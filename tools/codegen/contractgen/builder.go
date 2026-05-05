@@ -173,13 +173,15 @@ func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPT
 	}
 
 	spec := &HTTPEndpointSpec{
-		Method:        http.Method,
-		Path:          http.Path,
-		SuccessCode:   http.SuccessStatus,
-		NoContent:     http.NoContent,
-		HandlerMethod: handlerMethod,
-		HasBody:       hasBody,
-		Clients:       clients,
+		Method:                  http.Method,
+		Path:                    http.Path,
+		SuccessCode:             http.SuccessStatus,
+		NoContent:               http.NoContent,
+		HandlerMethod:           handlerMethod,
+		HasBody:                 hasBody,
+		Clients:                 clients,
+		AuthPublic:              http.Auth.Public,
+		AuthPasswordResetExempt: http.Auth.PasswordResetExempt,
 	}
 	spec.PathParams = buildPathParams(http)
 	spec.QueryParams = buildQueryParams(http)

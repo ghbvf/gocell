@@ -12,6 +12,8 @@ endpoints:
     method: POST
     path: /api/v1/access/sessions/refresh
     successStatus: 200
+    auth:
+      public: true
     noContent: false
     responses:
       400:

@@ -158,29 +158,42 @@ func TestHandler_CreateAdmin_BlankPassword_Returns400(t *testing.T) {
 	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "ERR_AUTH_IDENTITY_INVALID_INPUT")
+	// The generated handler enforces minLength:8 before reaching the service,
+	// so validation returns ERR_VALIDATION_FAILED rather than ERR_AUTH_IDENTITY_INVALID_INPUT.
+	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
 }
 
 func TestHandler_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
+		name        string
+		body        string
+		wantErrCode string
 	}{
 		{
-			name: "username too long",
-			body: `{"username":"` + strings.Repeat("u", 129) + `","email":"root@local","password":"SecretPass!23"}`,
+			// Generated handler enforces maxLength:128 (byte check) before service.
+			name:        "username too long",
+			body:        `{"username":"` + strings.Repeat("u", 129) + `","email":"root@local","password":"SecretPass!23"}`,
+			wantErrCode: "ERR_VALIDATION_FAILED",
 		},
 		{
-			name: "email too long",
-			body: `{"username":"root","email":"` + strings.Repeat("e", 257) + `","password":"SecretPass!23"}`,
+			// Generated handler enforces maxLength:256 (byte check) before service.
+			name:        "email too long",
+			body:        `{"username":"root","email":"` + strings.Repeat("e", 257) + `","password":"SecretPass!23"}`,
+			wantErrCode: "ERR_VALIDATION_FAILED",
 		},
 		{
-			name: "password too long for bcrypt",
-			body: `{"username":"root","email":"root@local","password":"` + strings.Repeat("p", 73) + `"}`,
+			// Generated handler enforces maxLength:72 (byte check) before service.
+			name:        "password too long for bcrypt",
+			body:        `{"username":"root","email":"root@local","password":"` + strings.Repeat("p", 73) + `"}`,
+			wantErrCode: "ERR_VALIDATION_FAILED",
 		},
 		{
-			name: "password not printable ASCII",
-			body: `{"username":"root","email":"root@local","password":"` + strings.Repeat("界", 8) + `"}`,
+			// 8 × "界" = 24 bytes — passes the generated handler's byte-length check
+			// but fails the service's printable-ASCII validation. Error comes from the
+			// service layer, so ERR_AUTH_IDENTITY_INVALID_INPUT is expected here.
+			name:        "password not printable ASCII",
+			body:        `{"username":"root","email":"root@local","password":"` + strings.Repeat("界", 8) + `"}`,
+			wantErrCode: "ERR_AUTH_IDENTITY_INVALID_INPUT",
 		},
 	}
 	for _, tc := range tests {
@@ -193,7 +206,7 @@ func TestHandler_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 			h.ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
-			assert.Contains(t, w.Body.String(), "ERR_AUTH_IDENTITY_INVALID_INPUT")
+			assert.Contains(t, w.Body.String(), tc.wantErrCode)
 		})
 	}
 }

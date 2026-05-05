@@ -18,6 +18,25 @@ type HTTPTransportMeta struct {
 	SuccessStatus int                      `yaml:"successStatus" json:"successStatus"`
 	NoContent     bool                     `yaml:"noContent"     json:"noContent"`
 	Responses     map[int]HTTPResponseMeta `yaml:"responses,omitempty" json:"responses,omitempty"`
+	// Auth declares route-level authentication overrides for contractgen.
+	// When set, the generated handler emits the corresponding auth.Route flags
+	// instead of the default Policy-only wiring. Omit for standard authenticated routes.
+	Auth HTTPAuthMeta `yaml:"auth,omitempty" json:"auth,omitempty"`
+}
+
+// HTTPAuthMeta carries route-level authentication override flags for contractgen.
+// These map directly to auth.Route fields (Public, PasswordResetExempt).
+//
+// ref: kubernetes-sigs/controller-tools markers/registry.go (declarative auth metadata)
+type HTTPAuthMeta struct {
+	// Public marks the route as JWT-exempt. The generated NewHandler takes no
+	// policy argument; auth.Route{Public: true} is emitted by RegisterRoutes.
+	// Mutually exclusive with PasswordResetExempt.
+	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
+	// PasswordResetExempt allows callers whose JWT carries password_reset_required=true
+	// to reach this route. The generated handler emits auth.Route{PasswordResetExempt: true}.
+	// Mutually exclusive with Public.
+	PasswordResetExempt bool `yaml:"passwordResetExempt,omitempty" json:"passwordResetExempt,omitempty"`
 }
 
 // ParamSchema describes a single HTTP path or query parameter.

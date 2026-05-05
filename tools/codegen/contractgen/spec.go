@@ -98,6 +98,14 @@ type HTTPEndpointSpec struct {
 	// generated contractSpec must carry this list so the governance enforcement
 	// matches the YAML declaration.
 	Clients []string
+	// AuthPublic is true when contract.yaml endpoints.http.auth.public is set.
+	// The generated NewHandler takes no policy argument and emits
+	// auth.Route{Public: true} in RegisterRoutes.
+	AuthPublic bool
+	// AuthPasswordResetExempt is true when contract.yaml endpoints.http.auth.passwordResetExempt is set.
+	// The generated handler emits auth.Route{PasswordResetExempt: true} in RegisterRoutes.
+	// Mutually exclusive with AuthPublic.
+	AuthPasswordResetExempt bool
 }
 
 // EventEndpointSpec holds event-specific endpoint information.

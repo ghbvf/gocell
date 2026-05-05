@@ -14,6 +14,8 @@ endpoints:
     method: POST
     path: /api/v1/access/sessions/login
     successStatus: 201
+    auth:
+      public: true
     noContent: false
     responses:
       400:

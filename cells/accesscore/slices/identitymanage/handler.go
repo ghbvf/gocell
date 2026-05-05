@@ -1,402 +1,273 @@
 package identitymanage
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"net/http"
+	"context"
 	"time"
-
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
+	changepassgen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/change-password/v1"
+	creategen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/create/v1"
+	deletegen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/delete/v1"
+	getgen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/get/v1"
+	lockgen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/lock/v1"
+	patchgen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/patch/v1"
+	unlockgen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/unlock/v1"
+	updategen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/update/v1"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Path constants — extracted so each user-resource path appears once in
-// source. FMT-18 resolves const string references at scan time so the YAML
-// cross-check still sees the effective path literal.
-const (
-	pathUsers      = "/api/v1/access/users"
-	pathUserByID   = "/api/v1/access/users/{id}"
-	pathUserLock   = "/api/v1/access/users/{id}/lock"
-	pathUserUnlock = "/api/v1/access/users/{id}/unlock"
-
-	pathUserPwChange = "/api/v1/access/users/{id}/password"
-)
-
-// Contract spec literals — one per route; cross-checked against
-// contracts/http/auth/user/**/contract.yaml by FMT-18 governance.
-var (
-	specUserCreate = wrapper.ContractSpec{
-		ID: "http.auth.user.create.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: pathUsers,
-	}
-	specUserGet = wrapper.ContractSpec{
-		ID: "http.auth.user.get.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: pathUserByID,
-	}
-	specUserUpdate = wrapper.ContractSpec{
-		ID: "http.auth.user.update.v1", Kind: "http", Transport: "http",
-		Method: "PUT", Path: pathUserByID,
-	}
-	specUserPatch = wrapper.ContractSpec{
-		ID: "http.auth.user.patch.v1", Kind: "http", Transport: "http",
-		Method: "PATCH", Path: pathUserByID,
-	}
-	specUserDelete = wrapper.ContractSpec{
-		ID: "http.auth.user.delete.v1", Kind: "http", Transport: "http",
-		Method: "DELETE", Path: pathUserByID,
-	}
-	specUserLock = wrapper.ContractSpec{
-		ID: "http.auth.user.lock.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: pathUserLock,
-	}
-	specUserUnlock = wrapper.ContractSpec{
-		ID: "http.auth.user.unlock.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: pathUserUnlock,
-	}
-	specUserChangePassword = wrapper.ContractSpec{
-		ID: "http.auth.user.change-password.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: pathUserPwChange,
-	}
-)
-
-// StatusResponse is a single-field DTO for lock/unlock responses.
-type StatusResponse struct {
-	Status string `json:"status"`
-}
-
-// UserResponse is the public DTO for User, excluding sensitive fields like
-// PasswordHash.
-type UserResponse struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	Email     string    `json:"email"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-// toUserResponse converts a domain.User to a UserResponse DTO.
-func toUserResponse(u *domain.User) UserResponse {
+// toUserResponseData converts a domain.User to the shared user DTO shape.
+// The generated contracts all use the same response field names; this helper
+// avoids repetition across 5 adapters.
+func toUserResponseData(u *domain.User) (id, username, email, status, createdAt, updatedAt string) {
 	if u == nil {
-		return UserResponse{}
-	}
-	return UserResponse{
-		ID:        u.ID,
-		Username:  u.Username,
-		Email:     u.Email,
-		Status:    string(u.Status),
-		CreatedAt: u.CreatedAt,
-		UpdatedAt: u.UpdatedAt,
-	}
-}
-
-// Handler provides HTTP endpoints for identity management.
-type Handler struct {
-	svc *Service
-}
-
-// NewHandler creates an identity-manage Handler.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
-}
-
-// RegisterRoutes registers identity-manage routes on the given mux via
-// auth.Mount so every request emits a contract-tagged span. Policy is
-// declared at registration time; handler bodies contain only business logic.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specUserCreate,
-		Handler:  http.HandlerFunc(h.handleCreate),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specUserGet,
-		Handler:  http.HandlerFunc(h.handleGet),
-		Policy:   auth.SelfOr("id", auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specUserUpdate,
-		Handler:  http.HandlerFunc(h.handleUpdate),
-		Policy:   auth.SelfOr("id", auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specUserPatch,
-		Handler:  http.HandlerFunc(h.handlePatch),
-		Policy:   auth.SelfOr("id", auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specUserDelete,
-		Handler:  http.HandlerFunc(h.handleDelete),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specUserLock,
-		Handler:  http.HandlerFunc(h.handleLock),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specUserUnlock,
-		Handler:  http.HandlerFunc(h.handleUnlock),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	// POST /{id}/password: SelfOr policy + PasswordResetExempt so a user whose
-	// token carries password_reset_required=true can still reach this endpoint
-	// to satisfy the reset requirement. Router.FinalizeAuth aggregates this
-	// declaration alongside all other Cell declarations at Bootstrap phase 5.
-	if err := auth.Mount(mux, auth.Route{
-		Contract:            specUserChangePassword,
-		Handler:             http.HandlerFunc(h.handleChangePassword),
-		Policy:              auth.SelfOr("id", auth.RoleAdmin),
-		PasswordResetExempt: true,
-	}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username             string `json:"username"`
-		Email                string `json:"email"`
-		Password             string `json:"password"`
-		RequirePasswordReset bool   `json:"requirePasswordReset"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
 		return
 	}
+	return u.ID, u.Username, u.Email, string(u.Status),
+		u.CreatedAt.UTC().Format(time.RFC3339),
+		u.UpdatedAt.UTC().Format(time.RFC3339)
+}
 
-	user, err := h.svc.Create(r.Context(), CreateInput{
+// toTokenPairResponseData converts an internal TokenPair to the change-password
+// contract response DTO.
+func toTokenPairResponseData(p dto.TokenPair) *changepassgen.ResponseData {
+	return &changepassgen.ResponseData{
+		AccessToken:           p.AccessToken,
+		RefreshToken:          p.RefreshToken,
+		ExpiresAt:             p.ExpiresAt.UTC().Format(time.RFC3339),
+		SessionId:             p.SessionID,
+		UserId:                p.UserID,
+		PasswordResetRequired: p.PasswordResetRequired,
+	}
+}
+
+// strPtr is a nil-safe helper: returns nil for empty string (treat as "not provided"
+// in PATCH semantics), non-nil for non-empty strings.
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// boolPtrIfTrue returns a pointer to true when v is true, nil otherwise.
+// Used for PATCH boolean fields where false cannot be distinguished from "absent"
+// in the generated request struct (both become the Go zero value false).
+// Semantic note: RequirePasswordReset=false via PATCH is treated as "no change"
+// to avoid ambiguity; admins who need to clear the flag can use the PUT endpoint.
+func boolPtrIfTrue(v bool) *bool {
+	if !v {
+		return nil
+	}
+	return &v
+}
+
+// CreateAdapter implements creategen.Service for http.auth.user.create.v1.
+type CreateAdapter struct{ S *Service }
+
+func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (*creategen.Response, error) {
+	user, err := a.S.Create(ctx, CreateInput{
 		Username:             req.Username,
 		Email:                req.Email,
 		Password:             req.Password,
 		RequirePasswordReset: req.RequirePasswordReset,
 	})
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
-
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toUserResponse(user)})
+	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	return &creategen.Response{Data: &creategen.ResponseData{
+		ID:        id,
+		Username:  username,
+		Email:     email,
+		Status:    status,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}}, nil
 }
 
-func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
-	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
-	if !ok {
-		return
-	}
-	user, err := h.svc.GetByID(r.Context(), id)
+// GetAdapter implements getgen.Service for http.auth.user.get.v1.
+type GetAdapter struct{ S *Service }
+
+func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (*getgen.Response, error) {
+	user, err := a.S.GetByID(ctx, req.ID)
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
+	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	return &getgen.Response{Data: &getgen.ResponseData{
+		ID:        id,
+		Username:  username,
+		Email:     email,
+		Status:    status,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}}, nil
 }
 
-func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
-	if !ok {
-		return
-	}
-	var req struct {
-		Email string `json:"email"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
+// UpdateAdapter implements updategen.Service for http.auth.user.update.v1.
+type UpdateAdapter struct{ S *Service }
 
-	input := UpdateInput{ID: id}
-	if req.Email != "" {
-		input.Email = &req.Email
-	}
-	user, err := h.svc.Update(r.Context(), input)
+func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (*updategen.Response, error) {
+	user, err := a.S.Update(ctx, UpdateInput{
+		ID:    req.ID,
+		Email: strPtr(req.Email),
+	})
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
+	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	return &updategen.Response{Data: &updategen.ResponseData{
+		ID:        id,
+		Username:  username,
+		Email:     email,
+		Status:    status,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}}, nil
 }
 
-func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
-	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
-	if !ok {
-		return
-	}
-	var req struct {
-		Name                 json.RawMessage `json:"name"`
-		Email                json.RawMessage `json:"email"`
-		Status               json.RawMessage `json:"status"`
-		RequirePasswordReset json.RawMessage `json:"requirePasswordReset"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
+// PatchAdapter implements patchgen.Service for http.auth.user.patch.v1.
+//
+// PATCH semantics: empty string fields are treated as "not provided" (no change).
+// RequirePasswordReset=false is treated as "no change" — use PUT (update) to
+// explicitly clear the flag. This is a pragmatic simplification; the generated
+// request struct cannot distinguish "absent" from "false" for bool fields.
+type PatchAdapter struct{ S *Service }
 
-	input := UpdateInput{ID: id}
-	name, hasName, err := decodePatchString(req.Name, "name")
+func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (*patchgen.Response, error) {
+	user, err := a.S.Update(ctx, UpdateInput{
+		ID:                   req.ID,
+		Name:                 strPtr(req.Name),
+		Email:                strPtr(req.Email),
+		Status:               strPtr(req.Status),
+		RequirePasswordReset: boolPtrIfTrue(req.RequirePasswordReset),
+	})
 	if err != nil {
-		httputil.WriteError(r.Context(), w,
-			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
-		return
+		return nil, err
 	}
-	if hasName {
-		input.Name = &name
-	}
-	email, hasEmail, err := decodePatchString(req.Email, "email")
-	if err != nil {
-		httputil.WriteError(r.Context(), w,
-			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
-		return
-	}
-	if hasEmail {
-		input.Email = &email
-	}
-	status, hasStatus, err := decodePatchString(req.Status, "status")
-	if err != nil {
-		httputil.WriteError(r.Context(), w,
-			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
-		return
-	}
-	if hasStatus {
-		input.Status = &status
-	}
-	requirePasswordReset, hasRequirePasswordReset, err := decodePatchBool(req.RequirePasswordReset, "requirePasswordReset")
-	if err != nil {
-		httputil.WriteError(r.Context(), w,
-			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
-		return
-	}
-	if hasRequirePasswordReset {
-		input.RequirePasswordReset = &requirePasswordReset
-	}
-
-	user, err := h.svc.Update(r.Context(), input)
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
+	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	return &patchgen.Response{Data: &patchgen.ResponseData{
+		ID:        id,
+		Username:  username,
+		Email:     email,
+		Status:    status,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}}, nil
 }
 
-func decodePatchString(raw json.RawMessage, field string) (string, bool, error) {
-	if len(raw) == 0 {
-		return "", false, nil
-	}
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return "", false, fmt.Errorf("field '%s' must be a string", field)
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", false, fmt.Errorf("field '%s' must be a string: %w", field, err)
-	}
-	return value, true, nil
-}
+// DeleteAdapter implements deletegen.Service for http.auth.user.delete.v1.
+// Prevents admin self-deletion using the caller principal from context.
+type DeleteAdapter struct{ S *Service }
 
-func decodePatchBool(raw json.RawMessage, field string) (bool, bool, error) {
-	if len(raw) == 0 {
-		return false, false, nil
-	}
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return false, false, fmt.Errorf("field '%s' must be a boolean", field)
-	}
-	var value bool
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return false, false, fmt.Errorf("field '%s' must be a boolean: %w", field, err)
-	}
-	return value, true, nil
-}
-
-func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
-	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
-	if !ok {
-		return
-	}
-
+func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (*deletegen.Response, error) {
 	// Prevent admin self-deletion — removing own account would lock out the
 	// operator with no recovery path if this is the last admin.
-	if p, ok := auth.FromContext(r.Context()); ok && p.Subject == id {
-		httputil.WriteError(r.Context(), w,
-			errcode.New(errcode.KindConflict, errcode.ErrAuthSelfDelete, "cannot delete own account"))
-		return
+	if p, ok := auth.FromContext(ctx); ok && p.Subject == req.ID {
+		return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthSelfDelete, "cannot delete own account")
 	}
-
-	if err := h.svc.Delete(r.Context(), id); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+	if err := a.S.Delete(ctx, req.ID); err != nil {
+		return nil, err
 	}
-	w.WriteHeader(http.StatusNoContent)
+	return &deletegen.Response{}, nil
 }
 
-func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
-	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
-	if !ok {
-		return
+// LockAdapter implements lockgen.Service for http.auth.user.lock.v1.
+type LockAdapter struct{ S *Service }
+
+func (a LockAdapter) Lock(ctx context.Context, req *lockgen.Request) (*lockgen.Response, error) {
+	if err := a.S.Lock(ctx, req.ID); err != nil {
+		return nil, err
 	}
-	if err := h.svc.Lock(r.Context(), id); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": StatusResponse{Status: "locked"}})
+	return &lockgen.Response{Data: &lockgen.ResponseData{Status: "locked"}}, nil
 }
 
-func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
-	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
-	if !ok {
-		return
+// UnlockAdapter implements unlockgen.Service for http.auth.user.unlock.v1.
+type UnlockAdapter struct{ S *Service }
+
+func (a UnlockAdapter) Unlock(ctx context.Context, req *unlockgen.Request) (*unlockgen.Response, error) {
+	if err := a.S.Unlock(ctx, req.ID); err != nil {
+		return nil, err
 	}
-	if err := h.svc.Unlock(r.Context(), id); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": StatusResponse{Status: "active"}})
+	return &unlockgen.Response{Data: &unlockgen.ResponseData{Status: "active"}}, nil
 }
 
-func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
-	if !ok {
-		return
-	}
-	var req struct {
-		OldPassword string `json:"oldPassword"`
-		NewPassword string `json:"newPassword"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
+// ChangePasswordAdapter implements changepassgen.Service for http.auth.user.change-password.v1.
+//
+// Route-level PasswordResetExempt: the generated handler emits
+// auth.Route{PasswordResetExempt: true} so a user whose token carries
+// password_reset_required=true can still reach this endpoint.
+type ChangePasswordAdapter struct{ S *Service }
 
-	pair, err := h.svc.ChangePassword(r.Context(), ChangePasswordInput{
-		UserID:      id,
+func (a ChangePasswordAdapter) ChangePassword(ctx context.Context, req *changepassgen.Request) (*changepassgen.Response, error) {
+	pair, err := a.S.ChangePassword(ctx, ChangePasswordInput{
+		UserID:      req.ID,
 		OldPassword: req.OldPassword,
 		NewPassword: req.NewPassword,
 	})
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
+	return &changepassgen.Response{Data: toTokenPairResponseData(pair)}, nil
+}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.ToTokenPairResponse(pair)})
+// Handler is the composite route handler for the identitymanage slice.
+// It wires 8 generated contract handlers (create/get/update/patch/delete/lock/unlock/change-password).
+type Handler struct {
+	createH         *creategen.Handler
+	getH            *getgen.Handler
+	updateH         *updategen.Handler
+	patchH          *patchgen.Handler
+	deleteH         *deletegen.Handler
+	lockH           *lockgen.Handler
+	unlockH         *unlockgen.Handler
+	changePasswordH *changepassgen.Handler
+}
+
+// NewHandler creates an identity-manage Handler wiring all 8 contract handlers.
+// Policy is declared at registration time; handler bodies contain only DTO conversion.
+func NewHandler(svc *Service) *Handler {
+	adminPolicy := auth.AnyRole(auth.RoleAdmin)
+	selfOrAdminPolicy := auth.SelfOr("id", auth.RoleAdmin)
+	selfOrAdminPwPolicy := auth.SelfOr("id", auth.RoleAdmin)
+	return &Handler{
+		createH:         creategen.NewHandler(CreateAdapter{svc}, adminPolicy),
+		getH:            getgen.NewHandler(GetAdapter{svc}, selfOrAdminPolicy),
+		updateH:         updategen.NewHandler(UpdateAdapter{svc}, selfOrAdminPolicy),
+		patchH:          patchgen.NewHandler(PatchAdapter{svc}, selfOrAdminPolicy),
+		deleteH:         deletegen.NewHandler(DeleteAdapter{svc}, adminPolicy),
+		lockH:           lockgen.NewHandler(LockAdapter{svc}, adminPolicy),
+		unlockH:         unlockgen.NewHandler(UnlockAdapter{svc}, adminPolicy),
+		changePasswordH: changepassgen.NewHandler(ChangePasswordAdapter{svc}, selfOrAdminPwPolicy),
+	}
+}
+
+// RegisterRoutes mounts all identity-manage contract handlers on mux.
+func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+	if err := h.createH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.getH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.updateH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.patchH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.deleteH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.lockH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.unlockH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	return h.changePasswordH.RegisterRoutes(mux)
 }

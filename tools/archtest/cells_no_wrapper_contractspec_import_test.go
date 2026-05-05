@@ -33,23 +33,10 @@ var migrationAllowlistCells = []string{}
 
 // permanentPathExceptionsCells lists file paths (relative to repo root, forward-slash)
 // that are permanently exempt from CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01.
-// Each entry must have a documented justification comment.
-// W3.5 permanent exceptions: five accesscore slice handlers that require
-// wrapper.ContractSpec for auth.Mount with Public:true or PasswordResetExempt:true.
-// The generated handler only supports Policy; Public/PasswordResetExempt flags
-// must be declared via auth.Mount with an explicit wrapper.ContractSpec literal.
-var permanentPathExceptionsCells = []string{
-	// sessionlogin: POST /api/v1/access/sessions/login — Public:true (no JWT; username+password auth)
-	"cells/accesscore/slices/sessionlogin/handler.go",
-	// sessionlogout: DELETE /api/v1/access/sessions/{id} — PasswordResetExempt:true (self-recovery flow)
-	"cells/accesscore/slices/sessionlogout/handler.go",
-	// sessionrefresh: POST /api/v1/access/sessions/refresh — Public:true (refresh token in body)
-	"cells/accesscore/slices/sessionrefresh/handler.go",
-	// setup: GET+POST /api/v1/access/setup/* — Public:true (first-run bootstrap, no admin exists yet)
-	"cells/accesscore/slices/setup/handler.go",
-	// identitymanage: POST /api/v1/access/users/{id}/password — PasswordResetExempt:true (change-password during reset)
-	"cells/accesscore/slices/identitymanage/handler.go",
-}
+// W3.5 complete: all accesscore slices use generated NewHandler; auth flags
+// (Public/PasswordResetExempt) are declared in contract.yaml endpoints.http.auth
+// and emitted by contractgen handler.tmpl — no cells/ file needs wrapper.ContractSpec.
+var permanentPathExceptionsCells = []string{}
 
 const wrapperPkgSuffix = "/kernel/wrapper"
 
@@ -94,8 +81,7 @@ func isMigratingCell(rel string) bool {
 }
 
 // isPermanentExceptionCell returns true when rel is in permanentPathExceptionsCells.
-// These files are architecturally justified in using wrapper.ContractSpec directly
-// (see the comments on each entry for the rationale).
+// W3.5 complete: this list is empty; all cells/ files use generated contract packages.
 func isPermanentExceptionCell(rel string) bool {
 	for _, exception := range permanentPathExceptionsCells {
 		if rel == exception {

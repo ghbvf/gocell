@@ -38,7 +38,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	h := setup.NewHandler(svc)
 	req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
 	rec := httptest.NewRecorder()
-	h.HandleStatus(rec, req)
+	newHandlerMux(t, h).ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
 	t.Run("500 provisioner failure response satisfies contract", func(t *testing.T) {
@@ -53,7 +53,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
 		rec := httptest.NewRecorder()
-		h.HandleStatus(rec, req)
+		newHandlerMux(t, h).ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
 		c.ValidateErrorResponse(t, http.StatusInternalServerError, rec.Body.Bytes())
@@ -96,7 +96,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	h.HandleCreateAdmin(rec, req)
+	newHandlerMux(t, h).ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -113,7 +113,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(badBody))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
-		h.HandleCreateAdmin(rec, req)
+		newHandlerMux(t, h).ServeHTTP(rec, req)
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 	}
 
@@ -127,7 +127,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
-		h.HandleCreateAdmin(rec, req)
+		newHandlerMux(t, h).ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusConflict, rec.Code)
 		c.ValidateErrorResponse(t, http.StatusConflict, rec.Body.Bytes())
@@ -148,7 +148,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
-		h.HandleCreateAdmin(rec, req)
+		newHandlerMux(t, h).ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusConflict, rec.Code)
 		c.ValidateErrorResponse(t, http.StatusConflict, rec.Body.Bytes())
@@ -168,7 +168,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
-		h.HandleCreateAdmin(rec, req)
+		newHandlerMux(t, h).ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusGone, rec.Code)
 		c.ValidateErrorResponse(t, http.StatusGone, rec.Body.Bytes())

@@ -29,7 +29,7 @@ type Handler struct {
 
 // NewHandler creates a Handler for http.auth.user.change-password.v1.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
-// use auth.PublicPolicy for unauthenticated public endpoints or supply a real policy.
+// supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
 	return &Handler{svc: svc, policy: policy}
 }
@@ -45,9 +45,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // resolve the handler function body via the Contract→Handler correlation.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
-		Contract: contractSpec,
-		Handler:  http.HandlerFunc(h.handle),
-		Policy:   h.policy,
+		Contract:            contractSpec,
+		Handler:             http.HandlerFunc(h.handle),
+		Policy:              h.policy,
+		PasswordResetExempt: true,
 	})
 }
 
