@@ -1,6 +1,6 @@
 package rabbitmq
 
-import "github.com/ghbvf/gocell/runtime/observability/poolstats"
+import "github.com/ghbvf/gocell/kernel/observability/poolstats"
 
 // ChannelStatter returns a poolstats.Statter bound to this Connection's
 // subscriber channel pool, with the supplied human-readable name

@@ -3,7 +3,7 @@ package poolstats_test
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
+	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 )
 
 func TestSnapshot_ZeroValueIsValid(t *testing.T) {

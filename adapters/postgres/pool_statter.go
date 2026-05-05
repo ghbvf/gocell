@@ -1,6 +1,6 @@
 package postgres
 
-import "github.com/ghbvf/gocell/runtime/observability/poolstats"
+import "github.com/ghbvf/gocell/kernel/observability/poolstats"
 
 // Statter returns a poolstats.Statter bound to this pool with the supplied
 // human-readable name (e.g. "postgres-main"). The OTel pool collector uses
