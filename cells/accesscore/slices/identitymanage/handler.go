@@ -53,27 +53,20 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// boolPtrIfTrue returns a pointer to true when v is true, nil otherwise.
-// Used for PATCH boolean fields where false cannot be distinguished from "absent"
-// in the generated request struct (both become the Go zero value false).
-// Semantic note: RequirePasswordReset=false via PATCH is treated as "no change"
-// to avoid ambiguity; admins who need to clear the flag can use the PUT endpoint.
-func boolPtrIfTrue(v bool) *bool {
-	if !v {
-		return nil
-	}
-	return &v
-}
 
 // CreateAdapter implements creategen.Service for http.auth.user.create.v1.
 type CreateAdapter struct{ S *Service }
 
 func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (*creategen.Response, error) {
+	var requireReset bool
+	if req.RequirePasswordReset != nil {
+		requireReset = *req.RequirePasswordReset
+	}
 	user, err := a.S.Create(ctx, CreateInput{
 		Username:             req.Username,
 		Email:                req.Email,
 		Password:             req.Password,
-		RequirePasswordReset: req.RequirePasswordReset,
+		RequirePasswordReset: requireReset,
 	})
 	if err != nil {
 		return nil, err
@@ -132,10 +125,9 @@ func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (*upd
 
 // PatchAdapter implements patchgen.Service for http.auth.user.patch.v1.
 //
-// PATCH semantics: empty string fields are treated as "not provided" (no change).
-// RequirePasswordReset=false is treated as "no change" — use PUT (update) to
-// explicitly clear the flag. This is a pragmatic simplification; the generated
-// request struct cannot distinguish "absent" from "false" for bool fields.
+// PATCH semantics: nil = absent (no change), &true = set, &false = clear.
+// The generated Request.RequirePasswordReset is *bool so the handler can
+// distinguish an explicit false (clear the flag) from an absent field (no change).
 type PatchAdapter struct{ S *Service }
 
 func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (*patchgen.Response, error) {
@@ -144,7 +136,7 @@ func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (*patchg
 		Name:                 strPtr(req.Name),
 		Email:                strPtr(req.Email),
 		Status:               strPtr(req.Status),
-		RequirePasswordReset: boolPtrIfTrue(req.RequirePasswordReset),
+		RequirePasswordReset: req.RequirePasswordReset, // *bool: nil=absent, &false=clear, &true=set
 	})
 	if err != nil {
 		return nil, err

@@ -19,10 +19,14 @@ type WriteAdapter struct{ S *Service }
 // Write implements write.Service. It maps the generated request to CreateInput
 // and converts the domain result to the generated response type.
 func (a WriteAdapter) Write(ctx context.Context, req *write.Request) (*write.Response, error) {
+	var sensitive bool
+	if req.Sensitive != nil {
+		sensitive = *req.Sensitive
+	}
 	entry, err := a.S.Create(ctx, CreateInput{
 		Key:       req.Key,
 		Value:     req.Value,
-		Sensitive: req.Sensitive,
+		Sensitive: sensitive,
 	})
 	if err != nil {
 		return nil, err

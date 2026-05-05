@@ -18,9 +18,13 @@ type CreateAdapter struct{ S *Service }
 
 // Create implements create.Service. Key/Enabled/RolloutPercentage/Description decoded by handler_gen.
 func (a CreateAdapter) Create(ctx context.Context, req *create.Request) (*create.Response, error) {
+	var enabled bool
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
 	flag, err := a.S.Create(ctx, CreateInput{
 		Key:               req.Key,
-		Enabled:           req.Enabled,
+		Enabled:           enabled,
 		RolloutPercentage: int(req.RolloutPercentage),
 		Description:       req.Description,
 	})
