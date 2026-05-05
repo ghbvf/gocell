@@ -153,6 +153,24 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 		assert.Contains(t, err.Error(), cell.PrimaryListener.String())
 	})
 
+	t.Run("Mismatch_SameIDDifferentInstances", func(t *testing.T) {
+		t.Parallel()
+		asmWithID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+		otherWithSameID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+		b := New(
+			WithClock(clock.Real()),
+			WithAssembly(asmWithID),
+			WithListener(cell.PrimaryListener, "127.0.0.1:0",
+				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(otherWithSameID)}),
+		)
+
+		err := b.validateAuthJWTFromAssemblyPlans()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "AuthJWTFromAssembly")
+		assert.Contains(t, err.Error(), "same *assembly.CoreAssembly instance")
+		assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+	})
+
 	t.Run("NilAssembly_NoError", func(t *testing.T) {
 		t.Parallel()
 		// No WithAssembly — b.assembly is nil; validateAuthJWTFromAssemblyPlans
