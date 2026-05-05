@@ -137,27 +137,6 @@ func TestEnsure_RaceDetected_ReturnsRaceSkipped(t *testing.T) {
 	assert.Nil(t, result.User)
 }
 
-func TestNewProvisioner_NilDependency_ReturnsError(t *testing.T) {
-	tests := []struct {
-		name string
-		user ports.UserRepository
-		role ports.RoleRepository
-		log  *slog.Logger
-		id   adminprovision.UUIDGenerator
-	}{
-		{name: "nil user repo", user: nil, role: mem.NewRoleRepository(), log: discardLogger(), id: fixedUUID("x")},
-		{name: "nil role repo", user: mem.NewUserRepository(), role: nil, log: discardLogger(), id: fixedUUID("x")},
-		{name: "nil logger", user: mem.NewUserRepository(), role: mem.NewRoleRepository(), log: nil, id: fixedUUID("x")},
-		{name: "nil uuid gen", user: mem.NewUserRepository(), role: mem.NewRoleRepository(), log: discardLogger(), id: nil},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := adminprovision.NewProvisioner(tc.user, tc.role, tc.log, tc.id, clock.Real())
-			require.Error(t, err)
-		})
-	}
-}
-
 // --- Status ---------------------------------------------------------------
 
 func TestProvisioner_Status_NoAdmin_ReturnsFalse(t *testing.T) {

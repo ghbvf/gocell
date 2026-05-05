@@ -60,20 +60,16 @@ func TestInternalAddrToBaseURL(t *testing.T) {
 
 // TestBootstrapAuthFailLogger_RecordsClientIP verifies that bootstrapAuthFailLogger
 // writes a slog record containing the "client_ip" field when the context carries
-// a real IP. This is the F2 RED test — it fails until the observer calls
-// ctxkeys.RealIPFrom and logs slog.String("client_ip", ip).
+// a real IP. Logger is injected directly (no slog.SetDefault) so the test is
+// safe to run with t.Parallel().
 func TestBootstrapAuthFailLogger_RecordsClientIP(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})
-	// Replace the default slog logger for this test.
-	// bootstrapAuthFailLogger uses slog.ErrorContext which goes through the default logger.
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
+	logger := slog.New(handler)
 
-	observer := bootstrapAuthFailLogger()
+	observer := bootstrapAuthFailLogger(logger)
 	ctx := ctxkeys.WithRealIP(context.Background(), "192.0.2.1")
 	observer(ctx, "rate_limited")
 

@@ -54,9 +54,9 @@ type BootstrapAuthFailObserver = func(ctx context.Context, reason string)
 // mismatch (no field-level oracle).
 //
 // onAuthFail is an optional observer invoked on every authentication failure
-// (after the 401 response is written). The reason string is one of:
-// "missing_header", "wrong_credentials". Callers use this hook to write audit
-// log entries without importing cells/. Pass nil to disable.
+// (after the response is written). The reason string is one of:
+// "missing_header", "wrong_credentials", "rate_limited". Callers use this
+// hook to write audit log entries without importing cells/. Pass nil to disable.
 //
 // Wire this middleware around the setup/admin handler to enforce D5 semantics:
 // env credentials authenticate the operator; body credentials define the admin
