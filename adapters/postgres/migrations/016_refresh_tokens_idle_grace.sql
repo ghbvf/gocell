@@ -17,15 +17,26 @@
 --
 -- ref: ory/hydra persistence/sql/persister_oauth2.go (refresh_token_rotated column pattern)
 -- ref: zitadel/zitadel internal/api/oidc/token_refresh.go (idle TTL per-request reset)
+--
+-- DEV NOTE: this migration was modified in place by PR#528 to drop the
+-- idle_expires_at DEFAULT clause. goose v3 stores version_id+tstamp (not
+-- file hash), so dev environments that already applied the PR#388 version
+-- of 016 must run `goose down -count 1` then `goose up` to pick up the new
+-- DDL — otherwise goose treats 016 as already applied and the change is a
+-- silent no-op (ADD COLUMN IF NOT EXISTS makes it inert too). CI is
+-- ephemeral; project undeployed; no production schema migration concern.
 
 -- +goose NO TRANSACTION
 
 -- +goose Up
 
--- ADD COLUMN statements run outside a transaction (NO TRANSACTION mode) so they
--- can be paired with CREATE INDEX CONCURRENTLY below.  ALTER TABLE ADD COLUMN
--- with a non-volatile DEFAULT is a metadata-only change in PostgreSQL ≥ 11 and
--- does not rewrite the table, so it completes instantly even on large tables.
+-- ADD COLUMN statements run outside a transaction (NO TRANSACTION mode) so
+-- they can be paired with CREATE INDEX CONCURRENTLY below. CREATE INDEX
+-- CONCURRENTLY cannot run inside a transaction block; the +goose NO
+-- TRANSACTION directive lifts that constraint for the whole migration.
+-- idle_expires_at is NOT NULL with no DEFAULT (PR#528 dropped the
+-- migration-time DEFAULT) — this only succeeds against an empty table.
+-- See DEV NOTE at the top of this file for upgrade flow.
 ALTER TABLE refresh_tokens
     ADD COLUMN IF NOT EXISTS idle_expires_at TIMESTAMPTZ NOT NULL;
 
