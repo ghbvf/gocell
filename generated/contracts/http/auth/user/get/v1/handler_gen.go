@@ -4,6 +4,7 @@
 package get
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -37,9 +38,11 @@ type Handler struct {
 // supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
 	h := &Handler{svc: svc, policy: policy}
-	if v, err := schemavalidate.NewValidator(requestSchemaJSON); err == nil {
-		h.requestValidator = v
+	v, err := schemavalidate.NewValidator(requestSchemaJSON)
+	if err != nil {
+		panic(fmt.Sprintf("generated handler http.auth.user.get.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
+	h.requestValidator = v
 	return h
 }
 

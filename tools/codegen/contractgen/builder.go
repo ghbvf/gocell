@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 )
 
@@ -107,6 +108,11 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		var compacted bytes.Buffer
 		if err := json.Compact(&compacted, schemaBytes); err != nil {
 			return fmt.Errorf("contractgen build: %q compact request schema: %w", contract.ID, err)
+		}
+		// Validate schema compiles before embedding — fail-fast at codegen time
+		// rather than at runtime. ref: oapi-codegen pkg/codegen/templates/strict.
+		if _, vErr := schemavalidate.NewValidator(compacted.Bytes()); vErr != nil {
+			return fmt.Errorf("contractgen build: %q request schema fails to compile: %w", contract.ID, vErr)
 		}
 		spec.RequestSchemaJSON = compacted.String()
 	}
@@ -503,6 +509,16 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 		}
 
 		goType, nestedName := schemaGoType(key, name, prop)
+
+		// Optional boolean fields must be *bool so callers can distinguish absent
+		// (nil) from explicit false (&false = clear). This is critical for PATCH
+		// where false and absent are otherwise indistinguishable at decode time.
+		// ref: kubernetes/api core/v1 optional bool fields (*bool convention)
+		// ref: oapi-codegen SkipOptionalPointer default false
+		if !required && goType == "bool" {
+			goType = "*bool"
+		}
+
 		doc := ""
 		if prop.Format == "uuid" || prop.Format == "date-time" {
 			doc = "format: " + prop.Format

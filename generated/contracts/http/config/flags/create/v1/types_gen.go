@@ -6,7 +6,7 @@ package create
 // Request — http.config.flags.create.v1.request
 type Request struct {
 	Key               string `json:"key"`
-	Enabled           bool   `json:"enabled,omitempty"`
+	Enabled           *bool  `json:"enabled,omitempty"`
 	RolloutPercentage int64  `json:"rolloutPercentage,omitempty"`
 	Description       string `json:"description,omitempty"`
 }

@@ -10,7 +10,7 @@ type Request struct {
 	Name                 string `json:"name,omitempty"`
 	Email                string `json:"email,omitempty"`
 	Status               string `json:"status,omitempty"`
-	RequirePasswordReset bool   `json:"requirePasswordReset,omitempty"`
+	RequirePasswordReset *bool  `json:"requirePasswordReset,omitempty"`
 }
 
 // Response — http.auth.user.patch.v1.response

@@ -7,7 +7,7 @@ package write
 type Request struct {
 	Key       string `json:"key"`
 	Value     string `json:"value"`
-	Sensitive bool   `json:"sensitive,omitempty"`
+	Sensitive *bool  `json:"sensitive,omitempty"`
 }
 
 // Response — http.config.write.v1.response

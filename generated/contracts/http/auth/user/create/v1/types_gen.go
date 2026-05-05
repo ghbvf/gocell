@@ -8,7 +8,7 @@ type Request struct {
 	Username             string `json:"username"`
 	Email                string `json:"email"`
 	Password             string `json:"password"`
-	RequirePasswordReset bool   `json:"requirePasswordReset,omitempty"`
+	RequirePasswordReset *bool  `json:"requirePasswordReset,omitempty"`
 }
 
 // Response — http.auth.user.create.v1.response
