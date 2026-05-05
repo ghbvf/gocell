@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -218,13 +219,24 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
-		// Two-phase Down: 013 (add observability column) is a non-destructive
-		// column drop and is unguarded — first Down rolls it back successfully.
-		// 012 (refresh_tokens_rebuild) is the destructive PR-A29 migration
-		// that the hard-gate guards; the second Down must surface its
-		// RAISE EXCEPTION error.
-		require.NoError(t, migrator.Down(ctx),
-			"migration 013 (observability column) down should succeed — non-destructive column drop")
+		// Roll non-destructive migrations back one by one until we reach 012,
+		// the destructive PR-A29 refresh_tokens_rebuild that is hard-gated by
+		// default. 014 (lease_id column) and 013 (observability column) are
+		// both non-destructive column/index drops and must succeed; the call
+		// that targets 012 must surface the RAISE EXCEPTION error.
+		//
+		// Driving the loop off ExpectedVersion keeps the test correct as new
+		// non-destructive migrations are added on top of 014.
+		expected, fsErr := ExpectedVersion(testMigrationsFS(t))
+		require.NoError(t, fsErr)
+		const hardGatedVersion = int64(12)
+		require.Greater(t, expected, hardGatedVersion,
+			"this test assumes at least one non-destructive migration on top of the 012 hard-gate")
+
+		for v := expected; v > hardGatedVersion; v-- {
+			require.NoError(t, migrator.Down(ctx),
+				"migration %d down should succeed — non-destructive rollback", v)
+		}
 
 		dErr := migrator.Down(ctx)
 		require.Error(t, dErr, "migration 012 down must be hard-gated by default")
@@ -239,12 +251,20 @@ func TestIntegration_Migrator(t *testing.T) {
 
 		statuses, sErr := migrator.Status(ctx)
 		require.NoError(t, sErr)
-		require.GreaterOrEqual(t, len(statuses), 2, "expect 012 + 013 in status list")
-		// 013 was rolled back successfully; 012 must remain applied (gate refused).
-		assert.False(t, statuses[len(statuses)-1].Applied,
-			"latest migration (013) should be rolled back after first Down")
-		assert.True(t, statuses[len(statuses)-2].Applied,
-			"012 should remain applied after refused rollback")
+		require.GreaterOrEqual(t, len(statuses), int(expected), "status list must cover all migrations")
+		// All migrations above 012 are rolled back; 012 must remain applied
+		// (gate refused).
+		for _, s := range statuses {
+			version, parseErr := strconv.ParseInt(s.Version, 10, 64)
+			require.NoError(t, parseErr, "migration %s must have integer version", s.Version)
+			if version <= hardGatedVersion {
+				assert.True(t, s.Applied,
+					"migration %d must remain applied after refused rollback", version)
+			} else {
+				assert.False(t, s.Applied,
+					"migration %d must be rolled back", version)
+			}
+		}
 	})
 }
 
