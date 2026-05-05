@@ -23,6 +23,8 @@ import (
 // will be rejected during parsing and verifier/issuer construction.
 const MinRSAKeyBits = 2048
 
+const msgJWTKeyParseFailed = "jwt key parse failed"
+
 // validateRSAKeySize checks that the RSA key modulus is at least MinRSAKeyBits.
 func validateRSAKeySize(n int, keyKind string) error {
 	if n < MinRSAKeyBits {
@@ -321,14 +323,14 @@ func LoadKeysFromEnv() (privateKey *rsa.PrivateKey, publicKey *rsa.PublicKey, er
 	privateKey, err = parseRSAPrivateKey([]byte(privPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
-			"jwt key parse failed",
+			msgJWTKeyParseFailed,
 			err, errcode.WithDetails(slog.String("env", EnvJWTPrivateKey)))
 	}
 
 	publicKey, err = parseRSAPublicKey([]byte(pubPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
-			"jwt key parse failed",
+			msgJWTKeyParseFailed,
 			err, errcode.WithDetails(slog.String("env", EnvJWTPublicKey)))
 	}
 
@@ -354,7 +356,7 @@ func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 	prevPub, err := parseRSAPublicKey([]byte(prevPubPEM))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			"jwt key parse failed",
+			msgJWTKeyParseFailed,
 			err, errcode.WithDetails(slog.String("env", EnvJWTPrevPublicKey)))
 	}
 
@@ -368,7 +370,7 @@ func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 	expiresAt, err := time.Parse(time.RFC3339, expiresStr)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			"jwt key parse failed",
+			msgJWTKeyParseFailed,
 			err, errcode.WithDetails(slog.String("env", EnvJWTPrevKeyExpires)))
 	}
 

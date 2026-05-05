@@ -46,6 +46,8 @@ const (
 	MethodAppRole Method = "approle"
 	// MethodKubernetes uses Vault Kubernetes auth (projected service account JWT).
 	MethodKubernetes Method = "kubernetes"
+
+	internalPathFmt = "path=%s"
 )
 
 // ---------------------------------------------------------------------------
@@ -277,12 +279,12 @@ func (a *kubernetesAuth) Login(ctx context.Context) (AuthResult, error) {
 	if err != nil {
 		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: Kubernetes auth: read JWT failed", err,
-			errcode.WithInternal(fmt.Sprintf("path=%s", a.jwtPath)))
+			errcode.WithInternal(fmt.Sprintf(internalPathFmt, a.jwtPath)))
 	}
 	if len(jwtBytes) == 0 {
 		return AuthResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: Kubernetes auth: JWT file is empty",
-			errcode.WithInternal(fmt.Sprintf("path=%s", a.jwtPath)))
+			errcode.WithInternal(fmt.Sprintf(internalPathFmt, a.jwtPath)))
 	}
 
 	path := "auth/" + a.mountPath + "/login"
@@ -439,13 +441,13 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 			if err != nil {
 				return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 					"vault-auth: read secret_id from file failed", err,
-					errcode.WithInternal(fmt.Sprintf("path=%s", cleanPath)))
+					errcode.WithInternal(fmt.Sprintf(internalPathFmt, cleanPath)))
 			}
 			s := strings.TrimSpace(string(data))
 			if s == "" {
 				return "", errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 					"vault-auth: secret_id file is empty",
-					errcode.WithInternal(fmt.Sprintf("path=%s", cleanPath)))
+					errcode.WithInternal(fmt.Sprintf(internalPathFmt, cleanPath)))
 			}
 			return s, nil
 		}, nil

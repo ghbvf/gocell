@@ -35,6 +35,8 @@ const (
 
 	stateIdle = "idle"
 	stateUsed = "used"
+
+	msgCreatePoolCounterFailed = "otel pool collector: create counter failed"
 )
 
 // RegisterPoolMetrics registers observable gauges on the supplied Meter
@@ -65,7 +67,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel pool collector: create counter failed", err,
+			msgCreatePoolCounterFailed, err,
 			errcode.WithDetails(slog.String("metric", metricNameConnCount)))
 	}
 
@@ -76,7 +78,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel pool collector: create counter failed", err,
+			msgCreatePoolCounterFailed, err,
 			errcode.WithDetails(slog.String("metric", metricNameConnMax)))
 	}
 
@@ -92,7 +94,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel pool collector: create counter failed", err,
+			msgCreatePoolCounterFailed, err,
 			errcode.WithDetails(slog.String("metric", metricNameConnTimeouts)))
 	}
 

@@ -13,6 +13,8 @@ import (
 
 var _ ports.UserRepository = (*UserRepository)(nil)
 
+const msgUserNotFound = "user not found"
+
 // UserRepository is an in-memory implementation of ports.UserRepository.
 type UserRepository struct {
 	mu     sync.RWMutex
@@ -49,7 +51,7 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 
 	u, ok := r.byID[id]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
@@ -62,7 +64,7 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 
 	u, ok := r.byName[username]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("username=%q", username)))
 	}
@@ -74,7 +76,7 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.byID[user.ID]; !exists {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
 	}
@@ -107,7 +109,7 @@ func (r *UserRepository) Delete(_ context.Context, id string) error {
 
 	u, ok := r.byID[id]
 	if !ok {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}

@@ -23,6 +23,8 @@ const (
 const (
 	generatedFileMode os.FileMode = 0o644
 	generatedDirMode  os.FileMode = 0o755
+
+	internalTemplatePlainFmt = "template=%s"
 )
 
 // validatePathComponent rejects identifiers that contain path traversal
@@ -280,14 +282,14 @@ func (s *Scaffolder) renderToFile(tplPath, outPath string, data any) error {
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrScaffoldTemplate,
 			"scaffold: failed to read template", err,
-			errcode.WithInternal(fmt.Sprintf("template=%s", tplPath)))
+			errcode.WithInternal(fmt.Sprintf(internalTemplatePlainFmt, tplPath)))
 	}
 
 	tmpl, err := template.New(filepath.Base(tplPath)).Funcs(funcMap).Parse(string(raw))
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrScaffoldTemplate,
 			"scaffold: failed to parse template", err,
-			errcode.WithInternal(fmt.Sprintf("template=%s", tplPath)))
+			errcode.WithInternal(fmt.Sprintf(internalTemplatePlainFmt, tplPath)))
 	}
 
 	// Render.
@@ -295,7 +297,7 @@ func (s *Scaffolder) renderToFile(tplPath, outPath string, data any) error {
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrScaffoldTemplate,
 			"scaffold: failed to execute template", err,
-			errcode.WithInternal(fmt.Sprintf("template=%s", tplPath)))
+			errcode.WithInternal(fmt.Sprintf(internalTemplatePlainFmt, tplPath)))
 	}
 
 	// Dry-run: conflict + render are enough to catch CI-pre-commit mistakes.

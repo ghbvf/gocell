@@ -16,6 +16,11 @@ import (
 // Compile-time check.
 var _ ports.FlagRepository = (*FlagRepository)(nil)
 
+const (
+	flagInternalKeyQuotedFmt = "key=%q"
+	msgFlagNotFound          = "flag not found"
+)
+
 // FlagRepository is an in-memory implementation of ports.FlagRepository.
 type FlagRepository struct {
 	mu    sync.RWMutex
@@ -39,7 +44,7 @@ func (r *FlagRepository) Create(_ context.Context, flag *domain.FeatureFlag) err
 
 	if _, exists := r.flags[flag.Key]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrFlagDuplicate, "flag key already exists",
-			errcode.WithInternal(fmt.Sprintf("key=%q", flag.Key)))
+			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, flag.Key)))
 	}
 	clone := *flag
 	r.flags[flag.Key] = &clone
@@ -52,8 +57,8 @@ func (r *FlagRepository) GetByKey(_ context.Context, key string) (*domain.Featur
 
 	flag, ok := r.flags[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, "flag not found",
-			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
+			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, key)))
 	}
 	clone := *flag
 	return &clone, nil
@@ -70,8 +75,8 @@ func (r *FlagRepository) Update(
 
 	existing, exists := r.flags[key]
 	if !exists {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, "flag not found",
-			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
+			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, key)))
 	}
 	existing.Enabled = enabled
 	existing.RolloutPercentage = rolloutPercentage
@@ -90,8 +95,8 @@ func (r *FlagRepository) Delete(_ context.Context, key string) (*domain.FeatureF
 
 	existing, exists := r.flags[key]
 	if !exists {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, "flag not found",
-			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
+			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, key)))
 	}
 	clone := *existing
 	delete(r.flags, key)
@@ -106,8 +111,8 @@ func (r *FlagRepository) Toggle(_ context.Context, key string, enabled bool) (*d
 
 	existing, exists := r.flags[key]
 	if !exists {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, "flag not found",
-			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
+			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, key)))
 	}
 	existing.Enabled = enabled
 	existing.Version++

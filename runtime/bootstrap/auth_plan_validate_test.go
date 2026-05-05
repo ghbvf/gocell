@@ -179,9 +179,9 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 
 		err := b.validateAuthJWTFromAssemblyPlans()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "AuthJWTFromAssembly")
-		assert.Contains(t, err.Error(), "same *assembly.CoreAssembly instance")
-		assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+		assert.Contains(t, errFull(t, err), "AuthJWTFromAssembly")
+		assert.Contains(t, errFull(t, err), "same *assembly.CoreAssembly instance")
+		assert.Contains(t, errFull(t, err), cell.PrimaryListener.String())
 	})
 
 	t.Run("NilAssembly_NoError", func(t *testing.T) {
@@ -253,8 +253,8 @@ func TestValidateAuthJWTFromAssemblyPlans_RejectsConstructorBypass(t *testing.T)
 				err = b.validateAuthJWTFromAssemblyPlans()
 			})
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantErr)
-			assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+			assert.Contains(t, errFull(t, err), tc.wantErr)
+			assert.Contains(t, errFull(t, err), cell.PrimaryListener.String())
 		})
 	}
 }

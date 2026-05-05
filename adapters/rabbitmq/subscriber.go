@@ -413,23 +413,26 @@ func (s *Subscriber) subscribeOnce(
 				slog.Any("error", closeErr))
 		}
 	}
+	setupErr := func(reconnectMsg string, err error, permanent func() error) error {
+		closeChannel()
+		if isRecoverableAMQPError(err) {
+			return fmt.Errorf("%w: %s: %v", errSubscriptionLost, reconnectMsg, err)
+		}
+		return permanent()
+	}
 
 	// Set QoS.
 	if err := ch.Qos(s.config.PrefetchCount, 0, false); err != nil {
-		closeChannel()
-		if isRecoverableAMQPError(err) {
-			return fmt.Errorf("%w: rabbitmq: set qos: %v", errSubscriptionLost, err)
-		}
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: set qos failed", err)
+		return setupErr("rabbitmq: set qos", err, func() error {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: set qos failed", err)
+		})
 	}
 
 	// Declare topology (exchange, DLX, queue, binding) — idempotent.
 	if err := s.declareTopology(ch, topic, queueName); err != nil {
-		closeChannel()
-		if isRecoverableAMQPError(err) {
-			return fmt.Errorf("%w: rabbitmq: declare topology: %v", errSubscriptionLost, err)
-		}
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: declare topology failed", err)
+		return setupErr("rabbitmq: declare topology", err, func() error {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: declare topology failed", err)
+		})
 	}
 
 	consumerTag := fmt.Sprintf("cg-%s-%s", queueName, topic)
@@ -445,11 +448,9 @@ func (s *Subscriber) subscribeOnce(
 
 	deliveries, err := ch.Consume(queueName, consumerTag, false, false, false, false, nil)
 	if err != nil {
-		closeChannel()
-		if isRecoverableAMQPError(err) {
-			return fmt.Errorf("%w: rabbitmq: start consuming: %v", errSubscriptionLost, err)
-		}
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConsume, "rabbitmq: start consuming failed", err)
+		return setupErr("rabbitmq: start consuming", err, func() error {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConsume, "rabbitmq: start consuming failed", err)
+		})
 	}
 
 	// Create and track a subscriptionRun for this invocation.

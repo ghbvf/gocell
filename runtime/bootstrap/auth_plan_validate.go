@@ -64,7 +64,8 @@ func (b *Bootstrap) validateAuthJWTFromAssemblyPlan(
 	}
 	if !p.IsConstructed() {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthJWTFromAssembly must be constructed with cell.NewAuthJWTFromAssembly(asm) or cell.MustNewAuthJWTFromAssembly(asm)",
+			"AuthJWTFromAssembly was constructed as a struct literal; "+
+				"use cell.NewAuthJWTFromAssembly(asm) or cell.MustNewAuthJWTFromAssembly(asm)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if b.assemblyCore == nil {
@@ -72,7 +73,8 @@ func (b *Bootstrap) validateAuthJWTFromAssemblyPlan(
 	}
 	if p.Assembly != b.assemblyCore {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"bootstrap: AuthJWTFromAssembly carries a different assembly than WithAssembly; the composition root must wire the same *assembly.CoreAssembly instance everywhere",
+			"bootstrap: AuthJWTFromAssembly carries a different assembly than WithAssembly; "+
+				"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
 			errcode.WithInternal(fmt.Sprintf(
 				"listener=%q plan_assembly=%q bootstrap_assembly=%q",
 				listener, p.Assembly.ID(), b.assemblyCore.ID())))

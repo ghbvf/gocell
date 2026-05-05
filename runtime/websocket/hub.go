@@ -42,6 +42,8 @@ const (
 	defaultShutdownTimeout      = 10 * time.Second
 	defaultSendBufferSize       = 32
 	defaultConcurrentCloseLimit = 64
+
+	internalConnIDFmt = "conn_id=%s"
 )
 
 // HubConfig configures the Hub.
@@ -788,7 +790,7 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrWSConnNotFound,
 			"websocket: connection not found",
-			errcode.WithInternal(fmt.Sprintf("conn_id=%s", connID)))
+			errcode.WithInternal(fmt.Sprintf(internalConnIDFmt, connID)))
 	}
 
 	select {
@@ -799,14 +801,14 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 	case <-entry.done:
 		return errcode.New(errcode.KindUnavailable, errcode.ErrWSConnNotFound,
 			"websocket: connection already evicted",
-			errcode.WithInternal(fmt.Sprintf("conn_id=%s", connID)))
+			errcode.WithInternal(fmt.Sprintf(internalConnIDFmt, connID)))
 	default:
 		h.evictWith(entry, "send_buffer_full", slog.LevelWarn,
 			"websocket hub: slow client evicted, send buffer full",
 			"websocket hub: close on slow-client evict")
 		return errcode.New(errcode.KindUnavailable, errcode.ErrWebsocketSlowClient,
 			"websocket: connection send buffer full, evicted",
-			errcode.WithInternal(fmt.Sprintf("conn_id=%s", connID)))
+			errcode.WithInternal(fmt.Sprintf(internalConnIDFmt, connID)))
 	}
 }
 

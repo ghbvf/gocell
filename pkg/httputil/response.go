@@ -18,6 +18,9 @@ const (
 	msgInternalServerError = "internal server error"
 	msgGatewayTimeout      = "gateway timeout"
 	msgServiceUnavailable  = "service unavailable"
+
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
 )
 
 // StatusClientClosedRequest is nginx's non-standard 499 status code returned
@@ -26,7 +29,7 @@ const StatusClientClosedRequest = errcode.StatusClientClosedRequest
 
 // WriteJSON writes v as a JSON response with the given HTTP status code.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("httputil: encode response", slog.Any("error", err))
@@ -243,7 +246,7 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 		inner["request_id"] = reqID
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(status)
 	if encErr := json.NewEncoder(w).Encode(map[string]any{
 		"error": inner,
@@ -257,7 +260,7 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 // normal serialization path fails — guarantees the client always sees a
 // non-empty body and a 5xx status.
 func writeInternalErrorSentinel(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(http.StatusInternalServerError)
 	if _, writeErr := w.Write(sentinelInternalErrorBody); writeErr != nil {
 		slog.Error("httputil: write sentinel error body",

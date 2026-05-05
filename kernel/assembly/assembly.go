@@ -57,6 +57,8 @@ const DefaultHookTimeout = 30 * time.Second
 // ref: k8s SharedInformer ctx propagation — informer callbacks carry caller ctx.
 const DefaultReloadTimeout = DefaultHookTimeout
 
+const internalCellQuotedFmt = "cell=%q"
+
 // Config holds assembly-level configuration.
 type Config struct {
 	ID             string
@@ -346,7 +348,7 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 				slog.String("cell", c.ID()), slog.Any("error", err))
 			errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 				"assembly: BeforeStop failed", err,
-				errcode.WithInternal(fmt.Sprintf("cell=%q", c.ID()))))
+				errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID()))))
 		}
 	}
 	if err := c.Stop(ctx); err != nil {
@@ -354,7 +356,7 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 			slog.String("cell", c.ID()), slog.Any("error", err))
 		errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			"assembly: stop cell failed", err,
-			errcode.WithInternal(fmt.Sprintf("cell=%q", c.ID()))))
+			errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID()))))
 	}
 	if as, ok := c.(cell.AfterStopper); ok {
 		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStop, as.AfterStop); err != nil {
@@ -362,7 +364,7 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 				slog.String("cell", c.ID()), slog.Any("error", err))
 			errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 				"assembly: AfterStop failed", err,
-				errcode.WithInternal(fmt.Sprintf("cell=%q", c.ID()))))
+				errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID()))))
 		}
 	}
 	// Remove the stopped cell's snapshot so Snapshots() never returns stale
@@ -455,7 +457,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 			a.mu.Unlock()
 			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"assembly: init cell failed", err,
-				errcode.WithInternal(fmt.Sprintf("cell=%q", c.ID())))
+				errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID())))
 		}
 		localSnaps[c.ID()] = recorder.Snapshot()
 	}

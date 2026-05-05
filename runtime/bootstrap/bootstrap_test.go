@@ -225,6 +225,35 @@ func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[s
 	return nil
 }
 
+func captureHasReadyzDependencyStatus(capture *captureHandler, depName, status string) bool {
+	const (
+		recMsg  = "readyz unhealthy"
+		attrKey = "dependencies"
+	)
+	for _, r := range capture.snapshot() {
+		if r.Message != recMsg {
+			continue
+		}
+		var depsAttr slog.Value
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == attrKey {
+				depsAttr = a.Value
+				return false
+			}
+			return true
+		})
+		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		if !ok {
+			continue
+		}
+		probe, ok := deps[depName]
+		if ok && probe["status"] == status {
+			return true
+		}
+	}
+	return false
+}
+
 // testCell is a minimal Cell for bootstrap testing.
 type testCell struct {
 	*cell.BaseCell
@@ -1479,33 +1508,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			return false
 		}
-		// Walk recent slog records for a "readyz unhealthy" entry whose
-		// dependencies map shows configDriftCheckerName=unhealthy.
-		for _, r := range driftSlogCapture.snapshot() {
-			if r.Message != "readyz unhealthy" {
-				continue
-			}
-			var depsAttr slog.Value
-			r.Attrs(func(a slog.Attr) bool {
-				if a.Key == "dependencies" {
-					depsAttr = a.Value
-					return false
-				}
-				return true
-			})
-			deps, ok := depsAttr.Any().(map[string]map[string]any)
-			if !ok {
-				continue
-			}
-			probe, ok := deps[configDriftCheckerName]
-			if !ok {
-				continue
-			}
-			if probe["status"] == "unhealthy" {
-				return true
-			}
-		}
-		return false
+		return captureHasReadyzDependencyStatus(driftSlogCapture, configDriftCheckerName, "unhealthy")
 	}, testtime.EventuallyLong, testtime.SlowPoll, "readyz should return 503 with config-drift unhealthy")
 
 	cancel()
@@ -3289,7 +3292,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	// Run should fail because no authProvider cell was discovered.
 	err = b.Run(ctx)
 	require.Error(t, err, "bootstrap should fail when no authProvider cell is discovered")
-	assert.Contains(t, err.Error(), "authProvider cell",
+	assert.Contains(t, errFull(t, err), "authProvider cell",
 		"error should mention missing authProvider")
 }
 
@@ -3320,9 +3323,9 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 
 	err = b.Run(ctx)
 	require.Error(t, err, "bootstrap should reject multiple authProvider cells")
-	assert.Contains(t, err.Error(), "multiple authProvider cells")
-	assert.Contains(t, err.Error(), "accesscore")
-	assert.Contains(t, err.Error(), "identity-core")
+	assert.Contains(t, errFull(t, err), "multiple authProvider cells")
+	assert.Contains(t, errFull(t, err), "accesscore")
+	assert.Contains(t, errFull(t, err), "identity-core")
 }
 
 // TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs verifies that

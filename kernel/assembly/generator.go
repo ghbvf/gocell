@@ -64,20 +64,25 @@ type boundaryContext struct {
 	SmokeTargets      []string
 }
 
+const (
+	internalAssemblyQuotedFmt = "assembly=%q"
+	internalTemplateQuotedFmt = "template=%q"
+)
+
 // GenerateEntrypoint generates the main.go content for an assembly.
 func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
 			"assembly not found",
-			errcode.WithInternal(fmt.Sprintf("assembly=%q", assemblyID)))
+			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
 	helperName, err := assemblyRunHelperName(assemblyID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"invalid assembly for generated run helper", err,
-			errcode.WithInternal(fmt.Sprintf("assembly=%q", assemblyID)))
+			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
 	ctx := entrypointContext{
@@ -103,7 +108,7 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
 			"assembly not found",
-			errcode.WithInternal(fmt.Sprintf("assembly=%q", assemblyID)))
+			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
 	cellSet := make(map[string]bool, len(asm.Cells))
@@ -412,21 +417,21 @@ func (g *Generator) executeTemplate(name string, ctx any) ([]byte, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to read template", err,
-			errcode.WithInternal(fmt.Sprintf("template=%q", name)))
+			errcode.WithInternal(fmt.Sprintf(internalTemplateQuotedFmt, name)))
 	}
 
 	tmpl, err := template.New(name).Parse(string(content))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to parse template", err,
-			errcode.WithInternal(fmt.Sprintf("template=%q", name)))
+			errcode.WithInternal(fmt.Sprintf(internalTemplateQuotedFmt, name)))
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to execute template", err,
-			errcode.WithInternal(fmt.Sprintf("template=%q", name)))
+			errcode.WithInternal(fmt.Sprintf(internalTemplateQuotedFmt, name)))
 	}
 
 	return buf.Bytes(), nil

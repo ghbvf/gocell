@@ -56,6 +56,8 @@ const (
 	// single relay batch under tens of MB at the default BatchSize=100.
 	// ref: Apache Kafka message.max.bytes default 1 MiB.
 	MaxPayloadBytes = 1 << 20
+
+	internalMetadataKeyQuotedFmt = "key=%q"
 )
 
 // ReservedMetadataKeys lists keys that the kernel observability bridge owns
@@ -104,19 +106,19 @@ func validateMetadata(m map[string]string) error {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: metadata key is reserved for the observability bridge — use Entry.Observability instead",
-				errcode.WithInternal(fmt.Sprintf("key=%q", k)))
+				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, k)))
 		}
 		if len(k) > MaxMetadataKeyLen {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: metadata key length exceeds max",
 				errcode.WithDetails(slog.Int("length", len(k)), slog.Int("max", MaxMetadataKeyLen)),
-				errcode.WithInternal(fmt.Sprintf("key=%q", truncate(k, 64))))
+				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, truncate(k, 64))))
 		}
 		if len(v) > MaxMetadataValueLen {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: metadata value length exceeds max",
 				errcode.WithDetails(slog.Int("length", len(v)), slog.Int("max", MaxMetadataValueLen)),
-				errcode.WithInternal(fmt.Sprintf("key=%q", truncate(k, 64))))
+				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, truncate(k, 64))))
 		}
 		total += len(k) + len(v)
 	}

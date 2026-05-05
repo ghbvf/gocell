@@ -146,13 +146,13 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 		v := ap.TokenVerifier()
 		if validation.IsNilInterface(v) {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				fmt.Sprintf("bootstrap: cell %q implements authProvider (cell.AuthProvider) but TokenVerifier() returned nil", id))
+				"bootstrap: authProvider cell TokenVerifier() returned nil",
+				errcode.WithInternal(fmt.Sprintf("cell=%q", id)))
 		}
 		if found != nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				fmt.Sprintf("bootstrap: multiple authProvider cells discovered: %q and %q; "+
-					"keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
-					foundID, id))
+				"bootstrap: multiple authProvider cells discovered; keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
+				errcode.WithInternal(fmt.Sprintf("first_cell=%q second_cell=%q", foundID, id)))
 		}
 		found = v
 		foundID = id
