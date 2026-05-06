@@ -30,8 +30,8 @@ type CellMeta struct {
 	// Go type (e.g. "ordercell" → "OrderCell"), which is why explicit
 	// declaration is required.
 	GoStructName GoIdentifier `yaml:"goStructName,omitempty"`
-	Dir          string `yaml:"-"` // directory segment under cells/, set by parser
-	File         string `yaml:"-"` // parsed cell.yaml path relative to project root
+	Dir          string       `yaml:"-"` // directory segment under cells/, set by parser
+	File         string       `yaml:"-"` // parsed cell.yaml path relative to project root
 }
 
 // Clone returns a deep copy of c, independently owning every slice and
