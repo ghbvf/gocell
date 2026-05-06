@@ -282,15 +282,20 @@ jobs:
         run: go vet -tags=integration_cluster ./adapters/redis/...
 
       # adapters/postgres coverage gate (G11 / PR-V1-TEST-GATE-CLOSURE)
-      # Closes P3-TD-02 + P4-TD-08: previously coverage-integration.out was
-      # only collected for SonarCloud (no enforcement). Mirrors the kernel
-      # coverage gate at this file:169-192 — same exit-1 + PASS-log shape.
+      # Closes P3-TD-02 + P4-TD-08 + P4-TD-11: previously coverage-integration.out
+      # was only collected for SonarCloud (no enforcement) and Migrator.Down
+      # v=0 idempotency had no regression test. Mirrors the kernel coverage
+      # gate at this file:169-192 — same exit-1 + PASS-log shape.
       #
       # Package floor 80% (P3-TD-02 original requirement, one-shot — not the
       # phased 60% step). Per-file floor 70% on pool.go / tx_manager.go /
       # migrator.go guards P3-TD-02's stated root concern ("Pool/TxManager/
       # Migrator 真实路径未覆盖") so the package average can't be propped up
       # by high outbox/refresh coverage while the core trio sags.
+      # pool_statter.go (66.7%) is intentionally outside the per-file floor —
+      # it's a pure delegating Stats() adapter; P3-TD-02 wording scopes the
+      # root concern to the Pool/TxManager/Migrator trio. Package floor 80%
+      # already accounts for its drag on the average.
       #
       # Coverage is parsed straight from coverage-integration.out — no extra
       # test run, no testcontainers re-spin. The profile rows (one per
@@ -306,6 +311,9 @@ jobs:
             echo "FAIL: $PROFILE missing or empty"; exit 1
           fi
 
+          # awk emits a single "%.1f" string for both the success and the
+          # zero-rows branches. Empty strings bubble up as a separate guard
+          # below; numeric "<threshold" comparison ($p+0) covers the 0.0 case.
           # Package-level %: statement-weighted over all adapters/postgres files.
           pkg_pct=$(awk -v prefix="$PKG_PREFIX" '
             $1 ~ "^"prefix"[^/]+\\.go:" {
@@ -314,11 +322,11 @@ jobs:
             }
             END {
               if (total > 0) printf "%.1f", hit/total*100
-              else print "0"
+              else printf "0.0"
             }
           ' "$PROFILE")
-          if [ -z "$pkg_pct" ] || [ "$pkg_pct" = "0" ]; then
-            echo "FAIL: no adapters/postgres rows in $PROFILE"; exit 1
+          if [ -z "$pkg_pct" ]; then
+            echo "FAIL: awk produced no output for $PROFILE"; exit 1
           fi
           awk -v p="$pkg_pct" 'BEGIN {
             if (p+0 < 80) { print "FAIL: adapters/postgres coverage " p "% < 80%"; exit 1 }
@@ -334,11 +342,11 @@ jobs:
               }
               END {
                 if (total > 0) printf "%.1f", hit/total*100
-                else print "0"
+                else printf "0.0"
               }
             ' "$PROFILE")
-            if [ -z "$file_pct" ] || [ "$file_pct" = "0" ]; then
-              echo "FAIL: no rows for adapters/postgres/$f in $PROFILE"; exit 1
+            if [ -z "$file_pct" ]; then
+              echo "FAIL: awk produced no output for adapters/postgres/$f"; exit 1
             fi
             awk -v p="$file_pct" -v f="$f" 'BEGIN {
               if (p+0 < 70) { print "FAIL: adapters/postgres/" f " coverage " p "% < 70%"; exit 1 }

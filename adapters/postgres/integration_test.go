@@ -751,6 +751,8 @@ func TestMigrator_NineBeforeTen_OrderRegression(t *testing.T) {
 // ref: pressly/goose provider_run_test.go TestProviderRun/up_and_down_by_one
 // — confirms ErrNoNextVersion is goose's canonical v=0 signal.
 func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
+	// setupPostgres starts a fresh testcontainer per test, so a fixed table
+	// name does not collide with sibling tests that pick the same string.
 	pool, cleanup := setupPostgres(t)
 	defer cleanup()
 	ctx := context.Background()
