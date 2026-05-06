@@ -49,7 +49,8 @@ func (r Evaluate200JSONResponse) visitEvaluateResponse(ctx context.Context, w ht
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "http.config.flags.evaluate.v1: encode Evaluate200JSONResponse body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.config.flags.evaluate.v1: encode Evaluate200JSONResponse body", attrs...)
 		return err
 	}
 	return nil

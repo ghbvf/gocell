@@ -325,10 +325,12 @@ func liftHTTPResponses(http *metadata.HTTPTransportMeta, handlerMethod string) [
 
 	out := make([]ResponseSpec, 0, len(statuses))
 	for _, status := range statuses {
+		isNoContent := http.NoContent && status == http.SuccessStatus
 		spec := ResponseSpec{
-			Status:     status,
-			IsError:    status >= 400,
-			GoTypeName: responseGoTypeName(handlerMethod, status, http.NoContent && status == http.SuccessStatus),
+			Status:      status,
+			IsError:     status >= 400,
+			IsNoContent: isNoContent,
+			GoTypeName:  responseGoTypeName(handlerMethod, status, isNoContent),
 		}
 		if r, ok := http.Responses[status]; ok {
 			spec.Description = r.Description

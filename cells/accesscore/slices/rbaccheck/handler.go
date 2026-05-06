@@ -103,7 +103,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes mounts the list and check contract handlers on mux.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := h.listH.RegisterRoutes(mux); err != nil {
 		return err
 	}

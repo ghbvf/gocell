@@ -99,6 +99,32 @@
 //
 // Reference: .claude/rules/gocell/observability.md "HTTP Metrics `cell` Label".
 //
+// # Workflow: adding a new declared status code
+//
+//  1. Edit contracts/<path>/contract.yaml — add the new status code under
+//     endpoints.http.responses[] with a schemaRef pointing to the JSON schema
+//     for that status's response body (or use the shared error envelope ref for
+//     4xx/5xx declared error responses).
+//
+// 2. Regenerate all typed structs:
+//
+//		go run ./cmd/gocell generate contract --all
+//
+//	   This reruns types.tmpl for every HTTP contract, emitting one new
+//	   {HandlerMethod}{Status}JSONResponse / NoContentResponse / ErrorResponse
+//	   struct for the added status, and updating the {HandlerMethod}ResponseObject
+//	   interface to include it.
+//
+// 3. Validate governance:
+//
+//		go run ./cmd/gocell check contract-health   # CH-04 + CH-06 must pass
+//		golangci-lint run ./...                      # 0 issues
+//
+//	   CH-06 (rules_http_typed_envelope.go) verifies that the generated struct
+//	   set exactly matches contract.yaml SuccessStatus ∪ responses[]; CH-04
+//	   (rules_http_response_alignment.go) verifies the handler-emitted status set
+//	   is a subset of the declared set. Both must be green before committing.
+//
 // # Cross-tooling references
 //
 //   - tools/codegen/internal/pathx — contract id → generated package path

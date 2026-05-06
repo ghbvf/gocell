@@ -54,7 +54,8 @@ func (r Login201JSONResponse) visitLoginResponse(ctx context.Context, w http.Res
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "http.auth.login.v1: encode Login201JSONResponse body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.auth.login.v1: encode Login201JSONResponse body", attrs...)
 		return err
 	}
 	return nil

@@ -884,6 +884,62 @@ func TestBuildHTTPEndpointSpec_Responses_LiftFromContract(t *testing.T) {
 	}
 }
 
+// TestDetectPagination_TypeMismatch verifies that detectPagination fails
+// fast when cursor is not declared as a string or limit is not declared as
+// an integer. The two error branches in builder.detectPagination are the
+// only place where the IR rejects an otherwise-syntactically-valid pagination
+// declaration; without these tests a future relaxation of the type check
+// could silently slip through.
+func TestDetectPagination_TypeMismatch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		queryParams map[string]metadata.ParamSchema
+		wantErrMsg  string
+	}{
+		{
+			name: "cursor as integer rejected",
+			queryParams: map[string]metadata.ParamSchema{
+				"cursor": {Type: "integer"},
+				"limit":  {Type: "integer"},
+			},
+			wantErrMsg: "cursor param must be string type",
+		},
+		{
+			name: "limit as string rejected",
+			queryParams: map[string]metadata.ParamSchema{
+				"cursor": {Type: "string"},
+				"limit":  {Type: "string"},
+			},
+			wantErrMsg: "limit param must be integer type",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			httpMeta := &metadata.HTTPTransportMeta{
+				Method:      "GET",
+				Path:        "/api/v1/items",
+				QueryParams: tc.queryParams,
+			}
+			contract := &metadata.ContractMeta{
+				ID:        "http.x.list.v1",
+				Kind:      "http",
+				Endpoints: metadata.EndpointsMeta{HTTP: httpMeta},
+			}
+			pathParams := buildPathParams(httpMeta)
+			queryParams := buildQueryParams(httpMeta)
+			_, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErrMsg) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrMsg)
+			}
+		})
+	}
+}
+
 // TestBuildHTTPEndpointSpec_Responses_NoContent verifies that a 204 NoContent
 // success endpoint generates a *NoContentResponse Go type rather than the
 // JSONResponse suffix used for body-bearing success responses.

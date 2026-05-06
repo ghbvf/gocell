@@ -62,7 +62,8 @@ func (r ExtendLease200JSONResponse) visitExtendLeaseResponse(ctx context.Context
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "http.device.command.extend-lease.v1: encode ExtendLease200JSONResponse body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.device.command.extend-lease.v1: encode ExtendLease200JSONResponse body", attrs...)
 		return err
 	}
 	return nil

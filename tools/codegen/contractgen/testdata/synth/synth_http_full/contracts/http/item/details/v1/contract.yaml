@@ -21,6 +21,13 @@ endpoints:
         maximum: 1000
     successStatus: 200
     noContent: false
+    responses:
+      404:
+        description: "Not Found — item does not exist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      503:
+        description: "Service Unavailable — downstream dependency unreachable"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

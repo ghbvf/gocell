@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -50,6 +49,13 @@ const CodeContractHealthTypedEnvelope = "CH-06"
 // The leading run is the {HandlerMethod} (PascalCase, may contain digits if
 // the contract is named that way), so the regex anchors the status as the
 // 3-digit run immediately before the {Suffix} group.
+//
+// Correctness depends on archtest CODEGEN-CONTRACT-USER-OVERLAP-01
+// (tools/archtest/codegen_contract_gen_test.go) which prevents hand-written
+// .go files from landing under generated/contracts/. Without that guard a
+// user-written DTO accidentally named e.g. `Foo200JSONResponse` would be
+// counted as an "implemented" typed struct and could mask CH-06 orphan
+// reports — the two rules together provide the closed-set guarantee.
 var typedResponseStructPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*?(\d{3})(JSONResponse|NoContentResponse|ErrorResponse)$`)
 
 // CheckHTTPTypedResponseEnvelope enforces CH-06: every HTTP contract that
@@ -204,18 +210,3 @@ func collectTypedResponseStatuses(specs []ast.Spec, out map[int]struct{}) {
 		out[status] = struct{}{}
 	}
 }
-
-// sortedStatuses returns the status keys of m sorted ascending. Helper kept
-// local to CH-06 to avoid coupling to other rules' diff helpers.
-func sortedStatuses(m map[int]struct{}) []int {
-	out := make([]int, 0, len(m))
-	for s := range m {
-		out = append(out, s)
-	}
-	sort.Ints(out)
-	return out
-}
-
-// _ silences the unused-helper warning when the package compiles in isolation
-// during go vet but other rules still benefit from the same sorted-set view.
-var _ = sortedStatuses

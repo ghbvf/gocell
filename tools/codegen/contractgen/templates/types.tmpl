@@ -52,7 +52,7 @@ func (r {{.GoTypeName}}) visit{{$.Endpoint.HandlerMethod}}Response(ctx context.C
 	httputil.WriteErrorWithStatus(ctx, w, {{.Status}}, &r.Body)
 	return nil
 }
-{{- else if eq .GoTypeName (printf "%s%dNoContentResponse" $.Endpoint.HandlerMethod .Status)}}
+{{- else if .IsNoContent}}
 // {{.GoTypeName}} renders an HTTP {{.Status}} No Content success response.
 // The success status carries no body; this struct is a marker so the
 // typed-envelope set covers the success case uniformly with errors.
@@ -71,7 +71,8 @@ func (r {{.GoTypeName}}) visit{{$.Endpoint.HandlerMethod}}Response(ctx context.C
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader({{.Status}})
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "{{$.ContractID}}: encode {{.GoTypeName}} body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "{{$.ContractID}}: encode {{.GoTypeName}} body", attrs...)
 		return err
 	}
 	return nil

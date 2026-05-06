@@ -239,7 +239,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes mounts all identity-manage contract handlers on mux.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := h.createH.RegisterRoutes(mux); err != nil {
 		return err
 	}

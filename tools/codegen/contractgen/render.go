@@ -41,26 +41,7 @@ var templates = func() *template.Template {
 		// httputil.ParsePageParams (no strconv), and only the extra filter
 		// params still need per-param parsing; when Pagination is nil, the
 		// full QueryParams slice is parsed inline.
-		"needsStrconv": func(spec *ContractGenSpec) bool {
-			if spec.Endpoint == nil {
-				return false
-			}
-			ep := spec.Endpoint
-			if ep.Pagination != nil {
-				for _, p := range ep.Pagination.ExtraQueryParams {
-					if p.GoType == "int64" || p.GoType == "float64" || p.GoType == "bool" {
-						return true
-					}
-				}
-				return false
-			}
-			for _, p := range ep.QueryParams {
-				if p.GoType == "int64" || p.GoType == "float64" || p.GoType == "bool" {
-					return true
-				}
-			}
-			return false
-		},
+		"needsStrconv": needsStrconv,
 		// derefInt64 dereferences a *int64 pointer for use in templates.
 		"derefInt64": func(p *int64) int64 {
 			if p == nil {
@@ -92,34 +73,14 @@ var templates = func() *template.Template {
 			return p != nil
 		},
 		// needsErrcode reports whether the generated handler imports the errcode
-		// package. It is needed when: a request schema is present (errcode.Assertion
-		// in the schema compile-failure panic), any path param has a length
-		// constraint, or any query param requires per-param parsing (which emits
-		// errcode.New(KindInvalid, ...) for required/parse/range failures). With
-		// the typed-response envelope, Pagination still requires errcode for its
-		// ExtraQueryParams (per-param parse) but not for cursor/limit (those go
-		// through httputil.ParsePageParams).
+		// package. With the typed-response envelope every HTTP handler emits at
+		// minimum the post-service nil-response guard
+		// (`errcode.New(KindInternal, ErrInternal, ...)`), so the predicate is
+		// effectively `spec.Endpoint != nil`. The historical per-feature checks
+		// (request schema, path-param length constraints, per-param query parse)
+		// still apply for sanity but no longer narrow the import.
 		"needsErrcode": func(spec *ContractGenSpec) bool {
-			if spec.Endpoint == nil {
-				return false
-			}
-			ep := spec.Endpoint
-			if spec.RequestSchemaJSON != "" {
-				return true
-			}
-			if ep.Pagination != nil {
-				if len(ep.Pagination.ExtraQueryParams) > 0 {
-					return true
-				}
-			} else if len(ep.QueryParams) > 0 {
-				return true
-			}
-			for _, p := range ep.PathParams {
-				if p.MinLength != nil || p.MaxLength != nil {
-					return true
-				}
-			}
-			return false
+			return spec.Endpoint != nil
 		},
 	}
 
@@ -127,6 +88,32 @@ var templates = func() *template.Template {
 	t = t.Funcs(funcMap)
 	return template.Must(t.ParseFS(templateFS, "templates/*.tmpl"))
 }()
+
+// needsStrconv is the package-private implementation of the funcMap helper
+// of the same name. Extracted to a top-level function so unit tests can
+// invoke it directly without round-tripping through template.FuncMap value
+// resolution (which fixes the funcMap value to interface{}). The helper is
+// covered by render_test.TestNeedsStrconv.
+func needsStrconv(spec *ContractGenSpec) bool {
+	if spec == nil || spec.Endpoint == nil {
+		return false
+	}
+	ep := spec.Endpoint
+	if ep.Pagination != nil {
+		for _, p := range ep.Pagination.ExtraQueryParams {
+			if p.GoType == "int64" || p.GoType == "float64" || p.GoType == "bool" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range ep.QueryParams {
+		if p.GoType == "int64" || p.GoType == "float64" || p.GoType == "bool" {
+			return true
+		}
+	}
+	return false
+}
 
 // RenderTypes renders types_gen.go content for the given spec.
 // Returns formatted, goimports-processed bytes.

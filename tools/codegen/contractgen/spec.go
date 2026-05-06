@@ -173,6 +173,12 @@ type ResponseSpec struct {
 	SchemaRef string
 	// IsError is true for status >= 400; the success entry is false.
 	IsError bool
+	// IsNoContent is true for the 204 NoContent success entry — the
+	// generated typed struct is an empty marker (`struct{}`) and the visit
+	// method writes only the status header. Templates branch on this flag
+	// rather than reverse-derive the suffix from GoTypeName, keeping the
+	// IR the single source for the JSON-vs-NoContent distinction.
+	IsNoContent bool
 	// GoTypeName is the Go identifier for the typed response struct that
 	// implements the per-endpoint XxxResponseObject interface. The naming
 	// convention is {HandlerMethod}{Status}{Suffix}: 200 → 200JSONResponse,

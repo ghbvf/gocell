@@ -59,7 +59,8 @@ func (r Create201JSONResponse) visitCreateResponse(ctx context.Context, w http.R
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "http.config.flags.create.v1: encode Create201JSONResponse body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.config.flags.create.v1: encode Create201JSONResponse body", attrs...)
 		return err
 	}
 	return nil

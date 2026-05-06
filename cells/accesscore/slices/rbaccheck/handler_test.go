@@ -228,6 +228,21 @@ func TestHandler(t *testing.T) {
 	}
 }
 
+func TestHandleList_ExceedsMaxLimit(t *testing.T) {
+	r := setup(t, query.RunModeProd)
+	w := httptest.NewRecorder()
+	// limit=501 exceeds the 500-item ceiling enforced by httputil.ParsePageParams
+	// (F4 absorb: generated handler routes cursor/limit through ParsePageParams,
+	// which returns ERR_PAGE_SIZE_EXCEEDED for limit > 500).
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1")+"?limit=501", nil)
+	req = req.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
+}
+
 func TestHandler_ListRoles_ProdMode_InvalidCursor_Returns400(t *testing.T) {
 	r := setup(t, query.RunModeProd)
 	w := httptest.NewRecorder()

@@ -84,10 +84,17 @@ func WriteErrorWithStatus(ctx context.Context, w http.ResponseWriter, status int
 
 	switch {
 	case status >= 400 && status < 500:
-		log4xx(ctx, "error", ecErr, status)
+		log4xx(ctx, "typed", ecErr, status)
 	case status >= 500:
-		publicCode := ecErr.PublicCode()
-		log5xx(ctx, "error", ecErr, status, publicCode)
+		// Derive the public code from the *typed-envelope status*, not from
+		// ecErr.Kind. The typed-envelope guarantees the wire status (CH-06
+		// enforces the contract.yaml ↔ typed-struct bijection statically), so
+		// the wire code/message must agree with that status even when the
+		// underlying errcode.Kind would have mapped elsewhere — e.g. service
+		// constructs `XxxYyy503ErrorResponse{Body: *errcode.New(KindInternal, …)}`
+		// and the wire body must read ERR_SERVICE_UNAVAILABLE, not ERR_INTERNAL.
+		publicCode := errcode.PublicCodeForStatus(status)
+		log5xx(ctx, "typed", ecErr, status, publicCode)
 		switch status {
 		case http.StatusServiceUnavailable:
 			out = errcode.New(ecErr.Kind, publicCode, msgServiceUnavailable)
@@ -192,6 +199,19 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error, status int,
 }
 
 func appendCorrelationAttrs(ctx context.Context, attrs []any) []any {
+	return AppendCorrelationAttrs(ctx, attrs)
+}
+
+// AppendCorrelationAttrs appends request_id / trace_id / span_id slog
+// attributes (when present in ctx) to the supplied slice. Public so
+// generated typed-response handlers and other framework error logging
+// callers can reuse the canonical correlation key set without re-importing
+// ctxkeys directly.
+//
+// The order matches the framework's existing 4xx/5xx log paths
+// (request_id → trace_id → span_id) so dashboards filtering on column
+// position keep working.
+func AppendCorrelationAttrs(ctx context.Context, attrs []any) []any {
 	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
 		attrs = append(attrs, slog.String("request_id", reqID))
 	}

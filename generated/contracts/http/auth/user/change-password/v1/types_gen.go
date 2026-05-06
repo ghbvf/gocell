@@ -56,7 +56,8 @@ func (r ChangePassword200JSONResponse) visitChangePasswordResponse(ctx context.C
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "http.auth.user.change-password.v1: encode ChangePassword200JSONResponse body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.auth.user.change-password.v1: encode ChangePassword200JSONResponse body", attrs...)
 		return err
 	}
 	return nil

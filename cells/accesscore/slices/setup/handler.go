@@ -78,7 +78,7 @@ func NewHandler(svc *Service, bootstrapAuth func(http.Handler) http.Handler) *Ha
 }
 
 // RegisterRoutes mounts the setup contract handlers on mux.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := h.statusH.RegisterRoutes(mux); err != nil {
 		return err
 	}

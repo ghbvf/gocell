@@ -59,7 +59,8 @@ func (r Update200JSONResponse) visitUpdateResponse(ctx context.Context, w http.R
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "http.config.flags.update.v1: encode Update200JSONResponse body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.config.flags.update.v1: encode Update200JSONResponse body", attrs...)
 		return err
 	}
 	return nil

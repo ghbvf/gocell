@@ -5,12 +5,13 @@ package admin
 
 import (
 	"bytes"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
@@ -49,14 +50,16 @@ type Handler struct {
 // auth.bootstrap:true to setup/admin contracts only.
 func NewHandler(svc Service, bootstrapAuth func(http.Handler) http.Handler) *Handler {
 	if bootstrapAuth == nil {
-		panic("generated handler http.auth.setup.admin.v1: bootstrapAuth must not be nil " +
-			"(auth.bootstrap:true contracts require a per-route replacement authenticator; " +
-			"composition root must inject runtime/auth.NewBootstrapMiddleware)")
+		// B-class assertion: argument-contract violation (composition-root must inject
+		// runtime/auth.NewBootstrapMiddleware). errcode.Assertion routes through the
+		// kernel recover middleware (500 + structured log) instead of a bare panic so
+		// PANIC-REGISTERED-01 archtest stays clean across the entire generator surface.
+		panic(errcode.Assertion("generated handler http.auth.setup.admin.v1: bootstrapAuth must not be nil (auth.bootstrap:true contracts require a per-route replacement authenticator; composition root must inject runtime/auth.NewBootstrapMiddleware)"))
 	}
 	h := &Handler{svc: svc, bootstrapAuth: bootstrapAuth}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(fmt.Sprintf("generated handler http.auth.setup.admin.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(errcode.Assertion("generated handler http.auth.setup.admin.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 	return h
@@ -102,8 +105,23 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	// Discard visitXxxResponse's error: types_gen.go's encode/write paths already
-	// log via slog.ErrorContext on failure, and there is no recovery branch at the
-	// handler level once headers/body have been (partially) flushed.
-	_ = resp.visitAdminResponse(r.Context(), w)
+	if resp == nil {
+		// Service contract violation: returned nil response without error. CH-06
+		// enforces the typed-struct ↔ contract.yaml bijection statically, so the
+		// only way this branch fires is a service implementation bug. Use
+		// errcode.Assertion (B-class panic) so the kernel recover middleware
+		// converts to 500 + structured Error log without forcing every contract
+		// to declare 500 under endpoints.http.responses (CH-04 only flags
+		// handler-emitted statuses that have no recover backstop).
+		panic(errcode.Assertion("generated handler http.auth.setup.admin.v1: service returned nil response without error (typed envelope contract violation)"))
+	}
+	// types_gen.go's encode/write paths already log via slog.ErrorContext on
+	// failure (with request_id/trace_id correlation). Headers/body may already
+	// be flushed at this point so there is no recovery branch — surface the
+	// outcome on the handler-level slog so access-log + trace span see the
+	// truncated response and metrics middleware can record the failure.
+	if visitErr := resp.visitAdminResponse(r.Context(), w); visitErr != nil {
+		slog.ErrorContext(r.Context(), "http.auth.setup.admin.v1: typed response visit failed",
+			slog.Any("error", visitErr))
+	}
 }

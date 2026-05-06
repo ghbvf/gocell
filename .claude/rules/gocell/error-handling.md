@@ -24,7 +24,7 @@
 1. 禁止 `errors.New` 对外暴露（exported package-scope `var Err* = errors.New(...)` 必须走 `errcode.New(code, message)`），由 archtest `EXPORTED-ERROR-NEW-01` 静态拦截。函数体内 `errors.New` 局部错误允许。
 2. 错误必须包装上下文：`fmt.Errorf("enrollment: %w", err)`
 3. 禁止 `_ = someFunc()` 忽略错误，必须显式处理或记录
-4. handler 层统一转换领域错误为 HTTP 状态码，domain 层禁止返回 HTTP 状态码
+4. handler 层统一转换领域错误为 HTTP 状态码，domain 层禁止返回 HTTP 状态码。对于 codegen 合同（contract.yaml `codegen: true`），cell adapter 通过返回生成的 `Xxx{Status}ErrorResponse{Body: errcode.Error{...}}` typed struct 表达业务 4xx/5xx；`return nil, err` 仅保留给未声明的 framework 5xx（panic recover、infrastructure faults），由 generated handler 走 `httputil.WriteError` 兜底。详见 ADR `docs/architecture/202605061500-adr-typed-response-envelope.md`。
 5. 500 不暴露内部细节，写 `slog`；客户端看到的错误信息必须对用户有意义
 
 ## Message PII 静态字面量约束

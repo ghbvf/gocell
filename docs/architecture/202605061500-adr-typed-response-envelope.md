@@ -81,6 +81,13 @@ Together they replace the fragile "single AST scan reverse-inferring everything"
 - 24 cell + example slice adapters had to migrate to the typed signature in a single PR (no compatibility shim — see `feedback_no_backcompat_elegant`). Mechanical; absorbed by 4 parallel sub-agents in `Batch 3`.
 - `pkg/httputil` gains one new public function (`WriteErrorWithStatus`) which is now part of the framework's stable surface for typed-envelope generated code.
 - 46 generated http handlers + ~14 golden testdata files regenerated; a single Batch 2 commit churns 5k LOC of generated content.
+- Framework 5xx paths where service returns a non-nil error fall outside the CH-06 assertion surface — they are covered by CH-04's `httpHelperWritesStatuses` table (`kernel/governance/rules_http_response_alignment.go:90-97`), which maps `WriteError` and pre-service helpers to their emitted status set. CH-04 and CH-06 are thus complementary: CH-04 owns pre-service and framework-fallback error sources, CH-06 owns the post-service typed-struct bijection.
+
+### Runtime 行为
+
+- `XxxResponseObject` 的 unexported `visitXxxResponse(ctx, w)` 方法把实现集封闭在 generated package 内部（与 `oapi-codegen` strict 模式同源）。Service 方法的返回类型是接口而非具体类型，在 Go 编译期即可确认：返回错误 concrete type 是编译错误，运行时不存在 dispatch 失败路径。
+- Service 返回 `(nil, nil)` 时，generated handler 走 `httputil.WriteError(errcode.New(KindInternal, …))` 兜底，向客户端返回 500 + `ERR_INTERNAL`，并通过 `slog.ErrorContext` 记录 "service returned nil response without error"。该路径属于 CH-04 覆盖的 `WriteError` 兜底面，不属于 CH-06 的 typed-struct 断言面。
+- `visitXxxResponse` 返回 non-nil error（encode/write 失败）时，handler 调用 `slog.ErrorContext` 记录截断响应；headers/body 可能已部分 flush，无法回滚，因此不存在二次响应写入路径。
 
 ### Carried forward (not in scope)
 

@@ -22,6 +22,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,13 +45,9 @@ type inlineLimitParseViolation struct {
 func TestHandlerNoInlineLimitParse(t *testing.T) {
 	root := findModuleRoot(t)
 
-	handlers, err := filepath.Glob(filepath.Join(root, "generated", "contracts", "http", "**", "handler_gen.go"))
-	require.NoError(t, err)
-	// Recursive glob fallback: stdlib filepath.Glob does not expand ** by
-	// default. Walk the tree manually if Glob returned 0 entries.
-	if len(handlers) == 0 {
-		handlers = walkHandlerGenFiles(t, filepath.Join(root, "generated", "contracts", "http"))
-	}
+	httpRoot := filepath.Join(root, "generated", "contracts", "http")
+	require.DirExists(t, httpRoot, "generated/contracts/http must exist; run `gocell generate contract --all`")
+	handlers := walkHandlerGenFiles(t, httpRoot)
 	require.NotEmpty(t, handlers, "no generated handler_gen.go files found under generated/contracts/http")
 
 	var violations []inlineLimitParseViolation
@@ -81,6 +78,42 @@ func walkHandlerGenFiles(t *testing.T, base string) []string {
 	})
 	require.NoError(t, err)
 	return out
+}
+
+// TestScanInlineLimitParse_DetectsViolation is the reverse / self-validation
+// test: it writes a synthetic handler_gen.go that intentionally pairs
+// strconv.ParseInt with a "limit" string literal in the same function body
+// and asserts that scanInlineLimitParse flags it. Without this test, a future
+// refactor that silently broke the AST walk (e.g. inverted the condition,
+// dropped the BasicLit branch) would let real violations slip past the
+// archtest while the positive test still passed (because real generated
+// handlers always conform).
+func TestScanInlineLimitParse_DetectsViolation(t *testing.T) {
+	dir := t.TempDir()
+	violatingPath := filepath.Join(dir, "handler_gen.go")
+	body := `package fixture
+
+import (
+	"net/http"
+	"strconv"
+)
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_ = v
+	}
+}
+`
+	require.NoError(t, os.WriteFile(violatingPath, []byte(body), 0o600))
+
+	violations := scanInlineLimitParse(t, violatingPath)
+	require.Len(t, violations, 1, "scanner must detect the synthetic violation")
+	require.Equal(t, "handle", violations[0].Func)
 }
 
 // scanInlineLimitParse parses a single handler_gen.go and returns one

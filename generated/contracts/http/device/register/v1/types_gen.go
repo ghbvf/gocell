@@ -49,7 +49,8 @@ func (r Register201JSONResponse) visitRegisterResponse(ctx context.Context, w ht
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
 	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
-		slog.ErrorContext(ctx, "http.device.register.v1: encode Register201JSONResponse body", slog.Any("error", err))
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.device.register.v1: encode Register201JSONResponse body", attrs...)
 		return err
 	}
 	return nil
