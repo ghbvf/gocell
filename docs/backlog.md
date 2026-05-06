@@ -280,8 +280,6 @@
 | PR245-F6 | **OUTBOX-ARCHTEST-SCAN-SCOPE-EXPAND-01** — 现状: isCellFile 仅匹配 `cell.go`；修复: 改为 `cells/<n>/*.go` 排除 internal/slices/test | arch-opt | Cx2 | 🟡 | — | `tools/archtest/outbox_cell_test.go` | PR#245 round-1 F-6 |
 | PR245-F10 | **CELL-RAW-DEPS-ARCHTEST-EXPAND-01** — 现状: PR-A5c 仅 ban WithPublisher/WithOutboxWriter；修复: 一并 ban 所有 raw-dep Option（029 #13 PR-A22 / 030 G-17 吸收） | arch-opt | Cx2 | 🟢 | — | `tools/archtest/raw_deps_test.go` (或扩展) | PR#245 round-1 F-10 |
 | PR250-F3 | **Event wire byte pinning** — 现状: 缺 byte 级回归；修复: 加 pinning test | test | Cx2 | 🟡 | — | `cells/accesscore/` | PR#250 |
-| PR-CFG-A-DEFER-3 | **Health agg archtest** — 现状: aggregator archtest 待 G1/G2 后落地；修复: 写 archtest | arch-opt | Cx3 | 🟢 | — | `tools/archtest/` | PR#268 |
-| JOURNEY-ACTIVE-LIFECYCLE-EMPTY-01 | **Journey active lifecycle 空状态** — 现状: 无 active journey 时 governance 沉默；修复: 加守卫 | arch-opt | Cx2 | 🔴 | — | `journeys/` + governance | systems layer review |
 | JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01 | **Journey contract 存在性校验** — 现状: journey 引用 contract 不存在不报错；修复: 加 governance 规则 | arch-opt | Cx2 | 🔴 | — | `kernel/governance/` | systems layer review |
 | ASSEMBLY-SCAFFOLD-CMD-01 | **ASSEMBLY-SCAFFOLD-CMD-01** — 现状: scaffold 子命令无 assembly；修复: 加 `gocell scaffold assembly` + 派生 modules_gen.go | feat | P1/Cx2 | 🟠 | 加第 2 个 assembly | `cmd/gocell/app/scaffold_assembly.go` (新) | systems-layer-07 §P1-3 |
 | B2-K-08-CARVEOUT-NARROW | **B2-K-08-CARVEOUT-NARROW** — 现状: errcode_constructor_test 对 ctxcancel/httputil 做 file-level 豁免；修复: 改 function-level + 扩展 message const | arch-opt | P1/Cx2 | 🟡 | 第 3 个 file 豁免出现 | `tools/archtest/` + `pkg/ctxcancel/` + `pkg/httputil/` | PR#391 K#08 carve-out |
@@ -289,10 +287,8 @@
 | IDUTIL-UUID-RAND-FAILURE-TEST-01 | **UUID rand failure test** — 现状: rand.Read 失败路径无回归；修复: fault injection test | test | Cx1 | 🟡 | — | `pkg/idutil/` | GitHub #23 |
 | FU2-GOVERNANCE-STATIC | **Governance static analysis** — 现状: typed gate (→ PR#321) 已落，static 后续；修复: 跟进 | arch-opt | Cx3 | 🟢 | — | `tools/archtest/` | — |
 | PR266-AUDITAPPEND-STRICT | **AuditAppend strict** — 现状: append 验证缺；修复: 加严 | arch-opt | P2/Cx2 | 🟡 | — | `cells/auditcore/` | PR#266 |
-| PR266-METADATA-ONLY-CONSUMER-BUSINESS | **Metadata-only consumer business** — 现状: receive placeholder 仍业务化；修复: 与 ConfigReceive cleanup 一同 | arch-opt | P2/Cx2 | 🟠 | 与 ConfigReceive cleanup 同 | `cells/accesscore/` | PR#266 |
 | PR332-VERIFY-GENERATED-REMEDIATION-DRIFT-01 | **Verify codegen drift remediation 提示** — 现状: drift 报错不提示修复命令；修复: 补 hint | arch-opt | Cx2 | 🟡 | — | `cmd/gocell/` | PR#332 |
 | VERIFY-CODEGEN-SANDBOX-INTEGRATION | **VERIFY-CODEGEN-SANDBOX-INTEGRATION** — 现状: --local=false sandbox 路径无端到端回归；修复: 补 1-2 条 git worktree integration test | test | Cx2 | 🟠 | 修改 verify-codegen-*.sh 或 runVerifyCodegen* | `cmd/gocell/app/codegen_*_drift_test.go` + tools/codegen helper | PR #404 K#10 review P2 |
-| PR391-CLI-EXPORT-ALIAS-GENERATEDAT-FLAKE | **CLI export alias/generatedAt flake** — 现状: 测试偶发；修复: 决定确定性策略 | bug | Cx1 | 🟡 | — | `cmd/gocell/` | PR#391 |
 | F2 | **Framework doc F2** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F2 |
 | F3 | **Framework doc F3** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F3 |
 | F4 | **Framework doc F4** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F4 |
@@ -306,7 +302,6 @@
 | TEST-CHDIR-PARALLEL-CLI-01 | **TEST-CHDIR-PARALLEL-CLI-01** — 现状: 4 个 CLI test 用 os.Chdir 阻碍 t.Parallel()；修复: 抽 RootResolver helper | test | P3/Cx2 | 🟡 | CLI 测试 > 30s 或新 generate sub-cmd | `cmd/gocell/app/generate_*_test.go` + `verify_codegen_*_test.go` | PR #361 round-2 #3 |
 | T6 | **CONTRACT-EVENT-PAYLOAD-CODEGEN-01** — 现状: scaffold/generate 无 schema → Go 能力；修复: 派生 payload.gen.go + decode/validate helper | feat | — | 🟠 | event subscriber decode 扩散 ≥5 cell | `tools/codegen/eventgen/` (新) + `generated/contracts/event/` | T6 |
 | T7 | **CH-05 alias eval** — 现状: import alias / const eval 漂移；修复: governance 加 | arch-opt | — | 🟡 | import alias / const drift | `kernel/governance/` | T7 / PR-A45 |
-| T9 | **Internal clients declared** — 现状: contract reality gap；修复: governance 强制 internal client 声明 | arch-opt | — | 🟠 | contract reality gap | `kernel/governance/` | T9 / PR#293 |
 | T10 | **Devtools cell promotion** — 现状: catalog 内置；修复: 升级为外部 cell | arch-opt | — | 🟠 | catalog customization | `cells/devtools/` + `runtime/` | T10 / PR-A37 |
 | M4-COVERAGE | **REVERSE-COVERAGE-ARCHTESTS-01** — 现状: 缺 5 条反向追溯规则；修复: 加 `IMPL-DECL-COVER-01` (cell 间 Go import 必须经 contract，非 slice 间) + `HANDLER-DECL-COVER-01` (http handler 必须出现在某 contract.yaml) + `EMIT-DECL-COVER-01` (outbox emit 必须出现在 contract.triggers) + `DEAD-CONTRACT-01` (active contract 必须有 handler 入口) + `DEAD-CODE-01` (deprecated contract 引用代码不能在 main 分支)；不含 SLICE-DECOUPLE | arch-opt | P2/Cx3 | 🟠 | M3 落地 | `tools/archtest/` | ADR-202605041430 M4 |
 | CONTRACT-BREAKING-01 | **`gocell check contract-breaking`** — 现状: 缺 API schema 历史破坏性变更比对；修复: 借鉴 buf.build 引入 40+ 条规则（字段删除/必填放宽阻断） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `cmd/gocell/` + `kernel/governance/` | backlog_later §5 |
@@ -316,7 +311,6 @@
 | CONTRACTTEST-SCHEMAREF-FAILFAST-01 | **contracttest schemaRefs 默认 fail-fast** — 现状: 未命中 schemaRefs key 默认 no-op，掩盖测试缺失；修复: 默认 fail；宽松改显式 `WithMissingKeyTolerated()` API | arch-opt | P1/Cx2 | 🟡 | 发布前必做 | `pkg/contracttest/contracttest.go` | backlog1 §2.2 |
 | CONTRACT-ENDPOINT-TEST-MAPPING-01 | **active contract → 测试用例映射门禁** — 现状: 缺活跃端点 → 测试覆盖映射；修复: governance 加规则：`lifecycle: active` HTTP contract 必须有对应 contract test | arch-opt | P1/Cx2 | 🟡 | 发布前必做 | `kernel/governance/` | backlog1 §2.2 |
 | CONTRACT-PATH-QUERY-EXECUTABLE-01 | **path/query 参数约束可执行测试** — 现状: pattern/min/max/format 无入参可执行测试；修复: 加 transport 入参 rejected 用例覆盖 | arch-opt | P1/Cx2 | 🟡 | 发布前必做 | `pkg/contracttest/contracttest.go` | backlog1 §2.2 |
-| CLI-SECONDARY-HELP-01 | **CLI 二级命令统一 -h/help** — 现状: 二级命令不识别 `-h`/`help`，被当 subtype 解析；修复: 修正 dispatch 顺序 + 文案 | bug | Cx1 | 🟡 | — | `cmd/gocell/app/dispatch.go` + `check.go` + `scaffold.go` | backlog1 §2.7 |
 | CLI-UNIMPL-HIDE-01 | **CLI 未实现命令隐藏** — 现状: `not implemented` 命令出现在主帮助；修复: 移除或显式 `[experimental]` 标注 + 运行时 `exit 64` | bug | Cx1 | 🟡 | — | `cmd/gocell/app/dispatch.go` + `generate.go` | backlog1 §2.7 |
 | B2-K-08 | **Assembly race test 认知复杂度超限** — 现状: `TestAssembly_StartConcurrentSnapshots_RaceDetector` SonarCloud `brain-overload` 32/15；修复: 拆 setupRaceFixture/spawnReaders/awaitReady 三 helper（保持 race window 确定性） | refactor | P2/Cx2 | 🟡 | — | `kernel/assembly/snapshots_race_test.go:36-120` | backlog2 §2 B2-K-08 |
 | B2-A-13 | **PG pool tx rollback 日志泄漏** — 现状: rollback 日志输出 SQL 片段；修复: 走 `pkg/redaction` | bug | P2/Cx2 | 🟡 | — | `adapters/postgres/pool.go:87,113` | backlog2 §5.1 B2-A-13 |
