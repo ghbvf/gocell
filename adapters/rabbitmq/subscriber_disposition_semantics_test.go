@@ -227,6 +227,32 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		}, testtime.D500ms, testtime.D50ms,
 			"DLX queue must remain empty for Requeue+Ack cycle (no rejected messages routed)")
 
+		// --- Terminal-state convergence (mirrors Ack subtest assertion strength) ---
+		// (a) main queue must drain to Messages=0 after the Ack on the second call
+		//     settles the broker — proves the redelivery cycle terminated cleanly,
+		//     not stuck in Requeue→Requeue→…
+		mainCh, err := conn.AcquireChannel()
+		require.NoError(t, err)
+		defer conn.ReleaseChannel(mainCh)
+
+		mainInspector, ok := mainCh.(queueInspector)
+		require.True(t, ok, "AMQPChannel must support QueueInspect in integration tests")
+
+		require.Eventually(t, func() bool {
+			q, qErr := mainInspector.QueueInspect(mainQueue)
+			return qErr == nil && q.Messages == 0
+		}, testtime.D2s, testtime.D50ms,
+			"main queue must drain to Messages=0 after Requeue+Ack cycle terminates")
+
+		// (b) callCount must remain stable — no continued redelivery loop after the
+		//     Ack on call #2 settled. Snapshot AFTER (a) succeeds (queue drained)
+		//     so any post-drain redelivery (which would re-grow the count) trips Never.
+		settledCount := callCount.Load()
+		require.Never(t, func() bool {
+			return callCount.Load() > settledCount
+		}, testtime.D300ms, testtime.D50ms,
+			"callCount must remain stable after queue drained (no post-Ack redelivery loop)")
+
 		subCancel()
 		_ = sub.Close(context.Background())
 	})

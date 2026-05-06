@@ -81,6 +81,39 @@ attempt cap. Behavior is now uniform across all `Config` instances:
 `ReconnectMaxBackoff` caps the backoff delay; the reconnect loop runs until
 `Close` is called.
 
+#### Migration note: `ConnectTimeout` default 5s (PR-V1-RMQ-CONFORMANCE-AND-CLOSURE, 029 B13)
+
+`Config.ConnectTimeout` was added with a default of `5 * time.Second`,
+wired into `amqp.Config.Dial` via `amqp.DefaultDial(d)`. Before this PR,
+`NewConnection` called `amqp.Dial(url)` bare, which inherited the OS
+default TCP SYN timeout (~1 minute on Linux, ~75 seconds on macOS) — an
+unreachable broker could block `NewConnection` for over a minute.
+
+Behavior change after upgrade (no code changes required for default users):
+
+- A broker that is reachable but slow to handshake (TLS, network jitter,
+  loaded broker) now fails dial after 5s instead of relying on the OS
+  default. The `Connection` reconnect loop immediately backs off and
+  retries (`ReconnectBaseDelay` 1s → `ReconnectMaxBackoff` 30s), so a
+  blip self-heals on the next successful dial.
+- Typical symptom of the new default biting too aggressively: `slog.Warn
+  "rabbitmq: reconnect attempt"` repeating with `error` field showing
+  `i/o timeout` on every attempt against a broker that does eventually
+  accept connections under a longer budget.
+
+Tuning advice:
+
+- Default 5s suits AMQP over a healthy LAN/cloud-internal network and
+  matches `adapters/postgres` `Config.ConnectTimeout` parity.
+- Slow / cross-region links or heavy mTLS handshakes: raise to **10–15s**
+  via `Config.ConnectTimeout`.
+- Tests against a blackhole IP / fault-injection harness: use a tight
+  value like `200ms` (see `adapters/rabbitmq/connect_timeout_test.go`
+  `TestNewConnection_ConnectTimeout_Blackhole`).
+- The `connect_timeout` `slog.Duration` field is logged on every
+  successful `connect()` (`adapters/rabbitmq/connection.go`); use it to
+  audit the effective value in production after deploy.
+
 ### ConsumerBase Config (`ConsumerBaseConfig`)
 
 | Field | Type | Required | Default | Description |
