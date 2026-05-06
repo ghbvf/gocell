@@ -992,6 +992,7 @@ func hasNextCursorInRequired(info responseSchemaInfo) bool {
 const (
 	codeFMT27 = "FMT-27"
 	codeFMT28 = "FMT-28"
+	codeFMT29 = "FMT-29"
 )
 
 // validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
@@ -1039,6 +1040,36 @@ func (v *Validator) validateFMT27() []ValidationResult {
 				c.ID,
 			),
 		))
+	}
+	return results
+}
+
+// validateFMT29 checks that every assembly declares a non-empty owner.team and
+// owner.role. Assembly ownership complements the JSON Schema required constraint
+// by providing a governance-layer finding with file+field attribution in the
+// governance report. Mirrors the cell owner check in validateFMT11.
+func (v *Validator) validateFMT29() []ValidationResult {
+	var results []ValidationResult
+	for _, asm := range v.project.Assemblies {
+		if asm == nil {
+			continue
+		}
+		if asm.Owner.Team == "" {
+			results = append(results, v.newResult(
+				codeFMT29, SeverityError, IssueRequired,
+				assemblyFile(asm),
+				"owner.team",
+				fmt.Sprintf("assembly %q must have owner.team", asm.ID),
+			))
+		}
+		if asm.Owner.Role == "" {
+			results = append(results, v.newResult(
+				codeFMT29, SeverityError, IssueRequired,
+				assemblyFile(asm),
+				"owner.role",
+				fmt.Sprintf("assembly %q must have owner.role", asm.ID),
+			))
+		}
 	}
 	return results
 }

@@ -567,3 +567,75 @@ func TestFMT28_BootstrapOnSetupAdminPath(t *testing.T) {
 		}
 	}
 }
+
+// --- FMT-29: assembly owner.team and owner.role required ---
+
+// buildFMT29Project returns a minimal ProjectMeta containing one assembly with
+// the given owner fields.
+func buildFMT29Project(team, role string) *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": {
+				ID:    "testasm",
+				Cells: []string{},
+				Owner: metadata.OwnerMeta{Team: team, Role: role},
+				Dir:   "testasm",
+				File:  "assemblies/testasm/assembly.yaml",
+			},
+		},
+	}
+}
+
+// TestFMT29_MissingOwnerTeam verifies that an assembly without owner.team
+// produces an FMT-29 SeverityError finding.
+func TestFMT29_MissingOwnerTeam(t *testing.T) {
+	project := buildFMT29Project("", "assembly-owner")
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT29()
+
+	var got []ValidationResult
+	for _, r := range results {
+		if r.Code == codeFMT29 && r.Severity == SeverityError && r.Field == "owner.team" {
+			got = append(got, r)
+		}
+	}
+	if len(got) == 0 {
+		t.Errorf("FMT-29: expected finding for missing owner.team, got 0 findings")
+	}
+}
+
+// TestFMT29_MissingOwnerRole verifies that an assembly without owner.role
+// produces an FMT-29 SeverityError finding.
+func TestFMT29_MissingOwnerRole(t *testing.T) {
+	project := buildFMT29Project("platform", "")
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT29()
+
+	var got []ValidationResult
+	for _, r := range results {
+		if r.Code == codeFMT29 && r.Severity == SeverityError && r.Field == "owner.role" {
+			got = append(got, r)
+		}
+	}
+	if len(got) == 0 {
+		t.Errorf("FMT-29: expected finding for missing owner.role, got 0 findings")
+	}
+}
+
+// TestFMT29_FullOwner verifies that an assembly with both owner.team and
+// owner.role set produces 0 FMT-29 findings.
+func TestFMT29_FullOwner(t *testing.T) {
+	project := buildFMT29Project("platform", "assembly-owner")
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT29()
+
+	for _, r := range results {
+		if r.Code == codeFMT29 {
+			t.Errorf("FMT-29: unexpected finding for complete owner: %v", r)
+		}
+	}
+}

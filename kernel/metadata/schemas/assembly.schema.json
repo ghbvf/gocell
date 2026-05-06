@@ -10,7 +10,7 @@
     "id": {
       "type": "string",
       "description": "Unique assembly identifier. Must equal the directory name under assemblies/.",
-      "pattern": "^[a-z][a-z0-9-]*$"
+      "pattern": "^[a-z][a-z0-9]+$"
     },
     "cells": {
       "type": "array",
@@ -51,7 +51,7 @@
         },
         "deployTemplate": {
           "type": "string",
-          "description": "Deployment template identifier.",
+          "description": "Deployment template identifier. Omit to use the parser-applied default \"k8s\" (the JSON Schema `default` keyword is documentation only — actual defaulting happens in metadata.applyAssemblyDerivations).",
           "enum": ["k8s", "compose", "binary"],
           "default": "k8s"
         }

@@ -101,6 +101,41 @@ func TestTOPO09_AssemblyEmptyCells(t *testing.T) {
 	assert.Empty(t, got, "assembly with no cells should be skipped")
 }
 
+// TestTOPO09_InvalidCellLevelSkips: assembly references a cell with an invalid
+// consistencyLevel ("L9") → skip, 0 findings from TOPO-09.
+// FMT-03 owns invalid level validation; TOPO-09 gracefully skips to avoid
+// duplicate / misleading reports.
+func TestTOPO09_InvalidCellLevelSkips(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"badlevelcell": {
+				ID:               "badlevelcell",
+				ConsistencyLevel: "L9", // invalid — FMT-03 covers this
+				Type:             "core",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
+				Dir:              "badlevelcell",
+				File:             "cells/badlevelcell/cell.yaml",
+			},
+		},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"badasm": {
+				ID:                  "badasm",
+				Cells:               []string{"badlevelcell"},
+				MaxConsistencyLevel: "L2",
+				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
+				Dir:                 "badasm",
+				File:                "assemblies/badasm/assembly.yaml",
+			},
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+	got := findByCode(val.validateTOPO09(), "TOPO-09")
+	assert.Empty(t, got, "invalid cell level should be skipped by TOPO-09 (FMT-03 owns invalid level validation)")
+}
+
 // TestTOPO09_AssemblyUnknownCellRef: assembly references a cell ID not in
 // Cells map → skip (REF rules cover unknown refs), 0 findings from TOPO-09.
 func TestTOPO09_AssemblyUnknownCellRef(t *testing.T) {

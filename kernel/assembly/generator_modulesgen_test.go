@@ -2,6 +2,7 @@ package assembly
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -96,6 +97,31 @@ func TestGenerateModulesGen_CellMissingGoStructName(t *testing.T) {
 	// Message is a const literal; it must mention GoStructName so the error
 	// is self-describing without the Internal field.
 	assert.Contains(t, ec.Message, "GoStructName")
+}
+
+// TestGenerateModulesGen_UnknownCellRef verifies that when an assembly references
+// a cell ID that is not registered in project.Cells, GenerateModulesGen returns
+// an errcode.Error with code ErrMetadataInvalid and a message containing "unknown"
+// or "not found".
+func TestGenerateModulesGen_UnknownCellRef(t *testing.T) {
+	project := buildModulesTestProject()
+	// Add assembly with an unregistered cell ID.
+	project.Assemblies["ghostbundle"] = &metadata.AssemblyMeta{
+		ID:    "ghostbundle",
+		Cells: []string{"accesscore", "ghost-cell-not-registered"},
+	}
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	_, err := gen.GenerateModulesGen("ghostbundle")
+	require.Error(t, err)
+
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec), "error must be an errcode.Error, got: %T", err)
+	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+	// Message must contain "unknown" or "not found" so the error is self-describing.
+	msgLower := strings.ToLower(ec.Message)
+	assert.True(t, strings.Contains(msgLower, "unknown") || strings.Contains(msgLower, "not found"),
+		"error message should contain 'unknown' or 'not found', got: %q", ec.Message)
 }
 
 func TestGenerateModulesGen_PreservesCellsOrder(t *testing.T) {
