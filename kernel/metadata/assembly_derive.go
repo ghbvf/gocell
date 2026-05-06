@@ -1,11 +1,6 @@
 package metadata
 
-import (
-	"fmt"
-	"path/filepath"
-
-	"github.com/ghbvf/gocell/pkg/errcode"
-)
+import "path/filepath"
 
 // consistencyOrder maps level string to numeric rank for comparison.
 // Mirrors kernel/cell.Level (L0=0..L4=4); kernel/metadata cannot import
@@ -21,22 +16,24 @@ var consistencyOrder = map[string]int{
 // applyAssemblyDerivations fills derived AssemblyMeta fields after parsing.
 // Single source of truth for build defaults and MaxConsistencyLevel; the
 // governance Validator only asserts derivations, never recomputes them.
-func applyAssemblyDerivations(pm *ProjectMeta) error {
+//
+// Layering note: this function performs structural derivation only — it does
+// not validate referential integrity (unknown cell IDs, invalid level strings).
+// Those failures are governance concerns (REF-* / TOPO-09) and would conflate
+// parser concerns with validator concerns. When derivation cannot complete
+// because of missing/invalid references, the affected field is left at its
+// zero value so governance can report the underlying issue without being
+// shadowed by a parser-level error.
+func applyAssemblyDerivations(pm *ProjectMeta) {
 	for _, asm := range pm.Assemblies {
 		if asm == nil {
 			continue
 		}
-		if err := deriveAssembly(pm, asm); err != nil {
-			return err
-		}
+		deriveAssembly(pm, asm)
 	}
-	return nil
 }
 
-func deriveAssembly(pm *ProjectMeta, asm *AssemblyMeta) error {
-	if err := validateAssemblyOwner(asm); err != nil {
-		return err
-	}
+func deriveAssembly(pm *ProjectMeta, asm *AssemblyMeta) {
 	if asm.Build.Entrypoint == "" {
 		asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("cmd", asm.ID, "main.go"))
 	}
@@ -46,49 +43,36 @@ func deriveAssembly(pm *ProjectMeta, asm *AssemblyMeta) error {
 	if asm.Build.DeployTemplate == "" {
 		asm.Build.DeployTemplate = "k8s"
 	}
-
-	maxLevel, err := computeMaxConsistencyLevel(pm, asm)
-	if err != nil {
-		return err
+	if maxLevel, ok := computeMaxConsistencyLevel(pm, asm); ok {
+		asm.MaxConsistencyLevel = maxLevel
 	}
-	asm.MaxConsistencyLevel = maxLevel
-	return nil
-}
-
-func validateAssemblyOwner(asm *AssemblyMeta) error {
-	if asm.Owner.Team == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-			"assembly owner.team is required",
-			errcode.WithInternal(fmt.Sprintf("assembly=%q", asm.ID)))
-	}
-	return nil
 }
 
 // computeMaxConsistencyLevel returns the max consistency level string among all
-// cells referenced by asm. Returns "L0" when asm.Cells is empty.
-func computeMaxConsistencyLevel(pm *ProjectMeta, asm *AssemblyMeta) (string, error) {
+// cells referenced by asm. Returns ("L0", true) when asm.Cells is empty.
+// Returns (_, false) when any referenced cell is unknown or has an invalid
+// ConsistencyLevel — those cases are governance failures (REF-* / FMT-03)
+// and the field is left empty so the governance layer can report the
+// underlying issue.
+func computeMaxConsistencyLevel(pm *ProjectMeta, asm *AssemblyMeta) (string, bool) {
 	if len(asm.Cells) == 0 {
-		return "L0", nil
+		return "L0", true
 	}
 	maxRank := -1
 	maxLevel := "L0"
-	for i, cellID := range asm.Cells {
+	for _, cellID := range asm.Cells {
 		c, ok := pm.Cells[cellID]
 		if !ok {
-			return "", errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-				"assembly references unknown cell",
-				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q index=%d", asm.ID, cellID, i)))
+			return "", false
 		}
 		rank, valid := consistencyOrder[c.ConsistencyLevel]
 		if !valid {
-			return "", errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-				"assembly cell has invalid consistencyLevel",
-				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q level=%q", asm.ID, cellID, c.ConsistencyLevel)))
+			return "", false
 		}
 		if rank > maxRank {
 			maxRank = rank
 			maxLevel = c.ConsistencyLevel
 		}
 	}
-	return maxLevel, nil
+	return maxLevel, true
 }

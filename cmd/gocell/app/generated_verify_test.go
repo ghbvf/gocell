@@ -86,6 +86,17 @@ func runFixture(context.Context, string, []string) error {
 	return nil
 }
 `))
+	// K#10: gocell generate assembly now also emits cmd/{id}/modules_gen.go
+	// which references a CellModule type. Provide a minimal type definition
+	// in the same package so the generated file compiles. Real assemblies
+	// declare CellModule with the full Provide signature in cmd/{id}/cell_module.go;
+	// the fixture only needs the type to satisfy modules_gen.go's reference.
+	writeAppFixtureFile(t, root, "cmd/fixture/cell_module.go", []byte(`package main
+
+type CellModule interface {
+	ID() string
+}
+`))
 	return root
 }
 

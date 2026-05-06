@@ -4,9 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // buildAssemblyProject constructs a minimal *ProjectMeta with the given cells
@@ -39,7 +36,7 @@ func TestApplyAssemblyDerivations_BuildAllOmitted(t *testing.T) {
 	}
 	pm := buildAssemblyProject(map[string]string{"mycelll1": "L1"}, []string{"mycelll1"}, asm)
 
-	require.NoError(t, applyAssemblyDerivations(pm))
+	applyAssemblyDerivations(pm)
 
 	assert.Equal(t, "cmd/testbundle/main.go", asm.Build.Entrypoint)
 	assert.Equal(t, "testbundle", asm.Build.Binary)
@@ -55,7 +52,7 @@ func TestApplyAssemblyDerivations_PartialBuildOverride(t *testing.T) {
 	}
 	pm := buildAssemblyProject(map[string]string{"somecell": "L2"}, []string{"somecell"}, asm)
 
-	require.NoError(t, applyAssemblyDerivations(pm))
+	applyAssemblyDerivations(pm)
 
 	// Binary must not be overridden
 	assert.Equal(t, "custom-bin", asm.Build.Binary)
@@ -80,7 +77,7 @@ func TestApplyAssemblyDerivations_MaxConsistencyMultipleCells(t *testing.T) {
 		asm,
 	)
 
-	require.NoError(t, applyAssemblyDerivations(pm))
+	applyAssemblyDerivations(pm)
 
 	assert.Equal(t, "L4", asm.MaxConsistencyLevel)
 }
@@ -92,22 +89,42 @@ func TestApplyAssemblyDerivations_MaxConsistencyAllL0(t *testing.T) {
 	}
 	pm := buildAssemblyProject(map[string]string{"purecalc": "L0"}, []string{"purecalc"}, asm)
 
-	require.NoError(t, applyAssemblyDerivations(pm))
+	applyAssemblyDerivations(pm)
 
 	assert.Equal(t, "L0", asm.MaxConsistencyLevel)
 }
 
-func TestApplyAssemblyDerivations_MissingCellRefFails(t *testing.T) {
+// TestApplyAssemblyDerivations_MissingCellRefSkipsMaxLevel asserts the
+// layering decision: parser-stage derivation does not validate referential
+// integrity; unknown cell IDs leave MaxConsistencyLevel empty so governance
+// REF-* / TOPO-09 can report the issue without being shadowed by a
+// parser-level error.
+func TestApplyAssemblyDerivations_MissingCellRefSkipsMaxLevel(t *testing.T) {
 	asm := &AssemblyMeta{
 		ID:    "badbundle",
 		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
 	pm := buildAssemblyProject(map[string]string{}, []string{"nonexistent"}, asm)
 
-	err := applyAssemblyDerivations(pm)
-	require.Error(t, err)
+	applyAssemblyDerivations(pm)
 
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrMetadataInvalid, ec.Code)
+	// Build defaults are still applied even when cells are unresolvable.
+	assert.Equal(t, "cmd/badbundle/main.go", asm.Build.Entrypoint)
+	assert.Equal(t, "badbundle", asm.Build.Binary)
+	assert.Equal(t, "k8s", asm.Build.DeployTemplate)
+	// MaxConsistencyLevel left at zero value; governance reports the unknown ref.
+	assert.Empty(t, asm.MaxConsistencyLevel)
+}
+
+func TestApplyAssemblyDerivations_InvalidLevelSkipsMaxLevel(t *testing.T) {
+	asm := &AssemblyMeta{
+		ID:    "badlvlbundle",
+		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+	}
+	pm := buildAssemblyProject(map[string]string{"bad-level-cell": "L9"}, []string{"bad-level-cell"}, asm)
+
+	applyAssemblyDerivations(pm)
+
+	// Same layering rationale — invalid level is FMT-03 territory.
+	assert.Empty(t, asm.MaxConsistencyLevel)
 }

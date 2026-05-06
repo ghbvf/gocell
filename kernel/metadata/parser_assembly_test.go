@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -55,23 +54,23 @@ owner:
 	assert.Equal(t, "bundle-owner", asm.Owner.Role)
 }
 
-// TestParseAssembly_OwnerRequired checks that omitting owner causes the derive
-// step to fail fast (owner.Team empty).
-func TestParseAssembly_OwnerRequired(t *testing.T) {
-	// assembly without owner field — KnownFields(true) passes (owner is optional
-	// in yaml struct, schema validation is a separate governance phase), so we
-	// rely on the derive step's owner-empty check.
+// TestParseAssembly_OwnerOmittedParsesEmpty asserts the layering decision:
+// parser does not enforce owner required; that's a schema/governance concern.
+// Yaml decoder keeps Owner zero-valued; downstream governance/schema validates.
+func TestParseAssembly_OwnerOmittedParsesEmpty(t *testing.T) {
 	fsys := minimalAssemblyFS(`id: mybundle
 cells:
   - testcell
 `, "L0")
 
-	_, err := NewParser("").ParseFS(fsys)
-	require.Error(t, err)
-	assert.True(t,
-		strings.Contains(err.Error(), "owner") ||
-			strings.Contains(err.Error(), "ERR_METADATA_INVALID"),
-		"expected owner-related error, got: %v", err)
+	pm, err := NewParser("").ParseFS(fsys)
+	require.NoError(t, err)
+	asm := pm.Assemblies["mybundle"]
+	require.NotNil(t, asm)
+	assert.Empty(t, asm.Owner.Team, "Owner.Team is left empty for governance/schema layer")
+	assert.Empty(t, asm.Owner.Role)
+	// Build defaults still derive
+	assert.Equal(t, "cmd/mybundle/main.go", asm.Build.Entrypoint)
 }
 
 // TestParseAssembly_RejectsMaxConsistencyLevelKey checks that a yaml key
