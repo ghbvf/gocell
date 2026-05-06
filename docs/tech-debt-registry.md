@@ -92,7 +92,7 @@
 | # | 标签 | 状态 | 问题 | 延迟理由 | 建议修复时机 |
 |---|------|------|------|---------|-------------|
 | P3-TD-01 | [TECH] | RESOLVED | integration_test.go 全为 t.Skip stub；testcontainers-go 未引入 go.mod | Phase 4 实现 testcontainers 集成测试（postgres/redis/rabbitmq）；go.mod 添加 v0.41.0 | Phase 4 ✓ |
-| P3-TD-02 | [TECH] | PARTIAL | postgres adapter 覆盖率 46.6%（要求 ≥80%）；Pool/TxManager/Migrator 真实路径未覆盖 | testcontainers 测试已实现；精确覆盖率未在流水线中测量（需 Docker + -tags=integration） | Phase 5（测量验证） |
+| P3-TD-02 | [TECH] | RESOLVED | ~~postgres adapter 覆盖率 46.6%（要求 ≥80%）；Pool/TxManager/Migrator 真实路径未覆盖~~ | PR-V1-TEST-GATE-CLOSURE 实测包级 87.7% ≥ 80%；pool.go 91.1% / tx_manager.go 83.7% / migrator.go 81.1% 全部 ≥ 70%；CI gate 双层守护（包级 80% + 三核心 70%）落 `_build-lint.yml` integration-test job | v1.0 ✓ |
 | P3-TD-04 | [TECH] | OPEN | websocket/oidc/s3 单元测试在 sandbox 环境 httptest 端口绑定 panic | 测试在非 sandbox 环境正常通过，sandbox 限制 net.Listen；Phase 4 添加跳过 guard | Phase 4 CI ✓（guard 已加）|
 | P3-TD-07 | [TECH] | RESOLVED | testcontainers-go 未在 go.mod | go.mod 已添加 v0.41.0（注意：标记为 indirect，Phase 5 修正） | Phase 4 ✓ |
 
@@ -146,7 +146,7 @@
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
 | P4-TD-05 | [TECH] | RESOLVED | 无 outbox 全链路集成测试（FR-6.5） | Phase 4 实现 TestIntegration_OutboxFullChain（postgres→relay→rabbitmq→idempotency）| Phase 4 ✓ |
-| P4-TD-11 | [TECH] | OPEN | `adapters/postgres` 缺少 `Migrator.Down()` 在 version 0 下重复调用仍返回 nil 的回归测试覆盖 | 当前实现已恢复 idempotent no-op 语义，但没有第三次 `Down()` 的测试锁定；后续重构或依赖升级可能再次引入兼容性回归 | v1.1 |
+| P4-TD-11 | [TECH] | RESOLVED | ~~`adapters/postgres` 缺少 `Migrator.Down()` 在 version 0 下重复调用仍返回 nil 的回归测试覆盖~~ | PR-V1-TEST-GATE-CLOSURE 加 `TestMigrator_Down_AtVersionZero_Idempotent`（minimal MapFS fixture + Up→Down x3 + Status 校验，锁 ErrNoCurrentVersion/ErrNoNextVersion 两条 goose v=0 语义） | v1.0 ✓ |
 
 ### CI/运维
 
@@ -168,7 +168,7 @@
 
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
-| P4-TD-08 | [TECH] | OPEN | postgres adapter 集成覆盖率（-tags=integration）未在流水线中测量；基准为 46.6%（Phase 3） | 无法确认 testcontainers 测试后覆盖率是否达到 ≥80% 要求 | Phase 5（CI 集成覆盖率测量）|
+| P4-TD-08 | [TECH] | RESOLVED | ~~postgres adapter 集成覆盖率（-tags=integration）未在流水线中测量；基准为 46.6%（Phase 3）~~ | PR-V1-TEST-GATE-CLOSURE 在 `_build-lint.yml` integration-test job 加 post-process awk gate 阻断 < 80% / 三核心 < 70%；实测当前包级 87.7% PASS | v1.0 ✓ |
 | P4-TD-09 | [TECH] | OPEN | testcontainers-go 在 go.mod 中标记为 `// indirect`，实际为直接依赖 | go.mod 声明不准确，go mod tidy 可能移除 | v1.1 |
 
 ---
@@ -211,14 +211,15 @@
 | Phase | [TECH] | [PRODUCT] | 合计 | OPEN | RESOLVED | PARTIAL |
 |-------|--------|-----------|------|------|----------|---------|
 | Phase 2 | 23 | 3 | 26 | 1 | 24 | 1 |
-| Phase 3 新增 | 9 | 3 | 12 | 5 | 5 | 2 |
-| Phase 4 新增 | 10 | 0 | 10 | 9 | 1 | 0 |
+| Phase 3 新增 | 9 | 3 | 12 | 5 | 6 | 1 |
+| Phase 4 新增 | 10 | 0 | 10 | 7 | 3 | 0 |
 | PR #43 WS | 7 | 0 | 7 | 5 | 2 | 0 |
-| **总计** | **49** | **6** | **55** | **20** | **32** | **3** |
+| **总计** | **49** | **6** | **55** | **18** | **35** | **2** |
 
-**活跃债务（OPEN + PARTIAL）**: 23 条（v1.1 处理目标）
+**活跃债务（OPEN + PARTIAL）**: 20 条（v1.1 处理目标）
 
 **Phase 4 关闭**: P3-TD-01、P3-TD-03、P3-TD-06、P3-TD-07、P3-TD-08、P3-TD-09、P4-TD-05（共 7 条）
 **Phase 4 新增 OPEN**: P4-TD-01 through P4-TD-04、P4-TD-06 through P4-TD-11（共 10 条）
+**v1.0 关闭（PR-V1-TEST-GATE-CLOSURE / G11）**: P3-TD-02、P4-TD-08、P4-TD-11（共 3 条 — postgres adapter 覆盖率 + Migrator.Down v=0 idempotency 闭环）
 
-**注**: 全局 registry 仅追踪跨 Phase 持续影响的条目（架构/安全/测试层面）。编码规范/DX 细节项在 Phase 执行中修复时不重复录入。Phase 3 PARTIAL 项（P3-TD-02、P3-TD-05）在 Phase 4 仍为 PARTIAL，目标 v1.1 完全关闭。
+**注**: 全局 registry 仅追踪跨 Phase 持续影响的条目（架构/安全/测试层面）。编码规范/DX 细节项在 Phase 执行中修复时不重复录入。Phase 3 PARTIAL 项 P3-TD-05 在 Phase 4 仍为 PARTIAL，目标 v1.1 完全关闭（P3-TD-02 已于 v1.0 关闭）。

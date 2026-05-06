@@ -281,6 +281,71 @@ jobs:
         # is left to staging and B11 backlog.
         run: go vet -tags=integration_cluster ./adapters/redis/...
 
+      # adapters/postgres coverage gate (G11 / PR-V1-TEST-GATE-CLOSURE)
+      # Closes P3-TD-02 + P4-TD-08: previously coverage-integration.out was
+      # only collected for SonarCloud (no enforcement). Mirrors the kernel
+      # coverage gate at this file:169-192 — same exit-1 + PASS-log shape.
+      #
+      # Package floor 80% (P3-TD-02 original requirement, one-shot — not the
+      # phased 60% step). Per-file floor 70% on pool.go / tx_manager.go /
+      # migrator.go guards P3-TD-02's stated root concern ("Pool/TxManager/
+      # Migrator 真实路径未覆盖") so the package average can't be propped up
+      # by high outbox/refresh coverage while the core trio sags.
+      #
+      # Coverage is parsed straight from coverage-integration.out — no extra
+      # test run, no testcontainers re-spin. The profile rows (one per
+      # statement-block) are statement-weighted aggregated by awk so a 1-stmt
+      # uncovered helper can't drag a 100-stmt covered hot path down.
+      - name: adapters/postgres coverage gate
+        run: |
+          set -euo pipefail
+          PROFILE=coverage-integration.out
+          PKG_PREFIX='github.com/ghbvf/gocell/adapters/postgres/'
+
+          if [ ! -s "$PROFILE" ]; then
+            echo "FAIL: $PROFILE missing or empty"; exit 1
+          fi
+
+          # Package-level %: statement-weighted over all adapters/postgres files.
+          pkg_pct=$(awk -v prefix="$PKG_PREFIX" '
+            $1 ~ "^"prefix"[^/]+\\.go:" {
+              total += $2
+              if ($3 > 0) hit += $2
+            }
+            END {
+              if (total > 0) printf "%.1f", hit/total*100
+              else print "0"
+            }
+          ' "$PROFILE")
+          if [ -z "$pkg_pct" ] || [ "$pkg_pct" = "0" ]; then
+            echo "FAIL: no adapters/postgres rows in $PROFILE"; exit 1
+          fi
+          awk -v p="$pkg_pct" 'BEGIN {
+            if (p+0 < 80) { print "FAIL: adapters/postgres coverage " p "% < 80%"; exit 1 }
+            print "PASS: adapters/postgres coverage " p "% >= 80%"
+          }'
+
+          # Per-file floor: P3-TD-02 root concern guard.
+          for f in pool.go tx_manager.go migrator.go; do
+            file_pct=$(awk -v file="$PKG_PREFIX$f:" '
+              index($1, file) == 1 {
+                total += $2
+                if ($3 > 0) hit += $2
+              }
+              END {
+                if (total > 0) printf "%.1f", hit/total*100
+                else print "0"
+              }
+            ' "$PROFILE")
+            if [ -z "$file_pct" ] || [ "$file_pct" = "0" ]; then
+              echo "FAIL: no rows for adapters/postgres/$f in $PROFILE"; exit 1
+            fi
+            awk -v p="$file_pct" -v f="$f" 'BEGIN {
+              if (p+0 < 70) { print "FAIL: adapters/postgres/" f " coverage " p "% < 70%"; exit 1 }
+              print "PASS: adapters/postgres/" f " coverage " p "% >= 70%"
+            }'
+          done
+
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
