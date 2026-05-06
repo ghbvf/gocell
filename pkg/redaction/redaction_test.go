@@ -572,6 +572,18 @@ func (customLogValuer) LogValue() slog.Value {
 	return slog.StringValue("logvaluer-resolved-value")
 }
 
+// secretLeakingLogValuer documents the fail-open boundary cost: if a
+// LogValuer's resolved string contains a sensitive key=value pattern,
+// RedactSlogAttr does NOT recurse into LogValue() and the secret leaks
+// to slog. This is by design — the first-line defense (errcode.WithDetails
+// + DETAILS-SLOG-ATTR-01 archtest) prevents direct-writing arbitrary
+// structs to errcode.Error.Details.
+type secretLeakingLogValuer struct{}
+
+func (secretLeakingLogValuer) LogValue() slog.Value {
+	return slog.StringValue("password=hunter2")
+}
+
 // TestRedactSlogAttr_PassthroughKinds locks the baseline behavior of
 // redactSlogValue for non-string slog.Value kinds: bool, int64, float64,
 // time.Time, slog.Any (struct), and slog.LogValuer all pass through unchanged.
@@ -622,6 +634,15 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 		{
 			name:           "logvaluer passthrough",
 			attr:           slog.Any("v", customLogValuer{}),
+			wantValueEqual: true,
+		},
+		{
+			// Documents fail-open boundary cost: LogValuer resolving to a
+			// sensitive string IS NOT redacted (passthrough). Acceptable
+			// only because errcode.WithDetails forbids non-slog.Attr inputs
+			// upstream (DETAILS-SLOG-ATTR-01).
+			name:           "logvaluer with secret leaks by design (fail-open boundary)",
+			attr:           slog.Any("config", secretLeakingLogValuer{}),
 			wantValueEqual: true,
 		},
 		{

@@ -581,12 +581,6 @@ func contractIDForTypeName(typeName string, contractImports map[string]string) s
 		}
 	}
 
-	// Fallback: return any single entry (handles aliases that don't follow naming).
-	if len(contractImports) == 1 {
-		for _, cid := range contractImports {
-			return cid
-		}
-	}
 	return ""
 }
 
