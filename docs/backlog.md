@@ -52,6 +52,11 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | **Slice 多 verb 拆分** — 现状: auditcore/configcore 多 slice 跨 verb；修复: 加 4+ cell 时拆分 | arch-opt | Cx3 | 🟠 | 4+ cell 加入 | `cells/auditcore` + `configcore/` | systems layer review |
 | M2-LIFECYCLE | **CELL-SLICE-LIFECYCLE-FIELD-01** — 现状: cell/slice 缺生命周期相位声明；修复: cell.yaml/slice.yaml 加 `lifecycle` 字段 (experimental/candidate/asset/maintenance/retired) + governance 校验状态转移合法性 + 运行时通过 Aggregator 接口暴露当前相位（差距由消费方计算）(also: cap-13) | feat | P2/Cx3 | 🟠 | M1 落地 | `kernel/metadata/types.go` + `kernel/governance/` + `kernel/healthz/` | ADR-202605041430 M2 |
 | M3-RULE-ENGINE | **GOVERNANCE-RULE-ENGINE-DATA-DRIVEN-01** — 现状: governance 64 规则散在 Go 代码；修复: `kernel/governance/engine.go` 唯一执行体 + `kernel/governance/rules/*.yaml` 数据化（5 槽位 detect/evidence/next/level/harvest）+ `next-action` 五级 (autofix/suggest/advisory/block/escalate) + 规则带 `metric` 距离函数 + 修 ADV-05 SeverityError 错分 | refactor | P2/Cx3 | 🟡 | — | `kernel/governance/engine.go` (新) + `kernel/governance/rules/*.yaml` (新) | ADR-202605041430 M3 |
+| G-1 | **FMT-11 dynamic-status-field 隔离** — 现状: 动态状态字段（readiness/risk/blocker）漏入非 status-board 文件，元数据被污染；修复: governance 加 FMT-11 严格隔离 | doc | P2/Cx2 | 🟡 | 出现元数据污染或非法 contract 引用 | `kernel/governance/` | backlog_later §1 |
+| G-2 | **TOPO-07 actor.maxConsistencyLevel 校验** — 现状: parser 已解析 actor.maxConsistencyLevel 但校验阶段不阻断；修复: governance 加 TOPO-07 阻断 | bug | P2/Cx2 | 🟡 | 同 G-1 | `kernel/metadata/parser.go` + governance | backlog_later §1 |
+| G-4 | **Deprecated contract 引用阻断** — 现状: deprecated 仅 warning；修复: 升 P1 break build | arch-opt | P2/Cx2 | 🟡 | v1.1 启动 | `kernel/governance/` | backlog_later §1 |
+| G-6 | **Assembly boundary.yaml 一致性校验** — 现状: 派生文件无校验；修复: 加生成系一致性校验 | doc | P3/Cx1 | 🟡 | v1.1 启动 | `kernel/governance/` | backlog_later §1 |
+| DURABLE-TYPE-01 | **L2/L3 持久化级别静态保护** — 现状: 类型抹除让 L2/L3 检测退化为启动期 panic；修复: 探索类型系统层面静态编译保护（仓储级能力推断） | arch-opt | P2/Cx3 | 🟡 | v1.1 启动 | `kernel/metadata/` + `kernel/persistence/` | backlog_later §6 |
 
 ---
 
@@ -83,6 +88,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR-CI-5-FU-WEBSOCKET-ORIGIN-CONTRACT | **WEBSOCKET-ORIGIN-CONTRACT-TRIM-NORMALIZE-01** — 现状: Validate trim 仅判断未规范化；修复: trim 写回 cfg + 文档统一裸 host vs 完整 origin | arch-opt | P2/Cx1-Cx2 | 🟢 | — | `adapters/websocket/handler.go` + integration_test.go | 029 D7 / via /fix PR#335 |
 | T8-B | **PATH-PARAM-PREVALIDATE** — 现状: handler-side path param 校验分散；修复: 路由前预校验 helper | arch-opt | — | 🟠 | 安全审查触发 | `runtime/auth/` + `pkg/httputil/` | PR-A45 |
 | T4 | **CB-RESILIENCE-PACKAGE-01** — 现状: Allower / CircuitBreakerRetryAfter 在 `runtime/http/middleware`；修复: 迁到 `runtime/resilience/circuitbreaker/` 独立包 (also: cap-x-cross) | refactor | — | 🟠 | 出现第 2 个非 HTTP CB 消费方 | `runtime/http/middleware/` + `runtime/resilience/circuitbreaker/` (新) | T4 |
+| WM-32 | **mTLS 中间件** — 现状: 缺；修复: 加 TLS 构建器 + HTTP 证书提取钩子（折中：大规模环境 mTLS 卸载在 K8s/Service Mesh 解决，框架仅提供构建器） | feat | P2/Cx2 | 🟡 | V1.1 启动 | `runtime/http/middleware/` | backlog_later §7 WM-32（4/6 票）|
 
 ---
 
@@ -112,6 +118,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | T1 | **AUTH-PROVIDER-EXPORT-01** — 现状: `authProvider` interface unexported；修复: 移出 `runtime/bootstrap` | arch-opt | — | 🟠 | 第 2 个 auth provider cell | `runtime/bootstrap/` | T1 |
 | T2 | **AUTH-ISSUE-OPTIONS-01** — 现状: `JWTIssuer.Issue()` 5 参数；修复: IssueOptions struct | arch-opt | — | 🟠 | Issue() 第 5 个参数 | `runtime/auth/` | T2 |
 | T5 | **AUTH-SIGNER-01** — 现状: SigningKeyProvider 返回 `*rsa.PrivateKey`；修复: 改 `crypto.Signer` 支持 HSM/KMS/EC | arch-opt | — | 🟡 | caller 需 HSM/KMS | `runtime/auth/` | T5 |
+| C-AC7 | **JWT jti claim 支持** — 现状: 缺 jti，单 token 无法黑名单撤销；修复: Issue() 加 jti + jti 黑名单存储 | feat | P2/Cx2 | 🟡 | 出现单 token 撤销需求 | `runtime/auth/` | backlog_later §6 C-AC7 |
 
 ---
 
@@ -144,6 +151,9 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 |---|---|---|---|---|---|---|---|
 | RELAY-RETRYDELAY-TABLE-TEST-01 | **Relay retry delay 表驱动测试** — 现状: retry delay 路径覆盖单一；修复: 加 table-driven test | test | Cx2 | 🟡 | — | `adapters/rabbitmq/` | — |
 | CELL-CONSUMER-EXTRA-TOPICS-OPTION-01 | **Cell consumer extra topics option** — 现状: cell 无法订阅同 cell 外的 extra topics；修复: 加 Option | feat | Cx3 | 🟡 | — | `kernel/cell/` | GitHub #303 |
+| KERNEL-REPLAY-01 | **kernel/replay 投影重算** — 现状: 缺 CQRS Projection rebuild；修复: 新建 replay 包 + 依赖 Consumer 模型稳定后实现 | feat | P3/Cx3 | 🟡 | Consumer 模型稳定 + 业务出现 CQRS rebuild 需求 | `kernel/replay/` (新) | backlog_later §2 |
+| KERNEL-RECONCILE-01 | **kernel/reconcile L3 收敛循环** — 现状: 缺 Reconciler 模式；修复: 新建 reconcile 包 | feat | P2/Cx3 | 🟡 | L3 业务出现 | `kernel/reconcile/` (新) | backlog_later §2 |
+| WM-18 | **延迟消息原语** — 现状: 缺 TTL；修复: RMQ x-delayed-message 插件绑定 + 测试桩支持（运维成本拉升，等 Outbox 稳定后探索） | feat | P2/Cx2 | 🟡 | V1.1 启动 + Outbox 彻底稳定 | `adapters/rabbitmq/` + outbox | backlog_later §7 WM-18（3/6 票）|
 
 ---
 
@@ -267,6 +277,10 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | T9 | **Internal clients declared** — 现状: contract reality gap；修复: governance 强制 internal client 声明 | arch-opt | — | 🟠 | contract reality gap | `kernel/governance/` | T9 / PR#293 |
 | T10 | **Devtools cell promotion** — 现状: catalog 内置；修复: 升级为外部 cell | arch-opt | — | 🟠 | catalog customization | `cells/devtools/` + `runtime/` | T10 / PR-A37 |
 | M4-COVERAGE | **REVERSE-COVERAGE-ARCHTESTS-01** — 现状: 缺 5 条反向追溯规则；修复: 加 `IMPL-DECL-COVER-01` (cell 间 Go import 必须经 contract，非 slice 间) + `HANDLER-DECL-COVER-01` (http handler 必须出现在某 contract.yaml) + `EMIT-DECL-COVER-01` (outbox emit 必须出现在 contract.triggers) + `DEAD-CONTRACT-01` (active contract 必须有 handler 入口) + `DEAD-CODE-01` (deprecated contract 引用代码不能在 main 分支)；不含 SLICE-DECOUPLE | arch-opt | P2/Cx3 | 🟠 | M3 落地 | `tools/archtest/` | ADR-202605041430 M4 |
+| CONTRACT-BREAKING-01 | **`gocell check contract-breaking`** — 现状: 缺 API schema 历史破坏性变更比对；修复: 借鉴 buf.build 引入 40+ 条规则（字段删除/必填放宽阻断） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `cmd/gocell/` + `kernel/governance/` | backlog_later §5 |
+| CONTRACT-CODEGEN-01 | **Go DTO ↔ JSON Schema 双向推断** — 现状: 代码与契约 YAML 分裂；修复: Struct Tags 实时双写到 JSON Schema（对齐 oapi-codegen） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `tools/codegen/` + DTO 模板 | backlog_later §5 |
+| CONTRACT-STUB-01 | **Consumer-Driven Contract Stub** — 现状: 缺消费方 stub 校验；修复: 提供 Stub 桩代码套件（对标 Spring Cloud Contract / Pact） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `tools/contracttest/` | backlog_later §5 |
+| C-L6 | **Contract ID 解析标准统一** — 现状: CLI 用点分（http.auth）、Generator 退化为斜杠分割，开发者上下文脱节；修复: 全局检索 + 统一内部 Contract ID 解析 | bug | P2/Cx2 | 🟡 | — | `cmd/gocell/` + `kernel/scaffold/` + `tools/codegen/` | backlog_later §6 C-L6 |
 
 ---
 
@@ -276,7 +290,6 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| PR-A12-SWEEPER-WIRE | **Command sweeper wire** — 现状: InMemQueue.ListPending 多设备路径未串；修复: 触发后接 (also: cap-12) | feat | Cx1-Cx2 | 🟠 | InMemQueue.ListPending 多设备 | `kernel/command/` | PR#249 |
 | PR-BATCH2-RETRO-FU | **Batch2 retrospective 收口** — 现状: 多个跨 cap 发现；修复: 拆条 fix-up | arch-opt | Cx1-Cx2 | 🔴 | — | `runtime/auth/` + `cells/` | batch2 retrospective |
 | ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 | **A-03 ADAPTER-ERROR-CLASSIFICATION-TRANSIENT** — 现状: 各 adapter 错误分类不统一；修复: postgres 40001/40P01/08* + redis i/o timeout + s3 5xx/429 标 transient | arch-opt | Cx3 | 🟠 | 首个 handler disposition 收口 | `adapters/{postgres,redis,s3}/errors.go` + `pkg/errcode/` | systems layer review |
 | ADAPTER-FAKE-EXPORT-01 | **Adapter fake export 一致性** — 现状: fake/exports 散；修复: 统一规范 | arch-opt | Cx3 | 🟠 | cell mock 扩展 | `adapters/*/fake/` | systems layer review |
@@ -295,6 +308,11 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR267-FU-IOTDEVICE-OWNER | **iotdevice owner.team 同步** — 现状: example owner 缺；修复: 补 | arch-opt | Cx1 | 🟡 | — | `examples/iotdevice/` | PR#267 |
 | PR267-FU-TODOORDER-OWNER | **todoorder owner.team 同步** — 现状: 同上；修复: 同上 | arch-opt | Cx1 | 🟡 | — | `examples/todoorder/` | PR#267 |
 | B-FLOOR-FOLLOWUP | **TYPED-ENVELOPE-ADAPTER-FLOOR-UPGRADE** — 现状: PR#403 段 1 是 Ceiling 守；修复: 段 2.5 升 Success-Floor + 段 4 升 Full-Floor | refactor | 段 2.5 Cx3 / 段 4 Cx3 | 🟠 | 段 2 invariant Registry 工具产品化 | `cells/*/slices/*/handler.go` (~20) + archtest + ADR D7 演进锚点 | PR #403 第三轮 review §R1 |
+| KERNEL-WEBHOOK-01 | **kernel/webhook 出站请求** — 现状: 缺 Webhook Receiver/Dispatcher 抽象；修复: 新建 webhook 包 + HMAC 认证 + SSRF 黑白名单（依赖 Outbox Relay 稳定）(also: cap-04, cap-08) | feat | P2/Cx3 | 🟡 | Outbox Relay 稳定后 | `kernel/webhook/` (新) | backlog_later §2 + WM-4 |
+| RUNTIME-SCHEDULER-01 | **runtime/scheduler Cron 调度** — 现状: PeriodicWorker 仅固定间隔；修复: 新建 scheduler 包 + Cron 表达式 + 分布式防重 (also: cap-11, cap-12) | feat | P2/Cx3 | 🟡 | 业务出现 Cron 需求 | `runtime/scheduler/` (新) | backlog_later §2 |
+| KERNEL-ROLLBACK-01 | **kernel/rollback 元数据模型** — 现状: 缺跨事件撤回原语；修复: 新建 rollback 包 + 元数据模型 (also: cap-07, cap-08) | feat | P3/Cx3 | 🟡 | V1.1+ 启动 | `kernel/rollback/` (新) | backlog_later §2 |
+| L3-EXAMPLE-PROJECTION-01 | **examples L3 投影 reference** — 现状: 无完全 L3 一致性级别官方 reference cell，业务可能错误塞入 L2；修复: examples/ 补 L3 Projection 样板 (also: cap-08) | doc | P2/Cx2 | 🟡 | v1.1 启动 | `examples/` | backlog_later §4 |
+| C-DC9 | **auditarchive 死代码靶子打通** — 现状: handler 返 `ErrNotImplemented`，S3 adapter 已就绪但中间业务层漏接；修复: 打通导出链路 (also: cap-08) | bug | P2/Cx2 | 🟡 | — | `cells/auditcore/slices/auditarchive/` + S3 adapter | backlog_later §6 C-DC9 |
 
 ---
 
