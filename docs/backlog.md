@@ -33,7 +33,11 @@
 
 > 主要包：`kernel/cell` + `assembly` + `lifecycle` + `worker` + `runtime/worker`
 
-_暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| B2-K-02 | **Kernel Must*/error-first 混用** — 现状: `MustNewAuthJWT` 等 Must 系列与 error-first 构造器混用，composition root 残留 panic；修复: 生产路径改 error-first，Must 仅 test-only/cmd 顶层 | bug | P1/Cx3 | 🟡 | — | `kernel/wrapper/handler.go` + `kernel/cell/auth_plan.go` + `pkg/contracttest/` | backlog2 §2 B2-K-02 |
+| B2-C-03 | **Cell.Init 泄漏基础设施类型** — 现状: configcore Cell 公共 API 暴露 `*adapterpg.Pool`；修复: 装配责任回收到 module 层（与 G1 SharedPGPool 同主题）| arch-opt | P1/Cx3 | 🟡 | — | `cells/configcore/cell_init.go` + `cell.go` | backlog2 §4 B2-C-03 |
+| B2-PROVISIONER-MUTEX-REVIEW | **Provisioner mutex 清理 review** — 现状: A26-R1 已删 initialadmin，但 provisioner mutex 残留；修复: PG adapter 落地后审视是否仍需 mutex | refactor | P2/Cx1 | 🟠 | PG adapter for accesscore | `cells/accesscore/internal/adminprovision/provisioner.go` | backlog2 §13 |
 
 ---
 
@@ -57,6 +61,9 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | G-4 | **Deprecated contract 引用阻断** — 现状: deprecated 仅 warning；修复: 升 P1 break build | arch-opt | P2/Cx2 | 🟡 | v1.1 启动 | `kernel/governance/` | backlog_later §1 |
 | G-6 | **Assembly boundary.yaml 一致性校验** — 现状: 派生文件无校验；修复: 加生成系一致性校验 | doc | P3/Cx1 | 🟡 | v1.1 启动 | `kernel/governance/` | backlog_later §1 |
 | DURABLE-TYPE-01 | **L2/L3 持久化级别静态保护** — 现状: 类型抹除让 L2/L3 检测退化为启动期 panic；修复: 探索类型系统层面静态编译保护（仓储级能力推断） | arch-opt | P2/Cx3 | 🟡 | v1.1 启动 | `kernel/metadata/` + `kernel/persistence/` | backlog_later §6 |
+| B2-K-05 | **Metadata parser error 路径泄漏** — 现状: parse error 含 fs 内部路径，低强度信息泄露；修复: error 双通道 (public 仅 cell/slice ID + 字段路径，internal slog 保留 fs path) | bug | P2/Cx2 | 🟡 | — | `kernel/metadata/parser.go:190,202` | backlog2 §2 B2-K-05 |
+| B2-K-07 | **Contracttest undeclared ref no-op** — 现状: `MustValidateRequest("not-declared", ...)` 静默 return，key 写错时假通过；修复: 未声明 key 改 `t.Fatalf` | bug | P1/Cx1 | 🟡 | — | `pkg/contracttest/contracttest.go:170,189` | backlog2 §2 B2-K-07 |
+| B2-T-07-FU-3 | **K04-CELLGEN-CONTRACTSPEC-CLIENTS** — 现状: cellgen 不派生 contract.clients；修复: 加派生（A5 follow-up） | arch-opt | Cx2 | 🟡 | cellgen 升级窗口 | `tools/codegen/cellgen/` | backlog2 §8 A5 follow-up |
 
 ---
 
@@ -67,6 +74,9 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | P1-8 | **DEVICE-LIST-API** — 现状: `cells/devicecell/slices/devicelist/` 缺；修复: 新建 slice + `GET /api/v1/devices` 分页 + contract + contract_test | feat | P1/— | 🟡 | — | `cells/devicecell/slices/devicelist/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
+| B2-C-08 | **Configcore event decoder 严格** — 现状: cell event consumer DisallowUnknownFields，PR-V1-EVOLVE-ADR 之后应放宽；修复: 关闭 DisallowUnknownFields | bug | P1/Cx2 | 🟡 | — | `cells/configcore/internal/events/config_events.go:82` | backlog2 §4 B2-C-08 |
+| B2-T-01 | **Config rollback 乐观锁缺** — 现状: rollback 无版本检查；修复: 加乐观锁版本号（与 cap-09 P3-TD-12 同根源，本条聚焦 contract 层声明）| bug | P1/Cx2 | 🟡 | 与 cap-09 P3-TD-12 协同 | `contracts/http/config/rollback/v1/contract.yaml` + `cells/configcore/internal/ports/config_repo.go:23-25` | backlog2 §8 B2-T-01 |
+| B2-T-04 | **Contract userId 风格混用** — 现状: payload schema 字段命名混用 userId/UserID；修复: 统一 camelCase | refactor | P2/Cx2 | 🟡 | — | `contracts/event/user/created/v1/payload.schema.json:6` | backlog2 §8 B2-T-04 |
 
 ---
 
@@ -89,6 +99,9 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | T8-B | **PATH-PARAM-PREVALIDATE** — 现状: handler-side path param 校验分散；修复: 路由前预校验 helper | arch-opt | — | 🟠 | 安全审查触发 | `runtime/auth/` + `pkg/httputil/` | PR-A45 |
 | T4 | **CB-RESILIENCE-PACKAGE-01** — 现状: Allower / CircuitBreakerRetryAfter 在 `runtime/http/middleware`；修复: 迁到 `runtime/resilience/circuitbreaker/` 独立包 (also: cap-x-cross) | refactor | — | 🟠 | 出现第 2 个非 HTTP CB 消费方 | `runtime/http/middleware/` + `runtime/resilience/circuitbreaker/` (新) | T4 |
 | WM-32 | **mTLS 中间件** — 现状: 缺；修复: 加 TLS 构建器 + HTTP 证书提取钩子（折中：大规模环境 mTLS 卸载在 K8s/Service Mesh 解决，框架仅提供构建器） | feat | P2/Cx2 | 🟡 | V1.1 启动 | `runtime/http/middleware/` | backlog_later §7 WM-32（4/6 票）|
+| B2-C-07 | **Configclient 不可恢复错误走 requeue** — 现状: 不可恢复 HTTP 错误也走 retry/requeue；修复: 区分 4xx/5xx 决定 ack/requeue/reject | bug | P1/Cx2 | 🟡 | — | `cells/accesscore/internal/adapters/http/configclient.go:91` + `cells/accesscore/slices/configreceive/service.go` | backlog2 §4 B2-C-07 |
+| B2-X-04 | **Health listener 默认 loopback** — 现状: 默认绑 0.0.0.0（即使 healthListener）；修复: 默认 loopback，显式 opt-in 暴露 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cmd/corebundle/shared_deps.go:461` | backlog2 §7 B2-X-04 |
+| B2-T-08 | **Config publish 失败码声明不完整** — 现状: contract 缺部分失败码声明；修复: 补 4xx/5xx 完整声明 | bug | P2/Cx1 | 🟡 | — | `contracts/http/config/publish/v1/contract.yaml` | backlog2 §8 B2-T-08 |
 
 ---
 
@@ -122,6 +135,9 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | P3-TD-10 | **TOCTOU 竞态修复** — 现状: Phase 2 #54 session TOCTOU 未修；修复: Redis 分布式锁 + 持久化 session 稳定后处理 (also: cap-11) | bug | P2/Cx3 | 🟠 | post-v1.0 + Redis distlock 稳定 + PG session repo | `cells/accesscore/` | tech-debt-registry P3-TD-10 |
 | P4-TD-03 | **IssueTestToken HS256 dead code** — 现状: 测试 helper 仍保留 HS256 路径，JWTVerifier 全拒；修复: 删 dead code 防误用 | refactor | Cx1 | 🟡 | — | `runtime/auth/` (test helper) | tech-debt-registry P4-TD-03 |
 | SECURECOOKIE-AEAD-NEG-01 | **SecureCookie AEAD 负向测试** — 现状: AEAD 失败路径无测试；修复: 截断/伪造/边界长度/解密失败类型断言 (`errors.Is(err, ErrAEADAuthFailed)`) | test | Cx2 | 🟡 | v1.0 GA 前 | `pkg/securecookie/securecookie_test.go` | backlog1 §2.5 |
+| B2-C-02 | **SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT** — 现状: setup 端点常驻 Public，未初始化窗口可被匿名首管抢注；修复: 移到 `/internal/v1/setup/` (service-token only) + contract `lifecycle: bootstrap`，或 1 次性 bootstrap token | feat | P0/Cx3 | 🔴 | — | `cells/accesscore/cell_routes.go:73` + `slices/setup/handler.go:46-58` + `contracts/http/auth/setup/admin/v1/contract.yaml:5` | backlog2 §1 B2-C-02 |
+| B2-A-08 | **PG refresh store ambient tx 混用** — 现状: 部分方法用 ambient tx，部分用显式 BeginTx；修复: 统一显式事务边界 | arch-opt | P1/Cx3 | 🟡 | — | `adapters/postgres/refresh_store.go:141,190,227` | backlog2 §5.1 B2-A-08 |
+| B2-A-09 | **PG refresh 拒绝耗时侧信道** — 现状: 拒绝路径耗时不一致，可侧信道推断；修复: 加常量时间常量比较 | bug | P1/Cx3 | 🟡 | 安全审查触发 | `adapters/postgres/refresh_store.go:221,295,330` | backlog2 §5.1 B2-A-09 |
 
 ---
 
@@ -133,6 +149,11 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 |---|---|---|---|---|---|---|---|
 | T3 | **DEVICE-ENQUEUE-RBAC** — 现状: HandleEnqueue 无设备维度鉴权；修复: 加设备粒度策略 | feat | — | 🟠 | 多租户 operator | `cells/devicecell/` | T3 |
 | T11 | **ADMIN-ROLE-DEDUP** — 现状: admin role 字符串散在多处；修复: 抽 const 单源 | arch-opt | — | 🟠 | role 命名漂移出现 | `pkg/auth/` + `cells/` | T11 |
+| B2-C-06 | **SessionLogout consumer action 无验证** — 现状: consumer.go 接受任意 action 字段；修复: 加 action enum 校验 | bug | P1/Cx2 | 🟡 | — | `cells/accesscore/slices/sessionlogout/consumer.go:69` | backlog2 §4 B2-C-06 |
+| B2-T-02 | **RBACASSIGN event contract waiver expiry** — 现状: contract test waiver 已设置过期；修复: waiver 到期前补真实 contract 实现 | bug | P1/Cx2 | 🟠 | waiver 到期前 | `cells/accesscore/slices/rbacassign/contract_test.go:84,93` | backlog2 §8 B2-T-02 |
+| B2-T-05 | **Internal contract external actor drift** — 现状: contract 声明 external actor 但实际是 internal；修复: 校正 boundary.yaml | arch-opt | P1/Cx2 | 🟡 | — | `contracts/http/auth/role/{assign,revoke}/v1/contract.yaml` + `boundary.yaml` | backlog2 §8 B2-T-05 |
+| B2-T-07-FU-1 | **RBACASSIGN accesscore caller wiring** — 现状: production wiring 缺 caller；修复: 接入 caller (A5 follow-up) | arch-opt | Cx2 | 🟠 | production wiring 启动 | `cells/accesscore/slices/rbacassign/contract_test.go` | backlog2 §8 A5 follow-up |
+| B2-T-07-FU-2 | **BUILTIN-SERVICE-ROLES 删除 FU** — 现状: scope 派生 builtin role 还在 hard-code；修复: 完全派生（A5 follow-up） | arch-opt | Cx3 | 🟠 | scope 派生工具就绪 | `runtime/auth/principal.go` | backlog2 §8 A5 follow-up |
 
 ---
 
@@ -159,6 +180,16 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | KERNEL-REPLAY-01 | **kernel/replay 投影重算** — 现状: 缺 CQRS Projection rebuild；修复: 新建 replay 包 + 依赖 Consumer 模型稳定后实现 | feat | P3/Cx3 | 🟡 | Consumer 模型稳定 + 业务出现 CQRS rebuild 需求 | `kernel/replay/` (新) | backlog_later §2 |
 | KERNEL-RECONCILE-01 | **kernel/reconcile L3 收敛循环** — 现状: 缺 Reconciler 模式；修复: 新建 reconcile 包 | feat | P2/Cx3 | 🟡 | L3 业务出现 | `kernel/reconcile/` (新) | backlog_later §2 |
 | WM-18 | **延迟消息原语** — 现状: 缺 TTL；修复: RMQ x-delayed-message 插件绑定 + 测试桩支持（运维成本拉升，等 Outbox 稳定后探索） | feat | P2/Cx2 | 🟡 | V1.1 启动 + Outbox 彻底稳定 | `adapters/rabbitmq/` + outbox | backlog_later §7 WM-18（3/6 票）|
+| B2-K-06 | **EventRouter consumerGroup 与 cellID 混淆** — 现状: `Subscription.CellID = h.consumerGroup`，下游 metrics/日志属性自相矛盾；修复: 显式拆分 `CellID` 与 `ConsumerGroup` | bug | P2/Cx3 | 🟡 | — | `runtime/eventrouter/router.go:364` | backlog2 §2 B2-K-06 |
+| B2-A-14 | **RMQ StopIntake prefetch 未排空** — 现状: StopIntake 后 prefetch 仍在投递；修复: 排空 prefetch 后再退出 | bug | P1/Cx3 | 🟠 | StopIntake 耦合 | `adapters/rabbitmq/subscriber.go:914` | backlog2 §5.2 B2-A-14 |
+| B2-A-15 | **RMQ channel 无上限** — 现状: connection.go 创建 channel 无上限；修复: 加 channel cap + reuse pool | bug | P1/Cx3 | 🟠 | 无上限创建出现 | `adapters/rabbitmq/connection.go:171` | backlog2 §5.2 B2-A-15 |
+| B2-A-16 | **RMQ publish nack 无告警** — 现状: NACK/超时静默丢；修复: 告警 + 计数 metric | bug | P1/Cx1 | 🟠 | NACK/超时出现 | `adapters/rabbitmq/publisher.go:133,136,143` | backlog2 §5.2 B2-A-16 |
+| B2-A-17 | **RMQ EventBus 语义集成测试缺** — 现状: conformance test 不全；修复: 补 publisher/subscriber 全链路 testcontainer 集成测试 | test | P1/Cx3 | 🟡 | — | `adapters/rabbitmq/conformance_test.go:18` | backlog2 §5.2 B2-A-17 |
+| B2-A-26 | **Redis idempotency receipt commit/release race** — 现状: receipt commit 和 release 之间有 race；修复: Lua 原子化 | bug | P1/Cx3 | 🟡 | — | `adapters/redis/idempotency.go:136-200` | backlog2 §5.3 B2-A-26 |
+| B2-A-27 | **Redis idempotency multi-tenant key 碰撞** — 现状: 缺 KeyNamespace cell prefix（B10 只解决 cluster slot，B11 待办）；修复: 加 cell prefix | bug | P1/Cx3 | 🟡 | 多租户隔离需求 | `adapters/redis/idempotency.go:127-130` | backlog2 §5.3 B2-A-27 |
+| B2-C-10 | **Auditappend 全局 mutex 串行化 13 topic** — 现状: 单 mutex 串行化所有 topic 处理；修复: 按 topic/分片细化锁 | bug | P1/Cx3 | 🟡 | 容量/吞吐压力出现 | `cells/auditcore/slices/auditappend/service.go:93,165` | backlog2 §4 B2-C-10 |
+| B2-R-B-13-FU-01 | **RMQ-PR379-FU-DOC-DRIFT** — 现状: PR#379 review 留 doc 漂移；修复: 补 docs/guides/ 同步 | doc | P2/Cx1 | 🟡 | — | `adapters/rabbitmq/subscriber.go` + `docs/guides/` | backlog2 §13 |
+| B2-R-B-13-FU-02 | **RMQ-SUBSCRIBER-TERMINAL-PROPAGATION** — 现状: PR#379 review 留 terminal 错误传播缺测；修复: 加 propagation test | test | P2/Cx2 | 🟡 | — | `adapters/rabbitmq/subscriber.go:374-378` | backlog2 §13 |
 
 ---
 
@@ -175,6 +206,8 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR320-FU-CONFIGCORE-CI-NOOP | **ConfigCore CI noop test** — 现状: noop publisher CI 路径未覆盖；修复: 加测 | test | P3/Cx1 | 🟡 | — | `cells/configcore/` | PR#320 |
 | PR-CFG-D-FU | **PR-CFG-D follow-up** — 现状: configrepo edge case 残项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `cells/configcore/` | PR-CFG-D |
 | P3-TD-12 | **configpublish.Rollback 版本校验** — 现状: 缺持久化版本管理；修复: 加版本校验防 rollback 到不存在版本 | feat | P2/Cx2 | 🟠 | post-v1.0 + 持久化版本管理 | `cells/configcore/` | tech-debt-registry P3-TD-12 |
+| B2-A-33 | **Redis sentinel env & logvalue 缺** — 现状: sentinel 模式 env 配置不完整 + log value 缺；修复: 补 env 列表 + logvalue 透传 | bug | P2/Cx2 | 🟡 | sentinel 部署 | `cmd/corebundle/redis.go:18-22` + `adapters/redis/client.go:90-104` | backlog2 §5.3 B2-A-33 |
+| B2-C-11 | **Configsubscribe tombstone 无 TTL** — 现状: tombstone 永久保留导致内存膨胀；修复: 加 TTL + 定期清理 | bug | P2/Cx2 | 🟡 | — | `cells/configcore/slices/configsubscribe/service.go:29,169` | backlog2 §4 B2-C-11 |
 
 ---
 
@@ -191,6 +224,10 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
 | P3-TD-02 | **postgres adapter 覆盖率** — 现状: 测量基准 46.6%（要求 ≥80%）；testcontainers 已实现但 CI 未测量；修复: CI 加 -tags=integration 覆盖率测量（合并 P4-TD-08）| test | P2/Cx2 | 🟡 | — | `adapters/postgres/` + `.github/workflows/` | tech-debt-registry P3-TD-02 + P4-TD-08 |
 | P4-TD-11 | **Migrator.Down() v=0 回归测试** — 现状: 已恢复 idempotent no-op 但缺第三次 Down() 测试锁定；修复: 加锁定测 防依赖升级回归 | test | Cx1 | 🟡 | — | `adapters/postgres/migrator_test.go` | tech-debt-registry P4-TD-11 |
+| B2-A-11 | **PG constructor error model 混杂** — 现状: refresh_store 等构造器混合 panic + error；修复: 统一 error-first（与 cap-12 STARTUP-ROLLBACK 同主题）| arch-opt | P1/Cx3 | 🟡 | — | `adapters/postgres/refresh_store.go:114` | backlog2 §5.1 B2-A-11 |
+| B2-A-28 | **Redis password 可选 fail-open** — 现状: 缺 password 仍允许连接；修复: real mode 强制 password fail-fast | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `adapters/redis/client.go:62-68` | backlog2 §5.3 B2-A-28 |
+| B2-A-31 | **Redis sentinel TLS 未透传** — 现状: sentinel 模式 TLS config 未传给底层 client；修复: 透传 TLS | bug | P2/Cx2 | 🟡 | sentinel + TLS 部署 | `adapters/redis/client.go:200-215` | backlog2 §5.3 B2-A-31 |
+| B2-C-12 | **Audit HMAC key 最小长度未验证** — 现状: 任意短密钥都接受；修复: 加 32 字节最小长度 + Validate | bug | P2/Cx1 | 🟡 | 发布前安全收口 | `cells/auditcore/cell.go:319` | backlog2 §4 B2-C-12 |
 
 ---
 
@@ -202,6 +239,8 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 |---|---|---|---|---|---|---|---|
 | DISTLOCK-RENEW-CALLER-CONTEXT-01 | **DISTLOCK-RENEW-CALLER-CONTEXT-01** — 现状: manager renewal 用 `context.Background()`，父 ctx cancel 不停续租；修复: 用 acquisition ctx 派生 renew deadline | bug | P1/Cx2 | 🟠 | 首个 prod distlock caller | `runtime/distlock/locker.go` + `manager.go` | GitHub #20 |
 | DISTLOCK-WORKER | **Distlock worker 生命周期** — 现状: 缺 worker 角色；修复: 接入 worker pattern | arch-opt | Cx2 | 🟡 | — | `runtime/distlock/` | PR-A20 |
+| B2-A-29 | **Redis distlock race test 缺** — 现状: distlock_test 缺并发竞争测；修复: 加 race + count=20 stress | test | P1/Cx3 | 🟡 | — | `adapters/redis/distlock_test.go` | backlog2 §5.3 B2-A-29 |
+| B2-A-30 | **Redis distlock renew TTL 精度损失** — 现状: renew 时 TTL 精度损失；修复: 用 PEXPIRE 毫秒精度 | bug | P2/Cx2 | 🟡 | — | `adapters/redis/distlock.go:50-56` | backlog2 §5.3 B2-A-30 |
 
 ---
 
@@ -218,6 +257,10 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR405-BOOTSTRAP-SHUTDOWN-BUDGET-DECOUPLE | **BOOTSTRAP-SHUTDOWN-BUDGET-PER-LISTENER-DECOUPLE-01** — 现状: phase10 共享 shutCtx，dual-listener race 偶发超时；修复: HTTP drain + LIFO teardown 拆双 budget + 新 ADR | arch-opt | P2/Cx2 | 🟡 | — | `runtime/bootstrap/phases_shutdown.go` + `bootstrap_http_shutdown.go` + ADR | PR#405 reviewer |
 | STARTUP-ROLLBACK-ERR-JOIN-01 | **Startup rollback 错误聚合** — 现状: startup 失败时 rollbackErr 静默丢；修复: `errors.Join(startupErr, rollbackErr)` 或 `StartupRollbackError{Startup, Rollback}` 结构化 | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `runtime/bootstrap/run_state.go` | backlog1 §2.4 |
 | COREBUNDLE-MAINTEST-FAIL-FAST-01 | **corebundle main_test fail-fast** — 现状: bind 错误被白名单吞掉；修复: 用 `net.Listen("tcp", "127.0.0.1:0")` 注入 + 断言关键装配里程碑 | test | Cx2 | 🟡 | — | `cmd/corebundle/main_test.go` | backlog1 §2.7 |
+| B2-R-01 | **HealthListener 缺失时静默回退** — 现状: bootstrap 找不到 HealthListener 时静默回退到 main listener；修复: fail-fast 或显式 opt-in fallback | bug | P2/Cx2 | 🟡 | — | `runtime/bootstrap/bootstrap_phases.go:583-596` | backlog2 §3 B2-R-01 |
+| B2-R-02 | **Readyz 缺少 repo probe** — 现状: configcore/auditcore HealthCheckers 仅接 outbox，repo 状态无 probe（与 cap-13 REPO-HEALTHCHECKER-01 协同）| bug | P1/Cx2 | 🟡 | 与 cap-13 REPO-HEALTHCHECKER-01 同 PR | `cells/configcore/cell.go:204` + `cells/auditcore/cell.go:191` | backlog2 §3 B2-R-02 |
+| B2-X-03 | **PG invalid index warn continue** — 现状: PG invalid index 仅 warn 继续启动；修复: 改 fail-fast 防隐藏数据完整性问题 | bug | P2/Cx2 | 🟡 | — | `cmd/corebundle/bundle.go:308-313` | backlog2 §7 B2-X-03 |
+| B2-W-05 | **WebSocket Stop 同步 close 超时** — 现状: Stop 同步逐个 close 超时硬编码；修复: 并发 close + closeWg + 可配置 timeout | bug | P1/Cx2 | 🟡 | — | `runtime/websocket/hub.go:280-293` | backlog2 §6 B2-W-05 |
 
 ---
 
@@ -247,6 +290,21 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | WS-OPS-02 | **WS shutdown 并发 Close** — 现状: 同步逐个 Close，千连接线性增长；修复: 并发 Close + closeWg | arch-opt | Cx2 | 🟡 | 千级连接规模出现 | `runtime/websocket/hub.go` | tech-debt-registry WS-OPS-02 |
 | WS-DX-01 | **WS per-conn context tracing** — 现状: per-conn ctx 基于 Background()，无 tracing/correlation 传到 MessageHandler；修复: 透传 tracing ctx | arch-opt | Cx2 | 🟡 | observability 接入时 | `runtime/websocket/` | tech-debt-registry WS-DX-01 |
 | WS-DX-02 | **WS Conn 接口缺 RemoteAddr()** — 现状: 诊断日志只有 opaque UUID；修复: 接口加 RemoteAddr() | arch-opt | Cx1 | 🟡 | — | `runtime/websocket/` | tech-debt-registry WS-DX-02 |
+| B2-C-01 | **Audit hashchain 重启未恢复尾节点** — 现状: NewHashChain 启动从空链开始，多实例或重启后尾哈希不连续；修复: cell 启动时从 repo `SELECT last hash` 注入；考虑 leader 单写或 advisory lock | arch-opt | P0/Cx4 | 🔴 | — | `cells/auditcore/internal/domain/hashchain.go:31` + `cells/auditcore/cell.go` | backlog2 §1 B2-C-01 |
+| B2-R-05 | **OTel metric provider ctx 固定 Background** — 现状: provider 用 ctx.Background()；修复: 透传 caller ctx | bug | P1/Cx4 | 🟡 | — | `adapters/otel/metric_provider.go:174,178,185` | backlog2 §3 B2-R-05 |
+| B2-R-06 | **OTel tracer provider 未注册全局** — 现状: tracer 实例化后未 SetGlobal；修复: SetTracerProvider | bug | P1/Cx2 | 🟡 | — | `adapters/otel/tracer.go:56,73` | backlog2 §3 B2-R-06 |
+| B2-R-07 | **OTel tracer shutdown 无 deadline** — 现状: shutdown 无超时上限；修复: 加 ctx deadline | bug | P1/Cx1 | 🟡 | — | `adapters/otel/tracer.go:63,65` | backlog2 §3 B2-R-07 |
+| B2-R-08 | **OTel callback 需手工 unregister** — 现状: callback 注册后无自动 unregister；修复: 接 lifecycle hook | bug | P1/Cx3 | 🟡 | — | `adapters/otel/pool_collector.go:43,110` | backlog2 §3 B2-R-08 |
+| B2-R-09 | **OTel attr cache key 碰撞无上界** — 现状: attr cache 无 LRU/eviction；修复: 加 LRU + max size | bug | P1/Cx3 | 🟡 | — | `adapters/otel/metric_provider.go:84,96,101` | backlog2 §3 B2-R-09 |
+| B2-C-05 | **Auditappend actor 缺失降级不安全** — 现状: actor 缺失时静默降级；修复: fail-closed | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditappend/service.go:133` | backlog2 §4 B2-C-05 |
+| B2-C-09 | **Auditquery raw payload 直接回传** — 现状: handler 直接回传 raw payload 含敏感字段；修复: redact + slog level 区分 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditquery/handler.go:35,42` | backlog2 §4 B2-C-09 |
+| B2-C-14 | **Hash-chain 跨重启连续性测试缺** — 现状: 缺重启场景验证；修复: 加 testcontainer 重启回归 | test | P2/Cx2 | 🟡 | — | `cells/auditcore/slices/auditappend/service_test.go:110` | backlog2 §4 B2-C-14 |
+| B2-A-19 | **OTel span SetAttributes 明文出站** — 现状: span attr 未 redact；修复: 走 `pkg/redaction` | bug | P1/Cx2 | 🟡 | — | `adapters/otel/span.go:43,51` | backlog2 §5.3 B2-A-19 |
+| B2-A-20 | **OTel simple tracer propagation 不对称** — 现状: 解析 vs 注入实现不对称；修复: 统一 propagator | bug | P2/Cx2 | 🟡 | — | `runtime/observability/tracing/tracer.go:77` | backlog2 §5.3 B2-A-20 |
+| B2-A-22 | **Prometheus handler 无 timeout** — 现状: scrape 无超时控制；修复: 加 server.WriteTimeout | bug | P1/Cx1 | 🟡 | — | `cmd/corebundle/metrics.go:83` | backlog2 §5.3 B2-A-22 |
+| B2-A-23 | **Prometheus cellID label 无验证** — 现状: cellID label 接受任意字符串；修复: 加 enum/格式校验 | bug | P1/Cx1 | 🟡 | — | `adapters/prometheus/hook_observer.go:114-117` | backlog2 §5.3 B2-A-23 |
+| B2-A-24 | **Prometheus race test 缺** — 现状: provider 缺并发竞争测试；修复: 加 race | test | P1/Cx2 | 🟡 | — | `adapters/prometheus/metric_provider_test.go` | backlog2 §5.3 B2-A-24 |
+| B2-W-03 | **WebSocket 可观测性缺** — 现状: hub 无 metric/log；修复: 加 connection count / message rate / shutdown duration metric | feat | P1/Cx2 | 🟡 | — | `runtime/websocket/hub.go` | backlog2 §6 B2-W-03 |
 | REPO-HEALTHCHECKER-01 | **configcore/auditcore repo 接 HealthCheckers** — 现状: HealthCheckers 仅接 outbox，关键 repo 未接探针；修复: 接入 cell HealthCheckers（与 PR-CFG-1 PG relay probe 同主题）| arch-opt | P1/Cx2 | 🟡 | 与 PR-A53 同 PR | `cells/configcore/cell.go` + `cells/auditcore/cell.go` | backlog1 §3 |
 
 ---
@@ -304,6 +362,17 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | CONTRACT-PATH-QUERY-EXECUTABLE-01 | **path/query 参数约束可执行测试** — 现状: pattern/min/max/format 无入参可执行测试；修复: 加 transport 入参 rejected 用例覆盖 | arch-opt | P1/Cx2 | 🟡 | 发布前必做 | `pkg/contracttest/contracttest.go` | backlog1 §2.2 |
 | CLI-SECONDARY-HELP-01 | **CLI 二级命令统一 -h/help** — 现状: 二级命令不识别 `-h`/`help`，被当 subtype 解析；修复: 修正 dispatch 顺序 + 文案 | bug | Cx1 | 🟡 | — | `cmd/gocell/app/dispatch.go` + `check.go` + `scaffold.go` | backlog1 §2.7 |
 | CLI-UNIMPL-HIDE-01 | **CLI 未实现命令隐藏** — 现状: `not implemented` 命令出现在主帮助；修复: 移除或显式 `[experimental]` 标注 + 运行时 `exit 64` | bug | Cx1 | 🟡 | — | `cmd/gocell/app/dispatch.go` + `generate.go` | backlog1 §2.7 |
+| B2-K-08 | **Assembly race test 认知复杂度超限** — 现状: `TestAssembly_StartConcurrentSnapshots_RaceDetector` SonarCloud `brain-overload` 32/15；修复: 拆 setupRaceFixture/spawnReaders/awaitReady 三 helper（保持 race window 确定性） | refactor | P2/Cx2 | 🟡 | — | `kernel/assembly/snapshots_race_test.go:36-120` | backlog2 §2 B2-K-08 |
+| B2-A-13 | **PG pool tx rollback 日志泄漏** — 现状: rollback 日志输出 SQL 片段；修复: 走 `pkg/redaction` | bug | P2/Cx2 | 🟡 | — | `adapters/postgres/pool.go:87,113` | backlog2 §5.1 B2-A-13 |
+| B2-A-21 | **OTel messaging collector format %** — 现状: format 字符串遗留 `%`；修复: 修 format 占位符 | bug | P2/Cx1 | 🟡 | — | `adapters/otel/messaging_channel_collector.go:65` | backlog2 §5.3 B2-A-21 |
+| B2-A-25 | **Prometheus lookup vec 99% 重复** — 现状: 多处 lookup vec 模板代码 ~99% 重复；修复: 抽 helper 收敛 | refactor | P2/Cx2 | 🟡 | — | `adapters/prometheus/metric_provider.go:201-227` | backlog2 §5.3 B2-A-25 |
+| B2-A-34 | **Redis cluster CI live gate 缺** — 现状: integration_cluster build tag 已加但 CI 未启用 live job；修复: 加 GH Actions cluster job | test | P2/Cx3 | 🟡 | — | `.github/workflows/_build-lint.yml` + `adapters/redis/cluster_real_test.go` | backlog2 §5.3 B2-A-34 |
+| B2-X-01 | **Outbox E2E 固定 sleep** — 现状: integration test 含固定 `time.Sleep`；修复: 改 condition wait | test | P2/Cx1 | 🟡 | — | `cmd/corebundle/outbox_e2e_integration_test.go:169` | backlog2 §7 B2-X-01 |
+| B2-X-02 | **shared-deps 聚合过宽** — 现状: shared_deps.go 聚合范围过宽，单一 struct 含太多字段；修复: 按 concern 拆 | refactor | P2/Cx3 | 🟡 | — | `cmd/corebundle/shared_deps.go:32` | backlog2 §7 B2-X-02 |
+| B2-X-05 | **gocell generate indexes 未实现但可见** — 现状: 出现在 help，运行 hard fail；修复: 标 `[experimental]` 或移除 (与 cap-14 CLI-UNIMPL-HIDE-01 同主题但具体到 generate indexes) | doc | P1/Cx1 | 🟡 | — | `cmd/gocell/app/generate.go:34` | backlog2 §7 B2-X-05 |
+| B2-X-06 | **gocell verify ctx 透传不完整** — 现状: verify 子命令 ctx 不一致；修复: 统一 ctx 链 | bug | P1/Cx2 | 🟠 | ctx 传播缺失暴露 | `cmd/gocell/app/verify.go:101,163,165,241` | backlog2 §7 B2-X-06 |
+| B2-X-07 | **gocell dispatch 无 signal ctx** — 现状: 主入口不处理 SIGINT/SIGTERM；修复: 加 signal.NotifyContext | bug | P1/Cx2 | 🟠 | signal 不响应暴露 | `cmd/gocell/app/dispatch.go:20` + `cmd/gocell/main.go:13` | backlog2 §7 B2-X-07 |
+| B2-X-08 | **cmdrun Windows 进程组杀不完** — 现状: Windows 平台进程组不彻底；修复: JobObject 或 taskkill /T | bug | P2/Cx2 | 🟡 | Windows 平台用例 | `pkg/cmdrun/cmdrun_windows.go` | backlog2 §7 B2-X-08 |
 | P2-T-02 | **J-auditlogintrail 端到端集成测试** — 现状: stub 已就位；修复: 用 Docker + testcontainers 激活 | test | P2/Cx2 | 🟡 | Phase 5 启动 | `tests/integration/` + journey | tech-debt-registry P2-T-02 |
 
 ---
@@ -342,6 +411,8 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | P4-TD-01 | **noop outbox/Claimer 共享包** — 现状: 各处 ad-hoc noop 实现，KG-02 建议提取；修复: 抽到共享 `runtime/testutil/outbox/` + 测试 helper 收口 | refactor | Cx2 | 🟡 | — | `runtime/testutil/` (扩) + 各 cell 测试 | tech-debt-registry P4-TD-01 |
 | P4-TD-06 | **CI example validation `\|\| true` 形式化** — 现状: 验证错误被静默吞咽；修复: 删 `\|\| true` 让 CI 阻断 | bug | Cx1 | 🟡 | v1.1 启动 | `.github/workflows/` | tech-debt-registry P4-TD-06 |
 | P4-TD-09 | **testcontainers-go indirect 标记** — 现状: go.mod 标记 indirect 但实际直接依赖，go mod tidy 可能移除；修复: 改 direct dep | bug | Cx1 | 🟡 | — | `go.mod` | tech-debt-registry P4-TD-09 |
+| B2-C-13 | **L2 跨层 e2e 回归不足** — 现状: setup → audit → config 跨 cell e2e 不全；修复: 加跨 cell integration test | test | P2/Cx3 | 🟡 | — | `cells/accesscore/slices/setup/service_test.go` + `tests/integration/` | backlog2 §4 B2-C-13 |
+| B2-T-07-FU-4 | **SVCTOKEN 跨信任域限制** — 现状: 跨 trust domain 时 SVCTOKEN 无额外限制；修复: 加 trust domain claim + 验证（A5 follow-up） | arch-opt | Cx4 | 🟠 | 多租户/跨信任域需求 | `contracts/` + `runtime/auth/` | backlog2 §8 A5 follow-up |
 | ADAPTER-CONNECT-BUDGET-01 | **adapter 级 ConnectTimeout 强制** — 现状: 各 adapter 依赖上层 ctx；修复: adapter 级 ConnectTimeout（默认 5s）写 Config + Validate + `ERR_ADAPTER_CONNECT_TIMEOUT` (also: cap-08, cap-10；PG 部分由 PR#401 已部分覆盖) | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/rabbitmq/connection.go` + `adapters/postgres/pool.go` | backlog1 §2.4 |
 | S3-FAILURE-INJECTION-01 | **S3 故障注入测试** — 现状: 缺 MinIO testcontainer 集成测；修复: 上传 403/5xx/timeout/recovery 路径覆盖 (also: cap-13) | test | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/s3/s3_test.go` | backlog1 §2.5 |
 | SWEEPER-OBSERVABLE-01 | **Sweeper onError + 并发度** — 现状: onError 默认兜底（slog.Error）；并发度按 finding 数计算不准；修复: onError 注入 + 并发度按 `groups × capacity × cost` 计算 (also: cap-08, cap-13；与 PR252-F2 同 PR) | arch-opt | P1/Cx2 | 🟠 | 与 PR252-F2 同 batch | `kernel/command/sweeper.go` | backlog1 §3 |
