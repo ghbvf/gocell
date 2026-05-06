@@ -582,12 +582,16 @@ func findWorkflowStep(steps []workflowStep, name string) (workflowStep, bool) {
 // build-test, and no verify-codegen job exists yet.
 // After the workflow migration (Batch 1 / Agent-C), they will turn GREEN.
 
-// codegenStepNames are the three step names that must live in verify-codegen,
-// not in build-test, after the SEC-SETUP-CLOSURE workflow refactor.
+// codegenStepNames are the codegen verify step names that must live in
+// verify-codegen, not in build-test, after the SEC-SETUP-CLOSURE workflow
+// refactor. Adding a new codegen subsystem (K#04 cell, K#06 contract,
+// K#10 assembly, …) means adding the step here so the SEC-SETUP-CLOSURE
+// archtest covers it.
 var codegenStepNames = []string{
 	"Verify generated artifacts are up-to-date",
 	"Verify cell codegen (K#04)",
 	"Verify contract codegen (K#06)",
+	"Verify assembly codegen (K#10)",
 }
 
 // TestVerifyCodegenJobIsIndependent asserts:
@@ -624,6 +628,9 @@ func TestVerifyCodegenGateRejectsStepsInBuildTest(t *testing.T) {
       - name: Verify contract codegen (K#06)
         if: matrix.static_checks
         run: ./hack/verify-codegen-contract.sh
+      - name: Verify assembly codegen (K#10)
+        if: matrix.static_checks
+        run: ./hack/verify-codegen-assembly.sh
 `)
 	require.Error(t, validateCodegenJobStructure(body),
 		"checker must reject when codegen steps are still in build-test")

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"sort"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -101,6 +102,9 @@ func resolveModule(root, flagValue string) (string, error) {
 
 // assemblyIDsToGenerate returns the list of assembly IDs to generate. When
 // all=true every key in project.Assemblies is included; otherwise only id.
+// Output is sorted by id so iteration order is stable across runs (Go map
+// iteration is randomized, which would otherwise leak into stdout / generated
+// path lists and break golden-file comparisons).
 func assemblyIDsToGenerate(project *metadata.ProjectMeta, id string, all bool) []string {
 	if !all {
 		return []string{id}
@@ -109,6 +113,7 @@ func assemblyIDsToGenerate(project *metadata.ProjectMeta, id string, all bool) [
 	for asmID := range project.Assemblies {
 		ids = append(ids, asmID)
 	}
+	sort.Strings(ids)
 	return ids
 }
 

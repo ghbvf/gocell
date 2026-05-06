@@ -1,7 +1,7 @@
 # ADR: Assembly YAML Minimal + Derivation Strategy
 
 > Status: Accepted
-> Date: 2026-05-08
+> Date: 2026-05-07
 > ref: docs/plans/202605011500-029-master-roadmap.md K#10
 > Implementation: PR-V1-ASSEMBLY-YAML-MINIMAL（K#10，吸收 K-08(a)+K-08(c)）
 
@@ -23,7 +23,7 @@
 
 派生逻辑集中在 `kernel/metadata/assembly_derive.go` 中的 `applyAssemblyDerivations` 函数，由 `ParseFS` 在成功解析并校验所有字段后在末段调用。`applyAssemblyDerivations` 负责：
 
-- 从 `id` 推导 `build.entrypoint`（`cmd/{id}/main.go`）和 `build.binary`（`bin/{id}`）（当字段为零值时）
+- 从 `id` 推导 `build.entrypoint`（`cmd/{id}/main.go`）和 `build.binary`（`{id}`）（当字段为零值时）
 - 将 `build.deployTemplate` 缺省为 `"k8s"`（当字段为零值时）
 - 遍历 `cells` 列表，从已解析的 cell metadata 中取各 cell 的 `ConsistencyLevel`，计算最大值写入 `MaxConsistencyLevel`
 
@@ -103,8 +103,52 @@ drift gate 三件套：
 - **examples/* 同步落 `assembly.yaml` 简化**：本 PR 不涵盖——仅 corebundle 验证派生流程；examples/ 等待 K#09 SCAFFOLD-ONE-CMD 配套时一并处理。
 - **`yaml.Node` 二次扫描拒 `maxConsistencyLevel` key**：放弃——schema `additionalProperties: false` 加 parser `KnownFields(true)` 已构成双层守护，引入第三层检查增加复杂度但不增加安全性。
 
+## Schema 约束单源
+
+`kernel/metadata/contract_constraints.go` 中的 const（`AssemblyIDPattern`、
+`GoStructNamePattern`、`DeployTemplateEnum`）是 schema 类语法约束的
+authoritative Go-side source。`kernel/metadata/schemas/*.json` 文件保留字面
+量供 IDE / yaml-language-server 消费，由 `kernel/metadata/schemas/
+schema_const_consistency_test.go` 验证字面量与 const 字节级一致。
+
+Runtime 单一守门员 = governance：
+
+- 解析期 parser **不做值校验**，只信 schema `additionalProperties: false` +
+  `KnownFields(true)` 拒未知字段；
+- governance FMT-A1 引用 `assemblyIDRe` 校验 assembly id；
+- governance FMT-30 引用 `DeployTemplateEnum` 校验 deployTemplate；
+- typed-identifier boundary 类型（`metadata.GoIdentifier`）在构造时引用
+  `goStructNameRe`。
+
+加新约束步骤：(1) `contract_constraints.go` 加 const → (2) 同步 schema 文件
+→ (3) governance 或 typed-identifier 引用 const → (4) consistency test 加比对项。
+
+R-meta 同根 PR #403 R0：本 PR 仅做 schema 字段切面的最小封堵；通用治理
+框架（`kernel/governance/invariants.go::Registry` + 四件套清单）留给
+PR #403 段 2 独立 PR 落地。详见 `docs/reviews/202605070218-pr404-second-wave-review.md`。
+
+## 派生物 typed boundary
+
+进入 codegen template 的字段必须是 typed value，raw string 不得直接拼接进
+Go 源代码模板。`kernel/metadata/identifier.GoIdentifier` 是该 boundary 的
+首批实现：
+
+- 私有 `value` 字段，仅 `NewGoIdentifier` / `MustNewGoIdentifier` /
+  `UnmarshalYAML` 三条构造路径，全部经 `goStructNameRe` 校验；
+- `CellMeta.GoStructName` 字段类型已迁移为 `GoIdentifier`；
+- 静态保证：Go 类型系统 + 7 处 call site 的 `.IsZero()` / `.String()` 方法
+  调用即拒回 raw string；任何"改回 string"的回归改动都会让所有 consumer
+  编译失败，无需独立 archtest。
+
+未来 codegen 输入字段（如新增 `cell.yaml` field 进入 template）必须采用
+typed boundary，不得绕过 raw string 拼接。codegen 模板侧用 `metadata.
+MustNewGoIdentifier(...)` 嵌入字面量（C-class init panic 失败模式，对应
+error-handling.md 中 panic taxonomy 的初始化误配置分类）。
+
 ## archtest 守卫
 
 - **ASSEMBLY-MODULES-GEN-01**：`cmd/*/modules_gen.go` 必须包含 `DO NOT EDIT` marker、`generatedCellModules` 函数声明、`package main` 声明。确保生成文件不被手工改写为非标准形态。
 - **ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02**：`cmd/*/run.go` AST 级别禁止以 cell ID 字符串字面量为 `case` 的 switch 语句。确保手工 cell→Module 映射 switch 不复出现。
 - **ASSEMBLY-MAXCONSISTENCY-DERIVED-03**：`AssemblyMeta.MaxConsistencyLevel` 字段的 yaml struct tag 必须为 `"-"`。确保该字段不可被 YAML 文件写入，派生只读语义不被绕过。
+- **TestSchemaConstantsMatchSchemaLiterals**（`kernel/metadata/schemas/`）：JSON schema pattern/enum 字面量必须与 `contract_constraints.go` const 字节级一致。
+- **TestAssemblySpecCoversAssemblyMeta**（`runtime/devtools/catalog/`）：`metadata.AssemblyMeta` 所有 yaml 字段必须映射到 `catalog.AssemblySpec` 或在 `catalogExcludedAssemblyFields` 中显式排除（含 reason）。

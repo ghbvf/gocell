@@ -82,13 +82,15 @@ func longestEntryName(entries []helpEntry) int {
 func printGenerateHelp() error {
 	printHelp("generate", []helpEntry{
 		{"assembly", []string{
-			"Generate the assembly entrypoint (cmd/<id>/main.go)",
-			"and assemblies/<id>/generated/boundary.yaml.",
+			"Generate the assembly entrypoint cmd/<id>/main.go,",
+			"assemblies/<id>/generated/boundary.yaml, and",
+			"cmd/<id>/modules_gen.go (the cell→Module factory).",
 			"Generated files are owned by gocell. Hand-written",
 			"helpers may live in cmd/<id>/run.go etc., but",
-			"cmd/<id>/main.go must carry the gocell generated",
-			"header or generation aborts to protect your edits.",
-			"--id=<assemblyID> [--module=<module>]",
+			"cmd/<id>/main.go and cmd/<id>/modules_gen.go must",
+			"carry the gocell generated header or generation",
+			"aborts to protect your edits.",
+			"--id=<assemblyID> | --all [--module=<module>]",
 		}},
 		{"metrics-schema", []string{
 			"Generate assemblies/<id>/generated/metrics-schema.yaml",
