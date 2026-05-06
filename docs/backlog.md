@@ -64,6 +64,8 @@
 | B2-K-05 | **Metadata parser error 路径泄漏** — 现状: parse error 含 fs 内部路径，低强度信息泄露；修复: error 双通道 (public 仅 cell/slice ID + 字段路径，internal slog 保留 fs path) | bug | P2/Cx2 | 🟡 | — | `kernel/metadata/parser.go:190,202` | backlog2 §2 B2-K-05 |
 | B2-K-07 | **Contracttest undeclared ref no-op** — 现状: `MustValidateRequest("not-declared", ...)` 静默 return，key 写错时假通过；修复: 未声明 key 改 `t.Fatalf` | bug | P1/Cx1 | 🟡 | — | `pkg/contracttest/contracttest.go:170,189` | backlog2 §2 B2-K-07 |
 | B2-T-07-FU-3 | **K04-CELLGEN-CONTRACTSPEC-CLIENTS** — 现状: cellgen 不派生 contract.clients；修复: 加派生（A5 follow-up） | arch-opt | Cx2 | 🟡 | cellgen 升级窗口 | `tools/codegen/cellgen/` | backlog2 §8 A5 follow-up |
+| GOVERNANCE-INVARIANTS-REGISTRY | **派生物治理 invariants Registry** — 现状: 资源约束在 6-8 处独立声明，加新字段改 6-8 处；修复: 立 `kernel/governance/invariants.go::Registry` + 四件套（detect/evidence/next/level/harvest），M3-RULE-ENGINE 子项聚焦派生 invariants | refactor | P2/Cx3 | 🟡 | 与 M3-RULE-ENGINE 同根 | `kernel/governance/invariants.go` (新) + `kernel/governance/rules/*.yaml` | PR#403/404 R0 |
+| GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN | **static governance 禁 auth.public 在 /internal/v1/** — 现状: runtime 守存在，元数据 governance 阶段无闸门；修复: 加 FMT-XX 规则 + codegen fail-fast，contract 出现 `auth.public:true` + `/internal/v1/*` 路径模式即报错 | bug | P1/Cx2 | 🔴 | 发布前安全收口 | `kernel/governance/rules_fmt.go` + `tools/codegen/contractgen/builder.go` | PR#376 F-SEC-002 |
 
 ---
 
@@ -374,6 +376,11 @@
 | B2-X-07 | **gocell dispatch 无 signal ctx** — 现状: 主入口不处理 SIGINT/SIGTERM；修复: 加 signal.NotifyContext | bug | P1/Cx2 | 🟠 | signal 不响应暴露 | `cmd/gocell/app/dispatch.go:20` + `cmd/gocell/main.go:13` | backlog2 §7 B2-X-07 |
 | B2-X-08 | **cmdrun Windows 进程组杀不完** — 现状: Windows 平台进程组不彻底；修复: JobObject 或 taskkill /T | bug | P2/Cx2 | 🟡 | Windows 平台用例 | `pkg/cmdrun/cmdrun_windows.go` | backlog2 §7 B2-X-08 |
 | P2-T-02 | **J-auditlogintrail 端到端集成测试** — 现状: stub 已就位；修复: 用 Docker + testcontainers 激活 | test | P2/Cx2 | 🟡 | Phase 5 启动 | `tests/integration/` + journey | tech-debt-registry P2-T-02 |
+| ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL | **Carve-out 收窄到 function-level + ADR 登记** — 现状: ERRCODE-KIND-LITERAL-01 / MESSAGE-CONST-LITERAL-01 给 `pkg/ctxcancel/` + `pkg/httputil/` file-level 豁免，无 ADR；与现有 `B2-K-08-CARVEOUT-NARROW` 同根但更细：(a) 改 function-level（仅豁免 `WrapOrInfra` / `writeErrcodeError` struct literal 行）+ (b) 新 ADR 登记 carve-out 列表+理由 | arch-opt | P1/Cx2 | 🟡 | 与 B2-K-08 同 PR | `tools/archtest/errcode_constructor_test.go` + ADR (新) | PR#391 F2 |
+| ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME | **NO-MANUAL-CONTRACTSPEC-LITERAL-01 扫描 runtime** — 现状: archtest 仅扫 `cells/` + `examples/`，`runtime/` 漏；新加 spec literal 不报；修复: 扫描根加 `runtime/`（保留 framework infra 必要的豁免列表）| arch-opt | P1/Cx1 | 🟡 | — | `tools/archtest/no_manual_contractspec_literal_test.go:97` | PR#376 F-ARCH-001 |
+| ARCHTEST-CELL-METADATA-FIELD-DRIFT | **cell.yaml ↔ cell_gen.go 字段级漂移守卫** — 现状: K#05 NO-METADATA-LITERAL-IN-CELLGO-01 / MARKER-WIRE-SINGLE-SOURCE-01 守结构一致，**字段级（owner / Schema.Primary / VerifySmoke）漂移仍可能发生**；修复: archtest 扫 3 cell 的 cell.yaml 与 cell_gen.go 对应字段值是否一致 | test | P1/Cx2 | 🟡 | — | `tools/archtest/` + 3 cell `cell_gen.go` | systems-layer-04 cells P0 |
+| CATALOG-DTO-DRIFT-ARCHTEST | **metadata→catalog DTO 完整性映射 archtest** — 现状: PR#404 加 Owner/MaxConsistencyLevel 已同步进 catalog wire，但**无 archtest 守卫**；修复: 写 archtest 校验 AssemblyMeta 字段必映射到 `runtime/devtools/catalog/wire.go` DTO | test | P2/Cx2 | 🟡 | — | `tools/archtest/` + `runtime/devtools/catalog/wire.go` | PR#404 F4 (resolved 但缺守卫) |
+| ADR-DATE-CONSISTENCY-CHECK | **ADR 文件名日期 vs 内容 Date 一致性** — 现状: PR#404 ADR `202605061800-...md` 文件内 Date: 2026-05-07（1 天误差）；修复: archtest 校验 `docs/architecture/yyyymmddHHmm-*.md` 文件名前缀日期 = 内容 `Date:` 字段日期 | test | P3/Cx1 | 🟡 | — | `tools/archtest/` + ADR 命名约定 | PR#404 F6 |
 
 ---
 
