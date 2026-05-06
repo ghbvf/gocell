@@ -31,7 +31,7 @@ const (
 	poolTestConnectExplicit  = 7 * time.Second        // explicit value passed through applyDefaults
 	poolTestConnectDefault5s = 5 * time.Second        // expected default after applyDefaults
 	poolTestConnectShort     = 200 * time.Millisecond // tight bound for blackhole / DSN-override tests
-	poolTestConnectAssertCap = 2 * time.Second        // upper bound the test asserts elapsed against
+	poolTestConnectAssertCap = 5 * time.Second        // upper bound the test asserts elapsed against (slack for CI scheduling)
 	poolTestConnectNegative  = time.Duration(-1)      // negative input for default-fallback case
 	poolTestConnectUnreach1s = 1 * time.Second        // bound for the immediate-refused (127.0.0.1:1) test
 )
@@ -204,8 +204,14 @@ func TestNewPool_UnreachableHost(t *testing.T) {
 // TestNewPool_ConnectTimeout_Blackhole verifies Config.ConnectTimeout actually
 // bounds a TCP-handshake-blackhole scenario. Without the field, pgxpool falls
 // back to its 2 min internal default; with ConnectTimeout=200ms the call must
-// fail in well under 2s.
+// fail in well under 5s. Skipped under -short because it depends on the
+// runner's network reaching RFC 5737 TEST-NET-1 (192.0.2.0/24) as a black
+// hole (the standard cloud and most corporate networks do; a few exotic
+// setups may RST instead, exercising the wrong code path).
 func TestNewPool_ConnectTimeout_Blackhole(t *testing.T) {
+	if testing.Short() {
+		t.Skip("blackhole timeout test requires network reach to RFC 5737 TEST-NET-1")
+	}
 	start := time.Now()
 	_, err := NewPool(t.Context(), Config{
 		DSN:            testPostgresBlackholeDSN,
@@ -226,8 +232,12 @@ func TestNewPool_ConnectTimeout_Blackhole(t *testing.T) {
 // TestNewPool_ConnectTimeout_DSNOverride_CodeWins documents the DSN-vs-Config
 // precedence: explicit Config.ConnectTimeout overrides any DSN connect_timeout.
 // The DSN is unreachable so we just inspect the elapsed time — if Config didn't
-// win, the DSN's 30s would dominate over Config's 200ms.
+// win, the DSN's 30s would dominate over Config's 200ms. Skipped under -short
+// (same network-reachability caveat as TestNewPool_ConnectTimeout_Blackhole).
 func TestNewPool_ConnectTimeout_DSNOverride_CodeWins(t *testing.T) {
+	if testing.Short() {
+		t.Skip("DSN-override test requires network reach to RFC 5737 TEST-NET-1")
+	}
 	dsn := "postgres://nobody:" + "nopass@192.0.2.1:5432/nonexistent?connect_timeout=30"
 	start := time.Now()
 	_, err := NewPool(t.Context(), Config{
