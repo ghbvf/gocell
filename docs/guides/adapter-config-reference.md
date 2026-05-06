@@ -60,6 +60,8 @@ This document lists every adapter shipped with GoCell and its configuration surf
 | `ReconnectBaseDelay` | duration | no | 1s | Initial delay for exponential backoff |
 | `ChannelPoolSize` | int | no | 10 | Maximum number of channels in the pool |
 | `ConfirmTimeout` | duration | no | 5s | Timeout for publisher confirm mode |
+| `ConnectTimeout` | duration | no | 5s | Timeout for AMQP TCP dial + handshake. NewConnection wires this into `amqp.Config.Dial` via `amqp.DefaultDial(d)`. Aligned with `adapters/postgres` `Config.ConnectTimeout`. |
+| `MaxChannelsPerConn` | int | no | 256 | Cap for in-flight channels per Connection. Pool-miss acquisitions return `ErrAdapterAMQPChannelMaxExceeded` when reached. (Closes PR#402 doc drift.) |
 
 #### Migration note: `MaxReconnectAttempts` removed (PR-V1-RMQ-TERMINAL, 029 A4)
 
@@ -97,12 +99,14 @@ attempt cap. Behavior is now uniform across all `Config` instances:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `DLXExchange` | string | yes | - | Dead-letter exchange name (required — without it, Nack silently discards messages) |
-| `QueueName` | string | no | - | Explicit queue name. Takes precedence over ConsumerGroup-based naming |
-| `ConsumerGroup` | string | no | - | Logical consumer group. When QueueName is empty, queue is derived as `{ConsumerGroup}.{topic}` |
-| `DLXRoutingKey` | string | no | "" | Routing key for dead-lettered messages (only effective when DLXExchange is set) |
-| `PrefetchCount` | int | no | 10 | Prefetch (QoS) count per consumer |
-| `ShutdownTimeout` | duration | no | 30s | How long to wait for in-flight messages during Close() |
+| `DLXExchange` | string | yes | - | Dead-letter exchange name. Without it, broker `Nack(requeue=false)` silently discards messages. Set per-cell DLX. |
+| `Clock` | clock.Clock | yes | - | Time source for shutdown deadlines. `NewSubscriber` calls `clock.MustHaveClock` and panics if nil; pass `clock.Real()` at composition root or `clockmock.FakeClock` in tests. |
+| `QueueName` | string | no | - | Explicit queue name. Takes precedence over ConsumerGroup-based naming. |
+| `ConsumerGroup` | string | no | - | Logical consumer group. When QueueName is empty, queue is derived as `{ConsumerGroup}.{topic}`. |
+| `DLXRoutingKey` | string | no | "" | Routing key for dead-lettered messages (only effective when DLXExchange is set). |
+| `PrefetchCount` | int | no | 10 | Prefetch (QoS) count per consumer. |
+| `StopIntakePerCallTimeout` | duration | no | 2s | Bound for any single `basic.cancel` during StopIntake. A hung broker cannot stall shutdown beyond this budget per consumer. |
+| `StopIntakeDrainTimeout` | duration | no | 30s | Total upper bound for StopIntake to drain in-flight prefetched deliveries + handler completion. Exceeding it returns `ErrAdapterAMQPCloseTimeout` and logs `slog.Warn` with remaining inflight count. |
 
 ## OIDC (`adapters/oidc`) — thin go-oidc v3 wrapper
 
