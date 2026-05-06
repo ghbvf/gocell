@@ -1,4 +1,4 @@
-# slowgate allowlist — tests permitted to exceed the default 5s budget.
+# slowgate allowlist — tests permitted to exceed the default 15s budget.
 #
 # Format: each data line is `Package<TAB>TestName`. Every data line MUST
 # be preceded by a `# <reason>` comment explaining why the wall-clock cost
@@ -7,12 +7,13 @@
 # top-level test func. Independent table-driven negative cases for the
 # parser live in TestLoadSlowgateAllowlist_ParseRules (same file).
 #
-# Threshold rationale (5s, see tools/slowgate/main.go defaultThreshold):
-# the dominant >2s test population in this repo is packages.Load-bound
-# and subprocess-go-toolchain — both swing 2–7s from cold cache + GHA
-# runner CPU contention. A 2s threshold produces a long tail of allowlist
-# churn that is pure noise; 5s preserves real signal (a sleep regression
-# from 100ms to 6s is still caught) without being trip-wire on CI flakes.
+# Threshold rationale (15s, see tools/slowgate/main.go defaultThreshold):
+# packages.Load-bound and subprocess-go-toolchain tests run 5–15× slower
+# on GHA ubuntu-latest 2-CPU runners than on developer laptops. 2s and 5s
+# thresholds both produced perpetual allowlist churn driven by hardware
+# mismatch, not real regression. 15s lets the slow-by-design population
+# pass while still catching meaningful regressions (a 100ms sleep drifting
+# to 16s+ still fires).
 #
 # Adding entries: only when CI has empirically failed the gate. The
 # failing slowgate step prints `SLOW <Package> <TestName> <Elapsed>` lines
@@ -22,7 +23,8 @@
 # ----------------------------------------------------------------------
 # type-graph-load: tests use packages.Load over the entire module type
 # graph. Cost is dominated by Go's package loader and `go list` walk,
-# not by sleep or I/O. Inherent to whole-module static analysis.
+# scales with module size; ubuntu-latest 2-CPU runners hit 16–46s on
+# the larger scans.
 # ----------------------------------------------------------------------
 
 # type-graph-load: clock injection callsite scan over module
@@ -33,59 +35,47 @@ github.com/ghbvf/gocell/tools/archtest	TestClockInjectionProdCallsite
 github.com/ghbvf/gocell/tools/archtest	TestErrcodeMessageConstLiteral
 # type-graph-load: exported error-new scan over module
 github.com/ghbvf/gocell/tools/archtest	TestExportedErrorNew
-# type-graph-load: goose session-locker scan over module
-github.com/ghbvf/gocell/tools/archtest	TestGooseSessionLocker01
 # type-graph-load: kernel/clock leaf-fallback scan over module
 github.com/ghbvf/gocell/tools/archtest	TestKernelClockLeafFallback
 # type-graph-load: kernel/clock reset-relative scan over module
 github.com/ghbvf/gocell/tools/archtest	TestKernelClockResetRelativeProd
+# type-graph-load: layering rules walk over module dependency graph
+github.com/ghbvf/gocell/tools/archtest	TestLayeringRules
 # type-graph-load: lint-gate smoke (subprocess golangci-lint warmup)
 github.com/ghbvf/gocell/tools/archtest	TestLintGateSmoke
+# type-graph-load: metric-label errcode classifiers Ack scan over module
+github.com/ghbvf/gocell/tools/archtest	TestMetricLabelErrcodeClassifiersRequireAck
 # type-graph-load: prod clock injection scan over module
 github.com/ghbvf/gocell/tools/archtest	TestProdClockInjection
 # type-graph-load: prod duration const scan over module
 github.com/ghbvf/gocell/tools/archtest	TestProdDurationConst
+# type-graph-load: slowgate allowlist drift guard (this test) loads referenced packages
+github.com/ghbvf/gocell/tools/archtest	TestSlowgateAllowlist
 # type-graph-load: test-sleep discipline scan over module
 github.com/ghbvf/gocell/tools/archtest	TestTestSleepDiscipline
 # type-graph-load: test-time literal const scan over module
 github.com/ghbvf/gocell/tools/archtest	TestTestTimeLiteralConst
 # type-graph-load: test-time literal fixtures cross-validation
 github.com/ghbvf/gocell/tools/archtest	TestTestTimeLiteralFixtures
-# type-graph-load: slowgate allowlist drift guard (this test) loads referenced packages
-github.com/ghbvf/gocell/tools/archtest	TestSlowgateAllowlist
-# type-graph-load: metricschema cross-package prometheus helper opts scan
-github.com/ghbvf/gocell/tools/metricschema	TestBuild_FailsClosedOnUnresolvedCrossPackagePrometheusHelperOpts
-# type-graph-load: metricschema prometheus helper vec labels scan
-github.com/ghbvf/gocell/tools/metricschema	TestBuild_FailsClosedOnUnresolvedPrometheusHelperVecLabels
 
 # ----------------------------------------------------------------------
 # subprocess-go-toolchain: tests invoke `go build` / `go test` /
-# `go list` as subprocess. Cost is dominated by Go toolchain startup
-# and module resolution; not amenable to mock without losing the test
-# subject (we are testing the artifact-on-disk produced by go itself).
+# `go list` as subprocess. CI hardware adds ~10s of toolchain startup +
+# module resolution per invocation; multi-call tests amplify.
 # ----------------------------------------------------------------------
 
-# subprocess-go-toolchain: kernel/verify subprocess go test failing-test capture
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_FailingTest
-# subprocess-go-toolchain: kernel/verify subprocess go test against temp module
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_WithTempModule
 # subprocess-go-toolchain: kernel/verify subprocess go with caller-selected GOROOT/PATH
 github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_UsesCallerSelectedGoAndAdditivePATH
-# subprocess-go-toolchain: kernel/verify subprocess go with skip-only test path
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_SkipOnlyReal
-# subprocess-go-toolchain: kernel/verify integration test runs full journey via subprocess
-github.com/ghbvf/gocell/kernel/verify	TestRunJourney_Integration
-# subprocess-go-toolchain: kernel/verify integration test runs full cell via subprocess
-github.com/ghbvf/gocell/kernel/verify	TestVerifyCell_Integration
-# subprocess-go-toolchain: kernel/verify integration test runs full slice via subprocess
-github.com/ghbvf/gocell/kernel/verify	TestVerifySlice_Integration
+# subprocess-go-toolchain: kernel/verify subprocess go test against temp module
+github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_WithTempModule
 # subprocess-go-toolchain: kernel/verify integration test runs slice with metadata refs
 github.com/ghbvf/gocell/kernel/verify	TestVerifySlice_WithMetadataRefs
 
 # ----------------------------------------------------------------------
 # verify-large-fixture: cmd/gocell verify-* commands replay full
 # assembly/journey/cell YAML fixtures through validators. Dominant cost
-# is YAML parsing + cross-file reference resolution.
+# is YAML parsing + cross-file reference resolution; scales with the
+# fixture set size.
 # ----------------------------------------------------------------------
 
 # verify-large-fixture: validate strict mode against full assembly fixtures
@@ -105,14 +95,3 @@ github.com/ghbvf/gocell/cmd/gocell/app	TestRunVerifySlice_ValidID
 
 # external-network-timeout: OTLP exporter dial unreachable collector
 github.com/ghbvf/gocell/adapters/otel	TestNewTracer_Insecure
-# external-network-timeout: vault token reauth retries N times before giving up
-github.com/ghbvf/gocell/adapters/vault	TestDoReauth_SucceedsAfterNFailures
-
-# ----------------------------------------------------------------------
-# sleep-bounded: test orchestrates real-time barriers via time.After /
-# t.Cleanup-budget; sleep IS the subject. Companion //archtest:allow:
-# test-sleep annotations track each underlying call.
-# ----------------------------------------------------------------------
-
-# sleep-bounded: router shutdown phase wrapping uses 2× testtime.D2s budgets
-github.com/ghbvf/gocell/runtime/eventrouter	TestRouterClose_WrapsErrorsByPhase

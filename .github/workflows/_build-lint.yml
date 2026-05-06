@@ -165,9 +165,10 @@ jobs:
       # it by default, and without it a non-zero `go test` exit code would
       # be masked by slowgate success. Do not remove this line.
       #
-      # `--threshold=5s` matches `defaultThreshold` in tools/slowgate/main.go;
+      # `--threshold=15s` matches `defaultThreshold` in tools/slowgate/main.go;
       # the literal is duplicated to keep the workflow self-documenting at
-      # the call site.
+      # the call site. Calibrated for GHA ubuntu-latest 2-CPU runners where
+      # packages.Load-bound tests run 5–15× slower than developer laptops.
       - name: Test
         shell: bash
         run: |
@@ -178,7 +179,7 @@ jobs:
             -json \
             ${{ matrix.pkgs }} \
             -count=1 -timeout 5m \
-            | "$RUNNER_TEMP/slowgate" --threshold=5s --allowlist=tools/slowgate/allowlist.txt
+            | "$RUNNER_TEMP/slowgate" --threshold=15s --allowlist=tools/slowgate/allowlist.txt
 
       # Static governance gates (validate --strict, verify journey, check
       # contract-health, check unconditional-skip, examples internal-import

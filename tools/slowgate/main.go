@@ -61,16 +61,19 @@ const (
 	// value is shown instead so the message stays accurate.
 	defaultAllowlistPath = "tools/slowgate/allowlist.txt"
 
-	// defaultThreshold is the default per-test wall-clock budget. 5s is the
-	// empirical floor needed to absorb GHA ubuntu-latest runner variance
-	// across this codebase: the dominant >2s test population is
-	// packages.Load-bound (archtest / typeseval / metricschema /
-	// generatedverify) and subprocess-go-toolchain (kernel/verify), where
-	// individual runs swing 2–7s from cold cache + concurrent CPU. 2s
-	// produces a long tail of allowlist churn that is pure noise; 5s lets
-	// the gate retain its real signal — a sleep regression from 100ms to
-	// 6s is still caught, while CI flakes from 1.9→2.1s are absorbed.
-	defaultThreshold = 5 * time.Second
+	// defaultThreshold is the default per-test wall-clock budget. 15s is
+	// calibrated for GHA ubuntu-latest runner hardware: packages.Load-bound
+	// tests (archtest / typeseval / metricschema / generatedverify) and
+	// subprocess-go-toolchain tests (kernel/verify) run 5–15× slower on
+	// CI's 2-CPU shared runners than on a developer laptop, so locally
+	// "fast" 2–7s tests routinely show 5–43s on CI. 2s and 5s thresholds
+	// both produced perpetual allowlist churn from this hardware mismatch;
+	// 15s preserves real signal (a sleep regression from 100ms to 16s+ is
+	// still caught) while letting the slow-by-design population pass
+	// without per-PR allowlist edits. A handful of tests genuinely > 15s
+	// (large packages.Load scans, subprocess go invocations, long YAML
+	// fixtures) live in tools/slowgate/allowlist.txt.
+	defaultThreshold = 15 * time.Second
 )
 
 func main() {
