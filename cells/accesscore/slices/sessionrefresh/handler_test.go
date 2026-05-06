@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -51,7 +52,8 @@ func setup(t testing.TB) (http.Handler, string) {
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 
-	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
@@ -203,7 +205,8 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	userRepo := mem.NewUserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
-	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())

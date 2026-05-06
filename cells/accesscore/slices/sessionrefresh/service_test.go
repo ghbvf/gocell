@@ -3,6 +3,7 @@ package sessionrefresh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
@@ -129,7 +131,8 @@ func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, ports
 	if err != nil {
 		t.Fatalf("test setup: %v", err)
 	}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 	return svc, sessionRepo, refreshStore, fakeClock
 }
 
@@ -141,7 +144,8 @@ func newTestServiceWithUserRepo(t testing.TB) (*Service, ports.SessionRepository
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 	return svc, sessionRepo, userRepo
 }
 
@@ -159,28 +163,32 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil sessionRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.SessionRepository
-				return NewService(typedNil, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+				return NewService(typedNil, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 			},
 		},
 		{
 			name: "typed nil roleRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.RoleRepository
-				return NewService(sessionRepo, typedNil, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+				return NewService(sessionRepo, typedNil, userRepo, refreshStore, testIssuer, slog.Default(),
+					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 			},
 		},
 		{
 			name: "typed nil userRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.UserRepository
-				return NewService(sessionRepo, roleRepo, typedNil, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+				return NewService(sessionRepo, roleRepo, typedNil, refreshStore, testIssuer, slog.Default(),
+					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 			},
 		},
 		{
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(sessionRepo, roleRepo, userRepo, typedNil, testIssuer, slog.Default(), WithClock(clock.Real()))
+				return NewService(sessionRepo, roleRepo, userRepo, typedNil, testIssuer, slog.Default(),
+					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 			},
 		},
 	}
@@ -194,6 +202,98 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 		})
 	}
+}
+
+// TestNewService_RequiresTxRunner asserts that NewService rejects callers
+// that omit WithTxManager. The cross-store ACID wrap in Refresh requires a
+// non-nil TxRunner; the construction-time fail-fast prevents a nil-deref at
+// the first request. No silent fallback to cell.DemoTxRunner — that would
+// mask production wiring mistakes.
+func TestNewService_RequiresTxRunner(t *testing.T) {
+	sessionRepo := testutil.RealSessionRepo(t)
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	refreshStore := newTestRefreshStore()
+
+	t.Run("missing WithTxManager option", func(t *testing.T) {
+		_, err := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+			WithClock(clock.Real()))
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	})
+
+	t.Run("nil TxRunner via WithTxManager(nil) is rejected", func(t *testing.T) {
+		// WithTxManager silently ignores nil to keep the option idempotent —
+		// but NewService's final check still rejects the resulting unconfigured
+		// state.
+		_, err := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+			WithClock(clock.Real()), WithTxManager(nil))
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	})
+}
+
+// failingTxRunner is a TxRunner that runs the closure once, captures whether
+// it succeeded internally, and then returns a sentinel error simulating an
+// outer-tx failure (commit failure, infrastructure outage, etc.). Used to
+// verify Refresh propagates the RunInTx error and never leaks a partially
+// populated TokenPair.
+type failingTxRunner struct {
+	innerCalled bool
+	innerErr    error
+}
+
+func (r *failingTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	r.innerCalled = true
+	r.innerErr = fn(ctx)
+	return errFailingTxRunnerOuter
+}
+
+var errFailingTxRunnerOuter = errors.New("test: outer tx commit failure")
+
+// TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair asserts that an outer
+// TxRunner failure is propagated and TokenPair stays at its zero value
+// (no partial leakage of access/refresh tokens to the caller). This is the
+// service-layer counterpart to the adapter-level
+// TestB5_OuterTxRollback_* integration tests.
+func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
+	sessionRepo := testutil.RealSessionRepo(t)
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	refreshStore := newTestRefreshStore()
+	user, err := domain.NewUser("usr-runintx-fail", "u@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-runintx-fail"
+	require.NoError(t, userRepo.Create(context.Background(), user))
+	sess, err := domain.NewSession("usr-runintx-fail", "at", time.Now().Add(time.Hour), time.Now())
+	require.NoError(t, err)
+	sess.ID = "sess-runintx-fail"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-runintx-fail", "usr-runintx-fail")
+	require.NoError(t, err)
+
+	tr := &failingTxRunner{}
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(tr))
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+
+	// Outer-tx error must propagate verbatim.
+	require.ErrorIs(t, err, errFailingTxRunnerOuter,
+		"Refresh must surface the TxRunner error so callers can distinguish infra failures from token rejection")
+
+	// The closure must have run (the inner refresh logic fully executed and
+	// succeeded — only the commit failed).
+	require.True(t, tr.innerCalled, "RunInTx closure must have executed")
+	require.NoError(t, tr.innerErr, "the inner refresh sequence should have completed without error before the simulated commit failure")
+
+	// TokenPair must be the zero value: no partial leakage of any field.
+	assert.Equal(t, dto.TokenPair{}, pair,
+		"on outer-tx failure Refresh must return a zero TokenPair — no partial token data may leak to the caller")
 }
 
 // issueTestWireToken creates a session + issues a wire token from the refreshStore.
@@ -248,7 +348,8 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	sess, err := domain.NewSession("usr-rolefail", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -470,7 +571,8 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), seedUser))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	sess, err := domain.NewSession("usr-sa", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -505,7 +607,8 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository() // intentionally empty — GetByID returns error
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	sess, err := domain.NewSession("usr-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -535,7 +638,8 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 
 	// Recreate with a known refreshStore so we can issue and rotate wire tokens.
 	refreshStore := newTestRefreshStore()
-	svc2 := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc2 := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-clear"
@@ -570,7 +674,8 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	sess, _ := domain.NewSession("usr-ref-reset", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-reset"
@@ -602,7 +707,8 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	// Issue a wire token but don't seed the session — GetByID will return infraErr.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra")
@@ -679,7 +785,8 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 
 	spy := &spyRefreshStore{Store: innerStore}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "session-not-found must cause Refresh to fail")
@@ -705,7 +812,8 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
 	}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -737,7 +845,8 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-infra"
@@ -770,7 +879,8 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 
 	innerStore := newTestRefreshStore()
 	spy := &spyRefreshStore{Store: innerStore}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-missing"
@@ -812,6 +922,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 					testIssuer,
 					slog.Default(),
 					WithClock(clock.Real()),
+					WithTxManager(cell.DemoTxRunner{}),
 				)
 				return svc, wireToken
 			},
@@ -838,7 +949,8 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				sessionRepo := testutil.RealSessionRepo(t)
 				refreshStore := newTestRefreshStore()
 				svc := MustNewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(),
-					refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+					refreshStore, testIssuer, slog.Default(),
+					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour), time.Now())
 				require.NoError(t, err)
 				sess.ID = "sess-uniform-missing"
@@ -884,6 +996,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 					testIssuer,
 					logger,
 					WithClock(clock.Real()),
+					WithTxManager(cell.DemoTxRunner{}),
 				)
 				return svc, wireToken
 			},
@@ -1018,7 +1131,8 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 		Store: innerStore,
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "rotate store down"),
 	}
-	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1051,7 +1165,8 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	spy := &spyRefreshStore{Store: innerStore}
 	// Override Rotate to return a token with wrong SessionID.
 	mismatchStore := rotateMismatchRefreshStore{Store: spy, rotatedSessionID: "wrong-session", rotatedSubjectID: "usr-mismatch"}
-	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1096,7 +1211,8 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 		rotatedSessionID: "tampered-session",
 		rotatedSubjectID: "usr-mismatch-revoke-fail",
 	}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1147,7 +1263,8 @@ func TestService_CascadeRevoke_UsesDetachedStoreMethod(t *testing.T) {
 
 	spy := &detachSpyRefreshStore{Store: innerStore}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
 
 	// Cancel the caller ctx before calling Refresh. This service-level test
 	// only asserts method routing; durable cancellation behavior is owned by

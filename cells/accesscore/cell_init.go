@@ -202,7 +202,9 @@ func (c *AccessCore) initSlices() error {
 	// access JWT replay attempt) returns ErrRejected.
 	refreshSvc, err := sessionrefresh.NewService(
 		c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore,
-		c.jwtIssuer, c.logger, sessionrefresh.WithClock(c.clk),
+		c.jwtIssuer, c.logger,
+		sessionrefresh.WithClock(c.clk),
+		sessionrefresh.WithTxManager(c.txRunner),
 	)
 	if err != nil {
 		return err
