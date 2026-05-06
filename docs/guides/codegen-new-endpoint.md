@@ -96,7 +96,7 @@ This writes three files under `generated/contracts/http/myapp/widgets/create/v1/
 |------|---------|
 | `types_gen.go` | `Request`, `Response`, `ResponseData` structs + typed response envelope types (e.g. `Create201JSONResponse`, `Create400ErrorResponse`, `Create500ErrorResponse`) |
 | `iface_gen.go` | `Service` interface with `Create(ctx, *Request) (CreateResponseObject, error)` |
-| `handler_gen.go` | `Handler` that decodes, validates, calls Service, calls `VisitCreateResponse` to write the typed response |
+| `handler_gen.go` | `Handler` that decodes, validates, calls Service, calls `visitCreateResponse` (unexported, package-internal) to write the typed response |
 
 Do **not** edit these files — they are regenerated on every `gocell generate contract`.
 
