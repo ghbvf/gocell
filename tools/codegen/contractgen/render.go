@@ -77,7 +77,7 @@ var templates = func() *template.Template {
 			if spec.RequestSchemaJSON != "" {
 				return true
 			}
-			if len(ep.QueryParams) > 0 && !ep.IsPagination {
+			if len(ep.QueryParams) > 0 && !ep.IsPagination() {
 				return true
 			}
 			for _, p := range ep.PathParams {

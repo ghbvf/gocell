@@ -241,18 +241,24 @@ func buildHTTPEndpointSpec(
 	spec.QueryParams = queryParams
 
 	// Pagination detection: cursor (string) + limit (integer) with no path params
-	// and GET method signals a canonical paginated list endpoint.
+	// and GET method signals a canonical paginated list endpoint. Batch 1 keeps
+	// the strict 2-element behavior; Batch 2 relaxes detection to "contains
+	// cursor+limit, others go to ExtraQueryParams" together with the matching
+	// handler.tmpl rewrite so generated handlers always parse cursor/limit via
+	// pkg/httputil.ParsePageParams (single error envelope).
 	if http.Method == "GET" && len(spec.PathParams) == 0 && len(spec.QueryParams) == 2 {
 		if err := detectPagination(spec); err != nil {
 			return nil, fmt.Errorf("contractgen build: %q pagination: %w", contract.ID, err)
 		}
 	}
+
+	spec.Responses = liftHTTPResponses(http, handlerMethod)
 	return spec, nil
 }
 
 // detectPagination checks whether the query params are exactly cursor (string)
-// and limit (integer), setting IsPagination=true if so. Fails fast if the params
-// look like a mixed pagination+filter pattern.
+// and limit (integer), setting Pagination if so. Fails fast on mixed
+// pagination+filter today; Batch 2 routes the extras into ExtraQueryParams.
 func detectPagination(spec *HTTPEndpointSpec) error {
 	hasCursor, hasLimit := false, false
 	for _, q := range spec.QueryParams {
@@ -268,14 +274,74 @@ func detectPagination(spec *HTTPEndpointSpec) error {
 			}
 			hasLimit = true
 		default:
-			// Extra query param mixed with cursor/limit → not a pure pagination endpoint.
+			// Extra query param mixed with cursor/limit → not a pure pagination
+			// endpoint under the strict Batch 1 invariant.
 			return nil
 		}
 	}
 	if hasCursor && hasLimit {
-		spec.IsPagination = true
+		spec.Pagination = &PaginationShape{HasCursor: true, HasLimit: true}
 	}
 	return nil
+}
+
+// liftHTTPResponses projects the contract.yaml http.responses[] map into a
+// sorted []ResponseSpec, prepending the success status (derived from the
+// HTTPTransportMeta SuccessStatus / NoContent fields). Each entry's
+// GoTypeName follows the {HandlerMethod}{Status}{Suffix} convention:
+//
+//   - success body-bearing → "{Method}{Status}JSONResponse"
+//   - success 204 NoContent → "{Method}204NoContentResponse"
+//   - error (>=400)         → "{Method}{Status}ErrorResponse"
+//
+// The slice is consumed by Batch 2 templates to generate one Go type per
+// declared status implementing the XxxResponseObject interface, and by CH-04
+// governance to assert the generated typed-response set matches the
+// contract.yaml declaration exactly.
+func liftHTTPResponses(http *metadata.HTTPTransportMeta, handlerMethod string) []ResponseSpec {
+	statuses := make([]int, 0, len(http.Responses)+1)
+	if http.SuccessStatus > 0 {
+		statuses = append(statuses, http.SuccessStatus)
+	}
+	for s := range http.Responses {
+		// Defensive: ignore any responses[] entry that duplicates the success
+		// status (contract authors should declare success only via SuccessStatus).
+		if s == http.SuccessStatus {
+			continue
+		}
+		statuses = append(statuses, s)
+	}
+	sort.Ints(statuses)
+
+	out := make([]ResponseSpec, 0, len(statuses))
+	for _, status := range statuses {
+		spec := ResponseSpec{
+			Status:     status,
+			IsError:    status >= 400,
+			GoTypeName: responseGoTypeName(handlerMethod, status, http.NoContent && status == http.SuccessStatus),
+		}
+		if r, ok := http.Responses[status]; ok {
+			spec.Description = r.Description
+			spec.SchemaRef = r.SchemaRef
+		}
+		out = append(out, spec)
+	}
+	return out
+}
+
+// responseGoTypeName derives the typed response struct identifier from the
+// endpoint's HandlerMethod, an HTTP status code, and whether the success
+// status is 204 NoContent (controls the JSONResponse vs NoContentResponse
+// suffix). The error suffix is unconditional for status >= 400.
+func responseGoTypeName(handlerMethod string, status int, isNoContent bool) string {
+	switch {
+	case status >= 400:
+		return fmt.Sprintf("%s%dErrorResponse", handlerMethod, status)
+	case isNoContent:
+		return fmt.Sprintf("%s%dNoContentResponse", handlerMethod, status)
+	default:
+		return fmt.Sprintf("%s%dJSONResponse", handlerMethod, status)
+	}
 }
 
 func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {

@@ -95,11 +95,19 @@ type HTTPEndpointSpec struct {
 	// schemaRefs.request. POST/PATCH endpoints that only use path params and have
 	// no request body schema must not call DecodeJSONStrict (empty body → 400).
 	HasBody bool
-	// IsPagination is true when the endpoint's query params are exactly
-	// cursor (string) + limit (integer) — the canonical pagination pattern.
-	// When true, the generated handler uses httputil.ParsePageParams instead
-	// of inline query param parsing.
-	IsPagination bool
+	// Pagination is non-nil when the endpoint exposes the canonical cursor+limit
+	// pagination pattern (Batch 1 still requires query=cursor+limit exactly; the
+	// follow-up batch relaxes detection to "contains cursor+limit, others free"
+	// and routes the extras through ExtraQueryParams). When set, the generated
+	// handler uses httputil.ParsePageParams for cursor/limit instead of inline
+	// query param parsing.
+	Pagination *PaginationShape
+	// Responses lists every declared HTTP response (success + errors) sorted
+	// by status ascending. It is the single declaration table that drives
+	// generated typed response envelope structs (one Go type per status) and
+	// CH-04 governance equality between contract.yaml http.responses[] and the
+	// generated handler's typed response set.
+	Responses []ResponseSpec
 	// Clients lists the allowed caller-cell IDs from contract.yaml endpoints.clients.
 	// When non-empty, auth.Mount enforces RequireCallerCell on this route. The
 	// generated contractSpec must carry this list so the governance enforcement
@@ -120,6 +128,56 @@ type HTTPEndpointSpec struct {
 	// enforces that this flag only appears on setup/admin contracts. Mutually
 	// exclusive with AuthPublic and AuthPasswordResetExempt.
 	AuthBootstrap bool
+}
+
+// IsPagination reports whether this endpoint uses the canonical cursor+limit
+// pagination pattern. It is implemented as a method (not a field) so handler
+// templates can keep their existing `{{- if .Endpoint.IsPagination}}` form
+// while builder-side state moves to the structured *PaginationShape value.
+func (e *HTTPEndpointSpec) IsPagination() bool {
+	return e != nil && e.Pagination != nil
+}
+
+// PaginationShape captures the structural facts the handler template needs
+// to emit the right query-parsing code for a paginated endpoint:
+//
+//   - HasCursor / HasLimit indicate which canonical params are present
+//     (always both true after Batch 1; Batch 2 keeps the same invariant
+//     while relaxing endpoint-shape detection).
+//   - ExtraQueryParams carries any additional query parameters declared on
+//     the same endpoint. Today the builder rejects mixed pagination+filter
+//     endpoints in detectPagination; Batch 2 lifts that restriction and
+//     these params are routed through per-param parsing while cursor+limit
+//     keep going through pkg/httputil.ParsePageParams (single error envelope).
+type PaginationShape struct {
+	HasCursor        bool
+	HasLimit         bool
+	ExtraQueryParams []ParamSpec
+}
+
+// ResponseSpec describes a single declared HTTP response from contract.yaml.
+// One ResponseSpec is emitted per declared status (success status from the
+// HTTP transport metadata + every entry in http.responses[]), sorted by
+// Status ascending. The slice is the single source of truth for typed
+// response envelope generation and CH-04 governance.
+type ResponseSpec struct {
+	// Status is the HTTP status code, e.g. 200, 204, 401, 503.
+	Status int
+	// Description mirrors the contract.yaml response description (free form).
+	// Empty for the success entry (the success body schema documents itself).
+	Description string
+	// SchemaRef is the contract-relative path to the JSON schema that
+	// describes this response body. Empty for the success entry (success
+	// body lives in schemaRefs.response, not in responses[]) and for the
+	// 204 NoContent entry.
+	SchemaRef string
+	// IsError is true for status >= 400; the success entry is false.
+	IsError bool
+	// GoTypeName is the Go identifier for the typed response struct that
+	// implements the per-endpoint XxxResponseObject interface. The naming
+	// convention is {HandlerMethod}{Status}{Suffix}: 200 → 200JSONResponse,
+	// 204 → 204NoContentResponse, 4xx/5xx → {Status}ErrorResponse.
+	GoTypeName string
 }
 
 // EventEndpointSpec holds event-specific endpoint information.
