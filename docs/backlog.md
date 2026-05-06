@@ -194,8 +194,6 @@
 | PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | **TEST-RACE-COVERAGE-ADAPTERS-INTEGRATION-01** — 现状: PG concurrent Up CI 不带 -race；修复: test-race.yml 加 adapters/postgres 路径（评估） | test | P2/Cx3 | 🟡 | — | `.github/workflows/test-race.yml` | PR-V1-PG-STARTUP-HARDEN F5 |
 | X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE/SEED-ROLE-IFACE/AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
 | S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
-| P3-TD-02 | **postgres adapter 覆盖率** — 现状: 测量基准 46.6%（要求 ≥80%）；testcontainers 已实现但 CI 未测量；修复: CI 加 -tags=integration 覆盖率测量（合并 P4-TD-08）| test | P2/Cx2 | 🟡 | — | `adapters/postgres/` + `.github/workflows/` | tech-debt-registry P3-TD-02 + P4-TD-08 |
-| P4-TD-11 | **Migrator.Down() v=0 回归测试** — 现状: 已恢复 idempotent no-op 但缺第三次 Down() 测试锁定；修复: 加锁定测 防依赖升级回归 | test | Cx1 | 🟡 | — | `adapters/postgres/migrator_test.go` | tech-debt-registry P4-TD-11 |
 | B2-A-28 | **Redis password 可选 fail-open** — 现状: 缺 password 仍允许连接；修复: real mode 强制 password fail-fast | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `adapters/redis/client.go:62-68` | backlog2 §5.3 B2-A-28 |
 | B2-C-12 | **Audit HMAC key 最小长度未验证** — 现状: 任意短密钥都接受；修复: 加 32 字节最小长度 + Validate | bug | P2/Cx1 | 🟡 | 发布前安全收口 | `cells/auditcore/cell.go:319` | backlog2 §4 B2-C-12 |
 
