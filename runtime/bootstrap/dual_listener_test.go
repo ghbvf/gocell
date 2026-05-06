@@ -855,7 +855,13 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
-		WithShutdownTimeout(testtime.D2s),
+		// D5s shutdown budget (matches the dual-listener slow-reload test at
+		// bootstrap_test.go:1815). 4 in-flight requests drain in parallel with
+		// dual-listener http.Server.Shutdown + LIFO teardown sharing a single
+		// shutCtx; -race scheduling on slow CI runners can push the tail past
+		// D2s. The test asserts race-free shutdown — the budget value is
+		// incidental and must only be wide enough to avoid an artificial timeout.
+		WithShutdownTimeout(testtime.D5s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -892,7 +898,9 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	select {
 	case err := <-done:
 		assert.NoError(t, err)
-	case <-time.After(testtime.SelectShutdown):
+	// D10s outer guard keeps `outer > inner` so a clean shutdown that consumes
+	// most of the D5s shutCtx still wins this fallback in the select race.
+	case <-time.After(testtime.D10s):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
