@@ -404,3 +404,35 @@ GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./tests/integration/... 
 ```
 
 See `docs/guides/integration-testing.md` for full details and environment variable reference.
+
+## 加入 Assembly
+
+新 cell 创建后接入 assembly 的工作流（K#10 引入派生模式后简化）：
+
+### 步骤
+
+1. **assembly.yaml 加 cell**：在 `assemblies/<assemblyID>/assembly.yaml` 的 `cells:` 列表追加新 cell ID
+2. **cmd/<assemblyID>/ 加 *Module struct**：在 `cmd/<assemblyID>/<cell>_module.go` 定义 `<GoStructName>Module` 实现 `CellModule` 接口（参考 `cmd/corebundle/access_module.go` 模板）
+3. **跑 codegen**：`gocell generate assembly --id=<assemblyID>` 派生新 `cmd/<assemblyID>/modules_gen.go`
+4. **CI drift gate**：`gocell verify codegen-assembly` 自动校验 modules_gen.go ↔ assembly.yaml 一致性
+
+### 命名约定
+
+`modules_gen.go` 内的 factory 类型名按 `{cell.GoStructName}Module` 派生（例：cell.GoStructName=`AccessCore` → `AccessCoreModule{}` 字面量）。`<cell>_module.go` 必须按此命名定义 struct。
+
+archtest **ASSEMBLY-CELLMODULE-TYPE-04** 静态守卫 `cmd/{id}/modules_gen.go` 存在时 `cmd/{id}/` 必含 `CellModule` 类型声明。
+archtest **ASSEMBLY-MODULES-GEN-01** 守 generated marker。
+archtest **ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02** 守 run.go 不退化到手工 switch。
+
+### 派生字段（K#10 ASSEMBLY-YAML-MINIMAL）
+
+assembly.yaml 必填仅 `id` + `cells` + `owner`，其余从 cell 元数据派生：
+
+| 字段 | 派生规则 | 显式声明覆盖 |
+|------|---------|-----------|
+| `build.entrypoint` | `cmd/{id}/main.go` | ✓ |
+| `build.binary` | assembly id 本身 | ✓ |
+| `build.deployTemplate` | 默认 `k8s`（schema enum: k8s/compose/binary） | ✓ |
+| `maxConsistencyLevel` | `max(cells[].consistencyLevel)` | ✗ 派生只读，yaml 出现该 key 即拒（KnownFields + schema additionalProperties:false 双层守） |
+
+详见 ADR `docs/architecture/202605061800-adr-assembly-yaml-minimal-derivation.md`。

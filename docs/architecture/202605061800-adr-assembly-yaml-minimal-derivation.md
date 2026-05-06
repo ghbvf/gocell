@@ -82,6 +82,16 @@ drift gate 三件套：
 
 - `modules_gen.go` 进入 git 增加 review noise（与 `cell_gen.go` / `contract_gen.go` 既有代码生成惯例一致，drift gate 三件套锁定漂移风险）
 
+### Negative
+
+- `kernel/metadata/assembly_derive.go` inline 复制 `consistencyOrder` map 镜像
+  `kernel/cell.Level`（L0-L4）。原因：`kernel/cell` 已 import `kernel/metadata`，
+  反向 import 会形成 cycle，故 metadata 派生计算被迫手抄。代价：未来 GoCell
+  扩展 L5 时必须双改 kernel/cell/types.go::Level + kernel/metadata/assembly_derive.go::consistencyOrder。
+  
+  Follow-up：评估把 ConsistencyLevel 类型 + ParseLevel 下沉到 pkg/consistency/
+  共享包（metadata + cell 共同 import），消除双源；登记 docs/backlog.md 跟踪。
+
 ## Alternatives Considered
 
 - **runtime `init()` 注册**：放弃——违反 Go 风格（隐式副作用），引入启动顺序耦合，且不可被静态分析工具追踪。

@@ -560,3 +560,6 @@ jobs:
       # cell codegen gate pattern.
       - name: Verify contract codegen (K#06)
         run: ./hack/verify-codegen-contract.sh
+
+      - name: Verify assembly codegen (K#10)
+        run: ./hack/verify-codegen-assembly.sh
