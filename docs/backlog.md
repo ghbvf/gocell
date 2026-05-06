@@ -119,6 +119,8 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | T2 | **AUTH-ISSUE-OPTIONS-01** — 现状: `JWTIssuer.Issue()` 5 参数；修复: IssueOptions struct | arch-opt | — | 🟠 | Issue() 第 5 个参数 | `runtime/auth/` | T2 |
 | T5 | **AUTH-SIGNER-01** — 现状: SigningKeyProvider 返回 `*rsa.PrivateKey`；修复: 改 `crypto.Signer` 支持 HSM/KMS/EC | arch-opt | — | 🟡 | caller 需 HSM/KMS | `runtime/auth/` | T5 |
 | C-AC7 | **JWT jti claim 支持** — 现状: 缺 jti，单 token 无法黑名单撤销；修复: Issue() 加 jti + jti 黑名单存储 | feat | P2/Cx2 | 🟡 | 出现单 token 撤销需求 | `runtime/auth/` | backlog_later §6 C-AC7 |
+| P3-TD-10 | **TOCTOU 竞态修复** — 现状: Phase 2 #54 session TOCTOU 未修；修复: Redis 分布式锁 + 持久化 session 稳定后处理 (also: cap-11) | bug | P2/Cx3 | 🟠 | post-v1.0 + Redis distlock 稳定 + PG session repo | `cells/accesscore/` | tech-debt-registry P3-TD-10 |
+| P4-TD-03 | **IssueTestToken HS256 dead code** — 现状: 测试 helper 仍保留 HS256 路径，JWTVerifier 全拒；修复: 删 dead code 防误用 | refactor | Cx1 | 🟡 | — | `runtime/auth/` (test helper) | tech-debt-registry P4-TD-03 |
 
 ---
 
@@ -140,6 +142,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | PR341-FU-OUTBOXTEST-CLOSE-BUDGET-COVERAGE | **OUTBOXTEST-CLOSE-BUDGET-COVERAGE-01** — 现状: conformance suite 仍裸调 `sub.Close(ctx)`；修复: 全部走 closeWithBudget 或 godoc 强约定 | test | P2/Cx1 | 🟡 | — | `kernel/outbox/outboxtest/conformance.go` | PR #341 round-1 |
+| P4-TD-04 | **ordercell L2 事务性 outbox** — 现状: ordercell 声明 L2 但用 publisher.Publish 而非事务性 outbox.Writer；修复: Init 强制 outboxWriter 注入 + 替换 Publish | bug | P2/Cx2 | 🟡 | v1.1 启动 | `examples/todoorder/cells/ordercell/` | tech-debt-registry P4-TD-04 |
 
 ---
 
@@ -169,6 +172,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR-CFG-G1-FU6 | **ConfigCore G1 follow-up 6** — 现状: PR-CFG-G1 余项；修复: 单独跟进 | arch-opt | Cx2 | 🟡 | — | `cells/configcore/` | PR-CFG-G1 |
 | PR320-FU-CONFIGCORE-CI-NOOP | **ConfigCore CI noop test** — 现状: noop publisher CI 路径未覆盖；修复: 加测 | test | P3/Cx1 | 🟡 | — | `cells/configcore/` | PR#320 |
 | PR-CFG-D-FU | **PR-CFG-D follow-up** — 现状: configrepo edge case 残项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `cells/configcore/` | PR-CFG-D |
+| P3-TD-12 | **configpublish.Rollback 版本校验** — 现状: 缺持久化版本管理；修复: 加版本校验防 rollback 到不存在版本 | feat | P2/Cx2 | 🟠 | post-v1.0 + 持久化版本管理 | `cells/configcore/` | tech-debt-registry P3-TD-12 |
 
 ---
 
@@ -183,6 +187,8 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | **TEST-RACE-COVERAGE-ADAPTERS-INTEGRATION-01** — 现状: PG concurrent Up CI 不带 -race；修复: test-race.yml 加 adapters/postgres 路径（评估） | test | P2/Cx3 | 🟡 | — | `.github/workflows/test-race.yml` | PR-V1-PG-STARTUP-HARDEN F5 |
 | X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE/SEED-ROLE-IFACE/AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
 | S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
+| P3-TD-02 | **postgres adapter 覆盖率** — 现状: 测量基准 46.6%（要求 ≥80%）；testcontainers 已实现但 CI 未测量；修复: CI 加 -tags=integration 覆盖率测量（合并 P4-TD-08）| test | P2/Cx2 | 🟡 | — | `adapters/postgres/` + `.github/workflows/` | tech-debt-registry P3-TD-02 + P4-TD-08 |
+| P4-TD-11 | **Migrator.Down() v=0 回归测试** — 现状: 已恢复 idempotent no-op 但缺第三次 Down() 测试锁定；修复: 加锁定测 防依赖升级回归 | test | Cx1 | 🟡 | — | `adapters/postgres/migrator_test.go` | tech-debt-registry P4-TD-11 |
 
 ---
 
@@ -230,6 +236,13 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR284-FU-COMPOSE-HEALTH | **Compose health** — 现状: docker-compose health 不全；修复: 补 healthcheck | arch-opt | Cx2 | 🟡 | — | `examples/*/docker-compose.yml` | PR#284 |
 | PR283-OTEL-SLOG-ERROR-ATTR | **OTEL-SLOG-ERROR-ATTR-NORMALISE-01** — 现状: `slog.Any("error", err)` 在 OTEL bridge 会展开 struct；修复: ReplaceAttr hook 序列化 err.Error() | arch-opt | P2/Cx2 | 🟠 | 首次 OTEL slog bridge 接入 | `adapters/otel/` + `runtime/observability/logging/` | PR#283 round-2 I3 |
 | M1-OBSERVED | **HEALTHZ-INTERFACE-PACKAGE-01** — 现状: 38 处 Health 实现分散无统一接口；修复: 新建 `kernel/healthz` 接口包 (Aggregator/Probe/Snapshot) + codegen 从 cell.yaml 派生状态 schema + 默认 `runtime/observability/healthz/inmemory` 实现 + 可选 postgres/otel adapter + `HEALTHZ-WRITE-01` archtest + 38 处分散 Health 收口（不持久化 yaml，持久化交宿主） (also: cap-14, cap-10) | feat | P2/Cx3 | 🟡 | — | `kernel/healthz/` (新) + `runtime/observability/healthz/` + `tools/codegen/` | ADR-202605041430 M1 |
+| P4-TD-10 | **Metrics path label cardinality** — 现状: `r.URL.Path` 直接作 label，参数化路由展开成高基数序列（`/users/123` `/orders/42`...）；修复: 改用 chi route template 或 `_` 占位 | bug | P2/Cx2 | 🟡 | — | `runtime/observability/metrics.go` | tech-debt-registry P4-TD-10 |
+| WS-T-01 | **WS Stop + external cancel 并发测试** — 现状: shutdown CAS 单路径设计未被测试锁；修复: 加并发竞争测 | test | Cx2 | 🟡 | — | `runtime/websocket/hub_test.go` | tech-debt-registry WS-T-01 |
+| WS-T-02 | **Broadcast/Send on stopped hub 测试** — 现状: 停止后调用不 panic 但行为未验证；修复: 加 stopped hub 调用回归 | test | Cx1 | 🟡 | — | `runtime/websocket/hub_test.go` | tech-debt-registry WS-T-02 |
+| WS-OPS-01 | **WS shutdownTimeout 可配置** — 现状: 硬编码 10s；修复: 暴露到 HubConfig | feat | Cx1 | 🟡 | — | `runtime/websocket/hub.go` | tech-debt-registry WS-OPS-01 |
+| WS-OPS-02 | **WS shutdown 并发 Close** — 现状: 同步逐个 Close，千连接线性增长；修复: 并发 Close + closeWg | arch-opt | Cx2 | 🟡 | 千级连接规模出现 | `runtime/websocket/hub.go` | tech-debt-registry WS-OPS-02 |
+| WS-DX-01 | **WS per-conn context tracing** — 现状: per-conn ctx 基于 Background()，无 tracing/correlation 传到 MessageHandler；修复: 透传 tracing ctx | arch-opt | Cx2 | 🟡 | observability 接入时 | `runtime/websocket/` | tech-debt-registry WS-DX-01 |
+| WS-DX-02 | **WS Conn 接口缺 RemoteAddr()** — 现状: 诊断日志只有 opaque UUID；修复: 接口加 RemoteAddr() | arch-opt | Cx1 | 🟡 | — | `runtime/websocket/` | tech-debt-registry WS-DX-02 |
 
 ---
 
@@ -281,6 +294,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | CONTRACT-CODEGEN-01 | **Go DTO ↔ JSON Schema 双向推断** — 现状: 代码与契约 YAML 分裂；修复: Struct Tags 实时双写到 JSON Schema（对齐 oapi-codegen） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `tools/codegen/` + DTO 模板 | backlog_later §5 |
 | CONTRACT-STUB-01 | **Consumer-Driven Contract Stub** — 现状: 缺消费方 stub 校验；修复: 提供 Stub 桩代码套件（对标 Spring Cloud Contract / Pact） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `tools/contracttest/` | backlog_later §5 |
 | C-L6 | **Contract ID 解析标准统一** — 现状: CLI 用点分（http.auth）、Generator 退化为斜杠分割，开发者上下文脱节；修复: 全局检索 + 统一内部 Contract ID 解析 | bug | P2/Cx2 | 🟡 | — | `cmd/gocell/` + `kernel/scaffold/` + `tools/codegen/` | backlog_later §6 C-L6 |
+| P2-T-02 | **J-auditlogintrail 端到端集成测试** — 现状: stub 已就位；修复: 用 Docker + testcontainers 激活 | test | P2/Cx2 | 🟡 | Phase 5 启动 | `tests/integration/` + journey | tech-debt-registry P2-T-02 |
 
 ---
 
@@ -313,6 +327,11 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | KERNEL-ROLLBACK-01 | **kernel/rollback 元数据模型** — 现状: 缺跨事件撤回原语；修复: 新建 rollback 包 + 元数据模型 (also: cap-07, cap-08) | feat | P3/Cx3 | 🟡 | V1.1+ 启动 | `kernel/rollback/` (新) | backlog_later §2 |
 | L3-EXAMPLE-PROJECTION-01 | **examples L3 投影 reference** — 现状: 无完全 L3 一致性级别官方 reference cell，业务可能错误塞入 L2；修复: examples/ 补 L3 Projection 样板 (also: cap-08) | doc | P2/Cx2 | 🟡 | v1.1 启动 | `examples/` | backlog_later §4 |
 | C-DC9 | **auditarchive 死代码靶子打通** — 现状: handler 返 `ErrNotImplemented`，S3 adapter 已就绪但中间业务层漏接；修复: 打通导出链路 (also: cap-08) | bug | P2/Cx2 | 🟡 | — | `cells/auditcore/slices/auditarchive/` + S3 adapter | backlog_later §6 C-DC9 |
+| P3-TD-04 | **websocket/oidc/s3 sandbox httptest panic** — 现状: sandbox 限 net.Listen，单测 panic；guard 已加；修复: 评估 CI sandbox 替代方案或维持 guard | test | Cx1 | 🟡 | — | `adapters/{websocket,oidc,s3}/` + CI | tech-debt-registry P3-TD-04 |
+| P3-TD-05 | **示例 docker-compose start_period** — 现状: 3 个示例 compose 缺 start_period（rabbitmq healthcheck）+ 用废弃的 `version: "3.9"`；修复: 补 start_period + 删 version 键（合并 P4-TD-07） | arch-opt | Cx1 | 🟡 | v1.1 启动 | `examples/*/docker-compose.yml` | tech-debt-registry P3-TD-05 + P4-TD-07 |
+| P4-TD-01 | **noop outbox/Claimer 共享包** — 现状: 各处 ad-hoc noop 实现，KG-02 建议提取；修复: 抽到共享 `runtime/testutil/outbox/` + 测试 helper 收口 | refactor | Cx2 | 🟡 | — | `runtime/testutil/` (扩) + 各 cell 测试 | tech-debt-registry P4-TD-01 |
+| P4-TD-06 | **CI example validation `\|\| true` 形式化** — 现状: 验证错误被静默吞咽；修复: 删 `\|\| true` 让 CI 阻断 | bug | Cx1 | 🟡 | v1.1 启动 | `.github/workflows/` | tech-debt-registry P4-TD-06 |
+| P4-TD-09 | **testcontainers-go indirect 标记** — 现状: go.mod 标记 indirect 但实际直接依赖，go mod tidy 可能移除；修复: 改 direct dep | bug | Cx1 | 🟡 | — | `go.mod` | tech-debt-registry P4-TD-09 |
 
 ---
 
