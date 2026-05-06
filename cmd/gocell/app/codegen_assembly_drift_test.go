@@ -182,3 +182,33 @@ func TestVerifyCodegenAssembly_UnknownFlag(t *testing.T) {
 		t.Fatal("expected flag-parse error")
 	}
 }
+
+// TestVerifyCodegenAssembly_RejectsPathEscapesRoot asserts that a
+// user-controlled assembly.yaml whose build.entrypoint escapes the project
+// root cannot coerce verify into reading arbitrary files. The verify path
+// shares the codegen.Write IsWithinRoot guard with the write path so a
+// crafted "../../../etc/passwd/main.go" entrypoint is rejected before any
+// host filesystem access. Regression for review §F3.
+func TestVerifyCodegenAssembly_RejectsPathEscapesRoot(t *testing.T) {
+	root := minimalAssemblyProject(t)
+
+	// Overwrite assembly.yaml with a malicious build.entrypoint outside the
+	// project root. FMT-30 + AssemblyIDPattern stay green; the offending
+	// field is the entrypoint path used to derive modules_gen.go's location.
+	asmPath := filepath.Join(root, "assemblies", "myasm", "assembly.yaml")
+	asmYAML := "id: myasm\ncells:\n  - alpha\n" +
+		"owner:\n  team: testteam\n  role: owner\n" +
+		"build:\n  entrypoint: ../../../../etc/passwd/main.go\n"
+	if err := os.WriteFile(asmPath, []byte(asmYAML), 0o644); err != nil {
+		t.Fatalf("rewrite assembly.yaml: %v", err)
+	}
+
+	chdirToRoot(t, root)
+	err := runVerifyCodegenAssembly([]string{"--local"})
+	if err == nil {
+		t.Fatal("expected verify to reject path escaping repo root, got nil")
+	}
+	if !strings.Contains(err.Error(), "escapes RepoRoot") {
+		t.Fatalf("expected RepoRoot-escape error, got: %v", err)
+	}
+}

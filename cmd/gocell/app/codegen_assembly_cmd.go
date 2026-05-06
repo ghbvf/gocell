@@ -1,9 +1,7 @@
 package app
 
 import (
-	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 
@@ -89,21 +87,24 @@ func processOneAssemblyModulesGen(
 	outPath := filepath.Join(root, filepath.Dir(entrypointRel), "modules_gen.go")
 	relPath := filepath.Join(filepath.Dir(entrypointRel), "modules_gen.go")
 
-	if verify {
-		got, rerr := os.ReadFile(outPath) //nolint:gosec // path constructed from project metadata, not user input
-		if rerr != nil || !bytes.Equal(got, content) {
-			result.drifted = append(result.drifted, relPath)
-		}
-		return nil
-	}
-	if _, werr := codegen.Write(codegen.WriteOptions{
+	res, werr := codegen.Write(codegen.WriteOptions{
 		Path:     outPath,
 		Content:  content,
 		RepoRoot: root,
-	}); werr != nil {
+		Verify:   verify,
+	})
+	if werr != nil {
+		if verify {
+			return fmt.Errorf("verify modules_gen %s: %w", asmID, werr)
+		}
 		return fmt.Errorf("write modules_gen %s: %w", asmID, werr)
 	}
-	result.generated = append(result.generated, relPath)
+	if res.Action == codegen.ActionDrifted {
+		result.drifted = append(result.drifted, relPath)
+	}
+	if !verify {
+		result.generated = append(result.generated, relPath)
+	}
 	return nil
 }
 
