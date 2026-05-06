@@ -25,7 +25,5 @@ passCriteria:
   - text: 5xx 日志通过 pkg/redaction.RedactSlogAttr 处理 Details，password/token/dsn 等敏感字段在 slog 输出中替换为 <REDACTED>
     mode: auto
     checkRef: journey.J-typed-envelope-roundtrip.5xx-log-redact
-  - text: visit 方法采用 buffer-then-commit (encode 到 bytes.Buffer 后再 WriteHeader)，与 oapi-codegen / Kratos / go-zero 三家上游共识一致
+  - text: visit 方法采用 buffer-then-commit (encode 到 bytes.Buffer 后再 WriteHeader)，与 oapi-codegen / Kratos / go-zero 三家上游共识一致；archtest VISIT-BUFFER-THEN-COMMIT-01 是权威静态守，runtime smoke 冗余
     mode: manual
-    # manual: archtest VISIT-BUFFER-THEN-COMMIT-01 is the authoritative static guard; runtime smoke is redundant
-    checkRef: journey.J-typed-envelope-roundtrip.buffer-then-commit
