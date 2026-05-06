@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // ValidateStrict runs all standard validation rules and, when strict is true,
@@ -210,18 +212,23 @@ func (v *Validator) validateFMTC1(strict bool) []ValidationResult {
 	return results
 }
 
-// validateFMTA1 checks that no assembly.yaml declares a kebab-case id. In
-// strict mode this is a SeverityError; in non-strict mode it is silent.
+// validateFMTA1 checks that every assembly.yaml id satisfies
+// metadata.AssemblyIDPattern (^[a-z][a-z0-9]+$). In strict mode this is a
+// SeverityError; in non-strict mode it is silent.
 //
-// Mirrors FMT-C1 for assemblies. Assembly ids are referenced by binary name
-// and deploy templates, so a kebab id leaks into filesystem and CI artifacts.
+// Assembly ids are referenced by binary name and deploy templates; an id
+// outside the lowercase-letter-and-digit shape leaks into filesystem and CI
+// artifacts. This rule was originally a kebab-only check; it now consumes
+// metadata.AssemblyIDPattern (the same literal as schemas/assembly.schema.json
+// properties.id.pattern, kept in sync by TestSchemaConstantsMatchSchemaLiterals)
+// so schema-aware tooling and the governance CLI report the same contract.
 func (v *Validator) validateFMTA1(strict bool) []ValidationResult {
 	if !strict {
 		return nil
 	}
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
-		if !strings.Contains(a.ID, "-") {
+		if metadata.MatchAssemblyID(a.ID) {
 			continue
 		}
 		results = append(results, v.newResult(
@@ -229,8 +236,8 @@ func (v *Validator) validateFMTA1(strict bool) []ValidationResult {
 			assemblyFile(a),
 			"id",
 			fmt.Sprintf(
-				"assembly id %q contains '-'; kebab-case assembly ids are disallowed in strict mode (rename to %q)",
-				a.ID, strings.ReplaceAll(a.ID, "-", ""),
+				"assembly id %q does not match %s; use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
+				a.ID, metadata.AssemblyIDPattern,
 			),
 		))
 	}

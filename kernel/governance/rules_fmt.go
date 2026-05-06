@@ -993,6 +993,7 @@ const (
 	codeFMT27 = "FMT-27"
 	codeFMT28 = "FMT-28"
 	codeFMT29 = "FMT-29"
+	codeFMT30 = "FMT-30"
 )
 
 // validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
@@ -1038,6 +1039,39 @@ func (v *Validator) validateFMT27() []ValidationResult {
 					"public skips JWT entirely, bootstrap uses env-credential Basic Auth, "+
 					"passwordResetExempt requires a valid JWT",
 				c.ID,
+			),
+		))
+	}
+	return results
+}
+
+// validateFMT30 enforces that every assembly's build.deployTemplate is one of
+// metadata.DeployTemplateEnum (or empty, in which case parser derivation
+// applies the default). The schema literal at
+// schemas/assembly.schema.json deployTemplate.enum is kept byte-equal to
+// metadata.DeployTemplateEnum by TestSchemaConstantsMatchSchemaLiterals;
+// governance is the sole runtime gatekeeper that rejects out-of-enum values.
+//
+// Without this rule, schema-aware tooling rejects out-of-enum values but
+// `gocell validate` accepts them, leaving CLI users with a different
+// contract than the schema declares (see review §F2).
+func (v *Validator) validateFMT30() []ValidationResult {
+	var results []ValidationResult
+	for _, asm := range v.project.Assemblies {
+		if asm == nil {
+			continue
+		}
+		dt := asm.Build.DeployTemplate
+		if dt == "" || metadata.IsKnownDeployTemplate(dt) {
+			continue
+		}
+		results = append(results, v.newResult(
+			codeFMT30, SeverityError, IssueInvalid,
+			assemblyFile(asm),
+			"build.deployTemplate",
+			fmt.Sprintf(
+				"assembly %q build.deployTemplate=%q is not one of %v",
+				asm.ID, dt, metadata.DeployTemplateEnum,
 			),
 		))
 	}

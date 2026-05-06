@@ -49,13 +49,13 @@ func fixtureFailFastWarnings(t *testing.T) string {
 	asmDir := filepath.Join(dir, "assemblies", "warnasm")
 	require.NoError(t, os.MkdirAll(asmDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cmd", "warnasm"), 0o755))
-	// owner required by FMT-29 (K#10); deployTemplate left as deploy.yaml to
-	// preserve original test intent — this fixture aims to trigger REF-16 as
-	// the lone Warning, not an FMT-29 Error from missing owner.
+	// FMT-29 requires owner; FMT-30 requires deployTemplate ∈ DeployTemplateEnum
+	// when set. This fixture aims to trigger REF-16 as the lone Warning, so
+	// every other field is valid: owner present, deployTemplate=k8s.
 	asmYAML := "id: warnasm\n" +
 		"cells: []\n" +
 		"owner:\n  team: test\n  role: maintainer\n" +
-		"build:\n  entrypoint: cmd/warnasm\n  binary: warnasm\n  deployTemplate: deploy.yaml\n"
+		"build:\n  entrypoint: cmd/warnasm\n  binary: warnasm\n  deployTemplate: k8s\n"
 	require.NoError(t, os.WriteFile(filepath.Join(asmDir, "assembly.yaml"), []byte(asmYAML), 0o644))
 	return dir
 }
