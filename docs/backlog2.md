@@ -1,7 +1,7 @@
 # [DEPRECATED] Backlog2 — 2026-04-29 4 份归档审查的新增问题清单
 
 > 本文件已合并到 [`docs/backlog.md`](backlog.md)（capability framework，2026-05-07 起生效）。  
-> 原内容截至 commit `18a06ab7`（K/R/C/A/W/X/T 物理域 + §12 PR#376 follow-up + §13 PR-V1-SEC-SETUP-CLOSURE follow-up）留作历史参考，可在 git 历史中查阅 `git show 18a06ab7:docs/backlog2.md`。
+> 原内容（431 行，K/R/C/A/W/X/T 物理域 + §12 PR#376 follow-up + §13 PR-V1-SEC-SETUP-CLOSURE follow-up）已完整备份到 [`docs/backlog/archive/backlog2.md`](backlog/archive/backlog2.md)（develop @ 18a06ab7 快照）。
 >
 > 状态：~67 项 OPEN（含 P0 高危项 2 条）+ 已闭口 ~25 项（✅ 标注详见原档逐项）+ §10 索引段 dedup ~10 项已在原 backlog.md 不重复登记。
 >

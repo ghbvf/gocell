@@ -1,7 +1,7 @@
 # [DEPRECATED] Backlog 增补 — 2026-04-26 分层六席位审查
 
 > 本文件已合并到 [`docs/backlog.md`](backlog.md)（capability framework，2026-05-07 起生效）。  
-> 原内容截至 commit `18a06ab7`（按 7 个 PR 主题打包 31 项 P1）留作历史参考，可在 git 历史中查阅 `git show 18a06ab7:docs/backlog1.md`。
+> 原内容（231 行，按 7 个 PR 主题打包 31 项 P1）已完整备份到 [`docs/backlog/archive/backlog1.md`](backlog/archive/backlog1.md)（develop @ 18a06ab7 快照）。
 >
 > 状态分布：
 > - **18 已完成**（✅ 见原档逐项 PR# 注解，跨 PR #294/#295/#296/#297/#298/#300/#301/#302/#353/#366/#368）

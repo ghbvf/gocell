@@ -1,7 +1,7 @@
 # [DEPRECATED] GoCell V1.1+ 长期规划详解
 
 > 本文件已合并到 [`docs/backlog.md`](backlog.md)（capability framework，2026-05-07 起生效）。  
-> 原内容截至 commit `18a06ab7` 留作历史参考，可在 git 历史中查阅 `git show 18a06ab7:docs/backlog_later_detail.md`。
+> 原内容（91 行，V1.1+ 长期规划详解）已完整备份到 [`docs/backlog/archive/backlog_later_detail.md`](backlog/archive/backlog_later_detail.md)（develop @ 18a06ab7 快照）。
 >
 > 各 item 现归属：
 >

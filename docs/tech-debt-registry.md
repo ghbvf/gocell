@@ -1,7 +1,7 @@
 # [DEPRECATED] Tech Debt Registry — GoCell
 
 > 本文件已合并到 [`docs/backlog.md`](backlog.md)（capability framework，2026-05-07 起生效）。  
-> 原内容截至 commit `18a06ab7`（含 55 项跨 Phase 技术债与产品债）留作历史参考，可在 git 历史中查阅 `git show 18a06ab7:docs/tech-debt-registry.md`。
+> 原内容（224 行，含 55 项跨 Phase 技术债与产品债）已完整备份到 [`docs/backlog/archive/tech-debt-registry.md`](backlog/archive/tech-debt-registry.md)（develop @ 18a06ab7 快照）。
 >
 > 状态分布：
 > - **32 RESOLVED** — 不入新 backlog（已闭口，详情查 git 历史）

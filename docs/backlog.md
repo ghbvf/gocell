@@ -426,5 +426,5 @@
   - `## 设计决策记录（历史 — 不修，避免重复审查）`
   - `## v1.1+ 长期规划`
   - `## 工时汇总`
-- `docs/backlog1.md` / `docs/backlog2.md` / `docs/backlog_later_detail.md` / `docs/tech-debt-registry.md` 在 P2-P6 期间逐步并入本文件，最终改成 1 段重定向桩。
+- `docs/backlog1.md` (231 行，2026-04-26 草案) / `docs/backlog2.md` (431 行，2026-04-29 4-archive) / `docs/backlog_later_detail.md` (91 行，V1.1+ 详解) / `docs/tech-debt-registry.md` (224 行，跨 Phase 技术债) 已分别并入本文件，原档完整备份到 [`docs/backlog/archive/`](backlog/archive/) 同名文件，原路径改成 1 段重定向桩。
 - 主轴权威源：[`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md)
