@@ -116,6 +116,7 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 
 	slog.Info("postgres pool connected",
 		slog.String("host", poolCfg.ConnConfig.Host),
+		slog.Int("port", int(poolCfg.ConnConfig.Port)),
 		slog.Int("max_conns", int(cfg.MaxConns)),
 		slog.Duration("connect_timeout", cfg.ConnectTimeout),
 	)
