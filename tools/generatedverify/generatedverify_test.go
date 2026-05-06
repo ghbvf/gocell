@@ -344,6 +344,142 @@ func TestAssemblyForOrphanPath(t *testing.T) {
 	}
 }
 
+// newGeneratedFixtureWithCells creates a fixture with an assembly that has
+// cells>0, triggering the assembly-modules-gen Kind in ExpectedArtifacts.
+//
+// The placeholder cell carries GoStructName so modules_gen.go is emitted.
+// Dir and File are set so expectedCellgenArtifacts can render cell_gen.go
+// without hitting a missing-package-name error. The underlying cell.yaml
+// file is also written so cellgen's BuildCellSpec can read it.
+func newGeneratedFixtureWithCells(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+
+	root, project := newGeneratedFixture(t)
+
+	// Write minimal cell.yaml on disk so cellgen template sources work.
+	writeFile(t, root, "cells/placeholder/cell.yaml", []byte(
+		"id: placeholder\ntype: core\nconsistencyLevel: L0\n"+
+			"owner:\n  team: fixture\n  role: test\n"+
+			"schema:\n  primary: placeholder_table\n"+
+			"verify:\n  smoke: []\ngoStructName: Placeholder\n",
+	))
+
+	// cmd/fixture/cell_module.go: CellModule interface + PlaceholderModule stub so
+	// modules_gen.go (which references both) compiles when metricschema.Build
+	// calls go/packages.Load against the entrypoint package.
+	writeFile(t, root, "cmd/fixture/cell_module.go", []byte(`package main
+
+type CellModule interface {
+	ID() string
+}
+
+// PlaceholderModule satisfies the generated CellModule factory list
+// (cells: [placeholder], goStructName: Placeholder).
+type PlaceholderModule struct{}
+
+func (PlaceholderModule) ID() string { return "placeholder" }
+`))
+
+	// Add a placeholder cell with GoStructName and Dir/File set so cellgen
+	// can derive Package and SourceFile for the template.
+	project.Cells["placeholder"] = &metadata.CellMeta{
+		ID:           "placeholder",
+		Type:         "core",
+		GoStructName: metadata.MustNewGoIdentifier("Placeholder"),
+		Dir:          "placeholder",                 // used as Go package name
+		File:         "cells/placeholder/cell.yaml", // used as SourceFile in header
+	}
+	// Update the fixture assembly to include the placeholder cell.
+	project.Assemblies["fixture"] = &metadata.AssemblyMeta{
+		ID:    "fixture",
+		Cells: []string{"placeholder"},
+		Build: metadata.BuildMeta{
+			Entrypoint: "cmd/fixture/main.go",
+			Binary:     "bin/fixture",
+		},
+	}
+	return root, project
+}
+
+// TestExpectedArtifactsWithCellsIncludesModulesGen verifies that an assembly
+// with cells>0 emits the assembly-modules-gen Kind. With the placeholder cell
+// also having GoStructName set, the total is 5 artifacts:
+// assembly-entrypoint, boundary, assembly-modules-gen, metrics-schema, cell-gen.
+func TestExpectedArtifactsWithCellsIncludesModulesGen(t *testing.T) {
+	root, project := newGeneratedFixtureWithCells(t)
+
+	artifacts, err := ExpectedArtifacts(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+
+	// Collect kinds to verify assembly-modules-gen is present.
+	kinds := artifactKinds(artifacts)
+	assert.Contains(t, kinds, "assembly-modules-gen",
+		"expected assembly-modules-gen kind in manifest; got %v", kinds)
+
+	// Locate the assembly-modules-gen artifact.
+	var modulesArtifact *Artifact
+	for i := range artifacts {
+		if artifacts[i].Kind == "assembly-modules-gen" {
+			modulesArtifact = &artifacts[i]
+			break
+		}
+	}
+	require.NotNil(t, modulesArtifact, "assembly-modules-gen artifact not found in manifest")
+	assert.Equal(t, "cmd/fixture/modules_gen.go", modulesArtifact.Path)
+	assert.Contains(t, string(modulesArtifact.Content), "generatedCellModules")
+	assert.Contains(t, string(modulesArtifact.Content), "PlaceholderModule")
+}
+
+// TestVerifyDetectsTamperedModulesGen verifies that altering modules_gen.go
+// after it was correctly generated is reported as content-differs drift.
+func TestVerifyDetectsTamperedModulesGen(t *testing.T) {
+	root, project := newGeneratedFixtureWithCells(t)
+	artifacts := writeExpectedArtifacts(t, root, project)
+
+	// Tamper with modules_gen.go.
+	for _, a := range artifacts {
+		if a.Kind == "assembly-modules-gen" {
+			tampered := append([]byte(nil), a.Content...)
+			tampered = append(tampered, []byte("\n// tampered\n")...)
+			writeFile(t, root, a.Path, tampered)
+		}
+	}
+
+	result, err := Verify(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+
+	assert.False(t, result.Passed())
+	var found bool
+	for _, d := range result.Drifts {
+		if d.Kind == "assembly-modules-gen" && d.Message == "content differs" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected assembly-modules-gen content-differs drift; got %+v", result.Drifts)
+}
+
+// TestVerifyDetectsMissingModulesGen verifies that a missing modules_gen.go
+// is reported as file-is-missing drift.
+func TestVerifyDetectsMissingModulesGen(t *testing.T) {
+	root, project := newGeneratedFixtureWithCells(t)
+	writeExpectedArtifacts(t, root, project)
+
+	// Remove modules_gen.go.
+	require.NoError(t, os.Remove(filepath.Join(root, "cmd", "fixture", "modules_gen.go")))
+
+	result, err := Verify(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+
+	assert.False(t, result.Passed())
+	var found bool
+	for _, d := range result.Drifts {
+		if d.Kind == "assembly-modules-gen" && d.Message == "file is missing" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected assembly-modules-gen file-is-missing drift; got %+v", result.Drifts)
+}
+
 func newGeneratedFixture(t *testing.T) (string, *metadata.ProjectMeta) {
 	t.Helper()
 

@@ -205,7 +205,7 @@ func TestNewVerifyPrinter_RejectsUnknown(t *testing.T) {
 func TestRunGenerateAssembly_MissingID(t *testing.T) {
 	err := runGenerate([]string{"assembly"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--id is required")
+	assert.Contains(t, err.Error(), "usage: gocell generate assembly")
 }
 
 func TestRunGenerateAssembly_WithModule(t *testing.T) {

@@ -67,6 +67,10 @@ type boundaryContext struct {
 const (
 	internalAssemblyQuotedFmt = "assembly=%q"
 	internalTemplateQuotedFmt = "template=%q"
+	// msgAssemblyNotFound is the public message for ErrAssemblyNotFound;
+	// shared by GenerateEntrypoint / GenerateBoundary / GenerateModulesGen so
+	// the wire wording stays in one place.
+	msgAssemblyNotFound = "assembly not found"
 )
 
 // GenerateEntrypoint generates the main.go content for an assembly.
@@ -74,7 +78,7 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
-			"assembly not found",
+			msgAssemblyNotFound,
 			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
@@ -95,6 +99,12 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	return g.executeTemplate("main.go.tpl", ctx)
 }
 
+// modulesContext is the template context for modules_gen.go.tpl.
+type modulesContext struct {
+	AssemblyID string
+	Modules    []string // CellModule struct names, in cells.yaml order
+}
+
 // GenerateBoundary generates the boundary.yaml content for an assembly.
 //
 // Boundary contains:
@@ -107,7 +117,7 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
-			"assembly not found",
+			msgAssemblyNotFound,
 			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
@@ -135,6 +145,44 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	}
 
 	return g.executeTemplate("boundary.yaml.tpl", ctx)
+}
+
+// GenerateModulesGen generates the modules_gen.go content for an assembly's
+// CellModule factory list. cells appear in the order declared in
+// assembly.yaml.cells (not sorted), preserving runtime startup order.
+//
+// Each cell must have GoStructName set (cell.yaml schema extension consumed
+// by codegen). The generated factory references {GoStructName}Module by
+// convention; the *Module struct is hand-written in cmd/{assemblyID}/.
+func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
+	asm := g.project.Assemblies[assemblyID]
+	if asm == nil {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
+			msgAssemblyNotFound,
+			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
+	}
+
+	modules := make([]string, 0, len(asm.Cells))
+	for _, cellID := range asm.Cells {
+		cm := g.cells.Get(cellID)
+		if cm == nil {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
+				"assembly references unknown cell",
+				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID)))
+		}
+		if cm.GoStructName.IsZero() {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"cell missing GoStructName for modules_gen factory derivation",
+				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID)))
+		}
+		modules = append(modules, cm.GoStructName.String()+"Module")
+	}
+
+	ctx := modulesContext{
+		AssemblyID: assemblyID,
+		Modules:    modules,
+	}
+	return g.executeTemplate("modules_gen.go.tpl", ctx)
 }
 
 // computeBoundaryContracts determines which contracts cross the assembly boundary.

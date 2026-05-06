@@ -24,10 +24,11 @@ import (
 //	gocell verify generated [--module=<module>]
 //	gocell verify codegen-cell [--local]
 //	gocell verify codegen-contract [--local]
+//	gocell verify codegen-assembly [--local]
 func runVerify(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell verify " +
-			"<slice|cell|journey|targets|generated|codegen-cell|codegen-contract> [flags]")
+			"<slice|cell|journey|targets|generated|codegen-cell|codegen-contract|codegen-assembly> [flags]")
 	}
 	if isHelpFlag(args[0]) {
 		return printVerifyHelp()
@@ -51,9 +52,11 @@ func runVerify(args []string) error {
 		return verifyCodegenCell(subArgs)
 	case "codegen-contract":
 		return verifyCodegenContract(subArgs)
+	case "codegen-assembly":
+		return runVerifyCodegenAssembly(subArgs)
 	default:
 		return fmt.Errorf("unknown verify type: %s "+
-			"(expected slice, cell, journey, targets, generated, codegen-cell, or codegen-contract)", subtype)
+			"(expected slice, cell, journey, targets, generated, codegen-cell, codegen-contract, or codegen-assembly)", subtype)
 	}
 }
 

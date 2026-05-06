@@ -31,7 +31,7 @@ var cellMeta = &metadata.CellMeta{
 		{{ printf "%q" . }},
 {{- end }}
 	}},
-	GoStructName: {{ printf "%q" .MetadataLiteral.GoStructName }},
+	GoStructName: metadata.MustNewGoIdentifier({{ printf "%q" .MetadataLiteral.GoStructName }}),
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }

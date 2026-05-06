@@ -26,7 +26,7 @@ var cellMeta = &metadata.CellMeta{
 	Owner:            metadata.OwnerMeta{Team: "", Role: ""},
 	Schema:           metadata.SchemaMeta{Primary: ""},
 	Verify:           metadata.CellVerifyMeta{Smoke: []string{}},
-	GoStructName:     "Demo",
+	GoStructName:     metadata.MustNewGoIdentifier("Demo"),
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }

@@ -25,6 +25,9 @@ entities:
         cells:
             - accesscore
             - auditcore
+        owner:
+            team: ""
+            role: ""
         build:
             entrypoint: cmd/server/main.go
             binary: gocell-server

@@ -56,10 +56,13 @@ passCriteria: []
 `)},
 		"assemblies/a/assembly.yaml": &fstest.MapFile{Data: []byte(`id: a
 cells: [x]
+owner:
+  team: t
+  role: r
 build:
   entrypoint: main.go
   binary: a
-  deployTemplate: t
+  deployTemplate: k8s
 `)},
 		"actors.yaml": &fstest.MapFile{Data: []byte(`- id: ext
   maxConsistencyLevel: L2

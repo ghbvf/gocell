@@ -29,7 +29,7 @@ var cellMeta = &metadata.CellMeta{
 	Verify: metadata.CellVerifyMeta{Smoke: []string{
 		"smoke.configcore.startup",
 	}},
-	GoStructName: "ConfigCore",
+	GoStructName: metadata.MustNewGoIdentifier("ConfigCore"),
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }

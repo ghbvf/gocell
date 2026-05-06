@@ -4,6 +4,7 @@ package cell
 import (
 	"fmt"
 
+	"github.com/ghbvf/gocell/kernel/cell/levelrank"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -29,13 +30,12 @@ const (
 	L4              // DeviceLatent
 )
 
-// levelStrings maps Level values to their string representations.
-var levelStrings = [...]string{"L0", "L1", "L2", "L3", "L4"}
-
 // String returns the string representation of a Level (e.g. "L0", "L2").
+// Backed by levelrank.Levels — single source of truth shared with
+// kernel/metadata derivation.
 func (l Level) String() string {
-	if l >= L0 && int(l) < len(levelStrings) {
-		return levelStrings[l]
+	if s := levelrank.At(int(l)); s != "" {
+		return s
 	}
 	return fmt.Sprintf("Level(%d)", int(l))
 }
@@ -43,22 +43,12 @@ func (l Level) String() string {
 // ParseLevel parses a string like "L0" or "L3" into a Level.
 // Returns errcode.ErrValidationFailed for unrecognized input.
 func ParseLevel(s string) (Level, error) {
-	switch s {
-	case "L0":
-		return L0, nil
-	case "L1":
-		return L1, nil
-	case "L2":
-		return L2, nil
-	case "L3":
-		return L3, nil
-	case "L4":
-		return L4, nil
-	default:
-		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"invalid consistency level",
-			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
+	if r := levelrank.Rank(s); r >= 0 {
+		return Level(r), nil
 	}
+	return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"invalid consistency level",
+		errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
 }
 
 // HealthStatus reports the health of a Cell.

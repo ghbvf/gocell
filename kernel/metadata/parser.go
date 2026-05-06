@@ -87,6 +87,8 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 		return nil, err
 	}
 
+	applyAssemblyDerivations(pm)
+
 	return pm, nil
 }
 

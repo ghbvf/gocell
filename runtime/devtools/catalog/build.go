@@ -319,7 +319,9 @@ func buildJourneyEntity(j *metadata.JourneyMeta, inc IncludeOptions) Entity {
 // buildAssemblyEntity converts AssemblyMeta to an Entity.
 func buildAssemblyEntity(a *metadata.AssemblyMeta, inc IncludeOptions) Entity {
 	spec := AssemblySpec{
-		Cells: a.Cells,
+		Cells:               a.Cells,
+		Owner:               CellSpecOwner{Team: a.Owner.Team, Role: a.Owner.Role},
+		MaxConsistencyLevel: a.MaxConsistencyLevel,
 		Build: AssemblySpecBuild{
 			Entrypoint:     a.Build.Entrypoint,
 			Binary:         a.Build.Binary,

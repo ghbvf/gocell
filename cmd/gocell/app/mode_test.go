@@ -49,8 +49,14 @@ func fixtureFailFastWarnings(t *testing.T) string {
 	asmDir := filepath.Join(dir, "assemblies", "warnasm")
 	require.NoError(t, os.MkdirAll(asmDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cmd", "warnasm"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(asmDir, "assembly.yaml"),
-		[]byte("id: warnasm\ncells: []\nbuild:\n  entrypoint: cmd/warnasm\n  binary: warnasm\n  deployTemplate: deploy.yaml\n"), 0o644))
+	// FMT-29 requires owner; FMT-30 requires deployTemplate ∈ DeployTemplateEnum
+	// when set. This fixture aims to trigger REF-16 as the lone Warning, so
+	// every other field is valid: owner present, deployTemplate=k8s.
+	asmYAML := "id: warnasm\n" +
+		"cells: []\n" +
+		"owner:\n  team: test\n  role: maintainer\n" +
+		"build:\n  entrypoint: cmd/warnasm\n  binary: warnasm\n  deployTemplate: k8s\n"
+	require.NoError(t, os.WriteFile(filepath.Join(asmDir, "assembly.yaml"), []byte(asmYAML), 0o644))
 	return dir
 }
 
@@ -456,32 +462,38 @@ func TestRunValidate_Strict_DetectsAllowedFilesMismatch(t *testing.T) {
 	assert.NotContains(t, out, "FMT-16", "FMT-16 must stay silent — directory itself is no-dash")
 }
 
-// TestRunValidate_Strict_DetectsKebabAssemblyID locks in FMT-A1: assembly
-// ids leak into binary names and deploy templates, so kebab is rejected
-// even when the directory is clean.
-func TestRunValidate_Strict_DetectsKebabAssemblyID(t *testing.T) {
+// TestRunValidate_DetectsKebabAssemblyID locks in FMT-A1 under default
+// (non-strict) mode: the rule mirrors schemas/assembly.schema.json id.
+// pattern, so schema-aware tooling and the governance CLI agree without a
+// strict toggle. Assembly ids leak into binary names and deploy templates,
+// and the schema unconditionally rejects out-of-pattern values.
+func TestRunValidate_DetectsKebabAssemblyID(t *testing.T) {
 	dir := writeKebabAssemblyID(t)
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict"})
+		gotErr = runValidate([]string{"--root", dir})
 	})
-	require.Error(t, gotErr, "strict must return error when FMT-A1 fires on kebab assembly id")
-	assert.Contains(t, out, "FMT-A1", "full-mode output must report FMT-A1 code")
+	require.Error(t, gotErr, "default validate must return error when FMT-A1 fires on kebab assembly id")
+	assert.Contains(t, out, "FMT-A1", "default-mode output must report FMT-A1 code")
 }
 
 // TestRunValidate_Default_IgnoresStrictOnlyRules is the regression guard
-// for the strict gate itself: every fixture that trips FMT-16 / 17 / C1 /
-// A1 in strict mode must remain silent under default mode. Without this
-// case a refactor that accidentally promoted a strict rule to a base rule
+// for the strict gate itself: every fixture that trips FMT-16 / 17 / C1
+// in strict mode must remain silent under default mode. Without this case
+// a refactor that accidentally promoted a strict rule to a base rule
 // would slip through (CI gates would still pass, but `gocell validate`
 // without --strict would no longer be the documented "default-permissive"
-// surface).
+// surface for kebab-style violations).
+//
+// FMT-A1 (assembly id pattern) is intentionally NOT in this list: it
+// mirrors schemas/assembly.schema.json id.pattern and runs unconditionally
+// — see TestRunValidate_DetectsKebabAssemblyID for the positive lock.
 //
 // The fixtures here may emit unrelated base findings (e.g. REF-16 warning,
 // or REF-* errors stemming from minimal scaffolding); the test deliberately
 // does NOT assert "no error returned" because the contract being verified
-// is narrower: regardless of base findings, no FMT-16/17/C1/A1 line may
+// is narrower: regardless of base findings, no FMT-16/17/C1 line may
 // appear in default output. `out` is logged on failure so a future drift
 // in base rules surfaces the offending code.
 func TestRunValidate_Default_IgnoresStrictOnlyRules(t *testing.T) {
@@ -492,7 +504,6 @@ func TestRunValidate_Default_IgnoresStrictOnlyRules(t *testing.T) {
 		{"kebabSliceDir_FMT16", writeKebabSlice},
 		{"kebabCellID_FMTC1", writeKebabCellID},
 		{"allowedFilesMismatch_FMT17", writeAllowedFilesMismatch},
-		{"kebabAssemblyID_FMTA1", writeKebabAssemblyID},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -501,7 +512,7 @@ func TestRunValidate_Default_IgnoresStrictOnlyRules(t *testing.T) {
 			out := captureStdout(t, func() {
 				_ = runValidate([]string{"--root", dir})
 			})
-			for _, code := range []string{"FMT-16", "FMT-17", "FMT-C1", "FMT-A1"} {
+			for _, code := range []string{"FMT-16", "FMT-17", "FMT-C1"} {
 				if assert.NotContains(t, out, code, "%s must stay silent under default mode", code) {
 					continue
 				}

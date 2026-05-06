@@ -352,6 +352,67 @@ func (v *Validator) validateTOPO08() []ValidationResult {
 	return results
 }
 
+// validateTOPO09 asserts that an assembly's derived MaxConsistencyLevel matches
+// the maximum ConsistencyLevel of its member cells. The derivation lives in
+// kernel/metadata.applyAssemblyDerivations (single source of truth); this rule
+// is a read-only safeguard that catches accidental drift between derive and
+// governance assertion. Skips assemblies with no cells or with cells the
+// validator cannot resolve (REF-* rules cover those cases).
+func (v *Validator) validateTOPO09() []ValidationResult {
+	var results []ValidationResult
+
+	// Sort assembly keys for deterministic output.
+	keys := make([]string, 0, len(v.project.Assemblies))
+	for k := range v.project.Assemblies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, asmID := range keys {
+		asm := v.project.Assemblies[asmID]
+		if asm == nil || len(asm.Cells) == 0 {
+			continue
+		}
+		expected, ok := computeExpectedMax(v.project, asm)
+		if !ok {
+			continue // unknown cell ref or invalid level — covered by REF/FMT
+		}
+		if asm.MaxConsistencyLevel != expected.String() {
+			results = append(results, v.newResult(
+				"TOPO-09", SeverityError, IssueMismatch,
+				assemblyFile(asm),
+				"maxConsistencyLevel",
+				fmt.Sprintf(
+					"assembly %q maxConsistencyLevel %q does not match cells max %q",
+					asm.ID, asm.MaxConsistencyLevel, expected.String(),
+				),
+			))
+		}
+	}
+	return results
+}
+
+// computeExpectedMax returns the highest ConsistencyLevel among an assembly's
+// member cells. Returns (_, false) when any cell ID is unknown or has an
+// unparseable level.
+func computeExpectedMax(pm *metadata.ProjectMeta, asm *metadata.AssemblyMeta) (cell.Level, bool) {
+	var maxLvl cell.Level
+	for i, cellID := range asm.Cells {
+		c, found := pm.Cells[cellID]
+		if !found {
+			return 0, false
+		}
+		lvl, err := cell.ParseLevel(c.ConsistencyLevel)
+		if err != nil {
+			return 0, false
+		}
+		if i == 0 || lvl > maxLvl {
+			maxLvl = lvl
+		}
+	}
+	return maxLvl, true
+}
+
 // validateTOPO06 checks that each cell belongs to at most one assembly.
 func (v *Validator) validateTOPO06() []ValidationResult {
 	var results []ValidationResult

@@ -31,7 +31,7 @@ var cellMeta = &metadata.CellMeta{
 	Verify: metadata.CellVerifyMeta{Smoke: []string{
 		"smoke.accesscore.startup",
 	}},
-	GoStructName: "AccessCore",
+	GoStructName: metadata.MustNewGoIdentifier("AccessCore"),
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }

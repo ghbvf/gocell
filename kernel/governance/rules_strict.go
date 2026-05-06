@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // ValidateStrict runs all standard validation rules and, when strict is true,
@@ -14,8 +16,11 @@ import (
 //   - FMT-19: kernel/wrapper/*.go contains forbidden mutable package-level state
 //   - VERIFY-06: active journeys have at least one auto passCriteria checkRef
 //   - FMT-C1: cell.yaml id contains '-' (kebab-case cell id disallowed)
-//   - FMT-A1: assembly.yaml id contains '-' (kebab-case assembly id disallowed)
 //   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
+//
+// FMT-A1 (assembly id pattern) is unconditional inside Validate: it
+// mirrors schemas/assembly.schema.json id.pattern and must apply on every
+// validate path so schema-aware tooling and `gocell validate` agree.
 //
 // FMT-18 (wrapper.ContractSpec literals in cells/** cross-check) was removed in
 // PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0 ContractSpec literals,
@@ -90,7 +95,8 @@ func (v *Validator) strictRules(ctx context.Context, strict bool) []func() []Val
 		// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 / NO-MANUAL-CONTRACTSPEC-LITERAL-01).
 		func() []ValidationResult { return v.validateFMT19(strict) },
 		func() []ValidationResult { return v.validateFMTC1(strict) },
-		func() []ValidationResult { return v.validateFMTA1(strict) },
+		// FMT-A1 is now registered in the default rules() pipeline (it
+		// mirrors a schema constraint and applies on every validate path).
 		func() []ValidationResult { return v.validateDOCNAME01(strict) },
 	}
 }
@@ -210,18 +216,27 @@ func (v *Validator) validateFMTC1(strict bool) []ValidationResult {
 	return results
 }
 
-// validateFMTA1 checks that no assembly.yaml declares a kebab-case id. In
-// strict mode this is a SeverityError; in non-strict mode it is silent.
+// validateFMTA1 checks that every assembly.yaml id satisfies
+// metadata.AssemblyIDPattern (^[a-z][a-z0-9]+$). It runs unconditionally:
+// the rule mirrors a schema-level constraint (schemas/assembly.schema.json
+// properties.id.pattern, kept byte-equal by TestSchemaConstantsMatchSchema
+// Literals) and schema-aware tooling rejects the same values without a
+// strict toggle. Gating this check on --strict would leave default
+// `gocell validate` users on a different contract than the schema and
+// FMT-30 (deployTemplate enum), violating the single-gatekeeper model
+// declared in docs/architecture/202605061800-adr-assembly-yaml-minimal-
+// derivation.md §"Schema 约束单源".
 //
-// Mirrors FMT-C1 for assemblies. Assembly ids are referenced by binary name
-// and deploy templates, so a kebab id leaks into filesystem and CI artifacts.
-func (v *Validator) validateFMTA1(strict bool) []ValidationResult {
-	if !strict {
-		return nil
-	}
+// FMT-C1 / FMT-16 / FMT-17 stay strict-only because cell.schema.json id
+// pattern itself permits kebab (different schema design); those rules
+// remain stylistic strict-mode preferences, not schema mirrors.
+//
+// strict is accepted for signature symmetry with the strictRules block but
+// no longer changes behavior.
+func (v *Validator) validateFMTA1(_ bool) []ValidationResult {
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
-		if !strings.Contains(a.ID, "-") {
+		if metadata.MatchAssemblyID(a.ID) {
 			continue
 		}
 		results = append(results, v.newResult(
@@ -229,8 +244,8 @@ func (v *Validator) validateFMTA1(strict bool) []ValidationResult {
 			assemblyFile(a),
 			"id",
 			fmt.Sprintf(
-				"assembly id %q contains '-'; kebab-case assembly ids are disallowed in strict mode (rename to %q)",
-				a.ID, strings.ReplaceAll(a.ID, "-", ""),
+				"assembly id %q does not match %s; use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
+				a.ID, metadata.AssemblyIDPattern,
 			),
 		))
 	}

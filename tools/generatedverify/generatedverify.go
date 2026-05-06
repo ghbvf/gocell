@@ -189,6 +189,24 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 			Content:    boundary,
 		})
 
+		// K#10 modules_gen.go — co-located with the entrypoint so it shares
+		// `package main` and references CellModule without an import cycle.
+		// Only emitted when the assembly has cells (empty assembly produces
+		// no factory list to register).
+		if len(asm.Cells) > 0 {
+			modules, err := gen.GenerateModulesGen(id)
+			if err != nil {
+				return nil, fmt.Errorf("generate expected modules_gen for %q: %w", id, err)
+			}
+			modulesRel := filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(entrypointRel)), "modules_gen.go"))
+			artifacts = append(artifacts, Artifact{
+				AssemblyID: id,
+				Kind:       "assembly-modules-gen",
+				Path:       modulesRel,
+				Content:    modules,
+			})
+		}
+
 		schema, err := metricschema.Build(ctx, root, project, id)
 		if err != nil {
 			return nil, fmt.Errorf("generate expected metrics schema for %q: %w", id, err)
@@ -253,7 +271,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	cellIDs := make([]string, 0, len(project.Cells))
 	for id, c := range project.Cells {
-		if c.GoStructName == "" {
+		if c.GoStructName.IsZero() {
 			continue
 		}
 		cellIDs = append(cellIDs, id)

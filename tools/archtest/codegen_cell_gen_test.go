@@ -64,7 +64,7 @@ func TestCodegenCellGen01_EnabledCellHasGen(t *testing.T) {
 	project := mustParseProject(t, root)
 
 	for _, cell := range project.Cells {
-		if cell.GoStructName == "" {
+		if cell.GoStructName.IsZero() {
 			continue // not opted into codegen
 		}
 		dir := filepath.Join(root, filepath.Dir(cell.File))
@@ -109,9 +109,10 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 		if _, err := os.Stat(genPath); err != nil {
 			continue // only check cells that have a generated file
 		}
-		if cell.GoStructName == "" {
+		if cell.GoStructName.IsZero() {
 			continue
 		}
+		structName := cell.GoStructName.String()
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatalf("CODEGEN-USER-FILE-OVERLAP-01: read dir %s: %v", dir, err)
@@ -125,9 +126,9 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 				continue
 			}
 			path := filepath.Join(dir, name)
-			if hasInitMethod(t, path, cell.GoStructName) {
+			if hasInitMethod(t, path, structName) {
 				t.Errorf("CODEGEN-USER-FILE-OVERLAP-01: %s defines func (c *%s) Init — Init is owned by cell_gen.go; "+
-					"move business init logic into func (c *%s) initInternal", path, cell.GoStructName, cell.GoStructName)
+					"move business init logic into func (c *%s) initInternal", path, structName, structName)
 			}
 		}
 	}
@@ -148,7 +149,7 @@ func TestCodegenInitInternal01(t *testing.T) {
 	project := mustParseProject(t, root)
 
 	for _, cell := range project.Cells {
-		if cell.GoStructName == "" {
+		if cell.GoStructName.IsZero() {
 			continue
 		}
 		dir := filepath.Join(root, filepath.Dir(cell.File))
@@ -156,7 +157,7 @@ func TestCodegenInitInternal01(t *testing.T) {
 		if _, err := os.Stat(genPath); err != nil {
 			continue // CODEGEN-CELL-GEN-01 already catches missing cell_gen.go
 		}
-		violations := checkInitInternalHook(t, dir, cell.GoStructName)
+		violations := checkInitInternalHook(t, dir, cell.GoStructName.String())
 		for _, v := range violations {
 			t.Errorf("CODEGEN-INIT-INTERNAL-01: %s", v)
 		}

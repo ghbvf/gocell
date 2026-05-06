@@ -178,8 +178,10 @@ func validProject() *metadata.ProjectMeta {
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
-				ID:    "corebundle",
-				Cells: []string{"accesscore", "auditcore", "shared-crypto"},
+				ID:                  "corebundle",
+				Cells:               []string{"accesscore", "auditcore", "shared-crypto"},
+				MaxConsistencyLevel: "L2", // derived: max of L2, L2, L0
+				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Build: metadata.BuildMeta{
 					Entrypoint:     "cmd/corebundle/main.go",
 					Binary:         "corebundle",

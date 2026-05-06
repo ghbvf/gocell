@@ -104,7 +104,7 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 		// archtest enforces that any cell matching the codegen whitelist must
 		// declare GoStructName. Emit a warning to stderr (unless in verify
 		// mode, which is silent on opt-out cells by design).
-		if cell.GoStructName == "" {
+		if cell.GoStructName.IsZero() {
 			if !opts.Verify {
 				slog.Info("cellgen: skipping cell (no goStructName)", slog.String("cell_id", cell.ID))
 			}
@@ -187,7 +187,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	if !ok {
 		return nil, fmt.Errorf("cellgen render artifacts: cell %q not found", cellID)
 	}
-	if cell.GoStructName == "" {
+	if cell.GoStructName.IsZero() {
 		return nil, nil
 	}
 

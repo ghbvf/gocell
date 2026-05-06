@@ -992,6 +992,8 @@ func hasNextCursorInRequired(info responseSchemaInfo) bool {
 const (
 	codeFMT27 = "FMT-27"
 	codeFMT28 = "FMT-28"
+	codeFMT29 = "FMT-29"
+	codeFMT30 = "FMT-30"
 )
 
 // validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
@@ -1039,6 +1041,69 @@ func (v *Validator) validateFMT27() []ValidationResult {
 				c.ID,
 			),
 		))
+	}
+	return results
+}
+
+// validateFMT30 enforces that every assembly's build.deployTemplate is one of
+// metadata.DeployTemplateEnum (or empty, in which case parser derivation
+// applies the default). The schema literal at
+// schemas/assembly.schema.json deployTemplate.enum is kept byte-equal to
+// metadata.DeployTemplateEnum by TestSchemaConstantsMatchSchemaLiterals;
+// governance is the sole runtime gatekeeper that rejects out-of-enum values.
+//
+// Without this rule, schema-aware tooling rejects out-of-enum values but
+// `gocell validate` accepts them, leaving CLI users with a different
+// contract than the schema declares (see review §F2).
+func (v *Validator) validateFMT30() []ValidationResult {
+	var results []ValidationResult
+	for _, asm := range v.project.Assemblies {
+		if asm == nil {
+			continue
+		}
+		dt := asm.Build.DeployTemplate
+		if dt == "" || metadata.IsKnownDeployTemplate(dt) {
+			continue
+		}
+		results = append(results, v.newResult(
+			codeFMT30, SeverityError, IssueInvalid,
+			assemblyFile(asm),
+			"build.deployTemplate",
+			fmt.Sprintf(
+				"assembly %q build.deployTemplate=%q is not one of %v",
+				asm.ID, dt, metadata.DeployTemplateEnum,
+			),
+		))
+	}
+	return results
+}
+
+// validateFMT29 checks that every assembly declares a non-empty owner.team and
+// owner.role. Assembly ownership complements the JSON Schema required constraint
+// by providing a governance-layer finding with file+field attribution in the
+// governance report. Mirrors the cell owner check in validateFMT11.
+func (v *Validator) validateFMT29() []ValidationResult {
+	var results []ValidationResult
+	for _, asm := range v.project.Assemblies {
+		if asm == nil {
+			continue
+		}
+		if asm.Owner.Team == "" {
+			results = append(results, v.newResult(
+				codeFMT29, SeverityError, IssueRequired,
+				assemblyFile(asm),
+				"owner.team",
+				fmt.Sprintf("assembly %q must have owner.team", asm.ID),
+			))
+		}
+		if asm.Owner.Role == "" {
+			results = append(results, v.newResult(
+				codeFMT29, SeverityError, IssueRequired,
+				assemblyFile(asm),
+				"owner.role",
+				fmt.Sprintf("assembly %q must have owner.role", asm.ID),
+			))
+		}
 	}
 	return results
 }
