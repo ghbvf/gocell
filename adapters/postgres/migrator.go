@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -82,11 +83,26 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 
 	db := stdlib.OpenDBFromPool(p.inner)
 
+	// SessionLocker holds a pg_advisory_lock for the duration of Up/Down so
+	// concurrent migrators (multi-pod startup) serialize on the lock rather
+	// than racing the schema_migrations table. Default lockID is goose's
+	// constant 4097083626 (CRC of "goose"), which the codebase does not use
+	// elsewhere; defaults give a 5min acquire window that is well above any
+	// realistic Up runtime and below any startup ctx.
+	//
+	// ref: pressly/goose lock/postgres.go pg_try_advisory_lock + retry
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		_ = db.Close()
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
+	}
+
 	provider, err := goose.NewProvider(
 		goose.DialectPostgres,
 		db,
 		migrations,
 		goose.WithTableName(tableName),
+		goose.WithSessionLocker(locker),
 	)
 	if err != nil {
 		_ = db.Close()

@@ -104,7 +104,9 @@ func TestGooseSessionLocker01(t *testing.T) {
 		}
 	}
 	assert.Empty(t, violations,
-		"%s: every mutating goose.NewProvider in adapters/postgres/ must include goose.WithSessionLocker; concurrent Up() races without it (GH #21 / POSTGRES-MIGRATOR-LOCK-ORDER-REGRESSION-01)",
+		"%s: every mutating goose.NewProvider in adapters/postgres/ must include "+
+			"goose.WithSessionLocker; concurrent Up() races without it "+
+			"(GH #21 / POSTGRES-MIGRATOR-LOCK-ORDER-REGRESSION-01)",
 		ruleGooseSessionLocker01)
 }
 

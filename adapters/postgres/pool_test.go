@@ -25,6 +25,17 @@ var testPostgresUnreachableDSN = "postgres://nobody:" + "nopass@127.0.0.1:1/none
 // exercising the TCP-handshake-timeout branch (vs immediate connection-refused).
 var testPostgresBlackholeDSN = "postgres://nobody:" + "nopass@192.0.2.1:5432/nonexistent"
 
+// File-local Duration constants for ConnectTimeout tests, satisfying
+// TEST-TIME-LITERAL-01 (no bare duration literals in test bodies).
+const (
+	poolTestConnectExplicit  = 7 * time.Second        // explicit value passed through applyDefaults
+	poolTestConnectDefault5s = 5 * time.Second        // expected default after applyDefaults
+	poolTestConnectShort     = 200 * time.Millisecond // tight bound for blackhole / DSN-override tests
+	poolTestConnectAssertCap = 2 * time.Second        // upper bound the test asserts elapsed against
+	poolTestConnectNegative  = time.Duration(-1)      // negative input for default-fallback case
+	poolTestConnectUnreach1s = 1 * time.Second        // bound for the immediate-refused (127.0.0.1:1) test
+)
+
 // TestConfig_ZeroValue verifies that a zero Config has empty DSN and zero
 // numeric fields. applyDefaults fills them; callers supply explicit values.
 func TestConfig_ZeroValue(t *testing.T) {
@@ -53,12 +64,12 @@ func TestConfig_ExplicitValues(t *testing.T) {
 
 func TestConfig_ApplyDefaults(t *testing.T) {
 	tests := []struct {
-		name           string
-		input          Config
-		wantConns      int32
-		wantIdle       time.Duration
-		wantMaxLife    time.Duration
-		wantConnectTO  time.Duration
+		name          string
+		input         Config
+		wantConns     int32
+		wantIdle      time.Duration
+		wantMaxLife   time.Duration
+		wantConnectTO time.Duration
 	}{
 		{
 			name:          "all zero",
@@ -78,11 +89,11 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 		},
 		{
 			name:          "all set",
-			input:         Config{MaxConns: 5, IdleTimeout: testtime.D2min, MaxLifetime: testtime.D30min, ConnectTimeout: 7 * time.Second},
+			input:         Config{MaxConns: 5, IdleTimeout: testtime.D2min, MaxLifetime: testtime.D30min, ConnectTimeout: poolTestConnectExplicit},
 			wantConns:     5,
 			wantIdle:      testtime.D2min,
 			wantMaxLife:   testtime.D30min,
-			wantConnectTO: 7 * time.Second,
+			wantConnectTO: poolTestConnectExplicit,
 		},
 		{
 			name:          "negative conns",
@@ -94,7 +105,7 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 		},
 		{
 			name:          "negative connect timeout",
-			input:         Config{ConnectTimeout: -1},
+			input:         Config{ConnectTimeout: poolTestConnectNegative},
 			wantConns:     defaultMaxConns,
 			wantIdle:      defaultIdleTimeout,
 			wantMaxLife:   defaultMaxLifetime,
@@ -118,7 +129,7 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 func TestConfig_ApplyDefaults_ConnectTimeout(t *testing.T) {
 	cfg := Config{}
 	cfg.applyDefaults()
-	assert.Equal(t, 5*time.Second, cfg.ConnectTimeout,
+	assert.Equal(t, poolTestConnectDefault5s, cfg.ConnectTimeout,
 		"zero ConnectTimeout must default to 5s")
 }
 
@@ -181,7 +192,7 @@ func TestNewPool_UnreachableHost(t *testing.T) {
 	_, err := NewPool(t.Context(), Config{
 		DSN:            testPostgresUnreachableDSN,
 		MaxConns:       1,
-		ConnectTimeout: time.Second,
+		ConnectTimeout: poolTestConnectUnreach1s,
 	})
 	require.Error(t, err)
 
@@ -199,7 +210,7 @@ func TestNewPool_ConnectTimeout_Blackhole(t *testing.T) {
 	_, err := NewPool(t.Context(), Config{
 		DSN:            testPostgresBlackholeDSN,
 		MaxConns:       1,
-		ConnectTimeout: 200 * time.Millisecond,
+		ConnectTimeout: poolTestConnectShort,
 	})
 	elapsed := time.Since(start)
 
@@ -207,7 +218,7 @@ func TestNewPool_ConnectTimeout_Blackhole(t *testing.T) {
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec), "blackhole error must be structured errcode: %v", err)
 	assert.Equal(t, ErrAdapterPGConnect, ec.Code)
-	assert.Less(t, elapsed, 2*time.Second,
+	assert.Less(t, elapsed, poolTestConnectAssertCap,
 		"NewPool must respect ConnectTimeout=200ms; elapsed=%v (would otherwise hang ~2 min on pgxpool fallback)",
 		elapsed)
 }
@@ -222,12 +233,12 @@ func TestNewPool_ConnectTimeout_DSNOverride_CodeWins(t *testing.T) {
 	_, err := NewPool(t.Context(), Config{
 		DSN:            dsn,
 		MaxConns:       1,
-		ConnectTimeout: 200 * time.Millisecond,
+		ConnectTimeout: poolTestConnectShort,
 	})
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
-	assert.Less(t, elapsed, 2*time.Second,
+	assert.Less(t, elapsed, poolTestConnectAssertCap,
 		"Config.ConnectTimeout=200ms must override DSN connect_timeout=30s; elapsed=%v",
 		elapsed)
 }

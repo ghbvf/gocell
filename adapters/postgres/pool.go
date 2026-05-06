@@ -18,10 +18,11 @@ var _ lifecycle.ContextCloser = (*Pool)(nil)
 
 // Default pool configuration values.
 const (
-	defaultMaxConns      = 10
-	defaultIdleTimeout   = 5 * time.Minute
-	defaultMaxLifetime   = 1 * time.Hour
-	defaultHealthTimeout = 5 * time.Second
+	defaultMaxConns       = 10
+	defaultIdleTimeout    = 5 * time.Minute
+	defaultMaxLifetime    = 1 * time.Hour
+	defaultHealthTimeout  = 5 * time.Second
+	defaultConnectTimeout = 5 * time.Second
 )
 
 // Config holds PostgreSQL connection pool settings.
@@ -43,6 +44,20 @@ type Config struct {
 	// MaxLifetime is the maximum lifetime of a connection.
 	// Default (applied by applyDefaults): 1h.
 	MaxLifetime time.Duration
+
+	// ConnectTimeout bounds a single connection-establishment attempt
+	// (TCP+TLS+startup) at the pgconn layer. It applies to the pool's initial
+	// connect AND every subsequent on-demand connection top-up at runtime —
+	// without it, pgxpool falls back to its 2 min internal default and a TCP
+	// SYN-blackhole route can hang any acquire for that long.
+	//
+	// The total budget for NewPool itself (parse + initial dial + Ping) is
+	// the caller's ctx; this field only governs per-connection handshakes.
+	//
+	// Precedence: when set > 0, the value is written to
+	// pgconn.Config.ConnectTimeout unconditionally, overriding any
+	// connect_timeout=N in the DSN. Default (applied by applyDefaults): 5s.
+	ConnectTimeout time.Duration
 }
 
 // applyDefaults fills zero-valued fields with default values.
@@ -55,6 +70,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MaxLifetime <= 0 {
 		c.MaxLifetime = defaultMaxLifetime
+	}
+	if c.ConnectTimeout <= 0 {
+		c.ConnectTimeout = defaultConnectTimeout
 	}
 }
 
@@ -82,6 +100,9 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 	poolCfg.MaxConns = cfg.MaxConns
 	poolCfg.MaxConnIdleTime = cfg.IdleTimeout
 	poolCfg.MaxConnLifetime = cfg.MaxLifetime
+	// Override DSN connect_timeout (if any). applyDefaults guarantees
+	// cfg.ConnectTimeout > 0 here, so this write is unconditional.
+	poolCfg.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -96,6 +117,7 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 	slog.Info("postgres pool connected",
 		slog.String("host", poolCfg.ConnConfig.Host),
 		slog.Int("max_conns", int(cfg.MaxConns)),
+		slog.Duration("connect_timeout", cfg.ConnectTimeout),
 	)
 
 	return &Pool{inner: pool, config: cfg}, nil
