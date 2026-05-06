@@ -123,13 +123,11 @@
 | PR338-FU-AUTH-FAIL-CLOSED-DOC-CLEANUP | **AUTH-FAIL-CLOSED-DOC-CLEANUP-01** — 现状: nonce.go docstring + archive quickstart 未跟 PR-CFG-I 更新；修复: 补 deprecation banner | doc | P3/Cx1 | 🟡 | — | `runtime/auth/nonce.go` + `docs/archive/specs/201-wm2-key-rotation/quickstart.md` | PR#338 round-1 |
 | PR267-FU-AUTHTEST-INTERNAL | **Auth test 内部化** — 现状: testHelpers 暴露过多；修复: internal package | arch-opt | Cx1 | 🟡 | — | `cells/accesscore/` | PR#267 |
 | PR267-FU-ROLE-PREFIX-ADR | **Role prefix ADR** — 现状: role 命名前缀约定无 ADR；修复: 写 ADR | doc | Cx1 | 🟡 | — | `docs/architecture/` | PR#267 |
-| X2 | **WM-35 BFF handler cookie session 接入** — 现状: BFF 无 cookie session；修复: 接入 SecureCookie | feat | P3/— | 🟡 | — | BFF + `runtime/auth/` | 长期 roadmap |
 | X3 | **WM-36 SecureCookie key rotation** — 现状: 无密钥轮转；修复: 接入 rotation worker | feat | P3/— | 🟡 | — | `runtime/auth/` | WM-35 后续 |
 | X5 | **P3-TD-11 accesscore domain 拆分** — 现状: domain 包过大；修复: User/Session/Role 拆分 | refactor | P3/— | 🟡 | X1 落地后 | `cells/accesscore/internal/domain/` | 历史 Batch 8 |
 | X12 | **REFRESH-IDLE-EXPIRE-01** — 现状: 无 idle expire 滑动窗口；修复: 加 `idle_expires_at` 列 + Policy.MaxIdle | feat | P3/Cx2 | 🟠 | PR-A29 已合可启动 | `runtime/auth/refresh/types.go` + `adapters/postgres/` + migration | Zitadel 双过期对标 |
 | X13 | **REFRESH-PARTITION-01** — 现状: 批量 DELETE GC；修复: `expires_at` range 分区 + DROP PARTITION (also: cap-10) | feat | P3/Cx2 | 🟠 | 生产流量达阈值 | migration + ops runbook | 通用 PG 模式 |
 | X14 | **REFRESH-GRACE-COUNTER-01** — 现状: 无重用次数限制；修复: `first_used_at` + `used_times` 列 | feat | P3/Cx2 | 🟠 | PR-A29 已合可启动 | `adapters/postgres/refresh_store.go` + migration | Hydra COALESCE 对标 |
-| T1 | **AUTH-PROVIDER-EXPORT-01** — 现状: `authProvider` interface unexported；修复: 移出 `runtime/bootstrap` | arch-opt | — | 🟠 | 第 2 个 auth provider cell | `runtime/bootstrap/` | T1 |
 | T2 | **AUTH-ISSUE-OPTIONS-01** — 现状: `JWTIssuer.Issue()` 5 参数；修复: IssueOptions struct | arch-opt | — | 🟠 | Issue() 第 5 个参数 | `runtime/auth/` | T2 |
 | T5 | **AUTH-SIGNER-01** — 现状: SigningKeyProvider 返回 `*rsa.PrivateKey`；修复: 改 `crypto.Signer` 支持 HSM/KMS/EC | arch-opt | — | 🟡 | caller 需 HSM/KMS | `runtime/auth/` | T5 |
 | C-AC7 | **JWT jti claim 支持** — 现状: 缺 jti，单 token 无法黑名单撤销；修复: Issue() 加 jti + jti 黑名单存储 | feat | P2/Cx2 | 🟡 | 出现单 token 撤销需求 | `runtime/auth/` | backlog_later §6 C-AC7 |
@@ -291,7 +289,6 @@
 | B2-C-05 | **Auditappend actor 缺失降级不安全** — 现状: actor 缺失时静默降级；修复: fail-closed | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditappend/service.go:133` | backlog2 §4 B2-C-05 |
 | B2-C-09 | **Auditquery raw payload 直接回传** — 现状: handler 直接回传 raw payload 含敏感字段；修复: redact + slog level 区分 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditquery/handler.go:35,42` | backlog2 §4 B2-C-09 |
 | B2-C-14 | **Hash-chain 跨重启连续性测试缺** — 现状: 缺重启场景验证；修复: 加 testcontainer 重启回归 | test | P2/Cx2 | 🟡 | — | `cells/auditcore/slices/auditappend/service_test.go:110` | backlog2 §4 B2-C-14 |
-| B2-A-19 | **OTel span SetAttributes 明文出站** — 现状: span attr 未 redact；修复: 走 `pkg/redaction` | bug | P1/Cx2 | 🟡 | — | `adapters/otel/span.go:43,51` | backlog2 §5.3 B2-A-19 |
 | B2-A-20 | **OTel simple tracer propagation 不对称** — 现状: 解析 vs 注入实现不对称；修复: 统一 propagator | bug | P2/Cx2 | 🟡 | — | `runtime/observability/tracing/tracer.go:77` | backlog2 §5.3 B2-A-20 |
 | B2-A-22 | **Prometheus handler 无 timeout** — 现状: scrape 无超时控制；修复: 加 server.WriteTimeout | bug | P1/Cx1 | 🟡 | — | `cmd/corebundle/metrics.go:83` | backlog2 §5.3 B2-A-22 |
 | B2-A-23 | **Prometheus cellID label 无验证** — 现状: cellID label 接受任意字符串；修复: 加 enum/格式校验 | bug | P1/Cx1 | 🟡 | — | `adapters/prometheus/hook_observer.go:114-117` | backlog2 §5.3 B2-A-23 |
@@ -386,11 +383,9 @@
 | PR237-A4 | **Listener architecture** — 现状: 双 listener 架构 doc 缺；修复: 写架构说明 | arch-opt | Cx2 | 🟡 | — | `runtime/http/` | PR#237 |
 | PR238-FU4 | **PR238 audit follow-up 4** — 详情见 PR#238 | arch-opt | Cx2 | 🟡 | — | `cells/auditcore/` | PR#238 |
 | PR238-FU5 | **PR238 audit follow-up 5** — 详情见 PR#238 | arch-opt | Cx2 | 🟡 | — | `cells/auditcore/` | PR#238 |
-| PR238-FU8 | **PR238 audit follow-up 8** — InternalMessage op label 测试覆盖；修复: configrepo UpdateForRollback op 测试 | test | P2/Cx1 | 🟡 | — | `cells/configcore/internal/adapters/postgres/config_repo_test.go` | PR#238 |
 | PR280-FU1 | **PR280 adapter follow-up 1** — 详情见 PR#280 | arch-opt | Cx2 | 🟡 | — | `adapters/` | PR#280 |
 | DEVOPS-INTEGRATION-CLEANUP-WAIT-TIMEOUT-01 | **Devops integration cleanup wait timeout** — 现状: e2e cleanup 超时；修复: 加 wait helper | arch-opt | Cx1 | 🟡 | — | `tests/e2e/` | GitHub #19 |
 | X4 | **WM-7 泛型 BulkResult** — 现状: 各 cell 各写 BulkResult；修复: 抽泛型 | feat | P3/— | 🟡 | — | `pkg/` | 历史 Batch 8 |
-| X9 | **LINT-MODERN-01** — 现状: modernization baseline 全仓清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder）；修复: 独立 PR；不混入功能 | arch-opt | P3/Cx2 | 🟡 | — | 全仓 | PR#163 post-review |
 | B-FLOOR-FOLLOWUP | **TYPED-ENVELOPE-ADAPTER-FLOOR-UPGRADE** — 现状: PR#403 段 1 是 Ceiling 守；修复: 段 2.5 升 Success-Floor + 段 4 升 Full-Floor | refactor | 段 2.5 Cx3 / 段 4 Cx3 | 🟠 | 段 2 invariant Registry 工具产品化 | `cells/*/slices/*/handler.go` (~20) + archtest + ADR D7 演进锚点 | PR #403 第三轮 review §R1 |
 | KERNEL-WEBHOOK-01 | **kernel/webhook 出站请求** — 现状: 缺 Webhook Receiver/Dispatcher 抽象；修复: 新建 webhook 包 + HMAC 认证 + SSRF 黑白名单（依赖 Outbox Relay 稳定）(also: cap-04, cap-08) | feat | P2/Cx3 | 🟡 | Outbox Relay 稳定后 | `kernel/webhook/` (新) | backlog_later §2 + WM-4 |
 | RUNTIME-SCHEDULER-01 | **runtime/scheduler Cron 调度** — 现状: PeriodicWorker 仅固定间隔；修复: 新建 scheduler 包 + Cron 表达式 + 分布式防重 (also: cap-11, cap-12) | feat | P2/Cx3 | 🟡 | 业务出现 Cron 需求 | `runtime/scheduler/` (新) | backlog_later §2 |
