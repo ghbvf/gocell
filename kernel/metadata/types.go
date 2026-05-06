@@ -29,7 +29,7 @@ type CellMeta struct {
 	// automatic mapping from a lowercased cell id to its conventional CamelCase
 	// Go type (e.g. "ordercell" → "OrderCell"), which is why explicit
 	// declaration is required.
-	GoStructName string `yaml:"goStructName,omitempty"`
+	GoStructName GoIdentifier `yaml:"goStructName,omitempty"`
 	Dir          string `yaml:"-"` // directory segment under cells/, set by parser
 	File         string `yaml:"-"` // parsed cell.yaml path relative to project root
 }

@@ -26,7 +26,7 @@ var cellMeta = &metadata.CellMeta{
 	Verify: metadata.CellVerifyMeta{Smoke: []string{
 		"smoke.ordercell.startup",
 	}},
-	GoStructName: "OrderCell",
+	GoStructName: metadata.MustNewGoIdentifier("OrderCell"),
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }

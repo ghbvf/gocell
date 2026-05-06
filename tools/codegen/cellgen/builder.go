@@ -60,13 +60,13 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string, bundle markergen.Wire
 	if !ok {
 		return nil, fmt.Errorf("cellgen build: cell %q not found", cellID)
 	}
-	if cell.GoStructName == "" {
+	if cell.GoStructName.IsZero() {
 		return nil, fmt.Errorf("cellgen build: cell %q is missing goStructName in cell.yaml — required for cell_gen.go", cellID)
 	}
 
 	spec := &CellGenSpec{
 		Package:              cell.Dir,
-		StructName:           cell.GoStructName,
+		StructName:           cell.GoStructName.String(),
 		CellID:               cell.ID,
 		ConsumerGroupDefault: cell.ID,
 		SourceFile:           cell.File,
@@ -319,7 +319,7 @@ func buildMetadataLiteral(cell *metadata.CellMeta) CellMetadataLiteral {
 		OwnerRole:        cell.Owner.Role,
 		SchemaPrimary:    cell.Schema.Primary,
 		VerifySmoke:      smoke,
-		GoStructName:     cell.GoStructName,
+		GoStructName:     cell.GoStructName.String(),
 	}
 }
 

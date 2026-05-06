@@ -385,7 +385,7 @@ func (PlaceholderModule) ID() string { return "placeholder" }
 	project.Cells["placeholder"] = &metadata.CellMeta{
 		ID:           "placeholder",
 		Type:         "core",
-		GoStructName: "Placeholder",
+		GoStructName: metadata.MustNewGoIdentifier("Placeholder"),
 		Dir:          "placeholder",                 // used as Go package name
 		File:         "cells/placeholder/cell.yaml", // used as SourceFile in header
 	}

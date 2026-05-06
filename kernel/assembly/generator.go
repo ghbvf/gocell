@@ -166,12 +166,12 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 				"assembly references unknown cell",
 				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID)))
 		}
-		if cm.GoStructName == "" {
+		if cm.GoStructName.IsZero() {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				"cell missing GoStructName for modules_gen factory derivation",
 				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID)))
 		}
-		modules = append(modules, cm.GoStructName+"Module")
+		modules = append(modules, cm.GoStructName.String()+"Module")
 	}
 
 	ctx := modulesContext{

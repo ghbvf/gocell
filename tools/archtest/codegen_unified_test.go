@@ -365,7 +365,7 @@ func TestMarkerWireSingleSource01(t *testing.T) {
 		t.Fatalf("MARKER-WIRE-SINGLE-SOURCE-01: metadata.Parse failed: %v", err)
 	}
 	for _, c := range project.Cells {
-		if c.GoStructName == "" {
+		if c.GoStructName.IsZero() {
 			continue // not opted in to K#04 codegen
 		}
 		dir := filepath.Join(root, filepath.Dir(c.File))

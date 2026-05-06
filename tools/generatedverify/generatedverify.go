@@ -271,7 +271,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	cellIDs := make([]string, 0, len(project.Cells))
 	for id, c := range project.Cells {
-		if c.GoStructName == "" {
+		if c.GoStructName.IsZero() {
 			continue
 		}
 		cellIDs = append(cellIDs, id)

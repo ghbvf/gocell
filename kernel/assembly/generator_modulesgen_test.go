@@ -19,15 +19,15 @@ func buildModulesTestProject() *metadata.ProjectMeta {
 		Cells: map[string]*metadata.CellMeta{
 			"accesscore": {
 				ID:           "accesscore",
-				GoStructName: "AccessCore",
+				GoStructName: metadata.MustNewGoIdentifier("AccessCore"),
 			},
 			"auditcore": {
 				ID:           "auditcore",
-				GoStructName: "AuditCore",
+				GoStructName: metadata.MustNewGoIdentifier("AuditCore"),
 			},
 			"configcore": {
 				ID:           "configcore",
-				GoStructName: "ConfigCore",
+				GoStructName: metadata.MustNewGoIdentifier("ConfigCore"),
 			},
 		},
 		Slices:    make(map[string]*metadata.SliceMeta),
@@ -83,8 +83,8 @@ func TestGenerateModulesGen_CellMissingGoStructName(t *testing.T) {
 	project := buildModulesTestProject()
 	// Override accesscore to have empty GoStructName
 	project.Cells["accesscore"] = &metadata.CellMeta{
-		ID:           "accesscore",
-		GoStructName: "",
+		ID: "accesscore",
+		// GoStructName left at zero value to trigger the missing-name error.
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
@@ -127,9 +127,9 @@ func TestGenerateModulesGen_UnknownCellRef(t *testing.T) {
 func TestGenerateModulesGen_PreservesCellsOrder(t *testing.T) {
 	project := buildModulesTestProject()
 	// Declare assembly with cells in b, a, c order
-	project.Cells["b"] = &metadata.CellMeta{ID: "b", GoStructName: "B"}
-	project.Cells["a"] = &metadata.CellMeta{ID: "a", GoStructName: "A"}
-	project.Cells["c"] = &metadata.CellMeta{ID: "c", GoStructName: "C"}
+	project.Cells["b"] = &metadata.CellMeta{ID: "b", GoStructName: metadata.MustNewGoIdentifier("B")}
+	project.Cells["a"] = &metadata.CellMeta{ID: "a", GoStructName: metadata.MustNewGoIdentifier("A")}
+	project.Cells["c"] = &metadata.CellMeta{ID: "c", GoStructName: metadata.MustNewGoIdentifier("C")}
 	project.Assemblies["ordered"] = &metadata.AssemblyMeta{
 		ID:    "ordered",
 		Cells: []string{"b", "a", "c"},

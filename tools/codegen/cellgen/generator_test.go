@@ -347,8 +347,8 @@ func TestGenerate_VerifyDriftAfterManualEdit(t *testing.T) {
 // sharing the contracts map from the original project.
 func TestProjectFilteredToCell_OnlyTargetCellAndSlices(t *testing.T) {
 	t.Parallel()
-	cellA := &metadata.CellMeta{ID: "a", Dir: "a", File: "cells/a/cell.yaml", GoStructName: "A"}
-	cellB := &metadata.CellMeta{ID: "b", Dir: "b", File: "cells/b/cell.yaml", GoStructName: "B"}
+	cellA := &metadata.CellMeta{ID: "a", Dir: "a", File: "cells/a/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("A")}
+	cellB := &metadata.CellMeta{ID: "b", Dir: "b", File: "cells/b/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("B")}
 	sliceA1 := &metadata.SliceMeta{ID: "s1", BelongsToCell: "a", Dir: "s1", File: "cells/a/slices/s1/slice.yaml"}
 	sliceB1 := &metadata.SliceMeta{ID: "s1", BelongsToCell: "b", Dir: "s1", File: "cells/b/slices/s1/slice.yaml"}
 	contract := &metadata.ContractMeta{ID: "event.foo.v1", Kind: "event"}
@@ -413,7 +413,7 @@ func initSyntheticRepo(t *testing.T) string {
 // The event contract is needed by syntheticBundle's Subscribes entry (T-8).
 func buildSyntheticProject() *metadata.ProjectMeta {
 	cell := &metadata.CellMeta{
-		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo",
+		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo"),
 	}
 	slc := &metadata.SliceMeta{
 		ID: "alpha", BelongsToCell: "demo", Dir: "alpha",
