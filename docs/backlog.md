@@ -306,7 +306,6 @@
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| K05-CLI-FLAG-DEFAULT-AND-SCAFFOLD | **K05-CLI-FLAG-DEFAULT-AND-SCAFFOLD** — 现状: codegen 子命令 flag 默认值 + scaffold 模板未做产品评审建议；修复: --all/--local 默认 true + scaffold 自带 stub markers + Levenshtein 建议 | feat | Cx1 | 🟢 | — | `cmd/gocell/app/codegen_cmd.go` + `scaffold_cmd.go` + 模板 | K#05 ADR Decision 8 |
 | K05-ARCHTEST-PACKAGES-LOAD-UPGRADE | **K05-ARCHTEST-PACKAGES-LOAD-UPGRADE** — 现状: archtest AST 仅按 `reg` 字面 receiver 匹配，rename 可绕过；修复: 升 packages.Load + 按 cell.Registry 类型判断 | arch-opt | Cx3 | 🟠 | K#06 contractgen 类型分析 | `tools/archtest/codegen_unified_test.go` | K#05 PR #365 review K05-07 |
 | TEST-JOURNEY-ROOT-HARNESS-01 | **ROOT-JOURNEY-INTEGRATION-HARNESS-01** — 现状: J-useronboarding 等 root journey 缺真 Go integration harness；修复: 补 tests/integration/ | test | Cx3 | 🔴 | — | `tests/integration/` + `journeys/J-*.yaml` | PR-A63 复核 |
 | V-A11 | **GOVERNANCE-EXAMPLES-COVERAGE-01** — 现状: governance rules 不扫 examples/；修复: 加 rules_examples.go | arch-opt | Cx3 | 🔴 | — | `kernel/governance/rules_examples.go` (新) | verification §A11 |
@@ -390,11 +389,8 @@
 | PR238-FU8 | **PR238 audit follow-up 8** — InternalMessage op label 测试覆盖；修复: configrepo UpdateForRollback op 测试 | test | P2/Cx1 | 🟡 | — | `cells/configcore/internal/adapters/postgres/config_repo_test.go` | PR#238 |
 | PR280-FU1 | **PR280 adapter follow-up 1** — 详情见 PR#280 | arch-opt | Cx2 | 🟡 | — | `adapters/` | PR#280 |
 | DEVOPS-INTEGRATION-CLEANUP-WAIT-TIMEOUT-01 | **Devops integration cleanup wait timeout** — 现状: e2e cleanup 超时；修复: 加 wait helper | arch-opt | Cx1 | 🟡 | — | `tests/e2e/` | GitHub #19 |
-| DEAD-VARIABLE-01 | **DEAD-VARIABLE-DEADCODE-SCAN-01** — 现状: golangci-lint 未启 unused/deadcode；修复: 临时启用 → baseline → 删 / //nolint:unused → 关闭 | test | P3/Cx1 | 🟡 | — | `.golangci.yml`（临时改）+ 全仓清理 | graceful-backus P3 P2-6 |
 | X4 | **WM-7 泛型 BulkResult** — 现状: 各 cell 各写 BulkResult；修复: 抽泛型 | feat | P3/— | 🟡 | — | `pkg/` | 历史 Batch 8 |
 | X9 | **LINT-MODERN-01** — 现状: modernization baseline 全仓清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder）；修复: 独立 PR；不混入功能 | arch-opt | P3/Cx2 | 🟡 | — | 全仓 | PR#163 post-review |
-| PR267-FU-IOTDEVICE-OWNER | **iotdevice owner.team 同步** — 现状: example owner 缺；修复: 补 | arch-opt | Cx1 | 🟡 | — | `examples/iotdevice/` | PR#267 |
-| PR267-FU-TODOORDER-OWNER | **todoorder owner.team 同步** — 现状: 同上；修复: 同上 | arch-opt | Cx1 | 🟡 | — | `examples/todoorder/` | PR#267 |
 | B-FLOOR-FOLLOWUP | **TYPED-ENVELOPE-ADAPTER-FLOOR-UPGRADE** — 现状: PR#403 段 1 是 Ceiling 守；修复: 段 2.5 升 Success-Floor + 段 4 升 Full-Floor | refactor | 段 2.5 Cx3 / 段 4 Cx3 | 🟠 | 段 2 invariant Registry 工具产品化 | `cells/*/slices/*/handler.go` (~20) + archtest + ADR D7 演进锚点 | PR #403 第三轮 review §R1 |
 | KERNEL-WEBHOOK-01 | **kernel/webhook 出站请求** — 现状: 缺 Webhook Receiver/Dispatcher 抽象；修复: 新建 webhook 包 + HMAC 认证 + SSRF 黑白名单（依赖 Outbox Relay 稳定）(also: cap-04, cap-08) | feat | P2/Cx3 | 🟡 | Outbox Relay 稳定后 | `kernel/webhook/` (新) | backlog_later §2 + WM-4 |
 | RUNTIME-SCHEDULER-01 | **runtime/scheduler Cron 调度** — 现状: PeriodicWorker 仅固定间隔；修复: 新建 scheduler 包 + Cron 表达式 + 分布式防重 (also: cap-11, cap-12) | feat | P2/Cx3 | 🟡 | 业务出现 Cron 需求 | `runtime/scheduler/` (新) | backlog_later §2 |
@@ -405,7 +401,6 @@
 | P3-TD-05 | **示例 docker-compose start_period** — 现状: 3 个示例 compose 缺 start_period（rabbitmq healthcheck）+ 用废弃的 `version: "3.9"`；修复: 补 start_period + 删 version 键（合并 P4-TD-07） | arch-opt | Cx1 | 🟡 | v1.1 启动 | `examples/*/docker-compose.yml` | tech-debt-registry P3-TD-05 + P4-TD-07 |
 | P4-TD-01 | **noop outbox/Claimer 共享包** — 现状: 各处 ad-hoc noop 实现，KG-02 建议提取；修复: 抽到共享 `runtime/testutil/outbox/` + 测试 helper 收口 | refactor | Cx2 | 🟡 | — | `runtime/testutil/` (扩) + 各 cell 测试 | tech-debt-registry P4-TD-01 |
 | P4-TD-06 | **CI example validation `\|\| true` 形式化** — 现状: 验证错误被静默吞咽；修复: 删 `\|\| true` 让 CI 阻断 | bug | Cx1 | 🟡 | v1.1 启动 | `.github/workflows/` | tech-debt-registry P4-TD-06 |
-| P4-TD-09 | **testcontainers-go indirect 标记** — 现状: go.mod 标记 indirect 但实际直接依赖，go mod tidy 可能移除；修复: 改 direct dep | bug | Cx1 | 🟡 | — | `go.mod` | tech-debt-registry P4-TD-09 |
 | B2-C-13 | **L2 跨层 e2e 回归不足** — 现状: setup → audit → config 跨 cell e2e 不全；修复: 加跨 cell integration test | test | P2/Cx3 | 🟡 | — | `cells/accesscore/slices/setup/service_test.go` + `tests/integration/` | backlog2 §4 B2-C-13 |
 | B2-T-07-FU-4 | **SVCTOKEN 跨信任域限制** — 现状: 跨 trust domain 时 SVCTOKEN 无额外限制；修复: 加 trust domain claim + 验证（A5 follow-up） | arch-opt | Cx4 | 🟠 | 多租户/跨信任域需求 | `contracts/` + `runtime/auth/` | backlog2 §8 A5 follow-up |
 | ADAPTER-CONNECT-BUDGET-01 | **adapter 级 ConnectTimeout 强制** — 现状: 各 adapter 依赖上层 ctx；修复: adapter 级 ConnectTimeout（默认 5s）写 Config + Validate + `ERR_ADAPTER_CONNECT_TIMEOUT` (also: cap-08, cap-10；PG 部分由 PR#401 已部分覆盖) | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/rabbitmq/connection.go` + `adapters/postgres/pool.go` | backlog1 §2.4 |
@@ -424,7 +419,6 @@
 |---|---|---|---|---|---|---|---|---|
 | K-02 | **JOURNEY-LIFECYCLE-CI-CLOSE** — (a) 升 J-ssologin 为 active；(b) `runner.RunActiveJourneys` active 集为空时 fail；(c) `gocell validate` 增 `journey.contracts ↔ contracts/` 双向存在性校验（对偶 ADV-06）；J-confighotreload 引用未声明 `event.config.entry-deleted.v1` | feat | P0/Cx2 | 🔴 | — | `journeys/J-*.yaml` + `kernel/governance/` + `kernel/verify/` | 030 §2 K-02 | cap-14 |
 | K-03 | **KERNEL-OBSERVABILITY-PKGDOC** — kernel/observability 无包级 doc.go，与 runtime/observability 职责切分不明；修复: 加 30-50 行 doc.go 明确 provider-neutral 抽象 | doc | P1/Cx1 | 🟡 | — | `kernel/observability/doc.go` (新) | 030 §2 K-03 | cap-13 |
-| K-06 | **CELL-METADATA-SINGLE-SOURCE 残余** — (a) Go literal vs yaml 双源 K#05 已物理消除；残余 (b) configcore 顶层补 `consistencyLevel`；(c) scaffold cell 模板同步 `loadCellMetadata()` pattern（已并入 029 06.PR4 范围）| refactor | P1/Cx2 | 🟢 | 029 06.PR4 落地一并 | `cells/configcore/cell.yaml` + `kernel/scaffold/` | 030 §2 K-06 | cap-14 |
 | K-07 | **CELLS-SLICE-MULTI-VERB-DECOMPOSE** — auditappend 14 contractUsages，configread 双 listener；修复: 拆 `auditappend-{session,user,config,role}` 共享 dispatch + `configread-internal` 单独；不留兼容包装 | refactor | P1/Cx3 | 🟡 | — | `cells/auditcore/slices/auditappend/` + `cells/configcore/slices/configread/` | 030 §2 K-07 | cap-02（与现有 CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 同根，可合并） |
 | K-08 | **ASSEMBLY-SCAFFOLD-EXPAND 残余** — 029 K#10 PR#404 已完成 (a) AssemblyMeta + (c) modules_gen.go 派生；残余 = (b) `gocell scaffold assembly --id=... --cells=... --deploy=k8s` | feat | P1/Cx2 | 🟠 | 加第 2 个 assembly | `cmd/gocell/app/scaffold_assembly.go` (新) | 030 §2 K-08 | cap-14（与现有 ASSEMBLY-SCAFFOLD-CMD-01 同条） |
 | R-01 | **EVENT-OBSERVABILITY-METRIC-PACK**（吸收 G-05）— (a) RelayCollector 不被 bootstrap 自动注入；(b) eventrouter 无 collector；(c) InMemoryEventBus drop 仅 Warn 无 counter；(d) metrics 缺 outbox/event 命名空间；(e) Provider 无 GaugeVec；(f) relay pending depth 无 Gauge；(g) consumer reject 无 counter；修复: Provider 加 GaugeVec + 三套 collector 工厂 + bootstrap phase 5/6 自动 wire + 5 新 metric | feat | P1/Cx3 | 🟡 | — | `runtime/observability/metrics/{shutdown,outbox,event}.go` + `runtime/bootstrap/` + `kernel/observability/` | 030 §2 R-01 + G-05 | cap-13 |
