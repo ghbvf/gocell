@@ -97,7 +97,6 @@
 | PR237-PM7 | **EXAMPLE-INTERNAL-LISTENER-COMMENT-01** — 现状: examples/*/main.go 双 addr 缺注释；修复: 加注释或 `WithHTTPInternalDisable` | doc | Cx1 | 🟡 | — | `examples/*/main.go` | PR #237 round-2 PM-07 |
 | LISTENER-API-SPEC-01 | **Listener API spec 化** — 现状: listener 选项散在代码；修复: contracts 化声明 | arch-opt | Cx2 | 🟡 | — | `contracts/http/` | PR#237 |
 | ROUTE-ERROR-POLICY-01 | **Route error policy 统一** — 现状: 3+ route family 错误处理不一；修复: 定义共享 policy | arch-opt | Cx3-Cx4 | 🟠 | 3+ route 家族出现 | `runtime/http/` | systems review |
-| PR-CI-5-FU-WEBSOCKET-ORIGIN-CONTRACT | **WEBSOCKET-ORIGIN-CONTRACT-TRIM-NORMALIZE-01** — 现状: Validate trim 仅判断未规范化；修复: trim 写回 cfg + 文档统一裸 host vs 完整 origin | arch-opt | P2/Cx1-Cx2 | 🟢 | — | `adapters/websocket/handler.go` + integration_test.go | 029 D7 / via /fix PR#335 |
 | T8-B | **PATH-PARAM-PREVALIDATE** — 现状: handler-side path param 校验分散；修复: 路由前预校验 helper | arch-opt | — | 🟠 | 安全审查触发 | `runtime/auth/` + `pkg/httputil/` | PR-A45 |
 | T4 | **CB-RESILIENCE-PACKAGE-01** — 现状: Allower / CircuitBreakerRetryAfter 在 `runtime/http/middleware`；修复: 迁到 `runtime/resilience/circuitbreaker/` 独立包 (also: cap-x-cross) | refactor | — | 🟠 | 出现第 2 个非 HTTP CB 消费方 | `runtime/http/middleware/` + `runtime/resilience/circuitbreaker/` (新) | T4 |
 | WM-32 | **mTLS 中间件** — 现状: 缺；修复: 加 TLS 构建器 + HTTP 证书提取钩子（折中：大规模环境 mTLS 卸载在 K8s/Service Mesh 解决，框架仅提供构建器） | feat | P2/Cx2 | 🟡 | V1.1 启动 | `runtime/http/middleware/` | backlog_later §7 WM-32（4/6 票）|
@@ -206,7 +205,6 @@
 | CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01 | **ConfigReceive placeholder 清理** — 现状: PR266 metadata-only 后还有 placeholder 残余；修复: 与 PR266 一同 | refactor | Cx2 | 🟠 | 与 PR266 metadata consumer 同 | `cells/accesscore/` | systems layer review |
 | PR-CFG-G1-FU6 | **ConfigCore G1 follow-up 6** — 现状: PR-CFG-G1 余项；修复: 单独跟进 | arch-opt | Cx2 | 🟡 | — | `cells/configcore/` | PR-CFG-G1 |
 | PR320-FU-CONFIGCORE-CI-NOOP | **ConfigCore CI noop test** — 现状: noop publisher CI 路径未覆盖；修复: 加测 | test | P3/Cx1 | 🟡 | — | `cells/configcore/` | PR#320 |
-| PR-CFG-D-FU | **PR-CFG-D follow-up** — 现状: configrepo edge case 残项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `cells/configcore/` | PR-CFG-D |
 | P3-TD-12 | **configpublish.Rollback 版本校验** — 现状: 缺持久化版本管理；修复: 加版本校验防 rollback 到不存在版本 | feat | P2/Cx2 | 🟠 | post-v1.0 + 持久化版本管理 | `cells/configcore/` | tech-debt-registry P3-TD-12 |
 | B2-A-33 | **Redis sentinel env & logvalue 缺** — 现状: sentinel 模式 env 配置不完整 + log value 缺；修复: 补 env 列表 + logvalue 透传 | bug | P2/Cx2 | 🟡 | sentinel 部署 | `cmd/corebundle/redis.go:18-22` + `adapters/redis/client.go:90-104` | backlog2 §5.3 B2-A-33 |
 | B2-C-11 | **Configsubscribe tombstone 无 TTL** — 现状: tombstone 永久保留导致内存膨胀；修复: 加 TTL + 定期清理 | bug | P2/Cx2 | 🟡 | — | `cells/configcore/slices/configsubscribe/service.go:29,169` | backlog2 §4 B2-C-11 |
@@ -262,7 +260,6 @@
 | B2-R-01 | **HealthListener 缺失时静默回退** — 现状: bootstrap 找不到 HealthListener 时静默回退到 main listener；修复: fail-fast 或显式 opt-in fallback | bug | P2/Cx2 | 🟡 | — | `runtime/bootstrap/bootstrap_phases.go:583-596` | backlog2 §3 B2-R-01 |
 | B2-R-02 | **Readyz 缺少 repo probe** — 现状: configcore/auditcore HealthCheckers 仅接 outbox，repo 状态无 probe（与 cap-13 REPO-HEALTHCHECKER-01 协同）| bug | P1/Cx2 | 🟡 | 与 cap-13 REPO-HEALTHCHECKER-01 同 PR | `cells/configcore/cell.go:204` + `cells/auditcore/cell.go:191` | backlog2 §3 B2-R-02 |
 | B2-X-03 | **PG invalid index warn continue** — 现状: PG invalid index 仅 warn 继续启动；修复: 改 fail-fast 防隐藏数据完整性问题 | bug | P2/Cx2 | 🟡 | — | `cmd/corebundle/bundle.go:308-313` | backlog2 §7 B2-X-03 |
-| B2-W-05 | **WebSocket Stop 同步 close 超时** — 现状: Stop 同步逐个 close 超时硬编码；修复: 并发 close + closeWg + 可配置 timeout | bug | P1/Cx2 | 🟡 | — | `runtime/websocket/hub.go:280-293` | backlog2 §6 B2-W-05 |
 
 ---
 
@@ -272,12 +269,10 @@
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| WS-HUB-READYZ-PROBE-01 | **WEBSOCKET-HUB-READYZ-PROBE-01** — 现状: Hub 不实现 ManagedResource，未就绪时 /readyz 仍 200；修复: Checkers 暴露 `websocket_hub_ready` | feat | Cx3 | 🟢 | — | `runtime/websocket/hub.go` + `health.go` (新) + bootstrap | PR-A64a #340 review #4 / 029 D7 |
 | ADAPTER-MANAGED-RESOURCE-COMPLETENESS-01 | **Adapter readyz probes 完整性** — 现状: 部分 adapter 缺 ready probe；修复: 统一规范 | arch-opt | Cx2 | 🟡 | — | `adapters/{postgres,redis,s3}/` | systems layer review |
 | R3 | **safe_observe DI** — 现状: observe DI 路径未统一；修复: 抽象统一 | arch-opt | — | 🟡 | — | `runtime/observability/` | R3 |
 | A5a-R3 | **Observability ctx 透传** — 现状: 部分路径丢 ctx；修复: thread ctx | arch-opt | — | 🟡 | — | `runtime/observability/` | A5a |
 | A5a-R12 | **Observability 集成补全** — 现状: integration test gap；修复: 加测 | test | — | 🟡 | — | `runtime/observability/` | A5a |
-| PR238-FU2 | **PR238 typed gate governance** — 现状: typed gate 后续治理 (→ #321 typed gate)；修复: 跟进 | arch-opt | P2/Cx2 | 🟢 | — | `runtime/observability/` | PR#238 |
 | OBS-SSA-ANALYZER-01 | **OBS SSA analyzer** — 现状: 缺静态分析；修复: 加 SSA-based analyzer | arch-opt | Cx3 | 🟡 | — | `tools/archtest/` + `runtime/observability/` | OBS-SSA |
 | PR-CI-5-FU-HEALTH-LATE-WATCHER | **Health late watcher** — 现状: late watcher 路径未覆盖；修复: 补 | arch-opt | Cx2 | 🟡 | — | `runtime/http/health/` | PR-CI-5 |
 | PR392-FU-AUDIT-CHAIN-WIRING | **BOOTSTRAP-AUDIT-CHAIN-WIRING-01** — 现状: onAuthFail 用 slog 未接 audit chain；修复: 升级为 audit.AppendBootstrapAuthFail | arch-opt | P2/Cx2 | 🟠 | accesscore audit chain cross-cell wiring | `cmd/corebundle/access_module.go` | PR #392 ADR §D10 |
@@ -286,12 +281,7 @@
 | PR283-OTEL-SLOG-ERROR-ATTR | **OTEL-SLOG-ERROR-ATTR-NORMALISE-01** — 现状: `slog.Any("error", err)` 在 OTEL bridge 会展开 struct；修复: ReplaceAttr hook 序列化 err.Error() | arch-opt | P2/Cx2 | 🟠 | 首次 OTEL slog bridge 接入 | `adapters/otel/` + `runtime/observability/logging/` | PR#283 round-2 I3 |
 | M1-OBSERVED | **HEALTHZ-INTERFACE-PACKAGE-01** — 现状: 38 处 Health 实现分散无统一接口；修复: 新建 `kernel/healthz` 接口包 (Aggregator/Probe/Snapshot) + codegen 从 cell.yaml 派生状态 schema + 默认 `runtime/observability/healthz/inmemory` 实现 + 可选 postgres/otel adapter + `HEALTHZ-WRITE-01` archtest + 38 处分散 Health 收口（不持久化 yaml，持久化交宿主） (also: cap-14, cap-10) | feat | P2/Cx3 | 🟡 | — | `kernel/healthz/` (新) + `runtime/observability/healthz/` + `tools/codegen/` | ADR-202605041430 M1 |
 | P4-TD-10 | **Metrics path label cardinality** — 现状: `r.URL.Path` 直接作 label，参数化路由展开成高基数序列（`/users/123` `/orders/42`...）；修复: 改用 chi route template 或 `_` 占位 | bug | P2/Cx2 | 🟡 | — | `runtime/observability/metrics.go` | tech-debt-registry P4-TD-10 |
-| WS-T-01 | **WS Stop + external cancel 并发测试** — 现状: shutdown CAS 单路径设计未被测试锁；修复: 加并发竞争测 | test | Cx2 | 🟡 | — | `runtime/websocket/hub_test.go` | tech-debt-registry WS-T-01 |
-| WS-T-02 | **Broadcast/Send on stopped hub 测试** — 现状: 停止后调用不 panic 但行为未验证；修复: 加 stopped hub 调用回归 | test | Cx1 | 🟡 | — | `runtime/websocket/hub_test.go` | tech-debt-registry WS-T-02 |
-| WS-OPS-01 | **WS shutdownTimeout 可配置** — 现状: 硬编码 10s；修复: 暴露到 HubConfig | feat | Cx1 | 🟡 | — | `runtime/websocket/hub.go` | tech-debt-registry WS-OPS-01 |
-| WS-OPS-02 | **WS shutdown 并发 Close** — 现状: 同步逐个 Close，千连接线性增长；修复: 并发 Close + closeWg | arch-opt | Cx2 | 🟡 | 千级连接规模出现 | `runtime/websocket/hub.go` | tech-debt-registry WS-OPS-02 |
 | WS-DX-01 | **WS per-conn context tracing** — 现状: per-conn ctx 基于 Background()，无 tracing/correlation 传到 MessageHandler；修复: 透传 tracing ctx | arch-opt | Cx2 | 🟡 | observability 接入时 | `runtime/websocket/` | tech-debt-registry WS-DX-01 |
-| WS-DX-02 | **WS Conn 接口缺 RemoteAddr()** — 现状: 诊断日志只有 opaque UUID；修复: 接口加 RemoteAddr() | arch-opt | Cx1 | 🟡 | — | `runtime/websocket/` | tech-debt-registry WS-DX-02 |
 | B2-C-01 | **Audit hashchain 重启未恢复尾节点** — 现状: NewHashChain 启动从空链开始，多实例或重启后尾哈希不连续；修复: cell 启动时从 repo `SELECT last hash` 注入；考虑 leader 单写或 advisory lock | arch-opt | P0/Cx4 | 🔴 | — | `cells/auditcore/internal/domain/hashchain.go:31` + `cells/auditcore/cell.go` | backlog2 §1 B2-C-01 |
 | B2-R-05 | **OTel metric provider ctx 固定 Background** — 现状: provider 用 ctx.Background()；修复: 透传 caller ctx | bug | P1/Cx4 | 🟡 | — | `adapters/otel/metric_provider.go:174,178,185` | backlog2 §3 B2-R-05 |
 | B2-R-06 | **OTel tracer provider 未注册全局** — 现状: tracer 实例化后未 SetGlobal；修复: SetTracerProvider | bug | P1/Cx2 | 🟡 | — | `adapters/otel/tracer.go:56,73` | backlog2 §3 B2-R-06 |
@@ -306,7 +296,6 @@
 | B2-A-22 | **Prometheus handler 无 timeout** — 现状: scrape 无超时控制；修复: 加 server.WriteTimeout | bug | P1/Cx1 | 🟡 | — | `cmd/corebundle/metrics.go:83` | backlog2 §5.3 B2-A-22 |
 | B2-A-23 | **Prometheus cellID label 无验证** — 现状: cellID label 接受任意字符串；修复: 加 enum/格式校验 | bug | P1/Cx1 | 🟡 | — | `adapters/prometheus/hook_observer.go:114-117` | backlog2 §5.3 B2-A-23 |
 | B2-A-24 | **Prometheus race test 缺** — 现状: provider 缺并发竞争测试；修复: 加 race | test | P1/Cx2 | 🟡 | — | `adapters/prometheus/metric_provider_test.go` | backlog2 §5.3 B2-A-24 |
-| B2-W-03 | **WebSocket 可观测性缺** — 现状: hub 无 metric/log；修复: 加 connection count / message rate / shutdown duration metric | feat | P1/Cx2 | 🟡 | — | `runtime/websocket/hub.go` | backlog2 §6 B2-W-03 |
 | REPO-HEALTHCHECKER-01 | **configcore/auditcore repo 接 HealthCheckers** — 现状: HealthCheckers 仅接 outbox，关键 repo 未接探针；修复: 接入 cell HealthCheckers（与 PR-CFG-1 PG relay probe 同主题）| arch-opt | P1/Cx2 | 🟡 | 与 PR-A53 同 PR | `cells/configcore/cell.go` + `cells/auditcore/cell.go` | backlog1 §3 |
 
 ---
@@ -336,7 +325,6 @@
 | PR266-AUDITAPPEND-STRICT | **AuditAppend strict** — 现状: append 验证缺；修复: 加严 | arch-opt | P2/Cx2 | 🟡 | — | `cells/auditcore/` | PR#266 |
 | PR266-METADATA-ONLY-CONSUMER-BUSINESS | **Metadata-only consumer business** — 现状: receive placeholder 仍业务化；修复: 与 ConfigReceive cleanup 一同 | arch-opt | P2/Cx2 | 🟠 | 与 ConfigReceive cleanup 同 | `cells/accesscore/` | PR#266 |
 | PR332-VERIFY-GENERATED-REMEDIATION-DRIFT-01 | **Verify codegen drift remediation 提示** — 现状: drift 报错不提示修复命令；修复: 补 hint | arch-opt | Cx2 | 🟡 | — | `cmd/gocell/` | PR#332 |
-| PR-CI-5-FU-PANIC-WHITELIST-STRUCTURED | **PANIC whitelist structured** — 现状: 白名单字符串散；修复: structured registry | arch-opt | Cx3 | 🟡 | — | `tools/archtest/` | PR-CI-5 |
 | VERIFY-CODEGEN-SANDBOX-INTEGRATION | **VERIFY-CODEGEN-SANDBOX-INTEGRATION** — 现状: --local=false sandbox 路径无端到端回归；修复: 补 1-2 条 git worktree integration test | test | Cx2 | 🟠 | 修改 verify-codegen-*.sh 或 runVerifyCodegen* | `cmd/gocell/app/codegen_*_drift_test.go` + tools/codegen helper | PR #404 K#10 review P2 |
 | PR391-CLI-EXPORT-ALIAS-GENERATEDAT-FLAKE | **CLI export alias/generatedAt flake** — 现状: 测试偶发；修复: 决定确定性策略 | bug | Cx1 | 🟡 | — | `cmd/gocell/` | PR#391 |
 | F2 | **Framework doc F2** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F2 |
