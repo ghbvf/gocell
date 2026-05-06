@@ -10,7 +10,7 @@ package archtest
 //     the legacy single-mux route registration surface.
 //
 // Historical provenance remains allowed in docs/backlog.md, docs/plans/**,
-// docs/reviews/**, docs/archive/**, and CHANGELOG.md.
+// docs/reviews/**, docs/archive/**, docs/backlog/archive/**, and CHANGELOG.md.
 
 import (
 	"fmt"
@@ -176,6 +176,10 @@ func listenerDXDocExcluded(rel string) bool {
 		"docs/plans/",
 		"docs/reviews/",
 		"docs/archive/",
+		// docs/backlog/archive/** — historical snapshot of pre-framework
+		// backlog files (5 sources @ 18a06ab7); listener API references
+		// retained verbatim for traceability.
+		"docs/backlog/archive/",
 	} {
 		if strings.HasPrefix(rel, prefix) {
 			return true
