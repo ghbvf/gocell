@@ -110,14 +110,73 @@ ref: ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` §"e
 - **Pre-service typed wrap**. Validation errors emitted by `handler.tmpl` decoder/path-param branches still call `httputil.WriteError(errcode.New(KindInvalid, …))` rather than constructing `Xxx400ErrorResponse`. They produce the same wire envelope and CH-04 covers their static guarantees; promoting them to typed envelope would add ~50 sites of mechanical wrap with no end-user benefit.
 - **handler.tmpl 模块化** (06.FU2). PR #403 已达 199 文件，handler.tmpl 按关注点拆分（decode / pagination / visit / error-fallback）作为独立 follow-up，与 typed envelope 主题不直接相关。
 
+### D7. 双向闭合契约（PR #403 第三轮 review §R1 收口）
+
+D1-D6 编码了 typed envelope 的"链中段"——`contract.yaml` 声明 → `typed XxxErrorResponse` struct 生成。链头（contract.yaml 必须声明 ≥1 4xx/5xx）和链尾（adapter return status 集合 ⊆ contract 声明）都需要静态守卫，否则中段 codegen 在两端开口。
+
+**链头：C18-error-required**
+
+`tools/codegen/contractgen/builder.go::collectAndValidateStatuses` 末尾新增 hasError 累计检查：HTTP endpoint 必须显式声明至少一个 4xx/5xx response code，不允许 success-only contract（如 `successStatus: 201, Responses: nil`）静默通过。理由：typed `XxxErrorResponse` struct 的源是 `contract.yaml.responses[]`；无声明则 typed envelope 在错误路径上无 wire form，CH-06 bijection 也无法验证。
+
+**链尾：ADAPTER-RETURNS-DECLARED-TYPES-01（Ceiling 守语义）**
+
+`tools/archtest/adapter_returns_declared_types_test.go` 新增 archtest，AST 扫描 `cells/*/slices/*/{handler,service}.go` 与 `examples/*/cells/*/slices/*/{handler,service}.go`，提取实现 `XxxResponseObject` 接口的方法的 `return XxxNNNJSONResponse{...}` / `XxxNNNNoContentResponse{...}` / `XxxNNNErrorResponse{...}` 字面量返回，断言 status NNN ∈ contract.yaml `SuccessStatus ∪ Responses[]`；超集报错。
+
+**Ceiling 语义边界**：return 集合 ⊆ declared 集合。**零 typed return（adapter 全部走 `return nil, err` framework fallback）合法**。理由：当前 cells/examples 下所有 adapter 全部 framework-fallback 是 Pre-CH-06 时代的历史包袱；一次性升级到 Floor 守需改 25+ 个 adapter，超出 Cx3 范围。
+
+**演进锚点（依赖段 2 invariant Registry 工具产品化）**
+
+| 阶段 | 守语义升级 | adapter 改造 | 入口 |
+|---|---|---|---|
+| 段 1（本 ADR） | ADAPTER-RETURNS-DECLARED-TYPES-01 = Ceiling 守 | 零改动；零 typed return 合法 | 已落地 |
+| 段 2.5（独立 PR） | + ADAPTER-RETURNS-SUCCESS-FLOOR-01（successStatus 必须至少有一处 typed return） | ~25 adapter `return nil, err` → `return XxxNNNJSONResponse{...}, nil` | docs/backlog.md `B-FLOOR-FOLLOWUP` |
+| 段 4（独立 PR） | + ADAPTER-RETURNS-FULL-FLOOR-01（每个声明 status 都至少返一次） | 桩典型错误路径返 typed `XxxNNNErrorResponse` | 同上 |
+
+**Bijection 图**
+
+```
+contract.yaml.responses[]
+       │
+       │ C18 (链头) — 必含 ≥1 4xx/5xx
+       ▼
+generated/contracts/.../types_gen.go (XxxNNNErrorResponse / XxxNNNJSONResponse)
+       │
+       │ CH-06 (链中) — bijection: 声明 ⇔ 生成
+       ▼
+adapter return XxxNNN...{...} 字面量
+       │
+       │ ADAPTER-RETURNS-DECLARED-TYPES-01 (链尾, Ceiling)
+       ▼ — return ⊆ declared；零 typed return 合法
+http wire response
+```
+
+### D8. 5xx wire code 单源（PR #403 第三轮 review §R2 收口）
+
+PR #403 rebase 触发 `TestWriteErrorWithStatus_5xxKindNormalize/501` 失败，根因是 D6 引入的 `PublicCodeForStatus(501) → ErrNotImplemented` 与 `Kind.PublicCode()` 中 `KindNotImplemented` 投影到 `ErrInternal` 的真实行为冲突。修复方向是声明 5xx wire code 单源：
+
+- **权威**：`pkg/errcode/kind.go::Kind.PublicCode()`——每个 5xx Kind 投影到 `{ErrInternal, ErrServiceUnavailable, ErrServerTimeout}` 之一
+- **镜像**：`pkg/errcode/status.go::PublicCodeForStatus`——是 `Kind.PublicCode()` 的 status→Code 镜像；只有 503/504 有显式 case（其 Kind 有专用 wire code），其他 5xx（500/501/502/507/...）全部 fall through 到 default ErrInternal
+- **收敛集**：5xx wire code 永远只能是 `{ErrInternal, ErrServiceUnavailable, ErrServerTimeout}` 三者之一
+
+引入新 dedicated 5xx wire code 必须**同时**扩展 `Kind.PublicCode()` 和 `PublicCodeForStatus`，由 archtest `WIRE-CODE-5XX-SINGLE-SOURCE-01`（`tools/archtest/wire_code_5xx_single_source_test.go`）静态守卫：AST 扫两处 switch case，断言 5xx 段集合一致。
+
+`PublicCodeForStatus` 的 godoc 顶部记载此约定，作为下次修改者的入口指引。
+
+D6 §"5xx wire/log 隔离强化"中"Kind 透传 normalize"的部分被 D8 收紧——5xx 路径不仅 normalize Kind，还必须把任何非收敛集 wire code 折叠到 ErrInternal。
+
 ## References
 
 - Plan: `~/.claude-ming/plans/docs-plans-202605011500-029-master-road-shimmying-sloth.md`
 - Roadmap entry: `docs/plans/202605011500-029-master-roadmap.md` line 108 (06.FU)
 - PR#376 F-COR-001 source: `docs/reviews/202605051730-PR376/06-correctness.md`
+- PR #403 third-wave review: `docs/reviews/202605070153-pr403-third-wave-review.md`
 - ref: oapi-codegen `pkg/codegen/templates/strict/strict-interface.tmpl@main`
 - ref: oapi-codegen `pkg/codegen/templates/strict/strict-responses.tmpl@main`
 - ref: oapi-codegen `examples/petstore-expanded/strict/api/petstore-server.gen.go@v2.1.0`
 - ref: Kratos `transport/http/codec.go` DefaultResponseEncoder（buffer-then-commit）
 - ref: go-zero `rest/httpx/responses.go` doWriteJson（buffer-then-commit）
+- ref: oapi-codegen `pkg/codegen/operations.go::generateOperationDefinition` strict-server require ≥1 4xx (D7 链头)
+- ref: goa `goagen/codegen/types/types.go` strict response set; connect-go `cmd/protoc-gen-connect-go` typed error returns (D7 链尾，goa/connect-go 通过编译期类型，GoCell 选 archtest 因 contract.yaml 不在 protobuf 编译流)
+- ref: grpc-go `internal/status/status.go::Code()` switch single source (D8)
+- ref: go-zero `tools/goctl/api/spec/spec.go` registry-driven contract surface (D6 暴露面注册表)
 - PR #403 review (multi-role 6 dimensions)
