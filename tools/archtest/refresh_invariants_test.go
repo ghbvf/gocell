@@ -1,33 +1,18 @@
 package archtest
 
-// refresh_cross_store_tx_test.go enforces REFRESH-CROSS-STORE-TX-01:
-// cells/accesscore/slices/sessionrefresh/service.go Refresh method must wrap
-// the validate→update→rotate sequence in a single s.txRunner.RunInTx call so
-// that PG refresh-store and (eventually) PG session-repo writes share one
-// commit boundary.
-//
-// The rule scans the AST:
-//   1. Refresh body must contain exactly one s.txRunner.RunInTx(...) call.
-//   2. The RunInTx call's second argument resolves to a *ast.FuncLit (either
-//      inline `func(...) error { ... }` or an identifier bound to one).
-//   3. The closure body must invoke at least one method on `s` — guards
-//      against an empty/no-op wrap that satisfies (1) without doing work.
-//   4. The forbidden bare-store calls (s.refreshStore.Peek / .Rotate,
-//      s.sessionRepo.Update / .GetByID, s.userRepo.GetByID) must NOT appear
-//      in Refresh's body outside the closure. They may live inside the
-//      closure or in any helper method on s reachable through it (e.g.
-//      s.refreshInTx) — any direct call from Refresh's top level escapes
-//      the wrap.
-//
-// Cascade-revoke paths (s.refreshStore.RevokeSessionDetached) are allowed
-// outside the closure: PR#395 detached-context invariant requires them to
-// run on a context derived via ctxutil.WithDetachedTimeout.
+// refresh_invariants_test.go consolidates refresh-theme invariants:
+//   - INVARIANT: REFRESH-CROSS-STORE-TX-01
+//   - INVARIANT: REFRESH-INVALID-INDEX-SINGLE-SOURCE-01
+//   - INVARIANT: REFRESH-AMBIENT-TX-01
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,9 +21,37 @@ import (
 
 const ruleRefreshCrossStoreTX01 = "REFRESH-CROSS-STORE-TX-01"
 
-// TestRefreshCrossStoreTX01 asserts that sessionrefresh.Service.Refresh
-// wraps its body in exactly one s.txRunner.RunInTx call, and that the
-// store-touching calls listed below appear inside that closure.
+// canonicalInvalidIndexFile is the only file allowed to define DetectInvalidIndexes.
+const canonicalInvalidIndexFile = "adapters/postgres/schema_guard.go"
+
+const ruleRefreshInvalidIndexSingleSource01 = "REFRESH-INVALID-INDEX-SINGLE-SOURCE-01"
+
+const ruleRefreshAmbientTX01 = "REFRESH-AMBIENT-TX-01"
+
+// INVARIANT: REFRESH-CROSS-STORE-TX-01
+//
+// refresh_cross_store_tx_test.go enforces REFRESH-CROSS-STORE-TX-01:
+// cells/accesscore/slices/sessionrefresh/service.go Refresh method must wrap
+// the validate→update→rotate sequence in a single s.txRunner.RunInTx call so
+// that PG refresh-store and (eventually) PG session-repo writes share one
+// commit boundary.
+//
+// The rule scans the AST:
+//  1. Refresh body must contain exactly one s.txRunner.RunInTx(...) call.
+//  2. The RunInTx call's second argument resolves to a *ast.FuncLit (either
+//     inline `func(...) error { ... }` or an identifier bound to one).
+//  3. The closure body must invoke at least one method on `s` — guards
+//     against an empty/no-op wrap that satisfies (1) without doing work.
+//  4. The forbidden bare-store calls (s.refreshStore.Peek / .Rotate,
+//     s.sessionRepo.Update / .GetByID, s.userRepo.GetByID) must NOT appear
+//     in Refresh's body outside the closure. They may live inside the
+//     closure or in any helper method on s reachable through it (e.g.
+//     s.refreshInTx) — any direct call from Refresh's top level escapes
+//     the wrap.
+//
+// Cascade-revoke paths (s.refreshStore.RevokeSessionDetached) are allowed
+// outside the closure: PR#395 detached-context invariant requires them to
+// run on a context derived via ctxutil.WithDetachedTimeout.
 func TestRefreshCrossStoreTX01(t *testing.T) {
 	root := findModuleRoot(t)
 	rel := "cells/accesscore/slices/sessionrefresh/service.go"
@@ -247,4 +260,154 @@ func bareServiceFieldCall(call *ast.CallExpr) (string, bool) {
 		return "", false
 	}
 	return inner.Sel.Name + "." + outer.Sel.Name, true
+}
+
+// INVARIANT: REFRESH-INVALID-INDEX-SINGLE-SOURCE-01
+//
+// refresh_invalid_index_single_source_test.go enforces REFRESH-INVALID-INDEX-SINGLE-SOURCE-01:
+// the function "DetectInvalidIndexes" must be declared (defined) in exactly one
+// production (non-_test.go) Go file across the entire repository:
+// adapters/postgres/schema_guard.go.
+//
+// Callers of DetectInvalidIndexes (e.g. migrator.go, cmd/corebundle/bundle.go)
+// are allowed. Only a second *declaration* (func DetectInvalidIndexes ...) would
+// violate the rule, which would indicate B8 or future work introducing a
+// parallel invalid-index check path outside schema_guard.
+func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
+	root := findModuleRoot(t)
+
+	type declarationSite struct {
+		rel  string
+		line int
+	}
+	var declarations []declarationSite
+
+	skipDirs := map[string]struct{}{
+		"vendor": {}, "worktrees": {}, "testdata": {}, "generated": {}, ".git": {},
+	}
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if _, skip := skipDirs[d.Name()]; skip {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
+		if parseErr != nil {
+			// Skip unparseable files (e.g. generated with build constraints).
+			return nil //nolint:nilerr // intentional: skip files that fail to parse
+		}
+
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if fd.Name.Name != "DetectInvalidIndexes" {
+				continue
+			}
+			// Only top-level function declarations (no receiver).
+			if fd.Recv != nil {
+				continue
+			}
+			rel, _ := filepath.Rel(root, path)
+			pos := fset.Position(fd.Pos())
+			declarations = append(declarations, declarationSite{
+				rel:  filepath.ToSlash(rel),
+				line: pos.Line,
+			})
+		}
+		return nil
+	})
+	require.NoError(t, err, "walking repo root")
+
+	if len(declarations) == 0 {
+		t.Fatalf("%s: DetectInvalidIndexes not declared anywhere — expected it in %s",
+			ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile)
+	}
+
+	if len(declarations) > 1 {
+		t.Logf("%s: DetectInvalidIndexes declared in %d files (expected 1):", ruleRefreshInvalidIndexSingleSource01, len(declarations))
+		for _, d := range declarations {
+			t.Logf("  %s:%d", d.rel, d.line)
+		}
+	}
+
+	assert.Len(t, declarations, 1,
+		"%s: DetectInvalidIndexes must be declared in exactly one production file (%s); "+
+			"found declarations in %d files — callers are allowed, new parallel definitions are not",
+		ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile, len(declarations))
+
+	if len(declarations) == 1 {
+		assert.Equal(t, canonicalInvalidIndexFile, declarations[0].rel,
+			"%s: DetectInvalidIndexes must be declared in %s, not %s",
+			ruleRefreshInvalidIndexSingleSource01, canonicalInvalidIndexFile, declarations[0].rel)
+	}
+}
+
+// INVARIANT: REFRESH-AMBIENT-TX-01
+//
+// refresh_store_ambient_tx_test.go enforces REFRESH-AMBIENT-TX-01:
+// adapters/postgres/refresh_store.go must not contain any direct pool.Begin /
+// (*pgxpool.Pool).Begin / tx.Begin calls. After B2-A-08, Peek and Rotate
+// delegate transaction management to the injected TxRunner; the store itself
+// must not acquire transactions directly.
+//
+// The rule scans the AST for SelectorExpr calls whose Sel.Name is "Begin"
+// where the receiver is a known pool-like identifier. It also catches bare
+// method calls named "Begin" on any expression, since the only legitimate
+// Begin callers in refresh_store.go would be pool or tx variables.
+func TestRefreshAmbientTX01(t *testing.T) {
+	root := findModuleRoot(t)
+	rel := "adapters/postgres/refresh_store.go"
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution|parser.ParseComments)
+	require.NoError(t, err, "%s: parse failed", rel)
+
+	type violation struct {
+		line int
+		expr string
+	}
+	var violations []violation
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if sel.Sel.Name != "Begin" {
+			return true
+		}
+		pos := fset.Position(call.Pos())
+		violations = append(violations, violation{
+			line: pos.Line,
+			expr: fmt.Sprintf("call to .Begin() at line %d", pos.Line),
+		})
+		return true
+	})
+
+	if len(violations) > 0 {
+		t.Logf("%s: %d violation(s) in %s:", ruleRefreshAmbientTX01, len(violations), rel)
+		for _, v := range violations {
+			t.Logf("  line %d: .Begin() call — refresh_store must delegate to TxRunner, not acquire transactions directly", v.line)
+		}
+	}
+	assert.Empty(t, violations,
+		"%s: %s must not contain .Begin() calls; use injected TxRunner.RunInTx instead (B2-A-08)",
+		ruleRefreshAmbientTX01, rel)
 }

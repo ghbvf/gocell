@@ -1,21 +1,271 @@
-// prod_duration_const_internal_test.go — regression-guard unit tests for the
-// PROD-DURATION-CONST-01 helper predicates. Every helper that the archtest
-// enforcement relies on has direct unit tests so a future refactor cannot
-// silently widen or narrow the predicate without a red build.
+// Package archtest — production code invariant gates.
+//
+// Merged from:
+//   - prod_duration_const_test.go          (PROD-DURATION-CONST-01 enforcement + helpers)
+//   - prod_duration_const_internal_test.go (PROD-DURATION-CONST-01 predicate unit tests)
+//
+// NOTE: prod_duration_fixtures_test.go is a fixture-driver file and is NOT merged here.
 //
 // ref: docs/plans/202604272358-2-2-ci-batch2-k8s-verify.md PR-CI-6
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
+
+// ============================================================
+// INVARIANT: PROD-DURATION-CONST-01
+// ============================================================
+//
+// In all production-shippable .go files, any expression whose static type is
+// time.Duration and whose subtree contains a BasicLit must appear directly in
+// the initializer of a package-level const declaration. All other positions
+// are violations. Exception: a BasicLit whose token value is "0" is not a
+// violation.
+//
+// ref: docs/plans/202604272358-2-2-ci-batch2-k8s-verify.md PR-CI-6
+
+// TestProdDurationConst enforces PROD-DURATION-CONST-01 using universal AST
+// walk: for every declaration that is not a package-level const block, any
+// expression whose static type is time.Duration and whose subtree contains a
+// BasicLit is a violation.
+func TestProdDurationConst(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode " +
+			"(loads production packages module-wide, ~5-10s)")
+	}
+
+	root := findModuleRoot(t)
+	patterns := prodscan.PatternsExtended(root)
+
+	pkgs, errs, err := typeseval.LoadPackages(root, false, []string{"e2e", "integration", "pg"}, patterns...)
+	require.NoError(t, err, "packages.Load failed")
+	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
+
+	var violations []string
+	visited := map[string]bool{}
+
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		for i, file := range p.Syntax {
+			if i >= len(p.GoFiles) {
+				continue
+			}
+			abs := p.GoFiles[i]
+			if visited[abs] {
+				continue
+			}
+			visited[abs] = true
+
+			rel, ok := fileroles.Rel(root, abs)
+			if !ok || !fileroles.IsProductionCode(rel) {
+				continue
+			}
+
+			violations = append(violations, scanProdDurationAST(p.Fset, file, rel, p.TypesInfo)...)
+		}
+	})
+
+	sort.Strings(violations)
+	for _, v := range violations {
+		t.Log(v)
+	}
+	assert.Empty(t, violations,
+		"PROD-DURATION-CONST-01: extract literal durations to package-level const. "+
+			"ref: docs/plans/202604272358-2-2-ci-batch2-k8s-verify.md PR-CI-6")
+}
+
+// scanProdDurationAST walks a single parsed file's AST using a universal walk:
+// for each top-level declaration that is not a package-level const block, it
+// inspects every sub-expression. An expression that (a) has static type
+// time.Duration and (b) whose subtree contains a BasicLit is a violation.
+func scanProdDurationAST(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) []string {
+	var violations []string
+
+	for _, decl := range file.Decls {
+		// Package-level const blocks are the unique compliant position.
+		if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+			continue
+		}
+
+		ast.Inspect(decl, func(n ast.Node) bool {
+			expr, ok := n.(ast.Expr)
+			if !ok {
+				return true
+			}
+			if !exprIsTimeDuration(expr, info) {
+				return true
+			}
+			if !isLiteralDurationExpr(expr) {
+				return true
+			}
+			pos := fset.Position(expr.Pos())
+			violations = append(violations, fmt.Sprintf("%s:%d: %s", rel, pos.Line, formatDurationExpr(expr)))
+			return false
+		})
+	}
+
+	return violations
+}
+
+// exprIsTimeDuration returns true when expr's static type is time.Duration.
+func exprIsTimeDuration(expr ast.Expr, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok || tv.Type == nil {
+		return false
+	}
+	named, ok := tv.Type.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj != nil && obj.Pkg() != nil &&
+		obj.Pkg().Path() == "time" && obj.Name() == "Duration"
+}
+
+// isLiteralDurationExpr returns true for expressions whose subtree contains a
+// numeric BasicLit that contributes a non-zero literal value.
+func isLiteralDurationExpr(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return (e.Kind == token.INT || e.Kind == token.FLOAT) && e.Value != "0"
+	case *ast.BinaryExpr:
+		if e.Op != token.MUL {
+			return false
+		}
+		if isTimeUnit(e.X) && allLiteralOrLitProduct(e.Y) {
+			return true
+		}
+		if isTimeUnit(e.Y) && allLiteralOrLitProduct(e.X) {
+			return true
+		}
+		return false
+	case *ast.ParenExpr:
+		return isLiteralDurationExpr(e.X)
+	case *ast.UnaryExpr:
+		return isLiteralDurationExpr(e.X)
+	case *ast.CallExpr:
+		if isTimeDurationCast(e) && len(e.Args) == 1 {
+			if lit, ok := e.Args[0].(*ast.BasicLit); ok {
+				return (lit.Kind == token.INT || lit.Kind == token.FLOAT) && lit.Value != "0"
+			}
+		}
+	}
+	return false
+}
+
+// isTimeUnit returns true for time.{Nanosecond,Microsecond,Millisecond,Second,Minute,Hour}.
+func isTimeUnit(expr ast.Expr) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || id.Name != "time" {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Nanosecond", "Microsecond", "Millisecond",
+		"Second", "Minute", "Hour":
+		return true
+	}
+	return false
+}
+
+// isTimeDurationCast returns true for time.Duration(<expr>) type-conversion calls.
+func isTimeDurationCast(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || id.Name != "time" {
+		return false
+	}
+	return sel.Sel.Name == "Duration"
+}
+
+// allLiteralOrLitProduct reports whether expr is composed entirely of BasicLit
+// nodes, parenthesised/arithmetic BasicLit products, or time.Duration(<BasicLit>)
+// casts.
+func allLiteralOrLitProduct(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return (e.Kind == token.INT || e.Kind == token.FLOAT) && e.Value != "0"
+	case *ast.ParenExpr:
+		return allLiteralOrLitProduct(e.X)
+	case *ast.BinaryExpr:
+		return allLiteralOrLitProduct(e.X) && allLiteralOrLitProduct(e.Y)
+	case *ast.UnaryExpr:
+		return allLiteralOrLitProduct(e.X)
+	case *ast.CallExpr:
+		if isTimeDurationCast(e) && len(e.Args) == 1 {
+			if lit, ok := e.Args[0].(*ast.BasicLit); ok {
+				return (lit.Kind == token.INT || lit.Kind == token.FLOAT) && lit.Value != "0"
+			}
+		}
+	}
+	return false
+}
+
+// formatDurationExpr renders an expression back to compact human-readable text
+// for violation reports.
+func formatDurationExpr(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return e.Value
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		if id, ok := e.X.(*ast.Ident); ok {
+			return id.Name + "." + e.Sel.Name
+		}
+		return e.Sel.Name
+	case *ast.BinaryExpr:
+		return formatDurationExpr(e.X) + e.Op.String() + formatDurationExpr(e.Y)
+	case *ast.ParenExpr:
+		return "(" + formatDurationExpr(e.X) + ")"
+	case *ast.UnaryExpr:
+		return e.Op.String() + formatDurationExpr(e.X)
+	case *ast.CallExpr:
+		args := make([]string, len(e.Args))
+		for i, a := range e.Args {
+			args[i] = formatDurationExpr(a)
+		}
+		return formatDurationExpr(e.Fun) + "(" + strings.Join(args, ", ") + ")"
+	}
+	return "<expr>"
+}
+
+// ============================================================
+// PROD-DURATION-CONST-01 predicate unit tests
+// ============================================================
+//
+// These tests guard the helper predicates to ensure a future refactor cannot
+// silently widen or narrow the predicate without a red build.
 
 // parseExpr parses a single Go expression. Failures are fatal — bad source is a test bug.
 func parseExpr(t *testing.T, src string) ast.Expr {
@@ -34,10 +284,6 @@ func callExpr(t *testing.T, src string) *ast.CallExpr {
 	return call
 }
 
-// ---------------------------------------------------------------------------
-// TestIsTimeUnit
-// ---------------------------------------------------------------------------
-
 func TestIsTimeUnit(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -50,13 +296,9 @@ func TestIsTimeUnit(t *testing.T) {
 		{"time.Second", true},
 		{"time.Minute", true},
 		{"time.Hour", true},
-		// time.Duration is a type, not a unit constant.
 		{"time.Duration", false},
-		// Non-time package — field name matches but wrong receiver.
 		{"mytime.Second", false},
-		// Bare identifier without selector.
 		{"Second", false},
-		// time.Now is a function, not a unit.
 		{"time.Now", false},
 	}
 	for _, c := range cases {
@@ -68,10 +310,6 @@ func TestIsTimeUnit(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestIsTimeDurationCast
-// ---------------------------------------------------------------------------
-
 func TestIsTimeDurationCast(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -80,11 +318,8 @@ func TestIsTimeDurationCast(t *testing.T) {
 	}{
 		{"time.Duration(30)", true},
 		{"time.Duration(x)", true},
-		// time.Hour used as function — not the cast.
 		{"time.Hour(30)", false},
-		// Wrong package name.
 		{"pkg.Duration(30)", false},
-		// Correct package, wrong function.
 		{"time.Sleep(30)", false},
 	}
 	for _, c := range cases {
@@ -96,10 +331,6 @@ func TestIsTimeDurationCast(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestAllLiteralOrLitProduct
-// ---------------------------------------------------------------------------
-
 func TestAllLiteralOrLitProduct(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -109,17 +340,11 @@ func TestAllLiteralOrLitProduct(t *testing.T) {
 		{"5", true},
 		{"30", true},
 		{"100", true},
-		// Zero sentinel must be rejected.
 		{"0", false},
-		// Product of two non-zero literals.
 		{"7*24", true},
-		// Product containing an identifier.
 		{"n*24", false},
-		// time.Duration(<BasicLit>) counts as literal-bearing magnitude.
 		{"time.Duration(30)", true},
-		// time.Duration(<ident>) is not a literal.
 		{"time.Duration(x)", false},
-		// Parenthesised literal product.
 		{"(7*24)", true},
 	}
 	for _, c := range cases {
@@ -131,61 +356,32 @@ func TestAllLiteralOrLitProduct(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestIsLiteralDurationExpr — includes new BasicLit single-node cases
-// ---------------------------------------------------------------------------
-
 func TestIsLiteralDurationExpr(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		src  string
 		want bool
 	}{
-		// Standard literal * unit forms.
 		{"5*time.Second", true},
 		{"30*time.Second", true},
 		{"10*time.Minute", true},
 		{"60*time.Second", true},
-		// time.Unit * literal (reversed order).
 		{"time.Second*5", true},
-		// Chained magnitude: 7*24*time.Hour.
 		{"7*24*time.Hour", true},
 		{"30*24*time.Hour", true},
-		// time.Duration(<BasicLit>) cast form.
 		{"time.Duration(30)", true},
-		// time.Duration(<BasicLit>) * time.Unit.
 		{"time.Duration(30)*time.Second", true},
-		// Parenthesised form.
 		{"(5*time.Second)", true},
-		// Negated form — -5*time.Second must still flag.
 		{"-5*time.Second", true},
-
-		// --- BasicLit single-node cases (彻底化关键新增) ---
-		// Non-zero bare literal — var x time.Duration = 5 scenario.
-		// isLiteralDurationExpr sees a *ast.BasicLit("5") → true.
 		{"5", true},
-		// Zero bare literal — return 0 sentinel → must NOT flag.
 		{"0", false},
-
-		// Zero sentinel expressed as multiplication — magnitude "0" rejected.
 		{"0*time.Second", false},
-		// Named const scaling: existingDur*2.
-		// No recursive fallback — namedVar*scalar must not flag even without type guard.
 		{"existingDur*2", false},
-		// time.Unit * named const — allLiteralOrLitProduct(BaseRetryDelay) = false.
 		{"BaseRetryDelay*time.Second", false},
-		// Non-time package unit: 5*custompkg.Second.
-		// isTimeUnit(custompkg.Second)=false, allLiteralOrLitProduct(5)=true but
-		// the other side is not a time.Unit, so terminal check fails.
-		// No recursive fallback → false.
 		{"5*custompkg.Second", false},
-		// Division expression (op != MUL).
 		{"5*time.Hour/2", false},
-		// time.Duration cast with runtime expr.
 		{"time.Duration(x)", false},
-		// Named const identifier alone.
 		{"defaultTimeout", false},
-		// SelectorExpr (struct field or package const).
 		{"cfg.Timeout", false},
 	}
 	for _, c := range cases {
@@ -197,13 +393,8 @@ func TestIsLiteralDurationExpr(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestExprIsTimeDuration — type-guard unit tests using synthetic types.Info
-// ---------------------------------------------------------------------------
-
 // buildTimeDurationInfo returns a synthetic *types.Info that maps a dummy
-// ast.Ident to type time.Duration via a hand-crafted *types.Named object.
-// This lets us test exprIsTimeDuration without a full packages.Load.
+// ast.Ident to type time.Duration.
 func buildTimeDurationInfo(expr ast.Expr, isDuration bool) *types.Info {
 	info := &types.Info{
 		Types: map[ast.Expr]types.TypeAndValue{},
@@ -211,7 +402,6 @@ func buildTimeDurationInfo(expr ast.Expr, isDuration bool) *types.Info {
 	if !isDuration {
 		return info
 	}
-	// Construct a *types.Named whose Obj reports pkg="time", name="Duration".
 	timePkg := types.NewPackage("time", "time")
 	durObj := types.NewTypeName(token.NoPos, timePkg, "Duration", nil)
 	durType := types.NewNamed(durObj, types.Typ[types.Int64], nil)
@@ -255,7 +445,7 @@ func TestExprIsTimeDuration(t *testing.T) {
 		{
 			desc:       "nil info → false",
 			src:        "5*time.Second",
-			isDuration: false, // will test with nil info directly
+			isDuration: false,
 			want:       false,
 		},
 		{
@@ -280,16 +470,8 @@ func TestExprIsTimeDuration(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestUniformWalkSkipsPackageConst — universal walk skips package-level const
-// ---------------------------------------------------------------------------
-
 // countDurationLiteralsInFile counts how many times isLiteralDurationExpr
 // returns true when walking all non-package-const decls in the file.
-// The type guard (exprIsTimeDuration) is bypassed intentionally — these tests
-// focus on the walk/skip logic and predicate shape, not on type resolution.
-// In production, exprIsTimeDuration would further filter to only time.Duration
-// expressions; here every literal-shaped expr is counted.
 func countDurationLiteralsInFile(t *testing.T, src string) int {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -299,7 +481,7 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	count := 0
 	for _, decl := range f.Decls {
 		if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
-			continue // package-level const — skip entire subtree
+			continue
 		}
 		ast.Inspect(decl, func(n ast.Node) bool {
 			expr, ok := n.(ast.Expr)
@@ -381,10 +563,6 @@ var bad = 30 * time.Second
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// TestUniformWalkUnwraps — walk reports outermost match only, not sub-exprs
-// ---------------------------------------------------------------------------
 
 func TestUniformWalkUnwraps(t *testing.T) {
 	t.Parallel()

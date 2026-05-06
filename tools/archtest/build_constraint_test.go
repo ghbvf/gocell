@@ -1,3 +1,4 @@
+// INVARIANT: BUILD-CONSTRAINT-INTEGRATION-TAG-01: every *_integration_test.go must carry a proper //go:build integration constraint
 package archtest
 
 import (

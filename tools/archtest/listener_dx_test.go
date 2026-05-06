@@ -1,3 +1,4 @@
+// INVARIANT: LISTENER-DX-01: deleted listener option APIs and legacy auth.Route Delegated surface must not be reintroduced
 package archtest
 
 // listener_dx_test.go enforces A52 LISTENER-DX-UNIFY anti-regression guards.
