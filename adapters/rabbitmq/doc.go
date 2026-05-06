@@ -53,6 +53,22 @@
 //	app, _ := bootstrap.New(bootstrap.WithManagedResource(conn))
 //	_ = pub; _ = sub; _ = app
 //
+// # AMQPChannel destruction contract (RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01)
+//
+// Every site that destroys an AMQPChannel MUST call Connection.CloseEphemeralChannel
+// instead of ch.Close() directly. Direct calls bypass the inUseChannels.Add(-1)
+// decrement and permanently leak MaxChannelsPerConn slots, causing spurious
+// ERR_ADAPTER_AMQP_CHANNEL_MAX_EXCEEDED errors after enough reconnect cycles.
+//
+// The four internal destruction sites are:
+//   - drainChannelPool: idle-pool channels drained on reconnect
+//   - ReleaseChannel (pool-full path): excess channel on release
+//   - subscribeOnce closeChannel: setup-failure cleanup
+//   - subscriptionRun.waitAndClose: normal subscription teardown
+//
+// This invariant is enforced statically by archtest RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01
+// (tools/archtest/rmq_channel_destruction_test.go).
+//
 // ref: ThreeDotsLabs/watermill-amqp — reconnect + ACK/NACK + channel lifecycle
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget
 // ref: rabbitmq/amqp091-go channel.go — Cancel→drain→Wait→Close graceful stop order

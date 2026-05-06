@@ -116,8 +116,10 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		// Preserve terminal error code from Connection so callers can distinguish
 		// "permanent config failure" / "reconnect exhausted" from "transient publish failure".
 		if isTerminalConnectionError(err) {
+			p.collector.RecordPublishFailure(PublishFailureAcquireChannel)
 			return err
 		}
+		p.collector.RecordPublishFailure(PublishFailureAcquireChannel)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: acquire channel for publish", err)
 	}
 	// Close the channel after use instead of returning it to the shared pool.
@@ -136,11 +138,13 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
+		p.collector.RecordPublishFailure(PublishFailureDeclareExchange)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: declare exchange", err)
 	}
 
 	// Enable confirm mode.
 	if err := ch.Confirm(false); err != nil {
+		p.collector.RecordPublishFailure(PublishFailureConfirmMode)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: enable confirm mode", err)
 	}
 
@@ -154,6 +158,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	}
 
 	if err := ch.PublishWithContext(ctx, topic, "", false, false, msg); err != nil {
+		p.collector.RecordPublishFailure(PublishFailurePublishSend)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: publish message", err)
 	}
 

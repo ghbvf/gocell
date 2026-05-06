@@ -59,7 +59,7 @@ func TestSubscriptionRun_New(t *testing.T) {
 	ch := newMockChannel()
 	const tag = "cg-test-queue-test.topic"
 
-	run := newSubscriptionRun(ch, tag)
+	run := newSubscriptionRun(ch, tag, nil)
 
 	require.NotNil(t, run, "newSubscriptionRun must return non-nil")
 	assert.Equal(t, ch, run.ch, "ch must match the argument")
@@ -71,7 +71,7 @@ func TestSubscriptionRun_New(t *testing.T) {
 // markDeliveryDone calls.
 func TestSubscriptionRun_RegisterDeliveryAndWait(t *testing.T) {
 	ch := newMockChannel()
-	run := newSubscriptionRun(ch, "cg-test-wait")
+	run := newSubscriptionRun(ch, "cg-test-wait", nil)
 
 	const n = 5
 	for range n {
@@ -109,7 +109,7 @@ func TestSubscriptionRun_RegisterDeliveryAndWait(t *testing.T) {
 // must always be observed as true — regardless of clock resolution.
 func TestSubscriptionRun_CloseWaitsLocalWg(t *testing.T) {
 	rc := newRecordingChannel()
-	run := newSubscriptionRun(rc, "cg-a19-order")
+	run := newSubscriptionRun(rc, "cg-a19-order", nil)
 
 	run.registerDelivery()
 
@@ -141,7 +141,7 @@ func TestSubscriptionRun_CloseWaitsLocalWg(t *testing.T) {
 // a second time does not call ch.Close again (sync.Once guard).
 func TestSubscriptionRun_WaitAndClose_Idempotent(t *testing.T) {
 	rc := newRecordingChannel()
-	run := newSubscriptionRun(rc, "cg-idempotent")
+	run := newSubscriptionRun(rc, "cg-idempotent", nil)
 
 	ctx := context.Background()
 	require.NoError(t, run.waitAndClose(ctx))
@@ -155,7 +155,7 @@ func TestSubscriptionRun_WaitAndClose_Idempotent(t *testing.T) {
 // when the context deadline expires before all in-flight deliveries complete.
 func TestSubscriptionRun_CtxTimeout(t *testing.T) {
 	ch := newMockChannel()
-	run := newSubscriptionRun(ch, "cg-ctx-timeout")
+	run := newSubscriptionRun(ch, "cg-ctx-timeout", nil)
 
 	// Add a delivery that will never complete within the ctx budget.
 	run.registerDelivery()
@@ -190,7 +190,7 @@ func TestSubscriptionRun_CtxTimeout(t *testing.T) {
 // negatives from GC goroutines and other test-framework noise.
 func TestSubscriptionRun_WaitAndClose_CtxTimeout_AbandonedGoroutineEventuallyExits(t *testing.T) {
 	ch := newMockChannel()
-	run := newSubscriptionRun(ch, "cg-abandon-exits")
+	run := newSubscriptionRun(ch, "cg-abandon-exits", nil)
 
 	// Register one in-flight delivery; the goroutine inside waitAndClose will
 	// block on localWg.Wait() until we call markDeliveryDone below.

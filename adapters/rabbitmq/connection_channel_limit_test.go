@@ -7,14 +7,18 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -248,4 +252,228 @@ func TestAcquireChannel_RaceUnderConcurrency(t *testing.T) {
 		"successful acquisitions (%d) must not exceed MaxChannelsPerConn (%d)", got, maxChannels)
 	assert.Equal(t, got, conn.inUseChannels.Load(),
 		"inUseChannels must match successful acquisition count")
+}
+
+// TestReconnect_DrainPool_ReleasesInUseChannels verifies that drainChannelPool,
+// called during reconnect, decrements inUseChannels for each idle pool channel.
+//
+// Before the P1 fix, drainChannelPool called ch.Close() directly without
+// decrementing inUseChannels, permanently leaking the cap slot. After
+// maxChannels channels were cycled through (acquire → release → reconnect),
+// the pool would be "full" with inUseChannels at cap, causing every subsequent
+// AcquireChannel to return ErrAdapterAMQPChannelMaxExceeded ("fake full").
+func TestReconnect_DrainPool_ReleasesInUseChannels(t *testing.T) {
+	const poolSize = 3
+	const maxChannels = 3
+
+	// Two-connection dial sequence: initial + reconnect.
+	var dialMu sync.Mutex
+	var dialCount int
+	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
+	dialFunc := func(url string) (AMQPConnection, error) {
+		dialMu.Lock()
+		dialCount++
+		n := dialCount
+		dialMu.Unlock()
+		if n <= len(mocks) {
+			return mocks[n-1], nil
+		}
+		return newMockConnection(), nil
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                testAMQPURL,
+		ChannelPoolSize:    poolSize,
+		MaxChannelsPerConn: maxChannels,
+		ReconnectBaseDelay: testtime.D1ms, // fast reconnect for test
+		ConfirmTimeout:     testtime.D2s,
+	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	require.NoError(t, err)
+	defer func() {
+		if cErr := conn.Close(context.Background()); cErr != nil {
+			t.Logf("cleanup close: %v", cErr)
+		}
+	}()
+
+	// Acquire 3 channels (fills inUseChannels to maxChannels=3).
+	ch1, err := conn.AcquireChannel()
+	require.NoError(t, err)
+	ch2, err := conn.AcquireChannel()
+	require.NoError(t, err)
+	ch3, err := conn.AcquireChannel()
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(3), conn.inUseChannels.Load(), "inUseChannels must be 3 after acquiring 3 channels")
+
+	// Release all 3 back to pool (pool-return path: inUseChannels stays at 3).
+	conn.ReleaseChannel(ch1)
+	conn.ReleaseChannel(ch2)
+	conn.ReleaseChannel(ch3)
+
+	assert.Equal(t, int32(3), conn.inUseChannels.Load(), "inUseChannels must stay at 3 after pool-return releases")
+
+	// Trigger reconnect by sending a close notification on mock1.
+	require.Eventually(t, func() bool {
+		mocks[0].mu.Lock()
+		defer mocks[0].mu.Unlock()
+		return mocks[0].notifyCloseCh != nil
+	}, testtime.D2s, testtime.D10ms, "reconnectLoop must have registered NotifyClose")
+
+	mocks[0].mu.Lock()
+	notifyCh := mocks[0].notifyCloseCh
+	mocks[0].isClosed = true
+	mocks[0].mu.Unlock()
+	notifyCh <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait for reconnect to complete (dial count reaches 2).
+	require.Eventually(t, func() bool {
+		dialMu.Lock()
+		defer dialMu.Unlock()
+		return dialCount >= 2
+	}, testtime.D2s, testtime.D10ms, "reconnect must complete within 2s")
+
+	// Wait for the reconnect loop to re-enter StateConnected (so drainChannelPool
+	// has been called and inUseChannels has been decremented).
+	require.Eventually(t, func() bool {
+		return conn.Health(context.Background()) == nil
+	}, testtime.D2s, testtime.D10ms, "connection must be healthy after reconnect")
+
+	// inUseChannels must be 0: drainChannelPool closed 3 pool channels, each
+	// calling CloseEphemeralChannel → Add(-1).
+	assert.Equal(t, int32(0), conn.inUseChannels.Load(),
+		"inUseChannels must be 0 after reconnect drains pool (P1 fix: drainChannelPool must decrement counter)")
+
+	// Post-reconnect AcquireChannel must succeed (no fake-full).
+	postCh, err := conn.AcquireChannel()
+	require.NoError(t, err, "AcquireChannel must succeed after reconnect clears inUseChannels")
+	conn.CloseEphemeralChannel(postCh)
+}
+
+// TestNewConnection_NegativeMaxChannelsPerConn_FallsBackToDefault verifies that
+// MaxChannelsPerConn <= 0 values are replaced by defaultRMQMaxChannelsPerConn
+// at setDefaults time. Production code must not be able to set a sentinel that
+// disables the cap.
+func TestNewConnection_NegativeMaxChannelsPerConn_FallsBackToDefault(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		input    int
+		expected int
+	}{
+		{input: -1, expected: defaultRMQMaxChannelsPerConn},
+		{input: -100, expected: defaultRMQMaxChannelsPerConn},
+		{input: 0, expected: defaultRMQMaxChannelsPerConn},
+		{input: 256, expected: 256},
+		{input: 1024, expected: 1024},
+	}
+
+	for _, tc := range cases {
+		cfg := Config{MaxChannelsPerConn: tc.input}
+		cfg.setDefaults()
+		assert.Equal(t, tc.expected, cfg.MaxChannelsPerConn,
+			"MaxChannelsPerConn=%d must fall back to %d after setDefaults",
+			tc.input, tc.expected)
+	}
+}
+
+// TestSubscribeOnce_SetupFailure_ReleasesInUseChannel verifies that when
+// subscribeOnce fails during setup (e.g. QueueDeclare returns an error),
+// closeChannel is called which invokes CloseEphemeralChannel → inUseChannels
+// is decremented.
+//
+// Before the P1 fix, closeChannel called ch.Close() directly, permanently
+// leaking the inUseChannels slot and causing fake-full errors after enough
+// failed subscription attempts.
+func TestSubscribeOnce_SetupFailure_ReleasesInUseChannel(t *testing.T) {
+	conn, mockConn := newTestConnectionWithCapAndMock(t, 1, 1<<20 /* uncapped */)
+
+	ch := newMockChannel()
+	// A permanent (non-AMQP) error so subscribeOnce returns immediately
+	// without entering the reconnect loop.
+	ch.queueDeclareErr = errors.New("rabbitmq: declare queue: permission denied")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "setup-fail-queue",
+		DLXExchange: "setup-fail.dlx",
+		Clock:       clock.Real(),
+	})
+
+	// inUseChannels is 0 before subscribe.
+	assert.Equal(t, int32(0), conn.inUseChannels.Load(), "inUseChannels must be 0 before subscribe")
+
+	ctx := context.Background()
+	// Subscribe returns error immediately (permanent setup failure).
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "setup.fail.topic"}, entryToSubHandler(
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		},
+	))
+	require.Error(t, err, "Subscribe must return error on permanent setup failure")
+
+	// inUseChannels must be back at 0 — closeChannel called CloseEphemeralChannel.
+	assert.Equal(t, int32(0), conn.inUseChannels.Load(),
+		"inUseChannels must be 0 after setup failure (P1 fix: closeChannel must call CloseEphemeralChannel)")
+}
+
+// TestSubscriptionRun_WaitAndClose_ReleasesInUseChannel verifies that
+// subscriptionRun.waitAndClose (the normal subscription teardown path) calls
+// conn.CloseEphemeralChannel, which decrements inUseChannels.
+//
+// Before the P1 fix, waitAndClose called ch.Close() directly, permanently
+// leaking the inUseChannels slot on every subscription that completed normally.
+func TestSubscriptionRun_WaitAndClose_ReleasesInUseChannel(t *testing.T) {
+	conn, mockConn := newTestConnectionWithCapAndMock(t, 1, 1<<20 /* uncapped */)
+
+	ch := newMockChannel()
+	ch.consumeDeliveries = make(chan amqp.Delivery, 1)
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "waitandclose-queue",
+		DLXExchange: "waitandclose.dlx",
+		Clock:       clock.Real(),
+	})
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	subDone := make(chan error, 1)
+	go func() {
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "waitandclose.topic"}, entryToSubHandler(
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			},
+		))
+	}()
+
+	// Wait until subscriber has acquired its channel (inUseChannels == 1).
+	require.Eventually(t, func() bool {
+		return conn.inUseChannels.Load() == 1
+	}, testtime.D2s, testtime.FastPoll, "subscriber must acquire channel before we cancel")
+
+	// Cancel Subscribe ctx → consumeLoop exits.
+	// Close deliveries channel first so consumeLoop sees closed channel and exits cleanly.
+	close(ch.consumeDeliveries)
+	subCancel()
+
+	select {
+	case err := <-subDone:
+		assert.NoError(t, err, "Subscribe must return nil on clean cancel")
+	case <-time.After(testtime.D3s):
+		t.Fatal("Subscribe did not exit after ctx cancel")
+	}
+
+	// Call sub.Close() to ensure the Close sweep runs waitAndClose for any
+	// runs that are still tracked (e.g. when waitAndClose ctx expired early).
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer closeCancel()
+	require.NoError(t, sub.Close(closeCtx), "sub.Close must succeed")
+
+	// inUseChannels must be 0 — waitAndClose (via subscribeOnce or Close sweep)
+	// called CloseEphemeralChannel for the subscriber's channel.
+	assert.Equal(t, int32(0), conn.inUseChannels.Load(),
+		"inUseChannels must be 0 after subscription teardown (P1 fix: waitAndClose must call CloseEphemeralChannel)")
 }

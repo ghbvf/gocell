@@ -102,35 +102,73 @@ func TestRMQChannelMaxPerConn01_SetDefaultsPopulatesField(t *testing.T) {
 		t.Fatalf("RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults not found in %s", src)
 	}
 
-	// Look for any assignment to <recv>.MaxChannelsPerConn whose RHS includes
-	// the documented default constant.
+	// Look for an if-statement whose condition is `<recv>.MaxChannelsPerConn <= 0`
+	// and whose body assigns MaxChannelsPerConn from the documented default constant.
+	//
+	// The condition must be <= 0 (not == 0) so that negative values are also
+	// treated as "not configured" and receive the fail-closed default.
+	// Accepting == 0 only would allow callers to pass -1 and silently skip the cap.
 	var assigns bool
+	var conditionIsLEQ bool
 	ast.Inspect(setDefaults.Body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 {
-			return true
-		}
-		sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
+		ifStmt, ok := n.(*ast.IfStmt)
 		if !ok {
 			return true
 		}
-		if sel.Sel.Name != "MaxChannelsPerConn" {
-			return true
-		}
-		if len(assign.Rhs) != 1 {
-			return true
-		}
-		ident, ok := assign.Rhs[0].(*ast.Ident)
+		// Check if the condition is `<recv>.MaxChannelsPerConn <= 0`.
+		bin, ok := ifStmt.Cond.(*ast.BinaryExpr)
 		if !ok {
 			return true
 		}
-		if ident.Name == expectedDefaultMaxChannelsPerConnConst {
-			assigns = true
-			return false
+		if bin.Op != token.LEQ {
+			return true
 		}
+		// LHS must be a selector ending in MaxChannelsPerConn.
+		lhsSel, ok := bin.X.(*ast.SelectorExpr)
+		if !ok || lhsSel.Sel.Name != "MaxChannelsPerConn" {
+			return true
+		}
+		// RHS must be the literal 0.
+		rhs, ok := bin.Y.(*ast.BasicLit)
+		if !ok || rhs.Kind != token.INT || rhs.Value != "0" {
+			return true
+		}
+		// Found if MaxChannelsPerConn <= 0 — now verify body assigns default constant.
+		conditionIsLEQ = true
+		ast.Inspect(ifStmt.Body, func(inner ast.Node) bool {
+			assign, ok := inner.(*ast.AssignStmt)
+			if !ok || len(assign.Lhs) != 1 {
+				return true
+			}
+			sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "MaxChannelsPerConn" {
+				return true
+			}
+			if len(assign.Rhs) != 1 {
+				return true
+			}
+			ident, ok := assign.Rhs[0].(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if ident.Name == expectedDefaultMaxChannelsPerConnConst {
+				assigns = true
+				return false
+			}
+			return true
+		})
 		return true
 	})
 
+	if !conditionIsLEQ {
+		t.Errorf(
+			"RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults must guard the " +
+				"MaxChannelsPerConn assignment with `<= 0` (not `== 0`). " +
+				"A negative value passed by a caller must also fall back to the " +
+				"default (256) — accepting only == 0 allows -1 to bypass the cap " +
+				"and produce a production outage.",
+		)
+	}
 	if !assigns {
 		t.Errorf(
 			"RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults must assign "+

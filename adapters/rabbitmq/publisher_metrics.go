@@ -21,6 +21,21 @@ const (
 	// broker returned a Confirmation. Likely cause: connection or channel
 	// lost mid-flight.
 	PublishFailureChanClosed PublishFailureReason = "chan_closed"
+	// PublishFailureAcquireChannel means the publisher could not obtain an AMQP
+	// channel from the connection. Likely cause: channel cap exceeded, connection
+	// lost, or a permanent configuration error (e.g. bad credentials).
+	PublishFailureAcquireChannel PublishFailureReason = "acquire_channel"
+	// PublishFailureDeclareExchange means the idempotent exchange declaration
+	// failed. Likely cause: broker permissions, wrong exchange type, or
+	// connection lost after channel was acquired.
+	PublishFailureDeclareExchange PublishFailureReason = "declare_exchange"
+	// PublishFailureConfirmMode means enabling publisher-confirm mode on the
+	// channel failed. Likely cause: channel already in confirm mode (should
+	// not happen with ephemeral channels) or broker error.
+	PublishFailureConfirmMode PublishFailureReason = "confirm_mode"
+	// PublishFailurePublishSend means the PublishWithContext wire call failed.
+	// Likely cause: connection/channel lost during publish, context expired.
+	PublishFailurePublishSend PublishFailureReason = "publish_send"
 )
 
 // PublisherCollector observes RabbitMQ publish-side failures with enough
@@ -61,8 +76,9 @@ var _ PublisherCollector = NoopPublisherCollector{}
 //
 //	rabbitmq_publish_failed_total (counter, labels: cell, reason)
 //
-// reason ∈ {nack, timeout, chan_closed} — closed set defined in
-// PublishFailureReason; alerting rules can rely on the literals.
+// reason ∈ {acquire_channel, declare_exchange, confirm_mode, publish_send,
+// nack, timeout, chan_closed} — closed set defined in PublishFailureReason;
+// alerting rules can rely on the literals.
 //
 // ref: kernel/outbox.providerRelayCollector — same inject-at-construction
 // pattern, same provider-neutral surface.
@@ -88,10 +104,14 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 	}
 	failed, err := p.CounterVec(metrics.CounterOpts{
 		Name: "rabbitmq_publish_failed_total",
-		Help: "Total number of RabbitMQ publish attempts that failed at the wire " +
-			"level, by reason. reason=nack covers broker NACK; " +
-			"reason=timeout covers confirm-timer fired before broker reply; " +
-			"reason=chan_closed covers confirm channel closed mid-flight.",
+		Help: "Total number of RabbitMQ publish attempts that failed, by reason. " +
+			"reason=acquire_channel: could not obtain a channel (cap exceeded or connection lost); " +
+			"reason=declare_exchange: idempotent exchange declaration failed; " +
+			"reason=confirm_mode: enabling publisher-confirm mode failed; " +
+			"reason=publish_send: PublishWithContext wire call failed; " +
+			"reason=nack: broker explicitly NACKed the message; " +
+			"reason=timeout: confirm-timer fired before broker reply; " +
+			"reason=chan_closed: confirm channel closed mid-flight.",
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {

@@ -326,9 +326,6 @@ type Config struct {
 	//   0  — auto-default to defaultRMQMaxChannelsPerConn (=256) at
 	//        setDefaults time. Production NewConnection always populates
 	//        this branch.
-	//   <0 — disabled (uncapped). Test convenience for sites that build
-	//        *Connection directly without setDefaults; production should
-	//        not use this sentinel.
 	//   >0 — cap value as configured.
 	MaxChannelsPerConn int
 }
@@ -346,7 +343,7 @@ func (c *Config) setDefaults() {
 	if c.ConfirmTimeout <= 0 {
 		c.ConfirmTimeout = defaultRMQConfirmTimeout
 	}
-	if c.MaxChannelsPerConn == 0 {
+	if c.MaxChannelsPerConn <= 0 {
 		c.MaxChannelsPerConn = defaultRMQMaxChannelsPerConn
 	}
 }
@@ -826,10 +823,7 @@ func (c *Connection) drainChannelPool() {
 	for {
 		select {
 		case ch := <-c.channelPool:
-			if err := ch.Close(); err != nil {
-				slog.Debug("rabbitmq: error closing pooled channel",
-					slog.Any("error", err))
-			}
+			c.CloseEphemeralChannel(ch)
 		default:
 			return
 		}
@@ -849,9 +843,9 @@ func (c *Connection) drainChannelPool() {
 //     Add(-1); but the broker-side Channel() call only fires after the
 //     cap check passes, so the broker never observes more than cap
 //     channels open simultaneously.
-//   - MaxChannelsPerConn < 0: cap check skipped (uncapped). Test convenience
-//     for sites that build *Connection directly without setDefaults;
-//     production NewConnection always populates the field via setDefaults.
+//   - MaxChannelsPerConn > 0: cap enforced. setDefaults ensures this is
+//     always the case after NewConnection; the cap check (cap > 0) is a
+//     no-op defensive guard only.
 func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	c.mu.RLock()
 	permErr := c.permanentErr
@@ -910,19 +904,26 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 	default:
 	}
 	// Pool full — close the channel and decrement in-use.
-	if err := ch.Close(); err != nil {
-		slog.Debug("rabbitmq: error closing excess channel",
-			slog.Any("error", err))
-	}
-	c.inUseChannels.Add(-1)
+	c.CloseEphemeralChannel(ch)
 }
 
-// CloseEphemeralChannel closes ch and decrements inUseChannels. Use this
-// for channels that should not return to the pool (e.g. publisher confirm-
-// mode channels — see publisher.go for rationale on why confirm-mode
-// channels pollute the pool). Pairing with the AcquireChannel pool-miss
-// counter increment is mandatory; bypassing this method leaks
-// MaxChannelsPerConn slots permanently.
+// CloseEphemeralChannel closes ch and decrements inUseChannels. This is the
+// single canonical API for all AMQPChannel destruction paths in this package.
+//
+// Every site that destroys an AMQPChannel MUST call this method instead of
+// calling ch.Close() directly. Direct ch.Close() calls bypass the counter
+// decrement and permanently leak MaxChannelsPerConn slots, causing false
+// "channel cap reached" errors (ERR_ADAPTER_AMQP_CHANNEL_MAX_EXCEEDED) after
+// enough subscriptions reconnect or publishers run.
+//
+// Covered destruction paths (see RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01 archtest):
+//   - drainChannelPool: idle-pool channels drained on reconnect
+//   - ReleaseChannel (pool-full path): excess channel on release
+//   - Subscriber.closeChannel: setup-failure cleanup in subscribeOnce
+//   - subscriptionRun.waitAndClose: normal subscription teardown
+//
+// Exception: CloseEphemeralChannel and ReleaseChannel themselves contain the
+// one allowed ch.Close() call each (the archtest whitelist covers them).
 func (c *Connection) CloseEphemeralChannel(ch AMQPChannel) {
 	if err := ch.Close(); err != nil {
 		slog.Debug("rabbitmq: error closing ephemeral channel",

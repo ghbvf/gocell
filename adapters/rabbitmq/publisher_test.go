@@ -338,7 +338,115 @@ func TestNoopPublisherCollector_DoesNotPanic(t *testing.T) {
 		PublishFailureNack,
 		PublishFailureTimeout,
 		PublishFailureChanClosed,
+		PublishFailureAcquireChannel,
+		PublishFailureDeclareExchange,
+		PublishFailureConfirmMode,
+		PublishFailurePublishSend,
 	} {
 		assert.NotPanics(t, func() { noop.RecordPublishFailure(r) })
 	}
+}
+
+// =============================================================================
+// P3: pre-confirmation failure collector coverage
+// =============================================================================
+
+// TestPublisher_RecordsFailure_OnAcquireChannelError verifies that when
+// AcquireChannel fails, the collector records PublishFailureAcquireChannel.
+func TestPublisher_RecordsFailure_OnAcquireChannelError(t *testing.T) {
+	t.Parallel()
+
+	conn, mockConn := newTestConnectionWithCapAndMock(t, 0, 1)
+
+	// Fill up the cap with one mock channel so the next AcquireChannel fails.
+	conn.inUseChannels.Store(1) // Simulate cap already reached.
+	_ = mockConn                // mockConn referenced by dialFunc in connection.
+
+	col := &fakeCollector{}
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+	require.Error(t, err, "Publish must fail when channel cap is exceeded")
+
+	reasons := col.recorded()
+	require.Len(t, reasons, 1, "collector must record exactly one failure")
+	assert.Equal(t, PublishFailureAcquireChannel, reasons[0],
+		"collector must record PublishFailureAcquireChannel on cap-exceeded error")
+}
+
+// TestPublisher_RecordsFailure_OnExchangeDeclareError verifies that when
+// ExchangeDeclare fails, the collector records PublishFailureDeclareExchange.
+func TestPublisher_RecordsFailure_OnExchangeDeclareError(t *testing.T) {
+	t.Parallel()
+
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.exchangeDeclareErr = errors.New("exchange declare failed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	col := &fakeCollector{}
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+	require.Error(t, err, "Publish must fail on ExchangeDeclare error")
+
+	reasons := col.recorded()
+	require.Len(t, reasons, 1, "collector must record exactly one failure")
+	assert.Equal(t, PublishFailureDeclareExchange, reasons[0],
+		"collector must record PublishFailureDeclareExchange on exchange declare error")
+}
+
+// TestPublisher_RecordsFailure_OnConfirmModeError verifies that when
+// Confirm(false) fails, the collector records PublishFailureConfirmMode.
+func TestPublisher_RecordsFailure_OnConfirmModeError(t *testing.T) {
+	t.Parallel()
+
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.confirmErr = errors.New("confirm mode failed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	col := &fakeCollector{}
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+	require.Error(t, err, "Publish must fail on Confirm error")
+
+	reasons := col.recorded()
+	require.Len(t, reasons, 1, "collector must record exactly one failure")
+	assert.Equal(t, PublishFailureConfirmMode, reasons[0],
+		"collector must record PublishFailureConfirmMode on confirm mode error")
+}
+
+// TestPublisher_RecordsFailure_OnPublishSendError verifies that when
+// PublishWithContext fails, the collector records PublishFailurePublishSend.
+func TestPublisher_RecordsFailure_OnPublishSendError(t *testing.T) {
+	t.Parallel()
+
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.publishErr = errors.New("publish send failed")
+	// Provide a valid autoConfirmation so the test doesn't time out on confirm wait.
+	// (PublishWithContext error is returned before confirm wait.)
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	col := &fakeCollector{}
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+	require.Error(t, err, "Publish must fail on PublishWithContext error")
+
+	reasons := col.recorded()
+	require.Len(t, reasons, 1, "collector must record exactly one failure")
+	assert.Equal(t, PublishFailurePublishSend, reasons[0],
+		"collector must record PublishFailurePublishSend on publish send error")
 }

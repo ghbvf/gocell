@@ -28,7 +28,11 @@ import (
 type subscriptionRun struct {
 	ch          AMQPChannel
 	consumerTag string
-	localWg     sync.WaitGroup // tracks processDelivery goroutines of this run only
+	// conn is the Connection that allocated ch. Used by waitAndClose to call
+	// CloseEphemeralChannel (the single canonical AMQPChannel destruction path)
+	// so that inUseChannels is decremented on every subscription teardown.
+	conn    *Connection
+	localWg sync.WaitGroup // tracks processDelivery goroutines of this run only
 	// inflight is an atomic counter mirroring localWg adds/dones. It exists
 	// solely for diagnostic logging in StopIntake timeout paths — callers that
 	// need a synchronization barrier must use localWg.Wait(), not this counter.
@@ -42,11 +46,15 @@ type subscriptionRun struct {
 	closeWgDone sync.Once
 }
 
-// newSubscriptionRun creates a subscriptionRun for the given channel and consumer tag.
-func newSubscriptionRun(ch AMQPChannel, tag string) *subscriptionRun {
+// newSubscriptionRun creates a subscriptionRun for the given channel, consumer tag,
+// and the Connection that allocated the channel. conn is required so that
+// waitAndClose can call conn.CloseEphemeralChannel (the single canonical
+// AMQPChannel destruction path) to correctly decrement inUseChannels.
+func newSubscriptionRun(ch AMQPChannel, tag string, conn *Connection) *subscriptionRun {
 	return &subscriptionRun{
 		ch:          ch,
 		consumerTag: tag,
+		conn:        conn,
 		wgDoneCh:    make(chan struct{}),
 	}
 }
@@ -109,17 +117,19 @@ func (r *subscriptionRun) waitAndClose(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	// Phase 2: close the AMQP channel exactly once.
-	var closeErr error
+	// Phase 2: close the AMQP channel exactly once via the canonical destruction
+	// path, which also decrements inUseChannels to release the cap slot.
+	// conn is nil only in unit tests that construct subscriptionRun directly
+	// without going through subscribeOnce; in that case fall back to a bare
+	// ch.Close() so the WaitGroup/close-once mechanics are still testable.
 	r.closed.Do(func() {
-		if err := r.ch.Close(); err != nil {
-			slog.Debug("rabbitmq: subscriptionRun ch.Close error",
-				slog.String("consumer_tag", r.consumerTag),
-				slog.Any("error", err))
-			closeErr = err
+		if r.conn != nil {
+			r.conn.CloseEphemeralChannel(r.ch)
+		} else {
+			_ = r.ch.Close()
 		}
 	})
-	return closeErr
+	return nil
 }
 
 // wgDone returns a channel that is closed when all in-flight deliveries have

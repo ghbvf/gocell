@@ -466,7 +466,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 // Uses recordingChannel to compare Ack timestamps vs Close timestamp.
 func TestSubscriber_Reconnect_WaitsForInflightBeforeClose(t *testing.T) {
 	rc := newRecordingChannel()
-	run := newSubscriptionRun(rc, "cg-a19-queue-a19.topic")
+	run := newSubscriptionRun(rc, "cg-a19-queue-a19.topic", nil)
 
 	// Track Ack call timestamps via two in-flight goroutines.
 	var ackTimes []time.Time
@@ -512,7 +512,7 @@ func TestSubscriber_Reconnect_WaitsForInflightBeforeClose(t *testing.T) {
 // call ch.Close exactly once (sync.Once guard in subscriptionRun).
 func TestSubscriber_Reconnect_ClosesChannelExactlyOnce(t *testing.T) {
 	rc := newRecordingChannel()
-	run := newSubscriptionRun(rc, "cg-once-close-queue-once.topic")
+	run := newSubscriptionRun(rc, "cg-once-close-queue-once.topic", nil)
 
 	ctx := context.Background()
 
@@ -555,7 +555,7 @@ func TestSubscriber_Reconnect_ClosesChannelExactlyOnce(t *testing.T) {
 // ref: Subscriber.Close sweep — run.waitAndClose is idempotent via sync.Once
 func TestSubscriber_ReconnectWaitAndCloseTimeout_RunKeptForCloseSweep(t *testing.T) {
 	rc := newRecordingChannel()
-	run := newSubscriptionRun(rc, "cg-f17-timeout-queue-f17.timeout.topic")
+	run := newSubscriptionRun(rc, "cg-f17-timeout-queue-f17.timeout.topic", nil)
 
 	// Register two in-flight deliveries that will block until gate is released.
 	gate := make(chan struct{})

@@ -416,11 +416,9 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	// closeChannel cleans up the AMQP channel on setup failure.
+	// Uses CloseEphemeralChannel to symmetrically decrement inUseChannels.
 	closeChannel := func() {
-		if closeErr := ch.Close(); closeErr != nil {
-			slog.Debug("rabbitmq: error closing channel during cleanup",
-				slog.Any("error", closeErr))
-		}
+		s.conn.CloseEphemeralChannel(ch)
 	}
 	setupErr := func(reconnectMsg string, err error, permanent func() error) error {
 		closeChannel()
@@ -463,7 +461,9 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	// Create and track a subscriptionRun for this invocation.
-	run := newSubscriptionRun(ch, consumerTag)
+	// Pass s.conn so waitAndClose can call CloseEphemeralChannel (the single
+	// canonical AMQPChannel destruction path, decrementing inUseChannels).
+	run := newSubscriptionRun(ch, consumerTag, s.conn)
 	s.addRun(run)
 	// NOTE: removeRun is called explicitly below — only after waitAndClose succeeds.
 	// If waitAndClose times out, the run is intentionally kept in s.runs so that
@@ -1069,18 +1069,37 @@ func cancelConsumerWithBudget(ctx context.Context, c consumerRef, perCallTimeout
 	}
 }
 
-// StopIntake snapshots active runs, releases the lock, then issues basic.cancel
-// concurrently via run.cancelWithBudget. Each individual Cancel is bounded by
-// StopIntakePerCallTimeout so a single unresponsive broker cannot stall the
-// whole shutdown path. The outer ctx gates the entire operation — if the
-// caller's budget expires, StopIntake returns ctx.Err() without waiting for
-// remaining goroutines.
+// StopIntake stops new message intake by issuing broker basic.cancel for every
+// active subscriptionRun and then waiting for already-prefetched deliveries to
+// settle. It uses a two-phase budget model:
+//
+// Phase 1 — broker cancel dispatch (basic.cancel round-trip, bounded by outer ctx):
+//   - Active runs are snapshotted, then each run.cancelWithBudget is dispatched
+//     concurrently. Each individual Cancel has its own StopIntakePerCallTimeout
+//     deadline so a single unresponsive broker cannot stall all cancels.
+//   - cancelWg.Wait() waits for all dispatched cancels to complete (or time out).
+//   - If the caller's ctx is canceled before cancelWg.Wait() returns, StopIntake
+//     returns ctx.Err() immediately without waiting for the cancel goroutines.
+//
+// Phase 2 — inflight delivery drain (bounded by an independent detached budget):
+//   - The drain context is derived via context.WithoutCancel(ctx) with a
+//     StopIntakeDrainTimeout ceiling (default 30s). This detachment is
+//     intentional: caller cancellation must NOT abort the drain. Prefetched
+//     messages that have been handed to handlers must be allowed to complete,
+//     otherwise they are re-delivered — violating at-least-once delivery
+//     semantics and potentially causing duplicate-side-effects even with
+//     idempotency guards.
+//   - If the drain budget expires before all inflight handlers complete,
+//     StopIntake returns ErrAdapterAMQPCloseTimeout. Handlers that are still
+//     running continue until their own context is canceled.
+//
+// Recommended shutdown sequence: StopIntake(ctx) → Close(ctx).
 //
 // Invariants:
 //   - runsMu is NEVER held across broker I/O (basic.cancel is a synchronous round-trip).
 //   - Each Cancel call has an independent per-call deadline.
-//   - On outer ctx cancel, returns promptly; leaked Cancel goroutines are bounded
-//     by the per-call timeout and broker channel liveness.
+//   - On outer ctx cancel during Phase 1, returns promptly; leaked Cancel goroutines
+//     are bounded by the per-call timeout and broker channel liveness.
 //
 // ref: Uber fx app.go StopTimeout (budget must be honored);
 // ref: Watermill router.go (stop intake → bounded drain pattern).

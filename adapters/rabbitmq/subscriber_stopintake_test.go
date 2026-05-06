@@ -319,6 +319,115 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 		"StopIntake must not exceed drain budget substantially; got %s", elapsed)
 }
 
+// TestStopIntake_OuterCtxCancel_DoesNotAbortDrain verifies the two-phase budget
+// model: canceling the caller's StopIntake ctx AFTER Phase 1 (cancelWg.Wait)
+// completes does NOT abort Phase 2 (inflight delivery drain).
+//
+// The drain context is derived via context.WithoutCancel(ctx) so it is immune
+// to the caller's cancellation. Without this guarantee, a caller that provides a
+// short StopIntake budget would silently drop prefetched messages — causing
+// redelivery and defeating the idempotency guarantee.
+//
+// Scenario:
+//  1. One delivery is pre-loaded and a blocking handler is registered.
+//  2. StopIntake is called with a cancellable outer ctx.
+//  3. We wait until basic.cancel has been issued (confirming Phase 1 is complete).
+//  4. The outer ctx is immediately canceled.
+//  5. We verify StopIntake does NOT return ctx.Err() — the drain is still running.
+//  6. The handler is released — StopIntake returns nil (drain completed).
+func TestStopIntake_OuterCtxCancel_DoesNotAbortDrain(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.consumeDeliveries = make(chan amqp.Delivery, 1)
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	// released gates the blocking handler. handlerRunning is incremented when
+	// the handler starts so we can observe it being inflight.
+	released := make(chan struct{})
+	var handlerRunning atomic.Int64
+
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerRunning.Add(1)
+		defer handlerRunning.Add(-1)
+		<-released
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:              "drain-outer-cancel-queue",
+		DLXExchange:            "drain-outer-cancel.dlx",
+		StopIntakeDrainTimeout: testtime.D5s, // generous drain budget
+		Clock:                  clock.Real(),
+	})
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "drain-outer-cancel-1",
+		EventType: "drain.outer.cancel",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	go func() {
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: "drain.outer.cancel.topic"}, handler)
+	}()
+
+	// Wait until handler is inflight.
+	require.Eventually(t, func() bool {
+		return handlerRunning.Load() == 1
+	}, testtime.D3s, testtime.FastPoll, "handler must be running before we start StopIntake")
+
+	// stopCtx is the CALLER'S ctx passed to StopIntake — we will cancel it after
+	// Phase 1 (basic.cancel dispatch) completes.
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- sub.StopIntake(stopCtx)
+	}()
+
+	// Wait until StopIntake has issued basic.cancel, confirming Phase 1 is done.
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.cancelCalled
+	}, testtime.D2s, testtime.D10ms, "StopIntake must issue basic.cancel before we cancel outer ctx")
+
+	// Phase 1 is complete. Cancel the outer ctx NOW.
+	// If StopIntake incorrectly uses the outer ctx for Phase 2, it would
+	// return context.Canceled immediately.
+	stopCancel()
+
+	// Give StopIntake a small window to incorrectly return ctx.Err().
+	// If it returns in this window, the drain was aborted — that is the bug.
+	select {
+	case err := <-stopDone:
+		t.Fatalf("StopIntake returned too early after outer ctx cancel: %v — "+
+			"drain must NOT be aborted by caller ctx cancellation after Phase 1", err)
+	case <-time.After(testtime.D100ms):
+		// Expected: StopIntake is still running the drain on detached context.
+	}
+
+	// Handler is still blocking. Release it now.
+	close(released)
+
+	// StopIntake must complete with nil (drain succeeded).
+	select {
+	case err := <-stopDone:
+		assert.NoError(t, err,
+			"StopIntake must return nil after handler completes, even if outer ctx was canceled")
+	case <-time.After(testtime.D3s):
+		t.Fatal("StopIntake did not complete after handler released")
+	}
+
+	// Close the deliveries channel so Subscribe exits cleanly.
+	close(ch.consumeDeliveries)
+}
+
 // TestStopIntakeDrainTimeout_DefaultsTo30s verifies that SubscriberConfig with
 // StopIntakeDrainTimeout == 0 is set to defaultRMQDrainDeadline (30s) by setDefaults.
 func TestStopIntakeDrainTimeout_DefaultsTo30s(t *testing.T) {
