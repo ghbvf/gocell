@@ -36,7 +36,6 @@
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | B2-K-02 | **Kernel Must*/error-first 混用** — 现状: `MustNewAuthJWT` 等 Must 系列与 error-first 构造器混用，composition root 残留 panic；修复: 生产路径改 error-first，Must 仅 test-only/cmd 顶层 | bug | P1/Cx3 | 🟡 | — | `kernel/wrapper/handler.go` + `kernel/cell/auth_plan.go` + `pkg/contracttest/` | backlog2 §2 B2-K-02 |
-| B2-C-03 | **Cell.Init 泄漏基础设施类型** — 现状: configcore Cell 公共 API 暴露 `*adapterpg.Pool`；修复: 装配责任回收到 module 层（与 G1 SharedPGPool 同主题）| arch-opt | P1/Cx3 | 🟡 | — | `cells/configcore/cell_init.go` + `cell.go` | backlog2 §4 B2-C-03 |
 | B2-PROVISIONER-MUTEX-REVIEW | **Provisioner mutex 清理 review** — 现状: A26-R1 已删 initialadmin，但 provisioner mutex 残留；修复: PG adapter 落地后审视是否仍需 mutex | refactor | P2/Cx1 | 🟠 | PG adapter for accesscore | `cells/accesscore/internal/adminprovision/provisioner.go` | backlog2 §13 |
 
 ---
@@ -72,7 +71,6 @@
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | P1-8 | **DEVICE-LIST-API** — 现状: `cells/devicecell/slices/devicelist/` 缺；修复: 新建 slice + `GET /api/v1/devices` 分页 + contract + contract_test | feat | P1/— | 🟡 | — | `cells/devicecell/slices/devicelist/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
-| B2-C-08 | **Configcore event decoder 严格** — 现状: cell event consumer DisallowUnknownFields，PR-V1-EVOLVE-ADR 之后应放宽；修复: 关闭 DisallowUnknownFields | bug | P1/Cx2 | 🟡 | — | `cells/configcore/internal/events/config_events.go:82` | backlog2 §4 B2-C-08 |
 | B2-T-01 | **Config rollback 乐观锁缺** — 现状: rollback 无版本检查；修复: 加乐观锁版本号（与 cap-09 P3-TD-12 同根源，本条聚焦 contract 层声明）| bug | P1/Cx2 | 🟡 | 与 cap-09 P3-TD-12 协同 | `contracts/http/config/rollback/v1/contract.yaml` + `cells/configcore/internal/ports/config_repo.go:23-25` | backlog2 §8 B2-T-01 |
 | B2-T-04 | **Contract userId 风格混用** — 现状: payload schema 字段命名混用 userId/UserID；修复: 统一 camelCase | refactor | P2/Cx2 | 🟡 | — | `contracts/event/user/created/v1/payload.schema.json:6` | backlog2 §8 B2-T-04 |
 
@@ -104,7 +102,6 @@
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| AUTH-SERVICETOKEN-INVALID-MAC-FLAKE-01 | **InvalidMAC test 1/256 偶发失败** — 现状: `badToken[:len-2]+"ff"` 当原值就是 ff 时变 no-op；修复: XOR 翻转或 00/ff 互换 | test | P3/Cx1 | 🟡 | — | `runtime/auth/authenticator_test.go` | PR #301 |
 | B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 | **B5 follow-up PG runtime wiring + archtest 类型化** — 现状: corebundle 仍走 `WithInMemoryDefaults`；修复: B2 落 PG SessionRepository 后切真实 PG + archtest 升 packages-aware | refactor+test | P1+P2/Cx2+Cx3 | 🟠 | B2 落地 PG SessionRepository | `cmd/corebundle/access_module.go` + `cells/accesscore/cell_init.go` + `tools/archtest/` | PR#399 review L2 |
 | ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 | **ACCOUNT-LOCKOUT-AUTO-LOCK-01** — 现状: sessionlogin 无失败次数累计 + 阈值 + auto-lock；修复: 完整业务设计 + PG schema + journey harness | feat | Cx3 | 🔴 | — | `cells/accesscore/slices/sessionlogin/` + user repo + integration test | PR-A63 复核 |
 | CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 | **identitymanage 一致性等级误标** — 现状: 标 L0 实为 L1；修复: 校正 slice.yaml | arch-opt | Cx1 | 🔴 | — | `cells/accesscore/slices/identitymanage/slice.yaml` | systems layer review |
@@ -117,18 +114,13 @@
 | PR267-FU-ROLE-PREFIX-ADR | **Role prefix ADR** — 现状: role 命名前缀约定无 ADR；修复: 写 ADR | doc | Cx1 | 🟡 | — | `docs/architecture/` | PR#267 |
 | X3 | **WM-36 SecureCookie key rotation** — 现状: 无密钥轮转；修复: 接入 rotation worker | feat | P3/— | 🟡 | — | `runtime/auth/` | WM-35 后续 |
 | X5 | **P3-TD-11 accesscore domain 拆分** — 现状: domain 包过大；修复: User/Session/Role 拆分 | refactor | P3/— | 🟡 | X1 落地后 | `cells/accesscore/internal/domain/` | 历史 Batch 8 |
-| X12 | **REFRESH-IDLE-EXPIRE-01** — 现状: 无 idle expire 滑动窗口；修复: 加 `idle_expires_at` 列 + Policy.MaxIdle | feat | P3/Cx2 | 🟠 | PR-A29 已合可启动 | `runtime/auth/refresh/types.go` + `adapters/postgres/` + migration | Zitadel 双过期对标 |
 | X13 | **REFRESH-PARTITION-01** — 现状: 批量 DELETE GC；修复: `expires_at` range 分区 + DROP PARTITION (also: cap-10) | feat | P3/Cx2 | 🟠 | 生产流量达阈值 | migration + ops runbook | 通用 PG 模式 |
-| X14 | **REFRESH-GRACE-COUNTER-01** — 现状: 无重用次数限制；修复: `first_used_at` + `used_times` 列 | feat | P3/Cx2 | 🟠 | PR-A29 已合可启动 | `adapters/postgres/refresh_store.go` + migration | Hydra COALESCE 对标 |
-| T2 | **AUTH-ISSUE-OPTIONS-01** — 现状: `JWTIssuer.Issue()` 5 参数；修复: IssueOptions struct | arch-opt | — | 🟠 | Issue() 第 5 个参数 | `runtime/auth/` | T2 |
 | T5 | **AUTH-SIGNER-01** — 现状: SigningKeyProvider 返回 `*rsa.PrivateKey`；修复: 改 `crypto.Signer` 支持 HSM/KMS/EC | arch-opt | — | 🟡 | caller 需 HSM/KMS | `runtime/auth/` | T5 |
 | C-AC7 | **JWT jti claim 支持** — 现状: 缺 jti，单 token 无法黑名单撤销；修复: Issue() 加 jti + jti 黑名单存储 | feat | P2/Cx2 | 🟡 | 出现单 token 撤销需求 | `runtime/auth/` | backlog_later §6 C-AC7 |
 | P3-TD-10 | **TOCTOU 竞态修复** — 现状: Phase 2 #54 session TOCTOU 未修；修复: Redis 分布式锁 + 持久化 session 稳定后处理 (also: cap-11) | bug | P2/Cx3 | 🟠 | post-v1.0 + Redis distlock 稳定 + PG session repo | `cells/accesscore/` | tech-debt-registry P3-TD-10 |
 | P4-TD-03 | **IssueTestToken HS256 dead code** — 现状: 测试 helper 仍保留 HS256 路径，JWTVerifier 全拒；修复: 删 dead code 防误用 | refactor | Cx1 | 🟡 | — | `runtime/auth/` (test helper) | tech-debt-registry P4-TD-03 |
 | SECURECOOKIE-AEAD-NEG-01 | **SecureCookie AEAD 负向测试** — 现状: AEAD 失败路径无测试；修复: 截断/伪造/边界长度/解密失败类型断言 (`errors.Is(err, ErrAEADAuthFailed)`) | test | Cx2 | 🟡 | v1.0 GA 前 | `pkg/securecookie/securecookie_test.go` | backlog1 §2.5 |
 | B2-C-02 | **SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT** — 现状: setup 端点常驻 Public，未初始化窗口可被匿名首管抢注；修复: 移到 `/internal/v1/setup/` (service-token only) + contract `lifecycle: bootstrap`，或 1 次性 bootstrap token | feat | P0/Cx3 | 🔴 | — | `cells/accesscore/cell_routes.go:73` + `slices/setup/handler.go:46-58` + `contracts/http/auth/setup/admin/v1/contract.yaml:5` | backlog2 §1 B2-C-02 |
-| B2-A-08 | **PG refresh store ambient tx 混用** — 现状: 部分方法用 ambient tx，部分用显式 BeginTx；修复: 统一显式事务边界 | arch-opt | P1/Cx3 | 🟡 | — | `adapters/postgres/refresh_store.go:141,190,227` | backlog2 §5.1 B2-A-08 |
-| B2-A-09 | **PG refresh 拒绝耗时侧信道** — 现状: 拒绝路径耗时不一致，可侧信道推断；修复: 加常量时间常量比较 | bug | P1/Cx3 | 🟡 | 安全审查触发 | `adapters/postgres/refresh_store.go:221,295,330` | backlog2 §5.1 B2-A-09 |
 
 ---
 
@@ -155,7 +147,6 @@
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | PR341-FU-OUTBOXTEST-CLOSE-BUDGET-COVERAGE | **OUTBOXTEST-CLOSE-BUDGET-COVERAGE-01** — 现状: conformance suite 仍裸调 `sub.Close(ctx)`；修复: 全部走 closeWithBudget 或 godoc 强约定 | test | P2/Cx1 | 🟡 | — | `kernel/outbox/outboxtest/conformance.go` | PR #341 round-1 |
-| P4-TD-04 | **ordercell L2 事务性 outbox** — 现状: ordercell 声明 L2 但用 publisher.Publish 而非事务性 outbox.Writer；修复: Init 强制 outboxWriter 注入 + 替换 Publish | bug | P2/Cx2 | 🟡 | v1.1 启动 | `examples/todoorder/cells/ordercell/` | tech-debt-registry P4-TD-04 |
 | AUDITAPPEND-L2-FAILURE-PROOF-01 | **AuditAppend L2 失败注入测试** — 现状: 缺 PG-level 失败注入证明；修复: testcontainer + 故意 fail outbox writer 验证 DB 写成功 + outbox 失败 → 事务真回滚 | test | P1/Cx3 | 🟡 | v1.0 GA 前 | `cells/auditcore/slices/auditappend/outbox_test.go` | backlog1 §2.5 |
 
 ---
@@ -216,8 +207,6 @@
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| DISTLOCK-RENEW-CALLER-CONTEXT-01 | **DISTLOCK-RENEW-CALLER-CONTEXT-01** — 现状: manager renewal 用 `context.Background()`，父 ctx cancel 不停续租；修复: 用 acquisition ctx 派生 renew deadline | bug | P1/Cx2 | 🟠 | 首个 prod distlock caller | `runtime/distlock/locker.go` + `manager.go` | GitHub #20 |
-| DISTLOCK-WORKER | **Distlock worker 生命周期** — 现状: 缺 worker 角色；修复: 接入 worker pattern | arch-opt | Cx2 | 🟡 | — | `runtime/distlock/` | PR-A20 |
 | B2-A-29 | **Redis distlock race test 缺** — 现状: distlock_test 缺并发竞争测；修复: 加 race + count=20 stress | test | P1/Cx3 | 🟡 | — | `adapters/redis/distlock_test.go` | backlog2 §5.3 B2-A-29 |
 | B2-A-30 | **Redis distlock renew TTL 精度损失** — 现状: renew 时 TTL 精度损失；修复: 用 PEXPIRE 毫秒精度 | bug | P2/Cx2 | 🟡 | — | `adapters/redis/distlock.go:50-56` | backlog2 §5.3 B2-A-30 |
 
@@ -410,7 +399,6 @@
 | C-05 | **CELLS-CELLROUTES-PLACEHOLDER-DELETE** — `configcore/cell_routes.go` 退化为占位（仅注释）；修复: 直接删除文件；迁移上下文挪到 commit message | refactor | P2/Cx1 | 🟡 | — | `cells/configcore/cell_routes.go` | 030 §3 C-05 | cap-09 |
 | C-06 | **L0-CELL-DECISION** — `l0Dependencies: []` 在 3 cell 全空，无任何 `type: l0` 实例，schema 字段是死代码路径；修复: 二选一 (a) 升 `pkg/query.CursorCodec` 等共享逻辑为示例 L0 cell；(b) 文档明确"L0 cell 是未来扩展点，当前无实例" | doc | P2/Cx1 | 🟡 | — | `cells/` + `kernel/metadata/` + docs | 030 §3 C-06 | cap-01 |
 | C-09 | **CELL-SPLIT-LAYOUT-NORMALIZE** — accesscore + configcore 三文件范式不一致：(a) `configDirectPublishMode`/`ensureCursorCodec` 是 pure helper 但放 `cell_init.go`；(b) `RegisterSubscriptions` 放 `cell_routes.go` 名不副实；修复: 引入 `cell_lifecycle.go`（订阅注册）+ `cell_helpers.go`（pure helper）命名惯例；反向迁移 + scaffold 模板同步 | refactor | P2/Cx2 | 🟡 | K-07 一并 | `cells/accesscore/` + `cells/configcore/` + scaffold | 030 §3 C-09 | cap-01 |
-| G-06 | **OUTBOX-PAYLOAD-MAX-SIZE** — `Entry.Payload []byte` 无上限校验；超大 payload 致 DB 行过大、relay OOM、consumer OOM；修复: `MaxPayloadSize=512 KiB` 常量 + `Entry.Validate()` 校验（与 NATS JetStream 默认 1 MiB 对齐）。**注**: PR#380 B6 已 ship payload cap on relay 侧，此条聚焦 producer Validate | bug | P1/Cx1 | 🟡 | — | `kernel/outbox/outbox.go` | 030 §3 G-06 | cap-07 |
 | G-07 | **OUTBOX-WRITER-MUST-CONTRACT** — (a) `Writer.Write` 注释 SHOULD 而非 MUST 参与事务；(b) outbox/command 中 `MaxMetadataKeys` 等校验完全重复；(c) `HandleResult.Receipt` exported 但禁止 handler 读写；(d) 缺 `Ack()/Requeue(err)/Reject(err)` 工厂；修复: 改 MUST + `TxRunner.RunInTx` godoc 强制 + 提取 `kernel/metautil` + Receipt 改 unexported + 提供工厂函数 | arch-opt | P1/Cx2 | 🟡 | — | `kernel/outbox/` + `kernel/command/` + `kernel/metautil/` (新) | 030 §3 G-07 | cap-07 |
 | G-08 | **OUTBOX-FAILOPEN-COUNTER + INMEM-RECEIPT-FIX** — (a) fail-open `RecordDrop()` 无 metrics；(b) `inMemReceipt.Commit/Release` 共享 `sync.Once`，Release 先于 Commit 静默 false-success；(c) `UnmarshalEnvelope` `msg.ID` 仅非空检查，可日志注入（CWE-117）；修复: increment `outbox_failopen_drops_total{cell}` + `committed atomic.Bool` 区分 + 复用 `idutil.IsSafeID` | bug | P1/Cx2 | 🟡 | — | `kernel/outbox/` + `runtime/outbox/` + `pkg/idutil/` | 030 §3 G-08 | cap-08 |
 | G-09 | **COMMAND-SWEEPER-PRODUCTION-GUARD** — (a) `Sweeper.OnError=nil` 时 sweep 失败完全沉默；(b) Sweeper 用公开字段 + `Start()` 运行时 nil 检查，与 fail-fast 构造器约定不一致；修复: `runTick` 错误分支补 `slog.Error` + `command_sweep_errors_total` + `NewSweeper(scanner, queue, clk, ...)` 构造器构造期 fail-fast | bug | P1/Cx2 | 🟡 | — | `kernel/command/sweeper.go` | 030 §3 G-09 | cap-08（与现有 SWEEPER-OBSERVABLE-01 重叠 (a) 部分；(b) 是新工作） |
