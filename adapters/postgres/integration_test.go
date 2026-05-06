@@ -743,4 +743,42 @@ func TestMigrator_NineBeforeTen_OrderRegression(t *testing.T) {
 	assert.False(t, yExists, "seq_marker_y (010) must be dropped by Down")
 }
 
+// TestMigrator_Down_AtVersionZero_Idempotent locks P4-TD-11: after applying
+// Up then rolling back to v=0, repeated Down() calls must keep returning nil.
+// Goose returns ErrNoCurrentVersion / ErrNoNextVersion at v=0 which
+// Migrator.Down absorbs (migrator.go Down() — see "idempotent no-op" branch).
+//
+// ref: pressly/goose provider_run_test.go TestProviderRun/up_and_down_by_one
+// — confirms ErrNoNextVersion is goose's canonical v=0 signal.
+func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
+	// setupPostgres starts a fresh testcontainer per test, so a fixed table
+	// name does not collide with sibling tests that pick the same string.
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Single noop migration — decouples regression from production schema churn.
+	fixtureFS := fstest.MapFS{
+		"001_noop.sql": &fstest.MapFile{
+			Data: []byte("-- +goose Up\nSELECT 1;\n-- +goose Down\nSELECT 1;\n"),
+		},
+	}
+
+	const tableName = "schema_migrations_down_v0"
+	m, err := NewMigrator(pool, fixtureFS, tableName)
+	require.NoError(t, err)
+	defer func() { _ = m.Close() }()
+
+	require.NoError(t, m.Up(ctx))
+	require.NoError(t, m.Down(ctx), "1st Down rolls back 001 → v=0")
+	require.NoError(t, m.Down(ctx), "2nd Down at v=0 must be idempotent no-op")
+	require.NoError(t, m.Down(ctx), "3rd Down at v=0 still idempotent")
+
+	statuses, sErr := m.Status(ctx)
+	require.NoError(t, sErr)
+	require.Len(t, statuses, 1)
+	assert.False(t, statuses[0].Applied,
+		"001 must remain rolled back after repeated Down() at v=0")
+}
+
 // Target: adapters/postgres coverage >= 80%
