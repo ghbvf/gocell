@@ -51,76 +51,109 @@ func runGenerate(args []string) error {
 
 func generateAssembly(args []string) error {
 	fs := flag.NewFlagSet("generate assembly", flag.ContinueOnError)
-	id := fs.String("id", "", "assembly ID (required)")
+	id := fs.String("id", "", "assembly ID (mutually exclusive with --all)")
+	all := fs.Bool("all", false, "generate for every assembly")
 	module := fs.String("module", "", "Go module path (default: read from go.mod)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
-	if *id == "" {
-		return fmt.Errorf("--id is required")
+	if *id == "" && !*all {
+		return fmt.Errorf("usage: gocell generate assembly --id=<assemblyID> | --all [--module=<module>]")
+	}
+	if *id != "" && *all {
+		return fmt.Errorf("--id and --all are mutually exclusive")
 	}
 
 	root, err := findRoot()
 	if err != nil {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
-
-	// Determine module path.
-	mod := *module
-	if mod == "" {
-		var modErr error
-		mod, modErr = readModule(root)
-		if modErr != nil {
-			return fmt.Errorf("cannot read module from go.mod: %w", modErr)
-		}
+	mod, err := resolveModule(root, *module)
+	if err != nil {
+		return err
 	}
-
-	// Parse metadata.
 	parser := metadata.NewParser(root)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
+	ids := assemblyIDsToGenerate(project, *id, *all)
+	for _, asmID := range ids {
+		if err := generateOneAssembly(root, project, mod, asmID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveModule returns the module path from the flag value or go.mod.
+func resolveModule(root, flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	mod, err := readModule(root)
+	if err != nil {
+		return "", fmt.Errorf("cannot read module from go.mod: %w", err)
+	}
+	return mod, nil
+}
+
+// assemblyIDsToGenerate returns the list of assembly IDs to generate. When
+// all=true every key in project.Assemblies is included; otherwise only id.
+func assemblyIDsToGenerate(project *metadata.ProjectMeta, id string, all bool) []string {
+	if !all {
+		return []string{id}
+	}
+	ids := make([]string, 0, len(project.Assemblies))
+	for asmID := range project.Assemblies {
+		ids = append(ids, asmID)
+	}
+	return ids
+}
+
+func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id string) error {
 	// Generate.
 	gen := assembly.NewGenerator(project, mod, root)
 
-	entrypoint, err := gen.GenerateEntrypoint(*id)
+	entrypoint, err := gen.GenerateEntrypoint(id)
 	if err != nil {
 		return fmt.Errorf("generate entrypoint: %w", err)
 	}
 	// ref: go-zero goctl — generated file paths driven by configuration
-	asm := project.Assemblies[*id]
+	asm := project.Assemblies[id]
 	entrypointRel := asm.Build.Entrypoint
 	if entrypointRel == "" {
-		entrypointRel = filepath.Join("cmd", *id, "main.go")
+		entrypointRel = filepath.Join("cmd", id, "main.go")
 	}
 	entrypointPath := filepath.Join(root, entrypointRel)
 	if err := writeGeneratedFile(root, entrypointPath, entrypoint,
-		fmt.Sprintf("assembly %q build.entrypoint %q", *id, entrypointRel)); err != nil {
+		fmt.Sprintf("assembly %q build.entrypoint %q", id, entrypointRel)); err != nil {
 		return err
 	}
 
-	modulesContent, err := gen.GenerateModulesGen(*id)
-	if err != nil {
-		return fmt.Errorf("generate modules_gen: %w", err)
-	}
-	modulesPath := filepath.Join(filepath.Dir(entrypointPath), "modules_gen.go")
-	if err := writeGeneratedFile(root, modulesPath, modulesContent,
-		fmt.Sprintf("assembly %q modules_gen", *id)); err != nil {
-		return err
+	// B1 guard: only generate modules_gen.go when the assembly has cells.
+	if len(asm.Cells) > 0 {
+		modulesContent, err := gen.GenerateModulesGen(id)
+		if err != nil {
+			return fmt.Errorf("generate modules_gen: %w", err)
+		}
+		modulesPath := filepath.Join(filepath.Dir(entrypointPath), "modules_gen.go")
+		if err := writeGeneratedFile(root, modulesPath, modulesContent,
+			fmt.Sprintf("assembly %q modules_gen", id)); err != nil {
+			return err
+		}
 	}
 
-	boundary, err := gen.GenerateBoundary(*id)
+	boundary, err := gen.GenerateBoundary(id)
 	if err != nil {
 		return fmt.Errorf("generate boundary: %w", err)
 	}
 
 	// Boundary goes into assemblies/{id}/generated/.
-	boundaryPath := filepath.Join(root, "assemblies", *id, "generated", "boundary.yaml")
+	boundaryPath := filepath.Join(root, "assemblies", id, "generated", "boundary.yaml")
 	return writeGeneratedFile(root, boundaryPath, boundary,
-		fmt.Sprintf("assembly %q generated dir", *id))
+		fmt.Sprintf("assembly %q generated dir", id))
 }
 
 // generateMetricsSchema implements:

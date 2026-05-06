@@ -156,6 +156,11 @@ func printVerifyHelp() error {
 			"verify (fast, no sandbox). CI: pass --local=false for",
 			"git worktree sandbox mode.",
 		}},
+		{"codegen-assembly", []string{
+			"Verify cmd/*/modules_gen.go are in sync with assembly.yaml /",
+			"cell.yaml goStructName. Default --local in-place verify (fast).",
+			"CI: pass --local=false for git worktree sandbox.",
+		}},
 	})
 	return nil
 }

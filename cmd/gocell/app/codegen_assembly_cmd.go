@@ -2,10 +2,10 @@ package app
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -14,131 +14,101 @@ import (
 
 const codegenAssemblyKind = "assembly"
 
-// runVerifyCodegenAssembly implements `gocell verify codegen-assembly`.
-// 默认 --local=true（本地 in-place 校验），CI 通过 --local=false 走 sandbox。
-//
-// 校验范围：每个 assembly 的 cmd/{id}/modules_gen.go 必须与重生成结果 byte-equal。
-// main.go 与 boundary.yaml 走各自的 verify 路径（如有），本子命令只锁 modules_gen.go。
-func runVerifyCodegenAssembly(args []string) error {
-	fs := flag.NewFlagSet("verify codegen-assembly", flag.ContinueOnError)
-	local := fs.Bool("local", true,
-		"skip git worktree sandbox; verify in-place against current working tree "+
-			"(default true; CI should pass --local=false for sandbox mode)")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	root, err := findRoot()
-	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
-	}
-	if *local {
-		return verifyAssemblyModulesGenInPlace(root)
-	}
-	return verifyAssemblyModulesGenSandbox(root)
+// assemblyDriftResult implements CodegenResult for assembly modules_gen.go
+// codegen. Generated holds paths written (or would-write in verify mode);
+// Drifted holds paths whose on-disk content differs from the generated content.
+type assemblyDriftResult struct {
+	generated []string
+	drifted   []string
 }
 
-func verifyAssemblyModulesGenInPlace(root string) error {
-	project, err := parseProject(root)
-	if err != nil {
-		return err
-	}
-	drifts, err := collectAssemblyModulesGenDrift(root, project)
-	if err != nil {
-		return err
-	}
-	if len(drifts) > 0 {
-		for _, f := range drifts {
-			fmt.Fprintf(os.Stderr, "drift: %s\n", f)
-		}
-		writeDriftFixHint(codegenAssemblyKind)
-		return fmt.Errorf(driftErrorTemplate, len(drifts), codegenAssemblyKind)
-	}
-	fmt.Println("Generated assembly modules_gen.go OK (--local).")
-	return nil
+func (r assemblyDriftResult) GeneratedFiles() []string { return r.generated }
+func (r assemblyDriftResult) DriftedFiles() []string   { return r.drifted }
+
+// assemblyCodegenSpec is the codegenSpec[R] wiring for assembly modules_gen.go.
+// The Generate function regenerates all assemblies with cells>0; the `only`
+// parameter (per-id scoping) is intentionally unused because assembly codegen
+// has no per-id filter—all or nothing matches the existing behavior.
+// dryRun is also unused: assembly codegen writes inline without a dry-run path.
+var assemblyCodegenSpec = codegenSpec[assemblyDriftResult]{
+	Kind:            codegenAssemblyKind,
+	GenerateUsage:   "gocell generate assembly --id=<assemblyID> | --all",
+	AllFlagDesc:     "regenerate modules_gen.go for all assemblies (cells>0)",
+	PluralNoun:      "assembly modules_gen.go",
+	SourceArtifacts: "assembly.yaml / cell.yaml goStructName",
+	Generate:        generateAssemblyModulesGen,
 }
 
-func verifyAssemblyModulesGenSandbox(root string) error {
-	res, err := codegen.VerifyInWorktree(root, func(workdir string) error {
-		project, perr := parseProject(workdir)
-		if perr != nil {
-			return perr
-		}
-		return regenerateAssemblyModulesGen(workdir, project)
-	})
-	if err != nil {
-		return fmt.Errorf("verify codegen-assembly sandbox: %w", err)
-	}
-	if len(res.Drifted) > 0 {
-		fmt.Fprintln(os.Stderr, "ERROR: generated assembly modules_gen.go is out of sync with assembly.yaml/cell.yaml")
-		for _, f := range res.Drifted {
-			fmt.Fprintf(os.Stderr, "  %s\n", f)
-		}
-		fmt.Fprintln(os.Stderr, res.DiffSummary)
-		writeDriftFixHint(codegenAssemblyKind)
-		return fmt.Errorf("codegen drift in %d files", len(res.Drifted))
-	}
-	fmt.Println("Generated assembly modules_gen.go OK.")
-	return nil
-}
-
-// regenerateAssemblyModulesGen writes all assembly modules_gen.go files to
-// workdir; VerifyInWorktree will diff against the original root afterward.
-func regenerateAssemblyModulesGen(workdir string, project *metadata.ProjectMeta) error {
-	mod, err := readModule(workdir)
-	if err != nil {
-		return fmt.Errorf("cannot read module from go.mod: %w", err)
-	}
-	gen := assembly.NewGenerator(project, mod, workdir)
-	for asmID, asm := range project.Assemblies {
-		if asm == nil {
-			continue
-		}
-		content, gerr := gen.GenerateModulesGen(asmID)
-		if gerr != nil {
-			return fmt.Errorf("regenerate modules_gen %s: %w", asmID, gerr)
-		}
-		entrypointRel := asm.Build.Entrypoint
-		if entrypointRel == "" {
-			entrypointRel = filepath.Join("cmd", asmID, "main.go")
-		}
-		outPath := filepath.Join(workdir, filepath.Dir(entrypointRel), "modules_gen.go")
-		if _, werr := codegen.Write(codegen.WriteOptions{
-			Path:     outPath,
-			Content:  content,
-			RepoRoot: workdir,
-		}); werr != nil {
-			return fmt.Errorf("write modules_gen %s: %w", asmID, werr)
-		}
-	}
-	return nil
-}
-
-// collectAssemblyModulesGenDrift generates modules_gen content in memory and
-// diffs against the on-disk file. Returns relative paths of drifted files.
-func collectAssemblyModulesGenDrift(root string, project *metadata.ProjectMeta) ([]string, error) {
+// generateAssemblyModulesGen is the Generate func for assemblyCodegenSpec.
+// When verify=true it diffs in-memory content against disk; when verify=false
+// it writes (or no-ops if byte-equal). The `only` and `dryRun` params are
+// ignored—assembly codegen has no per-id scoping and no dry-run mode.
+func generateAssemblyModulesGen(root string, project *metadata.ProjectMeta, _, verify bool, _ string) (assemblyDriftResult, error) {
 	mod, err := readModule(root)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read module from go.mod: %w", err)
+		return assemblyDriftResult{}, fmt.Errorf("cannot read module from go.mod: %w", err)
 	}
+
+	ids := make([]string, 0, len(project.Assemblies))
+	for id := range project.Assemblies {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
 	gen := assembly.NewGenerator(project, mod, root)
-	var drifts []string
-	for asmID, asm := range project.Assemblies {
-		if asm == nil {
+	var result assemblyDriftResult
+	for _, asmID := range ids {
+		asm := project.Assemblies[asmID]
+		if asm == nil || len(asm.Cells) == 0 {
+			// B1 guard: skip nil or empty-cell assemblies — no factory list to register.
 			continue
 		}
-		want, gerr := gen.GenerateModulesGen(asmID)
-		if gerr != nil {
-			return nil, fmt.Errorf("regenerate modules_gen %s: %w", asmID, gerr)
-		}
-		entrypointRel := asm.Build.Entrypoint
-		if entrypointRel == "" {
-			entrypointRel = filepath.Join("cmd", asmID, "main.go")
-		}
-		outPath := filepath.Join(root, filepath.Dir(entrypointRel), "modules_gen.go")
-		got, rerr := os.ReadFile(outPath) //nolint:gosec // path constructed from project metadata, not user input
-		if rerr != nil || !bytes.Equal(got, want) {
-			drifts = append(drifts, filepath.Join(filepath.Dir(entrypointRel), "modules_gen.go"))
+		if err := processOneAssemblyModulesGen(root, gen, asmID, asm, verify, &result); err != nil {
+			return assemblyDriftResult{}, err
 		}
 	}
-	return drifts, nil
+	return result, nil
+}
+
+// processOneAssemblyModulesGen handles modules_gen.go for a single assembly.
+// It appends to result.drifted (verify mode) or result.generated (write mode).
+func processOneAssemblyModulesGen(
+	root string, gen *assembly.Generator,
+	asmID string, asm *metadata.AssemblyMeta,
+	verify bool, result *assemblyDriftResult,
+) error {
+	content, err := gen.GenerateModulesGen(asmID)
+	if err != nil {
+		return fmt.Errorf("regenerate modules_gen %s: %w", asmID, err)
+	}
+
+	entrypointRel := asm.Build.Entrypoint
+	if entrypointRel == "" {
+		entrypointRel = filepath.Join("cmd", asmID, "main.go")
+	}
+	outPath := filepath.Join(root, filepath.Dir(entrypointRel), "modules_gen.go")
+	relPath := filepath.Join(filepath.Dir(entrypointRel), "modules_gen.go")
+
+	if verify {
+		got, rerr := os.ReadFile(outPath) //nolint:gosec // path constructed from project metadata, not user input
+		if rerr != nil || !bytes.Equal(got, content) {
+			result.drifted = append(result.drifted, relPath)
+		}
+		return nil
+	}
+	if _, werr := codegen.Write(codegen.WriteOptions{
+		Path:     outPath,
+		Content:  content,
+		RepoRoot: root,
+	}); werr != nil {
+		return fmt.Errorf("write modules_gen %s: %w", asmID, werr)
+	}
+	result.generated = append(result.generated, relPath)
+	return nil
+}
+
+// runVerifyCodegenAssembly implements `gocell verify codegen-assembly`.
+// Delegates to the shared codegenSpec[R] framework (runCodegenVerify).
+func runVerifyCodegenAssembly(args []string) error {
+	return runCodegenVerify(assemblyCodegenSpec, args)
 }

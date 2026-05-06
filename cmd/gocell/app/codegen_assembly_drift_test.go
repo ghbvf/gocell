@@ -13,8 +13,8 @@ import (
 //   - cells/alpha/slices/s1/slice.yaml
 //   - assemblies/myasm/assembly.yaml  (cells: [alpha])
 //
-// It also pre-generates cmd/myasm/modules_gen.go via collectAssemblyModulesGenDrift
-// so the project starts in a "clean" state.
+// It also pre-generates cmd/myasm/modules_gen.go so the project starts in a
+// "clean" state.
 func minimalAssemblyProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -66,15 +66,15 @@ func minimalAssemblyProject(t *testing.T) string {
 }
 
 // preRenderAssemblyModulesGen generates all assembly modules_gen.go files for
-// the project at root using the same logic as the verify command.
+// the project at root using the generateAssemblyModulesGen helper (verify=false).
 func preRenderAssemblyModulesGen(t *testing.T, root string) {
 	t.Helper()
 	project, err := parseProject(root)
 	if err != nil {
 		t.Fatalf("pre-render metadata parse: %v", err)
 	}
-	if err := regenerateAssemblyModulesGen(root, project); err != nil {
-		t.Fatalf("pre-render regenerateAssemblyModulesGen: %v", err)
+	if _, err := generateAssemblyModulesGen(root, project, false, false, ""); err != nil {
+		t.Fatalf("pre-render generateAssemblyModulesGen: %v", err)
 	}
 }
 
@@ -86,10 +86,11 @@ func TestCollectAssemblyModulesGenDrift_NoDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	drifts, err := collectAssemblyModulesGenDrift(root, project)
+	res, err := generateAssemblyModulesGen(root, project, false, true, "")
 	if err != nil {
-		t.Fatalf("collectAssemblyModulesGenDrift: %v", err)
+		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
+	drifts := res.DriftedFiles()
 	if len(drifts) != 0 {
 		t.Fatalf("expected no drift, got: %v", drifts)
 	}
@@ -115,10 +116,11 @@ func TestCollectAssemblyModulesGenDrift_DetectsTampering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	drifts, err := collectAssemblyModulesGenDrift(root, project)
+	res, err := generateAssemblyModulesGen(root, project, false, true, "")
 	if err != nil {
-		t.Fatalf("collectAssemblyModulesGenDrift: %v", err)
+		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
+	drifts := res.DriftedFiles()
 	if len(drifts) == 0 {
 		t.Fatal("expected drift to be detected after tampering, got none")
 	}
@@ -139,10 +141,11 @@ func TestCollectAssemblyModulesGenDrift_DetectsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	drifts, err := collectAssemblyModulesGenDrift(root, project)
+	res, err := generateAssemblyModulesGen(root, project, false, true, "")
 	if err != nil {
-		t.Fatalf("collectAssemblyModulesGenDrift: %v", err)
+		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
+	drifts := res.DriftedFiles()
 	if len(drifts) == 0 {
 		t.Fatal("expected drift when modules_gen.go is missing, got none")
 	}
