@@ -3,7 +3,6 @@ cells:
   - configcore
   - accesscore
   - auditcore
-build:
-  entrypoint: cmd/corebundle/main.go
-  binary: corebundle
-  deployTemplate: k8s
+owner:
+  team: platform-core
+  role: maintainer

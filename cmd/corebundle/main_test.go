@@ -63,11 +63,24 @@ func TestCorebundleModulesMatchAssemblyMetadataOrder(t *testing.T) {
 	assert.Equal(t, "configcore", gotIDs[0], "configcore must stay first because it owns SharedPGPool creation")
 }
 
-func TestCorebundleModulesRejectUnknownCell(t *testing.T) {
+// TestCorebundleModulesRejectDrift verifies that corebundleModules returns an
+// error when the provided cellIDs diverge from the generated module list. This
+// guards against assembly.yaml ↔ modules_gen.go drift where the caller forgets
+// to run `gocell generate assembly --id=corebundle` after editing assembly.yaml.
+func TestCorebundleModulesRejectDrift(t *testing.T) {
+	// Length mismatch: 2 IDs vs 3 generated modules.
 	modules, err := corebundleModules([]string{"configcore", "ghostcore"})
 	require.Error(t, err)
 	assert.Nil(t, modules)
-	assert.Contains(t, err.Error(), `unsupported assembly cell "ghostcore"`)
+	assert.Contains(t, err.Error(), "length mismatch")
+	assert.Contains(t, err.Error(), "gocell generate assembly")
+
+	// ID drift: correct count but wrong IDs.
+	modules, err = corebundleModules([]string{"configcore", "ghostcore", "auditcore"})
+	require.Error(t, err)
+	assert.Nil(t, modules)
+	assert.Contains(t, err.Error(), "drift")
+	assert.Contains(t, err.Error(), "gocell generate assembly")
 }
 
 // TestLoadKeySet collapses 5 fragmented per-mode tests into a single
