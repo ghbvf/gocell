@@ -6,8 +6,8 @@
 
 ## 概览
 
-- archtest 文件总数：70
-- archtest INVARIANT 锚点数：171
+- archtest 文件总数：71
+- archtest INVARIANT 锚点数：174
 - governance `rules_*.go` 文件数：27
 
 ## archtest 规则清单
@@ -171,6 +171,7 @@
 | `SEC-FAIL-CLOSED-09` | `security_defaults_test.go` | 54 | sec |
 | `SETUP-ADMIN-CODEGEN-BOOTSTRAP-AUTH-WIRED-01` | `setup_admin_bootstrap_closure_test.go` | 24 | setup |
 | `SETUP-ADMIN-NOT-PUBLIC-01` | `setup_admin_auth_test.go` | 1 | setup |
+| `SLOWGATE-ALLOWLIST-01` | `slowgate_allowlist_test.go` | 1 | slowgate |
 | `SPAN-RECORD-ERROR-REDACT-01` | `span_record_error_redact_test.go` | 1 | span |
 | `SPAN-RECORD-ERROR-REDACT-ARCHTEST-01` | `span_record_error_redact_test.go` | 22 | span |
 | `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 735 | codegen |
@@ -178,7 +179,9 @@
 | `STORAGE-BACKEND-MEMORY-NO-PG-01` | `storage_backend_test.go` | 11 | storage |
 | `STORAGE-BACKEND-PG-WIRING-01` | `storage_backend_test.go` | 6 | storage |
 | `SVCTOKEN-CALLER-CELL-REQUIRED-01` | `svctoken_caller_cell_test.go` | 1 | svctoken |
+| `TEST-SLEEP-DISCIPLINE-01` | `slowgate_allowlist_test.go` | 20 | test |
 | `TEST-SLEEP-DISCIPLINE-01` | `test_sleep_discipline_test.go` | 1 | test |
+| `TEST-TIME-LITERAL-01` | `slowgate_allowlist_test.go` | 77 | test |
 | `TEST-TIME-LITERAL-01` | `test_sleep_discipline_test.go` | 25 | test |
 | `TEST-TIME-LITERAL-01` | `test_time_literal_fixtures_test.go` | 2 | test |
 | `TEST-TIME-LITERAL-01` | `test_time_literal_test.go` | 1 | test |
