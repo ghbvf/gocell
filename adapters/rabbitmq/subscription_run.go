@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,7 +29,11 @@ type subscriptionRun struct {
 	ch          AMQPChannel
 	consumerTag string
 	localWg     sync.WaitGroup // tracks processDelivery goroutines of this run only
-	closed      sync.Once
+	// inflight is an atomic counter mirroring localWg adds/dones. It exists
+	// solely for diagnostic logging in StopIntake timeout paths — callers that
+	// need a synchronization barrier must use localWg.Wait(), not this counter.
+	inflight atomic.Int64
+	closed   sync.Once
 	// wgDoneCh is closed exactly once when all in-flight deliveries have
 	// completed (localWg.Wait() returns in any wg-waiter goroutine).
 	// Initialized by newSubscriptionRun; closeWgDone ensures only one of the
@@ -51,12 +56,21 @@ func newSubscriptionRun(ch AMQPChannel, tag string) *subscriptionRun {
 // calls localWg.Wait() to avoid an Add-after-Wait race.
 func (r *subscriptionRun) registerDelivery() {
 	r.localWg.Add(1)
+	r.inflight.Add(1)
 }
 
 // markDeliveryDone marks one processDelivery goroutine as finished.
 // Must be called with defer inside each processDelivery goroutine.
 func (r *subscriptionRun) markDeliveryDone() {
 	r.localWg.Done()
+	r.inflight.Add(-1)
+}
+
+// inflightCount returns the current number of in-flight processDelivery
+// goroutines. Used for diagnostic logging only — use localWg.Wait() for
+// synchronization barriers.
+func (r *subscriptionRun) inflightCount() int64 {
+	return r.inflight.Load()
 }
 
 // waitAndClose drains in-flight deliveries then closes the AMQP channel exactly once.

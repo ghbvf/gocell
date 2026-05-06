@@ -111,6 +111,12 @@ type SubscriberConfig struct {
 	// this budget per consumer. Default: 2s.
 	StopIntakePerCallTimeout time.Duration
 
+	// StopIntakeDrainTimeout is the total upper bound for StopIntake to wait for
+	// already-prefetched deliveries to settle (drain + inflight handler completion).
+	// If exceeded, StopIntake returns ErrAdapterAMQPCloseTimeout and logs a
+	// slog.Warn with the remaining inflight count. Default: 30s.
+	StopIntakeDrainTimeout time.Duration
+
 	// Clock is the time source used to schedule the drainRemaining timer.
 	// Required: NewSubscriber calls clock.MustHaveClock(config.Clock, ...) to
 	// fail-fast on nil. Pass clock.Real() at the composition root, or a
@@ -125,6 +131,9 @@ func (sc *SubscriberConfig) setDefaults() {
 	}
 	if sc.StopIntakePerCallTimeout == 0 {
 		sc.StopIntakePerCallTimeout = defaultRMQStopIntakePerCallTimeout
+	}
+	if sc.StopIntakeDrainTimeout <= 0 {
+		sc.StopIntakeDrainTimeout = defaultRMQDrainDeadline
 	}
 }
 
@@ -570,11 +579,17 @@ func (s *Subscriber) consumeLoop(
 		// "StopIntake → drain → Close" ordering invariant that callers rely on
 		// — without it, a concurrent Close() can short-circuit to the closeCh
 		// case here and silently drop prefetched deliveries.
+		//
+		// drainCtx is derived with context.WithoutCancel so that prefetched
+		// deliveries are processed even after the parent ctx is canceled. The
+		// hard upper bound is enforced by drainRemaining's wall-clock timer
+		// (currentDrainDeadline) — no rely on ctx deadline here.
 		select {
 		case <-s.stopIntakeCh:
 			slog.Info("rabbitmq: intake stopped, entering drain mode",
 				slog.String(logKeyTopic, topic))
-			return s.drainRemaining(ctx, run, deliveries, topic, handler)
+			drainCtx := context.WithoutCancel(ctx)
+			return s.drainRemaining(drainCtx, run, deliveries, topic, handler)
 		default:
 		}
 
@@ -582,7 +597,8 @@ func (s *Subscriber) consumeLoop(
 		case <-s.stopIntakeCh:
 			slog.Info("rabbitmq: intake stopped, entering drain mode",
 				slog.String(logKeyTopic, topic))
-			return s.drainRemaining(ctx, run, deliveries, topic, handler)
+			drainCtx := context.WithoutCancel(ctx)
+			return s.drainRemaining(drainCtx, run, deliveries, topic, handler)
 
 		case <-ctx.Done():
 			slog.Info("rabbitmq: subscriber context canceled",
@@ -626,33 +642,28 @@ func currentDrainDeadline() time.Duration {
 	return defaultRMQDrainDeadline
 }
 
-// drainRemaining processes deliveries already prefetched after StopIntake
-// issued basic.cancel. It exits when:
-//   - the deliveries channel is closed (broker acknowledged basic.cancel), or
-//   - ctx is canceled (hard stop from parent), or
-//   - closeCh fires (Close() was called as the hard-shutdown boundary).
-//
-// New deliveries should not arrive after basic.cancel; any that do (race
-// window) are still processed correctly.
-//
-// ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan drain pattern
-
 // drainRemaining reads prefetched deliveries until the deliveries channel is
-// closed by the broker (the cancel ack path), the outer Subscribe ctx is
-// canceled (hard abort), or currentDrainDeadline() elapses (broker never ack'd the
-// cancel).
+// closed by the broker (the cancel ack path) or currentDrainDeadline() elapses
+// (broker never ack'd the cancel).
 //
-// Invariant: closeCh is intentionally NOT in the select. Once StopIntake has
-// entered the drain path, honoring closeCh here would race with buffered
-// deliveries — the broker typically keeps pushing a handful of messages
-// between the cancel and its ack, and the handler-processing gap makes the
-// client-side buffer momentarily empty. We MUST let the broker drive the
-// exit by closing the chan, otherwise prefetched-but-unacked messages are
-// silently lost.
+// ctx MUST be a detached context (context.WithoutCancel) derived by consumeLoop
+// before calling this function. This ensures prefetched-but-unacked deliveries
+// are processed even after the parent ctx is canceled during graceful shutdown.
+// The hard upper bound is enforced by a wall-clock timer so a non-responsive
+// broker cannot wedge drain indefinitely.
 //
-// ref: Watermill router.go — drain completes when source closes, not when
+// Invariants:
+//   - closeCh is intentionally NOT in the select. Once StopIntake has entered
+//     the drain path, honoring closeCh would race with buffered deliveries —
+//     the broker keeps pushing messages between the cancel and its ack, and the
+//     handler-processing gap makes the client-side buffer momentarily empty.
+//     We MUST let the broker drive the exit by closing the chan.
+//   - ctx.Done() is intentionally NOT in the select. The ctx passed here is
+//     context.WithoutCancel(parent), so ctx.Done() is never closed. Removing
+//     the arm makes the contract explicit and prevents accidental re-introduction.
 //
-//	an external stop signal fires.
+// ref: Watermill router.go — drain completes when source closes, not on stop signal
+// ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan drain pattern
 func (s *Subscriber) drainRemaining(
 	ctx context.Context,
 	run *subscriptionRun,
@@ -679,10 +690,6 @@ func (s *Subscriber) drainRemaining(
 				defer run.markDeliveryDone()
 				s.processDelivery(ctx, ch, d, topic, handler)
 			}(d)
-		case <-ctx.Done():
-			slog.Info("rabbitmq: drain interrupted by context cancellation",
-				slog.String(logKeyTopic, topic))
-			return nil
 		case <-timer.C():
 			slog.Warn("rabbitmq: drain deadline reached, broker did not acknowledge basic.cancel",
 				slog.String(logKeyTopic, topic),
@@ -1074,21 +1081,56 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 	}
 
 	// Wait for every dispatched basic.cancel to complete (or for their own
-	// per-call timeouts to fire) before reporting StopIntake done. This
-	// ensures the broker has stopped pushing new deliveries when we return.
-	//
-	// Note: drain completion is NOT awaited here. consumeLoop's priority
-	// select guarantees stopIntakeCh is observed before closeCh even if
-	// both are closed by the time consumeLoop re-enters select, so
-	// drainRemaining is always entered. Inside drainRemaining, buffered
-	// deliveries are dispatched (priority) before abort signals.
+	// per-call timeouts to fire). This ensures the broker has stopped pushing
+	// new deliveries before we proceed to wait for inflight handlers.
 	cancelDone := make(chan struct{})
 	go func() { cancelWg.Wait(); close(cancelDone) }()
 	select {
 	case <-cancelDone:
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+
+	// Wait for already-prefetched deliveries to settle. Use the configured
+	// StopIntakeDrainTimeout (default 30s) as a fail-closed upper bound so a
+	// pathological broker or handler cannot wedge shutdown indefinitely.
+	//
+	// We re-snapshot runs because some may have exited between the cancel
+	// dispatch and now. localWg.Wait() on each run is the authoritative signal
+	// that all processDelivery goroutines of that run have completed.
+	//
+	// ref: ThreeDotsLabs/watermill subscriber.Close — wg.Wait inside close path
+	// ref: Uber fx app.go StopTimeout — ctx carries the shared shutdown budget
+	drainTimeout := s.config.StopIntakeDrainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = defaultRMQDrainDeadline
+	}
+	drainCtx, drainCancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+	defer drainCancel()
+
+	remaining := s.snapshotActiveRuns()
+	inflightWaitCh := make(chan struct{})
+	go func() {
+		defer close(inflightWaitCh)
+		for _, r := range remaining {
+			r.localWg.Wait()
+		}
+	}()
+	select {
+	case <-inflightWaitCh:
+		return nil
+	case <-drainCtx.Done():
+		// Tally remaining inflight for diagnostics.
+		var pending int64
+		for _, r := range remaining {
+			pending += r.inflightCount()
+		}
+		slog.Warn("rabbitmq: StopIntake drain timeout, returning fail-closed",
+			slog.Int("remaining_runs", len(remaining)),
+			slog.Int64("inflight_deliveries", pending),
+			slog.Duration("budget", drainTimeout))
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPCloseTimeout,
+			"rabbitmq: StopIntake drain budget exceeded")
 	}
 }
 
