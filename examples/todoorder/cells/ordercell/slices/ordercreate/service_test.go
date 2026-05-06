@@ -92,10 +92,12 @@ func TestService_Create(t *testing.T) {
 			} else {
 				require.NoError(t, createErr)
 				require.NotNil(t, resp)
-				require.NotNil(t, resp.Data)
-				assert.Equal(t, tt.item, resp.Data.Item)
-				assert.Equal(t, "pending", resp.Data.Status)
-				assert.NotEmpty(t, resp.Data.ID)
+				r, ok := resp.(createv1.Create201JSONResponse)
+				require.True(t, ok, "expected Create201JSONResponse")
+				require.NotNil(t, r.Data)
+				assert.Equal(t, tt.item, r.Data.Item)
+				assert.Equal(t, "pending", r.Data.Status)
+				assert.NotEmpty(t, r.Data.ID)
 			}
 		})
 	}
@@ -111,15 +113,17 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	resp, err := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	require.NotNil(t, resp.Data)
+	r, ok := resp.(createv1.Create201JSONResponse)
+	require.True(t, ok, "expected Create201JSONResponse")
+	require.NotNil(t, r.Data)
 	require.Len(t, writer.entries, 1, "should write exactly one outbox entry")
 	assert.Equal(t, 1, txRunner.calls, "should run inside txRunner")
 	assert.NotEmpty(t, writer.entries[0].ID)
-	assert.Equal(t, resp.Data.ID, writer.entries[0].AggregateID)
+	assert.Equal(t, r.Data.ID, writer.entries[0].AggregateID)
 	assert.Equal(t, "order", writer.entries[0].AggregateType)
 	assert.Equal(t, TopicOrderCreated, writer.entries[0].EventType)
 	assert.Equal(t, TopicOrderCreated, writer.entries[0].RoutingTopic())
-	assert.Contains(t, string(writer.entries[0].Payload), resp.Data.ID)
+	assert.Contains(t, string(writer.entries[0].Payload), r.Data.ID)
 }
 
 func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
@@ -157,8 +161,10 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "demo-item"})
 	require.NoError(t, createErr)
 	require.NotNil(t, resp)
-	require.NotNil(t, resp.Data)
-	assert.Equal(t, "demo-item", resp.Data.Item)
+	rDemo, ok := resp.(createv1.Create201JSONResponse)
+	require.True(t, ok, "expected Create201JSONResponse")
+	require.NotNil(t, rDemo.Data)
+	assert.Equal(t, "demo-item", rDemo.Data.Item)
 }
 
 func TestService_Create_PersistsOrder(t *testing.T) {
@@ -173,11 +179,13 @@ func TestService_Create_PersistsOrder(t *testing.T) {
 	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "persisted"})
 	require.NoError(t, createErr)
 	require.NotNil(t, resp)
-	require.NotNil(t, resp.Data)
+	rPersist, ok := resp.(createv1.Create201JSONResponse)
+	require.True(t, ok, "expected Create201JSONResponse")
+	require.NotNil(t, rPersist.Data)
 
-	got, err := repo.GetByID(context.Background(), resp.Data.ID)
+	got, err := repo.GetByID(context.Background(), rPersist.Data.ID)
 	require.NoError(t, err)
-	assert.Equal(t, resp.Data.ID, got.ID)
+	assert.Equal(t, rPersist.Data.ID, got.ID)
 	assert.Equal(t, "persisted", got.Item)
 }
 

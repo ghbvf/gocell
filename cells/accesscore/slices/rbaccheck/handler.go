@@ -43,7 +43,7 @@ type ListAdapter struct{ S *Service }
 
 // List implements listg.Service. The generated handler already validates and
 // decodes userID (UUID), cursor, and limit from the request.
-func (a ListAdapter) List(ctx context.Context, req *listg.Request) (*listg.Response, error) {
+func (a ListAdapter) List(ctx context.Context, req *listg.Request) (listg.ListResponseObject, error) {
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
 		Limit:  int(req.Limit),
@@ -67,7 +67,7 @@ func (a ListAdapter) List(ctx context.Context, req *listg.Request) (*listg.Respo
 			Permissions: perms,
 		})
 	}
-	return &listg.Response{
+	return listg.List200JSONResponse{
 		Data:       items,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,
@@ -79,12 +79,12 @@ type CheckAdapter struct{ S *Service }
 
 // Check implements checkg.Service. The generated handler already validates and
 // decodes userID (UUID) and roleName from the request.
-func (a CheckAdapter) Check(ctx context.Context, req *checkg.Request) (*checkg.Response, error) {
+func (a CheckAdapter) Check(ctx context.Context, req *checkg.Request) (checkg.CheckResponseObject, error) {
 	has, err := a.S.HasRole(ctx, req.UserID, req.RoleName)
 	if err != nil {
 		return nil, err
 	}
-	return &checkg.Response{Data: &checkg.ResponseData{HasRole: has}}, nil
+	return checkg.Check200JSONResponse{Data: &checkg.ResponseData{HasRole: has}}, nil
 }
 
 // Handler is the composite route handler for the rbaccheck slice.

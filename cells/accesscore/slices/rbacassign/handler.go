@@ -13,11 +13,11 @@ import (
 type AssignAdapter struct{ S *Service }
 
 // Assign implements assign.Service.
-func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (*assign.Response, error) {
+func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (assign.AssignResponseObject, error) {
 	if err := a.S.Assign(ctx, req.UserId, req.RoleId); err != nil {
 		return nil, err
 	}
-	return &assign.Response{Data: &assign.ResponseData{
+	return assign.Assign201JSONResponse{Data: &assign.ResponseData{
 		UserId:   req.UserId,
 		RoleId:   req.RoleId,
 		Assigned: true,
@@ -28,11 +28,11 @@ func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (*assign
 type RevokeAdapter struct{ S *Service }
 
 // Revoke implements revoke.Service.
-func (a RevokeAdapter) Revoke(ctx context.Context, req *revoke.Request) (*revoke.Response, error) {
+func (a RevokeAdapter) Revoke(ctx context.Context, req *revoke.Request) (revoke.RevokeResponseObject, error) {
 	if err := a.S.Revoke(ctx, req.UserId, req.RoleId); err != nil {
 		return nil, err
 	}
-	return &revoke.Response{Data: &revoke.ResponseData{
+	return revoke.Revoke200JSONResponse{Data: &revoke.ResponseData{
 		UserId:  req.UserId,
 		RoleId:  req.RoleId,
 		Revoked: true,

@@ -18,7 +18,7 @@ type WriteAdapter struct{ S *Service }
 
 // Write implements write.Service. It maps the generated request to CreateInput
 // and converts the domain result to the generated response type.
-func (a WriteAdapter) Write(ctx context.Context, req *write.Request) (*write.Response, error) {
+func (a WriteAdapter) Write(ctx context.Context, req *write.Request) (write.WriteResponseObject, error) {
 	var sensitive bool
 	if req.Sensitive != nil {
 		sensitive = *req.Sensitive
@@ -31,7 +31,7 @@ func (a WriteAdapter) Write(ctx context.Context, req *write.Request) (*write.Res
 	if err != nil {
 		return nil, err
 	}
-	return &write.Response{Data: toWriteResponseData(entry)}, nil
+	return write.Write201JSONResponse{Data: toWriteResponseData(entry)}, nil
 }
 
 // UpdateAdapter wraps Service to implement update.Service for http.config.update.v1.
@@ -39,7 +39,7 @@ type UpdateAdapter struct{ S *Service }
 
 // Update implements update.Service. It maps the generated request to UpdateInput
 // and converts the domain result to the generated response type.
-func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (*update.Response, error) {
+func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (update.UpdateResponseObject, error) {
 	entry, err := a.S.Update(ctx, UpdateInput{
 		Key:   req.Key,
 		Value: req.Value,
@@ -47,18 +47,18 @@ func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (*update
 	if err != nil {
 		return nil, err
 	}
-	return &update.Response{Data: toUpdateResponseData(entry)}, nil
+	return update.Update200JSONResponse{Data: toUpdateResponseData(entry)}, nil
 }
 
 // DeleteAdapter wraps Service to implement configdelete.Service for http.config.delete.v1.
 type DeleteAdapter struct{ S *Service }
 
 // Delete implements configdelete.Service.
-func (a DeleteAdapter) Delete(ctx context.Context, req *configdelete.Request) (*configdelete.Response, error) {
+func (a DeleteAdapter) Delete(ctx context.Context, req *configdelete.Request) (configdelete.DeleteResponseObject, error) {
 	if err := a.S.Delete(ctx, req.Key); err != nil {
 		return nil, err
 	}
-	return &configdelete.Response{}, nil
+	return configdelete.Delete204NoContentResponse{}, nil
 }
 
 // toWriteResponseData converts a domain.ConfigEntry to write.ResponseData.

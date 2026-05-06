@@ -120,13 +120,18 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 	mux := newHandlerMux(svc)
 
 	w := httptest.NewRecorder()
-	// The generated handler validates limit <= 500 and returns ERR_VALIDATION_FAILED.
+	// The generated handler routes cursor/limit through httputil.ParsePageParams
+	// (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb): exceeding the 500
+	// limit ceiling now produces the canonical ERR_PAGE_SIZE_EXCEEDED envelope
+	// shared with every other paginated endpoint (formerly the inline
+	// per-param parse emitted ERR_VALIDATION_FAILED — diverging from the rest
+	// of the HTTP surface).
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=501", nil)
 	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
+	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
 }
 
 func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {

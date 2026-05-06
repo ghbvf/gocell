@@ -41,24 +41,24 @@ func toConfigVersionResponse(v *domain.ConfigVersion) ConfigVersionResponse {
 type PublishAdapter struct{ S *Service }
 
 // Publish implements configpublishgen.Service. Key comes from path param, already decoded by handler_gen.
-func (a PublishAdapter) Publish(ctx context.Context, req *configpublishgen.Request) (*configpublishgen.Response, error) {
+func (a PublishAdapter) Publish(ctx context.Context, req *configpublishgen.Request) (configpublishgen.PublishResponseObject, error) {
 	version, err := a.S.Publish(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
-	return &configpublishgen.Response{Data: toPublishResponseData(version)}, nil
+	return configpublishgen.Publish201JSONResponse{Data: toPublishResponseData(version)}, nil
 }
 
 // RollbackAdapter wraps Service to implement rollbackgen.Service for http.config.rollback.v1.
 type RollbackAdapter struct{ S *Service }
 
 // Rollback implements rollbackgen.Service. Key comes from path param; Version from body.
-func (a RollbackAdapter) Rollback(ctx context.Context, req *rollbackgen.Request) (*rollbackgen.Response, error) {
+func (a RollbackAdapter) Rollback(ctx context.Context, req *rollbackgen.Request) (rollbackgen.RollbackResponseObject, error) {
 	entry, err := a.S.Rollback(ctx, req.Key, int(req.Version))
 	if err != nil {
 		return nil, err
 	}
-	return &rollbackgen.Response{Data: toRollbackResponseData(entry)}, nil
+	return rollbackgen.Rollback200JSONResponse{Data: toRollbackResponseData(entry)}, nil
 }
 
 // Handler is the composite route handler for the configpublish slice.

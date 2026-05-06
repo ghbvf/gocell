@@ -53,10 +53,11 @@ func TestService_ListEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
+	raw, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	resp := raw.(listcontract.List200JSONResponse)
 	if resp.HasMore {
 		t.Error("expected HasMore=false for empty repo")
 	}
@@ -76,10 +77,11 @@ func TestService_ListPagination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page1, err := svc.List(context.Background(), &listcontract.Request{Limit: 2})
+	raw1, err := svc.List(context.Background(), &listcontract.Request{Limit: 2})
 	if err != nil {
 		t.Fatalf("page 1 error: %v", err)
 	}
+	page1 := raw1.(listcontract.List200JSONResponse)
 	if !page1.HasMore {
 		t.Error("expected HasMore=true for first page")
 	}
@@ -90,10 +92,11 @@ func TestService_ListPagination(t *testing.T) {
 		t.Error("expected non-empty NextCursor")
 	}
 
-	page2, err := svc.List(context.Background(), &listcontract.Request{Limit: 2, Cursor: page1.NextCursor})
+	raw2, err := svc.List(context.Background(), &listcontract.Request{Limit: 2, Cursor: page1.NextCursor})
 	if err != nil {
 		t.Fatalf("page 2 error: %v", err)
 	}
+	page2 := raw2.(listcontract.List200JSONResponse)
 	if page2.HasMore {
 		t.Error("expected HasMore=false for last page")
 	}
@@ -114,10 +117,11 @@ func TestService_ListSingleDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
+	raw, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	resp := raw.(listcontract.List200JSONResponse)
 	if resp.HasMore {
 		t.Error("expected HasMore=false for single device")
 	}
@@ -139,10 +143,11 @@ func TestService_ListLimitOne(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 1})
+	raw, err := svc.List(context.Background(), &listcontract.Request{Limit: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	resp := raw.(listcontract.List200JSONResponse)
 	if !resp.HasMore {
 		t.Error("expected HasMore=true with limit=1 and 2 devices")
 	}
@@ -164,10 +169,11 @@ func TestService_ListSecondarySort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
+	raw, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	resp := raw.(listcontract.List200JSONResponse)
 	if len(resp.Data) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(resp.Data))
 	}

@@ -37,7 +37,7 @@ var errOracleStubInvoked = errors.New("oracle stub: handler reached service laye
 // before reaching service code.
 type stubLoginService struct{}
 
-func (s *stubLoginService) Login(_ context.Context, _ *logingen.Request) (*logingen.Response, error) {
+func (s *stubLoginService) Login(_ context.Context, _ *logingen.Request) (logingen.LoginResponseObject, error) {
 	return nil, errOracleStubInvoked
 }
 

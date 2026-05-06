@@ -36,13 +36,13 @@ func TestService_Register(t *testing.T) {
 		name       string
 		deviceName string
 		wantErr    bool
-		checkResp  func(t *testing.T, resp *registercontract.Response)
+		checkResp  func(t *testing.T, resp registercontract.Register201JSONResponse)
 	}{
 		{
 			name:       "valid registration",
 			deviceName: "sensor-a",
 			wantErr:    false,
-			checkResp: func(t *testing.T, resp *registercontract.Response) {
+			checkResp: func(t *testing.T, resp registercontract.Register201JSONResponse) {
 				require.NotNil(t, resp.Data)
 				assert.NotEmpty(t, resp.Data.ID)
 				assert.Equal(t, "sensor-a", resp.Data.Name)
@@ -68,7 +68,7 @@ func TestService_Register(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, resp)
 				if tc.checkResp != nil {
-					tc.checkResp(t, resp)
+					tc.checkResp(t, resp.(registercontract.Register201JSONResponse))
 				}
 			}
 		})
@@ -81,11 +81,12 @@ func TestService_Register_PersistsDevice(t *testing.T) {
 
 	resp, err := svc.Register(ctx, &registercontract.Request{Name: "sensor-b"})
 	require.NoError(t, err)
-	require.NotNil(t, resp.Data)
+	r := resp.(registercontract.Register201JSONResponse)
+	require.NotNil(t, r.Data)
 
-	stored, err := repo.GetByID(ctx, resp.Data.ID)
+	stored, err := repo.GetByID(ctx, r.Data.ID)
 	require.NoError(t, err)
-	assert.Equal(t, resp.Data.ID, stored.ID)
+	assert.Equal(t, r.Data.ID, stored.ID)
 	assert.Equal(t, "sensor-b", stored.Name)
 }
 
@@ -101,8 +102,9 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
 	require.NoError(t, err, "publish failure should not propagate as error")
 	require.NotNil(t, resp)
-	require.NotNil(t, resp.Data)
-	assert.NotEmpty(t, resp.Data.ID)
+	r := resp.(registercontract.Register201JSONResponse)
+	require.NotNil(t, r.Data)
+	assert.NotEmpty(t, r.Data.ID)
 }
 
 func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
@@ -149,9 +151,11 @@ func TestService_Register_DuplicateID_IsUnlikelyButHandled(t *testing.T) {
 	svc, _ := newTestService()
 	ctx := context.Background()
 
-	r1, err := svc.Register(ctx, &registercontract.Request{Name: "dev-1"})
+	resp1, err := svc.Register(ctx, &registercontract.Request{Name: "dev-1"})
 	require.NoError(t, err)
-	r2, err := svc.Register(ctx, &registercontract.Request{Name: "dev-2"})
+	resp2, err := svc.Register(ctx, &registercontract.Request{Name: "dev-2"})
 	require.NoError(t, err)
+	r1 := resp1.(registercontract.Register201JSONResponse)
+	r2 := resp2.(registercontract.Register201JSONResponse)
 	assert.NotEqual(t, r1.Data.ID, r2.Data.ID)
 }

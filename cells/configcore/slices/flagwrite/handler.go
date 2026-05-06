@@ -17,7 +17,7 @@ import (
 type CreateAdapter struct{ S *Service }
 
 // Create implements create.Service. Key/Enabled/RolloutPercentage/Description decoded by handler_gen.
-func (a CreateAdapter) Create(ctx context.Context, req *create.Request) (*create.Response, error) {
+func (a CreateAdapter) Create(ctx context.Context, req *create.Request) (create.CreateResponseObject, error) {
 	var enabled bool
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -31,7 +31,7 @@ func (a CreateAdapter) Create(ctx context.Context, req *create.Request) (*create
 	if err != nil {
 		return nil, err
 	}
-	return &create.Response{Data: toCreateResponseData(flag)}, nil
+	return create.Create201JSONResponse{Data: toCreateResponseData(flag)}, nil
 }
 
 // UpdateAdapter wraps Service to implement update.Service for http.config.flags.update.v1.
@@ -39,7 +39,7 @@ type UpdateAdapter struct{ S *Service }
 
 // Update implements update.Service. Key from path param; all body fields decoded and
 // range-validated (rolloutPercentage 0-100) by handler_gen before reaching here.
-func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (*update.Response, error) {
+func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (update.UpdateResponseObject, error) {
 	flag, err := a.S.Update(ctx, UpdateInput{
 		Key:               req.Key,
 		Enabled:           req.Enabled,
@@ -49,30 +49,30 @@ func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (*update
 	if err != nil {
 		return nil, err
 	}
-	return &update.Response{Data: toUpdateResponseData(flag)}, nil
+	return update.Update200JSONResponse{Data: toUpdateResponseData(flag)}, nil
 }
 
 // ToggleAdapter wraps Service to implement toggle.Service for http.config.flags.toggle.v1.
 type ToggleAdapter struct{ S *Service }
 
 // Toggle implements toggle.Service. Key from path param; Enabled from body, decoded by handler_gen.
-func (a ToggleAdapter) Toggle(ctx context.Context, req *toggle.Request) (*toggle.Response, error) {
+func (a ToggleAdapter) Toggle(ctx context.Context, req *toggle.Request) (toggle.ToggleResponseObject, error) {
 	flag, err := a.S.Toggle(ctx, req.Key, req.Enabled)
 	if err != nil {
 		return nil, err
 	}
-	return &toggle.Response{Data: toToggleResponseData(flag)}, nil
+	return toggle.Toggle200JSONResponse{Data: toToggleResponseData(flag)}, nil
 }
 
 // FlagDeleteAdapter wraps Service to implement flagsdelete.Service for http.config.flags.delete.v1.
 type FlagDeleteAdapter struct{ S *Service }
 
 // Delete implements flagsdelete.Service. Key from path param, decoded by handler_gen.
-func (a FlagDeleteAdapter) Delete(ctx context.Context, req *flagsdelete.Request) (*flagsdelete.Response, error) {
+func (a FlagDeleteAdapter) Delete(ctx context.Context, req *flagsdelete.Request) (flagsdelete.DeleteResponseObject, error) {
 	if err := a.S.Delete(ctx, req.Key); err != nil {
 		return nil, err
 	}
-	return &flagsdelete.Response{}, nil
+	return flagsdelete.Delete204NoContentResponse{}, nil
 }
 
 // Handler is the composite route handler for the flagwrite slice.

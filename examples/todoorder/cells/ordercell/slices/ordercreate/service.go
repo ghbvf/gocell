@@ -101,12 +101,12 @@ func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option
 
 // Create creates a new order and publishes an outbox event.
 // It implements createv1.Service.
-func (s *Service) Create(ctx context.Context, req *createv1.Request) (*createv1.Response, error) {
+func (s *Service) Create(ctx context.Context, req *createv1.Request) (createv1.CreateResponseObject, error) {
 	order, err := s.createInternal(ctx, req.Item)
 	if err != nil {
 		return nil, err
 	}
-	return toCreateResponse(order), nil
+	return createv1.Create201JSONResponse(toCreateResponse(order)), nil
 }
 
 // createInternal is the business logic core: creates an order and writes
@@ -148,11 +148,8 @@ func (s *Service) createInternal(ctx context.Context, item string) (*domain.Orde
 	return order, nil
 }
 
-func toCreateResponse(o *domain.Order) *createv1.Response {
-	if o == nil {
-		return nil
-	}
-	return &createv1.Response{
+func toCreateResponse(o *domain.Order) createv1.Response {
+	return createv1.Response{
 		Data: &createv1.ResponseData{
 			ID:     o.ID,
 			Item:   o.Item,

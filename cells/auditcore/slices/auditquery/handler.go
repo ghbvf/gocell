@@ -67,7 +67,7 @@ type ListAdapter struct {
 
 // List implements auditlist.Service. The request fields (actorId, from, to, limit,
 // cursor, eventType) are already decoded and basic-validated by handler_gen.
-func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (*auditlist.Response, error) {
+func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlist.ListResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
@@ -121,7 +121,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (*auditli
 	for _, e := range result.Items {
 		items = append(items, toListResponseDataItem(e))
 	}
-	return &auditlist.Response{
+	return auditlist.List200JSONResponse{
 		Data:       items,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,

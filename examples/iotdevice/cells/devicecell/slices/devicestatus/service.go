@@ -26,12 +26,12 @@ func NewService(repo domain.DeviceRepository, logger *slog.Logger) *Service {
 
 // Status implements statuscontract.Service: retrieves a device by ID and wraps
 // the result in the generated response type.
-func (s *Service) Status(ctx context.Context, req *statuscontract.Request) (*statuscontract.Response, error) {
+func (s *Service) Status(ctx context.Context, req *statuscontract.Request) (statuscontract.StatusResponseObject, error) {
 	device, err := s.GetStatus(ctx, req.ID)
 	if err != nil {
 		return nil, err
 	}
-	return &statuscontract.Response{
+	return statuscontract.Status200JSONResponse{
 		Data: &statuscontract.ResponseData{
 			ID:       device.ID,
 			Name:     device.Name,
