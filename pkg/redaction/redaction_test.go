@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
@@ -558,6 +559,105 @@ func TestRedactSlogAttr(t *testing.T) {
 			if got.Value.String() != tc.want.Value.String() {
 				t.Errorf("RedactSlogAttr(%v).Value = %q, want %q",
 					tc.in, got.Value.String(), tc.want.Value.String())
+			}
+		})
+	}
+}
+
+// customLogValuer implements slog.LogValuer for passthrough boundary testing.
+// It returns a fixed string value so the test is deterministic.
+type customLogValuer struct{}
+
+func (customLogValuer) LogValue() slog.Value {
+	return slog.StringValue("logvaluer-resolved-value")
+}
+
+// TestRedactSlogAttr_PassthroughKinds locks the baseline behavior of
+// redactSlogValue for non-string slog.Value kinds: bool, int64, float64,
+// time.Time, slog.Any (struct), and slog.LogValuer all pass through unchanged.
+//
+// This is intentional fail-open design: the regex pipeline only matches
+// `key=value` text shapes, so numeric/temporal/structured values cannot
+// carry the patterns. Runtime data entering errcode.Error must go through
+// errcode.WithDetails (type-checked to slog.Attr), which is the first line
+// of defense (DETAILS-SLOG-ATTR-01 archtest).
+//
+// If a new direct-write path for slog.Any(callerSuppliedStruct) is added,
+// extend redactSlogValue with ValueResolve and add cases here.
+func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
+	t.Parallel()
+
+	fixedTime := time.Unix(1700000000, 0)
+
+	cases := []struct {
+		name           string
+		attr           slog.Attr
+		wantValueEqual bool // true = value unchanged (passthrough); false = value changed (redacted)
+	}{
+		{
+			name:           "bool passthrough",
+			attr:           slog.Bool("flag", true),
+			wantValueEqual: true,
+		},
+		{
+			name:           "int64 passthrough",
+			attr:           slog.Int64("count", 42),
+			wantValueEqual: true,
+		},
+		{
+			name:           "float64 passthrough",
+			attr:           slog.Float64("ratio", 3.14),
+			wantValueEqual: true,
+		},
+		{
+			name:           "time passthrough",
+			attr:           slog.Time("ts", fixedTime),
+			wantValueEqual: true,
+		},
+		{
+			name:           "any struct passthrough",
+			attr:           slog.Any("obj", struct{ X int }{X: 1}),
+			wantValueEqual: true,
+		},
+		{
+			name:           "logvaluer passthrough",
+			attr:           slog.Any("v", customLogValuer{}),
+			wantValueEqual: true,
+		},
+		{
+			// Control case: string with sensitive key=value IS redacted.
+			name:           "string redacted (control)",
+			attr:           slog.String("msg", "password=secret"),
+			wantValueEqual: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			original := tc.attr.Value.String()
+			got := redaction.RedactSlogAttr(tc.attr)
+
+			if got.Key != tc.attr.Key {
+				t.Errorf("RedactSlogAttr key changed: got %q, want %q", got.Key, tc.attr.Key)
+			}
+
+			resultEqual := got.Value.String() == original
+			if resultEqual != tc.wantValueEqual {
+				if tc.wantValueEqual {
+					t.Errorf(
+						"RedactSlogAttr(%v): expected passthrough (value unchanged), "+
+							"but got %q (original %q). KindLogValuer/KindAny should not be "+
+							"recursively scanned — fail-open design per Known limitations.",
+						tc.attr, got.Value.String(), original,
+					)
+				} else {
+					t.Errorf(
+						"RedactSlogAttr(%v): expected redaction (value changed), "+
+							"but value unchanged %q. String control case must trigger regex.",
+						tc.attr, got.Value.String(),
+					)
+				}
 			}
 		})
 	}
