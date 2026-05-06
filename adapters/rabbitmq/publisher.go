@@ -26,11 +26,12 @@ var _ outbox.Publisher = (*Publisher)(nil)
 // ref: uber-go/fx app.go StopTimeout — ctx carries shared shutdown budget
 // ref: Watermill defaultChannelProvider — ephemeral per-publish channel
 type Publisher struct {
-	conn   *Connection
-	mu     sync.Mutex // guards closed/wg.Add ordering to prevent Add-after-Wait race
-	closed atomic.Bool
-	wg     sync.WaitGroup
-	clock  clock.Clock
+	conn      *Connection
+	mu        sync.Mutex // guards closed/wg.Add ordering to prevent Add-after-Wait race
+	closed    atomic.Bool
+	wg        sync.WaitGroup
+	clock     clock.Clock
+	collector PublisherCollector
 }
 
 // PublisherOption configures a Publisher.
@@ -45,11 +46,21 @@ func WithPublisherClock(clk clock.Clock) PublisherOption {
 	}
 }
 
+// WithPublisherCollector injects an observability collector. Defaults to
+// NoopPublisherCollector. Production wiring uses NewProviderPublisherCollector.
+func WithPublisherCollector(c PublisherCollector) PublisherOption {
+	return func(p *Publisher) {
+		if c != nil {
+			p.collector = c
+		}
+	}
+}
+
 // NewPublisher creates a Publisher backed by the given Connection.
 // A clock.Clock must be supplied via WithPublisherClock; NewPublisher panics
 // if no clock is provided.
 func NewPublisher(conn *Connection, opts ...PublisherOption) *Publisher {
-	p := &Publisher{conn: conn}
+	p := &Publisher{conn: conn, collector: NoopPublisherCollector{}}
 	for _, o := range opts {
 		o(p)
 	}
@@ -105,8 +116,10 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		// Preserve terminal error code from Connection so callers can distinguish
 		// "permanent config failure" / "reconnect exhausted" from "transient publish failure".
 		if isTerminalConnectionError(err) {
+			p.collector.RecordPublishFailure(PublishFailureAcquireChannel)
 			return err
 		}
+		p.collector.RecordPublishFailure(PublishFailureAcquireChannel)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: acquire channel for publish", err)
 	}
 	// Close the channel after use instead of returning it to the shared pool.
@@ -115,21 +128,23 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	// full, deadlocking ALL channels on the connection. Watermill uses the
 	// same strategy (ephemeral channel per publish) as the default.
 	//
+	// CloseEphemeralChannel combines ch.Close() with inUseChannels.Add(-1)
+	// to symmetrically roll back the pool-miss counter increment performed by
+	// AcquireChannel. Using bare ch.Close() here would permanently leak the
+	// counter slot and exhaust MaxChannelsPerConn after 256 publishes.
+	//
 	// ref: Watermill defaultChannelProvider — open, use, close per publish.
-	defer func() {
-		if closeErr := ch.Close(); closeErr != nil {
-			slog.Debug("rabbitmq: error closing publish channel",
-				slog.Any("error", closeErr))
-		}
-	}()
+	defer p.conn.CloseEphemeralChannel(ch)
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
+		p.collector.RecordPublishFailure(PublishFailureDeclareExchange)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: declare exchange", err)
 	}
 
 	// Enable confirm mode.
 	if err := ch.Confirm(false); err != nil {
+		p.collector.RecordPublishFailure(PublishFailureConfirmMode)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: enable confirm mode", err)
 	}
 
@@ -143,6 +158,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	}
 
 	if err := ch.PublishWithContext(ctx, topic, "", false, false, msg); err != nil {
+		p.collector.RecordPublishFailure(PublishFailurePublishSend)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: publish message", err)
 	}
 
@@ -152,19 +168,31 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	select {
 	case confirm, ok := <-confirmCh:
 		if !ok {
+			slog.Warn("rabbitmq: confirm channel closed before broker confirmation",
+				slog.String("topic", topic))
+			p.collector.RecordPublishFailure(PublishFailureChanClosed)
 			return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: confirm channel closed")
 		}
 		if !confirm.Ack {
-			return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: broker nacked message")
+			slog.Warn("rabbitmq: broker NACKed published message",
+				slog.String("topic", topic),
+				slog.Uint64("delivery_tag", confirm.DeliveryTag))
+			p.collector.RecordPublishFailure(PublishFailureNack)
+			return errcode.New(errcode.KindInternal, ErrAdapterAMQPNack, "rabbitmq: broker nacked message")
 		}
 		slog.Debug("rabbitmq: message published and confirmed",
 			slog.String("topic", topic))
 		return nil
 
 	case <-confirmTimer.C():
+		slog.Warn("rabbitmq: publish confirm timer fired before broker reply",
+			slog.String("topic", topic),
+			slog.Duration("budget", p.conn.config.ConfirmTimeout))
+		p.collector.RecordPublishFailure(PublishFailureTimeout)
 		return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: publish confirm timed out")
 
 	case <-ctx.Done():
+		// Caller-initiated cancel — not a wire-level failure, no collector record.
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: publish context canceled", ctx.Err())
 	}
 }

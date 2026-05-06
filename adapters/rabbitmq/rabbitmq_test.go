@@ -1303,7 +1303,8 @@ func TestPublisher_Publish_Nacked(t *testing.T) {
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT")
+	// NACK is now a distinct error code from confirm timeout.
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_NACK")
 }
 
 func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
@@ -1964,9 +1965,9 @@ func TestSubscriber_AddRemoveRun(t *testing.T) {
 		runs:    make(map[*subscriptionRun]struct{}),
 	}
 
-	r1 := newSubscriptionRun(newMockChannel(), "tag1")
-	r2 := newSubscriptionRun(newMockChannel(), "tag2")
-	r3 := newSubscriptionRun(newMockChannel(), "tag3")
+	r1 := newSubscriptionRun(newMockChannel(), "tag1", nil)
+	r2 := newSubscriptionRun(newMockChannel(), "tag2", nil)
+	r3 := newSubscriptionRun(newMockChannel(), "tag3", nil)
 
 	sub.addRun(r1)
 	sub.addRun(r2)
@@ -1987,7 +1988,7 @@ func TestSubscriber_AddRemoveRun(t *testing.T) {
 	sub.runsMu.Unlock()
 
 	// Remove a run that is not tracked — should be a no-op.
-	sub.removeRun(newSubscriptionRun(newMockChannel(), "unknown"))
+	sub.removeRun(newSubscriptionRun(newMockChannel(), "unknown", nil))
 
 	sub.runsMu.Lock()
 	assert.Len(t, sub.runs, 2)

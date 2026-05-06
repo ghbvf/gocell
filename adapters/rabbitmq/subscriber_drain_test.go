@@ -98,12 +98,17 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 		t.Fatal("handlers did not start within 3s")
 	}
 
-	// Call StopIntake — should close stopIntakeCh and call ch.Cancel. With
-	// the concurrent Cancel dispatch (F1 fix), we wait for cancelCalled via
-	// Eventually so the test does not race with the dispatch goroutine.
-	err := sub.StopIntake(ctx)
-	require.NoError(t, err)
+	// Call StopIntake in a goroutine — StopIntake now waits for in-flight
+	// handlers to complete (inflight-wait phase). The handlers are blocked on
+	// <-released, so we must release them before StopIntake can return.
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- sub.StopIntake(ctx)
+	}()
 
+	// Wait until StopIntake has issued basic.cancel to the broker (F1 fix:
+	// concurrent Cancel dispatch). This confirms stopIntakeCh is closed and
+	// consumeLoop has entered drainRemaining.
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
@@ -111,27 +116,32 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms,
 		"StopIntake must call ch.Cancel to stop broker delivery")
 
-	// Release the handlers so they can complete.
+	// Release the handlers so they can complete. StopIntake (inflight-wait phase)
+	// unblocks once all handlers return.
 	close(released)
 
-	// Wait until all 3 handlers have finished.
-	require.Eventually(t, func() bool {
-		return handlerCount.Load() == int64(numDeliveries)
-	}, testtime.D3s, testtime.FastPoll, "all %d deliveries must be handled", numDeliveries)
+	// StopIntake must complete after all handlers finish.
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err, "StopIntake must return nil after all handlers complete")
+	case <-time.After(testtime.D3s):
+		t.Fatal("StopIntake did not return after handlers released")
+	}
+
+	// All handlers must have run.
+	assert.Equal(t, int64(numDeliveries), handlerCount.Load(),
+		"all prefetched deliveries must be processed")
 
 	// Simulate broker closing the deliveries channel after basic.cancel.
+	// drainRemaining exits and Subscribe returns.
 	close(ch.consumeDeliveries)
 
-	// consumeLoop (drainRemaining) should exit cleanly.
 	select {
 	case err := <-subDone:
 		assert.NoError(t, err, "Subscribe must return nil after clean drain")
 	case <-time.After(testtime.D3s):
 		t.Fatal("Subscribe did not return after drain completed")
 	}
-
-	assert.Equal(t, int64(numDeliveries), handlerCount.Load(),
-		"all prefetched deliveries must be processed")
 
 	// Verify every delivery was Ack'd to the broker.
 	ch.mu.Lock()
@@ -421,9 +431,19 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	assert.Less(t, elapsed, testtime.D500ms,
 		"StopIntake must return within a short margin of ctx deadline; got %s", elapsed)
 
+	// Close deliveries channel so drainRemaining exits promptly. After StopIntake
+	// closes stopIntakeCh, consumeLoop enters drainRemaining on a detached context;
+	// subCancel() alone cannot interrupt it. Closing deliveries simulates the
+	// broker acknowledging basic.cancel.
+	close(ch.consumeDeliveries)
+
 	// Clean up: cancel Subscribe so the goroutine exits.
 	subCancel()
-	<-subDone
+	select {
+	case <-subDone:
+	case <-time.After(testtime.D3s):
+		t.Fatal("Subscribe did not exit after deliveries channel closed")
+	}
 }
 
 // TestSubscriber_StopIntake_PerCallTimeout verifies that a single hanging
@@ -484,8 +504,19 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	assert.Less(t, elapsed, testtime.D1s,
 		"StopIntake must not exceed per-call timeout substantially; got %s", elapsed)
 
+	// Close deliveries channel to unblock drainRemaining. After StopIntake,
+	// drainRemaining runs on a detached context and cannot be interrupted by
+	// subCancel() — it exits only when the broker closes the delivery channel
+	// or the drain timer fires. Simulating broker cancel-ack here avoids waiting
+	// the full 30s drain deadline.
+	close(ch.consumeDeliveries)
+
 	subCancel()
-	<-subDone
+	select {
+	case <-subDone:
+	case <-time.After(testtime.D3s):
+		t.Fatal("Subscribe did not exit after deliveries channel closed")
+	}
 }
 
 // TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO verifies the key
@@ -565,6 +596,17 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 		t.Fatal("StopIntake did not complete after hang released")
 	}
 
+	// Close the deliveries channel to let drainRemaining exit. After StopIntake,
+	// drainRemaining runs on a detached context (context.WithoutCancel) so it
+	// cannot be interrupted by subCancel() — it waits for the broker to close the
+	// delivery channel or for the drain timer. Closing it here simulates the broker
+	// acknowledging basic.cancel, allowing Subscribe to return promptly.
+	close(ch.consumeDeliveries)
+
 	subCancel()
-	<-subDone
+	select {
+	case <-subDone:
+	case <-time.After(testtime.D3s):
+		t.Fatal("Subscribe did not exit after deliveries channel closed")
+	}
 }

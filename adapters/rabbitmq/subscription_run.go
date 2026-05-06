@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,8 +28,20 @@ import (
 type subscriptionRun struct {
 	ch          AMQPChannel
 	consumerTag string
-	localWg     sync.WaitGroup // tracks processDelivery goroutines of this run only
-	closed      sync.Once
+	// conn is the Connection that allocated ch. Used by waitAndClose to call
+	// CloseEphemeralChannel (the single canonical AMQPChannel destruction path)
+	// so that inUseChannels is decremented on every subscription teardown.
+	conn    *Connection
+	localWg sync.WaitGroup // tracks processDelivery goroutines of this run only
+	// inflight is an atomic counter mirroring localWg adds/dones. It is the
+	// authoritative signal observed by Subscriber.StopIntake Phase 2 (which
+	// polls it instead of calling localWg.Wait, to avoid the Add-after-Wait
+	// race against drainRemaining's concurrent registerDelivery).
+	// localWg remains the synchronization barrier only for waitAndClose,
+	// which is invoked AFTER consumeLoop has returned (so no concurrent Add
+	// can occur).
+	inflight atomic.Int64
+	closed   sync.Once
 	// wgDoneCh is closed exactly once when all in-flight deliveries have
 	// completed (localWg.Wait() returns in any wg-waiter goroutine).
 	// Initialized by newSubscriptionRun; closeWgDone ensures only one of the
@@ -37,11 +50,15 @@ type subscriptionRun struct {
 	closeWgDone sync.Once
 }
 
-// newSubscriptionRun creates a subscriptionRun for the given channel and consumer tag.
-func newSubscriptionRun(ch AMQPChannel, tag string) *subscriptionRun {
+// newSubscriptionRun creates a subscriptionRun for the given channel, consumer tag,
+// and the Connection that allocated the channel. conn is required so that
+// waitAndClose can call conn.CloseEphemeralChannel (the single canonical
+// AMQPChannel destruction path) to correctly decrement inUseChannels.
+func newSubscriptionRun(ch AMQPChannel, tag string, conn *Connection) *subscriptionRun {
 	return &subscriptionRun{
 		ch:          ch,
 		consumerTag: tag,
+		conn:        conn,
 		wgDoneCh:    make(chan struct{}),
 	}
 }
@@ -51,12 +68,21 @@ func newSubscriptionRun(ch AMQPChannel, tag string) *subscriptionRun {
 // calls localWg.Wait() to avoid an Add-after-Wait race.
 func (r *subscriptionRun) registerDelivery() {
 	r.localWg.Add(1)
+	r.inflight.Add(1)
 }
 
 // markDeliveryDone marks one processDelivery goroutine as finished.
 // Must be called with defer inside each processDelivery goroutine.
 func (r *subscriptionRun) markDeliveryDone() {
 	r.localWg.Done()
+	r.inflight.Add(-1)
+}
+
+// inflightCount returns the current number of in-flight processDelivery
+// goroutines. Used for diagnostic logging only — use localWg.Wait() for
+// synchronization barriers.
+func (r *subscriptionRun) inflightCount() int64 {
+	return r.inflight.Load()
 }
 
 // waitAndClose drains in-flight deliveries then closes the AMQP channel exactly once.
@@ -74,6 +100,16 @@ func (r *subscriptionRun) markDeliveryDone() {
 // ref: rabbitmq/amqp091-go channel.go IsClosed short-circuit on double close
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan→WaitGroup→ch.Close
 func (r *subscriptionRun) waitAndClose(ctx context.Context) error {
+	// Contract: callers MUST guarantee that no further registerDelivery will
+	// occur for this run before invoking waitAndClose. Production callers
+	// satisfy this transitively — subscribeOnce only calls waitAndClose after
+	// consumeLoop returns, and Subscriber.Close only sweeps the runs map after
+	// s.wg.Wait has drained every processDelivery goroutine. With that
+	// guarantee, the localWg.Wait below cannot race with a concurrent Add.
+	// Subscriber.StopIntake intentionally does NOT call localWg.Wait — it polls
+	// the atomic inflight counter directly, which is the canonical way to
+	// observe drain progress while drainRemaining may still be dispatching.
+	//
 	// Phase 1: wait for in-flight deliveries bounded by ctx.
 	// The wg-waiter goroutine closes r.wgDoneCh when localWg.Wait() returns,
 	// providing a happens-before signal for goroutine-exit assertions in tests.
@@ -95,17 +131,19 @@ func (r *subscriptionRun) waitAndClose(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	// Phase 2: close the AMQP channel exactly once.
-	var closeErr error
+	// Phase 2: close the AMQP channel exactly once via the canonical destruction
+	// path, which also decrements inUseChannels to release the cap slot.
+	// conn is nil only in unit tests that construct subscriptionRun directly
+	// without going through subscribeOnce; in that case fall back to a bare
+	// ch.Close() so the WaitGroup/close-once mechanics are still testable.
 	r.closed.Do(func() {
-		if err := r.ch.Close(); err != nil {
-			slog.Debug("rabbitmq: subscriptionRun ch.Close error",
-				slog.String("consumer_tag", r.consumerTag),
-				slog.Any("error", err))
-			closeErr = err
+		if r.conn != nil {
+			r.conn.CloseEphemeralChannel(r.ch)
+		} else {
+			_ = r.ch.Close()
 		}
 	})
-	return closeErr
+	return nil
 }
 
 // wgDone returns a channel that is closed when all in-flight deliveries have

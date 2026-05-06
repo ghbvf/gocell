@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -26,14 +27,16 @@ import (
 
 // Error codes for the RabbitMQ adapter.
 const (
-	ErrAdapterAMQPConnect          errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
-	ErrAdapterAMQPConnectPermanent errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
-	ErrAdapterAMQPPublish          errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
-	ErrAdapterAMQPConfirmTimeout   errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
-	ErrAdapterAMQPSubscribe        errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
-	ErrAdapterAMQPConsume          errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
-	ErrAdapterAMQPReconnecting     errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
-	ErrAdapterAMQPCloseTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CLOSE_TIMEOUT"
+	ErrAdapterAMQPConnect            errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
+	ErrAdapterAMQPConnectPermanent   errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
+	ErrAdapterAMQPPublish            errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
+	ErrAdapterAMQPConfirmTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
+	ErrAdapterAMQPSubscribe          errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
+	ErrAdapterAMQPConsume            errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPReconnecting       errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
+	ErrAdapterAMQPCloseTimeout       errcode.Code = "ERR_ADAPTER_AMQP_CLOSE_TIMEOUT"
+	ErrAdapterAMQPChannelMaxExceeded errcode.Code = "ERR_ADAPTER_AMQP_CHANNEL_MAX_EXCEEDED"
+	ErrAdapterAMQPNack               errcode.Code = "ERR_ADAPTER_AMQP_NACK"
 )
 
 const (
@@ -44,6 +47,13 @@ const (
 	defaultRMQReconnectBaseDelay = 1 * time.Second
 	// defaultRMQConfirmTimeout is the per-publish confirm wait deadline.
 	defaultRMQConfirmTimeout = 5 * time.Second
+	// defaultRMQMaxChannelsPerConn caps in-flight AMQP channels per physical
+	// TCP connection. Far below amqp091-go's negotiated channel_max default
+	// (2047) so adapter-side fail-fast triggers before the broker shuts the
+	// connection.
+	//
+	// ref: rabbitmq/amqp091-go connection.go openTune (defaultChannelMax = 2<<10-1).
+	defaultRMQMaxChannelsPerConn = 256
 )
 
 // Pre-allocated Health() errors to avoid per-call allocation.
@@ -307,6 +317,17 @@ type Config struct {
 	// ConfirmTimeout is the timeout for publisher confirm mode.
 	// Default: 5s.
 	ConfirmTimeout time.Duration
+
+	// MaxChannelsPerConn caps the number of in-flight channels acquired
+	// from one Connection. Pool-miss acquisitions check this counter and
+	// return ErrAdapterAMQPChannelMaxExceeded when the cap is reached.
+	//
+	// Values:
+	//   0  — auto-default to defaultRMQMaxChannelsPerConn (=256) at
+	//        setDefaults time. Production NewConnection always populates
+	//        this branch.
+	//   >0 — cap value as configured.
+	MaxChannelsPerConn int
 }
 
 func (c *Config) setDefaults() {
@@ -321,6 +342,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.ConfirmTimeout <= 0 {
 		c.ConfirmTimeout = defaultRMQConfirmTimeout
+	}
+	if c.MaxChannelsPerConn <= 0 {
+		c.MaxChannelsPerConn = defaultRMQMaxChannelsPerConn
 	}
 }
 
@@ -446,6 +470,13 @@ type Connection struct {
 	lastError         string
 	lastDisconnectAt  time.Time
 	reconnectAttempts int
+
+	// inUseChannels counts channels handed out to callers (subscribers'
+	// per-subscription channels + publishers' ephemeral channels) net of
+	// returns. Pool-miss path increments before allocation, pool-full /
+	// close-path decrement on release. Reads are eventually-consistent
+	// snapshot reads — exact-time reads not required for fail-fast.
+	inUseChannels atomic.Int32
 }
 
 // runtimePermanentConfirmHits is the number of consecutive inferred-sentinel
@@ -792,10 +823,7 @@ func (c *Connection) drainChannelPool() {
 	for {
 		select {
 		case ch := <-c.channelPool:
-			if err := ch.Close(); err != nil {
-				slog.Debug("rabbitmq: error closing pooled channel",
-					slog.Any("error", err))
-			}
+			c.CloseEphemeralChannel(ch)
 		default:
 			return
 		}
@@ -804,6 +832,20 @@ func (c *Connection) drainChannelPool() {
 
 // AcquireChannel gets a channel from the pool or creates a new one.
 // Returns the permanent error if the connection is in terminal state.
+//
+// Invariants:
+//   - Pool hit (idle channel returned): inUseChannels unchanged — the broker
+//     channel was already counted when it was first allocated.
+//   - Pool miss: inUseChannels.Add(1) before allocation; rolled back on cap
+//     exceeded or broker error so over-cap allocations cannot leak counter
+//     slots. Note: under heavy concurrency the counter can momentarily
+//     read above MaxChannelsPerConn between the Add(1) and the rollback
+//     Add(-1); but the broker-side Channel() call only fires after the
+//     cap check passes, so the broker never observes more than cap
+//     channels open simultaneously.
+//   - MaxChannelsPerConn > 0: cap enforced. setDefaults ensures this is
+//     always the case after NewConnection; the cap check (cap > 0) is a
+//     no-op defensive guard only.
 func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	c.mu.RLock()
 	permErr := c.permanentErr
@@ -816,7 +858,8 @@ func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 		return nil, permErr
 	}
 
-	// Try to get from pool first.
+	// Try to get from pool first — pool hit does not change inUseChannels
+	// because the channel's broker slot was already counted on first allocation.
 	select {
 	case ch := <-c.channelPool:
 		return ch, nil
@@ -827,24 +870,66 @@ func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection not available")
 	}
 
+	// Pool miss — increment in-use BEFORE allocating; rollback on cap miss
+	// or broker error so over-cap allocations cannot leak counter slots.
+	next := c.inUseChannels.Add(1)
+	if cap := c.config.MaxChannelsPerConn; cap > 0 && int(next) > cap {
+		c.inUseChannels.Add(-1)
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterAMQPChannelMaxExceeded,
+			"rabbitmq: channel cap reached for connection")
+	}
+
 	ch, err := conn.Channel()
 	if err != nil {
+		c.inUseChannels.Add(-1)
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: open channel", err)
 	}
 
 	return ch, nil
 }
 
-// ReleaseChannel returns a channel to the pool. If the pool is full, the channel is closed.
+// ReleaseChannel returns a channel to the pool. If the pool is full, the
+// channel is closed and inUseChannels is decremented.
+//
+// Invariants (mirror of AcquireChannel):
+//   - Pool return: broker channel stays held (pool holds it), inUseChannels
+//     unchanged — the slot is still "in use" by the idle pool.
+//   - Pool full path: close the excess channel, decrement inUseChannels so the
+//     slot is available for the next pool-miss acquisition.
 func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 	select {
 	case c.channelPool <- ch:
+		// Returned to pool — broker channel still held; in-use unchanged.
+		return
 	default:
-		if err := ch.Close(); err != nil {
-			slog.Debug("rabbitmq: error closing excess channel",
-				slog.Any("error", err))
-		}
 	}
+	// Pool full — close the channel and decrement in-use.
+	c.CloseEphemeralChannel(ch)
+}
+
+// CloseEphemeralChannel closes ch and decrements inUseChannels. This is the
+// single canonical API for all AMQPChannel destruction paths in this package.
+//
+// Every site that destroys an AMQPChannel MUST call this method instead of
+// calling ch.Close() directly. Direct ch.Close() calls bypass the counter
+// decrement and permanently leak MaxChannelsPerConn slots, causing false
+// "channel cap reached" errors (ERR_ADAPTER_AMQP_CHANNEL_MAX_EXCEEDED) after
+// enough subscriptions reconnect or publishers run.
+//
+// Covered destruction paths (see RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01 archtest):
+//   - drainChannelPool: idle-pool channels drained on reconnect
+//   - ReleaseChannel (pool-full path): excess channel on release
+//   - Subscriber.closeChannel: setup-failure cleanup in subscribeOnce
+//   - subscriptionRun.waitAndClose: normal subscription teardown
+//
+// Exception: CloseEphemeralChannel and ReleaseChannel themselves contain the
+// one allowed ch.Close() call each (the archtest whitelist covers them).
+func (c *Connection) CloseEphemeralChannel(ch AMQPChannel) {
+	if err := ch.Close(); err != nil {
+		slog.Debug("rabbitmq: error closing ephemeral channel",
+			slog.Any("error", err))
+	}
+	c.inUseChannels.Add(-1)
 }
 
 // Health checks if the connection is alive. Returns a distinct error code per
