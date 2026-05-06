@@ -651,10 +651,15 @@ func TestWriteErrorWithStatus_5xxKindNormalize(t *testing.T) {
 			wantDetailsLen: 0,
 		},
 		{
-			name:           "501 not implemented normalized",
+			// 501 wire collapses to ErrInternal because Kind.PublicCode()
+			// returns ErrInternal for every 5xx Kind except KindUnavailable
+			// /KindDeadlineExceeded. Even when ecErr.Kind starts as
+			// KindUnavailable, the typed-envelope status takes priority and
+			// the wire body normalizes to KindInternal+ErrInternal.
+			name:           "501 not implemented → internal wire",
 			status:         http.StatusNotImplemented,
 			ecErr:          errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "z"),
-			wantWireCode:   errcode.ErrNotImplemented,
+			wantWireCode:   errcode.ErrInternal,
 			wantDetailsLen: 0,
 		},
 	}

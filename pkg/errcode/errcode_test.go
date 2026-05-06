@@ -130,7 +130,7 @@ func TestPublicCodeForStatus(t *testing.T) {
 		want   Code
 	}{
 		{"500 internal", http.StatusInternalServerError, ErrInternal},
-		{"501 not implemented", http.StatusNotImplemented, ErrNotImplemented},
+		{"501 not implemented → internal", http.StatusNotImplemented, ErrInternal},
 		{"502 bad gateway → internal", http.StatusBadGateway, ErrInternal},
 		{"503 service unavailable", http.StatusServiceUnavailable, ErrServiceUnavailable},
 		{"504 gateway timeout", http.StatusGatewayTimeout, ErrServerTimeout},

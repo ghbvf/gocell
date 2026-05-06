@@ -108,9 +108,12 @@ func WriteErrorWithStatus(ctx context.Context, w http.ResponseWriter, status int
 			out = errcode.New(errcode.KindUnavailable, publicCode, msgServiceUnavailable)
 		case http.StatusGatewayTimeout:
 			out = errcode.New(errcode.KindDeadlineExceeded, publicCode, msgGatewayTimeout)
-		case http.StatusNotImplemented:
-			out = errcode.New(errcode.KindNotImplemented, publicCode, msgInternalServerError)
 		default:
+			// 500/501/502/507/... — all collapse to KindInternal+ErrInternal
+			// on wire (Kind.PublicCode() returns ErrInternal for every 5xx
+			// Kind except KindUnavailable/KindDeadlineExceeded). KindInternal
+			// here forces IsClient()=false so MarshalJSON strips Details as
+			// required by the v1 schema's 5xx-details=[] invariant.
 			out = errcode.New(errcode.KindInternal, publicCode, msgInternalServerError)
 		}
 	}

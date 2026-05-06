@@ -97,17 +97,14 @@ func (k Kind) publicMessage() string {
 // Used by framework-owned raw responses that start from a status before
 // constructing an Error.
 //
-// Unmapped 5xx (e.g. 502 Bad Gateway, 507 Insufficient Storage) fall to
-// ErrInternal as the canonical "operation failed; details on server" code —
-// no separate wire constant exists for them. Add a case here only when both
-// the upstream status appears in a contract.yaml responses[] and a dedicated
-// error code is added in errcode.go.
+// Only KindUnavailable (503) and KindDeadlineExceeded (504) have dedicated
+// wire codes; every other 5xx (500/501/502/507/...) collapses to ErrInternal
+// to match Kind.PublicCode(), which Error.MarshalJSON applies during 5xx
+// projection. Adding a new dedicated 5xx code requires extending
+// Kind.PublicCode() in tandem so the status→code and Kind→code mappings
+// stay aligned.
 func PublicCodeForStatus(status int) Code {
 	switch status {
-	case http.StatusInternalServerError:
-		return ErrInternal
-	case http.StatusNotImplemented:
-		return ErrNotImplemented
 	case http.StatusServiceUnavailable:
 		return ErrServiceUnavailable
 	case http.StatusGatewayTimeout:
