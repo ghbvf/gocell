@@ -26,5 +26,6 @@ passCriteria:
     mode: auto
     checkRef: journey.J-typed-envelope-roundtrip.5xx-log-redact
   - text: visit 方法采用 buffer-then-commit (encode 到 bytes.Buffer 后再 WriteHeader)，与 oapi-codegen / Kratos / go-zero 三家上游共识一致
-    mode: auto
+    mode: manual
+    # manual: archtest VISIT-BUFFER-THEN-COMMIT-01 is the authoritative static guard; runtime smoke is redundant
     checkRef: journey.J-typed-envelope-roundtrip.buffer-then-commit

@@ -596,7 +596,6 @@ func TestWriteErrorBody_HappyPathStatusReachesWire(t *testing.T) {
 // failure mechanism. We can't easily inject one without a wrapper type;
 // the test below instead verifies the invariant by direct call to the
 // sentinel writer (which is what the fail-closed branch invokes).
-type _ = struct{}
 
 // TestWriteErrorBody_FailClosedOnMarshalFailure verifies writeErrorBody's
 // fail-closed contract via the sentinel writer in isolation: marshal
@@ -732,4 +731,36 @@ func TestWriteErrorBody_PreservesInt64Precision(t *testing.T) {
 	// notation, no ".0", no "9007199254740992" rounding.
 	assert.Contains(t, rec.Body.String(), `"value":9007199254740993`,
 		"int64 detail must round-trip without precision loss")
+}
+
+// ioFailingWriter is a writer that fails after writing failAfter bytes.
+// Used to exercise the io.Writer error path in encodeErrorEnvelopeTo.
+type ioFailingWriter struct {
+	failAfter int
+	written   int
+}
+
+func (w *ioFailingWriter) Write(p []byte) (int, error) {
+	if w.written >= w.failAfter {
+		return 0, errors.New("simulated io failure")
+	}
+	n := len(p)
+	if n > w.failAfter-w.written {
+		n = w.failAfter - w.written
+	}
+	w.written += n
+	return n, nil
+}
+
+// TestEncodeErrorEnvelopeTo_FailingWriter verifies that encodeErrorEnvelopeTo
+// propagates a write error when the underlying io.Writer fails. This is only
+// reachable now that the parameter type is io.Writer (not *bytes.Buffer), which
+// makes the function directly testable with a synthetic failing writer.
+func TestEncodeErrorEnvelopeTo_FailingWriter(t *testing.T) {
+	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "fail path test")
+	w := &ioFailingWriter{failAfter: 0}
+	err := encodeErrorEnvelopeTo(w, context.Background(), ec)
+	if err == nil {
+		t.Fatal("want err on io failure, got nil")
+	}
 }

@@ -78,6 +78,11 @@ func TestVisitBufferThenCommit(t *testing.T) {
 // whose receiver type ends in "JSONResponse" (the success body-bearing variant)
 // follows the buffer-then-commit pattern: encode into bytes.Buffer first,
 // then WriteHeader, then buf.WriteTo(w).
+//
+// Excludes NoContentResponse (无 body, 不存在 buffer-then-commit 场景) 与
+// ErrorResponse (走 WriteErrorWithStatus 而非 visit-self-render；其完整性
+// 由 5xx wire-code single-source archtest 与 typed envelope C18 链头守
+// 共同覆盖)。
 func checkVisitBufferThenCommit(t *testing.T, path string) {
 	t.Helper()
 	fset := token.NewFileSet()

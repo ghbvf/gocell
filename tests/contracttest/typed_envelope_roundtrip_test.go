@@ -121,10 +121,4 @@ func TestJourney_TypedEnvelopeRoundtrip(t *testing.T) {
 		assert.NotContains(t, logs, "secret123", "5xx slog must NOT contain raw secret")
 	})
 
-	t.Run("buffer-then-commit", func(t *testing.T) {
-		// 验证由 archtest VISIT-BUFFER-THEN-COMMIT-01 静态守卫；
-		// 此运行时 case 仅记录指针，确保 Journey 自动验收命中归档
-		// 详见 tools/archtest/visit_buffer_then_commit_test.go
-		t.Log("VISIT-BUFFER-THEN-COMMIT-01 archtest is the authoritative guard; runtime smoke skipped")
-	})
 }
