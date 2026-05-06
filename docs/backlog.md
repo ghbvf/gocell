@@ -1,201 +1,309 @@
 # GoCell Backlog
 
 > **单源 backlog** — 按 14 capability units 主轴组织。  
-> 框架设计稿：[`docs/plans/202605070330-031-backlog-capability-framework.md`](plans/202605070330-031-backlog-capability-framework.md)  
 > 主轴权威源：[`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md) §1  
-> 目录说明：[`docs/backlog/README.md`](backlog/README.md)
+> 历史归档：[`docs/backlog/archive/`](backlog/archive/)
 >
-> 基线：`origin/develop @ 18a06ab7`（2026-05-07）  
-> 状态：**P1 骨架阶段** — 各 capability 章节仅含 1 行 `[EXAMPLE]` 占位，等 P2-P6 迁移真实 item，P7 删占位。
+> 基线：`origin/develop @ 18a06ab7`（2026-05-07）
 
 ---
 
-## Item schema（速查）
+## Schema
 
-每个 capability 章节用一张表承载所有 item，列含义：
+每个 capability 章节一张表，每条 item 一行：
 
 | 列 | 取值 | 说明 |
 |---|---|---|
 | ID | 沿用旧值；新建项 `<CAP_NUM>-<DOMAIN>-<NNN>` | 唯一 |
-| 描述 | `**标题** — 现状: ...; 修复方向: ...` | 主内容 |
+| 描述 | `**标题** — 现状: ...; 修复方向: ...`；次要能力末尾 `(also: cap-XX)` | 主内容 |
 | Type | `feat` / `bug` / `debt` / `refactor` / `arch-opt` / `doc` / `test` / `fu` | `arch-opt` = "架构优化" |
-| P/Cx | 例 `P1/Cx2`；DONE 行可填 `—` | Priority + Complexity |
-| Flag | 🔴 硬约束 / 🟠 条件延后 / 🟡 可延后 / 🟢 已纳入 plan / ✅ 已完成 | 🔴 = 发布阻塞项；✅ 列在表内即视为 DONE（待人工归档） |
-| Trigger | 仅 🟠 必填 | 触发条件文本 |
+| P/Cx | 例 `P1/Cx2`；DONE 行可填 `—` | Priority + Complexity 合一列 |
+| Flag | 🔴 硬约束（即"发布阻塞项"）/ 🟠 条件延后 / 🟡 可延后 / 🟢 已纳入 plan / ✅ 已完成 | 状态由 Flag 编码：✅ = DONE 待人工归档；其余视为 OPEN |
+| Trigger | 仅 Flag=🟠 必填 | 触发条件文本 |
 | Files | ≤ 3 个 | 主要涉及文件 |
 | Source | PR# / review 报告路径 / issue# | 来源 |
 
-跨域处理：每条 item 物理只在一个 capability 章节出现（primary）；次要关联在描述里写 `(also: cap-XX)`。决策规则见框架设计稿 §3。
+**跨域决策**：(1) 主代码改动落处 → primary；(2) 平手则 contract owner cell 所属 capability；(3) 还平手按 `cells > runtime > kernel > tools` 优先级；(4) 跨 ≥ 4 cap 且无明确 owner 才进 `cap-x-cross`。次要 capability 在描述里写 `(also: cap-XX)`，物理只在 primary 章节出现一次。
+
+**归档**：人工。Flag=✅ 留主表至人工迁 [`archive/`](backlog/archive/)（按季度命名 `2026-q2-completed.md`）；WONTFIX 立即移 archive + 理由必填。
 
 ---
 
 ## cap-01: Cell 声明与生命周期
 
-> 主要包：`kernel/cell` + `assembly` + `lifecycle` + `worker` + `runtime/worker`  
-> domain-map ref：§1.A #1
+> 主要包：`kernel/cell` + `assembly` + `lifecycle` + `worker` + `runtime/worker`
 
-| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
-|---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-01 | **示例 item** — 现状: P1 占位; 修复方向: P7 删全部 `[EXAMPLE]` 项 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+_暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 
 ---
 
 ## cap-02: 元数据解析与治理
 
-> 主要包：`kernel/metadata` + `governance` + `verify` + `depgraph` + `tools/archtest` + `tools/generatedverify`  
-> domain-map ref：§1.A #2
+> 主要包：`kernel/metadata` + `governance` + `verify` + `depgraph` + `tools/archtest` + `tools/generatedverify`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-02 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| P1-5 | **METADATA-PERF-BENCH-01** — 现状: 缺 `BenchmarkParseFS_500Files` 性能基准；修复: 加 bench + 评估 goccy/go-yaml 单次解码迁移成本 | test | P1/Cx3 | 🟡 | — | `kernel/metadata/parser_test.go` | PR#152 seat-4 |
+| KERNEL-CONTRACTSPEC-CONTRACTMETA-DUAL-DEF-01 | **Contract 双源定义** — 现状: `kernel/wrapper.ContractSpec` 与 `kernel/metadata.ContractMeta` 双源；修复: K#04 PR-4 codegen 落地时合一 | arch-opt | Cx3 | 🟠 | K#04 PR-4 codegen 迁移 | `kernel/wrapper/` + `kernel/metadata/` | systems layer review |
+| KERNEL-INTERNAL-DAG-GUARD-01 | **kernel 反向 import 守卫** — 现状: 缺 archtest 守 kernel 反向 import；修复: 引入新依赖时一并加 DAG 守卫 | arch-opt | Cx2 | 🟠 | kernel 出现新反向引用 | `tools/archtest/` | systems layer review |
+| ASSEMBLY-SCHEMA-MINIMUM-VIABLE-01 | **Assembly schema 最小可用** — 现状: AssemblyMeta 缺 owner + maxConsistencyLevel + deployTemplate enum；修复: 加 2 个 assembly 时一并落 | arch-opt | P1/Cx2 | 🟠 | 加第 2 个 assembly | `kernel/metadata/types.go` + governance + assembly.yaml | systems-layer-07 §P1-1+2 |
+| SHARED-ERROR-SCHEMA-GENERATION-01 | **共享 error schema 单源** — 现状: 4 份 mirror 人工同步；修复: canonical → make generate 派生 examples/testdata | arch-opt | P2/Cx2-Cx3 | 🟡 | 下次 envelope schema 变更 | `contracts/shared/errors/` + `tests/contracttest/testdata/` | PR#396 review |
+| KERNEL-DEPGRAPH-OUT-EVAL-01 | **Depgraph out evaluation** — 现状: depgraph 只 in-eval；修复: 加 out-eval 路径 | arch-opt | Cx3 | 🟠 | 第 3 个 depgraph 消费方 | `kernel/depgraph/` + `runtime/` | PR#357 |
+| CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | **Slice 多 verb 拆分** — 现状: auditcore/configcore 多 slice 跨 verb；修复: 加 4+ cell 时拆分 | arch-opt | Cx3 | 🟠 | 4+ cell 加入 | `cells/auditcore` + `configcore/` | systems layer review |
+| M2-LIFECYCLE | **CELL-SLICE-LIFECYCLE-FIELD-01** — 现状: cell/slice 缺生命周期相位声明；修复: cell.yaml/slice.yaml 加 `lifecycle` 字段 (experimental/candidate/asset/maintenance/retired) + governance 校验状态转移合法性 + 运行时通过 Aggregator 接口暴露当前相位（差距由消费方计算）(also: cap-13) | feat | P2/Cx3 | 🟠 | M1 落地 | `kernel/metadata/types.go` + `kernel/governance/` + `kernel/healthz/` | ADR-202605041430 M2 |
+| M3-RULE-ENGINE | **GOVERNANCE-RULE-ENGINE-DATA-DRIVEN-01** — 现状: governance 64 规则散在 Go 代码；修复: `kernel/governance/engine.go` 唯一执行体 + `kernel/governance/rules/*.yaml` 数据化（5 槽位 detect/evidence/next/level/harvest）+ `next-action` 五级 (autofix/suggest/advisory/block/escalate) + 规则带 `metric` 距离函数 + 修 ADV-05 SeverityError 错分 | refactor | P2/Cx3 | 🟡 | — | `kernel/governance/engine.go` (新) + `kernel/governance/rules/*.yaml` (新) | ADR-202605041430 M3 |
 
 ---
 
 ## cap-03: Contract 注册与发现
 
-> 主要包：`kernel/wrapper` + `kernel/registry` + `pkg/contracts`  
-> domain-map ref：§1.A #3
+> 主要包：`kernel/wrapper` + `kernel/registry` + `pkg/contracts`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-03 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| P1-8 | **DEVICE-LIST-API** — 现状: `cells/devicecell/slices/devicelist/` 缺；修复: 新建 slice + `GET /api/v1/devices` 分页 + contract + contract_test | feat | P1/— | 🟡 | — | `cells/devicecell/slices/devicelist/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
 
 ---
 
 ## cap-04: HTTP 入站处理
 
-> 主要包：`runtime/http/{router,middleware,health,devtools}`  
-> domain-map ref：§1.A #4
+> 主要包：`runtime/http/{router,middleware,health,devtools}`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-04 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| A26-R3 | **SETUP-PATH-NAMESPACE-POLICY-01** — 现状: 顶级 `/api/v1/setup/` 与 per-Cell 入口规则未明文；修复: 在 api-versioning.md 写明 | doc | Cx1 | 🟡 | — | `.claude/rules/gocell/api-versioning.md` | PR#247 round-2 N-01 |
+| HTTPUTIL-WRITEERRORBODY-DOUBLE-MARSHAL | **错误响应双重 JSON marshal** — 现状: writeErrorBody marshal+unmarshal+encode 三次；修复: errcode.MarshalJSON 原生支持 envelope 注入 | bug | P3/Cx1 | 🟡 | HTTP 错误成 hot path | `pkg/httputil/response.go` + `pkg/errcode/errcode.go` | PR #391 review round-2 |
+| PR391-HEALTH-VERBOSE-REDACTION-01 | **Readyz verbose redaction** — 现状: verbose 503 dependency error 仅 truncate，可能含 secret；修复: 走 `pkg/redaction` + 4 通道分明 | arch-opt | P1/Cx2 | 🟠 | 发布前安全收口 | `runtime/http/health/` + ADR | PR#391 review security |
+| PR392-FU-RATE-LIMITER-DISTRIBUTED | **BOOTSTRAP-RATELIMIT-DISTRIBUTED-01** — 现状: in-memory token bucket per pod；修复: 出现暴力枚举威胁时引入 Redis-backed | arch-opt | P3/Cx3 | 🟡 | bootstrap mode + 多 pod | `adapters/ratelimit/` + `cmd/corebundle/access_module.go` | PR #392 ADR §D10 |
+| PR237-T1 | **Listener timeout pattern** — 现状: timeout 配置分散；修复: 抽统一 listener config | arch-opt | Cx2 | 🟡 | — | `runtime/http/` | PR#237 |
+| PR237-PM5 | **DUAL-LISTENER-DEPLOYMENT-GUIDE-01** — 现状: 缺双 listener 部署章节；修复: 新增 `docs/operations/dual-listener-deployment.md` | doc | Cx2 | 🟡 | — | `docs/operations/` | PR #237 round-2 PM-05 |
+| PR237-PM7 | **EXAMPLE-INTERNAL-LISTENER-COMMENT-01** — 现状: examples/*/main.go 双 addr 缺注释；修复: 加注释或 `WithHTTPInternalDisable` | doc | Cx1 | 🟡 | — | `examples/*/main.go` | PR #237 round-2 PM-07 |
+| LISTENER-API-SPEC-01 | **Listener API spec 化** — 现状: listener 选项散在代码；修复: contracts 化声明 | arch-opt | Cx2 | 🟡 | — | `contracts/http/` | PR#237 |
+| ROUTE-ERROR-POLICY-01 | **Route error policy 统一** — 现状: 3+ route family 错误处理不一；修复: 定义共享 policy | arch-opt | Cx3-Cx4 | 🟠 | 3+ route 家族出现 | `runtime/http/` | systems review |
+| PR-CI-5-FU-WEBSOCKET-ORIGIN-CONTRACT | **WEBSOCKET-ORIGIN-CONTRACT-TRIM-NORMALIZE-01** — 现状: Validate trim 仅判断未规范化；修复: trim 写回 cfg + 文档统一裸 host vs 完整 origin | arch-opt | P2/Cx1-Cx2 | 🟢 | — | `adapters/websocket/handler.go` + integration_test.go | 029 D7 / via /fix PR#335 |
+| T8-B | **PATH-PARAM-PREVALIDATE** — 现状: handler-side path param 校验分散；修复: 路由前预校验 helper | arch-opt | — | 🟠 | 安全审查触发 | `runtime/auth/` + `pkg/httputil/` | PR-A45 |
+| T4 | **CB-RESILIENCE-PACKAGE-01** — 现状: Allower / CircuitBreakerRetryAfter 在 `runtime/http/middleware`；修复: 迁到 `runtime/resilience/circuitbreaker/` 独立包 (also: cap-x-cross) | refactor | — | 🟠 | 出现第 2 个非 HTTP CB 消费方 | `runtime/http/middleware/` + `runtime/resilience/circuitbreaker/` (新) | T4 |
 
 ---
 
 ## cap-05: 身份认证 (Authn)
 
-> 主要包：`runtime/auth` + `auth/refresh` + `auth/refresh/memstore` + `auth/config`  
-> domain-map ref：§1.B #5
+> 主要包：`runtime/auth` + `auth/refresh` + `auth/refresh/memstore` + `auth/config`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-05 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| AUTH-SERVICETOKEN-INVALID-MAC-FLAKE-01 | **InvalidMAC test 1/256 偶发失败** — 现状: `badToken[:len-2]+"ff"` 当原值就是 ff 时变 no-op；修复: XOR 翻转或 00/ff 互换 | test | P3/Cx1 | 🟡 | — | `runtime/auth/authenticator_test.go` | PR #301 |
+| B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 | **B5 follow-up PG runtime wiring + archtest 类型化** — 现状: corebundle 仍走 `WithInMemoryDefaults`；修复: B2 落 PG SessionRepository 后切真实 PG + archtest 升 packages-aware | refactor+test | P1+P2/Cx2+Cx3 | 🟠 | B2 落地 PG SessionRepository | `cmd/corebundle/access_module.go` + `cells/accesscore/cell_init.go` + `tools/archtest/` | PR#399 review L2 |
+| ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 | **ACCOUNT-LOCKOUT-AUTO-LOCK-01** — 现状: sessionlogin 无失败次数累计 + 阈值 + auto-lock；修复: 完整业务设计 + PG schema + journey harness | feat | Cx3 | 🔴 | — | `cells/accesscore/slices/sessionlogin/` + user repo + integration test | PR-A63 复核 |
+| CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 | **identitymanage 一致性等级误标** — 现状: 标 L0 实为 L1；修复: 校正 slice.yaml | arch-opt | Cx1 | 🔴 | — | `cells/accesscore/slices/identitymanage/slice.yaml` | systems layer review |
+| OIDC-FAIL-FAST-DISCOVERY-01 | **OIDC discovery fail-fast** — 现状: discovery 错误不 fail-closed；修复: 引入 OIDC 时落地 | bug | Cx2 | 🟠 | 首个 prod OIDC 部署 | `adapters/oidc/` | systems layer review |
+| OIDC-JWKS-ROTATION-WORKER-01 | **OIDC JWKS 轮转 worker** — 现状: 缺 background fetch；修复: 与 fail-fast 一同落地 | feat | Cx2 | 🟠 | 与 OIDC discovery 同 | `adapters/oidc/` | systems layer review |
+| PR-A8-RESIDUAL | **Vault K8s auth E2E** — 现状: Vault K8s auth 实现已落，缺真 K8s e2e；修复: 跑 testcontainers k8s 验证 | arch-opt | Cx2 | 🟡 | — | `adapters/vault/` | PR#305 |
+| PR338-FU-LOGIN-DURABLE-TX-ATOMICITY-TEST | **登录 durable TX atomicity 集成测试** — 现状: 仅单元测；修复: PG session repo 落地后补 service-level test | test | Cx2 | 🟠 | PG session repo 落地 | `cells/accesscore/slices/sessionlogin/` | PR#338 |
+| PR338-FU-AUTH-FAIL-CLOSED-DOC-CLEANUP | **AUTH-FAIL-CLOSED-DOC-CLEANUP-01** — 现状: nonce.go docstring + archive quickstart 未跟 PR-CFG-I 更新；修复: 补 deprecation banner | doc | P3/Cx1 | 🟡 | — | `runtime/auth/nonce.go` + `docs/archive/specs/201-wm2-key-rotation/quickstart.md` | PR#338 round-1 |
+| PR267-FU-AUTHTEST-INTERNAL | **Auth test 内部化** — 现状: testHelpers 暴露过多；修复: internal package | arch-opt | Cx1 | 🟡 | — | `cells/accesscore/` | PR#267 |
+| PR267-FU-ROLE-PREFIX-ADR | **Role prefix ADR** — 现状: role 命名前缀约定无 ADR；修复: 写 ADR | doc | Cx1 | 🟡 | — | `docs/architecture/` | PR#267 |
+| X2 | **WM-35 BFF handler cookie session 接入** — 现状: BFF 无 cookie session；修复: 接入 SecureCookie | feat | P3/— | 🟡 | — | BFF + `runtime/auth/` | 长期 roadmap |
+| X3 | **WM-36 SecureCookie key rotation** — 现状: 无密钥轮转；修复: 接入 rotation worker | feat | P3/— | 🟡 | — | `runtime/auth/` | WM-35 后续 |
+| X5 | **P3-TD-11 accesscore domain 拆分** — 现状: domain 包过大；修复: User/Session/Role 拆分 | refactor | P3/— | 🟡 | X1 落地后 | `cells/accesscore/internal/domain/` | 历史 Batch 8 |
+| X12 | **REFRESH-IDLE-EXPIRE-01** — 现状: 无 idle expire 滑动窗口；修复: 加 `idle_expires_at` 列 + Policy.MaxIdle | feat | P3/Cx2 | 🟠 | PR-A29 已合可启动 | `runtime/auth/refresh/types.go` + `adapters/postgres/` + migration | Zitadel 双过期对标 |
+| X13 | **REFRESH-PARTITION-01** — 现状: 批量 DELETE GC；修复: `expires_at` range 分区 + DROP PARTITION (also: cap-10) | feat | P3/Cx2 | 🟠 | 生产流量达阈值 | migration + ops runbook | 通用 PG 模式 |
+| X14 | **REFRESH-GRACE-COUNTER-01** — 现状: 无重用次数限制；修复: `first_used_at` + `used_times` 列 | feat | P3/Cx2 | 🟠 | PR-A29 已合可启动 | `adapters/postgres/refresh_store.go` + migration | Hydra COALESCE 对标 |
+| T1 | **AUTH-PROVIDER-EXPORT-01** — 现状: `authProvider` interface unexported；修复: 移出 `runtime/bootstrap` | arch-opt | — | 🟠 | 第 2 个 auth provider cell | `runtime/bootstrap/` | T1 |
+| T2 | **AUTH-ISSUE-OPTIONS-01** — 现状: `JWTIssuer.Issue()` 5 参数；修复: IssueOptions struct | arch-opt | — | 🟠 | Issue() 第 5 个参数 | `runtime/auth/` | T2 |
+| T5 | **AUTH-SIGNER-01** — 现状: SigningKeyProvider 返回 `*rsa.PrivateKey`；修复: 改 `crypto.Signer` 支持 HSM/KMS/EC | arch-opt | — | 🟡 | caller 需 HSM/KMS | `runtime/auth/` | T5 |
 
 ---
 
 ## cap-06: 授权决策 (Authz)
 
-> 主要包：`runtime/auth` (authz/policy)  
-> domain-map ref：§1.B #6
+> 主要包：`runtime/auth` (authz/policy)
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-06 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| T3 | **DEVICE-ENQUEUE-RBAC** — 现状: HandleEnqueue 无设备维度鉴权；修复: 加设备粒度策略 | feat | — | 🟠 | 多租户 operator | `cells/devicecell/` | T3 |
+| T11 | **ADMIN-ROLE-DEDUP** — 现状: admin role 字符串散在多处；修复: 抽 const 单源 | arch-opt | — | 🟠 | role 命名漂移出现 | `pkg/auth/` + `cells/` | T11 |
 
 ---
 
 ## cap-07: 事务性事件发布 (Outbox Producer)
 
-> 主要包：`kernel/outbox` + `runtime/outbox` + `adapters/postgres`  
-> domain-map ref：§1.A #7
+> 主要包：`kernel/outbox` + `runtime/outbox` + `adapters/postgres` (outbox table)
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-07 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| PR341-FU-OUTBOXTEST-CLOSE-BUDGET-COVERAGE | **OUTBOXTEST-CLOSE-BUDGET-COVERAGE-01** — 现状: conformance suite 仍裸调 `sub.Close(ctx)`；修复: 全部走 closeWithBudget 或 godoc 强约定 | test | P2/Cx1 | 🟡 | — | `kernel/outbox/outboxtest/conformance.go` | PR #341 round-1 |
 
 ---
 
 ## cap-08: 异步事件消费 (Subscriber+Claimer)
 
-> 主要包：`kernel/{outbox,idempotency}` + `runtime/eventrouter` + `adapters/{redis,rabbitmq}`  
-> domain-map ref：§1.A #8
+> 主要包：`kernel/{outbox,idempotency}` + `runtime/eventrouter` + `adapters/{redis,rabbitmq}`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-08 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| RELAY-RETRYDELAY-TABLE-TEST-01 | **Relay retry delay 表驱动测试** — 现状: retry delay 路径覆盖单一；修复: 加 table-driven test | test | Cx2 | 🟡 | — | `adapters/rabbitmq/` | — |
+| CELL-CONSUMER-EXTRA-TOPICS-OPTION-01 | **Cell consumer extra topics option** — 现状: cell 无法订阅同 cell 外的 extra topics；修复: 加 Option | feat | Cx3 | 🟡 | — | `kernel/cell/` | GitHub #303 |
 
 ---
 
 ## cap-09: 配置加载与热更新
 
-> 主要包：`runtime/config` + watcher  
-> domain-map ref：§1.B #9
+> 主要包：`runtime/config` + watcher + `cells/configcore`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-09 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| PR-CFG-A-DEFER-2 | **ConfigCore L2 divergence** — 现状: L2 与 L1 表项 schema 偏差；修复: 收口 | arch-opt | Cx1 | 🟡 | — | `cells/configcore/` | PR#268 |
+| CONFIGCORE-CACHE-LIFECYCLE-OWNER-01 | **ConfigCore 缓存生命周期归属** — 现状: 内存增长信号；修复: 明确 owner + 清理 | arch-opt | Cx2 | 🟠 | 出现内存增长信号 | `cells/configcore/` | systems layer review |
+| CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01 | **ConfigReceive placeholder 清理** — 现状: PR266 metadata-only 后还有 placeholder 残余；修复: 与 PR266 一同 | refactor | Cx2 | 🟠 | 与 PR266 metadata consumer 同 | `cells/accesscore/` | systems layer review |
+| PR-CFG-G1-FU6 | **ConfigCore G1 follow-up 6** — 现状: PR-CFG-G1 余项；修复: 单独跟进 | arch-opt | Cx2 | 🟡 | — | `cells/configcore/` | PR-CFG-G1 |
+| PR320-FU-CONFIGCORE-CI-NOOP | **ConfigCore CI noop test** — 现状: noop publisher CI 路径未覆盖；修复: 加测 | test | P3/Cx1 | 🟡 | — | `cells/configcore/` | PR#320 |
+| PR-CFG-D-FU | **PR-CFG-D follow-up** — 现状: configrepo edge case 残项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `cells/configcore/` | PR-CFG-D |
 
 ---
 
 ## cap-10: 持久化与加密
 
-> 主要包：`kernel/persistence` + `kernel/crypto` + `adapters/{postgres,vault}`  
-> domain-map ref：§1.B #10
+> 主要包：`kernel/persistence` + `kernel/crypto` + `adapters/{postgres,vault}`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-10 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| ACCESSCORE-PG-USERS-MIGRATION-01 | **AccessCore PG repository + migration** — 现状: 仅内存；修复: users/roles/role_assignments 表 + UNIQUE on admin role | feat | P1/— | 🔴 | — | `adapters/postgres/accesscore/` | PR #392 v2 review |
+| A26-R4 | **SETUP-ORPHAN-E2E-01** — 现状: orphan recovery 仅单元测；修复: PG adapter 落地后真 DB e2e | test | Cx2 | 🟠 | PG adapter for accesscore | `cmd/corebundle/setup_integration_test.go` | PR#247 round-2 N-06 |
+| PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | **TEST-RACE-COVERAGE-ADAPTERS-INTEGRATION-01** — 现状: PG concurrent Up CI 不带 -race；修复: test-race.yml 加 adapters/postgres 路径（评估） | test | P2/Cx3 | 🟡 | — | `.github/workflows/test-race.yml` | PR-V1-PG-STARTUP-HARDEN F5 |
+| X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE/SEED-ROLE-IFACE/AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
+| S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
 
 ---
 
 ## cap-11: 分布式锁
 
-> 主要包：`runtime/distlock` + `adapters/redis`  
-> domain-map ref：§1.B #11
+> 主要包：`runtime/distlock` + `adapters/redis`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-11 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| DISTLOCK-RENEW-CALLER-CONTEXT-01 | **DISTLOCK-RENEW-CALLER-CONTEXT-01** — 现状: manager renewal 用 `context.Background()`，父 ctx cancel 不停续租；修复: 用 acquisition ctx 派生 renew deadline | bug | P1/Cx2 | 🟠 | 首个 prod distlock caller | `runtime/distlock/locker.go` + `manager.go` | GitHub #20 |
+| DISTLOCK-WORKER | **Distlock worker 生命周期** — 现状: 缺 worker 角色；修复: 接入 worker pattern | arch-opt | Cx2 | 🟡 | — | `runtime/distlock/` | PR-A20 |
 
 ---
 
 ## cap-12: 启停编排 (Bootstrap)
 
-> 主要包：`runtime/bootstrap` + `runtime/shutdown`  
-> domain-map ref：§1.A #12
+> 主要包：`runtime/bootstrap` + `runtime/shutdown`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-12 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| V-A8-DEFERRED | **CMD-CORE-INTERNAL-GUARD-PUBLIC-01** — 现状: cmd/corebundle/main.go 28 行，archtest 锁 ≤30；修复: 触发后评估提升为公开类型 | debt | Cx2 | 🟠 | runtime/bootstrap 子包出现 / 多消费方 | `runtime/bootstrap/` + `cmd/corebundle/` | PR-A64a deferred |
+| PR252-F1 | **QueueRegistrar bootstrap 集成** — 现状: 当前仅 InMemQueue；修复: 下一个 durable command adapter 落地时加入 | arch-opt | Cx3 | 🟠 | 下一个 durable command adapter | `runtime/command/` | PR#252 |
+| PR252-F2 | **Sweeper 生产治理** — 现状: 单 replica 假设；修复: multi-replica command consumer 时落 | arch-opt | Cx4 | 🟠 | multi-replica command consumer | `runtime/command/` | PR#252 |
+| PR333-BOOTSTRAP-OPTION-CROSS-CONCERN | **Bootstrap option 跨 concern 拆分** — 现状: option 概念混杂；修复: 按 concern 拆 | arch-opt | Cx2 | 🟡 | — | `runtime/bootstrap/` | PR#333 |
+| PR405-BOOTSTRAP-SHUTDOWN-BUDGET-DECOUPLE | **BOOTSTRAP-SHUTDOWN-BUDGET-PER-LISTENER-DECOUPLE-01** — 现状: phase10 共享 shutCtx，dual-listener race 偶发超时；修复: HTTP drain + LIFO teardown 拆双 budget + 新 ADR | arch-opt | P2/Cx2 | 🟡 | — | `runtime/bootstrap/phases_shutdown.go` + `bootstrap_http_shutdown.go` + ADR | PR#405 reviewer |
 
 ---
 
 ## cap-13: 可观测性
 
-> 主要包：`runtime/observability/{metrics,tracing,poolstats}` + `pkg/logutil` + `adapters/{prometheus,otel}`  
-> domain-map ref：§1.B #13
+> 主要包：`runtime/observability/{metrics,tracing,poolstats}` + `pkg/logutil` + `adapters/{prometheus,otel}`
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-13 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| WS-HUB-READYZ-PROBE-01 | **WEBSOCKET-HUB-READYZ-PROBE-01** — 现状: Hub 不实现 ManagedResource，未就绪时 /readyz 仍 200；修复: Checkers 暴露 `websocket_hub_ready` | feat | Cx3 | 🟢 | — | `runtime/websocket/hub.go` + `health.go` (新) + bootstrap | PR-A64a #340 review #4 / 029 D7 |
+| ADAPTER-MANAGED-RESOURCE-COMPLETENESS-01 | **Adapter readyz probes 完整性** — 现状: 部分 adapter 缺 ready probe；修复: 统一规范 | arch-opt | Cx2 | 🟡 | — | `adapters/{postgres,redis,s3}/` | systems layer review |
+| R3 | **safe_observe DI** — 现状: observe DI 路径未统一；修复: 抽象统一 | arch-opt | — | 🟡 | — | `runtime/observability/` | R3 |
+| A5a-R3 | **Observability ctx 透传** — 现状: 部分路径丢 ctx；修复: thread ctx | arch-opt | — | 🟡 | — | `runtime/observability/` | A5a |
+| A5a-R12 | **Observability 集成补全** — 现状: integration test gap；修复: 加测 | test | — | 🟡 | — | `runtime/observability/` | A5a |
+| PR238-FU2 | **PR238 typed gate governance** — 现状: typed gate 后续治理 (→ #321 typed gate)；修复: 跟进 | arch-opt | P2/Cx2 | 🟢 | — | `runtime/observability/` | PR#238 |
+| OBS-SSA-ANALYZER-01 | **OBS SSA analyzer** — 现状: 缺静态分析；修复: 加 SSA-based analyzer | arch-opt | Cx3 | 🟡 | — | `tools/archtest/` + `runtime/observability/` | OBS-SSA |
+| PR-CI-5-FU-HEALTH-LATE-WATCHER | **Health late watcher** — 现状: late watcher 路径未覆盖；修复: 补 | arch-opt | Cx2 | 🟡 | — | `runtime/http/health/` | PR-CI-5 |
+| PR392-FU-AUDIT-CHAIN-WIRING | **BOOTSTRAP-AUDIT-CHAIN-WIRING-01** — 现状: onAuthFail 用 slog 未接 audit chain；修复: 升级为 audit.AppendBootstrapAuthFail | arch-opt | P2/Cx2 | 🟠 | accesscore audit chain cross-cell wiring | `cmd/corebundle/access_module.go` | PR #392 ADR §D10 |
+| PR237-OB2 | **Listener observability** — 现状: per-listener 观测 metric 不全；修复: 补 | arch-opt | Cx2 | 🟡 | — | `runtime/observability/` | PR#237 |
+| PR284-FU-COMPOSE-HEALTH | **Compose health** — 现状: docker-compose health 不全；修复: 补 healthcheck | arch-opt | Cx2 | 🟡 | — | `examples/*/docker-compose.yml` | PR#284 |
+| PR283-OTEL-SLOG-ERROR-ATTR | **OTEL-SLOG-ERROR-ATTR-NORMALISE-01** — 现状: `slog.Any("error", err)` 在 OTEL bridge 会展开 struct；修复: ReplaceAttr hook 序列化 err.Error() | arch-opt | P2/Cx2 | 🟠 | 首次 OTEL slog bridge 接入 | `adapters/otel/` + `runtime/observability/logging/` | PR#283 round-2 I3 |
+| M1-OBSERVED | **HEALTHZ-INTERFACE-PACKAGE-01** — 现状: 38 处 Health 实现分散无统一接口；修复: 新建 `kernel/healthz` 接口包 (Aggregator/Probe/Snapshot) + codegen 从 cell.yaml 派生状态 schema + 默认 `runtime/observability/healthz/inmemory` 实现 + 可选 postgres/otel adapter + `HEALTHZ-WRITE-01` archtest + 38 处分散 Health 收口（不持久化 yaml，持久化交宿主） (also: cap-14, cap-10) | feat | P2/Cx3 | 🟡 | — | `kernel/healthz/` (新) + `runtime/observability/healthz/` + `tools/codegen/` | ADR-202605041430 M1 |
 
 ---
 
 ## cap-14: 代码生成与治理工具链
 
-> 主要包：`tools/{archtest,codegen,depgraph,e2egate,metricschema,generatedverify}` + `cmd/gocell` 8 子命令  
-> domain-map ref：§1.B #14
+> 主要包：`tools/{archtest,codegen,depgraph,e2egate,metricschema,generatedverify}` + `cmd/gocell` 8 子命令
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-14 | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| K05-CLI-FLAG-DEFAULT-AND-SCAFFOLD | **K05-CLI-FLAG-DEFAULT-AND-SCAFFOLD** — 现状: codegen 子命令 flag 默认值 + scaffold 模板未做产品评审建议；修复: --all/--local 默认 true + scaffold 自带 stub markers + Levenshtein 建议 | feat | Cx1 | 🟢 | — | `cmd/gocell/app/codegen_cmd.go` + `scaffold_cmd.go` + 模板 | K#05 ADR Decision 8 |
+| K05-ARCHTEST-PACKAGES-LOAD-UPGRADE | **K05-ARCHTEST-PACKAGES-LOAD-UPGRADE** — 现状: archtest AST 仅按 `reg` 字面 receiver 匹配，rename 可绕过；修复: 升 packages.Load + 按 cell.Registry 类型判断 | arch-opt | Cx3 | 🟠 | K#06 contractgen 类型分析 | `tools/archtest/codegen_unified_test.go` | K#05 PR #365 review K05-07 |
+| TEST-JOURNEY-ROOT-HARNESS-01 | **ROOT-JOURNEY-INTEGRATION-HARNESS-01** — 现状: J-useronboarding 等 root journey 缺真 Go integration harness；修复: 补 tests/integration/ | test | Cx3 | 🔴 | — | `tests/integration/` + `journeys/J-*.yaml` | PR-A63 复核 |
+| V-A11 | **GOVERNANCE-EXAMPLES-COVERAGE-01** — 现状: governance rules 不扫 examples/；修复: 加 rules_examples.go | arch-opt | Cx3 | 🔴 | — | `kernel/governance/rules_examples.go` (新) | verification §A11 |
+| V-A13 | **GENTPL-LIFECYCLE-PATTERN-01** — 现状: gentpl/main.go.tpl 直连 app.Start/Stop 跳过 phase3b（PR#392 已删 phase3b admin provision）；修复: 决定模板"最小骨架 vs 开箱即用" + 集成测试 | doc+arch-opt | Cx1+Cx2 | 🟡 | — | `kernel/assembly/gentpl/main.go.tpl` | PR #243 review §E1 |
+| PR245-F6 | **OUTBOX-ARCHTEST-SCAN-SCOPE-EXPAND-01** — 现状: isCellFile 仅匹配 `cell.go`；修复: 改为 `cells/<n>/*.go` 排除 internal/slices/test | arch-opt | Cx2 | 🟡 | — | `tools/archtest/outbox_cell_test.go` | PR#245 round-1 F-6 |
+| PR245-F10 | **CELL-RAW-DEPS-ARCHTEST-EXPAND-01** — 现状: PR-A5c 仅 ban WithPublisher/WithOutboxWriter；修复: 一并 ban 所有 raw-dep Option（029 #13 PR-A22 / 030 G-17 吸收） | arch-opt | Cx2 | 🟢 | — | `tools/archtest/raw_deps_test.go` (或扩展) | PR#245 round-1 F-10 |
+| PR250-F3 | **Event wire byte pinning** — 现状: 缺 byte 级回归；修复: 加 pinning test | test | Cx2 | 🟡 | — | `cells/accesscore/` | PR#250 |
+| PR-CFG-A-DEFER-3 | **Health agg archtest** — 现状: aggregator archtest 待 G1/G2 后落地；修复: 写 archtest | arch-opt | Cx3 | 🟢 | — | `tools/archtest/` | PR#268 |
+| JOURNEY-ACTIVE-LIFECYCLE-EMPTY-01 | **Journey active lifecycle 空状态** — 现状: 无 active journey 时 governance 沉默；修复: 加守卫 | arch-opt | Cx2 | 🔴 | — | `journeys/` + governance | systems layer review |
+| JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01 | **Journey contract 存在性校验** — 现状: journey 引用 contract 不存在不报错；修复: 加 governance 规则 | arch-opt | Cx2 | 🔴 | — | `kernel/governance/` | systems layer review |
+| ASSEMBLY-SCAFFOLD-CMD-01 | **ASSEMBLY-SCAFFOLD-CMD-01** — 现状: scaffold 子命令无 assembly；修复: 加 `gocell scaffold assembly` + 派生 modules_gen.go | feat | P1/Cx2 | 🟠 | 加第 2 个 assembly | `cmd/gocell/app/scaffold_assembly.go` (新) | systems-layer-07 §P1-3 |
+| B2-K-08-CARVEOUT-NARROW | **B2-K-08-CARVEOUT-NARROW** — 现状: errcode_constructor_test 对 ctxcancel/httputil 做 file-level 豁免；修复: 改 function-level + 扩展 message const | arch-opt | P1/Cx2 | 🟡 | 第 3 个 file 豁免出现 | `tools/archtest/` + `pkg/ctxcancel/` + `pkg/httputil/` | PR#391 K#08 carve-out |
+| JOURNEY-STATUS-BOARD-LIFECYCLE-CONSISTENCY-01 | **Journey status-board 状态机一致性** — 现状: board state 与 yaml lifecycle 双状态机各表；修复: 定义强映射 + 双向校验 | arch-opt | P1/Cx2 | 🟡 | 第 9 条 journey 写 board 时 | `kernel/governance/rules_journey.go` + status-board + J-*.yaml | systems-layer-06 §P1-4+5 |
+| IDUTIL-UUID-RAND-FAILURE-TEST-01 | **UUID rand failure test** — 现状: rand.Read 失败路径无回归；修复: fault injection test | test | Cx1 | 🟡 | — | `pkg/idutil/` | GitHub #23 |
+| FU2-GOVERNANCE-STATIC | **Governance static analysis** — 现状: typed gate (→ PR#321) 已落，static 后续；修复: 跟进 | arch-opt | Cx3 | 🟢 | — | `tools/archtest/` | — |
+| PR266-AUDITAPPEND-STRICT | **AuditAppend strict** — 现状: append 验证缺；修复: 加严 | arch-opt | P2/Cx2 | 🟡 | — | `cells/auditcore/` | PR#266 |
+| PR266-METADATA-ONLY-CONSUMER-BUSINESS | **Metadata-only consumer business** — 现状: receive placeholder 仍业务化；修复: 与 ConfigReceive cleanup 一同 | arch-opt | P2/Cx2 | 🟠 | 与 ConfigReceive cleanup 同 | `cells/accesscore/` | PR#266 |
+| PR332-VERIFY-GENERATED-REMEDIATION-DRIFT-01 | **Verify codegen drift remediation 提示** — 现状: drift 报错不提示修复命令；修复: 补 hint | arch-opt | Cx2 | 🟡 | — | `cmd/gocell/` | PR#332 |
+| PR-CI-5-FU-PANIC-WHITELIST-STRUCTURED | **PANIC whitelist structured** — 现状: 白名单字符串散；修复: structured registry | arch-opt | Cx3 | 🟡 | — | `tools/archtest/` | PR-CI-5 |
+| VERIFY-CODEGEN-SANDBOX-INTEGRATION | **VERIFY-CODEGEN-SANDBOX-INTEGRATION** — 现状: --local=false sandbox 路径无端到端回归；修复: 补 1-2 条 git worktree integration test | test | Cx2 | 🟠 | 修改 verify-codegen-*.sh 或 runVerifyCodegen* | `cmd/gocell/app/codegen_*_drift_test.go` + tools/codegen helper | PR #404 K#10 review P2 |
+| PR391-CLI-EXPORT-ALIAS-GENERATEDAT-FLAKE | **CLI export alias/generatedAt flake** — 现状: 测试偶发；修复: 决定确定性策略 | bug | Cx1 | 🟡 | — | `cmd/gocell/` | PR#391 |
+| F2 | **Framework doc F2** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F2 |
+| F3 | **Framework doc F3** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F3 |
+| F4 | **Framework doc F4** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F4 |
+| F5 | **Framework doc F5** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F5 |
+| F6 | **Framework doc F6** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F6 |
+| F7 | **Framework doc F7** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F7 |
+| F8 | **Framework doc F8** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F8 |
+| F9 | **Framework doc F9** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F9 |
+| NOLINT-AUDIT-01 | **Nolint audit** — 现状: 全仓 101 处 nolint 含 errcheck 类豁免；修复: 审查 | arch-opt | Cx2 | 🟡 | — | 全仓 *.go | NOLINT-AUDIT-01 |
+| ADR-INDEX-01 | **ADR index** — 现状: 缺 ADR 索引；修复: 生成 docs/architecture/INDEX.md | doc | Cx1 | 🟡 | — | `docs/architecture/` | ADR-INDEX-01 |
+| TEST-CHDIR-PARALLEL-CLI-01 | **TEST-CHDIR-PARALLEL-CLI-01** — 现状: 4 个 CLI test 用 os.Chdir 阻碍 t.Parallel()；修复: 抽 RootResolver helper | test | P3/Cx2 | 🟡 | CLI 测试 > 30s 或新 generate sub-cmd | `cmd/gocell/app/generate_*_test.go` + `verify_codegen_*_test.go` | PR #361 round-2 #3 |
+| T6 | **CONTRACT-EVENT-PAYLOAD-CODEGEN-01** — 现状: scaffold/generate 无 schema → Go 能力；修复: 派生 payload.gen.go + decode/validate helper | feat | — | 🟠 | event subscriber decode 扩散 ≥5 cell | `tools/codegen/eventgen/` (新) + `generated/contracts/event/` | T6 |
+| T7 | **CH-05 alias eval** — 现状: import alias / const eval 漂移；修复: governance 加 | arch-opt | — | 🟡 | import alias / const drift | `kernel/governance/` | T7 / PR-A45 |
+| T9 | **Internal clients declared** — 现状: contract reality gap；修复: governance 强制 internal client 声明 | arch-opt | — | 🟠 | contract reality gap | `kernel/governance/` | T9 / PR#293 |
+| T10 | **Devtools cell promotion** — 现状: catalog 内置；修复: 升级为外部 cell | arch-opt | — | 🟠 | catalog customization | `cells/devtools/` + `runtime/` | T10 / PR-A37 |
+| M4-COVERAGE | **REVERSE-COVERAGE-ARCHTESTS-01** — 现状: 缺 5 条反向追溯规则；修复: 加 `IMPL-DECL-COVER-01` (cell 间 Go import 必须经 contract，非 slice 间) + `HANDLER-DECL-COVER-01` (http handler 必须出现在某 contract.yaml) + `EMIT-DECL-COVER-01` (outbox emit 必须出现在 contract.triggers) + `DEAD-CONTRACT-01` (active contract 必须有 handler 入口) + `DEAD-CODE-01` (deprecated contract 引用代码不能在 main 分支)；不含 SLICE-DECOUPLE | arch-opt | P2/Cx3 | 🟠 | M3 落地 | `tools/archtest/` | ADR-202605041430 M4 |
 
 ---
 
 ## cap-x-cross: 横切
 
-> 不属于单一 capability 的项：CI / lint baseline、跨 capability 大重构（≥4 cap，无明确 owner）、仓库级文档、发布相关 checklist。  
-> 进入条件：**严格** — 跨 ≥ 4 capability 且无明确 owner 才进；2-3 capability 跨域走 primary + 描述里 `(also: cap-XX)`，仍归 primary 章节。
+> 不属于单一 capability 的项：CI / lint baseline、跨 capability 大重构（≥ 4 cap 且无明确 owner）、仓库级文档、发布相关 checklist。
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| EXAMPLE-CAP-X | **示例 item** — 现状: P1 占位; 修复方向: P7 删 | doc | P3/Cx1 | 🟡 | — | (n/a) | `docs/plans/202605070330-031-backlog-capability-framework.md` |
+| PR-A12-SWEEPER-WIRE | **Command sweeper wire** — 现状: InMemQueue.ListPending 多设备路径未串；修复: 触发后接 (also: cap-12) | feat | Cx1-Cx2 | 🟠 | InMemQueue.ListPending 多设备 | `kernel/command/` | PR#249 |
+| PR-BATCH2-RETRO-FU | **Batch2 retrospective 收口** — 现状: 多个跨 cap 发现；修复: 拆条 fix-up | arch-opt | Cx1-Cx2 | 🔴 | — | `runtime/auth/` + `cells/` | batch2 retrospective |
+| ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 | **A-03 ADAPTER-ERROR-CLASSIFICATION-TRANSIENT** — 现状: 各 adapter 错误分类不统一；修复: postgres 40001/40P01/08* + redis i/o timeout + s3 5xx/429 标 transient | arch-opt | Cx3 | 🟠 | 首个 handler disposition 收口 | `adapters/{postgres,redis,s3}/errors.go` + `pkg/errcode/` | systems layer review |
+| ADAPTER-FAKE-EXPORT-01 | **Adapter fake export 一致性** — 现状: fake/exports 散；修复: 统一规范 | arch-opt | Cx3 | 🟠 | cell mock 扩展 | `adapters/*/fake/` | systems layer review |
+| PR-A41-FU1 | **PR-A41 advisory rules follow-up** — 现状: governance advisory 规则余项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `kernel/governance/` | PR-A41 |
+| PR237-F06 | **Listener DX follow-up** — 现状: Listener DX 余项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `runtime/http/middleware/` | PR#237 |
+| PR237-DX1 | **Listener DX docs** — 现状: DX docs 缺；修复: 补 | doc | Cx2 | 🟡 | — | `docs/` | PR#237 |
+| PR237-A4 | **Listener architecture** — 现状: 双 listener 架构 doc 缺；修复: 写架构说明 | arch-opt | Cx2 | 🟡 | — | `runtime/http/` | PR#237 |
+| PR238-FU4 | **PR238 audit follow-up 4** — 详情见 PR#238 | arch-opt | Cx2 | 🟡 | — | `cells/auditcore/` | PR#238 |
+| PR238-FU5 | **PR238 audit follow-up 5** — 详情见 PR#238 | arch-opt | Cx2 | 🟡 | — | `cells/auditcore/` | PR#238 |
+| PR238-FU8 | **PR238 audit follow-up 8** — InternalMessage op label 测试覆盖；修复: configrepo UpdateForRollback op 测试 | test | P2/Cx1 | 🟡 | — | `cells/configcore/internal/adapters/postgres/config_repo_test.go` | PR#238 |
+| PR280-FU1 | **PR280 adapter follow-up 1** — 详情见 PR#280 | arch-opt | Cx2 | 🟡 | — | `adapters/` | PR#280 |
+| DEVOPS-INTEGRATION-CLEANUP-WAIT-TIMEOUT-01 | **Devops integration cleanup wait timeout** — 现状: e2e cleanup 超时；修复: 加 wait helper | arch-opt | Cx1 | 🟡 | — | `tests/e2e/` | GitHub #19 |
+| DEAD-VARIABLE-01 | **DEAD-VARIABLE-DEADCODE-SCAN-01** — 现状: golangci-lint 未启 unused/deadcode；修复: 临时启用 → baseline → 删 / //nolint:unused → 关闭 | test | P3/Cx1 | 🟡 | — | `.golangci.yml`（临时改）+ 全仓清理 | graceful-backus P3 P2-6 |
+| X4 | **WM-7 泛型 BulkResult** — 现状: 各 cell 各写 BulkResult；修复: 抽泛型 | feat | P3/— | 🟡 | — | `pkg/` | 历史 Batch 8 |
+| X9 | **LINT-MODERN-01** — 现状: modernization baseline 全仓清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder）；修复: 独立 PR；不混入功能 | arch-opt | P3/Cx2 | 🟡 | — | 全仓 | PR#163 post-review |
+| PR267-FU-IOTDEVICE-OWNER | **iotdevice owner.team 同步** — 现状: example owner 缺；修复: 补 | arch-opt | Cx1 | 🟡 | — | `examples/iotdevice/` | PR#267 |
+| PR267-FU-TODOORDER-OWNER | **todoorder owner.team 同步** — 现状: 同上；修复: 同上 | arch-opt | Cx1 | 🟡 | — | `examples/todoorder/` | PR#267 |
+| B-FLOOR-FOLLOWUP | **TYPED-ENVELOPE-ADAPTER-FLOOR-UPGRADE** — 现状: PR#403 段 1 是 Ceiling 守；修复: 段 2.5 升 Success-Floor + 段 4 升 Full-Floor | refactor | 段 2.5 Cx3 / 段 4 Cx3 | 🟠 | 段 2 invariant Registry 工具产品化 | `cells/*/slices/*/handler.go` (~20) + archtest + ADR D7 演进锚点 | PR #403 第三轮 review §R1 |
 
 ---
 
 ## 历史与参考
 
-- 旧 backlog：`docs/backlog.md`（本文件先前版本）/ `docs/backlog1.md` / `docs/backlog2.md` / `docs/backlog_later_detail.md` / `docs/tech-debt-registry.md` 将在 P2-P7 期间逐步并入本文件，最终改成重定向桩。
-- 框架设计稿：[`docs/plans/202605070330-031-backlog-capability-framework.md`](plans/202605070330-031-backlog-capability-framework.md)
+- 原 backlog 305 行已备份到 [`docs/backlog/archive/backlog.md`](backlog/archive/backlog.md)（develop @ 18a06ab7 快照），含被本次迁移**跳过**的 narrative 段：
+  - `## 架构演进里程碑（M0-M4，源自 ADR-202605041430）` — **M0 已大部分完成**（poolstats 接口下沉 PR#387 / Noop archtest / CellMeta 合一）；**M1/M2/M3/M4 已提取为 4 条 backlog item**（M1→cap-13、M2→cap-02、M3→cap-02、M4→cap-14）；narrative 段保留在 archive 作为完整 ADR 上下文
+  - `## 设计决策记录（历史 — 不修，避免重复审查）`
+  - `## v1.1+ 长期规划`
+  - `## 工时汇总`
+- `docs/backlog1.md` / `docs/backlog2.md` / `docs/backlog_later_detail.md` / `docs/tech-debt-registry.md` 在 P2-P6 期间逐步并入本文件，最终改成 1 段重定向桩。
 - 主轴权威源：[`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md)
