@@ -50,16 +50,12 @@
 | P1-5 | **METADATA-PERF-BENCH-01** — 现状: 缺 `BenchmarkParseFS_500Files` 性能基准；修复: 加 bench + 评估 goccy/go-yaml 单次解码迁移成本 | test | P1/Cx3 | 🟡 | — | `kernel/metadata/parser_test.go` | PR#152 seat-4 |
 | KERNEL-CONTRACTSPEC-CONTRACTMETA-DUAL-DEF-01 | **Contract 双源定义** — 现状: `kernel/wrapper.ContractSpec` 与 `kernel/metadata.ContractMeta` 双源；修复: K#04 PR-4 codegen 落地时合一 | arch-opt | Cx3 | 🟠 | K#04 PR-4 codegen 迁移 | `kernel/wrapper/` + `kernel/metadata/` | systems layer review |
 | KERNEL-INTERNAL-DAG-GUARD-01 | **kernel 反向 import 守卫** — 现状: 缺 archtest 守 kernel 反向 import；修复: 引入新依赖时一并加 DAG 守卫 | arch-opt | Cx2 | 🟠 | kernel 出现新反向引用 | `tools/archtest/` | systems layer review |
-| ASSEMBLY-SCHEMA-MINIMUM-VIABLE-01 | **Assembly schema 最小可用** — 现状: AssemblyMeta 缺 owner + maxConsistencyLevel + deployTemplate enum；修复: 加 2 个 assembly 时一并落 | arch-opt | P1/Cx2 | 🟠 | 加第 2 个 assembly | `kernel/metadata/types.go` + governance + assembly.yaml | systems-layer-07 §P1-1+2 |
 | SHARED-ERROR-SCHEMA-GENERATION-01 | **共享 error schema 单源** — 现状: 4 份 mirror 人工同步；修复: canonical → make generate 派生 examples/testdata | arch-opt | P2/Cx2-Cx3 | 🟡 | 下次 envelope schema 变更 | `contracts/shared/errors/` + `tests/contracttest/testdata/` | PR#396 review |
 | KERNEL-DEPGRAPH-OUT-EVAL-01 | **Depgraph out evaluation** — 现状: depgraph 只 in-eval；修复: 加 out-eval 路径 | arch-opt | Cx3 | 🟠 | 第 3 个 depgraph 消费方 | `kernel/depgraph/` + `runtime/` | PR#357 |
 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | **Slice 多 verb 拆分** — 现状: auditcore/configcore 多 slice 跨 verb；修复: 加 4+ cell 时拆分 | arch-opt | Cx3 | 🟠 | 4+ cell 加入 | `cells/auditcore` + `configcore/` | systems layer review |
 | M2-LIFECYCLE | **CELL-SLICE-LIFECYCLE-FIELD-01** — 现状: cell/slice 缺生命周期相位声明；修复: cell.yaml/slice.yaml 加 `lifecycle` 字段 (experimental/candidate/asset/maintenance/retired) + governance 校验状态转移合法性 + 运行时通过 Aggregator 接口暴露当前相位（差距由消费方计算）(also: cap-13) | feat | P2/Cx3 | 🟠 | M1 落地 | `kernel/metadata/types.go` + `kernel/governance/` + `kernel/healthz/` | ADR-202605041430 M2 |
 | M3-RULE-ENGINE | **GOVERNANCE-RULE-ENGINE-DATA-DRIVEN-01** — 现状: governance 64 规则散在 Go 代码；修复: `kernel/governance/engine.go` 唯一执行体 + `kernel/governance/rules/*.yaml` 数据化（5 槽位 detect/evidence/next/level/harvest）+ `next-action` 五级 (autofix/suggest/advisory/block/escalate) + 规则带 `metric` 距离函数 + 修 ADV-05 SeverityError 错分 | refactor | P2/Cx3 | 🟡 | — | `kernel/governance/engine.go` (新) + `kernel/governance/rules/*.yaml` (新) | ADR-202605041430 M3 |
 | G-1 | **FMT-11 dynamic-status-field 隔离** — 现状: 动态状态字段（readiness/risk/blocker）漏入非 status-board 文件，元数据被污染；修复: governance 加 FMT-11 严格隔离 | doc | P2/Cx2 | 🟡 | 出现元数据污染或非法 contract 引用 | `kernel/governance/` | backlog_later §1 |
-| G-2 | **TOPO-07 actor.maxConsistencyLevel 校验** — 现状: parser 已解析 actor.maxConsistencyLevel 但校验阶段不阻断；修复: governance 加 TOPO-07 阻断 | bug | P2/Cx2 | 🟡 | 同 G-1 | `kernel/metadata/parser.go` + governance | backlog_later §1 |
-| G-4 | **Deprecated contract 引用阻断** — 现状: deprecated 仅 warning；修复: 升 P1 break build | arch-opt | P2/Cx2 | 🟡 | v1.1 启动 | `kernel/governance/` | backlog_later §1 |
-| G-6 | **Assembly boundary.yaml 一致性校验** — 现状: 派生文件无校验；修复: 加生成系一致性校验 | doc | P3/Cx1 | 🟡 | v1.1 启动 | `kernel/governance/` | backlog_later §1 |
 | DURABLE-TYPE-01 | **L2/L3 持久化级别静态保护** — 现状: 类型抹除让 L2/L3 检测退化为启动期 panic；修复: 探索类型系统层面静态编译保护（仓储级能力推断） | arch-opt | P2/Cx3 | 🟡 | v1.1 启动 | `kernel/metadata/` + `kernel/persistence/` | backlog_later §6 |
 | B2-K-05 | **Metadata parser error 路径泄漏** — 现状: parse error 含 fs 内部路径，低强度信息泄露；修复: error 双通道 (public 仅 cell/slice ID + 字段路径，internal slog 保留 fs path) | bug | P2/Cx2 | 🟡 | — | `kernel/metadata/parser.go:190,202` | backlog2 §2 B2-K-05 |
 | B2-K-07 | **Contracttest undeclared ref no-op** — 现状: `MustValidateRequest("not-declared", ...)` 静默 return，key 写错时假通过；修复: 未声明 key 改 `t.Fatalf` | bug | P1/Cx1 | 🟡 | — | `pkg/contracttest/contracttest.go:170,189` | backlog2 §2 B2-K-07 |
@@ -92,16 +88,12 @@
 | HTTPUTIL-WRITEERRORBODY-DOUBLE-MARSHAL | **错误响应双重 JSON marshal** — 现状: writeErrorBody marshal+unmarshal+encode 三次；修复: errcode.MarshalJSON 原生支持 envelope 注入 | bug | P3/Cx1 | 🟡 | HTTP 错误成 hot path | `pkg/httputil/response.go` + `pkg/errcode/errcode.go` | PR #391 review round-2 |
 | PR391-HEALTH-VERBOSE-REDACTION-01 | **Readyz verbose redaction** — 现状: verbose 503 dependency error 仅 truncate，可能含 secret；修复: 走 `pkg/redaction` + 4 通道分明 | arch-opt | P1/Cx2 | 🟠 | 发布前安全收口 | `runtime/http/health/` + ADR | PR#391 review security |
 | PR392-FU-RATE-LIMITER-DISTRIBUTED | **BOOTSTRAP-RATELIMIT-DISTRIBUTED-01** — 现状: in-memory token bucket per pod；修复: 出现暴力枚举威胁时引入 Redis-backed | arch-opt | P3/Cx3 | 🟡 | bootstrap mode + 多 pod | `adapters/ratelimit/` + `cmd/corebundle/access_module.go` | PR #392 ADR §D10 |
-| PR237-T1 | **Listener timeout pattern** — 现状: timeout 配置分散；修复: 抽统一 listener config | arch-opt | Cx2 | 🟡 | — | `runtime/http/` | PR#237 |
 | PR237-PM5 | **DUAL-LISTENER-DEPLOYMENT-GUIDE-01** — 现状: 缺双 listener 部署章节；修复: 新增 `docs/operations/dual-listener-deployment.md` | doc | Cx2 | 🟡 | — | `docs/operations/` | PR #237 round-2 PM-05 |
 | PR237-PM7 | **EXAMPLE-INTERNAL-LISTENER-COMMENT-01** — 现状: examples/*/main.go 双 addr 缺注释；修复: 加注释或 `WithHTTPInternalDisable` | doc | Cx1 | 🟡 | — | `examples/*/main.go` | PR #237 round-2 PM-07 |
 | LISTENER-API-SPEC-01 | **Listener API spec 化** — 现状: listener 选项散在代码；修复: contracts 化声明 | arch-opt | Cx2 | 🟡 | — | `contracts/http/` | PR#237 |
 | ROUTE-ERROR-POLICY-01 | **Route error policy 统一** — 现状: 3+ route family 错误处理不一；修复: 定义共享 policy | arch-opt | Cx3-Cx4 | 🟠 | 3+ route 家族出现 | `runtime/http/` | systems review |
-| T8-B | **PATH-PARAM-PREVALIDATE** — 现状: handler-side path param 校验分散；修复: 路由前预校验 helper | arch-opt | — | 🟠 | 安全审查触发 | `runtime/auth/` + `pkg/httputil/` | PR-A45 |
 | T4 | **CB-RESILIENCE-PACKAGE-01** — 现状: Allower / CircuitBreakerRetryAfter 在 `runtime/http/middleware`；修复: 迁到 `runtime/resilience/circuitbreaker/` 独立包 (also: cap-x-cross) | refactor | — | 🟠 | 出现第 2 个非 HTTP CB 消费方 | `runtime/http/middleware/` + `runtime/resilience/circuitbreaker/` (新) | T4 |
 | WM-32 | **mTLS 中间件** — 现状: 缺；修复: 加 TLS 构建器 + HTTP 证书提取钩子（折中：大规模环境 mTLS 卸载在 K8s/Service Mesh 解决，框架仅提供构建器） | feat | P2/Cx2 | 🟡 | V1.1 启动 | `runtime/http/middleware/` | backlog_later §7 WM-32（4/6 票）|
-| B2-C-07 | **Configclient 不可恢复错误走 requeue** — 现状: 不可恢复 HTTP 错误也走 retry/requeue；修复: 区分 4xx/5xx 决定 ack/requeue/reject | bug | P1/Cx2 | 🟡 | — | `cells/accesscore/internal/adapters/http/configclient.go:91` + `cells/accesscore/slices/configreceive/service.go` | backlog2 §4 B2-C-07 |
-| B2-X-04 | **Health listener 默认 loopback** — 现状: 默认绑 0.0.0.0（即使 healthListener）；修复: 默认 loopback，显式 opt-in 暴露 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cmd/corebundle/shared_deps.go:461` | backlog2 §7 B2-X-04 |
 | B2-T-08 | **Config publish 失败码声明不完整** — 现状: contract 缺部分失败码声明；修复: 补 4xx/5xx 完整声明 | bug | P2/Cx1 | 🟡 | — | `contracts/http/config/publish/v1/contract.yaml` | backlog2 §8 B2-T-08 |
 
 ---
@@ -179,16 +171,7 @@
 | KERNEL-REPLAY-01 | **kernel/replay 投影重算** — 现状: 缺 CQRS Projection rebuild；修复: 新建 replay 包 + 依赖 Consumer 模型稳定后实现 | feat | P3/Cx3 | 🟡 | Consumer 模型稳定 + 业务出现 CQRS rebuild 需求 | `kernel/replay/` (新) | backlog_later §2 |
 | KERNEL-RECONCILE-01 | **kernel/reconcile L3 收敛循环** — 现状: 缺 Reconciler 模式；修复: 新建 reconcile 包 | feat | P2/Cx3 | 🟡 | L3 业务出现 | `kernel/reconcile/` (新) | backlog_later §2 |
 | WM-18 | **延迟消息原语** — 现状: 缺 TTL；修复: RMQ x-delayed-message 插件绑定 + 测试桩支持（运维成本拉升，等 Outbox 稳定后探索） | feat | P2/Cx2 | 🟡 | V1.1 启动 + Outbox 彻底稳定 | `adapters/rabbitmq/` + outbox | backlog_later §7 WM-18（3/6 票）|
-| B2-K-06 | **EventRouter consumerGroup 与 cellID 混淆** — 现状: `Subscription.CellID = h.consumerGroup`，下游 metrics/日志属性自相矛盾；修复: 显式拆分 `CellID` 与 `ConsumerGroup` | bug | P2/Cx3 | 🟡 | — | `runtime/eventrouter/router.go:364` | backlog2 §2 B2-K-06 |
-| B2-A-14 | **RMQ StopIntake prefetch 未排空** — 现状: StopIntake 后 prefetch 仍在投递；修复: 排空 prefetch 后再退出 | bug | P1/Cx3 | 🟠 | StopIntake 耦合 | `adapters/rabbitmq/subscriber.go:914` | backlog2 §5.2 B2-A-14 |
-| B2-A-15 | **RMQ channel 无上限** — 现状: connection.go 创建 channel 无上限；修复: 加 channel cap + reuse pool | bug | P1/Cx3 | 🟠 | 无上限创建出现 | `adapters/rabbitmq/connection.go:171` | backlog2 §5.2 B2-A-15 |
-| B2-A-16 | **RMQ publish nack 无告警** — 现状: NACK/超时静默丢；修复: 告警 + 计数 metric | bug | P1/Cx1 | 🟠 | NACK/超时出现 | `adapters/rabbitmq/publisher.go:133,136,143` | backlog2 §5.2 B2-A-16 |
-| B2-A-17 | **RMQ EventBus 语义集成测试缺** — 现状: conformance test 不全；修复: 补 publisher/subscriber 全链路 testcontainer 集成测试 | test | P1/Cx3 | 🟡 | — | `adapters/rabbitmq/conformance_test.go:18` | backlog2 §5.2 B2-A-17 |
-| B2-A-26 | **Redis idempotency receipt commit/release race** — 现状: receipt commit 和 release 之间有 race；修复: Lua 原子化 | bug | P1/Cx3 | 🟡 | — | `adapters/redis/idempotency.go:136-200` | backlog2 §5.3 B2-A-26 |
-| B2-A-27 | **Redis idempotency multi-tenant key 碰撞** — 现状: 缺 KeyNamespace cell prefix（B10 只解决 cluster slot，B11 待办）；修复: 加 cell prefix | bug | P1/Cx3 | 🟡 | 多租户隔离需求 | `adapters/redis/idempotency.go:127-130` | backlog2 §5.3 B2-A-27 |
 | B2-C-10 | **Auditappend 全局 mutex 串行化 13 topic** — 现状: 单 mutex 串行化所有 topic 处理；修复: 按 topic/分片细化锁 | bug | P1/Cx3 | 🟡 | 容量/吞吐压力出现 | `cells/auditcore/slices/auditappend/service.go:93,165` | backlog2 §4 B2-C-10 |
-| B2-R-B-13-FU-01 | **RMQ-PR379-FU-DOC-DRIFT** — 现状: PR#379 review 留 doc 漂移；修复: 补 docs/guides/ 同步 | doc | P2/Cx1 | 🟡 | — | `adapters/rabbitmq/subscriber.go` + `docs/guides/` | backlog2 §13 |
-| B2-R-B-13-FU-02 | **RMQ-SUBSCRIBER-TERMINAL-PROPAGATION** — 现状: PR#379 review 留 terminal 错误传播缺测；修复: 加 propagation test | test | P2/Cx2 | 🟡 | — | `adapters/rabbitmq/subscriber.go:374-378` | backlog2 §13 |
 
 ---
 
@@ -222,9 +205,7 @@
 | S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
 | P3-TD-02 | **postgres adapter 覆盖率** — 现状: 测量基准 46.6%（要求 ≥80%）；testcontainers 已实现但 CI 未测量；修复: CI 加 -tags=integration 覆盖率测量（合并 P4-TD-08）| test | P2/Cx2 | 🟡 | — | `adapters/postgres/` + `.github/workflows/` | tech-debt-registry P3-TD-02 + P4-TD-08 |
 | P4-TD-11 | **Migrator.Down() v=0 回归测试** — 现状: 已恢复 idempotent no-op 但缺第三次 Down() 测试锁定；修复: 加锁定测 防依赖升级回归 | test | Cx1 | 🟡 | — | `adapters/postgres/migrator_test.go` | tech-debt-registry P4-TD-11 |
-| B2-A-11 | **PG constructor error model 混杂** — 现状: refresh_store 等构造器混合 panic + error；修复: 统一 error-first（与 cap-12 STARTUP-ROLLBACK 同主题）| arch-opt | P1/Cx3 | 🟡 | — | `adapters/postgres/refresh_store.go:114` | backlog2 §5.1 B2-A-11 |
 | B2-A-28 | **Redis password 可选 fail-open** — 现状: 缺 password 仍允许连接；修复: real mode 强制 password fail-fast | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `adapters/redis/client.go:62-68` | backlog2 §5.3 B2-A-28 |
-| B2-A-31 | **Redis sentinel TLS 未透传** — 现状: sentinel 模式 TLS config 未传给底层 client；修复: 透传 TLS | bug | P2/Cx2 | 🟡 | sentinel + TLS 部署 | `adapters/redis/client.go:200-215` | backlog2 §5.3 B2-A-31 |
 | B2-C-12 | **Audit HMAC key 最小长度未验证** — 现状: 任意短密钥都接受；修复: 加 32 字节最小长度 + Validate | bug | P2/Cx1 | 🟡 | 发布前安全收口 | `cells/auditcore/cell.go:319` | backlog2 §4 B2-C-12 |
 
 ---
