@@ -514,6 +514,11 @@ const runtimePermanentConfirmHits = 2
 // It attempts an initial connection and starts the reconnect loop.
 // A clock.Clock must be supplied via WithConnectionClock; NewConnection
 // panics if no clock is provided (use clock.Real() at the composition root).
+//
+// Option-order contract: the default dial function (built via
+// newDefaultDialFn(config.ConnectTimeout) so amqp.DefaultDial(d) bounds
+// TCP+handshake) is established BEFORE options are applied; WithDialFunc
+// replaces it transparently for tests that need to inject a mock dialer.
 func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error) {
 	config.setDefaults()
 

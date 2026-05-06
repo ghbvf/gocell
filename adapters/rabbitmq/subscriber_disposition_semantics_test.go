@@ -108,30 +108,21 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 			t.Fatal("timed out waiting for handler to be called")
 		}
 
-		// Allow broker-side ack to settle.
-		time.Sleep(testtime.D250ms) //archtest:allow:test-sleep settle window for broker ack to propagate; no synchronization hook
-
-		// --- Assert: DLX queue receives 0 messages ---
-		// Open a raw consumer on the DLQ and poll for D250ms — no message should arrive.
+		// --- Assert: DLX queue must remain empty (no rejected messages routed) ---
+		// Use QueueInspect polling over a window instead of time.Sleep+raw-consume;
+		// require.Never fails immediately if Messages > 0, proving no DLX routing occurred.
 		dlxCh, err := conn.AcquireChannel()
 		require.NoError(t, err)
 		defer conn.ReleaseChannel(dlxCh)
 
-		dlxMsgs, err := dlxCh.Consume(dlxQueue, "ack-dlx-consumer", true, false, false, false, nil)
-		require.NoError(t, err, "consume from DLQ")
+		dlxInspector, ok := dlxCh.(queueInspector)
+		require.True(t, ok, "AMQPChannel must support QueueInspect in integration tests")
 
-		var dlxCount int
-		deadline := time.After(testtime.D250ms)
-	drainAckDLX:
-		for {
-			select {
-			case <-dlxMsgs:
-				dlxCount++
-			case <-deadline:
-				break drainAckDLX
-			}
-		}
-		assert.Equal(t, 0, dlxCount, "DLX queue must receive 0 messages after Ack")
+		require.Never(t, func() bool {
+			q, qErr := dlxInspector.QueueInspect(dlxQueue)
+			return qErr == nil && q.Messages > 0
+		}, testtime.D500ms, testtime.D50ms,
+			"DLX queue must remain empty for Ack disposition (no rejected messages routed)")
 
 		// --- Assert: main queue Messages == 0 after ack settled ---
 		inspCh, err := conn.AcquireChannel()
@@ -220,29 +211,21 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		}, testtime.SelectAsyncSettle, testtime.SlowPoll,
 			"handler must be called at least 2 times to confirm broker redelivery")
 
-		// Allow broker-side ack to settle.
-		time.Sleep(testtime.D250ms) //archtest:allow:test-sleep settle window for broker requeue+ack to propagate; no synchronization hook
-
-		// --- Assert: DLX queue receives 0 messages ---
+		// --- Assert: DLX queue must remain empty (Requeue+Ack cycle, no DLX routing) ---
+		// require.Never proves no message was routed to DLX during the observation window;
+		// this is stronger than the prior raw-consume drain which could miss a delayed enqueue.
 		dlxCh, err := conn.AcquireChannel()
 		require.NoError(t, err)
 		defer conn.ReleaseChannel(dlxCh)
 
-		dlxMsgs, err := dlxCh.Consume(dlxQueue, "requeue-dlx-consumer", true, false, false, false, nil)
-		require.NoError(t, err, "consume from DLQ")
+		dlxInspector, ok := dlxCh.(queueInspector)
+		require.True(t, ok, "AMQPChannel must support QueueInspect in integration tests")
 
-		var dlxCount int
-		deadline := time.After(testtime.D250ms)
-	drainRequeueDLX:
-		for {
-			select {
-			case <-dlxMsgs:
-				dlxCount++
-			case <-deadline:
-				break drainRequeueDLX
-			}
-		}
-		assert.Equal(t, 0, dlxCount, "DLX queue must receive 0 messages after Requeue+Ack cycle")
+		require.Never(t, func() bool {
+			q, qErr := dlxInspector.QueueInspect(dlxQueue)
+			return qErr == nil && q.Messages > 0
+		}, testtime.D500ms, testtime.D50ms,
+			"DLX queue must remain empty for Requeue+Ack cycle (no rejected messages routed)")
 
 		subCancel()
 		_ = sub.Close(context.Background())

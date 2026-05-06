@@ -37,6 +37,8 @@ import (
 //
 // ref: connection_runtime_terminal_test.go newMockConnection injection pattern.
 func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
+	t.Parallel()
+
 	originalMock := newMockConnection()
 
 	// dialPhase orchestrates two regimes:

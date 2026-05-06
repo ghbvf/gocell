@@ -100,7 +100,7 @@ attempt cap. Behavior is now uniform across all `Config` instances:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `DLXExchange` | string | yes | - | Dead-letter exchange name. Without it, broker `Nack(requeue=false)` silently discards messages. Set per-cell DLX. |
-| `Clock` | clock.Clock | yes | - | Time source for shutdown deadlines. `NewSubscriber` calls `clock.MustHaveClock` and panics if nil; pass `clock.Real()` at composition root or `clockmock.FakeClock` in tests. |
+| `Clock` | clock.Clock | yes | - | Time source for `StopIntake` deadlines (`StopIntakePerCallTimeout`, `StopIntakeDrainTimeout`). `NewSubscriber` calls `clock.MustHaveClock` and panics if nil; pass `clock.Real()` at composition root or `clockmock.FakeClock` in tests. |
 | `QueueName` | string | no | - | Explicit queue name. Takes precedence over ConsumerGroup-based naming. |
 | `ConsumerGroup` | string | no | - | Logical consumer group. When QueueName is empty, queue is derived as `{ConsumerGroup}.{topic}`. |
 | `DLXRoutingKey` | string | no | "" | Routing key for dead-lettered messages (only effective when DLXExchange is set). |

@@ -15,8 +15,8 @@ import (
 )
 
 // testAMQPBlackholeURL is the RFC 5737 TEST-NET-1 address used for
-// ConnectTimeout fast-fail tests. Constructed as a concat to avoid
-// gosec G101 false-positive on test fixture URLs.
+// ConnectTimeout fast-fail tests. String concat defeats gosec G101 false-positive
+// on test fixture URLs (not real credentials; gosec does not flag this form).
 var testAMQPBlackholeURL = "amqp://guest:" + "guest@192.0.2.1:5672/"
 
 // connectTimeoutBlackholeBudget is the upper bound for the blackhole dial
@@ -63,10 +63,13 @@ func TestNewConnection_ConnectTimeout_Blackhole(t *testing.T) {
 
 	// The underlying cause must surface a net.Error with Timeout()=true,
 	// proving amqp.DefaultDial(timeout) actually fired (not OS default).
+	// errcode.Wrap preserves the chain via fmt.Errorf("...: %w", err); the
+	// inner net.Error from amqp091's net.DialTimeout must remain reachable.
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		assert.True(t, netErr.Timeout(), "expected net.Error.Timeout()=true; got %v", netErr)
-	}
+	require.True(t, errors.As(err, &netErr),
+		"error chain must include net.Error from amqp091 TCP dial timeout; got %T: %v", err, err)
+	require.True(t, netErr.Timeout(),
+		"net.Error.Timeout() must be true (proves configured ConnectTimeout fired, not OS default); got %v", netErr)
 }
 
 // TestConfig_ConnectTimeout_DefaultsTo5s locks the contract that
