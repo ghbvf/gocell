@@ -9,10 +9,12 @@ import (
 
 const (
 	// testThreshold is the budget used in evaluate / renderViolations
-	// fixtures. Decoupled from the binary's defaultThreshold (5s) — these
-	// tests exercise threshold-comparison behavior at an arbitrary cutoff,
-	// not the production default. Output formatting assertions reference
-	// the literal "2s" string emitted by `time.Duration.String()`.
+	// fixtures. Decoupled from the binary's defaultThreshold — these
+	// tests exercise threshold-comparison behavior at an arbitrary
+	// cutoff, not the production default. The fixed `2 * time.Second`
+	// value is chosen so output-format assertions can match the literal
+	// "2s" string emitted by `time.Duration.String()`; changes to
+	// defaultThreshold do not affect these fixtures.
 	testThreshold = 2 * time.Second
 	// nilAllowlistOverElapsed is a synthetic over-budget elapsed used by
 	// TestEvaluate_NilAllowlistMeansNoneAllowed.

@@ -154,16 +154,18 @@ jobs:
       #
       # `-json` redirects test framework events to stdout (test2json schema);
       # `-coverprofile` continues to write the coverage atomic file
-      # independently. The pipe feeds straight into slowgate which exits 1
-      # if any (Package, Test) Elapsed exceeds the threshold without an
-      # allowlist entry; the violating tests are surfaced on stderr in the
-      # GHA step log (no separate artifact — slowgate's own log lines are
-      # the canonical diagnostic, retained by GHA's default 90-day step-log
-      # retention).
+      # independently. `tee` archives the raw event stream to RUNNER_TEMP
+      # so that *non*-slowgate failures (test panics, build errors, sub-
+      # test stack traces) remain diagnosable from the uploaded artifact —
+      # without `tee`, slowgate consumes the event stream and only its own
+      # threshold-summary survives in stderr, which is insufficient for
+      # arbitrary test failures. The artifact upload below is conditional
+      # on step failure (`if: failure()`) to keep the success-path
+      # exposure surface and storage cost minimal.
       #
       # `set -o pipefail` is explicitly set here — GHA bash does NOT enable
       # it by default, and without it a non-zero `go test` exit code would
-      # be masked by slowgate success. Do not remove this line.
+      # be masked by `tee`/`slowgate` success. Do not remove this line.
       #
       # `--threshold=15s` matches `defaultThreshold` in tools/slowgate/main.go;
       # the literal is duplicated to keep the workflow self-documenting at
@@ -179,7 +181,23 @@ jobs:
             -json \
             ${{ matrix.pkgs }} \
             -count=1 -timeout 5m \
+            | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
             | "$RUNNER_TEMP/slowgate" --threshold=15s --allowlist=tools/slowgate/allowlist.txt
+
+      # Upload the raw `go test -json` event stream only on Test step
+      # failure. Restored as a P1 review fix: without it, a non-slowgate
+      # failure (test panic, race report, build error) loses the full
+      # event context because slowgate consumes the JSON stream and only
+      # surfaces threshold-summary lines on stderr. retention 3 days is
+      # the diagnostic window — past that, the failing CI run itself
+      # already contains the GHA step log via 90-day step-log retention.
+      - name: Upload test-json artifact (failure only)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-json-${{ matrix.shard }}
+          path: ${{ runner.temp }}/test-${{ matrix.shard }}.json
+          retention-days: 3
 
       # Static governance gates (validate --strict, verify journey, check
       # contract-health, check unconditional-skip, examples internal-import
