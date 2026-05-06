@@ -28,6 +28,18 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// File-local timeouts for TestPhase7ServeAll_DualListener_NoCloseRace —
+// the only test in this file that fires concurrent in-flight requests during
+// cancel(). See testtime/testtime.go for the convention: per-site unique
+// deadlines should be declared file-local so the project-wide constants stay
+// semantic. testtime.SelectShutdown (5s) cannot be used here because the
+// shutdown budget itself is 5s — the outer select fallback must be strictly
+// greater than the inner shutCtx for the assertion path to win the race.
+const (
+	noCloseRaceShutdownBudget = testtime.D5s
+	noCloseRaceShutdownGuard  = testtime.D10s
+)
+
 // dualListenerCell registers one /api/v1/* and one /internal/v1/* route so
 // tests can verify dual-listener dispatch end-to-end.
 type dualListenerCell struct {
@@ -855,13 +867,14 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
-		// D5s shutdown budget (matches the dual-listener slow-reload test at
-		// bootstrap_test.go:1815). 4 in-flight requests drain in parallel with
-		// dual-listener http.Server.Shutdown + LIFO teardown sharing a single
-		// shutCtx; -race scheduling on slow CI runners can push the tail past
-		// D2s. The test asserts race-free shutdown — the budget value is
-		// incidental and must only be wide enough to avoid an artificial timeout.
-		WithShutdownTimeout(testtime.D5s),
+		// noCloseRaceShutdownBudget matches TestBootstrap_ShutdownDrainsInflightReload
+		// (the other dual-listener test that drains real in-flight work). 4 in-flight
+		// requests drain in parallel with dual-listener http.Server.Shutdown + LIFO
+		// teardown sharing a single shutCtx; -race scheduling on slow CI runners can
+		// push the tail past testtime.D2s. The test asserts race-free shutdown —
+		// the budget value is incidental and only needs to be wide enough to avoid
+		// an artificial timeout.
+		WithShutdownTimeout(noCloseRaceShutdownBudget),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -898,9 +911,10 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	select {
 	case err := <-done:
 		assert.NoError(t, err)
-	// D10s outer guard keeps `outer > inner` so a clean shutdown that consumes
-	// most of the D5s shutCtx still wins this fallback in the select race.
-	case <-time.After(testtime.D10s):
+	// noCloseRaceShutdownGuard preserves the `outer > inner` invariant so a
+	// clean shutdown that consumes most of noCloseRaceShutdownBudget still wins
+	// this fallback in the select race.
+	case <-time.After(noCloseRaceShutdownGuard):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
