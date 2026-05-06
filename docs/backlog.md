@@ -121,6 +121,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | C-AC7 | **JWT jti claim 支持** — 现状: 缺 jti，单 token 无法黑名单撤销；修复: Issue() 加 jti + jti 黑名单存储 | feat | P2/Cx2 | 🟡 | 出现单 token 撤销需求 | `runtime/auth/` | backlog_later §6 C-AC7 |
 | P3-TD-10 | **TOCTOU 竞态修复** — 现状: Phase 2 #54 session TOCTOU 未修；修复: Redis 分布式锁 + 持久化 session 稳定后处理 (also: cap-11) | bug | P2/Cx3 | 🟠 | post-v1.0 + Redis distlock 稳定 + PG session repo | `cells/accesscore/` | tech-debt-registry P3-TD-10 |
 | P4-TD-03 | **IssueTestToken HS256 dead code** — 现状: 测试 helper 仍保留 HS256 路径，JWTVerifier 全拒；修复: 删 dead code 防误用 | refactor | Cx1 | 🟡 | — | `runtime/auth/` (test helper) | tech-debt-registry P4-TD-03 |
+| SECURECOOKIE-AEAD-NEG-01 | **SecureCookie AEAD 负向测试** — 现状: AEAD 失败路径无测试；修复: 截断/伪造/边界长度/解密失败类型断言 (`errors.Is(err, ErrAEADAuthFailed)`) | test | Cx2 | 🟡 | v1.0 GA 前 | `pkg/securecookie/securecookie_test.go` | backlog1 §2.5 |
 
 ---
 
@@ -143,6 +144,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 |---|---|---|---|---|---|---|---|
 | PR341-FU-OUTBOXTEST-CLOSE-BUDGET-COVERAGE | **OUTBOXTEST-CLOSE-BUDGET-COVERAGE-01** — 现状: conformance suite 仍裸调 `sub.Close(ctx)`；修复: 全部走 closeWithBudget 或 godoc 强约定 | test | P2/Cx1 | 🟡 | — | `kernel/outbox/outboxtest/conformance.go` | PR #341 round-1 |
 | P4-TD-04 | **ordercell L2 事务性 outbox** — 现状: ordercell 声明 L2 但用 publisher.Publish 而非事务性 outbox.Writer；修复: Init 强制 outboxWriter 注入 + 替换 Publish | bug | P2/Cx2 | 🟡 | v1.1 启动 | `examples/todoorder/cells/ordercell/` | tech-debt-registry P4-TD-04 |
+| AUDITAPPEND-L2-FAILURE-PROOF-01 | **AuditAppend L2 失败注入测试** — 现状: 缺 PG-level 失败注入证明；修复: testcontainer + 故意 fail outbox writer 验证 DB 写成功 + outbox 失败 → 事务真回滚 | test | P1/Cx3 | 🟡 | v1.0 GA 前 | `cells/auditcore/slices/auditappend/outbox_test.go` | backlog1 §2.5 |
 
 ---
 
@@ -214,6 +216,8 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | PR252-F2 | **Sweeper 生产治理** — 现状: 单 replica 假设；修复: multi-replica command consumer 时落 | arch-opt | Cx4 | 🟠 | multi-replica command consumer | `runtime/command/` | PR#252 |
 | PR333-BOOTSTRAP-OPTION-CROSS-CONCERN | **Bootstrap option 跨 concern 拆分** — 现状: option 概念混杂；修复: 按 concern 拆 | arch-opt | Cx2 | 🟡 | — | `runtime/bootstrap/` | PR#333 |
 | PR405-BOOTSTRAP-SHUTDOWN-BUDGET-DECOUPLE | **BOOTSTRAP-SHUTDOWN-BUDGET-PER-LISTENER-DECOUPLE-01** — 现状: phase10 共享 shutCtx，dual-listener race 偶发超时；修复: HTTP drain + LIFO teardown 拆双 budget + 新 ADR | arch-opt | P2/Cx2 | 🟡 | — | `runtime/bootstrap/phases_shutdown.go` + `bootstrap_http_shutdown.go` + ADR | PR#405 reviewer |
+| STARTUP-ROLLBACK-ERR-JOIN-01 | **Startup rollback 错误聚合** — 现状: startup 失败时 rollbackErr 静默丢；修复: `errors.Join(startupErr, rollbackErr)` 或 `StartupRollbackError{Startup, Rollback}` 结构化 | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `runtime/bootstrap/run_state.go` | backlog1 §2.4 |
+| COREBUNDLE-MAINTEST-FAIL-FAST-01 | **corebundle main_test fail-fast** — 现状: bind 错误被白名单吞掉；修复: 用 `net.Listen("tcp", "127.0.0.1:0")` 注入 + 断言关键装配里程碑 | test | Cx2 | 🟡 | — | `cmd/corebundle/main_test.go` | backlog1 §2.7 |
 
 ---
 
@@ -243,6 +247,7 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | WS-OPS-02 | **WS shutdown 并发 Close** — 现状: 同步逐个 Close，千连接线性增长；修复: 并发 Close + closeWg | arch-opt | Cx2 | 🟡 | 千级连接规模出现 | `runtime/websocket/hub.go` | tech-debt-registry WS-OPS-02 |
 | WS-DX-01 | **WS per-conn context tracing** — 现状: per-conn ctx 基于 Background()，无 tracing/correlation 传到 MessageHandler；修复: 透传 tracing ctx | arch-opt | Cx2 | 🟡 | observability 接入时 | `runtime/websocket/` | tech-debt-registry WS-DX-01 |
 | WS-DX-02 | **WS Conn 接口缺 RemoteAddr()** — 现状: 诊断日志只有 opaque UUID；修复: 接口加 RemoteAddr() | arch-opt | Cx1 | 🟡 | — | `runtime/websocket/` | tech-debt-registry WS-DX-02 |
+| REPO-HEALTHCHECKER-01 | **configcore/auditcore repo 接 HealthCheckers** — 现状: HealthCheckers 仅接 outbox，关键 repo 未接探针；修复: 接入 cell HealthCheckers（与 PR-CFG-1 PG relay probe 同主题）| arch-opt | P1/Cx2 | 🟡 | 与 PR-A53 同 PR | `cells/configcore/cell.go` + `cells/auditcore/cell.go` | backlog1 §3 |
 
 ---
 
@@ -294,6 +299,11 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | CONTRACT-CODEGEN-01 | **Go DTO ↔ JSON Schema 双向推断** — 现状: 代码与契约 YAML 分裂；修复: Struct Tags 实时双写到 JSON Schema（对齐 oapi-codegen） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `tools/codegen/` + DTO 模板 | backlog_later §5 |
 | CONTRACT-STUB-01 | **Consumer-Driven Contract Stub** — 现状: 缺消费方 stub 校验；修复: 提供 Stub 桩代码套件（对标 Spring Cloud Contract / Pact） | feat | P2/Cx3 | 🟡 | V1.1 启动 | `tools/contracttest/` | backlog_later §5 |
 | C-L6 | **Contract ID 解析标准统一** — 现状: CLI 用点分（http.auth）、Generator 退化为斜杠分割，开发者上下文脱节；修复: 全局检索 + 统一内部 Contract ID 解析 | bug | P2/Cx2 | 🟡 | — | `cmd/gocell/` + `kernel/scaffold/` + `tools/codegen/` | backlog_later §6 C-L6 |
+| CONTRACTTEST-SCHEMAREF-FAILFAST-01 | **contracttest schemaRefs 默认 fail-fast** — 现状: 未命中 schemaRefs key 默认 no-op，掩盖测试缺失；修复: 默认 fail；宽松改显式 `WithMissingKeyTolerated()` API | arch-opt | P1/Cx2 | 🟡 | 发布前必做 | `pkg/contracttest/contracttest.go` | backlog1 §2.2 |
+| CONTRACT-ENDPOINT-TEST-MAPPING-01 | **active contract → 测试用例映射门禁** — 现状: 缺活跃端点 → 测试覆盖映射；修复: governance 加规则：`lifecycle: active` HTTP contract 必须有对应 contract test | arch-opt | P1/Cx2 | 🟡 | 发布前必做 | `kernel/governance/` | backlog1 §2.2 |
+| CONTRACT-PATH-QUERY-EXECUTABLE-01 | **path/query 参数约束可执行测试** — 现状: pattern/min/max/format 无入参可执行测试；修复: 加 transport 入参 rejected 用例覆盖 | arch-opt | P1/Cx2 | 🟡 | 发布前必做 | `pkg/contracttest/contracttest.go` | backlog1 §2.2 |
+| CLI-SECONDARY-HELP-01 | **CLI 二级命令统一 -h/help** — 现状: 二级命令不识别 `-h`/`help`，被当 subtype 解析；修复: 修正 dispatch 顺序 + 文案 | bug | Cx1 | 🟡 | — | `cmd/gocell/app/dispatch.go` + `check.go` + `scaffold.go` | backlog1 §2.7 |
+| CLI-UNIMPL-HIDE-01 | **CLI 未实现命令隐藏** — 现状: `not implemented` 命令出现在主帮助；修复: 移除或显式 `[experimental]` 标注 + 运行时 `exit 64` | bug | Cx1 | 🟡 | — | `cmd/gocell/app/dispatch.go` + `generate.go` | backlog1 §2.7 |
 | P2-T-02 | **J-auditlogintrail 端到端集成测试** — 现状: stub 已就位；修复: 用 Docker + testcontainers 激活 | test | P2/Cx2 | 🟡 | Phase 5 启动 | `tests/integration/` + journey | tech-debt-registry P2-T-02 |
 
 ---
@@ -332,6 +342,9 @@ _暂无活动 item。新建项归此章节用 ID 前缀 `01-CELL-`。_
 | P4-TD-01 | **noop outbox/Claimer 共享包** — 现状: 各处 ad-hoc noop 实现，KG-02 建议提取；修复: 抽到共享 `runtime/testutil/outbox/` + 测试 helper 收口 | refactor | Cx2 | 🟡 | — | `runtime/testutil/` (扩) + 各 cell 测试 | tech-debt-registry P4-TD-01 |
 | P4-TD-06 | **CI example validation `\|\| true` 形式化** — 现状: 验证错误被静默吞咽；修复: 删 `\|\| true` 让 CI 阻断 | bug | Cx1 | 🟡 | v1.1 启动 | `.github/workflows/` | tech-debt-registry P4-TD-06 |
 | P4-TD-09 | **testcontainers-go indirect 标记** — 现状: go.mod 标记 indirect 但实际直接依赖，go mod tidy 可能移除；修复: 改 direct dep | bug | Cx1 | 🟡 | — | `go.mod` | tech-debt-registry P4-TD-09 |
+| ADAPTER-CONNECT-BUDGET-01 | **adapter 级 ConnectTimeout 强制** — 现状: 各 adapter 依赖上层 ctx；修复: adapter 级 ConnectTimeout（默认 5s）写 Config + Validate + `ERR_ADAPTER_CONNECT_TIMEOUT` (also: cap-08, cap-10；PG 部分由 PR#401 已部分覆盖) | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/rabbitmq/connection.go` + `adapters/postgres/pool.go` | backlog1 §2.4 |
+| S3-FAILURE-INJECTION-01 | **S3 故障注入测试** — 现状: 缺 MinIO testcontainer 集成测；修复: 上传 403/5xx/timeout/recovery 路径覆盖 (also: cap-13) | test | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/s3/s3_test.go` | backlog1 §2.5 |
+| SWEEPER-OBSERVABLE-01 | **Sweeper onError + 并发度** — 现状: onError 默认兜底（slog.Error）；并发度按 finding 数计算不准；修复: onError 注入 + 并发度按 `groups × capacity × cost` 计算 (also: cap-08, cap-13；与 PR252-F2 同 PR) | arch-opt | P1/Cx2 | 🟠 | 与 PR252-F2 同 batch | `kernel/command/sweeper.go` | backlog1 §3 |
 
 ---
 
