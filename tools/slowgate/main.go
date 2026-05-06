@@ -61,12 +61,16 @@ const (
 	// value is shown instead so the message stays accurate.
 	defaultAllowlistPath = "tools/slowgate/allowlist.txt"
 
-	// defaultThreshold is the default per-test wall-clock budget. 2s leaves
-	// headroom for CI runner variance over the GoCell unit shards while
-	// still flagging meaningful regressions (most unit tests finish in
-	// well under 1s; type-graph-load and verify-job tests are explicitly
-	// allowlisted in tools/slowgate/allowlist.txt).
-	defaultThreshold = 2 * time.Second
+	// defaultThreshold is the default per-test wall-clock budget. 5s is the
+	// empirical floor needed to absorb GHA ubuntu-latest runner variance
+	// across this codebase: the dominant >2s test population is
+	// packages.Load-bound (archtest / typeseval / metricschema /
+	// generatedverify) and subprocess-go-toolchain (kernel/verify), where
+	// individual runs swing 2–7s from cold cache + concurrent CPU. 2s
+	// produces a long tail of allowlist churn that is pure noise; 5s lets
+	// the gate retain its real signal — a sleep regression from 100ms to
+	// 6s is still caught, while CI flakes from 1.9→2.1s are absorbed.
+	defaultThreshold = 5 * time.Second
 )
 
 func main() {

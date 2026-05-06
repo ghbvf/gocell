@@ -1,25 +1,23 @@
-# slowgate allowlist — tests permitted to exceed the default 2s budget.
+# slowgate allowlist — tests permitted to exceed the default 5s budget.
 #
 # Format: each data line is `Package<TAB>TestName`. Every data line MUST
 # be preceded by a `# <reason>` comment explaining why the wall-clock cost
 # is unavoidable. The companion archtest SLOWGATE-ALLOWLIST-01 enforces
 # both the comment rule and that every (Package, TestName) maps to a real
-# top-level test func.
+# top-level test func. Independent table-driven negative cases for the
+# parser live in TestLoadSlowgateAllowlist_ParseRules (same file).
 #
-# DO NOT add entries based on local-laptop timings — local runs (especially
-# under concurrent CPU load) often show 10-30% higher elapsed than the GHA
-# ubuntu-latest runner. Add an entry only when CI has empirically failed
-# the gate for that test. The canonical regeneration workflow:
+# Threshold rationale (5s, see tools/slowgate/main.go defaultThreshold):
+# the dominant >2s test population in this repo is packages.Load-bound
+# and subprocess-go-toolchain — both swing 2–7s from cold cache + GHA
+# runner CPU contention. A 2s threshold produces a long tail of allowlist
+# churn that is pure noise; 5s preserves real signal (a sleep regression
+# from 100ms to 6s is still caught) without being trip-wire on CI flakes.
 #
-#   1. Push the PR; let CI run.
-#   2. If slowgate fails on any shard, download the matching
-#      `test-json-<shard>` artifact uploaded by `_build-lint.yml`.
-#   3. Re-run slowgate locally against that artifact:
-#        slowgate --threshold=2s --allowlist=/dev/null < test-<shard>.json
-#      The stderr `SLOW <pkg> <test> ...` lines map 1:1 to allowlist
-#      entries (Package<TAB>TestName).
-#   4. Append entries here grouped under the appropriate `# <category>:`
-#      comment, with a reason describing why the test is unavoidably slow.
+# Adding entries: only when CI has empirically failed the gate. The
+# failing slowgate step prints `SLOW <Package> <TestName> <Elapsed>` lines
+# directly to stderr in the GHA step log — append the matching pair here
+# under the appropriate `# <category>:` comment with a non-empty reason.
 
 # ----------------------------------------------------------------------
 # type-graph-load: tests use packages.Load over the entire module type
@@ -27,30 +25,6 @@
 # not by sleep or I/O. Inherent to whole-module static analysis.
 # ----------------------------------------------------------------------
 
-# type-graph-load: bootstrap path predicate scan
-github.com/ghbvf/gocell/tools/archtest	TestBootstrapPathPredicateSole
-# type-graph-load: caller-cell required scan over module
-github.com/ghbvf/gocell/tools/archtest	TestSVCTOKEN_CALLER_CELL_REQUIRED_01
-# type-graph-load: handler path/query length validation scan over module
-github.com/ghbvf/gocell/tools/archtest	TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01
-# type-graph-load: metric-label errcode classifiers Ack scan over module
-github.com/ghbvf/gocell/tools/archtest	TestMetricLabelErrcodeClassifiersRequireAck
-# type-graph-load: security-topics fail-open scan over module
-github.com/ghbvf/gocell/tools/archtest	TestSecurityTopicsDoNotOptInFailOpen
-# type-graph-load: event-subscription contractgen coverage scan over module
-github.com/ghbvf/gocell/tools/archtest	TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01
-# type-graph-load: handler no-schema-for-Nobody scan over module
-github.com/ghbvf/gocell/tools/archtest	TestHandlerNoSchemaForNobody01
-# type-graph-load: no-wire-fields-in-yaml fixture scan over module
-github.com/ghbvf/gocell/tools/archtest	TestNoWireFieldsInYaml01
-# type-graph-load: cell production go-files inclusive walk over module
-github.com/ghbvf/gocell/tools/archtest	TestFindCellProductionGoFiles_IncludesExamples
-# type-graph-load: metricschema corebundle reachable typed-metrics scan
-github.com/ghbvf/gocell/tools/metricschema	TestBuild_CorebundleCapturesReachableTypedMetrics
-# type-graph-load: metricschema corebundle generated-schema currency check
-github.com/ghbvf/gocell/tools/metricschema	TestBuild_CorebundleGeneratedSchemaIsCurrent
-# type-graph-load: slowgate allowlist drift guard (this test) loads referenced packages
-github.com/ghbvf/gocell/tools/archtest	TestSlowgateAllowlist
 # type-graph-load: clock injection callsite scan over module
 github.com/ghbvf/gocell/tools/archtest	TestClockInjectionCallsite
 # type-graph-load: clock injection prod callsite scan over module
@@ -61,18 +35,12 @@ github.com/ghbvf/gocell/tools/archtest	TestErrcodeMessageConstLiteral
 github.com/ghbvf/gocell/tools/archtest	TestExportedErrorNew
 # type-graph-load: goose session-locker scan over module
 github.com/ghbvf/gocell/tools/archtest	TestGooseSessionLocker01
-# type-graph-load: health-checker implies-managed-resource cross-package walk
-github.com/ghbvf/gocell/tools/archtest	TestHealthCheckersImpliesManagedResource
 # type-graph-load: kernel/clock leaf-fallback scan over module
 github.com/ghbvf/gocell/tools/archtest	TestKernelClockLeafFallback
 # type-graph-load: kernel/clock reset-relative scan over module
 github.com/ghbvf/gocell/tools/archtest	TestKernelClockResetRelativeProd
-# type-graph-load: layering rules walk over module dependency graph
-github.com/ghbvf/gocell/tools/archtest	TestLayeringRules
 # type-graph-load: lint-gate smoke (subprocess golangci-lint warmup)
 github.com/ghbvf/gocell/tools/archtest	TestLintGateSmoke
-# type-graph-load: deleted-auth-symbols scan over module
-github.com/ghbvf/gocell/tools/archtest	TestNO_DELETED_AUTH_SYMBOLS_01
 # type-graph-load: prod clock injection scan over module
 github.com/ghbvf/gocell/tools/archtest	TestProdClockInjection
 # type-graph-load: prod duration const scan over module
@@ -83,12 +51,12 @@ github.com/ghbvf/gocell/tools/archtest	TestTestSleepDiscipline
 github.com/ghbvf/gocell/tools/archtest	TestTestTimeLiteralConst
 # type-graph-load: test-time literal fixtures cross-validation
 github.com/ghbvf/gocell/tools/archtest	TestTestTimeLiteralFixtures
-# type-graph-load: typeseval test-flag isolation
-github.com/ghbvf/gocell/tools/archtest/internal/typeseval	TestLoadPackages_TestsFlagIncludesTestFiles
-# type-graph-load: typeseval shared-resolver isolation
-github.com/ghbvf/gocell/tools/archtest/internal/typeseval	TestSharedResolver_DifferentKeysIsolated
-# type-graph-load: typeseval shared-resolver test-flag cache key
-github.com/ghbvf/gocell/tools/archtest/internal/typeseval	TestSharedResolver_TestsFlagDistinctCacheKey
+# type-graph-load: slowgate allowlist drift guard (this test) loads referenced packages
+github.com/ghbvf/gocell/tools/archtest	TestSlowgateAllowlist
+# type-graph-load: metricschema cross-package prometheus helper opts scan
+github.com/ghbvf/gocell/tools/metricschema	TestBuild_FailsClosedOnUnresolvedCrossPackagePrometheusHelperOpts
+# type-graph-load: metricschema prometheus helper vec labels scan
+github.com/ghbvf/gocell/tools/metricschema	TestBuild_FailsClosedOnUnresolvedPrometheusHelperVecLabels
 
 # ----------------------------------------------------------------------
 # subprocess-go-toolchain: tests invoke `go build` / `go test` /
@@ -97,6 +65,14 @@ github.com/ghbvf/gocell/tools/archtest/internal/typeseval	TestSharedResolver_Tes
 # subject (we are testing the artifact-on-disk produced by go itself).
 # ----------------------------------------------------------------------
 
+# subprocess-go-toolchain: kernel/verify subprocess go test failing-test capture
+github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_FailingTest
+# subprocess-go-toolchain: kernel/verify subprocess go test against temp module
+github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_WithTempModule
+# subprocess-go-toolchain: kernel/verify subprocess go with caller-selected GOROOT/PATH
+github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_UsesCallerSelectedGoAndAdditivePATH
+# subprocess-go-toolchain: kernel/verify subprocess go with skip-only test path
+github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_SkipOnlyReal
 # subprocess-go-toolchain: kernel/verify integration test runs full journey via subprocess
 github.com/ghbvf/gocell/kernel/verify	TestRunJourney_Integration
 # subprocess-go-toolchain: kernel/verify integration test runs full cell via subprocess
@@ -105,34 +81,6 @@ github.com/ghbvf/gocell/kernel/verify	TestVerifyCell_Integration
 github.com/ghbvf/gocell/kernel/verify	TestVerifySlice_Integration
 # subprocess-go-toolchain: kernel/verify integration test runs slice with metadata refs
 github.com/ghbvf/gocell/kernel/verify	TestVerifySlice_WithMetadataRefs
-# subprocess-go-toolchain: kernel/verify subprocess go test failing-test capture
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_FailingTest
-# subprocess-go-toolchain: kernel/verify subprocess go with skip-only test path
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_SkipOnlyReal
-# subprocess-go-toolchain: kernel/verify subprocess go with caller-selected GOROOT/PATH
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_UsesCallerSelectedGoAndAdditivePATH
-# subprocess-go-toolchain: kernel/verify subprocess go test against temp module
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_WithTempModule
-# subprocess-go-toolchain: kernel/verify subprocess go test zero-match real path
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_ZeroMatchReal
-# subprocess-go-toolchain: generatedverify entry-point sibling check
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyAllowsHandwrittenSiblingOfEntrypoint
-# subprocess-go-toolchain: generatedverify generator-header scan
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyDetectsGeneratorHeaderOutsideKnownDirs
-# subprocess-go-toolchain: generatedverify orphaned assembly artifact
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyDetectsOrphanedAssemblyGeneratedArtifact
-# subprocess-go-toolchain: generatedverify orphaned assembly file
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyDetectsOrphanedFileFromRemovedAssembly
-# subprocess-go-toolchain: generatedverify renamed-entrypoint detection
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyDetectsRenamedEntrypointLeftBehind
-# subprocess-go-toolchain: generatedverify handwritten-in-generated-dir
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyIgnoresHandwrittenFileInGeneratedDir
-# subprocess-go-toolchain: generatedverify happy-path committed artifacts
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyPassesWhenExpectedFilesAreCommitted
-# subprocess-go-toolchain: generatedverify staged-but-uncommitted detection
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyRejectsStagedButUncommittedArtifact
-# subprocess-go-toolchain: generatedverify uncommitted-artifacts inside repo
-github.com/ghbvf/gocell/tools/generatedverify	TestVerifyReportsUncommittedArtifactsInsideGitRepo
 
 # ----------------------------------------------------------------------
 # verify-large-fixture: cmd/gocell verify-* commands replay full
@@ -148,29 +96,17 @@ github.com/ghbvf/gocell/cmd/gocell/app	TestRunVerifyCell_ValidID
 github.com/ghbvf/gocell/cmd/gocell/app	TestRunVerifyJourney_ValidID
 # verify-large-fixture: verify-slice command end-to-end (largest fixture set)
 github.com/ghbvf/gocell/cmd/gocell/app	TestRunVerifySlice_ValidID
-# verify-large-fixture: check unconditional-skip walk over full repo
-github.com/ghbvf/gocell/cmd/gocell/app	TestRunCheckUnconditionalSkip
-# verify-large-fixture: unconditional-skip CI mode walks repo
-github.com/ghbvf/gocell/cmd/gocell/app	TestCheckUnconditionalSkipCI
-# verify-large-fixture: unconditional-skip JSON output walks repo
-github.com/ghbvf/gocell/cmd/gocell/app	TestCheckUnconditionalSkip_JSONFormat
-# verify-large-fixture: unconditional-skip text output walks repo
-github.com/ghbvf/gocell/cmd/gocell/app	TestCheckUnconditionalSkip_TextFormat_PrintsScope
-# verify-large-fixture: unconditional-skip analyzer bounded-to-root scan
-github.com/ghbvf/gocell/cmd/gocell/app	TestRunUnconditionalSkipAnalyzer_BoundedToRoot
 
 # ----------------------------------------------------------------------
-# external-network-timeout: tests assert error path of dialing an
-# unreachable endpoint. The slow path IS the test subject — the budget
-# spent waiting for the dial to fail is the wall-clock floor.
+# external-network-timeout: tests assert the error path of dialing an
+# unreachable endpoint. The dial backoff IS the test subject — the
+# wall-clock cost is the configured retry/timeout budget.
 # ----------------------------------------------------------------------
 
-# external-network-timeout: vault transit dial unreachable host
-github.com/ghbvf/gocell/cmd/corebundle	TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast
-# external-network-timeout: corebundle SharedDeps Validate dials configured deps
-github.com/ghbvf/gocell/cmd/corebundle	TestSharedDeps_Validate
 # external-network-timeout: OTLP exporter dial unreachable collector
 github.com/ghbvf/gocell/adapters/otel	TestNewTracer_Insecure
+# external-network-timeout: vault token reauth retries N times before giving up
+github.com/ghbvf/gocell/adapters/vault	TestDoReauth_SucceedsAfterNFailures
 
 # ----------------------------------------------------------------------
 # sleep-bounded: test orchestrates real-time barriers via time.After /
@@ -178,14 +114,5 @@ github.com/ghbvf/gocell/adapters/otel	TestNewTracer_Insecure
 # test-sleep annotations track each underlying call.
 # ----------------------------------------------------------------------
 
-# sleep-bounded: router shutdown phase wrapping uses time.After budgets
+# sleep-bounded: router shutdown phase wrapping uses 2× testtime.D2s budgets
 github.com/ghbvf/gocell/runtime/eventrouter	TestRouterClose_WrapsErrorsByPhase
-
-# ----------------------------------------------------------------------
-# crypto-cost: bcrypt / argon2 password hashing has a cost factor that
-# is the test subject — the wall-clock cost is the security parameter
-# being verified, not an implementation hot-spot.
-# ----------------------------------------------------------------------
-
-# crypto-cost: identitymanage password change exercises bcrypt cost factor
-github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage	TestHttpAuthUserChangePasswordV1Serve

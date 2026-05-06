@@ -154,12 +154,20 @@ jobs:
       #
       # `-json` redirects test framework events to stdout (test2json schema);
       # `-coverprofile` continues to write the coverage atomic file
-      # independently. `tee` archives the raw event stream to RUNNER_TEMP for
-      # the post-step artifact upload, then pipes into slowgate which exits 1
-      # if any (Package, Test) Elapsed exceeds 2s without an allowlist entry.
+      # independently. The pipe feeds straight into slowgate which exits 1
+      # if any (Package, Test) Elapsed exceeds the threshold without an
+      # allowlist entry; the violating tests are surfaced on stderr in the
+      # GHA step log (no separate artifact — slowgate's own log lines are
+      # the canonical diagnostic, retained by GHA's default 90-day step-log
+      # retention).
+      #
       # `set -o pipefail` is explicitly set here — GHA bash does NOT enable
       # it by default, and without it a non-zero `go test` exit code would
-      # be masked by `tee`/`slowgate` success. Do not remove this line.
+      # be masked by slowgate success. Do not remove this line.
+      #
+      # `--threshold=5s` matches `defaultThreshold` in tools/slowgate/main.go;
+      # the literal is duplicated to keep the workflow self-documenting at
+      # the call site.
       - name: Test
         shell: bash
         run: |
@@ -170,19 +178,7 @@ jobs:
             -json \
             ${{ matrix.pkgs }} \
             -count=1 -timeout 5m \
-            | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
-            | "$RUNNER_TEMP/slowgate" --threshold=2s --allowlist=tools/slowgate/allowlist.txt
-
-      # Archive the raw `go test -json` event stream so a slowgate failure can
-      # be diagnosed against the actual elapsed timings without re-running the
-      # shard.
-      - name: Upload test-json artifact
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-json-${{ matrix.shard }}
-          path: ${{ runner.temp }}/test-${{ matrix.shard }}.json
-          retention-days: 7
+            | "$RUNNER_TEMP/slowgate" --threshold=5s --allowlist=tools/slowgate/allowlist.txt
 
       # Static governance gates (validate --strict, verify journey, check
       # contract-health, check unconditional-skip, examples internal-import

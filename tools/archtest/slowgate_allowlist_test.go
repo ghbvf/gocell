@@ -168,16 +168,20 @@ func loadSlowgateAllowlist(path string) ([]slowgateEntry, error) {
 	for sc.Scan() {
 		lineNum++
 		raw := strings.TrimRight(sc.Text(), "\r")
-		trimmed := strings.TrimSpace(raw)
-
-		if trimmed == "" {
-			// Blank line: keeps lastNonBlank state unchanged so a comment
-			// can be visually separated from its data line by one blank.
+		// Do not TrimSpace here: a `pkg<TAB>` data line (empty test name)
+		// must reach splitAllowlistFields with its TAB intact so the empty
+		// trailing field is diagnosed as "empty test name" rather than
+		// collapsing into a single-field "expected 2 fields" error.
+		// Mirrors tools/slowgate/main.go parseAllowlist.
+		leftTrimmed := strings.TrimLeft(raw, " \t")
+		if leftTrimmed == "" {
+			// Blank line: keep lastNonBlank* state so a comment can be
+			// visually separated from its data line by blank lines.
 			continue
 		}
-		if strings.HasPrefix(trimmed, "#") {
-			reason := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
-			lastNonBlank = trimmed
+		if strings.HasPrefix(leftTrimmed, "#") {
+			reason := strings.TrimSpace(strings.TrimPrefix(leftTrimmed, "#"))
+			lastNonBlank = leftTrimmed
 			lastNonBlankWasComment = reason != ""
 			continue
 		}
@@ -187,26 +191,26 @@ func loadSlowgateAllowlist(path string) ([]slowgateEntry, error) {
 			return nil, fmt.Errorf(
 				"%s:%d: data line %q is not preceded by a `# <reason>` comment "+
 					"(every allowlist entry must justify itself)",
-				path, lineNum, trimmed,
+				path, lineNum, leftTrimmed,
 			)
 		}
 		_ = lastNonBlank // retained for diagnostics-friendly future use
-		fields := splitAllowlistFields(trimmed)
+		fields := splitAllowlistFields(raw)
 		if len(fields) != 2 {
 			return nil, fmt.Errorf(
 				"%s:%d: expected 2 fields (Package<TAB>Test), got %d (%q)",
-				path, lineNum, len(fields), trimmed,
+				path, lineNum, len(fields), raw,
 			)
 		}
 		if fields[0] == "" || fields[1] == "" {
-			return nil, fmt.Errorf("%s:%d: empty package or empty test name (%q)", path, lineNum, trimmed)
+			return nil, fmt.Errorf("%s:%d: empty package or empty test name (%q)", path, lineNum, raw)
 		}
 		entries = append(entries, slowgateEntry{Package: fields[0], Test: fields[1]})
 
 		// After consuming a data line, reset comment state so the NEXT data
 		// line must have its own preceding comment.
 		lastNonBlankWasComment = false
-		lastNonBlank = trimmed
+		lastNonBlank = leftTrimmed
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
@@ -233,4 +237,117 @@ func splitAllowlistFields(s string) []string {
 		return out
 	}
 	return strings.Fields(s)
+}
+
+// TestLoadSlowgateAllowlist_ParseRules covers loadSlowgateAllowlist's
+// parser invariants in isolation from the live tools/slowgate/allowlist.txt
+// file, so changes to the comment-precedence rule can be exercised without
+// touching the production allowlist. Each case writes a tiny synthetic
+// allowlist into t.TempDir() and asserts the expected (entries, error).
+//
+// ref: docs/plans/202605011500-029-master-roadmap.md G9
+func TestLoadSlowgateAllowlist_ParseRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		content     string
+		wantEntries int
+		wantErr     string // substring; "" means expect no error
+	}{
+		{
+			name:        "happy_path_minimal",
+			content:     "# reason\npkg/a\tTestA\n",
+			wantEntries: 1,
+		},
+		{
+			name:        "blank_line_between_comment_and_data_ok",
+			content:     "# reason\n\npkg/a\tTestA\n",
+			wantEntries: 1,
+		},
+		{
+			name:        "many_blank_lines_between_comment_and_data_ok",
+			content:     "# reason\n\n\n\n\npkg/a\tTestA\n",
+			wantEntries: 1,
+		},
+		{
+			name:    "data_without_preceding_comment_rejected",
+			content: "pkg/a\tTestA\n",
+			wantErr: "not preceded by",
+		},
+		{
+			name:    "bare_hash_does_not_count_as_reason",
+			content: "#\npkg/a\tTestA\n",
+			wantErr: "not preceded by",
+		},
+		{
+			name:    "section_header_then_bare_hash_then_data_rejected",
+			content: "# section title\n#\npkg/a\tTestA\n",
+			wantErr: "not preceded by",
+		},
+		{
+			name:    "two_consecutive_data_lines_second_rejected",
+			content: "# reason\npkg/a\tTestA\npkg/b\tTestB\n",
+			wantErr: "not preceded by",
+		},
+		{
+			name:        "tab_and_whitespace_mix_ok",
+			content:     "# reason\npkg/a\t  TestA \n",
+			wantEntries: 1,
+		},
+		{
+			name:        "crlf_line_endings_ok",
+			content:     "# reason\r\npkg/a\tTestA\r\n",
+			wantEntries: 1,
+		},
+		{
+			name:    "single_field_rejected",
+			content: "# reason\npkgonly\n",
+			wantErr: "expected 2 fields",
+		},
+		{
+			name:    "three_fields_rejected",
+			content: "# reason\npkg/a\tTestA\textra\n",
+			wantErr: "expected 2 fields",
+		},
+		{
+			name:    "empty_test_name_rejected",
+			content: "# reason\npkg/a\t\n",
+			wantErr: "empty package or empty test name",
+		},
+		{
+			name:    "empty_package_rejected",
+			content: "# reason\n\tTestA\n",
+			wantErr: "empty package or empty test name",
+		},
+		{
+			name:        "empty_file_returns_no_entries",
+			content:     "",
+			wantEntries: 0,
+		},
+		{
+			name:        "comment_only_file_returns_no_entries",
+			content:     "# header\n# more\n",
+			wantEntries: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "allowlist.txt")
+			require.NoError(t, os.WriteFile(path, []byte(tc.content), 0o600))
+
+			entries, err := loadSlowgateAllowlist(path)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantErr,
+					"err %q must contain %q", err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, entries, tc.wantEntries)
+		})
+	}
 }
