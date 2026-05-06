@@ -6,101 +6,88 @@ package archtest
 // race on the schema_migrations table (GitHub #21,
 // POSTGRES-MIGRATOR-LOCK-ORDER-REGRESSION-01).
 //
-// Allowlist: schema_guard.go is exempt — its goose.NewProvider is used only by
-// VerifyExpectedVersion's read-only GetDBVersion path; advisory locks add no
-// value on a read-only readiness probe and would create connection contention.
-// The mutating Up/Down path lives in migrator.go and MUST hold the lock.
+// Resolution is type-driven via go/packages + types.Info.ObjectOf: every
+// CallExpr is resolved to its *types.Func and gated on
+// Pkg().Path() == "github.com/pressly/goose/v3" with Name() == "NewProvider"
+// (or "WithSessionLocker"). Import aliases ("import g \"…/goose/v3\""), dot
+// imports ("import . \"…/goose/v3\""), and same-named symbols from unrelated
+// packages are all handled correctly — an identifier-name AST heuristic
+// (sel.X.Name == "goose") could not.
 //
-// AST strategy:
-//   1. parser.ParseDir adapters/postgres/ (skip subdirs, _test.go, allowlist)
-//   2. for every CallExpr matching goose.NewProvider(...)
-//   3. assert at least one of its variadic args is goose.WithSessionLocker(...)
+// Allowlist: keyed on repo-relative path (filepath.ToSlash) so a future move
+// of schema_guard.go under a sub-directory does not silently inherit the
+// exemption based on basename collision. schema_guard.go is exempt because
+// its goose.NewProvider is used only by VerifyExpectedVersion's read-only
+// GetDBVersion path; advisory locks add no value on a read-only readiness
+// probe and would create connection contention. The mutating Up/Down path
+// lives in migrator.go and MUST hold the lock.
 //
 // ref: pressly/goose lock/postgres.go pg_try_advisory_lock + retry
+// ref: dominikh/go-tools analysis/code/code.go CallName / IsCallToAny
 
 import (
+	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
-	"strings"
+	"go/types"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
-const ruleGooseSessionLocker01 = "GOOSE-SESSION-LOCKER-01"
+const (
+	ruleGooseSessionLocker01 = "GOOSE-SESSION-LOCKER-01"
+	gooseImportPathProd      = "github.com/pressly/goose/v3"
+)
 
-// gooseSessionLockerAllowlist contains files (relative to adapters/postgres/)
-// where goose.NewProvider is intentionally invoked without WithSessionLocker.
-// These are read-only paths that do not mutate schema_migrations.
+// gooseSessionLockerAllowlist maps a repo-relative path (forward-slash) to
+// the rationale for exempting that file from the rule. Only the listed paths
+// may invoke goose.NewProvider without WithSessionLocker.
 var gooseSessionLockerAllowlist = map[string]string{
-	"schema_guard.go": "VerifyExpectedVersion uses provider.GetDBVersion only (read-only)",
+	"adapters/postgres/schema_guard.go": "VerifyExpectedVersion uses provider.GetDBVersion only (read-only); " +
+		"advisory locks add no value on a readiness probe.",
+}
+
+// gooseLockerViolation is one offending NewProvider call site.
+type gooseLockerViolation struct {
+	rel  string
+	line int
+}
+
+func (v gooseLockerViolation) String() string {
+	return fmt.Sprintf("%s:%d  goose.NewProvider must include goose.WithSessionLocker(lock.NewPostgresSessionLocker())", v.rel, v.line)
 }
 
 func TestGooseSessionLocker01(t *testing.T) {
-	root := findModuleRoot(t)
-	pgDir := filepath.Join(root, "adapters", "postgres")
-
-	type violation struct {
-		file string
-		line int
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	var violations []violation
 
-	walkErr := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, werr error) error {
-		if werr != nil {
-			return werr
-		}
-		if d.IsDir() {
-			if d.Name() == "migrations" || d.Name() == "testdata" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		base := filepath.Base(path)
-		if _, allow := gooseSessionLockerAllowlist[base]; allow {
-			return nil
-		}
+	root := findModuleRoot(t)
 
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			return parseErr
-		}
+	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, "./adapters/postgres/...")
+	require.NoError(t, err, "packages.Load adapters/postgres/...")
+	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
-		rel, _ := filepath.Rel(root, path)
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if !isGooseNewProvider(call) {
-				return true
-			}
-			if hasGooseWithSessionLocker(call.Args) {
-				return true
-			}
-			pos := fset.Position(call.Pos())
-			violations = append(violations, violation{
-				file: filepath.ToSlash(rel),
-				line: pos.Line,
-			})
-			return true
-		})
-		return nil
-	})
-	require.NoError(t, walkErr, "walking adapters/postgres/")
+	violations, allowlistedHits := scanGooseSessionLocker(
+		pkgs, root, gooseImportPathProd, gooseSessionLockerAllowlist,
+	)
+
+	for rel, reason := range allowlistedHits {
+		t.Logf("%s: allowlist hit %s — %s", ruleGooseSessionLocker01, rel, reason)
+	}
 
 	if len(violations) > 0 {
 		t.Logf("%s: %d violation(s):", ruleGooseSessionLocker01, len(violations))
 		for _, v := range violations {
-			t.Logf("  %s:%d  goose.NewProvider must include goose.WithSessionLocker(lock.NewPostgresSessionLocker())", v.file, v.line)
+			t.Logf("  %s", v)
 		}
 	}
 	assert.Empty(t, violations,
@@ -110,35 +97,147 @@ func TestGooseSessionLocker01(t *testing.T) {
 		ruleGooseSessionLocker01)
 }
 
-func isGooseNewProvider(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	if sel.Sel.Name != "NewProvider" {
-		return false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == "goose"
+// scanGooseSessionLocker walks pkgs and returns (violations, allowlistHits).
+//
+// The matcher is type-driven: each CallExpr.Fun is resolved via
+// info.ObjectOf to a *types.Func; only those whose Pkg().Path() equals
+// gooseImportPath are considered. A NewProvider call without a sibling
+// WithSessionLocker(...) call argument from the same package is a violation.
+//
+// allowlist is keyed on repo-relative path (forward-slash, relative to
+// modRoot). modRoot is the path used to compute file rel-paths.
+func scanGooseSessionLocker(
+	pkgs []*packages.Package,
+	modRoot string,
+	gooseImportPath string,
+	allowlist map[string]string,
+) ([]gooseLockerViolation, map[string]string) {
+	var violations []gooseLockerViolation
+	allowlistedHits := map[string]string{}
+	visited := map[string]bool{}
+
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		for i, file := range p.Syntax {
+			if i >= len(p.GoFiles) {
+				continue
+			}
+			abs := p.GoFiles[i]
+			if visited[abs] {
+				continue
+			}
+			visited[abs] = true
+
+			rel, ok := fileroles.Rel(modRoot, abs)
+			if !ok {
+				continue
+			}
+
+			fileViolations := scanGooseSessionLockerFile(p.Fset, file, rel, p.TypesInfo, gooseImportPath)
+			if len(fileViolations) == 0 {
+				continue
+			}
+			if reason, exempt := allowlist[rel]; exempt {
+				allowlistedHits[rel] = reason
+				continue
+			}
+			violations = append(violations, fileViolations...)
+		}
+	})
+
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].rel != violations[j].rel {
+			return violations[i].rel < violations[j].rel
+		}
+		return violations[i].line < violations[j].line
+	})
+	return violations, allowlistedHits
 }
 
-func hasGooseWithSessionLocker(args []ast.Expr) bool {
+// scanGooseSessionLockerFile inspects a single file and returns violations.
+func scanGooseSessionLockerFile(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+	gooseImportPath string,
+) []gooseLockerViolation {
+	var out []gooseLockerViolation
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if !isGooseFuncCall(info, call, gooseImportPath, "NewProvider") {
+			return true
+		}
+		if hasGooseFuncArg(info, call.Args, gooseImportPath, "WithSessionLocker") {
+			return true
+		}
+		out = append(out, gooseLockerViolation{
+			rel:  rel,
+			line: fset.Position(call.Pos()).Line,
+		})
+		return true
+	})
+	return out
+}
+
+// isGooseFuncCall reports whether call is an invocation of the package-level
+// function gooseImportPath.funcName, regardless of import alias / dot-import.
+func isGooseFuncCall(info *types.Info, call *ast.CallExpr, gooseImportPath, funcName string) bool {
+	ident := callFuncIdent(call.Fun)
+	if ident == nil {
+		return false
+	}
+	return resolvesToGooseFunc(info, ident, gooseImportPath, funcName)
+}
+
+// hasGooseFuncArg reports whether any direct arg in args is a call to
+// gooseImportPath.funcName.
+func hasGooseFuncArg(info *types.Info, args []ast.Expr, gooseImportPath, funcName string) bool {
 	for _, arg := range args {
-		call, ok := arg.(*ast.CallExpr)
+		argCall, ok := arg.(*ast.CallExpr)
 		if !ok {
 			continue
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			continue
-		}
-		if sel.Sel.Name != "WithSessionLocker" {
-			continue
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if ok && pkg.Name == "goose" {
+		if isGooseFuncCall(info, argCall, gooseImportPath, funcName) {
 			return true
 		}
 	}
 	return false
+}
+
+// callFuncIdent returns the identifier that names the function in a
+// CallExpr.Fun: the .Sel of a SelectorExpr (pkg.Func), the bare Ident
+// (dot-import case), or nil for anything else (e.g. function literal,
+// method-on-value).
+func callFuncIdent(fun ast.Expr) *ast.Ident {
+	switch e := fun.(type) {
+	case *ast.SelectorExpr:
+		return e.Sel
+	case *ast.Ident:
+		return e
+	}
+	return nil
+}
+
+// resolvesToGooseFunc checks ident's resolved object: must be a *types.Func
+// declared at package scope (no receiver) in package gooseImportPath with
+// the requested name.
+func resolvesToGooseFunc(info *types.Info, ident *ast.Ident, gooseImportPath, funcName string) bool {
+	if info == nil || ident == nil {
+		return false
+	}
+	fn, ok := info.ObjectOf(ident).(*types.Func)
+	if !ok {
+		return false
+	}
+	if fn.Pkg() == nil || fn.Pkg().Path() != gooseImportPath {
+		return false
+	}
+	if sig, _ := fn.Type().(*types.Signature); sig != nil && sig.Recv() != nil {
+		return false
+	}
+	return fn.Name() == funcName
 }
