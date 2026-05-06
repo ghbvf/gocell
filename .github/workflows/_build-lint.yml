@@ -257,6 +257,19 @@ jobs:
         # under the same tags as a compatibility patrol.
         run: go test -tags=integration,otelcollector ./adapters/otel/... -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m
 
+      - name: Race coverage for PG migrator concurrent Up
+        env:
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
+        # B4 GOOSE-SESSION-LOCKER regression guard. The main integration step
+        # above runs without -race (15-min budget covers the full adapter
+        # suite); test-race.yml's Linux race gate is scoped to
+        # kernel/runtime/pkg and does not pull the integration build tag,
+        # so without this dedicated step `TestMigrator_ConcurrentUp_NoRaceWithSessionLocker`
+        # would never exercise the Go race detector in CI. -count=3 amplifies
+        # any timing-dependent race; the focused -run keeps wall-time ≤ 60s
+        # by skipping every other postgres integration test.
+        run: go test -tags=integration -race -count=3 -timeout 5m ./adapters/postgres/ -run '^TestMigrator_ConcurrentUp_NoRaceWithSessionLocker$'
+
       - name: Redis cluster compile gate
         # B10 PR-V1-REDIS-CLUSTER: cluster_real_test.go is gated by
         # //go:build integration_cluster and is env-driven (skips when

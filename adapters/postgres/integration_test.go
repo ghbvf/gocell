@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/google/uuid"
@@ -593,6 +594,153 @@ func TestMigrator_Up_RefusesIfInvalidIndexExists(t *testing.T) {
 	// Either the table doesn't exist (versionCount == 0) or it has no applied
 	// migrations — in either case no version was advanced.
 	// The critical assertion is that Up() returned an error (already asserted above).
+}
+
+// ---------------------------------------------------------------------------
+// PR-V1-PG-STARTUP-HARDEN: SessionLocker concurrent-Up + 9/10 sequence
+// ---------------------------------------------------------------------------
+
+// concurrentUpFixtureFS returns a small migration FS used by the
+// concurrent-Up test. The single migration inserts one row into
+// _migration_run_sentinel — under proper advisory locking, exactly one row
+// must exist after N goroutines race to call Up() against the same DB.
+func concurrentUpFixtureFS() fstest.MapFS {
+	return fstest.MapFS{
+		"001_marker_run_once.sql": &fstest.MapFile{Data: []byte(
+			"-- +goose Up\n" +
+				"CREATE TABLE IF NOT EXISTS _migration_run_sentinel (\n" +
+				"    id   SERIAL PRIMARY KEY,\n" +
+				"    ts   TIMESTAMPTZ NOT NULL DEFAULT now()\n" +
+				");\n" +
+				"INSERT INTO _migration_run_sentinel (ts) VALUES (now());\n" +
+				"-- +goose Down\n" +
+				"DROP TABLE IF EXISTS _migration_run_sentinel;\n",
+		)},
+	}
+}
+
+// TestMigrator_ConcurrentUp_NoRaceWithSessionLocker spawns N goroutines that
+// all call Up() against the same Pool and tracking table. With
+// goose.WithSessionLocker the SessionLocker serializes them via
+// pg_advisory_lock so the marker INSERT runs exactly once; without it, the
+// INSERT can run multiple times (sentinel row count > 1) or two providers
+// can race the schema_migrations write (per-row uniqueness violation).
+func TestMigrator_ConcurrentUp_NoRaceWithSessionLocker(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		// N stays well below MaxConns=10 so each goroutine can acquire its
+		// own connection (SessionLocker holds one *sql.Conn while Up runs).
+		N         = 5
+		tableName = "schema_migrations_concurrent"
+	)
+	fixtureFS := concurrentUpFixtureFS()
+
+	errs := make(chan error, N)
+	for range N {
+		go func() {
+			m, err := NewMigrator(pool, fixtureFS, tableName)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer func() { _ = m.Close() }()
+			errs <- m.Up(ctx)
+		}()
+	}
+
+	for range N {
+		require.NoError(t, <-errs, "concurrent Up must all return nil under SessionLocker")
+	}
+
+	// Sentinel row count == 1 proves the INSERT ran exactly once across N
+	// concurrent providers — the SessionLocker serialized them.
+	var sentinelCount int
+	require.NoError(t, pool.DB().QueryRow(ctx,
+		"SELECT count(*) FROM _migration_run_sentinel").Scan(&sentinelCount))
+	assert.Equal(t, 1, sentinelCount,
+		"_migration_run_sentinel INSERT must run exactly once across N concurrent Up calls")
+
+	// Tracking table has version 1 marked applied. We do not assert row count:
+	// goose may record one tracking row per Up() call even when the migration
+	// SQL is skipped under the lock — the only invariant we care about is
+	// that the highest applied version is correctly recorded as 1, and the
+	// SQL ran exactly once (sentinelCount above).
+	var maxVersion int64
+	require.NoError(t, pool.DB().QueryRow(ctx,
+		"SELECT coalesce(max(version_id), 0) FROM "+tableName+" WHERE is_applied = true").Scan(&maxVersion))
+	assert.Equal(t, int64(1), maxVersion,
+		"schema_migrations_concurrent max applied version_id must be 1")
+}
+
+// sequenceFixtureFS_910 returns a 1..10 dense fixture used to lock 9-before-10
+// numeric ordering and the Down(1)-step rollback semantics.
+func sequenceFixtureFS_910() fstest.MapFS {
+	noop := []byte("-- +goose Up\nSELECT 1;\n-- +goose Down\nSELECT 1;\n")
+	tableMig := func(table string) []byte {
+		return []byte(
+			"-- +goose Up\n" +
+				"CREATE TABLE IF NOT EXISTS " + table + " (id serial primary key, created_at timestamptz default now());\n" +
+				"-- +goose Down\n" +
+				"DROP TABLE IF EXISTS " + table + ";\n",
+		)
+	}
+
+	fs := fstest.MapFS{}
+	for v := 1; v <= 8; v++ {
+		fs[fmt.Sprintf("%03d_noop.sql", v)] = &fstest.MapFile{Data: noop}
+	}
+	fs["009_add_marker_x.sql"] = &fstest.MapFile{Data: tableMig("seq_marker_x")}
+	fs["010_add_marker_y.sql"] = &fstest.MapFile{Data: tableMig("seq_marker_y")}
+	return fs
+}
+
+// TestMigrator_NineBeforeTen_OrderRegression ensures goose's numeric ordering
+// places 009 before 010 (string sort would too, but only because of the
+// zero-padded prefix). Down(1) rolls back exactly 010, leaving 009 applied.
+func TestMigrator_NineBeforeTen_OrderRegression(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const tableName = "schema_migrations_seq910"
+	fixtureFS := sequenceFixtureFS_910()
+
+	m, err := NewMigrator(pool, fixtureFS, tableName)
+	require.NoError(t, err)
+	defer func() { _ = m.Close() }()
+
+	require.NoError(t, m.Up(ctx))
+
+	statuses, err := m.Status(ctx)
+	require.NoError(t, err)
+	idx009, idx010 := -1, -1
+	for i, s := range statuses {
+		switch s.Version {
+		case "009":
+			idx009 = i
+		case "010":
+			idx010 = i
+		}
+	}
+	require.GreaterOrEqual(t, idx009, 0, "Status() must include version 009")
+	require.GreaterOrEqual(t, idx010, 0, "Status() must include version 010")
+	assert.Less(t, idx009, idx010, "Status() must list 009 before 010")
+	assert.True(t, statuses[idx009].Applied, "009 must be applied after Up")
+	assert.True(t, statuses[idx010].Applied, "010 must be applied after Up")
+
+	// Down rolls back exactly the latest version (010).
+	require.NoError(t, m.Down(ctx))
+
+	var xExists, yExists bool
+	require.NoError(t, pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='seq_marker_x')`).Scan(&xExists))
+	require.NoError(t, pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='seq_marker_y')`).Scan(&yExists))
+	assert.True(t, xExists, "seq_marker_x (009) must remain after Down")
+	assert.False(t, yExists, "seq_marker_y (010) must be dropped by Down")
 }
 
 // Target: adapters/postgres coverage >= 80%
