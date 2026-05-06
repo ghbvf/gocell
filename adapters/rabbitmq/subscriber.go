@@ -46,7 +46,51 @@ const (
 	// defaultRMQDrainDeadline is the maximum wall-clock time drainRemaining waits
 	// for the deliveries channel to close after StopIntake issued basic.cancel.
 	defaultRMQDrainDeadline = 30 * time.Second
+	// stopIntakeInflightPollInterval is the cadence at which StopIntake Phase 2
+	// polls each subscriptionRun's atomic inflight counter while waiting for
+	// in-flight processDelivery goroutines to drain. Polling avoids the
+	// Add-after-Wait race that direct localWg.Wait would suffer from; 20 ms is
+	// short enough that shutdown latency is unobservable in practice yet long
+	// enough to keep the polling cost negligible.
+	stopIntakeInflightPollInterval = 20 * time.Millisecond
 )
+
+// waitInflightDrain polls each subscriptionRun's atomic inflight counter
+// until it reaches zero or ctx expires. It is the StopIntake Phase 2 worker
+// goroutine.
+//
+// Polling the atomic counter (instead of calling r.localWg.Wait directly)
+// avoids the Add-after-Wait race against drainRemaining's concurrent
+// registerDelivery: Go's WaitGroup contract panics with
+// "WaitGroup misuse: Add called concurrently with Wait" when Add(positive)
+// brings the counter from 0 to delta while a Wait is registered as a waiter.
+// drainRemaining keeps dispatching prefetched deliveries between StopIntake's
+// basic.cancel and the broker's cancel-ack, so any Wait launched by
+// StopIntake can race that Add path.
+//
+// localWg remains authoritative for the waitAndClose path, which only runs
+// after consumeLoop returns (no concurrent Add can occur there).
+//
+// clk is the same kernel/clock.Clock injected via SubscriberConfig — the
+// stdlib time package is forbidden in production code by
+// PROD-CLOCK-INJECTION-01 so the polling cadence honors test fakes.
+//
+// On exit, doneCh is closed unconditionally to signal completion to the
+// caller's outer select.
+func waitInflightDrain(ctx context.Context, clk clock.Clock, runs []*subscriptionRun, doneCh chan<- struct{}) {
+	defer close(doneCh)
+	for _, r := range runs {
+		for r.inflightCount() > 0 {
+			tick := clk.NewTimerAt(clk.Now().Add(stopIntakeInflightPollInterval))
+			select {
+			case <-tick.C():
+			case <-ctx.Done():
+				tick.Stop()
+				return
+			}
+		}
+	}
+}
 
 // isRecoverableAMQPError returns true if the error indicates a transient
 // connection/channel loss that can be recovered via reconnect. Permanent errors
@@ -1158,12 +1202,7 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 
 	remaining := s.snapshotActiveRuns()
 	inflightWaitCh := make(chan struct{})
-	go func() {
-		defer close(inflightWaitCh)
-		for _, r := range remaining {
-			r.localWg.Wait()
-		}
-	}()
+	go waitInflightDrain(drainCtx, s.clock, remaining, inflightWaitCh)
 	select {
 	case <-inflightWaitCh:
 		return nil

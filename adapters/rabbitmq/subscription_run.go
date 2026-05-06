@@ -33,9 +33,13 @@ type subscriptionRun struct {
 	// so that inUseChannels is decremented on every subscription teardown.
 	conn    *Connection
 	localWg sync.WaitGroup // tracks processDelivery goroutines of this run only
-	// inflight is an atomic counter mirroring localWg adds/dones. It exists
-	// solely for diagnostic logging in StopIntake timeout paths — callers that
-	// need a synchronization barrier must use localWg.Wait(), not this counter.
+	// inflight is an atomic counter mirroring localWg adds/dones. It is the
+	// authoritative signal observed by Subscriber.StopIntake Phase 2 (which
+	// polls it instead of calling localWg.Wait, to avoid the Add-after-Wait
+	// race against drainRemaining's concurrent registerDelivery).
+	// localWg remains the synchronization barrier only for waitAndClose,
+	// which is invoked AFTER consumeLoop has returned (so no concurrent Add
+	// can occur).
 	inflight atomic.Int64
 	closed   sync.Once
 	// wgDoneCh is closed exactly once when all in-flight deliveries have
@@ -96,6 +100,16 @@ func (r *subscriptionRun) inflightCount() int64 {
 // ref: rabbitmq/amqp091-go channel.go IsClosed short-circuit on double close
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan→WaitGroup→ch.Close
 func (r *subscriptionRun) waitAndClose(ctx context.Context) error {
+	// Contract: callers MUST guarantee that no further registerDelivery will
+	// occur for this run before invoking waitAndClose. Production callers
+	// satisfy this transitively — subscribeOnce only calls waitAndClose after
+	// consumeLoop returns, and Subscriber.Close only sweeps the runs map after
+	// s.wg.Wait has drained every processDelivery goroutine. With that
+	// guarantee, the localWg.Wait below cannot race with a concurrent Add.
+	// Subscriber.StopIntake intentionally does NOT call localWg.Wait — it polls
+	// the atomic inflight counter directly, which is the canonical way to
+	// observe drain progress while drainRemaining may still be dispatching.
+	//
 	// Phase 1: wait for in-flight deliveries bounded by ctx.
 	// The wg-waiter goroutine closes r.wgDoneCh when localWg.Wait() returns,
 	// providing a happens-before signal for goroutine-exit assertions in tests.
