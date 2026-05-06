@@ -102,6 +102,16 @@ func generateAssembly(args []string) error {
 		return err
 	}
 
+	modulesContent, err := gen.GenerateModulesGen(*id)
+	if err != nil {
+		return fmt.Errorf("generate modules_gen: %w", err)
+	}
+	modulesPath := filepath.Join(filepath.Dir(entrypointPath), "modules_gen.go")
+	if err := writeGeneratedFile(root, modulesPath, modulesContent,
+		fmt.Sprintf("assembly %q modules_gen", *id)); err != nil {
+		return err
+	}
+
 	boundary, err := gen.GenerateBoundary(*id)
 	if err != nil {
 		return fmt.Errorf("generate boundary: %w", err)
