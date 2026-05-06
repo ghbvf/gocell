@@ -60,6 +60,47 @@ func WritePublic(ctx context.Context, w http.ResponseWriter, kind errcode.Kind, 
 	writeErrorBody(ctx, w, status, &errcode.Error{Kind: kind, Code: respCode, Message: message})
 }
 
+// WriteErrorWithStatus writes ecErr in the canonical structured error
+// response format at the *given* HTTP status, instead of deriving the
+// status from errcode.Kind. The same 4xx/5xx redaction policy as WriteError
+// applies (5xx replaces code/message with the public sentinel; Details are
+// stripped by Error.MarshalJSON; Internal never serializes).
+//
+// Used by typed-response-envelope generated handlers
+// (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE) where the status is pinned to
+// the typed response struct identity (e.g. Get404ErrorResponse) rather
+// than reverse-derived from errcode.Kind. CH-04 governance enforces that
+// the contract.yaml-declared status matches the typed struct's status, so
+// any drift between the explicit status and ecErr.Kind.Status() is caught
+// at codegen time, not at runtime.
+func WriteErrorWithStatus(ctx context.Context, w http.ResponseWriter, status int, ecErr *errcode.Error) {
+	out := ecErr
+
+	if status == StatusClientClosedRequest {
+		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
+			setCancelReason(ctx, reason)
+		}
+	}
+
+	switch {
+	case status >= 400 && status < 500:
+		log4xx(ctx, "error", ecErr, status)
+	case status >= 500:
+		publicCode := ecErr.PublicCode()
+		log5xx(ctx, "error", ecErr, status, publicCode)
+		switch status {
+		case http.StatusServiceUnavailable:
+			out = errcode.New(ecErr.Kind, publicCode, msgServiceUnavailable)
+		case http.StatusGatewayTimeout:
+			out = errcode.New(ecErr.Kind, publicCode, msgGatewayTimeout)
+		default:
+			out = errcode.New(ecErr.Kind, publicCode, msgInternalServerError)
+		}
+	}
+
+	writeErrorBody(ctx, w, status, out)
+}
+
 // WriteError writes err in the canonical structured error response format.
 func WriteError(ctx context.Context, w http.ResponseWriter, err error) {
 	var ecErr *errcode.Error

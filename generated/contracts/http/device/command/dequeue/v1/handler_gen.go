@@ -72,6 +72,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		req.ID = v
 	}
+
 	req.Cursor = r.URL.Query().Get("cursor")
 	if req.Cursor != "" && len(req.Cursor) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -85,6 +86,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
 		return
 	}
+
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
@@ -112,5 +114,8 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	httputil.WriteJSON(w, 200, resp)
+	// Discard visitXxxResponse's error: types_gen.go's encode/write paths already
+	// log via slog.ErrorContext on failure, and there is no recovery branch at the
+	// handler level once headers/body have been (partially) flushed.
+	_ = resp.visitDequeueResponse(r.Context(), w)
 }

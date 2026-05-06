@@ -3,6 +3,16 @@
 
 package ack
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.device.command.ack.v1.request
 type Request struct {
 	ID     string `json:"id"`
@@ -31,4 +41,55 @@ type ResponseData struct {
 	DeliveredAt string `json:"deliveredAt,omitempty"`
 	// format: date-time
 	CompletedAt string `json:"completedAt,omitempty"`
+}
+
+// AckResponseObject is the typed response envelope for
+// http.device.command.ack.v1. Service.Ack must return one of the
+// Ack{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type AckResponseObject interface {
+	visitAckResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Ack200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Ack200JSONResponse Response
+
+func (r Ack200JSONResponse) visitAckResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.device.command.ack.v1: encode Ack200JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+// Ack400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Ack400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Ack400ErrorResponse) visitAckResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Ack413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Ack413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Ack413ErrorResponse) visitAckResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

@@ -35,6 +35,32 @@ var templates = func() *template.Template {
 			}
 			return false
 		},
+		// needsStrconv reports whether the generated handler imports the strconv
+		// package. Drives the import block under the typed-response-envelope
+		// template: when Pagination is set, cursor/limit go through
+		// httputil.ParsePageParams (no strconv), and only the extra filter
+		// params still need per-param parsing; when Pagination is nil, the
+		// full QueryParams slice is parsed inline.
+		"needsStrconv": func(spec *ContractGenSpec) bool {
+			if spec.Endpoint == nil {
+				return false
+			}
+			ep := spec.Endpoint
+			if ep.Pagination != nil {
+				for _, p := range ep.Pagination.ExtraQueryParams {
+					if p.GoType == "int64" || p.GoType == "float64" || p.GoType == "bool" {
+						return true
+					}
+				}
+				return false
+			}
+			for _, p := range ep.QueryParams {
+				if p.GoType == "int64" || p.GoType == "float64" || p.GoType == "bool" {
+					return true
+				}
+			}
+			return false
+		},
 		// derefInt64 dereferences a *int64 pointer for use in templates.
 		"derefInt64": func(p *int64) int64 {
 			if p == nil {
@@ -65,10 +91,14 @@ var templates = func() *template.Template {
 		"hasMaxLength": func(p *int) bool {
 			return p != nil
 		},
-		// needsErrcode reports whether the generated handler requires the errcode
-		// package. It is needed when: any query param exists (required check / parse
-		// errors), any path param has a length constraint, or a request schema is
-		// present (errcode.Assertion used in schema compile-failure panic).
+		// needsErrcode reports whether the generated handler imports the errcode
+		// package. It is needed when: a request schema is present (errcode.Assertion
+		// in the schema compile-failure panic), any path param has a length
+		// constraint, or any query param requires per-param parsing (which emits
+		// errcode.New(KindInvalid, ...) for required/parse/range failures). With
+		// the typed-response envelope, Pagination still requires errcode for its
+		// ExtraQueryParams (per-param parse) but not for cursor/limit (those go
+		// through httputil.ParsePageParams).
 		"needsErrcode": func(spec *ContractGenSpec) bool {
 			if spec.Endpoint == nil {
 				return false
@@ -77,7 +107,11 @@ var templates = func() *template.Template {
 			if spec.RequestSchemaJSON != "" {
 				return true
 			}
-			if len(ep.QueryParams) > 0 && !ep.IsPagination() {
+			if ep.Pagination != nil {
+				if len(ep.Pagination.ExtraQueryParams) > 0 {
+					return true
+				}
+			} else if len(ep.QueryParams) > 0 {
 				return true
 			}
 			for _, p := range ep.PathParams {

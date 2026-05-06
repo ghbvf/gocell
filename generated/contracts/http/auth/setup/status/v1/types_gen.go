@@ -3,6 +3,16 @@
 
 package status
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.auth.setup.status.v1.request
 type Request struct{}
 
@@ -14,4 +24,68 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.auth.setup.status.v1.
 type ResponseData struct {
 	HasAdmin bool `json:"hasAdmin"`
+}
+
+// StatusResponseObject is the typed response envelope for
+// http.auth.setup.status.v1. Service.Status must return one of the
+// Status{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type StatusResponseObject interface {
+	visitStatusResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Status200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Status200JSONResponse Response
+
+func (r Status200JSONResponse) visitStatusResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.auth.setup.status.v1: encode Status200JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+// Status400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Status400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Status400ErrorResponse) visitStatusResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Status413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Status413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Status413ErrorResponse) visitStatusResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
+}
+
+// Status500ErrorResponse renders an HTTP 500 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Status500ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Status500ErrorResponse) visitStatusResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 500, &r.Body)
+	return nil
 }

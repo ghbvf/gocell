@@ -3,6 +3,16 @@
 
 package get
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.order.get.v1.request
 type Request struct {
 	ID string `json:"id"`
@@ -20,4 +30,55 @@ type ResponseData struct {
 	Status string `json:"status"`
 	// format: date-time
 	CreatedAt string `json:"createdAt"`
+}
+
+// GetResponseObject is the typed response envelope for
+// http.order.get.v1. Service.Get must return one of the
+// Get{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type GetResponseObject interface {
+	visitGetResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Get200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Get200JSONResponse Response
+
+func (r Get200JSONResponse) visitGetResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.order.get.v1: encode Get200JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+// Get400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Get400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Get400ErrorResponse) visitGetResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Get404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Get404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Get404ErrorResponse) visitGetResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
 }

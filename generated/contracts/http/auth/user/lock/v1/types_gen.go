@@ -3,6 +3,16 @@
 
 package lock
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.auth.user.lock.v1.request
 type Request struct {
 	// format: uuid
@@ -17,4 +27,94 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.auth.user.lock.v1.
 type ResponseData struct {
 	Status string `json:"status"`
+}
+
+// LockResponseObject is the typed response envelope for
+// http.auth.user.lock.v1. Service.Lock must return one of the
+// Lock{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type LockResponseObject interface {
+	visitLockResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Lock200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Lock200JSONResponse Response
+
+func (r Lock200JSONResponse) visitLockResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.auth.user.lock.v1: encode Lock200JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+// Lock400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Lock400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Lock400ErrorResponse) visitLockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Lock401ErrorResponse renders an HTTP 401 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Lock401ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Lock401ErrorResponse) visitLockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+	return nil
+}
+
+// Lock403ErrorResponse renders an HTTP 403 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Lock403ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Lock403ErrorResponse) visitLockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Lock404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Lock404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Lock404ErrorResponse) visitLockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}
+
+// Lock413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Lock413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Lock413ErrorResponse) visitLockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

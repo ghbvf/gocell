@@ -3,6 +3,14 @@
 
 package sessiondelete
 
+import (
+	"context"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.auth.session.delete.v1.request
 type Request struct {
 	// format: uuid
@@ -11,3 +19,63 @@ type Request struct {
 
 // Response — http.auth.session.delete.v1.response
 type Response struct{}
+
+// DeleteResponseObject is the typed response envelope for
+// http.auth.session.delete.v1. Service.Delete must return one of the
+// Delete{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type DeleteResponseObject interface {
+	visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Delete204NoContentResponse renders an HTTP 204 No Content success response.
+// The success status carries no body; this struct is a marker so the
+// typed-envelope set covers the success case uniformly with errors.
+type Delete204NoContentResponse struct{}
+
+func (r Delete204NoContentResponse) visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+// Delete400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Delete400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Delete400ErrorResponse) visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Delete401ErrorResponse renders an HTTP 401 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Delete401ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Delete401ErrorResponse) visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+	return nil
+}
+
+// Delete404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Delete404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Delete404ErrorResponse) visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}

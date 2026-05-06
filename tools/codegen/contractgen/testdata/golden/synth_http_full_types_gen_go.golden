@@ -3,6 +3,13 @@
 
 package details
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+)
+
 // Request — http.item.details.v1.request
 type Request struct {
 	ID   string `json:"id"`
@@ -20,4 +27,29 @@ type ResponseData struct {
 	Name string `json:"name"`
 	// format: date-time
 	CreatedAt string `json:"createdAt"`
+}
+
+// DetailsResponseObject is the typed response envelope for
+// http.item.details.v1. Service.Details must return one of the
+// Details{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type DetailsResponseObject interface {
+	visitDetailsResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Details200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Details200JSONResponse Response
+
+func (r Details200JSONResponse) visitDetailsResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.item.details.v1: encode Details200JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
 }

@@ -240,13 +240,15 @@ func buildHTTPEndpointSpec(
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
 
-	// Pagination detection: cursor (string) + limit (integer) with no path params
-	// and GET method signals a canonical paginated list endpoint. Batch 1 keeps
-	// the strict 2-element behavior; Batch 2 relaxes detection to "contains
-	// cursor+limit, others go to ExtraQueryParams" together with the matching
-	// handler.tmpl rewrite so generated handlers always parse cursor/limit via
-	// pkg/httputil.ParsePageParams (single error envelope).
-	if http.Method == "GET" && len(spec.PathParams) == 0 && len(spec.QueryParams) == 2 {
+	// Pagination detection (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb):
+	// Any GET endpoint with no path params that declares cursor (string) +
+	// limit (integer) in its query params is paginated, regardless of the
+	// presence of additional filter params. The extras land in
+	// Pagination.ExtraQueryParams and the handler template parses them with
+	// the standard per-param branch — cursor/limit are always handled by
+	// pkg/httputil.ParsePageParams so the limit error envelope is uniform
+	// across the entire HTTP surface (PR#376 F-COR-001 fix).
+	if http.Method == "GET" && len(spec.PathParams) == 0 && len(spec.QueryParams) >= 2 {
 		if err := detectPagination(spec); err != nil {
 			return nil, fmt.Errorf("contractgen build: %q pagination: %w", contract.ID, err)
 		}
@@ -256,11 +258,14 @@ func buildHTTPEndpointSpec(
 	return spec, nil
 }
 
-// detectPagination checks whether the query params are exactly cursor (string)
-// and limit (integer), setting Pagination if so. Fails fast on mixed
-// pagination+filter today; Batch 2 routes the extras into ExtraQueryParams.
+// detectPagination scans QueryParams; if both cursor (string) and limit
+// (integer) are present, the endpoint is paginated and Pagination is set.
+// Any non-cursor/non-limit query params land in ExtraQueryParams so the
+// handler template can route them through per-param parsing while
+// cursor/limit always go through pkg/httputil.ParsePageParams.
 func detectPagination(spec *HTTPEndpointSpec) error {
 	hasCursor, hasLimit := false, false
+	var extras []ParamSpec
 	for _, q := range spec.QueryParams {
 		switch q.Name {
 		case "cursor":
@@ -274,13 +279,15 @@ func detectPagination(spec *HTTPEndpointSpec) error {
 			}
 			hasLimit = true
 		default:
-			// Extra query param mixed with cursor/limit → not a pure pagination
-			// endpoint under the strict Batch 1 invariant.
-			return nil
+			extras = append(extras, q)
 		}
 	}
 	if hasCursor && hasLimit {
-		spec.Pagination = &PaginationShape{HasCursor: true, HasLimit: true}
+		spec.Pagination = &PaginationShape{
+			HasCursor:        true,
+			HasLimit:         true,
+			ExtraQueryParams: extras,
+		}
 	}
 	return nil
 }

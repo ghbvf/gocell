@@ -3,6 +3,16 @@
 
 package rollback
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.config.rollback.v1.request
 type Request struct {
 	Key     string `json:"key"`
@@ -25,4 +35,81 @@ type ResponseData struct {
 	CreatedAt string `json:"createdAt"`
 	// format: date-time
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// RollbackResponseObject is the typed response envelope for
+// http.config.rollback.v1. Service.Rollback must return one of the
+// Rollback{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type RollbackResponseObject interface {
+	visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Rollback200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Rollback200JSONResponse Response
+
+func (r Rollback200JSONResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.config.rollback.v1: encode Rollback200JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+// Rollback400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Rollback400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Rollback400ErrorResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Rollback401ErrorResponse renders an HTTP 401 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Rollback401ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Rollback401ErrorResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+	return nil
+}
+
+// Rollback403ErrorResponse renders an HTTP 403 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Rollback403ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Rollback403ErrorResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Rollback413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Rollback413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Rollback413ErrorResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

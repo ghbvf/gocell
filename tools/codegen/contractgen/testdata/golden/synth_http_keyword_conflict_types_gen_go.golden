@@ -3,6 +3,11 @@
 
 package configdelete
 
+import (
+	"context"
+	"net/http"
+)
+
 // Request — http.config.delete.v1.request
 type Request struct {
 	Key string `json:"key"`
@@ -10,3 +15,24 @@ type Request struct {
 
 // Response — http.config.delete.v1.response
 type Response struct{}
+
+// DeleteResponseObject is the typed response envelope for
+// http.config.delete.v1. Service.Delete must return one of the
+// Delete{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type DeleteResponseObject interface {
+	visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Delete204NoContentResponse renders an HTTP 204 No Content success response.
+// The success status carries no body; this struct is a marker so the
+// typed-envelope set covers the success case uniformly with errors.
+type Delete204NoContentResponse struct{}
+
+func (r Delete204NoContentResponse) visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}

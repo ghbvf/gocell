@@ -3,6 +3,13 @@
 
 package ping
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+)
+
 // Request — http.order.ping.v1.request
 type Request struct {
 	Message string `json:"message"`
@@ -11,4 +18,29 @@ type Request struct {
 // Response — http.order.ping.v1.response
 type Response struct {
 	Ok bool `json:"ok"`
+}
+
+// PingResponseObject is the typed response envelope for
+// http.order.ping.v1. Service.Ping must return one of the
+// Ping{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type PingResponseObject interface {
+	visitPingResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Ping201JSONResponse renders an HTTP 201 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Ping201JSONResponse Response
+
+func (r Ping201JSONResponse) visitPingResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.order.ping.v1: encode Ping201JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
 }

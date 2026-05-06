@@ -3,6 +3,16 @@
 
 package register
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.device.register.v1.request
 type Request struct {
 	Name string `json:"name"`
@@ -18,4 +28,55 @@ type ResponseData struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
+}
+
+// RegisterResponseObject is the typed response envelope for
+// http.device.register.v1. Service.Register must return one of the
+// Register{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type RegisterResponseObject interface {
+	visitRegisterResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Register201JSONResponse renders an HTTP 201 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Register201JSONResponse Response
+
+func (r Register201JSONResponse) visitRegisterResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.device.register.v1: encode Register201JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+// Register400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Register400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Register400ErrorResponse) visitRegisterResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Register413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Register413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Register413ErrorResponse) visitRegisterResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

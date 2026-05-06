@@ -751,6 +751,45 @@ func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
 	}
 }
 
+// TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter verifies
+// that an endpoint declaring cursor+limit alongside additional filter query
+// params (e.g. role, since) is recognized as paginated (Pagination != nil)
+// and the extras are routed into ExtraQueryParams, so the handler can drive
+// cursor+limit through pkg/httputil.ParsePageParams while the extras parse
+// per-param. This is the F4 absorb path: a single limit error envelope across
+// the entire HTTP surface.
+func TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method: "GET",
+		Path:   "/api/v1/auth/roles",
+		QueryParams: map[string]metadata.ParamSchema{
+			"cursor": {Type: "string"},
+			"limit":  {Type: "integer"},
+			"role":   {Type: "string"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.auth.role.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+	if spec.Pagination == nil {
+		t.Fatal("Pagination must be populated when cursor+limit present even with filters, got nil")
+	}
+	if !spec.Pagination.HasCursor || !spec.Pagination.HasLimit {
+		t.Errorf("Pagination flags wrong: HasCursor=%v HasLimit=%v", spec.Pagination.HasCursor, spec.Pagination.HasLimit)
+	}
+	if got := len(spec.Pagination.ExtraQueryParams); got != 1 {
+		t.Fatalf("ExtraQueryParams length = %d, want 1 (role)", got)
+	}
+	if name := spec.Pagination.ExtraQueryParams[0].Name; name != "role" {
+		t.Errorf("ExtraQueryParams[0].Name = %q, want %q", name, "role")
+	}
+}
+
 // TestBuildHTTPEndpointSpec_PaginationShape_NoPagination verifies that an
 // endpoint with arbitrary query params (no cursor or no limit) produces a
 // nil Pagination shape and IsPagination() returns false.

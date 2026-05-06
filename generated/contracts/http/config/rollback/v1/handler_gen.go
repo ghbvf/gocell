@@ -105,5 +105,8 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	httputil.WriteJSON(w, 200, resp)
+	// Discard visitXxxResponse's error: types_gen.go's encode/write paths already
+	// log via slog.ErrorContext on failure, and there is no recovery branch at the
+	// handler level once headers/body have been (partially) flushed.
+	_ = resp.visitRollbackResponse(r.Context(), w)
 }

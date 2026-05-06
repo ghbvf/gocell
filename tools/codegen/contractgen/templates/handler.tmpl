@@ -1,3 +1,125 @@
+{{- /*
+queryParamParse renders the inline parsing block for one query parameter.
+Used by both the Pagination.ExtraQueryParams branch (when cursor/limit are
+already handled by httputil.ParsePageParams) and the non-pagination branch
+(plain per-param parse). Single source so the constraint check + error
+envelope shape stays consistent across the entire HTTP surface
+(PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb).
+*/ -}}
+{{- define "queryParamParse" -}}
+{{- if eq .GoType "string"}}
+	req.{{.GoName}} = r.URL.Query().Get("{{.Name}}")
+{{- if .Required}}
+	if req.{{.GoName}} == "" {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: required field missing",
+			errcode.WithDetails(slog.String("field", "{{.Name}}"))))
+		return
+	}
+{{- end}}
+{{- if hasMinLength .MinLength}}
+	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+		return
+	}
+{{- end}}
+{{- if hasMaxLength .MaxLength}}
+	if len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+		return
+	}
+{{- end}}
+{{- else if eq .GoType "int64"}}
+{{- if .Required}}
+	{
+		raw{{.GoName}} := r.URL.Query().Get("{{.Name}}")
+		if raw{{.GoName}} == "" {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: required field missing",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"))))
+			return
+		}
+		v, err := strconv.ParseInt(raw{{.GoName}}, 10, 64)
+		if err != nil {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
+			return
+		}
+{{- if hasMinimum .Minimum}}
+		if v < {{derefInt64 .Minimum}} {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+			return
+		}
+{{- end}}
+{{- if hasMaximum .Maximum}}
+		if v > {{derefInt64 .Maximum}} {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+			return
+		}
+{{- end}}
+		req.{{.GoName}} = v
+	}
+{{- else}}
+	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
+			return
+		}
+{{- if hasMinimum .Minimum}}
+		if v < {{derefInt64 .Minimum}} {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+			return
+		}
+{{- end}}
+{{- if hasMaximum .Maximum}}
+		if v > {{derefInt64 .Maximum}} {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+			return
+		}
+{{- end}}
+		req.{{.GoName}} = v
+	}
+{{- end}}
+{{- else if eq .GoType "float64"}}
+	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a number"))))
+			return
+		}
+		req.{{.GoName}} = v
+	}
+{{- else if eq .GoType "bool"}}
+	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a boolean"))))
+			return
+		}
+		req.{{.GoName}} = v
+	}
+{{- end}}
+{{- end -}}
 {{template "contractHeader" .}}
 
 package {{.PackageName}}
@@ -11,7 +133,7 @@ import (
 	"bytes"
 	"io"
 {{- end}}
-{{- if and (not .Endpoint.IsPagination) (hasQueryNumeric .Endpoint.QueryParams)}}
+{{- if needsStrconv .}}
 	"strconv"
 {{- end}}
 
@@ -201,7 +323,8 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 {{- end}}
-{{- else if .Endpoint.IsPagination}}
+{{- end}}
+{{- if .Endpoint.Pagination}}
 	page, err := httputil.ParsePageParams(r)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)
@@ -209,120 +332,12 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Cursor = page.Cursor
 	req.Limit = int64(page.Limit)
+{{- range .Endpoint.Pagination.ExtraQueryParams}}
+{{template "queryParamParse" .}}
+{{- end}}
 {{- else}}
 {{- range .Endpoint.QueryParams}}
-{{- if eq .GoType "string"}}
-	req.{{.GoName}} = r.URL.Query().Get("{{.Name}}")
-{{- if .Required}}
-	if req.{{.GoName}} == "" {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: required field missing",
-			errcode.WithDetails(slog.String("field", "{{.Name}}"))))
-		return
-	}
-{{- end}}
-{{- if hasMinLength .MinLength}}
-	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
-		return
-	}
-{{- end}}
-{{- if hasMaxLength .MaxLength}}
-	if len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
-		return
-	}
-{{- end}}
-{{- else if eq .GoType "int64"}}
-{{- if .Required}}
-	{
-		raw{{.GoName}} := r.URL.Query().Get("{{.Name}}")
-		if raw{{.GoName}} == "" {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: required field missing",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"))))
-			return
-		}
-		v, err := strconv.ParseInt(raw{{.GoName}}, 10, 64)
-		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
-			return
-		}
-{{- if hasMinimum .Minimum}}
-		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
-			return
-		}
-{{- end}}
-{{- if hasMaximum .Maximum}}
-		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
-			return
-		}
-{{- end}}
-		req.{{.GoName}} = v
-	}
-{{- else}}
-	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
-		v, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
-			return
-		}
-{{- if hasMinimum .Minimum}}
-		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
-			return
-		}
-{{- end}}
-{{- if hasMaximum .Maximum}}
-		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
-			return
-		}
-{{- end}}
-		req.{{.GoName}} = v
-	}
-{{- end}}
-{{- else if eq .GoType "float64"}}
-	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
-		v, err := strconv.ParseFloat(raw, 64)
-		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a number"))))
-			return
-		}
-		req.{{.GoName}} = v
-	}
-{{- else if eq .GoType "bool"}}
-	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
-		v, err := strconv.ParseBool(raw)
-		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a boolean"))))
-			return
-		}
-		req.{{.GoName}} = v
-	}
-{{- end}}
+{{template "queryParamParse" .}}
 {{- end}}
 {{- end}}
 	resp, err := h.svc.{{.Endpoint.HandlerMethod}}(r.Context(), req)
@@ -330,10 +345,8 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-{{- if .Endpoint.NoContent}}
-	w.WriteHeader(http.StatusNoContent)
-	_ = resp
-{{- else}}
-	httputil.WriteJSON(w, {{.Endpoint.SuccessCode}}, resp)
-{{- end}}
+	// Discard visitXxxResponse's error: types_gen.go's encode/write paths already
+	// log via slog.ErrorContext on failure, and there is no recovery branch at the
+	// handler level once headers/body have been (partially) flushed.
+	_ = resp.visit{{.Endpoint.HandlerMethod}}Response(r.Context(), w)
 }

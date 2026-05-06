@@ -3,6 +3,16 @@
 
 package assign
 
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.auth.role.assign.v1.request
 type Request struct {
 	UserId string `json:"userId"`
@@ -19,4 +29,94 @@ type ResponseData struct {
 	UserId   string `json:"userId"`
 	RoleId   string `json:"roleId"`
 	Assigned bool   `json:"assigned"`
+}
+
+// AssignResponseObject is the typed response envelope for
+// http.auth.role.assign.v1. Service.Assign must return one of the
+// Assign{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+type AssignResponseObject interface {
+	visitAssignResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Assign201JSONResponse renders an HTTP 201 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Assign201JSONResponse Response
+
+func (r Assign201JSONResponse) visitAssignResponse(ctx context.Context, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+		slog.ErrorContext(ctx, "http.auth.role.assign.v1: encode Assign201JSONResponse body", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+// Assign400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Assign400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Assign400ErrorResponse) visitAssignResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Assign401ErrorResponse renders an HTTP 401 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Assign401ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Assign401ErrorResponse) visitAssignResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+	return nil
+}
+
+// Assign403ErrorResponse renders an HTTP 403 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Assign403ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Assign403ErrorResponse) visitAssignResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Assign404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Assign404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Assign404ErrorResponse) visitAssignResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}
+
+// Assign413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Assign413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Assign413ErrorResponse) visitAssignResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }
