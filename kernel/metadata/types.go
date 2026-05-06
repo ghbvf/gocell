@@ -204,18 +204,20 @@ type PassCriterion struct {
 
 // AssemblyMeta maps to assemblies/{id}/assembly.yaml.
 type AssemblyMeta struct {
-	ID    string    `yaml:"id"`
-	Cells []string  `yaml:"cells"`
-	Build BuildMeta `yaml:"build"`
-	Dir   string    `yaml:"-"` // directory segment under assemblies/, set by parser
-	File  string    `yaml:"-"` // parsed assembly.yaml path relative to project root
+	ID                  string    `yaml:"id"`
+	Cells               []string  `yaml:"cells"`
+	Owner               OwnerMeta `yaml:"owner"`
+	Build               BuildMeta `yaml:"build,omitempty"`
+	MaxConsistencyLevel string    `yaml:"-"` // derived; yaml occurrence rejected by KnownFields
+	Dir                 string    `yaml:"-"` // directory segment under assemblies/, set by parser
+	File                string    `yaml:"-"` // parsed assembly.yaml path relative to project root
 }
 
 // BuildMeta holds the build configuration for an Assembly.
 type BuildMeta struct {
-	Entrypoint     string `yaml:"entrypoint"`
-	Binary         string `yaml:"binary"`
-	DeployTemplate string `yaml:"deployTemplate"`
+	Entrypoint     string `yaml:"entrypoint,omitempty"`
+	Binary         string `yaml:"binary,omitempty"`
+	DeployTemplate string `yaml:"deployTemplate,omitempty"`
 }
 
 // StatusBoardEntry maps to a single entry in journeys/status-board.yaml.

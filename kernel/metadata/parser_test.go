@@ -114,6 +114,9 @@ passCriteria:
 cells:
   - accesscore
   - auditcore
+owner:
+  team: platform
+  role: cell-owner
 build:
   entrypoint: cmd/corebundle/main.go
   binary: corebundle

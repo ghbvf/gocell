@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gocell.dev/schemas/assembly.schema.json",
   "title": "GoCell Assembly Descriptor",
-  "description": "Defines an Assembly, the physical packaging unit. An assembly groups cells into a single deployable binary. Boundary information is generated into a separate file by tooling.",
+  "description": "Defines an Assembly, the physical packaging unit. K#10: minimal required = id+cells+owner; build fields are derived from cell.yaml type when omitted.",
   "type": "object",
-  "required": ["id", "cells", "build"],
+  "required": ["id", "cells", "owner"],
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -20,23 +20,40 @@
       },
       "minItems": 1
     },
+    "owner": {
+      "type": "object",
+      "description": "Team responsible for this assembly.",
+      "required": ["team", "role"],
+      "additionalProperties": false,
+      "properties": {
+        "team": {
+          "type": "string",
+          "description": "Team name."
+        },
+        "role": {
+          "type": "string",
+          "description": "Role identifier."
+        }
+      }
+    },
     "build": {
       "type": "object",
-      "description": "Build configuration for the assembly.",
-      "required": ["entrypoint", "binary", "deployTemplate"],
+      "description": "Build configuration for the assembly. All fields optional; defaults are derived.",
       "additionalProperties": false,
       "properties": {
         "entrypoint": {
           "type": "string",
-          "description": "Path to the main.go entrypoint, relative to the repository root."
+          "description": "Path to main.go (default: cmd/{id}/main.go)"
         },
         "binary": {
           "type": "string",
-          "description": "Output binary name."
+          "description": "Output binary name (default: assembly id)"
         },
         "deployTemplate": {
           "type": "string",
-          "description": "Deployment template identifier (e.g. k8s, docker-compose)."
+          "description": "Deployment template identifier.",
+          "enum": ["k8s", "compose", "binary"],
+          "default": "k8s"
         }
       }
     }
