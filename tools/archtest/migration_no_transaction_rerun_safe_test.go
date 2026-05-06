@@ -1,4 +1,4 @@
-package archtest_test
+package archtest
 
 import (
 	"os"
@@ -8,27 +8,8 @@ import (
 	"testing"
 )
 
-// orFindModuleRoot walks up from the test working directory to find go.mod.
-// Defined here (the sole remaining archtest_test package file) after the
-// outbox_receipt_test.go merge into outbox_invariants_test.go.
-func orFindModuleRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("go.mod not found walking up from working directory")
-		}
-		dir = parent
-	}
-}
-
+// INVARIANT: MIGRATION-NO-TRANSACTION-RERUN-SAFE-01
+//
 // TestMigrationNoTransactionRerunSafe01 enforces MIGRATION-NO-TRANSACTION-
 // RERUN-SAFE-01: every DDL statement in a `-- +goose NO TRANSACTION` migration
 // MUST be rerun-safe — `IF NOT EXISTS` / `IF EXISTS` for plain CREATE/DROP/
@@ -54,7 +35,7 @@ func orFindModuleRoot(t *testing.T) string {
 // pass this rule rather than carved out, since adding `IF NOT EXISTS` to an
 // already-applied migration is idempotent and harmless on existing DBs.
 func TestMigrationNoTransactionRerunSafe01(t *testing.T) {
-	root := orFindModuleRoot(t)
+	root := findModuleRoot(t)
 	dir := filepath.Join(root, "adapters", "postgres", "migrations")
 
 	entries, err := os.ReadDir(dir)

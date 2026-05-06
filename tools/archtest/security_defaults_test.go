@@ -39,6 +39,10 @@ import (
 )
 
 const (
+	// RETIRED: SEC-FAIL-CLOSED-01 — see testSEC01AddrDrivenGate godoc below.
+	// The constant + t.Run subtest are retained as inert markers so historic
+	// CI logs and grep continue to map cleanly onto rule IDs; the body is a
+	// one-line t.Skip().
 	secFailClosed01 = "SEC-FAIL-CLOSED-01"
 	secFailClosed02 = "SEC-FAIL-CLOSED-02"
 	secFailClosed03 = "SEC-FAIL-CLOSED-03"

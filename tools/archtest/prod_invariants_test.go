@@ -1,5 +1,8 @@
 // Package archtest — production code invariant gates.
 //
+// Asserted invariants:
+//   - INVARIANT: PROD-DURATION-CONST-01
+//
 // Merged from:
 //   - prod_duration_const_test.go          (PROD-DURATION-CONST-01 enforcement + helpers)
 //   - prod_duration_const_internal_test.go (PROD-DURATION-CONST-01 predicate unit tests)

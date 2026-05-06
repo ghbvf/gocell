@@ -75,8 +75,10 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 新增任何"约束"（archtest / governance rule / godoc 强约定）前，按以下优先级决策载体：
 
 1. **funnel + codegen**：能否用 schema/marker 单源 → codegen 派生执行体？能 → 走这条
-2. **type system 自然拦**：能否用 Go interface / typed struct 让违反不可表达？能 → 走这条
+2. **type system 自然拦**：能否用 Go interface / typed struct 让违反不可表达？能 → 走这条（注：type system 与 archtest 可并存——凡涉及 PII / 安全语义的约束，即使已有类型拦截，仍须评估是否需要 archtest 双重防线，例如 `MESSAGE-CONST-LITERAL-01` / `DETAILS-SLOG-ATTR-01`）
 3. **archtest 平铺兜底**：上面两条都不行 → 一个 `tools/archtest/{theme}_invariants_test.go` 主题文件，每个规则函数前 godoc 加 `// INVARIANT: {ID}` 锚点 + 不能 funnel 的理由
+
+**文件命名分支**：同主题规则数 ≥ 3 → 新建或扩展 `{theme}_invariants_test.go` 主题文件；单条独立规则 → 保留 `{rule}_test.go` 单文件命名。已有 `{rule}_test.go` 单文件且新增同主题第 3 条规则时，重命名为 `{theme}_invariants_test.go` 并补完 anchor。
 
 **不准建 Registry / 中心化注册表**。多份文档用 grep 锚点串联（grep `INVARIANT: {ID}` 跳全套）。
 

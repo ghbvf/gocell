@@ -462,6 +462,12 @@ func assertPanicWhitelistMatchesADR(t *testing.T, root string, usedWhitelist map
 
 	assert.Equal(t, adrKeys, goKeys,
 		"%s: ADR whitelist table must exactly match architecturalPanicWhitelist", rulePanicRegistered01)
+	// CLAUDE.md error-handling.md lists 6 C-class panic exemptions. Only 4
+	// require explicit whitelist entries here; the other 2 (websocket handler
+	// protocol error, kernel/cell bootstrap fatal) are auto-exempted via the
+	// `Must*` function-name prefix gate inside scanRootForPanicRegistered…
+	// (so they never reach this whitelist). Adjust both numbers in lock-step
+	// if the auto-exemption rule ever changes.
 	assert.Equal(t, 4, len(goKeys),
 		"%s: architectural panic whitelist must contain exactly the ADR-approved permanent entries", rulePanicRegistered01)
 

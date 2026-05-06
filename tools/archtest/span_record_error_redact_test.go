@@ -180,6 +180,103 @@ func TestSpanRecordErrorRedacted(t *testing.T) {
 			"ref: docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md §8")
 }
 
+// TestSpanRecordErrorScanDirsCoverage is the fail-closed coverage gate for
+// SPAN-RECORD-ERROR-REDACT-01: it scans every production .go file in the repo
+// for any `*.RecordError(...)` call and asserts the file's directory tree is
+// already enrolled in spanRecordErrorScanDirs. Without this, a new package
+// emitting span.RecordError would silently bypass the redaction guard until
+// someone manually appended its directory.
+func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	enrolled := make(map[string]struct{}, len(spanRecordErrorScanDirs))
+	for _, dir := range spanRecordErrorScanDirs {
+		enrolled[filepath.Clean(dir)] = struct{}{}
+	}
+
+	var unenrolled []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "vendor" || name == "node_modules" ||
+				name == "testdata" || name == "worktrees" || name == "bak" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			// Skip unparseable files (e.g. build-constrained shards) so the
+			// repo-wide walk reaches every parseable .go file. Fail-closed
+			// scope is enforced by enrollment, not by parser errors.
+			return nil //nolint:nilerr // intentional skip on parse failure
+		}
+		// Files that themselves define a RecordError method are span wrapper
+		// implementations (e.g. adapters/otel/span.go, runtime/observability/
+		// tracing/tracer.go), not callers of the gate. Skip them — the
+		// redaction contract applies one layer above (the caller of *Span,
+		// not the span impl forwarding to its inner library span).
+		definesRecordErrorMethod := false
+		hasRecordError := false
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if fn.Recv != nil && fn.Name != nil && fn.Name.Name == "RecordError" {
+				definesRecordErrorMethod = true
+				break
+			}
+		}
+		if definesRecordErrorMethod {
+			return nil
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && sel.Sel != nil && sel.Sel.Name == "RecordError" {
+				hasRecordError = true
+				return false
+			}
+			return true
+		})
+		if !hasRecordError {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		dir := filepath.Dir(rel)
+		// Walk up looking for any enrolled prefix.
+		for d := dir; d != "." && d != "/"; d = filepath.Dir(d) {
+			if _, ok := enrolled[d]; ok {
+				return nil
+			}
+		}
+		unenrolled = append(unenrolled, rel)
+		return nil
+	})
+	require.NoError(t, err)
+	sort.Strings(unenrolled)
+	assert.Empty(t, unenrolled,
+		"SPAN-RECORD-ERROR-REDACT-01 coverage: production files calling "+
+			"span.RecordError(...) must live under a directory enrolled in "+
+			"spanRecordErrorScanDirs. New offenders found above — either add "+
+			"the directory to the enrollment list or relocate the call.")
+}
+
 // runSpanRecordErrorFixtureScan parses fixture .go files (non-test, no module
 // load) and reports violations relative to fixtureDir.
 func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {

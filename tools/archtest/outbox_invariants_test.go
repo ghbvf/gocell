@@ -740,7 +740,11 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	}
 }
 
-// INVARIANT: OUTBOX-RELAY-LOST-METRIC-01-B.
+// INVARIANT: OUTBOX-RELAY-LOST-METRIC-01-B
+//
+// PollCycleResult must declare a Lost field so handleFailedEntry can
+// route stale-lease writebacks into the lost stat / metric (separately
+// from real retries).
 func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	t.Parallel()
 

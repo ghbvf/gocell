@@ -179,8 +179,8 @@ const ruleExportedErrorNew01 = "EXPORTED-ERROR-NEW-01"
 // itself wraps errors.New internally.
 const errcodeAllowlistPath = "pkg/errcode/"
 
-// ─── INVARIANT: ERRCODE-KIND-LITERAL-01 ──────────────────────────────────────
-
+// INVARIANT: ERRCODE-KIND-LITERAL-01
+//
 // TestErrcodeLiteralConstructionBanned seals the Kind-based error model:
 // callers outside pkg/errcode must use errcode.New/Wrap so every error chooses
 // a transport Kind explicitly.
@@ -283,8 +283,8 @@ func isErrcodeErrorType(expr ast.Expr, errcodeNames map[string]struct{}) bool {
 	return ok
 }
 
-// ─── INVARIANT: MESSAGE-CONST-LITERAL-01 ─────────────────────────────────────
-
+// INVARIANT: MESSAGE-CONST-LITERAL-01
+//
 // TestErrcodeMessageConstLiteral enforces MESSAGE-CONST-LITERAL-01.
 //
 // MESSAGE-CONST-LITERAL-01 — every call to `errcode.New(...)` and
@@ -514,21 +514,20 @@ func isAcceptableMessageExpr(expr ast.Expr, info *types.Info) bool {
 	}
 }
 
-// ─── INVARIANT: ERROR-FIRST-API-01 / ERROR-FIRST-TYPED-NIL-01 ────────────────
-
-// TestErrorFirstAPI01 walks the enforced file list and reports panic() calls
-// inside error-less function declarations.
+// INVARIANT: ERROR-FIRST-API-01
 //
-// error_first_test.go enforces:
-//   - ERROR-FIRST-API-01: in the explicitly enrolled files (PR-MODE-6 scope),
-//     exported and unexported function declarations whose return signature
-//     does NOT include an error MUST NOT contain a `panic(...)` call in the
-//     function body.
-//   - ERROR-FIRST-TYPED-NIL-01: error-returning New* constructors in the
-//     enrolled file scope must nil-guard each nil-able dependency parameter at
-//     construction time. Interface params must be guarded with
-//     validation.IsNilInterface(p) (typed-nil defeat); pointer / map / chan /
-//     func params may use p == nil.
+// TestErrorFirstAPI01 walks the enforced file list and reports panic() calls
+// inside error-less function declarations: in the explicitly enrolled files
+// (PR-MODE-6 scope), exported and unexported function declarations whose
+// return signature does NOT include an error MUST NOT contain a `panic(...)`
+// call in the function body.
+//
+// Companion invariant ERROR-FIRST-TYPED-NIL-01 (asserted by
+// TestErrorFirstTypedNil01 below) requires error-returning New* constructors
+// in the enrolled file scope to nil-guard each nil-able dependency parameter
+// at construction time. Interface params must be guarded with
+// validation.IsNilInterface(p) (typed-nil defeat); pointer / map / chan /
+// func params may use p == nil.
 func TestErrorFirstAPI01(t *testing.T) {
 	root := findModuleRoot(t)
 
@@ -552,6 +551,12 @@ func TestErrorFirstAPI01(t *testing.T) {
 		ruleErrorFirstAPI01)
 }
 
+// INVARIANT: ERROR-FIRST-TYPED-NIL-01
+//
+// TestErrorFirstTypedNil01 verifies error-returning New* constructors in the
+// enrolled file scope nil-guard each nil-able dependency parameter at
+// construction time (see ERROR-FIRST-API-01 for the companion panic-free
+// rule).
 func TestErrorFirstTypedNil01(t *testing.T) {
 	root := findModuleRoot(t)
 
@@ -1218,8 +1223,8 @@ func findPanicCalls(body *ast.BlockStmt, onPanic func(token.Pos)) {
 	})
 }
 
-// ─── INVARIANT: DETAILS-SLOG-ATTR-01 ─────────────────────────────────────────
-
+// INVARIANT: DETAILS-SLOG-ATTR-01
+//
 // TestDetailsSlogAttr enforces DETAILS-SLOG-ATTR-01 across production code.
 //
 // DETAILS-SLOG-ATTR-01 — every call to `errcode.WithDetails(...)` in
@@ -1452,8 +1457,8 @@ func runDetailsSlogAttrFixtureScan(t *testing.T, fixtureDir string) []string {
 	return out
 }
 
-// ─── INVARIANT: EXPORTED-ERROR-NEW-01 ────────────────────────────────────────
-
+// INVARIANT: EXPORTED-ERROR-NEW-01
+//
 // TestExportedErrorNew enforces EXPORTED-ERROR-NEW-01 by walking every
 // production-code file (per fileroles.IsProductionCode) outside the
 // pkg/errcode/ allow-list and flagging package-scope exported sentinel

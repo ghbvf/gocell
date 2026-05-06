@@ -5,9 +5,10 @@
 
 ## 概览
 
-- archtest 文件总数：104（含 6 个 fixture + 2 个 helper，规则文件 ~96）
+- archtest 文件总数：**70**（合并前 104，本 PR 净减 34；含 6 个 fixture + 2 个 helper）
 - governance rules_*.go 文件数：~24（含 _test.go 配对，规则定义 ~12）
 - governance 规则总数：60+ 条（FMT-01..30, REF-01..17, TOPO-01..09, VERIFY-01..06, CH-04/05/06 等）
+- 11 个 `*_invariants_test.go` 主题文件取代 45 个原拆分文件 + 11 个 INVARIANT 锚点补齐
 
 ## 本 PR 处置（同主题聚并）
 
@@ -56,114 +57,80 @@
 
 ---
 
-## archtest 文件清单（104 个）
+## archtest 文件清单（70 个）
 
 | 文件 | INVARIANT ID | 主题 |
 |---|---|---|
-| `accesscore_facade_test.go` | _未声明_ | _misc |
+| `accesscore_facade_test.go` | ACCESSCORE-FACADE-A61-01 | _misc |
 | `adapter_returns_declared_types_test.go` | ADAPTER-RETURNS-DECLARED-TYPES-01 | _misc |
 | `archtest_test.go` | _未声明_ | _misc |
-| `assembly_modules_gen_test.go` | ASSEMBLY-MODULES-GEN-01 | assembly |
-| `assembly_snapshots_locked_test.go` | ASSEMBLY-SNAPSHOTS-LOCKED-01 | assembly |
-| `assemblyref_method_set_test.go` | ASSEMBLYREF-METHOD-SET-01 | assembly |
-| `auth_authtest_boundary_test.go` | _未声明_ | _misc |
+| `assembly_invariants_test.go` | ASSEMBLY-MODULES-GEN-01 | assembly |
+| `auth_authtest_boundary_test.go` | AUTH-AUTHTEST-BOUNDARY-01 | _misc |
 | `auth_plan_test.go` | AUTH-PLAN-01 | _misc |
 | `bootstrap_path_predicate_test.go` | BOOTSTRAP-PATH-PREDICATE-SOLE-01 | _misc |
-| `build_constraint_test.go` | _未声明_ | _misc |
-| `cell_init_test.go` | _未声明_ | _misc |
+| `build_constraint_test.go` | BUILD-CONSTRAINT-INTEGRATION-TAG-01 | _misc |
+| `cell_init_test.go` | CELL-INIT-CONTRACTUSAGE-01 | _misc |
 | `cellmeta_single_source_test.go` | CELLMETA-SINGLE-SOURCE-01 | _misc |
 | `cells_no_wrapper_contractspec_import_test.go` | CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 | _misc |
-| `ci_pinning_test.go` | _未声明_ | _misc |
-| `clock_injection_callsite_test.go` | CLOCK-INJECTION-TEST-CALLSITE-01 | clock |
-| `clock_injection_prod_callsite_test.go` | CLOCK-INJECTION-PROD-CALLSITE-01 | clock |
-| `clock_leaf_fallback_test.go` | KERNEL-CLOCK-LEAF-FALLBACK-01 | clock |
-| `clock_reset_relative_prod_test.go` | KERNEL-CLOCK-RESET-RELATIVE-PROD-01 | clock |
-| `codegen_cell_gen_test.go` | CODEGEN-CELL-GEN-01 | codegen |
-| `codegen_contract_gen_test.go` | CODEGEN-CONTRACT-GEN-01
-CODEGEN-CONTRACT-USER-OVERLAP-01 | codegen |
-| `codegen_kind_parity_test.go` | COMMAND-PROJECTION-EXPLICIT-01 | codegen |
-| `codegen_unified_test.go` | NO-METADATA-LITERAL-IN-CELLGO-01 | codegen |
+| `ci_pinning_test.go` | CI-PINNING-WORKFLOW-DIGEST-01 | _misc |
+| `clock_invariants_test.go` | CLOCK-INJECTION-TEST-CALLSITE-01 | clock |
+| `codegen_invariants_test.go` | CODEGEN-CELL-GEN-01
+CODEGEN-INIT-INTERNAL-01
+CODEGEN-USER-FILE-OVERLAP-01 | codegen |
 | `contract_kinds_closed_set_test.go` | CONTRACT-KINDS-CLOSED-SET-01 | _misc |
 | `contract_spec_clients_test.go` | INTERNAL-CONTRACT-CLIENTS-REQUIRED-01 | _misc |
-| `contracttest_boundary_test.go` | _未声明_ | _misc |
-| `corebundle_deps_test.go` | _未声明_ | _misc |
-| `details_slog_attr_test.go` | DETAILS-SLOG-ATTR-01 | errcode |
-| `errcode_constructor_test.go` | _未声明_ | errcode |
+| `contracttest_boundary_test.go` | CONTRACTTEST-BOUNDARY-01 | _misc |
+| `corebundle_deps_test.go` | COREBUNDLE-DEPS-01 | _misc |
+| `errcode_invariants_test.go` | ERRCODE-KIND-LITERAL-01 | errcode |
 | `errcode_message_const_fixtures_test.go` | MESSAGE-CONST-LITERAL-01 | errcode |
-| `errcode_message_const_test.go` | MESSAGE-CONST-LITERAL-01 | errcode |
-| `error_first_test.go` | ERROR-FIRST-API-01
-PR-MODE-6 | errcode |
 | `event_camelcase_test.go` | EVENT-PAYLOAD-CAMELCASE-01 | _misc |
 | `event_subscription_contractgen_coverage_test.go` | EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01 | _misc |
 | `exported_error_new_fixtures_test.go` | EXPORTED-ERROR-NEW-01 | errcode |
-| `exported_error_new_test.go` | EXPORTED-ERROR-NEW-01 | errcode |
 | `goose_session_locker_fixtures_test.go` | _未声明_ | _misc |
 | `goose_session_locker_test.go` | GOOSE-SESSION-LOCKER-01 | _misc |
-| `handler_inline_limit_parse_test.go` | HANDLER-NO-INLINE-LIMIT-PARSE-01 | handler |
-| `handler_no_schema_for_nobody_test.go` | HANDLER-NO-SCHEMA-FOR-NOBODY-01 | handler |
-| `handler_path_query_length_validation_test.go` | HANDLER-PATH-QUERY-LENGTH-VALIDATION-01 | handler |
-| `handler_policy_required_test.go` | HANDLER-POLICY-REQUIRED-01 | handler |
-| `handler_validator_fail_fast_test.go` | HANDLER-VALIDATOR-FAIL-FAST-01 | handler |
+| `handler_invariants_test.go` | HANDLER-NO-INLINE-LIMIT-PARSE-01 | handler |
 | `health_aggregation_test.go` | HEALTH-AGG-01 | _misc |
 | `helpers_test.go` | _未声明_ | _misc |
 | `http_metrics_label_test.go` | HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01 | _misc |
-| `httputil_5xx_kind_normalize_test.go` | HTTPUTIL-5XX-KIND-NORMALIZE-01 | httputil |
-| `httputil_5xx_log_redact_test.go` | HTTPUTIL-5XX-LOG-REDACT-01 | httputil |
-| `httputil_exported_registry_test.go` | HTTPUTIL-SURFACE-REGISTERED-01 | httputil |
-| `integration_guard_test.go` | _未声明_ | _misc |
+| `httputil_invariants_test.go` | HTTPUTIL-5XX-KIND-NORMALIZE-01 | httputil |
+| `integration_guard_test.go` | INTEGRATION-GUARD-01 | _misc |
 | `kernel_metadata_no_wire_test.go` | KERNEL-METADATA-NO-WIRE-01 | _misc |
 | `kernel_poolstats_location_test.go` | KERNEL-POOLSTATS-LOCATION-01 | _misc |
 | `lintgate_smoke_test.go` | LINT-GATE-SMOKE-01 | _misc |
-| `listener_dx_test.go` | _未声明_ | _misc |
-| `managed_resource_contract_test.go` | _未声明_ | _misc |
-| `migration_no_transaction_rerun_safe_test.go` | RERUN-SAFE-01 | _misc |
+| `listener_dx_test.go` | LISTENER-DX-01 | _misc |
+| `managed_resource_contract_test.go` | MANAGED-RESOURCE-CONTRACT-01 | _misc |
+| `migration_no_transaction_rerun_safe_test.go` | _未声明_ | _misc |
 | `module_order_test.go` | MODULE-ORDER-CONFIGCORE-FIRST-01 | _misc |
 | `no_deleted_auth_symbols_test.go` | NO-DELETED-AUTH-SYMBOLS-01 | _misc |
 | `no_manual_contractspec_literal_test.go` | NO-MANUAL-CONTRACTSPEC-LITERAL-01 | _misc |
 | `no_test_service_context_in_production_test.go` | NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01 | test |
 | `observability_metrics_test.go` | _未声明_ | _misc |
-| `outbox_cell_test.go` | _未声明_ | outbox |
-| `outbox_lease_id_test.go` | OUTBOX-LEASE-ID-CAS-01 | outbox |
-| `outbox_payload_size_test.go` | OUTBOX-PAYLOAD-SIZE-01 | outbox |
-| `outbox_receipt_test.go` | OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01 | outbox |
-| `outbox_relay_lost_metric_test.go` | OUTBOX-RELAY-LOST-METRIC-01 | outbox |
-| `outbox_service_test.go` | OUTBOX-SERVICE-01 | outbox |
-| `outbox_topic_test.go` | _未声明_ | outbox |
-| `panic_redaction_test.go` | PANIC-REDACT-01 | panic |
-| `panic_registered_test.go` | PANIC-REGISTERED-01 | panic |
+| `outbox_invariants_test.go` | OUTBOX-CELL-01 | outbox |
+| `panic_invariants_test.go` | PANIC-REDACT-01 | panic |
 | `patch_optional_bool_pointer_test.go` | PATCH-OPTIONAL-BOOL-POINTER-01 | _misc |
 | `pgquery_boundary_test.go` | _未声明_ | _misc |
 | `postgres_constructor_error_first_test.go` | PG-CONSTRUCTOR-MUST-FREE-01 | _misc |
 | `prod_clock_injection_fixtures_test.go` | PROD-CLOCK-INJECTION-01 | clock |
-| `prod_clock_injection_test.go` | PROD-CLOCK-INJECTION-01 | clock |
-| `prod_duration_const_internal_test.go` | PROD-DURATION-CONST-01 | prod |
-| `prod_duration_const_test.go` | PROD-DURATION-CONST-01 | prod |
 | `prod_duration_fixtures_test.go` | PROD-DURATION-CONST-01 | prod |
+| `prod_invariants_test.go` | PROD-DURATION-CONST-01 | _misc |
 | `provision_state_removed_test.go` | PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01 | _misc |
 | `queryparam_drift_test.go` | PR-MODE-3 | _misc |
 | `readyz_probe_naming_test.go` | READYZ-PROBE-NAMING-01 | _misc |
 | `redis_idempotency_hashtag_test.go` | IDEMPOTENCY-LUA-HASHTAG-01 | _misc |
-| `refresh_cross_store_tx_test.go` | REFRESH-CROSS-STORE-TX-01 | refresh |
-| `refresh_invalid_index_single_source_test.go` | REFRESH-INVALID-INDEX-SINGLE-SOURCE-01 | refresh |
-| `refresh_store_ambient_tx_test.go` | REFRESH-AMBIENT-TX-01 | refresh |
+| `refresh_invariants_test.go` | REFRESH-CROSS-STORE-TX-01 | refresh |
 | `repoerr_test.go` | CTXCANCEL-LOCAL-IMPL-BAN-01 | _misc |
-| `rmq_channel_destruction_test.go` | RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01 | rmq |
-| `rmq_channel_max_per_conn_test.go` | RMQ-CHANNEL-MAX-PER-CONN-01 | rmq |
-| `rmq_publisher_failure_handling_test.go` | RMQ-PUBLISHER-FAILURE-HANDLING-01 | rmq |
-| `rmq_publisher_releases_channel_test.go` | RMQ-PUBLISHER-RELEASES-CHANNEL-01 | rmq |
-| `rmq_stopintake_inflight_wait_test.go` | RMQ-STOPINTAKE-INFLIGHT-WAIT-01 | rmq |
+| `rmq_invariants_test.go` | RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01 | rmq |
 | `role_admin_literal_test.go` | ROLE-ADMIN-LITERAL-01 | _misc |
 | `security_defaults_test.go` | PR-MODE-1 | _misc |
 | `setup_admin_auth_test.go` | SETUP-ADMIN-NOT-PUBLIC-01 | _misc |
 | `setup_admin_bootstrap_closure_test.go` | CELLS-NO-ROUTEMUX-WRAPPER-01 | _misc |
 | `span_record_error_redact_test.go` | SPAN-RECORD-ERROR-REDACT-01 | _misc |
-| `spec_gen_topic_equals_contract_id_test.go` | SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01 | codegen |
 | `storage_backend_test.go` | STORAGE-BACKEND-PG-WIRING-01 | _misc |
 | `svctoken_caller_cell_test.go` | SVCTOKEN-CALLER-CELL-REQUIRED-01 | _misc |
 | `test_sleep_discipline_test.go` | TEST-SLEEP-DISCIPLINE-01 | test |
 | `test_time_literal_fixtures_test.go` | TEST-TIME-LITERAL-01 | test |
 | `test_time_literal_test.go` | TEST-TIME-LITERAL-01 | test |
-| `testutil_boundary_test.go` | _未声明_ | _misc |
+| `testutil_boundary_test.go` | TESTUTIL-BOUNDARY-01 | _misc |
 | `visit_buffer_then_commit_test.go` | VISIT-BUFFER-THEN-COMMIT-01 | _misc |
 | `wire_code_5xx_single_source_test.go` | WIRE-CODE-5XX-SINGLE-SOURCE-01 | _misc |
 

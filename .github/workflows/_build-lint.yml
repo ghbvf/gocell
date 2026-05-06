@@ -58,8 +58,10 @@ jobs:
             static_checks: true
           - shard: tools
             # archtest / metricschema / generatedverify use go/packages to load
-            # the full module type graph; they are the slowest test suite (~130s)
-            # and are isolated here so they run in parallel with the kernel shard.
+            # the full module type graph; the whole ./tools/... shard runs
+            # ~130s on CI (archtest alone is ~30s; metricschema + generatedverify
+            # contribute the rest). Isolated here so it runs in parallel with
+            # the kernel shard.
             pkgs: ./tools/...
             static_checks: false
           - shard: runtime
