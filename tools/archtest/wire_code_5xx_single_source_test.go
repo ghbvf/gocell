@@ -147,6 +147,13 @@ func TestWireCode5xxSingleSource(t *testing.T) {
 // For Kind.PublicCode(), which switches on a Kind receiver rather than an int
 // status, we collect (case index → returned Code identifier) using an
 // incrementing pseudo-key so the caller can extract the identifier set.
+//
+// The default branch of Kind.PublicCode() (returning ErrInternal for every
+// 5xx Kind without a dedicated case) is intentionally not validated here:
+// it is the convergence target of the single-source rule, not a divergence
+// risk. Adding a new dedicated 5xx wire code requires extending an explicit
+// case in BOTH Kind.PublicCode() and PublicCodeForStatus, which is exactly
+// what this archtest enforces.
 // The map key is set to a negative sentinel (-1, -2, …) for Kind cases to
 // avoid collisions with real HTTP status ints.
 //

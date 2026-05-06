@@ -333,6 +333,14 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 // encodeErrorEnvelopeTo writes the canonical wire envelope into out, including
 // numeric-precision merge and request_id injection. Returns an error if any
 // step fails — caller writes sentinelInternalErrorBody to the wire instead.
+//
+// Three error paths exist:
+//  1. json.Marshal(ecErr) — unreachable in production: errcode.Error has a
+//     custom MarshalJSON that emits a fixed schema and never returns err.
+//  2. dec.Decode(&inner) — unreachable: input is the bytes we just marshaled,
+//     so it is well-formed JSON object by construction.
+//  3. json.NewEncoder(out).Encode(...) — reachable: io.Writer can fail (this
+//     is the path TestEncodeErrorEnvelopeTo_FailingWriter exercises).
 func encodeErrorEnvelopeTo(out io.Writer, ctx context.Context, ecErr *errcode.Error) error {
 	innerJSON, err := json.Marshal(ecErr)
 	if err != nil {

@@ -18,6 +18,7 @@
 package archtest
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -296,10 +297,7 @@ func gatherAdapterFiles(root string) ([]string, error) {
 
 // isNotExist reports whether err indicates the path does not exist.
 func isNotExist(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "no such file")
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // checkAdapterFile parses one file and reports violations via t.Errorf.
