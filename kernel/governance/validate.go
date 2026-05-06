@@ -183,6 +183,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateREF17,
 		v.validateTOPO01, v.validateTOPO02, v.validateTOPO03, v.validateTOPO04,
 		v.validateTOPO05, v.validateTOPO06, v.validateTOPO07, v.validateTOPO08,
+		v.validateTOPO09,
 		v.validateVERIFY01, v.validateVERIFY02, v.validateVERIFY03,
 		v.validateVERIFY04, v.validateVERIFY05,
 		v.validateFMT01, v.validateFMT02, v.validateFMT03, v.validateFMT04,
