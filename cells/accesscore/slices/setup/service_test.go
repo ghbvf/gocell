@@ -78,11 +78,36 @@ func TestNewService_NilProvisioner_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestNewService_NilProvisioner_ReturnsErrcode is the F3 RED test:
+// provisioner nil check must return errcode (KindInvalid+ErrValidationFailed),
+// not a bare fmt.Errorf.
+func TestNewService_NilProvisioner_ReturnsErrcode(t *testing.T) {
+	_, err := setup.NewService(nil, discardLogger())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "provisioner nil check must return errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
 func TestNewService_NilLogger_Error(t *testing.T) {
 	prov, _ := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
 		discardLogger(), func() string { return "x" }, clock.Real())
 	_, err := setup.NewService(prov, nil)
 	require.Error(t, err)
+}
+
+// TestNewService_NilLogger_ReturnsErrcode is the F3 RED test:
+// logger nil check must return errcode (KindInvalid+ErrValidationFailed),
+// not a bare fmt.Errorf.
+func TestNewService_NilLogger_ReturnsErrcode(t *testing.T) {
+	prov, err := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
+		discardLogger(), func() string { return "x" }, clock.Real())
+	require.NoError(t, err)
+	_, err = setup.NewService(prov, nil)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "logger nil check must return errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
@@ -156,41 +181,6 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.False(t, persisted.PasswordResetRequired, "setup path creates with operator-chosen password")
 	// Verify password was hashed with bcrypt
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("SecretPass!23")))
-}
-
-func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_EmitsEvent(t *testing.T) {
-	// Pre-seed a user row with the target username but no admin role assigned
-	// (simulates a prior run that crashed between UserRepo.Create and
-	// RoleRepo.AssignToUser). CreateAdmin must recover the orphan row, rewrite
-	// the password hash, assign the admin role, and emit event.user.created.v1
-	// because setup emits only after adminprovision.Ensure returns.
-	userRepo := mem.NewUserRepository()
-	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
-	require.NoError(t, err)
-	orphan.ID = "usr-orphan-prior"
-	orphan.MarkProvisionPending(domain.UserSourceSetup, time.Now())
-	require.NoError(t, userRepo.Create(context.Background(), orphan))
-
-	roleRepo := mem.NewRoleRepository()
-	w := &stubWriter{}
-	svc := newService(t, userRepo, roleRepo, w)
-
-	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-		Username: "root",
-		Email:    "root@local",
-		Password: "SecretPass!23",
-	})
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, "usr-orphan-prior", out.ID, "orphan row reused")
-
-	require.Len(t, w.entries, 1, "setup orphan recovery must emit user.created")
-	assert.Equal(t, dto.TopicUserCreated, w.entries[0].EventType)
-
-	// Admin role now assigned to the orphan user.
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
-	require.NoError(t, err)
-	assert.Equal(t, 1, cnt)
 }
 
 func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
@@ -409,17 +399,15 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 		"410 fast-path must not call bcrypt")
 }
 
-// TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover
-// pins the provenance boundary: interactive setup must not reclaim a pending
-// bootstrap row with the same username.
-func TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover(t *testing.T) {
+// TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover
+// pins the duplicate-username boundary: setup must return 409 without touching
+// or promoting any existing user row with the same username.
+func TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
+	existing, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
-	orphan.ID = "usr-bootstrap-prior"
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
-	orphan.MarkPasswordResetRequired(time.Now())
-	require.NoError(t, userRepo.Create(context.Background(), orphan))
+	existing.ID = "usr-existing-prior"
+	require.NoError(t, userRepo.Create(context.Background(), existing))
 
 	roleRepo := mem.NewRoleRepository()
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
@@ -435,15 +423,13 @@ func TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 
-	refreshed, err := userRepo.GetByID(context.Background(), "usr-bootstrap-prior")
+	refreshed, err := userRepo.GetByID(context.Background(), "usr-existing-prior")
 	require.NoError(t, err)
-	assert.Equal(t, "$2a$10$oldhash00000000000000000000000000000000000000000000000", refreshed.PasswordHash)
-	assert.True(t, refreshed.PasswordResetRequired)
-	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
-	assert.Equal(t, domain.ProvisionStatePending, refreshed.ProvisionState)
+	assert.Equal(t, "$2a$10$oldhash00000000000000000000000000000000000000000000000", refreshed.PasswordHash,
+		"existing user hash must be untouched")
 	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
-	assert.Equal(t, 0, cnt)
+	assert.Equal(t, 0, cnt, "duplicate username must not be promoted to admin")
 }
 
 // TestService_CreateAdmin_ControlCharInField_Returns400 pins the email/username

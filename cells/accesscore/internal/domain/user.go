@@ -38,7 +38,7 @@ func ValidUserStatus(s UserStatus) bool {
 }
 
 // UserSource records which path created the user row. Identity users are
-// ordinary accounts; setup/bootstrap users are first-admin provisioning rows.
+// ordinary accounts; setup users are first-admin provisioning rows.
 type UserSource string
 
 const (
@@ -46,35 +46,6 @@ const (
 	UserSourceIdentity UserSource = "identity"
 	// UserSourceSetup marks an interactive first-run setup row.
 	UserSourceSetup UserSource = "setup"
-	// UserSourceBootstrap marks a legacy headless-bootstrap provision row.
-	// The bootstrap admin provision mode was removed (ADR §D3 v2), but this
-	// constant is retained to disambiguate orphaned rows created by prior
-	// bootstrap attempts during setup-slice orphan recovery.
-	UserSourceBootstrap UserSource = "bootstrap"
-)
-
-// ValidAdminProvisionSource returns true for sources owned by admin provisioning.
-func ValidAdminProvisionSource(s UserSource) bool {
-	switch s {
-	case UserSourceSetup, UserSourceBootstrap:
-		return true
-	default:
-		return false
-	}
-}
-
-// ProvisionState tracks whether a provisioning-owned user row is still safe to
-// recover. Only pending rows from the same source may be reclaimed.
-type ProvisionState string
-
-const (
-	// ProvisionStateNone means the user was not created by admin provisioning.
-	ProvisionStateNone ProvisionState = ""
-	// ProvisionStatePending means UserRepo.Create succeeded but first-admin
-	// provisioning has not completed all required writes yet.
-	ProvisionStatePending ProvisionState = "pending"
-	// ProvisionStateComplete means the provisioning-owned row was completed.
-	ProvisionStateComplete ProvisionState = "complete"
 )
 
 // User is the identity aggregate root for accesscore.
@@ -86,7 +57,6 @@ type User struct {
 	PasswordResetRequired bool
 	Status                UserStatus
 	CreationSource        UserSource
-	ProvisionState        ProvisionState
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }
@@ -109,35 +79,9 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 		PasswordHash:   passwordHash,
 		Status:         StatusActive,
 		CreationSource: UserSourceIdentity,
-		ProvisionState: ProvisionStateNone,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}, nil
-}
-
-// MarkProvisionPending marks a setup/bootstrap-owned row as recoverable until
-// the first-admin provisioning sequence completes.
-// now is the wall-clock instant provided by the caller's clock.Clock.
-func (u *User) MarkProvisionPending(source UserSource, now time.Time) {
-	u.CreationSource = source
-	u.ProvisionState = ProvisionStatePending
-	u.UpdatedAt = now
-}
-
-// MarkProvisionComplete marks a setup/bootstrap-owned row as no longer
-// recoverable by duplicate-username recovery.
-// now is the wall-clock instant provided by the caller's clock.Clock.
-func (u *User) MarkProvisionComplete(now time.Time) {
-	u.ProvisionState = ProvisionStateComplete
-	u.UpdatedAt = now
-}
-
-// IsRecoverableProvisionOrphan verifies that a duplicate username belongs to
-// the same interrupted provisioning attempt class, not to an ordinary user.
-func (u *User) IsRecoverableProvisionOrphan(source UserSource) bool {
-	return ValidAdminProvisionSource(source) &&
-		u.CreationSource == source &&
-		u.ProvisionState == ProvisionStatePending
 }
 
 // MarkPasswordResetRequired sets the PasswordResetRequired flag to true and

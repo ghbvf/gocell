@@ -188,6 +188,36 @@ func TestBootstrapMiddleware_RateLimited_Returns429(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, code, "rate limited request must return 429")
 }
 
+// TestAllowBootstrapRequest_RateLimited_InvokesObserver verifies that when
+// the rate limiter blocks a request, onAuthFail is invoked with reason="rate_limited".
+// This is the F1 RED test — it will fail until allowBootstrapRequest calls onAuthFail.
+func TestAllowBootstrapRequest_RateLimited_InvokesObserver(t *testing.T) {
+	t.Parallel()
+
+	creds := bootstrapCreds()
+	limiter := &fakeRateLimiter{allowAll: false} // always rate-limited
+
+	var capturedReason string
+	var hookCalled bool
+	hook := func(_ context.Context, reason string) {
+		hookCalled = true
+		capturedReason = reason
+	}
+
+	mw := auth.ExportedNewBootstrapMiddlewareWithHook(creds, limiter, hook)
+	next := &nextHandlerCalled{}
+	handler := mw(next)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", nil)
+	req.Header.Set("Authorization", basicAuthHeader("admin", "secret123"))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, w.Code, "rate limited must return 429")
+	assert.True(t, hookCalled, "onAuthFail must be called when rate-limited")
+	assert.Equal(t, "rate_limited", capturedReason, "reason must be rate_limited")
+}
+
 // TestBootstrapMiddleware_AuthFail_InvokesOnAuthFail verifies that the
 // onAuthFail observer is called on authentication failure with the correct
 // reason string, and is NOT called on success.

@@ -200,11 +200,12 @@
                       },
                       "bootstrap": {
                         "type": "boolean",
-                        "description": "If true, route is protected by HTTP Basic Auth using GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials. auth.Route{Bootstrap: true} is emitted by RegisterRoutes. Mutually exclusive with public and passwordResetExempt. FMT-28 limits to setup/admin paths."
+                        "description": "If true, contractgen generates a NewHandler(bootstrapAuth func(http.Handler) http.Handler, ...) constructor and emits auth.Route{BootstrapAuth: bootstrapAuth} from RegisterRoutes; the listener-level JWT middleware skips this route. Composition root injects the bootstrap Basic Auth + per-IP rate-limit middleware (GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials). Mutually exclusive with public and passwordResetExempt. FMT-28 limits to setup/admin paths."
                       },
                       "responses": {
                         "type": "array",
                         "description": "HTTP status codes injected by listener-mounted middleware (e.g. bootstrap auth 401, rate limiter 429). CH-04 governance treats these as declared without requiring handler AST emission.",
+                        "uniqueItems": true,
                         "items": {
                           "type": "integer",
                           "minimum": 100,

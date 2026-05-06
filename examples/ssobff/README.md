@@ -55,7 +55,7 @@ const (
 These constants live in this demo binary only — production deployments
 inject `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`
 via env (see `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`
-§D9 + `docs/operations/first-run-setup.md`).
+§D2 + `docs/operations/first-run-setup.md`).
 
 ```bash
 # Provision the admin (operator authenticates with ssobffBootstrap* creds;

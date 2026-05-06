@@ -114,10 +114,11 @@ type HTTPEndpointSpec struct {
 	// Mutually exclusive with AuthPublic and AuthBootstrap.
 	AuthPasswordResetExempt bool
 	// AuthBootstrap is true when contract.yaml endpoints.http.auth.bootstrap is set.
-	// The generated handler emits auth.Route{Bootstrap: true} in RegisterRoutes
-	// and the listener-level JWT middleware skips this route. FMT-28 enforces
-	// that this flag only appears on setup/admin contracts.
-	// Mutually exclusive with AuthPublic and AuthPasswordResetExempt.
+	// The generated NewHandler takes bootstrapAuth as a non-nil first arg of type
+	// func(http.Handler) http.Handler and emits auth.Route{BootstrapAuth: bootstrapAuth}
+	// in RegisterRoutes; the listener-level JWT middleware skips this route. FMT-28
+	// enforces that this flag only appears on setup/admin contracts. Mutually
+	// exclusive with AuthPublic and AuthPasswordResetExempt.
 	AuthBootstrap bool
 }
 

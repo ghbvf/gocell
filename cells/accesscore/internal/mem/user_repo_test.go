@@ -19,7 +19,7 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-test-001"
 	user.MarkPasswordResetRequired(time.Now())
-	user.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
+	user.CreationSource = domain.UserSourceSetup
 
 	require.NoError(t, repo.Create(ctx, user))
 
@@ -27,23 +27,19 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	got, err := repo.GetByID(ctx, "usr-test-001")
 	require.NoError(t, err)
 	assert.True(t, got.PasswordResetRequired, "GetByID must preserve PasswordResetRequired")
-	assert.Equal(t, domain.UserSourceBootstrap, got.CreationSource, "GetByID must preserve CreationSource")
-	assert.Equal(t, domain.ProvisionStatePending, got.ProvisionState, "GetByID must preserve ProvisionState")
+	assert.Equal(t, domain.UserSourceSetup, got.CreationSource, "GetByID must preserve CreationSource")
 
 	// GetByUsername should preserve the flag.
 	got2, err := repo.GetByUsername(ctx, "testuser")
 	require.NoError(t, err)
 	assert.True(t, got2.PasswordResetRequired, "GetByUsername must preserve PasswordResetRequired")
-	assert.Equal(t, domain.UserSourceBootstrap, got2.CreationSource, "GetByUsername must preserve CreationSource")
-	assert.Equal(t, domain.ProvisionStatePending, got2.ProvisionState, "GetByUsername must preserve ProvisionState")
+	assert.Equal(t, domain.UserSourceSetup, got2.CreationSource, "GetByUsername must preserve CreationSource")
 
-	// Update should preserve changes to the flag.
+	// Update should persist changes to the flag.
 	got.ClearPasswordResetRequired(time.Now())
-	got.MarkProvisionComplete(time.Now())
 	require.NoError(t, repo.Update(ctx, got))
 
 	got3, err := repo.GetByID(ctx, "usr-test-001")
 	require.NoError(t, err)
 	assert.False(t, got3.PasswordResetRequired, "Update must persist ClearPasswordResetRequired")
-	assert.Equal(t, domain.ProvisionStateComplete, got3.ProvisionState, "Update must persist provision completion")
 }

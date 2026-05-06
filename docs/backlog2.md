@@ -370,14 +370,62 @@ func NewSubscription(typedH EventHandler, group, slice string) *Subscription
 
 ### BOOTSTRAP-AUDIT-CHAIN-WIRING-01
 
-**触发条件**：accesscore audit chain 跨 cell 注入路径打通后跟进（当前 `access_module.go` 传 `nil` OnAuthFail hook）。
+**触发条件**：accesscore audit chain 跨 cell 注入路径打通后跟进（当前 `access_module.go` 注入 `bootstrapAuthFailLogger`，仅写 slog，未写入 audit cell）。
 
-**描述**：`NewBootstrapMiddleware(creds, limiter, onAuthFail)` 的第三参数 `onAuthFail` 接口已就位，当前在 `access_module.go` 组装时传 `nil`（middleware 在 nil hook 时跳过 audit write，不影响功能）。当 accesscore audit chain 的跨 cell 注入路径完成后，wiring `onAuthFail = auditWriter.WriteBootstrapAuthFailure` 以实现 Basic Auth 暴力枚举的审计追踪，扩展零成本。
+**描述**：`NewBootstrapMiddleware(creds, limiter, onAuthFail)` 第三参数 `onAuthFail` 已就位，当前 `access_module.go` 注入 `bootstrapAuthFailLogger(slog.Default())`，写结构化 slog（`event=bootstrap_auth_failed`、`reason`、`client_ip`），但不写入 audit cell。当 accesscore audit chain 的跨 cell 注入路径完成后，wiring `onAuthFail = auditWriter.WriteBootstrapAuthFailure` 以实现 Basic Auth 暴力枚举的审计追踪，扩展零成本。
 
 **来源**：ADR `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` D4 + Out of Scope 段（ADR 修订后 D1-D5）。
 
 **严重度**：P2（功能完整性；不影响安全主路径）
 
 **估时**：2h dev + 1h review（hook 接口已就位）
+
+**Cx**：Cx1
+
+---
+
+### BOOTSTRAP-RATELIMIT-DISTRIBUTED-01
+
+**触发条件**：多 pod 部署（accesscore PG adapter 落地）后，per-replica in-memory token bucket 无法跨 pod 共享限速预算，运营需要分布式 rate limiter。
+
+**描述**：当前 `BootstrapRateLimiter`（per-IP token bucket，5 req/min sustained / burst 10）是 in-memory 实现，每个 replica 独立计数。单 pod 开发环境完整有效；多 pod 生产环境攻击者可通过不同入口绕过单 replica 限速。目标：对接 Redis 实现 sliding window counter，保留当前 `BootstrapRateLimiter` interface（零改动 bootstrap middleware），只换注入实现。
+
+**来源**：ADR `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` §D5 + Out of Scope 段；B2-C-02 postmortem P1#5。
+
+**严重度**：P2（开发/单 pod 场景完整；多 pod 生产缓解措施为 K8s ingress 限速）
+
+**估时**：4h dev + 2h review
+
+**Cx**：Cx2
+
+---
+
+### ACCESSCORE-PG-USERS-MIGRATION-01
+
+**触发条件**：accesscore 切换 PG UserRepository adapter（当前仅 mem.UserRepository）。
+
+**描述**：引入 PG users 表 migration，包含 `UNIQUE (role = 'admin')` 部分索引（PostgreSQL conditional unique），使 multi-pod 并发 setup POST 时第一个 INSERT 胜出，后续 409；admin 已存在时 setup 端点返回 410 Gone（endpoint 持续受 Basic Auth 保护，避免 410 oracle 暴露状态）。同步更新 `Provisioner.createAdminUser` 对 PG unique violation 的错误处理（ErrAuthUserDuplicate → 409）。
+
+**来源**：ADR `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` §D5 "目标状态（PG adapter 落地后）"段。
+
+**严重度**：P1（in-memory mode 无共享存储，当前不支持多 pod；PG 落地是多 pod 幂等承诺的唯一路径）
+
+**估时**：6h dev + 3h review（含 migration + PG repo + integration test）
+
+**Cx**：Cx3（跨 cells/accesscore + adapters/postgres + migration）
+
+---
+
+### PROVISIONER-MUTEX-REVIEW-01
+
+**触发条件**：`cells/accesscore/internal/adminprovision/provisioner.go` 中 `sync.Mutex` 保护的并发安全边界在 PG adapter 引入后需要复查。
+
+**描述**：当前 `Provisioner` 使用 `sync.Mutex` 保证单进程内 admin 唯一性（`hasAdmin` flag + `createAdminUser` 原子区间）。PG adapter 落地后，单进程 mutex 失效（多 pod 共享 PG），幂等保证转移到 `UNIQUE (role='admin')` DB 约束（见 `ACCESSCORE-PG-USERS-MIGRATION-01`）。届时应删除 `Provisioner.mu` + `hasAdmin` 本地状态，简化为直接 INSERT + 捕获 unique violation，避免 double-check 反模式。
+
+**来源**：PR #392 Wave 2 简化后剩余的 mutex 结构；`ACCESSCORE-PG-USERS-MIGRATION-01` 的关联清理项。
+
+**严重度**：P2（当前正确；PG 落地前无动作需求）
+
+**估时**：2h dev + 1h review
 
 **Cx**：Cx1

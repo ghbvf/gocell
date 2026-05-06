@@ -1,6 +1,7 @@
 # ADR — Bootstrap Admin Security Boundary
 
 - **Date**: 2026-05-06（Supersedes 2026-05-06 v1）
+- **Revised**: 2026-05-06 16:00 (postmortem-driven from v1 00:30)
 - **Status**: Accepted (revision per postmortem 202605060030)
 - **Closes**: B2-C-02 (P0) SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT
 - **Roadmap**: PR-V1-SEC-SETUP-CLOSURE
@@ -76,6 +77,16 @@ env = operator identity (authenticator)；body = admin identity (subject)。
 
 brute-force 防护：per-IP token-bucket limiter（5 req/min sustained, burst 10，对照 nginx `limit_req`）+ slog `onAuthFail` observer。
 
+> setup HTTP 同步路径不再产生 pending row；crash 后用户重试得 409 + 运维 SQL 清理（不走自动 orphan recovery）。多 pod 跨进程幂等的最终承诺由 PG users(role=admin) UNIQUE 约束兑现（见 backlog ACCESSCORE-PG-USERS-MIGRATION-01）。
+
+## 替代方案
+
+**A — 保留 bootstrap admin provision mode（headless 路径）**：通过 credfile 物化一次性密码，容器化下传递不安全，cleaner worker 路径复杂度高。Postmortem 分析：crash 后 pending row 形成 orphan，自动 orphan recovery 需要维护 ProvisionState 状态机，复杂度超过收益。已废弃。
+
+**B — 单独 CLI seed 命令**：适合 Keycloak / Vault 模式，但要求 operator 有容器 exec 或 job 权限，与 GoCell 「HTTP-first, zero-sidecar」设计矛盾。已排除。
+
+**C — 放弃幂等，不做 409 处理**：username 冲突直接 500，依赖运维重命名。运维 UX 不可接受，对 multi-pod race 无守护。已排除。
+
 ## Consequences
 
 - 单一引导式 admin 注册路径，运维每次部署后多发一次 curl POST
@@ -85,7 +96,7 @@ brute-force 防护：per-IP token-bucket limiter（5 req/min sustained, burst 10
 
 ## Out of Scope / backlog 登记
 
-- **BOOTSTRAP-AUDIT-CHAIN-WIRING-01**：`access_module.go` 当前传 `nil` OnAuthFail hook；触发条件：accesscore audit chain 跨 cell 注入路径打通后跟进；hook 接口已就位，扩展零成本
+- **BOOTSTRAP-AUDIT-CHAIN-WIRING-01**：`access_module.go` 当前注入 `bootstrapAuthFailLogger(slog.Default())`，写 `event=bootstrap_auth_failed` + `reason` + `client_ip` 到 slog；触发条件：accesscore audit chain 跨 cell 注入路径打通后将 hook 升级为 audit chain writer，扩展零成本
 - **BOOTSTRAP-RATELIMIT-DISTRIBUTED-01**：per-replica in-memory bucket；multi-pod 拓扑约束已删除，分布式 rate limiter 仍是合理后续
 - K8s etcd 加密 / Secret RBAC 最小化（运维责任域，不涉及 GoCell 代码）
 
