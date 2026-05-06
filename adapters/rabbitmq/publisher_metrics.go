@@ -47,7 +47,8 @@ type PublisherCollector interface {
 type NoopPublisherCollector struct{}
 
 // RecordPublishFailure is a no-op.
-func (NoopPublisherCollector) RecordPublishFailure(_ PublishFailureReason) { /* no-op: metrics disabled */ }
+func (NoopPublisherCollector) RecordPublishFailure(_ PublishFailureReason) { /* no-op: metrics disabled */
+}
 
 // Compile-time interface check.
 var _ PublisherCollector = NoopPublisherCollector{}

@@ -25,6 +25,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
+// stopIntakeDrainTimeoutBudget is the test-local fail-closed drain budget for
+// the timeout case. Larger than the injected drainRemaining timer override so
+// that drain finishes its own deadline before StopIntake returns the timeout
+// error — this lets the assertion on elapsed time observe the inflight-wait
+// budget rather than the inner drain timer.
+const stopIntakeDrainTimeoutBudget = 120 * time.Millisecond
+
 // TestStopIntake_DrainSurvivesParentCtxCancel verifies that drain processes
 // all prefetched deliveries even after the parent Subscribe ctx is canceled.
 //
@@ -237,7 +244,7 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 	// Inject a short drain deadline for drainRemaining (timer in drainRemaining).
 	prev := testOnlyDrainDeadlineOverride
-	testOnlyDrainDeadlineOverride = 100 * time.Millisecond
+	testOnlyDrainDeadlineOverride = testtime.SlowPoll
 	t.Cleanup(func() { testOnlyDrainDeadlineOverride = prev })
 
 	conn, mockConn := newTestConnection(t)
@@ -266,7 +273,7 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:              "drain-timeout-queue",
 		DLXExchange:            "drain-timeout.dlx",
-		StopIntakeDrainTimeout: 120 * time.Millisecond, // slightly longer than drainRemaining timer
+		StopIntakeDrainTimeout: stopIntakeDrainTimeoutBudget, // slightly longer than drainRemaining timer
 		Clock:                  clock.Real(),
 	})
 
@@ -306,7 +313,7 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 		"StopIntake must return ErrAdapterAMQPCloseTimeout on drain timeout")
 
 	// Must return within a reasonable margin of the drain budget.
-	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, testtime.SlowPoll,
 		"StopIntake must wait at least StopIntakeDrainTimeout; got %s", elapsed)
 	assert.Less(t, elapsed, testtime.D1s,
 		"StopIntake must not exceed drain budget substantially; got %s", elapsed)
@@ -317,7 +324,7 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 func TestStopIntakeDrainTimeout_DefaultsTo30s(t *testing.T) {
 	sc := SubscriberConfig{
 		PrefetchCount:            10,
-		StopIntakePerCallTimeout: 2 * time.Second,
+		StopIntakePerCallTimeout: testtime.D2s,
 		StopIntakeDrainTimeout:   0, // zero → should become 30s
 	}
 	sc.setDefaults()

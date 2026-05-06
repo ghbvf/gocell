@@ -836,6 +836,10 @@ func (c *Connection) drainChannelPool() {
 //     channel was already counted when it was first allocated.
 //   - Pool miss: inUseChannels.Add(1) before allocation; rolled back on cap
 //     exceeded or broker error so over-cap slots cannot leak.
+//   - MaxChannelsPerConn <= 0: cap check skipped (uncapped). NewConnection's
+//     setDefaults populates the field with defaultRMQMaxChannelsPerConn, so
+//     this branch only fires when callers build *Connection directly without
+//     setDefaults — a test convenience, not a production path.
 func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	c.mu.RLock()
 	permErr := c.permanentErr
@@ -862,7 +866,8 @@ func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 
 	// Pool miss — increment in-use BEFORE allocating; rollback on cap miss
 	// or broker error so over-cap allocations cannot leak counter slots.
-	if next := c.inUseChannels.Add(1); int(next) > c.config.MaxChannelsPerConn {
+	next := c.inUseChannels.Add(1)
+	if cap := c.config.MaxChannelsPerConn; cap > 0 && int(next) > cap {
 		c.inUseChannels.Add(-1)
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterAMQPChannelMaxExceeded,
 			"rabbitmq: channel cap reached for connection")
