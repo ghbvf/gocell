@@ -11,7 +11,9 @@ import (
 )
 
 const (
-	// MaxHTTPIDLen is the maximum length for HTTP-borne correlation IDs validated by the pkg/redaction regex pipeline (RequestID/CorrelationID, et al).
+	// MaxHTTPIDLen is the maximum length for HTTP-borne correlation IDs
+	// (RequestID, CorrelationID, et al) validated by the pkg/redaction regex
+	// pipeline.
 	MaxHTTPIDLen = 128
 
 	// MaxMetadataIDLen is the maximum length for broker metadata IDs

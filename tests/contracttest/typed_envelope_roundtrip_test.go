@@ -120,5 +120,4 @@ func TestJourney_TypedEnvelopeRoundtrip(t *testing.T) {
 		assert.Contains(t, logs, "<REDACTED>", "5xx slog Details must be redacted")
 		assert.NotContains(t, logs, "secret123", "5xx slog must NOT contain raw secret")
 	})
-
 }

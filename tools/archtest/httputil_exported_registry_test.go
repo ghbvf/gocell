@@ -29,9 +29,9 @@ func TestHttputilExportedRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("abs repo root: %v", err)
 	}
-	httputil := filepath.Join(root, "pkg/httputil")
+	httputil := filepath.Join(root, "pkg", "httputil")
 	docGoPath := filepath.Join(httputil, "doc.go")
-	governancePath := filepath.Join(root, "kernel/governance/rules_http_response_alignment.go")
+	governancePath := filepath.Join(root, "kernel", "governance", "rules_http_response_alignment.go")
 
 	// 1. Collect all exported functions from pkg/httputil (excluding test files).
 	exported := collectExportedFuncs(t, httputil)
@@ -52,7 +52,10 @@ func TestHttputilExportedRegistry(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("HTTPUTIL-SURFACE-REGISTERED-01: the following exported pkg/httputil functions are not registered in doc.go Stable Surface OR kernel/governance maps — add them to pkg/httputil/doc.go and/or kernel/governance/rules_http_response_alignment.go: %v", missing)
+		t.Errorf("HTTPUTIL-SURFACE-REGISTERED-01: the following exported "+
+			"pkg/httputil functions are not registered in doc.go Stable Surface "+
+			"OR kernel/governance maps — add them to pkg/httputil/doc.go and/or "+
+			"kernel/governance/rules_http_response_alignment.go: %v", missing)
 	}
 }
 
@@ -97,7 +100,7 @@ func collectExportedFuncs(t *testing.T, dir string) map[string]bool {
 // of doc.go. It matches lines of the form "  - FuncName" (with optional args).
 func collectDocRegistered(t *testing.T, path string) map[string]bool {
 	t.Helper()
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(path) //nolint:gosec // archtest reads governance/source files via repo-relative paths only
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
@@ -129,7 +132,7 @@ func collectDocRegistered(t *testing.T, path string) map[string]bool {
 // stable map literals with one entry per line.
 func collectGovernanceRegistered(t *testing.T, path string) map[string]bool {
 	t.Helper()
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(path) //nolint:gosec // archtest reads governance/source files via repo-relative paths only
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
