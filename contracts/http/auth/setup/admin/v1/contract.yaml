@@ -28,7 +28,7 @@ endpoints:
         description: "Conflict — requested first-admin username already belongs to a non-recoverable user or provisioning attempt"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       410:
-        description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details carry nextAction=\"login\" only; clients resolve the login endpoint via OpenAPI / contract registry. See docs/architecture/202604181900-adr-auth-setup-first-run.md."
+        description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details carry nextAction=\"login\" only; clients resolve the login endpoint via OpenAPI / contract registry. See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"

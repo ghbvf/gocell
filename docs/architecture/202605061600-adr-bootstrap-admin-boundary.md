@@ -96,7 +96,7 @@ brute-force 防护：per-IP token-bucket limiter（5 req/min sustained, burst 10
 
 ## Out of Scope / backlog 登记
 
-- **BOOTSTRAP-AUDIT-CHAIN-WIRING-01**：`access_module.go` 当前传 `nil` OnAuthFail hook；触发条件：accesscore audit chain 跨 cell 注入路径打通后跟进；hook 接口已就位，扩展零成本
+- **BOOTSTRAP-AUDIT-CHAIN-WIRING-01**：`access_module.go` 当前注入 `bootstrapAuthFailLogger(slog.Default())`，写 `event=bootstrap_auth_failed` + `reason` + `client_ip` 到 slog；触发条件：accesscore audit chain 跨 cell 注入路径打通后将 hook 升级为 audit chain writer，扩展零成本
 - **BOOTSTRAP-RATELIMIT-DISTRIBUTED-01**：per-replica in-memory bucket；multi-pod 拓扑约束已删除，分布式 rate limiter 仍是合理后续
 - K8s etcd 加密 / Secret RBAC 最小化（运维责任域，不涉及 GoCell 代码）
 

@@ -370,9 +370,9 @@ func NewSubscription(typedH EventHandler, group, slice string) *Subscription
 
 ### BOOTSTRAP-AUDIT-CHAIN-WIRING-01
 
-**触发条件**：accesscore audit chain 跨 cell 注入路径打通后跟进（当前 `access_module.go` 传 `nil` OnAuthFail hook）。
+**触发条件**：accesscore audit chain 跨 cell 注入路径打通后跟进（当前 `access_module.go` 注入 `bootstrapAuthFailLogger`，仅写 slog，未写入 audit cell）。
 
-**描述**：`NewBootstrapMiddleware(creds, limiter, onAuthFail)` 的第三参数 `onAuthFail` 接口已就位，当前在 `access_module.go` 组装时传 `nil`（middleware 在 nil hook 时跳过 audit write，不影响功能）。当 accesscore audit chain 的跨 cell 注入路径完成后，wiring `onAuthFail = auditWriter.WriteBootstrapAuthFailure` 以实现 Basic Auth 暴力枚举的审计追踪，扩展零成本。
+**描述**：`NewBootstrapMiddleware(creds, limiter, onAuthFail)` 第三参数 `onAuthFail` 已就位，当前 `access_module.go` 注入 `bootstrapAuthFailLogger(slog.Default())`，写结构化 slog（`event=bootstrap_auth_failed`、`reason`、`client_ip`），但不写入 audit cell。当 accesscore audit chain 的跨 cell 注入路径完成后，wiring `onAuthFail = auditWriter.WriteBootstrapAuthFailure` 以实现 Basic Auth 暴力枚举的审计追踪，扩展零成本。
 
 **来源**：ADR `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` D4 + Out of Scope 段（ADR 修订后 D1-D5）。
 

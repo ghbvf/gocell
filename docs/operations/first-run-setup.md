@@ -145,17 +145,20 @@ spec:
                   key: password
 ```
 
-multi-pod 部署：DB 唯一约束保证幂等，第一个 INSERT 胜出，后续 POST 返回 409 或 410。
+部署语义：当前 `UserRepository` 仅有 in-memory 实现，进程内 `sync.Mutex` 保证 admin 唯一；first-run admin 必须落到单 pod replica。多 pod 幂等承诺要等 `ACCESSCORE-PG-USERS-MIGRATION-01`（PG `users` 表 + `UNIQUE(role='admin')` 部分索引）落地后才成立——届时第一个 INSERT 胜出，后续 POST 返回 409 或 410。
 
 ---
 
 ## 故障排查
 
-| 现象 | 原因 | 处理 |
-|------|------|------|
-| 启动失败：`ERR_AUTH_BOOTSTRAP_CREDENTIALS_MISSING` | `GOCELL_BOOTSTRAP_ADMIN_USERNAME` 或 `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` 为空 | 检查两个 env 是否正确注入；K8s Secret 是否挂载 |
-| 启动失败：`ERR_AUTH_BOOTSTRAP_PASSWORD_TOO_SHORT` | `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` 少于 8 字节（TrimSpace 后） | 使用更长密码；K8s secret 末尾换行由 TrimSpace 自动处理 |
-| 启动失败：`ERR_AUTH_BOOTSTRAP_PASSWORD_CONTROL_CHAR` | 密码含控制字符 | 检查 secret 编码；使用可打印 ASCII |
+启动失败统一返回 `ERR_CELL_INVALID_CONFIG`（K#08 后 bootstrap 校验归类为 cell config 失败），按 `message` 区分根因：
+
+| 现象 | message | 原因 | 处理 |
+|------|---------|------|------|
+| 启动失败 | `... are required to protect setup/admin endpoint` | 两个 env 同时为空 | 注入 `GOCELL_BOOTSTRAP_ADMIN_USERNAME` 与 `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`；检查 K8s Secret 是否挂载 |
+| 启动失败 | `... must both be set or both be empty` | 两个 env 中只设置了一个 | 同时设置或同时清空两个 env |
+| 启动失败 | `... USERNAME must not contain control characters` | username 含控制字符 | 检查 secret 编码；使用可打印 ASCII |
+| 启动失败 | `... PASSWORD must be at least 8 bytes` | password TrimSpace 后少于 8 字节 | 使用更长密码；K8s secret 末尾换行由 TrimSpace 自动处理 |
 | setup/admin 返回 401 | Basic Auth 凭据错误 | 核对 `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` |
 | setup/admin 返回 409 | 请求 username 已被其他 user 占用 | 换 username → 重试 |
 | setup/admin 返回 410 | Basic Auth 通过 + admin 已创建 | 进入 login 流；admin 已就绪 |
