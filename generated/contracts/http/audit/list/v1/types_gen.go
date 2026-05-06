@@ -3,6 +3,17 @@
 
 package list
 
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.audit.list.v1.request
 type Request struct {
 	ActorId   string `json:"actorId,omitempty"`
@@ -31,4 +42,75 @@ type ResponseDataItem struct {
 	// format: date-time
 	Timestamp string `json:"timestamp"`
 	Payload   any    `json:"payload,omitempty"`
+}
+
+// ListResponseObject is the typed response envelope for
+// http.audit.list.v1. Service.List must return one of the
+// List{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+//
+//	(buffer-then-commit pattern: encode to bytes.Buffer first so encode
+//	 failures don't commit a half-written response status to wire)
+type ListResponseObject interface {
+	visitListResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// List200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type List200JSONResponse Response
+
+func (r List200JSONResponse) visitListResponse(ctx context.Context, w http.ResponseWriter) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(Response(r)); err != nil {
+		// encode 失败时 header 尚未提交，handler 收到 err 后可走 WriteError 兜底 5xx
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.audit.list.v1: encode List200JSONResponse body", attrs...)
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = buf.WriteTo(w)
+	return nil
+}
+
+// List400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type List400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r List400ErrorResponse) visitListResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// List401ErrorResponse renders an HTTP 401 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type List401ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r List401ErrorResponse) visitListResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+	return nil
+}
+
+// List403ErrorResponse renders an HTTP 403 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type List403ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r List403ErrorResponse) visitListResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
 }

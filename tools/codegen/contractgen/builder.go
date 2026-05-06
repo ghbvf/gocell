@@ -240,21 +240,39 @@ func buildHTTPEndpointSpec(
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
 
-	// Pagination detection: cursor (string) + limit (integer) with no path params
-	// and GET method signals a canonical paginated list endpoint.
-	if http.Method == "GET" && len(spec.PathParams) == 0 && len(spec.QueryParams) == 2 {
+	// Pagination detection (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb):
+	// Any GET endpoint that declares cursor (string) + limit (integer) in its
+	// query params is paginated, regardless of the presence of path params or
+	// additional filter query params. The extras land in
+	// Pagination.ExtraQueryParams and the handler template parses them with
+	// the standard per-param branch — cursor/limit are always handled by
+	// pkg/httputil.ParsePageParams so the limit error envelope is uniform
+	// across the entire HTTP surface (PR#376 F-COR-001 fix; the original
+	// `len(PathParams) == 0` precondition was a leftover from the strict
+	// 2-element invariant and would have left e.g. /roles/{userID}?cursor=&limit=
+	// emitting the divergent inline-limit envelope).
+	if http.Method == "GET" && len(spec.QueryParams) >= 2 {
 		if err := detectPagination(spec); err != nil {
 			return nil, fmt.Errorf("contractgen build: %q pagination: %w", contract.ID, err)
 		}
 	}
+
+	var liftErr error
+	spec.Responses, liftErr = liftHTTPResponses(http, handlerMethod, contract.ID)
+	if liftErr != nil {
+		return nil, liftErr
+	}
 	return spec, nil
 }
 
-// detectPagination checks whether the query params are exactly cursor (string)
-// and limit (integer), setting IsPagination=true if so. Fails fast if the params
-// look like a mixed pagination+filter pattern.
+// detectPagination scans QueryParams; if both cursor (string) and limit
+// (integer) are present, the endpoint is paginated and Pagination is set.
+// Any non-cursor/non-limit query params land in ExtraQueryParams so the
+// handler template can route them through per-param parsing while
+// cursor/limit always go through pkg/httputil.ParsePageParams.
 func detectPagination(spec *HTTPEndpointSpec) error {
 	hasCursor, hasLimit := false, false
+	var extras []ParamSpec
 	for _, q := range spec.QueryParams {
 		switch q.Name {
 		case "cursor":
@@ -268,14 +286,119 @@ func detectPagination(spec *HTTPEndpointSpec) error {
 			}
 			hasLimit = true
 		default:
-			// Extra query param mixed with cursor/limit → not a pure pagination endpoint.
-			return nil
+			extras = append(extras, q)
 		}
 	}
 	if hasCursor && hasLimit {
-		spec.IsPagination = true
+		spec.Pagination = &PaginationShape{
+			HasCursor:        true,
+			HasLimit:         true,
+			ExtraQueryParams: extras,
+		}
 	}
 	return nil
+}
+
+// liftHTTPResponses projects the contract.yaml http.responses[] map into a
+// sorted []ResponseSpec, prepending the success status (derived from the
+// HTTPTransportMeta SuccessStatus / NoContent fields). Each entry's
+// GoTypeName follows the {HandlerMethod}{Status}{Suffix} convention:
+//
+//   - success body-bearing → "{Method}{Status}JSONResponse"
+//   - success 204 NoContent → "{Method}204NoContentResponse"
+//   - error (>=400)         → "{Method}{Status}ErrorResponse"
+//
+// The slice is consumed by Batch 2 templates to generate one Go type per
+// declared status implementing the XxxResponseObject interface, and by CH-04
+// governance to assert the generated typed-response set matches the
+// contract.yaml declaration exactly.
+//
+// liftHTTPResponses validates that:
+//   - at least one status (SuccessStatus or responses[]) is declared (C18)
+//   - SuccessStatus, if set, is in range 1xx/2xx/3xx (C5)
+//   - every responses[] key (other than SuccessStatus duplicate) is in 4xx/5xx (C5)
+func liftHTTPResponses(http *metadata.HTTPTransportMeta, handlerMethod string, contractID string) ([]ResponseSpec, error) {
+	statuses, err := collectAndValidateStatuses(http, contractID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Ints(statuses)
+
+	out := make([]ResponseSpec, 0, len(statuses))
+	for _, status := range statuses {
+		isNoContent := http.NoContent && status == http.SuccessStatus
+		spec := ResponseSpec{
+			Status:      status,
+			IsError:     status >= 400,
+			IsNoContent: isNoContent,
+			GoTypeName:  responseGoTypeName(handlerMethod, status, isNoContent),
+		}
+		if r, ok := http.Responses[status]; ok {
+			spec.Description = r.Description
+			spec.SchemaRef = r.SchemaRef
+		}
+		out = append(out, spec)
+	}
+	return out, nil
+}
+
+// collectAndValidateStatuses returns the unsorted status set declared by the
+// contract (SuccessStatus + responses[] keys), enforcing the C5 / C18 ranges
+// described on liftHTTPResponses. Extracted out so the parent function stays
+// under the gocognit complexity budget.
+func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID string) ([]int, error) {
+	if http.SuccessStatus == 0 && len(http.Responses) == 0 {
+		return nil, fmt.Errorf(
+			"contractgen: contract %q declares no SuccessStatus and no responses[]; HTTP endpoint must declare at least one response",
+			contractID)
+	}
+
+	statuses := make([]int, 0, len(http.Responses)+1)
+
+	if http.SuccessStatus > 0 {
+		if http.SuccessStatus < 100 || http.SuccessStatus > 399 {
+			return nil, fmt.Errorf(
+				"contractgen: contract %q success status %d invalid: must be 1xx/2xx/3xx",
+				contractID, http.SuccessStatus)
+		}
+		statuses = append(statuses, http.SuccessStatus)
+	}
+
+	hasError := false
+	for s := range http.Responses {
+		if s == http.SuccessStatus {
+			continue
+		}
+		if s < 400 || s > 599 {
+			return nil, fmt.Errorf(
+				"contractgen: contract %q response status %d invalid: must be 4xx/5xx (success status %d declared via SuccessStatus)",
+				contractID, s, http.SuccessStatus)
+		}
+		statuses = append(statuses, s)
+		hasError = true
+	}
+	if !hasError && (http.SuccessStatus > 0 || len(http.Responses) > 0) {
+		return nil, fmt.Errorf(
+			"contractgen: contract %q HTTP endpoint must declare at least one 4xx/5xx response;"+
+				" typed error envelope requires an explicit error response declaration",
+			contractID)
+	}
+	return statuses, nil
+}
+
+// responseGoTypeName derives the typed response struct identifier from the
+// endpoint's HandlerMethod, an HTTP status code, and whether the success
+// status is 204 NoContent (controls the JSONResponse vs NoContentResponse
+// suffix). The error suffix is unconditional for status >= 400.
+func responseGoTypeName(handlerMethod string, status int, isNoContent bool) string {
+	switch {
+	case status >= 400:
+		return fmt.Sprintf("%s%dErrorResponse", handlerMethod, status)
+	case isNoContent:
+		return fmt.Sprintf("%s%dNoContentResponse", handlerMethod, status)
+	default:
+		return fmt.Sprintf("%s%dJSONResponse", handlerMethod, status)
+	}
 }
 
 func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {

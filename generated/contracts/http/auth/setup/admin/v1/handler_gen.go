@@ -5,12 +5,12 @@ package admin
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
@@ -49,14 +49,16 @@ type Handler struct {
 // auth.bootstrap:true to setup/admin contracts only.
 func NewHandler(svc Service, bootstrapAuth func(http.Handler) http.Handler) *Handler {
 	if bootstrapAuth == nil {
-		panic("generated handler http.auth.setup.admin.v1: bootstrapAuth must not be nil " +
-			"(auth.bootstrap:true contracts require a per-route replacement authenticator; " +
-			"composition root must inject runtime/auth.NewBootstrapMiddleware)")
+		// B-class assertion: argument-contract violation (composition-root must inject
+		// runtime/auth.NewBootstrapMiddleware). errcode.Assertion routes through the
+		// kernel recover middleware (500 + structured log) instead of a bare panic so
+		// PANIC-REGISTERED-01 archtest stays clean across the entire generator surface.
+		panic(errcode.Assertion("generated handler http.auth.setup.admin.v1: bootstrapAuth must not be nil (auth.bootstrap:true contracts require a per-route replacement authenticator; composition root must inject runtime/auth.NewBootstrapMiddleware)"))
 	}
 	h := &Handler{svc: svc, bootstrapAuth: bootstrapAuth}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(fmt.Sprintf("generated handler http.auth.setup.admin.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(errcode.Assertion("generated handler http.auth.setup.admin.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 	return h
@@ -102,5 +104,20 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	httputil.WriteJSON(w, 201, resp)
+	if resp == nil {
+		// Service contract violation: returned nil response without error.
+		// buffer-then-commit: header not yet committed, the framework helper
+		// emits a well-formed 5xx response. CH-04 governance treats this as
+		// the un-declared framework 5xx surface (ADR D1).
+		httputil.WriteNilResponseInternal(r.Context(), w)
+		return
+	}
+	// types_gen.go encodes to a bytes.Buffer first (buffer-then-commit); if
+	// encoding fails, the header is not yet committed and the framework helper
+	// emits a well-formed 5xx response. types_gen.go already logs via
+	// slog.ErrorContext (with request_id/trace_id correlation), so no duplicate
+	// log here — only wire the 5xx fallback.
+	if visitErr := resp.visitAdminResponse(r.Context(), w); visitErr != nil {
+		httputil.WriteEncodeFaultInternal(r.Context(), w)
+	}
 }

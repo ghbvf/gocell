@@ -1,0 +1,29 @@
+id: J-typed-envelope-roundtrip
+goal: typed response envelope 在 wire 层 success/error/framework-fallback 三类响应均符合 v1 schema 与 PII safety 约束
+lifecycle: experimental
+owner:
+  team: platform
+  role: framework
+cells:
+  - accesscore
+contracts:
+  - http.auth.login.v1
+  - http.auth.session.delete.v1
+passCriteria:
+  - text: 业务 4xx 通过 typed Xxx4xxErrorResponse 返回，wire body 含非空 details 数组
+    mode: auto
+    checkRef: journey.J-typed-envelope-roundtrip.business-4xx-details
+  - text: 业务 5xx 通过 typed Xxx5xxErrorResponse 返回，wire body details 数组为空（MarshalJSON strip）
+    mode: auto
+    checkRef: journey.J-typed-envelope-roundtrip.business-5xx-strip
+  - text: framework 5xx (service 返回 nil 或 visit encode 失败) 通过 httputil.WriteNilResponseInternal/WriteEncodeFaultInternal 兜底，wire 状态码与 details=[] 一致
+    mode: auto
+    checkRef: journey.J-typed-envelope-roundtrip.framework-5xx-fallback
+  - text: 5xx 路径 errcode.Kind 归一化为匹配 status 的 Kind，杜绝 4xx Kind 透传导致 Details 不 strip
+    mode: auto
+    checkRef: journey.J-typed-envelope-roundtrip.5xx-kind-normalize
+  - text: 5xx 日志通过 pkg/redaction.RedactSlogAttr 处理 Details，password/token/dsn 等敏感字段在 slog 输出中替换为 <REDACTED>
+    mode: auto
+    checkRef: journey.J-typed-envelope-roundtrip.5xx-log-redact
+  - text: visit 方法采用 buffer-then-commit (encode 到 bytes.Buffer 后再 WriteHeader)，与 oapi-codegen / Kratos / go-zero 三家上游共识一致；archtest VISIT-BUFFER-THEN-COMMIT-01 是权威静态守，runtime smoke 冗余
+    mode: manual

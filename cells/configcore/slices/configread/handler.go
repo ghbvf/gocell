@@ -18,19 +18,19 @@ import (
 type GetAdapter struct{ S *Service }
 
 // Get implements configget.Service. Key comes from path param, already decoded by handler_gen.
-func (a GetAdapter) Get(ctx context.Context, req *configget.Request) (*configget.Response, error) {
+func (a GetAdapter) Get(ctx context.Context, req *configget.Request) (configget.GetResponseObject, error) {
 	entry, err := a.S.GetByKey(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
-	return &configget.Response{Data: toGetResponseData(entry)}, nil
+	return configget.Get200JSONResponse{Data: toGetResponseData(entry)}, nil
 }
 
 // ListAdapter wraps Service to implement configlist.Service for http.config.list.v1.
 type ListAdapter struct{ S *Service }
 
 // List implements configlist.Service. ParsePageParams is called by handler_gen.
-func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (*configlist.Response, error) {
+func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (configlist.ListResponseObject, error) {
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
 		Limit:  int(req.Limit),
@@ -43,7 +43,7 @@ func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (*config
 	for _, e := range result.Items {
 		items = append(items, toListResponseDataItem(e))
 	}
-	return &configlist.Response{
+	return configlist.List200JSONResponse{
 		Data:       items,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,
@@ -56,12 +56,12 @@ func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (*config
 type InternalGetAdapter struct{ S *Service }
 
 // Get implements internalapig.Service.
-func (a InternalGetAdapter) Get(ctx context.Context, req *internalapig.Request) (*internalapig.Response, error) {
+func (a InternalGetAdapter) Get(ctx context.Context, req *internalapig.Request) (internalapig.GetResponseObject, error) {
 	entry, err := a.S.GetByKey(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
-	return &internalapig.Response{Data: toInternalGetResponseData(entry)}, nil
+	return internalapig.Get200JSONResponse{Data: toInternalGetResponseData(entry)}, nil
 }
 
 // Handler is the composite route handler for the configread slice.

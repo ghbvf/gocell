@@ -116,6 +116,7 @@ func checkContractHealth(args []string) error {
 	results := validator.CheckContractHealth(contracts)
 	results = append(results, validator.CheckHTTPResponseAlignment(contracts, root)...)
 	results = append(results, validator.CheckHTTPPathParamUUID(contracts, root)...)
+	results = append(results, validator.CheckHTTPTypedResponseEnvelope(contracts, root)...)
 
 	if err := printer.Print(results); err != nil {
 		return fmt.Errorf(errEmitResultsFmt, err)

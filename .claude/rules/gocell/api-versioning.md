@@ -15,6 +15,7 @@
    - 共享 error envelope（`contracts/shared/errors/error-response-v1.schema.json`）例外：保持 strict
    - cell event consumer 不得调用 `json.Decoder.DisallowUnknownFields()`
    - 详见 ADR `docs/architecture/202605031600-adr-v1-schema-evolution.md`
+   - typed response struct（如 `Get200JSONResponse`）是 codegen 派生产物，字段演化规则同 `Response` DTO；struct 名称变更等效于 status 声明变化，由 CH-06 governance 拦截，不触发 v2 升级。新增声明的 status code 不需要 v2 升级（client 不应假定 status 集合封闭）。
 2. 新增请求参数必须有默认值
 3. Deprecation 至少保留 2 个 Sprint（4 周）
 4. 统一列表响应格式：`{"data": [...], "nextCursor": "...", "hasMore": bool}`

@@ -16,12 +16,12 @@ type StatusAdapter struct{ S *Service }
 
 // Status implements statusGen.Service. The generated handler already decodes
 // the (empty) request.
-func (a StatusAdapter) Status(ctx context.Context, _ *statusGen.Request) (*statusGen.Response, error) {
+func (a StatusAdapter) Status(ctx context.Context, _ *statusGen.Request) (statusGen.StatusResponseObject, error) {
 	out, err := a.S.Status(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &statusGen.Response{
+	return statusGen.Status200JSONResponse{
 		Data: &statusGen.ResponseData{HasAdmin: out.HasAdmin},
 	}, nil
 }
@@ -31,7 +31,7 @@ type AdminAdapter struct{ S *Service }
 
 // Admin implements adminGen.Service. The generated handler validates and
 // decodes username+email+password from the request body.
-func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (*adminGen.Response, error) {
+func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (adminGen.AdminResponseObject, error) {
 	out, err := a.S.CreateAdmin(ctx, CreateAdminInput{
 		Username: req.Username,
 		Email:    req.Email,
@@ -40,7 +40,7 @@ func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (*adminG
 	if err != nil {
 		return nil, err
 	}
-	return &adminGen.Response{
+	return adminGen.Admin201JSONResponse{
 		Data: &adminGen.ResponseData{
 			ID:        out.ID,
 			Username:  out.Username,
@@ -78,7 +78,7 @@ func NewHandler(svc *Service, bootstrapAuth func(http.Handler) http.Handler) *Ha
 }
 
 // RegisterRoutes mounts the setup contract handlers on mux.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := h.statusH.RegisterRoutes(mux); err != nil {
 		return err
 	}

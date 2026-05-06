@@ -393,16 +393,16 @@ func (s *Service) getCommand(ctx context.Context, cmdID string) (command.Entry, 
 }
 
 // Enqueue implements enqueuecontract.Service.
-func (s *Service) Enqueue(ctx context.Context, req *enqueuecontract.Request) (*enqueuecontract.Response, error) {
+func (s *Service) Enqueue(ctx context.Context, req *enqueuecontract.Request) (enqueuecontract.EnqueueResponseObject, error) {
 	entry, err := s.enqueueInternal(ctx, req.ID, req.CommandType, req.Payload)
 	if err != nil {
 		return nil, err
 	}
-	return &enqueuecontract.Response{Data: toEnqueueResponseData(entry)}, nil
+	return enqueuecontract.Enqueue201JSONResponse{Data: toEnqueueResponseData(entry)}, nil
 }
 
 // Dequeue implements dequeuecontract.Service.
-func (s *Service) Dequeue(ctx context.Context, req *dequeuecontract.Request) (*dequeuecontract.Response, error) {
+func (s *Service) Dequeue(ctx context.Context, req *dequeuecontract.Request) (dequeuecontract.DequeueResponseObject, error) {
 	entries, err := s.dequeueInternal(ctx, req.ID, int(req.Limit), command.DefaultLeaseDuration)
 	if err != nil {
 		return nil, err
@@ -411,11 +411,11 @@ func (s *Service) Dequeue(ctx context.Context, req *dequeuecontract.Request) (*d
 	for _, e := range entries {
 		items = append(items, toDequeueResponseDataItem(e))
 	}
-	return &dequeuecontract.Response{Data: items, NextCursor: "", HasMore: false}, nil
+	return dequeuecontract.Dequeue200JSONResponse{Data: items, NextCursor: "", HasMore: false}, nil
 }
 
 // Report implements reportcontract.Service.
-func (s *Service) Report(ctx context.Context, req *reportcontract.Request) (*reportcontract.Response, error) {
+func (s *Service) Report(ctx context.Context, req *reportcontract.Request) (reportcontract.ReportResponseObject, error) {
 	if err := s.reportInternal(ctx, req.ID, req.CmdId); err != nil {
 		return nil, err
 	}
@@ -423,11 +423,11 @@ func (s *Service) Report(ctx context.Context, req *reportcontract.Request) (*rep
 	if err != nil {
 		return nil, err
 	}
-	return &reportcontract.Response{Data: toReportResponseData(entry)}, nil
+	return reportcontract.Report200JSONResponse{Data: toReportResponseData(entry)}, nil
 }
 
 // Ack implements ackcontract.Service.
-func (s *Service) Ack(ctx context.Context, req *ackcontract.Request) (*ackcontract.Response, error) {
+func (s *Service) Ack(ctx context.Context, req *ackcontract.Request) (ackcontract.AckResponseObject, error) {
 	reason, err := parseAckReason(req.Reason)
 	if err != nil {
 		return nil, err
@@ -439,11 +439,13 @@ func (s *Service) Ack(ctx context.Context, req *ackcontract.Request) (*ackcontra
 	if err != nil {
 		return nil, err
 	}
-	return &ackcontract.Response{Data: toAckResponseData(entry)}, nil
+	return ackcontract.Ack200JSONResponse{Data: toAckResponseData(entry)}, nil
 }
 
 // ExtendLease implements extendleasecontract.Service.
-func (s *Service) ExtendLease(ctx context.Context, req *extendleasecontract.Request) (*extendleasecontract.Response, error) {
+func (s *Service) ExtendLease(
+	ctx context.Context, req *extendleasecontract.Request,
+) (extendleasecontract.ExtendLeaseResponseObject, error) {
 	if err := s.extendLeaseInternal(ctx, req.ID, req.CmdId, time.Duration(req.ExtensionSeconds)*time.Second); err != nil {
 		return nil, err
 	}
@@ -451,7 +453,7 @@ func (s *Service) ExtendLease(ctx context.Context, req *extendleasecontract.Requ
 	if err != nil {
 		return nil, err
 	}
-	return &extendleasecontract.Response{Data: toExtendLeaseResponseData(entry)}, nil
+	return extendleasecontract.ExtendLease200JSONResponse{Data: toExtendLeaseResponseData(entry)}, nil
 }
 
 // Compile-time interface checks.
@@ -538,7 +540,7 @@ func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) e
 
 // List implements listcontract.Service for the internal ops view.
 // It calls ScanActive and converts the result to the generated Response shape.
-func (s *Service) List(ctx context.Context, req *listcontract.Request) (*listcontract.Response, error) {
+func (s *Service) List(ctx context.Context, req *listcontract.Request) (listcontract.ListResponseObject, error) {
 	statuses, err := parseStatusFilter(req.Statuses)
 	if err != nil {
 		return nil, err
@@ -558,7 +560,7 @@ func (s *Service) List(ctx context.Context, req *listcontract.Request) (*listcon
 	for _, e := range result.Items {
 		items = append(items, toListResponseDataItem(e))
 	}
-	return &listcontract.Response{
+	return listcontract.List200JSONResponse{
 		Data:       items,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,

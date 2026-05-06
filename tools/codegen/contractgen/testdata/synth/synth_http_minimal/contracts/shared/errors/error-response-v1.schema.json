@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/errors/error-response-v1.schema.json",
+  "title": "GoCell HTTP error response",
+  "description": "Canonical envelope produced by pkg/httputil.WriteError and pkg/httputil.WritePublic.",
+  "type": "object",
+  "required": ["error"],
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "details"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "pattern": "^ERR_[A-Z0-9_]+$"},
+        "message": {"type": "string"},
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "key": {"type": "string"},
+              "value": {"type": ["string", "number", "boolean"]}
+            }
+          }
+        },
+        "request_id": {"type": "string"}
+      }
+    }
+  }
+}

@@ -3,9 +3,11 @@ package redaction_test
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
@@ -485,5 +487,199 @@ func assertRedactAnyIntPassthrough(t *testing.T) {
 	}
 	if s != "42" {
 		t.Errorf("RedactAny(42) = %q, want %q", s, "42")
+	}
+}
+
+func TestRedactSlogAttr(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   slog.Attr
+		want slog.Attr
+	}{
+		{
+			name: "string_value_with_dsn",
+			in:   slog.String("connection", "dsn=postgres://u:p@h:5432/db"),
+			want: slog.String("connection", "dsn=<REDACTED>"),
+		},
+		{
+			name: "string_value_without_secret",
+			in:   slog.String("orderID", "abc-123"),
+			want: slog.String("orderID", "abc-123"),
+		},
+		{
+			name: "int_value_passes_through",
+			in:   slog.Int("retryCount", 3),
+			want: slog.Int("retryCount", 3),
+		},
+		{
+			// The attr key is "password" but the VALUE itself is "secret123"
+			// (no key=value pattern inside the string), so RedactString does
+			// not trigger. Key is preserved verbatim; only value text is scanned.
+			name: "key_preserved_plain_value_no_pattern",
+			in:   slog.String("password", "secret123"),
+			want: slog.String("password", "secret123"),
+		},
+		{
+			// defaultPattern stops at whitespace (\S+), so "port=5432" survives.
+			name: "embedded_password_in_value",
+			in:   slog.String("config", "host=h password=secret123 port=5432"),
+			want: slog.String("config", "host=h password=<REDACTED> port=5432"),
+		},
+		{
+			// bearer= key triggers defaultPattern; value stops at whitespace.
+			name: "group_value_recurses",
+			in:   slog.Group("ctx", slog.String("token", "bearer=abc.def.ghi")),
+			want: slog.Group("ctx", slog.String("token", "bearer=<REDACTED>")),
+		},
+		{
+			// Bool value has no string text; passes through unchanged.
+			name: "bool_value_passes_through",
+			in:   slog.Bool("ok", true),
+			want: slog.Bool("ok", true),
+		},
+		{
+			// Nested group recursion: inner string with secret is masked.
+			name: "nested_group_recurses",
+			in: slog.Group("outer",
+				slog.Group("inner", slog.String("apiKey", "api_key=topsecret"))),
+			want: slog.Group("outer",
+				slog.Group("inner", slog.String("apiKey", "api_key=<REDACTED>"))),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := redaction.RedactSlogAttr(tc.in)
+			if got.Key != tc.want.Key {
+				t.Errorf("RedactSlogAttr(%v).Key = %q, want %q", tc.in, got.Key, tc.want.Key)
+			}
+			if got.Value.String() != tc.want.Value.String() {
+				t.Errorf("RedactSlogAttr(%v).Value = %q, want %q",
+					tc.in, got.Value.String(), tc.want.Value.String())
+			}
+		})
+	}
+}
+
+// customLogValuer implements slog.LogValuer for passthrough boundary testing.
+// It returns a fixed string value so the test is deterministic.
+type customLogValuer struct{}
+
+func (customLogValuer) LogValue() slog.Value {
+	return slog.StringValue("logvaluer-resolved-value")
+}
+
+// secretLeakingLogValuer documents the fail-open boundary cost: if a
+// LogValuer's resolved string contains a sensitive key=value pattern,
+// RedactSlogAttr does NOT recurse into LogValue() and the secret leaks
+// to slog. This is by design — the first-line defense (errcode.WithDetails
+// + DETAILS-SLOG-ATTR-01 archtest) prevents direct-writing arbitrary
+// structs to errcode.Error.Details.
+type secretLeakingLogValuer struct{}
+
+func (secretLeakingLogValuer) LogValue() slog.Value {
+	return slog.StringValue("password=hunter2")
+}
+
+// TestRedactSlogAttr_PassthroughKinds locks the baseline behavior of
+// redactSlogValue for non-string slog.Value kinds: bool, int64, float64,
+// time.Time, slog.Any (struct), and slog.LogValuer all pass through unchanged.
+//
+// This is intentional fail-open design: the regex pipeline only matches
+// `key=value` text shapes, so numeric/temporal/structured values cannot
+// carry the patterns. Runtime data entering errcode.Error must go through
+// errcode.WithDetails (type-checked to slog.Attr), which is the first line
+// of defense (DETAILS-SLOG-ATTR-01 archtest).
+//
+// If a new direct-write path for slog.Any(callerSuppliedStruct) is added,
+// extend redactSlogValue with ValueResolve and add cases here.
+func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
+	t.Parallel()
+
+	fixedTime := time.Unix(1700000000, 0)
+
+	cases := []struct {
+		name           string
+		attr           slog.Attr
+		wantValueEqual bool // true = value unchanged (passthrough); false = value changed (redacted)
+	}{
+		{
+			name:           "bool passthrough",
+			attr:           slog.Bool("flag", true),
+			wantValueEqual: true,
+		},
+		{
+			name:           "int64 passthrough",
+			attr:           slog.Int64("count", 42),
+			wantValueEqual: true,
+		},
+		{
+			name:           "float64 passthrough",
+			attr:           slog.Float64("ratio", 3.14),
+			wantValueEqual: true,
+		},
+		{
+			name:           "time passthrough",
+			attr:           slog.Time("ts", fixedTime),
+			wantValueEqual: true,
+		},
+		{
+			name:           "any struct passthrough",
+			attr:           slog.Any("obj", struct{ X int }{X: 1}),
+			wantValueEqual: true,
+		},
+		{
+			name:           "logvaluer passthrough",
+			attr:           slog.Any("v", customLogValuer{}),
+			wantValueEqual: true,
+		},
+		{
+			// Documents fail-open boundary cost: LogValuer resolving to a
+			// sensitive string IS NOT redacted (passthrough). Acceptable
+			// only because errcode.WithDetails forbids non-slog.Attr inputs
+			// upstream (DETAILS-SLOG-ATTR-01).
+			name:           "logvaluer with secret leaks by design (fail-open boundary)",
+			attr:           slog.Any("config", secretLeakingLogValuer{}),
+			wantValueEqual: true,
+		},
+		{
+			// Control case: string with sensitive key=value IS redacted.
+			name:           "string redacted (control)",
+			attr:           slog.String("msg", "password=secret"),
+			wantValueEqual: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			original := tc.attr.Value.String()
+			got := redaction.RedactSlogAttr(tc.attr)
+
+			if got.Key != tc.attr.Key {
+				t.Errorf("RedactSlogAttr key changed: got %q, want %q", got.Key, tc.attr.Key)
+			}
+
+			resultEqual := got.Value.String() == original
+			if resultEqual != tc.wantValueEqual {
+				if tc.wantValueEqual {
+					t.Errorf(
+						"RedactSlogAttr(%v): expected passthrough (value unchanged), "+
+							"but got %q (original %q). KindLogValuer/KindAny should not be "+
+							"recursively scanned — fail-open design per Known limitations.",
+						tc.attr, got.Value.String(), original,
+					)
+				} else {
+					t.Errorf(
+						"RedactSlogAttr(%v): expected redaction (value changed), "+
+							"but value unchanged %q. String control case must trigger regex.",
+						tc.attr, got.Value.String(),
+					)
+				}
+			}
+		})
 	}
 }

@@ -94,8 +94,15 @@ func (k Kind) publicMessage() string {
 }
 
 // PublicCodeForStatus returns the wire-safe error code for an HTTP status.
-// It is retained for framework-owned raw responses that start from a status
-// before they construct an Error.
+// Used by framework-owned raw responses that start from a status before
+// constructing an Error.
+//
+// Only KindUnavailable (503) and KindDeadlineExceeded (504) have dedicated
+// wire codes; every other 5xx (500/501/502/507/...) collapses to ErrInternal
+// to match Kind.PublicCode(), which Error.MarshalJSON applies during 5xx
+// projection. Adding a new dedicated 5xx code requires extending
+// Kind.PublicCode() in tandem so the status→code and Kind→code mappings
+// stay aligned.
 func PublicCodeForStatus(status int) Code {
 	switch status {
 	case http.StatusServiceUnavailable:

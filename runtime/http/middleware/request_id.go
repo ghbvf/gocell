@@ -6,6 +6,7 @@ package middleware
 
 import (
 	"net/http"
+	"regexp"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -14,6 +15,22 @@ import (
 )
 
 const headerRequestID = "X-Request-Id"
+
+// requestIDPattern restricts request_id to UUID-friendly chars; control bytes
+// (CR/LF/Tab/SOH/...) would break slog text format lines and enable log
+// injection. The 64-char ceiling absorbs uuid (36 chars), short-id formats,
+// and span-id (16 chars) without permitting unbounded payloads.
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// sanitizeRequestID returns id verbatim when it matches requestIDPattern,
+// otherwise returns "" — caller treats empty as "absent" and falls through
+// to server-side generation (e.g. uuid.NewString()).
+func sanitizeRequestID(id string) string {
+	if requestIDPattern.MatchString(id) {
+		return id
+	}
+	return ""
+}
 
 // RequestID reads the request ID from the X-Request-Id header, or generates a
 // new UUID v4 if absent. The ID is stored in the request context via
@@ -76,7 +93,7 @@ func requestIDForRequest(r *http.Request, cfg requestIDConfig) (string, error) {
 }
 
 func requestIDFromHeader(id string) (string, error) {
-	if id == "" || len(id) > idutil.MaxHTTPIDLen || !idutil.IsSafeID(id) {
+	if sanitizeRequestID(id) == "" {
 		return newRequestID()
 	}
 	return id, nil

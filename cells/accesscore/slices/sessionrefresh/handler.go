@@ -15,12 +15,12 @@ type RefreshAdapter struct{ S *Service }
 
 // Refresh implements refreshgen.Service. The generated handler already validates
 // and decodes refreshToken from the request body.
-func (a RefreshAdapter) Refresh(ctx context.Context, req *refreshgen.Request) (*refreshgen.Response, error) {
+func (a RefreshAdapter) Refresh(ctx context.Context, req *refreshgen.Request) (refreshgen.RefreshResponseObject, error) {
 	pair, err := a.S.Refresh(ctx, req.RefreshToken)
 	if err != nil {
 		return nil, err
 	}
-	return &refreshgen.Response{
+	return refreshgen.Refresh200JSONResponse{
 		Data: toRefreshResponseData(pair),
 	}, nil
 }

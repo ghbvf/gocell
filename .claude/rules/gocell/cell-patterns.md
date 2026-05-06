@@ -151,3 +151,40 @@ auth:
 - 设计中尚未连线 → `lifecycle: draft`（待真实 producer/consumer 落地后转 active）
 - 内部 fan-out 但还没 consumer → 添加占位 cell consumer（注释说明意图）
 - 对外 fan-out 给 SIEM/外部平台 → actors.yaml 注册 actor + subscribers 引用 actor ID
+
+## typed response envelope adapter（codegen 合同）
+
+当 contract.yaml 声明 `codegen: true` 时，`gocell generate contract` 为每个 HTTP endpoint
+生成 `{HandlerMethod}ResponseObject` 接口 + 对应 typed struct（见
+`tools/codegen/contractgen/doc.go`）。Cell adapter 须实现 generated `Service` 接口：
+
+```go
+// XxxAdapter 将 generated Service 接口桥接到领域 Service。
+type XxxAdapter struct {
+    S *Service
+}
+
+// GetItem 实现 generated pkg.Service 接口。
+// 成功路径返回 typed struct，错误路径返回 (nil, err) 交由框架兜底。
+func (a *XxxAdapter) GetItem(ctx context.Context, req *pkg.GetItemRequest) (pkg.GetItemResponseObject, error) {
+    item, err := a.S.GetItem(ctx, req.ItemID)
+    if err != nil {
+        // 已声明的业务 4xx：返回 typed struct，状态码由 CH-06 静态守卫
+        var notFound *domain.ErrNotFound
+        if errors.As(err, &notFound) {
+            return pkg.GetItem404ErrorResponse{Body: errcode.Error{...}}, nil
+        }
+        // 未声明的 framework 5xx：返回 (nil, err)，handler 走 httputil.WriteError 兜底
+        return nil, err
+    }
+    return pkg.GetItem200JSONResponse{ID: item.ID, Name: item.Name}, nil
+}
+```
+
+关键约定：
+- 已声明的业务 4xx/5xx 必须返回对应 `Xxx{Status}ErrorResponse` typed struct，不得 `return nil, err`。
+- `return nil, err` 仅保留给未在 contract.yaml 中声明的基础设施故障（panic recover、DB 断连等），由 generated handler 走 `httputil.WriteError` 兜底。
+- `return nil, nil` 是合同违反，框架走 KindInternal 500 兜底并记 Error 日志（见 ADR §Runtime 行为）。
+
+cross-ref: `tools/codegen/contractgen/doc.go` §iface_gen.go、
+`docs/architecture/202605061500-adr-typed-response-envelope.md` §D1。

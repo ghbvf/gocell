@@ -546,8 +546,13 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema(t *testing.T) {
 		SchemaRefs: metadata.SchemaRefsMeta{Request: ""}, // no request body schema
 	}
 	http := &metadata.HTTPTransportMeta{
-		Method: "POST",
-		Path:   "/api/v1/orders/{id}/activate",
+		Method:        "POST",
+		Path:          "/api/v1/orders/{id}/activate",
+		SuccessStatus: 204,
+		NoContent:     true,
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
@@ -570,8 +575,12 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 		SchemaRefs: metadata.SchemaRefsMeta{Request: "request-schema.json"},
 	}
 	http := &metadata.HTTPTransportMeta{
-		Method: "POST",
-		Path:   "/api/v1/orders",
+		Method:        "POST",
+		Path:          "/api/v1/orders",
+		SuccessStatus: 201,
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
@@ -644,6 +653,10 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 				Auth: metadata.HTTPAuthMeta{
 					Bootstrap: true,
 				},
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+					401: {Description: "Unauthorized"},
+				},
 			},
 		},
 		File: "contracts/http/auth/setup/admin/v1/contract.yaml",
@@ -684,6 +697,10 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 		Auth: metadata.HTTPAuthMeta{
 			Bootstrap: true,
 		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+			401: {Description: "Unauthorized"},
+		},
 	}
 	contract := &metadata.ContractMeta{
 		ID:      "http.auth.setup.admin.v1",
@@ -704,5 +721,461 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 	}
 	if !spec.AuthBootstrap {
 		t.Errorf("AuthBootstrap must propagate from auth.bootstrap:true, got false")
+	}
+}
+
+// --- Batch 1 RED (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE) ---
+//
+// These tests assert the new IR shapes introduced for typed response envelope
+// generation: PaginationShape (replaces IsPagination bool with structured form
+// that carries cursor/limit + non-pagination query params) and ResponseSpec
+// (lifts contract.yaml http.responses[] into the IR so handler/types/governance
+// share one declaration table).
+
+// TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit verifies that an
+// endpoint with exactly cursor+limit query params produces a non-nil
+// Pagination shape with HasCursor/HasLimit set and an empty ExtraQueryParams.
+// IsPagination() method must mirror Pagination != nil for template back-compat.
+func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/orders",
+		SuccessStatus: 200,
+		QueryParams: map[string]metadata.ParamSchema{
+			"cursor": {Type: "string"},
+			"limit":  {Type: "integer"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.order.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+	if spec.Pagination == nil {
+		t.Fatal("Pagination shape must be populated for cursor+limit endpoint, got nil")
+	}
+	if !spec.Pagination.HasCursor || !spec.Pagination.HasLimit {
+		t.Errorf("Pagination must report HasCursor=true HasLimit=true, got HasCursor=%v HasLimit=%v",
+			spec.Pagination.HasCursor, spec.Pagination.HasLimit)
+	}
+	if len(spec.Pagination.ExtraQueryParams) != 0 {
+		t.Errorf("ExtraQueryParams must be empty for pure cursor+limit, got %d", len(spec.Pagination.ExtraQueryParams))
+	}
+	if !spec.IsPagination() {
+		t.Errorf("IsPagination() must return true when Pagination != nil")
+	}
+}
+
+// TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter verifies
+// that an endpoint declaring cursor+limit alongside additional filter query
+// params (e.g. role, since) is recognized as paginated (Pagination != nil)
+// and the extras are routed into ExtraQueryParams, so the handler can drive
+// cursor+limit through pkg/httputil.ParsePageParams while the extras parse
+// per-param. This is the F4 absorb path: a single limit error envelope across
+// the entire HTTP surface.
+func TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/auth/roles",
+		SuccessStatus: 200,
+		QueryParams: map[string]metadata.ParamSchema{
+			"cursor": {Type: "string"},
+			"limit":  {Type: "integer"},
+			"role":   {Type: "string"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.auth.role.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+	if spec.Pagination == nil {
+		t.Fatal("Pagination must be populated when cursor+limit present even with filters, got nil")
+	}
+	if !spec.Pagination.HasCursor || !spec.Pagination.HasLimit {
+		t.Errorf("Pagination flags wrong: HasCursor=%v HasLimit=%v", spec.Pagination.HasCursor, spec.Pagination.HasLimit)
+	}
+	if got := len(spec.Pagination.ExtraQueryParams); got != 1 {
+		t.Fatalf("ExtraQueryParams length = %d, want 1 (role)", got)
+	}
+	if name := spec.Pagination.ExtraQueryParams[0].Name; name != "role" {
+		t.Errorf("ExtraQueryParams[0].Name = %q, want %q", name, "role")
+	}
+}
+
+// TestBuildHTTPEndpointSpec_PaginationShape_NoPagination verifies that an
+// endpoint with arbitrary query params (no cursor or no limit) produces a
+// nil Pagination shape and IsPagination() returns false.
+func TestBuildHTTPEndpointSpec_PaginationShape_NoPagination(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/items",
+		SuccessStatus: 200,
+		QueryParams: map[string]metadata.ParamSchema{
+			"name": {Type: "string"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.item.search.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+	if spec.Pagination != nil {
+		t.Errorf("Pagination must be nil for non-cursor+limit endpoint, got %+v", spec.Pagination)
+	}
+	if spec.IsPagination() {
+		t.Errorf("IsPagination() must return false when Pagination == nil")
+	}
+}
+
+// TestBuildHTTPEndpointSpec_Responses_LiftFromContract verifies that
+// contract.yaml http.responses[] is lifted into the IR Responses slice.
+// Each declared error status produces a ResponseSpec with IsError=true,
+// the success status (from SuccessStatus) is also represented, and
+// GoTypeName follows the {HandlerMethod}{Status}{Suffix} convention.
+func TestBuildHTTPEndpointSpec_Responses_LiftFromContract(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/sessions/{id}",
+		SuccessStatus: 200,
+		PathParams: map[string]metadata.ParamSchema{
+			"id": {Type: "string", Format: "uuid"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			401: {Description: "Unauthorized", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+			404: {Description: "Not Found", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+			503: {Description: "Service Unavailable", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.access.session.get.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+
+	// Expect 4 entries (success 200 + 401/404/503 errors), sorted by status ascending.
+	if got, want := len(spec.Responses), 4; got != want {
+		t.Fatalf("Responses length = %d, want %d (success + 3 errors)", got, want)
+	}
+	wantOrder := []int{200, 401, 404, 503}
+	for i, status := range wantOrder {
+		if spec.Responses[i].Status != status {
+			t.Errorf("Responses[%d].Status = %d, want %d (must be sorted ascending)", i, spec.Responses[i].Status, status)
+		}
+	}
+
+	// Success entry: IsError=false, SchemaRef empty (success body is the response schema, not declared in responses[]).
+	if spec.Responses[0].IsError {
+		t.Errorf("success entry IsError = true, want false")
+	}
+	// Error entries: IsError=true.
+	for _, idx := range []int{1, 2, 3} {
+		if !spec.Responses[idx].IsError {
+			t.Errorf("Responses[%d] (status %d) IsError = false, want true", idx, spec.Responses[idx].Status)
+		}
+		if spec.Responses[idx].SchemaRef == "" {
+			t.Errorf("Responses[%d] (status %d) SchemaRef empty, want lifted from contract", idx, spec.Responses[idx].Status)
+		}
+	}
+
+	// GoTypeName convention: HandlerMethod="Get" → "Get200JSONResponse", "Get401ErrorResponse", etc.
+	wantGoNames := map[int]string{
+		200: "Get200JSONResponse",
+		401: "Get401ErrorResponse",
+		404: "Get404ErrorResponse",
+		503: "Get503ErrorResponse",
+	}
+	for _, r := range spec.Responses {
+		if got := r.GoTypeName; got != wantGoNames[r.Status] {
+			t.Errorf("Responses[status=%d].GoTypeName = %q, want %q", r.Status, got, wantGoNames[r.Status])
+		}
+	}
+}
+
+// TestDetectPagination_TypeMismatch verifies that detectPagination fails
+// fast when cursor is not declared as a string or limit is not declared as
+// an integer. The two error branches in builder.detectPagination are the
+// only place where the IR rejects an otherwise-syntactically-valid pagination
+// declaration; without these tests a future relaxation of the type check
+// could silently slip through.
+func TestDetectPagination_TypeMismatch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		queryParams map[string]metadata.ParamSchema
+		wantErrMsg  string
+	}{
+		{
+			name: "cursor as integer rejected",
+			queryParams: map[string]metadata.ParamSchema{
+				"cursor": {Type: "integer"},
+				"limit":  {Type: "integer"},
+			},
+			wantErrMsg: "cursor param must be string type",
+		},
+		{
+			name: "limit as string rejected",
+			queryParams: map[string]metadata.ParamSchema{
+				"cursor": {Type: "string"},
+				"limit":  {Type: "string"},
+			},
+			wantErrMsg: "limit param must be integer type",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			httpMeta := &metadata.HTTPTransportMeta{
+				Method:      "GET",
+				Path:        "/api/v1/items",
+				QueryParams: tc.queryParams,
+			}
+			contract := &metadata.ContractMeta{
+				ID:        "http.x.list.v1",
+				Kind:      "http",
+				Endpoints: metadata.EndpointsMeta{HTTP: httpMeta},
+			}
+			pathParams := buildPathParams(httpMeta)
+			queryParams := buildQueryParams(httpMeta)
+			_, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErrMsg) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrMsg)
+			}
+		})
+	}
+}
+
+// TestBuildHTTPEndpointSpec_Responses_NoContent verifies that a 204 NoContent
+// success endpoint generates a *NoContentResponse Go type rather than the
+// JSONResponse suffix used for body-bearing success responses.
+func TestBuildHTTPEndpointSpec_Responses_NoContent(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "DELETE",
+		Path:          "/api/v1/sessions/{id}",
+		SuccessStatus: 204,
+		NoContent:     true,
+		PathParams: map[string]metadata.ParamSchema{
+			"id": {Type: "string", Format: "uuid"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			401: {Description: "Unauthorized", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.access.session.delete.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+
+	// First entry is success (204), should use NoContentResponse suffix.
+	if spec.Responses[0].Status != 204 {
+		t.Fatalf("Responses[0].Status = %d, want 204", spec.Responses[0].Status)
+	}
+	if got, want := spec.Responses[0].GoTypeName, "Delete204NoContentResponse"; got != want {
+		t.Errorf("204 GoTypeName = %q, want %q (no-content success uses NoContentResponse suffix)", got, want)
+	}
+	if spec.Responses[0].IsError {
+		t.Errorf("204 success IsError = true, want false")
+	}
+}
+
+// --- collectAndValidateStatuses tests (C18 tighten: require ≥1 4xx/5xx) ---
+
+// TestCollectAndValidateStatuses exercises the C18-tightened rule that every
+// HTTP endpoint must declare at least one 4xx/5xx response code.
+func TestCollectAndValidateStatuses(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		http        *metadata.HTTPTransportMeta
+		wantErr     bool
+		wantErrFrag string
+		wantLen     int // expected length of returned statuses when wantErr==false
+	}{
+		{
+			name: "success-only no responses",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses:     nil,
+			},
+			wantErr:     true,
+			wantErrFrag: "must declare at least one 4xx/5xx",
+		},
+		{
+			name: "success+400",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+				},
+			},
+			wantErr: false,
+			wantLen: 2, // 200 + 400
+		},
+		{
+			name: "only-401 no successStatus",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 0,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					401: {Description: "Unauthorized"},
+				},
+			},
+			wantErr: false,
+			wantLen: 1, // 401 only
+		},
+		{
+			name: "successStatus+only-3xx",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					304: {Description: "Not Modified"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 4xx/5xx",
+		},
+		{
+			name: "empty everything",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 0,
+				Responses:     map[int]metadata.HTTPResponseMeta{},
+			},
+			wantErr:     true,
+			wantErrFrag: "must declare at least one response",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := collectAndValidateStatuses(tc.http, "http.test.contract.v1")
+			switch {
+			case tc.wantErr && err == nil:
+				t.Fatalf("expected error containing %q, got nil", tc.wantErrFrag)
+			case tc.wantErr && tc.wantErrFrag != "" && !strings.Contains(err.Error(), tc.wantErrFrag):
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrFrag)
+			case !tc.wantErr && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case !tc.wantErr && len(got) != tc.wantLen:
+				t.Errorf("statuses length = %d, want %d; got %v", len(got), tc.wantLen, got)
+			}
+		})
+	}
+}
+
+// --- liftHTTPResponses status validation tests (C5 / C18) ---
+
+// TestLiftHTTPResponses_Validation covers the C5 (status range) and C18
+// (at-least-one-response) validation rules added to liftHTTPResponses.
+func TestLiftHTTPResponses_Validation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		http        *metadata.HTTPTransportMeta
+		wantErr     bool
+		wantErrFrag string // substring that must appear in the error message
+	}{
+		{
+			name: "valid success=200 plus 4xx/5xx errors",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+					500: {Description: "Internal Server Error"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "responses[] contains 3xx — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					301: {Description: "Moved Permanently"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 4xx/5xx",
+		},
+		{
+			name: "responses[] contains 600 — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					600: {Description: "Out of range"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 4xx/5xx",
+		},
+		{
+			name: "no SuccessStatus and no responses[] — rejected (C18)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 0,
+				Responses:     map[int]metadata.HTTPResponseMeta{},
+			},
+			wantErr:     true,
+			wantErrFrag: "must declare at least one response",
+		},
+		{
+			name: "SuccessStatus=99 (too low) — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 99,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 1xx/2xx/3xx",
+		},
+		{
+			name: "SuccessStatus=400 (not 1xx-3xx) — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 400,
+				Responses:     map[int]metadata.HTTPResponseMeta{},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 1xx/2xx/3xx",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := liftHTTPResponses(tc.http, "Get", "http.test.contract.v1")
+			switch {
+			case tc.wantErr && err == nil:
+				t.Fatalf("expected error containing %q, got nil", tc.wantErrFrag)
+			case tc.wantErr && tc.wantErrFrag != "" && !strings.Contains(err.Error(), tc.wantErrFrag):
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrFrag)
+			case !tc.wantErr && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }

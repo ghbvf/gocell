@@ -3,6 +3,17 @@
 
 package changepassword
 
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.auth.user.change-password.v1.request
 type Request struct {
 	// format: uuid
@@ -25,4 +36,101 @@ type ResponseData struct {
 	SessionId             string `json:"sessionId"`
 	UserId                string `json:"userId"`
 	PasswordResetRequired bool   `json:"passwordResetRequired"`
+}
+
+// ChangePasswordResponseObject is the typed response envelope for
+// http.auth.user.change-password.v1. Service.ChangePassword must return one of the
+// ChangePassword{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+//
+//	(buffer-then-commit pattern: encode to bytes.Buffer first so encode
+//	 failures don't commit a half-written response status to wire)
+type ChangePasswordResponseObject interface {
+	visitChangePasswordResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// ChangePassword200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type ChangePassword200JSONResponse Response
+
+func (r ChangePassword200JSONResponse) visitChangePasswordResponse(ctx context.Context, w http.ResponseWriter) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(Response(r)); err != nil {
+		// encode 失败时 header 尚未提交，handler 收到 err 后可走 WriteError 兜底 5xx
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.auth.user.change-password.v1: encode ChangePassword200JSONResponse body", attrs...)
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = buf.WriteTo(w)
+	return nil
+}
+
+// ChangePassword400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type ChangePassword400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r ChangePassword400ErrorResponse) visitChangePasswordResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// ChangePassword401ErrorResponse renders an HTTP 401 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type ChangePassword401ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r ChangePassword401ErrorResponse) visitChangePasswordResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+	return nil
+}
+
+// ChangePassword403ErrorResponse renders an HTTP 403 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type ChangePassword403ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r ChangePassword403ErrorResponse) visitChangePasswordResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// ChangePassword404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type ChangePassword404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r ChangePassword404ErrorResponse) visitChangePasswordResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}
+
+// ChangePassword413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type ChangePassword413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r ChangePassword413ErrorResponse) visitChangePasswordResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

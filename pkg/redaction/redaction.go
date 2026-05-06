@@ -15,6 +15,7 @@ package redaction
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"unicode/utf8"
 )
@@ -204,6 +205,49 @@ func RedactPanic(v any) string {
 		return x
 	default:
 		return fmt.Sprint(x)
+	}
+}
+
+// RedactSlogAttr returns a copy of attr whose value is redacted via RedactAny.
+// Key is preserved verbatim; only the value runs through the regex masker.
+//
+// Generated handlers and pkg/httputil log paths use this to scrub user-supplied
+// errcode.Error.Details before they reach slog. It complements RedactError
+// (which masks string error text) — Details are slog.Attr structures, not
+// strings, so they need the slog.Attr-shaped helper.
+//
+// The implementation walks the underlying slog.Value:
+//
+//   - String values run through RedactString
+//   - Group values recurse over their attrs
+//   - All other kinds (int, bool, time, etc.) pass through unchanged because
+//     the regex only matches `key=value` text shapes
+//
+// # Known limitations
+//
+// KindLogValuer 与 KindAny 走 passthrough 不做递归扫描，是 fail-open 设计：
+// runtime 数据进入 errcode.Error 必须经 WithDetails，而 WithDetails 在
+// 输入是非 slog.Attr 类型时 panic（pkg/errcode/errcode.go DETAILS-SLOG-ATTR-01
+// 守），构成第一道防线。如未来引入直写 slog.Any(callerSuppliedStruct) 路径，
+// 需在此函数补 ValueResolve 并扩展锁定测试（pkg/redaction/redaction_test.go
+// TestRedactSlogAttr_PassthroughKinds）。
+func RedactSlogAttr(attr slog.Attr) slog.Attr {
+	return slog.Attr{Key: attr.Key, Value: redactSlogValue(attr.Value)}
+}
+
+func redactSlogValue(v slog.Value) slog.Value {
+	switch v.Kind() {
+	case slog.KindString:
+		return slog.StringValue(RedactString(v.String()))
+	case slog.KindGroup:
+		attrs := v.Group()
+		out := make([]slog.Attr, len(attrs))
+		for i, a := range attrs {
+			out[i] = RedactSlogAttr(a)
+		}
+		return slog.GroupValue(out...)
+	default:
+		return v
 	}
 }
 

@@ -56,7 +56,7 @@ func strPtr(s string) *string {
 // CreateAdapter implements creategen.Service for http.auth.user.create.v1.
 type CreateAdapter struct{ S *Service }
 
-func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (*creategen.Response, error) {
+func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (creategen.CreateResponseObject, error) {
 	var requireReset bool
 	if req.RequirePasswordReset != nil {
 		requireReset = *req.RequirePasswordReset
@@ -71,7 +71,7 @@ func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (*cre
 		return nil, err
 	}
 	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
-	return &creategen.Response{Data: &creategen.ResponseData{
+	return creategen.Create201JSONResponse{Data: &creategen.ResponseData{
 		ID:        id,
 		Username:  username,
 		Email:     email,
@@ -84,13 +84,13 @@ func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (*cre
 // GetAdapter implements getgen.Service for http.auth.user.get.v1.
 type GetAdapter struct{ S *Service }
 
-func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (*getgen.Response, error) {
+func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (getgen.GetResponseObject, error) {
 	user, err := a.S.GetByID(ctx, req.ID)
 	if err != nil {
 		return nil, err
 	}
 	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
-	return &getgen.Response{Data: &getgen.ResponseData{
+	return getgen.Get200JSONResponse{Data: &getgen.ResponseData{
 		ID:        id,
 		Username:  username,
 		Email:     email,
@@ -103,7 +103,7 @@ func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (*getgen.Respo
 // UpdateAdapter implements updategen.Service for http.auth.user.update.v1.
 type UpdateAdapter struct{ S *Service }
 
-func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (*updategen.Response, error) {
+func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (updategen.UpdateResponseObject, error) {
 	user, err := a.S.Update(ctx, UpdateInput{
 		ID:    req.ID,
 		Email: strPtr(req.Email),
@@ -112,7 +112,7 @@ func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (*upd
 		return nil, err
 	}
 	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
-	return &updategen.Response{Data: &updategen.ResponseData{
+	return updategen.Update200JSONResponse{Data: &updategen.ResponseData{
 		ID:        id,
 		Username:  username,
 		Email:     email,
@@ -129,7 +129,7 @@ func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (*upd
 // distinguish an explicit false (clear the flag) from an absent field (no change).
 type PatchAdapter struct{ S *Service }
 
-func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (*patchgen.Response, error) {
+func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (patchgen.PatchResponseObject, error) {
 	user, err := a.S.Update(ctx, UpdateInput{
 		ID:                   req.ID,
 		Name:                 strPtr(req.Name),
@@ -141,7 +141,7 @@ func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (*patchg
 		return nil, err
 	}
 	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
-	return &patchgen.Response{Data: &patchgen.ResponseData{
+	return patchgen.Patch200JSONResponse{Data: &patchgen.ResponseData{
 		ID:        id,
 		Username:  username,
 		Email:     email,
@@ -155,7 +155,7 @@ func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (*patchg
 // Prevents admin self-deletion using the caller principal from context.
 type DeleteAdapter struct{ S *Service }
 
-func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (*deletegen.Response, error) {
+func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (deletegen.DeleteResponseObject, error) {
 	// Prevent admin self-deletion — removing own account would lock out the
 	// operator with no recovery path if this is the last admin.
 	if p, ok := auth.FromContext(ctx); ok && p.Subject == req.ID {
@@ -164,27 +164,27 @@ func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (*del
 	if err := a.S.Delete(ctx, req.ID); err != nil {
 		return nil, err
 	}
-	return &deletegen.Response{}, nil
+	return deletegen.Delete204NoContentResponse{}, nil
 }
 
 // LockAdapter implements lockgen.Service for http.auth.user.lock.v1.
 type LockAdapter struct{ S *Service }
 
-func (a LockAdapter) Lock(ctx context.Context, req *lockgen.Request) (*lockgen.Response, error) {
+func (a LockAdapter) Lock(ctx context.Context, req *lockgen.Request) (lockgen.LockResponseObject, error) {
 	if err := a.S.Lock(ctx, req.ID); err != nil {
 		return nil, err
 	}
-	return &lockgen.Response{Data: &lockgen.ResponseData{Status: "locked"}}, nil
+	return lockgen.Lock200JSONResponse{Data: &lockgen.ResponseData{Status: "locked"}}, nil
 }
 
 // UnlockAdapter implements unlockgen.Service for http.auth.user.unlock.v1.
 type UnlockAdapter struct{ S *Service }
 
-func (a UnlockAdapter) Unlock(ctx context.Context, req *unlockgen.Request) (*unlockgen.Response, error) {
+func (a UnlockAdapter) Unlock(ctx context.Context, req *unlockgen.Request) (unlockgen.UnlockResponseObject, error) {
 	if err := a.S.Unlock(ctx, req.ID); err != nil {
 		return nil, err
 	}
-	return &unlockgen.Response{Data: &unlockgen.ResponseData{Status: "active"}}, nil
+	return unlockgen.Unlock200JSONResponse{Data: &unlockgen.ResponseData{Status: "active"}}, nil
 }
 
 // ChangePasswordAdapter implements changepassgen.Service for http.auth.user.change-password.v1.
@@ -194,7 +194,9 @@ func (a UnlockAdapter) Unlock(ctx context.Context, req *unlockgen.Request) (*unl
 // password_reset_required=true can still reach this endpoint.
 type ChangePasswordAdapter struct{ S *Service }
 
-func (a ChangePasswordAdapter) ChangePassword(ctx context.Context, req *changepassgen.Request) (*changepassgen.Response, error) {
+func (a ChangePasswordAdapter) ChangePassword(
+	ctx context.Context, req *changepassgen.Request,
+) (changepassgen.ChangePasswordResponseObject, error) {
 	pair, err := a.S.ChangePassword(ctx, ChangePasswordInput{
 		UserID:      req.ID,
 		OldPassword: req.OldPassword,
@@ -203,7 +205,7 @@ func (a ChangePasswordAdapter) ChangePassword(ctx context.Context, req *changepa
 	if err != nil {
 		return nil, err
 	}
-	return &changepassgen.Response{Data: toTokenPairResponseData(pair)}, nil
+	return changepassgen.ChangePassword200JSONResponse{Data: toTokenPairResponseData(pair)}, nil
 }
 
 // Handler is the composite route handler for the identitymanage slice.
@@ -237,7 +239,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes mounts all identity-manage contract handlers on mux.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := h.createH.RegisterRoutes(mux); err != nil {
 		return err
 	}

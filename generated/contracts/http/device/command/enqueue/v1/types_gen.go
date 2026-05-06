@@ -3,6 +3,17 @@
 
 package enqueue
 
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.device.command.enqueue.v1.request
 type Request struct {
 	ID          string `json:"id"`
@@ -31,4 +42,62 @@ type ResponseData struct {
 	DeliveredAt string `json:"deliveredAt,omitempty"`
 	// format: date-time
 	CompletedAt string `json:"completedAt,omitempty"`
+}
+
+// EnqueueResponseObject is the typed response envelope for
+// http.device.command.enqueue.v1. Service.Enqueue must return one of the
+// Enqueue{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+//
+//	(buffer-then-commit pattern: encode to bytes.Buffer first so encode
+//	 failures don't commit a half-written response status to wire)
+type EnqueueResponseObject interface {
+	visitEnqueueResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Enqueue201JSONResponse renders an HTTP 201 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Enqueue201JSONResponse Response
+
+func (r Enqueue201JSONResponse) visitEnqueueResponse(ctx context.Context, w http.ResponseWriter) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(Response(r)); err != nil {
+		// encode 失败时 header 尚未提交，handler 收到 err 后可走 WriteError 兜底 5xx
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.device.command.enqueue.v1: encode Enqueue201JSONResponse body", attrs...)
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, _ = buf.WriteTo(w)
+	return nil
+}
+
+// Enqueue400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Enqueue400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Enqueue400ErrorResponse) visitEnqueueResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Enqueue413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Enqueue413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Enqueue413ErrorResponse) visitEnqueueResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

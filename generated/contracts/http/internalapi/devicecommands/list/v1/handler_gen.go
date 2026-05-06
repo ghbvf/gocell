@@ -6,7 +6,6 @@ package list
 import (
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -57,19 +56,14 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
-	req.Cursor = r.URL.Query().Get("cursor")
-	if req.Cursor != "" && len(req.Cursor) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
+	page, err := httputil.ParsePageParams(r)
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.Cursor) > 4096 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
-		return
-	}
+	req.Cursor = page.Cursor
+	req.Limit = int64(page.Limit)
+
 	req.DeviceId = r.URL.Query().Get("deviceId")
 	if req.DeviceId != "" && len(req.DeviceId) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -83,28 +77,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 			errcode.WithDetails(slog.String("field", "deviceId"), slog.String("reason", "invalid"))))
 		return
 	}
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		v, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "must be an integer"))))
-			return
-		}
-		if v < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
-			return
-		}
-		if v > 500 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
-			return
-		}
-		req.Limit = v
-	}
+
 	req.Statuses = r.URL.Query().Get("statuses")
 	if req.Statuses != "" && len(req.Statuses) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -123,5 +96,20 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	httputil.WriteJSON(w, 200, resp)
+	if resp == nil {
+		// Service contract violation: returned nil response without error.
+		// buffer-then-commit: header not yet committed, the framework helper
+		// emits a well-formed 5xx response. CH-04 governance treats this as
+		// the un-declared framework 5xx surface (ADR D1).
+		httputil.WriteNilResponseInternal(r.Context(), w)
+		return
+	}
+	// types_gen.go encodes to a bytes.Buffer first (buffer-then-commit); if
+	// encoding fails, the header is not yet committed and the framework helper
+	// emits a well-formed 5xx response. types_gen.go already logs via
+	// slog.ErrorContext (with request_id/trace_id correlation), so no duplicate
+	// log here — only wire the 5xx fallback.
+	if visitErr := resp.visitListResponse(r.Context(), w); visitErr != nil {
+		httputil.WriteEncodeFaultInternal(r.Context(), w)
+	}
 }

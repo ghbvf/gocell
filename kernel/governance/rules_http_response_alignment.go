@@ -94,6 +94,16 @@ var httpHelperWritesStatuses = map[string][]int{
 	"ParsePageParams":        {http.StatusBadRequest},
 	"ParseUUIDPathParam":     {http.StatusBadRequest},
 	"ParsePageParamsOrWrite": {http.StatusBadRequest},
+	// Framework 5xx fallbacks invoked only by generated handlers
+	// (typed-envelope nil-response guard / visit encode failure path). Per
+	// ADR 202605061500-adr-typed-response-envelope.md D1, the error return
+	// surface is "reserved for un-declared framework 5xx" — these helpers
+	// must not require contract.yaml responses[500] declaration. Empty
+	// status set in the table both registers them as known writers (silences
+	// the "unknown httputil helper" warning) and keeps CH-04 from inferring
+	// 500 from their inner errcode.New(KindInternal, ...) implementations.
+	"WriteNilResponseInternal": {},
+	"WriteEncodeFaultInternal": {},
 }
 
 var errcodeKindNameToStatus = map[string]int{
@@ -717,6 +727,10 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 			"DecodeJSONStrict":                {}, // strict variant; same semantics as DecodeJSON
 			"WithClientErrorLogSampling":      {}, // logging decorator — no status write
 			"WithClientErrorLogSamplingEvery": {}, // logging decorator — no status write
+			"AppendCorrelationAttrs":          {}, // decorator — appends slog.Attr, no status write
+			"WithCancelReasonSlot":            {}, // decorator — installs cancel-reason ctx slot
+			"CancelReason":                    {}, // decorator — reads cancel-reason from ctx
+			"ParseCanonicalUUID":              {}, // pure util — no HTTP I/O
 		}
 		if _, suppressed := knownNonWriters[helperName]; !suppressed {
 			slog.Warn("CH-04: unknown httputil helper call, skipping helper-status inference",

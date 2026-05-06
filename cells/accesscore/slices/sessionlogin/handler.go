@@ -15,7 +15,7 @@ type LoginAdapter struct{ S *Service }
 
 // Login implements logingen.Service. The generated handler already validates
 // and decodes username+password from the request body.
-func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (*logingen.Response, error) {
+func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (logingen.LoginResponseObject, error) {
 	pair, err := a.S.Login(ctx, LoginInput{
 		Username: req.Username,
 		Password: req.Password,
@@ -23,7 +23,7 @@ func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (*loging
 	if err != nil {
 		return nil, err
 	}
-	return &logingen.Response{
+	return logingen.Login201JSONResponse{
 		Data: toLoginResponseData(pair),
 	}, nil
 }

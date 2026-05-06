@@ -751,6 +751,71 @@ func TestGenerate_PackageNameKeywordSanitize(t *testing.T) {
 	}
 }
 
+// TestGenerate_RequiresErrorStatus verifies that a contract with successStatus
+// but no 4xx/5xx responses causes Generate to return an error containing
+// "must declare at least one 4xx/5xx" (C18 tighten, R1 chain head).
+func TestGenerate_RequiresErrorStatus(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPMinimalRoot(t)
+
+	// Patch the ping contract: clear its responses so it has successStatus but no error responses.
+	pingContract := p.Contracts["http.order.ping.v1"]
+	if pingContract == nil {
+		t.Fatal("http.order.ping.v1 not found in synth fixture")
+	}
+	// Store original responses and clear them.
+	origResponses := pingContract.Endpoints.HTTP.Responses
+	pingContract.Endpoints.HTTP.Responses = nil
+	t.Cleanup(func() { pingContract.Endpoints.HTTP.Responses = origResponses })
+
+	_, err := Generate(root, p, Options{OnlyContract: "http.order.ping.v1"})
+	if err == nil {
+		t.Fatal("expected error for contract with no 4xx/5xx responses, got nil")
+	}
+	if !strings.Contains(err.Error(), "4xx/5xx") {
+		t.Errorf("error should mention '4xx/5xx', got: %v", err)
+	}
+}
+
+// TestGenerate_PropagatesBuildSpecError_C5 verifies that a contract whose
+// responses[] contains a 2xx code (same as successStatus → C5 violation because
+// the responses[] key range is 4xx/5xx only) propagates a builder error to the
+// Generate caller. This documents the error propagation chain from
+// collectAndValidateStatuses → liftHTTPResponses → buildHTTPEndpointSpec → Generate.
+func TestGenerate_PropagatesBuildSpecError_C5(t *testing.T) {
+	t.Parallel()
+	// Build a synthetic contract with successStatus=200 and responses[200] (duplicate
+	// success key is skipped) plus responses[301] which is a 3xx → C5 rejection.
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.test.c5.v1": {
+				ID:      "http.test.c5.v1",
+				Kind:    "http",
+				Codegen: true,
+				Endpoints: metadata.EndpointsMeta{
+					Server: "testcell",
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          "/api/v1/test",
+						SuccessStatus: 200,
+						Responses: map[int]metadata.HTTPResponseMeta{
+							301: {Description: "Moved Permanently — invalid range for responses[]"},
+						},
+					},
+				},
+				File: "contracts/http/test/c5/v1/contract.yaml",
+			},
+		},
+	}
+	_, err := Generate(t.TempDir(), p, Options{})
+	if err == nil {
+		t.Fatal("expected C5 error for 3xx in responses[], got nil")
+	}
+	if !strings.Contains(err.Error(), "must be 4xx/5xx") {
+		t.Errorf("error should mention 'must be 4xx/5xx' (C5), got: %v", err)
+	}
+}
+
 // TestGenerate_BuildSpecError_OneOf verifies that a contract whose request schema
 // contains an unsupported "oneOf" keyword causes Generate to return an error.
 func TestGenerate_BuildSpecError_OneOf(t *testing.T) {

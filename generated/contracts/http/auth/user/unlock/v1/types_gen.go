@@ -3,6 +3,17 @@
 
 package unlock
 
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.auth.user.unlock.v1.request
 type Request struct {
 	// format: uuid
@@ -17,4 +28,101 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.auth.user.unlock.v1.
 type ResponseData struct {
 	Status string `json:"status"`
+}
+
+// UnlockResponseObject is the typed response envelope for
+// http.auth.user.unlock.v1. Service.Unlock must return one of the
+// Unlock{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+//
+//	(buffer-then-commit pattern: encode to bytes.Buffer first so encode
+//	 failures don't commit a half-written response status to wire)
+type UnlockResponseObject interface {
+	visitUnlockResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Unlock200JSONResponse renders an HTTP 200 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Unlock200JSONResponse Response
+
+func (r Unlock200JSONResponse) visitUnlockResponse(ctx context.Context, w http.ResponseWriter) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(Response(r)); err != nil {
+		// encode 失败时 header 尚未提交，handler 收到 err 后可走 WriteError 兜底 5xx
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.auth.user.unlock.v1: encode Unlock200JSONResponse body", attrs...)
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = buf.WriteTo(w)
+	return nil
+}
+
+// Unlock400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Unlock400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Unlock400ErrorResponse) visitUnlockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Unlock401ErrorResponse renders an HTTP 401 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Unlock401ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Unlock401ErrorResponse) visitUnlockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+	return nil
+}
+
+// Unlock403ErrorResponse renders an HTTP 403 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Unlock403ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Unlock403ErrorResponse) visitUnlockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Unlock404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Unlock404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Unlock404ErrorResponse) visitUnlockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}
+
+// Unlock413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Unlock413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Unlock413ErrorResponse) visitUnlockResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

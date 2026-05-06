@@ -3,6 +3,17 @@
 
 package admin
 
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
+
 // Request — http.auth.setup.admin.v1.request
 type Request struct {
 	Username string `json:"username"`
@@ -22,4 +33,88 @@ type ResponseData struct {
 	Email    string `json:"email"`
 	// format: date-time
 	CreatedAt string `json:"createdAt"`
+}
+
+// AdminResponseObject is the typed response envelope for
+// http.auth.setup.admin.v1. Service.Admin must return one of the
+// Admin{Status}{Suffix} structs declared below; the
+// generated handler dispatches via the unexported method, which keeps the
+// implementation set closed to types declared in this package.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+//
+//	(buffer-then-commit pattern: encode to bytes.Buffer first so encode
+//	 failures don't commit a half-written response status to wire)
+type AdminResponseObject interface {
+	visitAdminResponse(ctx context.Context, w http.ResponseWriter) error
+}
+
+// Admin201JSONResponse renders an HTTP 201 success response.
+// Marshals the underlying Response DTO as a JSON body.
+type Admin201JSONResponse Response
+
+func (r Admin201JSONResponse) visitAdminResponse(ctx context.Context, w http.ResponseWriter) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(Response(r)); err != nil {
+		// encode 失败时 header 尚未提交，handler 收到 err 后可走 WriteError 兜底 5xx
+		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "http.auth.setup.admin.v1: encode Admin201JSONResponse body", attrs...)
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, _ = buf.WriteTo(w)
+	return nil
+}
+
+// Admin400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Admin400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Admin400ErrorResponse) visitAdminResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Admin409ErrorResponse renders an HTTP 409 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Admin409ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Admin409ErrorResponse) visitAdminResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 409, &r.Body)
+	return nil
+}
+
+// Admin410ErrorResponse renders an HTTP 410 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Admin410ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Admin410ErrorResponse) visitAdminResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 410, &r.Body)
+	return nil
+}
+
+// Admin413ErrorResponse renders an HTTP 413 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Admin413ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Admin413ErrorResponse) visitAdminResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
+	return nil
 }

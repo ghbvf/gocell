@@ -78,16 +78,16 @@ func (s *Service) list(ctx context.Context, pageReq query.PageParams) (query.Pag
 }
 
 // Get implements getv1.Service.
-func (s *Service) Get(ctx context.Context, req *getv1.Request) (*getv1.Response, error) {
+func (s *Service) Get(ctx context.Context, req *getv1.Request) (getv1.GetResponseObject, error) {
 	order, err := s.GetByID(ctx, req.ID)
 	if err != nil {
 		return nil, err
 	}
-	return toGetResponse(order), nil
+	return getv1.Get200JSONResponse(toGetResponse(order)), nil
 }
 
 // List implements listv1.Service.
-func (s *Service) List(ctx context.Context, req *listv1.Request) (*listv1.Response, error) {
+func (s *Service) List(ctx context.Context, req *listv1.Request) (listv1.ListResponseObject, error) {
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
 		Limit:  int(req.Limit),
@@ -96,14 +96,11 @@ func (s *Service) List(ctx context.Context, req *listv1.Request) (*listv1.Respon
 	if err != nil {
 		return nil, err
 	}
-	return toListResponse(result), nil
+	return listv1.List200JSONResponse(toListResponse(result)), nil
 }
 
-func toGetResponse(o *domain.Order) *getv1.Response {
-	if o == nil {
-		return nil
-	}
-	return &getv1.Response{
+func toGetResponse(o *domain.Order) getv1.Response {
+	return getv1.Response{
 		Data: &getv1.ResponseData{
 			ID:        o.ID,
 			Item:      o.Item,
@@ -113,7 +110,7 @@ func toGetResponse(o *domain.Order) *getv1.Response {
 	}
 }
 
-func toListResponse(result query.PageResult[*domain.Order]) *listv1.Response {
+func toListResponse(result query.PageResult[*domain.Order]) listv1.Response {
 	items := make([]*listv1.ResponseDataItem, 0, len(result.Items))
 	for _, o := range result.Items {
 		items = append(items, &listv1.ResponseDataItem{
@@ -123,7 +120,7 @@ func toListResponse(result query.PageResult[*domain.Order]) *listv1.Response {
 			CreatedAt: o.CreatedAt.Format(time.RFC3339),
 		})
 	}
-	return &listv1.Response{
+	return listv1.Response{
 		Data:       items,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,

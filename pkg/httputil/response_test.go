@@ -175,6 +175,121 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 	assertAttrAbsent(t, *errRec, "message")
 }
 
+// --- WriteErrorWithStatus (typed-envelope) tests ---
+// These cases pin the status to the typed struct identity instead of deriving
+// from errcode.Kind. The wire body must read the public code matching the
+// *explicit* status, even when the underlying ecErr.Kind would have mapped to
+// a different status — this is the security-critical decoupling that makes
+// the typed envelope honest about its declared response set.
+
+func TestWriteErrorWithStatus_4xxKeepsBodyAndLogsAtWarn(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	ecErr := errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
+		"session not found",
+		errcode.WithDetails(slog.String("sessionId", "s-7")))
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-typed-404")
+	ctx = WithClientErrorLogSamplingEvery(ctx, "test", 1)
+
+	rec := httptest.NewRecorder()
+	WriteErrorWithStatus(ctx, rec, http.StatusNotFound, ecErr)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrSessionNotFound), errObj["code"])
+	assert.Equal(t, "session not found", errObj["message"])
+	assert.Equal(t, "req-typed-404", errObj["request_id"])
+	// 4xx Details kept on the wire.
+	require.NotEmpty(t, errObj["details"])
+
+	warnRec := findRecord(handler, slog.LevelWarn)
+	require.NotNil(t, warnRec, "4xx must log at Warn (sampled)")
+	assertStringAttr(t, *warnRec, "request_id", "req-typed-404")
+}
+
+func TestWriteErrorWithStatus_500MasksBodyWithStatusDerivedPublicCode(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	// Service constructs Xxx500ErrorResponse{Body: *errcode.New(KindInternal, ...)}
+	// — Kind matches status here; wire code must be ErrInternal.
+	ecErr := errcode.Wrap(
+		errcode.KindInternal,
+		errcode.ErrConfigRepoQuery,
+		"config query failed",
+		errors.New("postgres pool exhausted"),
+		errcode.WithInternal("select config_entries failed"),
+		errcode.WithDetails(slog.String("tenant", "admin@example.com")),
+	)
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-typed-500")
+
+	rec := httptest.NewRecorder()
+	WriteErrorWithStatus(ctx, rec, http.StatusInternalServerError, ecErr)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrInternal), errObj["code"], "wire code is the public sentinel for 500")
+	assert.Equal(t, "internal server error", errObj["message"])
+	assert.Equal(t, []any{}, errObj["details"], "5xx strips Details from wire")
+	assert.Equal(t, "req-typed-500", errObj["request_id"])
+
+	errRec := findRecord(handler, slog.LevelError)
+	require.NotNil(t, errRec)
+	assertStringAttr(t, *errRec, "code", string(errcode.ErrConfigRepoQuery))
+	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrInternal))
+	assertStringAttr(t, *errRec, "internal", "select config_entries failed")
+	// Details must remain in slog for diagnostics.
+	assertStringAttr(t, *errRec, "tenant", "admin@example.com")
+}
+
+func TestWriteErrorWithStatus_503DerivesPublicCodeFromStatusNotFromKind(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	// Service constructs Xxx503ErrorResponse{Body: *errcode.New(KindInternal, ...)}.
+	// The typed-envelope status (503) is the source of truth — wire code must be
+	// ErrServiceUnavailable, NOT ErrInternal (which is what ecErr.Kind.PublicCode()
+	// would return). This is the security/correctness fix from PR review safety F2.
+	ecErr := errcode.New(
+		errcode.KindInternal,
+		errcode.ErrConfigRepoQuery,
+		"upstream temporarily unavailable",
+	)
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-typed-503")
+
+	rec := httptest.NewRecorder()
+	WriteErrorWithStatus(ctx, rec, http.StatusServiceUnavailable, ecErr)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"],
+		"wire code follows the typed-envelope status (503), not the underlying Kind")
+	assert.Equal(t, "service unavailable", errObj["message"])
+	assert.Equal(t, []any{}, errObj["details"])
+
+	// KindInternal at 503: log5xx routes by Kind, not by status — KindInternal
+	// → Error (real fault category), not Warn (which is reserved for
+	// KindUnavailable / KindDeadlineExceeded). Verifies the wire/log decoupling:
+	// wire status is the typed-envelope identity, but log severity is still
+	// Kind-driven so dashboards distinguish dependency degradation from real faults.
+	errRec := findRecord(handler, slog.LevelError)
+	require.NotNil(t, errRec)
+	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrServiceUnavailable))
+	assertStringAttr(t, *errRec, "status", "503")
+}
+
+func TestWriteErrorWithStatus_504UsesGatewayTimeoutMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	ecErr := errcode.New(errcode.KindDeadlineExceeded, errcode.ErrServerTimeout, "downstream slow")
+	WriteErrorWithStatus(context.Background(), rec, http.StatusGatewayTimeout, ecErr)
+
+	assert.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, "gateway timeout", errObj["message"])
+	assert.Equal(t, string(errcode.ErrServerTimeout), errObj["code"])
+}
+
 // TestWriteError_MaxBytesError_Returns413 verifies the WriteError fast path
 // for *http.MaxBytesError surfaced from generated handlers' io.ReadAll on a
 // MaxBytesReader-wrapped Body. Without this branch the error falls through
@@ -481,7 +596,6 @@ func TestWriteErrorBody_HappyPathStatusReachesWire(t *testing.T) {
 // failure mechanism. We can't easily inject one without a wrapper type;
 // the test below instead verifies the invariant by direct call to the
 // sentinel writer (which is what the fail-closed branch invokes).
-type _ = struct{}
 
 // TestWriteErrorBody_FailClosedOnMarshalFailure verifies writeErrorBody's
 // fail-closed contract via the sentinel writer in isolation: marshal
@@ -506,6 +620,94 @@ func TestWriteErrorBody_FailClosedOnMarshalFailure(t *testing.T) {
 // marker text changes there it must change here too.
 const unsafeKindMarkerWire = "<UNSUPPORTED_KIND>"
 
+// TestWriteErrorWithStatus_5xxKindNormalize verifies that both
+// WriteErrorWithStatus and writeErrcodeError (via WriteError) normalize the
+// Kind of the outgoing errcode.Error to match the HTTP status, not the
+// underlying ecErr.Kind. The key invariant: 5xx wire bodies must strip
+// Details (MarshalJSON uses IsClient() to decide), so a 4xx-Kind ecErr
+// that carries Details would leak them if Kind were not normalized.
+func TestWriteErrorWithStatus_5xxKindNormalize(t *testing.T) {
+	cases := []struct {
+		name           string
+		status         int
+		ecErr          *errcode.Error
+		wantWireCode   errcode.Code
+		wantDetailsLen int
+	}{
+		{
+			name:   "503 with KindNotFound (4xx Kind) details stripped",
+			status: http.StatusServiceUnavailable,
+			ecErr: errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound, "x",
+				errcode.WithDetails(slog.String("dsn", "postgres://u:p@h"))),
+			wantWireCode:   errcode.ErrServiceUnavailable,
+			wantDetailsLen: 0,
+		},
+		{
+			name:           "504 deadline normalized",
+			status:         http.StatusGatewayTimeout,
+			ecErr:          errcode.New(errcode.KindInternal, errcode.ErrInternal, "y"),
+			wantWireCode:   errcode.ErrServerTimeout,
+			wantDetailsLen: 0,
+		},
+		{
+			// 501 wire collapses to ErrInternal because Kind.PublicCode()
+			// returns ErrInternal for every 5xx Kind except KindUnavailable
+			// /KindDeadlineExceeded. Even when ecErr.Kind starts as
+			// KindUnavailable, the typed-envelope status takes priority and
+			// the wire body normalizes to KindInternal+ErrInternal.
+			name:           "501 not implemented → internal wire",
+			status:         http.StatusNotImplemented,
+			ecErr:          errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "z"),
+			wantWireCode:   errcode.ErrInternal,
+			wantDetailsLen: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			WriteErrorWithStatus(context.Background(), rec, tc.status, tc.ecErr)
+			require.Equal(t, tc.status, rec.Code)
+			var body struct {
+				Error struct {
+					Code    errcode.Code `json:"code"`
+					Details []any        `json:"details"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			assert.Equal(t, tc.wantWireCode, body.Error.Code)
+			assert.Len(t, body.Error.Details, tc.wantDetailsLen)
+		})
+	}
+}
+
+// TestLog5xx_DetailsRedacted verifies that sensitive values in ecErr.Details
+// are masked before they reach slog output. The 5xx log path must call
+// redaction.RedactSlogAttr on each Details attr — transparent pass-through
+// would leak runtime fields (e.g. DSN passwords) to log backends.
+func TestLog5xx_DetailsRedacted(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	ecErr := errcode.New(
+		errcode.KindInternal,
+		errcode.ErrInternal,
+		"upstream failed",
+		errcode.WithDetails(slog.String("config", "host=h password=secret123 port=5432")),
+	)
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-redact")
+
+	rec := httptest.NewRecorder()
+	WriteErrorWithStatus(ctx, rec, http.StatusInternalServerError, ecErr)
+
+	errRec := findRecord(handler, slog.LevelError)
+	require.NotNil(t, errRec, "5xx must emit an error log")
+
+	got, ok := attrValue(*errRec, "config")
+	require.True(t, ok, "config attr must be present in log")
+	assert.Contains(t, got, "<REDACTED>", "password value must be redacted in slog output")
+	assert.NotContains(t, got, "secret123", "raw secret must not appear in slog output")
+}
+
 // TestWriteErrorBody_PreservesInt64Precision verifies that int64 detail
 // values larger than 2^53 round-trip through writeErrorBody without
 // precision loss. The default json.Decoder coerces JSON numbers into
@@ -529,4 +731,36 @@ func TestWriteErrorBody_PreservesInt64Precision(t *testing.T) {
 	// notation, no ".0", no "9007199254740992" rounding.
 	assert.Contains(t, rec.Body.String(), `"value":9007199254740993`,
 		"int64 detail must round-trip without precision loss")
+}
+
+// ioFailingWriter is a writer that fails after writing failAfter bytes.
+// Used to exercise the io.Writer error path in encodeErrorEnvelopeTo.
+type ioFailingWriter struct {
+	failAfter int
+	written   int
+}
+
+func (w *ioFailingWriter) Write(p []byte) (int, error) {
+	if w.written >= w.failAfter {
+		return 0, errors.New("simulated io failure")
+	}
+	n := len(p)
+	if n > w.failAfter-w.written {
+		n = w.failAfter - w.written
+	}
+	w.written += n
+	return n, nil
+}
+
+// TestEncodeErrorEnvelopeTo_FailingWriter verifies that encodeErrorEnvelopeTo
+// propagates a write error when the underlying io.Writer fails. This is only
+// reachable now that the parameter type is io.Writer (not *bytes.Buffer), which
+// makes the function directly testable with a synthetic failing writer.
+func TestEncodeErrorEnvelopeTo_FailingWriter(t *testing.T) {
+	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "fail path test")
+	w := &ioFailingWriter{failAfter: 0}
+	err := encodeErrorEnvelopeTo(w, context.Background(), ec)
+	if err == nil {
+		t.Fatal("want err on io failure, got nil")
+	}
 }

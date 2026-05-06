@@ -41,6 +41,13 @@ endpoints:
     method: POST
     path: /api/v1/widgets
     successStatus: 201
+    responses:
+      400:
+        description: invalid request
+        schemaRef: ../../shared/errors/error-response-v1.schema.json
+      500:
+        description: internal server error
+        schemaRef: ../../shared/errors/error-response-v1.schema.json
 schemaRefs:
   request: request.schema.json
   response: response.schema.json
@@ -87,9 +94,9 @@ This writes three files under `generated/contracts/http/myapp/widgets/create/v1/
 
 | File | Purpose |
 |------|---------|
-| `types_gen.go` | `Request`, `Response`, `ResponseData` structs |
-| `iface_gen.go` | `Service` interface with `Create(ctx, *Request) (*Response, error)` |
-| `handler_gen.go` | `Handler` that decodes, validates, calls Service, encodes |
+| `types_gen.go` | `Request`, `Response`, `ResponseData` structs + typed response envelope types (e.g. `Create201JSONResponse`, `Create400ErrorResponse`, `Create500ErrorResponse`) |
+| `iface_gen.go` | `Service` interface with `Create(ctx, *Request) (CreateResponseObject, error)` |
+| `handler_gen.go` | `Handler` that decodes, validates, calls Service, calls `visitCreateResponse` (unexported, package-internal) to write the typed response |
 
 Do **not** edit these files — they are regenerated on every `gocell generate contract`.
 
@@ -105,6 +112,7 @@ import (
     "context"
 
     createg "github.com/ghbvf/gocell/generated/contracts/http/myapp/widgets/create/v1"
+    "github.com/ghbvf/gocell/pkg/errcode"
     kcell "github.com/ghbvf/gocell/kernel/cell"
     "github.com/ghbvf/gocell/runtime/auth"
 )
@@ -112,12 +120,19 @@ import (
 // CreateAdapter implements createg.Service.
 type CreateAdapter struct{ S *Service }
 
-func (a CreateAdapter) Create(ctx context.Context, req *createg.Request) (*createg.Response, error) {
+func (a CreateAdapter) Create(ctx context.Context, req *createg.Request) (createg.CreateResponseObject, error) {
     w, err := a.S.Create(ctx, req.Name)
     if err != nil {
+        // Business 4xx: return typed error struct, not (nil, err).
+        // (nil, err) is reserved for undeclared framework 5xx (panic recover,
+        // infrastructure faults) — the generated handler writes those via
+        // httputil.WriteError.
+        if errcode.IsKind(err, errcode.KindNotFound) {
+            return createg.Create404ErrorResponse{Body: *errcode.New(errcode.KindNotFound, errcode.ErrNotFound, "order not found")}, nil
+        }
         return nil, err
     }
-    return &createg.Response{Data: &createg.ResponseData{ID: w.ID, Name: w.Name}}, nil
+    return createg.Create201JSONResponse(createg.Response{Data: &createg.ResponseData{ID: w.ID, Name: w.Name}}), nil
 }
 
 // Handler composes the generated contract handler with a policy.
@@ -188,3 +203,5 @@ takes a standard `outbox.EntryHandler` — no custom interface to implement.
 | Forgetting `codegen: true` in contract.yaml | Generator skips the contract | Add `codegen: true` |
 | Editing files in `generated/` | Overwritten on next generate | Implement the `Service` interface instead |
 | Wrong `contractUsages` role | `gocell validate` ADV-06 fail | Set `role: serve` for HTTP server, `role: subscribe` for event subscriber |
+| `return nil, err` for business 4xx | Generated handler falls through to `httputil.WriteError` 5xx path; business error loses its intended status code | Return typed struct: `return createg.Create404ErrorResponse{Body: *errcode.New(...)}, nil` |
+| Missing `responses:` block in contract.yaml | CH-06 governance silently passes (empty set × empty set = true), but the generated typed envelope contains only the success status struct — the adapter has no typed struct to express business errors | Any POST/PUT/DELETE endpoint must declare at least `400` and `500` in `responses:` |

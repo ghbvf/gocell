@@ -58,19 +58,19 @@ func toEvaluateResultResponse(r *EvaluateResult) EvaluateResultResponse {
 type GetAdapter struct{ S *Service }
 
 // Get implements flagsget.Service. Key comes from path param, already decoded by handler_gen.
-func (a GetAdapter) Get(ctx context.Context, req *flagsget.Request) (*flagsget.Response, error) {
+func (a GetAdapter) Get(ctx context.Context, req *flagsget.Request) (flagsget.GetResponseObject, error) {
 	flag, err := a.S.GetByKey(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
-	return &flagsget.Response{Data: toGetResponseData(flag)}, nil
+	return flagsget.Get200JSONResponse{Data: toGetResponseData(flag)}, nil
 }
 
 // ListAdapter wraps Service to implement flagslist.Service for http.config.flags.list.v1.
 type ListAdapter struct{ S *Service }
 
 // List implements flagslist.Service.
-func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (*flagslist.Response, error) {
+func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (flagslist.ListResponseObject, error) {
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
 		Limit:  int(req.Limit),
@@ -83,7 +83,7 @@ func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (*flagsli
 	for _, f := range result.Items {
 		items = append(items, toListResponseDataItem(f))
 	}
-	return &flagslist.Response{
+	return flagslist.List200JSONResponse{
 		Data:       items,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,
@@ -94,12 +94,12 @@ func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (*flagsli
 type EvaluateAdapter struct{ S *Service }
 
 // Evaluate implements evaluate.Service. Key from path, Subject from body (decoded by handler_gen).
-func (a EvaluateAdapter) Evaluate(ctx context.Context, req *evaluate.Request) (*evaluate.Response, error) {
+func (a EvaluateAdapter) Evaluate(ctx context.Context, req *evaluate.Request) (evaluate.EvaluateResponseObject, error) {
 	result, err := a.S.Evaluate(ctx, req.Key, req.Subject)
 	if err != nil {
 		return nil, err
 	}
-	return &evaluate.Response{Data: &evaluate.ResponseData{
+	return evaluate.Evaluate200JSONResponse{Data: &evaluate.ResponseData{
 		Key:     result.Key,
 		Enabled: result.Enabled,
 	}}, nil

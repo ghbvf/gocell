@@ -28,7 +28,7 @@ type DeleteAdapter struct{ S *Service }
 // AuthMiddleware still requires a valid JWT; PasswordResetExempt keeps the
 // route reachable while the caller still owes a password reset (standard
 // user-self-recovery flow).
-func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (*deletegen.Response, error) {
+func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (deletegen.DeleteResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
 		// Auth middleware guarantees subject presence on protected routes.
@@ -41,7 +41,7 @@ func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (*del
 	if err := a.S.Logout(ctx, req.ID, callerUserID); err != nil {
 		return nil, err
 	}
-	return &deletegen.Response{}, nil
+	return deletegen.Delete204NoContentResponse{}, nil
 }
 
 // Handler is the route handler for the sessionlogout slice.

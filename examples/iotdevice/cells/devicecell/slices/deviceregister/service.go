@@ -82,12 +82,12 @@ func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Optio
 
 // Register implements registercontract.Service: decodes the generated request,
 // delegates to registerInternal, and wraps the result in the generated response.
-func (s *Service) Register(ctx context.Context, req *registercontract.Request) (*registercontract.Response, error) {
+func (s *Service) Register(ctx context.Context, req *registercontract.Request) (registercontract.RegisterResponseObject, error) {
 	device, err := s.registerInternal(ctx, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	return &registercontract.Response{
+	return registercontract.Register201JSONResponse{
 		Data: &registercontract.ResponseData{
 			ID:     device.ID,
 			Name:   device.Name,

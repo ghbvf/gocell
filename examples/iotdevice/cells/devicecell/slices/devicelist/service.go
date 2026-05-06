@@ -43,7 +43,7 @@ func NewService(
 }
 
 // List implements listcontract.Service and returns a paginated page of devices.
-func (s *Service) List(ctx context.Context, req *listcontract.Request) (*listcontract.Response, error) {
+func (s *Service) List(ctx context.Context, req *listcontract.Request) (listcontract.ListResponseObject, error) {
 	pageReq := query.PageParams{
 		Limit:  int(req.Limit),
 		Cursor: req.Cursor,
@@ -57,7 +57,7 @@ func (s *Service) List(ctx context.Context, req *listcontract.Request) (*listcon
 	for _, d := range result.Items {
 		items = append(items, toResponseDataItem(d))
 	}
-	return &listcontract.Response{
+	return listcontract.List200JSONResponse{
 		Data:       items,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,

@@ -88,5 +88,20 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	httputil.WriteJSON(w, 201, resp)
+	if resp == nil {
+		// Service contract violation: returned nil response without error.
+		// buffer-then-commit: header not yet committed, the framework helper
+		// emits a well-formed 5xx response. CH-04 governance treats this as
+		// the un-declared framework 5xx surface (ADR D1).
+		httputil.WriteNilResponseInternal(r.Context(), w)
+		return
+	}
+	// types_gen.go encodes to a bytes.Buffer first (buffer-then-commit); if
+	// encoding fails, the header is not yet committed and the framework helper
+	// emits a well-formed 5xx response. types_gen.go already logs via
+	// slog.ErrorContext (with request_id/trace_id correlation), so no duplicate
+	// log here — only wire the 5xx fallback.
+	if visitErr := resp.visitRegisterResponse(r.Context(), w); visitErr != nil {
+		httputil.WriteEncodeFaultInternal(r.Context(), w)
+	}
 }

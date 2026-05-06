@@ -6,7 +6,22 @@ package status
 import "context"
 
 // Service is the business interface that the http.device.status.v1 server cell must implement.
-// The generated handler in handler_gen.go wires HTTP decode/encode + auth around this interface.
+//
+// The signature follows the typed-response-envelope strict-server pattern
+// (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE):
+//
+//   - The Service implementation returns one of the generated typed
+//     Status{Status}{Suffix} structs (each implements
+//     StatusResponseObject declared in types_gen.go).
+//     CH-04 governance enforces that this typed-response set matches
+//     contract.yaml http.responses[] declaration exactly.
+//   - The Go error return is reserved for *un-declared* framework 5xx
+//     situations (panics, infrastructure faults). The generated handler
+//     falls back to httputil.WriteError(err) on this path, which derives
+//     the response status from errcode.Kind (or returns 500 for non-errcode
+//     errors). Business 4xx / 5xx must be returned as a typed struct.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-interface.tmpl@main
 type Service interface {
-	Status(ctx context.Context, req *Request) (*Response, error)
+	Status(ctx context.Context, req *Request) (StatusResponseObject, error)
 }

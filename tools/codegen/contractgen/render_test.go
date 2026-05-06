@@ -890,3 +890,187 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 		}
 	}
 }
+
+// --- funcMap unit tests (PR #403 review T1: needsStrconv / responseGoTypeName /
+// liftHTTPResponses were previously covered only via golden files; direct unit
+// cases isolate logic regressions before they propagate into rendered output).
+
+// TestNeedsStrconv covers the package-level helper that decides whether the
+// generated handler imports strconv. Pagination ExtraQueryParams take
+// precedence — when set, the full QueryParams slice is irrelevant.
+func TestNeedsStrconv(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		spec *ContractGenSpec
+		want bool
+	}{
+		{"nil spec", nil, false},
+		{"nil endpoint", &ContractGenSpec{}, false},
+		{"non-pagination string-only", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+			QueryParams: []ParamSpec{{Name: "name", GoType: "string"}},
+		}}, false},
+		{"non-pagination int64", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+			QueryParams: []ParamSpec{{Name: "page", GoType: "int64"}},
+		}}, true},
+		{"pagination no extras", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+			Pagination: &PaginationShape{HasCursor: true, HasLimit: true},
+		}}, false},
+		{"pagination with int64 extra", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+			Pagination: &PaginationShape{
+				HasCursor: true, HasLimit: true,
+				ExtraQueryParams: []ParamSpec{{Name: "since", GoType: "int64"}},
+			},
+		}}, true},
+		{"pagination with bool extra", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+			Pagination: &PaginationShape{
+				HasCursor: true, HasLimit: true,
+				ExtraQueryParams: []ParamSpec{{Name: "active", GoType: "bool"}},
+			},
+		}}, true},
+		{"pagination with string-only extras", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+			Pagination: &PaginationShape{
+				HasCursor: true, HasLimit: true,
+				ExtraQueryParams: []ParamSpec{{Name: "tag", GoType: "string"}},
+			},
+		}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := needsStrconv(tc.spec); got != tc.want {
+				t.Errorf("needsStrconv(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResponseGoTypeName covers the {HandlerMethod}{Status}{Suffix} naming
+// convention emitted into types_gen.go. Three suffixes — JSONResponse for
+// body-bearing success, NoContentResponse for 204 success markers,
+// ErrorResponse for declared 4xx/5xx — are the entire surface CH-06
+// validates against the contract.yaml declaration.
+func TestResponseGoTypeName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method      string
+		status      int
+		isNoContent bool
+		want        string
+	}{
+		{"Get", 200, false, "Get200JSONResponse"},
+		{"Create", 201, false, "Create201JSONResponse"},
+		{"Delete", 204, true, "Delete204NoContentResponse"},
+		{"Get", 404, false, "Get404ErrorResponse"},
+		{"Get", 503, false, "Get503ErrorResponse"},
+		{"HandleEnqueue", 201, false, "HandleEnqueue201JSONResponse"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.want, func(t *testing.T) {
+			t.Parallel()
+			got := responseGoTypeName(tc.method, tc.status, tc.isNoContent)
+			if got != tc.want {
+				t.Errorf("responseGoTypeName(%q, %d, %v) = %q, want %q",
+					tc.method, tc.status, tc.isNoContent, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLiftHTTPResponses covers projection of contract.yaml http.responses[]
+// into the IR Responses slice — sort order, success/error split, NoContent
+// flag, and GoTypeName derivation.
+func TestLiftHTTPResponses(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success + errors sorted", func(t *testing.T) {
+		t.Parallel()
+		got, err := liftHTTPResponses(&metadata.HTTPTransportMeta{
+			SuccessStatus: 200,
+			Responses: map[int]metadata.HTTPResponseMeta{
+				503: {SchemaRef: "../err.json", Description: "svc down"},
+				401: {SchemaRef: "../err.json", Description: "no auth"},
+			},
+		}, "Get", "http.test.sorted.v1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("len = %d, want 3", len(got))
+		}
+		// Sorted ascending: 200, 401, 503.
+		want := []int{200, 401, 503}
+		for i, s := range want {
+			if got[i].Status != s {
+				t.Errorf("[%d].Status = %d, want %d", i, got[i].Status, s)
+			}
+		}
+		// Success entry: IsError=false, IsNoContent=false (200 with body).
+		if got[0].IsError || got[0].IsNoContent {
+			t.Errorf("success: IsError=%v IsNoContent=%v", got[0].IsError, got[0].IsNoContent)
+		}
+		// Error entries: IsError=true.
+		if !got[1].IsError || !got[2].IsError {
+			t.Errorf("errors not flagged")
+		}
+		if got[2].GoTypeName != "Get503ErrorResponse" {
+			t.Errorf("err GoTypeName = %q", got[2].GoTypeName)
+		}
+	})
+
+	t.Run("204 NoContent flagged", func(t *testing.T) {
+		t.Parallel()
+		// C18 tighten: even NoContent endpoints must declare at least one 4xx/5xx.
+		got, err := liftHTTPResponses(&metadata.HTTPTransportMeta{
+			SuccessStatus: 204,
+			NoContent:     true,
+			Responses: map[int]metadata.HTTPResponseMeta{
+				400: {Description: "Bad Request"},
+			},
+		}, "Delete", "http.test.nocontent.v1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2 (204 + 400)", len(got))
+		}
+		if !got[0].IsNoContent {
+			t.Errorf("204 success IsNoContent must be true")
+		}
+		if got[0].GoTypeName != "Delete204NoContentResponse" {
+			t.Errorf("GoTypeName = %q", got[0].GoTypeName)
+		}
+		if got[1].Status != 400 || !got[1].IsError {
+			t.Errorf("second entry should be 400 error, got status=%d isError=%v", got[1].Status, got[1].IsError)
+		}
+	})
+
+	t.Run("no success status and no responses returns error (C18)", func(t *testing.T) {
+		t.Parallel()
+		// C18: contracts with neither SuccessStatus nor responses[] are rejected.
+		_, err := liftHTTPResponses(&metadata.HTTPTransportMeta{}, "Foo", "http.test.empty.v1")
+		if err == nil {
+			t.Fatal("expected C18 error for contract with no SuccessStatus and no responses[], got nil")
+		}
+	})
+
+	t.Run("responses-duplicated success status deduped", func(t *testing.T) {
+		t.Parallel()
+		// Defensive path in liftHTTPResponses: when contract authors
+		// accidentally mirror the success status into responses[], the
+		// success entry wins (only one ResponseSpec emitted for that status).
+		got, err := liftHTTPResponses(&metadata.HTTPTransportMeta{
+			SuccessStatus: 200,
+			Responses: map[int]metadata.HTTPResponseMeta{
+				200: {SchemaRef: "../err.json"}, // duplicate — defensive
+				404: {SchemaRef: "../err.json"},
+			},
+		}, "Get", "http.test.deduped.v1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2 (success+404, success-dup deduped)", len(got))
+		}
+	})
+}
