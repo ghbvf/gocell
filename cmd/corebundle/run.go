@@ -41,7 +41,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return err
 	}
 
-	modules, err := corebundleModules(assemblyCellIDs)
+	modules, err := corebundleModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
 	}
@@ -80,9 +80,9 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	return bootstrap.New(opts...).Run(ctx) //archtest:allow:clock-injection:via-slice opts from defaultRuntimeOptions includes WithClock
 }
 
-func corebundleModules(cellIDs []string) ([]CellModule, error) {
+func corebundleModules(assemblyID string, cellIDs []string) ([]CellModule, error) {
 	mods := generatedCellModules()
-	if err := assertModuleIDsMatch(cellIDs, mods); err != nil {
+	if err := assertModuleIDsMatch(assemblyID, cellIDs, mods); err != nil {
 		return nil, err
 	}
 	return mods, nil
@@ -91,18 +91,18 @@ func corebundleModules(cellIDs []string) ([]CellModule, error) {
 // assertModuleIDsMatch fails-fast when assembly.yaml.cells (cellIDs) drifts from
 // the generated module list. The two should be 1:1 in declaration order; any
 // mismatch indicates a missing `gocell generate assembly` run.
-func assertModuleIDsMatch(cellIDs []string, mods []CellModule) error {
-	const hint = "run `gocell generate assembly --id=corebundle`"
+func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []CellModule) error {
+	hint := fmt.Sprintf("run `gocell generate assembly --id=%s`", assemblyID)
 	if len(cellIDs) != len(mods) {
 		return fmt.Errorf(
-			"corebundle: assembly.yaml cells (%d) ↔ modules_gen.go (%d) length mismatch; %s",
-			len(cellIDs), len(mods), hint)
+			"%s: assembly.yaml cells (%d) ↔ modules_gen.go (%d) length mismatch; %s",
+			assemblyID, len(cellIDs), len(mods), hint)
 	}
 	for i, want := range cellIDs {
 		if got := mods[i].ID(); got != want {
 			return fmt.Errorf(
-				"corebundle: assembly.yaml cells[%d]=%q ↔ modules_gen.go=%q drift; %s",
-				i, want, got, hint)
+				"%s: assembly.yaml cells[%d]=%q ↔ modules_gen.go=%q drift; %s",
+				assemblyID, i, want, got, hint)
 		}
 	}
 	return nil
