@@ -60,6 +60,8 @@ This document lists every adapter shipped with GoCell and its configuration surf
 | `ReconnectBaseDelay` | duration | no | 1s | Initial delay for exponential backoff |
 | `ChannelPoolSize` | int | no | 10 | Maximum number of channels in the pool |
 | `ConfirmTimeout` | duration | no | 5s | Timeout for publisher confirm mode |
+| `ConnectTimeout` | duration | no | 5s | Timeout for AMQP TCP dial + handshake. NewConnection wires this into `amqp.Config.Dial` via `amqp.DefaultDial(d)`. Aligned with `adapters/postgres` `Config.ConnectTimeout`. |
+| `MaxChannelsPerConn` | int | no | 256 | Cap for in-flight channels per Connection. Pool-miss acquisitions return `ErrAdapterAMQPChannelMaxExceeded` when reached. (Closes PR#402 doc drift.) |
 
 #### Migration note: `MaxReconnectAttempts` removed (PR-V1-RMQ-TERMINAL, 029 A4)
 
@@ -79,6 +81,39 @@ attempt cap. Behavior is now uniform across all `Config` instances:
 `ReconnectMaxBackoff` caps the backoff delay; the reconnect loop runs until
 `Close` is called.
 
+#### Migration note: `ConnectTimeout` default 5s (PR-V1-RMQ-CONFORMANCE-AND-CLOSURE, 029 B13)
+
+`Config.ConnectTimeout` was added with a default of `5 * time.Second`,
+wired into `amqp.Config.Dial` via `amqp.DefaultDial(d)`. Before this PR,
+`NewConnection` called `amqp.Dial(url)` bare, which inherited the OS
+default TCP SYN timeout (~1 minute on Linux, ~75 seconds on macOS) — an
+unreachable broker could block `NewConnection` for over a minute.
+
+Behavior change after upgrade (no code changes required for default users):
+
+- A broker that is reachable but slow to handshake (TLS, network jitter,
+  loaded broker) now fails dial after 5s instead of relying on the OS
+  default. The `Connection` reconnect loop immediately backs off and
+  retries (`ReconnectBaseDelay` 1s → `ReconnectMaxBackoff` 30s), so a
+  blip self-heals on the next successful dial.
+- Typical symptom of the new default biting too aggressively: `slog.Warn
+  "rabbitmq: reconnect attempt"` repeating with `error` field showing
+  `i/o timeout` on every attempt against a broker that does eventually
+  accept connections under a longer budget.
+
+Tuning advice:
+
+- Default 5s suits AMQP over a healthy LAN/cloud-internal network and
+  matches `adapters/postgres` `Config.ConnectTimeout` parity.
+- Slow / cross-region links or heavy mTLS handshakes: raise to **10–15s**
+  via `Config.ConnectTimeout`.
+- Tests against a blackhole IP / fault-injection harness: use a tight
+  value like `200ms` (see `adapters/rabbitmq/connect_timeout_test.go`
+  `TestNewConnection_ConnectTimeout_Blackhole`).
+- The `connect_timeout` `slog.Duration` field is logged on every
+  successful `connect()` (`adapters/rabbitmq/connection.go`); use it to
+  audit the effective value in production after deploy.
+
 ### ConsumerBase Config (`ConsumerBaseConfig`)
 
 | Field | Type | Required | Default | Description |
@@ -97,12 +132,14 @@ attempt cap. Behavior is now uniform across all `Config` instances:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `DLXExchange` | string | yes | - | Dead-letter exchange name (required — without it, Nack silently discards messages) |
-| `QueueName` | string | no | - | Explicit queue name. Takes precedence over ConsumerGroup-based naming |
-| `ConsumerGroup` | string | no | - | Logical consumer group. When QueueName is empty, queue is derived as `{ConsumerGroup}.{topic}` |
-| `DLXRoutingKey` | string | no | "" | Routing key for dead-lettered messages (only effective when DLXExchange is set) |
-| `PrefetchCount` | int | no | 10 | Prefetch (QoS) count per consumer |
-| `ShutdownTimeout` | duration | no | 30s | How long to wait for in-flight messages during Close() |
+| `DLXExchange` | string | yes | - | Dead-letter exchange name. Without it, broker `Nack(requeue=false)` silently discards messages. Set per-cell DLX. |
+| `Clock` | clock.Clock | yes | - | Time source for `StopIntake` deadlines (`StopIntakePerCallTimeout`, `StopIntakeDrainTimeout`). `NewSubscriber` calls `clock.MustHaveClock` and panics if nil; pass `clock.Real()` at composition root or `clockmock.FakeClock` in tests. |
+| `QueueName` | string | no | - | Explicit queue name. Takes precedence over ConsumerGroup-based naming. |
+| `ConsumerGroup` | string | no | - | Logical consumer group. When QueueName is empty, queue is derived as `{ConsumerGroup}.{topic}`. |
+| `DLXRoutingKey` | string | no | "" | Routing key for dead-lettered messages (only effective when DLXExchange is set). |
+| `PrefetchCount` | int | no | 10 | Prefetch (QoS) count per consumer. |
+| `StopIntakePerCallTimeout` | duration | no | 2s | Bound for any single `basic.cancel` during StopIntake. A hung broker cannot stall shutdown beyond this budget per consumer. |
+| `StopIntakeDrainTimeout` | duration | no | 30s | Total upper bound for StopIntake to drain in-flight prefetched deliveries + handler completion. Exceeding it returns `ErrAdapterAMQPCloseTimeout` and logs `slog.Warn` with remaining inflight count. |
 
 ## OIDC (`adapters/oidc`) — thin go-oidc v3 wrapper
 

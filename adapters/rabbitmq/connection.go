@@ -54,6 +54,10 @@ const (
 	//
 	// ref: rabbitmq/amqp091-go connection.go openTune (defaultChannelMax = 2<<10-1).
 	defaultRMQMaxChannelsPerConn = 256
+	// defaultRMQConnectTimeout bounds AMQP TCP dial + handshake. Without it,
+	// amqp.Dial relies on OS TCP defaults (~1min on Linux); 5s aligns with
+	// PG Config.ConnectTimeout (PR#401) and Dapr defaultReconnectWait.
+	defaultRMQConnectTimeout = 5 * time.Second
 )
 
 // Pre-allocated Health() errors to avoid per-call allocation.
@@ -328,6 +332,13 @@ type Config struct {
 	//        this branch.
 	//   >0 — cap value as configured.
 	MaxChannelsPerConn int
+
+	// ConnectTimeout bounds the AMQP TCP dial + handshake. NewConnection
+	// wires this into amqp.Config.Dial via amqp.DefaultDial(d). Override
+	// for slower networks; ≤0 falls back to defaultRMQConnectTimeout (5s).
+	//
+	// Aligned with adapters/postgres/pool.go Config.ConnectTimeout.
+	ConnectTimeout time.Duration
 }
 
 func (c *Config) setDefaults() {
@@ -345,6 +356,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.MaxChannelsPerConn <= 0 {
 		c.MaxChannelsPerConn = defaultRMQMaxChannelsPerConn
+	}
+	if c.ConnectTimeout <= 0 {
+		c.ConnectTimeout = defaultRMQConnectTimeout
 	}
 }
 
@@ -406,13 +420,22 @@ func (w *amqpConnectionWrapper) Close() error {
 	return w.conn.Close()
 }
 
-// DefaultDial creates a real AMQP connection.
-func DefaultDial(url string) (AMQPConnection, error) {
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, err
+// newDefaultDialFn returns a DialFunc that dials AMQP with a per-call
+// TCP+handshake timeout. The returned closure captures `timeout` so
+// each NewConnection's default dial honors its Config.ConnectTimeout.
+//
+// ref: rabbitmq/amqp091-go connection.go DefaultDial(timeout) — canonical
+// pattern for bounding net.Dial in amqp091.
+func newDefaultDialFn(timeout time.Duration) DialFunc {
+	return func(url string) (AMQPConnection, error) {
+		conn, err := amqp.DialConfig(url, amqp.Config{
+			Dial: amqp.DefaultDial(timeout),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &amqpConnectionWrapper{conn: conn}, nil
 	}
-	return &amqpConnectionWrapper{conn: conn}, nil
 }
 
 // Connection manages an AMQP connection with auto-reconnect and channel pooling.
@@ -491,12 +514,17 @@ const runtimePermanentConfirmHits = 2
 // It attempts an initial connection and starts the reconnect loop.
 // A clock.Clock must be supplied via WithConnectionClock; NewConnection
 // panics if no clock is provided (use clock.Real() at the composition root).
+//
+// Option-order contract: the default dial function (built via
+// newDefaultDialFn(config.ConnectTimeout) so amqp.DefaultDial(d) bounds
+// TCP+handshake) is established BEFORE options are applied; WithDialFunc
+// replaces it transparently for tests that need to inject a mock dialer.
 func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error) {
 	config.setDefaults()
 
 	c := &Connection{
 		config:      config,
-		dial:        DefaultDial,
+		dial:        newDefaultDialFn(config.ConnectTimeout),
 		channelPool: make(chan AMQPChannel, config.ChannelPoolSize),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
@@ -557,7 +585,8 @@ func (c *Connection) connect() error {
 	c.mu.Unlock()
 
 	slog.Info("rabbitmq: connection established",
-		slog.String("url", sanitizeURL(c.config.URL)))
+		slog.String("url", sanitizeURL(c.config.URL)),
+		slog.Duration("connect_timeout", c.config.ConnectTimeout))
 	return nil
 }
 
