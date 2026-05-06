@@ -114,12 +114,8 @@ func TestMockReceipt_WithErrors(t *testing.T) {
 
 	r := NewMockReceiptWithErrors(commitErr, releaseErr)
 
-	if err := r.Commit(context.Background()); err != commitErr {
-		t.Fatalf("want commitErr, got %v", err)
-	}
-	if err := r.Release(context.Background()); err != releaseErr {
-		t.Fatalf("want releaseErr, got %v", err)
-	}
+	assertSameErrorIdentity(t, r.Commit(context.Background()), commitErr, "Commit must return the configured error")
+	assertSameErrorIdentity(t, r.Release(context.Background()), releaseErr, "Release must return the configured error")
 
 	// Even with errors, the state should be recorded.
 	if !r.Committed() {

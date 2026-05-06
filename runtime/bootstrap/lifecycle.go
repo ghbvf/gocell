@@ -44,8 +44,8 @@ const (
 	// hookSlowNumerator and hookSlowDenominator define the slow-start warning
 	// threshold as a fraction of the hook timeout: threshold = timeout * num / den.
 	// 8/10 = 80% of the timeout is the slow-start warning boundary.
-	hookSlowNumerator   time.Duration = 8
-	hookSlowDenominator time.Duration = 10
+	hookSlowNumerator   = 8
+	hookSlowDenominator = 10
 )
 
 // Hook is a pair of lifecycle callbacks invoked in Append order on Start and

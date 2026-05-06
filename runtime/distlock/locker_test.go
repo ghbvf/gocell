@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"runtime"
 	"strconv"
 	"sync"
@@ -43,6 +44,25 @@ const lockerRenewTolerance = testtime.D10ms
 
 // lockerWaitRenewTimeout is the hard deadline used in waitForRenewOnMgr.
 const lockerWaitRenewTimeout = testtime.D30s
+
+func assertSameErrorIdentity(t *testing.T, got, want error, msg string) {
+	t.Helper()
+	if sameErrorIdentity(got, want) {
+		return
+	}
+	t.Fatalf("want exact error identity: got %T %v, want %T %v: %s", got, got, want, want, msg)
+}
+
+func sameErrorIdentity(got, want error) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	gv, wv := reflect.ValueOf(got), reflect.ValueOf(want)
+	if gv.Type() != wv.Type() || !gv.Comparable() {
+		return false
+	}
+	return gv.Equal(wv)
+}
 
 // mgr returns the internal Manager via type assertion.
 // lockerImpl exposes Manager() returning *Manager.
@@ -116,9 +136,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx)
-	if cause != distlock.ErrLockReleased {
-		t.Errorf("TC-1: Cause = %v, want ErrLockReleased", cause)
-	}
+	assertSameErrorIdentity(t, cause, distlock.ErrLockReleased, "TC-1 cause")
 }
 
 // TC-2: Advance ttl*0.5 - 1ns → no renew; Advance 1ns → exactly 1 renew.
@@ -231,9 +249,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx1)
-	if cause != distlock.ErrLockLost {
-		t.Errorf("TC-3: Cause = %v, want ErrLockLost", cause)
-	}
+	assertSameErrorIdentity(t, cause, distlock.ErrLockLost, "TC-3 cause")
 
 	// Sibling isolation: advance past key3b's next renewal window and verify
 	// that the manager still renews key3b (no error was injected for it).
@@ -282,9 +298,7 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 		t.Fatal("TC-4: lockCtx should be Done when held=false")
 	}
 
-	if context.Cause(lockCtx) != distlock.ErrLockLost {
-		t.Errorf("TC-4: Cause = %v, want ErrLockLost", context.Cause(lockCtx))
-	}
+	assertSameErrorIdentity(t, context.Cause(lockCtx), distlock.ErrLockLost, "TC-4 cause")
 
 	// Lock should be removed from heap snapshot.
 	snap := mgr(l).Snapshot()
@@ -325,9 +339,7 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 
 		// Cause should propagate parent's cause (context.Canceled for plain cancel).
 		cause := context.Cause(lockCtx)
-		if cause != context.Canceled {
-			t.Errorf("TC-5a: Cause = %v, want context.Canceled", cause)
-		}
+		assertSameErrorIdentity(t, cause, context.Canceled, "TC-5a cause")
 
 		// release() should not panic (error is intentionally discarded after context cancel).
 		if err := release(); err != nil {
@@ -362,12 +374,8 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 		// context.Cause(lockCtx) must equal context.Cause(parentCtx) == customErr.
 		cause := context.Cause(lockCtx)
 		parentCause := context.Cause(parentCtx)
-		if cause != parentCause {
-			t.Errorf("TC-5b: Cause = %v, want parentCause = %v", cause, parentCause)
-		}
-		if cause != customErr {
-			t.Errorf("TC-5b: Cause = %v, want customErr = %v", cause, customErr)
-		}
+		assertSameErrorIdentity(t, cause, parentCause, "TC-5b parent cause")
+		assertSameErrorIdentity(t, cause, customErr, "TC-5b custom cause")
 
 		// release() should not panic (error is intentionally discarded after context cancel).
 		if err := release(); err != nil {
@@ -1117,9 +1125,7 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx)
-	if cause != distlock.ErrLockLost {
-		t.Errorf("TC-14: Cause = %v, want ErrLockLost", cause)
-	}
+	assertSameErrorIdentity(t, cause, distlock.ErrLockLost, "TC-14 cause")
 
 	// Exactly 3 Renew calls (default budget=3).
 	if got := fd.Calls("Renew"); got != 3 {
@@ -1164,9 +1170,7 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx)
-	if cause != distlock.ErrLockLost {
-		t.Errorf("TC-15: Cause = %v, want ErrLockLost", cause)
-	}
+	assertSameErrorIdentity(t, cause, distlock.ErrLockLost, "TC-15 cause")
 
 	// Exactly 1 Renew call — no retry on permanent ownership loss.
 	if got := fd.Calls("Renew"); got != 1 {

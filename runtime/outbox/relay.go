@@ -387,7 +387,7 @@ const (
 // claimTTLPollMultiplier is the minimum ratio of ClaimTTL to PollInterval:
 // ClaimTTL must exceed PollInterval * claimTTLPollMultiplier to prevent
 // ReclaimStale from reclaiming entries still being processed.
-const claimTTLPollMultiplier time.Duration = 2
+const claimTTLPollMultiplier = 2
 
 // nextCleanupWait computes how long the cleanup loop should sleep before the
 // next pass: min(time-until-next-published-eligible, time-until-next-dead-eligible),
@@ -825,10 +825,10 @@ func (r *Relay) Ready() <-chan struct{} {
 }
 
 // retryDelayBase is the scaling unit for exponential backoff: delay = base * (retryDelayBase << shift).
-const retryDelayBase time.Duration = 1
+const retryDelayBase = 1
 
 // retryJitterDivisor defines the jitter range as a fraction of the delay: jitter ∈ [0, delay/retryJitterDivisor).
-const retryJitterDivisor time.Duration = 4
+const retryJitterDivisor = 4
 
 // retryDelay computes exponential backoff with jitter and cap.
 // Formula: cappedDelay(base * 2^attempts) + jitter([0, delay/4])

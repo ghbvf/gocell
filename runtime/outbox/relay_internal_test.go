@@ -616,6 +616,93 @@ func TestCappedDelay_CapsAtMax(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// retryDelay
+// ---------------------------------------------------------------------------
+
+const (
+	relayRetryDelayOneNS        = time.Nanosecond
+	relayRetryDelayTwoNS        = 2 * time.Nanosecond
+	relayRetryDelayThreeNS      = 3 * time.Nanosecond
+	relayRetryDelayTenNS        = 10 * time.Nanosecond
+	relayRetryDelayLargeAttempt = 60
+)
+
+func TestRelay_RetryDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		base     time.Duration
+		max      time.Duration
+		attempts int
+		wantMin  time.Duration
+		wantMax  time.Duration
+	}{
+		{
+			name:     "attempt_0_exact_when_jitter_range_zero",
+			base:     relayRetryDelayOneNS,
+			max:      relayRetryDelayTenNS,
+			attempts: 0,
+			wantMin:  relayRetryDelayOneNS,
+			wantMax:  relayRetryDelayOneNS,
+		},
+		{
+			name:     "attempt_1_exact_double_when_jitter_range_zero",
+			base:     relayRetryDelayOneNS,
+			max:      relayRetryDelayTenNS,
+			attempts: 1,
+			wantMin:  relayRetryDelayTwoNS,
+			wantMax:  relayRetryDelayTwoNS,
+		},
+		{
+			name:     "large_attempt_exact_cap_when_jitter_range_zero",
+			base:     relayRetryDelayOneNS,
+			max:      relayRetryDelayThreeNS,
+			attempts: relayRetryDelayLargeAttempt,
+			wantMin:  relayRetryDelayThreeNS,
+			wantMax:  relayRetryDelayThreeNS,
+		},
+		{
+			name:     "attempt_1_bounds_with_jitter",
+			base:     testtime.D1s,
+			max:      testtime.D10s,
+			attempts: 1,
+			wantMin:  testtime.D2s,
+			wantMax:  testtime.D2s + testtime.D2s/retryJitterDivisor,
+		},
+		{
+			name:     "large_attempt_cap_bounds_with_jitter",
+			base:     testtime.D5s,
+			max:      testtime.D10s,
+			attempts: relayRetryDelayLargeAttempt,
+			wantMin:  testtime.D10s,
+			wantMax:  testtime.D10s + testtime.D10s/retryJitterDivisor,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := &Relay{
+				cfg: RelayConfig{
+					BaseRetryDelay: tc.base,
+					MaxRetryDelay:  tc.max,
+				}.WithDefaults(),
+				clock: clock.Real(),
+			}
+
+			got := r.retryDelay(tc.attempts)
+			if tc.wantMin == tc.wantMax {
+				assert.Equal(t, tc.wantMin, got)
+				return
+			}
+			assert.GreaterOrEqual(t, got, tc.wantMin)
+			assert.LessOrEqual(t, got, tc.wantMax)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TruncateError / SanitizeError
 // ---------------------------------------------------------------------------
 

@@ -881,7 +881,10 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		wg.Go(func() {
 			inFlight.Add(1)
 			defer inFlight.Add(-1)
-			_, _ = testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
+			httpResp, _ := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
+			if httpResp != nil {
+				_ = httpResp.Body.Close()
+			}
 		})
 	}
 

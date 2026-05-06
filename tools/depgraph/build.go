@@ -63,7 +63,7 @@ func Load(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
 	// negatives. Surface the first error and let the caller decide.
 	for _, p := range pkgs {
 		if len(p.Errors) > 0 {
-			return nil, fmt.Errorf("packages.Load: package %q: %v", p.PkgPath, p.Errors[0])
+			return nil, fmt.Errorf("packages.Load: package %q: %w", p.PkgPath, p.Errors[0])
 		}
 	}
 	module := detectModule(pkgs)

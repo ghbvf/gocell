@@ -74,7 +74,7 @@ func scanEventSubscriptionCoverage(contractID, subPath string) error {
 	f, parseErr := parser.ParseFile(fset, subPath, nil, parser.SkipObjectResolution)
 	if parseErr != nil {
 		return fmt.Errorf(
-			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot parse %s: %v",
+			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot parse %s: %w",
 			subPath, parseErr,
 		)
 	}

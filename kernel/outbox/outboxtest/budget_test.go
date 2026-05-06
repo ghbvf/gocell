@@ -104,7 +104,7 @@ func TestCloseWithBudget_PassesErrorThroughOnHappyPath(t *testing.T) {
 	t.Parallel()
 	wantErr := context.DeadlineExceeded // any sentinel error
 	err := closeWithBudget(t, fastCloseSubscriber{err: wantErr}, "topic-ok", time.Second)
-	assertTrue(t, err == wantErr, "expected pass-through of subscriber Close error")
+	assertSameErrorIdentity(t, err, wantErr, "expected pass-through of subscriber Close error")
 }
 
 func TestAwaitWithBudget_TagsErrorWithLabelOnTimeout(t *testing.T) {

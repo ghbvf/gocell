@@ -30,11 +30,11 @@ const backoffJitterDivisor = 2
 // leaseRenewalDivisor determines the default LeaseRenewalInterval as a fraction
 // of LeaseTTL: interval = TTL / leaseRenewalDivisor. A value of 3 means renewal
 // fires at 1/3 of the TTL, providing two retry attempts before the lease expires.
-const leaseRenewalDivisor time.Duration = 3
+const leaseRenewalDivisor = 3
 
 // exponentialDelayBase is the untyped-int scaling unit for ExponentialDelay:
 // delay = base * (exponentialDelayBase << attempt). Must equal 1.
-const exponentialDelayBase time.Duration = 1
+const exponentialDelayBase = 1
 
 const (
 	// defaultConsumerBaseRetryBaseDelay is the base delay for exponential-backoff

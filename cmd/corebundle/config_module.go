@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -210,7 +211,7 @@ func replaceRegisteredCollectors(reg prom.Registerer, current *[]prom.Collector,
 	if err != nil {
 		unregisterCollectors(reg, registered)
 		if _, restoreErr := registerCollectorSet(reg, previous, label+" restore"); restoreErr != nil {
-			return fmt.Errorf("%w (also failed to restore previous collectors: %v)", err, restoreErr)
+			return fmt.Errorf("%w (also failed to restore previous collectors: %w)", err, restoreErr)
 		}
 		return err
 	}
@@ -242,8 +243,8 @@ func unregisterCollectors(reg prom.Registerer, collectors []prom.Collector) {
 func registerOrReuseCounter(reg prom.Registerer, opts prom.CounterOpts) (prom.Counter, error) {
 	c := prom.NewCounter(opts)
 	if err := reg.Register(c); err != nil {
-		are, ok := err.(prom.AlreadyRegisteredError)
-		if !ok {
+		var are prom.AlreadyRegisteredError
+		if !errors.As(err, &are) {
 			return nil, err
 		}
 		if existing, ok2 := are.ExistingCollector.(prom.Counter); ok2 {

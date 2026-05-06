@@ -33,7 +33,7 @@ const reauthBackoffInitial = time.Second
 const reauthBackoffCap = 60 * time.Second
 
 // reauthBackoffMultiplier is the exponential backoff factor applied on each retry.
-const reauthBackoffMultiplier time.Duration = 2
+const reauthBackoffMultiplier = 2
 
 // defaultStartupTimeout bounds the total time spent on Vault-facing startup I/O
 // (auth Login, optional wrap-token unwrap, initial key metadata read). Override

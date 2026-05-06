@@ -495,6 +495,29 @@ func assertNoError(t *testing.T, err error) {
 	}
 }
 
+func assertSameErrorIdentity(t *testing.T, got, want error, msgAndArgs ...any) {
+	t.Helper()
+	if sameErrorIdentity(got, want) {
+		return
+	}
+	suffix := ""
+	if len(msgAndArgs) > 0 {
+		suffix = " — " + fmt.Sprint(msgAndArgs...)
+	}
+	t.Fatalf("want exact error identity: got %T %v, want %T %v%s", got, got, want, want, suffix)
+}
+
+func sameErrorIdentity(got, want error) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	gv, wv := reflect.ValueOf(got), reflect.ValueOf(want)
+	if gv.Type() != wv.Type() || !gv.Comparable() {
+		return false
+	}
+	return gv.Equal(wv)
+}
+
 // assertEqual is a generic table-test helper. golangci-lint unparam currently
 // observes a single int32(1) call site, but the helper is positioned as the
 // reusable equality assertion for future table-driven tests across this file.

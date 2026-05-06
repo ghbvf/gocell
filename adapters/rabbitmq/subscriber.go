@@ -416,7 +416,7 @@ func (s *Subscriber) subscribeOnce(
 	setupErr := func(reconnectMsg string, err error, permanent func() error) error {
 		closeChannel()
 		if isRecoverableAMQPError(err) {
-			return fmt.Errorf("%w: %s: %v", errSubscriptionLost, reconnectMsg, err)
+			return fmt.Errorf("%w: %s: %w", errSubscriptionLost, reconnectMsg, err)
 		}
 		return permanent()
 	}
@@ -510,7 +510,7 @@ func classifyAcquireChannelError(err error) error {
 		return err
 	}
 	if isRecoverableAMQPError(err) {
-		return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
+		return fmt.Errorf("%w: acquire channel: %w", errSubscriptionLost, err)
 	}
 	return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
 }
