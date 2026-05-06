@@ -6,7 +6,7 @@
 
 | 文件 | 角色 |
 |---|---|
-| `docs/backlog.md` | **单源主入口**，按 14 capability units + 1 横切桶（`cap-x-cross`）分章节，含顶部索引 + Triggered Index |
+| `docs/backlog.md` | **单源主入口**，按 14 capability units + 1 横切桶（`cap-x-cross`）分章节，每章一张表 |
 | `docs/backlog/README.md` | 本文件 — 目录说明 + 框架引用 |
 | `docs/backlog/archive/` | DONE / WONTFIX item 人工归档目录（按季度命名，如 `2026-q2-completed.md`） |
 
@@ -37,34 +37,44 @@
 | 14 | 代码生成与治理工具链 | `cap-14-codegen-tooling` |
 | X | 横切（CI/lint、跨能力重构、文档、发布） | `cap-x-cross` |
 
-## Item schema（速查）
+## Item 表格 schema（每章节一张表，每条 item 一行）
 
 ```
-### [STATE] ID — 标题一句话
+| ID | 描述（**标题** — 现状: ...; 修复方向: ...） | Type | P/Cx | Flag | Trigger | Files | Source |
+```
 
-| Field | Value |
+| 列 | 取值 |
 |---|---|
-| Capability     | cap-NN-xxx (primary) — 可选 Also: [cap-MM, cap-PP] |
-| Type           | feat / bug / debt / refactor / arch-opt / doc / test / fu |
-| Priority       | P0 / P1 / P2 / P3 |
-| Complexity     | Cx1 / Cx2 / Cx3 |
-| ReleaseBlocker | yes / no（yes 必须配 Flag=🔴）|
-| Flag           | 🔴 硬约束 / 🟠 条件延后 / 🟡 可延后 / 🟢 已纳入 plan |
-| Trigger        | （仅 🟠 必填）触发条件 |
-| Files          | ≤ 3 个 |
-| Source         | PR# / review 报告路径 |
+| ID | 沿用旧值；新建项 `<CAP_NUM>-<DOMAIN>-<NNN>`（如 `05-AUTHN-001`）|
+| 描述 | 主内容：标题加粗 + 现状 + 修复方向，markdown 单元格内行内排版 |
+| Type | `feat` / `bug` / `debt` / `refactor` / `arch-opt` / `doc` / `test` / `fu`（`arch-opt` = "架构优化"）|
+| P/Cx | 例 `P1/Cx2`；DONE 行可填 `—` |
+| Flag | 🔴 硬约束（即"发布阻塞项"） / 🟠 条件延后 / 🟡 可延后 / 🟢 已纳入 plan / ✅ 已完成 |
+| Trigger | 仅 Flag=🟠 必填；触发条件文本 |
+| Files | ≤ 3 个主要涉及文件 |
+| Source | PR# / review 报告路径 / issue# |
 
-**现状**: ...
-**修复方向**: ...
-```
+## State 规约（隐式，不另设列）
 
-字段约束、cross-domain 决策规则、归档策略详见框架设计稿。
+- Flag=🔴/🟠/🟡/🟢 → 视为 OPEN（活动项）
+- Flag=✅ → 视为 DONE（待人工归档）
+- WONTFIX → 立即移到 `archive/` + 在 archive 文件保留理由
+- 没有 IN_PROGRESS 子段；in-progress 状态由 Source 列 PR# 自然表达
 
-## State 规约
+## 归档机制（人工）
 
-- `STATE` ∈ {OPEN, IN_PROGRESS, DONE, WONTFIX}（章节内按子段分组）
-- DONE 留主文件直至人工迁移到 `archive/`
-- WONTFIX 立即移到 `archive/` + 理由必填
+- DONE / ✅ 项留在主文件直至人工迁移到 `archive/`，无定时滚动
+- WONTFIX 立即移到 `archive/<year>-q<N>-completed.md`，理由必填
+
+## 跨域处理
+
+- 每条 item 物理只在 **一个** capability 章节出现（primary）
+- 次要 capability 在描述末尾标 `(also: cap-XX, cap-YY)`，便于 grep
+- Primary 决策规则（详见框架设计稿 §3）：
+  1. 主代码改动落在哪个 capability → primary
+  2. 平手 → contract 的 owner cell 所属 capability
+  3. 还平手 → `cells > runtime > kernel > tools` 优先级
+  4. 跨 ≥ 4 个 → `cap-x-cross`
 
 ## 迁移进度
 
