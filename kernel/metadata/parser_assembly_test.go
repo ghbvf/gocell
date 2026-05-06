@@ -11,7 +11,7 @@ import (
 // minimalAssemblyFS builds an fstest.MapFS with a single cell and an assembly
 // yaml. asmYAML is the raw assembly.yaml content; cellLevel is the consistency
 // level of the single cell "testcell".
-func minimalAssemblyFS(asmYAML string, cellLevel string) fstest.MapFS {
+func minimalAssemblyFS(asmYAML, cellLevel string) fstest.MapFS {
 	return fstest.MapFS{
 		"cells/testcell/cell.yaml": &fstest.MapFile{Data: []byte(`id: testcell
 type: core

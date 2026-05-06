@@ -84,7 +84,7 @@ func TestAssemblySchema_BuildOptional(t *testing.T) {
 }
 
 // formatf is a helper that avoids importing fmt in a test-only file.
-func formatf(format string, arg string) string {
+func formatf(format, arg string) string {
 	out := make([]byte, 0, len(format)+len(arg))
 	i := 0
 	for i < len(format) {

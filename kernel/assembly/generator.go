@@ -67,6 +67,10 @@ type boundaryContext struct {
 const (
 	internalAssemblyQuotedFmt = "assembly=%q"
 	internalTemplateQuotedFmt = "template=%q"
+	// msgAssemblyNotFound is the public message for ErrAssemblyNotFound;
+	// shared by GenerateEntrypoint / GenerateBoundary / GenerateModulesGen so
+	// the wire wording stays in one place.
+	msgAssemblyNotFound = "assembly not found"
 )
 
 // GenerateEntrypoint generates the main.go content for an assembly.
@@ -74,7 +78,7 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
-			"assembly not found",
+			msgAssemblyNotFound,
 			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
@@ -113,7 +117,7 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
-			"assembly not found",
+			msgAssemblyNotFound,
 			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
@@ -154,7 +158,7 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
-			"assembly not found",
+			msgAssemblyNotFound,
 			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
 	}
 
