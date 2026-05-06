@@ -706,3 +706,178 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 		t.Errorf("AuthBootstrap must propagate from auth.bootstrap:true, got false")
 	}
 }
+
+// --- Batch 1 RED (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE) ---
+//
+// These tests assert the new IR shapes introduced for typed response envelope
+// generation: PaginationShape (replaces IsPagination bool with structured form
+// that carries cursor/limit + non-pagination query params) and ResponseSpec
+// (lifts contract.yaml http.responses[] into the IR so handler/types/governance
+// share one declaration table).
+
+// TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit verifies that an
+// endpoint with exactly cursor+limit query params produces a non-nil
+// Pagination shape with HasCursor/HasLimit set and an empty ExtraQueryParams.
+// IsPagination() method must mirror Pagination != nil for template back-compat.
+func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method: "GET",
+		Path:   "/api/v1/orders",
+		QueryParams: map[string]metadata.ParamSchema{
+			"cursor": {Type: "string"},
+			"limit":  {Type: "integer"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.order.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+	if spec.Pagination == nil {
+		t.Fatal("Pagination shape must be populated for cursor+limit endpoint, got nil")
+	}
+	if !spec.Pagination.HasCursor || !spec.Pagination.HasLimit {
+		t.Errorf("Pagination must report HasCursor=true HasLimit=true, got HasCursor=%v HasLimit=%v",
+			spec.Pagination.HasCursor, spec.Pagination.HasLimit)
+	}
+	if len(spec.Pagination.ExtraQueryParams) != 0 {
+		t.Errorf("ExtraQueryParams must be empty for pure cursor+limit, got %d", len(spec.Pagination.ExtraQueryParams))
+	}
+	if !spec.IsPagination() {
+		t.Errorf("IsPagination() must return true when Pagination != nil")
+	}
+}
+
+// TestBuildHTTPEndpointSpec_PaginationShape_NoPagination verifies that an
+// endpoint with arbitrary query params (no cursor or no limit) produces a
+// nil Pagination shape and IsPagination() returns false.
+func TestBuildHTTPEndpointSpec_PaginationShape_NoPagination(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method: "GET",
+		Path:   "/api/v1/items",
+		QueryParams: map[string]metadata.ParamSchema{
+			"name": {Type: "string"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.item.search.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+	if spec.Pagination != nil {
+		t.Errorf("Pagination must be nil for non-cursor+limit endpoint, got %+v", spec.Pagination)
+	}
+	if spec.IsPagination() {
+		t.Errorf("IsPagination() must return false when Pagination == nil")
+	}
+}
+
+// TestBuildHTTPEndpointSpec_Responses_LiftFromContract verifies that
+// contract.yaml http.responses[] is lifted into the IR Responses slice.
+// Each declared error status produces a ResponseSpec with IsError=true,
+// the success status (from SuccessStatus) is also represented, and
+// GoTypeName follows the {HandlerMethod}{Status}{Suffix} convention.
+func TestBuildHTTPEndpointSpec_Responses_LiftFromContract(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/sessions/{id}",
+		SuccessStatus: 200,
+		PathParams: map[string]metadata.ParamSchema{
+			"id": {Type: "string", Format: "uuid"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			401: {Description: "Unauthorized", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+			404: {Description: "Not Found", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+			503: {Description: "Service Unavailable", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.access.session.get.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+
+	// Expect 4 entries (success 200 + 401/404/503 errors), sorted by status ascending.
+	if got, want := len(spec.Responses), 4; got != want {
+		t.Fatalf("Responses length = %d, want %d (success + 3 errors)", got, want)
+	}
+	wantOrder := []int{200, 401, 404, 503}
+	for i, status := range wantOrder {
+		if spec.Responses[i].Status != status {
+			t.Errorf("Responses[%d].Status = %d, want %d (must be sorted ascending)", i, spec.Responses[i].Status, status)
+		}
+	}
+
+	// Success entry: IsError=false, SchemaRef empty (success body is the response schema, not declared in responses[]).
+	if spec.Responses[0].IsError {
+		t.Errorf("success entry IsError = true, want false")
+	}
+	// Error entries: IsError=true.
+	for _, idx := range []int{1, 2, 3} {
+		if !spec.Responses[idx].IsError {
+			t.Errorf("Responses[%d] (status %d) IsError = false, want true", idx, spec.Responses[idx].Status)
+		}
+		if spec.Responses[idx].SchemaRef == "" {
+			t.Errorf("Responses[%d] (status %d) SchemaRef empty, want lifted from contract", idx, spec.Responses[idx].Status)
+		}
+	}
+
+	// GoTypeName convention: HandlerMethod="Get" → "Get200JSONResponse", "Get401ErrorResponse", etc.
+	wantGoNames := map[int]string{
+		200: "Get200JSONResponse",
+		401: "Get401ErrorResponse",
+		404: "Get404ErrorResponse",
+		503: "Get503ErrorResponse",
+	}
+	for _, r := range spec.Responses {
+		if got := r.GoTypeName; got != wantGoNames[r.Status] {
+			t.Errorf("Responses[status=%d].GoTypeName = %q, want %q", r.Status, got, wantGoNames[r.Status])
+		}
+	}
+}
+
+// TestBuildHTTPEndpointSpec_Responses_NoContent verifies that a 204 NoContent
+// success endpoint generates a *NoContentResponse Go type rather than the
+// JSONResponse suffix used for body-bearing success responses.
+func TestBuildHTTPEndpointSpec_Responses_NoContent(t *testing.T) {
+	t.Parallel()
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "DELETE",
+		Path:          "/api/v1/sessions/{id}",
+		SuccessStatus: 204,
+		NoContent:     true,
+		PathParams: map[string]metadata.ParamSchema{
+			"id": {Type: "string", Format: "uuid"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			401: {Description: "Unauthorized", SchemaRef: "../../../shared/errors/error-response-v1.schema.json"},
+		},
+	}
+	contract := &metadata.ContractMeta{ID: "http.access.session.delete.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+
+	// First entry is success (204), should use NoContentResponse suffix.
+	if spec.Responses[0].Status != 204 {
+		t.Fatalf("Responses[0].Status = %d, want 204", spec.Responses[0].Status)
+	}
+	if got, want := spec.Responses[0].GoTypeName, "Delete204NoContentResponse"; got != want {
+		t.Errorf("204 GoTypeName = %q, want %q (no-content success uses NoContentResponse suffix)", got, want)
+	}
+	if spec.Responses[0].IsError {
+		t.Errorf("204 success IsError = true, want false")
+	}
+}
