@@ -6,11 +6,16 @@
       "name": "TestNonexistent",
       "passed": false,
       "output": "",
-      "zeroMatch": true
+      "zeroMatch": true,
+      "skippedOnly": false
     }
   ],
   "errors": [
-    "zero tests matched -run pattern"
+    {
+      "code": "ERR_ZERO_TEST_MATCH",
+      "message": "zero tests matched -run pattern",
+      "details": []
+    }
   ],
   "manualPending": []
 }

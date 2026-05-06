@@ -51,7 +51,8 @@ func TestVerifySlice_NotFound(t *testing.T) {
 	require.Error(t, err)
 	var ecErrSlice *errcode.Error
 	require.True(t, errors.As(err, &ecErrSlice))
-	assert.Contains(t, ecErrSlice.Message+" "+ecErrSlice.InternalMessage, "not found")
+	assert.Contains(t, ecErrSlice.Message, "not found")
+	assertDetailString(t, ecErrSlice, "slice", "cell/missing")
 }
 
 func TestVerifyCell_NotFound(t *testing.T) {
@@ -62,7 +63,8 @@ func TestVerifyCell_NotFound(t *testing.T) {
 	require.Error(t, err)
 	var ecErrCell *errcode.Error
 	require.True(t, errors.As(err, &ecErrCell))
-	assert.Contains(t, ecErrCell.Message+" "+ecErrCell.InternalMessage, "not found")
+	assert.Contains(t, ecErrCell.Message, "not found")
+	assertDetailString(t, ecErrCell, "cell", "missing")
 }
 
 func TestRunJourney_NotFound(t *testing.T) {
@@ -73,7 +75,8 @@ func TestRunJourney_NotFound(t *testing.T) {
 	require.Error(t, err)
 	var ecErrJourney *errcode.Error
 	require.True(t, errors.As(err, &ecErrJourney))
-	assert.Contains(t, ecErrJourney.Message+" "+ecErrJourney.InternalMessage, "not found")
+	assert.Contains(t, ecErrJourney.Message, "not found")
+	assertDetailString(t, ecErrJourney, "journey", "missing")
 }
 
 func TestRunJourney_ManualPending(t *testing.T) {
@@ -235,7 +238,8 @@ func TestJOtherHappyPath(t *testing.T) {}
 	require.Len(t, errs, 1)
 	var ecErrScope *errcode.Error
 	require.True(t, errors.As(errs[0], &ecErrScope))
-	assert.Contains(t, ecErrScope.Message+" "+ecErrScope.InternalMessage, "J-other")
+	assertDetailString(t, ecErrScope, "scope", "J-other")
+	assertDetailString(t, ecErrScope, "journey", "J-current")
 }
 
 func TestRunJourneyCheckRef_RejectsNonJourneyRef(t *testing.T) {
@@ -379,7 +383,9 @@ func TestRecordResult_ZeroMatchMessage(t *testing.T) {
 	require.Len(t, result.Errors, 1)
 	var ecErrZero *errcode.Error
 	require.True(t, errors.As(result.Errors[0], &ecErrZero))
-	assert.Contains(t, ecErrZero.Message+" "+ecErrZero.InternalMessage, "check your YAML ref")
+	assert.Contains(t, ecErrZero.Message, "check your YAML ref")
+	assertDetailString(t, ecErrZero, "pattern", "SomePattern")
+	assertDetailString(t, ecErrZero, "pkg", "./pkg/...")
 }
 
 func TestRecordResult_SkipOnlyFails(t *testing.T) {
@@ -390,12 +396,14 @@ func TestRecordResult_SkipOnlyFails(t *testing.T) {
 	require.Len(t, result.Errors, 1)
 	var ecErrSkip *errcode.Error
 	require.True(t, errors.As(result.Errors[0], &ecErrSkip))
-	assert.Contains(t, ecErrSkip.Message+" "+ecErrSkip.InternalMessage, "only skipped tests")
+	assert.Contains(t, ecErrSkip.Message, "only skipped tests")
+	assertDetailString(t, ecErrSkip, "pattern", "^TestFoo$")
+	assertDetailString(t, ecErrSkip, "pkg", "./pkg/...")
 }
 
 // TestRecordResult_ZeroMatchNoPattern covers the pattern=="" else branch
-// (PR #391 K#08 split: pattern presence determines public message, runtime
-// detail rides on WithInternal). Without explicit coverage, recordResult's
+// (PR #391 K#08 split: pattern presence determines public message, fixable
+// verify context rides on public WithDetails). Without explicit coverage, recordResult's
 // else arms drop kernel/verify below the 90% gate.
 func TestRecordResult_ZeroMatchNoPattern(t *testing.T) {
 	result := &VerifyResult{TargetID: "test", Passed: true}
@@ -406,7 +414,7 @@ func TestRecordResult_ZeroMatchNoPattern(t *testing.T) {
 	var ec *errcode.Error
 	require.True(t, errors.As(result.Errors[0], &ec))
 	assert.Equal(t, "matched no tests", ec.Message)
-	assert.Contains(t, ec.InternalMessage, "pkg=./pkg/...")
+	assertDetailString(t, ec, "pkg", "./pkg/...")
 }
 
 // TestRecordResult_SkipOnlyNoPattern covers the SkippedOnly pattern=="" else
@@ -420,5 +428,12 @@ func TestRecordResult_SkipOnlyNoPattern(t *testing.T) {
 	var ec *errcode.Error
 	require.True(t, errors.As(result.Errors[0], &ec))
 	assert.Equal(t, "matched only skipped tests", ec.Message)
-	assert.Contains(t, ec.InternalMessage, "pkg=./pkg/...")
+	assertDetailString(t, ec, "pkg", "./pkg/...")
+}
+
+func assertDetailString(t *testing.T, ec *errcode.Error, key, want string) {
+	t.Helper()
+	attr, ok := ec.FindAttr(key)
+	require.True(t, ok, "missing detail attr %q", key)
+	assert.Equal(t, want, attr.Value.String())
 }

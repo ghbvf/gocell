@@ -16,8 +16,6 @@ import (
 
 const (
 	msgInternalServerError = "internal server error"
-	msgGatewayTimeout      = "gateway timeout"
-	msgServiceUnavailable  = "service unavailable"
 
 	headerContentType = "Content-Type"
 	contentTypeJSON   = "application/json"
@@ -167,7 +165,6 @@ func appendCorrelationAttrs(ctx context.Context, attrs []any) []any {
 
 func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string, ecErr *errcode.Error) {
 	status := ecErr.Status()
-	out := ecErr
 
 	if status == StatusClientClosedRequest {
 		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
@@ -181,20 +178,9 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	case status >= 500:
 		publicCode := ecErr.PublicCode()
 		log5xx(ctx, label, ecErr, status, publicCode)
-		// Replace internal code/message with public sentinel before serializing;
-		// Error.MarshalJSON also strips Details for 5xx, so the resulting wire
-		// body never carries runtime context out of the process.
-		switch status {
-		case http.StatusServiceUnavailable:
-			out = errcode.New(ecErr.Kind, publicCode, msgServiceUnavailable)
-		case http.StatusGatewayTimeout:
-			out = errcode.New(ecErr.Kind, publicCode, msgGatewayTimeout)
-		default:
-			out = errcode.New(ecErr.Kind, publicCode, msgInternalServerError)
-		}
 	}
 
-	writeErrorBody(ctx, w, status, out)
+	writeErrorBody(ctx, w, status, ecErr)
 }
 
 // sentinelInternalErrorBody is the JSON body emitted when the canonical

@@ -82,6 +82,17 @@ func (k Kind) PublicCode() Code {
 	}
 }
 
+func (k Kind) publicMessage() string {
+	switch k.Status() {
+	case http.StatusServiceUnavailable:
+		return "service unavailable"
+	case http.StatusGatewayTimeout:
+		return "gateway timeout"
+	default:
+		return "internal server error"
+	}
+}
+
 // PublicCodeForStatus returns the wire-safe error code for an HTTP status.
 // It is retained for framework-owned raw responses that start from a status
 // before they construct an Error.

@@ -126,16 +126,26 @@ func TestVerifyJSONPrinter_Schema(t *testing.T) {
 
 	// Re-parse into a local DTO that mirrors the wire schema.
 	type testResultDTO struct {
-		Name      string `json:"name"`
-		Passed    bool   `json:"passed"`
-		Output    string `json:"output"`
-		ZeroMatch bool   `json:"zeroMatch"`
+		Name        string `json:"name"`
+		Passed      bool   `json:"passed"`
+		Output      string `json:"output"`
+		ZeroMatch   bool   `json:"zeroMatch"`
+		SkippedOnly bool   `json:"skippedOnly"`
+	}
+	type errorDetailDTO struct {
+		Key   string `json:"key"`
+		Value any    `json:"value"`
+	}
+	type errorDTO struct {
+		Code    string           `json:"code"`
+		Message string           `json:"message"`
+		Details []errorDetailDTO `json:"details"`
 	}
 	type doc struct {
 		TargetID      string          `json:"targetId"`
 		Passed        bool            `json:"passed"`
 		Results       []testResultDTO `json:"results"`
-		Errors        []string        `json:"errors"`
+		Errors        []errorDTO      `json:"errors"`
 		ManualPending []string        `json:"manualPending"`
 	}
 
@@ -148,8 +158,11 @@ func TestVerifyJSONPrinter_Schema(t *testing.T) {
 	assert.True(t, got.Results[0].Passed)
 	assert.Equal(t, "ok", got.Results[0].Output)
 	assert.False(t, got.Results[0].ZeroMatch)
+	assert.False(t, got.Results[0].SkippedOnly)
 	require.Len(t, got.Errors, 1)
-	assert.NotEmpty(t, got.Errors[0])
+	assert.Equal(t, "ERR_INTERNAL", got.Errors[0].Code)
+	assert.NotEmpty(t, got.Errors[0].Message)
+	assert.Empty(t, got.Errors[0].Details)
 	require.Len(t, got.ManualPending, 1)
 	assert.Equal(t, "check-1", got.ManualPending[0])
 }

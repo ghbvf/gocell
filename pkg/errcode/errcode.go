@@ -5,8 +5,13 @@ package errcode
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"reflect"
+	"strconv"
+	"strings"
 )
 
 // Code is a typed error code string.
@@ -601,6 +606,39 @@ const (
 	ErrMetricsSchemaUnresolved Code = "ERR_METRICS_SCHEMA_UNRESOLVED"
 )
 
+// PublicDetail is the wire-safe key/value shape used in public error
+// projections. Values are limited to JSON scalar types by WithDetails and by
+// the defensive MarshalJSON path.
+type PublicDetail struct {
+	Key   string `json:"key"`
+	Value any    `json:"value"`
+}
+
+// PublicError is the structured projection shared by HTTP responses, CLI text
+// rendering, and machine-readable command output.
+type PublicError struct {
+	Code    Code           `json:"code"`
+	Message string         `json:"message"`
+	Details []PublicDetail `json:"details"`
+
+	// Operator-only fields. They are omitted from HTTP/public projections but
+	// let local CLI and CI output preserve a routeable source code for 5xx
+	// failures without exposing InternalMessage, Cause, or server-side Details.
+	SourceCode Code `json:"sourceCode,omitempty"`
+	Status     int  `json:"status,omitempty"`
+}
+
+// MarshalJSON keeps the details field schema-stable even when callers build a
+// PublicError literal instead of using the projection helpers.
+func (p PublicError) MarshalJSON() ([]byte, error) {
+	type publicError PublicError
+	out := publicError(p)
+	if out.Details == nil {
+		out.Details = []PublicDetail{}
+	}
+	return json.Marshal(out)
+}
+
 // Option customizes an Error at construction time.
 type Option func(*Error)
 
@@ -625,12 +663,13 @@ func WithInternal(message string) Option {
 // list from 5xx errors so server-side runtime context never leaks to clients.
 //
 // Allowed kinds (JSON-safe scalar): KindString, KindInt64, KindUint64,
-// KindFloat64, KindBool, KindDuration, KindTime. Any other kind — KindAny,
-// KindGroup, KindLogValuer — panics via MustValidateDetailsKinds: those carry
-// arbitrary Go values or nested structures whose Value.Any() output is
-// handler-dependent (per stdlib log/slog docs, slog.Attr is a logging
-// carrier, not a wire DTO). go-kratos errors.Metadata uses map<string,
-// string> for the same reason; this is the static-by-construction analog.
+// KindFloat64 with finite values only, KindBool, KindDuration, KindTime. Any
+// other kind — KindAny, KindGroup, KindLogValuer — panics via
+// MustValidateDetailsKinds: those carry arbitrary Go values or nested
+// structures whose Value.Any() output is handler-dependent (per stdlib
+// log/slog docs, slog.Attr is a logging carrier, not a wire DTO). go-kratos
+// errors.Metadata uses map<string,string> for the same reason; this is the
+// static-by-construction analog.
 //
 // Multiple WithDetails calls accumulate; attributes are appended in call order.
 //
@@ -664,6 +703,12 @@ func MustValidateDetailsKinds(attrs []slog.Attr) {
 					"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
 				attr.Key, attr.Value.Kind()))
 		}
+		if !isWireSafeAttrValue(attr) {
+			panic(Assertion(
+				"errcode.WithDetails: attr %q has non-finite float64 value; "+
+					"use a finite number or string sentinel",
+				attr.Key))
+		}
 	}
 }
 
@@ -681,6 +726,14 @@ func isWireSafeAttrKind(k slog.Kind) bool {
 	default:
 		return false
 	}
+}
+
+func isWireSafeAttrValue(attr slog.Attr) bool {
+	if attr.Value.Kind() != slog.KindFloat64 {
+		return true
+	}
+	f := attr.Value.Float64()
+	return !math.IsNaN(f) && !math.IsInf(f, 0)
 }
 
 // Error is a structured error that carries a machine-readable Code, a
@@ -734,39 +787,22 @@ func (e *Error) FindAttr(key string) (slog.Attr, bool) {
 // Defense-in-depth: WithDetails already rejects wire-unsafe kinds at
 // construction time, but a hand-built *Error (e.g. test fixture, future
 // code path that bypasses the option) might still attach KindAny / Group /
-// LogValuer. In that case we substitute the value with the unsafeKindMarker
-// sentinel so the wire payload stays JSON-safe and operators see the
-// substitution in their logs.
+// LogValuer. A direct KindFloat64 with NaN/Inf is also JSON-unsafe because
+// encoding/json rejects non-finite floats. In those cases we substitute the
+// value with a stable sentinel so the wire payload stays JSON-safe and
+// operators see the substitution in their logs.
 func (e *Error) MarshalJSON() ([]byte, error) {
-	type kv struct {
-		Key   string `json:"key"`
-		Value any    `json:"value"`
+	return json.Marshal(e.PublicProjection())
+}
+
+func publicDetailWireValue(attr slog.Attr) (any, string) {
+	if !isWireSafeAttrKind(attr.Value.Kind()) {
+		return unsafeKindMarker, unsafeKindMarker
 	}
-	wire := struct {
-		Code    Code   `json:"code"`
-		Message string `json:"message"`
-		Details []kv   `json:"details"`
-	}{
-		Code:    e.Code,
-		Message: e.Message,
-		Details: []kv{},
+	if !isWireSafeAttrValue(attr) {
+		return unsafeValueMarker, unsafeValueMarker
 	}
-	if e.Kind.IsClient() {
-		wire.Details = make([]kv, 0, len(e.Details))
-		for _, attr := range e.Details {
-			value := attr.Value.Any()
-			if !isWireSafeAttrKind(attr.Value.Kind()) {
-				slog.Error(
-					"errcode: details attr bypassed WithDetails kind whitelist; substituting wire value",
-					slog.String("key", attr.Key),
-					slog.String("kind", attr.Value.Kind().String()),
-				)
-				value = unsafeKindMarker
-			}
-			wire.Details = append(wire.Details, kv{Key: attr.Key, Value: value})
-		}
-	}
-	return json.Marshal(wire)
+	return attr.Value.Any(), ""
 }
 
 // unsafeKindMarker is the sentinel value substituted in MarshalJSON when a
@@ -774,6 +810,8 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 // fixed (not formatted with the actual kind) so that wire payloads remain
 // stable and tests can assert on it.
 const unsafeKindMarker = "<UNSUPPORTED_KIND>"
+
+const unsafeValueMarker = "<UNSUPPORTED_VALUE>"
 
 // Error returns a formatted string representation for logging/diagnostics.
 // When InternalMessage is set it is preferred over Message, because Error()
@@ -788,6 +826,288 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("[%s] %s: %s", e.Code, msg, e.Cause.Error())
 	}
 	return fmt.Sprintf("[%s] %s", e.Code, msg)
+}
+
+// PublicProjection returns the HTTP/public structured projection for e.
+func (e *Error) PublicProjection() PublicError {
+	return e.project(publicSurface)
+}
+
+// OperatorProjection returns the CLI/CI structured projection for e. It keeps
+// the public code/message/details contract, and for 5xx errors adds routeable
+// source metadata that is safe for local operators.
+func (e *Error) OperatorProjection() PublicError {
+	return e.project(operatorSurface)
+}
+
+type projectionSurface int
+
+const (
+	publicSurface projectionSurface = iota
+	operatorSurface
+)
+
+func (e *Error) project(surface projectionSurface) PublicError {
+	if e == nil {
+		return PublicError{Code: ErrInternal, Message: "internal server error", Details: []PublicDetail{}}
+	}
+
+	out := PublicError{
+		Code:    e.Code,
+		Message: e.Message,
+		Details: publicDetails(e.Details),
+	}
+	if !e.Kind.IsClient() {
+		out.Code = e.PublicCode()
+		out.Message = e.Kind.publicMessage()
+		out.Details = []PublicDetail{}
+		if surface == operatorSurface {
+			out.SourceCode = e.Code
+			out.Status = e.Status()
+		}
+	}
+	return out
+}
+
+func publicDetails(attrs []slog.Attr) []PublicDetail {
+	if len(attrs) == 0 {
+		return []PublicDetail{}
+	}
+	details := make([]PublicDetail, 0, len(attrs))
+	for _, attr := range attrs {
+		value, substitute := publicDetailWireValue(attr)
+		switch substitute {
+		case unsafeKindMarker:
+			slog.Error(
+				"errcode: details attr bypassed WithDetails kind whitelist; substituting wire value",
+				slog.String("key", attr.Key),
+				slog.String("kind", attr.Value.Kind().String()),
+			)
+		case unsafeValueMarker:
+			slog.Error(
+				"errcode: details attr bypassed WithDetails value whitelist; substituting wire value",
+				slog.String("key", attr.Key),
+				slog.String("kind", attr.Value.Kind().String()),
+			)
+		}
+		details = append(details, PublicDetail{Key: attr.Key, Value: value})
+	}
+	return details
+}
+
+// PublicProjection returns the public structured projections for err. Joined
+// errors are flattened so machine consumers can route each error independently.
+func PublicProjection(err error) []PublicError {
+	return projectError(err, publicSurface)
+}
+
+// OperatorProjection returns the operator structured projections for err.
+func OperatorProjection(err error) []PublicError {
+	return projectError(err, operatorSurface)
+}
+
+var errcodeErrorType = reflect.TypeOf((*Error)(nil))
+
+func projectError(err error, surface projectionSurface) []PublicError {
+	if err == nil {
+		return nil
+	}
+	if out, ok := projectDirectError(err, surface); ok {
+		return out
+	}
+	if out, ok := projectJoinedError(err, surface); ok {
+		return out
+	}
+	if out, ok := projectWrappedErrcode(err, surface); ok {
+		return out
+	}
+	if out, ok := projectMatchedErrcode(err, surface); ok {
+		return out
+	}
+	return []PublicError{fallbackProjection(err, surface)}
+}
+
+func projectDirectError(err error, surface projectionSurface) ([]PublicError, bool) {
+	if ec, ok := directError(err); ok {
+		return []PublicError{ec.project(surface)}, true
+	}
+	return nil, false
+}
+
+func directError(err error) (*Error, bool) {
+	if reflect.TypeOf(err) != errcodeErrorType {
+		return nil, false
+	}
+	var ec *Error
+	if !errors.As(err, &ec) {
+		return nil, false
+	}
+	return ec, true
+}
+
+func projectJoinedError(err error, surface projectionSurface) ([]PublicError, bool) {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		out := projectErrorChildren(joined.Unwrap(), surface)
+		if len(out) > 0 {
+			return out, true
+		}
+	}
+	return nil, false
+}
+
+func projectErrorChildren(children []error, surface projectionSurface) []PublicError {
+	out := make([]PublicError, 0, len(children))
+	for _, child := range children {
+		out = append(out, projectError(child, surface)...)
+	}
+	return out
+}
+
+func projectWrappedErrcode(err error, surface projectionSurface) ([]PublicError, bool) {
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		child := wrapped.Unwrap()
+		if child != nil {
+			if _, ok := child.(interface{ Unwrap() []error }); ok {
+				out := projectError(child, surface)
+				if len(out) > 0 {
+					return out, true
+				}
+			}
+			var childEC *Error
+			if errors.As(child, &childEC) {
+				return projectError(child, surface), true
+			}
+		}
+	}
+	return nil, false
+}
+
+func projectMatchedErrcode(err error, surface projectionSurface) ([]PublicError, bool) {
+	var ec *Error
+	if errors.As(err, &ec) {
+		return []PublicError{ec.project(surface)}, true
+	}
+	return nil, false
+}
+
+func fallbackProjection(err error, surface projectionSurface) PublicError {
+	msg := "internal server error"
+	if surface == operatorSurface {
+		msg = err.Error()
+	}
+	return PublicError{
+		Code:    ErrInternal,
+		Message: msg,
+		Details: []PublicDetail{},
+	}
+}
+
+// PublicString renders err for user-facing public output. It preserves the
+// public Code, Message, and 4xx Details, but never uses InternalMessage or
+// Cause from *Error because those may carry runtime diagnostics.
+func PublicString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return projectString(err, publicSurface)
+}
+
+// OperatorString renders err for local CLI and CI output. It is still safe for
+// secrets in errcode internals, but includes sourceCode/status on 5xx errcodes
+// so operators can route failures without guessing from a generic 500 label.
+func OperatorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return projectString(err, operatorSurface)
+}
+
+func projectString(err error, surface projectionSurface) string {
+	if ec, ok := directError(err); ok {
+		return formatProjectedError(ec.project(surface))
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		parts := make([]string, 0, len(children))
+		for _, child := range children {
+			if child == nil {
+				continue
+			}
+			parts = append(parts, projectString(child, surface))
+		}
+		return strings.Join(parts, "\n")
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		child := wrapped.Unwrap()
+		if child != nil {
+			return strings.ReplaceAll(err.Error(), child.Error(), projectString(child, surface))
+		}
+	}
+	var ec *Error
+	if !errors.As(err, &ec) {
+		return err.Error()
+	}
+	return strings.ReplaceAll(err.Error(), ec.Error(), formatProjectedError(ec.project(surface)))
+}
+
+// PublicString renders e with the same public surface used by HTTP clients.
+func (e *Error) PublicString() string {
+	if e == nil {
+		return ""
+	}
+	return formatProjectedError(e.PublicProjection())
+}
+
+// OperatorString renders e with the CLI/CI operator surface.
+func (e *Error) OperatorString() string {
+	if e == nil {
+		return ""
+	}
+	return formatProjectedError(e.OperatorProjection())
+}
+
+func formatProjectedError(p PublicError) string {
+	msg := fmt.Sprintf("[%s] %s", p.Code, p.Message)
+	details := formatPublicDetails(p.Details)
+	if p.Status != 0 {
+		details = appendDetail(details, fmt.Sprintf("status=%d", p.Status))
+	}
+	if p.SourceCode != "" {
+		details = appendDetail(details, fmt.Sprintf("sourceCode=%s", p.SourceCode))
+	}
+	if details == "" {
+		return msg
+	}
+	return fmt.Sprintf("%s (%s)", msg, details)
+}
+
+func formatPublicDetails(details []PublicDetail) string {
+	if len(details) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(details))
+	for _, detail := range details {
+		if detail.Key == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", detail.Key, formatPublicDetailValue(detail.Value)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func appendDetail(details, detail string) string {
+	if details == "" {
+		return detail
+	}
+	return details + ", " + detail
+}
+
+func formatPublicDetailValue(value any) string {
+	raw, err := json.Marshal(value)
+	if err == nil {
+		return string(raw)
+	}
+	return strconv.Quote(fmt.Sprint(value))
 }
 
 // Unwrap returns the underlying Cause, enabling errors.Is / errors.As chains.

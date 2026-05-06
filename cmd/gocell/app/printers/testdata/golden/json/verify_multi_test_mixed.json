@@ -6,23 +6,30 @@
       "name": "TestA",
       "passed": true,
       "output": "",
-      "zeroMatch": false
+      "zeroMatch": false,
+      "skippedOnly": false
     },
     {
       "name": "TestB",
       "passed": false,
       "output": "assertion failed",
-      "zeroMatch": false
+      "zeroMatch": false,
+      "skippedOnly": false
     },
     {
       "name": "TestC",
       "passed": true,
       "output": "",
-      "zeroMatch": false
+      "zeroMatch": false,
+      "skippedOnly": false
     }
   ],
   "errors": [
-    "subprocess exit 1"
+    {
+      "code": "ERR_INTERNAL",
+      "message": "subprocess exit 1",
+      "details": []
+    }
   ],
   "manualPending": [
     "manual smoke test pending"
