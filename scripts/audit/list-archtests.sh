@@ -16,6 +16,11 @@
 
 set -euo pipefail
 
+# Pin sort/awk locale so the inventory order is bit-identical on macOS dev
+# boxes and Linux CI runners. Without LC_ALL=C, GNU sort folds case and
+# treats punctuation differently than BSD sort, which surfaces as drift.
+export LC_ALL=C
+
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 
@@ -47,11 +52,19 @@ archtest_files=()
 while IFS= read -r line; do archtest_files+=("${line}"); done < <(find "${archtest_dir}" -maxdepth 1 -type f -name '*_test.go' | sort)
 archtest_count="${#archtest_files[@]}"
 
-# extract_rules collects rule rows (id<TAB>basename<TAB>line) for one file:
-# 1) Prefer explicit `// INVARIANT: <ID>` anchors (any line). Theme files like
-#    outbox_invariants_test.go declare all rules this way.
-# 2) Fall back to bare leading-comment IDs in first 50 lines (e.g. single-rule
-#    files like auth_plan_test.go that pre-date the INVARIANT anchor convention).
+# extract_rules collects rule rows (id<TAB>basename<TAB>line) for one file.
+#
+# Anchor grammar (all variants emit one row per declared ID):
+#   // INVARIANT: ID-01
+#   // INVARIANT: ID-01..04                          # numeric range
+#   // INVARIANT: ID-01, ID-02, ID-03                # comma list
+#   // INVARIANT: ID-01..02, OTHER-ID-01             # mixed
+#   // INVARIANT: ID-01, ID-02,                      # multi-line continuation:
+#   //            ID-03, ID-04                       # any subsequent comment
+#   //            ID-05                              # line until trailing comma drops
+#
+# Fallback (legacy single-rule files without the anchor): scan first 100
+# lines for any ID-shape literal, take first occurrence per ID.
 extract_rules() {
   local file="${1}"
   local base
@@ -60,26 +73,87 @@ extract_rules() {
   # `-<UPPER>` middle segments, ending in `-<digits>`. Matches OBS-01 (2-seg)
   # through CLOCK-INJECTION-PROD-CALLSITE-01 (5-seg).
   local id_pattern='[A-Z][A-Z0-9]+(-[A-Z0-9]+)*-[0-9]+'
-  local anchored
-  anchored="$(grep -nE "^[[:space:]]*//[[:space:]]*INVARIANT:[[:space:]]+${id_pattern}" "${file}" 2>/dev/null || true)"
-  if [[ -n "${anchored}" ]]; then
-    echo "${anchored}" | awk -v base="${base}" -v idre="${id_pattern}" '
-      {
-        idx = index($0, ":");
-        if (idx <= 0) next;
-        lineno = substr($0, 1, idx - 1);
-        if (match($0, idre)) {
-          id = substr($0, RSTART, RLENGTH);
-          print id "\t" base "\t" lineno;
+
+  if grep -qE "^[[:space:]]*//[[:space:]]*INVARIANT:[[:space:]]+${id_pattern}" "${file}" 2>/dev/null; then
+    awk -v base="${base}" -v idre="${id_pattern}" '
+      function trim(s) {
+        sub(/^[[:space:]]+/, "", s);
+        sub(/[[:space:]]+$/, "", s);
+        return s;
+      }
+      function emit_id(id, lineno) {
+        print id "\t" base "\t" lineno;
+      }
+      function expand_token(tok, lineno,    head, dotdot_pos, end_str, last_dash, start_str, width, i, fmt, padded, plain_id) {
+        # Range form: token starts with "<ID>..<digits>" (with the ID itself
+        # ending in a numeric segment so we know where to splice).
+        if (match(tok, /^[A-Z][A-Z0-9]+(-[A-Z0-9]+)*-[0-9]+\.\.[0-9]+/)) {
+          head = substr(tok, RSTART, RLENGTH);
+          dotdot_pos = index(head, "..");
+          end_str    = substr(head, dotdot_pos + 2);
+          start_id   = substr(head, 1, dotdot_pos - 1);
+          # split start_id into "<prefix>-<digits>" via the trailing -NN.
+          last_dash = match(start_id, /-[0-9]+$/);
+          if (last_dash > 0) {
+            start_str = substr(start_id, last_dash + 1);
+            width = length(start_str);
+            fmt = "%0" width "d";
+            for (i = start_str + 0; i <= end_str + 0; i++) {
+              padded = sprintf(fmt, i);
+              emit_id(substr(start_id, 1, last_dash) padded, lineno);
+            }
+            return;
+          }
         }
-      }'
+        # Plain ID at the start of the token (description / colon / dash
+        # tail is allowed and ignored).
+        if (match(tok, /^[A-Z][A-Z0-9]+(-[A-Z0-9]+)*-[0-9]+/)) {
+          plain_id = substr(tok, RSTART, RLENGTH);
+          emit_id(plain_id, lineno);
+        }
+      }
+      function flush(text, lineno,    parts, n, i, tok) {
+        n = split(text, parts, ",");
+        for (i = 1; i <= n; i++) {
+          tok = trim(parts[i]);
+          if (tok != "") {
+            expand_token(tok, lineno);
+          }
+        }
+      }
+      {
+        # Detect anchor start.
+        if (match($0, /^[[:space:]]*\/\/[[:space:]]*INVARIANT:[[:space:]]*/)) {
+          start_line = NR;
+          # Strip the prefix; keep the payload (may be incomplete on continuation).
+          payload = substr($0, RSTART + RLENGTH);
+          # Drop trailing CR (CRLF tolerance).
+          sub(/\r$/, "", payload);
+          # Continuation while payload ends with a comma (after trim).
+          while (match(payload, /,[[:space:]]*$/)) {
+            if ((getline next_line) <= 0) break;
+            sub(/\r$/, "", next_line);
+            if (match(next_line, /^[[:space:]]*\/\/[[:space:]]*/)) {
+              cont = substr(next_line, RSTART + RLENGTH);
+              # Empty `//` line breaks the continuation.
+              if (trim(cont) == "") break;
+              payload = payload " " cont;
+            } else {
+              break;
+            }
+          }
+          flush(payload, start_line);
+        }
+      }
+    ' "${file}"
     return
   fi
+
   head -n 100 "${file}" 2>/dev/null \
     | awk -v base="${base}" -v idre="${id_pattern}" '
-        # Legacy single-rule files: scan first 100 lines for any ID pattern
-        # in either comments or const string literals. Take first occurrence
-        # per unique ID.
+        # Legacy single-rule files: scan first 100 lines for any ID-shape
+        # literal in either comments or const string literals. Take first
+        # occurrence per unique ID.
         match($0, idre) {
           id = substr($0, RSTART, RLENGTH);
           if (!(id in seen)) {

@@ -816,7 +816,11 @@ func (v outboxServiceViolation) String() string {
 	return fmt.Sprintf("%s: %s:%d: %s", v.Rule, v.File, v.Line, v.Message)
 }
 
-// INVARIANT: OUTBOX-SERVICE-01..05
+// INVARIANT: OUTBOX-SERVICE-01
+// INVARIANT: OUTBOX-SERVICE-02
+// INVARIANT: OUTBOX-SERVICE-03
+// INVARIANT: OUTBOX-SERVICE-04
+// INVARIANT: OUTBOX-SERVICE-05
 //
 // TestSliceServicesDoNotBypassTransactionalOutbox enforces OUTBOX-SERVICE-01..05
 // on cells/**/slices/**/service.go files.

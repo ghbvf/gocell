@@ -51,7 +51,10 @@ const (
 var _ func(string, *metadata.ProjectMeta) (map[string]markergen.WireBundle, error) = markergen.Merge
 
 // ============================================================
-// INVARIANT: CODEGEN-CELL-GEN-01..04
+// INVARIANT: CODEGEN-CELL-GEN-01
+// INVARIANT: CODEGEN-CELL-GEN-02
+// INVARIANT: CODEGEN-CELL-GEN-03
+// INVARIANT: CODEGEN-CELL-GEN-04
 // ============================================================
 //
 // These gates protect the generator's contract on cells that have opted
@@ -245,7 +248,9 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 }
 
 // ============================================================
-// INVARIANT: CODEGEN-CONTRACT-GEN-01..02, CODEGEN-CONTRACT-USER-OVERLAP-01
+// INVARIANT: CODEGEN-CONTRACT-GEN-01
+// INVARIANT: CODEGEN-CONTRACT-GEN-02
+// INVARIANT: CODEGEN-CONTRACT-USER-OVERLAP-01
 // ============================================================
 //
 // Gates protect the generator's contract on contracts that have opted into
@@ -404,7 +409,8 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 }
 
 // ============================================================
-// INVARIANT: COMMAND-PROJECTION-EXPLICIT-01, SPEC-GEN-VALUE-PARITY-01
+// INVARIANT: COMMAND-PROJECTION-EXPLICIT-01
+// INVARIANT: SPEC-GEN-VALUE-PARITY-01
 // ============================================================
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#06
@@ -549,9 +555,11 @@ func TestSPEC_GEN_VALUE_PARITY_01_NegativeFixture_WrongIDInStruct(t *testing.T) 
 }
 
 // ============================================================
-// INVARIANT: NO-METADATA-LITERAL-IN-CELLGO-01, NO-WIRE-FIELDS-IN-YAML-01,
-//            MARKER-MISSING-FOR-WIRE-CALL-01, MARKERGEN-DRIFT-VERIFY-01,
-//            MARKER-WIRE-SINGLE-SOURCE-01
+// INVARIANT: NO-METADATA-LITERAL-IN-CELLGO-01
+// INVARIANT: NO-WIRE-FIELDS-IN-YAML-01
+// INVARIANT: MARKER-MISSING-FOR-WIRE-CALL-01
+// INVARIANT: MARKERGEN-DRIFT-VERIFY-01
+// INVARIANT: MARKER-WIRE-SINGLE-SOURCE-01
 // ============================================================
 //
 // These gates protect the K#05 wire+metadata single-source contract on
