@@ -1,5 +1,10 @@
 package rabbitmq
 
+import (
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
 // PublishFailureReason classifies why a Publish() call did not complete the
 // confirm round-trip. Values form a closed set; callers (collectors,
 // alerting rules, log queries) can rely on the literals being stable.
@@ -46,3 +51,56 @@ func (NoopPublisherCollector) RecordPublishFailure(_ PublishFailureReason) { /* 
 
 // Compile-time interface check.
 var _ PublisherCollector = NoopPublisherCollector{}
+
+// providerPublisherCollector implements PublisherCollector via a provider-
+// neutral metrics.Provider. Wired at the composition root with a real Prom
+// provider in production and metricsmock in tests.
+//
+// Metric (subsystem=rabbitmq):
+//
+//	rabbitmq_publish_failed_total (counter, labels: cell, reason)
+//
+// reason ∈ {nack, timeout, chan_closed} — closed set defined in
+// PublishFailureReason; alerting rules can rely on the literals.
+//
+// ref: kernel/outbox.providerRelayCollector — same inject-at-construction
+// pattern, same provider-neutral surface.
+type providerPublisherCollector struct {
+	cellID string
+	failed metrics.CounterVec
+}
+
+var _ PublisherCollector = (*providerPublisherCollector)(nil)
+
+// NewProviderPublisherCollector registers the rabbitmq_publish_failed_total
+// counter on p and returns a PublisherCollector backed by it.
+// Returns error when cellID is empty or when the Provider reports registration
+// failure (typically duplicate metric names).
+func NewProviderPublisherCollector(p metrics.Provider, cellID string) (PublisherCollector, error) {
+	if cellID == "" {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"rabbitmq: cellID is required for provider publisher collector")
+	}
+	if p == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"rabbitmq: metrics.Provider is required")
+	}
+	failed, err := p.CounterVec(metrics.CounterOpts{
+		Name: "rabbitmq_publish_failed_total",
+		Help: "Total number of RabbitMQ publish attempts that failed at the wire " +
+			"level, by reason. reason=nack covers broker NACK; " +
+			"reason=timeout covers confirm-timer fired before broker reply; " +
+			"reason=chan_closed covers confirm channel closed mid-flight.",
+		LabelNames: []string{"cell", "reason"},
+	})
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"rabbitmq: register publish failed counter", err)
+	}
+	return &providerPublisherCollector{cellID: cellID, failed: failed}, nil
+}
+
+// RecordPublishFailure increments rabbitmq_publish_failed_total{cell, reason}.
+func (c *providerPublisherCollector) RecordPublishFailure(reason PublishFailureReason) {
+	c.failed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc()
+}

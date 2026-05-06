@@ -9,6 +9,7 @@ package rabbitmq
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,4 +215,130 @@ func (b *blockingPublishChannel) PublishWithContext(
 		return errors.New("blockingPublishChannel: safety net timeout — gate not released within 2s")
 	}
 	return b.mockChannel.PublishWithContext(ctx, exchange, key, mandatory, immediate, msg)
+}
+
+// =============================================================================
+// Batch C: fakeCollector + collector-wiring tests
+// =============================================================================
+
+// fakeCollector records RecordPublishFailure calls for assertion in tests.
+type fakeCollector struct {
+	mu      sync.Mutex
+	reasons []PublishFailureReason
+}
+
+func (f *fakeCollector) RecordPublishFailure(reason PublishFailureReason) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reasons = append(f.reasons, reason)
+}
+
+func (f *fakeCollector) recorded() []PublishFailureReason {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]PublishFailureReason, len(f.reasons))
+	copy(out, f.reasons)
+	return out
+}
+
+// TestPublish_NackReturnsNackErrcodeAndRecords verifies that a broker NACK
+// returns ErrAdapterAMQPNack and records PublishFailureNack on the collector.
+func TestPublish_NackReturnsNackErrcodeAndRecords(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.autoConfirmation = &amqp.Confirmation{Ack: false, DeliveryTag: 1}
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	col := &fakeCollector{}
+	pub := NewPublisher(conn,
+		WithPublisherClock(clock.Real()),
+		WithPublisherCollector(col),
+	)
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), string(ErrAdapterAMQPNack),
+		"NACK must return ErrAdapterAMQPNack, not ErrAdapterAMQPConfirmTimeout")
+
+	reasons := col.recorded()
+	require.Len(t, reasons, 1)
+	assert.Equal(t, PublishFailureNack, reasons[0])
+}
+
+// TestPublish_TimeoutReturnsTimeoutAndRecords verifies that a confirm-timer
+// expiry returns ErrAdapterAMQPConfirmTimeout and records PublishFailureTimeout.
+func TestPublish_TimeoutReturnsTimeoutAndRecords(t *testing.T) {
+	mockConn := newMockConnection()
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return mockConn, nil
+	}
+
+	conn, err := NewConnection(Config{
+		URL:            "amqp://test@localhost/",
+		ConfirmTimeout: testtime.MediumPoll,
+	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	require.NoError(t, err)
+	defer func() {
+		if cErr := conn.Close(context.Background()); cErr != nil {
+			t.Logf("close error: %v", cErr)
+		}
+	}()
+
+	col := &fakeCollector{}
+	pub := NewPublisher(conn,
+		WithPublisherClock(clock.Real()),
+		WithPublisherCollector(col),
+	)
+
+	err = pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), string(ErrAdapterAMQPConfirmTimeout))
+
+	reasons := col.recorded()
+	require.Len(t, reasons, 1)
+	assert.Equal(t, PublishFailureTimeout, reasons[0])
+}
+
+// TestPublish_ConfirmChanClosedReturnsTimeoutAndRecords verifies that a closed
+// confirm channel returns ErrAdapterAMQPConfirmTimeout and records
+// PublishFailureChanClosed on the collector.
+func TestPublish_ConfirmChanClosedReturnsTimeoutAndRecords(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.autoCloseConfirm = true
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	col := &fakeCollector{}
+	pub := NewPublisher(conn,
+		WithPublisherClock(clock.Real()),
+		WithPublisherCollector(col),
+	)
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{"data":"value"}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), string(ErrAdapterAMQPConfirmTimeout))
+	assert.Contains(t, err.Error(), "confirm channel closed")
+
+	reasons := col.recorded()
+	require.Len(t, reasons, 1)
+	assert.Equal(t, PublishFailureChanClosed, reasons[0])
+}
+
+// TestNoopPublisherCollector_DoesNotPanic verifies that NoopPublisherCollector
+// handles all known reasons without panic.
+func TestNoopPublisherCollector_DoesNotPanic(t *testing.T) {
+	noop := NoopPublisherCollector{}
+	for _, r := range []PublishFailureReason{
+		PublishFailureNack,
+		PublishFailureTimeout,
+		PublishFailureChanClosed,
+	} {
+		assert.NotPanics(t, func() { noop.RecordPublishFailure(r) })
+	}
 }

@@ -1303,7 +1303,8 @@ func TestPublisher_Publish_Nacked(t *testing.T) {
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT")
+	// NACK is now a distinct error code from confirm timeout.
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_NACK")
 }
 
 func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
