@@ -21,6 +21,10 @@ var testPostgresDSN = "postgres://test:" + "test@localhost:5432/testdb"
 // testPostgresUnreachableDSN targets a port that is never open in CI; used to test error paths.
 var testPostgresUnreachableDSN = "postgres://nobody:" + "nopass@127.0.0.1:1/nonexistent"
 
+// testPostgresBlackholeDSN targets RFC 5737 TEST-NET-1 — routers drop SYN packets,
+// exercising the TCP-handshake-timeout branch (vs immediate connection-refused).
+var testPostgresBlackholeDSN = "postgres://nobody:" + "nopass@192.0.2.1:5432/nonexistent"
+
 // TestConfig_ZeroValue verifies that a zero Config has empty DSN and zero
 // numeric fields. applyDefaults fills them; callers supply explicit values.
 func TestConfig_ZeroValue(t *testing.T) {
@@ -29,6 +33,7 @@ func TestConfig_ZeroValue(t *testing.T) {
 	assert.EqualValues(t, 0, cfg.MaxConns)
 	assert.Equal(t, time.Duration(0), cfg.IdleTimeout)
 	assert.Equal(t, time.Duration(0), cfg.MaxLifetime)
+	assert.Equal(t, time.Duration(0), cfg.ConnectTimeout)
 }
 
 // TestConfig_ExplicitValues verifies that a Config struct literal passes
@@ -48,39 +53,52 @@ func TestConfig_ExplicitValues(t *testing.T) {
 
 func TestConfig_ApplyDefaults(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       Config
-		wantConns   int32
-		wantIdle    time.Duration
-		wantMaxLife time.Duration
+		name           string
+		input          Config
+		wantConns      int32
+		wantIdle       time.Duration
+		wantMaxLife    time.Duration
+		wantConnectTO  time.Duration
 	}{
 		{
-			name:        "all zero",
-			input:       Config{},
-			wantConns:   defaultMaxConns,
-			wantIdle:    defaultIdleTimeout,
-			wantMaxLife: defaultMaxLifetime,
+			name:          "all zero",
+			input:         Config{},
+			wantConns:     defaultMaxConns,
+			wantIdle:      defaultIdleTimeout,
+			wantMaxLife:   defaultMaxLifetime,
+			wantConnectTO: defaultConnectTimeout,
 		},
 		{
-			name:        "partial set",
-			input:       Config{MaxConns: 20},
-			wantConns:   20,
-			wantIdle:    defaultIdleTimeout,
-			wantMaxLife: defaultMaxLifetime,
+			name:          "partial set",
+			input:         Config{MaxConns: 20},
+			wantConns:     20,
+			wantIdle:      defaultIdleTimeout,
+			wantMaxLife:   defaultMaxLifetime,
+			wantConnectTO: defaultConnectTimeout,
 		},
 		{
-			name:        "all set",
-			input:       Config{MaxConns: 5, IdleTimeout: testtime.D2min, MaxLifetime: testtime.D30min},
-			wantConns:   5,
-			wantIdle:    testtime.D2min,
-			wantMaxLife: testtime.D30min,
+			name:          "all set",
+			input:         Config{MaxConns: 5, IdleTimeout: testtime.D2min, MaxLifetime: testtime.D30min, ConnectTimeout: 7 * time.Second},
+			wantConns:     5,
+			wantIdle:      testtime.D2min,
+			wantMaxLife:   testtime.D30min,
+			wantConnectTO: 7 * time.Second,
 		},
 		{
-			name:        "negative conns",
-			input:       Config{MaxConns: -1},
-			wantConns:   defaultMaxConns,
-			wantIdle:    defaultIdleTimeout,
-			wantMaxLife: defaultMaxLifetime,
+			name:          "negative conns",
+			input:         Config{MaxConns: -1},
+			wantConns:     defaultMaxConns,
+			wantIdle:      defaultIdleTimeout,
+			wantMaxLife:   defaultMaxLifetime,
+			wantConnectTO: defaultConnectTimeout,
+		},
+		{
+			name:          "negative connect timeout",
+			input:         Config{ConnectTimeout: -1},
+			wantConns:     defaultMaxConns,
+			wantIdle:      defaultIdleTimeout,
+			wantMaxLife:   defaultMaxLifetime,
+			wantConnectTO: defaultConnectTimeout,
 		},
 	}
 
@@ -90,8 +108,18 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 			assert.Equal(t, tt.wantConns, tt.input.MaxConns)
 			assert.Equal(t, tt.wantIdle, tt.input.IdleTimeout)
 			assert.Equal(t, tt.wantMaxLife, tt.input.MaxLifetime)
+			assert.Equal(t, tt.wantConnectTO, tt.input.ConnectTimeout)
 		})
 	}
+}
+
+// TestConfig_ApplyDefaults_ConnectTimeout asserts the default 5s value is
+// applied when zero, locking the field's existence and default in one place.
+func TestConfig_ApplyDefaults_ConnectTimeout(t *testing.T) {
+	cfg := Config{}
+	cfg.applyDefaults()
+	assert.Equal(t, 5*time.Second, cfg.ConnectTimeout,
+		"zero ConnectTimeout must default to 5s")
 }
 
 func TestNewPool_EmptyDSN(t *testing.T) {
@@ -145,19 +173,74 @@ func TestPool_Stats_NotInitialized(t *testing.T) {
 	assert.Equal(t, "pool not initialized", (&Pool{}).Stats())
 }
 
+// TestNewPool_UnreachableHost exercises the immediate connection-refused branch
+// (127.0.0.1:1 — kernel returns RST, no SYN timeout). Modernized to drive the
+// adapter-level Config.ConnectTimeout instead of a caller-side
+// context.WithTimeout, so the new field is on the production hot path.
 func TestNewPool_UnreachableHost(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-
-	_, err := NewPool(ctx, Config{
-		DSN:      testPostgresUnreachableDSN,
-		MaxConns: 1,
+	_, err := NewPool(t.Context(), Config{
+		DSN:            testPostgresUnreachableDSN,
+		MaxConns:       1,
+		ConnectTimeout: time.Second,
 	})
 	require.Error(t, err)
 
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec), "NewPool unreachable error must be structured errcode: %v", err)
 	assert.Equal(t, ErrAdapterPGConnect, ec.Code)
+}
+
+// TestNewPool_ConnectTimeout_Blackhole verifies Config.ConnectTimeout actually
+// bounds a TCP-handshake-blackhole scenario. Without the field, pgxpool falls
+// back to its 2 min internal default; with ConnectTimeout=200ms the call must
+// fail in well under 2s.
+func TestNewPool_ConnectTimeout_Blackhole(t *testing.T) {
+	start := time.Now()
+	_, err := NewPool(t.Context(), Config{
+		DSN:            testPostgresBlackholeDSN,
+		MaxConns:       1,
+		ConnectTimeout: 200 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "blackhole error must be structured errcode: %v", err)
+	assert.Equal(t, ErrAdapterPGConnect, ec.Code)
+	assert.Less(t, elapsed, 2*time.Second,
+		"NewPool must respect ConnectTimeout=200ms; elapsed=%v (would otherwise hang ~2 min on pgxpool fallback)",
+		elapsed)
+}
+
+// TestNewPool_ConnectTimeout_DSNOverride_CodeWins documents the DSN-vs-Config
+// precedence: explicit Config.ConnectTimeout overrides any DSN connect_timeout.
+// The DSN is unreachable so we just inspect the elapsed time — if Config didn't
+// win, the DSN's 30s would dominate over Config's 200ms.
+func TestNewPool_ConnectTimeout_DSNOverride_CodeWins(t *testing.T) {
+	dsn := "postgres://nobody:" + "nopass@192.0.2.1:5432/nonexistent?connect_timeout=30"
+	start := time.Now()
+	_, err := NewPool(t.Context(), Config{
+		DSN:            dsn,
+		MaxConns:       1,
+		ConnectTimeout: 200 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, 2*time.Second,
+		"Config.ConnectTimeout=200ms must override DSN connect_timeout=30s; elapsed=%v",
+		elapsed)
+}
+
+// TestNewPool_InvalidDSN_NoPasswordLeak asserts that a parse error never echoes
+// the raw password back into the error string (PII safety).
+func TestNewPool_InvalidDSN_NoPasswordLeak(t *testing.T) {
+	const sensitivePassword = "verysecretpass"
+	dsn := "postgres://user:" + sensitivePassword + "@localhost/db?sslmode=invalid_mode_value"
+	_, err := NewPool(t.Context(), Config{DSN: dsn})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), sensitivePassword,
+		"NewPool error must not echo raw password from DSN")
 }
 
 // ---------------------------------------------------------------------------
