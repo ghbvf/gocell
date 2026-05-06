@@ -57,10 +57,17 @@ func TestParseAllowlist(t *testing.T) {
 			want: []string{"github.com/a\tTestA", "github.com/b\tTestB"},
 		},
 		{
-			name:  "trailing_inline_comment_preserved_in_test_name",
+			name:  "inline_comment_after_data_rejected",
 			input: "github.com/a TestA # not a comment in this slot\n",
-			// inline `#` inside a data line is treated as part of the test
-			// name; this is wrong format and the parser should reject it.
+			// `#` is only meaningful at the start of a line (after optional
+			// whitespace). On a data line, anything after the test name is
+			// extra content. The whitespace-fallback path passes this line
+			// through `strings.Fields` which produces 6 tokens; the
+			// resulting >2 field count is what triggers the "extra fields"
+			// rejection — NOT any special handling of `#`. A line like
+			// `github.com/a TestA#suffix` (no space before `#`) would parse
+			// as a 2-field line with TestName="TestA#suffix"; this is
+			// surfaced by SLOWGATE-ALLOWLIST-01 (no such test exists).
 			wantErr: "extra fields",
 		},
 		{
@@ -206,23 +213,28 @@ func TestRenderViolations_Format(t *testing.T) {
 		{Package: "pkg/a", Test: "TestB", Elapsed: renderViolationSlowElapsed},
 		{Package: "pkg/a", Test: "TestA", Elapsed: renderViolationFastElapsed},
 	}
+	const customAllowlistPath = "custom/path/allowlist.txt"
 	var buf bytes.Buffer
-	renderViolations(&buf, v, testThreshold)
+	renderViolations(&buf, v, testThreshold, customAllowlistPath)
 	out := buf.String()
 
-	// Lines must be sorted (deterministic CI output).
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	// Header must include exact threshold and count.
 	wantHeader := "slowgate: 2 test(s) exceeded 2s budget"
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if !strings.Contains(lines[0], wantHeader) {
 		t.Errorf("renderViolations: header want %q, got %q", wantHeader, lines[0])
 	}
 
-	// Violation rows: SLOW <pkg> <test> <elapsed> > <threshold>
-	if !strings.Contains(out, "SLOW pkg/a TestA") {
-		t.Errorf("renderViolations: missing TestA row: %s", out)
+	// Violation rows are precisely formatted: `  SLOW <pkg> <test> <elapsed> > <threshold>`
+	// Elapsed values are rounded to ms (`Elapsed.Round(time.Millisecond)`):
+	// 2100ms → 2.1s, 3500ms → 3.5s.
+	wantRowA := "  SLOW pkg/a TestA 2.1s > 2s\n"
+	wantRowB := "  SLOW pkg/a TestB 3.5s > 2s\n"
+	if !strings.Contains(out, wantRowA) {
+		t.Errorf("renderViolations: missing exact TestA row %q in:\n%s", wantRowA, out)
 	}
-	if !strings.Contains(out, "SLOW pkg/a TestB") {
-		t.Errorf("renderViolations: missing TestB row: %s", out)
+	if !strings.Contains(out, wantRowB) {
+		t.Errorf("renderViolations: missing exact TestB row %q in:\n%s", wantRowB, out)
 	}
 	// Sort order: TestA < TestB.
 	idxA := strings.Index(out, "TestA")
@@ -231,8 +243,13 @@ func TestRenderViolations_Format(t *testing.T) {
 		t.Errorf("renderViolations: rows not sorted (A=%d, B=%d):\n%s", idxA, idxB, out)
 	}
 
-	// Actionable footer must be present.
-	if !strings.Contains(out, "tools/slowgate/allowlist.txt") {
-		t.Errorf("renderViolations: missing actionable footer pointing to allowlist.txt:\n%s", out)
+	// Actionable footer must echo the caller-supplied path verbatim, not
+	// hard-code defaultAllowlistPath; this lets developers running slowgate
+	// against an alternate allowlist (e.g. a draft file) see the right hint.
+	if !strings.Contains(out, customAllowlistPath) {
+		t.Errorf("renderViolations: footer missing caller-supplied path %q:\n%s", customAllowlistPath, out)
+	}
+	if strings.Contains(out, "tools/slowgate/allowlist.txt") {
+		t.Errorf("renderViolations: footer must not hard-code the project default when caller passed a path:\n%s", out)
 	}
 }

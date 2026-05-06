@@ -14,6 +14,13 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# Local convenience uses `go run` (compiles each invocation, no binary
+# artifact left on disk). CI builds the binary once via `go build -o
+# $RUNNER_TEMP/slowgate ./tools/slowgate` and reuses it across the 5 unit
+# shards. Local elapsed timings on a busy laptop are typically ~10-30%
+# higher than the GHA ubuntu-latest runner; if a borderline test fires
+# here that doesn't fire in CI, prefer adjusting the test rather than
+# adding it to the allowlist on the basis of a local laptop measurement.
 go run ./tools/slowgate \
   --threshold=2s \
   --allowlist=tools/slowgate/allowlist.txt \

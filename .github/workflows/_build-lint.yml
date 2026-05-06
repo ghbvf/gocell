@@ -157,8 +157,9 @@ jobs:
       # independently. `tee` archives the raw event stream to RUNNER_TEMP for
       # the post-step artifact upload, then pipes into slowgate which exits 1
       # if any (Package, Test) Elapsed exceeds 2s without an allowlist entry.
-      # `set -o pipefail` (default in GHA bash) ensures a `go test` failure
-      # propagates through the pipe.
+      # `set -o pipefail` is explicitly set here — GHA bash does NOT enable
+      # it by default, and without it a non-zero `go test` exit code would
+      # be masked by `tee`/`slowgate` success. Do not remove this line.
       - name: Test
         shell: bash
         run: |

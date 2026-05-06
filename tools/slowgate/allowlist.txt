@@ -6,9 +6,20 @@
 # both the comment rule and that every (Package, TestName) maps to a real
 # top-level test func.
 #
-# Re-run the gate against an empty allowlist to regenerate this file's
-# data-line content from ground truth:
-#   go test -json ./... 2>/dev/null | slowgate --threshold=2s --allowlist=/dev/null
+# DO NOT add entries based on local-laptop timings — local runs (especially
+# under concurrent CPU load) often show 10-30% higher elapsed than the GHA
+# ubuntu-latest runner. Add an entry only when CI has empirically failed
+# the gate for that test. The canonical regeneration workflow:
+#
+#   1. Push the PR; let CI run.
+#   2. If slowgate fails on any shard, download the matching
+#      `test-json-<shard>` artifact uploaded by `_build-lint.yml`.
+#   3. Re-run slowgate locally against that artifact:
+#        slowgate --threshold=2s --allowlist=/dev/null < test-<shard>.json
+#      The stderr `SLOW <pkg> <test> ...` lines map 1:1 to allowlist
+#      entries (Package<TAB>TestName).
+#   4. Append entries here grouped under the appropriate `# <category>:`
+#      comment, with a reason describing why the test is unavoidably slow.
 
 # ----------------------------------------------------------------------
 # type-graph-load: tests use packages.Load over the entire module type

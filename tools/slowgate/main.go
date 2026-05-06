@@ -22,13 +22,19 @@
 // Each data line must produce exactly two fields. The (Package, TestName)
 // pair is matched verbatim against the `Package` and `Test` fields of the
 // `go test -json` event. Subtests (Test names containing `/`) are skipped
-// because cmd/test2json only populates Elapsed on root-test terminal events.
+// because the parent root-test event already aggregates the subtest's
+// wall-clock into its own Elapsed; counting subtests independently would
+// double-count the same time spent.
 //
-// Companion gates:
+// Companion gates (independent, no shared invariant):
 //   - TEST-SLEEP-DISCIPLINE-01 (tools/archtest) — every time.Sleep in test
-//     code carries a //archtest:allow:test-sleep <reason> annotation.
+//     code carries a //archtest:allow:test-sleep <reason> annotation. Targets
+//     sleep paper-trail; not coupled to slowgate.
 //   - SLOWGATE-ALLOWLIST-01 (tools/archtest) — every entry in the slowgate
-//     allowlist points to a real test func that has such an annotation.
+//     allowlist (a) maps to a real top-level `func TestXxx`, AND (b) is
+//     preceded by a `# <reason>` comment line in allowlist.txt. Decoupled
+//     from sleep annotations: most >2s tests in this codebase are slow due
+//     to packages.Load / subprocess go-toolchain / fixture walks, not sleep.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md G9
 // ref: cmd/test2json — TestEvent schema (Action/Package/Test/Elapsed)
@@ -49,7 +55,11 @@ import (
 )
 
 const (
-	allowlistPath = "tools/slowgate/allowlist.txt"
+	// defaultAllowlistPath is the canonical project-relative path used in
+	// the actionable stderr footer when the caller does not pass --allowlist
+	// (e.g. ad-hoc invocations). When --allowlist is set, the actual flag
+	// value is shown instead so the message stays accurate.
+	defaultAllowlistPath = "tools/slowgate/allowlist.txt"
 
 	// defaultThreshold is the default per-test wall-clock budget. 2s leaves
 	// headroom for CI runner variance over the GoCell unit shards while
@@ -86,7 +96,11 @@ func main() {
 		os.Exit(2)
 	}
 	if len(violations) > 0 {
-		renderViolations(os.Stderr, violations, *threshold)
+		footerPath := *allowlistFile
+		if footerPath == "" {
+			footerPath = defaultAllowlistPath
+		}
+		renderViolations(os.Stderr, violations, *threshold, footerPath)
 		os.Exit(1)
 	}
 }
@@ -113,10 +127,14 @@ type violation struct {
 // is not in allowlist.
 //
 // Filtering rules (must match cmd/test2json semantics):
-//   - only `pass` and `fail` Actions carry meaningful Elapsed
-//   - empty Test field is the package-level event — ignored
-//   - Test containing `/` is a subtest — Elapsed double-counts, ignored
-//   - skip / output / run / pause / cont — ignored
+//   - only `pass` and `fail` Actions are considered (these are the per-test
+//     terminal events with reliable Elapsed)
+//   - empty Test field is the package-level summary event — its Elapsed
+//     aggregates the whole package, not a single test, so we ignore it
+//   - Test containing `/` is a subtest — its Elapsed is already wholly
+//     contained within its parent root-test's Elapsed; counting both
+//     would double-count the same wall-clock seconds
+//   - skip / output / run / pause / cont — no test-level wall-clock signal
 func evaluate(r io.Reader, threshold time.Duration, allowlist map[string]struct{}) ([]violation, error) {
 	dec := json.NewDecoder(r)
 	var out []violation
@@ -221,8 +239,12 @@ func splitAllowlistLine(s string) []string {
 //	  SLOW pkg/a TestX 3.412s > 2s
 //	  ...
 //	to allowlist a test, append `<Package><TAB><TestName>` to
-//	tools/slowgate/allowlist.txt with a `# <reason>` comment line.
-func renderViolations(w io.Writer, vs []violation, threshold time.Duration) {
+//	<allowlistPath> with a leading `# <reason>` comment line.
+//
+// The footer references the actual allowlist path the caller passed via
+// --allowlist (or the project-default const) so the actionable hint is
+// always accurate.
+func renderViolations(w io.Writer, vs []violation, threshold time.Duration, allowlistPath string) {
 	sort.Slice(vs, func(i, j int) bool {
 		if vs[i].Package != vs[j].Package {
 			return vs[i].Package < vs[j].Package

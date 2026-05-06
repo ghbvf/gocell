@@ -73,6 +73,13 @@ func TestSlowgateAllowlist(t *testing.T) {
 	}
 	sort.Strings(patterns)
 
+	// We reuse testTimeLiteralBuildTags (the same build-tag set used by
+	// TEST-TIME-LITERAL-01) because the slowgate allowlist contains
+	// integration- and pg-tagged tests (e.g. kernel/verify integration
+	// tests that exec subprocess go-toolchain) that would otherwise be
+	// invisible to packages.Load and falsely flagged as "orphan entries".
+	// Any new build tag introduced repo-wide must be added there; the two
+	// gates inherit the same scope by construction.
 	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
@@ -138,8 +145,10 @@ type slowgateEntry struct {
 // enforces the "preceding `# <reason>` comment" rule. Format:
 //   - blank lines and lines starting with `#` are comments (allowed anywhere)
 //   - data lines are `Package<TAB>Test` (TAB or any whitespace)
-//   - every data line MUST be preceded (immediately, allowing one optional
-//     blank line gap) by a non-empty `# <reason>` comment line
+//   - every data line MUST have a non-empty `# <reason>` comment line as its
+//     last preceding non-blank line; any number of blank lines between the
+//     comment and the data line is fine, but no other content (including
+//     section dividers like a bare `#` with empty body) may intervene
 //
 // The function returns the parsed entries OR an error describing the first
 // violation encountered (orphan data line, malformed line, etc).
@@ -205,13 +214,21 @@ func loadSlowgateAllowlist(path string) ([]slowgateEntry, error) {
 	return entries, nil
 }
 
-// splitAllowlistFields prefers a single TAB separator; falls back to any
-// whitespace run when no TAB is present.
+// splitAllowlistFields mirrors tools/slowgate/main.go's splitAllowlistLine
+// byte-for-byte. The two parsers cannot share an import (tools/slowgate is
+// package main and not importable as a library, by design — flat single-
+// binary layout). Behavioral parity is preserved by: (a) identical token
+// splitting (TAB-preferring with whitespace fallback), and (b) the
+// "preserve all positional fields" policy in the TAB branch so that
+// `pkg<TAB>` (empty test) is diagnosed by the field-count check rather
+// than collapsing into a single-field error. Any change to either side
+// must be mirrored here.
 func splitAllowlistFields(s string) []string {
 	if strings.Contains(s, "\t") {
-		out := strings.SplitN(s, "\t", 3)
-		for i := range out {
-			out[i] = strings.TrimSpace(out[i])
+		parts := strings.Split(s, "\t")
+		out := make([]string, len(parts))
+		for i, p := range parts {
+			out[i] = strings.TrimSpace(p)
 		}
 		return out
 	}
