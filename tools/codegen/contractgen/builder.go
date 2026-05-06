@@ -364,6 +364,7 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 		statuses = append(statuses, http.SuccessStatus)
 	}
 
+	hasError := false
 	for s := range http.Responses {
 		if s == http.SuccessStatus {
 			continue
@@ -374,6 +375,13 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 				contractID, s, http.SuccessStatus)
 		}
 		statuses = append(statuses, s)
+		hasError = true
+	}
+	if !hasError && (http.SuccessStatus > 0 || len(http.Responses) > 0) {
+		return nil, fmt.Errorf(
+			"contractgen: contract %q HTTP endpoint must declare at least one 4xx/5xx response;"+
+				" typed error envelope requires an explicit error response declaration",
+			contractID)
 	}
 	return statuses, nil
 }

@@ -57,6 +57,13 @@ endpoints:
     method: POST
     path: /api/v1/orders
     successStatus: 201
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: error-response-v1.schema.json
+      500:
+        description: Internal Server Error
+        schemaRef: error-response-v1.schema.json
 schemaRefs:
   request: request.schema.json
   response: response.schema.json
@@ -91,7 +98,100 @@ schemaRefs:
 		t.Fatalf("write response.schema.json: %v", err)
 	}
 
+	// Minimal error response schema (referenced by responses[400] and responses[500]).
+	errorSchema := `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErrorResponse",
+  "type": "object",
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(contractDir, "error-response-v1.schema.json"), []byte(errorSchema), 0o644); err != nil {
+		t.Fatalf("write error-response-v1.schema.json: %v", err)
+	}
+
 	return root, contractID
+}
+
+// TestGenerateContract_C18_FailsWithoutErrorResponses verifies that generate
+// returns an error when a contract declares successStatus but no 4xx/5xx responses
+// (C18 tighten, R1 chain head).
+func TestGenerateContract_C18_FailsWithoutErrorResponses(t *testing.T) {
+	// Not parallel: uses os.Chdir which is process-global.
+	root := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module example.com/c18test\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	contractDir := filepath.Join(root, "contracts", "http", "order", "create", "v1")
+	if err := os.MkdirAll(contractDir, 0o755); err != nil {
+		t.Fatalf("mkdir contracts: %v", err)
+	}
+
+	// Contract with successStatus but NO responses[] — must fail C18.
+	contractYAML := `id: http.order.create.v1
+kind: http
+codegen: true
+endpoints:
+  http:
+    method: POST
+    path: /api/v1/orders
+    successStatus: 201
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
+`
+	if err := os.WriteFile(filepath.Join(contractDir, "contract.yaml"), []byte(contractYAML), 0o644); err != nil {
+		t.Fatalf("write contract.yaml: %v", err)
+	}
+
+	requestSchema := `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CreateOrderRequest",
+  "type": "object",
+  "properties": {"name": {"type": "string"}},
+  "required": ["name"]
+}`
+	if err := os.WriteFile(filepath.Join(contractDir, "request.schema.json"), []byte(requestSchema), 0o644); err != nil {
+		t.Fatalf("write request.schema.json: %v", err)
+	}
+	responseSchema := `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CreateOrderResponse",
+  "type": "object",
+  "properties": {"id": {"type": "string"}}
+}`
+	if err := os.WriteFile(filepath.Join(contractDir, "response.schema.json"), []byte(responseSchema), 0o644); err != nil {
+		t.Fatalf("write response.schema.json: %v", err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err = generateContract([]string{"--all"})
+	if err == nil {
+		t.Fatal("expected error for contract with no 4xx/5xx responses, got nil")
+	}
+	if !strings.Contains(err.Error(), "4xx/5xx") {
+		t.Fatalf("expected error to mention '4xx/5xx', got: %v", err)
+	}
 }
 
 // TestGenerateContract_SuccessAll creates a minimal fake project in a temp dir

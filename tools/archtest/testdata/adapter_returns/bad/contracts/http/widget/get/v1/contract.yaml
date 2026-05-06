@@ -1,0 +1,23 @@
+id: http.widget.get.v1
+kind: http
+ownerCell: widgetcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: widgetcell
+  http:
+    method: GET
+    path: /api/v1/widgets/{id}
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 256
+    successStatus: 200
+    responses:
+      404:
+        description: "Widget not found"
+        schemaRef: "schema.json"
+schemaRefs:
+  response: response.schema.json

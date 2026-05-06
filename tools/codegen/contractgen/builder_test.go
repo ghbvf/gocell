@@ -550,6 +550,9 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema(t *testing.T) {
 		Path:          "/api/v1/orders/{id}/activate",
 		SuccessStatus: 204,
 		NoContent:     true,
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
@@ -575,6 +578,9 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 		Method:        "POST",
 		Path:          "/api/v1/orders",
 		SuccessStatus: 201,
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
@@ -647,6 +653,10 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 				Auth: metadata.HTTPAuthMeta{
 					Bootstrap: true,
 				},
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+					401: {Description: "Unauthorized"},
+				},
 			},
 		},
 		File: "contracts/http/auth/setup/admin/v1/contract.yaml",
@@ -686,6 +696,10 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 		SuccessStatus: 201,
 		Auth: metadata.HTTPAuthMeta{
 			Bootstrap: true,
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+			401: {Description: "Unauthorized"},
 		},
 	}
 	contract := &metadata.ContractMeta{
@@ -732,6 +746,9 @@ func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
 			"cursor": {Type: "string"},
 			"limit":  {Type: "integer"},
 		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
 	}
 	contract := &metadata.ContractMeta{ID: "http.order.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
@@ -773,6 +790,9 @@ func TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter(t *testing.
 			"limit":  {Type: "integer"},
 			"role":   {Type: "string"},
 		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
+		},
 	}
 	contract := &metadata.ContractMeta{ID: "http.auth.role.list.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
 	pathParams := buildPathParams(httpMeta)
@@ -806,6 +826,9 @@ func TestBuildHTTPEndpointSpec_PaginationShape_NoPagination(t *testing.T) {
 		SuccessStatus: 200,
 		QueryParams: map[string]metadata.ParamSchema{
 			"name": {Type: "string"},
+		},
+		Responses: map[int]metadata.HTTPResponseMeta{
+			400: {Description: "Bad Request"},
 		},
 	}
 	contract := &metadata.ContractMeta{ID: "http.item.search.v1", Kind: "http", Endpoints: metadata.EndpointsMeta{HTTP: httpMeta}}
@@ -980,6 +1003,89 @@ func TestBuildHTTPEndpointSpec_Responses_NoContent(t *testing.T) {
 	}
 	if spec.Responses[0].IsError {
 		t.Errorf("204 success IsError = true, want false")
+	}
+}
+
+// --- collectAndValidateStatuses tests (C18 tighten: require ≥1 4xx/5xx) ---
+
+// TestCollectAndValidateStatuses exercises the C18-tightened rule that every
+// HTTP endpoint must declare at least one 4xx/5xx response code.
+func TestCollectAndValidateStatuses(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		http        *metadata.HTTPTransportMeta
+		wantErr     bool
+		wantErrFrag string
+		wantLen     int // expected length of returned statuses when wantErr==false
+	}{
+		{
+			name: "success-only no responses",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses:     nil,
+			},
+			wantErr:     true,
+			wantErrFrag: "must declare at least one 4xx/5xx",
+		},
+		{
+			name: "success+400",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+				},
+			},
+			wantErr: false,
+			wantLen: 2, // 200 + 400
+		},
+		{
+			name: "only-401 no successStatus",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 0,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					401: {Description: "Unauthorized"},
+				},
+			},
+			wantErr: false,
+			wantLen: 1, // 401 only
+		},
+		{
+			name: "successStatus+only-3xx",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					304: {Description: "Not Modified"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 4xx/5xx",
+		},
+		{
+			name: "empty everything",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 0,
+				Responses:     map[int]metadata.HTTPResponseMeta{},
+			},
+			wantErr:     true,
+			wantErrFrag: "must declare at least one response",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := collectAndValidateStatuses(tc.http, "http.test.contract.v1")
+			switch {
+			case tc.wantErr && err == nil:
+				t.Fatalf("expected error containing %q, got nil", tc.wantErrFrag)
+			case tc.wantErr && tc.wantErrFrag != "" && !strings.Contains(err.Error(), tc.wantErrFrag):
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrFrag)
+			case !tc.wantErr && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case !tc.wantErr && len(got) != tc.wantLen:
+				t.Errorf("statuses length = %d, want %d; got %v", len(got), tc.wantLen, got)
+			}
+		})
 	}
 }
 

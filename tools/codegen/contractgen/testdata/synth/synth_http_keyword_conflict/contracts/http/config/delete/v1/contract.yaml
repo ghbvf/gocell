@@ -15,6 +15,13 @@ endpoints:
         maxLength: 128
     successStatus: 204
     noContent: true
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: Not Found
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

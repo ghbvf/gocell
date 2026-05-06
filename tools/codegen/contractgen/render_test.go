@@ -1020,21 +1020,28 @@ func TestLiftHTTPResponses(t *testing.T) {
 
 	t.Run("204 NoContent flagged", func(t *testing.T) {
 		t.Parallel()
+		// C18 tighten: even NoContent endpoints must declare at least one 4xx/5xx.
 		got, err := liftHTTPResponses(&metadata.HTTPTransportMeta{
 			SuccessStatus: 204,
 			NoContent:     true,
+			Responses: map[int]metadata.HTTPResponseMeta{
+				400: {Description: "Bad Request"},
+			},
 		}, "Delete", "http.test.nocontent.v1")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(got) != 1 {
-			t.Fatalf("len = %d, want 1", len(got))
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2 (204 + 400)", len(got))
 		}
 		if !got[0].IsNoContent {
 			t.Errorf("204 success IsNoContent must be true")
 		}
 		if got[0].GoTypeName != "Delete204NoContentResponse" {
 			t.Errorf("GoTypeName = %q", got[0].GoTypeName)
+		}
+		if got[1].Status != 400 || !got[1].IsError {
+			t.Errorf("second entry should be 400 error, got status=%d isError=%v", got[1].Status, got[1].IsError)
 		}
 	})
 

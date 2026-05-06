@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -52,5 +53,31 @@ func (r Ping201JSONResponse) visitPingResponse(ctx context.Context, w http.Respo
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
 	_, _ = buf.WriteTo(w)
+	return nil
+}
+
+// Ping400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Ping400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Ping400ErrorResponse) visitPingResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
+// Ping500ErrorResponse renders an HTTP 500 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Ping500ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Ping500ErrorResponse) visitPingResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 500, &r.Body)
 	return nil
 }
