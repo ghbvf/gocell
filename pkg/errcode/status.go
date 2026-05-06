@@ -94,10 +94,20 @@ func (k Kind) publicMessage() string {
 }
 
 // PublicCodeForStatus returns the wire-safe error code for an HTTP status.
-// It is retained for framework-owned raw responses that start from a status
-// before they construct an Error.
+// Used by framework-owned raw responses that start from a status before
+// constructing an Error.
+//
+// Unmapped 5xx (e.g. 502 Bad Gateway, 507 Insufficient Storage) fall to
+// ErrInternal as the canonical "operation failed; details on server" code —
+// no separate wire constant exists for them. Add a case here only when both
+// the upstream status appears in a contract.yaml responses[] and a dedicated
+// error code is added in errcode.go.
 func PublicCodeForStatus(status int) Code {
 	switch status {
+	case http.StatusInternalServerError:
+		return ErrInternal
+	case http.StatusNotImplemented:
+		return ErrNotImplemented
 	case http.StatusServiceUnavailable:
 		return ErrServiceUnavailable
 	case http.StatusGatewayTimeout:

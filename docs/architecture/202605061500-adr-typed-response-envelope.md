@@ -29,7 +29,7 @@ Adopt a typed response envelope on the `oapi-codegen pkg/codegen/templates/stric
 
 `iface.tmpl` flips the Service signature to `Method(ctx, *Request) ({HandlerMethod}ResponseObject, error)`. The `error` return is reserved for *un-declared* framework 5xx (panic recover, infrastructure faults); the generated handler routes it through `httputil.WriteError(err)` which reverts to the `errcode.Kind → Status` mapping. Business 4xx/5xx must be returned as a typed struct.
 
-`handler.tmpl` collapses the post-service path to `_ = resp.visit{HandlerMethod}Response(r.Context(), w)`. The Visit method writes status + body; the handler-level discard is safe because the typed structs already log encode/write failures via `slog.ErrorContext` and there is no recovery branch once headers/body have been (partially) flushed.
+`handler.tmpl` collapses the post-service path to `_ = resp.visit{HandlerMethod}Response(r.Context(), w)`. The Visit method buffers JSON encoding to `bytes.Buffer` first, then commits status + body atomically; encode failures surface to the handler for 5xx fallback via `httputil.WriteError(ctx, w, errcode.New(KindInternal, ...))`, ensuring wire status code and body are always consistent.
 
 #### Rejected alternatives
 
@@ -67,6 +67,21 @@ Together they replace the fragile "single AST scan reverse-inferring everything"
 
 `tools/archtest/handler_inline_limit_parse_test.go` walks `generated/contracts/http/**/handler_gen.go` and flags any function whose body contains both `strconv.ParseInt` and a `"limit"` string literal. The two-condition match keeps the rule from firing on legitimate generic `int64` query parsing for unrelated params. Guards the generator template against regressing to per-param limit parsing — the symptom of D2's old behavior.
 
+### D6. 5xx wire/log 隔离强化
+
+PR #403 review 暴露 `pkg/httputil.WriteErrorWithStatus` 的 5xx 路径残留两个隐性炸弹：
+
+1. **Kind 透传**：`out = errcode.New(ecErr.Kind, ...)` 把传入 ecErr 的 Kind 原样写进 5xx wire body。若 ecErr.Kind 为 4xx（如 KindNotFound），`MarshalJSON` 的 `IsClient()` 返回 true，Details 不会 strip，5xx wire body 可能携带 runtime 字段（违反 errcode message PII safety 原则，ADR `202605051730`）。
+2. **Details log 未 redact**：`log5xx` 把 ecErr.Details 的每个 slog.Attr 直接追加到 logAttrs 写入 slog，控制字段（dsn / token 等）泄漏到 stdout/stderr。
+
+修复：
+
+- 5xx 路径强制 normalize Kind 为与 status 匹配的 5xx Kind 常量（`KindUnavailable` / `KindDeadlineExceeded` / `KindNotImplemented` / `KindInternal`），由 archtest `HTTPUTIL-5XX-KIND-NORMALIZE-01` 静态守卫。
+- log5xx 通过 `pkg/redaction.RedactSlogAttr(slog.Attr) slog.Attr` 处理 Details 后再追加，由 archtest `HTTPUTIL-5XX-LOG-REDACT-01` 静态守卫。
+- `RedactSlogAttr` 是 `slog.Attr` 的 redaction 适配层（KindString → RedactString，KindGroup → 递归），与 `pkg/redaction.RedactError` 形成完整覆盖。
+
+ref: ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` §"errcode 三层 redaction 分工"（5xx 必须 strip Details + Internal 永不出现）。
+
 ## Consequences
 
 ### Wins
@@ -87,12 +102,13 @@ Together they replace the fragile "single AST scan reverse-inferring everything"
 
 - `XxxResponseObject` 的 unexported `visitXxxResponse(ctx, w)` 方法把实现集封闭在 generated package 内部（与 `oapi-codegen` strict 模式同源）。Service 方法的返回类型是接口而非具体类型，在 Go 编译期即可确认：返回错误 concrete type 是编译错误，运行时不存在 dispatch 失败路径。
 - Service 返回 `(nil, nil)` 时，generated handler 走 `httputil.WriteError(errcode.New(KindInternal, …))` 兜底，向客户端返回 500 + `ERR_INTERNAL`，并通过 `slog.ErrorContext` 记录 "service returned nil response without error"。该路径属于 CH-04 覆盖的 `WriteError` 兜底面，不属于 CH-06 的 typed-struct 断言面。
-- `visitXxxResponse` 返回 non-nil error（encode/write 失败）时，handler 调用 `slog.ErrorContext` 记录截断响应；headers/body 可能已部分 flush，无法回滚，因此不存在二次响应写入路径。
+- Success 与 Error 路径均采用 **buffer-then-commit** 模式（先序列化到 `bytes.Buffer`，再 `WriteHeader` + `buf.WriteTo`），与 `oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main` / `Kratos transport/http/codec.go DefaultResponseEncoder` / `go-zero rest/httpx/responses.go doWriteJson` 三家上游共识一致。`visitXxxResponse` 返回 non-nil error 时 header 尚未提交，handler 调用 `httputil.WriteError(ctx, w, errcode.New(KindInternal, ...))` 兜底 5xx，wire 状态码与 body 严格一致；底层 encode 失败的关联 trace 字段由 visit 内部 `slog.ErrorContext` 记录。
 
 ### Carried forward (not in scope)
 
 - **Converter codegen** (06.FU2 `PR-V1-CONTRACT-RESPONSE-CONVERTER-CODEGEN`). The 6 `to{X}ResponseData` helpers in `examples/iotdevice/cells/devicecell/slices/devicecommand/service.go` were preserved as-is. Typed envelope only changes the outer Service signature; converter dedup is a separate codegen pass.
 - **Pre-service typed wrap**. Validation errors emitted by `handler.tmpl` decoder/path-param branches still call `httputil.WriteError(errcode.New(KindInvalid, …))` rather than constructing `Xxx400ErrorResponse`. They produce the same wire envelope and CH-04 covers their static guarantees; promoting them to typed envelope would add ~50 sites of mechanical wrap with no end-user benefit.
+- **handler.tmpl 模块化** (06.FU2). PR #403 已达 199 文件，handler.tmpl 按关注点拆分（decode / pagination / visit / error-fallback）作为独立 follow-up，与 typed envelope 主题不直接相关。
 
 ## References
 
@@ -102,3 +118,6 @@ Together they replace the fragile "single AST scan reverse-inferring everything"
 - ref: oapi-codegen `pkg/codegen/templates/strict/strict-interface.tmpl@main`
 - ref: oapi-codegen `pkg/codegen/templates/strict/strict-responses.tmpl@main`
 - ref: oapi-codegen `examples/petstore-expanded/strict/api/petstore-server.gen.go@v2.1.0`
+- ref: Kratos `transport/http/codec.go` DefaultResponseEncoder（buffer-then-commit）
+- ref: go-zero `rest/httpx/responses.go` doWriteJson（buffer-then-commit）
+- PR #403 review (multi-role 6 dimensions)

@@ -3,6 +3,7 @@ package redaction_test
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -485,5 +486,79 @@ func assertRedactAnyIntPassthrough(t *testing.T) {
 	}
 	if s != "42" {
 		t.Errorf("RedactAny(42) = %q, want %q", s, "42")
+	}
+}
+
+func TestRedactSlogAttr(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   slog.Attr
+		want slog.Attr
+	}{
+		{
+			name: "string_value_with_dsn",
+			in:   slog.String("connection", "dsn=postgres://u:p@h:5432/db"),
+			want: slog.String("connection", "dsn=<REDACTED>"),
+		},
+		{
+			name: "string_value_without_secret",
+			in:   slog.String("orderID", "abc-123"),
+			want: slog.String("orderID", "abc-123"),
+		},
+		{
+			name: "int_value_passes_through",
+			in:   slog.Int("retryCount", 3),
+			want: slog.Int("retryCount", 3),
+		},
+		{
+			// The attr key is "password" but the VALUE itself is "secret123"
+			// (no key=value pattern inside the string), so RedactString does
+			// not trigger. Key is preserved verbatim; only value text is scanned.
+			name: "key_preserved_plain_value_no_pattern",
+			in:   slog.String("password", "secret123"),
+			want: slog.String("password", "secret123"),
+		},
+		{
+			// defaultPattern stops at whitespace (\S+), so "port=5432" survives.
+			name: "embedded_password_in_value",
+			in:   slog.String("config", "host=h password=secret123 port=5432"),
+			want: slog.String("config", "host=h password=<REDACTED> port=5432"),
+		},
+		{
+			// bearer= key triggers defaultPattern; value stops at whitespace.
+			name: "group_value_recurses",
+			in:   slog.Group("ctx", slog.String("token", "bearer=abc.def.ghi")),
+			want: slog.Group("ctx", slog.String("token", "bearer=<REDACTED>")),
+		},
+		{
+			// Bool value has no string text; passes through unchanged.
+			name: "bool_value_passes_through",
+			in:   slog.Bool("ok", true),
+			want: slog.Bool("ok", true),
+		},
+		{
+			// Nested group recursion: inner string with secret is masked.
+			name: "nested_group_recurses",
+			in: slog.Group("outer",
+				slog.Group("inner", slog.String("apiKey", "api_key=topsecret"))),
+			want: slog.Group("outer",
+				slog.Group("inner", slog.String("apiKey", "api_key=<REDACTED>"))),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := redaction.RedactSlogAttr(tc.in)
+			if got.Key != tc.want.Key {
+				t.Errorf("RedactSlogAttr(%v).Key = %q, want %q", tc.in, got.Key, tc.want.Key)
+			}
+			if got.Value.String() != tc.want.Value.String() {
+				t.Errorf("RedactSlogAttr(%v).Value = %q, want %q",
+					tc.in, got.Value.String(), tc.want.Value.String())
+			}
+		})
 	}
 }

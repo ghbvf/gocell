@@ -546,8 +546,10 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema(t *testing.T) {
 		SchemaRefs: metadata.SchemaRefsMeta{Request: ""}, // no request body schema
 	}
 	http := &metadata.HTTPTransportMeta{
-		Method: "POST",
-		Path:   "/api/v1/orders/{id}/activate",
+		Method:        "POST",
+		Path:          "/api/v1/orders/{id}/activate",
+		SuccessStatus: 204,
+		NoContent:     true,
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
@@ -570,8 +572,9 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 		SchemaRefs: metadata.SchemaRefsMeta{Request: "request-schema.json"},
 	}
 	http := &metadata.HTTPTransportMeta{
-		Method: "POST",
-		Path:   "/api/v1/orders",
+		Method:        "POST",
+		Path:          "/api/v1/orders",
+		SuccessStatus: 201,
 	}
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
@@ -722,8 +725,9 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
 	t.Parallel()
 	httpMeta := &metadata.HTTPTransportMeta{
-		Method: "GET",
-		Path:   "/api/v1/orders",
+		Method:        "GET",
+		Path:          "/api/v1/orders",
+		SuccessStatus: 200,
 		QueryParams: map[string]metadata.ParamSchema{
 			"cursor": {Type: "string"},
 			"limit":  {Type: "integer"},
@@ -761,8 +765,9 @@ func TestBuildHTTPEndpointSpec_PaginationShape_PureCursorLimit(t *testing.T) {
 func TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter(t *testing.T) {
 	t.Parallel()
 	httpMeta := &metadata.HTTPTransportMeta{
-		Method: "GET",
-		Path:   "/api/v1/auth/roles",
+		Method:        "GET",
+		Path:          "/api/v1/auth/roles",
+		SuccessStatus: 200,
 		QueryParams: map[string]metadata.ParamSchema{
 			"cursor": {Type: "string"},
 			"limit":  {Type: "integer"},
@@ -796,8 +801,9 @@ func TestBuildHTTPEndpointSpec_PaginationShape_CursorLimitPlusFilter(t *testing.
 func TestBuildHTTPEndpointSpec_PaginationShape_NoPagination(t *testing.T) {
 	t.Parallel()
 	httpMeta := &metadata.HTTPTransportMeta{
-		Method: "GET",
-		Path:   "/api/v1/items",
+		Method:        "GET",
+		Path:          "/api/v1/items",
+		SuccessStatus: 200,
 		QueryParams: map[string]metadata.ParamSchema{
 			"name": {Type: "string"},
 		},
@@ -974,5 +980,96 @@ func TestBuildHTTPEndpointSpec_Responses_NoContent(t *testing.T) {
 	}
 	if spec.Responses[0].IsError {
 		t.Errorf("204 success IsError = true, want false")
+	}
+}
+
+// --- liftHTTPResponses status validation tests (C5 / C18) ---
+
+// TestLiftHTTPResponses_Validation covers the C5 (status range) and C18
+// (at-least-one-response) validation rules added to liftHTTPResponses.
+func TestLiftHTTPResponses_Validation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		http        *metadata.HTTPTransportMeta
+		wantErr     bool
+		wantErrFrag string // substring that must appear in the error message
+	}{
+		{
+			name: "valid success=200 plus 4xx/5xx errors",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+					500: {Description: "Internal Server Error"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "responses[] contains 3xx — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					301: {Description: "Moved Permanently"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 4xx/5xx",
+		},
+		{
+			name: "responses[] contains 600 — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 200,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					600: {Description: "Out of range"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 4xx/5xx",
+		},
+		{
+			name: "no SuccessStatus and no responses[] — rejected (C18)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 0,
+				Responses:     map[int]metadata.HTTPResponseMeta{},
+			},
+			wantErr:     true,
+			wantErrFrag: "must declare at least one response",
+		},
+		{
+			name: "SuccessStatus=99 (too low) — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 99,
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request"},
+				},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 1xx/2xx/3xx",
+		},
+		{
+			name: "SuccessStatus=400 (not 1xx-3xx) — rejected (C5)",
+			http: &metadata.HTTPTransportMeta{
+				SuccessStatus: 400,
+				Responses:     map[int]metadata.HTTPResponseMeta{},
+			},
+			wantErr:     true,
+			wantErrFrag: "must be 1xx/2xx/3xx",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := liftHTTPResponses(tc.http, "Get", "http.test.contract.v1")
+			switch {
+			case tc.wantErr && err == nil:
+				t.Fatalf("expected error containing %q, got nil", tc.wantErrFrag)
+			case tc.wantErr && tc.wantErrFrag != "" && !strings.Contains(err.Error(), tc.wantErrFrag):
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrFrag)
+			case !tc.wantErr && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }

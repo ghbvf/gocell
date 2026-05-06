@@ -12,6 +12,35 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
+func TestSanitizeRequestID(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string // "" means rejected
+	}{
+		{"valid uuid", "550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440000"},
+		{"valid short id", "abc-123_XYZ", "abc-123_XYZ"},
+		{"empty rejected", "", ""},
+		{"too long rejected", strings.Repeat("a", 65), ""},
+		{"max length accepted", strings.Repeat("a", 64), strings.Repeat("a", 64)},
+		{"control char CR rejected", "abc\rdef", ""},
+		{"control char LF rejected", "abc\ndef", ""},
+		{"control char NUL rejected", "abc\x00def", ""},
+		{"space rejected", "abc def", ""},
+		{"slash rejected", "abc/def", ""},
+		{"colon rejected", "abc:def", ""},
+		{"dot rejected", "abc.def", ""},
+		{"unicode rejected", "abc\xe4\xb8\xaddef", ""},
+		{"percent rejected", "abc%0Adef", ""},
+		{"tab rejected", "abc\tdef", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sanitizeRequestID(tc.in))
+		})
+	}
+}
+
 func TestRequestID_ExistingHeader(t *testing.T) {
 	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := ctxkeys.RequestIDFrom(r.Context())

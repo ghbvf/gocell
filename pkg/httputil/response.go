@@ -12,10 +12,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 const (
 	msgInternalServerError = "internal server error"
+	msgGatewayTimeout      = "gateway timeout"
+	msgServiceUnavailable  = "service unavailable"
 
 	headerContentType = "Content-Type"
 	contentTypeJSON   = "application/json"
@@ -52,7 +55,7 @@ func WritePublic(ctx context.Context, w http.ResponseWriter, kind errcode.Kind, 
 				slog.String("public_code", string(publicCode)),
 				slog.Int("status", status),
 			}
-			logAttrs = appendCorrelationAttrs(ctx, logAttrs)
+			logAttrs = AppendCorrelationAttrs(ctx, logAttrs)
 			slog.Error("write public error (5xx)", logAttrs...)
 		}
 		respCode = publicCode
@@ -86,26 +89,64 @@ func WriteErrorWithStatus(ctx context.Context, w http.ResponseWriter, status int
 	case status >= 400 && status < 500:
 		log4xx(ctx, "typed", ecErr, status)
 	case status >= 500:
-		// Derive the public code from the *typed-envelope status*, not from
-		// ecErr.Kind. The typed-envelope guarantees the wire status (CH-06
-		// enforces the contract.yaml ↔ typed-struct bijection statically), so
-		// the wire code/message must agree with that status even when the
-		// underlying errcode.Kind would have mapped elsewhere — e.g. service
-		// constructs `XxxYyy503ErrorResponse{Body: *errcode.New(KindInternal, …)}`
-		// and the wire body must read ERR_SERVICE_UNAVAILABLE, not ERR_INTERNAL.
+		// Derive the public code AND normalize Kind from the typed-envelope status,
+		// not from ecErr.Kind. The typed-envelope guarantees the wire status (CH-06
+		// enforces the contract.yaml ↔ typed-struct bijection statically), so the wire
+		// code/message/Kind must agree with that status. Kind normalization closes
+		// the residual gap: even if a service mistakenly constructs Xxx503ErrorResponse
+		// with a 4xx-Kind errcode body (and possibly Details), the 5xx wire body
+		// renders with KindUnavailable so MarshalJSON's IsClient() check strips Details
+		// as required by the v1 schema (5xx details=[]).
 		publicCode := errcode.PublicCodeForStatus(status)
 		log5xx(ctx, "typed", ecErr, status, publicCode)
+		// Each branch passes a const-literal message identifier directly to
+		// errcode.New so MESSAGE-CONST-LITERAL-01 archtest is satisfied
+		// (the rule rejects var-bound msg idents to prevent runtime data
+		// from leaking into errcode.Error.Message).
 		switch status {
 		case http.StatusServiceUnavailable:
-			out = errcode.New(ecErr.Kind, publicCode, msgServiceUnavailable)
+			out = errcode.New(errcode.KindUnavailable, publicCode, msgServiceUnavailable)
 		case http.StatusGatewayTimeout:
-			out = errcode.New(ecErr.Kind, publicCode, msgGatewayTimeout)
+			out = errcode.New(errcode.KindDeadlineExceeded, publicCode, msgGatewayTimeout)
+		case http.StatusNotImplemented:
+			out = errcode.New(errcode.KindNotImplemented, publicCode, msgInternalServerError)
 		default:
-			out = errcode.New(ecErr.Kind, publicCode, msgInternalServerError)
+			out = errcode.New(errcode.KindInternal, publicCode, msgInternalServerError)
 		}
 	}
 
 	writeErrorBody(ctx, w, status, out)
+}
+
+// WriteNilResponseInternal writes a 500 Internal Server Error for the
+// typed-envelope nil-response fallback path: when Service.Method returns
+// (nil, nil), the generated handler invokes this helper instead of letting
+// the framework recover from a panic. This is the "un-declared framework
+// 5xx" surface called out in ADR 202605061500-adr-typed-response-envelope.md
+// D1; CH-04 governance registers it in httpHelperWritesStatuses with an empty
+// status set so the resulting 500 is intentionally outside contract.yaml's
+// responses[] declaration surface.
+func WriteNilResponseInternal(ctx context.Context, w http.ResponseWriter) {
+	WriteError(ctx, w, errcode.New(
+		errcode.KindInternal,
+		errcode.ErrInternal,
+		"service returned nil response without error",
+		errcode.WithCategory(errcode.CategoryInfra),
+	))
+}
+
+// WriteEncodeFaultInternal writes a 500 Internal Server Error for the
+// typed-envelope visit encode failure path: when a generated visit method
+// returns a non-nil error before WriteHeader (buffer-then-commit pattern),
+// the handler calls this helper to commit a 500 wire response. Same exempt
+// framework 5xx surface as WriteNilResponseInternal.
+func WriteEncodeFaultInternal(ctx context.Context, w http.ResponseWriter) {
+	WriteError(ctx, w, errcode.New(
+		errcode.KindInternal,
+		errcode.ErrInternal,
+		"response encode failed",
+		errcode.WithCategory(errcode.CategoryInfra),
+	))
 }
 
 // WriteError writes err in the canonical structured error response format.
@@ -133,7 +174,7 @@ func WriteError(ctx context.Context, w http.ResponseWriter, err error) {
 	}
 
 	logAttrs := []any{slog.Any("error", err)}
-	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
+	logAttrs = AppendCorrelationAttrs(ctx, logAttrs)
 	slog.Error("unhandled error", logAttrs...)
 	writeErrcodeError(ctx, w, "error", errcode.New(
 		errcode.KindInternal,
@@ -160,7 +201,7 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
 		}
 	}
-	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
+	logAttrs = AppendCorrelationAttrs(ctx, logAttrs)
 	slog.Warn(label+" (4xx)", logAttrs...)
 }
 
@@ -182,24 +223,20 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error, status int,
 		logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
 	}
 	for _, attr := range ecErr.Details {
-		logAttrs = append(logAttrs, attr)
+		logAttrs = append(logAttrs, redaction.RedactSlogAttr(attr))
 	}
 	if ecErr.Kind == errcode.KindDeadlineExceeded {
 		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
 			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
 		}
 	}
-	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
+	logAttrs = AppendCorrelationAttrs(ctx, logAttrs)
 	switch ecErr.Kind {
 	case errcode.KindUnavailable, errcode.KindDeadlineExceeded:
 		slog.Warn(label+" (5xx)", logAttrs...)
 	default:
 		slog.Error(label+" (5xx)", logAttrs...)
 	}
-}
-
-func appendCorrelationAttrs(ctx context.Context, attrs []any) []any {
-	return AppendCorrelationAttrs(ctx, attrs)
 }
 
 // AppendCorrelationAttrs appends request_id / trace_id / span_id slog
@@ -259,47 +296,58 @@ var sentinelInternalErrorBody = []byte(
 // error envelope places it alongside code/message/details, not in the outer
 // wrapper (see contracts/shared/errors/error-response-v1.schema.json).
 //
+// Buffer-then-commit: the full pipeline (marshal → decode → merge → encode)
+// runs into a bytes.Buffer before any header or status is written to w. Only
+// when the buffer is ready does the function commit headers + status + body.
+// Pipeline failure → sentinelInternalErrorBody at HTTP 500 (headers not yet
+// written). ref: oapi-codegen strict-responses pattern.
+//
 // Numeric precision: the merge step decodes ecErr's marshaled bytes back
 // through json.Decoder with UseNumber() so int64/uint64 details survive
 // the round-trip without being coerced to float64. The default decoder
 // would silently truncate any int beyond 2^53.
 //
-// Fail-closed: if json.Marshal/Decode fails (e.g. a Details attr bypassed
-// the kind whitelist and carries a non-marshalable Go value, or a future
-// custom MarshalJSON returns a malformed payload), the response still gets
-// HTTP 500 + the sentinelInternalErrorBody. There is no path that returns
-// an empty 200 body. ref: net/http.Error — stdlib never returns a body
-// without first writing a status; this function holds the same invariant.
+// Fail-closed: if any pipeline step fails, the response still gets HTTP 500 +
+// sentinelInternalErrorBody. There is no path that returns an empty 200 body.
+// ref: net/http.Error — stdlib never returns a body without first writing a
+// status; this function holds the same invariant.
 func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecErr *errcode.Error) {
+	var buf bytes.Buffer
+	if err := encodeErrorEnvelopeTo(&buf, ctx, ecErr); err != nil {
+		attrs := AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
+		slog.ErrorContext(ctx, "httputil: encode error envelope", attrs...)
+		w.Header().Set(headerContentType, contentTypeJSON)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write(sentinelInternalErrorBody)
+		return
+	}
+	w.Header().Set(headerContentType, contentTypeJSON)
+	w.WriteHeader(status)
+	if _, writeErr := buf.WriteTo(w); writeErr != nil {
+		slog.Error("httputil: write error response", slog.Any("error", writeErr))
+	}
+}
+
+// encodeErrorEnvelopeTo writes the canonical wire envelope into out, including
+// numeric-precision merge and request_id injection. Returns an error if any
+// step fails — caller writes sentinelInternalErrorBody to the wire instead.
+func encodeErrorEnvelopeTo(out *bytes.Buffer, ctx context.Context, ecErr *errcode.Error) error {
 	innerJSON, err := json.Marshal(ecErr)
 	if err != nil {
-		slog.Error("httputil: encode errcode body; emitting sentinel 500",
-			slog.Any("error", err),
-			slog.Int("requested_status", status))
-		writeInternalErrorSentinel(w)
-		return
+		return err
 	}
 	dec := json.NewDecoder(bytes.NewReader(innerJSON))
 	dec.UseNumber()
 	var inner map[string]any
 	if err := dec.Decode(&inner); err != nil {
-		slog.Error("httputil: decode errcode body; emitting sentinel 500",
-			slog.Any("error", err),
-			slog.Int("requested_status", status))
-		writeInternalErrorSentinel(w)
-		return
+		return err
 	}
 	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
 		inner["request_id"] = reqID
 	}
-
-	w.Header().Set(headerContentType, contentTypeJSON)
-	w.WriteHeader(status)
-	if encErr := json.NewEncoder(w).Encode(map[string]any{
+	return json.NewEncoder(out).Encode(map[string]any{
 		"error": inner,
-	}); encErr != nil {
-		slog.Error("httputil: encode error response", slog.Any("error", encErr))
-	}
+	})
 }
 
 // writeInternalErrorSentinel writes a hard-coded 500 response with the

@@ -28,4 +28,17 @@
 // Service method, not to call any WriteError variant directly. See
 // tools/codegen/contractgen/doc.go and
 // docs/architecture/202605061500-adr-typed-response-envelope.md.
+//
+// # Stable Surface
+//
+// The following identifiers form pkg/httputil's stable surface for codegen
+// consumers (tools/codegen/contractgen/templates/types.tmpl). Signature
+// changes are breaking and require regenerating all 45 generated
+// types_gen.go files:
+//
+//   - WriteError(ctx, w, err)
+//   - WriteErrorWithStatus(ctx, w, status, ecErr)
+//   - AppendCorrelationAttrs(ctx, attrs) []any
+//
+// ref: docs/architecture/202605061500-adr-typed-response-envelope.md
 package httputil

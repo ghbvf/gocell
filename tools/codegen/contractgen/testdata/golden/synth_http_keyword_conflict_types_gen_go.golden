@@ -23,6 +23,9 @@ type Response struct{}
 // implementation set closed to types declared in this package.
 //
 // ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+//
+//	(buffer-then-commit pattern: encode to bytes.Buffer first so encode
+//	 failures don't commit a half-written response status to wire)
 type DeleteResponseObject interface {
 	visitDeleteResponse(ctx context.Context, w http.ResponseWriter) error
 }

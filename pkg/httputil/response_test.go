@@ -621,6 +621,89 @@ func TestWriteErrorBody_FailClosedOnMarshalFailure(t *testing.T) {
 // marker text changes there it must change here too.
 const unsafeKindMarkerWire = "<UNSUPPORTED_KIND>"
 
+// TestWriteErrorWithStatus_5xxKindNormalize verifies that both
+// WriteErrorWithStatus and writeErrcodeError (via WriteError) normalize the
+// Kind of the outgoing errcode.Error to match the HTTP status, not the
+// underlying ecErr.Kind. The key invariant: 5xx wire bodies must strip
+// Details (MarshalJSON uses IsClient() to decide), so a 4xx-Kind ecErr
+// that carries Details would leak them if Kind were not normalized.
+func TestWriteErrorWithStatus_5xxKindNormalize(t *testing.T) {
+	cases := []struct {
+		name           string
+		status         int
+		ecErr          *errcode.Error
+		wantWireCode   errcode.Code
+		wantDetailsLen int
+	}{
+		{
+			name:   "503 with KindNotFound (4xx Kind) details stripped",
+			status: http.StatusServiceUnavailable,
+			ecErr: errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound, "x",
+				errcode.WithDetails(slog.String("dsn", "postgres://u:p@h"))),
+			wantWireCode:   errcode.ErrServiceUnavailable,
+			wantDetailsLen: 0,
+		},
+		{
+			name:           "504 deadline normalized",
+			status:         http.StatusGatewayTimeout,
+			ecErr:          errcode.New(errcode.KindInternal, errcode.ErrInternal, "y"),
+			wantWireCode:   errcode.ErrServerTimeout,
+			wantDetailsLen: 0,
+		},
+		{
+			name:           "501 not implemented normalized",
+			status:         http.StatusNotImplemented,
+			ecErr:          errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "z"),
+			wantWireCode:   errcode.ErrNotImplemented,
+			wantDetailsLen: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			WriteErrorWithStatus(context.Background(), rec, tc.status, tc.ecErr)
+			require.Equal(t, tc.status, rec.Code)
+			var body struct {
+				Error struct {
+					Code    errcode.Code `json:"code"`
+					Details []any        `json:"details"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			assert.Equal(t, tc.wantWireCode, body.Error.Code)
+			assert.Len(t, body.Error.Details, tc.wantDetailsLen)
+		})
+	}
+}
+
+// TestLog5xx_DetailsRedacted verifies that sensitive values in ecErr.Details
+// are masked before they reach slog output. The 5xx log path must call
+// redaction.RedactSlogAttr on each Details attr — transparent pass-through
+// would leak runtime fields (e.g. DSN passwords) to log backends.
+func TestLog5xx_DetailsRedacted(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	ecErr := errcode.New(
+		errcode.KindInternal,
+		errcode.ErrInternal,
+		"upstream failed",
+		errcode.WithDetails(slog.String("config", "host=h password=secret123 port=5432")),
+	)
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-redact")
+
+	rec := httptest.NewRecorder()
+	WriteErrorWithStatus(ctx, rec, http.StatusInternalServerError, ecErr)
+
+	errRec := findRecord(handler, slog.LevelError)
+	require.NotNil(t, errRec, "5xx must emit an error log")
+
+	got, ok := attrValue(*errRec, "config")
+	require.True(t, ok, "config attr must be present in log")
+	assert.Contains(t, got, "<REDACTED>", "password value must be redacted in slog output")
+	assert.NotContains(t, got, "secret123", "raw secret must not appear in slog output")
+}
+
 // TestWriteErrorBody_PreservesInt64Precision verifies that int64 detail
 // values larger than 2^53 round-trip through writeErrorBody without
 // precision loss. The default json.Decoder coerces JSON numbers into

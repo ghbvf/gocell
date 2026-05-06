@@ -985,13 +985,16 @@ func TestLiftHTTPResponses(t *testing.T) {
 
 	t.Run("success + errors sorted", func(t *testing.T) {
 		t.Parallel()
-		got := liftHTTPResponses(&metadata.HTTPTransportMeta{
+		got, err := liftHTTPResponses(&metadata.HTTPTransportMeta{
 			SuccessStatus: 200,
 			Responses: map[int]metadata.HTTPResponseMeta{
 				503: {SchemaRef: "../err.json", Description: "svc down"},
 				401: {SchemaRef: "../err.json", Description: "no auth"},
 			},
-		}, "Get")
+		}, "Get", "http.test.sorted.v1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if len(got) != 3 {
 			t.Fatalf("len = %d, want 3", len(got))
 		}
@@ -1017,10 +1020,13 @@ func TestLiftHTTPResponses(t *testing.T) {
 
 	t.Run("204 NoContent flagged", func(t *testing.T) {
 		t.Parallel()
-		got := liftHTTPResponses(&metadata.HTTPTransportMeta{
+		got, err := liftHTTPResponses(&metadata.HTTPTransportMeta{
 			SuccessStatus: 204,
 			NoContent:     true,
-		}, "Delete")
+		}, "Delete", "http.test.nocontent.v1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if len(got) != 1 {
 			t.Fatalf("len = %d, want 1", len(got))
 		}
@@ -1032,11 +1038,12 @@ func TestLiftHTTPResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("no success status emits empty", func(t *testing.T) {
+	t.Run("no success status and no responses returns error (C18)", func(t *testing.T) {
 		t.Parallel()
-		got := liftHTTPResponses(&metadata.HTTPTransportMeta{}, "Foo")
-		if len(got) != 0 {
-			t.Errorf("len = %d, want 0", len(got))
+		// C18: contracts with neither SuccessStatus nor responses[] are rejected.
+		_, err := liftHTTPResponses(&metadata.HTTPTransportMeta{}, "Foo", "http.test.empty.v1")
+		if err == nil {
+			t.Fatal("expected C18 error for contract with no SuccessStatus and no responses[], got nil")
 		}
 	})
 
@@ -1045,13 +1052,16 @@ func TestLiftHTTPResponses(t *testing.T) {
 		// Defensive path in liftHTTPResponses: when contract authors
 		// accidentally mirror the success status into responses[], the
 		// success entry wins (only one ResponseSpec emitted for that status).
-		got := liftHTTPResponses(&metadata.HTTPTransportMeta{
+		got, err := liftHTTPResponses(&metadata.HTTPTransportMeta{
 			SuccessStatus: 200,
 			Responses: map[int]metadata.HTTPResponseMeta{
 				200: {SchemaRef: "../err.json"}, // duplicate — defensive
 				404: {SchemaRef: "../err.json"},
 			},
-		}, "Get")
+		}, "Get", "http.test.deduped.v1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if len(got) != 2 {
 			t.Fatalf("len = %d, want 2 (success+404, success-dup deduped)", len(got))
 		}

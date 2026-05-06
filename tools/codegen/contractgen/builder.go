@@ -257,7 +257,11 @@ func buildHTTPEndpointSpec(
 		}
 	}
 
-	spec.Responses = liftHTTPResponses(http, handlerMethod)
+	var liftErr error
+	spec.Responses, liftErr = liftHTTPResponses(http, handlerMethod, contract.ID)
+	if liftErr != nil {
+		return nil, liftErr
+	}
 	return spec, nil
 }
 
@@ -308,18 +312,15 @@ func detectPagination(spec *HTTPEndpointSpec) error {
 // declared status implementing the XxxResponseObject interface, and by CH-04
 // governance to assert the generated typed-response set matches the
 // contract.yaml declaration exactly.
-func liftHTTPResponses(http *metadata.HTTPTransportMeta, handlerMethod string) []ResponseSpec {
-	statuses := make([]int, 0, len(http.Responses)+1)
-	if http.SuccessStatus > 0 {
-		statuses = append(statuses, http.SuccessStatus)
-	}
-	for s := range http.Responses {
-		// Defensive: ignore any responses[] entry that duplicates the success
-		// status (contract authors should declare success only via SuccessStatus).
-		if s == http.SuccessStatus {
-			continue
-		}
-		statuses = append(statuses, s)
+//
+// liftHTTPResponses validates that:
+//   - at least one status (SuccessStatus or responses[]) is declared (C18)
+//   - SuccessStatus, if set, is in range 1xx/2xx/3xx (C5)
+//   - every responses[] key (other than SuccessStatus duplicate) is in 4xx/5xx (C5)
+func liftHTTPResponses(http *metadata.HTTPTransportMeta, handlerMethod string, contractID string) ([]ResponseSpec, error) {
+	statuses, err := collectAndValidateStatuses(http, contractID)
+	if err != nil {
+		return nil, err
 	}
 	sort.Ints(statuses)
 
@@ -338,7 +339,43 @@ func liftHTTPResponses(http *metadata.HTTPTransportMeta, handlerMethod string) [
 		}
 		out = append(out, spec)
 	}
-	return out
+	return out, nil
+}
+
+// collectAndValidateStatuses returns the unsorted status set declared by the
+// contract (SuccessStatus + responses[] keys), enforcing the C5 / C18 ranges
+// described on liftHTTPResponses. Extracted out so the parent function stays
+// under the gocognit complexity budget.
+func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID string) ([]int, error) {
+	if http.SuccessStatus == 0 && len(http.Responses) == 0 {
+		return nil, fmt.Errorf(
+			"contractgen: contract %q declares no SuccessStatus and no responses[]; HTTP endpoint must declare at least one response",
+			contractID)
+	}
+
+	statuses := make([]int, 0, len(http.Responses)+1)
+
+	if http.SuccessStatus > 0 {
+		if http.SuccessStatus < 100 || http.SuccessStatus > 399 {
+			return nil, fmt.Errorf(
+				"contractgen: contract %q success status %d invalid: must be 1xx/2xx/3xx",
+				contractID, http.SuccessStatus)
+		}
+		statuses = append(statuses, http.SuccessStatus)
+	}
+
+	for s := range http.Responses {
+		if s == http.SuccessStatus {
+			continue
+		}
+		if s < 400 || s > 599 {
+			return nil, fmt.Errorf(
+				"contractgen: contract %q response status %d invalid: must be 4xx/5xx (success status %d declared via SuccessStatus)",
+				contractID, s, http.SuccessStatus)
+		}
+		statuses = append(statuses, s)
+	}
+	return statuses, nil
 }
 
 // responseGoTypeName derives the typed response struct identifier from the

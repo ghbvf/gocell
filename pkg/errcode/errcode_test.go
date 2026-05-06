@@ -124,9 +124,26 @@ func TestIsTransientAndExpected4xx(t *testing.T) {
 }
 
 func TestPublicCodeForStatus(t *testing.T) {
-	assert.Equal(t, ErrInternal, PublicCodeForStatus(http.StatusInternalServerError))
-	assert.Equal(t, ErrServiceUnavailable, PublicCodeForStatus(http.StatusServiceUnavailable))
-	assert.Equal(t, ErrServerTimeout, PublicCodeForStatus(http.StatusGatewayTimeout))
+	cases := []struct {
+		name   string
+		status int
+		want   Code
+	}{
+		{"500 internal", http.StatusInternalServerError, ErrInternal},
+		{"501 not implemented", http.StatusNotImplemented, ErrNotImplemented},
+		{"502 bad gateway → internal", http.StatusBadGateway, ErrInternal},
+		{"503 service unavailable", http.StatusServiceUnavailable, ErrServiceUnavailable},
+		{"504 gateway timeout", http.StatusGatewayTimeout, ErrServerTimeout},
+		{"507 insufficient storage → internal", http.StatusInsufficientStorage, ErrInternal},
+		{"599 unmapped 5xx → internal", 599, ErrInternal},
+		{"4xx not handled here → internal sentinel", http.StatusBadRequest, ErrInternal},
+		{"0 invalid → internal sentinel", 0, ErrInternal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, PublicCodeForStatus(tc.status))
+		})
+	}
 }
 
 func TestAssertion(t *testing.T) {

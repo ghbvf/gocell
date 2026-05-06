@@ -4,6 +4,7 @@
 package lock
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -36,6 +37,9 @@ type ResponseData struct {
 // implementation set closed to types declared in this package.
 //
 // ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main
+//
+//	(buffer-then-commit pattern: encode to bytes.Buffer first so encode
+//	 failures don't commit a half-written response status to wire)
 type LockResponseObject interface {
 	visitLockResponse(ctx context.Context, w http.ResponseWriter) error
 }
@@ -45,13 +49,16 @@ type LockResponseObject interface {
 type Lock200JSONResponse Response
 
 func (r Lock200JSONResponse) visitLockResponse(ctx context.Context, w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	if err := json.NewEncoder(w).Encode(Response(r)); err != nil {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(Response(r)); err != nil {
+		// encode 失败时 header 尚未提交，handler 收到 err 后可走 WriteError 兜底 5xx
 		attrs := httputil.AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
 		slog.ErrorContext(ctx, "http.auth.user.lock.v1: encode Lock200JSONResponse body", attrs...)
 		return err
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = buf.WriteTo(w)
 	return nil
 }
 

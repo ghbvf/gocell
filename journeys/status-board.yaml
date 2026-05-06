@@ -43,3 +43,8 @@
   risk: low
   blocker: ""
   updatedAt: 2026-04-23
+- journeyId: J-typed-envelope-roundtrip
+  state: doing
+  risk: low
+  blocker: ""
+  updatedAt: 2026-05-06
