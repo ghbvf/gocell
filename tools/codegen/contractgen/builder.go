@@ -241,14 +241,17 @@ func buildHTTPEndpointSpec(
 	spec.QueryParams = queryParams
 
 	// Pagination detection (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb):
-	// Any GET endpoint with no path params that declares cursor (string) +
-	// limit (integer) in its query params is paginated, regardless of the
-	// presence of additional filter params. The extras land in
+	// Any GET endpoint that declares cursor (string) + limit (integer) in its
+	// query params is paginated, regardless of the presence of path params or
+	// additional filter query params. The extras land in
 	// Pagination.ExtraQueryParams and the handler template parses them with
 	// the standard per-param branch — cursor/limit are always handled by
 	// pkg/httputil.ParsePageParams so the limit error envelope is uniform
-	// across the entire HTTP surface (PR#376 F-COR-001 fix).
-	if http.Method == "GET" && len(spec.PathParams) == 0 && len(spec.QueryParams) >= 2 {
+	// across the entire HTTP surface (PR#376 F-COR-001 fix; the original
+	// `len(PathParams) == 0` precondition was a leftover from the strict
+	// 2-element invariant and would have left e.g. /roles/{userID}?cursor=&limit=
+	// emitting the divergent inline-limit envelope).
+	if http.Method == "GET" && len(spec.QueryParams) >= 2 {
 		if err := detectPagination(spec); err != nil {
 			return nil, fmt.Errorf("contractgen build: %q pagination: %w", contract.ID, err)
 		}

@@ -4,13 +4,10 @@
 package list
 
 import (
-	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -63,43 +60,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		req.UserID = v
 	}
-
-	req.Cursor = r.URL.Query().Get("cursor")
-	if req.Cursor != "" && len(req.Cursor) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
+	page, err := httputil.ParsePageParams(r)
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.Cursor) > 4096 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
-		return
-	}
-
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		v, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "must be an integer"))))
-			return
-		}
-		if v < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
-			return
-		}
-		if v > 500 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
-			return
-		}
-		req.Limit = v
-	}
+	req.Cursor = page.Cursor
+	req.Limit = int64(page.Limit)
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)
