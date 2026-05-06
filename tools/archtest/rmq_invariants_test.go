@@ -13,10 +13,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // ---------------------------------------------------------------------------
@@ -43,65 +47,103 @@ var allowedChannelCloseFuncs = map[string]bool{
 // every AMQPChannel destruction site in adapters/rabbitmq/ MUST go through
 // Connection.CloseEphemeralChannel.
 //
-// Direct ch.Close() calls outside of CloseEphemeralChannel or ReleaseChannel
+// Direct ch.Close() calls outside of CloseEphemeralChannel or waitAndClose
 // bypass the inUseChannels.Add(-1) decrement and permanently leak
 // MaxChannelsPerConn slots, causing spurious ERR_ADAPTER_AMQP_CHANNEL_MAX_EXCEEDED
 // false-positives after enough reconnect cycles or subscription teardowns.
 //
+// Implementation: go/types-backed receiver classification. The receiver of
+// every `Close()` call is resolved via packages.Package.TypesInfo.TypeOf, then
+// matched against the AMQPChannel interface declared in the same package via
+// types.Implements. This is naming-immune: renaming `ch` to `channel` or
+// shuffling field names does not change the verdict.
+//
+// ref: golang/tools go/analysis/passes/copylock — types.Implements idiom
+// ref: golang/tools go/analysis/passes/lostcancel — TypesInfo.TypeOf pipeline
 // ref: docs/plans/202605011500-029-master-roadmap.md B12 PR-V1-RMQ-LIFECYCLE-HARDEN P1
 // ref: adapters/rabbitmq/doc.go — AMQPChannel destruction contract
 func TestRMQChannelDestructionViaConn01(t *testing.T) {
+	if testing.Short() {
+		t.Skip("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: skipping packages.Load-based archtest in -short mode")
+	}
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	rmqDir := filepath.Join(root, "adapters", "rabbitmq")
 
-	entries, err := os.ReadDir(rmqDir)
+	resolver, err := typeseval.SharedResolver(root, false, nil, "github.com/ghbvf/gocell/adapters/rabbitmq")
 	if err != nil {
-		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: read dir %s: %v", rmqDir, err)
+		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: load adapters/rabbitmq: %v", err)
 	}
+	pkg := pickPackage(t, resolver.Packages(), "github.com/ghbvf/gocell/adapters/rabbitmq")
 
-	fset := token.NewFileSet()
+	chanIface := lookupInterfaceType(t, pkg, "AMQPChannel")
 
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+	for i, file := range pkg.Syntax {
+		path := pkg.GoFiles[i]
+		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
-
-		src := filepath.Join(rmqDir, name)
-		f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: parse %s: %v", src, err)
-		}
-
-		checkFileForDirectChannelClose(t, fset, f, src)
+		checkFileForDirectChannelClose(t, pkg.Fset, file, pkg.TypesInfo, chanIface, path)
 	}
 }
 
-// checkFileForDirectChannelClose walks all function/method declarations in f
-// and flags any call of the form <expr>.Close() where <expr> is NOT the
-// physical AMQP connection (i.e. not receiver.conn.Close() / amqpConn.Close()).
-//
-// The heuristic used: a Close() call is an AMQPChannel close if the receiver
-// identifier name contains "ch" or is a field named "ch", OR if the enclosing
-// function is not in the whitelist.  Because the rabbitmq package uses the
-// variable name "ch" consistently for AMQPChannel values, this is highly
-// accurate without requiring type-checker infrastructure.
-//
-// False-positive prevention for AMQPConnection.Close:
-//   - amqpConnectionWrapper.Close — receiver type is *amqpConnectionWrapper, not a channel
-//   - Connection.Close — calls underlying conn.Close(), receiver is conn
-//   - The physical-connection variables are named "conn", not "ch"
-func checkFileForDirectChannelClose(t *testing.T, fset *token.FileSet, f *ast.File, src string) {
+// pickPackage returns the loaded package whose import path matches `want`.
+// Tests-disabled SharedResolver still returns a slice; the typed package
+// lives at the requested path.
+func pickPackage(t *testing.T, pkgs []*packages.Package, want string) *packages.Package {
+	t.Helper()
+	for _, p := range pkgs {
+		if p.PkgPath == want {
+			if p.TypesInfo == nil || p.Types == nil {
+				t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: package %s has no types info", want)
+			}
+			return p
+		}
+	}
+	t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: package %s not loaded", want)
+	return nil
+}
+
+// lookupInterfaceType resolves a top-level interface declaration by name and
+// returns its types.Interface. Fail-closed when the type vanishes or is no
+// longer an interface.
+func lookupInterfaceType(t *testing.T, pkg *packages.Package, name string) *types.Interface {
+	t.Helper()
+	obj := pkg.Types.Scope().Lookup(name)
+	if obj == nil {
+		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s not declared in %s", name, pkg.PkgPath)
+	}
+	tn, ok := obj.(*types.TypeName)
+	if !ok {
+		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s is not a type", name)
+	}
+	iface, ok := tn.Type().Underlying().(*types.Interface)
+	if !ok {
+		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s is not an interface", name)
+	}
+	return iface
+}
+
+// checkFileForDirectChannelClose walks every function in f and flags any
+// `Close()` call whose receiver type implements AMQPChannel — regardless of
+// the receiver variable's name. AMQPConnection close calls slip through
+// because AMQPConnection's method set (4 methods) is a strict subset of
+// AMQPChannel's (16 methods), so types.Implements rejects it.
+func checkFileForDirectChannelClose(
+	t *testing.T,
+	fset *token.FileSet,
+	f *ast.File,
+	info *types.Info,
+	chanIface *types.Interface,
+	src string,
+) {
 	t.Helper()
 
 	for _, decl := range f.Decls {
 		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
+		if !ok || fd.Body == nil {
 			continue
 		}
-
 		funcName := fd.Name.Name
 		if allowedChannelCloseFuncs[funcName] {
 			continue
@@ -113,18 +155,14 @@ func checkFileForDirectChannelClose(t *testing.T, fset *token.FileSet, f *ast.Fi
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
+			if !ok || sel.Sel.Name != "Close" {
 				return true
 			}
-			if sel.Sel.Name != "Close" {
+			recvType := info.TypeOf(sel.X)
+			if recvType == nil {
 				return true
 			}
-
-			// Determine if the receiver looks like an AMQPChannel.
-			// AMQPChannel variables in this package are always named "ch".
-			// Physical connection variables are named "conn" or are type-wrapped.
-			receiverName := extractReceiverName(sel.X)
-			if !isLikelyAMQPChannel(receiverName) {
+			if !implementsAMQPChannel(recvType, chanIface) {
 				return true
 			}
 
@@ -133,36 +171,159 @@ func checkFileForDirectChannelClose(t *testing.T, fset *token.FileSet, f *ast.Fi
 			if rel == "" {
 				rel = src
 			}
+			receiverHint := receiverHint(sel.X)
 			t.Errorf(
-				"RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s:%d: %s() contains direct %s.Close() call.\n"+
+				"RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s:%d: %s() contains direct %s.Close() call (receiver type %s implements AMQPChannel).\n"+
 					"  All AMQPChannel destruction MUST go through Connection.CloseEphemeralChannel\n"+
 					"  to keep inUseChannels in sync with MaxChannelsPerConn.\n"+
 					"  Replace: %s.Close() → conn.CloseEphemeralChannel(%s)",
-				rel, pos.Line, funcName, receiverName, receiverName, receiverName,
+				rel, pos.Line, funcName, receiverHint, recvType.String(), receiverHint, receiverHint,
 			)
 			return true
 		})
 	}
 }
 
-// extractReceiverName returns the base identifier name from a selector receiver
-// expression. For `ch.Close()` returns "ch"; for `r.ch.Close()` returns "ch";
-// for `c.conn.Close()` returns "conn".
-func extractReceiverName(x ast.Expr) string {
+// implementsAMQPChannel reports whether t (value or pointer) satisfies the
+// AMQPChannel interface. We try both the type itself and a pointer to it,
+// matching how `types.Implements` is used in golang/tools copylock.go: a
+// type satisfies an interface either directly or via its pointer receiver.
+func implementsAMQPChannel(t types.Type, iface *types.Interface) bool {
+	if types.Implements(t, iface) {
+		return true
+	}
+	if _, isPtr := t.(*types.Pointer); !isPtr {
+		return types.Implements(types.NewPointer(t), iface)
+	}
+	return false
+}
+
+// receiverHint reproduces the source-level receiver expression for use in
+// error messages only. Decisions never depend on this string.
+func receiverHint(x ast.Expr) string {
 	switch e := x.(type) {
 	case *ast.Ident:
 		return e.Name
 	case *ast.SelectorExpr:
-		return e.Sel.Name
+		return receiverHint(e.X) + "." + e.Sel.Name
 	}
-	return ""
+	return "<expr>"
 }
 
-// isLikelyAMQPChannel returns true if the receiver name suggests it holds an
-// AMQPChannel value. The rabbitmq package uses "ch" for all AMQPChannel
-// variables and "conn"/"w" for AMQPConnection values.
-func isLikelyAMQPChannel(name string) bool {
-	return name == "ch"
+// TestRMQChannelDestructionViaConn01_NamingImmunity is a positive/negative
+// fixture pair proving the RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01 type filter
+// is naming-immune: violations are flagged based on receiver type implementing
+// AMQPChannel, never the receiver variable name. Co-located with the rule so
+// renaming the heuristic-era var "ch" downstream cannot regress this gate.
+//
+// Built on go/types directly (types.Config.Check on an inline AST) so we do
+// not need an external fixture module — the test stays self-contained.
+func TestRMQChannelDestructionViaConn01_NamingImmunity(t *testing.T) {
+	t.Parallel()
+
+	src := `package fixture
+type AMQPChannel interface {
+	Publish() error
+	Consume() error
+	Close() error
+}
+type IOCloser interface {
+	Close() error
+}
+func violatorRenamedVar() {
+	var renamed AMQPChannel
+	renamed.Close()
+}
+func violatorShortVar() {
+	var ch AMQPChannel
+	ch.Close()
+}
+func violatorAmqpCh() {
+	var amqpCh AMQPChannel
+	amqpCh.Close()
+}
+func innocentIOCloser() {
+	var ch IOCloser
+	ch.Close()
+}
+func CloseEphemeralChannel() {
+	var c AMQPChannel
+	c.Close()
+}
+func waitAndClose() {
+	var c AMQPChannel
+	c.Close()
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	conf := types.Config{}
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
+	pkg, err := conf.Check("fixture", fset, []*ast.File{file}, info)
+	if err != nil {
+		t.Fatalf("type-check fixture: %v", err)
+	}
+	chanIface := pkg.Scope().Lookup("AMQPChannel").Type().Underlying().(*types.Interface)
+
+	// Capture errors via a sub-t so we can read them. We use t.Run with a
+	// recording test impl pattern: simpler to call the inspection directly
+	// and aggregate flagged function names locally.
+	flagged := map[string]bool{}
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		funcName := fd.Name.Name
+		if allowedChannelCloseFuncs[funcName] {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Close" {
+				return true
+			}
+			rt := info.TypeOf(sel.X)
+			if rt == nil {
+				return true
+			}
+			if implementsAMQPChannel(rt, chanIface) {
+				flagged[funcName] = true
+			}
+			return true
+		})
+	}
+
+	wantFlagged := map[string]bool{
+		"violatorRenamedVar": true,
+		"violatorShortVar":   true,
+		"violatorAmqpCh":     true,
+	}
+	wantInnocent := []string{"innocentIOCloser"}
+
+	for name := range wantFlagged {
+		if !flagged[name] {
+			t.Errorf("expected %s to be flagged (renaming receiver must not weaken gate)", name)
+		}
+	}
+	for _, name := range wantInnocent {
+		if flagged[name] {
+			t.Errorf("did not expect %s to be flagged (io.Closer-shaped types implement Close but not AMQPChannel)", name)
+		}
+	}
+	// Whitelisted owners must not appear in flagged map at all.
+	for _, owner := range []string{"CloseEphemeralChannel", "waitAndClose"} {
+		if flagged[owner] {
+			t.Errorf("expected whitelisted %s to be skipped at function-name layer", owner)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
