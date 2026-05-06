@@ -255,7 +255,19 @@ jobs:
         # Keep the PR/push gate focused on the single real OTLP/gRPC collector
         # round-trip. The nightly/manual workflow still runs the full package
         # under the same tags as a compatibility patrol.
-        run: go test -tags=integration,otelcollector ./adapters/otel/... -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m
+        # `no tests to run` guard: a focused `-run '^Foo$'` selector that
+        # matches zero tests (test renamed / moved / deleted) emits a
+        # "no tests to run" warning but still exits 0 — the gate would
+        # silently pass. Pipe stdout+stderr through grep and fail explicitly.
+        run: |
+          set -euo pipefail
+          out=$(go test -tags=integration,otelcollector ./adapters/otel/... \
+            -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q 'no tests to run'; then
+            echo "FAIL: -run selector matched zero tests in ./adapters/otel/...; rename/move regression?"
+            exit 1
+          fi
 
       - name: Race coverage for PG migrator concurrent Up
         env:
@@ -268,7 +280,20 @@ jobs:
         # would never exercise the Go race detector in CI. -count=3 amplifies
         # any timing-dependent race; the focused -run keeps wall-time ≤ 60s
         # by skipping every other postgres integration test.
-        run: go test -tags=integration -race -count=3 -timeout 5m ./adapters/postgres/ -run '^TestMigrator_ConcurrentUp_NoRaceWithSessionLocker$'
+        #
+        # `no tests to run` guard (same rationale as the OTel step above):
+        # `-run` selectors that match zero tests still exit 0; the grep
+        # converts that into an explicit FAIL so renames/moves don't
+        # silently disable the race regression防线.
+        run: |
+          set -euo pipefail
+          out=$(go test -tags=integration -race -count=3 -timeout 5m ./adapters/postgres/ \
+            -run '^TestMigrator_ConcurrentUp_NoRaceWithSessionLocker$' 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q 'no tests to run'; then
+            echo "FAIL: -run selector matched zero tests in ./adapters/postgres/; rename/move regression?"
+            exit 1
+          fi
 
       - name: Redis cluster compile gate
         # B10 PR-V1-REDIS-CLUSTER: cluster_real_test.go is gated by
