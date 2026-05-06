@@ -628,8 +628,13 @@ func (s *Subscriber) consumeLoop(
 	}
 }
 
-// testOnlyDrainDeadlineOverride is non-zero only in tests that need to inject a
-// short drain budget to avoid waiting the full defaultRMQDrainDeadline.
+// testOnlyDrainDeadlineOverride is non-zero only in tests that need to
+// inject a short drain budget. Tests writing this variable MUST NOT call
+// t.Parallel() — concurrent writes race the package-level read in
+// currentDrainDeadline. The field is intentionally a package-level var
+// (not a Subscriber config field) because consumeLoop creates its drain
+// timer before drainRemaining is reached, and threading a deadline
+// through every layer just for testing inflates the production API.
 var testOnlyDrainDeadlineOverride time.Duration
 
 // currentDrainDeadline returns the active drain deadline. In production this
@@ -716,6 +721,17 @@ func validateEntryIDLength(id string) bool {
 	return len(id) > maxEntryIDLength
 }
 
+// processDelivery handles a single broker delivery. Concurrency:
+//
+// ctx semantics:
+//   - When called from consumeLoop's normal path, ctx is the original
+//     subscription ctx — a parent cancel reaches the handler.
+//   - When called from drainRemaining (after StopIntake), ctx is a
+//     detached context derived via context.WithoutCancel; handler runs
+//     to completion regardless of parent cancel.
+//
+// Handlers MUST be ctx-cancel aware: a Disposition.Requeue under graceful
+// shutdown is acceptable; the relay reclaim path will redrive on next poll.
 func (s *Subscriber) processDelivery(
 	ctx context.Context,
 	ch AMQPChannel,
@@ -1003,6 +1019,19 @@ func (s *Subscriber) Close(ctx context.Context) error {
 // allowing in-flight processDelivery goroutines and already-prefetched messages
 // to complete naturally. Close() remains the hard-shutdown boundary
 // (closeCh signal + wg.Wait bounded by ctx).
+//
+// Drain timeout behavior:
+//
+//	When StopIntakeDrainTimeout fires before all in-flight processDelivery
+//	goroutines settle, StopIntake returns ErrAdapterAMQPCloseTimeout with
+//	slog.Warn capturing the residual inflight count. The unfinished
+//	handler goroutines are NOT killed (Go has no goroutine cancel
+//	primitive); Close() must be called subsequently to finalize cleanup
+//	via wg.Wait — Close honors its own ctx deadline.
+//
+//	Recommended call sequence on graceful shutdown:
+//	  if err := sub.StopIntake(ctx); err != nil { /* log; do not abort */ }
+//	  _ = sub.Close(closeCtx)  // closeCtx may differ; see Close docs
 //
 // Idempotent: safe to call multiple times. Safe to call concurrently with
 // Subscribe and processDelivery in-flight.

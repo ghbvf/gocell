@@ -321,7 +321,15 @@ type Config struct {
 	// MaxChannelsPerConn caps the number of in-flight channels acquired
 	// from one Connection. Pool-miss acquisitions check this counter and
 	// return ErrAdapterAMQPChannelMaxExceeded when the cap is reached.
-	// Default: 256.
+	//
+	// Values:
+	//   0  — auto-default to defaultRMQMaxChannelsPerConn (=256) at
+	//        setDefaults time. Production NewConnection always populates
+	//        this branch.
+	//   <0 — disabled (uncapped). Test convenience for sites that build
+	//        *Connection directly without setDefaults; production should
+	//        not use this sentinel.
+	//   >0 — cap value as configured.
 	MaxChannelsPerConn int
 }
 
@@ -338,7 +346,7 @@ func (c *Config) setDefaults() {
 	if c.ConfirmTimeout <= 0 {
 		c.ConfirmTimeout = defaultRMQConfirmTimeout
 	}
-	if c.MaxChannelsPerConn <= 0 {
+	if c.MaxChannelsPerConn == 0 {
 		c.MaxChannelsPerConn = defaultRMQMaxChannelsPerConn
 	}
 }
@@ -835,11 +843,15 @@ func (c *Connection) drainChannelPool() {
 //   - Pool hit (idle channel returned): inUseChannels unchanged — the broker
 //     channel was already counted when it was first allocated.
 //   - Pool miss: inUseChannels.Add(1) before allocation; rolled back on cap
-//     exceeded or broker error so over-cap slots cannot leak.
-//   - MaxChannelsPerConn <= 0: cap check skipped (uncapped). NewConnection's
-//     setDefaults populates the field with defaultRMQMaxChannelsPerConn, so
-//     this branch only fires when callers build *Connection directly without
-//     setDefaults — a test convenience, not a production path.
+//     exceeded or broker error so over-cap allocations cannot leak counter
+//     slots. Note: under heavy concurrency the counter can momentarily
+//     read above MaxChannelsPerConn between the Add(1) and the rollback
+//     Add(-1); but the broker-side Channel() call only fires after the
+//     cap check passes, so the broker never observes more than cap
+//     channels open simultaneously.
+//   - MaxChannelsPerConn < 0: cap check skipped (uncapped). Test convenience
+//     for sites that build *Connection directly without setDefaults;
+//     production NewConnection always populates the field via setDefaults.
 func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	c.mu.RLock()
 	permErr := c.permanentErr
@@ -900,6 +912,20 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 	// Pool full — close the channel and decrement in-use.
 	if err := ch.Close(); err != nil {
 		slog.Debug("rabbitmq: error closing excess channel",
+			slog.Any("error", err))
+	}
+	c.inUseChannels.Add(-1)
+}
+
+// CloseEphemeralChannel closes ch and decrements inUseChannels. Use this
+// for channels that should not return to the pool (e.g. publisher confirm-
+// mode channels — see publisher.go for rationale on why confirm-mode
+// channels pollute the pool). Pairing with the AcquireChannel pool-miss
+// counter increment is mandatory; bypassing this method leaks
+// MaxChannelsPerConn slots permanently.
+func (c *Connection) CloseEphemeralChannel(ch AMQPChannel) {
+	if err := ch.Close(); err != nil {
+		slog.Debug("rabbitmq: error closing ephemeral channel",
 			slog.Any("error", err))
 	}
 	c.inUseChannels.Add(-1)

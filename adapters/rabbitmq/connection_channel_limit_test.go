@@ -175,6 +175,45 @@ func TestReleaseChannel_DecrementsInUseOnClose(t *testing.T) {
 		"ch2 must be closed when pool is full on release")
 }
 
+// TestPublisher_RepeatedPublish_DoesNotLeakInUseChannels verifies that each
+// Publish call leaves inUseChannels at 0 after completion — i.e. the
+// CloseEphemeralChannel defer correctly rolls back the pool-miss increment.
+//
+// Without the fix (bare ch.Close() instead of CloseEphemeralChannel), every
+// Publish permanently increments inUseChannels and the 4th publish would hit
+// ErrAdapterAMQPChannelMaxExceeded with MaxChannelsPerConn=3.
+func TestPublisher_RepeatedPublish_DoesNotLeakInUseChannels(t *testing.T) {
+	// Must NOT be t.Parallel() — this test reads conn.inUseChannels between
+	// publishes and requires no concurrent modify.
+	const numPublishes = 5
+	const maxChannels = 3
+
+	// Build a connection with MaxChannelsPerConn=3 and poolSize=0 to force
+	// every Publish through the pool-miss path.
+	conn, mockConn := newTestConnectionWithCapAndMock(t, 0, maxChannels)
+
+	// Pre-populate channelQueue with numPublishes autoConfirm channels.
+	// Publisher creates a new channel per Publish; the queue supplies them
+	// in FIFO order so each call gets its own distinct channel instance.
+	mockConn.mu.Lock()
+	for range numPublishes {
+		mockConn.channelQueue = append(mockConn.channelQueue, newAutoConfirmChannel())
+	}
+	mockConn.mu.Unlock()
+
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+
+	for i := range numPublishes {
+		err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+		require.NoError(t, err, "publish %d must succeed", i+1)
+
+		// After each Publish the channel must have been released; inUseChannels
+		// should be back at 0.
+		require.Equal(t, int32(0), conn.inUseChannels.Load(),
+			"inUseChannels must be 0 after publish %d (channel leak detected)", i+1)
+	}
+}
+
 // TestAcquireChannel_RaceUnderConcurrency runs N goroutines concurrently
 // acquiring channels and asserts that the total successful acquisitions
 // never exceed MaxChannelsPerConn. Uses -race to detect data races.

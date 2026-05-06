@@ -126,13 +126,13 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	// full, deadlocking ALL channels on the connection. Watermill uses the
 	// same strategy (ephemeral channel per publish) as the default.
 	//
+	// CloseEphemeralChannel combines ch.Close() with inUseChannels.Add(-1)
+	// to symmetrically roll back the pool-miss counter increment performed by
+	// AcquireChannel. Using bare ch.Close() here would permanently leak the
+	// counter slot and exhaust MaxChannelsPerConn after 256 publishes.
+	//
 	// ref: Watermill defaultChannelProvider — open, use, close per publish.
-	defer func() {
-		if closeErr := ch.Close(); closeErr != nil {
-			slog.Debug("rabbitmq: error closing publish channel",
-				slog.Any("error", closeErr))
-		}
-	}()
+	defer p.conn.CloseEphemeralChannel(ch)
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
