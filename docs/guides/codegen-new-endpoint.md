@@ -41,16 +41,16 @@ endpoints:
     method: POST
     path: /api/v1/widgets
     successStatus: 201
+    responses:
+      400:
+        description: invalid request
+        schemaRef: ../../shared/errors/error-response-v1.schema.json
+      500:
+        description: internal server error
+        schemaRef: ../../shared/errors/error-response-v1.schema.json
 schemaRefs:
   request: request.schema.json
   response: response.schema.json
-responses:
-  "400":
-    description: invalid request
-    schemaRef: ../../shared/errors/error-response-v1.schema.json
-  "500":
-    description: internal server error
-    schemaRef: ../../shared/errors/error-response-v1.schema.json
 ```
 
 `contracts/http/myapp/widgets/create/v1/request.schema.json`:

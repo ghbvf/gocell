@@ -31,14 +31,27 @@
 //
 // # Stable Surface
 //
-// The following identifiers form pkg/httputil's stable surface for codegen
-// consumers (tools/codegen/contractgen/templates/types.tmpl). Signature
-// changes are breaking and require regenerating all 45 generated
-// types_gen.go files:
+// Status writers (write HTTP status + body):
+//   - WriteJSON(w, status, body) — generic typed body writer
+//   - WritePublic(ctx, w, kind, code, message) — typed public error envelope
+//   - WriteError(ctx, w, err) — domain error → wire envelope
+//   - WriteErrorWithStatus(ctx, w, status, ecErr) — explicit status override
+//   - WriteNilResponseInternal(ctx, w) — framework 5xx for nil typed response
+//   - WriteEncodeFaultInternal(ctx, w) — framework 5xx for encode failure
 //
-//   - WriteError(ctx, w, err)
-//   - WriteErrorWithStatus(ctx, w, status, ecErr)
-//   - AppendCorrelationAttrs(ctx, attrs) []any
+// Decorators (do not write status/body):
+//   - AppendCorrelationAttrs(ctx, attrs) — append RequestID/CorrelationID slog.Attr
+//   - WithCancelReasonSlot(ctx) — install writable 499 cancel-reason slot in context
+//   - CancelReason(ctx) — read the 499 cancel-reason label set by the response path
+//   - ParseCanonicalUUID(raw) — parse and normalize UUID to 36-char dashed form
+//
+// Body decoders (read request, may write 4xx on parse error):
+//   - DecodeJSON(r, dst, maxBytes) / DecodeJSONStrict(r, dst, maxBytes) — JSON body decoder
+//   - ParsePageParams(r) / ParsePageParamsOrWrite(w, r) — pagination query parser
+//   - ParseUUIDPathParam(w, r, name) — UUID path param parser
+//
+// Logging policy modifiers (no I/O):
+//   - WithClientErrorLogSampling(ctx, routeKey) / WithClientErrorLogSamplingEvery(ctx, routeKey, every)
 //
 // ref: docs/architecture/202605061500-adr-typed-response-envelope.md
 package httputil

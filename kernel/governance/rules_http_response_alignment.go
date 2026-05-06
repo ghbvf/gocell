@@ -727,6 +727,10 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 			"DecodeJSONStrict":                {}, // strict variant; same semantics as DecodeJSON
 			"WithClientErrorLogSampling":      {}, // logging decorator — no status write
 			"WithClientErrorLogSamplingEvery": {}, // logging decorator — no status write
+			"AppendCorrelationAttrs":          {}, // decorator — appends slog.Attr, no status write
+			"WithCancelReasonSlot":            {}, // decorator — installs cancel-reason ctx slot
+			"CancelReason":                    {}, // decorator — reads cancel-reason from ctx
+			"ParseCanonicalUUID":              {}, // pure util — no HTTP I/O
 		}
 		if _, suppressed := knownNonWriters[helperName]; !suppressed {
 			slog.Warn("CH-04: unknown httputil helper call, skipping helper-status inference",

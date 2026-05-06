@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -319,9 +320,7 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 	if err := encodeErrorEnvelopeTo(&buf, ctx, ecErr); err != nil {
 		attrs := AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
 		slog.ErrorContext(ctx, "httputil: encode error envelope", attrs...)
-		w.Header().Set(headerContentType, contentTypeJSON)
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write(sentinelInternalErrorBody)
+		writeInternalErrorSentinel(w)
 		return
 	}
 	w.Header().Set(headerContentType, contentTypeJSON)
@@ -334,7 +333,7 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 // encodeErrorEnvelopeTo writes the canonical wire envelope into out, including
 // numeric-precision merge and request_id injection. Returns an error if any
 // step fails — caller writes sentinelInternalErrorBody to the wire instead.
-func encodeErrorEnvelopeTo(out *bytes.Buffer, ctx context.Context, ecErr *errcode.Error) error {
+func encodeErrorEnvelopeTo(out io.Writer, ctx context.Context, ecErr *errcode.Error) error {
 	innerJSON, err := json.Marshal(ecErr)
 	if err != nil {
 		return err
