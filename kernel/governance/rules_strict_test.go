@@ -599,10 +599,14 @@ func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
 	}
 }
 
-// TestStrictValidator_FMTA1_KebabAssemblyID verifies FMT-A1 flags
-// assembly.yaml ids containing '-' in strict mode. Uses synthetic ids
-// (baz-qux) so later repo-wide sed renames do not erase the kebab fixture.
-func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
+// TestValidator_FMTA1_AssemblyIDPattern verifies FMT-A1 fires
+// unconditionally for assembly ids that violate AssemblyIDPattern. Uses
+// synthetic ids (baz-qux) so later repo-wide sed renames do not erase the
+// fixture. FMT-A1 mirrors a schema constraint (schemas/assembly.schema.json
+// id.pattern) so it must trip on both the default and strict validate
+// paths — schema-aware tooling rejects the same value without a strict
+// toggle.
+func TestValidator_FMTA1_AssemblyIDPattern(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells:     map[string]*metadata.CellMeta{},
 		Slices:    map[string]*metadata.SliceMeta{},
@@ -620,25 +624,29 @@ func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
 
 	v := NewValidator(project, "", clock.Real())
 
-	forRes608, err := v.ValidateStrict(t.Context(), false)
-	require.NoError(t, err)
-	for _, r := range forRes608 {
-		if r.Code == "FMT-A1" {
-			t.Errorf("non-strict mode must not emit FMT-A1: %s", r.Message)
-		}
+	for _, strict := range []bool{false, true} {
+		strict := strict
+		t.Run(fmtBoolName(strict), func(t *testing.T) {
+			results, err := v.ValidateStrict(t.Context(), strict)
+			require.NoError(t, err)
+			var got bool
+			for _, r := range results {
+				if r.Code == "FMT-A1" && r.Severity == SeverityError {
+					got = true
+				}
+			}
+			if !got {
+				t.Errorf("FMT-A1 must fire for kebab-case assembly id (strict=%v)", strict)
+			}
+		})
 	}
+}
 
-	var got bool
-	forRes615, err := v.ValidateStrict(t.Context(), true)
-	require.NoError(t, err)
-	for _, r := range forRes615 {
-		if r.Code == "FMT-A1" && r.Severity == SeverityError {
-			got = true
-		}
+func fmtBoolName(b bool) string {
+	if b {
+		return "strict"
 	}
-	if !got {
-		t.Error("strict mode should produce FMT-A1 error for kebab-case assembly id")
-	}
+	return "default"
 }
 
 // TestStrictValidator_FMT16_KebabCellDir verifies FMT-16 flags kebab cell
