@@ -10,18 +10,9 @@ package metadata
 import (
 	"log/slog"
 	"path/filepath"
-)
 
-// consistencyOrder maps level string to numeric rank for comparison.
-// Mirrors kernel/cell.Level (L0=0..L4=4); kernel/metadata cannot import
-// kernel/cell because kernel/cell imports kernel/metadata (cycle).
-var consistencyOrder = map[string]int{
-	"L0": 0,
-	"L1": 1,
-	"L2": 2,
-	"L3": 3,
-	"L4": 4,
-}
+	"github.com/ghbvf/gocell/kernel/cell/levelrank"
+)
 
 // applyAssemblyDerivations fills derived AssemblyMeta fields after parsing.
 // Single source of truth for build defaults and MaxConsistencyLevel; the
@@ -93,8 +84,8 @@ func computeMaxConsistencyLevel(pm *ProjectMeta, asm *AssemblyMeta) (string, boo
 		if !ok {
 			return "", false
 		}
-		rank, valid := consistencyOrder[c.ConsistencyLevel]
-		if !valid {
+		rank := levelrank.Rank(c.ConsistencyLevel)
+		if rank < 0 {
 			return "", false
 		}
 		if rank > maxRank {

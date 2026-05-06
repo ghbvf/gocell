@@ -84,13 +84,15 @@ drift gate 三件套：
 
 ### Negative
 
-- `kernel/metadata/assembly_derive.go` inline 复制 `consistencyOrder` map 镜像
-  `kernel/cell.Level`（L0-L4）。原因：`kernel/cell` 已 import `kernel/metadata`，
-  反向 import 会形成 cycle，故 metadata 派生计算被迫手抄。代价：未来 GoCell
-  扩展 L5 时必须双改 kernel/cell/types.go::Level + kernel/metadata/assembly_derive.go::consistencyOrder。
-  
-  Follow-up：评估把 ConsistencyLevel 类型 + ParseLevel 下沉到 pkg/consistency/
-  共享包（metadata + cell 共同 import），消除双源；登记 docs/backlog.md 跟踪。
+- 一致性等级（L0-L4）原本被两处持有：`kernel/cell.Level` 类型 + `levelStrings`
+  数组（运行期类型）与 `kernel/metadata/assembly_derive.go::consistencyOrder` map
+  （解析期排序）。`kernel/cell` 已 import `kernel/metadata`，反向 import 会形成
+  cycle。本 PR 通过新建零依赖子包 `kernel/cell/levelrank`（仅 `Levels` 数组 +
+  `Rank()` + `At()`）打破对称：`kernel/cell.Level.String/ParseLevel` 与
+  `kernel/metadata.computeMaxConsistencyLevel` 都向下依赖 levelrank，单源治理。
+  对标 etcd `raftpb`、CockroachDB `storage/enginepb` 子包隔离模式。L0-L4 taxonomy
+  由 GoCell 宪法固化（sync/async × local/cross-cell/device），不预期扩展；本
+  refactor 的目标是消除现有重复，不是为 taxonomy 扩张做准备。
 
 ## Alternatives Considered
 
