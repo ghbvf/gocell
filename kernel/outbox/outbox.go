@@ -12,43 +12,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/metautil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
-// ---------------------------------------------------------------------------
-// Metadata size limits (META-SIZE-01)
-//
-// These constants prevent unbounded metadata from degrading broker throughput
-// or exceeding transport-level control-line limits.
-//
-// ref: OTel sdk/trace/span_limits.go -- 128 attributes/span (GoCell uses 64
-//      as a tighter balance between overhead prevention and practical use)
-// ref: NATS server/const.go -- MAX_CONTROL_LINE_SIZE = 4096 bytes
-// ref: RabbitMQ -- no hard header-size limit, but 64 KB total is a pragmatic
-//      ceiling aligned with most broker implementations
-// ---------------------------------------------------------------------------
+// Metadata size limits (META-SIZE-01) live in kernel/metautil so kernel/outbox
+// and kernel/command share a single source of truth. The values themselves
+// (key count, key length, value length, total size) are imported via
+// metautil.Max* constants and METADATA-LIMITS-SINGLE-SOURCE-01 archtest
+// rejects any reintroduction in this package.
 
 const (
-	// MaxMetadataKeys is the maximum number of key-value pairs in Entry.Metadata.
-	// Typical GoCell entries carry 3-10 keys (trace_id, request_id, correlation_id
-	// plus domain context); 64 provides 6x headroom while keeping serialized
-	// overhead under 1 KB for small entries. OTel allows 128 attributes/span.
-	MaxMetadataKeys = 64
-
-	// MaxMetadataKeyLen is the maximum byte length of a single metadata key.
-	// Measured in bytes (len()), not runes -- multi-byte UTF-8 keys are counted
-	// by their wire size, consistent with transport-level limits.
-	MaxMetadataKeyLen = 256
-
-	// MaxMetadataValueLen is the maximum byte length of a single metadata value.
-	// Aligned with NATS MAX_CONTROL_LINE_SIZE (4096). Measured in bytes.
-	MaxMetadataValueLen = 4096
-
-	// MaxMetadataTotalSize is the maximum total byte size of all metadata
-	// key-value pairs combined (sum of len(k)+len(v) for each pair).
-	MaxMetadataTotalSize = 65536
-
 	// MaxPayloadBytes caps Entry.Payload length. A bug or malicious producer
 	// that emits multi-MB JSON would otherwise inflate relay batch memory
 	// (BatchSize × payload bytes) and PG TOAST / replication overhead. 1 MiB
@@ -90,53 +65,17 @@ var reservedMetadataKeySet = func() map[string]struct{} {
 	return s
 }()
 
-// validateMetadata checks metadata map against size limits and rejects any
-// keys claimed by the kernel observability bridge (ReservedMetadataKeys).
-// nil or empty metadata is valid (no checks needed).
+// validateMetadata layers the outbox-specific reserved-key check on top of
+// the shared metautil limits. nil or empty metadata is valid.
 func validateMetadata(m map[string]string) error {
-	if len(m) == 0 {
-		return nil
-	}
-	if len(m) > MaxMetadataKeys {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"outbox: metadata key count exceeds max",
-			errcode.WithDetails(slog.Int("count", len(m)), slog.Int("max", MaxMetadataKeys)))
-	}
-	var total int
-	for k, v := range m {
+	for k := range m {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: metadata key is reserved for the observability bridge — use Entry.Observability instead",
 				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, k)))
 		}
-		if len(k) > MaxMetadataKeyLen {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"outbox: metadata key length exceeds max",
-				errcode.WithDetails(slog.Int("length", len(k)), slog.Int("max", MaxMetadataKeyLen)),
-				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, truncate(k, 64))))
-		}
-		if len(v) > MaxMetadataValueLen {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"outbox: metadata value length exceeds max",
-				errcode.WithDetails(slog.Int("length", len(v)), slog.Int("max", MaxMetadataValueLen)),
-				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, truncate(k, 64))))
-		}
-		total += len(k) + len(v)
 	}
-	if total > MaxMetadataTotalSize {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"outbox: metadata total size exceeds max",
-			errcode.WithDetails(slog.Int("total", total), slog.Int("max", MaxMetadataTotalSize)))
-	}
-	return nil
-}
-
-// truncate returns the first n bytes of s, appending "..." if truncated.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	return metautil.ValidateLimits(m, metautil.DomainOutbox)
 }
 
 // ---------------------------------------------------------------------------
@@ -266,14 +205,20 @@ func (e Entry) Validate() error {
 // Writer / Relay / Publisher
 // ---------------------------------------------------------------------------
 
-// Writer writes outbox entries within a transaction.
-// The implementation must ensure the outbox write is atomic with the
-// business state write (same DB transaction).
+// Writer writes outbox entries within a transaction. The implementation
+// MUST ensure the outbox write is atomic with the business state write
+// (same DB transaction).
 type Writer interface {
-	// Write persists an outbox entry atomically with the caller's business state.
-	// Implementations that require transactional guarantees SHOULD use a
-	// context-embedded transaction pattern (e.g., extract tx from context via
-	// TxFromContext(ctx)) to participate in the caller's transaction scope.
+	// Write persists an outbox entry atomically with the caller's business
+	// state. Write MUST be invoked from within an active transaction; the
+	// implementation extracts the tx from ctx via TxFromContext(ctx). Calling
+	// Write outside of a persistence.TxRunner.RunInTx scope is a programming
+	// error — implementations return an errcode error with KindInternal
+	// (e.g. adapters/postgres returns ErrAdapterPGNoTx) rather than silently
+	// writing without transactional guarantees.
+	//
+	// ref: nikolayk812/pgx-outbox writer.go -- explicit tx parameter +
+	// ErrTxNil guard for the same MUST-have-tx contract.
 	Write(ctx context.Context, entry Entry) error
 }
 

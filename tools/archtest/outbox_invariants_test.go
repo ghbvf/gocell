@@ -1628,3 +1628,137 @@ func skipOutboxTopicProductionScan(rel string) bool {
 		strings.Contains(rel, "/testdata/") ||
 		strings.HasPrefix(rel, "testdata/")
 }
+
+// ---------------------------------------------------------------------------
+// METADATA-LIMITS-SINGLE-SOURCE-01
+//
+// kernel/metautil owns the four metadata size constants (MaxMetadataKeys,
+// MaxMetadataKeyLen, MaxMetadataValueLen, MaxMetadataTotalSize). Reintroducing
+// any of them in kernel/outbox or kernel/command would silently re-fork the
+// limits and let the two transports drift again — which is exactly what 030
+// review §G-07 (b) flagged as the original bug. Type system cannot enforce
+// "constant lives in one package" and codegen has no marker to derive from,
+// so we ground the rule in archtest per CLAUDE.md §"新增 invariant 决策原则"
+// tier 3.
+// ---------------------------------------------------------------------------
+
+// INVARIANT: METADATA-LIMITS-SINGLE-SOURCE-01
+//
+// TestMetadataLimitsSingleSource enforces that MaxMetadataKeys,
+// MaxMetadataKeyLen, MaxMetadataValueLen, and MaxMetadataTotalSize are
+// declared exactly once in the repository — under kernel/metautil. Any
+// other declaration (notably in kernel/outbox or kernel/command, which
+// historically duplicated them) fails the test.
+func TestMetadataLimitsSingleSource(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := repoRootFromTestPath(t)
+
+	forbidden := map[string]struct{}{
+		"MaxMetadataKeys":      {},
+		"MaxMetadataKeyLen":    {},
+		"MaxMetadataValueLen":  {},
+		"MaxMetadataTotalSize": {},
+	}
+
+	type hit struct {
+		File  string
+		Line  int
+		Const string
+	}
+	var hits []hit
+
+	walkErr := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			rel, _ := filepath.Rel(repoRoot, path)
+			if rel == "." {
+				return nil
+			}
+			// Allow the canonical home; skip vendored/generated trees.
+			if rel == "kernel/metautil" {
+				return filepath.SkipDir
+			}
+			if strings.HasPrefix(rel, "vendor/") ||
+				strings.HasPrefix(rel, "generated/") ||
+				strings.HasPrefix(rel, "tools/archtest/") ||
+				strings.Contains(rel, "/testdata/") ||
+				strings.HasPrefix(rel, "testdata/") ||
+				strings.HasPrefix(rel, "worktrees/") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		// Syntactically broken files are out of scope for this rule — gofmt /
+		// build invariants own that contract. Discard the parse error.
+		file, _ := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if file == nil {
+			return nil
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, name := range vs.Names {
+					if _, bad := forbidden[name.Name]; !bad {
+						continue
+					}
+					rel, _ := filepath.Rel(repoRoot, path)
+					hits = append(hits, hit{
+						File:  rel,
+						Line:  fset.Position(name.Pos()).Line,
+						Const: name.Name,
+					})
+				}
+			}
+		}
+		return nil
+	})
+	require.NoError(t, walkErr, "walk repo root")
+
+	if len(hits) == 0 {
+		return
+	}
+	lines := make([]string, 0, len(hits))
+	for _, h := range hits {
+		lines = append(lines, fmt.Sprintf("%s:%d declares %s outside kernel/metautil", h.File, h.Line, h.Const))
+	}
+	sort.Strings(lines)
+	t.Fatalf("METADATA-LIMITS-SINGLE-SOURCE-01: forbidden duplicates of metadata limit constants:\n  %s",
+		strings.Join(lines, "\n  "))
+}
+
+// repoRootFromTestPath finds the repository root by walking up from the test
+// binary's working directory until it sees a go.mod file. Test binaries run
+// from the package directory, so we ascend from CWD.
+func repoRootFromTestPath(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	dir := cwd
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("METADATA-LIMITS-SINGLE-SOURCE-01: repo root with go.mod not found above %s", cwd)
+		}
+		dir = parent
+	}
+}

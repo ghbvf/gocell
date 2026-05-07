@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/metautil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -227,7 +228,7 @@ func TestSubscriberInterface(t *testing.T) {
 
 	t.Run("Subscribe returns nil on success", func(t *testing.T) {
 		handler := func(_ context.Context, _ Entry) (HandleResult, Settlement) {
-			return HandleResult{Disposition: DispositionAck}, nil
+			return Ack(), nil
 		}
 		err := sub.Subscribe(context.Background(), testFullSub("test.topic", "cg-test"), handler)
 		assert.NoError(t, err)
@@ -309,7 +310,7 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"),
 		func(_ context.Context, _ Entry) HandleResult {
 			called = true
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		})
 	assert.NoError(t, err)
 	assert.True(t, inner.subscribeCalled)
@@ -327,7 +328,7 @@ func TestSubscriberWithMiddleware_RequiresConsumerBase(t *testing.T) {
 
 	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"),
 		func(_ context.Context, _ Entry) HandleResult {
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		})
 
 	require.Error(t, err)
@@ -356,7 +357,7 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	var receivedEntry Entry
 	handler := func(_ context.Context, e Entry) HandleResult {
 		receivedEntry = e
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	}
 
 	err := sub.SubscribeEntry(context.Background(), testFullSub("orders.created", "cg-orders"), handler)
@@ -397,7 +398,7 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 
 	handler := func(_ context.Context, _ Entry) HandleResult {
 		order = append(order, "handler")
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	}
 
 	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"), handler)
@@ -437,10 +438,7 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 
 	shortCircuit := func(_ Subscription, _ EntryHandler) EntryHandler {
 		return func(_ context.Context, _ Entry) HandleResult {
-			return HandleResult{
-				Disposition: DispositionReject,
-				Err:         assert.AnError,
-			}
+			return Reject(assert.AnError)
 		}
 	}
 
@@ -453,7 +451,7 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	handlerCalled := false
 	handler := func(_ context.Context, _ Entry) HandleResult {
 		handlerCalled = true
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	}
 
 	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"), handler)
@@ -821,7 +819,7 @@ func TestHandleResult_Fields(t *testing.T) {
 func TestEntry_Validate_MetadataKeyCount_Exceeds(t *testing.T) {
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
 	e.Metadata = make(map[string]string)
-	for i := range MaxMetadataKeys + 1 {
+	for i := range metautil.MaxMetadataKeys + 1 {
 		e.Metadata[fmt.Sprintf("key-%d", i)] = "v"
 	}
 	err := e.Validate()
@@ -831,7 +829,7 @@ func TestEntry_Validate_MetadataKeyCount_Exceeds(t *testing.T) {
 
 func TestEntry_Validate_MetadataKeyLen_Exceeds(t *testing.T) {
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	longKey := strings.Repeat("k", MaxMetadataKeyLen+1)
+	longKey := strings.Repeat("k", metautil.MaxMetadataKeyLen+1)
 	e.Metadata = map[string]string{longKey: "v"}
 	err := e.Validate()
 	assert.Error(t, err)
@@ -842,7 +840,7 @@ func TestEntry_Validate_MetadataKeyLen_Exceeds(t *testing.T) {
 
 func TestEntry_Validate_MetadataValueLen_Exceeds(t *testing.T) {
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	longVal := strings.Repeat("v", MaxMetadataValueLen+1)
+	longVal := strings.Repeat("v", metautil.MaxMetadataValueLen+1)
 	e.Metadata = map[string]string{"k": longVal}
 	err := e.Validate()
 	assert.Error(t, err)
@@ -855,8 +853,8 @@ func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
 	e.Metadata = make(map[string]string)
 	// Fill with entries that individually fit but exceed total.
-	val := strings.Repeat("x", MaxMetadataValueLen)
-	for i := range (MaxMetadataTotalSize / MaxMetadataValueLen) + 2 {
+	val := strings.Repeat("x", metautil.MaxMetadataValueLen)
+	for i := range (metautil.MaxMetadataTotalSize / metautil.MaxMetadataValueLen) + 2 {
 		e.Metadata[fmt.Sprintf("k%d", i)] = val
 	}
 	err := e.Validate()
@@ -904,18 +902,18 @@ func TestEntry_Validate_EmptyMetadata_OK(t *testing.T) {
 
 func TestValidateMetadata_Constants(t *testing.T) {
 	// Verify constants match documented values.
-	assert.Equal(t, 64, MaxMetadataKeys)
-	assert.Equal(t, 256, MaxMetadataKeyLen)
-	assert.Equal(t, 4096, MaxMetadataValueLen)
-	assert.Equal(t, 65536, MaxMetadataTotalSize)
+	assert.Equal(t, 64, metautil.MaxMetadataKeys)
+	assert.Equal(t, 256, metautil.MaxMetadataKeyLen)
+	assert.Equal(t, 4096, metautil.MaxMetadataValueLen)
+	assert.Equal(t, 65536, metautil.MaxMetadataTotalSize)
 }
 
 func TestEntry_Validate_MetadataMultiByteUTF8(t *testing.T) {
 	// len() returns byte count, not rune count. A 3-byte CJK character
 	// "中" (U+4E2D) counts as 3 bytes toward the key/value limits.
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	cjkKey := strings.Repeat("中", MaxMetadataKeyLen/3) // each char is 3 bytes
-	assert.Less(t, len(cjkKey), MaxMetadataKeyLen+1, "should fit within byte limit")
+	cjkKey := strings.Repeat("中", metautil.MaxMetadataKeyLen/3) // each char is 3 bytes
+	assert.Less(t, len(cjkKey), metautil.MaxMetadataKeyLen+1, "should fit within byte limit")
 	e.Metadata = map[string]string{cjkKey: "value"}
 	assert.NoError(t, e.Validate(), "multi-byte key within byte limit should pass")
 }
@@ -951,25 +949,25 @@ func TestPayloadConstantsAlign(t *testing.T) {
 }
 
 func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
-	// Exactly MaxMetadataKeys keys should pass.
+	// Exactly metautil.MaxMetadataKeys keys should pass.
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
 	e.Metadata = make(map[string]string)
-	for i := range MaxMetadataKeys {
+	for i := range metautil.MaxMetadataKeys {
 		e.Metadata[fmt.Sprintf("k%02d", i)] = "v"
 	}
-	assert.NoError(t, e.Validate(), "exactly MaxMetadataKeys should be valid")
+	assert.NoError(t, e.Validate(), "exactly metautil.MaxMetadataKeys should be valid")
 
-	// Exactly MaxMetadataKeyLen key should pass.
+	// Exactly metautil.MaxMetadataKeyLen key should pass.
 	e2 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	exactKey := strings.Repeat("k", MaxMetadataKeyLen)
+	exactKey := strings.Repeat("k", metautil.MaxMetadataKeyLen)
 	e2.Metadata = map[string]string{exactKey: "v"}
-	assert.NoError(t, e2.Validate(), "key at exactly MaxMetadataKeyLen should be valid")
+	assert.NoError(t, e2.Validate(), "key at exactly metautil.MaxMetadataKeyLen should be valid")
 
-	// Exactly MaxMetadataValueLen value should pass.
+	// Exactly metautil.MaxMetadataValueLen value should pass.
 	e3 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	exactVal := strings.Repeat("v", MaxMetadataValueLen)
+	exactVal := strings.Repeat("v", metautil.MaxMetadataValueLen)
 	e3.Metadata = map[string]string{"k": exactVal}
-	assert.NoError(t, e3.Validate(), "value at exactly MaxMetadataValueLen should be valid")
+	assert.NoError(t, e3.Validate(), "value at exactly metautil.MaxMetadataValueLen should be valid")
 }
 
 // --- DiscardPublisher Logger + Counter Tests (DISCARD-OBS-01) ---
@@ -1027,7 +1025,7 @@ func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
 		ContractID: "event.orders.created.v1", ContractKind: "event", ContractTransport: "memory",
 	}
 	err := swm.SubscribeEntry(context.Background(), wantSub, func(_ context.Context, _ Entry) HandleResult {
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, wantSub.Topic, capturedSub.Topic, "middleware must receive Topic")

@@ -92,12 +92,20 @@ func TestObservabilityMetadata_Validate(t *testing.T) {
 		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "field length exceeds max"},
 		{name: "TraceID unsafe chars", o: ObservabilityMetadata{TraceID: "trace; DROP TABLE"}, wantError: "unsafe characters"},
 		{name: "TraceParent malformed", o: ObservabilityMetadata{TraceParent: "not-a-valid-traceparent"}, wantError: "valid W3C traceparent"},
-		{name: "total exceeds cap", o: ObservabilityMetadata{
+		// Maximum reachable total: 3 ID fields × MaxMetadataIDLen + 55B
+		// TraceParent = 768 + 55 = 823 < MaxObservabilityTotalSize (1024).
+		// The Validate per-field branch caps each ID at MaxMetadataIDLen and
+		// TraceParent at the W3C-format-fixed 55 bytes; the aggregate cap is
+		// therefore unreachable today (Validate's `total > MaxObservabilityTotalSize`
+		// guard is effectively dead defense-in-depth). See backlog
+		// `OBS-TOTAL-CAP-DEAD-BRANCH-01` for whether to delete the guard or
+		// raise per-field limits.
+		{name: "max reachable total stays under cap", o: ObservabilityMetadata{
 			TraceID:       strings.Repeat("a", idutil.MaxMetadataIDLen),
 			RequestID:     strings.Repeat("b", idutil.MaxMetadataIDLen),
 			CorrelationID: strings.Repeat("c", idutil.MaxMetadataIDLen),
-			TraceParent:   validTP, // 55B; total = 768 + 55 = 823 ≤ 1024 — adjust to push over
-		}, wantError: ""}, // 823 < 1024, still ok
+			TraceParent:   validTP,
+		}, wantError: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -466,7 +474,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 			require.True(t, ok)
 			assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
 
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}))
 
 	require.NotNil(t, cap.handler)
@@ -493,7 +501,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 			called = true
 			_, ok := ctxkeys.RequestIDFrom(ctx)
 			assert.False(t, ok, "no request_id should be set from zero ObservabilityMetadata")
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}))
 
 	require.NotNil(t, cap.handler)
@@ -518,7 +526,7 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(), testFullSub("test", "cg-obs"),
 		func(_ context.Context, _ Entry) HandleResult {
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}))
 	require.NotNil(t, cap.handler)
 	_, _ = cap.handler(context.Background(), Entry{

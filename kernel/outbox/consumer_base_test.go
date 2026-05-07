@@ -371,7 +371,7 @@ func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 	called := false
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-1"})
@@ -395,7 +395,7 @@ func TestConsumerBase_Wrap_ClaimDone_SkipsHandler(t *testing.T) {
 	called := false
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-dup"})
@@ -415,7 +415,7 @@ func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
 	called := false
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-busy"})
@@ -440,9 +440,9 @@ func TestConsumerBase_Wrap_TransientError_RetriesUntilAck(t *testing.T) {
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
 		if attempts == 1 {
-			return HandleResult{Disposition: DispositionRequeue, Err: errors.New("transient")}
+			return Requeue(errors.New("transient"))
 		}
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-retry"})
@@ -464,7 +464,7 @@ func TestConsumerBase_Wrap_RetryBudgetExhausted_RejectsToDLX(t *testing.T) {
 	attempts := 0
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
-		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("always fail")}
+		return Requeue(errors.New("always fail"))
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-exhaust"})
@@ -486,7 +486,7 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 	attempts := 0
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
-		return HandleResult{Disposition: DispositionReject, Err: errors.New("bad payload")}
+		return Reject(errors.New("bad payload"))
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-explicit-reject"})
@@ -515,10 +515,7 @@ func TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated(t *testin
 	attempts := 0
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
-		return HandleResult{
-			Disposition: DispositionRequeue,
-			Err:         fmt.Errorf("ctx: %w", NewPermanentError(errors.New("unmarshal"))),
-		}
+		return Requeue(fmt.Errorf("ctx: %w", NewPermanentError(errors.New("unmarshal"))))
 	})
 
 	res, _ := handler(context.Background(), Entry{ID: "evt-perm"})
@@ -544,7 +541,7 @@ func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
 		case started <- struct{}{}:
 		default:
 		}
-		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("transient")}
+		return Requeue(errors.New("transient"))
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -580,7 +577,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_LocalRetryThenSuccess(t *testin
 	called := false
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-claim-retry"})
@@ -605,7 +602,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_ExhaustedRequeues(t *testing.T)
 	called := false
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-claim-fail"})
@@ -631,7 +628,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -660,7 +657,7 @@ func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing
 	called := false
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-fail-open"})
@@ -680,7 +677,7 @@ func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	start := time.Now()
@@ -724,7 +721,7 @@ func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 		case <-ctx.Done():
 		}
 		close(handlerDone)
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, _ := handler(context.Background(), Entry{ID: "evt-renewal"})
@@ -763,10 +760,10 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			ctxCancelSeen <- struct{}{}
-			return HandleResult{Disposition: DispositionRequeue, Err: ctx.Err()}
+			return Requeue(ctx.Err())
 		case <-time.After(testtime.D5s):
 			t.Error("handler blocked without ctx cancellation")
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}
 	})
 
@@ -831,13 +828,13 @@ func TestConsumerBase_DifferentConsumerGroupsNoCollision(t *testing.T) {
 	calls1 := 0
 	handler1 := cb1.Wrap(sub1, func(_ context.Context, _ Entry) HandleResult {
 		calls1++
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	calls2 := 0
 	handler2 := cb2.Wrap(sub2, func(_ context.Context, _ Entry) HandleResult {
 		calls2++
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	entry := Entry{ID: "shared-event-id-001"}
@@ -880,7 +877,7 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		// Return immediately — renewal goroutine must exit.
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, _ := handler(context.Background(), Entry{ID: "evt-quick"})
@@ -925,7 +922,7 @@ func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *test
 			t.Error("handler context was canceled on transient extend error — must not happen")
 		}
 		close(handlerDone)
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, _ := handler(context.Background(), Entry{ID: "evt-transient-extend"})
@@ -955,7 +952,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalNegative(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, _ := handler(context.Background(), Entry{ID: "evt-neg-interval"})
@@ -980,7 +977,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, _ := handler(context.Background(), Entry{ID: "evt-zero"})
@@ -1029,7 +1026,7 @@ func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testin
 		// The handler deliberately does NOT check ctx.Done() to simulate a
 		// stale handler that ignores cancellation.
 		time.Sleep(renewalIntervalMultiplier5 * interval) //archtest:allow:test-sleep Renew extends TTL — polling defeats test
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, _ := handler(context.Background(), Entry{ID: "evt-lease-lost-ack"})
@@ -1070,10 +1067,10 @@ func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			ctxCancelSeen <- struct{}{}
-			return HandleResult{Disposition: DispositionRequeue, Err: ctx.Err()}
+			return Requeue(ctx.Err())
 		case <-time.After(testtime.D5s):
 			t.Error("handler blocked without ctx cancellation")
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}
 	})
 
@@ -1107,7 +1104,7 @@ func TestConsumerBase_LeaseHeld_NormalAck(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
-		return HandleResult{Disposition: DispositionAck}
+		return Ack()
 	})
 
 	res, settlement := handler(context.Background(), Entry{ID: "evt-normal-ack"})

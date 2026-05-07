@@ -178,7 +178,7 @@ func testPublishSubscribe(t *testing.T, _ Features, constructor PubSubConstructo
 	h.subscribe(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 		received = entry
 		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	h.publishAndWait(payload)
@@ -274,7 +274,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 					closeOnceA.Do(func() { close(doneA) })
 				}
 				mu.Unlock()
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+				return outbox.Ack(), nil
 			})
 	}()
 	waitForSubscription(t, ctx, sub, topicA, "")
@@ -338,14 +338,14 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	wg.Go(func() {
 		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			sub1Received.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			return outbox.Ack(), nil
 		})
 	})
 
 	wg.Go(func() {
 		_ = sub.Subscribe(subCtx, sub2Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			sub2Received.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			return outbox.Ack(), nil
 		})
 	})
 
@@ -395,7 +395,7 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 					default:
 					}
 					totalReceived.Add(1)
-					return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+					return outbox.Ack(), nil
 				})
 		})
 	}
@@ -445,7 +445,7 @@ func testDispositionAck(t *testing.T, _ Features, constructor PubSubConstructor)
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount.Add(1)
 		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	h.publishAndWait([]byte(`{"test":"ack"}`))
@@ -466,13 +466,10 @@ func testDispositionRequeue(t *testing.T, features Features, constructor PubSubC
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		n := callCount.Add(1)
 		if n == 1 {
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         fmt.Errorf("transient failure"),
-			}
+			return outbox.Requeue(fmt.Errorf("transient failure"))
 		}
 		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	h.publishAndWait([]byte(`{"test":"requeue"}`))
@@ -492,10 +489,7 @@ func testDispositionReject(t *testing.T, features Features, constructor PubSubCo
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount.Add(1)
 		h.signalDone()
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(fmt.Errorf("bad payload")),
-		}
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("bad payload")))
 	})
 
 	h.publishAndWait([]byte(`{"test":"reject"}`))
@@ -519,7 +513,7 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 			return outbox.HandleResult{} // zero-value = invalid Disposition
 		}
 		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	h.publishAndWait([]byte(`{"test":"zero-disposition"}`))
@@ -543,10 +537,7 @@ func testPermanentErrorCausesReject(t *testing.T, features Features, constructor
 	h.subscribe(func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 		callCount.Add(1)
 		h.signalDone()
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(fmt.Errorf("unmarshal failed")),
-		}
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("unmarshal failed")))
 	})
 
 	h.publishAndWait([]byte(`{"test":"permanent-error"}`))
@@ -575,7 +566,7 @@ func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubS
 	// directly so the conformance test can inject a mock Settlement.
 	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-ack"}`))
@@ -598,10 +589,7 @@ func testReceiptReleasedOnReject(t *testing.T, features Features, constructor Pu
 
 	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		h.signalDone()
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(fmt.Errorf("bad")),
-		}, receipt
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("bad"))), receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-reject"}`))
@@ -627,12 +615,9 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 		n := callCount.Add(1)
 		if n == 1 {
 			h.signalDone()
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         fmt.Errorf("transient"),
-			}, receipt
+			return outbox.Requeue(fmt.Errorf("transient")), receipt
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		return outbox.Ack(), nil
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-requeue"}`))
@@ -668,7 +653,7 @@ func testReceiptCommitFailureDoesNotAck(t *testing.T, features Features, constru
 		if n == 1 {
 			h.signalDone() // wake publisher after first delivery
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"commit-fail"}`))
@@ -703,7 +688,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 	go func() {
 		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t)},
 			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+				return outbox.Ack(), nil
 			})
 		subscribeReturned <- err
 	}()
@@ -736,7 +721,7 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 		defer close(subscribeReturned)
 		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic},
 			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+				return outbox.Ack(), nil
 			})
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
@@ -860,7 +845,7 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 			},
 			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				h.signalDone()
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			},
 		)
 		if err != nil && !errors.Is(err, context.Canceled) {
