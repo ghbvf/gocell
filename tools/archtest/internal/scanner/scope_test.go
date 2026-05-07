@@ -186,3 +186,74 @@ func TestScope_ZeroValueIsRejected(t *testing.T) {
 		t.Fatal("expected error from zero-value Scope, got nil")
 	}
 }
+
+func TestScope_SelfProtectRel(t *testing.T) {
+	// Create a temp tree that looks like the scanner package location.
+	// ModuleScope must not include files under the self-protect path.
+	tmp := t.TempDir()
+	scannerDir := filepath.Join(tmp, "tools", "archtest", "internal", "scanner")
+	if err := os.MkdirAll(scannerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	fakeFile := filepath.Join(scannerDir, "fake.go")
+	if err := os.WriteFile(fakeFile, []byte("package scanner\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile fake.go: %v", err)
+	}
+
+	s := scanner.ModuleScope(tmp)
+	files, err := s.Files()
+	if err != nil {
+		t.Fatalf("Files() error: %v", err)
+	}
+	for _, f := range files {
+		if f == fakeFile {
+			t.Errorf("self-protect should exclude %s but it was returned", fakeFile)
+		}
+	}
+}
+
+func TestDirsScope_DeduplicatesOverlappingRoots(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "src", "a.go"), "package src\n")
+
+	// Pass the same relative dir twice — Files() must deduplicate.
+	s := scanner.DirsScope(tmp, []string{"src", "src"})
+	files, err := s.Files()
+	if err != nil {
+		t.Fatalf("Files() error: %v", err)
+	}
+	// Single-root result must match two-root result.
+	sSingle := scanner.DirsScope(tmp, []string{"src"})
+	filesSingle, err := sSingle.Files()
+	if err != nil {
+		t.Fatalf("single DirsScope Files() error: %v", err)
+	}
+	if len(files) != len(filesSingle) {
+		t.Errorf("DeduplicateOverlappingRoots: got %d files, single-root got %d", len(files), len(filesSingle))
+	}
+}
+
+func TestDirsScope_EscapeReturnsError(t *testing.T) {
+	tmp := t.TempDir()
+	// Pass ".." which would escape modRoot.
+	s := scanner.DirsScope(tmp, []string{".."})
+	_, err := s.Files()
+	if err == nil {
+		t.Fatal("expected error for dir escaping module root, got nil")
+	}
+	if !containsAny(err.Error(), "escapes", "DirsScope") {
+		t.Errorf("error message should mention escape: %v", err)
+	}
+}
+
+// containsAny returns true if s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		for i := 0; i <= len(s)-len(sub); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+	}
+	return false
+}

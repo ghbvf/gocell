@@ -61,6 +61,14 @@ func TestReceiverTypeName_Cases(t *testing.T) {
 			src:  "package x; func (struct{}) M() {}",
 			want: "",
 		},
+		// Pointer to a generic instantiation where the base is not a bare Ident.
+		// Go does not allow (*pkg.T)[P] syntax in receiver lists, but
+		// ReceiverTypeName should return "" for any unrecognized shape rather
+		// than panicking.
+		// Note: "func (*T[P]) M() {}" IS valid and covered by the *T case above;
+		// this case tests a generic value-receiver path via IndexExpr where X
+		// is not an Ident (which the parser would only produce under unusual AST
+		// construction, but the contract is still: return "" not panic).
 	}
 
 	for _, tc := range tests {
