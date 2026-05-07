@@ -3,11 +3,17 @@ package scanner
 import (
 	"fmt"
 	"go/parser"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
 
 // ImportBan describes a rule that forbids importing specific packages.
+//
+// Use ImportBan when the entire check is "file imports forbidden package X".
+// For custom AST patterns (e.g., struct literals, argument values), use
+// [EachFile] with [Report] instead.
 type ImportBan struct {
 	// RuleID is the invariant identifier, e.g. "KERNEL-NO-RUNTIME-01".
 	RuleID string
@@ -45,10 +51,13 @@ func (b ImportBan) detect(s Scope) ([]Diagnostic, error) {
 }
 
 // buildAllowSet converts a slice of allowed rels into a set for O(1) lookup.
+// Each entry is normalised with filepath.ToSlash(filepath.Clean(r)) to match
+// the slash-separated fc.Rel values produced by eachFile on all platforms,
+// including Windows where filepath.Join returns backslash-separated paths.
 func buildAllowSet(allowRels []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(allowRels))
 	for _, r := range allowRels {
-		set[r] = struct{}{}
+		set[filepath.ToSlash(filepath.Clean(r))] = struct{}{}
 	}
 	return set
 }
@@ -104,16 +113,9 @@ func (b ImportBan) Run(t *testing.T, s Scope) {
 
 // sortDiagnostics sorts diags in-place by (Rel, Line, Message).
 func sortDiagnostics(diags []Diagnostic) {
-	n := len(diags)
-	for i := 1; i < n; i++ {
-		for j := i; j > 0; j-- {
-			if less(diags[j], diags[j-1]) {
-				diags[j], diags[j-1] = diags[j-1], diags[j]
-			} else {
-				break
-			}
-		}
-	}
+	sort.Slice(diags, func(i, j int) bool {
+		return less(diags[i], diags[j])
+	})
 }
 
 func less(a, b Diagnostic) bool {
