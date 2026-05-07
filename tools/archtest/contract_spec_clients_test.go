@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 const ruleInternalContractClients01 = "INTERNAL-CONTRACT-CLIENTS-REQUIRED-01"
@@ -76,10 +78,7 @@ func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 
 		hits, err := scanContractSpecMissingClients(f, rel)
-		if err != nil {
-			t.Logf("scan error %s: %v", rel, err)
-			continue
-		}
+		require.NoError(t, err)
 		violations = append(violations, hits...)
 	}
 
@@ -109,9 +108,7 @@ func scanContractSpecMissingClients(path, rel string) ([]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		// Files with build tags or syntax errors that only compile under
-		// specific constraints — skip silently.
-		return nil, nil //nolint:nilerr // soft-skip on read error: archtest fixture allows missing/unreadable files (caller will scan rest)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
 	var violations []string

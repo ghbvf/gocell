@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 const ruleNoTestServiceContextInProduction = "NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01"
@@ -68,10 +70,7 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 			rel = filepath.ToSlash(rel)
 
 			hits, scanErr := scanTestServiceContextCalls(f, rel)
-			if scanErr != nil {
-				t.Logf("scan error %s: %v", rel, scanErr)
-				continue
-			}
+			require.NoError(t, scanErr)
 			violations = append(violations, hits...)
 		}
 	}
@@ -98,7 +97,7 @@ func scanTestServiceContextCalls(path, rel string) ([]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil //nolint:nilerr // soft-skip on parse error: build-tag-only files are not violations
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
 	var violations []string

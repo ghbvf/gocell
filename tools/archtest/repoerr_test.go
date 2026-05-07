@@ -134,7 +134,7 @@ func scanCtxCancelLocalImpl(path string) ([]repoErrViolation, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return scanCtxCancelLocalImplAST(fset, file, path), nil
 }
@@ -554,7 +554,7 @@ func scanRepoLogKeyIDRedact(path string) ([]repoErrViolation, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return scanRepoLogKeyIDRedactAST(fset, file, path), nil
 }
