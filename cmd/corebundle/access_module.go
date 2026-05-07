@@ -152,6 +152,10 @@ func (m AccessCoreModule) Provide(
 		// "memory" (default dev mode) and any unrecognized backend both use
 		// in-memory repositories. Topology validation upstream rejects unknown
 		// backends before this point; the else branch here is defense-in-depth.
+		if shared.Topology.StorageBackend != "memory" && shared.Topology.StorageBackend != "" {
+			slog.Warn("access_module: backend fell back to in-memory defaults",
+				slog.String("storage_backend", shared.Topology.StorageBackend))
+		}
 		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
 	}
 	// Bootstrap credential auth + per-IP token bucket rate limiter protects
