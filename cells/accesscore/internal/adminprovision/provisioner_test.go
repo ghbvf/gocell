@@ -339,9 +339,9 @@ func TestProvisioner_Ensure_RaceLoser_AssignDuplicate_RecountFails_SurfacesError
 	t.Parallel()
 	userRepo := mem.NewUserRepository()
 	roleRepo := &assignDuplicateRoleRepo{
-		counts:     []int{0},
-		countErr:   errors.New("recount db error"),
-		assignErr:  errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate, "duplicate assignment"),
+		counts:    []int{0},
+		countErr:  errors.New("recount db error"),
+		assignErr: errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate, "duplicate assignment"),
 	}
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("race-loser-id-3"))
 
@@ -532,16 +532,18 @@ func (r *recountErrRoleRepo) CountByRole(ctx context.Context, roleID string) (in
 // CountByRole returns scripted values; if countErr is set it is returned after
 // the scripted counts are exhausted.
 type assignDuplicateRoleRepo struct {
-	counts   []int
-	i        int
-	countErr error
+	counts    []int
+	i         int
+	countErr  error
 	assignErr error
 }
 
 func (r *assignDuplicateRoleRepo) Create(ctx context.Context, role *domain.Role) error { return nil }
+
 func (r *assignDuplicateRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
 	return false, r.assignErr
 }
+
 func (r *assignDuplicateRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
 	if r.i < len(r.counts) {
 		v := r.counts[r.i]
@@ -550,18 +552,23 @@ func (r *assignDuplicateRoleRepo) CountByRole(ctx context.Context, roleID string
 	}
 	return 0, r.countErr
 }
+
 func (r *assignDuplicateRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
 	return nil, nil
 }
+
 func (r *assignDuplicateRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	return nil
 }
+
 func (r *assignDuplicateRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	return true, nil
 }
+
 func (r *assignDuplicateRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
 	return &domain.Role{ID: id}, nil
 }
+
 func (r *assignDuplicateRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }

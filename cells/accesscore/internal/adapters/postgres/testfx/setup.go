@@ -15,8 +15,9 @@ package testfx
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"sync"
 	"testing"
 
@@ -81,7 +82,11 @@ func SetupPGPool(t *testing.T) *adapterpg.Pool {
 	ctx := context.Background()
 
 	// Create isolated schema via a short-lived bootstrap pool.
-	schema := fmt.Sprintf("fx%016x", rand.Int63())
+	var rb [8]byte
+	if _, err := rand.Read(rb[:]); err != nil {
+		t.Fatalf("testfx.SetupPGPool: read random schema suffix: %v", err)
+	}
+	schema := fmt.Sprintf("fx%016x", binary.BigEndian.Uint64(rb[:]))
 	bootstrap, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: baseConnStr})
 	if err != nil {
 		t.Fatalf("testfx.SetupPGPool: bootstrap pool: %v", err)

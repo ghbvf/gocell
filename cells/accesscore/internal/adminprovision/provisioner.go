@@ -168,27 +168,33 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 
 	// 4. Assign admin role (idempotent).
 	if _, err := p.roleRepo.AssignToUser(ctx, result.User.ID, auth.RoleAdmin); err != nil {
-		// The DB partial unique index idx_role_assignments_single_admin rejects
-		// concurrent role assignments. If we receive ErrAuthRoleDuplicate here,
-		// another replica won the race between our CountByRole fast-path and our
-		// AssignToUser call. Verify via recount, then fold to setup terminal state.
-		var ecErr *errcode.Error
-		if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthRoleDuplicate {
-			cnt, cntErr := p.roleRepo.CountByRole(ctx, auth.RoleAdmin)
-			if cntErr != nil {
-				return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: recount after assign duplicate: %w", cntErr)
-			}
-			if cnt >= 1 {
-				p.logger.Debug("admin provision: assign role race; admin already exists",
-					slog.String("event", "admin_provision_assign_race"))
-				return ProvisionResult{Outcome: OutcomeRaceSkipped}, nil
-			}
-			// cnt==0 but received 23505 — should not happen; surface as infra error.
-		}
-		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: assign admin role: %w", err)
+		return p.handleAssignAdminError(ctx, err)
 	}
 
 	return result, nil
+}
+
+// handleAssignAdminError folds an AssignToUser failure observed during Ensure
+// step 4 into a ProvisionResult. The DB partial unique index
+// idx_role_assignments_single_admin rejects concurrent role assignments; an
+// ErrAuthRoleDuplicate here means another replica won the race between our
+// CountByRole fast-path and our AssignToUser call. We verify via recount,
+// then fold to setup terminal state. Any other error is wrapped and surfaced.
+func (p *Provisioner) handleAssignAdminError(ctx context.Context, err error) (ProvisionResult, error) {
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthRoleDuplicate {
+		cnt, cntErr := p.roleRepo.CountByRole(ctx, auth.RoleAdmin)
+		if cntErr != nil {
+			return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: recount after assign duplicate: %w", cntErr)
+		}
+		if cnt >= 1 {
+			p.logger.Debug("admin provision: assign role race; admin already exists",
+				slog.String("event", "admin_provision_assign_race"))
+			return ProvisionResult{Outcome: OutcomeRaceSkipped}, nil
+		}
+		// cnt==0 but received 23505 — should not happen; surface as infra error.
+	}
+	return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: assign admin role: %w", err)
 }
 
 // Compensate best-effort removes the admin role assignment and user row after

@@ -480,10 +480,15 @@ func TestSchemaGuard_Migration020_RoleAssignmentsFK(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 020")
 
+	// pg_constraint.confdeltype is a "char" (single-byte char) column. pgx's
+	// binary protocol decodes char(1) as a Go byte, not a string — Scan into
+	// *string fails with "cannot scan char (OID 18) in binary format into
+	// *string". Cast to text in SQL to land cleanly in *string.
+
 	// Assert: fk_role_assignments_user exists with confdeltype='c' (CASCADE).
 	var userFKDelType string
 	err = pool.DB().QueryRow(ctx,
-		`SELECT con.confdeltype
+		`SELECT con.confdeltype::text
 		 FROM pg_constraint con
 		 JOIN pg_class rel ON rel.oid = con.conrelid
 		 WHERE rel.relname = 'role_assignments'
@@ -497,7 +502,7 @@ func TestSchemaGuard_Migration020_RoleAssignmentsFK(t *testing.T) {
 	// Assert: fk_role_assignments_role exists with confdeltype='r' (RESTRICT).
 	var roleFKDelType string
 	err = pool.DB().QueryRow(ctx,
-		`SELECT con.confdeltype
+		`SELECT con.confdeltype::text
 		 FROM pg_constraint con
 		 JOIN pg_class rel ON rel.oid = con.conrelid
 		 WHERE rel.relname = 'role_assignments'
