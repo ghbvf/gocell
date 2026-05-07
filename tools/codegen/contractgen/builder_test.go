@@ -680,6 +680,101 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPEndpointSpec_ServiceOwnedAllowsPasswordResetExempt(t *testing.T) {
+	t.Parallel()
+
+	contract := &metadata.ContractMeta{
+		ID:   "http.auth.session.delete.v1",
+		Kind: "http",
+		Endpoints: metadata.EndpointsMeta{
+			Server: "accesscore",
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:        "DELETE",
+				Path:          "/api/v1/access/sessions/{id}",
+				SuccessStatus: 204,
+				NoContent:     true,
+				Auth: metadata.HTTPAuthMeta{
+					ServiceOwned:        true,
+					PasswordResetExempt: true,
+				},
+				Responses: map[int]metadata.HTTPResponseMeta{
+					400: {Description: "Bad Request", SchemaRef: "error.schema.json"},
+				},
+			},
+		},
+	}
+	http := contract.Endpoints.HTTP
+	spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+	if err != nil {
+		t.Fatalf("expected serviceOwned + passwordResetExempt to build, got: %v", err)
+	}
+	if !spec.AuthServiceOwned {
+		t.Error("AuthServiceOwned should be true")
+	}
+	if !spec.AuthPasswordResetExempt {
+		t.Error("AuthPasswordResetExempt should remain true")
+	}
+	if spec.AuthPublic || spec.AuthBootstrap || spec.AuthClientsOnly {
+		t.Errorf("serviceOwned endpoint must not imply public/bootstrap/clientsOnly: public=%v bootstrap=%v clientsOnly=%v",
+			spec.AuthPublic, spec.AuthBootstrap, spec.AuthClientsOnly)
+	}
+}
+
+func TestBuildHTTPEndpointSpec_ServiceOwnedRejectsExclusiveModes(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		auth    metadata.HTTPAuthMeta
+		path    string
+		clients []string
+	}{
+		{
+			name: "public",
+			auth: metadata.HTTPAuthMeta{ServiceOwned: true, Public: true},
+			path: "/api/v1/service-owned/public",
+		},
+		{
+			name: "bootstrap",
+			auth: metadata.HTTPAuthMeta{ServiceOwned: true, Bootstrap: true},
+			path: "/api/v1/access/setup/admin",
+		},
+		{
+			name:    "clientsOnly",
+			auth:    metadata.HTTPAuthMeta{ServiceOwned: true, ClientsOnly: true},
+			path:    "/internal/v1/service-owned/clients-only",
+			clients: []string{"edge-bff"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			contract := &metadata.ContractMeta{
+				ID:   "http.auth.bad.serviceowned." + tc.name + ".v1",
+				Kind: "http",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: tc.clients,
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          tc.path,
+						SuccessStatus: 200,
+						Auth:          tc.auth,
+					},
+				},
+			}
+			http := contract.Endpoints.HTTP
+			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			if err == nil {
+				t.Fatal("expected serviceOwned mutual-exclusion error, got nil")
+			}
+			if !strings.Contains(err.Error(), "auth.serviceOwned:true") {
+				t.Fatalf("error should mention auth.serviceOwned:true, got: %v", err)
+			}
+		})
+	}
+}
+
 // TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic verifies that
 // a contract declaring both auth.bootstrap:true and auth.public:true is a configuration
 // error that produces distinguishable field values (both would be true, which FMT-27

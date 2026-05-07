@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -31,7 +32,7 @@ func newContractHandler() http.Handler {
 		LastSeen: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	svc := NewService(repo, slog.Default())
-	handler := statuscontract.NewHandler(svc, nil) // nil policy: auth handled by listener chain in prod
+	handler := statuscontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/devices/{id}/status", handler)
 	return mux

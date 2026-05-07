@@ -99,8 +99,11 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	// declared request schema). GET/DELETE may declare schemaRefs.request as
 	// metadata (e.g. "no body" placeholder), but the generated handler reads no
 	// body and the validator wiring would be dead code (init-time compile cost +
-	// binary bloat). HANDLER-NO-SCHEMA-FOR-NOBODY-01 archtest enforces that
-	// no-body handlers contain no requestSchemaJSON literal.
+	// binary bloat). The `endpointSpec.HasBody` gate here combined with the
+	// `if .RequestSchemaJSON` template gate is the single funnel — generated
+	// no-body handlers cannot contain a requestSchemaJSON literal, byte-pinned
+	// by the http_order_get_v1 / http_order_list_v1 / synth_http_full handler
+	// goldens in render_test.go.
 	// ref: oapi-codegen — request validator emitted only for operations with
 	// a requestBody.
 	if contract.SchemaRefs.Request != "" && endpointSpec.HasBody {
@@ -220,9 +223,17 @@ func buildHTTPEndpointSpec(
 	// informational metadata (who calls this endpoint) — auth.Mount rejects
 	// Clients on non-internal paths (wrapper.ContractSpec validation rule).
 	var clients []string
-	isInternalPath := strings.HasPrefix(http.Path, "/internal/v1/") || http.Path == "/internal/v1"
+	isInternalPath := metadata.IsInternalHTTPPath(http.Path)
 	if isInternalPath && len(contract.Endpoints.Clients) > 0 {
 		clients = append(clients, contract.Endpoints.Clients...)
+	}
+
+	if err := validateAuthServiceOwned(contract.ID, http.Auth); err != nil {
+		return nil, err
+	}
+
+	if err := validateAuthClientsOnly(contract.ID, http.Path, http.Auth, contract.Endpoints.Clients, isInternalPath); err != nil {
+		return nil, err
 	}
 
 	spec := &HTTPEndpointSpec{
@@ -236,6 +247,8 @@ func buildHTTPEndpointSpec(
 		AuthPublic:              http.Auth.Public,
 		AuthPasswordResetExempt: http.Auth.PasswordResetExempt,
 		AuthBootstrap:           http.Auth.Bootstrap,
+		AuthClientsOnly:         http.Auth.ClientsOnly,
+		AuthServiceOwned:        http.Auth.ServiceOwned,
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
@@ -263,6 +276,52 @@ func buildHTTPEndpointSpec(
 		return nil, liftErr
 	}
 	return spec, nil
+}
+
+func validateAuthServiceOwned(contractID string, auth metadata.HTTPAuthMeta) error {
+	if !auth.ServiceOwned {
+		return nil
+	}
+	if !auth.Public && !auth.Bootstrap && !auth.ClientsOnly {
+		return nil
+	}
+	return fmt.Errorf(
+		"contractgen build: contract %q declares auth.serviceOwned:true with auth.public/auth.bootstrap/auth.clientsOnly; "+
+			"serviceOwned keeps listener JWT auth and delegates ownership authorization to the service, "+
+			"so it cannot be combined with auth modes that replace or bypass that route shape",
+		contractID)
+}
+
+func validateAuthClientsOnly(
+	contractID string,
+	path string,
+	auth metadata.HTTPAuthMeta,
+	declaredClients []string,
+	isInternalPath bool,
+) error {
+	if !auth.ClientsOnly {
+		return nil
+	}
+	if auth.Public || auth.Bootstrap || auth.PasswordResetExempt {
+		return fmt.Errorf(
+			"contractgen build: contract %q declares auth.clientsOnly:true with auth.public/auth.bootstrap/auth.passwordResetExempt; "+
+				"clientsOnly relies on caller-cell identity only and cannot be combined with listener-bypass or password-reset auth modes",
+			contractID)
+	}
+	if !isInternalPath {
+		return fmt.Errorf(
+			"contractgen build: contract %q declares auth.clientsOnly:true but path %q is "+
+				"not an internal path (must match /internal/v1 or /internal/v1/...); "+
+				"clientsOnly is only meaningful for internal endpoints where caller-cell identity is verifiable",
+			contractID, path)
+	}
+	if len(declaredClients) == 0 {
+		return fmt.Errorf(
+			"contractgen build: contract %q declares auth.clientsOnly:true but endpoints.clients is empty; "+
+				"clientsOnly requires at least one declared client cell so RequireCallerCell has an allowlist to enforce",
+			contractID)
+	}
+	return nil
 }
 
 // detectPagination scans QueryParams; if both cursor (string) and limit

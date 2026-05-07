@@ -280,7 +280,8 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	c.commandAckHandler = ackcontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
 	c.commandExtendLeaseHandler = extendleasecontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
-	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc, nil)
+	// auth.clientsOnly:true → single-arg NewHandler; no policy needed, caller-cell allowlist is the guard.
+	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc)
 	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
 		Scanner:  cmdQueue,
 		Queue:    cmdQueue,

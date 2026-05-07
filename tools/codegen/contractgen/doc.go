@@ -69,8 +69,10 @@
 // in contract.yaml. Pagination endpoints — every GET that declares cursor +
 // limit, regardless of additional path or filter query params — route through
 // pkg/httputil.ParsePageParams so the limit error envelope is uniform across
-// the entire HTTP surface; archtest HANDLER-NO-INLINE-LIMIT-PARSE-01 in
-// tools/archtest guards against regression to per-param inline limit parsing.
+// the entire HTTP surface; this is byte-pinned by the http_order_list_v1
+// handler_gen.go golden in render_test.go — any reintroduction of inline
+// strconv.ParseInt("limit") in the template diffs the golden output.
+// (funnel-first; see docs/plans/202605070431-pr403-funnel-fix-roadmap.md §7.)
 //
 // # spec_gen.go (kind=event only)
 //

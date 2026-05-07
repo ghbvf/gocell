@@ -50,12 +50,12 @@ type Handler struct {
 }
 
 // NewHandler creates a sessionlogout Handler using the generated session-delete handler.
-// No per-route policy: the PasswordResetExempt flag is baked into the generated
-// handler's RegisterRoutes (auth.Route{PasswordResetExempt: true}), and ownership
-// enforcement is done inside the service.
+// No per-route policy: contract.yaml declares auth.serviceOwned:true, so the
+// generated handler keeps listener JWT auth and PasswordResetExempt routing while
+// ownership enforcement stays inside the service.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{
-		deleteH: deletegen.NewHandler(DeleteAdapter{svc}, nil),
+		deleteH: deletegen.NewHandler(DeleteAdapter{svc}),
 	}
 }
 

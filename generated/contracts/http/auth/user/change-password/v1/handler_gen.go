@@ -36,9 +36,16 @@ type Handler struct {
 }
 
 // NewHandler creates a Handler for http.auth.user.change-password.v1.
-// policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
-// supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
+	if policy == nil {
+		// B-class assertion: caller must supply a non-nil auth.Policy. For public
+		// endpoints declare auth.public:true in contract.yaml. For internal endpoints
+		// relying solely on caller-cell allowlist declare auth.clientsOnly:true. For
+		// service-owned endpoints declare auth.serviceOwned:true.
+		// errcode.Assertion routes through kernel recover middleware (500 + log)
+		// instead of bare panic so PANIC-REGISTERED-01 archtest stays clean.
+		panic(errcode.Assertion("generated handler http.auth.user.change-password.v1: policy must not be nil (non-public, non-bootstrap, non-clientsOnly, non-serviceOwned endpoints require a real auth.Policy; for public/clients-only/service-owned endpoints update contract.yaml auth flag and regenerate)"))
+	}
 	h := &Handler{svc: svc, policy: policy}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
@@ -85,11 +92,12 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if h.requestValidator != nil {
-		if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
-			schemavalidate.WriteValidationError(r.Context(), w, err)
-			return
-		}
+	// h.requestValidator is guaranteed non-nil — NewHandler panics on
+	// schemavalidate.NewValidator failure (codegen invariant), so the field
+	// is only reachable here when validator construction succeeded.
+	if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
+		schemavalidate.WriteValidationError(r.Context(), w, err)
+		return
 	}
 	resp, err := h.svc.ChangePassword(r.Context(), req)
 	if err != nil {

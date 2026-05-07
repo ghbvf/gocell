@@ -25,15 +25,16 @@ var contractSpec = wrapper.ContractSpec{
 
 // Handler wires HTTP decode/encode + auth.Mount for http.internal.devicecommands.list.v1.
 type Handler struct {
-	svc    Service
-	policy auth.Policy
+	svc Service
 }
 
 // NewHandler creates a Handler for http.internal.devicecommands.list.v1.
-// policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
-// supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
-func NewHandler(svc Service, policy auth.Policy) *Handler {
-	h := &Handler{svc: svc, policy: policy}
+// This endpoint relies solely on Contract.Clients caller-cell allowlist for
+// authorization (auth.Mount auto-injects RequireCallerCell guard); no per-route
+// Policy argument is accepted. RegisterRoutes emits auth.Route{Contract, Handler}
+// without Policy.
+func NewHandler(svc Service) *Handler {
+	h := &Handler{svc: svc}
 	return h
 }
 
@@ -50,7 +51,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
 		Handler:  http.HandlerFunc(h.handle),
-		Policy:   h.policy,
+		// no Policy: Contract.Clients triggers auth.Mount RequireCallerCell guard
 	})
 }
 

@@ -440,6 +440,69 @@ func TestRender_Golden_Synth_HTTPFull(t *testing.T) {
 	}
 }
 
+// TestRender_Golden_Synth_HTTPAuthModes tests the auth-modes synth fixture
+// (Public + Bootstrap branches of handler.tmpl). Pinning these golden bytes
+// prevents silent removal of branch-specific literals: Public NewHandler with
+// no policy arg, Bootstrap nil-bootstrapAuth panic, and the schema-compile
+// panic on each branch.
+func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// To extend coverage with a new auth mode (e.g. a future auth.serviceToken):
+	//   1. Add testdata/synth/synth_http_auth_modes/contracts/http/sample/<mode>/v1/
+	//      with contract.yaml (declaring the new auth flag) + request.schema.json
+	//      + response.schema.json.
+	//   2. Append a case below with contractID and goldenKey.
+	//   3. Run: go test ./tools/codegen/contractgen/ \
+	//      -run TestRender_Golden_Synth_HTTPAuthModes -update
+	cases := []struct {
+		contractID string
+		goldenKey  string
+	}{
+		{"http.sample.public.v1", "synth_http_auth_modes_public"},
+		{"http.sample.bootstrap.v1", "synth_http_auth_modes_bootstrap"},
+		{"http.sample.passwordresetexempt.v1", "synth_http_auth_modes_passwordresetexempt"},
+		{"http.sample.clientsonly.v1", "synth_http_auth_modes_clientsonly"},
+		{"http.sample.serviceowned.v1", "synth_http_auth_modes_serviceowned"},
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
+	for _, tc := range cases {
+		t.Run(tc.contractID, func(t *testing.T) {
+			contract := p.Contracts[tc.contractID]
+			if contract == nil {
+				t.Fatalf("%s not found in synth fixture", tc.contractID)
+			}
+			spec, err := BuildContractSpec(absTestDir, p, tc.contractID)
+			if err != nil {
+				t.Fatalf("BuildContractSpec: %v", err)
+			}
+			for _, outFile := range outputs {
+				t.Run(outFile, func(t *testing.T) {
+					content := renderFile(t, spec, outFile)
+					goldenFile := goldenFilePath(tc.goldenKey, outFile)
+
+					if *updateGolden {
+						writeGolden(t, goldenFile, content)
+						return
+					}
+					assertGolden(t, goldenFile, content)
+				})
+			}
+		})
+	}
+}
+
 // TestRender_Golden_Synth_Event tests the event synth fixture.
 func TestRender_Golden_Synth_Event(t *testing.T) {
 	testDir := filepath.Join("testdata", "synth", "synth_event")
@@ -563,8 +626,28 @@ func assertGolden(t *testing.T, path string, got []byte) {
 		}
 		t.Fatalf("read golden %s: %v", path, err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Errorf("output does not match golden file %s\n\ngot:\n%s\n\nwant:\n%s", path, got, want)
+	if bytes.Equal(got, want) {
+		return
+	}
+	gotLines := strings.Split(string(got), "\n")
+	wantLines := strings.Split(string(want), "\n")
+	maxLines := len(gotLines)
+	if len(wantLines) > maxLines {
+		maxLines = len(wantLines)
+	}
+	for i := 0; i < maxLines; i++ {
+		var gotLine, wantLine string
+		if i < len(gotLines) {
+			gotLine = gotLines[i]
+		}
+		if i < len(wantLines) {
+			wantLine = wantLines[i]
+		}
+		if gotLine != wantLine {
+			t.Errorf("golden mismatch %s line %d:\n  got:  %q\n  want: %q\n(re-run with -update to refresh after intentional template changes)",
+				path, i+1, gotLine, wantLine)
+			return
+		}
 	}
 }
 
@@ -1071,6 +1154,109 @@ func TestLiftHTTPResponses(t *testing.T) {
 		}
 		if len(got) != 2 {
 			t.Fatalf("len = %d, want 2 (success+404, success-dup deduped)", len(got))
+		}
+	})
+}
+
+// TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients verifies the
+// three scenarios for auth.clientsOnly validation in buildHTTPEndpointSpec.
+func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *testing.T) {
+	t.Parallel()
+
+	makeContract := func(path string, clients []string) *metadata.ContractMeta {
+		return &metadata.ContractMeta{
+			ID:      "http.internal.sample.list.v1",
+			Kind:    "http",
+			Codegen: true,
+			Endpoints: metadata.EndpointsMeta{
+				Server:  "testcell",
+				Clients: clients,
+				HTTP: &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          path,
+					SuccessStatus: 200,
+					NoContent:     false,
+					Auth:          metadata.HTTPAuthMeta{ClientsOnly: true},
+					Responses: map[int]metadata.HTTPResponseMeta{
+						400: {Description: "Bad Request", SchemaRef: "err.json"},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("clientsOnly + internal path + clients non-empty passes", func(t *testing.T) {
+		t.Parallel()
+		contract := makeContract("/internal/v1/sample/list", []string{"testcell"})
+		http := contract.Endpoints.HTTP
+		pathParams := buildPathParams(http)
+		queryParams := buildQueryParams(http)
+		spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		if err != nil {
+			t.Fatalf("expected no error for valid clientsOnly config, got: %v", err)
+		}
+		if !spec.AuthClientsOnly {
+			t.Error("AuthClientsOnly should be true")
+		}
+	})
+
+	t.Run("clientsOnly + api path returns error", func(t *testing.T) {
+		t.Parallel()
+		contract := makeContract("/api/v1/sample/list", []string{"testcell"})
+		http := contract.Endpoints.HTTP
+		pathParams := buildPathParams(http)
+		queryParams := buildQueryParams(http)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		if err == nil {
+			t.Fatal("expected error for clientsOnly on non-internal path")
+		}
+		if !strings.Contains(err.Error(), "internal path") {
+			t.Errorf("error should mention 'internal path', got: %v", err)
+		}
+	})
+
+	t.Run("clientsOnly + internal path + clients empty returns error", func(t *testing.T) {
+		t.Parallel()
+		contract := makeContract("/internal/v1/sample/list", nil)
+		http := contract.Endpoints.HTTP
+		pathParams := buildPathParams(http)
+		queryParams := buildQueryParams(http)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		if err == nil {
+			t.Fatal("expected error for clientsOnly with empty clients")
+		}
+		if !strings.Contains(err.Error(), "clients is empty") {
+			t.Errorf("error should mention 'clients is empty', got: %v", err)
+		}
+	})
+
+	t.Run("clientsOnly + exclusive auth mode returns error", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name string
+			auth metadata.HTTPAuthMeta
+		}{
+			{name: "public", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Public: true}},
+			{name: "bootstrap", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Bootstrap: true}},
+			{name: "passwordResetExempt", auth: metadata.HTTPAuthMeta{ClientsOnly: true, PasswordResetExempt: true}},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				contract := makeContract("/internal/v1/sample/list", []string{"testcell"})
+				http := contract.Endpoints.HTTP
+				http.Auth = tc.auth
+				pathParams := buildPathParams(http)
+				queryParams := buildQueryParams(http)
+				_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+				if err == nil {
+					t.Fatal("expected error for clientsOnly combined with exclusive auth mode")
+				}
+				if !strings.Contains(err.Error(), "auth.clientsOnly:true") {
+					t.Errorf("error should mention auth.clientsOnly:true, got: %v", err)
+				}
+			})
 		}
 	})
 }

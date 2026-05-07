@@ -1,0 +1,26 @@
+id: http.sample.clientsonly.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  clients:
+    - testcell
+  http:
+    method: GET
+    path: /internal/v1/sample/clientsonly
+    successStatus: 200
+    auth:
+      clientsOnly: true
+    noContent: false
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

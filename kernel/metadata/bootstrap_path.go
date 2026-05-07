@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"regexp"
+	"strings"
 )
 
 // bootstrapPathRE matches the bootstrap admin endpoint pattern:
@@ -33,4 +34,10 @@ var bootstrapPathRE = regexp.MustCompile(`^/api/v\d+/[^/]+/setup/admin$`)
 // ref: postmortem 202605060030 §5.3 / ADR §D4
 func IsBootstrapPath(path string) bool {
 	return bootstrapPathRE.MatchString(path)
+}
+
+// IsInternalHTTPPath reports whether path targets the internal HTTP listener
+// prefix where caller-cell identity can be enforced.
+func IsInternalHTTPPath(path string) bool {
+	return path == "/internal/v1" || strings.HasPrefix(path, "/internal/v1/")
 }

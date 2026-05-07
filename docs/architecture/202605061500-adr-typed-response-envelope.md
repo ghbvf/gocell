@@ -63,9 +63,28 @@ Together they replace the fragile "single AST scan reverse-inferring everything"
 
 `tools/codegen/contractgen/doc.go` is rewritten as the one-page maintainer map: the artifact-by-kind matrix, the typed-envelope naming convention, the cell attribution constraint (existing), and pointers to CH-04 / CH-06 / archtest. The previous 30-line stub is replaced wholesale.
 
-### D5. archtest `HANDLER-NO-INLINE-LIMIT-PARSE-01`
+### D5. funnel-first 守门：pagination shape relax + golden 字节锁定
 
-`tools/archtest/handler_inline_limit_parse_test.go` walks `generated/contracts/http/**/handler_gen.go` and flags any function whose body contains both `strconv.ParseInt` and a `"limit"` string literal. The two-condition match keeps the rule from firing on legitimate generic `int64` query parsing for unrelated params. Guards the generator template against regressing to per-param limit parsing — the symptom of D2's old behavior.
+PR #403 当时引入了 `tools/archtest/handler_invariants_test.go::TestHandlerNoInlineLimitParse`（archtest `HANDLER-NO-INLINE-LIMIT-PARSE-01`），扫描 `generated/contracts/http/**/handler_gen.go` 中同时含 `strconv.ParseInt` 与 `"limit"` 字面量的函数体，作为 generator 退化到 per-param inline limit 解析的兜底守卫。
+
+PR-FUNNEL-02（参见 `docs/plans/202605070431-pr403-funnel-fix-roadmap.md` §7）把同主题 5 条 archtest 拆分为"模板侧 funnel-pin（4 条）+ 调用侧 archtest 残留（1 条）"两类：
+
+**模板侧 funnel-pin（删除 archtest，由 handler.tmpl + golden 字节锁定取代）**
+
+- HANDLER-NO-INLINE-LIMIT-PARSE-01 — 由 `http_order_list_v1` golden 字节锁定 `httputil.ParsePageParams`
+- HANDLER-NO-SCHEMA-FOR-NOBODY-01 — 由 builder `endpointSpec.HasBody` gate + `if .RequestSchemaJSON` template gate 联合保证，`http_order_get_v1` / `http_order_list_v1` / `synth_http_full` golden 字节锁定 GET handler 无 `requestSchemaJSON` literal
+- HANDLER-PATH-QUERY-LENGTH-VALIDATION-01 — 由 `synth_http_full` / `synth_http_keyword_conflict` golden 字节锁定 `len(v) < N` / `len(v) > N` 块
+- HANDLER-VALIDATOR-FAIL-FAST-01 — 由 9 个 handler golden 全数字节锁定 `panic(errcode.Assertion("schema compile failed: %v", err))` literal（Auth / Public / Bootstrap / PasswordResetExempt 全分支覆盖）
+
+**调用侧 archtest 残留（funnel 触不到，保留 archtest 平铺兜底）**
+
+- HANDLER-POLICY-REQUIRED-01 — PR#411 review F1 fix 将此条升级为 **funnel + 平铺兜底两级防御**：funnel 端通过 `auth.clientsOnly` / `auth.serviceOwned` 新标志生成单参 `NewHandler(svc Service)`（无 policy 参数，caller 无法传 nil），Default 分支构造期加 `if policy == nil { panic(errcode.Assertion(...)) }` 把所有 nil-policy 产生源消灭；archtest scanner 退化为简化平铺兜底，删除 `handlerPolicyPublicExemptPkgs` 字符串豁免列表（alias 伪装绕过路径），捕获"字面 nil 传给 2-arg NewHandler"的代码气味（此类代码在 runtime 也会被构造期 panic 炸出，scanner 只是更早发现）。保留为 `tools/archtest/handler_policy_required_test.go`（一个文件、一个 Test func、一个 negative fixture，无豁免列表）。
+
+**Funnel 性质**
+
+模板侧 4 条由 golden 字节级 diff 守 —— 任何模板分支字面量变化（panic 文本、policy 参数声明、`len()` 检查、ParsePageParams 调用）都触发 golden 字节差异，且无 false positive。调用侧 1 条由 AST 扫描守 —— scanner 自身被 negative fixture 验证（`tools/archtest/testdata/handler_nil_policy/cell.go`）。
+
+主流对照（K8s / CockroachDB / Linux / Rust / Go 工具链）都接受 funnel 不到的残留平铺管理 —— 模板可表达的约束走 funnel + freeze，模板看不到的约束保留 archtest，分类清晰。
 
 ### D6. 5xx wire/log 隔离强化
 

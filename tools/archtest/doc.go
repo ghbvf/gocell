@@ -51,7 +51,11 @@
 //	codegen_invariants_test.go     CODEGEN-* / SPEC-GEN-*
 //	errcode_invariants_test.go     ERRCODE-KIND-LITERAL / MESSAGE-CONST-LITERAL /
 //	                               ERROR-FIRST-* / DETAILS-SLOG-ATTR / EXPORTED-ERROR-NEW
-//	handler_invariants_test.go     HANDLER-*
+//	handler_policy_required_test.go HANDLER-POLICY-REQUIRED-01 (caller-side
+//	                               wiring scan; the other 4 HANDLER-* rules
+//	                               were funnel-pinned via handler.tmpl +
+//	                               golden in tools/codegen/contractgen by
+//	                               PR-FUNNEL-02)
 //	httputil_invariants_test.go    HTTPUTIL-*
 //	outbox_invariants_test.go      OUTBOX-*
 //	panic_invariants_test.go       PANIC-*
