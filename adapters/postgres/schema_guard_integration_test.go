@@ -305,3 +305,249 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 	assert.Contains(t, err.Error(), "schema version mismatch",
 		"error message should mention schema version mismatch")
 }
+
+// TestSchemaGuard_Migration017_Users_TableAndIndexes verifies that migration 017
+// creates the users table with the expected columns and UNIQUE indexes.
+//
+// ref: adapters/postgres/migrations/017_users.sql
+// ref: cells/accesscore/internal/domain/user.go (UserStatus / UserSource consts)
+func TestSchemaGuard_Migration017_Users_TableAndIndexes(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_017")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 019")
+
+	// Assert: users table exists.
+	var tableExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'users'
+		)`).Scan(&tableExists)
+	require.NoError(t, err)
+	assert.True(t, tableExists, "users table must exist after migration 017")
+
+	// Assert: all required columns present.
+	wantCols := []string{
+		"id", "username", "email", "password_hash",
+		"password_reset_required", "status", "creation_source",
+		"created_at", "updated_at",
+	}
+	for _, col := range wantCols {
+		col := col
+		var colExists bool
+		err = pool.DB().QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = 'users' AND column_name = $1
+			)`, col).Scan(&colExists)
+		require.NoError(t, err)
+		assert.Truef(t, colExists, "users must have column %q", col)
+	}
+
+	// Assert: idx_users_username UNIQUE index exists.
+	var usernameIdxExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = 'public' AND tablename = 'users'
+			  AND indexname = 'idx_users_username'
+		)`).Scan(&usernameIdxExists)
+	require.NoError(t, err)
+	assert.True(t, usernameIdxExists, "idx_users_username must exist (UNIQUE)")
+
+	// Assert: idx_users_email UNIQUE index exists.
+	var emailIdxExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = 'public' AND tablename = 'users'
+			  AND indexname = 'idx_users_email'
+		)`).Scan(&emailIdxExists)
+	require.NoError(t, err)
+	assert.True(t, emailIdxExists, "idx_users_email must exist (UNIQUE)")
+
+	// Assert: both indexes are UNIQUE via pg_indexes → pg_class.
+	for _, idxName := range []string{"idx_users_username", "idx_users_email"} {
+		idxName := idxName
+		var isUnique bool
+		err = pool.DB().QueryRow(ctx,
+			`SELECT ix.indisunique
+			 FROM pg_class c
+			 JOIN pg_index ix ON ix.indrelid = c.oid
+			 JOIN pg_class ci ON ci.oid = ix.indexrelid
+			 WHERE c.relname = 'users' AND ci.relname = $1`,
+			idxName).Scan(&isUnique)
+		require.NoError(t, err)
+		assert.Truef(t, isUnique, "%s must be a UNIQUE index", idxName)
+	}
+}
+
+// TestSchemaGuard_Migration018_Sessions_TableAndIndexes verifies that migration 018
+// creates the sessions table with the expected columns and indexes including the
+// UNIQUE access_token constraint.
+//
+// ref: adapters/postgres/migrations/018_sessions.sql
+// ref: cells/accesscore/internal/domain/session.go (Session.Version)
+func TestSchemaGuard_Migration018_Sessions_TableAndIndexes(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_018")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 019")
+
+	// Assert: sessions table exists.
+	var tableExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'sessions'
+		)`).Scan(&tableExists)
+	require.NoError(t, err)
+	assert.True(t, tableExists, "sessions table must exist after migration 018")
+
+	// Assert: all required columns present.
+	wantCols := []string{
+		"id", "user_id", "access_token", "expires_at",
+		"revoked_at", "created_at", "version",
+	}
+	for _, col := range wantCols {
+		col := col
+		var colExists bool
+		err = pool.DB().QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = $1
+			)`, col).Scan(&colExists)
+		require.NoError(t, err)
+		assert.Truef(t, colExists, "sessions must have column %q", col)
+	}
+
+	// Assert: idx_sessions_user_id index exists.
+	var userIdxExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = 'public' AND tablename = 'sessions'
+			  AND indexname = 'idx_sessions_user_id'
+		)`).Scan(&userIdxExists)
+	require.NoError(t, err)
+	assert.True(t, userIdxExists, "idx_sessions_user_id must exist")
+
+	// Assert: access_token has a UNIQUE index (enforced by UNIQUE column constraint).
+	// PostgreSQL creates an implicit unique index named sessions_access_token_key
+	// for UNIQUE column constraints; we verify uniqueness via pg_index.indisunique.
+	var accessTokenIsUnique bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT ix.indisunique
+		 FROM pg_class c
+		 JOIN pg_index ix ON ix.indrelid = c.oid
+		 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(ix.indkey)
+		 WHERE c.relname = 'sessions' AND a.attname = 'access_token' AND ix.indisunique = true
+		 LIMIT 1`).Scan(&accessTokenIsUnique)
+	require.NoError(t, err)
+	assert.True(t, accessTokenIsUnique, "access_token column must have a UNIQUE index")
+}
+
+// TestSchemaGuard_Migration019_Roles_TableAndIndexes verifies that migration 019
+// creates the roles and role_assignments tables with the expected columns, and that
+// idx_role_assignments_single_admin is a partial UNIQUE index with WHERE role_id='admin'.
+//
+// ref: adapters/postgres/migrations/019_roles.sql
+// ref: PostgreSQL partial indexes (docs/indexes-partial.html)
+// ref: jackc/pgx v5 pgconn PgError 23505 unique_violation
+func TestSchemaGuard_Migration019_Roles_TableAndIndexes(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_019")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 019")
+
+	// Assert: roles table exists.
+	var rolesExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'roles'
+		)`).Scan(&rolesExists)
+	require.NoError(t, err)
+	assert.True(t, rolesExists, "roles table must exist after migration 019")
+
+	// Assert: roles columns.
+	wantRoleCols := []string{"id", "name", "permissions", "created_at"}
+	for _, col := range wantRoleCols {
+		col := col
+		var colExists bool
+		err = pool.DB().QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = 'roles' AND column_name = $1
+			)`, col).Scan(&colExists)
+		require.NoError(t, err)
+		assert.Truef(t, colExists, "roles must have column %q", col)
+	}
+
+	// Assert: role_assignments table exists.
+	var assignmentsExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'role_assignments'
+		)`).Scan(&assignmentsExists)
+	require.NoError(t, err)
+	assert.True(t, assignmentsExists, "role_assignments table must exist after migration 019")
+
+	// Assert: role_assignments columns.
+	wantAssignmentCols := []string{"user_id", "role_id", "assigned_at"}
+	for _, col := range wantAssignmentCols {
+		col := col
+		var colExists bool
+		err = pool.DB().QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = 'role_assignments' AND column_name = $1
+			)`, col).Scan(&colExists)
+		require.NoError(t, err)
+		assert.Truef(t, colExists, "role_assignments must have column %q", col)
+	}
+
+	// Assert: idx_role_assignments_single_admin exists.
+	var singleAdminIdxExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = 'public' AND tablename = 'role_assignments'
+			  AND indexname = 'idx_role_assignments_single_admin'
+		)`).Scan(&singleAdminIdxExists)
+	require.NoError(t, err)
+	assert.True(t, singleAdminIdxExists, "idx_role_assignments_single_admin must exist")
+
+	// Assert: idx_role_assignments_single_admin is UNIQUE and PARTIAL (indpred IS NOT NULL).
+	// indpred stores the WHERE clause predicate for partial indexes as a pg_node_tree;
+	// a non-NULL indpred confirms the index is partial (WHERE role_id = 'admin').
+	var isUnique bool
+	var indpred *string // NULL for non-partial indexes
+	err = pool.DB().QueryRow(ctx,
+		`SELECT ix.indisunique, pg_get_expr(ix.indpred, ix.indrelid)
+		 FROM pg_class c
+		 JOIN pg_index ix ON ix.indrelid = c.oid
+		 JOIN pg_class ci ON ci.oid = ix.indexrelid
+		 WHERE c.relname = 'role_assignments'
+		   AND ci.relname = 'idx_role_assignments_single_admin'`,
+	).Scan(&isUnique, &indpred)
+	require.NoError(t, err)
+	assert.True(t, isUnique, "idx_role_assignments_single_admin must be UNIQUE")
+	require.NotNil(t, indpred, "idx_role_assignments_single_admin must be a PARTIAL index (indpred IS NOT NULL)")
+	assert.Contains(t, *indpred, "admin",
+		"partial index predicate must reference 'admin' (WHERE role_id = 'admin')")
+}
