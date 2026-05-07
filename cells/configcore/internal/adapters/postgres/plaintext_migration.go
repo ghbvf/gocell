@@ -207,11 +207,11 @@ func (m *plaintextMigrator) encryptBatch(
 ) error {
 	for _, row := range batch {
 		aad := computeAAD(table, row.aadIdentity)
-		ct, keyID, nonce, edk, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
+		encResult, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
 		if encErr != nil {
 			return fmt.Errorf("plaintext-migrator: encrypt aad_identity=%s: %w", row.aadIdentity, encErr)
 		}
-		skipped, err := m.updateRow(ctx, updateQ, row.id, ct, keyID, nonce, edk)
+		skipped, err := m.updateRow(ctx, updateQ, row.id, encResult.Ciphertext, encResult.KeyID, encResult.Nonce, encResult.EDK)
 		if err != nil {
 			return fmt.Errorf("plaintext-migrator: update aad_identity=%s: %w", row.aadIdentity, err)
 		}

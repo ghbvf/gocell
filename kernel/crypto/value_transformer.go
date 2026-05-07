@@ -20,10 +20,9 @@ import (
 // ref: kubernetes/kubernetes staging/.../storage/value/transformer.go@master
 type ValueTransformer interface {
 	// Encrypt encrypts plaintext under the current key.
-	// Returns (ciphertext, keyID, nonce, edk, error).
-	// keyID identifies the key version; store alongside the ciphertext so that
-	// Decrypt can resolve the correct historical key on read.
-	Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext []byte, keyID string, nonce, edk []byte, err error)
+	// EncryptResult.KeyID identifies the key version; store it alongside the
+	// ciphertext so Decrypt can resolve the correct historical key on read.
+	Encrypt(ctx context.Context, plaintext, aad []byte) (EncryptResult, error)
 
 	// Decrypt decrypts ciphertext using the key identified by keyID.
 	// Fail-closed: returns an error on any decryption failure; never returns

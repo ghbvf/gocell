@@ -13,6 +13,7 @@ import (
 
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -127,9 +128,14 @@ func (r *fakeEmptyRow) Scan(_ ...any) error { return errors.New("no rows") }
 
 type noopTransformerForMigTest struct{}
 
-func (noopTransformerForMigTest) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, string, []byte, []byte, error) {
+func (noopTransformerForMigTest) Encrypt(_ context.Context, plaintext, _ []byte) (kcrypto.EncryptResult, error) {
 	ct := append([]byte("enc:"), plaintext...)
-	return ct, "test-key-v1", []byte("nonce"), []byte("edk"), nil
+	return kcrypto.EncryptResult{
+		Ciphertext: ct,
+		Nonce:      []byte("nonce"),
+		EDK:        []byte("edk"),
+		KeyID:      "test-key-v1",
+	}, nil
 }
 
 func (noopTransformerForMigTest) Decrypt(_ context.Context, ciphertext []byte, _ string, _, _, _ []byte) ([]byte, error) {
@@ -345,14 +351,14 @@ type aadAwareTransformer struct {
 	keyID string
 }
 
-func (t *aadAwareTransformer) Encrypt(_ context.Context, pt, aad []byte) ([]byte, string, []byte, []byte, error) {
+func (t *aadAwareTransformer) Encrypt(_ context.Context, pt, aad []byte) (kcrypto.EncryptResult, error) {
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(aad)&0xffffffff))
 	ct := make([]byte, 0, 4+len(aad)+len(pt))
 	ct = append(ct, lenBuf[:]...)
 	ct = append(ct, aad...)
 	ct = append(ct, pt...)
-	return ct, t.keyID, nil, nil, nil
+	return kcrypto.EncryptResult{Ciphertext: ct, KeyID: t.keyID}, nil
 }
 
 func (t *aadAwareTransformer) Decrypt(_ context.Context, ct []byte, _ string, _, _, aad []byte) ([]byte, error) {

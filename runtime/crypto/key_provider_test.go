@@ -29,13 +29,13 @@ func (h *fakeKeyHandle) ID() string { return h.id }
 // Encrypt XORs plaintext with 0x42 (dummy cipher), produces a unique nonce
 // via counter, and binds aad by prepending it to the "ciphertext" for
 // round-trip verification.
-func (h *fakeKeyHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error) {
+func (h *fakeKeyHandle) Encrypt(_ context.Context, plaintext, aad []byte) (crypto.EncryptResult, error) {
 	h.counter++
 	// nonce = 12-byte counter value
-	nonce = make([]byte, 12)
+	nonce := make([]byte, 12)
 	nonce[11] = byte(h.counter & 0xff)
 	// edk = key id bytes (stand-in for wrapped DEK)
-	edk = []byte(h.id)
+	edk := []byte(h.id)
 
 	ct := make([]byte, 1+len(aad)+len(plaintext))
 	ct[0] = byte(len(aad) & 0xff)
@@ -43,7 +43,12 @@ func (h *fakeKeyHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphe
 	for i, b := range plaintext {
 		ct[1+len(aad)+i] = b ^ 0x42
 	}
-	return ct, nonce, edk, h.id, nil
+	return crypto.EncryptResult{
+		Ciphertext: ct,
+		Nonce:      nonce,
+		EDK:        edk,
+		KeyID:      h.id,
+	}, nil
 }
 
 // Decrypt reverses fakeKeyHandle.Encrypt; returns ErrDecryptFailed if the
@@ -185,15 +190,15 @@ func TestKeyHandle_EncryptDecrypt_AADConsistent(t *testing.T) {
 	aad := []byte("cell:configcore/key:api_key")
 
 	// Round-trip with matching AAD should succeed.
-	cipher, nonce, edk, _, err := h.Encrypt(ctx, plaintext, aad)
+	result, err := h.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	recovered, err := h.Decrypt(ctx, cipher, nonce, edk, aad)
+	recovered, err := h.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
 
 	// Different AAD must fail.
-	_, err = h.Decrypt(ctx, cipher, nonce, edk, []byte("cell:configcore/key:other_key"))
+	_, err = h.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, []byte("cell:configcore/key:other_key"))
 	require.Error(t, err, "different AAD should produce a decrypt error")
 }
 
@@ -207,12 +212,12 @@ func TestKeyHandle_EncryptDecrypt_NonceUnique(t *testing.T) {
 	plaintext := []byte("value")
 	aad := []byte("aad")
 
-	_, nonce1, _, _, err := h.Encrypt(ctx, plaintext, aad)
+	result1, err := h.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	_, nonce2, _, _, err := h.Encrypt(ctx, plaintext, aad)
+	result2, err := h.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	assert.NotEqual(t, nonce1, nonce2, "consecutive Encrypt calls must produce different nonces")
+	assert.NotEqual(t, result1.Nonce, result2.Nonce, "consecutive Encrypt calls must produce different nonces")
 }
 
 // ---------------------------------------------------------------------------

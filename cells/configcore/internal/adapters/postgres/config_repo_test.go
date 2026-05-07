@@ -569,8 +569,13 @@ type mockTransformerForTest struct {
 
 var _ crypto.ValueTransformer = (*mockTransformerForTest)(nil)
 
-func (m *mockTransformerForTest) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, string, []byte, []byte, error) {
-	return plaintext, m.keyID, []byte("nonce1234567"), []byte("edk"), nil
+func (m *mockTransformerForTest) Encrypt(_ context.Context, plaintext, _ []byte) (crypto.EncryptResult, error) {
+	return crypto.EncryptResult{
+		Ciphertext: plaintext,
+		Nonce:      []byte("nonce1234567"),
+		EDK:        []byte("edk"),
+		KeyID:      m.keyID,
+	}, nil
 }
 
 func (m *mockTransformerForTest) Decrypt(_ context.Context, ciphertext []byte, _ string, _, _, _ []byte) ([]byte, error) {

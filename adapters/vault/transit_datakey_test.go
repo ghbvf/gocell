@@ -24,7 +24,7 @@ func TestEncrypt_UsesDataKeyPath(t *testing.T) {
 	p := newTestProvider(t, fake)
 	h := mustCurrent(t, p)
 
-	_, _, edk, keyID, err := h.Encrypt(context.Background(), []byte("payload"), []byte("aad"))
+	result, err := h.Encrypt(context.Background(), []byte("payload"), []byte("aad"))
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
@@ -41,11 +41,11 @@ func TestEncrypt_UsesDataKeyPath(t *testing.T) {
 	if bits := fake.lastWriteData["bits"]; bits != 256 {
 		t.Errorf("datakey body bits = %v, want 256", bits)
 	}
-	if keyID != "vault-transit:v3" {
-		t.Errorf("keyID = %q, want vault-transit:v3", keyID)
+	if result.KeyID != "vault-transit:v3" {
+		t.Errorf("keyID = %q, want vault-transit:v3", result.KeyID)
 	}
-	if !strings.HasPrefix(string(edk), "vault:v3:") {
-		t.Errorf("edk prefix = %q, want vault:v3:", string(edk))
+	if !strings.HasPrefix(string(result.EDK), "vault:v3:") {
+		t.Errorf("edk prefix = %q, want vault:v3:", string(result.EDK))
 	}
 }
 
@@ -62,11 +62,11 @@ func TestEncryptDecrypt_DataKeyRoundTrip(t *testing.T) {
 	plaintext := []byte("hello world")
 	aad := []byte("row:42")
 
-	ct, nonce, edk, _, err := h.Encrypt(context.Background(), plaintext, aad)
+	result, err := h.Encrypt(context.Background(), plaintext, aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	got, err := h.Decrypt(context.Background(), ct, nonce, edk, aad)
+	got, err := h.Decrypt(context.Background(), result.Ciphertext, result.Nonce, result.EDK, aad)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
@@ -75,11 +75,33 @@ func TestEncryptDecrypt_DataKeyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEncrypt_NonceUnique(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 5}
+	p := newTestProvider(t, fake)
+	h := mustCurrent(t, p)
+
+	plaintext := []byte("same payload")
+	aad := []byte("same aad")
+
+	result1, err := h.Encrypt(context.Background(), plaintext, aad)
+	if err != nil {
+		t.Fatalf("Encrypt #1: %v", err)
+	}
+	result2, err := h.Encrypt(context.Background(), plaintext, aad)
+	if err != nil {
+		t.Fatalf("Encrypt #2: %v", err)
+	}
+
+	if bytes.Equal(result1.Nonce, result2.Nonce) {
+		t.Fatalf("consecutive Encrypt calls must produce unique nonces; got %x", result1.Nonce)
+	}
+}
+
 func TestEncrypt_MalformedDatakeyResponse(t *testing.T) {
 	for _, tc := range malformedDatakeyResponseCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, h := newMalformedDatakeyHandle(t, tc.response)
-			_, _, _, _, err := h.Encrypt(context.Background(), []byte("payload"), []byte("aad"))
+			_, err := h.Encrypt(context.Background(), []byte("payload"), []byte("aad"))
 			assertMalformedDatakeyError(t, err)
 			assertDatakeyRequestOnly(t, fake)
 		})

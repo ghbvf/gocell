@@ -25,6 +25,25 @@ type KeyProvider interface {
 	Rotate(ctx context.Context) (newKeyID string, err error)
 }
 
+// EncryptResult is the named output of an encryption operation.
+//
+// Returning a struct instead of positional values keeps KeyHandle and
+// ValueTransformer aligned and prevents nonce/keyID/EDK tuple swaps at storage
+// boundaries.
+type EncryptResult struct {
+	// Ciphertext is the encrypted payload.
+	Ciphertext []byte
+	// Nonce is the per-encryption AEAD nonce. Crypto-active KeyHandle
+	// implementations MUST generate fresh nonce material for every successful
+	// Encrypt call.
+	Nonce []byte
+	// EDK is the encrypted data key or provider-specific wrapped key material.
+	EDK []byte
+	// KeyID is the encrypt-time key version identifier actually used to protect
+	// the payload. Callers MUST persist this value alongside Ciphertext.
+	KeyID string
+}
+
 // KeyHandle is a thin handle for a specific key version. It provides the
 // cryptographic primitives needed by ValueTransformer.
 //
@@ -49,20 +68,11 @@ type KeyHandle interface {
 	ID() string
 
 	// Encrypt encrypts plaintext under this key using the provided aad as
-	// Additional Authenticated Data.  Returns:
-	//   - ciphertext: the encrypted payload (opaque bytes; may embed nonce for
-	//     some backends like VaultTransit).
-	//   - nonce:      random IV used for AES-GCM (nil for backends that embed it).
-	//   - edk:        encrypted DEK for envelope encryption (nil for backends
-	//     like VaultTransit that manage keys server-side).
-	//   - keyID:      the KEK version identifier actually used at encrypt-time.
-	//     Callers MUST persist this value alongside the ciphertext so that the
-	//     correct key can be resolved during decryption.  Returning keyID from
-	//     Encrypt (rather than reading handle.ID() after the call) eliminates
-	//     the race between a Current() call and a key rotation in VaultTransit.
-	//     Mirrors k8s KMS v2 EncryptResponse.KeyID semantics.
-	//   - err:        non-nil on any encryption failure (fail-closed).
-	Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error)
+	// Additional Authenticated Data. Callers MUST persist the returned
+	// EncryptResult.KeyID rather than reading handle.ID() after the call; this
+	// eliminates the race between Current() and key rotation in backends like
+	// VaultTransit. Mirrors k8s KMS v2 EncryptResponse.KeyID semantics.
+	Encrypt(ctx context.Context, plaintext, aad []byte) (EncryptResult, error)
 
 	// Decrypt decrypts ciphertext encrypted by this key. The aad must match
 	// exactly what was provided to Encrypt; mismatched aad returns ErrDecryptFailed.

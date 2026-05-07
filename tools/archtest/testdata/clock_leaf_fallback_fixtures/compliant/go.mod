@@ -1,6 +1,6 @@
 module fixturetest/clock_leaf_fallback/compliant
 
-go 1.25.9
+go 1.25.10
 
 // Pin to the worktree's kernel/clock so the fixture compiles against the same
 // API the gate guards. The compliant fixture only consumes types/values it

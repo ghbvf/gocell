@@ -37,18 +37,18 @@ func NewValueTransformer(p KeyProvider) ValueTransformer {
 }
 
 // Encrypt encrypts plaintext using the current KeyHandle.
-func (t *keyProviderTransformer) Encrypt(ctx context.Context, plaintext, aad []byte) ([]byte, string, []byte, []byte, error) {
+func (t *keyProviderTransformer) Encrypt(ctx context.Context, plaintext, aad []byte) (EncryptResult, error) {
 	handle, err := t.provider.Current(ctx)
 	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("value-transformer: get current key: %w", err)
+		return EncryptResult{}, fmt.Errorf("value-transformer: get current key: %w", err)
 	}
 
-	ct, nonce, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
+	result, err := handle.Encrypt(ctx, plaintext, aad)
 	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("value-transformer: encrypt: %w", err)
+		return EncryptResult{}, fmt.Errorf("value-transformer: encrypt: %w", err)
 	}
 
-	return ct, keyID, nonce, edk, nil
+	return result, nil
 }
 
 // CurrentKeyID returns the ID of the currently active key. Used by the config
@@ -72,9 +72,9 @@ func (t *keyProviderTransformer) Decrypt(ctx context.Context, ciphertext []byte,
 	// Defense-in-depth: verify that the provider returned a handle whose ID
 	// matches the requested keyID. A mismatch indicates a buggy KeyProvider
 	// implementation that routed the lookup to the wrong key — permanent error.
-	if handle.ID() != keyID {
-		return nil, fmt.Errorf("value-transformer: provider returned handle id %q for requested keyID %q",
-			handle.ID(), keyID)
+	if err := kcrypto.MatchKeyID(handle.ID(), keyID); err != nil {
+		return nil, fmt.Errorf("value-transformer: provider returned handle id %q for requested keyID %q: %w",
+			handle.ID(), keyID, err)
 	}
 
 	plaintext, err := handle.Decrypt(ctx, ciphertext, nonce, edk, aad)
@@ -95,8 +95,8 @@ func (t *keyProviderTransformer) Decrypt(ctx context.Context, ciphertext []byte,
 type NoopTransformer struct{}
 
 // Encrypt returns plaintext as-is with empty keyID, nonce, and edk.
-func (NoopTransformer) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, string, []byte, []byte, error) {
-	return plaintext, "", nil, nil, nil
+func (NoopTransformer) Encrypt(_ context.Context, plaintext, _ []byte) (EncryptResult, error) {
+	return EncryptResult{Ciphertext: plaintext}, nil
 }
 
 // Decrypt returns ciphertext as-is.
