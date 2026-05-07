@@ -19,50 +19,78 @@ func TestValidateLimits(t *testing.T) {
 		wantOK    bool
 		wantInMsg string
 	}{
-		{name: "nil passes", metadata: nil, prefix: "outbox", wantOK: true},
-		{name: "empty passes", metadata: map[string]string{}, prefix: "outbox", wantOK: true},
-		{name: "small valid passes", metadata: map[string]string{"k": "v"}, prefix: "outbox", wantOK: true},
+		{name: "nil passes", metadata: nil, prefix: metautil.DomainOutbox, wantOK: true},
+		{name: "empty passes", metadata: map[string]string{}, prefix: metautil.DomainOutbox, wantOK: true},
+		{name: "small valid passes", metadata: map[string]string{"k": "v"}, prefix: metautil.DomainOutbox, wantOK: true},
 		{
 			name:     "exactly MaxMetadataKeys passes",
-			metadata: makeKeys(metautil.MaxMetadataKeys), prefix: "outbox", wantOK: true,
+			metadata: makeKeys(metautil.MaxMetadataKeys), prefix: metautil.DomainOutbox, wantOK: true,
 		},
 		{
 			name:     "exactly MaxMetadataKeyLen passes",
 			metadata: map[string]string{strings.Repeat("k", metautil.MaxMetadataKeyLen): "v"},
-			prefix:   "outbox", wantOK: true,
+			prefix:   metautil.DomainOutbox, wantOK: true,
 		},
 		{
 			name:     "exactly MaxMetadataValueLen passes",
 			metadata: map[string]string{"k": strings.Repeat("v", metautil.MaxMetadataValueLen)},
-			prefix:   "outbox", wantOK: true,
+			prefix:   metautil.DomainOutbox, wantOK: true,
 		},
 		{
-			name:      "key count over limit fails with prefix",
+			name:      "key count over limit fails with outbox prefix",
 			metadata:  makeKeys(metautil.MaxMetadataKeys + 1),
-			prefix:    "outbox",
+			prefix:    metautil.DomainOutbox,
 			wantOK:    false,
 			wantInMsg: "outbox: metadata key count exceeds max",
 		},
 		{
-			name:      "key length over limit fails with prefix",
+			name:      "key count over limit fails with command prefix",
+			metadata:  makeKeys(metautil.MaxMetadataKeys + 1),
+			prefix:    metautil.DomainCommand,
+			wantOK:    false,
+			wantInMsg: "command: metadata key count exceeds max",
+		},
+		{
+			name:      "key length over limit fails with outbox prefix",
 			metadata:  map[string]string{strings.Repeat("k", metautil.MaxMetadataKeyLen+1): "v"},
-			prefix:    "command",
+			prefix:    metautil.DomainOutbox,
+			wantOK:    false,
+			wantInMsg: "outbox: metadata key length exceeds max",
+		},
+		{
+			name:      "key length over limit fails with command prefix",
+			metadata:  map[string]string{strings.Repeat("k", metautil.MaxMetadataKeyLen+1): "v"},
+			prefix:    metautil.DomainCommand,
 			wantOK:    false,
 			wantInMsg: "command: metadata key length exceeds max",
 		},
 		{
-			name:      "value length over limit fails with prefix",
+			name:      "value length over limit fails with outbox prefix",
 			metadata:  map[string]string{"k": strings.Repeat("v", metautil.MaxMetadataValueLen+1)},
-			prefix:    "command",
+			prefix:    metautil.DomainOutbox,
+			wantOK:    false,
+			wantInMsg: "outbox: metadata value length exceeds max",
+		},
+		{
+			name:      "value length over limit fails with command prefix",
+			metadata:  map[string]string{"k": strings.Repeat("v", metautil.MaxMetadataValueLen+1)},
+			prefix:    metautil.DomainCommand,
 			wantOK:    false,
 			wantInMsg: "command: metadata value length exceeds max",
 		},
 		{
-			name:      "total size over limit fails with prefix",
+			name:      "total size over limit fails with outbox prefix",
 			metadata:  makeBigPayload(),
-			prefix:    "outbox",
+			prefix:    metautil.DomainOutbox,
 			wantOK:    false,
 			wantInMsg: "outbox: metadata total size exceeds max",
+		},
+		{
+			name:      "total size over limit fails with command prefix",
+			metadata:  makeBigPayload(),
+			prefix:    metautil.DomainCommand,
+			wantOK:    false,
+			wantInMsg: "command: metadata total size exceeds max",
 		},
 	}
 
@@ -85,6 +113,37 @@ func TestValidateLimits(t *testing.T) {
 			}
 			if !strings.Contains(ec.Message, tc.wantInMsg) {
 				t.Fatalf("expected message to contain %q, got %q", tc.wantInMsg, ec.Message)
+			}
+		})
+	}
+}
+
+func TestValidateLimits_UnknownPrefixReturnsAssertion(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		prefix string
+	}{
+		{"empty prefix", ""},
+		{"unknown prefix", "relay"},
+		{"caps mismatch", "Outbox"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := metautil.ValidateLimits(map[string]string{"k": "v"}, tc.prefix)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Kind != errcode.KindInternal {
+				t.Fatalf("expected KindInternal, got %v", ec.Kind)
+			}
+			if !strings.Contains(ec.Message, "unknown domain prefix") {
+				t.Fatalf("expected assertion message, got %q", ec.Message)
 			}
 		})
 	}

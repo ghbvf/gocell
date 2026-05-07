@@ -75,7 +75,7 @@ func validateMetadata(m map[string]string) error {
 				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, k)))
 		}
 	}
-	return metautil.ValidateLimits(m, "outbox")
+	return metautil.ValidateLimits(m, metautil.DomainOutbox)
 }
 
 // ---------------------------------------------------------------------------
@@ -213,8 +213,9 @@ type Writer interface {
 	// state. Write MUST be invoked from within an active transaction; the
 	// implementation extracts the tx from ctx via TxFromContext(ctx). Calling
 	// Write outside of a persistence.TxRunner.RunInTx scope is a programming
-	// error — implementations return ErrNoTx (or an equivalent errcode error)
-	// rather than silently writing without transactional guarantees.
+	// error — implementations return an errcode error with KindInternal
+	// (e.g. adapters/postgres returns ErrAdapterPGNoTx) rather than silently
+	// writing without transactional guarantees.
 	//
 	// ref: nikolayk812/pgx-outbox writer.go -- explicit tx parameter +
 	// ErrTxNil guard for the same MUST-have-tx contract.

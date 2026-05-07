@@ -22,6 +22,10 @@ func Requeue(err error) HandleResult {
 // will Nack(requeue=false) so the broker routes to DLX. Wrap err with
 // outbox.NewPermanentError to tag it for logging/metrics; the disposition
 // itself is what the broker observes — PermanentError is purely diagnostic.
+//
+// Passing a nil err is accepted but reduces DLX observability — the
+// downstream operator has no diagnostic to attach. Production handlers
+// SHOULD pass a non-nil err (typically wrapped with NewPermanentError).
 func Reject(err error) HandleResult {
 	return HandleResult{Disposition: DispositionReject, Err: err}
 }

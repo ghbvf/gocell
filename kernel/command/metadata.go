@@ -11,5 +11,5 @@ import "github.com/ghbvf/gocell/kernel/metautil"
 // validateMetadata delegates to the shared metautil limit checker with the
 // "command" domain prefix so error Messages stay traceable.
 func validateMetadata(m map[string]string) error {
-	return metautil.ValidateLimits(m, "command")
+	return metautil.ValidateLimits(m, metautil.DomainCommand)
 }
