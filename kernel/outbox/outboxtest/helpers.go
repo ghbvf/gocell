@@ -28,6 +28,13 @@ const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
 // messages are durably queued before Subscribe starts consuming. For in-memory
 // implementations, Ready blocks until the goroutine calls Subscribe.
 //
+// Returns true if the Ready channel was selected (fast path, in-memory bus
+// case), false if it fell through to the subscribeReadyTimeout (acceptable for
+// adapters with never-closing Ready, e.g., RabbitMQ). Most callers can discard
+// the return value; the bool exists so timing tests can assert which select
+// arm won without reading wall-clock elapsed (see
+// OUTBOX-READY-TEST-TIMING-FLAKE-01 / PR#415 review).
+//
 // Contract: consumerGroup MUST equal the ConsumerGroup field of the Subscription
 // passed to the eventual Subscribe / SubscribeEntry call. RabbitMQ derives the
 // queue name from (topic, consumerGroup) via resolveQueueName, so a mismatch
@@ -36,7 +43,7 @@ const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
 // wrong queue under broker scheduling, producing flaky timeouts.
 //
 // ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
-func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
+func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) bool {
 	t.Helper()
 	subSpec := outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup}
 	if err := sub.Setup(ctx, subSpec); err != nil {
@@ -44,14 +51,17 @@ func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscribe
 	}
 	select {
 	case <-sub.Ready(subSpec):
+		return true
 	case <-ctx.Done():
 		t.Fatalf("waitForSubscription: context canceled before subscriber ready: %v", ctx.Err())
+		return false // unreachable; t.Fatalf calls runtime.Goexit
 	case <-time.After(subscribeReadyTimeout):
 		// Fallback: subscriber did not signal Ready within init delay. This is
 		// acceptable for implementations that return a never-closing Ready channel
 		// (e.g., persistent brokers where setup is fire-and-forget). The caller
 		// may experience delivery loss on the first message; that is acceptable
 		// for non-persistent test setups.
+		return false
 	}
 }
 

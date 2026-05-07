@@ -273,7 +273,9 @@ func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
 	// Phase 1: Validate all entries upfront.
 	for i, e := range entries {
 		if err := e.Validate(); err != nil {
-			return fmt.Errorf("outbox: entry[%d]: %w", i, err)
+			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"outbox: batch entry validation failed", err,
+				errcode.WithDetails(slog.Int("entry_index", i)))
 		}
 	}
 
@@ -286,7 +288,12 @@ func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
 		slog.Int("count", len(entries)))
 	for i, e := range entries {
 		if err := w.Write(ctx, e); err != nil {
-			return fmt.Errorf("outbox: write entry[%d] (id=%s): %w", i, e.ID, err)
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"outbox: batch sequential write failed", err,
+				errcode.WithDetails(
+					slog.Int("entry_index", i),
+					slog.String("entry_id", e.ID),
+				))
 		}
 	}
 	return nil
@@ -331,7 +338,9 @@ func (NoopWriter) Write(_ context.Context, entry Entry) error {
 func (NoopWriter) WriteBatch(_ context.Context, entries []Entry) error {
 	for i, entry := range entries {
 		if err := entry.Validate(); err != nil {
-			return fmt.Errorf("outbox: noop writer entry[%d]: %w", i, err)
+			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"outbox: noop writer entry validation failed", err,
+				errcode.WithDetails(slog.Int("entry_index", i)))
 		}
 	}
 	return nil
@@ -740,8 +749,13 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 		return fmt.Errorf("outbox: SubscriberWithMiddleware: %w", err)
 	}
 	if s.ConsumerBase == nil {
-		return fmt.Errorf("outbox: SubscriberWithMiddleware requires ConsumerBase for subscription topic=%q consumerGroup=%q contractID=%q",
-			sub.Topic, sub.ConsumerGroup, sub.ContractID)
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"outbox: SubscriberWithMiddleware requires ConsumerBase",
+			errcode.WithDetails(
+				slog.String("topic", sub.Topic),
+				slog.String("consumer_group", sub.ConsumerGroup),
+				slog.String("contract_id", sub.ContractID),
+			))
 	}
 
 	// Step 1: apply business middleware chain (EntryHandler → EntryHandler).
