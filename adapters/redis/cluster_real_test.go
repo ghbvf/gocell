@@ -92,7 +92,8 @@ func TestClusterIntegration_IdempotencyClaimer_NoCrossSlot(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	claimer := NewIdempotencyClaimer(client)
+	claimer, err := NewIdempotencyClaimer(client, testNamespace)
+	require.NoError(t, err)
 	uniq := time.Now().UnixNano()
 
 	// Distinct business keys that, without hashtags, would scatter across
@@ -127,7 +128,8 @@ func TestClusterIntegration_DistLock(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	drv := NewRedisDriver(client.cmdable())
+	drv, err := NewRedisDriver(client, testNamespace)
+	require.NoError(t, err)
 	key := fmt.Sprintf("integ:cluster:lock:%d", time.Now().UnixNano())
 
 	ok, err := drv.SetNX(ctx, key, "token-A", testtime.CtxLong)
@@ -153,7 +155,8 @@ func TestClusterIntegration_Cache(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	cache := NewCache(client)
+	cache, err := NewCache(client, testNamespace)
+	require.NoError(t, err)
 	key := fmt.Sprintf("integ:cluster:cache:%d", time.Now().UnixNano())
 
 	require.NoError(t, cache.Set(ctx, key, "hello", testtime.CtxLong))
@@ -174,7 +177,7 @@ func TestClusterIntegration_NonceStore(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	store, err := NewNonceStore(client, auth.ServiceTokenNonceTTL)
+	store, err := NewNonceStore(client, nonceTestNamespace, auth.ServiceTokenNonceTTL)
 	require.NoError(t, err)
 	nonce := fmt.Sprintf("nonce-%d", time.Now().UnixNano())
 

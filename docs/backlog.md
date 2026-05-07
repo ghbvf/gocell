@@ -198,7 +198,7 @@
 | PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | **TEST-RACE-COVERAGE-ADAPTERS-INTEGRATION-01** — 现状: PG concurrent Up CI 不带 -race；修复: test-race.yml 加 adapters/postgres 路径（评估） | test | P2/Cx3 | 🟡 | — | `.github/workflows/test-race.yml` | PR-V1-PG-STARTUP-HARDEN F5 |
 | X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE/SEED-ROLE-IFACE/AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
 | S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
-| B2-A-28 | **Redis password 可选 fail-open** — 现状: 缺 password 仍允许连接；修复: real mode 强制 password fail-fast | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `adapters/redis/client.go:62-68` | backlog2 §5.3 B2-A-28 |
+| B2-A-28 | ✅ shipped (fix/295-redis-keyns) — `Config.AllowUnsafeNoPassword bool`（默认 false）+ `validateConfig` 三 Mode 通杀 password 检查；`cmd/corebundle.loadRedisConfigFromEnv` 由 `topo.RequireProductionControlPlane()` 反推 opt-in（real → fail-closed，dev → 允许）。`TestNewClient_PasswordRequired_FailClosed` 4 子测试 pin 行为。| bug | P1/Cx2 | ✅ | 发布前安全收口 | `adapters/redis/client.go` + `cmd/corebundle/redis.go` | backlog2 §5.3 B2-A-28 |
 | B2-C-12 | **Audit HMAC key 最小长度未验证** — 现状: 任意短密钥都接受；修复: 加 32 字节最小长度 + Validate | bug | P2/Cx1 | 🟡 | 发布前安全收口 | `cells/auditcore/cell.go:319` | backlog2 §4 B2-C-12 |
 
 ---
@@ -209,8 +209,8 @@
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| B2-A-29 | **Redis distlock race test 缺** — 现状: distlock_test 缺并发竞争测；修复: 加 race + count=20 stress | test | P1/Cx3 | 🟡 | — | `adapters/redis/distlock_test.go` | backlog2 §5.3 B2-A-29 |
-| B2-A-30 | **Redis distlock renew TTL 精度损失** — 现状: renew 时 TTL 精度损失；修复: 用 PEXPIRE 毫秒精度 | bug | P2/Cx2 | 🟡 | — | `adapters/redis/distlock.go:50-56` | backlog2 §5.3 B2-A-30 |
+| B2-A-29 | ✅ shipped (fix/295-redis-keyns) — `adapters/redis/race_stress_integration_test.go` 4 个 race stress 测试覆盖 DistLock SetNX / IdempotencyClaimer / NonceStore / Cache（每个 50 goroutines；Cache 20 goroutines）。`.github/workflows/_build-lint.yml` 新增 "Race coverage for Redis primitive contention" step：`-tags=integration -race -count=3 -run '^TestRaceStress_'`，沿用 PG migrator race step 形态。| test | P1/Cx3 | ✅ | — | `adapters/redis/race_stress_integration_test.go` + `.github/workflows/_build-lint.yml` | backlog2 §5.3 B2-A-29 |
+| B2-A-30 | ✅ stale (fix/295-redis-keyns 审查关闭) — 原 backlog 描述错误。证据：(1) `Renew` 早已用 `PEXPIRE`(ms) via Lua（`distlock.go:28,60`）；(2) `SetNX` 通过 go-redis `usePrecise(dur)` 自动选 `PX <ms>` for sub-second TTL（`dur < time.Second \|\| dur%time.Second != 0`）；(3) `runtime/distlock/locker.go:167` 强制 `ttl >= time.Millisecond`。无 bug，**未写代码**。| bug | P2/Cx2 | ✅ | — | `adapters/redis/distlock.go:50-56` | backlog2 §5.3 B2-A-30 |
 
 ---
 

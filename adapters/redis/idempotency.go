@@ -25,36 +25,62 @@ var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 //
 // Consistency: L1 (LocalTx) — each Lua script executes atomically within Redis.
 //
-//   - {key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
-//   - {key}:done  — SET with doneTTL, value = "1". Indicates "completed".
+//   - <ns>:{key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
+//   - <ns>:{key}:done  — SET with doneTTL, value = "1". Indicates "completed".
 //
 // Cluster: the business key is wrapped in a Redis Cluster hashtag so CRC16
 // hashes only the key portion; lease and done keys colocate on the same slot,
 // keeping multi-KEY EVAL safe under Cluster mode (B10 PR-V1-REDIS-CLUSTER).
+// The KeyNamespace prefix sits outside the hashtag so slot colocality is
+// preserved regardless of namespace value.
 //
 // Claim checks done first (ClaimDone), then attempts lease (ClaimAcquired or ClaimBusy).
 // Commit sets done + deletes lease. Release deletes lease (token-guarded).
 type IdempotencyClaimer struct {
 	rdb cmdable
+	ns  KeyNamespace
 }
 
-// NewIdempotencyClaimer creates an IdempotencyClaimer using the given Client.
-func NewIdempotencyClaimer(client *Client) *IdempotencyClaimer {
-	return &IdempotencyClaimer{rdb: client.cmdable()}
+// NewIdempotencyClaimer creates an IdempotencyClaimer using the given Client
+// and KeyNamespace. ns is validated up front; nil client and invalid
+// namespace produce structured errors so misconfiguration fails-fast at
+// composition time.
+func NewIdempotencyClaimer(client *Client, ns KeyNamespace) (*IdempotencyClaimer, error) {
+	if err := ns.Validate(); err != nil {
+		return nil, err
+	}
+	if client == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis idempotency claimer: client is nil")
+	}
+	return newIdempotencyClaimerFromCmdable(client.cmdable(), ns)
 }
 
 // newIdempotencyClaimerFromCmdable creates an IdempotencyClaimer with a
-// pre-built cmdable for testing.
-func newIdempotencyClaimerFromCmdable(rdb cmdable) *IdempotencyClaimer {
-	return &IdempotencyClaimer{rdb: rdb}
+// pre-built cmdable for testing. Re-validates ns and the cmdable so
+// direct test callers cannot bypass the public constructor's invariants.
+func newIdempotencyClaimerFromCmdable(rdb cmdable, ns KeyNamespace) (*IdempotencyClaimer, error) {
+	if err := ns.Validate(); err != nil {
+		return nil, err
+	}
+	if rdb == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis idempotency claimer: cmdable is nil")
+	}
+	return &IdempotencyClaimer{rdb: rdb, ns: ns}, nil
 }
 
-// claimScript is the Lua script for atomic Claim:
+// claimScript is the Lua script for atomic Claim. KEYS[0] is intentionally
+// the done-key (suffix `:done`) — the mock cmdable in mock_test.go
+// dispatches claim-vs-commit by `keys[0]` suffix, and that invariant is
+// mirrored on the wire: commitScript puts the lease-key at KEYS[0]
+// (suffix `:lease`). The two scripts therefore use opposite KEYS order on
+// purpose. Do not "normalize" them without first updating the mock's
+// dispatch and the IDEMPOTENCY-LUA-HASHTAG-01 archtest in
+// tools/archtest/redis_idempotency_hashtag_test.go.
 //
-//	KEYS[1] = {key}:done
-//	KEYS[2] = {key}:lease
+//	KEYS[1] = <ns>:{key}:done
+//	KEYS[2] = <ns>:{key}:lease
 //	ARGV[1] = token
-//	ARGV[2] = leaseTTL (seconds)
+//	ARGV[2] = leaseTTL (milliseconds — PX precision)
 //
 // Returns:
 //
@@ -66,26 +92,28 @@ local done = redis.call('EXISTS', KEYS[1])
 if done == 1 then
   return 0
 end
-local ok = redis.call('SET', KEYS[2], ARGV[1], 'NX', 'EX', ARGV[2])
+local ok = redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2])
 if ok then
   return 1
 end
 return 2
 `
 
-// commitScript: atomic Commit (token-guarded):
+// commitScript: atomic Commit (token-guarded). KEYS[0] is the lease-key —
+// see claimScript's note above for why claim and commit use opposite
+// KEYS order.
 //
-//	KEYS[1] = {key}:lease
-//	KEYS[2] = {key}:done
+//	KEYS[1] = <ns>:{key}:lease
+//	KEYS[2] = <ns>:{key}:done
 //	ARGV[1] = token
-//	ARGV[2] = doneTTL (seconds)
+//	ARGV[2] = doneTTL (milliseconds — PX precision)
 //
 // Returns 1 on success, 0 if token mismatch (stale lease).
 const commitScript = `
 local val = redis.call('GET', KEYS[1])
 if val == ARGV[1] then
   redis.call('DEL', KEYS[1])
-  redis.call('SET', KEYS[2], '1', 'EX', ARGV[2])
+  redis.call('SET', KEYS[2], '1', 'PX', ARGV[2])
   return 1
 end
 return 0
@@ -149,16 +177,17 @@ func (c *IdempotencyClaimer) Claim(
 			"redis: idempotency claim token generation failed", err)
 	}
 
-	// Wrap business key in a Redis Cluster hashtag so {key}:lease and
-	// {key}:done hash to the same slot — required for the dual-KEY claim and
-	// commit Lua scripts to run on Cluster (B10). Standalone/Sentinel modes
-	// use the same naming for a single source of truth; the hashtag is a
-	// no-op outside Cluster.
-	leaseKey := "{" + key + "}:lease"
-	doneKey := "{" + key + "}:done"
-	leaseSec := max(int64(leaseTTL.Seconds()), 1)
+	// Wrap business key in a Redis Cluster hashtag so <ns>:{key}:lease and
+	// <ns>:{key}:done hash to the same slot — required for the dual-KEY claim
+	// and commit Lua scripts to run on Cluster (B10). The KeyNamespace prefix
+	// is appended outside the hashtag, so it does not affect CRC16 slot
+	// computation. Standalone/Sentinel modes use the same naming for a single
+	// source of truth; the hashtag is a no-op outside Cluster.
+	leaseKey := c.ns.applyHashtag(key, "lease")
+	doneKey := c.ns.applyHashtag(key, "done")
+	leaseMs := max(leaseTTL.Milliseconds(), 1)
 
-	res, err := c.rdb.Eval(ctx, claimScript, []string{doneKey, leaseKey}, token, leaseSec).Result()
+	res, err := c.rdb.Eval(ctx, claimScript, []string{doneKey, leaseKey}, token, leaseMs).Result()
 	if err != nil {
 		return 0, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
 			"redis: idempotency claim failed", err)
@@ -215,8 +244,8 @@ func (r *redisReceipt) Commit(ctx context.Context) error {
 	if r.committed {
 		return r.commitErr
 	}
-	doneSec := max(int64(r.doneTTL.Seconds()), 1)
-	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
+	doneMs := max(r.doneTTL.Milliseconds(), 1)
+	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneMs).Result()
 	if err != nil {
 		r.commitErr = errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
 			"redis: idempotency commit failed", err)

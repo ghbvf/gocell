@@ -6,15 +6,19 @@ package archtest
 // keys per dual-KEY Lua EVAL (claim, commit). Both keys MUST be in the
 // same Redis Cluster slot, otherwise the cluster rejects the EVAL with
 // CROSSSLOT. The shared-slot guarantee is achieved by wrapping the business
-// key in a Redis hashtag so CRC16 hashes only the business-key portion:
+// key in a Redis hashtag so CRC16 hashes only the business-key portion.
 //
-//   leaseKey := "{" + key + "}:lease"
-//   doneKey  := "{" + key + "}:done"
+// Since PR-V1-REDIS-KEYNS the key derivation is funneled through
+// KeyNamespace.applyHashtag, which produces:
 //
-// Without the hashtag (e.g. accidental refactor back to "lease:" + key),
-// the keys hash independently and Cluster mode breaks at runtime. This
-// gate fails when the construction line in adapters/redis/idempotency.go
-// no longer follows the "{" + key + "}:<role>" pattern.
+//	<ns>:{<key>}:<role>
+//
+// The KeyNamespace prefix sits OUTSIDE the hashtag so it does not affect
+// CRC16 slot computation; lease and done keys still colocate. This gate
+// asserts that idempotency.go derives leaseKey / doneKey from
+// applyHashtag with the role literals "lease" and "done" respectively.
+// A regression to manual concatenation (or to a different role literal)
+// fails this test.
 //
 // Mock dispatch is a sibling concern: adapters/redis/mock_test.go must
 // recognize the new key shape via suffix matching (":done" / ":lease").
@@ -22,7 +26,7 @@ package archtest
 // pass unit tests against a stale mock. This gate also pins that
 // suffix-matched dispatch.
 //
-// ref: docs/plans/202605011500-029-master-roadmap.md B10
+// ref: docs/plans/202605011500-029-master-roadmap.md B10, B11
 // ref: Redis cluster-spec hash-tags — {tag} sub-string colocation rule
 
 import (
@@ -37,12 +41,10 @@ import (
 )
 
 // TestIdempotency_LuaHashtag verifies the production code in
-// adapters/redis/idempotency.go assigns leaseKey / doneKey using the
-// hashtag-wrapped pattern `"{" + key + "}:lease"` / `"{" + key + "}:done"`.
-//
-// The check is structural over the AST (not regex over source) so renaming
-// `key` to `businessKey` would still pass, but reverting to a non-hashtag
-// expression like `"lease:" + key` would fail.
+// adapters/redis/idempotency.go assigns leaseKey / doneKey by calling
+// `<receiver>.ns.applyHashtag(key, "<role>")`. The check is structural
+// over the AST so renaming `key` to `businessKey` would still pass, but
+// reverting to a non-hashtag expression like `"lease:" + key` would fail.
 func TestIdempotency_LuaHashtag(t *testing.T) {
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "adapters", "redis", "idempotency.go")
@@ -65,11 +67,11 @@ func TestIdempotency_LuaHashtag(t *testing.T) {
 		}
 		switch ident.Name {
 		case "leaseKey":
-			if isHashtagConcat(assign.Rhs[0], ":lease") {
+			if isApplyHashtagCall(assign.Rhs[0], "lease") {
 				leaseOK = true
 			}
 		case "doneKey":
-			if isHashtagConcat(assign.Rhs[0], ":done") {
+			if isApplyHashtagCall(assign.Rhs[0], "done") {
 				doneOK = true
 			}
 		}
@@ -77,42 +79,46 @@ func TestIdempotency_LuaHashtag(t *testing.T) {
 	})
 
 	assert.True(t, leaseOK,
-		"adapters/redis/idempotency.go: leaseKey assignment must follow \"{\" + key + \"}:lease\" "+
-			"hashtag pattern (Redis Cluster slot colocation)")
+		"adapters/redis/idempotency.go: leaseKey must be derived from "+
+			"<receiver>.ns.applyHashtag(key, \"lease\") so the namespace+hashtag "+
+			"derivation stays single-source (Redis Cluster slot colocation)")
 	assert.True(t, doneOK,
-		"adapters/redis/idempotency.go: doneKey assignment must follow \"{\" + key + \"}:done\" "+
-			"hashtag pattern (Redis Cluster slot colocation)")
+		"adapters/redis/idempotency.go: doneKey must be derived from "+
+			"<receiver>.ns.applyHashtag(key, \"done\") so the namespace+hashtag "+
+			"derivation stays single-source (Redis Cluster slot colocation)")
 }
 
-// isHashtagConcat checks whether expr is a string concatenation of the exact
-// shape `"{" + <ident> + "}<suffix>"` where suffix is the role suffix.
-// Accepts associativity in either direction (Go parser builds left-leaning
-// trees but we tolerate either). Tail literal must match `"}" + wantSuffix`
-// exactly so a regression like `"}:done_v2"` is caught.
-func isHashtagConcat(expr ast.Expr, wantSuffix string) bool {
-	parts := flattenAdd(expr)
-	if len(parts) < 3 {
+// isApplyHashtagCall checks whether expr is a method call of the shape
+// `<receiver>.ns.applyHashtag(<keyParam>, "<role>")`. The receiver chain
+// is allowed to be any selector chain ending in `.ns.applyHashtag` so the
+// claimer's struct field name (`ns`) is the only fixed part — renaming
+// the outer receiver (`c` → `claimer`) does not break the gate.
+//
+// The first argument MUST be a plain identifier (not a literal, not a
+// composite expression). This catches a regression where a hardcoded
+// string sneaks into the hashtag — e.g. `c.ns.applyHashtag("", "lease")`
+// — which would silently disable per-call slot colocation.
+func isApplyHashtagCall(expr ast.Expr, wantRole string) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok || len(call.Args) != 2 {
 		return false
 	}
-	first, ok := stringLit(parts[0])
-	if !ok || first != "{" {
+	outer, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || outer.Sel.Name != "applyHashtag" {
 		return false
 	}
-	last, ok := stringLit(parts[len(parts)-1])
+	inner, ok := outer.X.(*ast.SelectorExpr)
+	if !ok || inner.Sel.Name != "ns" {
+		return false
+	}
+	if _, ok := call.Args[0].(*ast.Ident); !ok {
+		return false
+	}
+	role, ok := stringLit(call.Args[1])
 	if !ok {
 		return false
 	}
-	return last == "}"+wantSuffix
-}
-
-func flattenAdd(expr ast.Expr) []ast.Expr {
-	bin, ok := expr.(*ast.BinaryExpr)
-	if !ok || bin.Op != token.ADD {
-		return []ast.Expr{expr}
-	}
-	left := flattenAdd(bin.X)
-	right := flattenAdd(bin.Y)
-	return append(left, right...)
+	return role == wantRole
 }
 
 func stringLit(expr ast.Expr) (string, bool) {
@@ -120,7 +126,6 @@ func stringLit(expr ast.Expr) (string, bool) {
 	if !ok || lit.Kind != token.STRING {
 		return "", false
 	}
-	// Strip surrounding quotes; tolerate both `"` and backtick raw strings.
 	raw := lit.Value
 	if len(raw) < 2 {
 		return "", false

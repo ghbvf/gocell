@@ -26,7 +26,7 @@ const (
 
 type (
 	redisNonceStoreFactory      func(*adapterredis.Client, time.Duration) (auth.NonceStore, error)
-	redisConsumerClaimerFactory func(*adapterredis.Client) idempotency.Claimer
+	redisConsumerClaimerFactory func(*adapterredis.Client) (idempotency.Claimer, error)
 	redisClientFactory          func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
 )
 
@@ -34,13 +34,28 @@ type redisClientResult struct {
 	Client *adapterredis.Client
 }
 
+// nonceStoreNamespace and consumerClaimerNamespace are the KeyNamespace
+// values composition root passes into the shared Redis primitives.
+//
+//   - servicetoken-nonce: the NonceStore is a single global store for the
+//     internal listener's service-token replay protection — namespace
+//     names the role directly so wire keys read as
+//     "servicetoken-nonce:<nonce>".
+//   - _runtime: the IdempotencyClaimer is shared across all consumers; the
+//     "_runtime" sentinel mirrors the HTTP metrics convention for shared
+//     framework infrastructure where no cell context applies.
+const (
+	nonceStoreNamespace      adapterredis.KeyNamespace = "servicetoken-nonce"
+	consumerClaimerNamespace adapterredis.KeyNamespace = "_runtime"
+)
+
 var (
 	newRedisClient     redisClientFactory     = adapterredis.NewClient
 	newRedisNonceStore redisNonceStoreFactory = func(client *adapterredis.Client, ttl time.Duration) (auth.NonceStore, error) {
-		return adapterredis.NewNonceStore(client, ttl)
+		return adapterredis.NewNonceStore(client, nonceStoreNamespace, ttl)
 	}
-	newRedisIdempotencyClaimer redisConsumerClaimerFactory = func(client *adapterredis.Client) idempotency.Claimer {
-		return adapterredis.NewIdempotencyClaimer(client)
+	newRedisIdempotencyClaimer redisConsumerClaimerFactory = func(client *adapterredis.Client) (idempotency.Claimer, error) {
+		return adapterredis.NewIdempotencyClaimer(client, consumerClaimerNamespace)
 	}
 )
 
@@ -75,9 +90,10 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 				"GOCELL_REDIS_DB must be 0 (or unset) in cluster mode; cluster has no SELECT command")
 		}
 		return adapterredis.Config{
-			Mode:         adapterredis.ModeCluster,
-			ClusterAddrs: clusterAddrs,
-			Password:     os.Getenv(envRedisPassword),
+			Mode:                  adapterredis.ModeCluster,
+			ClusterAddrs:          clusterAddrs,
+			Password:              os.Getenv(envRedisPassword),
+			AllowUnsafeNoPassword: !requiresDistributedReplay(topo),
 		}, true, nil
 	}
 
@@ -104,9 +120,10 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 	}
 
 	return adapterredis.Config{
-		Addr:     addr,
-		Password: os.Getenv(envRedisPassword),
-		DB:       db,
+		Addr:                  addr,
+		Password:              os.Getenv(envRedisPassword),
+		DB:                    db,
+		AllowUnsafeNoPassword: !requiresDistributedReplay(topo),
 	}, true, nil
 }
 
@@ -175,7 +192,11 @@ func buildConsumerClaimer(
 			return nil, consumerClaimerKindUnknown, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
 				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set for distributed outbox idempotency in real multi-pod deployments")
 		}
-		return newRedisIdempotencyClaimer(client), consumerClaimerKindDistributed, nil
+		claimer, err := newRedisIdempotencyClaimer(client)
+		if err != nil {
+			return nil, consumerClaimerKindUnknown, fmt.Errorf("build Redis idempotency claimer: %w", err)
+		}
+		return claimer, consumerClaimerKindDistributed, nil
 	}
 	return idempotency.NewInMemClaimer(clk), consumerClaimerKindInMemory, nil
 }

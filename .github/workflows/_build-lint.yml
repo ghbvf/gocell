@@ -352,6 +352,33 @@ jobs:
             exit 1
           fi
 
+      - name: Race coverage for Redis primitive contention
+        env:
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
+        # B11 PR-V1-REDIS-KEYNS / B2-A-29: race stress for the four Redis
+        # primitives (DistLock, IdempotencyClaimer, NonceStore, Cache).
+        # Same rationale as the PG migrator race step above — the main
+        # integration step does not enable -race, and test-race.yml's
+        # Linux race gate is scoped to kernel/runtime/pkg without the
+        # integration build tag. -count=3 amplifies timing-dependent races
+        # in the dual-KEY Lua scripts and SET NX semantics; the focused
+        # -run pattern keeps wall-time ≤ 90s by exercising only the
+        # TestRaceStress_* family.
+        #
+        # `no tests to run` guard (same rationale as the OTel and PG steps
+        # above): `-run` selectors that match zero tests still exit 0; the
+        # grep converts that into an explicit FAIL so renames/moves don't
+        # silently disable the race regression 防线.
+        run: |
+          set -euo pipefail
+          out=$(go test -tags=integration -race -count=3 -timeout 5m ./adapters/redis/ \
+            -run '^TestRaceStress_' 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q 'no tests to run'; then
+            echo "FAIL: -run selector matched zero tests in ./adapters/redis/; rename/move regression?"
+            exit 1
+          fi
+
       - name: Redis cluster compile gate
         # B10 PR-V1-REDIS-CLUSTER: cluster_real_test.go is gated by
         # //go:build integration_cluster and is env-driven (skips when

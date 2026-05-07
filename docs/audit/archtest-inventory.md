@@ -6,8 +6,8 @@
 
 ## 概览
 
-- archtest 文件总数：71
-- archtest INVARIANT 锚点数：171
+- archtest 文件总数：72
+- archtest INVARIANT 锚点数：173
 - governance `rules_*.go` 文件数：15
 
 ## archtest 规则清单
@@ -30,6 +30,7 @@
 | `AUTH-PLAN-04` | `auth_plan_test.go` | 12 | auth |
 | `AUTH-ROUTE-BOOTSTRAP-FLAG-REMOVED-01` | `setup_admin_bootstrap_closure_test.go` | 19 | auth |
 | `B2-A-11` | `postgres_constructor_error_first_test.go` | 6 | b2 |
+| `B2-A-27` | `redis_key_namespace_test.go` | 30 | b2 |
 | `BOOTSTRAP-PATH-PREDICATE-SOLE-01` | `bootstrap_path_predicate_test.go` | 1 | bootstrap |
 | `BUILD-CONSTRAINT-INTEGRATION-TAG-01` | `build_constraint_test.go` | 1 | build |
 | `CELL-INIT-CONTRACTUSAGE-01` | `cell_init_test.go` | 1 | cell |
@@ -138,6 +139,7 @@
 | `PROD-DURATION-CONST-01` | `test_time_literal_test.go` | 29 | prod |
 | `PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01` | `provision_state_removed_test.go` | 14 | provision |
 | `READYZ-PROBE-NAMING-01` | `readyz_probe_naming_test.go` | 3 | readyz |
+| `REDIS-KEY-NAMESPACE-01` | `redis_key_namespace_test.go` | 3 | redis |
 | `REFRESH-AMBIENT-TX-01` | `refresh_invariants_test.go` | 358 | refresh |
 | `REFRESH-CROSS-STORE-TX-01` | `refresh_invariants_test.go` | 31 | refresh |
 | `REFRESH-INVALID-INDEX-SINGLE-SOURCE-01` | `refresh_invariants_test.go` | 265 | refresh |
