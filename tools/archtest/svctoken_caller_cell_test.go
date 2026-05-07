@@ -1,6 +1,6 @@
 // INVARIANT: SVCTOKEN-CALLER-CELL-REQUIRED-01
 //
-// SVCTOKEN-CALLER-CELL-REQUIRED-01
+// # SVCTOKEN-CALLER-CELL-REQUIRED-01
 //
 // Invariant: every call expression `auth.GenerateServiceToken(...)` must
 // pass a non-empty string literal as its second argument (callerCell).

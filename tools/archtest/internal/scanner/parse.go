@@ -32,9 +32,9 @@ func eachFile(s Scope, mode parser.Mode, fn func(FileContext) error) error {
 	for _, absPath := range files {
 		rel, relErr := filepath.Rel(s.modRoot, absPath)
 		if relErr != nil {
-			// rel computation failed: use a clearly-labelled fallback so
+			// rel computation failed: use a clearly-labeled fallback so
 			// absolute paths do not appear in CI logs unexpectedly.
-			return fmt.Errorf("rel-failed: %s: %w", relErr, relErr)
+			return fmt.Errorf("rel-failed: %w", relErr)
 		}
 		relSlash := filepath.ToSlash(rel)
 		fset := token.NewFileSet()

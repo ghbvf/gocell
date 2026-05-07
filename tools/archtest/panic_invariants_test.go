@@ -265,7 +265,9 @@ func scanSourceForPanicRegisteredViolations(
 	return scanPanicRegisteredAST(fset, file, rel, whitelist, used), used
 }
 
-func scanRootForPanicRegisteredViolations(t *testing.T, root string, whitelist map[string]string) ([]panicRegisteredViolation, map[string]bool) {
+func scanRootForPanicRegisteredViolations(
+	t *testing.T, root string, whitelist map[string]string,
+) ([]panicRegisteredViolation, map[string]bool) {
 	t.Helper()
 	usedWhitelist := map[string]bool{}
 	var violations []panicRegisteredViolation
