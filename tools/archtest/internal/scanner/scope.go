@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,6 +37,11 @@ func IncludeTests() option {
 
 // ExcludeRels returns an option that excludes specific file paths (relative to
 // the module root) from the file set returned by [Scope.Files].
+// Paths are matched after filepath.Clean normalization; use slash-separated
+// paths on all platforms (e.g., "runtime/auth/roles.go"). Directory exclusion
+// is not supported.
+// To add custom skip directories, extend the option set in the scanner package;
+// callers cannot define new options.
 func ExcludeRels(rels ...string) option {
 	return func(c *scopeConfig) {
 		c.excludeRels = append(c.excludeRels, rels...)
@@ -56,6 +63,8 @@ type Scope struct {
 	includeTests bool
 	// valid is true only when the scope was created by a constructor.
 	valid bool
+	// escapeErr is set when DirsScope detects dirs that escape modRoot.
+	escapeErr error
 }
 
 // ModuleScope creates a Scope rooted at modRoot that walks the entire module,
@@ -68,14 +77,32 @@ func ModuleScope(modRoot string, opts ...option) Scope {
 
 // DirsScope creates a Scope limited to dirs (relative to modRoot). Missing
 // directories are silently skipped — [Scope.Files] returns an empty slice with
-// no error for a scope whose roots do not exist.
+// no error for a scope whose roots do not exist. Dirs that would escape modRoot
+// via ".." path traversal are rejected at construction time; [Scope.Files]
+// returns an error listing every out-of-bound path.
+//
+// Prefer DirsScope when the rule applies to specific layers (e.g., runtime/,
+// cells/); use [ModuleScope] when the rule must cover the entire repository.
 func DirsScope(modRoot string, dirs []string, opts ...option) Scope {
 	cfg := applyOptions(opts)
+	sep := string(os.PathSeparator)
+	cleanMod := filepath.Clean(modRoot)
 	roots := make([]string, 0, len(dirs))
+	var invalidRoots []string
 	for _, d := range dirs {
-		roots = append(roots, filepath.Join(modRoot, d))
+		abs := filepath.Clean(filepath.Join(cleanMod, d))
+		// Accept paths equal to modRoot or strictly under it.
+		if abs != cleanMod && !strings.HasPrefix(abs, cleanMod+sep) {
+			invalidRoots = append(invalidRoots, d)
+			continue
+		}
+		roots = append(roots, abs)
 	}
-	return newScope(modRoot, roots, cfg)
+	s := newScope(modRoot, roots, cfg)
+	if len(invalidRoots) > 0 {
+		s.escapeErr = fmt.Errorf("DirsScope: dir %q escapes module root", invalidRoots[0])
+	}
+	return s
 }
 
 func applyOptions(opts []option) scopeConfig {
@@ -113,6 +140,9 @@ func (s Scope) Files() ([]string, error) {
 	if !s.valid {
 		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
 	}
+	if s.escapeErr != nil {
+		return nil, s.escapeErr
+	}
 	seen := make(map[string]struct{})
 	var files []string
 	for _, root := range s.roots {
@@ -137,6 +167,10 @@ func (s Scope) collectFile(f string, seen map[string]struct{}, files *[]string) 
 		return err
 	}
 	rel = filepath.Clean(rel)
+	// Fail-closed for paths that escaped modRoot (e.g. "../sibling").
+	if strings.HasPrefix(filepath.ToSlash(rel), "../") {
+		return nil
+	}
 	if _, excluded := s.excludeRels[rel]; excluded {
 		return nil
 	}
