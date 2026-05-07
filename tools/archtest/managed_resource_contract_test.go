@@ -70,6 +70,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/redis.Client":                    "close-only-resource: health/close are wired explicitly; no worker/checker bundle yet",
 	"adapters/redis.Config":                    "config: construction input value",
 	"adapters/redis.IdempotencyClaimer":        "subresource-not-owner: uses caller-owned Redis Client",
+	"adapters/redis.KeyNamespace":              "value-object: typed string for cell-scoped Redis key prefix",
 	"adapters/redis.Mode":                      "value-object: Redis topology enum",
 	"adapters/redis.NonceStore":                "subresource-not-owner: uses caller-owned Redis Client",
 	"adapters/redis.PoolStats":                 "value-object: pool diagnostic snapshot",

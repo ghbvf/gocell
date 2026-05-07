@@ -32,21 +32,30 @@ end
 `
 
 // RedisDriver implements runtime/distlock.Driver using Redis SET NX EX and
-// two Lua scripts for atomic renew and release operations.
+// two Lua scripts for atomic renew and release operations. All lock keys
+// are prefixed with the constructor-injected KeyNamespace so per-cell or
+// per-role driver instances cannot collide.
 type RedisDriver struct {
 	rdb cmdable
+	ns  KeyNamespace
 }
 
-// NewRedisDriver creates a RedisDriver backed by the given cmdable.
-func NewRedisDriver(rdb cmdable) *RedisDriver {
-	return &RedisDriver{rdb: rdb}
+// NewRedisDriver creates a RedisDriver backed by the given cmdable and
+// KeyNamespace. ns is validated up front; an invalid namespace produces
+// an error.
+func NewRedisDriver(rdb cmdable, ns KeyNamespace) (*RedisDriver, error) {
+	if err := ns.Validate(); err != nil {
+		return nil, err
+	}
+	return &RedisDriver{rdb: rdb, ns: ns}, nil
 }
 
 // SetNX attempts to set key=token with the given TTL using Redis SET NX EX.
 // Returns (true, nil) on success, (false, nil) when the key is already held,
 // and (false, err) on I/O failure.
 func (d *RedisDriver) SetNX(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
-	ok, err := d.rdb.SetNX(ctx, key, token, ttl).Result()
+	prefixed := d.ns.apply(key)
+	ok, err := d.rdb.SetNX(ctx, prefixed, token, ttl).Result()
 	if err != nil {
 		return false, fmt.Errorf("redis distlock: SetNX: %w", err)
 	}
@@ -57,7 +66,8 @@ func (d *RedisDriver) SetNX(ctx context.Context, key, token string, ttl time.Dur
 // Returns (true, nil) on success, (false, nil) when the token no longer
 // matches (ownership lost — not an I/O error), and (false, err) on I/O failure.
 func (d *RedisDriver) Renew(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
-	result, err := d.rdb.Eval(ctx, renewLockScript, []string{key}, token, ttl.Milliseconds()).Int64()
+	prefixed := d.ns.apply(key)
+	result, err := d.rdb.Eval(ctx, renewLockScript, []string{prefixed}, token, ttl.Milliseconds()).Int64()
 	if err != nil {
 		return false, fmt.Errorf("redis distlock: Renew: %w", err)
 	}
@@ -68,7 +78,8 @@ func (d *RedisDriver) Renew(ctx context.Context, key, token string, ttl time.Dur
 // Returns nil on success or when the key is already gone (idempotent).
 // Returns a non-nil error only on I/O failure.
 func (d *RedisDriver) Release(ctx context.Context, key, token string) error {
-	_, err := d.rdb.Eval(ctx, releaseLockScript, []string{key}, token).Int64()
+	prefixed := d.ns.apply(key)
+	_, err := d.rdb.Eval(ctx, releaseLockScript, []string{prefixed}, token).Int64()
 	if err != nil {
 		return fmt.Errorf("redis distlock: Release: %w", err)
 	}

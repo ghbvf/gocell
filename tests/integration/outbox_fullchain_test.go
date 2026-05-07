@@ -128,9 +128,10 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 	}
 
 	client, err := redis.NewClient(ctx, redis.Config{
-		Addr:        addr,
-		Mode:        redis.ModeStandalone,
-		DialTimeout: testtime.SelectAsyncSettle,
+		Addr:                  addr,
+		Mode:                  redis.ModeStandalone,
+		DialTimeout:           testtime.SelectAsyncSettle,
+		AllowUnsafeNoPassword: true, // testcontainers Redis has no auth
 	})
 	require.NoError(t, err, "create redis client")
 
@@ -229,7 +230,8 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		DLXExchange:   "test.dlx",
 		Clock:         clock.Real(),
 	})
-	claimer := redis.NewIdempotencyClaimer(redisClient)
+	claimer, err := redis.NewIdempotencyClaimer(redisClient, redis.KeyNamespace("_runtime"))
+	require.NoError(t, err)
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.Clock = clock.Real()
@@ -253,7 +255,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	}
 
 	// Create a business table for the test.
-	_, err := pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
+	_, err = pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
 		id   TEXT PRIMARY KEY,
 		data TEXT NOT NULL
 	)`)

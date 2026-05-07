@@ -305,9 +305,9 @@ func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStore
 		gotNonceTTL = ttl
 		return fakeDistributedNonceStore{}, nil
 	})
-	restoreRedisClaimerFactory(t, func(c *adapterredis.Client) idempotency.Claimer {
+	restoreRedisClaimerFactory(t, func(c *adapterredis.Client) (idempotency.Claimer, error) {
 		gotClaimerClient = c
-		return fakeDistributedClaimer{}
+		return fakeDistributedClaimer{}, nil
 	})
 
 	nonceStore, err := buildServiceNonceStore(topo, client, clock.Real())

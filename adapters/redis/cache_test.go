@@ -14,7 +14,7 @@ import (
 
 func TestCache_SetAndGet(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	err := cache.Set(ctx, "cache:key:1", "hello", testtime.D5min)
@@ -27,7 +27,7 @@ func TestCache_SetAndGet(t *testing.T) {
 
 func TestCache_GetNonExistent(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	val, err := cache.Get(ctx, "cache:missing")
@@ -37,7 +37,7 @@ func TestCache_GetNonExistent(t *testing.T) {
 
 func TestCache_Delete(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	err := cache.Set(ctx, "cache:del:1", "value", 0)
@@ -53,7 +53,7 @@ func TestCache_Delete(t *testing.T) {
 
 func TestCache_DeleteNonExistent(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// Deleting a non-existent key should not error.
@@ -64,7 +64,7 @@ func TestCache_DeleteNonExistent(t *testing.T) {
 func TestCache_SetError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.setErr = errMock
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	err := cache.Set(ctx, "cache:err", "val", 0)
@@ -75,7 +75,7 @@ func TestCache_SetError(t *testing.T) {
 func TestCache_GetError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.getErr = errMock
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	val, err := cache.Get(ctx, "cache:err")
@@ -87,7 +87,7 @@ func TestCache_GetError(t *testing.T) {
 func TestCache_DeleteError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.delErr = errMock
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	err := cache.Delete(ctx, "cache:err")
@@ -98,10 +98,11 @@ func TestCache_DeleteError(t *testing.T) {
 func TestCache_ViaClientConstructor(t *testing.T) {
 	mock := newMockCmdable()
 	client := newClientFromCmdable(mock, Config{})
-	cache := NewCache(client)
+	cache, err := NewCache(client, testNamespace)
+	require.NoError(t, err)
 	ctx := context.Background()
 
-	err := cache.Set(ctx, "cache:client", "works", 0)
+	err = cache.Set(ctx, "cache:client", "works", 0)
 	require.NoError(t, err)
 
 	val, err := cache.Get(ctx, "cache:client")
@@ -118,7 +119,7 @@ type testItem struct {
 
 func TestSetJSON_And_GetJSON(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	item := testItem{Name: "widget", Count: 42}
@@ -132,7 +133,7 @@ func TestSetJSON_And_GetJSON(t *testing.T) {
 
 func TestGetJSON_NonExistent(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	got, err := GetJSON[testItem](ctx, cache, "json:missing")
@@ -142,7 +143,7 @@ func TestGetJSON_NonExistent(t *testing.T) {
 
 func TestGetJSON_UnmarshalError(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// Store invalid JSON.
@@ -160,7 +161,7 @@ func TestGetJSON_UnmarshalError(t *testing.T) {
 func TestGetJSON_GetError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.getErr = errMock
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	_, err := GetJSON[testItem](ctx, cache, "json:err")
@@ -170,7 +171,7 @@ func TestGetJSON_GetError(t *testing.T) {
 
 func TestSetJSON_MarshalError(t *testing.T) {
 	mock := newMockCmdable()
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// chan cannot be marshaled.
@@ -183,7 +184,7 @@ func TestSetJSON_MarshalError(t *testing.T) {
 func TestSetJSON_SetError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.setErr = errMock
-	cache := newCacheFromCmdable(mock)
+	cache := mustNewCacheFromCmdable(t, mock)
 	ctx := context.Background()
 
 	err := SetJSON(ctx, cache, "json:set-err", testItem{Name: "x"}, 0)

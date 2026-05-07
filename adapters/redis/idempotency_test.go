@@ -30,7 +30,7 @@ var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 // the Claim entry instead of surfacing as obscure runtime errors.
 func TestIdempotencyClaimer_RejectsInvalidKey(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	for _, badKey := range []string{
@@ -52,7 +52,7 @@ func TestIdempotencyClaimer_RejectsInvalidKey(t *testing.T) {
 
 func TestIdempotencyClaimer_Claim_Acquired(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:claim:1", testtime.D5min, testtime.D24h)
@@ -62,7 +62,7 @@ func TestIdempotencyClaimer_Claim_Acquired(t *testing.T) {
 
 	// Verify the lease key was set.
 	mock.mu.Lock()
-	_, hasLease := mock.store["{idem:claim:1}:lease"]
+	_, hasLease := mock.store["testns:{idem:claim:1}:lease"]
 	mock.mu.Unlock()
 	assert.True(t, hasLease)
 }
@@ -73,10 +73,10 @@ func TestIdempotencyClaimer_Claim_Done(t *testing.T) {
 
 	// Pre-set the done key to simulate a previously completed processing.
 	mock.mu.Lock()
-	mock.store["{idem:claim:2}:done"] = mockEntry{value: "1"}
+	mock.store["testns:{idem:claim:2}:done"] = mockEntry{value: "1"}
 	mock.mu.Unlock()
 
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	state, receipt, err := claimer.Claim(ctx, "idem:claim:2", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
@@ -90,10 +90,10 @@ func TestIdempotencyClaimer_Claim_Busy(t *testing.T) {
 
 	// Pre-set the lease key to simulate another consumer processing.
 	mock.mu.Lock()
-	mock.store["{idem:claim:3}:lease"] = mockEntry{value: "other-token", expiry: time.Now().Add(testtime.D5min)}
+	mock.store["testns:{idem:claim:3}:lease"] = mockEntry{value: "other-token", expiry: time.Now().Add(testtime.D5min)}
 	mock.mu.Unlock()
 
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	state, receipt, err := claimer.Claim(ctx, "idem:claim:3", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimBusy, state)
@@ -103,7 +103,7 @@ func TestIdempotencyClaimer_Claim_Busy(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_Commit(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:commit:1", testtime.D5min, testtime.D24h)
@@ -116,8 +116,8 @@ func TestIdempotencyClaimer_Receipt_Commit(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.mu.Lock()
-	_, hasLease := mock.store["{idem:commit:1}:lease"]
-	doneEntry, hasDone := mock.store["{idem:commit:1}:done"]
+	_, hasLease := mock.store["testns:{idem:commit:1}:lease"]
+	doneEntry, hasDone := mock.store["testns:{idem:commit:1}:done"]
 	mock.mu.Unlock()
 
 	assert.False(t, hasLease, "lease key should be deleted after commit")
@@ -127,7 +127,7 @@ func TestIdempotencyClaimer_Receipt_Commit(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_Release(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:release:1", testtime.D5min, testtime.D24h)
@@ -140,8 +140,8 @@ func TestIdempotencyClaimer_Receipt_Release(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.mu.Lock()
-	_, hasLease := mock.store["{idem:release:1}:lease"]
-	_, hasDone := mock.store["{idem:release:1}:done"]
+	_, hasLease := mock.store["testns:{idem:release:1}:lease"]
+	_, hasDone := mock.store["testns:{idem:release:1}:done"]
 	mock.mu.Unlock()
 
 	assert.False(t, hasLease, "lease key should be deleted after release")
@@ -150,7 +150,7 @@ func TestIdempotencyClaimer_Receipt_Release(t *testing.T) {
 
 func TestIdempotencyClaimer_After_Commit_Claim_Returns_Done(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// First claim.
@@ -171,7 +171,7 @@ func TestIdempotencyClaimer_After_Commit_Claim_Returns_Done(t *testing.T) {
 
 func TestIdempotencyClaimer_After_Release_Claim_Reacquires(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// First claim.
@@ -192,7 +192,7 @@ func TestIdempotencyClaimer_After_Release_Claim_Reacquires(t *testing.T) {
 
 func TestIdempotencyClaimer_Claim_DefaultTTL(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// Pass zero TTLs — should use defaults.
@@ -205,7 +205,7 @@ func TestIdempotencyClaimer_Claim_DefaultTTL(t *testing.T) {
 func TestIdempotencyClaimer_Claim_EvalError(t *testing.T) {
 	mock := newClaimerMock()
 	mock.evalErr = errMock
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:err:1", testtime.D5min, testtime.D24h)
@@ -217,7 +217,7 @@ func TestIdempotencyClaimer_Claim_EvalError(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_Commit_StaleToken(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:stale-commit:1", testtime.D5min, testtime.D24h)
@@ -227,7 +227,7 @@ func TestIdempotencyClaimer_Receipt_Commit_StaleToken(t *testing.T) {
 
 	// Simulate lease expiry by deleting the lease key from the store.
 	mock.mu.Lock()
-	delete(mock.store, "{idem:stale-commit:1}:lease")
+	delete(mock.store, "testns:{idem:stale-commit:1}:lease")
 	mock.mu.Unlock()
 
 	// Commit should fail with stale lease error.
@@ -239,7 +239,7 @@ func TestIdempotencyClaimer_Receipt_Commit_StaleToken(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_Release_StaleToken(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:stale-release:1", testtime.D5min, testtime.D24h)
@@ -249,7 +249,7 @@ func TestIdempotencyClaimer_Receipt_Release_StaleToken(t *testing.T) {
 
 	// Simulate lease expiry by deleting the lease key from the store.
 	mock.mu.Lock()
-	delete(mock.store, "{idem:stale-release:1}:lease")
+	delete(mock.store, "testns:{idem:stale-release:1}:lease")
 	mock.mu.Unlock()
 
 	// Release should fail with stale lease error.
@@ -262,7 +262,8 @@ func TestIdempotencyClaimer_Receipt_Release_StaleToken(t *testing.T) {
 func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 	mock := newClaimerMock()
 	client := newClientFromCmdable(mock, Config{})
-	claimer := NewIdempotencyClaimer(client)
+	claimer, err := NewIdempotencyClaimer(client, testNamespace)
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	state, _, err := claimer.Claim(ctx, "idem:client:1", testtime.D5min, testtime.D24h)
@@ -272,7 +273,7 @@ func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_DoubleCommit_Idempotent(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:double-commit:1", testtime.D5min, testtime.D24h)
@@ -291,7 +292,7 @@ func TestIdempotencyClaimer_Receipt_DoubleCommit_Idempotent(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_DoubleRelease_Idempotent(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:double-release:1", testtime.D5min, testtime.D24h)
@@ -310,7 +311,7 @@ func TestIdempotencyClaimer_Receipt_DoubleRelease_Idempotent(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_DoubleCommit_ErrorCached(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:double-commit-err:1", testtime.D5min, testtime.D24h)
@@ -320,7 +321,7 @@ func TestIdempotencyClaimer_Receipt_DoubleCommit_ErrorCached(t *testing.T) {
 
 	// Delete the lease key to make Commit fail with stale token error.
 	mock.mu.Lock()
-	delete(mock.store, "{idem:double-commit-err:1}:lease")
+	delete(mock.store, "testns:{idem:double-commit-err:1}:lease")
 	mock.mu.Unlock()
 
 	// First Commit should fail.
@@ -336,7 +337,7 @@ func TestIdempotencyClaimer_Receipt_DoubleCommit_ErrorCached(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_DoubleRelease_ErrorCached(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	state, receipt, err := claimer.Claim(ctx, "idem:double-release-err:1", testtime.D5min, testtime.D24h)
@@ -346,7 +347,7 @@ func TestIdempotencyClaimer_Receipt_DoubleRelease_ErrorCached(t *testing.T) {
 
 	// Delete the lease key to make Release fail with stale token error.
 	mock.mu.Lock()
-	delete(mock.store, "{idem:double-release-err:1}:lease")
+	delete(mock.store, "testns:{idem:double-release-err:1}:lease")
 	mock.mu.Unlock()
 
 	// First Release should fail.
@@ -362,7 +363,7 @@ func TestIdempotencyClaimer_Receipt_DoubleRelease_ErrorCached(t *testing.T) {
 
 func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	type result struct {
@@ -407,7 +408,7 @@ func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_Commit_TransientError_ThenRetrySuccess(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// Claim a key successfully.
@@ -435,8 +436,8 @@ func TestIdempotencyClaimer_Receipt_Commit_TransientError_ThenRetrySuccess(t *te
 
 	// Verify done key exists and lease key is removed.
 	mock.mu.Lock()
-	_, hasLease := mock.store["{idem:transient:1}:lease"]
-	_, hasDone := mock.store["{idem:transient:1}:done"]
+	_, hasLease := mock.store["testns:{idem:transient:1}:lease"]
+	_, hasDone := mock.store["testns:{idem:transient:1}:done"]
 	mock.mu.Unlock()
 	assert.False(t, hasLease, "lease key should be deleted after successful commit")
 	assert.True(t, hasDone, "done key should exist after successful commit")
@@ -448,7 +449,7 @@ func TestIdempotencyClaimer_Receipt_Commit_TransientError_ThenRetrySuccess(t *te
 
 func TestReceipt_Extend_Success(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	_, receipt, err := claimer.Claim(ctx, "idem:extend:1", testtime.D5s, testtime.D24h)
@@ -461,7 +462,7 @@ func TestReceipt_Extend_Success(t *testing.T) {
 
 	// The lease key must still exist with updated expiry.
 	mock.mu.Lock()
-	entry, hasLease := mock.store["{idem:extend:1}:lease"]
+	entry, hasLease := mock.store["testns:{idem:extend:1}:lease"]
 	mock.mu.Unlock()
 
 	require.True(t, hasLease, "lease key should still exist after Extend")
@@ -471,7 +472,7 @@ func TestReceipt_Extend_Success(t *testing.T) {
 
 func TestReceipt_Extend_LeaseExpired(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	_, receipt, err := claimer.Claim(ctx, "idem:extend:2", testtime.D5s, testtime.D24h)
@@ -480,7 +481,7 @@ func TestReceipt_Extend_LeaseExpired(t *testing.T) {
 
 	// Simulate lease taken by another consumer — delete the lease key.
 	mock.mu.Lock()
-	delete(mock.store, "{idem:extend:2}:lease")
+	delete(mock.store, "testns:{idem:extend:2}:lease")
 	mock.mu.Unlock()
 
 	// Extend on a lost lease must return ErrLeaseExpired.
@@ -491,7 +492,7 @@ func TestReceipt_Extend_LeaseExpired(t *testing.T) {
 
 func TestReceipt_Extend_BackendDown(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	_, receipt, err := claimer.Claim(ctx, "idem:extend:3", testtime.D5s, testtime.D24h)
@@ -509,7 +510,7 @@ func TestReceipt_Extend_BackendDown(t *testing.T) {
 
 func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *testing.T) {
 	mock := newClaimerMock()
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	ctx := context.Background()
 
 	// Claim a key successfully.
@@ -537,8 +538,8 @@ func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *t
 
 	// Verify lease key is removed and done key does NOT exist.
 	mock.mu.Lock()
-	_, hasLease := mock.store["{idem:transient-rel:1}:lease"]
-	_, hasDone := mock.store["{idem:transient-rel:1}:done"]
+	_, hasLease := mock.store["testns:{idem:transient-rel:1}:lease"]
+	_, hasDone := mock.store["testns:{idem:transient-rel:1}:done"]
 	mock.mu.Unlock()
 	assert.False(t, hasLease, "lease key should be deleted after successful release")
 	assert.False(t, hasDone, "done key should NOT exist after release")
@@ -553,13 +554,13 @@ func TestClaimerMockCmdable_DoneKeyExpired_ReturnsAcquired(t *testing.T) {
 
 	// Pre-set a done key that is already expired.
 	mock.mu.Lock()
-	mock.store["{idem:expired-done:1}:done"] = mockEntry{
+	mock.store["testns:{idem:expired-done:1}:done"] = mockEntry{
 		value:  "1",
 		expiry: time.Now().Add(testtime.DNeg1s), // already expired
 	}
 	mock.mu.Unlock()
 
-	claimer := newIdempotencyClaimerFromCmdable(mock)
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
 	state, receipt, err := claimer.Claim(ctx, "idem:expired-done:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	// Expired done key must not block re-acquisition.

@@ -231,13 +231,68 @@ func TestNewClient_ClusterRemoteNonTLS(t *testing.T) {
 			"prod-a.redis.example.internal:7000",
 			"prod-b.redis.example.internal:7000",
 		},
-		DialTimeout: testtime.SlowPoll,
+		DialTimeout:           testtime.SlowPoll,
+		AllowUnsafeNoPassword: true, // test asserts on TLS error, not password gate
 	})
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAdapterEndpointNotTLS, ec.Code,
 		"cluster remote non-TLS endpoints must be rejected with ErrAdapterEndpointNotTLS")
+}
+
+// TestNewClient_PasswordRequired_FailClosed pins B2-A-28: by default an
+// empty Password is rejected at validateConfig time. Production callers
+// MUST either set Password or explicitly opt in via AllowUnsafeNoPassword.
+func TestNewClient_PasswordRequired_FailClosed(t *testing.T) {
+	t.Run("empty password rejected by default", func(t *testing.T) {
+		_, err := NewClient(context.Background(), Config{
+			Mode:        ModeStandalone,
+			Addr:        "127.0.0.1:6379",
+			DialTimeout: testtime.SlowPoll,
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+		assert.Contains(t, err.Error(), "Password required")
+	})
+
+	t.Run("AllowUnsafeNoPassword opt-in passes validation", func(t *testing.T) {
+		cfg := Config{
+			Mode:                  ModeStandalone,
+			Addr:                  "127.0.0.1:6379",
+			DialTimeout:           testtime.SlowPoll,
+			AllowUnsafeNoPassword: true,
+		}
+		// Validation must not return ErrAdapterRedisConnect for the password
+		// reason. Dial may still fail since no Redis is running on
+		// localhost in unit-test context — we accept any non-validation
+		// error for that path.
+		err := validateConfig(cfg)
+		require.NoError(t, err, "AllowUnsafeNoPassword must let validateConfig pass")
+	})
+
+	t.Run("non-empty password passes validation", func(t *testing.T) {
+		err := validateConfig(Config{
+			Mode:     ModeStandalone,
+			Addr:     "127.0.0.1:6379",
+			Password: "s3cret",
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("cluster mode also gated", func(t *testing.T) {
+		err := validateConfig(Config{
+			Mode:         ModeCluster,
+			ClusterAddrs: []string{"node-a:7000"},
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+		assert.Contains(t, err.Error(), "Password required")
+	})
 }
 
 func TestConfigLogValue_Cluster(t *testing.T) {
@@ -462,37 +517,41 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 		{
 			name: "standalone remote non-TLS addr — reject",
 			cfg: Config{
-				Mode:        ModeStandalone,
-				Addr:        "prod.redis.example.internal:6379",
-				DialTimeout: testtime.SlowPoll,
+				Mode:                  ModeStandalone,
+				Addr:                  "prod.redis.example.internal:6379",
+				DialTimeout:           testtime.SlowPoll,
+				AllowUnsafeNoPassword: true, // suite asserts on TLS gate only
 			},
 			wantTLSErr: true,
 		},
 		{
 			name: "sentinel remote non-TLS addr — reject",
 			cfg: Config{
-				Mode:           ModeSentinel,
-				SentinelAddrs:  []string{"prod1.sentinel.example.internal:26379"},
-				SentinelMaster: "mymaster",
-				DialTimeout:    testtime.SlowPoll,
+				Mode:                  ModeSentinel,
+				SentinelAddrs:         []string{"prod1.sentinel.example.internal:26379"},
+				SentinelMaster:        "mymaster",
+				DialTimeout:           testtime.SlowPoll,
+				AllowUnsafeNoPassword: true,
 			},
 			wantTLSErr: true,
 		},
 		{
 			name: "standalone loopback — ok (no TLS error expected)",
 			cfg: Config{
-				Mode:        ModeStandalone,
-				Addr:        "127.0.0.1:6379",
-				DialTimeout: testtime.SlowPoll,
+				Mode:                  ModeStandalone,
+				Addr:                  "127.0.0.1:6379",
+				DialTimeout:           testtime.SlowPoll,
+				AllowUnsafeNoPassword: true,
 			},
 			wantTLSErr: false,
 		},
 		{
 			name: "standalone rediss scheme — ok (TLS scheme accepted)",
 			cfg: Config{
-				Mode:        ModeStandalone,
-				Addr:        "rediss://prod.redis.example.internal:6379",
-				DialTimeout: testtime.SlowPoll,
+				Mode:                  ModeStandalone,
+				Addr:                  "rediss://prod.redis.example.internal:6379",
+				DialTimeout:           testtime.SlowPoll,
+				AllowUnsafeNoPassword: true,
 			},
 			wantTLSErr: false,
 		},

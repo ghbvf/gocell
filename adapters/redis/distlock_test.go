@@ -37,7 +37,7 @@ func TestRedisDriver_LuaScriptContent(t *testing.T) {
 // call when the key is not yet held.
 func TestRedisDriver_SetNX_Happy(t *testing.T) {
 	mock := newMockCmdable()
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 	ctx := context.Background()
 
 	ok, err := drv.SetNX(ctx, "lock:setnx:happy", "token-A", time.Second)
@@ -49,7 +49,7 @@ func TestRedisDriver_SetNX_Happy(t *testing.T) {
 // is already held by another token.
 func TestRedisDriver_SetNX_Busy(t *testing.T) {
 	mock := newMockCmdable()
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 	ctx := context.Background()
 
 	// First acquire.
@@ -68,7 +68,7 @@ func TestRedisDriver_SetNX_Busy(t *testing.T) {
 func TestRedisDriver_SetNX_IOError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.setNXErr = errMock
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 
 	ok, err := drv.SetNX(context.Background(), "lock:setnx:ioerr", "token-A", time.Second)
 	require.Error(t, err)
@@ -80,7 +80,7 @@ func TestRedisDriver_SetNX_IOError(t *testing.T) {
 // matches and the lock is extended.
 func TestRedisDriver_Renew_Happy(t *testing.T) {
 	mock := newMockCmdable()
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 	ctx := context.Background()
 
 	// Acquire the key first.
@@ -97,7 +97,7 @@ func TestRedisDriver_Renew_Happy(t *testing.T) {
 // the token does not match (Lua returns 0 — not an I/O error).
 func TestRedisDriver_Renew_TokenMismatch(t *testing.T) {
 	mock := newMockCmdable()
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 	ctx := context.Background()
 
 	// Acquire with token-A.
@@ -116,7 +116,7 @@ func TestRedisDriver_Renew_TokenMismatch(t *testing.T) {
 func TestRedisDriver_Renew_IOError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.evalErr = errMock
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 
 	held, err := drv.Renew(context.Background(), "lock:renew:ioerr", "token-A", time.Minute)
 	require.Error(t, err)
@@ -128,7 +128,7 @@ func TestRedisDriver_Renew_IOError(t *testing.T) {
 // removed when the token matches.
 func TestRedisDriver_Release_Happy(t *testing.T) {
 	mock := newMockCmdable()
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 	ctx := context.Background()
 
 	ok, err := drv.SetNX(ctx, "lock:release:happy", "token-A", time.Minute)
@@ -140,7 +140,7 @@ func TestRedisDriver_Release_Happy(t *testing.T) {
 
 	// Key should be gone.
 	mock.mu.Lock()
-	_, exists := mock.store["lock:release:happy"]
+	_, exists := mock.store["testns:lock:release:happy"]
 	mock.mu.Unlock()
 	assert.False(t, exists, "key must be removed after Release")
 }
@@ -149,7 +149,7 @@ func TestRedisDriver_Release_Happy(t *testing.T) {
 // the token does not match (Lua returns 0 — idempotent by contract).
 func TestRedisDriver_Release_NoOp(t *testing.T) {
 	mock := newMockCmdable()
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 	ctx := context.Background()
 
 	ok, err := drv.SetNX(ctx, "lock:release:noop", "token-A", time.Minute)
@@ -162,7 +162,7 @@ func TestRedisDriver_Release_NoOp(t *testing.T) {
 
 	// Key must still exist (token-A still holds it).
 	mock.mu.Lock()
-	_, exists := mock.store["lock:release:noop"]
+	_, exists := mock.store["testns:lock:release:noop"]
 	mock.mu.Unlock()
 	assert.True(t, exists, "key must still exist after wrong-token Release")
 }
@@ -172,7 +172,7 @@ func TestRedisDriver_Release_NoOp(t *testing.T) {
 func TestRedisDriver_Release_IOError(t *testing.T) {
 	mock := newMockCmdable()
 	mock.evalErr = errMock
-	drv := NewRedisDriver(mock)
+	drv := mustNewRedisDriver(t, mock)
 
 	err := drv.Release(context.Background(), "lock:release:ioerr", "token-A")
 	require.Error(t, err)

@@ -55,10 +55,11 @@ func startRedis(t *testing.T) (*Client, func()) {
 	}
 
 	client, err := NewClient(ctx, Config{
-		Addr:        addr,
-		Mode:        ModeStandalone,
-		DialTimeout: testtime.SelectAsyncSettle,
-		DistLockTTL: testtime.EventuallyLong,
+		Addr:                  addr,
+		Mode:                  ModeStandalone,
+		DialTimeout:           testtime.SelectAsyncSettle,
+		DistLockTTL:           testtime.EventuallyLong,
+		AllowUnsafeNoPassword: true, // testcontainers Redis has no auth
 	})
 	require.NoError(t, err, "create redis client")
 
@@ -116,7 +117,8 @@ func TestIntegration_IdempotencyClaimer(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	claimer := NewIdempotencyClaimer(client)
+	claimer, err := NewIdempotencyClaimer(client, testNamespace)
+	require.NoError(t, err)
 	key := "idem:integration:test:001"
 
 	// First claim should acquire.
@@ -144,7 +146,8 @@ func TestIntegration_RedisDriver_SetNX_Contention(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	drv := NewRedisDriver(client.cmdable())
+	drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+	require.NoError(t, err)
 	key := "integ:drv:contention:" + t.Name()
 
 	// First SetNX succeeds.
@@ -175,7 +178,8 @@ func TestIntegration_RedisDriver_Release_CancelledCtx(t *testing.T) {
 	client, cleanup := startRedis(t)
 	defer cleanup()
 
-	drv := NewRedisDriver(client.cmdable())
+	drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+	require.NoError(t, err)
 	key := "integ:drv:cancel-ctx:" + t.Name()
 	ctx := context.Background()
 
@@ -184,7 +188,7 @@ func TestIntegration_RedisDriver_Release_CancelledCtx(t *testing.T) {
 	require.True(t, ok)
 
 	// Verify key exists.
-	_, err = client.cmdable().Get(ctx, key).Result()
+	_, err = client.cmdable().Get(ctx, string(testNamespace)+":"+key).Result()
 	require.NoError(t, err, "key must exist before Release")
 
 	// Release with a pre-cancelled context.
@@ -199,7 +203,7 @@ func TestIntegration_RedisDriver_Release_CancelledCtx(t *testing.T) {
 	_ = drv.Release(ctx, key, "token-A")
 
 	// Key must be gone.
-	_, err = client.cmdable().Get(ctx, key).Result()
+	_, err = client.cmdable().Get(ctx, string(testNamespace)+":"+key).Result()
 	assert.ErrorIs(t, err, goredis.Nil, "key must be gone after Release")
 }
 
@@ -220,8 +224,10 @@ func TestRedisDriver_Conformance(t *testing.T) {
 		t.Helper()
 		n := counter.Add(1)
 		prefix := fmt.Sprintf("conformance:%s:%d:", t.Name(), n)
+		drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+		require.NoError(t, err)
 		return &prefixedRedisDriver{
-			RedisDriver: NewRedisDriver(client.cmdable()),
+			RedisDriver: drv,
 			prefix:      prefix,
 		}
 	}

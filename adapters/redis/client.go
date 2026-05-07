@@ -100,6 +100,14 @@ type Config struct {
 	// the library default — required for meaningful db.client.connection.max
 	// emissions on the pool stats collector.
 	PoolSize int
+
+	// AllowUnsafeNoPassword is the explicit dev/test escape hatch for an
+	// empty Password. The default (false) makes validateConfig reject any
+	// configuration that would silently connect to an unauthenticated Redis,
+	// closing B2-A-28's fail-open hole. Composition root sets this to true
+	// only when bootstrap.Topology.RequireProductionControlPlane() is false
+	// (i.e. dev / single-pod / non-production deployments).
+	AllowUnsafeNoPassword bool
 }
 
 // LogValue implements slog.LogValuer so that Config can be safely passed
@@ -213,6 +221,18 @@ func validateConfig(cfg Config) error {
 			return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 				"redis: Config.DB is not supported in cluster mode (no SELECT command)")
 		}
+	}
+	// B2-A-28: fail-closed on missing Password. The dev/test escape hatch is
+	// the explicit AllowUnsafeNoPassword flag — composition root sets it
+	// only when topology indicates a non-production deployment. Without
+	// this gate a missing GOCELL_REDIS_PASSWORD env silently produces an
+	// unauthenticated connection in production. URL-form addrs (rediss://
+	// user:pass@host) are not parsed here; for those topologies the caller
+	// must set Password explicitly so validation has a value to inspect, or
+	// opt in via AllowUnsafeNoPassword.
+	if cfg.Password == "" && !cfg.AllowUnsafeNoPassword {
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+			"redis: Config.Password required (set AllowUnsafeNoPassword=true for dev/test only)")
 	}
 	return nil
 }

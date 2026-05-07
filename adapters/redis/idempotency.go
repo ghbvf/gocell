@@ -25,28 +25,39 @@ var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 //
 // Consistency: L1 (LocalTx) — each Lua script executes atomically within Redis.
 //
-//   - {key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
-//   - {key}:done  — SET with doneTTL, value = "1". Indicates "completed".
+//   - <ns>:{key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
+//   - <ns>:{key}:done  — SET with doneTTL, value = "1". Indicates "completed".
 //
 // Cluster: the business key is wrapped in a Redis Cluster hashtag so CRC16
 // hashes only the key portion; lease and done keys colocate on the same slot,
 // keeping multi-KEY EVAL safe under Cluster mode (B10 PR-V1-REDIS-CLUSTER).
+// The KeyNamespace prefix sits outside the hashtag so slot colocality is
+// preserved regardless of namespace value.
 //
 // Claim checks done first (ClaimDone), then attempts lease (ClaimAcquired or ClaimBusy).
 // Commit sets done + deletes lease. Release deletes lease (token-guarded).
 type IdempotencyClaimer struct {
 	rdb cmdable
+	ns  KeyNamespace
 }
 
-// NewIdempotencyClaimer creates an IdempotencyClaimer using the given Client.
-func NewIdempotencyClaimer(client *Client) *IdempotencyClaimer {
-	return &IdempotencyClaimer{rdb: client.cmdable()}
+// NewIdempotencyClaimer creates an IdempotencyClaimer using the given Client
+// and KeyNamespace. ns is validated up front; an invalid namespace produces
+// an error rather than a silently-prefixed-but-broken claimer.
+func NewIdempotencyClaimer(client *Client, ns KeyNamespace) (*IdempotencyClaimer, error) {
+	if err := ns.Validate(); err != nil {
+		return nil, err
+	}
+	return &IdempotencyClaimer{rdb: client.cmdable(), ns: ns}, nil
 }
 
 // newIdempotencyClaimerFromCmdable creates an IdempotencyClaimer with a
 // pre-built cmdable for testing.
-func newIdempotencyClaimerFromCmdable(rdb cmdable) *IdempotencyClaimer {
-	return &IdempotencyClaimer{rdb: rdb}
+func newIdempotencyClaimerFromCmdable(rdb cmdable, ns KeyNamespace) (*IdempotencyClaimer, error) {
+	if err := ns.Validate(); err != nil {
+		return nil, err
+	}
+	return &IdempotencyClaimer{rdb: rdb, ns: ns}, nil
 }
 
 // claimScript is the Lua script for atomic Claim:
@@ -149,13 +160,14 @@ func (c *IdempotencyClaimer) Claim(
 			"redis: idempotency claim token generation failed", err)
 	}
 
-	// Wrap business key in a Redis Cluster hashtag so {key}:lease and
-	// {key}:done hash to the same slot — required for the dual-KEY claim and
-	// commit Lua scripts to run on Cluster (B10). Standalone/Sentinel modes
-	// use the same naming for a single source of truth; the hashtag is a
-	// no-op outside Cluster.
-	leaseKey := "{" + key + "}:lease"
-	doneKey := "{" + key + "}:done"
+	// Wrap business key in a Redis Cluster hashtag so <ns>:{key}:lease and
+	// <ns>:{key}:done hash to the same slot — required for the dual-KEY claim
+	// and commit Lua scripts to run on Cluster (B10). The KeyNamespace prefix
+	// is appended outside the hashtag, so it does not affect CRC16 slot
+	// computation. Standalone/Sentinel modes use the same naming for a single
+	// source of truth; the hashtag is a no-op outside Cluster.
+	leaseKey := c.ns.applyHashtag(key, "lease")
+	doneKey := c.ns.applyHashtag(key, "done")
 	leaseSec := max(int64(leaseTTL.Seconds()), 1)
 
 	res, err := c.rdb.Eval(ctx, claimScript, []string{doneKey, leaseKey}, token, leaseSec).Result()
