@@ -18,6 +18,11 @@ var (
 	// Report is already exported and indirectly covers this path; this alias
 	// is provided for tests that need the []string return value directly.
 	FormatReportForTest = formatReport
+
+	// BuildAllowSetForTest exposes buildAllowSet so the AllowRels
+	// normalization contract (filepath.Clean + ToSlash, matching fc.Rel
+	// produced by walk.go) can be asserted in isolation.
+	BuildAllowSetForTest = buildAllowSet
 )
 
 // DetectForTest exposes the unexported detect method so black-box tests

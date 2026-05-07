@@ -176,6 +176,24 @@ func TestSortDiagnostics_SameRelDifferentLine(t *testing.T) {
 	}
 }
 
+func TestImportBan_AllowRels_NormalizationIsConsistent(t *testing.T) {
+	// buildAllowSet must apply filepath.Clean + ToSlash so AllowRels keys
+	// match fc.Rel (slash-separated, cleaned) regardless of caller-side
+	// formatting variations. Equivalent inputs must dedupe to one key.
+	set := scanner.BuildAllowSetForTest([]string{
+		"tools/archtest/foo.go",
+		"./tools/archtest/foo.go",
+		"tools//archtest//foo.go",
+		"tools/archtest/./foo.go",
+	})
+	if _, ok := set["tools/archtest/foo.go"]; !ok {
+		t.Errorf("Clean+ToSlash should normalize all variants to tools/archtest/foo.go; got %v", set)
+	}
+	if len(set) != 1 {
+		t.Errorf("equivalent paths must dedupe; got %d entries: %v", len(set), set)
+	}
+}
+
 func TestImportBan_Run_NoViolations(t *testing.T) {
 	tmp := t.TempDir()
 	copyTestFile(t, filepath.Join("testdata", "importban", "compliant", "good.go.txt"),
