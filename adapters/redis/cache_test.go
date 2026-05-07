@@ -136,6 +136,34 @@ func TestNewCache_RejectsInvalidNamespace(t *testing.T) {
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }
 
+// TestNewCacheFromCmdable_RejectsNilCmdable pins the internal
+// cmdable-level constructor's defense-in-depth nil guard. Test
+// callers bypass NewCache and call the helper directly, so the
+// helper has to police its own input.
+func TestNewCacheFromCmdable_RejectsNilCmdable(t *testing.T) {
+	cache, err := newCacheFromCmdable(nil, testNamespace)
+
+	require.Error(t, err)
+	assert.Nil(t, cache)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+}
+
+// TestNewCacheFromCmdable_RejectsInvalidNamespace pins that the
+// internal helper re-validates ns even when the public NewCache is
+// bypassed (tests, future code paths). Symmetric with the public
+// constructor's validation guard.
+func TestNewCacheFromCmdable_RejectsInvalidNamespace(t *testing.T) {
+	cache, err := newCacheFromCmdable(newMockCmdable(), KeyNamespace(""))
+
+	require.Error(t, err)
+	assert.Nil(t, cache)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
 // --- JSON generics tests ---
 
 type testItem struct {

@@ -295,6 +295,33 @@ func TestNewIdempotencyClaimer_RejectsInvalidNamespace(t *testing.T) {
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }
 
+// TestNewIdempotencyClaimerFromCmdable_RejectsNilCmdable pins the
+// internal cmdable-level constructor's defense-in-depth nil guard.
+// Symmetric with newCacheFromCmdable / newRedisDriverFromCmdable /
+// newNonceStoreFromCmdable.
+func TestNewIdempotencyClaimerFromCmdable_RejectsNilCmdable(t *testing.T) {
+	claimer, err := newIdempotencyClaimerFromCmdable(nil, testNamespace)
+
+	require.Error(t, err)
+	assert.Nil(t, claimer)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+}
+
+// TestNewIdempotencyClaimerFromCmdable_RejectsInvalidNamespace pins
+// that the internal helper re-validates ns even when the public
+// NewIdempotencyClaimer is bypassed.
+func TestNewIdempotencyClaimerFromCmdable_RejectsInvalidNamespace(t *testing.T) {
+	claimer, err := newIdempotencyClaimerFromCmdable(newClaimerMock(), KeyNamespace(""))
+
+	require.Error(t, err)
+	assert.Nil(t, claimer)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
 func TestIdempotencyClaimer_Receipt_DoubleCommit_Idempotent(t *testing.T) {
 	mock := newClaimerMock()
 	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)

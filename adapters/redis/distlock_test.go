@@ -216,3 +216,17 @@ func TestNewRedisDriverFromCmdable_RejectsNilCmdable(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
 }
+
+// TestNewRedisDriverFromCmdable_RejectsInvalidNamespace pins that the
+// internal helper re-validates ns even when NewRedisDriver is bypassed.
+// Symmetric with newCacheFromCmdable / newIdempotencyClaimerFromCmdable /
+// newNonceStoreFromCmdable.
+func TestNewRedisDriverFromCmdable_RejectsInvalidNamespace(t *testing.T) {
+	drv, err := newRedisDriverFromCmdable(newMockCmdable(), KeyNamespace(""))
+
+	require.Error(t, err)
+	assert.Nil(t, drv)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
