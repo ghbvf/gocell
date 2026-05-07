@@ -316,6 +316,72 @@ func TestSetupOrphan_PGE2E_RecoveryResumes(t *testing.T) {
 		"users table must have exactly two rows: orphan + recovery-admin")
 }
 
+// TestSetupOrphan_PGE2E_RaceLoser_Returns410 verifies the concurrent race-loser scenario:
+// an admin user + role assignment already exist in PG (simulating another replica winning
+// the race). The setup POST must return 410 + ERR_SETUP_ALREADY_INITIALIZED, not
+// 409 + ERR_AUTH_ROLE_DUPLICATE.
+//
+// This covers the provisioner path where AssignToUser would receive ErrAuthRoleDuplicate
+// from the DB partial unique index idx_role_assignments_single_admin. The provisioner
+// folds this to OutcomeRaceSkipped which the setup service maps to 410.
+func TestSetupOrphan_PGE2E_RaceLoser_Returns410(t *testing.T) {
+	pool, cleanup := orphanPGPool(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Seed a complete admin: user row + role_assignments row (winner state).
+	winnerID := "00000000-0000-0000-0002-000000000001"
+	winnerUsername := "winner-admin"
+	winnerEmail := "winner-admin@local"
+	stubHash := "$2a$10$stub000000000000000000000000000000000000000000000stub"
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	_, err := pool.DB().Exec(ctx,
+		`INSERT INTO users (id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, false, 'active', 'setup', $5, $5)`,
+		winnerID, winnerUsername, winnerEmail, stubHash, now,
+	)
+	require.NoError(t, err, "seeding winner user must succeed")
+
+	// Ensure admin role exists.
+	_, err = pool.DB().Exec(ctx,
+		`INSERT INTO roles (id, name, created_at) VALUES ('admin', 'admin', $1) ON CONFLICT DO NOTHING`,
+		now,
+	)
+	require.NoError(t, err, "seeding admin role must succeed")
+
+	// Assign admin role to winner.
+	_, err = pool.DB().Exec(ctx,
+		`INSERT INTO role_assignments (user_id, role_id, assigned_at) VALUES ($1, 'admin', $2)`,
+		winnerID, now,
+	)
+	require.NoError(t, err, "seeding role assignment must succeed")
+
+	addr, shutdown := bootOrphanAssembly(t, pool)
+	defer shutdown()
+	base := "http://" + addr
+
+	// POST /setup/admin — admin already fully provisioned (fast-path or race path).
+	// Must return 410 + ERR_SETUP_ALREADY_INITIALIZED, NOT 409 + ERR_AUTH_ROLE_DUPLICATE.
+	resp := doSetupAdminPOST(t, base, "loser-admin", "loser@local", "SecretPass!23")
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+
+	assert.Equal(t, http.StatusGone, resp.StatusCode,
+		"race-loser setup POST must return 410 Gone, got body: %s", string(raw))
+	assert.Contains(t, string(raw), "ERR_SETUP_ALREADY_INITIALIZED",
+		"race-loser must receive ERR_SETUP_ALREADY_INITIALIZED, not ERR_AUTH_ROLE_DUPLICATE; body: %s", string(raw))
+
+	// Assert: users table has exactly one row (no extra row for loser-admin).
+	var totalUsers int
+	require.NoError(t, pool.DB().QueryRow(ctx,
+		"SELECT count(*) FROM users",
+	).Scan(&totalUsers))
+	assert.Equal(t, 1, totalUsers,
+		"users table must have exactly one row (winner only), got %d", totalUsers)
+}
+
 // TestSetupOrphan_PGE2E_NoOrphan_NormalProvision verifies the clean-DB path:
 // setup POST succeeds (201), creates one user row + one role_assignments row,
 // and subsequent setup POST returns 410 (already initialized).

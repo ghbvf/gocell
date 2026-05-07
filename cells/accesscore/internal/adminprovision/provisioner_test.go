@@ -292,6 +292,64 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 	}
 }
 
+// TestProvisioner_Ensure_RaceLoser_AssignDuplicate_FoldsToRaceSkipped verifies
+// that when AssignToUser returns ErrAuthRoleDuplicate (DB partial unique index
+// idx_role_assignments_single_admin rejects a concurrent loser), and recount
+// confirms at least one admin exists, Ensure folds to OutcomeRaceSkipped with
+// no error — the setup layer maps this to 410 ERR_SETUP_ALREADY_INITIALIZED.
+func TestProvisioner_Ensure_RaceLoser_AssignDuplicate_FoldsToRaceSkipped(t *testing.T) {
+	t.Parallel()
+	// userRepo: fresh create succeeds (we are past CountByRole fast-path)
+	userRepo := mem.NewUserRepository()
+	// roleRepo: CountByRole returns 0 first (fast-path passes), then 1 on recount.
+	// AssignToUser returns ErrAuthRoleDuplicate.
+	roleRepo := &assignDuplicateRoleRepo{
+		counts:    []int{0, 1}, // first CountByRole=0 (fast-path), second=1 (recount)
+		assignErr: errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate, "duplicate assignment"),
+	}
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("race-loser-id"))
+
+	result, err := p.Ensure(context.Background(), stdInput())
+	require.NoError(t, err, "race-loser must not return error; setup layer maps to 410")
+	assert.Equal(t, adminprovision.OutcomeRaceSkipped, result.Outcome)
+	assert.Nil(t, result.User)
+}
+
+// TestProvisioner_Ensure_RaceLoser_AssignDuplicate_RecountZero_SurfacesError verifies
+// that when AssignToUser returns ErrAuthRoleDuplicate but recount shows 0 admins
+// (unexpected state), the infra error is surfaced.
+func TestProvisioner_Ensure_RaceLoser_AssignDuplicate_RecountZero_SurfacesError(t *testing.T) {
+	t.Parallel()
+	userRepo := mem.NewUserRepository()
+	roleRepo := &assignDuplicateRoleRepo{
+		counts:    []int{0, 0}, // both counts return 0 — unexpected state
+		assignErr: errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate, "duplicate assignment"),
+	}
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("race-loser-id-2"))
+
+	_, err := p.Ensure(context.Background(), stdInput())
+	require.Error(t, err, "cnt==0 after ErrAuthRoleDuplicate must surface as error")
+	assert.ErrorContains(t, err, "assign admin role")
+}
+
+// TestProvisioner_Ensure_RaceLoser_AssignDuplicate_RecountFails_SurfacesError verifies
+// that when AssignToUser returns ErrAuthRoleDuplicate and the recount itself fails,
+// the recount error is surfaced.
+func TestProvisioner_Ensure_RaceLoser_AssignDuplicate_RecountFails_SurfacesError(t *testing.T) {
+	t.Parallel()
+	userRepo := mem.NewUserRepository()
+	roleRepo := &assignDuplicateRoleRepo{
+		counts:     []int{0},
+		countErr:   errors.New("recount db error"),
+		assignErr:  errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate, "duplicate assignment"),
+	}
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("race-loser-id-3"))
+
+	_, err := p.Ensure(context.Background(), stdInput())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "recount after assign duplicate")
+}
+
 // --- Compensate -----------------------------------------------------------
 
 func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
@@ -467,6 +525,45 @@ func (r *recountErrRoleRepo) CountByRole(ctx context.Context, roleID string) (in
 		return r.firstCount, nil
 	}
 	return 0, r.recountErr
+}
+
+// assignDuplicateRoleRepo simulates the race-loser scenario where AssignToUser
+// returns ErrAuthRoleDuplicate (DB partial unique index rejects the assignment).
+// CountByRole returns scripted values; if countErr is set it is returned after
+// the scripted counts are exhausted.
+type assignDuplicateRoleRepo struct {
+	counts   []int
+	i        int
+	countErr error
+	assignErr error
+}
+
+func (r *assignDuplicateRoleRepo) Create(ctx context.Context, role *domain.Role) error { return nil }
+func (r *assignDuplicateRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
+	return false, r.assignErr
+}
+func (r *assignDuplicateRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
+	if r.i < len(r.counts) {
+		v := r.counts[r.i]
+		r.i++
+		return v, nil
+	}
+	return 0, r.countErr
+}
+func (r *assignDuplicateRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
+	return nil, nil
+}
+func (r *assignDuplicateRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
+	return nil
+}
+func (r *assignDuplicateRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
+	return true, nil
+}
+func (r *assignDuplicateRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
+	return &domain.Role{ID: id}, nil
+}
+func (r *assignDuplicateRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
+	return nil, nil
 }
 
 // errUserRepo injects errors into each method.
