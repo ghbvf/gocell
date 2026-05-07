@@ -1,6 +1,6 @@
 module fixturetest/clock_leaf_fallback/violates
 
-go 1.25.9
+go 1.25.10
 
 // Pin to the worktree's kernel/clock so the fixture can resolve
 // kernel/clock.Real() and exercise the type-aware leaf-fallback gate.
