@@ -393,18 +393,6 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 // FMT-19 implementation (formerly rules_wrapper.go)
 // =============================================================================
 
-// FMT-18 SPEC-CONTRACT-SYNC was removed in PR-V1-CODEGEN-FULL-MIGRATION (W4).
-// After W3 completed the cell-by-cell migration, cells/** contains 0
-// wrapper.ContractSpec literals — enforced statically by three archtest gates:
-//   - CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01
-//   - NO-MANUAL-CONTRACTSPEC-LITERAL-01
-//   - EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
-//
-// The FMT-18 AST scanner's scan target (cells/**) is now always empty, making
-// the rule a no-op. The archtest gates provide stronger, faster enforcement
-// (import-graph level vs AST text scan). FMT-18 is deleted; the archtest gates
-// are the authoritative guardians of the cells-no-manual-spec invariant.
-
 // FMT-19 WRAPPER-NO-PACKAGE-STATE — enforces that kernel/wrapper/*.go
 // contains no mutable package-level variables of interface or pointer
 // type. Immutable zero-value sentinels (NoopTracer{}, noopSpan{}) and
@@ -412,8 +400,16 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 // allowed; any `var x Tracer` / `var mu sync.Mutex` is rejected. Guards
 // the round-4 invariant that kernel/wrapper is a pure value+rules layer.
 //
-// Both rules are strict-only (surface only under ValidateStrict(true)) to
-// avoid disrupting the base Validate() path for rapid iteration.
+// Strict-only (surface only under ValidateStrict(true)) to avoid
+// disrupting the base Validate() path for rapid iteration. Strict-mode
+// orchestrator is in rules_misc_strict.go and calls validateFMT19
+// cross-file; impl lives here.
+//
+// Historical sibling FMT-18 (SPEC-CONTRACT-SYNC) was removed in
+// PR-V1-CODEGEN-FULL-MIGRATION (W4); enforcement migrated to import-
+// graph-level archtest gates (CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
+// NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-CONTRACTGEN-
+// COVERAGE-01).
 
 const (
 	codeFMT19 = "FMT-19"

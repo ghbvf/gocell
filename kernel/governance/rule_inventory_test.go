@@ -102,22 +102,26 @@ func scanRuleIDs(t *testing.T, dir string) []string {
 // Total: 81 IDs across 11 series.
 func goldenRuleIDs() []string {
 	return []string{
-		// ADV — advisory warnings (rules_advisory.go)
+		// ADV — advisory warnings (rules_misc_advisory.go)
 		"ADV-01", "ADV-03", "ADV-04", "ADV-05", "ADV-06",
 
-		// CH — contract-health (contracthealth.go + rules_http_*.go)
+		// CH — contract-health (contracthealth.go + rules_http.go)
 		"CH-01", "CH-02", "CH-03", "CH-04", "CH-05", "CH-06",
 
 		// CONTRACT-CONSISTENCY-EMIT — http trigger ↔ outbox emit alignment
+		// (rules_misc_consistency.go)
 		"CONTRACT-CONSISTENCY-EMIT-01",
 
 		// DEP — dependency graph (depcheck.go)
 		"DEP-01", "DEP-02", "DEP-03",
 
-		// DOC-NAME — document literal scanning (rules_docs.go)
+		// DOC-NAME — document literal scanning (rules_misc_advisory.go;
+		// strict-mode orchestrator is in rules_misc_strict.go)
 		"DOC-NAME-01",
 
-		// FMT — format / structural (rules_fmt.go + strict variants)
+		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..30
+		// + strict-mode FMT-16/17/19/A1/C1 + FMT-20..23/25 in
+		// rules_misc_strict.go; FMT-19 implementation in rules_misc_advisory.go).
 		"FMT-01", "FMT-02", "FMT-03", "FMT-04", "FMT-05",
 		"FMT-06", "FMT-07", "FMT-08", "FMT-09", "FMT-10",
 		"FMT-11", "FMT-12", "FMT-13", "FMT-14", "FMT-15",
@@ -126,16 +130,18 @@ func goldenRuleIDs() []string {
 		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30",
 		"FMT-A1", "FMT-C1",
 
-		// OUTGUARD — outbox durability (rules_outbox.go)
+		// OUTGUARD — outbox durability (rules_misc_advisory.go)
 		"OUTGUARD-01",
 
-		// REF — reference integrity (rules_ref.go)
+		// REF — reference integrity (rules_ref.go for REF-01..11, 13..17;
+		// REF-12 was relocated to rules_fmt.go in PR-FUNNEL-03 because it is
+		// I/O-flavored — pairs with FMT cluster's disk-format rules).
 		"REF-01", "REF-02", "REF-03", "REF-04", "REF-05",
 		"REF-06", "REF-07", "REF-08", "REF-09", "REF-10",
 		"REF-11", "REF-12", "REF-13", "REF-14", "REF-15",
 		"REF-16", "REF-17",
 
-		// SLICE-CONSISTENCY — slice level vs parent cell (rules_slice.go)
+		// SLICE-CONSISTENCY — slice level vs parent cell (rules_misc_advisory.go)
 		"SLICE-CONSISTENCY-01",
 
 		// TOPO — topology (rules_topo.go)
