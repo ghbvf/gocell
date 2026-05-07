@@ -8,7 +8,7 @@
 
 - archtest 文件总数：71
 - archtest INVARIANT 锚点数：174
-- governance `rules_*.go` 文件数：27
+- governance `rules_*.go` 文件数：15
 
 ## archtest 规则清单
 
@@ -41,15 +41,15 @@
 | `CI-PINNING-WORKFLOW-DIGEST-01` | `ci_pinning_test.go` | 1 | ci |
 | `CLOCK-INJECTION-PROD-CALLSITE-01` | `clock_invariants_test.go` | 446 | clock |
 | `CLOCK-INJECTION-TEST-CALLSITE-01` | `clock_invariants_test.go` | 261 | clock |
-| `CODEGEN-CELL-GEN-01` | `codegen_invariants_test.go` | 54 | codegen |
-| `CODEGEN-CELL-GEN-02` | `codegen_invariants_test.go` | 55 | codegen |
-| `CODEGEN-CELL-GEN-03` | `codegen_invariants_test.go` | 56 | codegen |
-| `CODEGEN-CELL-GEN-04` | `codegen_invariants_test.go` | 57 | codegen |
-| `CODEGEN-CONTRACT-GEN-01` | `codegen_invariants_test.go` | 251 | codegen |
+| `CODEGEN-CELL-GEN-01` | `codegen_invariants_test.go` | 56 | codegen |
+| `CODEGEN-CELL-GEN-02` | `codegen_invariants_test.go` | 57 | codegen |
+| `CODEGEN-CELL-GEN-03` | `codegen_invariants_test.go` | 58 | codegen |
+| `CODEGEN-CELL-GEN-04` | `codegen_invariants_test.go` | 59 | codegen |
+| `CODEGEN-CONTRACT-GEN-01` | `codegen_invariants_test.go` | 253 | codegen |
 | `CODEGEN-CONTRACT-GEN-01` | `patch_optional_bool_pointer_test.go` | 68 | codegen |
-| `CODEGEN-CONTRACT-GEN-02` | `codegen_invariants_test.go` | 252 | codegen |
-| `CODEGEN-CONTRACT-USER-OVERLAP-01` | `codegen_invariants_test.go` | 253 | codegen |
-| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 412 | command |
+| `CODEGEN-CONTRACT-GEN-02` | `codegen_invariants_test.go` | 254 | codegen |
+| `CODEGEN-CONTRACT-USER-OVERLAP-01` | `codegen_invariants_test.go` | 255 | codegen |
+| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 416 | command |
 | `CONTRACT-KINDS-CLOSED-SET-01` | `contract_kinds_closed_set_test.go` | 1 | contract |
 | `CONTRACTTEST-BOUNDARY-01` | `contracttest_boundary_test.go` | 1 | contracttest |
 | `COREBUNDLE-DEPS-01` | `corebundle_deps_test.go` | 1 | corebundle |
@@ -68,7 +68,7 @@
 | `HANDLER-NO-SCHEMA-FOR-NOBODY-01` | `handler_invariants_test.go` | 201 | handler |
 | `HANDLER-PATH-QUERY-LENGTH-VALIDATION-01` | `handler_invariants_test.go` | 346 | handler |
 | `HANDLER-POLICY-REQUIRED-01` | `handler_invariants_test.go` | 937 | handler |
-| `HANDLER-VALIDATOR-FAIL-FAST-01` | `handler_invariants_test.go` | 1087 | handler |
+| `HANDLER-VALIDATOR-FAIL-FAST-01` | `handler_invariants_test.go` | 1090 | handler |
 | `HEALTH-AGG-01` | `health_aggregation_test.go` | 3 | health |
 | `HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01` | `http_metrics_label_test.go` | 20 | http |
 | `HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01` | `http_metrics_label_test.go` | 21 | http |
@@ -93,9 +93,9 @@
 | `LISTENER-DX-01` | `listener_dx_test.go` | 1 | listener |
 | `LITERAL-01` | `errcode_message_const_fixtures_test.go` | 71 | literal |
 | `MANAGED-RESOURCE-CONTRACT-01` | `managed_resource_contract_test.go` | 1 | managed |
-| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 560 | marker |
-| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 562 | marker |
-| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 561 | markergen |
+| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 564 | marker |
+| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 566 | marker |
+| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 565 | markergen |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_invariants_test.go` | 286 | errcode |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_message_const_fixtures_test.go` | 2 | errcode |
 | `META-QUERYPARAM-DRIFT-01` | `queryparam_drift_test.go` | 34 | meta |
@@ -104,9 +104,9 @@
 | `NO-DELETED-AUTH-SYMBOLS-01` | `no_deleted_auth_symbols_test.go` | 1 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `cells_no_wrapper_contractspec_import_test.go` | 7 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `no_manual_contractspec_literal_test.go` | 1 | no |
-| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 558 | no |
+| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 562 | no |
 | `NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01` | `no_test_service_context_in_production_test.go` | 1 | no |
-| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 559 | no |
+| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 563 | no |
 | `OBS-01` | `observability_metrics_test.go` | 12 | obs |
 | `OUTBOX-CELL-01` | `outbox_invariants_test.go` | 61 | outbox |
 | `OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01` | `outbox_invariants_test.go` | 600 | outbox |
@@ -141,7 +141,7 @@
 | `PROD-DURATION-CONST-01` | `test_time_literal_test.go` | 29 | prod |
 | `PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01` | `provision_state_removed_test.go` | 14 | provision |
 | `READYZ-PROBE-NAMING-01` | `readyz_probe_naming_test.go` | 3 | readyz |
-| `REFRESH-AMBIENT-TX-01` | `refresh_invariants_test.go` | 357 | refresh |
+| `REFRESH-AMBIENT-TX-01` | `refresh_invariants_test.go` | 358 | refresh |
 | `REFRESH-CROSS-STORE-TX-01` | `refresh_invariants_test.go` | 31 | refresh |
 | `REFRESH-INVALID-INDEX-SINGLE-SOURCE-01` | `refresh_invariants_test.go` | 265 | refresh |
 | `REPO-LOG-KEY-ID-REDACT-01` | `repoerr_test.go` | 20 | repo |
@@ -174,8 +174,8 @@
 | `SLOWGATE-ALLOWLIST-01` | `slowgate_allowlist_test.go` | 1 | slowgate |
 | `SPAN-RECORD-ERROR-REDACT-01` | `span_record_error_redact_test.go` | 1 | span |
 | `SPAN-RECORD-ERROR-REDACT-ARCHTEST-01` | `span_record_error_redact_test.go` | 22 | span |
-| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 735 | codegen |
-| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 413 | codegen |
+| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 739 | codegen |
+| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 417 | codegen |
 | `STORAGE-BACKEND-MEMORY-NO-PG-01` | `storage_backend_test.go` | 11 | storage |
 | `STORAGE-BACKEND-PG-WIRING-01` | `storage_backend_test.go` | 6 | storage |
 | `SVCTOKEN-CALLER-CELL-REQUIRED-01` | `svctoken_caller_cell_test.go` | 1 | svctoken |
@@ -195,28 +195,16 @@
 |---|---|
 | `rules_advisory.go` | ADV-01, ADV-03, ADV-04, ADV-05, ADV-06, REF-14, TOPO-03, TOPO-07 |
 | `rules_consistency.go` | CONSISTENCY-EMIT-01 |
-| `rules_consistency_test.go` | CONSISTENCY-EMIT-01 |
 | `rules_docs.go` | DOC-NAME-01 |
-| `rules_docs_test.go` | DOC-NAME-01 |
 | `rules_fmt.go` | FMT-01, FMT-02, FMT-03, FMT-04, FMT-05, FMT-06, FMT-07, FMT-08, FMT-09, FMT-10, FMT-11, FMT-12, FMT-13, FMT-14, FMT-15, FMT-24, FMT-26, FMT-27, FMT-28, FMT-29, FMT-30, REF-12 |
-| `rules_fmt_test.go` | FMT-13, FMT-26, FMT-27, FMT-28, FMT-29 |
 | `rules_http_pathparam_uuid.go` | CH-04, CH-05 |
-| `rules_http_pathparam_uuid_test.go` | CH-05 |
 | `rules_http_response_alignment.go` | CH-04 |
-| `rules_http_response_alignment_test.go` | CH-04 |
 | `rules_http_typed_envelope.go` | CH-04, CH-06 |
-| `rules_http_typed_envelope_test.go` | CH-06 |
 | `rules_outbox.go` | OUTGUARD-01 |
 | `rules_ref.go` | FMT-07, REF-01, REF-02, REF-03, REF-04, REF-05, REF-06, REF-07, REF-08, REF-09, REF-10, REF-11, REF-12, REF-13, REF-14, REF-15, REF-16, REF-17 |
 | `rules_slice.go` | FMT-03, REF-01, SLICE-CONSISTENCY-01 |
-| `rules_slice_test.go` | REF-01, SLICE-CONSISTENCY-01 |
 | `rules_strict.go` | DOC-NAME-01, FMT-14, FMT-16, FMT-17, FMT-18, FMT-19, FMT-30, FMT-A1, FMT-C1, VERIFY-06, WRAPPER-CONTRACTSPEC-IMPORT-01 |
 | `rules_strict_extra.go` | FMT-09, FMT-20, FMT-21, FMT-22, FMT-23, FMT-25, FMT-CONTRACT-DIR-ID-MATCH-01 |
-| `rules_strict_extra_fmt20_test.go` | FMT-20 |
-| `rules_strict_extra_test.go` | FMT-13, FMT-20, FMT-21, FMT-22, FMT-23, FMT-25 |
-| `rules_strict_test.go` | FMT-01, FMT-16, FMT-17, FMT-A1, FMT-C1, REF-05, VERIFY-06 |
 | `rules_topo.go` | FMT-03, REF-02, TOPO-01, TOPO-02, TOPO-03, TOPO-04, TOPO-05, TOPO-06, TOPO-07, TOPO-08, TOPO-09 |
-| `rules_topo_test.go` | FMT-03, TOPO-09 |
 | `rules_verify.go` | FMT-03, REF-09, VERIFY-01, VERIFY-02, VERIFY-03, VERIFY-04, VERIFY-05, VERIFY-06 |
 | `rules_wrapper.go` | FMT-18, FMT-19, WRAPPER-CONTRACTSPEC-IMPORT-01, WRAPPER-NO-PACKAGE-STATE |
-| `rules_wrapper_test.go` | FMT-18, FMT-19, WRAPPER-CONTRACTSPEC-IMPORT-01 |

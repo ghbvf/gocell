@@ -105,7 +105,7 @@ func TestTracer_ErrorStatusRecordsSpan(t *testing.T) {
 	tr, exp := newInMemoryTracer(t)
 
 	_, span := tr.Start(context.Background(), "err-op")
-	tracing.SpanRecordError(span, errTracerBoom)
+	span.RecordError(errTracerBoom)
 	tracing.SpanSetStatus(span, true, "boom")
 	span.End()
 

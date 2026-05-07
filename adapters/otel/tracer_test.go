@@ -385,7 +385,7 @@ func TestSpan_RecordError(t *testing.T) {
 	ctx := context.Background()
 
 	_, span := tracer.Start(ctx, "error-op")
-	tracing.SpanRecordError(span, errors.New("connection refused"))
+	span.RecordError(errors.New("connection refused"))
 	span.End()
 
 	spans := exporter.GetSpans()
@@ -431,7 +431,7 @@ func TestSpanHelper_SimpleSpanAcceptsAll(t *testing.T) {
 	defer span.End()
 
 	assert.NotPanics(t, func() {
-		tracing.SpanRecordError(span, errors.New("some error"))
+		span.RecordError(errors.New("some error"))
 	})
 	assert.NotPanics(t, func() {
 		tracing.SpanSetStatus(span, true, "fail")

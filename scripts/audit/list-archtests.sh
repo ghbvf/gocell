@@ -197,9 +197,11 @@ for f in "${archtest_files[@]}"; do
   fi
 done
 
-# Governance rules — IDs grepped from rules_*.go bodies.
+# Governance rules — IDs grepped from production rules_*.go bodies only.
+# `_test.go` companions are excluded so the inventory reports the real rule
+# definition surface (the *_test.go count would double-count rules).
 governance_files=()
-while IFS= read -r line; do governance_files+=("${line}"); done < <(find "${governance_dir}" -maxdepth 1 -type f -name 'rules_*.go' 2>/dev/null | sort || true)
+while IFS= read -r line; do governance_files+=("${line}"); done < <(find "${governance_dir}" -maxdepth 1 -type f -name 'rules_*.go' ! -name '*_test.go' 2>/dev/null | sort || true)
 governance_count="${#governance_files[@]}"
 
 cat <<HEADER

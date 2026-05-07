@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
@@ -180,7 +182,7 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 	t.Run("missing_header", func(t *testing.T) {
 		t.Parallel()
 		dir := filepath.Join(fixtureBase, "missing_header")
-		files := findGeneratedCellFilesIn([]string{dir})
+		files := findGeneratedCellFilesIn(t, []string{dir})
 		for _, f := range files {
 			content, err := os.ReadFile(f) //nolint:gosec // test reads fixture paths discovered by the scanner itself
 			if err != nil {
@@ -324,9 +326,9 @@ func TestCodegenContractUserOverlap01(t *testing.T) {
 	root := findModuleRoot(t)
 	genContractsDir := filepath.Join(root, generatedContractsSubdir)
 
-	_ = filepath.WalkDir(genContractsDir, func(path string, d os.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(genContractsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil //nolint:nilerr // walk continues past unreadable entries
+			return fmt.Errorf("walk %s: %w", path, err)
 		}
 		if d.IsDir() {
 			return nil
@@ -341,6 +343,7 @@ func TestCodegenContractUserOverlap01(t *testing.T) {
 			" — only _gen.go files are permitted; move helpers to the consuming package", path)
 		return nil
 	})
+	require.NoError(t, walkErr, "TestCodegenContractUserOverlap01: walk %s", genContractsDir)
 }
 
 // TestCodegenContractGates_NegativeFixtures runs the gate scanners against
@@ -367,7 +370,7 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 	t.Run("missing_header", func(t *testing.T) {
 		t.Parallel()
 		dir := filepath.Join(fixtureBase, "missing_header")
-		files := findGeneratedContractFilesIn([]string{filepath.Join(dir, "generated", "contracts")})
+		files := findGeneratedContractFilesIn(t, []string{filepath.Join(dir, "generated", "contracts")})
 		if len(files) == 0 {
 			t.Error("missing_header fixture: no *_gen.go found in generated/contracts — fixture is broken")
 			return
@@ -390,9 +393,9 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 		genDir := filepath.Join(dir, "generated", "contracts")
 
 		foundUserFile := false
-		_ = filepath.WalkDir(genDir, func(path string, d os.DirEntry, err error) error {
+		walkErr := filepath.WalkDir(genDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries
+				return fmt.Errorf("walk %s: %w", path, err)
 			}
 			if d.IsDir() || !strings.HasSuffix(path, ".go") {
 				return nil
@@ -402,6 +405,7 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 			}
 			return nil
 		})
+		require.NoError(t, walkErr, "user_file_overlap fixture: walk %s", genDir)
 		if !foundUserFile {
 			t.Error("user_file_overlap fixture: no hand-written .go file found under generated/contracts — fixture is broken")
 		}
@@ -857,12 +861,13 @@ func hasInitMethod(t *testing.T, path string, structName string) bool {
 }
 
 // findGeneratedCellFilesIn is the parameterized variant of findGeneratedCellFiles.
-func findGeneratedCellFilesIn(roots []string) []string {
+func findGeneratedCellFilesIn(t *testing.T, roots []string) []string {
+	t.Helper()
 	var found []string
 	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
+		walkErr := filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries by design
+				return fmt.Errorf("walk %s: %w", path, err)
 			}
 			if d.IsDir() {
 				return nil
@@ -872,6 +877,7 @@ func findGeneratedCellFilesIn(roots []string) []string {
 			}
 			return nil
 		})
+		require.NoError(t, walkErr, "findGeneratedCellFilesIn: walking %s", scanRoot)
 	}
 	sort.Strings(found)
 	return found
@@ -1029,16 +1035,17 @@ func contractIDToExpectedPkgPath(id string) string {
 // findGeneratedContractFiles walks generated/contracts/ collecting all *_gen.go files.
 func findGeneratedContractFiles(t *testing.T, root string) []string {
 	t.Helper()
-	return findGeneratedContractFilesIn([]string{filepath.Join(root, generatedContractsSubdir)})
+	return findGeneratedContractFilesIn(t, []string{filepath.Join(root, generatedContractsSubdir)})
 }
 
 // findGeneratedContractFilesIn is the parameterized variant.
-func findGeneratedContractFilesIn(roots []string) []string {
+func findGeneratedContractFilesIn(t *testing.T, roots []string) []string {
+	t.Helper()
 	var found []string
 	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
+		walkErr := filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries
+				return fmt.Errorf("walk %s: %w", path, err)
 			}
 			if d.IsDir() {
 				switch d.Name() {
@@ -1052,6 +1059,7 @@ func findGeneratedContractFilesIn(roots []string) []string {
 			}
 			return nil
 		})
+		require.NoError(t, walkErr, "findGeneratedContractFilesIn: walking %s", scanRoot)
 	}
 	sort.Strings(found)
 	return found

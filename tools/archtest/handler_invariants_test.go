@@ -1006,9 +1006,11 @@ func collectCellGoFiles(t *testing.T, root string) []string {
 	var files []string
 
 	walk := func(dir string) {
-		_ = filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
-			//nolint:nilerr // archtest walk skips unreadable nodes silently
-			if err != nil || info == nil || info.IsDir() {
+		walkErr := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return fmt.Errorf("walk %s: %w", path, err)
+			}
+			if info == nil || info.IsDir() {
 				return nil
 			}
 			if info.Name() == "cell.go" {
@@ -1016,6 +1018,7 @@ func collectCellGoFiles(t *testing.T, root string) []string {
 			}
 			return nil
 		})
+		require.NoError(t, walkErr, "collectCellGoFiles: walking %s", dir)
 	}
 	walk("cells")
 	walk("examples")
@@ -1118,9 +1121,9 @@ func TestHANDLER_VALIDATOR_FAIL_FAST_01(t *testing.T) {
 
 	genContractsDir := filepath.Join(root, "generated", "contracts")
 	var handlerFiles []string
-	_ = filepath.WalkDir(genContractsDir, func(path string, d os.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(genContractsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil //nolint:nilerr // archtest skips unreadable nodes silently
+			return fmt.Errorf("walk %s: %w", path, err)
 		}
 		if d.IsDir() {
 			switch d.Name() {
@@ -1134,6 +1137,7 @@ func TestHANDLER_VALIDATOR_FAIL_FAST_01(t *testing.T) {
 		}
 		return nil
 	})
+	require.NoError(t, walkErr, "%s: walk %s", handlerValidatorFailFastRule, genContractsDir)
 
 	if len(handlerFiles) == 0 {
 		t.Fatalf("%s: no handler_gen.go files found under %s — scan broken",

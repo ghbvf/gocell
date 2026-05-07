@@ -70,7 +70,7 @@ func TestSpanRecordError_RecordsOnSimpleSpan(t *testing.T) {
 	defer span.End()
 
 	testErr := errors.New("connection refused")
-	SpanRecordError(span, testErr)
+	span.RecordError(testErr)
 	assert.ErrorIs(t, span.(*simpleSpan).err, testErr)
 }
 

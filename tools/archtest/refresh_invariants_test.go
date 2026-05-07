@@ -303,8 +303,9 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 		fset := token.NewFileSet()
 		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
 		if parseErr != nil {
-			// Skip unparseable files (e.g. generated with build constraints).
-			return nil //nolint:nilerr // intentional: skip files that fail to parse
+			// fail-visible: a syntactically broken production file would
+			// otherwise silently bypass the rule.
+			return fmt.Errorf("parse %s: %w", path, parseErr)
 		}
 
 		for _, decl := range file.Decls {
