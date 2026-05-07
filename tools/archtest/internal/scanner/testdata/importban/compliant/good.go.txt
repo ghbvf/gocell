@@ -1,0 +1,5 @@
+package compliant
+
+import "fmt"
+
+var _ = fmt.Sprintf

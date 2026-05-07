@@ -1,0 +1,5 @@
+package allowlisted
+
+import "github.com/forbidden/path"
+
+var _ = path.Foo

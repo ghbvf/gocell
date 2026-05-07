@@ -1,0 +1,5 @@
+package violates
+
+import "github.com/forbidden/path"
+
+var _ = path.Foo
