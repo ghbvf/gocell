@@ -94,11 +94,12 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if h.requestValidator != nil {
-		if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
-			schemavalidate.WriteValidationError(r.Context(), w, err)
-			return
-		}
+	// h.requestValidator is guaranteed non-nil — NewHandler panics on
+	// schemavalidate.NewValidator failure (codegen invariant), so the field
+	// is only reachable here when validator construction succeeded.
+	if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
+		schemavalidate.WriteValidationError(r.Context(), w, err)
+		return
 	}
 	resp, err := h.svc.Toggle(r.Context(), req)
 	if err != nil {
