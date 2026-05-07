@@ -388,7 +388,7 @@ func TestHarness_CheckNoMoreDeliveries_NoLeakReturnsNil(t *testing.T) {
 
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 	h.publishAndWait([]byte(`{"ok":1}`))
 
@@ -406,7 +406,7 @@ func TestHarness_CheckNoMoreDeliveries_DetectsRedelivery(t *testing.T) {
 	h := newHarness(t, harnessConstructor(bus))
 
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 	// Publish twice: first is expected prior, second simulates redelivery.
 	if err := bus.Publish(context.Background(), h.Topic, []byte(`{"a":1}`)); err != nil {
@@ -444,7 +444,7 @@ func TestHarness_CheckNoMoreDeliveries_DrainTimeout(t *testing.T) {
 	h := newHarness(t, harnessConstructor(bus))
 
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 	// Shorten drain timeout — no publish, drain should fail quickly.
 	h.drainTimeout = testtime.MediumPoll
@@ -467,7 +467,7 @@ func TestHarness_CheckNoMoreDeliveries_DrainsThenWaits(t *testing.T) {
 	h := newHarness(t, harnessConstructor(bus))
 
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 	// Simulate 3 expected deliveries (competing-consumers scenario).
 	for range 3 {

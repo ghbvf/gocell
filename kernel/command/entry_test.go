@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/ghbvf/gocell/kernel/metautil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -286,7 +287,7 @@ func TestValidateNew_MetadataKeyCount_Exceeds(t *testing.T) {
 		Payload: []byte(`{}`), Status: StatusPending, CreatedAt: now,
 	}
 	entry.Metadata = make(map[string]string)
-	for i := range MaxMetadataKeys + 1 {
+	for i := range metautil.MaxMetadataKeys + 1 {
 		entry.Metadata[fmt.Sprintf("key-%d", i)] = "v"
 	}
 	err := entry.ValidateNew()

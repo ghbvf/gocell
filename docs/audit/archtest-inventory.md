@@ -95,6 +95,7 @@
 | `MESSAGE-CONST-LITERAL-01` | `errcode_invariants_test.go` | 286 | errcode |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_message_const_fixtures_test.go` | 2 | errcode |
 | `META-QUERYPARAM-DRIFT-01` | `queryparam_drift_test.go` | 34 | meta |
+| `METADATA-LIMITS-SINGLE-SOURCE-01` | `outbox_invariants_test.go` | 1645 | outbox |
 | `MIGRATION-NO-TRANSACTION-RERUN-SAFE-01` | `migration_no_transaction_rerun_safe_test.go` | 11 | migration |
 | `MODULE-ORDER-CONFIGCORE-FIRST-01` | `module_order_test.go` | 17 | module |
 | `NO-DELETED-AUTH-SYMBOLS-01` | `no_deleted_auth_symbols_test.go` | 1 | no |

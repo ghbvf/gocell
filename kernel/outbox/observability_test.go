@@ -466,7 +466,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 			require.True(t, ok)
 			assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
 
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}))
 
 	require.NotNil(t, cap.handler)
@@ -493,7 +493,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 			called = true
 			_, ok := ctxkeys.RequestIDFrom(ctx)
 			assert.False(t, ok, "no request_id should be set from zero ObservabilityMetadata")
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}))
 
 	require.NotNil(t, cap.handler)
@@ -518,7 +518,7 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(), testFullSub("test", "cg-obs"),
 		func(_ context.Context, _ Entry) HandleResult {
-			return HandleResult{Disposition: DispositionAck}
+			return Ack()
 		}))
 	require.NotNil(t, cap.handler)
 	_, _ = cap.handler(context.Background(), Entry{

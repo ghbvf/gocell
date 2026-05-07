@@ -148,7 +148,7 @@ func CollectN(
 		if count >= n {
 			closeOnce.Do(func() { close(done) })
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		return outbox.Ack(), nil
 	}
 
 	// Subscribe blocks -- run in goroutine.
@@ -230,7 +230,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 				if count >= c.n {
 					c.closeOnce.Do(func() { close(c.done) })
 				}
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+				return outbox.Ack(), nil
 			})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			c.t.Errorf(errSubscribeUnexpectedFmt, err)
