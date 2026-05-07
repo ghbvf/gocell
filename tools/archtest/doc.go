@@ -36,4 +36,34 @@
 //	PGQUERY-01: PostgreSQL SQL builder/keyset helpers must live in pkg/pgquery;
 //	            pkg/query remains limited to generic pagination, cursor,
 //	            runmode, and in-memory pagination helpers
+//
+// # Themed invariant files
+//
+// Beyond the LAYER-* / PGQUERY-01 rules above, this package hosts ~70
+// additional invariant gates organized into per-theme `*_invariants_test.go`
+// files. Each file contains the Test functions for one rule cluster; every
+// rule has a `// INVARIANT: {ID}` anchor immediately above its Test func so
+// `grep "INVARIANT: <ID>"` jumps to the asserting code, source code, ADR,
+// and inventory in one shot.
+//
+//	assembly_invariants_test.go    ASSEMBLY-* / ASSEMBLYREF-*
+//	clock_invariants_test.go       CLOCK-* / KERNEL-CLOCK-* / PROD-CLOCK-*
+//	codegen_invariants_test.go     CODEGEN-* / SPEC-GEN-*
+//	errcode_invariants_test.go     ERRCODE-KIND-LITERAL / MESSAGE-CONST-LITERAL /
+//	                               ERROR-FIRST-* / DETAILS-SLOG-ATTR / EXPORTED-ERROR-NEW
+//	handler_invariants_test.go     HANDLER-*
+//	httputil_invariants_test.go    HTTPUTIL-*
+//	outbox_invariants_test.go      OUTBOX-*
+//	panic_invariants_test.go       PANIC-*
+//	prod_invariants_test.go        PROD-DURATION-CONST-01
+//	refresh_invariants_test.go     REFRESH-*
+//	rmq_invariants_test.go         RMQ-*
+//
+// Single-rule files retain the `{rule}_test.go` naming (e.g.
+// `adapter_returns_declared_types_test.go`); they convert to
+// `{theme}_invariants_test.go` once the theme accumulates ≥ 3 rules — see
+// CLAUDE.md `## 新增 invariant 决策原则` for the file-naming branch.
+//
+// Inventory of every invariant + its disposition:
+// docs/audit/archtest-inventory.md.
 package archtest

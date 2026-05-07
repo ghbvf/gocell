@@ -1,3 +1,4 @@
+// INVARIANT: CELL-INIT-CONTRACTUSAGE-01: kernel/cell must not import runtime/* or adapters/*; Registry type must stay local
 package archtest
 
 // cell_init_test.go enforces structural invariants on the kernel/cell package:

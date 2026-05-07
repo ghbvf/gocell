@@ -1,3 +1,4 @@
+// INVARIANT: CI-PINNING-WORKFLOW-DIGEST-01: golangci-lint pinned to patch version; all external workflow uses pinned to SHA
 package archtest
 
 import (

@@ -39,6 +39,10 @@ import (
 )
 
 const (
+	// RETIRED: SEC-FAIL-CLOSED-01 — see testSEC01AddrDrivenGate godoc below.
+	// The constant + t.Run subtest are retained as inert markers so historic
+	// CI logs and grep continue to map cleanly onto rule IDs; the body is a
+	// one-line t.Skip().
 	secFailClosed01 = "SEC-FAIL-CLOSED-01"
 	secFailClosed02 = "SEC-FAIL-CLOSED-02"
 	secFailClosed03 = "SEC-FAIL-CLOSED-03"
@@ -111,33 +115,23 @@ func testSEC01AddrDrivenGate(t *testing.T, _ string) {
 	t.Skip("SEC-FAIL-CLOSED-01 retired: addr-driven if-gate is safe; SEC-02 covers actual fail-open. See git history for context.")
 }
 
-// testSEC02ListenerAuthChainNonNil scans all production Go files under
-// cmd/corebundle/ and examples/**/main.go for bootstrap.WithListener CallExpr
-// nodes and verifies that the 3rd argument (authChain) is never a bare nil
-// identifier literal.
+// testSEC02ListenerAuthChainNonNil scans every production package-main .go
+// file in the repo for bootstrap.WithListener CallExpr nodes and verifies
+// that the 3rd argument (authChain) is never a bare nil identifier.
+//
+// Scope: any new entry point (cmd/<name>/main.go, examples/<name>/main.go,
+// tests/<harness>/main.go) is auto-included because the filter is package
+// clause `main`, not a hardcoded directory list. This closes the SEC-02
+// scope-shrink bypass: previously only cmd/corebundle + examples/**/main.go
+// were scanned, leaving any new cmd/<name>/ unguarded.
+//
+// ref: rust-lang/rust-clippy `expect`/deny levels — critical lint rules
+// cannot be downgraded by scope-shrinking the scan.
 func testSEC02ListenerAuthChainNonNil(t *testing.T, root string) {
 	t.Helper()
 
-	// Collect files to scan: cmd/corebundle + examples/**/main.go (production only).
-	var scanFiles []string
-
-	// cmd/corebundle/**/*.go (non-test)
-	bundleDir := filepath.Join(root, "cmd", "corebundle")
-	bundleFiles, err := findProductionGoFilesInDir(bundleDir)
-	require.NoError(t, err, "reading cmd/corebundle")
-	scanFiles = append(scanFiles, bundleFiles...)
-
-	// examples/**/main.go
-	examplesDir := filepath.Join(root, "examples")
-	_ = filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && filepath.Base(path) == "main.go" {
-			scanFiles = append(scanFiles, path)
-		}
-		return nil
-	})
+	scanFiles, err := findAllProductionMainPackageFiles(root)
+	require.NoError(t, err, "finding production main package files")
 
 	var violations []string
 
@@ -209,23 +203,9 @@ func findWithListenerNilAuthChain(path string) ([]int, error) {
 func testSEC06InternalListenerMustNotUseAuthNone(t *testing.T, root string) {
 	t.Helper()
 
-	var scanFiles []string
-	bundleDir := filepath.Join(root, "cmd", "corebundle")
-	bundleFiles, err := findProductionGoFilesInDir(bundleDir)
-	require.NoError(t, err, "reading cmd/corebundle")
-	scanFiles = append(scanFiles, bundleFiles...)
-
-	examplesDir := filepath.Join(root, "examples")
-	err = filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && filepath.Base(path) == "main.go" {
-			scanFiles = append(scanFiles, path)
-		}
-		return nil
-	})
-	require.NoError(t, err, "reading examples")
+	// Same auto-include scope as SEC-02 — every package-main entry point.
+	scanFiles, err := findAllProductionMainPackageFiles(root)
+	require.NoError(t, err, "finding production main package files")
 
 	var violations []string
 	for _, f := range scanFiles {
@@ -1141,4 +1121,44 @@ func (h *Hub) shutdown() {
 	})
 
 	assert.Empty(t, found, "removeConnLocked and shutdown should be allowed and produce no violations")
+}
+
+// findAllProductionMainPackageFiles walks the repo and returns every
+// production .go file (non-test, non-vendor, non-generated) whose package
+// clause is `main`. New entry points (cmd/<name>/main.go,
+// examples/<name>/main.go, tests/<harness>/main.go, ...) are picked up
+// automatically — no scope list to maintain.
+//
+// Parse errors fail-visible (callers receive an error) so a syntactically
+// broken entry point cannot silently bypass the SEC scans.
+func findAllProductionMainPackageFiles(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "vendor", ".git", "generated", "testdata", "node_modules", "worktrees", "bak":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		af, perr := parser.ParseFile(fset, path, nil, parser.PackageClauseOnly)
+		if perr != nil {
+			return fmt.Errorf("parse %s: %w", path, perr)
+		}
+		if af.Name != nil && af.Name.Name == "main" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }

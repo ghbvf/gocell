@@ -19,6 +19,7 @@
 package archtest
 
 import (
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
@@ -27,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -148,9 +151,9 @@ func TestKERNEL_POOLSTATS_LOCATION_01b_ContractIsImportZero(t *testing.T) {
 // vendor / worktrees / testdata / .git / node_modules / generated.
 func walkPoolstatsModuleGoFiles(t *testing.T, root string, fn func(rel, path string)) {
 	t.Helper()
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil //nolint:nilerr // walk continues past unreadable entries
+			return fmt.Errorf("walk %s: %w", path, err)
 		}
 		if d.IsDir() {
 			switch d.Name() {
@@ -167,6 +170,7 @@ func walkPoolstatsModuleGoFiles(t *testing.T, root string, fn func(rel, path str
 		fn(rel, path)
 		return nil
 	})
+	require.NoError(t, err, "walkPoolstatsModuleGoFiles")
 }
 
 // isPoolstatsStdlibImport returns true when imported has no domain segment —

@@ -1,3 +1,4 @@
+// INVARIANT: CONTRACTTEST-BOUNDARY-01: tests/contracttest is test-only; legacy pkg/contracts and pkg/contracttest must stay deleted
 package archtest
 
 import (

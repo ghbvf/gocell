@@ -94,6 +94,65 @@ func isRedactErrorCall(expr ast.Expr, redactionLocal string) bool {
 	return xIdent.Name == redactionLocal
 }
 
+// fileHasNonImplRecordError reports whether file contains at least one
+// `*.RecordError(...)` call that is NOT inside the body of a `RecordError`
+// method declaration. Method-scope (not file-scope) skip: span-impl files
+// like adapters/otel/span.go declare RecordError as a forwarder; calls
+// inside that body legitimately delegate to the inner library span and
+// must not trigger the enrollment gate. Any RecordError call ELSEWHERE in
+// the same file (including file-level expressions) is still subject to
+// the gate, so a span-impl file that grows a second non-impl call site
+// cannot bypass coverage.
+//
+// ref: golang/tools go/analysis — typed scope tracking via parent funcs
+func fileHasNonImplRecordError(file *ast.File) bool {
+	implRanges := collectRecordErrorImplRanges(file)
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
+			return true
+		}
+		if posInRanges(call.Pos(), implRanges) {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+// collectRecordErrorImplRanges returns the body Pos/End pairs of every
+// `RecordError` method declaration in file. Pairs are flat: even indices
+// are start positions, odd indices are end positions.
+func collectRecordErrorImplRanges(file *ast.File) []token.Pos {
+	var ranges []token.Pos
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || fn.Recv == nil || fn.Name == nil {
+			continue
+		}
+		if fn.Name.Name != "RecordError" {
+			continue
+		}
+		ranges = append(ranges, fn.Body.Lbrace, fn.Body.Rbrace)
+	}
+	return ranges
+}
+
+func posInRanges(p token.Pos, ranges []token.Pos) bool {
+	for i := 0; i+1 < len(ranges); i += 2 {
+		if p >= ranges[i] && p <= ranges[i+1] {
+			return true
+		}
+	}
+	return false
+}
+
 // scanSpanRecordErrorFile walks file and reports every `*.RecordError(...)`
 // call whose first argument is not `<redaction>.RedactError(...)`.
 func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []string {
@@ -180,6 +239,71 @@ func TestSpanRecordErrorRedacted(t *testing.T) {
 			"ref: docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md §8")
 }
 
+// TestSpanRecordErrorScanDirsCoverage is the fail-closed coverage gate for
+// SPAN-RECORD-ERROR-REDACT-01: it scans every production .go file in the repo
+// for any `*.RecordError(...)` call and asserts the file's directory tree is
+// already enrolled in spanRecordErrorScanDirs. Without this, a new package
+// emitting span.RecordError would silently bypass the redaction guard until
+// someone manually appended its directory.
+func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	enrolled := make(map[string]struct{}, len(spanRecordErrorScanDirs))
+	for _, dir := range spanRecordErrorScanDirs {
+		enrolled[filepath.Clean(dir)] = struct{}{}
+	}
+
+	var unenrolled []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "vendor" || name == "node_modules" ||
+				name == "testdata" || name == "worktrees" || name == "bak" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			// fail-visible: silent skip would let a future syntactically
+			// broken file silently bypass the gate.
+			rel, _ := filepath.Rel(root, path)
+			return fmt.Errorf("%s: parse failed (must be syntactically valid): %w", rel, parseErr)
+		}
+		if !fileHasNonImplRecordError(file) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		dir := filepath.Dir(rel)
+		// Walk up looking for any enrolled prefix.
+		for d := dir; d != "." && d != "/"; d = filepath.Dir(d) {
+			if _, ok := enrolled[d]; ok {
+				return nil
+			}
+		}
+		unenrolled = append(unenrolled, rel)
+		return nil
+	})
+	require.NoError(t, err)
+	sort.Strings(unenrolled)
+	assert.Empty(t, unenrolled,
+		"SPAN-RECORD-ERROR-REDACT-01 coverage: production files calling "+
+			"span.RecordError(...) must live under a directory enrolled in "+
+			"spanRecordErrorScanDirs. New offenders found above — either add "+
+			"the directory to the enrollment list or relocate the call.")
+}
+
 // runSpanRecordErrorFixtureScan parses fixture .go files (non-test, no module
 // load) and reports violations relative to fixtureDir.
 func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {
@@ -235,6 +359,72 @@ func TestSpanRecordErrorRedactedFixtures(t *testing.T) {
 			assert.Equal(t, tc.wantViolCount, len(got),
 				"fixture %s: expected %d violation(s), got %d: %v",
 				tc.pkg, tc.wantViolCount, len(got), got)
+		})
+	}
+}
+
+// TestSpanRecordErrorMethodScopeSkip is the reverse-fixture for the
+// method-scope skip in TestSpanRecordErrorScanDirsCoverage. It proves that
+// a file which simultaneously (a) declares a `RecordError` method and (b)
+// invokes `*.RecordError(...)` from another function still triggers the
+// coverage gate via fileHasNonImplRecordError. Without the method-scope
+// fix, the whole file was skipped and (b) silently bypassed enrollment.
+//
+// Inline-source so we do not need to add a violator to production tree.
+//
+// ref: rust-lang/rust-clippy `expect` mechanism for catching missing-lint
+// ref: cockroachdb/cockroach gcassert inventory completeness check
+func TestSpanRecordErrorMethodScopeSkip(t *testing.T) {
+	t.Parallel()
+
+	srcs := map[string]struct {
+		src       string
+		wantFound bool
+	}{
+		"impl_only_no_other_call": {
+			src: `package x
+type span struct{}
+func (s *span) RecordError(err error) {
+	s.inner.RecordError(err)
+}
+`,
+			wantFound: false,
+		},
+		"impl_plus_unenrolled_caller": {
+			// span impl + bypass call site in another function
+			src: `package x
+type span struct{}
+func (s *span) RecordError(err error) {
+	s.inner.RecordError(err)
+}
+type Span interface{ RecordError(error) }
+func leaks(s Span, err error) {
+	s.RecordError(err)
+}
+`,
+			wantFound: true,
+		},
+		"file_level_var_init_caller": {
+			// non-impl file-level call (legal in var initializer) must flag
+			src: `package x
+type Span interface{ RecordError(error) }
+var noop = func(s Span, err error) { s.RecordError(err) }
+`,
+			wantFound: true,
+		},
+	}
+
+	for name, tc := range srcs {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, name+".go", tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err, "fixture must parse")
+			got := fileHasNonImplRecordError(file)
+			assert.Equal(t, tc.wantFound, got,
+				"fileHasNonImplRecordError(%s) = %v; want %v (method-scope must NOT skip non-impl callers)",
+				name, got, tc.wantFound)
 		})
 	}
 }

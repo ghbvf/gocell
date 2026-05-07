@@ -1,3 +1,4 @@
+// INVARIANT: TESTUTIL-BOUNDARY-01: cells/accesscore/internal/testutil must only be imported by _test.go files
 package archtest
 
 import (

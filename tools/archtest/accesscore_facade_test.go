@@ -1,3 +1,4 @@
+// INVARIANT: ACCESSCORE-FACADE-A61-01: accesscore must not grow a thin top-level credential-path forwarding API
 package archtest
 
 import (

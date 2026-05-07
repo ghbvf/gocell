@@ -1,3 +1,4 @@
+// INVARIANT: AUTH-AUTHTEST-BOUNDARY-01: authtest sub-package is test-only; auth.Authenticated() must stay deleted
 package archtest
 
 import (

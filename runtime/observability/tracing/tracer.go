@@ -42,12 +42,6 @@ func SpanSetName(s Span, name string) {
 	wrapper.SetSpanName(s, name)
 }
 
-// SpanRecordError records an error on the span. Thin shim over
-// wrapper.Span.RecordError kept for backwards compatibility.
-func SpanRecordError(s Span, err error) {
-	s.RecordError(err)
-}
-
 // SpanSetStatus is a thin shim over wrapper.Span.SetStatus that maps the
 // legacy boolean to wrapper.StatusCode so existing callers compile.
 func SpanSetStatus(s Span, isError bool, description string) {

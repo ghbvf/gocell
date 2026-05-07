@@ -1,4 +1,4 @@
-package archtest_test
+package archtest
 
 import (
 	"os"
@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+// INVARIANT: MIGRATION-NO-TRANSACTION-RERUN-SAFE-01
+//
 // TestMigrationNoTransactionRerunSafe01 enforces MIGRATION-NO-TRANSACTION-
 // RERUN-SAFE-01: every DDL statement in a `-- +goose NO TRANSACTION` migration
 // MUST be rerun-safe — `IF NOT EXISTS` / `IF EXISTS` for plain CREATE/DROP/
@@ -33,7 +35,7 @@ import (
 // pass this rule rather than carved out, since adding `IF NOT EXISTS` to an
 // already-applied migration is idempotent and harmless on existing DBs.
 func TestMigrationNoTransactionRerunSafe01(t *testing.T) {
-	root := orFindModuleRoot(t)
+	root := findModuleRoot(t)
 	dir := filepath.Join(root, "adapters", "postgres", "migrations")
 
 	entries, err := os.ReadDir(dir)
