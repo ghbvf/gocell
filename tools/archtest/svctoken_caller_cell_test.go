@@ -123,9 +123,11 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 
 			if !knownCells[callerCell] {
 				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    pos.Line,
-					Message: fmt.Sprintf("auth.GenerateServiceToken callerCell %q is not a known cell ID — register it in cells/ or actors.yaml", callerCell),
+					Rel:  fc.Rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"auth.GenerateServiceToken callerCell %q is not a known cell ID"+
+							" — register it in cells/ or actors.yaml", callerCell),
 				})
 			}
 			return true
@@ -202,4 +204,3 @@ func authPackageAliases(f *ast.File) map[string]struct{} {
 	}
 	return out
 }
-
