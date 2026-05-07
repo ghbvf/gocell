@@ -1,0 +1,25 @@
+id: http.sample.passwordresetexempt.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  http:
+    method: POST
+    path: /api/v1/sample/password-reset-exempt
+    successStatus: 201
+    auth:
+      passwordResetExempt: true
+    noContent: false
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

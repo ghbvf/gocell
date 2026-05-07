@@ -458,12 +458,20 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
+	// To extend coverage with a new auth mode (e.g. a future auth.serviceToken):
+	//   1. Add testdata/synth/synth_http_auth_modes/contracts/http/sample/<mode>/v1/
+	//      with contract.yaml (declaring the new auth flag) + request.schema.json
+	//      + response.schema.json.
+	//   2. Append a case below with contractID and goldenKey.
+	//   3. Run: go test ./tools/codegen/contractgen/ \
+	//      -run TestRender_Golden_Synth_HTTPAuthModes -update
 	cases := []struct {
 		contractID string
 		goldenKey  string
 	}{
 		{"http.sample.public.v1", "synth_http_auth_modes_public"},
 		{"http.sample.bootstrap.v1", "synth_http_auth_modes_bootstrap"},
+		{"http.sample.passwordresetexempt.v1", "synth_http_auth_modes_passwordresetexempt"},
 	}
 
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
@@ -616,8 +624,28 @@ func assertGolden(t *testing.T, path string, got []byte) {
 		}
 		t.Fatalf("read golden %s: %v", path, err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Errorf("output does not match golden file %s\n\ngot:\n%s\n\nwant:\n%s", path, got, want)
+	if bytes.Equal(got, want) {
+		return
+	}
+	gotLines := strings.Split(string(got), "\n")
+	wantLines := strings.Split(string(want), "\n")
+	maxLines := len(gotLines)
+	if len(wantLines) > maxLines {
+		maxLines = len(wantLines)
+	}
+	for i := 0; i < maxLines; i++ {
+		var gotLine, wantLine string
+		if i < len(gotLines) {
+			gotLine = gotLines[i]
+		}
+		if i < len(wantLines) {
+			wantLine = wantLines[i]
+		}
+		if gotLine != wantLine {
+			t.Errorf("golden mismatch %s line %d:\n  got:  %q\n  want: %q\n(re-run with -update to refresh after intentional template changes)",
+				path, i+1, gotLine, wantLine)
+			return
+		}
 	}
 }
 

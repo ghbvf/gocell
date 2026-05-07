@@ -7,7 +7,7 @@
 ## 概览
 
 - archtest 文件总数：71
-- archtest INVARIANT 锚点数：174
+- archtest INVARIANT 锚点数：170
 - governance `rules_*.go` 文件数：15
 
 ## archtest 规则清单
@@ -64,11 +64,7 @@
 | `EXPORTED-ERROR-NEW-01` | `errcode_invariants_test.go` | 1460 | errcode |
 | `EXPORTED-ERROR-NEW-01` | `exported_error_new_fixtures_test.go` | 2 | errcode |
 | `GOOSE-SESSION-LOCKER-01` | `goose_session_locker_test.go` | 3 | goose |
-| `HANDLER-NO-INLINE-LIMIT-PARSE-01` | `handler_invariants_test.go` | 62 | handler |
-| `HANDLER-NO-SCHEMA-FOR-NOBODY-01` | `handler_invariants_test.go` | 201 | handler |
-| `HANDLER-PATH-QUERY-LENGTH-VALIDATION-01` | `handler_invariants_test.go` | 346 | handler |
-| `HANDLER-POLICY-REQUIRED-01` | `handler_invariants_test.go` | 937 | handler |
-| `HANDLER-VALIDATOR-FAIL-FAST-01` | `handler_invariants_test.go` | 1090 | handler |
+| `HANDLER-POLICY-REQUIRED-01` | `handler_policy_required_test.go` | 46 | handler |
 | `HEALTH-AGG-01` | `health_aggregation_test.go` | 3 | health |
 | `HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01` | `http_metrics_label_test.go` | 20 | http |
 | `HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01` | `http_metrics_label_test.go` | 21 | http |
