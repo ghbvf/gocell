@@ -4,13 +4,20 @@ package archtest
 // (theme: pg-repo), all funnel-unreachable (type system cannot express the
 // constraint), so they are guarded here by AST inspection.
 //
+// Scan scope (both kept in sync via pgRepoScanRoots):
+//   - adapters/postgres/                       — kernel/runtime adapters
+//   - cells/<cell>/internal/adapters/postgres/ — cell-internal repos that
+//     implement cell-specific ports. CLAUDE.md forbids cells/ from importing
+//     adapters/, so PG implementations of cell-internal ports live under the
+//     owning cell (precedent: configcore/auditcore).
+//
 // Invariants:
-//   - PG-CONSTRUCTOR-MUST-FREE-01: no MustNew* constructors in adapters/postgres/
+//   - PG-CONSTRUCTOR-MUST-FREE-01: no MustNew* constructors anywhere in scope
 //   - PG-REPO-AMBIENT-TX-01: *_repo.go/*_store.go CRUD methods must not call
 //     pool.Begin / pool.BeginTx directly; must use txRunner.RunInTx or
 //     execCtx/queryRowCtx helpers
-//   - PG-REPO-ROLLBACK-REDACT-01: functions in adapters/postgres/ that contain
-//     rollback / Rollback must call pkg/redaction.RedactError
+//   - PG-REPO-ROLLBACK-REDACT-01: functions referencing rollback / Rollback
+//     must call pkg/redaction.RedactError
 
 import (
 	"go/ast"
@@ -25,13 +32,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// pgRepoScanRoots returns the directories that should be walked by every PG
+// repo invariant: the canonical adapters/postgres/ tree plus every
+// cells/<cell>/internal/adapters/postgres/ tree present in the repo.
+//
+// CLAUDE.md forbids cells/ from importing adapters/, so PG implementations of
+// cell-internal ports live under the owning cell. The two locations share the
+// same invariants and must be treated as one scan surface.
+func pgRepoScanRoots(t *testing.T, root string) []string {
+	t.Helper()
+	roots := []string{filepath.Join(root, "adapters", "postgres")}
+
+	cellsDir := filepath.Join(root, "cells")
+	entries, err := os.ReadDir(cellsDir)
+	if err != nil {
+		// cells/ missing in some test layouts is acceptable; just report
+		// adapters/postgres/.
+		return roots
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(cellsDir, e.Name(), "internal", "adapters", "postgres")
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && info.IsDir() {
+			roots = append(roots, candidate)
+		}
+	}
+	return roots
+}
+
 const rulePGConstructorMustFree01 = "PG-CONSTRUCTOR-MUST-FREE-01"
 
-// TestPGConstructorMustFree01 walks adapters/postgres/ non-test Go files and
-// reports any exported MustNew* function declaration.
+// TestPGConstructorMustFree01 walks every PG repo scan root (see
+// pgRepoScanRoots) and reports any exported MustNew* function declaration.
 func TestPGConstructorMustFree01(t *testing.T) {
 	root := findModuleRoot(t)
-	pgDir := filepath.Join(root, "adapters", "postgres")
+	scanRoots := pgRepoScanRoots(t, root)
 
 	type violation struct {
 		file string
@@ -40,63 +78,65 @@ func TestPGConstructorMustFree01(t *testing.T) {
 	}
 	var violations []violation
 
-	err := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			// skip sub-directories that aren't the postgres package itself
-			if d.Name() == "migrations" || d.Name() == "testdata" {
-				return filepath.SkipDir
+	for _, pgDir := range scanRoots {
+		err := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
 			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+			if d.IsDir() {
+				// skip sub-directories that aren't the postgres package itself
+				if d.Name() == "migrations" || d.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") {
+				return nil
+			}
+			if strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
 
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
-		if parseErr != nil {
-			return parseErr
-		}
+			fset := token.NewFileSet()
+			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
+			if parseErr != nil {
+				return parseErr
+			}
 
-		rel, _ := filepath.Rel(root, path)
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
+			rel, _ := filepath.Rel(root, path)
+			for _, decl := range file.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+				name := fd.Name.Name
+				// exported MustNew* at package level (no receiver)
+				if fd.Recv != nil {
+					continue
+				}
+				if !strings.HasPrefix(name, "MustNew") {
+					continue
+				}
+				pos := fset.Position(fd.Pos())
+				violations = append(violations, violation{
+					file: filepath.ToSlash(rel),
+					line: pos.Line,
+					name: name,
+				})
 			}
-			name := fd.Name.Name
-			// exported MustNew* at package level (no receiver)
-			if fd.Recv != nil {
-				continue
-			}
-			if !strings.HasPrefix(name, "MustNew") {
-				continue
-			}
-			pos := fset.Position(fd.Pos())
-			violations = append(violations, violation{
-				file: filepath.ToSlash(rel),
-				line: pos.Line,
-				name: name,
-			})
-		}
-		return nil
-	})
-	require.NoError(t, err, "walking adapters/postgres/")
+			return nil
+		})
+		require.NoError(t, err, "walking %s", pgDir)
+	}
 
 	if len(violations) > 0 {
 		t.Logf("%s: %d violation(s):", rulePGConstructorMustFree01, len(violations))
 		for _, v := range violations {
-			t.Logf("  %s:%d  %s — MustNew* constructors are banned in adapters/postgres/ (B2-A-11)", v.file, v.line, v.name)
+			t.Logf("  %s:%d  %s — MustNew* constructors are banned in PG repo scope (B2-A-11)", v.file, v.line, v.name)
 		}
 	}
 	assert.Empty(t, violations,
-		"%s: adapters/postgres/ must not export MustNew* constructors; use error-first NewXxx instead (B2-A-11)",
+		"%s: PG repo scope must not export MustNew* constructors; use error-first NewXxx instead (B2-A-11)",
 		rulePGConstructorMustFree01)
 }
 
@@ -124,7 +164,7 @@ const rulePGRepoAmbientTx01 = "PG-REPO-AMBIENT-TX-01"
 // 豁免：tx_manager.go（实现 TxRunner 接口本身）。
 func TestPGRepoAmbientTx01(t *testing.T) {
 	root := findModuleRoot(t)
-	pgDir := filepath.Join(root, "adapters", "postgres")
+	scanRoots := pgRepoScanRoots(t, root)
 
 	// allowlist: files that legitimately implement Begin themselves.
 	allowlist := map[string]bool{
@@ -139,83 +179,85 @@ func TestPGRepoAmbientTx01(t *testing.T) {
 	}
 	var violations []violation
 
-	err := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if d.Name() == "migrations" || d.Name() == "testdata" {
-				return filepath.SkipDir
+	for _, pgDir := range scanRoots {
+		err := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
 			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		base := filepath.Base(path)
-		// Only inspect *_repo.go and *_store.go files.
-		if !strings.HasSuffix(base, "_repo.go") && !strings.HasSuffix(base, "_store.go") {
-			return nil
-		}
-		// Skip allowlisted files.
-		if allowlist[base] {
-			return nil
-		}
-
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
-		if parseErr != nil {
-			return parseErr
-		}
-
-		rel, _ := filepath.Rel(root, path)
-
-		// Walk each method declaration with a pointer receiver.
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv == nil || fd.Body == nil {
-				continue
+			if d.IsDir() {
+				if d.Name() == "migrations" || d.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
 			}
 
-			methodName := fd.Name.Name
+			base := filepath.Base(path)
+			// Only inspect *_repo.go and *_store.go files.
+			if !strings.HasSuffix(base, "_repo.go") && !strings.HasSuffix(base, "_store.go") {
+				return nil
+			}
+			// Skip allowlisted files.
+			if allowlist[base] {
+				return nil
+			}
 
-			// Inspect all call expressions in the method body.
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
+			fset := token.NewFileSet()
+			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
+			if parseErr != nil {
+				return parseErr
+			}
+
+			rel, _ := filepath.Rel(root, path)
+
+			// Walk each method declaration with a pointer receiver.
+			for _, decl := range file.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Recv == nil || fd.Body == nil {
+					continue
 				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
+
+				methodName := fd.Name.Name
+
+				// Inspect all call expressions in the method body.
+				ast.Inspect(fd.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					// Check if method name is Begin or BeginTx.
+					if sel.Sel.Name != "Begin" && sel.Sel.Name != "BeginTx" {
+						return true
+					}
+					// Check if the receiver is a field access on "s" or "r"
+					// whose field name is "pool".
+					fieldAccess, ok := sel.X.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					if fieldAccess.Sel.Name != "pool" {
+						return true
+					}
+					pos := fset.Position(call.Pos())
+					violations = append(violations, violation{
+						file:   filepath.ToSlash(rel),
+						line:   pos.Line,
+						method: methodName,
+						call:   "." + fieldAccess.Sel.Name + "." + sel.Sel.Name,
+					})
 					return true
-				}
-				// Check if method name is Begin or BeginTx.
-				if sel.Sel.Name != "Begin" && sel.Sel.Name != "BeginTx" {
-					return true
-				}
-				// Check if the receiver is a field access on "s" or "r"
-				// whose field name is "pool".
-				fieldAccess, ok := sel.X.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				if fieldAccess.Sel.Name != "pool" {
-					return true
-				}
-				pos := fset.Position(call.Pos())
-				violations = append(violations, violation{
-					file:   filepath.ToSlash(rel),
-					line:   pos.Line,
-					method: methodName,
-					call:   "." + fieldAccess.Sel.Name + "." + sel.Sel.Name,
 				})
-				return true
-			})
-		}
-		return nil
-	})
-	require.NoError(t, err, "walking adapters/postgres/ for PG-REPO-AMBIENT-TX-01")
+			}
+			return nil
+		})
+		require.NoError(t, err, "walking %s for PG-REPO-AMBIENT-TX-01", pgDir)
+	}
 
 	if len(violations) > 0 {
 		t.Logf("%s: %d violation(s):", rulePGRepoAmbientTx01, len(violations))
@@ -253,7 +295,7 @@ const rulePGRepoRollbackRedact01 = "PG-REPO-ROLLBACK-REDACT-01"
 // 范式：PR#388 PG-CONSTRUCTOR-MUST-FREE-01 + PR#395 ADR span-redact。
 func TestPGRepoRollbackRedact01(t *testing.T) {
 	root := findModuleRoot(t)
-	pgDir := filepath.Join(root, "adapters", "postgres")
+	scanRoots := pgRepoScanRoots(t, root)
 
 	type violation struct {
 		file   string
@@ -263,57 +305,59 @@ func TestPGRepoRollbackRedact01(t *testing.T) {
 	}
 	var violations []violation
 
-	err := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if d.Name() == "migrations" || d.Name() == "testdata" {
-				return filepath.SkipDir
+	for _, pgDir := range scanRoots {
+		err := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				if d.Name() == "migrations" || d.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+
+			fset := token.NewFileSet()
+			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
+			if parseErr != nil {
+				return parseErr
+			}
+
+			rel, _ := filepath.Rel(root, path)
+
+			for _, decl := range file.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Body == nil {
+					continue
+				}
+
+				fnName := fd.Name.Name
+				fnPos := fset.Position(fd.Pos())
+
+				// Check whether this function body references "rollback" / "Rollback".
+				hasRollback := funcBodyContainsRollback(fd.Body)
+				if !hasRollback {
+					continue
+				}
+
+				// Function body references rollback — ensure RedactError is also called.
+				hasRedact := funcBodyContainsRedactError(fd.Body)
+				if !hasRedact {
+					violations = append(violations, violation{
+						file:   filepath.ToSlash(rel),
+						line:   fnPos.Line,
+						fn:     fnName,
+						reason: "contains rollback but no redaction.RedactError call",
+					})
+				}
 			}
 			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
-		if parseErr != nil {
-			return parseErr
-		}
-
-		rel, _ := filepath.Rel(root, path)
-
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-
-			fnName := fd.Name.Name
-			fnPos := fset.Position(fd.Pos())
-
-			// Check whether this function body references "rollback" / "Rollback".
-			hasRollback := funcBodyContainsRollback(fd.Body)
-			if !hasRollback {
-				continue
-			}
-
-			// Function body references rollback — ensure RedactError is also called.
-			hasRedact := funcBodyContainsRedactError(fd.Body)
-			if !hasRedact {
-				violations = append(violations, violation{
-					file:   filepath.ToSlash(rel),
-					line:   fnPos.Line,
-					fn:     fnName,
-					reason: "contains rollback but no redaction.RedactError call",
-				})
-			}
-		}
-		return nil
-	})
-	require.NoError(t, err, "walking adapters/postgres/ for PG-REPO-ROLLBACK-REDACT-01")
+		})
+		require.NoError(t, err, "walking %s for PG-REPO-ROLLBACK-REDACT-01", pgDir)
+	}
 
 	if len(violations) > 0 {
 		t.Logf("%s: %d violation(s):", rulePGRepoRollbackRedact01, len(violations))
