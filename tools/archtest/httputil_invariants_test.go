@@ -183,8 +183,8 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 // authority tables:
 //
 //  1. pkg/httputil/doc.go Stable Surface comment (pattern: "  - FuncName")
-//  2. kernel/governance/rules_http_response_alignment.go httpHelperWritesStatuses map
-//  3. kernel/governance/rules_http_response_alignment.go knownNonWriters map (inline)
+//  2. kernel/governance/rules_http.go httpHelperWritesStatuses map
+//  3. kernel/governance/rules_http.go knownNonWriters map (inline)
 //
 // This ensures that when a new exported function is added to pkg/httputil, the
 // author is forced to register it in either the doc surface or the governance
@@ -196,7 +196,7 @@ func TestHttputilExportedRegistry(t *testing.T) {
 	root := findModuleRoot(t)
 	httputil := filepath.Join(root, "pkg", "httputil")
 	docGoPath := filepath.Join(httputil, "doc.go")
-	governancePath := filepath.Join(root, "kernel", "governance", "rules_http_response_alignment.go")
+	governancePath := filepath.Join(root, "kernel", "governance", "rules_http.go")
 
 	// 1. Collect all exported functions from pkg/httputil (excluding test files).
 	exported := collectExportedFuncs(t, httputil)
@@ -220,7 +220,7 @@ func TestHttputilExportedRegistry(t *testing.T) {
 		t.Errorf("HTTPUTIL-SURFACE-REGISTERED-01: the following exported "+
 			"pkg/httputil functions are not registered in doc.go Stable Surface "+
 			"OR kernel/governance maps — add them to pkg/httputil/doc.go and/or "+
-			"kernel/governance/rules_http_response_alignment.go: %v", missing)
+			"kernel/governance/rules_http.go: %v", missing)
 	}
 }
 

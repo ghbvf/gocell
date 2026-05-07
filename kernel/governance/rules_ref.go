@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // validateREF01 checks that slice.belongsToCell references an existing cell.
@@ -222,48 +221,6 @@ func (v *Validator) validateREF11() []ValidationResult {
 				assemblyFile(a),
 				"build.entrypoint",
 				fmt.Sprintf("assembly %q build.entrypoint %q does not exist", a.ID, a.Build.Entrypoint),
-			))
-		}
-	}
-	return results
-}
-
-// validateREF12 checks that contract.schemaRefs files exist on disk.
-// Skipped when root is empty.
-func (v *Validator) validateREF12() []ValidationResult {
-	if v.root == "" {
-		return nil
-	}
-	var results []ValidationResult
-	for _, c := range v.project.Contracts {
-		results = append(results, v.checkREF12Contract(c)...)
-	}
-	return results
-}
-
-// checkREF12Contract validates all schema refs declared by a single contract.
-func (v *Validator) checkREF12Contract(c *metadata.ContractMeta) []ValidationResult {
-	var results []ValidationResult
-	for _, ref := range metadata.ContractSchemaRefs(c) {
-		if ref.Ref == "" {
-			continue
-		}
-		resolved, err := metadata.ResolveContractSchemaRef(v.root, c, ref)
-		if err != nil {
-			results = append(results, v.newResult(
-				"REF-12", SeverityError, IssueInvalid,
-				contractFile(c),
-				ref.Field,
-				fmt.Sprintf("contract %q %s %q: %v", c.ID, ref.Field, ref.Ref, err),
-			))
-			continue
-		}
-		if !v.fileExists(resolved.AbsPath) {
-			results = append(results, v.newResult(
-				"REF-12", SeverityError, IssueRefNotFound,
-				contractFile(c),
-				ref.Field,
-				fmt.Sprintf("contract %q %s points to missing file %q", c.ID, ref.Field, ref.Ref),
 			))
 		}
 	}

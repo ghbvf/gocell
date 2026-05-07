@@ -1,5 +1,22 @@
 package governance
 
+// rules_http.go consolidates the three HTTP-contract governance rules:
+//
+//   - CH-04 (response alignment)     — handler-emitted ≥400 status codes
+//                                      must be declared in the contract
+//                                      responses map.
+//   - CH-05 (path-param UUID)        — handlers serving contracts with
+//                                      pathParams.{name}.format=uuid must
+//                                      call httputil.ParseUUIDPathParam.
+//   - CH-06 (typed response envelope)— generated types_gen.go typed
+//                                      response struct set must equal
+//                                      contract SuccessStatus + responses[].
+//
+// CH-05 reuses the parsedHandlerFile cache + findHandlerFile + parseHandlerFile
+// machinery introduced for CH-04. CH-06 operates on the codegen artifact
+// (types_gen.go) and does not share scanning state with CH-04/05. Merged into
+// one file so the shared cache is colocated with all consumers.
+
 import (
 	"errors"
 	"fmt"
@@ -10,12 +27,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// =============================================================================
+// CH-04 — HTTP response alignment
+// =============================================================================
 
 // errCorrelationMissing is returned by extractHandlerStatusCodesForContract
 // when no auth.Mount call in the handler file maps the given contractID to a
@@ -767,4 +790,359 @@ func stripQuotes(s string) string {
 		return s[1 : len(s)-1]
 	}
 	return s
+}
+
+// =============================================================================
+// CH-05 — HTTP path-param UUID parsing
+// =============================================================================
+
+const CodeContractHealthPathParamUUID = "CH-05" // SeverityError
+
+// CheckHTTPPathParamUUID enforces CH-05: for every contract with
+// pathParams.{name}.format == "uuid", the corresponding handler must call
+// httputil.ParseUUIDPathParam(w, r, "{name}") for that parameter.
+//
+// Contracts without a matching in-repo handler are silently skipped.
+//
+// CH-05 reuses the same parsedHandlerFile cache and contractToFuncs mapping
+// from CH-04 (above) to narrow the walk to the specific handler function
+// linked to each contract via auth.Mount. When no auth.Mount correlation is
+// found the rule emits a SeverityError finding (fail-closed) rather than
+// falling back to whole-file scanning.
+func (v *Validator) CheckHTTPPathParamUUID(contracts []*metadata.ContractMeta, projectRoot string) []ValidationResult {
+	// Share the same parse cache across all contracts in one call; avoids
+	// re-parsing the same handler.go for every contract it serves.
+	cache := map[string]*parsedHandlerFile{}
+	var results []ValidationResult
+	for _, c := range contracts {
+		if c.Kind != "http" {
+			continue
+		}
+		results = append(results, v.checkPathParamUUIDForContract(c, projectRoot, cache)...)
+	}
+	return results
+}
+
+func (v *Validator) checkPathParamUUIDForContract(
+	c *metadata.ContractMeta, projectRoot string, cache map[string]*parsedHandlerFile,
+) []ValidationResult {
+	uuidParams := collectUUIDPathParams(c)
+	if len(uuidParams) == 0 {
+		return nil
+	}
+
+	handlerFile := findHandlerFile(v.project, c.ID, projectRoot)
+	if handlerFile == "" {
+		return nil
+	}
+
+	ph, err := parseHandlerFile(handlerFile, cache)
+	if err != nil {
+		return nil
+	}
+
+	fnName, ok := ph.contractToFuncs[c.ID]
+	if !ok {
+		return []ValidationResult{v.newResult(
+			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+			c.File, "endpoints.http.path",
+			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
+		)}
+	}
+
+	body, ok := ph.funcBodies[fnName]
+	if !ok {
+		return []ValidationResult{v.newResult(
+			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+			c.File, "endpoints.http.path",
+			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
+		)}
+	}
+
+	parsed := collectParsedUUIDParamNamesFromAST(body)
+	return buildPathParamFindings(v, c, uuidParams, parsed)
+}
+
+// buildPathParamFindings compares required UUID params vs parsed call sites.
+func buildPathParamFindings(
+	v *Validator, c *metadata.ContractMeta, uuidParams []string, parsed map[string]struct{},
+) []ValidationResult {
+	var results []ValidationResult
+	for _, paramName := range uuidParams {
+		if _, ok := parsed[paramName]; !ok {
+			results = append(results, v.newResult(
+				CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+				c.File, fmt.Sprintf("endpoints.http.pathParams.%s", paramName),
+				fmt.Sprintf(advHintCH05MissingParseCall, c.ID, paramName, paramName),
+			))
+		}
+	}
+	return results
+}
+
+// collectUUIDPathParams returns a sorted slice of path-param names that have
+// format == "uuid" in the contract.
+func collectUUIDPathParams(c *metadata.ContractMeta) []string {
+	if c.Endpoints.HTTP == nil {
+		return nil
+	}
+	var names []string
+	for name, schema := range c.Endpoints.HTTP.PathParams {
+		if schema.Format == "uuid" {
+			names = append(names, name)
+		}
+	}
+	// Sort for deterministic finding order across Go map iteration.
+	sort.Strings(names)
+	return names
+}
+
+// collectParsedUUIDParamNamesFromAST walks a single AST node (typically a
+// function body) and returns the set of parameter names passed to
+// httputil.ParseUUIDPathParam(w, r, "<name>") calls within it.
+func collectParsedUUIDParamNamesFromAST(node ast.Node) map[string]struct{} {
+	found := make(map[string]struct{})
+	ast.Inspect(node, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		collectParseUUIDCallName(call, found)
+		return true
+	})
+	return found
+}
+
+// collectParseUUIDCallName inspects a single call expression and, if it is
+// httputil.ParseUUIDPathParam(w, r, "<name>"), adds "<name>" to found.
+func collectParseUUIDCallName(call *ast.CallExpr, found map[string]struct{}) {
+	if !isParseUUIDPathParamCall(call) {
+		return
+	}
+	if len(call.Args) < 3 {
+		return
+	}
+	lit, ok := call.Args[2].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return
+	}
+	name := lit.Value
+	if len(name) >= 2 && name[0] == '"' && name[len(name)-1] == '"' {
+		name = name[1 : len(name)-1]
+	}
+	found[name] = struct{}{}
+}
+
+// isParseUUIDPathParamCall returns true when call is
+// httputil.ParseUUIDPathParam(...).
+func isParseUUIDPathParamCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return pkg.Name == "httputil" && sel.Sel.Name == "ParseUUIDPathParam"
+}
+
+// =============================================================================
+// CH-06 — typed response envelope alignment
+// =============================================================================
+
+// CodeContractHealthTypedEnvelope is the rule code for CH-06 — typed response
+// envelope alignment. Emitted as SeverityError when an HTTP contract's
+// declared response set (SuccessStatus + responses[] keys) does not match
+// the typed response struct set generated into types_gen.go.
+//
+// CH-06 closes the drift loop introduced by typed response envelope migration
+// (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE): the post-service response surface
+// is no longer reverse-inferred from errcode.Kind in handler AST (CH-04's
+// remaining job is the pre-service helper-emission set — DecodeJSONStrict
+// 400/413, ParsePageParams 400, ParseUUIDPathParam 400 — which still has no
+// other source of truth). Instead, the contract.yaml responses[] table and
+// the generated typed response struct set must agree exactly. Any builder bug
+// (missing lift), orphan struct (stale generated file), or contract drift
+// (yaml edited without regen) is statically caught here, replacing the
+// fragile reverse inference path described in roadmap 06.FU.
+//
+// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main —
+// the typed-response-set semantic this rule guards.
+const CodeContractHealthTypedEnvelope = "CH-06"
+
+// typedResponseStructPattern matches the generated typed response struct names
+// produced by tools/codegen/contractgen/templates/types.tmpl. The status code
+// is captured as the second-to-last 3-digit run before the suffix.
+//
+// Examples that match:
+//
+//   - Get200JSONResponse        → status 200
+//   - Delete204NoContentResponse → status 204
+//   - Get404ErrorResponse        → status 404
+//   - HandleEnqueue201JSONResponse → status 201
+//
+// The leading run is the {HandlerMethod} (PascalCase, may contain digits if
+// the contract is named that way), so the regex anchors the status as the
+// 3-digit run immediately before the {Suffix} group.
+//
+// Correctness depends on archtest CODEGEN-CONTRACT-USER-OVERLAP-01
+// (tools/archtest/codegen_contract_gen_test.go) which prevents hand-written
+// .go files from landing under generated/contracts/. Without that guard a
+// user-written DTO accidentally named e.g. `Foo200JSONResponse` would be
+// counted as an "implemented" typed struct and could mask CH-06 orphan
+// reports — the two rules together provide the closed-set guarantee.
+var typedResponseStructPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*?(\d{3})(JSONResponse|NoContentResponse|ErrorResponse)$`)
+
+// CheckHTTPTypedResponseEnvelope enforces CH-06: every HTTP contract that
+// opts into codegen must have a typed response struct in its generated
+// types_gen.go for every declared SuccessStatus + responses[] key, and no
+// orphan structs may exist beyond the declared set.
+//
+// Skipped silently for:
+//   - non-HTTP contracts (event/command/projection)
+//   - codegen=false contracts (legacy hand-written handlers do not emit typed structs)
+//   - missing types_gen.go (treated as codegen drift, surfaced by the verify pipeline)
+func (v *Validator) CheckHTTPTypedResponseEnvelope(
+	contracts []*metadata.ContractMeta, projectRoot string,
+) []ValidationResult {
+	var results []ValidationResult
+	for _, c := range contracts {
+		if c.Kind != "http" || !c.Codegen {
+			continue
+		}
+		results = append(results, v.checkTypedEnvelopeForContract(c, projectRoot)...)
+	}
+	return results
+}
+
+func (v *Validator) checkTypedEnvelopeForContract(
+	c *metadata.ContractMeta, projectRoot string,
+) []ValidationResult {
+	typesPath := typedEnvelopeTypesGenPath(projectRoot, c.ID)
+
+	implemented, ok := scanTypedResponseStructs(typesPath)
+	if !ok {
+		// types_gen.go absent or unparseable — codegen drift is a separate
+		// concern surfaced by `gocell generate --verify`. Stay silent here
+		// rather than double-reporting; CH-06 only owns the alignment check
+		// when both sides exist.
+		return nil
+	}
+
+	declared := typedEnvelopeDeclaredStatuses(c)
+
+	var results []ValidationResult
+	for _, status := range diffStatuses(declared, implemented) {
+		msg := fmt.Sprintf("%s: contract declares status %d but generated types_gen.go has no matching typed"+
+			" response struct (regenerate via `gocell generate contract --all`)", c.ID, status)
+		results = append(results, v.newResult(
+			CodeContractHealthTypedEnvelope, SeverityError, IssueRequired,
+			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status), msg,
+		))
+	}
+	for _, status := range diffStatuses(implemented, declared) {
+		msg := fmt.Sprintf("%s: generated types_gen.go has typed response struct for status %d but contract.yaml"+
+			" does not declare it (orphan struct — edit contract.yaml or rerun `gocell generate contract --all`)",
+			c.ID, status)
+		results = append(results, v.newResult(
+			CodeContractHealthTypedEnvelope, SeverityError, IssueRequired,
+			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status), msg,
+		))
+	}
+	return results
+}
+
+// typedEnvelopeDeclaredStatuses returns the union of SuccessStatus and
+// responses[] keys declared on the HTTP endpoint. Auth.Responses (middleware-
+// injected codes) are intentionally excluded — they are pre-service codes
+// emitted by listener-mounted middleware and do not produce typed structs in
+// types_gen.go (the generator only renders structs for entries in the IR
+// Responses slice, which is built from SuccessStatus + responses[]).
+func typedEnvelopeDeclaredStatuses(c *metadata.ContractMeta) map[int]struct{} {
+	out := make(map[int]struct{})
+	if c.Endpoints.HTTP == nil {
+		return out
+	}
+	if c.Endpoints.HTTP.SuccessStatus > 0 {
+		out[c.Endpoints.HTTP.SuccessStatus] = struct{}{}
+	}
+	for status := range c.Endpoints.HTTP.Responses {
+		out[status] = struct{}{}
+	}
+	return out
+}
+
+// typedEnvelopeTypesGenPath resolves the absolute path to the generated
+// types_gen.go file for the given contract. Mirrors
+// tools/codegen/internal/pathx.ContractIDToPackagePath: every "internal"
+// segment in the contract ID is rewritten to "internalapi" so generated
+// packages remain importable from cells/ and examples/ (Go internal package
+// rule).
+//
+// The mapping is duplicated here (10 lines) rather than imported from the
+// contractgen-internal pathx package to keep kernel/governance free of any
+// tools/codegen dependency. If a second consumer outside tools/ ever needs
+// the same mapping, promote pathx to pkg/contractpath.
+func typedEnvelopeTypesGenPath(projectRoot, contractID string) string {
+	parts := strings.Split(contractID, ".")
+	segments := make([]string, len(parts))
+	for i, p := range parts {
+		if p == "internal" {
+			segments[i] = "internalapi"
+		} else {
+			segments[i] = p
+		}
+	}
+	pkgParts := append([]string{projectRoot, "generated", "contracts"}, segments...)
+	return filepath.Join(append(pkgParts, "types_gen.go")...)
+}
+
+// scanTypedResponseStructs parses types_gen.go and returns the set of HTTP
+// status codes encoded in the typed response struct names declared at the
+// package level. The second return is false when the file is absent or fails
+// to parse, signaling that the alignment check should fall through silently
+// (codegen drift is a separate concern owned by `gocell generate --verify`).
+func scanTypedResponseStructs(typesPath string) (map[int]struct{}, bool) {
+	if _, err := os.Stat(typesPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false
+		}
+		return nil, false
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, typesPath, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, false
+	}
+	out := map[int]struct{}{}
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		collectTypedResponseStatuses(gen.Specs, out)
+	}
+	return out, true
+}
+
+// collectTypedResponseStatuses appends every typed-response status code found
+// in specs into out. Extracted from scanTypedResponseStructs to keep cognitive
+// complexity below the package's 15-branch ceiling.
+func collectTypedResponseStatuses(specs []ast.Spec, out map[int]struct{}) {
+	for _, spec := range specs {
+		ts, ok := spec.(*ast.TypeSpec)
+		if !ok {
+			continue
+		}
+		m := typedResponseStructPattern.FindStringSubmatch(ts.Name.Name)
+		if m == nil {
+			continue
+		}
+		status, convErr := strconv.Atoi(m[1])
+		if convErr != nil {
+			continue
+		}
+		out[status] = struct{}{}
+	}
 }

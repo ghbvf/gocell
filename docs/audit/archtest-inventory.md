@@ -8,7 +8,7 @@
 
 - archtest 文件总数：72
 - archtest INVARIANT 锚点数：173
-- governance `rules_*.go` 文件数：15
+- governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
 
@@ -192,18 +192,11 @@
 
 | 文件 | 包含的规则 |
 |---|---|
-| `rules_advisory.go` | ADV-01, ADV-03, ADV-04, ADV-05, ADV-06, REF-14, TOPO-03, TOPO-07 |
-| `rules_consistency.go` | CONSISTENCY-EMIT-01 |
-| `rules_docs.go` | DOC-NAME-01 |
 | `rules_fmt.go` | FMT-01, FMT-02, FMT-03, FMT-04, FMT-05, FMT-06, FMT-07, FMT-08, FMT-09, FMT-10, FMT-11, FMT-12, FMT-13, FMT-14, FMT-15, FMT-24, FMT-26, FMT-27, FMT-28, FMT-29, FMT-30, REF-12 |
-| `rules_http_pathparam_uuid.go` | CH-04, CH-05 |
-| `rules_http_response_alignment.go` | CH-04 |
-| `rules_http_typed_envelope.go` | CH-04, CH-06 |
-| `rules_outbox.go` | OUTGUARD-01 |
-| `rules_ref.go` | FMT-07, REF-01, REF-02, REF-03, REF-04, REF-05, REF-06, REF-07, REF-08, REF-09, REF-10, REF-11, REF-12, REF-13, REF-14, REF-15, REF-16, REF-17 |
-| `rules_slice.go` | FMT-03, REF-01, SLICE-CONSISTENCY-01 |
-| `rules_strict.go` | DOC-NAME-01, FMT-14, FMT-16, FMT-17, FMT-18, FMT-19, FMT-30, FMT-A1, FMT-C1, VERIFY-06, WRAPPER-CONTRACTSPEC-IMPORT-01 |
-| `rules_strict_extra.go` | FMT-09, FMT-20, FMT-21, FMT-22, FMT-23, FMT-25, FMT-CONTRACT-DIR-ID-MATCH-01 |
+| `rules_http.go` | CH-04, CH-05, CH-06 |
+| `rules_misc_advisory.go` | ADV-01, ADV-03, ADV-04, ADV-05, ADV-06, DOC-NAME-01, FMT-03, FMT-18, FMT-19, OUTGUARD-01, REF-01, REF-14, SLICE-CONSISTENCY-01, TOPO-03, TOPO-07, WRAPPER-CONTRACTSPEC-IMPORT-01, WRAPPER-NO-PACKAGE-STATE |
+| `rules_misc_consistency.go` | CONSISTENCY-EMIT-01 |
+| `rules_misc_strict.go` | DOC-NAME-01, FMT-09, FMT-14, FMT-16, FMT-17, FMT-18, FMT-19, FMT-20, FMT-21, FMT-22, FMT-23, FMT-25, FMT-30, FMT-A1, FMT-C1, FMT-CONTRACT-DIR-ID-MATCH-01, VERIFY-06, WRAPPER-CONTRACTSPEC-IMPORT-01 |
+| `rules_ref.go` | FMT-07, REF-01, REF-02, REF-03, REF-04, REF-05, REF-06, REF-07, REF-08, REF-09, REF-10, REF-11, REF-13, REF-14, REF-15, REF-16, REF-17 |
 | `rules_topo.go` | FMT-03, REF-02, TOPO-01, TOPO-02, TOPO-03, TOPO-04, TOPO-05, TOPO-06, TOPO-07, TOPO-08, TOPO-09 |
 | `rules_verify.go` | FMT-03, REF-09, VERIFY-01, VERIFY-02, VERIFY-03, VERIFY-04, VERIFY-05, VERIFY-06 |
-| `rules_wrapper.go` | FMT-18, FMT-19, WRAPPER-CONTRACTSPEC-IMPORT-01, WRAPPER-NO-PACKAGE-STATE |
