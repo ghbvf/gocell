@@ -28,6 +28,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -81,10 +83,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 		rel, _ := filepath.Rel(root, f)
 		rel = filepath.ToSlash(rel)
 		hits, scanErr := scanGenerateServiceTokenCallSites(f, rel, knownCells)
-		if scanErr != nil {
-			t.Logf("scan error %s: %v", rel, scanErr)
-			continue
-		}
+		require.NoError(t, scanErr)
 		violations = append(violations, hits...)
 	}
 
@@ -136,7 +135,7 @@ func scanGenerateServiceTokenCallSites(path, rel string, knownCells map[string]b
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil //nolint:nilerr // soft-skip on read error: archtest fixture allows missing/unreadable files (caller will scan rest)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
 	authAliases := authPackageAliases(f)

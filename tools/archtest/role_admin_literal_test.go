@@ -120,8 +120,7 @@ func findRoleAdminConstLiterals(path string) ([]int, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		// Ignore parse errors for files that only compile under specific build tags.
-		return nil, nil //nolint:nilerr // parse errors indicate files that only compile under specific build tags; safe to skip
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	var lines []int
 	for _, decl := range f.Decls {
@@ -243,8 +242,7 @@ func findAdminLiteralCallSites(path string) ([]int, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		// Ignore parse errors for files that only compile under specific build tags.
-		return nil, nil //nolint:nilerr // parse errors indicate files that only compile under specific build tags; safe to skip
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
 	var lines []int
