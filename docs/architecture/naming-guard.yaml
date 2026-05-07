@@ -13,6 +13,11 @@ exclude:
   - docs/bak/**
   # docs/backlog.md — inline code snippets trigger replacements
   - docs/backlog.md
+  # docs/backlog/archive/** — historical snapshot of pre-framework backlog
+  # files (backlog.md / backlog1.md / backlog2.md / backlog_later_detail.md
+  # / tech-debt-registry.md @ 18a06ab7); legacy literals retained verbatim
+  # for git-history-equivalent traceability — do not rename or treat as active.
+  - docs/backlog/archive/**
 replacements:
   - literal: access-core
     replacement: accesscore
