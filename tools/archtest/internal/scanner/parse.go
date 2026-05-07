@@ -30,18 +30,21 @@ func eachFile(s Scope, mode parser.Mode, fn func(FileContext) error) error {
 		return err
 	}
 	for _, absPath := range files {
-		rel, err := filepath.Rel(s.modRoot, absPath)
-		if err != nil {
-			return fmt.Errorf("rel %s: %w", absPath, err)
+		rel, relErr := filepath.Rel(s.modRoot, absPath)
+		if relErr != nil {
+			// rel computation failed: use a clearly-labelled fallback so
+			// absolute paths do not appear in CI logs unexpectedly.
+			return fmt.Errorf("rel-failed: %s: %w", relErr, relErr)
 		}
+		relSlash := filepath.ToSlash(rel)
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, absPath, nil, mode)
 		if err != nil {
-			return fmt.Errorf("parse %s: %w", absPath, err)
+			return fmt.Errorf("parse %s: %w", relSlash, err)
 		}
 		fc := FileContext{
 			AbsPath: absPath,
-			Rel:     filepath.ToSlash(rel),
+			Rel:     relSlash,
 			Fset:    fset,
 			File:    f,
 		}
@@ -53,8 +56,11 @@ func eachFile(s Scope, mode parser.Mode, fn func(FileContext) error) error {
 }
 
 // EachFile iterates over every file in scope, parsing each with the given mode.
-// Any parse error or fn error causes t.Fatalf to be called immediately
-// (fail-loud by construction; no silent fallback).
+// Any parse error causes t.Fatalf immediately, stopping the entire test
+// (fail-loud by construction; no silent fallback). fn is invoked for each
+// successfully parsed file; calling t.Errorf inside fn does not stop iteration
+// (collect-all-violations semantics — the loop continues to accumulate further
+// findings before the test ultimately fails).
 func EachFile(t *testing.T, s Scope, mode parser.Mode, fn func(*testing.T, FileContext)) {
 	t.Helper()
 	if err := eachFile(s, mode, func(fc FileContext) error {

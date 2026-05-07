@@ -31,8 +31,10 @@ func TestParseFile_ErrorFailLoud(t *testing.T) {
 	if !strings.Contains(err.Error(), "parse") {
 		t.Errorf("error should contain 'parse', got: %v", err)
 	}
-	if !strings.Contains(err.Error(), dst) {
-		t.Errorf("error should contain file path %s, got: %v", dst, err)
+	// Error message uses the module-relative path (not the absolute path).
+	const wantRelPath = "broken.go"
+	if !strings.Contains(err.Error(), wantRelPath) {
+		t.Errorf("error should contain relative path %q, got: %v", wantRelPath, err)
 	}
 }
 

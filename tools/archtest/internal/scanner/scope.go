@@ -116,7 +116,7 @@ func (s Scope) Files() ([]string, error) {
 	seen := make(map[string]struct{})
 	var files []string
 	for _, root := range s.roots {
-		walked, err := walkGoFiles(root, s.skipDirs, s.includeTests)
+		walked, err := walkGoFiles(s.modRoot, root, s.skipDirs, s.includeTests)
 		if err != nil {
 			return nil, err
 		}
