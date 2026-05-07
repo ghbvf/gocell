@@ -271,6 +271,30 @@ func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 }
 
+// TestNewIdempotencyClaimer_RejectsNilClient pins the constructor's
+// nil-fail-fast contract. Symmetric with NewNonceStore.
+func TestNewIdempotencyClaimer_RejectsNilClient(t *testing.T) {
+	claimer, err := NewIdempotencyClaimer(nil, testNamespace)
+
+	require.Error(t, err)
+	assert.Nil(t, claimer)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+}
+
+// TestNewIdempotencyClaimer_RejectsInvalidNamespace pins that
+// ns.Validate() fires before the nil-client check.
+func TestNewIdempotencyClaimer_RejectsInvalidNamespace(t *testing.T) {
+	claimer, err := NewIdempotencyClaimer(nil, KeyNamespace(""))
+
+	require.Error(t, err)
+	assert.Nil(t, claimer)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
 func TestIdempotencyClaimer_Receipt_DoubleCommit_Idempotent(t *testing.T) {
 	mock := newClaimerMock()
 	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)

@@ -47,9 +47,9 @@ func mustNewNonceStoreFromCmdable(t *testing.T, rdb cmdable) *NonceStore {
 
 func mustNewRedisDriver(t *testing.T, rdb cmdable) *RedisDriver {
 	t.Helper()
-	d, err := NewRedisDriver(rdb, testNamespace)
+	d, err := newRedisDriverFromCmdable(rdb, testNamespace)
 	if err != nil {
-		t.Fatalf("NewRedisDriver: %v", err)
+		t.Fatalf("newRedisDriverFromCmdable: %v", err)
 	}
 	return d
 }

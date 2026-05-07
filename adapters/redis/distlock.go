@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
@@ -40,12 +41,29 @@ type RedisDriver struct {
 	ns  KeyNamespace
 }
 
-// NewRedisDriver creates a RedisDriver backed by the given cmdable and
-// KeyNamespace. ns is validated up front; an invalid namespace produces
-// an error.
-func NewRedisDriver(rdb cmdable, ns KeyNamespace) (*RedisDriver, error) {
+// NewRedisDriver creates a RedisDriver backed by the given Client and
+// KeyNamespace. ns is validated up front; nil client and invalid
+// namespace produce structured errors so misconfiguration fails-fast at
+// composition time.
+func NewRedisDriver(client *Client, ns KeyNamespace) (*RedisDriver, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
+	}
+	if client == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis distlock driver: client is nil")
+	}
+	return newRedisDriverFromCmdable(client.cmdable(), ns)
+}
+
+// newRedisDriverFromCmdable is the cmdable-level constructor used by tests
+// that need to inject a mock cmdable. Same validation contract as the
+// public constructor.
+func newRedisDriverFromCmdable(rdb cmdable, ns KeyNamespace) (*RedisDriver, error) {
+	if err := ns.Validate(); err != nil {
+		return nil, err
+	}
+	if rdb == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis distlock driver: cmdable is nil")
 	}
 	return &RedisDriver{rdb: rdb, ns: ns}, nil
 }

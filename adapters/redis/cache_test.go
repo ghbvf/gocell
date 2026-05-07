@@ -110,6 +110,32 @@ func TestCache_ViaClientConstructor(t *testing.T) {
 	assert.Equal(t, "works", val)
 }
 
+// TestNewCache_RejectsNilClient pins the constructor's nil-fail-fast
+// contract. Symmetric with NewNonceStore — a nil client at composition
+// time is a programmer error, not an infrastructure failure.
+func TestNewCache_RejectsNilClient(t *testing.T) {
+	cache, err := NewCache(nil, testNamespace)
+
+	require.Error(t, err)
+	assert.Nil(t, cache)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+}
+
+// TestNewCache_RejectsInvalidNamespace pins that ns.Validate() fires
+// before the nil-client check, so namespace errors surface as
+// ErrValidationFailed rather than being shadowed by infra errors.
+func TestNewCache_RejectsInvalidNamespace(t *testing.T) {
+	cache, err := NewCache(nil, KeyNamespace(""))
+
+	require.Error(t, err)
+	assert.Nil(t, cache)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
 // --- JSON generics tests ---
 
 type testItem struct {

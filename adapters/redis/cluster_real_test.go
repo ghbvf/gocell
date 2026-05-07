@@ -128,7 +128,7 @@ func TestClusterIntegration_DistLock(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+	drv, err := NewRedisDriver(client, testNamespace)
 	require.NoError(t, err)
 	key := fmt.Sprintf("integ:cluster:lock:%d", time.Now().UnixNano())
 

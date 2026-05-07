@@ -23,18 +23,27 @@ type Cache struct {
 }
 
 // NewCache creates a new Cache using the given Client and KeyNamespace.
-// ns is validated up front; an invalid namespace produces an error.
+// ns is validated up front; nil client and invalid namespace produce
+// structured errors so misconfiguration fails-fast at composition time.
 func NewCache(client *Client, ns KeyNamespace) (*Cache, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
 	}
-	return &Cache{rdb: client.cmdable(), ns: ns}, nil
+	if client == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis cache: client is nil")
+	}
+	return newCacheFromCmdable(client.cmdable(), ns)
 }
 
 // newCacheFromCmdable creates a Cache with a pre-built cmdable for testing.
+// Re-validates ns and the cmdable so direct test callers cannot bypass
+// the public constructor's invariants.
 func newCacheFromCmdable(rdb cmdable, ns KeyNamespace) (*Cache, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
+	}
+	if rdb == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis cache: cmdable is nil")
 	}
 	return &Cache{rdb: rdb, ns: ns}, nil
 }

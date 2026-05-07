@@ -34,7 +34,7 @@ func TestRaceStress_DistLock_SetNX_ExactlyOneWinner(t *testing.T) {
 	client, cleanup := startRedis(t)
 	defer cleanup()
 
-	drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+	drv, err := NewRedisDriver(client, testNamespace)
 	require.NoError(t, err)
 	ctx := context.Background()
 	key := fmt.Sprintf("race:distlock:setnx:%s", t.Name())

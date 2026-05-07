@@ -290,6 +290,30 @@ func TestBuildConsumerClaimer_RealMultiPodRequiresRedisClient(t *testing.T) {
 	assertErrCode(t, err, errcode.ErrControlplaneClaimerNotDistributed)
 }
 
+// TestBuildConsumerClaimer_DistributedFactoryErrorWrapped pins the
+// error-first path through buildConsumerClaimer: when the Redis claimer
+// factory returns an error (e.g., NewIdempotencyClaimer rejecting an
+// invalid namespace or nil client), the wrapper produces nil claimer +
+// consumerClaimerKindUnknown + a wrap message containing the original
+// error. Mirrors TestBuildServiceNonceStore_DistributedFactoryErrorWrapped.
+func TestBuildConsumerClaimer_DistributedFactoryErrorWrapped(t *testing.T) {
+	topo := bootstrap.Topology{
+		AdapterMode:    "real",
+		StorageBackend: "postgres",
+	}
+	restoreRedisClaimerFactory(t, func(*adapterredis.Client) (idempotency.Claimer, error) {
+		return nil, errRedisTestFactory
+	})
+
+	claimer, kind, err := buildConsumerClaimer(topo, new(adapterredis.Client), clock.Real())
+
+	require.Error(t, err)
+	assert.Nil(t, claimer)
+	assert.Equal(t, consumerClaimerKindUnknown, kind)
+	assert.ErrorIs(t, err, errRedisTestFactory)
+	assert.Contains(t, err.Error(), "build Redis idempotency claimer")
+}
+
 func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStores(t *testing.T) {
 	topo := bootstrap.Topology{
 		AdapterMode:    "real",

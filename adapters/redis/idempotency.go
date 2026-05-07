@@ -42,20 +42,28 @@ type IdempotencyClaimer struct {
 }
 
 // NewIdempotencyClaimer creates an IdempotencyClaimer using the given Client
-// and KeyNamespace. ns is validated up front; an invalid namespace produces
-// an error rather than a silently-prefixed-but-broken claimer.
+// and KeyNamespace. ns is validated up front; nil client and invalid
+// namespace produce structured errors so misconfiguration fails-fast at
+// composition time.
 func NewIdempotencyClaimer(client *Client, ns KeyNamespace) (*IdempotencyClaimer, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
 	}
-	return &IdempotencyClaimer{rdb: client.cmdable(), ns: ns}, nil
+	if client == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis idempotency claimer: client is nil")
+	}
+	return newIdempotencyClaimerFromCmdable(client.cmdable(), ns)
 }
 
 // newIdempotencyClaimerFromCmdable creates an IdempotencyClaimer with a
-// pre-built cmdable for testing.
+// pre-built cmdable for testing. Re-validates ns and the cmdable so
+// direct test callers cannot bypass the public constructor's invariants.
 func newIdempotencyClaimerFromCmdable(rdb cmdable, ns KeyNamespace) (*IdempotencyClaimer, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
+	}
+	if rdb == nil {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis idempotency claimer: cmdable is nil")
 	}
 	return &IdempotencyClaimer{rdb: rdb, ns: ns}, nil
 }

@@ -21,10 +21,15 @@
 //   - [RedisDriver] implements three semantic primitives (SetNX / Renew / Release)
 //     using Redis SET NX EX + two Lua scripts (token-matched PEXPIRE / DEL)
 //
-// Wiring:
+// Wiring (every constructor below is error-first and takes a KeyNamespace
+// — the per-cell or per-role keyspace prefix; see the KeyNamespace godoc
+// for naming conventions):
 //
-//	rdb := goredis.NewClient(&goredis.Options{Addr: "localhost:6379"})
-//	driver := redis.NewRedisDriver(rdb)
+//	client, err := redis.NewClient(ctx, redis.Config{Addr: "localhost:6379", Password: "s3cret"})
+//	if err != nil { return err }
+//
+//	driver, err := redis.NewRedisDriver(client, redis.KeyNamespace("accesscore"))
+//	if err != nil { return err }
 //	locker := distlock.MustNew(driver,
 //	    distlock.WithRenewFraction(0.5),
 //	    distlock.WithReleaseTimeout(5*time.Second),
@@ -34,6 +39,17 @@
 //	if err != nil { return err }
 //	defer func() { _ = release() }()
 //	// pass lockCtx to DB / HTTP / outbox calls — they auto-cancel on lock loss
+//
+// The Cache, IdempotencyClaimer, and NonceStore constructors follow the
+// same shape:
+//
+//	cache, err := redis.NewCache(client, redis.KeyNamespace("accesscore"))
+//	claimer, err := redis.NewIdempotencyClaimer(client, redis.KeyNamespace("_runtime"))
+//	store, err := redis.NewNonceStore(client, redis.KeyNamespace("servicetoken-nonce"), auth.ServiceTokenNonceTTL)
+//
+// Composition root (cmd/corebundle) injects the cell ID for per-cell
+// resources and the "_runtime" / "servicetoken-nonce" sentinels for
+// shared infrastructure with no cell context.
 //
 // # Distributed Locking Safety
 //
@@ -66,10 +82,12 @@
 //
 // IdempotencyClaimer's dual-KEY Lua scripts (claim/commit) require all KEYS
 // to map to the same Redis Cluster slot. Keys are wrapped in a hashtag
-// `{businessKey}:lease` / `{businessKey}:done` so CRC16 hashes only the
-// business key portion; lease and done keys colocate on the same slot under
-// every Cluster topology. Standalone/Sentinel use the same naming for a
-// single source of truth — the hashtag is a no-op outside Cluster.
+// `<ns>:{businessKey}:lease` / `<ns>:{businessKey}:done` (the KeyNamespace
+// prefix sits OUTSIDE the hashtag) so CRC16 hashes only the business key
+// portion; lease and done keys colocate on the same slot under every
+// Cluster topology regardless of namespace value. Standalone/Sentinel use
+// the same naming for a single source of truth — the hashtag is a no-op
+// outside Cluster.
 //
 // ref: redis/go-redis osscluster.go — ClusterOptions / ParseClusterURL
 // ref: Redis cluster-spec hash-tags — {tag} sub-string colocation rule

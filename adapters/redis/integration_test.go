@@ -146,7 +146,7 @@ func TestIntegration_RedisDriver_SetNX_Contention(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+	drv, err := NewRedisDriver(client, testNamespace)
 	require.NoError(t, err)
 	key := "integ:drv:contention:" + t.Name()
 
@@ -178,7 +178,7 @@ func TestIntegration_RedisDriver_Release_CancelledCtx(t *testing.T) {
 	client, cleanup := startRedis(t)
 	defer cleanup()
 
-	drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+	drv, err := NewRedisDriver(client, testNamespace)
 	require.NoError(t, err)
 	key := "integ:drv:cancel-ctx:" + t.Name()
 	ctx := context.Background()
@@ -224,7 +224,7 @@ func TestRedisDriver_Conformance(t *testing.T) {
 		t.Helper()
 		n := counter.Add(1)
 		prefix := fmt.Sprintf("conformance:%s:%d:", t.Name(), n)
-		drv, err := NewRedisDriver(client.cmdable(), testNamespace)
+		drv, err := NewRedisDriver(client, testNamespace)
 		require.NoError(t, err)
 		return &prefixedRedisDriver{
 			RedisDriver: drv,

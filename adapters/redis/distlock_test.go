@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
@@ -177,4 +178,41 @@ func TestRedisDriver_Release_IOError(t *testing.T) {
 	err := drv.Release(context.Background(), "lock:release:ioerr", "token-A")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "redis distlock: Release")
+}
+
+// TestNewRedisDriver_RejectsNilClient pins the public constructor's
+// nil-fail-fast contract. Symmetric with NewCache /
+// NewIdempotencyClaimer / NewNonceStore.
+func TestNewRedisDriver_RejectsNilClient(t *testing.T) {
+	drv, err := NewRedisDriver(nil, testNamespace)
+
+	require.Error(t, err)
+	assert.Nil(t, drv)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+}
+
+// TestNewRedisDriver_RejectsInvalidNamespace pins that ns.Validate()
+// fires before the nil-client check.
+func TestNewRedisDriver_RejectsInvalidNamespace(t *testing.T) {
+	drv, err := NewRedisDriver(nil, KeyNamespace(""))
+
+	require.Error(t, err)
+	assert.Nil(t, drv)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
+// TestNewRedisDriverFromCmdable_RejectsNilCmdable pins the internal
+// cmdable-level constructor's nil-fail-fast contract.
+func TestNewRedisDriverFromCmdable_RejectsNilCmdable(t *testing.T) {
+	drv, err := newRedisDriverFromCmdable(nil, testNamespace)
+
+	require.Error(t, err)
+	assert.Nil(t, drv)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
 }
