@@ -280,7 +280,7 @@ const rulePGRepoRollbackRedact01 = "PG-REPO-ROLLBACK-REDACT-01"
 // TestPGRepoRollbackRedact01 enforces that every non-test Go file in
 // adapters/postgres/ that contains a function body referencing "rollback" or
 // "Rollback" also calls pkg/redaction.RedactError somewhere in that same
-// function body. This ensures rollback error paths are always sanitised before
+// function body. This ensures rollback error paths are always sanitized before
 // being written to structured logs.
 //
 // INVARIANT: PG-REPO-ROLLBACK-REDACT-01

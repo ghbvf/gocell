@@ -12,8 +12,8 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
@@ -127,7 +127,8 @@ func (m AccessCoreModule) Provide(
 		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
 		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
 		accessOpts = append(accessOpts, pgRepoOpts...)
-		accessOpts = append(accessOpts,
+		accessOpts = append(
+			accessOpts,
 			accesscore.WithOutboxDeps(nil, writer),
 			accesscore.WithTxManager(txMgr),
 			accesscore.WithRefreshStore(pgRefreshStore),
@@ -142,12 +143,13 @@ func (m AccessCoreModule) Provide(
 		// in log-only mode.
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
 		if shared.InternalGuard != nil {
-			accessOpts = append(accessOpts,
+			accessOpts = append(
+				accessOpts,
 				configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring, shared.Clock),
 			)
 		}
 	} else {
-		// "memory" (default dev mode) and any unrecognised backend both use
+		// "memory" (default dev mode) and any unrecognized backend both use
 		// in-memory repositories. Topology validation upstream rejects unknown
 		// backends before this point; the else branch here is defense-in-depth.
 		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())

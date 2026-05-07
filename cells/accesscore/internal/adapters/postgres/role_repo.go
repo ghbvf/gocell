@@ -336,8 +336,8 @@ func (r *PGRoleRepository) CountByRole(ctx context.Context, roleID string) (int,
 
 // ListByUserID returns a paginated, sorted list of roles assigned to userID.
 // Sorting and cursor-based pagination are applied in-memory after a full JOIN
-// scan, matching the mem.RoleRepository approach. A future optimisation can
-// push ordering into SQL once the sort/cursor schema stabilises.
+// scan, matching the mem.RoleRepository approach. A future optimization can
+// push ordering into SQL once the sort/cursor schema stabilizes.
 func (r *PGRoleRepository) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	rows, err := r.queryCtx(ctx, listByUserIDSQL, userID)
 	if err != nil {

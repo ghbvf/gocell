@@ -23,12 +23,15 @@ func (*typedNilUserClock) Until(t time.Time) time.Duration { return time.Until(t
 func (*typedNilUserClock) NewTimerAt(t time.Time) clock.Timer {
 	return clock.Real().NewTimerAt(t)
 }
+
 func (*typedNilUserClock) NewTicker(d time.Duration) clock.Ticker {
 	return clock.Real().NewTicker(d)
 }
+
 func (*typedNilUserClock) AfterFunc(t time.Time, fn func()) clock.Timer {
 	return clock.Real().AfterFunc(t, fn)
 }
+
 func (*typedNilUserClock) Sleep(ctx context.Context, t time.Time) error {
 	return clock.Real().Sleep(ctx, t)
 }
