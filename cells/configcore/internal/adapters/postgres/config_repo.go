@@ -185,11 +185,11 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
 	aad := configcrypto.AADForConfig(cellID, key)
-	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
+	result, err := r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
 		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key="+key, err)
 	}
-	return ct, keyID, nonce, edk, nil
+	return result.Ciphertext, result.KeyID, result.Nonce, result.EDK, nil
 }
 
 // decryptValue decrypts a cipher-column tuple for a sensitive entry.
@@ -219,11 +219,11 @@ func (r *ConfigRepository) encryptVersionValue(
 			"config repo: no ValueTransformer configured for sensitive version")
 	}
 	aad := configcrypto.AADForVersion(cellID, configID)
-	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
+	result, err := r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
 		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "EncryptVersion", "config_id="+configID, err)
 	}
-	return ct, keyID, nonce, edk, nil
+	return result.Ciphertext, result.KeyID, result.Nonce, result.EDK, nil
 }
 
 // decryptVersionValue decrypts a cipher-column tuple for a sensitive config version.

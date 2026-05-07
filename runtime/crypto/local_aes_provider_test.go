@@ -65,14 +65,14 @@ func TestLocalAESKeyProvider_ByID_OldKeyStillDecrypts(t *testing.T) {
 	plaintext := []byte("secret value")
 	aad := []byte("cell:configcore/key:db_password")
 
-	cipher, nonce, edk, _, err := current.Encrypt(ctx, plaintext, aad)
+	result, err := current.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Retrieve the same key by ID and decrypt.
 	handle, err := p.ByID(ctx, currentID)
 	require.NoError(t, err)
 
-	recovered, err := handle.Decrypt(ctx, cipher, nonce, edk, aad)
+	recovered, err := handle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
 }
@@ -91,11 +91,11 @@ func TestLocalAESKeyProvider_ByID_PreviousKeyDecrypts(t *testing.T) {
 
 	plaintext := []byte("old secret")
 	aad := []byte("cell:configcore/key:legacy_key")
-	cipher, nonce, edk, _, err := prevHandle.Encrypt(ctx, plaintext, aad)
+	result, err := prevHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Decrypt using the same previous handle.
-	recovered, err := prevHandle.Decrypt(ctx, cipher, nonce, edk, aad)
+	recovered, err := prevHandle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
 }
@@ -148,14 +148,14 @@ func TestLocalAESKeyProvider_EnvelopeRoundTrip(t *testing.T) {
 			plaintext := []byte(tc.plaintext)
 			aad := []byte(tc.aad)
 
-			ct, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
+			result, err := handle.Encrypt(ctx, plaintext, aad)
 			require.NoError(t, err)
 			// AES-GCM produces at least the 16-byte tag even for empty plaintext.
-			assert.NotEmpty(t, ct)
-			assert.NotEmpty(t, nonce)
-			assert.NotEmpty(t, edk)
+			assert.NotEmpty(t, result.Ciphertext)
+			assert.NotEmpty(t, result.Nonce)
+			assert.NotEmpty(t, result.EDK)
 
-			recovered, err := handle.Decrypt(ctx, ct, nonce, edk, aad)
+			recovered, err := handle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, aad)
 			require.NoError(t, err)
 			// AES-GCM Open on empty plaintext returns nil; normalise both to empty.
 			if len(recovered) == 0 {
@@ -207,10 +207,10 @@ func TestLocalAESKeyProvider_DecryptAADMismatch_FailClosed(t *testing.T) {
 	aad := []byte("cell:configcore/key:my_key")
 	wrongAAD := []byte("cell:configcore/key:other_key")
 
-	cipher, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
+	result, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	_, err = handle.Decrypt(ctx, cipher, nonce, edk, wrongAAD)
+	_, err = handle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, wrongAAD)
 	require.Error(t, err, "mismatched AAD must cause decrypt failure")
 
 	var ec *errcode.Error
@@ -232,12 +232,12 @@ func TestLocalAESKeyProvider_NonceUnique(t *testing.T) {
 	plaintext := []byte("same value")
 	aad := []byte("same aad")
 
-	_, nonce1, _, _, err := handle.Encrypt(ctx, plaintext, aad)
+	result1, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	_, nonce2, _, _, err := handle.Encrypt(ctx, plaintext, aad)
+	result2, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	assert.NotEqual(t, nonce1, nonce2, "consecutive Encrypt calls must produce different nonces")
+	assert.NotEqual(t, result1.Nonce, result2.Nonce, "consecutive Encrypt calls must produce different nonces")
 }
 
 // ---------------------------------------------------------------------------
@@ -251,11 +251,11 @@ func TestLocalAESHandle_Decrypt_MissingNonce(t *testing.T) {
 	require.NoError(t, err)
 
 	// Encrypt to get a valid ciphertext + edk.
-	ct, _, edk, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	result, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
 	require.NoError(t, err)
 
 	// Pass empty nonce — must fail.
-	_, err = handle.Decrypt(ctx, ct, nil, edk, []byte("aad"))
+	_, err = handle.Decrypt(ctx, result.Ciphertext, nil, result.EDK, []byte("aad"))
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -273,11 +273,11 @@ func TestLocalAESHandle_Decrypt_MissingEDK(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	ct, nonce, _, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	result, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
 	require.NoError(t, err)
 
 	// Pass empty edk — must fail.
-	_, err = handle.Decrypt(ctx, ct, nonce, nil, []byte("aad"))
+	_, err = handle.Decrypt(ctx, result.Ciphertext, result.Nonce, nil, []byte("aad"))
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -295,15 +295,15 @@ func TestLocalAESHandle_Decrypt_TamperedEDK(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	ct, nonce, edk, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	result, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
 	require.NoError(t, err)
 
 	// Flip the last byte of edk to simulate tampering.
-	tampered := make([]byte, len(edk))
-	copy(tampered, edk)
+	tampered := make([]byte, len(result.EDK))
+	copy(tampered, result.EDK)
 	tampered[len(tampered)-1] ^= 0xFF
 
-	_, err = handle.Decrypt(ctx, ct, nonce, tampered, []byte("aad"))
+	_, err = handle.Decrypt(ctx, result.Ciphertext, result.Nonce, tampered, []byte("aad"))
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -375,17 +375,15 @@ func TestLocalAESHandle_Encrypt_ReturnsKeyIDEqualsHandleID(t *testing.T) {
 	plaintext := []byte("sensitive config value")
 	aad := []byte("cell:configcore/key:api_key")
 
-	// Five-return-value Encrypt (Phase 0-b kernel interface).
-	// Compile error here is expected until Phase 2-c updates localAESHandle.Encrypt.
-	ct, nonce, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
+	result, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	assert.NotEmpty(t, ct)
-	assert.NotEmpty(t, nonce)
-	assert.NotEmpty(t, edk)
+	assert.NotEmpty(t, result.Ciphertext)
+	assert.NotEmpty(t, result.Nonce)
+	assert.NotEmpty(t, result.EDK)
 
 	// Core assertion: keyID returned from Encrypt must equal handle.ID().
-	assert.Equal(t, handle.ID(), keyID, "Encrypt must return the handle's key ID")
-	assert.Equal(t, crypto.LocalAESCurrentKeyID, keyID,
+	assert.Equal(t, handle.ID(), result.KeyID, "Encrypt must return the handle's key ID")
+	assert.Equal(t, crypto.LocalAESCurrentKeyID, result.KeyID,
 		"LocalAES current handle keyID must be %q", crypto.LocalAESCurrentKeyID)
 }
 
@@ -422,23 +420,22 @@ func TestLocalAESHandle_Encrypt_ByIDReturnedKeyIDMatches(t *testing.T) {
 	plaintext := []byte("old secret value")
 	aad := []byte("cell:configcore/key:legacy_db_password")
 
-	// Five-return-value Encrypt (Phase 0-b kernel interface).
-	ct, nonce, edk, keyID, err := prevHandle.Encrypt(ctx, plaintext, aad)
+	result, err := prevHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// keyID from Encrypt must equal the handle's own ID.
-	assert.Equal(t, crypto.LocalAESPreviousKeyID, keyID,
+	assert.Equal(t, crypto.LocalAESPreviousKeyID, result.KeyID,
 		"Encrypt on previous handle must return previous key ID")
-	assert.Equal(t, prevHandle.ID(), keyID,
+	assert.Equal(t, prevHandle.ID(), result.KeyID,
 		"Encrypt-returned keyID must equal handle.ID()")
 
 	// Round-trip: resolve via ByID(keyID) and decrypt — proving keyID is the
 	// correct binding between ciphertext and the KEK version.
-	resolvedHandle, err := p.ByID(ctx, keyID)
+	resolvedHandle, err := p.ByID(ctx, result.KeyID)
 	require.NoError(t, err)
-	assert.Equal(t, keyID, resolvedHandle.ID())
+	assert.Equal(t, result.KeyID, resolvedHandle.ID())
 
-	recovered, err := resolvedHandle.Decrypt(ctx, ct, nonce, edk, aad)
+	recovered, err := resolvedHandle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered,
 		"Decrypt via ByID(keyID) must recover original plaintext")
@@ -478,37 +475,36 @@ func TestLocalAESHandle_Encrypt_DoesNotReuseBuffers(t *testing.T) {
 	plaintext := []byte("same plaintext for both calls")
 	aad := []byte("cell:configcore/key:test_key")
 
-	// Five-return-value Encrypt (Phase 0-b kernel interface).
-	ct1, nonce1, edk1, keyID1, err := handle.Encrypt(ctx, plaintext, aad)
+	result1, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	ct2, nonce2, edk2, keyID2, err := handle.Encrypt(ctx, plaintext, aad)
+	result2, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// keyID must be stable (same handle, same KEK version).
-	assert.Equal(t, keyID1, keyID2, "keyID must be stable across calls on the same handle")
+	assert.Equal(t, result1.KeyID, result2.KeyID, "keyID must be stable across calls on the same handle")
 
 	// Nonces must differ (random per-call).
-	assert.NotEqual(t, nonce1, nonce2, "consecutive Encrypt calls must produce different nonces")
+	assert.NotEqual(t, result1.Nonce, result2.Nonce, "consecutive Encrypt calls must produce different nonces")
 
 	// edk must differ (each call wraps a fresh random DEK).
 	// If the same DEK were reused, the edk blobs would be identical (GCM is
 	// deterministic given the same key + nonce, and the edk nonce is also random).
 	// In practice two independent random DEKs will produce different edks with
 	// overwhelming probability.
-	assert.NotEqual(t, edk1, edk2,
+	assert.NotEqual(t, result1.EDK, result2.EDK,
 		"consecutive Encrypt calls must wrap independent DEKs (edk must differ)")
 
 	// Ciphertext must differ (different DEK -> different ciphertext even for same plaintext).
-	assert.NotEqual(t, ct1, ct2,
+	assert.NotEqual(t, result1.Ciphertext, result2.Ciphertext,
 		"consecutive Encrypt calls must produce different ciphertexts (different DEK)")
 
 	// Both must decrypt correctly — independence does not break correctness.
-	recovered1, err := handle.Decrypt(ctx, ct1, nonce1, edk1, aad)
+	recovered1, err := handle.Decrypt(ctx, result1.Ciphertext, result1.Nonce, result1.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered1)
 
-	recovered2, err := handle.Decrypt(ctx, ct2, nonce2, edk2, aad)
+	recovered2, err := handle.Decrypt(ctx, result2.Ciphertext, result2.Nonce, result2.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered2)
 }

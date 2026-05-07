@@ -500,42 +500,47 @@ func (h *vaultTransitHandle) ID() string { return h.id }
 //
 // ref: hashicorp/vault api-docs/secret/transit POST /transit/datakey/plaintext/:name
 // ref: kubernetes/kubernetes kmsv2/envelope.go@master (EncryptResponse.KeyID)
-func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error) {
+func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte) (kcrypto.EncryptResult, error) {
 	dkPath := h.mountPath + "/datakey/plaintext/" + h.keyName
 	result, err := h.client.Write(ctx, dkPath, map[string]any{"bits": 256})
 	if err != nil {
-		return nil, nil, nil, "", classifyVaultEncryptError(err)
+		return kcrypto.EncryptResult{}, classifyVaultEncryptError(err)
 	}
 
 	plaintextB64, ok := result["plaintext"].(string)
 	if !ok {
-		return nil, nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
+		return kcrypto.EncryptResult{}, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: datakey response missing string 'plaintext' field")
 	}
 	dek, err := base64.StdEncoding.DecodeString(plaintextB64)
 	if err != nil {
-		return nil, nil, nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
+		return kcrypto.EncryptResult{}, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: base64 decode DEK from datakey response", err)
 	}
 	defer clear(dek)
 
 	ciphertextStr, ok := result["ciphertext"].(string)
 	if !ok {
-		return nil, nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
+		return kcrypto.EncryptResult{}, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: datakey response missing string 'ciphertext' field")
 	}
-	keyID, err = parseVaultKeyID(ciphertextStr, errcode.ErrKeyProviderEncryptFailed)
+	keyID, err := parseVaultKeyID(ciphertextStr, errcode.ErrKeyProviderEncryptFailed)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return kcrypto.EncryptResult{}, err
 	}
 
-	ciphertext, nonce, err = aeadutil.EncryptGCM(dek, plaintext, aad)
+	ciphertext, nonce, err := aeadutil.EncryptGCM(dek, plaintext, aad)
 	if err != nil {
-		return nil, nil, nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
+		return kcrypto.EncryptResult{}, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: local AES-GCM encrypt", err)
 	}
 
-	return ciphertext, nonce, []byte(ciphertextStr), keyID, nil
+	return kcrypto.EncryptResult{
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+		EDK:        []byte(ciphertextStr),
+		KeyID:      keyID,
+	}, nil
 }
 
 // Decrypt decrypts ciphertext using envelope decryption.

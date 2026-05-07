@@ -104,16 +104,16 @@ func TestTransitEnvelope_RoundTrip(t *testing.T) {
 	plaintext := []byte("prod-api-secret")
 	aad := []byte("cell:configcore/key:api_key")
 
-	ct, nonce, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
+	result, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	assert.NotEmpty(t, ct, "ciphertext must be non-empty")
-	assert.NotNil(t, nonce, "nonce must be present for envelope AES-GCM")
-	assert.NotEmpty(t, nonce, "nonce must be non-empty")
-	assert.NotNil(t, edk, "edk (wrapped DEK) must be present for envelope mode")
-	assert.NotEmpty(t, edk, "edk must be non-empty")
-	assert.Contains(t, keyID, "vault-transit:v", "keyID must reflect vault key version")
+	assert.NotEmpty(t, result.Ciphertext, "ciphertext must be non-empty")
+	assert.NotNil(t, result.Nonce, "nonce must be present for envelope AES-GCM")
+	assert.NotEmpty(t, result.Nonce, "nonce must be non-empty")
+	assert.NotNil(t, result.EDK, "edk (wrapped DEK) must be present for envelope mode")
+	assert.NotEmpty(t, result.EDK, "edk must be non-empty")
+	assert.Contains(t, result.KeyID, "vault-transit:v", "keyID must reflect vault key version")
 
-	recovered, err := handle.Decrypt(ctx, ct, nonce, edk, aad)
+	recovered, err := handle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered, "round-trip must recover original plaintext")
 }
@@ -199,10 +199,10 @@ path "transit/keys/gocell-config/rotate"       { capabilities = ["create","updat
 	plaintext := []byte("approle-encrypted-secret")
 	aad := []byte("cell:configcore/key:approle_test")
 
-	ct, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
+	result, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	recovered, err := handle.Decrypt(ctx, ct, nonce, edk, aad)
+	recovered, err := handle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered, "AppRole auth: round-trip must recover original plaintext")
 }
@@ -261,12 +261,12 @@ func TestTransitEnvelope_AADMismatch_FailsClosed(t *testing.T) {
 	plaintext := []byte("secret-value")
 	encryptAAD := []byte("cell:configcore/key:row_a")
 
-	ct, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, encryptAAD)
+	result, err := handle.Encrypt(ctx, plaintext, encryptAAD)
 	require.NoError(t, err)
 
 	// Attempt cross-row replay: decrypt with a different AAD.
 	wrongAAD := []byte("cell:configcore/key:row_b")
-	_, err = handle.Decrypt(ctx, ct, nonce, edk, wrongAAD)
+	_, err = handle.Decrypt(ctx, result.Ciphertext, result.Nonce, result.EDK, wrongAAD)
 	require.Error(t, err, "decrypting with mismatched AAD must fail-closed (cross-row replay blocked)")
 
 	var ec *errcode.Error
@@ -300,9 +300,9 @@ func TestTransitEnvelope_RotateThenDecryptOldCiphertext(t *testing.T) {
 	plaintext := []byte("pre-rotation-value")
 	aad := []byte("cell:configcore/key:old_key")
 
-	ct1, nonce1, edk1, keyID1, err := handle1.Encrypt(ctx, plaintext, aad)
+	result1, err := handle1.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	assert.Contains(t, keyID1, "vault-transit:v1", "keyID must reflect v1 at encrypt time")
+	assert.Contains(t, result1.KeyID, "vault-transit:v1", "keyID must reflect v1 at encrypt time")
 
 	// Rotate to v2.
 	newID, err := p.Rotate(ctx)
@@ -318,7 +318,7 @@ func TestTransitEnvelope_RotateThenDecryptOldCiphertext(t *testing.T) {
 	handle1b, err := p.ByID(ctx, handle1.ID())
 	require.NoError(t, err)
 
-	recovered, err := handle1b.Decrypt(ctx, ct1, nonce1, edk1, aad)
+	recovered, err := handle1b.Decrypt(ctx, result1.Ciphertext, result1.Nonce, result1.EDK, aad)
 	require.NoError(t, err, "historical ciphertext encrypted with v1 must still be decryptable")
 	assert.Equal(t, plaintext, recovered)
 }
@@ -445,7 +445,7 @@ func TestTransitEnvelope_VaultNeverSeesBusinessPlaintext(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	_, _, _, _, err = handle.Encrypt(ctx, plaintext, aad)
+	_, err = handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Inspect the captured encrypt request.
@@ -513,21 +513,21 @@ func TestTransitEnvelope_KeyIDFromEncryptResponse(t *testing.T) {
 	plaintext := []byte("key-id-check-value")
 	aad := []byte("cell:configcore/key:key_id_test")
 
-	_, _, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
+	result, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// keyID must have the "vault-transit:v" prefix.
-	assert.True(t, strings.HasPrefix(keyID, "vault-transit:v"),
-		"keyID from Encrypt must start with 'vault-transit:v', got: %q", keyID)
+	assert.True(t, strings.HasPrefix(result.KeyID, "vault-transit:v"),
+		"keyID from Encrypt must start with 'vault-transit:v', got: %q", result.KeyID)
 
 	// keyID from Encrypt must match handle.ID() (no rotation happened).
-	assert.Equal(t, handleID, keyID,
+	assert.Equal(t, handleID, result.KeyID,
 		"keyID from Encrypt() must equal handle.ID() when no rotation occurred")
 
 	// The edk must start with the Vault ciphertext prefix "vault:v".
 	// This is the raw wrapped DEK ciphertext; the "vault:vN:" prefix is how
 	// we extract the key version.
-	edkStr := string(edk)
+	edkStr := string(result.EDK)
 	assert.True(t, strings.HasPrefix(edkStr, "vault:v"),
 		"edk (wrapped DEK) must start with Vault ciphertext prefix 'vault:v', got: %q", edkStr)
 
@@ -536,6 +536,6 @@ func TestTransitEnvelope_KeyIDFromEncryptResponse(t *testing.T) {
 	edkParts := strings.SplitN(edkStr, ":", 3)
 	require.Len(t, edkParts, 3, "edk must have format 'vault:vN:...'")
 	versionFromEDK := edkParts[1] // e.g. "v1"
-	assert.Equal(t, "vault-transit:"+versionFromEDK, keyID,
+	assert.Equal(t, "vault-transit:"+versionFromEDK, result.KeyID,
 		"keyID must be 'vault-transit:' + version extracted from edk prefix")
 }

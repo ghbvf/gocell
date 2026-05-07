@@ -54,13 +54,13 @@ func TestValueTransformer_EncryptDecrypt_RoundTrip(t *testing.T) {
 			plaintext := []byte(tc.value)
 			aad := testAAD(tc.configKey)
 
-			ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
+			result, err := tr.Encrypt(ctx, plaintext, aad)
 			require.NoError(t, err)
-			assert.NotEmpty(t, keyID)
-			assert.NotEmpty(t, nonce)
-			assert.NotEmpty(t, edk)
+			assert.NotEmpty(t, result.KeyID)
+			assert.NotEmpty(t, result.Nonce)
+			assert.NotEmpty(t, result.EDK)
 
-			recovered, err := tr.Decrypt(ctx, ct, keyID, nonce, edk, aad)
+			recovered, err := tr.Decrypt(ctx, result.Ciphertext, result.KeyID, result.Nonce, result.EDK, aad)
 			require.NoError(t, err)
 			// AES-GCM Open on empty plaintext returns nil; normalise both.
 			if len(recovered) == 0 {
@@ -102,12 +102,12 @@ func TestValueTransformer_DecryptByHistoricalKeyID(t *testing.T) {
 	plaintext := []byte("old-secret")
 	aad := testAAD("legacy_key")
 
-	ct, nonce, edk, _, err := previousHandle.Encrypt(ctx, plaintext, aad)
+	result, err := previousHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// The transformer should decrypt using the historical keyID.
 	tr := crypto.NewValueTransformer(p)
-	recovered, err := tr.Decrypt(ctx, ct, crypto.LocalAESPreviousKeyID, nonce, edk, aad)
+	recovered, err := tr.Decrypt(ctx, result.Ciphertext, crypto.LocalAESPreviousKeyID, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
 }
@@ -124,10 +124,10 @@ func TestValueTransformer_DecryptWrongAAD_FailClosed(t *testing.T) {
 	aad := testAAD("my_key")
 	wrongAAD := testAAD("other_key")
 
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
+	result, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	_, err = tr.Decrypt(ctx, ct, keyID, nonce, edk, wrongAAD)
+	_, err = tr.Decrypt(ctx, result.Ciphertext, result.KeyID, result.Nonce, result.EDK, wrongAAD)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -145,10 +145,10 @@ func TestValueTransformer_UnknownKeyID_FailClosed(t *testing.T) {
 
 	plaintext := []byte("value")
 	aad := testAAD("my_key")
-	ct, _, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
+	result, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	_, err = tr.Decrypt(ctx, ct, "nonexistent-key-id", nonce, edk, aad)
+	_, err = tr.Decrypt(ctx, result.Ciphertext, "nonexistent-key-id", result.Nonce, result.EDK, aad)
 	require.Error(t, err, "unknown keyID must return an error (fail-closed)")
 }
 
@@ -163,14 +163,14 @@ func TestNoopTransformer_Passthrough(t *testing.T) {
 	plaintext := []byte("public-config-value")
 	aad := testAAD("public_key")
 
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
+	result, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	assert.Equal(t, plaintext, ct)
-	assert.Empty(t, keyID)
-	assert.Nil(t, nonce)
-	assert.Nil(t, edk)
+	assert.Equal(t, plaintext, result.Ciphertext)
+	assert.Empty(t, result.KeyID)
+	assert.Nil(t, result.Nonce)
+	assert.Nil(t, result.EDK)
 
-	recovered, err := tr.Decrypt(ctx, ct, keyID, nonce, edk, aad)
+	recovered, err := tr.Decrypt(ctx, result.Ciphertext, result.KeyID, result.Nonce, result.EDK, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
 }
@@ -217,8 +217,8 @@ type errorKeyHandle struct {
 
 func (h *errorKeyHandle) ID() string { return "error-key" }
 
-func (h *errorKeyHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, string, error) {
-	return nil, nil, nil, "", h.encryptErr
+func (h *errorKeyHandle) Encrypt(_ context.Context, _, _ []byte) (crypto.EncryptResult, error) {
+	return crypto.EncryptResult{}, h.encryptErr
 }
 
 func (h *errorKeyHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) {
@@ -252,7 +252,7 @@ func TestValueTransformer_Encrypt_CurrentKeyError(t *testing.T) {
 	p := &errorKeyProvider{currentErr: errors.New("current key unavailable")}
 	tr := crypto.NewValueTransformer(p)
 
-	_, _, _, _, err := tr.Encrypt(ctx, []byte("value"), nil)
+	_, err := tr.Encrypt(ctx, []byte("value"), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "get current key")
 }
@@ -265,7 +265,7 @@ func TestValueTransformer_Encrypt_HandleEncryptError(t *testing.T) {
 	p := &singleHandleProvider{handle: &errorKeyHandle{encryptErr: encErr}}
 	tr := crypto.NewValueTransformer(p)
 
-	_, _, _, _, err := tr.Encrypt(ctx, []byte("value"), nil)
+	_, err := tr.Encrypt(ctx, []byte("value"), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "encrypt")
 }
@@ -283,7 +283,7 @@ func TestValueTransformer_Decrypt_ByIDError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Fake KeyHandle/KeyProvider for Phase 1-d tests (5-return-value interface)
+// Fake KeyHandle/KeyProvider for EncryptResult interface tests
 // ---------------------------------------------------------------------------
 
 // fixedKeyIDHandle implements kernel/crypto.KeyHandle for TC-VT-1.
@@ -300,14 +300,18 @@ func (h *fixedKeyIDHandle) ID() string { return h.handleID }
 // Encrypt returns a trivial ciphertext with encryptKeyID as keyID.
 // The ciphertext is just plaintext XOR'd with 0x55 (dummy cipher — correctness
 // is not the concern of TC-VT-1; keyID routing is).
-// Implements kernel/crypto.KeyHandle with the Phase 0-b 5-return-value signature.
-func (h *fixedKeyIDHandle) Encrypt(_ context.Context, plaintext, _ []byte) (ciphertext, nonce, edk []byte, keyID string, err error) {
+func (h *fixedKeyIDHandle) Encrypt(_ context.Context, plaintext, _ []byte) (crypto.EncryptResult, error) {
 	ct := make([]byte, len(plaintext))
 	for i, b := range plaintext {
 		ct[i] = b ^ 0x55
 	}
 	// Return encryptKeyID as the authoritative keyID (may differ from h.handleID).
-	return ct, []byte("nonce"), []byte("edk"), h.encryptKeyID, nil
+	return crypto.EncryptResult{
+		Ciphertext: ct,
+		Nonce:      []byte("nonce"),
+		EDK:        []byte("edk"),
+		KeyID:      h.encryptKeyID,
+	}, nil
 }
 
 // Decrypt reverses fixedKeyIDHandle.Encrypt.
@@ -326,9 +330,8 @@ type transientErrorHandle struct{}
 func (h *transientErrorHandle) ID() string { return "transient-key" }
 
 // Encrypt returns ErrKeyProviderTransient — simulating a Vault 503 or network timeout.
-// Implements kernel/crypto.KeyHandle with the Phase 0-b 5-return-value signature.
-func (h *transientErrorHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, string, error) {
-	return nil, nil, nil, "", errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient,
+func (h *transientErrorHandle) Encrypt(_ context.Context, _, _ []byte) (crypto.EncryptResult, error) {
+	return crypto.EncryptResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient,
 		"vault: service unavailable (503)")
 }
 
@@ -390,18 +393,18 @@ func TestKeyProviderTransformer_UsesEncryptReturnedKeyID_NotHandleID(t *testing.
 	plaintext := []byte("sensitive value")
 	aad := testAAD("tc_vt1_key")
 
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
+	result, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	assert.NotEmpty(t, ct)
-	assert.NotEmpty(t, nonce)
-	assert.NotEmpty(t, edk)
+	assert.NotEmpty(t, result.Ciphertext)
+	assert.NotEmpty(t, result.Nonce)
+	assert.NotEmpty(t, result.EDK)
 
 	// Core assertion: transformer must persist the keyID returned by Encrypt.
-	assert.Equal(t, "actual-used-keyID", keyID,
+	assert.Equal(t, "actual-used-keyID", result.KeyID,
 		"transformer must use keyID returned by handle.Encrypt, not handle.ID()")
 
 	// Negative assertion: must NOT use handle.ID() ("fake-handle-id").
-	assert.NotEqual(t, "fake-handle-id", keyID,
+	assert.NotEqual(t, "fake-handle-id", result.KeyID,
 		"transformer must NOT use handle.ID() as the stored keyID")
 }
 
@@ -430,7 +433,7 @@ func TestKeyProviderTransformer_EncryptErrorPropagates(t *testing.T) {
 	p := &fixedHandleProvider{handle: h}
 	tr := crypto.NewValueTransformer(p)
 
-	_, _, _, _, err := tr.Encrypt(ctx, []byte("value"), testAAD("tc_vt2_key"))
+	_, err := tr.Encrypt(ctx, []byte("value"), testAAD("tc_vt2_key"))
 	require.Error(t, err, "transient handle.Encrypt error must propagate")
 
 	// errcode.IsTransient traverses the error chain via errors.As.
@@ -469,8 +472,8 @@ type mismatchedIDHandle struct{}
 
 func (h *mismatchedIDHandle) ID() string { return "wrong-key-id" }
 
-func (h *mismatchedIDHandle) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, []byte, []byte, string, error) {
-	return plaintext, nil, nil, "wrong-key-id", nil
+func (h *mismatchedIDHandle) Encrypt(_ context.Context, plaintext, _ []byte) (crypto.EncryptResult, error) {
+	return crypto.EncryptResult{Ciphertext: plaintext, KeyID: "wrong-key-id"}, nil
 }
 
 func (h *mismatchedIDHandle) Decrypt(_ context.Context, ct, _, _, _ []byte) ([]byte, error) {

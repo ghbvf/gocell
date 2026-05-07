@@ -63,8 +63,8 @@ type fakeKeyHandle struct{}
 
 func (fakeKeyHandle) ID() string { return "fake-v1" }
 
-func (fakeKeyHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, string, error) {
-	return nil, nil, nil, "", errors.New("fakeKeyHandle.Encrypt must not be called in readiness tests")
+func (fakeKeyHandle) Encrypt(_ context.Context, _, _ []byte) (kcrypto.EncryptResult, error) {
+	return kcrypto.EncryptResult{}, errors.New("fakeKeyHandle.Encrypt must not be called in readiness tests")
 }
 
 func (fakeKeyHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) {

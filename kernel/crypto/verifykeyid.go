@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"strconv"
 	"strings"
@@ -73,6 +74,10 @@ func tryParseVersionSuffix(keyID, sep string) (provider string, version int, fou
 	return provider, v, true, nil
 }
 
+func canonicalKeyID(provider string, version int) string {
+	return provider + ":v" + strconv.Itoa(version)
+}
+
 // MatchKeyID verifies that handleID and edkKeyID refer to the same provider
 // and key version. Returns nil when they match, or a descriptive
 // ErrKeyProviderDecryptFailed error when they do not.
@@ -93,7 +98,9 @@ func MatchKeyID(handleID, edkKeyID string) error {
 		return err
 	}
 
-	if hp != ep || hv != ev {
+	handleCanonical := canonicalKeyID(hp, hv)
+	edkCanonical := canonicalKeyID(ep, ev)
+	if subtle.ConstantTimeCompare([]byte(handleCanonical), []byte(edkCanonical)) != 1 {
 		return errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"keyID mismatch: handle does not match edk",
 			errcode.WithInternal(fmt.Sprintf("handle=%q edk=%q", handleID, edkKeyID)))

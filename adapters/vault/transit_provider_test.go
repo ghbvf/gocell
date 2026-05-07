@@ -271,13 +271,14 @@ func mustCurrent(t *testing.T, p *TransitKeyProvider) *vaultTransitHandle {
 	return handle
 }
 
-// callEncrypt is a typed facade over h.Encrypt that returns the five-tuple
-// directly — keeps the assertion surface in tests concise.
+// callEncrypt is a typed facade over h.Encrypt that unpacks EncryptResult so
+// older assertion-heavy tests stay concise.
 func callEncrypt(
 	t *testing.T, h *vaultTransitHandle, ctx context.Context, plaintext, aad []byte,
 ) (ct, nonce, edk []byte, keyID string, err error) {
 	t.Helper()
-	return h.Encrypt(ctx, plaintext, aad)
+	result, err := h.Encrypt(ctx, plaintext, aad)
+	return result.Ciphertext, result.Nonce, result.EDK, result.KeyID, err
 }
 
 // callDecrypt is a typed facade over h.Decrypt.
@@ -1378,7 +1379,7 @@ func runConcurrentEncryptLoop(ctx context.Context, p *TransitKeyProvider, iterat
 		if !ok {
 			return
 		}
-		if _, _, _, _, err := vh.Encrypt(ctx, []byte("payload"), []byte("aad")); err != nil {
+		if _, err := vh.Encrypt(ctx, []byte("payload"), []byte("aad")); err != nil {
 			return // transient error during concurrent rotation is expected
 		}
 	}

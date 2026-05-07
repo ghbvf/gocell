@@ -181,10 +181,10 @@ func TestKeyProviderToTransformer_NilReturnsNoop(t *testing.T) {
 	vt := keyProviderToTransformer(nil)
 	require.NotNil(t, vt)
 	// Ensure it's actually a no-op: encrypt returns plaintext unchanged.
-	ct, keyID, nonce, edk, err := vt.Encrypt(context.Background(), []byte("plain"), nil)
+	result, err := vt.Encrypt(context.Background(), []byte("plain"), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "plain", string(ct))
-	assert.Empty(t, keyID)
-	assert.Nil(t, nonce)
-	assert.Nil(t, edk)
+	assert.Equal(t, "plain", string(result.Ciphertext))
+	assert.Empty(t, result.KeyID)
+	assert.Nil(t, result.Nonce)
+	assert.Nil(t, result.EDK)
 }

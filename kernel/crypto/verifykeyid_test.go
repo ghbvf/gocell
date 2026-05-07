@@ -3,6 +3,9 @@ package crypto_test
 import (
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 
@@ -202,5 +205,37 @@ func TestMatchKeyID(t *testing.T) {
 				t.Fatalf("MatchKeyID(%q, %q): unexpected error: %v", tc.handleID, tc.edkKeyID, err)
 			}
 		})
+	}
+}
+
+func TestMatchKeyIDUsesConstantTimeCompare(t *testing.T) {
+	t.Parallel()
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "verifykeyid.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse verifykeyid.go: %v", err)
+	}
+
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "ConstantTimeCompare" {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if ok && pkg.Name == "subtle" {
+			found = true
+			return false
+		}
+		return true
+	})
+
+	if !found {
+		t.Fatal("MatchKeyID must use crypto/subtle.ConstantTimeCompare for keyID comparisons")
 	}
 }

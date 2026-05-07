@@ -35,3 +35,7 @@ type KeyProvider = kcrypto.KeyProvider
 //
 // See KeyProvider alias comment for guidance on import choices.
 type KeyHandle = kcrypto.KeyHandle
+
+// EncryptResult is a type alias for the kernel encryption result contract.
+// The authoritative definition lives in kernel/crypto.
+type EncryptResult = kcrypto.EncryptResult
