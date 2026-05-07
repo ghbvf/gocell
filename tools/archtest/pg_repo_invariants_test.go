@@ -67,6 +67,15 @@ const rulePGConstructorMustFree01 = "PG-CONSTRUCTOR-MUST-FREE-01"
 
 // TestPGConstructorMustFree01 walks every PG repo scan root (see
 // pgRepoScanRoots) and reports any exported MustNew* function declaration.
+//
+// INVARIANT: PG-CONSTRUCTOR-MUST-FREE-01
+// 理由：funnel 不可达 — type system 无法区分"error-first NewXxx"与"panic-on-nil MustNewXxx"；
+//
+//	codegen 无对应钩子。
+//
+// 守护：adapters/postgres/ 与 cells/<cell>/internal/adapters/postgres/ 禁止导出 MustNew* 构造函数；
+//
+//	必须使用 error-first NewXxx（B2-A-11 设计决策）。
 func TestPGConstructorMustFree01(t *testing.T) {
 	root := findModuleRoot(t)
 	scanRoots := pgRepoScanRoots(t, root)
@@ -409,6 +418,187 @@ func funcBodyContainsRollback(body *ast.BlockStmt) bool {
 	})
 
 	return hasRollbackCall && hasSlogErrorOrWarn
+}
+
+// ---------------------------------------------------------------------------
+// NegativeFixtures — verify scanners detect violations in synthetic testdata
+// ---------------------------------------------------------------------------
+
+// TestPGConstructorMustFree01_NegativeFixture verifies that the scanner
+// correctly reports a MustNew* constructor in the synthetic fixture.
+// The fixture at testdata/pg_repo_invariants_neg/must_new/ contains a
+// deliberate violation.
+func TestPGConstructorMustFree01_NegativeFixture(t *testing.T) {
+	fixtureDir := filepath.Join("testdata", "pg_repo_invariants_neg", "must_new")
+
+	type violation struct {
+		file string
+		line int
+		name string
+	}
+	var violations []violation
+
+	err := filepath.WalkDir(fixtureDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
+		if parseErr != nil {
+			return parseErr
+		}
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil {
+				continue
+			}
+			name := fd.Name.Name
+			if !strings.HasPrefix(name, "MustNew") {
+				continue
+			}
+			pos := fset.Position(fd.Pos())
+			violations = append(violations, violation{file: path, line: pos.Line, name: name})
+		}
+		return nil
+	})
+	require.NoError(t, err, "walking %s", fixtureDir)
+	require.NotEmpty(t, violations,
+		"%s NegativeFixture: expected scanner to detect MustNew* violation in %s, got 0 violations",
+		rulePGConstructorMustFree01, fixtureDir)
+}
+
+// TestPGRepoAmbientTx01_NegativeFixture verifies that the scanner correctly
+// reports a pool.Begin call in the synthetic fixture.
+// The fixture at testdata/pg_repo_invariants_neg/ambient_tx/ contains a
+// deliberate violation.
+func TestPGRepoAmbientTx01_NegativeFixture(t *testing.T) {
+	fixtureDir := filepath.Join("testdata", "pg_repo_invariants_neg", "ambient_tx")
+	allowlist := map[string]bool{"tx_manager.go": true}
+
+	type violation struct {
+		file   string
+		line   int
+		method string
+		call   string
+	}
+	var violations []violation
+
+	err := filepath.WalkDir(fixtureDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		base := filepath.Base(path)
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if !strings.HasSuffix(base, "_repo.go") && !strings.HasSuffix(base, "_store.go") {
+			return nil
+		}
+		if allowlist[base] {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
+		if parseErr != nil {
+			return parseErr
+		}
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil || fd.Body == nil {
+				continue
+			}
+			methodName := fd.Name.Name
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if sel.Sel.Name != "Begin" && sel.Sel.Name != "BeginTx" {
+					return true
+				}
+				fieldAccess, ok := sel.X.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if fieldAccess.Sel.Name != "pool" {
+					return true
+				}
+				pos := fset.Position(call.Pos())
+				violations = append(violations, violation{
+					file: path, line: pos.Line,
+					method: methodName, call: "." + fieldAccess.Sel.Name + "." + sel.Sel.Name,
+				})
+				return true
+			})
+		}
+		return nil
+	})
+	require.NoError(t, err, "walking %s", fixtureDir)
+	require.NotEmpty(t, violations,
+		"%s NegativeFixture: expected scanner to detect pool.Begin violation in %s, got 0 violations",
+		rulePGRepoAmbientTx01, fixtureDir)
+}
+
+// TestPGRepoRollbackRedact01_NegativeFixture verifies that the scanner correctly
+// reports a function with rollback + slog logging but no RedactError call.
+// The fixture at testdata/pg_repo_invariants_neg/rollback_redact/ contains a
+// deliberate violation.
+func TestPGRepoRollbackRedact01_NegativeFixture(t *testing.T) {
+	fixtureDir := filepath.Join("testdata", "pg_repo_invariants_neg", "rollback_redact")
+
+	type violation struct {
+		file   string
+		line   int
+		fn     string
+		reason string
+	}
+	var violations []violation
+
+	err := filepath.WalkDir(fixtureDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
+		if parseErr != nil {
+			return parseErr
+		}
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			fnName := fd.Name.Name
+			fnPos := fset.Position(fd.Pos())
+			if !funcBodyContainsRollback(fd.Body) {
+				continue
+			}
+			if !funcBodyContainsRedactError(fd.Body) {
+				violations = append(violations, violation{
+					file: path, line: fnPos.Line, fn: fnName,
+					reason: "contains rollback but no redaction.RedactError call",
+				})
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err, "walking %s", fixtureDir)
+	require.NotEmpty(t, violations,
+		"%s NegativeFixture: expected scanner to detect rollback-without-redact violation in %s, got 0 violations",
+		rulePGRepoRollbackRedact01, fixtureDir)
 }
 
 // funcBodyContainsRedactError reports whether the given function body contains
