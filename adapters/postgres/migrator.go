@@ -143,8 +143,16 @@ func (m *Migrator) Up(ctx context.Context) error {
 			errcode.WithDetails(slog.Int("count", len(invalid))),
 			errcode.WithInternal(fmt.Sprintf("indexes=%v", names)))
 	}
-	if _, err := m.provider.Up(ctx); err != nil {
+	results, err := m.provider.Up(ctx)
+	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
+	}
+	if len(results) > 0 {
+		lastVersion := results[len(results)-1].Source.Version
+		slog.Info("postgres: migrations applied",
+			slog.Int("applied_count", len(results)),
+			slog.String("schema_version", fmt.Sprintf("%03d", lastVersion)),
+		)
 	}
 	return nil
 }
