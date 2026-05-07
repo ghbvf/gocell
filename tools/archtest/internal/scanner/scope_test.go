@@ -212,6 +212,49 @@ func TestScope_SelfProtectRel(t *testing.T) {
 	}
 }
 
+func TestScope_SelfProtect_PathSegmentBoundary(t *testing.T) {
+	// Self-protect must match path segments, not bare string prefixes.
+	// scanner_extra/ shares the prefix tools/archtest/internal/scanner but
+	// is a sibling directory; it must NOT be excluded.
+	tmp := t.TempDir()
+	scannerDir := filepath.Join(tmp, "tools", "archtest", "internal", "scanner")
+	scannerExtraDir := filepath.Join(tmp, "tools", "archtest", "internal", "scanner_extra")
+	if err := os.MkdirAll(scannerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll scanner: %v", err)
+	}
+	if err := os.MkdirAll(scannerExtraDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll scanner_extra: %v", err)
+	}
+	selfFile := filepath.Join(scannerDir, "self.go")
+	siblingFile := filepath.Join(scannerExtraDir, "foo.go")
+	if err := os.WriteFile(selfFile, []byte("package scanner\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile self.go: %v", err)
+	}
+	if err := os.WriteFile(siblingFile, []byte("package scanner_extra\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile foo.go: %v", err)
+	}
+
+	files, err := scanner.ModuleScope(tmp).Files()
+	if err != nil {
+		t.Fatalf("Files() error: %v", err)
+	}
+	var seenSelf, seenSibling bool
+	for _, f := range files {
+		switch f {
+		case selfFile:
+			seenSelf = true
+		case siblingFile:
+			seenSibling = true
+		}
+	}
+	if seenSelf {
+		t.Errorf("self-protect should exclude %s", selfFile)
+	}
+	if !seenSibling {
+		t.Errorf("self-protect must NOT exclude prefix-colliding sibling %s; got files=%v", siblingFile, files)
+	}
+}
+
 func TestDirsScope_DeduplicatesOverlappingRoots(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "src", "a.go"), "package src\n")

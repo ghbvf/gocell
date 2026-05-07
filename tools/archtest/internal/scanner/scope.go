@@ -174,7 +174,11 @@ func (s Scope) collectFile(f string, seen map[string]struct{}, files *[]string) 
 	if _, excluded := s.excludeRels[rel]; excluded {
 		return nil
 	}
-	if strings.HasPrefix(rel, selfProtectRel) {
+	// Path-segment boundary match (not bare HasPrefix) so "scanner_extra/"
+	// or other prefix-colliding siblings are not falsely excluded.
+	// ref: golangci-lint pkg/golinters/depguard — segment-boundary path match
+	if rel == selfProtectRel ||
+		strings.HasPrefix(rel, selfProtectRel+string(filepath.Separator)) {
 		return nil
 	}
 	if _, dup := seen[f]; !dup {
