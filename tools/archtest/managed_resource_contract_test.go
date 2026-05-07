@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 type adapterExportedType struct {
@@ -222,7 +224,7 @@ func adapterCheckerNameViolations(pkg *packages.Package, rel string) []string {
 			if !ok || fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 {
 				continue
 			}
-			recv := receiverTypeName(fn.Recv.List[0].Type)
+			recv := scanner.ReceiverTypeName(fn.Recv.List[0].Type)
 			if recv == "" || !ast.IsExported(recv) {
 				continue
 			}

@@ -1,7 +1,6 @@
 package archtest
 
 import (
-	"go/ast"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,24 +32,6 @@ func findAllGoFilesInDir(dir string) ([]string, error) {
 	})
 	sort.Strings(files)
 	return files, err
-}
-
-// receiverTypeName extracts the base type name from a receiver type expression.
-// Handles *T (StarExpr), T (Ident), and T[P] (IndexExpr generic).
-func receiverTypeName(expr ast.Expr) string {
-	switch e := expr.(type) {
-	case *ast.StarExpr:
-		if id, ok := e.X.(*ast.Ident); ok {
-			return id.Name
-		}
-	case *ast.Ident:
-		return e.Name
-	case *ast.IndexExpr:
-		if id, ok := e.X.(*ast.Ident); ok {
-			return id.Name
-		}
-	}
-	return ""
 }
 
 // findCellProductionGoFiles enumerates production .go files for every cell

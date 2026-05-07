@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
@@ -853,7 +854,7 @@ func hasInitMethod(t *testing.T, path string, structName string) bool {
 		if fd.Name.Name != "Init" {
 			continue
 		}
-		if receiverTypeName(fd.Recv.List[0].Type) == structName {
+		if scanner.ReceiverTypeName(fd.Recv.List[0].Type) == structName {
 			return true
 		}
 	}
@@ -917,7 +918,7 @@ func checkInitInternalHook(t *testing.T, dir string, structName string) []string
 			if fd.Name.Name != "initInternal" {
 				continue
 			}
-			if receiverTypeName(fd.Recv.List[0].Type) != structName {
+			if scanner.ReceiverTypeName(fd.Recv.List[0].Type) != structName {
 				continue
 			}
 			found = true

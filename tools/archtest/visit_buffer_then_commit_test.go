@@ -30,6 +30,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 func TestVisitBufferThenCommit(t *testing.T) {
@@ -103,8 +105,8 @@ func checkVisitBufferThenCommit(t *testing.T, path string) {
 			continue
 		}
 		// Only check success body-bearing variants: receiver type ends in JSONResponse.
-		// Use the shared receiverTypeName helper from helpers_test.go which accepts ast.Expr.
-		recvIdent := receiverTypeName(fn.Recv.List[0].Type)
+		// Use scanner.ReceiverTypeName which accepts ast.Expr.
+		recvIdent := scanner.ReceiverTypeName(fn.Recv.List[0].Type)
 		if !strings.HasSuffix(recvIdent, "JSONResponse") {
 			continue
 		}
