@@ -46,7 +46,7 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandt
 	repH := reportcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 	ackH := ackcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 	extH := extendleasecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	intH := listcontract.NewHandler(svc, nil)
+	intH := listcontract.NewHandler(svc)
 
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {

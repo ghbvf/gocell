@@ -472,6 +472,7 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		{"http.sample.public.v1", "synth_http_auth_modes_public"},
 		{"http.sample.bootstrap.v1", "synth_http_auth_modes_bootstrap"},
 		{"http.sample.passwordresetexempt.v1", "synth_http_auth_modes_passwordresetexempt"},
+		{"http.sample.clientsonly.v1", "synth_http_auth_modes_clientsonly"},
 	}
 
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
@@ -1152,6 +1153,79 @@ func TestLiftHTTPResponses(t *testing.T) {
 		}
 		if len(got) != 2 {
 			t.Fatalf("len = %d, want 2 (success+404, success-dup deduped)", len(got))
+		}
+	})
+}
+
+// TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients verifies the
+// three scenarios for auth.clientsOnly validation in buildHTTPEndpointSpec.
+func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *testing.T) {
+	t.Parallel()
+
+	makeContract := func(path string, clients []string) *metadata.ContractMeta {
+		return &metadata.ContractMeta{
+			ID:      "http.internal.sample.list.v1",
+			Kind:    "http",
+			Codegen: true,
+			Endpoints: metadata.EndpointsMeta{
+				Server:  "testcell",
+				Clients: clients,
+				HTTP: &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          path,
+					SuccessStatus: 200,
+					NoContent:     false,
+					Auth:          metadata.HTTPAuthMeta{ClientsOnly: true},
+					Responses: map[int]metadata.HTTPResponseMeta{
+						400: {Description: "Bad Request", SchemaRef: "err.json"},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("clientsOnly + internal path + clients non-empty passes", func(t *testing.T) {
+		t.Parallel()
+		contract := makeContract("/internal/v1/sample/list", []string{"testcell"})
+		http := contract.Endpoints.HTTP
+		pathParams := buildPathParams(http)
+		queryParams := buildQueryParams(http)
+		spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		if err != nil {
+			t.Fatalf("expected no error for valid clientsOnly config, got: %v", err)
+		}
+		if !spec.AuthClientsOnly {
+			t.Error("AuthClientsOnly should be true")
+		}
+	})
+
+	t.Run("clientsOnly + api path returns error", func(t *testing.T) {
+		t.Parallel()
+		contract := makeContract("/api/v1/sample/list", []string{"testcell"})
+		http := contract.Endpoints.HTTP
+		pathParams := buildPathParams(http)
+		queryParams := buildQueryParams(http)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		if err == nil {
+			t.Fatal("expected error for clientsOnly on non-internal path")
+		}
+		if !strings.Contains(err.Error(), "internal path") {
+			t.Errorf("error should mention 'internal path', got: %v", err)
+		}
+	})
+
+	t.Run("clientsOnly + internal path + clients empty returns error", func(t *testing.T) {
+		t.Parallel()
+		contract := makeContract("/internal/v1/sample/list", nil)
+		http := contract.Endpoints.HTTP
+		pathParams := buildPathParams(http)
+		queryParams := buildQueryParams(http)
+		_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+		if err == nil {
+			t.Fatal("expected error for clientsOnly with empty clients")
+		}
+		if !strings.Contains(err.Error(), "clients is empty") {
+			t.Errorf("error should mention 'clients is empty', got: %v", err)
 		}
 	})
 }

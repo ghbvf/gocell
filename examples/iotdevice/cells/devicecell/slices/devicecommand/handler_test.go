@@ -60,7 +60,7 @@ func setupHandlers() (
 	repH := reportcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 	ackH := ackcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 	extH := extendleasecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	intH := listcontract.NewHandler(svc, nil)
+	intH := listcontract.NewHandler(svc)
 	return enqH, deqH, repH, ackH, extH, intH, q
 }
 

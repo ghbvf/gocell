@@ -15,12 +15,13 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func setupStatusHandler() (*statuscontract.Handler, *mem.DeviceRepository) {
 	repo := mem.NewDeviceRepository()
 	svc := NewService(repo, slog.Default())
-	return statuscontract.NewHandler(svc, nil), repo // nil policy: tests call ServeHTTP directly, no auth middleware
+	return statuscontract.NewHandler(svc, auth.SelfOr("id", "admin")), repo
 }
 
 func TestHandleGetStatus(t *testing.T) {
@@ -89,7 +90,7 @@ func TestService_Status_LastSeenRFC3339(t *testing.T) {
 		ID: "dev-ts", Name: "ts-test", Status: "online", LastSeen: now,
 	})
 	svc := NewService(repo, slog.Default())
-	h := statuscontract.NewHandler(svc, nil)
+	h := statuscontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

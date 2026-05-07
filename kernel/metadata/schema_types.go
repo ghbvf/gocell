@@ -43,6 +43,15 @@ type HTTPAuthMeta struct {
 	// Mutually exclusive with Public and PasswordResetExempt. FMT-28 limits this
 	// flag to contracts whose path matches IsBootstrapPath.
 	Bootstrap bool `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty"`
+	// ClientsOnly indicates that this endpoint relies solely on Contract.Clients
+	// caller-cell allowlist for authorization. When true, contractgen generates a
+	// single-arg NewHandler(svc Service) constructor and emits auth.Route without
+	// a Policy field. auth.Mount auto-injects RequireCallerCell guard when
+	// Clients is non-empty. Mutually exclusive with Public, Bootstrap, and
+	// PasswordResetExempt. Requires endpoints.clients to be non-empty AND the
+	// path to match /internal/v1/* (semantically meaningful only for internal
+	// endpoints where caller-cell identity is verifiable via the service token).
+	ClientsOnly bool `yaml:"clientsOnly,omitempty" json:"clientsOnly,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware
 	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as
 	// declared without requiring handler AST emission.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -27,9 +28,15 @@ type Handler struct {
 }
 
 // NewHandler creates a Handler for http.order.list.v1.
-// policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
-// supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
+	if policy == nil {
+		// B-class assertion: caller must supply a non-nil auth.Policy. For public
+		// endpoints declare auth.public:true in contract.yaml. For internal endpoints
+		// relying solely on caller-cell allowlist declare auth.clientsOnly:true.
+		// errcode.Assertion routes through kernel recover middleware (500 + log)
+		// instead of bare panic so PANIC-REGISTERED-01 archtest stays clean.
+		panic(errcode.Assertion("generated handler http.order.list.v1: policy must not be nil (non-public, non-bootstrap, non-clientsOnly endpoints require a real auth.Policy; for public/clients-only endpoints update contract.yaml auth flag and regenerate)"))
+	}
 	h := &Handler{svc: svc, policy: policy}
 	return h
 }

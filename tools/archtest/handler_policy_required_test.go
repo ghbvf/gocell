@@ -1,4 +1,4 @@
-// Package archtest enforces HANDLER-POLICY-REQUIRED-01 — the lone caller-side
+// Package archtest enforces HANDLER-POLICY-REQUIRED-01 — the simplified caller-side
 // invariant from the original handler_invariants_test.go cluster that cannot
 // be golden-pinned because it scans hand-written cells/.../cell.go wiring
 // rather than codegen template output.
@@ -8,13 +8,25 @@
 //   - HANDLER-NO-INLINE-LIMIT-PARSE-01     -> pinned by http_order_list_v1 golden
 //   - HANDLER-NO-SCHEMA-FOR-NOBODY-01      -> pinned by HasBody gate + http_order_get_v1 golden
 //   - HANDLER-PATH-QUERY-LENGTH-VALIDATION-01 -> pinned by synth_http_full / synth_http_keyword_conflict goldens
-//   - HANDLER-VALIDATOR-FAIL-FAST-01       -> pinned by panic literal in all 8 handler goldens
+//   - HANDLER-VALIDATOR-FAIL-FAST-01       -> pinned by panic literal in all handler goldens
 //
-// HANDLER-POLICY-REQUIRED-01 is the residual: it scans cell.go wiring for
-// `<pkg>.NewHandler(svc, nil)` calls — a caller-side mistake that codegen
-// goldens cannot reach. The funnel-first principle (CLAUDE.md) accepts
-// archtest 平铺兜底 for constraints that cannot be funneled or type-system'd
-// out; this file is that residual.
+// HANDLER-POLICY-REQUIRED-01 funnel-first upgrade (F1 fix):
+//
+// The funnel end is the primary defense:
+//   - Public/ClientsOnly endpoints generate single-arg NewHandler(svc Service) — there
+//     is no second argument to pass nil to; the call site cannot violate the invariant.
+//   - Default branch (non-public, non-bootstrap, non-clientsOnly) NewHandler now has
+//     a construction-time `if policy == nil { panic(errcode.Assertion(...)) }` — a
+//     2-arg call with a typed nil panics at startup rather than silently fail-open.
+//
+// This archtest is the simplified flat backstop: it catches "caller passes the
+// literal nil to a 2-arg NewHandler but hasn't updated contract.yaml to declare
+// public/clientsOnly yet" — a code that would panic at startup anyway, but which
+// the scanner catches earlier (in CI) rather than at service boot.
+//
+// No exemption list needed: the funnel guarantees that any legitimate single-arg
+// call site uses a contract-declared Public or ClientsOnly flag, which changes the
+// generated signature to 1-arg. Any 2-arg site passing literal nil is always wrong.
 package archtest
 
 import (
@@ -32,31 +44,27 @@ import (
 
 const handlerPolicyRequiredRule = "HANDLER-POLICY-REQUIRED-01"
 
-// handlerPolicyPublicExemptPkgs lists the import alias prefixes whose generated
-// NewHandler is single-arg (Public=true endpoint) or whose route protection is
-// provided by contract.Clients (RequireCallerCell guard).
-//
-//   - "registercontract" — http.device.register.v1 — Public:true, NewHandler(svc Service) single-arg
-//   - "internallistcontract" — http.internal.devicecommands.list.v1 — /internal/v1/, Clients guard
-var handlerPolicyPublicExemptPkgs = []string{
-	"registercontract",
-	"internallistcontract",
-}
-
 // INVARIANT: HANDLER-POLICY-REQUIRED-01
 //
-// Every cells/.../cell.go and examples/.../cell.go that wires a generated
-// `<pkg>.NewHandler(svc, nil)` call must have <pkg> in
-// handlerPolicyPublicExemptPkgs (Public:true contracts whose generated
-// NewHandler takes a single argument, or internal endpoints where caller-cell
-// gating substitutes for per-route policy). Otherwise the route mounts with
-// `auth.Route{Policy: nil}` and any authenticated JWT can hit the handler —
-// a silent fail-open.
+// Funnel end (primary defense): handler.tmpl generates single-arg NewHandler for
+// Public/ClientsOnly endpoints and a construction-time nil-panic for the default
+// 2-arg branch. This archtest is the simplified flat backstop that catches the
+// code-smell earlier (in CI) rather than at service startup.
 //
-// This rule cannot be replaced by handler.tmpl + golden byte-pin: golden
-// freezes generator output (the NewHandler signature shape), not call sites.
-// nil-policy is a CALLER mistake in hand-written cell.go; the funnel can't
-// see it.
+// Scan: any `<pkg>.NewHandler(<expr>, nil)` call in cells/ or examples/ cell.go
+// is a violation — no exemption list. Rationale:
+//   - Legitimate single-arg call sites use a contract-declared Public or ClientsOnly
+//     flag → codegen changes the signature to 1-arg → the 2-arg site disappears.
+//   - The old handlerPolicyPublicExemptPkgs alias-string exemption was fragile
+//     (alias spoofing, import renaming). The new funnel makes it unnecessary.
+//   - Typed-nil paths (var pol auth.Policy; NewHandler(svc, pol)) are NOT caught
+//     here — they are caught at service startup by the construction-time panic.
+//     The scanner would need type information (go/types) to detect them statically;
+//     the runtime panic is a sufficient and simpler backstop for that path.
+//
+// This rule cannot be replaced by handler.tmpl + golden byte-pin: golden freezes
+// generator output (the NewHandler signature shape), not call sites. A literal nil
+// at the call site in hand-written cell.go is a CALLER mistake the funnel cannot see.
 func TestHANDLER_POLICY_REQUIRED_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -76,10 +84,11 @@ func TestHANDLER_POLICY_REQUIRED_01(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Logf(`%s: %d violation(s) found. Fix: pass a non-nil auth.Policy to NewHandler.
-For Public endpoints declare auth.public: true in contract.yaml and regenerate
-— the generated NewHandler then accepts no policy argument, so the nil call
-site disappears entirely.`, handlerPolicyRequiredRule, len(violations))
+		t.Logf(`%s: %d violation(s) found.
+Fix: all 2-arg NewHandler call sites must supply a non-nil auth.Policy.
+For public/clients-only endpoints regenerate after declaring auth.public/auth.clientsOnly
+in contract.yaml — the generated NewHandler then takes no policy argument,
+so the nil call site disappears entirely.`, handlerPolicyRequiredRule, len(violations))
 	}
 }
 
@@ -130,8 +139,10 @@ func collectCellGoFiles(t *testing.T, root string) []string {
 }
 
 // scanForNilPolicyNewHandler parses the Go file at path and returns a list of
-// violation strings for any call of the form <pkg>.NewHandler(<expr>, nil)
-// where <pkg> is not in handlerPolicyPublicExemptPkgs.
+// violation strings for any call of the form <pkg>.NewHandler(<expr>, nil).
+// No exemption list: the funnel guarantees that all legitimate single-arg call
+// sites use a contract-declared Public or ClientsOnly flag (which produces a
+// 1-arg generated signature), so any 2-arg site with literal nil is always wrong.
 func scanForNilPolicyNewHandler(path, rel string) []string {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, 0)
@@ -163,14 +174,11 @@ func scanForNilPolicyNewHandler(path, rel string) []string {
 		if id, ok := sel.X.(*ast.Ident); ok {
 			pkgAlias = id.Name
 		}
-		for _, exempt := range handlerPolicyPublicExemptPkgs {
-			if pkgAlias == exempt {
-				return true
-			}
-		}
 		pos := fset.Position(call.Pos())
 		violations = append(violations, fmt.Sprintf(
-			"%s:%d: %s.NewHandler called with nil policy — non-public endpoint must supply a real auth.Policy",
+			"%s:%d: %s.NewHandler called with literal nil policy — "+
+				"all 2-arg NewHandler call sites must supply a non-nil auth.Policy; "+
+				"for public/clients-only endpoints regenerate after declaring auth.public/auth.clientsOnly in contract.yaml",
 			rel, pos.Line, pkgAlias,
 		))
 		return true

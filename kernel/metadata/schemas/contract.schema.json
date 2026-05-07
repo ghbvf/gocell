@@ -202,6 +202,10 @@
                         "type": "boolean",
                         "description": "If true, contractgen generates a NewHandler(bootstrapAuth func(http.Handler) http.Handler, ...) constructor and emits auth.Route{BootstrapAuth: bootstrapAuth} from RegisterRoutes; the listener-level JWT middleware skips this route. Composition root injects the bootstrap Basic Auth + per-IP rate-limit middleware (GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials). Mutually exclusive with public and passwordResetExempt. FMT-28 limits to setup/admin paths."
                       },
+                      "clientsOnly": {
+                        "type": "boolean",
+                        "description": "If true, contractgen generates a single-arg NewHandler(svc Service) constructor and emits auth.Route without a Policy field. Authorization is provided solely by Contract.Clients caller-cell allowlist (auth.Mount auto-injects RequireCallerCell guard when Clients is non-empty). Mutually exclusive with public, bootstrap, and passwordResetExempt. Requires endpoints.clients to be non-empty AND path matching /internal/v1/* (semantically meaningful only for internal endpoints)."
+                      },
                       "responses": {
                         "type": "array",
                         "description": "HTTP status codes injected by listener-mounted middleware (e.g. bootstrap auth 401, rate limiter 429). CH-04 governance treats these as declared without requiring handler AST emission.",
@@ -216,7 +220,10 @@
                     "allOf": [
                       {"not": {"required": ["public", "bootstrap"]}, "description": "auth.public and auth.bootstrap are mutually exclusive."},
                       {"not": {"required": ["public", "passwordResetExempt"]}, "description": "auth.public and auth.passwordResetExempt are mutually exclusive."},
-                      {"not": {"required": ["bootstrap", "passwordResetExempt"]}, "description": "auth.bootstrap and auth.passwordResetExempt are mutually exclusive."}
+                      {"not": {"required": ["bootstrap", "passwordResetExempt"]}, "description": "auth.bootstrap and auth.passwordResetExempt are mutually exclusive."},
+                      {"not": {"required": ["clientsOnly", "public"]}, "description": "auth.clientsOnly and auth.public are mutually exclusive."},
+                      {"not": {"required": ["clientsOnly", "bootstrap"]}, "description": "auth.clientsOnly and auth.bootstrap are mutually exclusive."},
+                      {"not": {"required": ["clientsOnly", "passwordResetExempt"]}, "description": "auth.clientsOnly and auth.passwordResetExempt are mutually exclusive."}
                     ]
                   }
                 }

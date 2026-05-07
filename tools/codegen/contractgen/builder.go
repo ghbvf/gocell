@@ -228,6 +228,22 @@ func buildHTTPEndpointSpec(
 		clients = append(clients, contract.Endpoints.Clients...)
 	}
 
+	// ClientsOnly requires internal path + non-empty clients.
+	if http.Auth.ClientsOnly {
+		if !isInternalPath {
+			return nil, fmt.Errorf(
+				"contractgen build: contract %q declares auth.clientsOnly:true but path %q is not an internal path (must match /internal/v1/*); "+
+					"clientsOnly is only meaningful for internal endpoints where caller-cell identity is verifiable",
+				contract.ID, http.Path)
+		}
+		if len(contract.Endpoints.Clients) == 0 {
+			return nil, fmt.Errorf(
+				"contractgen build: contract %q declares auth.clientsOnly:true but endpoints.clients is empty; "+
+					"clientsOnly requires at least one declared client cell so RequireCallerCell has an allowlist to enforce",
+				contract.ID)
+		}
+	}
+
 	spec := &HTTPEndpointSpec{
 		Method:                  http.Method,
 		Path:                    http.Path,
@@ -239,6 +255,7 @@ func buildHTTPEndpointSpec(
 		AuthPublic:              http.Auth.Public,
 		AuthPasswordResetExempt: http.Auth.PasswordResetExempt,
 		AuthBootstrap:           http.Auth.Bootstrap,
+		AuthClientsOnly:         http.Auth.ClientsOnly,
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
