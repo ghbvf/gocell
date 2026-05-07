@@ -158,6 +158,41 @@ func TestHashChain_DifferentKeys_DifferentHashes(t *testing.T) {
 	require.NotEqual(t, e1.Hash, e2.Hash)
 }
 
+// makeRepeatedByteKey returns an n-byte key filled with 'a'. n == 0 returns
+// nil so the caller can exercise the nil-key rejection path.
+func makeRepeatedByteKey(n int) []byte {
+	if n <= 0 {
+		return nil
+	}
+	key := make([]byte, n)
+	for i := range key {
+		key[i] = 'a'
+	}
+	return key
+}
+
+// assertHMACKeyTooShortDetails asserts that ec carries the minimumBytes and
+// actualBytes int64 details that the audit chain promises to publish on
+// rejection. The key bytes themselves must never appear in any detail.
+func assertHMACKeyTooShortDetails(t *testing.T, ec *errcode.Error, wantActual int64) {
+	t.Helper()
+	var sawMin, sawActual bool
+	for _, attr := range ec.Details {
+		switch attr.Key {
+		case "minimumBytes":
+			sawMin = true
+			assert.Equal(t, slog.KindInt64, attr.Value.Kind())
+			assert.Equal(t, int64(32), attr.Value.Int64())
+		case "actualBytes":
+			sawActual = true
+			assert.Equal(t, slog.KindInt64, attr.Value.Kind())
+			assert.Equal(t, wantActual, attr.Value.Int64())
+		}
+	}
+	assert.True(t, sawMin, "details must include minimumBytes")
+	assert.True(t, sawActual, "details must include actualBytes")
+}
+
 // TestNewHashChain_KeyLength locks in the RFC 2104 §3 / NIST SP 800-107
 // minimum-key-length contract: HMAC-SHA256 keys must be at least 32 bytes
 // (the underlying hash output size). Shorter keys are rejected with a
@@ -168,7 +203,7 @@ func TestNewHashChain_KeyLength(t *testing.T) {
 		name      string
 		keyLen    int
 		wantOK    bool
-		wantBytes int // expected actualBytes detail when rejected
+		wantBytes int64 // expected actualBytes detail when rejected
 	}{
 		{name: "nil key rejected", keyLen: 0, wantOK: false, wantBytes: 0},
 		{name: "1 byte rejected", keyLen: 1, wantOK: false, wantBytes: 1},
@@ -180,15 +215,7 @@ func TestNewHashChain_KeyLength(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var key []byte
-			if tt.keyLen > 0 {
-				key = make([]byte, tt.keyLen)
-				for i := range key {
-					key[i] = 'a'
-				}
-			}
-
-			hc, err := NewHashChain(key)
+			hc, err := NewHashChain(makeRepeatedByteKey(tt.keyLen))
 			if tt.wantOK {
 				require.NoError(t, err)
 				require.NotNil(t, hc)
@@ -202,24 +229,7 @@ func TestNewHashChain_KeyLength(t *testing.T) {
 			require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
 			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 			assert.Contains(t, ec.Message, "audit hmac key too short")
-
-			// minimumBytes / actualBytes details surface only the lengths,
-			// never the key bytes themselves.
-			var sawMin, sawActual bool
-			for _, attr := range ec.Details {
-				switch attr.Key {
-				case "minimumBytes":
-					sawMin = true
-					assert.Equal(t, slog.KindInt64, attr.Value.Kind())
-					assert.Equal(t, int64(32), attr.Value.Int64())
-				case "actualBytes":
-					sawActual = true
-					assert.Equal(t, slog.KindInt64, attr.Value.Kind())
-					assert.Equal(t, int64(tt.wantBytes), attr.Value.Int64())
-				}
-			}
-			assert.True(t, sawMin, "details must include minimumBytes")
-			assert.True(t, sawActual, "details must include actualBytes")
+			assertHMACKeyTooShortDetails(t, ec, tt.wantBytes)
 		})
 	}
 }
