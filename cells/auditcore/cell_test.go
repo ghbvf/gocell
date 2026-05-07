@@ -113,6 +113,34 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 	assert.Error(t, err, "should fail without HMAC key")
 }
 
+func TestAuditCore_HMACKeyTooShort(t *testing.T) {
+	// 31-byte key — one short of the RFC 2104 §3 / NIST SP 800-107 minimum.
+	// The error must surface with errcode.ErrValidationFailed all the way
+	// through the slice wrapper (auditappend: %w / auditverify: %w).
+	shortKey := make([]byte, 31)
+	for i := range shortKey {
+		shortKey[i] = 'x'
+	}
+	c := NewAuditCore(
+		WithClock(clock.Real()),
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithHMACKey(shortKey),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
+		WithTxManager(cell.DemoTxRunner{}),
+		WithMetricsProvider(metrics.NopProvider{}),
+	)
+	ctx := context.Background()
+	err := c.Init(ctx, newTestRecorder())
+	require.Error(t, err, "must reject HMAC key shorter than 32 bytes")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must propagate as *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, ec.Message, "audit hmac key too short")
+}
+
 func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	c := NewAuditCore(
 		WithClock(clock.Real()),

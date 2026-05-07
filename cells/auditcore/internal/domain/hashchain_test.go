@@ -1,12 +1,19 @@
 package domain
 
 import (
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// 32-byte test key reused by Append/Verify tests; meets RFC 2104 §3 minimum.
+var testHMACKey32 = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 func TestHashChain_Append(t *testing.T) {
 	tests := []struct {
@@ -31,7 +38,8 @@ func TestHashChain_Append(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hc := NewHashChain([]byte("test-key"))
+			hc, err := NewHashChain(testHMACKey32)
+			require.NoError(t, err)
 			entries := make([]*AuditEntry, 0, tt.appendN)
 
 			for i := 0; i < tt.appendN; i++ {
@@ -62,8 +70,8 @@ func TestHashChain_Append(t *testing.T) {
 }
 
 func TestHashChain_Verify(t *testing.T) {
-	hmacKey := []byte("secret-key-for-test")
-	hc := NewHashChain(hmacKey)
+	hc, err := NewHashChain(testHMACKey32)
+	require.NoError(t, err)
 
 	// Build a chain of 5 entries.
 	entries := make([]*AuditEntry, 0, 5)
@@ -135,8 +143,10 @@ func TestHashChain_Verify(t *testing.T) {
 }
 
 func TestHashChain_DifferentKeys_DifferentHashes(t *testing.T) {
-	hc1 := NewHashChain([]byte("key-alpha"))
-	hc2 := NewHashChain([]byte("key-beta"))
+	hc1, err := NewHashChain([]byte("key-alpha-padded-to-32bytes-len!!"))
+	require.NoError(t, err)
+	hc2, err := NewHashChain([]byte("key-beta-padded-to-32bytes-len!!!"))
+	require.NoError(t, err)
 
 	now := time.Now()
 	e1 := hc1.Append("evt-1", "login", "actor", []byte(`{}`), now)
@@ -146,6 +156,72 @@ func TestHashChain_DifferentKeys_DifferentHashes(t *testing.T) {
 	// Timestamps will differ so hashes will differ anyway, but this confirms
 	// the key is part of the computation.
 	require.NotEqual(t, e1.Hash, e2.Hash)
+}
+
+// TestNewHashChain_KeyLength locks in the RFC 2104 §3 / NIST SP 800-107
+// minimum-key-length contract: HMAC-SHA256 keys must be at least 32 bytes
+// (the underlying hash output size). Shorter keys are rejected with a
+// public errcode.ErrValidationFailed carrying minimumBytes / actualBytes
+// details — the key bytes themselves never appear in the error.
+func TestNewHashChain_KeyLength(t *testing.T) {
+	tests := []struct {
+		name      string
+		keyLen    int
+		wantOK    bool
+		wantBytes int // expected actualBytes detail when rejected
+	}{
+		{name: "nil key rejected", keyLen: 0, wantOK: false, wantBytes: 0},
+		{name: "1 byte rejected", keyLen: 1, wantOK: false, wantBytes: 1},
+		{name: "31 bytes rejected", keyLen: 31, wantOK: false, wantBytes: 31},
+		{name: "32 bytes accepted (RFC 2104 §3 minimum)", keyLen: 32, wantOK: true},
+		{name: "33 bytes accepted", keyLen: 33, wantOK: true},
+		{name: "64 bytes accepted", keyLen: 64, wantOK: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var key []byte
+			if tt.keyLen > 0 {
+				key = make([]byte, tt.keyLen)
+				for i := range key {
+					key[i] = 'a'
+				}
+			}
+
+			hc, err := NewHashChain(key)
+			if tt.wantOK {
+				require.NoError(t, err)
+				require.NotNil(t, hc)
+				return
+			}
+
+			require.Error(t, err)
+			require.Nil(t, hc)
+
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+			assert.Contains(t, ec.Message, "audit hmac key too short")
+
+			// minimumBytes / actualBytes details surface only the lengths,
+			// never the key bytes themselves.
+			var sawMin, sawActual bool
+			for _, attr := range ec.Details {
+				switch attr.Key {
+				case "minimumBytes":
+					sawMin = true
+					assert.Equal(t, slog.KindInt64, attr.Value.Kind())
+					assert.Equal(t, int64(32), attr.Value.Int64())
+				case "actualBytes":
+					sawActual = true
+					assert.Equal(t, slog.KindInt64, attr.Value.Kind())
+					assert.Equal(t, int64(tt.wantBytes), attr.Value.Int64())
+				}
+			}
+			assert.True(t, sawMin, "details must include minimumBytes")
+			assert.True(t, sawActual, "details must include actualBytes")
+		})
+	}
 }
 
 // copyEntries creates a shallow copy of each entry so mutations do not

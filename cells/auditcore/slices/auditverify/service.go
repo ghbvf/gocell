@@ -61,9 +61,13 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	chain, err := domain.NewHashChain(hmacKey)
+	if err != nil {
+		return nil, fmt.Errorf("auditverify: %w", err)
+	}
 	s := &Service{
 		repo:    repo,
-		chain:   domain.NewHashChain(hmacKey),
+		chain:   chain,
 		emitter: outbox.NewNoopEmitter(),
 		logger:  logger,
 	}

@@ -46,7 +46,8 @@ func TestService_VerifyChain_ValidEntries(t *testing.T) {
 	svc, repo := newTestService(t)
 
 	// Build a valid chain using the same HMAC key.
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), time.Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
@@ -61,7 +62,8 @@ func TestService_VerifyChain_ValidEntries(t *testing.T) {
 func TestService_VerifyChain_TamperedEntry(t *testing.T) {
 	svc, repo := newTestService(t)
 
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), time.Now())
 		if i == 1 {

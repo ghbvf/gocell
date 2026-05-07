@@ -92,9 +92,13 @@ func NewService(
 	opts ...Option,
 ) (*Service, error) {
 	clock.MustHaveClock(clk, "auditappend.NewService")
+	chain, err := domain.NewHashChain(hmacKey)
+	if err != nil {
+		return nil, fmt.Errorf("auditappend: %w", err)
+	}
 	s := &Service{
 		repo:    repo,
-		chain:   domain.NewHashChain(hmacKey),
+		chain:   chain,
 		emitter: outbox.NewNoopEmitter(),
 		logger:  logger,
 		clock:   clk,
