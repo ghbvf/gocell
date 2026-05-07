@@ -196,7 +196,7 @@ func bootOrphanAssembly(t *testing.T, pool *adapterpg.Pool) (addr string, shutdo
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+	}, testtime.CtxLong, testtime.MediumPoll, "HTTP server did not become ready")
 
 	shutdown = func() {
 		cancel()
