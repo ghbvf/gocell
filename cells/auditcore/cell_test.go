@@ -116,7 +116,9 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 func TestAuditCore_HMACKeyTooShort(t *testing.T) {
 	// 31-byte key — one short of the RFC 2104 §3 / NIST SP 800-107 minimum.
 	// The error must surface with errcode.ErrValidationFailed all the way
-	// through the slice wrapper (auditappend: %w / auditverify: %w).
+	// through the slice wrapper (auditappend: %w / auditverify: %w), and
+	// the minimumBytes/actualBytes details must survive propagation so
+	// operators see the same diagnostics the domain layer emitted.
 	shortKey := make([]byte, 31)
 	for i := range shortKey {
 		shortKey[i] = 'x'
@@ -139,6 +141,21 @@ func TestAuditCore_HMACKeyTooShort(t *testing.T) {
 	require.True(t, errors.As(err, &ec), "error must propagate as *errcode.Error")
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 	assert.Contains(t, ec.Message, "audit hmac key too short")
+
+	// Details survive the slice/cell wrapping path (auditappend: %w).
+	var sawMin, sawActual bool
+	for _, attr := range ec.Details {
+		switch attr.Key {
+		case "minimumBytes":
+			sawMin = true
+			assert.Equal(t, int64(32), attr.Value.Int64())
+		case "actualBytes":
+			sawActual = true
+			assert.Equal(t, int64(31), attr.Value.Int64())
+		}
+	}
+	assert.True(t, sawMin, "details must include minimumBytes after propagation")
+	assert.True(t, sawActual, "details must include actualBytes after propagation")
 }
 
 func TestAuditCore_HMACKeyFromConfig(t *testing.T) {

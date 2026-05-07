@@ -15,6 +15,15 @@ import (
 // Keys shorter than the hash output (32 bytes) make the HMAC strength itself
 // the weakest link of the audit chain, which violates RFC 2104 §3 and
 // NIST SP 800-107 / FIPS 198-1 — they are rejected at construction time.
+//
+// INVARIANT: AUDIT-HMAC-KEY-MINLEN-01
+// Enforcement: Go type system — NewHashChain returns (*HashChain, error),
+// and every caller (cell.Init → auditappend.NewService / auditverify.NewService)
+// is forced to handle the error. Per CLAUDE.md "新增 invariant 决策原则" step 2
+// (type system 自然拦), no archtest layer is added: no caller can construct a
+// HashChain without going through this function. Regression test:
+// TestNewHashChain_KeyLength (table-driven) + TestAuditCore_HMACKeyTooShort
+// (end-to-end propagation through the slice wrapper).
 const minHMACKeyBytes = 32
 
 // HashChain maintains an append-only, HMAC-linked chain of AuditEntry records.
