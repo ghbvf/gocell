@@ -12,6 +12,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -19,10 +20,20 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 const defaultRefreshGCRetention = 24 * time.Hour
+
+// pgRefreshReuseInterval and pgRefreshMaxAge are the default refresh-token
+// policy values for PostgreSQL mode. They match the in-memory demo defaults
+// in cells/accesscore/cell.go. Extracted as consts to satisfy
+// PROD-DURATION-CONST-01 (no inline duration arithmetic in production code).
+const (
+	pgRefreshReuseInterval = 2 * time.Second
+	pgRefreshMaxAge        = 7 * 24 * time.Hour
+)
 
 // AccessCoreModule wires accesscore: JWT issuer/verifier + EventBus + cursor
 // codec, and the bootstrap Basic Auth protection for the setup/admin endpoint.
@@ -72,10 +83,10 @@ func (m AccessCoreModule) Provide(
 		return nil, nil, nil, fmt.Errorf("accesscore cursor codec: %w", err)
 	}
 
-	accessOpts := []accesscore.Option{
+	// sharedOpts are options applied regardless of storage backend.
+	sharedOpts := []accesscore.Option{
 		accesscore.WithClock(shared.Clock),
-		accesscore.WithInMemoryDefaults(),
-		// Publisher set unconditionally; outboxWriter set conditionally below.
+		// Publisher set unconditionally; outboxWriter set conditionally per backend.
 		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
 		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
 		accesscore.WithOutboxDeps(shared.EventBus, nil),
@@ -86,18 +97,40 @@ func (m AccessCoreModule) Provide(
 		accesscore.WithConfigEventCollector(shared.ConfigEventCollector),
 		accesscore.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
 	}
+
+	accessOpts := make([]accesscore.Option, len(sharedOpts))
+	copy(accessOpts, sharedOpts)
+
 	if shared.Topology.StorageBackend == "postgres" {
 		if shared.SharedPGPool == nil {
 			return nil, nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires SharedPGPool " +
 				"(ConfigCoreModule must run before AccessCoreModule)")
 		}
+		pgRepoOpts, err := accesspg.WithPool(shared.SharedPGPool.DB(), shared.Clock)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("AccessCoreModule: pg repo wiring: %w", err)
+		}
 		writer := adapterpg.NewOutboxWriter(shared.Clock)
 		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
+		pgRefreshPolicy := refresh.Policy{
+			ReuseInterval:  pgRefreshReuseInterval,
+			MaxAge:         pgRefreshMaxAge,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		}
+		pgRefreshStore, err := adapterpg.NewRefreshStore(
+			shared.SharedPGPool.DB(), txMgr, pgRefreshPolicy, shared.Clock, nil,
+		)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
+		}
 		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
 		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
+		accessOpts = append(accessOpts, pgRepoOpts...)
 		accessOpts = append(accessOpts,
 			accesscore.WithOutboxDeps(nil, writer),
 			accesscore.WithTxManager(txMgr),
+			accesscore.WithRefreshStore(pgRefreshStore),
 		)
 		// Wire the ConfigGetter for the configreceive slice to fetch entry values
 		// from configcore's internal GET /internal/v1/config/{key} endpoint after
@@ -113,6 +146,11 @@ func (m AccessCoreModule) Provide(
 				configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring, shared.Clock),
 			)
 		}
+	} else {
+		// "memory" (default dev mode) and any unrecognised backend both use
+		// in-memory repositories. Topology validation upstream rejects unknown
+		// backends before this point; the else branch here is defense-in-depth.
+		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
 	}
 	// Bootstrap credential auth + per-IP token bucket rate limiter protects
 	// the setup/admin endpoint (ADR §D2 operator credential via env).
