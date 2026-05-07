@@ -54,12 +54,12 @@
 
 | 项 | 值 |
 |---|---|
-| 来源 | PR408-FU-PARSE-ERROR-DOUBLE-NIL-SWEEP-01 + PR408-FU-LEGACY-ANCHOR-BACKFILL-01 + PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01 + PR408-FU-INVENTORY-GIT-LSFILES-01 + PR408-FU-SCANNER-SHARED-FRAMEWORK-01 |
+| 来源 | ✅ PR408-FU-PARSE-ERROR-DOUBLE-NIL-SWEEP-01 (PR#412) + PR408-FU-LEGACY-ANCHOR-BACKFILL-01 + PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01 + ✅ PR408-FU-INVENTORY-GIT-LSFILES-01 (PR#412) + PR408-FU-SCANNER-SHARED-FRAMEWORK-01 |
 | 问题 | PR#408 4 轮 review 反复出同类反模式（file-level skip / silent parse-error fallback / hardcoded scope / naming heuristic / `// INVARIANT:` 锚点不规范 / inventory 用 find 扫工作树）；per-file scanner 每作者重发明，下一轮新增反模式概率 100% |
-| 同 PR 项 | 5 条全收 — (a) 双 nil sweep（`return nil` 双 nil 形式漏匹配，2 处补 require.NoError + 穷举 nil 变体）；(b) 39 single-rule 文件加 `// INVARIANT: <ID>` 锚点 + 删 inventory fallback + `INVENTORY-ANCHOR-REQUIRED-01` archtest；(c) inventory 改 `git ls-files` + AST owner 提取（按 `Rule{ID:...}` struct literal / `const ruleID = "..."` 定位 canonical owner + referenced_by 列）；(d) 新建 `tools/archtest/internal/scanner/` 共享框架（fail-closed by construction、structured scope predicate、内置 vendor/testdata/worktrees skip、统一 receiver-type 解析）+ `SCANNER-FRAMEWORK-USAGE-01` 守 archtest 不许直接 import `filepath.WalkDir/Walk`；(e) 70+ scanner 渐进迁移先迁 ~15 个示范 |
-| Files | `tools/archtest/internal/scanner/*`(新) + `tools/archtest/{contract_spec_clients,no_deleted_auth_symbols,inventory_anchor_required(新)}_test.go` + 39 个 single-rule `*_test.go` 加锚点 + `scripts/audit/list-archtests.sh` + `hack/verify-archtest-inventory.sh` |
+| 同 PR 项 | 剩余 3 条 — (b) 39 single-rule 文件加 `// INVARIANT: <ID>` 锚点 + 删 inventory fallback + `INVENTORY-ANCHOR-REQUIRED-01` archtest；(c) inventory AST owner 提取（按 `Rule{ID:...}` struct literal / `const ruleID = "..."` 定位 canonical owner + referenced_by 列；git ls-files 部分已 PR#412 完成）；(d) 新建 `tools/archtest/internal/scanner/` 共享框架（fail-closed by construction、structured scope predicate、内置 vendor/testdata/worktrees skip、统一 receiver-type 解析）+ `SCANNER-FRAMEWORK-USAGE-01` 守 archtest 不许直接 import `filepath.WalkDir/Walk`；(e) 70+ scanner 渐进迁移先迁 ~15 个示范。已闭合：(a) 双 nil sweep 6 处穷举 + (c) inventory `git ls-files` 切换（PR#412） |
+| Files | `tools/archtest/internal/scanner/*`(新) + `tools/archtest/inventory_anchor_required_test.go`(新) + 39 个 single-rule `*_test.go` 加锚点 + `scripts/audit/list-archtests.sh`（AST owner 提取部分） |
 | ship | L4 |
-| 工时 | 32h+16h（scanner 框架）+ 6h+2h（PR408 4 子项）+ 7h+2h（15 scanner 迁移示范） |
+| 工时 | 32h+16h（scanner 框架）+ 4h+1h（PR408 剩余 3 子项；2 子项已完成于 PR#412）+ 7h+2h（15 scanner 迁移示范） |
 | 依赖 | — |
 
 ---

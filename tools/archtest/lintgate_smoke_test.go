@@ -110,9 +110,10 @@ func TestLintGateSmoke(t *testing.T) {
 	}
 }
 
-// buildLintGateCases enumerates the 11 fixtures covering each migrated rule
-// family plus the cmd/+examples/ negative case for forbidigo's text-coupled
-// exemption (P2 finding from PR #347 review — drift would surface here).
+// buildLintGateCases enumerates fixtures covering each migrated rule family
+// plus the cmd/+examples/ negative case for forbidigo's text-coupled exemption
+// (P2 finding from PR #347 review — drift would surface here) and the nilerr
+// funnel pinned by PR408-FU-PARSE-ERROR-DOUBLE-NIL-SWEEP-01 (PR #412).
 func buildLintGateCases() []lintGateCase {
 	stub := func(pkg string) string { return "package " + pkg + "\n" }
 
@@ -245,6 +246,26 @@ func buildLintGateCases() []lintGateCase {
 				"kernel/stub.go": stub("kernel"),
 			},
 			expectNoFindings: []lintGateFinding{{linter: "depguard", file: "examples/iotdevice/cells/foo/c.go"}},
+		},
+		{
+			// nilerr funnel: PR408-FU-PARSE-ERROR-DOUBLE-NIL-SWEEP-01 deletes
+			// `//nolint:nilerr` from 6 archtest scanners and relies on the
+			// nilerr linter (.golangci.yml: linters.enable) to catch any
+			// regression. If the linter is silently disabled or excluded for
+			// `tools/archtest/`, parse-error soft-skips can re-emerge with no
+			// behavior-level test catching them. This fixture pins the funnel.
+			name: "nilerr_swallows_error_in_nonnil_branch",
+			files: map[string]string{
+				"runtime/r.go": "package runtime\n\nimport \"os\"\n\n" +
+					"func F() ([]byte, error) {\n" +
+					"\tdata, err := os.ReadFile(\"/x\")\n" +
+					"\tif err != nil {\n" +
+					"\t\treturn nil, nil\n" +
+					"\t}\n" +
+					"\treturn data, nil\n" +
+					"}\n",
+			},
+			expectFindings: []lintGateFinding{{linter: "nilerr", file: "runtime/r.go"}},
 		},
 	}
 }
