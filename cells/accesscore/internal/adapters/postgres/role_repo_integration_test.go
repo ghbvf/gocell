@@ -6,66 +6,29 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // ---------------------------------------------------------------------------
 // Integration setup
 // ---------------------------------------------------------------------------
 
-// setupRoleRepoPG spins up a PostgreSQL container, applies all migrations
-// (including 019 for roles + role_assignments tables), and returns a
-// PGRoleRepository.
-func setupRoleRepoPG(t *testing.T) (*PGRoleRepository, func()) {
+// setupRoleRepoPG returns a PGRoleRepository backed by an isolated PG schema.
+// It delegates container start + migration to setupPGPool (shared base container,
+// one per test binary run — B1 fix).
+func setupRoleRepoPG(t *testing.T) *PGRoleRepository {
 	t.Helper()
-	testutil.RequireDocker(t)
-
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	fsys, err := adapterpg.MigrationsFS()
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, fsys, "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
+	pool := setupPGPool(t)
 	repo, err := NewPGRoleRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
-
-	cleanup := func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: container terminate: %v", err)
-		}
-	}
-	return repo, cleanup
+	return repo
 }
 
 // newTestRole builds a minimal valid domain.Role for test insertion.
@@ -96,8 +59,7 @@ func newUserID() string { return uuid.NewString() }
 // ---------------------------------------------------------------------------
 
 func TestPGRoleRepository_Integration_Create_GetByID_HappyPath(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRole("editor-" + uuid.NewString()[:8])
@@ -113,8 +75,7 @@ func TestPGRoleRepository_Integration_Create_GetByID_HappyPath(t *testing.T) {
 }
 
 func TestPGRoleRepository_Integration_Create_DuplicateName_ReturnsRoleDuplicate(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	name := "dupname-" + uuid.NewString()[:8]
@@ -130,8 +91,7 @@ func TestPGRoleRepository_Integration_Create_DuplicateName_ReturnsRoleDuplicate(
 }
 
 func TestPGRoleRepository_Integration_GetByID_NotFound_ReturnsRoleNotFound(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	_, err := repo.GetByID(ctx, uuid.NewString())
@@ -142,8 +102,7 @@ func TestPGRoleRepository_Integration_GetByID_NotFound_ReturnsRoleNotFound(t *te
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_HappyPath_ReturnsChangedTrue(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("assignable-" + uuid.NewString()[:8])
@@ -156,8 +115,7 @@ func TestPGRoleRepository_Integration_AssignToUser_HappyPath_ReturnsChangedTrue(
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_Duplicate_ReturnsChangedFalse(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("dup-assign-" + uuid.NewString()[:8])
@@ -174,8 +132,7 @@ func TestPGRoleRepository_Integration_AssignToUser_Duplicate_ReturnsChangedFalse
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_Admin_FirstWins_SecondReturnsRoleDuplicate(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	// Create the admin role with fixed ID "admin" to match the partial index.
@@ -202,8 +159,7 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_FirstWins_SecondReturns
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_OnlyOneSucceeds(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	// Use a fresh unique admin role with fixed prefix for partial index matching.
@@ -221,11 +177,15 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 		users[i] = newUserID()
 	}
 
+	// B5 fix: use a channel to collect per-goroutine results so that goroutine
+	// writes never share a backing array slot (eliminates the theoretical race
+	// detector hit on the old slice-indexed approach).
 	type result struct {
 		changed bool
 		err     error
 	}
-	results := make([]result, N)
+	resultsCh := make(chan result, N)
+
 	var wg sync.WaitGroup
 	wg.Add(N)
 
@@ -233,14 +193,15 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 		go func(idx int) {
 			defer wg.Done()
 			changed, err := repo.AssignToUser(ctx, users[idx], "admin")
-			results[idx] = result{changed: changed, err: err}
+			resultsCh <- result{changed: changed, err: err}
 		}(i)
 	}
 	wg.Wait()
+	close(resultsCh)
 
 	successCount := 0
 	dupCount := 0
-	for _, r := range results {
+	for r := range resultsCh {
 		if r.err == nil && r.changed {
 			successCount++
 			continue
@@ -259,8 +220,7 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUser_HappyPath(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("removable-" + uuid.NewString()[:8])
@@ -277,8 +237,7 @@ func TestPGRoleRepository_Integration_RemoveFromUser_HappyPath(t *testing.T) {
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_LastHolder_ReturnsForbidden(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("sole-holder-" + uuid.NewString()[:8])
@@ -298,8 +257,7 @@ func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_LastHolder_Returns
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_NotLast_RemovesRow(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("multi-holder-" + uuid.NewString()[:8])
@@ -324,8 +282,7 @@ func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_NotLast_RemovesRow
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_UserNotHolder_ReturnsChangedFalse(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("not-assigned-" + uuid.NewString()[:8])
@@ -338,8 +295,7 @@ func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_UserNotHolder_Retu
 }
 
 func TestPGRoleRepository_Integration_CountByRole_HappyPath(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("counted-" + uuid.NewString()[:8])
@@ -362,8 +318,7 @@ func TestPGRoleRepository_Integration_CountByRole_HappyPath(t *testing.T) {
 }
 
 func TestPGRoleRepository_Integration_ListByUserID_HappyPath_ReturnsRoles(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	suffix := uuid.NewString()[:8]
@@ -391,8 +346,7 @@ func TestPGRoleRepository_Integration_ListByUserID_HappyPath_ReturnsRoles(t *tes
 }
 
 func TestPGRoleRepository_Integration_ListByUserID_NoRoles_ReturnsEmpty(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	userID := newUserID()
@@ -402,8 +356,7 @@ func TestPGRoleRepository_Integration_ListByUserID_NoRoles_ReturnsEmpty(t *testi
 }
 
 func TestPGRoleRepository_Integration_Create_NoPermissions_RoundTrip(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("empty-perms-" + uuid.NewString()[:8])
@@ -416,24 +369,23 @@ func TestPGRoleRepository_Integration_Create_NoPermissions_RoundTrip(t *testing.
 }
 
 // ---------------------------------------------------------------------------
-// Timestamp precision guard
+// B6 fix: renamed from TimestampPrecision to RoundTrip; removed dead _ = before
 // ---------------------------------------------------------------------------
 
-func TestPGRoleRepository_Integration_Create_TimestampPrecision(t *testing.T) {
-	repo, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+// TestPGRoleRepository_Integration_Create_RoundTrip verifies that a newly
+// created role round-trips through GetByID and returns the correct identity
+// fields. The test name previously claimed timestamp-precision coverage that
+// the repo does not expose (created_at is not returned by GetByID).
+func TestPGRoleRepository_Integration_Create_RoundTrip(t *testing.T) {
+	repo := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	before := time.Now().UTC().Truncate(time.Second)
-	role := newTestRoleNoPerms("ts-precision-" + uuid.NewString()[:8])
+	role := newTestRoleNoPerms("roundtrip-" + uuid.NewString()[:8])
 	require.NoError(t, repo.Create(ctx, role))
 
-	// roles.created_at is set server-side via r.clk.Now() during Insert.
-	// We just verify the row round-trips without error; precise timestamp
-	// verification would require reading created_at back, which this
-	// repo does not currently expose. The before bound is a smoke check.
 	got, err := repo.GetByID(ctx, role.ID)
 	require.NoError(t, err)
 	assert.Equal(t, role.ID, got.ID)
-	_ = before
+	assert.Equal(t, role.Name, got.Name)
+	assert.Empty(t, got.Permissions)
 }

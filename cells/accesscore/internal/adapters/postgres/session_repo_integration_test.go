@@ -18,7 +18,6 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -52,7 +51,7 @@ func setupSessionRepoPG(t *testing.T) (*PGSessionRepository, func()) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
-	repo, err := NewPGSessionRepository(pool.DB(), clock.Real())
+	repo, err := NewPGSessionRepository(pool.DB())
 	require.NoError(t, err)
 
 	cleanup := func() {

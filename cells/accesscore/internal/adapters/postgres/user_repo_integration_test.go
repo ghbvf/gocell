@@ -11,60 +11,24 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // ---------------------------------------------------------------------------
 // Integration setup
 // ---------------------------------------------------------------------------
 
-// setupUserRepoPG spins up a PostgreSQL container, applies all migrations
-// (including 017 for the users table), and returns a PGUserRepository.
-func setupUserRepoPG(t *testing.T) (*PGUserRepository, func()) {
+// setupUserRepoPG returns a PGUserRepository backed by an isolated PG schema.
+// It delegates container start + migration to setupPGPool (shared base container,
+// one per test binary run — B1 fix).
+func setupUserRepoPG(t *testing.T) *PGUserRepository {
 	t.Helper()
-	testutil.RequireDocker(t)
-
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	pool := setupPGPool(t)
+	repo, err := NewPGUserRepository(pool.DB())
 	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	fsys, err := adapterpg.MigrationsFS()
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, fsys, "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
-	repo, err := NewPGUserRepository(pool.DB(), clock.Real())
-	require.NoError(t, err)
-
-	cleanup := func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: container terminate: %v", err)
-		}
-	}
-	return repo, cleanup
+	return repo
 }
 
 // newTestUser builds a minimal valid domain.User for test insertion.
@@ -88,8 +52,7 @@ func newTestUser(username, email string) *domain.User {
 // ---------------------------------------------------------------------------
 
 func TestPGUserRepository_Integration_CRUD(t *testing.T) {
-	repo, cleanup := setupUserRepoPG(t)
-	defer cleanup()
+	repo := setupUserRepoPG(t)
 	ctx := context.Background()
 
 	t.Run("Create_and_GetByID", func(t *testing.T) {
@@ -211,11 +174,13 @@ func TestPGUserRepository_Integration_CRUD(t *testing.T) {
 
 // TestPGUserRepository_Integration_ConcurrentInsert races N goroutines each
 // trying to INSERT a user with the same username. Only one must succeed; all
-// others must return ErrAuthUserDuplicate. This is the "concurrent INSERT race"
-// required by the task spec.
+// others must return ErrAuthUserDuplicate.
+//
+// B5 fix: results are collected via a channel so goroutine writes never share
+// a backing array slot, eliminating the theoretical race detector hit on the
+// old slice-indexed approach.
 func TestPGUserRepository_Integration_ConcurrentInsert(t *testing.T) {
-	repo, cleanup := setupUserRepoPG(t)
-	defer cleanup()
+	repo := setupUserRepoPG(t)
 	ctx := context.Background()
 
 	const N = 10
@@ -224,7 +189,11 @@ func TestPGUserRepository_Integration_ConcurrentInsert(t *testing.T) {
 		return "raceuser" + string(rune('a'+i)) + "@example.com"
 	}
 
-	errs := make([]error, N)
+	type result struct {
+		err error
+	}
+	resultsCh := make(chan result, N)
+
 	var wg sync.WaitGroup
 	wg.Add(N)
 
@@ -232,21 +201,22 @@ func TestPGUserRepository_Integration_ConcurrentInsert(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			u := newTestUser(username, email(idx))
-			errs[idx] = repo.Create(ctx, u)
+			resultsCh <- result{err: repo.Create(ctx, u)}
 		}(i)
 	}
 	wg.Wait()
+	close(resultsCh)
 
 	// Exactly one insert must succeed; the rest must be ErrAuthUserDuplicate.
 	successCount := 0
 	duplicateCount := 0
-	for _, err := range errs {
-		if err == nil {
+	for r := range resultsCh {
+		if r.err == nil {
 			successCount++
 			continue
 		}
 		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec, "unexpected error type: %v", err)
+		require.ErrorAs(t, r.err, &ec, "unexpected error type: %v", r.err)
 		assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 		duplicateCount++
 	}

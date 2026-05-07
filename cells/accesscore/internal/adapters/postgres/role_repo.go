@@ -35,13 +35,6 @@ import (
 // Compile-time assertion: PGRoleRepository implements ports.RoleRepository.
 var _ ports.RoleRepository = (*PGRoleRepository)(nil)
 
-// ErrRoleRepoQuery is the error code for unexpected PostgreSQL query failures in
-// the accesscore role repository. Mirrors the adapter-level sentinel
-// (ErrAdapterPGQuery = "ERR_ADAPTER_PG_QUERY") so monitoring can group all PG
-// query failures under a single code. The adapter package cannot be re-imported
-// because cells/ must not depend on adapters/ (depguard cells-isolation rule).
-const ErrRoleRepoQuery errcode.Code = "ERR_ADAPTER_PG_QUERY"
-
 // adminRoleConstraint is the partial index name that enforces at-most-one admin
 // role holder. The INSERT ON CONFLICT DO NOTHING clause absorbs the PK duplicate
 // scenario; this partial index collision must be caught by the application.
@@ -57,6 +50,16 @@ SELECT id, name, permissions, created_at
 FROM roles
 WHERE id = $1`
 
+	// insertRoleAssignmentSQL assigns a role to a user.
+	//
+	// ON CONFLICT (user_id, role_id) DO NOTHING absorbs the PK duplicate case
+	// (same user already holds the role) → RowsAffected==0, changed=false.
+	//
+	// NOTE: idx_role_assignments_single_admin partial index conflict is NOT
+	// absorbed by DO NOTHING — that clause only matches the explicit conflict
+	// target (user_id, role_id). A partial-index violation produces a 23505
+	// error with ConstraintName=="idx_role_assignments_single_admin", which the
+	// application catches and maps to ErrAuthRoleDuplicate.
 	insertRoleAssignmentSQL = `
 INSERT INTO role_assignments (user_id, role_id, assigned_at)
 VALUES ($1, $2, $3)
@@ -163,7 +166,7 @@ func (r *PGRoleRepository) queryCtx(ctx context.Context, sql string, args ...any
 func (r *PGRoleRepository) Create(ctx context.Context, role *domain.Role) error {
 	permJSON, err := json.Marshal(permissionsToJSON(role.Permissions))
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: marshal permissions", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: marshal permissions", err)
 	}
 	_, err = r.execCtx(ctx, insertRoleSQL,
 		role.ID,
@@ -185,13 +188,13 @@ func (r *PGRoleRepository) mapRoleCreateError(err error, name string) error {
 			slog.String("constraint", pgErr.ConstraintName),
 			slog.String("role_name", name),
 		)
+		// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate,
 			"role name already exists",
-			errcode.WithDetails(slog.String("constraint", pgErr.ConstraintName)),
-			errcode.WithInternal("name="+name),
+			errcode.WithInternal("constraint="+pgErr.ConstraintName+" name="+name),
 		)
 	}
-	return errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: create", err)
+	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: create", err)
 }
 
 // GetByID retrieves a role by primary key.
@@ -207,7 +210,7 @@ func (r *PGRoleRepository) GetByID(ctx context.Context, id string) (*domain.Role
 				errcode.WithInternal("id="+id),
 			)
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: get by id", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: get by id", err)
 	}
 	return role, nil
 }
@@ -217,7 +220,7 @@ func (r *PGRoleRepository) GetByID(ctx context.Context, id string) (*domain.Role
 func (r *PGRoleRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
 	rows, err := r.queryCtx(ctx, listByUserIDSQL, userID)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: get by user id", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: get by user id", err)
 	}
 	defer rows.Close()
 
@@ -225,12 +228,12 @@ func (r *PGRoleRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	for rows.Next() {
 		role, scanErr := scanRoleFromRows(rows)
 		if scanErr != nil {
-			return nil, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: get by user id scan", scanErr)
+			return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: get by user id scan", scanErr)
 		}
 		result = append(result, role)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: get by user id rows", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: get by user id rows", err)
 	}
 	if result == nil {
 		return []*domain.Role{}, nil
@@ -243,8 +246,12 @@ func (r *PGRoleRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 // Idempotent: if the user already holds the role, returns changed=false.
 //
 // Two distinct 23505 scenarios:
-//   - (user_id, role_id) PK collision — absorbed by ON CONFLICT DO NOTHING; RowsAffected==0 → changed=false
-//   - idx_role_assignments_single_admin partial index collision — caught via ConstraintName → ErrAuthRoleDuplicate
+//   - (user_id, role_id) PK collision — absorbed by ON CONFLICT DO NOTHING;
+//     RowsAffected==0 → changed=false. No error returned.
+//   - idx_role_assignments_single_admin partial index collision — NOT absorbed
+//     by DO NOTHING (PG ON CONFLICT only matches the explicit conflict target).
+//     Caught via pgErr.ConstraintName=="idx_role_assignments_single_admin",
+//     mapped to ErrAuthRoleDuplicate (multi-pod concurrent assign).
 func (r *PGRoleRepository) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
 	ct, err := r.execCtx(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
 	if err != nil {
@@ -256,14 +263,14 @@ func (r *PGRoleRepository) AssignToUser(ctx context.Context, userID, roleID stri
 					slog.String("role_id", roleID),
 					slog.String("user_id", userID),
 				)
+				// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
 				return false, errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate,
 					"admin role already assigned to another user",
-					errcode.WithDetails(slog.String("constraint", pgErr.ConstraintName)),
-					errcode.WithInternal(fmt.Sprintf("user_id=%s role_id=%s", userID, roleID)),
+					errcode.WithInternal(fmt.Sprintf("constraint=%s user_id=%s role_id=%s", pgErr.ConstraintName, userID, roleID)),
 				)
 			}
 		}
-		return false, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: assign to user", err)
+		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user", err)
 	}
 	return ct.RowsAffected() != 0, nil
 }
@@ -273,7 +280,7 @@ func (r *PGRoleRepository) AssignToUser(ctx context.Context, userID, roleID stri
 func (r *PGRoleRepository) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	_, err := r.execCtx(ctx, deleteRoleAssignmentSQL, userID, roleID)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: remove from user", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: remove from user", err)
 	}
 	return nil
 }
@@ -285,8 +292,14 @@ func (r *PGRoleRepository) RemoveFromUser(ctx context.Context, userID, roleID st
 // holder of the role. Returns changed=false when the user did not hold the role
 // (idempotent no-op, matching mem.RoleRepository semantics).
 //
-// Atomicity: the CTE COUNT + DELETE execute in a single server round-trip,
-// eliminating the TOCTOU gap between count check and removal.
+// Atomicity: This method MUST be called within an ambient transaction
+// (resolved via persistence.TxCtxKey). The two-statement pattern
+// (userHoldsRole SELECT + CTE-based DELETE) is only race-safe under a
+// shared TX snapshot. Direct pool calls (no ambient TX) have a TOCTOU
+// window between the existence probe and the DELETE.
+//
+// The CTE COUNT + DELETE execute in a single server round-trip,
+// eliminating the TOCTOU gap between count check and removal within the CTE.
 func (r *PGRoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	// First, check whether the user actually holds the role.
 	// This check distinguishes "sole holder" from "user does not hold role" —
@@ -302,7 +315,7 @@ func (r *PGRoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, 
 
 	ct, err := r.execCtx(ctx, removeIfNotLastSQL, userID, roleID)
 	if err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: remove if not last", err)
+		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: remove if not last", err)
 	}
 	if ct.RowsAffected() == 0 {
 		// CTE count check prevented the DELETE: this user is the sole holder.
@@ -319,7 +332,7 @@ func (r *PGRoleRepository) userHoldsRole(ctx context.Context, userID, roleID str
 	var count int
 	row := r.queryRowCtx(ctx, userHoldsRoleSQL, userID, roleID)
 	if err := row.Scan(&count); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: check user holds role", err)
+		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: check user holds role", err)
 	}
 	return count > 0, nil
 }
@@ -329,7 +342,7 @@ func (r *PGRoleRepository) CountByRole(ctx context.Context, roleID string) (int,
 	var count int
 	row := r.queryRowCtx(ctx, countByRoleSQL, roleID)
 	if err := row.Scan(&count); err != nil {
-		return 0, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: count by role", err)
+		return 0, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: count by role", err)
 	}
 	return count, nil
 }
@@ -341,7 +354,7 @@ func (r *PGRoleRepository) CountByRole(ctx context.Context, roleID string) (int,
 func (r *PGRoleRepository) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	rows, err := r.queryCtx(ctx, listByUserIDSQL, userID)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: list by user id", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: list by user id", err)
 	}
 	defer rows.Close()
 
@@ -349,12 +362,12 @@ func (r *PGRoleRepository) ListByUserID(ctx context.Context, userID string, para
 	for rows.Next() {
 		role, scanErr := scanRoleFromRows(rows)
 		if scanErr != nil {
-			return nil, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: list by user id scan", scanErr)
+			return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: list by user id scan", scanErr)
 		}
 		all = append(all, role)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrRoleRepoQuery, "role repo: list by user id rows", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: list by user id rows", err)
 	}
 	if all == nil {
 		all = []*domain.Role{}
@@ -368,32 +381,34 @@ func (r *PGRoleRepository) ListByUserID(ctx context.Context, userID string, para
 	return result, nil
 }
 
-// scanRole scans a pgx.Row into a domain.Role.
-func scanRole(row pgx.Row) (*domain.Role, error) {
+// rowScanner is the common scan interface shared by pgx.Row and pgx.Rows.
+// Used to deduplicate the scan logic between single-row and multi-row queries.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanRoleRow scans a rowScanner (pgx.Row or pgx.Rows) into a domain.Role.
+func scanRoleRow(s rowScanner) (*domain.Role, error) {
 	var (
 		id        string
 		name      string
 		permJSON  []byte
 		createdAt interface{}
 	)
-	if err := row.Scan(&id, &name, &permJSON, &createdAt); err != nil {
+	if err := s.Scan(&id, &name, &permJSON, &createdAt); err != nil {
 		return nil, err
 	}
 	return buildRole(id, name, permJSON)
 }
 
+// scanRole scans a pgx.Row into a domain.Role.
+func scanRole(row pgx.Row) (*domain.Role, error) {
+	return scanRoleRow(row)
+}
+
 // scanRoleFromRows scans a pgx.Rows (multi-row) into a domain.Role.
 func scanRoleFromRows(rows pgx.Rows) (*domain.Role, error) {
-	var (
-		id        string
-		name      string
-		permJSON  []byte
-		createdAt interface{}
-	)
-	if err := rows.Scan(&id, &name, &permJSON, &createdAt); err != nil {
-		return nil, err
-	}
-	return buildRole(id, name, permJSON)
+	return scanRoleRow(rows)
 }
 
 // buildRole constructs a domain.Role from raw DB fields.

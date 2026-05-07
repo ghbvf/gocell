@@ -16,12 +16,14 @@ import (
 	pgcell "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // WithPool injects PostgreSQL-backed repositories into accesscore using the
 // provided pool.
 //
-// clk must be non-nil; pass clock.Real() at the composition root.
+// clk must be non-nil; pass clock.Real() at the composition root. It is used
+// by PGRoleRepository (which writes created_at/assigned_at timestamps).
 //
 // The caller is responsible for the pool lifecycle. This option constructs
 // PGUserRepository, PGSessionRepository, and PGRoleRepository and injects
@@ -34,14 +36,17 @@ func WithPool(pool *pgxpool.Pool, clk clock.Clock) ([]accesscore.Option, error) 
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore/postgres: WithPool requires a non-nil *pgxpool.Pool")
 	}
-	clock.MustHaveClock(clk, "accesscore/postgres.WithPool")
+	if validation.IsNilInterface(clk) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore/postgres: WithPool requires a non-nil clock.Clock")
+	}
 
-	userRepo, err := pgcell.NewPGUserRepository(pool, clk)
+	userRepo, err := pgcell.NewPGUserRepository(pool)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore/postgres: NewPGUserRepository", err)
 	}
-	sessionRepo, err := pgcell.NewPGSessionRepository(pool, clk)
+	sessionRepo, err := pgcell.NewPGSessionRepository(pool)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore/postgres: NewPGSessionRepository", err)

@@ -1,12 +1,9 @@
 package postgres
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -14,29 +11,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
-
-// typedNilRoleClock implements clock.Clock but holds a nil pointer.
-// Used to verify that NewPGRoleRepository rejects typed-nil interface values.
-type typedNilRoleClock struct{}
-
-func (*typedNilRoleClock) Now() time.Time                  { return time.Now() }
-func (*typedNilRoleClock) Since(t time.Time) time.Duration { return time.Since(t) }
-func (*typedNilRoleClock) Until(t time.Time) time.Duration { return time.Until(t) }
-func (*typedNilRoleClock) NewTimerAt(t time.Time) clock.Timer {
-	return clock.Real().NewTimerAt(t)
-}
-
-func (*typedNilRoleClock) NewTicker(d time.Duration) clock.Ticker {
-	return clock.Real().NewTicker(d)
-}
-
-func (*typedNilRoleClock) AfterFunc(t time.Time, fn func()) clock.Timer {
-	return clock.Real().AfterFunc(t, fn)
-}
-
-func (*typedNilRoleClock) Sleep(ctx context.Context, t time.Time) error {
-	return clock.Real().Sleep(ctx, t)
-}
 
 // ---------------------------------------------------------------------------
 // Constructor validation
@@ -52,7 +26,7 @@ func TestNewPGRoleRepository_RequiresPool(t *testing.T) {
 }
 
 func TestNewPGRoleRepository_RequiresClock(t *testing.T) {
-	_, err := NewPGRoleRepository(dummyRolePool(), nil)
+	_, err := NewPGRoleRepository(dummyPool(), nil)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -61,8 +35,8 @@ func TestNewPGRoleRepository_RequiresClock(t *testing.T) {
 }
 
 func TestNewPGRoleRepository_TypedNilClock(t *testing.T) {
-	var clk *typedNilRoleClock
-	_, err := NewPGRoleRepository(dummyRolePool(), clk)
+	var clk *typedNilClock
+	_, err := NewPGRoleRepository(dummyPool(), clk)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -71,7 +45,7 @@ func TestNewPGRoleRepository_TypedNilClock(t *testing.T) {
 }
 
 func TestNewPGRoleRepository_HappyPath(t *testing.T) {
-	repo, err := NewPGRoleRepository(dummyRolePool(), clock.Real())
+	repo, err := NewPGRoleRepository(dummyPool(), clock.Real())
 	require.NoError(t, err)
 	assert.NotNil(t, repo)
 }
@@ -153,14 +127,4 @@ func TestRoleFieldValue(t *testing.T) {
 	assert.Equal(t, "id-1", roleFieldValue(r, "id"))
 	assert.Equal(t, "admin", roleFieldValue(r, "name"))
 	assert.Equal(t, "", roleFieldValue(r, "unknown"))
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-// dummyRolePool returns a non-nil *pgxpool.Pool sufficient to satisfy the
-// nil-check in NewPGRoleRepository. The pool is never used for actual DB calls.
-func dummyRolePool() *pgxpool.Pool {
-	return new(pgxpool.Pool) //nolint:exhaustruct // dummy value for nil-check only
 }

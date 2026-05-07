@@ -21,10 +21,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Compile-time assertion: PGUserRepository implements ports.UserRepository.
@@ -32,14 +30,6 @@ var _ ports.UserRepository = (*PGUserRepository)(nil)
 
 // pgUniqueViolation is the PostgreSQL error code for UNIQUE constraint violations.
 const pgUniqueViolation = "23505"
-
-// ErrUserRepoQuery is the error code for unexpected PostgreSQL query failures in
-// the accesscore user repository. It intentionally mirrors the adapter-level
-// sentinel (ErrAdapterPGQuery = "ERR_ADAPTER_PG_QUERY") so that callers and
-// monitoring can group all PG query failures under a single code, regardless of
-// which layer generated them. The adapter code cannot be re-imported here because
-// cells/ must not depend on adapters/ (depguard cells-isolation rule).
-const ErrUserRepoQuery errcode.Code = "ERR_ADAPTER_PG_QUERY"
 
 const (
 	insertUserSQL = `
@@ -69,7 +59,7 @@ WHERE id = $1`
 
 // PGUserRepository implements ports.UserRepository on PostgreSQL.
 //
-// Construction: error-first 2-param signature; nil checks fail-fast
+// Construction: error-first 1-param signature; nil check fails-fast
 // (PG-CONSTRUCTOR-MUST-FREE-01: no MustNew* variant is provided).
 //
 // TX semantics: ambient — if a pgx.Tx is stored in ctx under
@@ -84,22 +74,17 @@ WHERE id = $1`
 // idx_users_email.
 type PGUserRepository struct {
 	pool *pgxpool.Pool
-	clk  clock.Clock
 }
 
 // NewPGUserRepository constructs a PGUserRepository backed by the provided pool.
 //
-// Returns a non-nil error if pool or clk are nil (including typed-nil).
-func NewPGUserRepository(pool *pgxpool.Pool, clk clock.Clock) (*PGUserRepository, error) {
+// Returns a non-nil error if pool is nil.
+func NewPGUserRepository(pool *pgxpool.Pool) (*PGUserRepository, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pg.NewPGUserRepository: pool must not be nil")
 	}
-	if validation.IsNilInterface(clk) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"pg.NewPGUserRepository: clock must not be nil")
-	}
-	return &PGUserRepository{pool: pool, clk: clk}, nil
+	return &PGUserRepository{pool: pool}, nil
 }
 
 // execCtx executes a SQL statement against the ambient pgx.Tx when one is
@@ -146,27 +131,26 @@ func (r *PGUserRepository) Create(ctx context.Context, user *domain.User) error 
 func (r *PGUserRepository) mapCreateError(err error, username, email string) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
+		// A8: username and email are PII — stay in WithInternal, not wire-visible.
 		slog.Warn("user create: unique constraint violation",
 			slog.String("constraint", pgErr.ConstraintName),
-			slog.String("username", username),
 		)
 		switch pgErr.ConstraintName {
 		case "idx_users_email":
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 				"email already exists",
-				errcode.WithDetails(slog.String("constraint", pgErr.ConstraintName)),
-				errcode.WithInternal("email="+email),
+				errcode.WithInternal("constraint="+pgErr.ConstraintName+" email="+email),
 			)
 		default:
 			// idx_users_username or any other unique constraint
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 				"username already exists",
-				errcode.WithDetails(slog.String("constraint", pgErr.ConstraintName)),
-				errcode.WithInternal("username="+username),
+				errcode.WithInternal("constraint="+pgErr.ConstraintName+" username="+username),
 			)
 		}
 	}
-	return errcode.Wrap(errcode.KindInternal, ErrUserRepoQuery, "user repo: create", err)
+	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: create", err)
 }
 
 // GetByID retrieves a user by primary key.
@@ -182,7 +166,7 @@ func (r *PGUserRepository) GetByID(ctx context.Context, id string) (*domain.User
 				errcode.WithInternal("id="+id),
 			)
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, ErrUserRepoQuery, "user repo: get by id", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: get by id", err)
 	}
 	return u, nil
 }
@@ -200,7 +184,7 @@ func (r *PGUserRepository) GetByUsername(ctx context.Context, username string) (
 				errcode.WithInternal("username="+username),
 			)
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, ErrUserRepoQuery, "user repo: get by username", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: get by username", err)
 	}
 	return u, nil
 }
@@ -219,7 +203,7 @@ func (r *PGUserRepository) Update(ctx context.Context, user *domain.User) error 
 		user.UpdatedAt,
 	)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrUserRepoQuery, "user repo: update", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: update", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
@@ -236,7 +220,7 @@ func (r *PGUserRepository) Update(ctx context.Context, user *domain.User) error 
 func (r *PGUserRepository) Delete(ctx context.Context, id string) error {
 	ct, err := r.execCtx(ctx, deleteUserSQL, id)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrUserRepoQuery, "user repo: delete", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: delete", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,

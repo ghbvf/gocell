@@ -23,21 +23,12 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Compile-time assertion: PGSessionRepository implements ports.SessionRepository.
 var _ ports.SessionRepository = (*PGSessionRepository)(nil)
-
-// ErrSessionRepoQuery is the error code for unexpected PostgreSQL query failures in
-// the accesscore session repository. Mirrors the adapter-level sentinel
-// (ErrAdapterPGQuery = "ERR_ADAPTER_PG_QUERY") so monitoring can group all PG
-// query failures under a single code. The adapter package cannot be re-imported
-// because cells/ must not depend on adapters/ (depguard cells-isolation rule).
-const ErrSessionRepoQuery errcode.Code = "ERR_ADAPTER_PG_QUERY"
 
 const (
 	insertSessionSQL = `
@@ -74,7 +65,7 @@ WHERE id = $1`
 
 // PGSessionRepository implements ports.SessionRepository on PostgreSQL.
 //
-// Construction: error-first 2-param signature; nil checks fail-fast
+// Construction: error-first 1-param signature; nil check fails-fast
 // (PG-CONSTRUCTOR-MUST-FREE-01: no MustNew* variant is provided).
 //
 // TX semantics: ambient — if a pgx.Tx is stored in ctx under
@@ -90,22 +81,25 @@ WHERE id = $1`
 // (PG-REPO-AMBIENT-TX-01).
 type PGSessionRepository struct {
 	pool *pgxpool.Pool
-	clk  clock.Clock
 }
 
 // NewPGSessionRepository constructs a PGSessionRepository backed by the provided pool.
 //
-// Returns a non-nil error if pool or clk are nil (including typed-nil).
-func NewPGSessionRepository(pool *pgxpool.Pool, clk clock.Clock) (*PGSessionRepository, error) {
+// Returns a non-nil error if pool is nil.
+func NewPGSessionRepository(pool *pgxpool.Pool) (*PGSessionRepository, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pg.NewPGSessionRepository: pool must not be nil")
 	}
-	if validation.IsNilInterface(clk) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"pg.NewPGSessionRepository: clock must not be nil")
-	}
-	return &PGSessionRepository{pool: pool, clk: clk}, nil
+	return &PGSessionRepository{pool: pool}, nil
+}
+
+// Health pings the underlying PostgreSQL pool.
+// Satisfies the optional health-check interface probed by cell_init.go:
+//
+//	if hc, ok := c.sessionRepo.(interface{ Health(context.Context) error }); ok { ... }
+func (r *PGSessionRepository) Health(ctx context.Context) error {
+	return r.pool.Ping(ctx)
 }
 
 // execCtx executes a SQL statement against the ambient pgx.Tx when one is
@@ -141,26 +135,29 @@ func (r *PGSessionRepository) Create(ctx context.Context, session *domain.Sessio
 		session.Version,
 	)
 	if err != nil {
-		return r.mapCreateError(err, session.ID)
+		return r.mapCreateError(err, session.ID, session.UserID)
 	}
 	return nil
 }
 
 // mapCreateError converts a raw pgx error from Create into an errcode.Error.
-func (r *PGSessionRepository) mapCreateError(err error, sessionID string) error {
+//
+// userID is included in the slog.Warn log for operator diagnostics (A10).
+func (r *PGSessionRepository) mapCreateError(err error, sessionID, userID string) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
 		slog.Warn("session create: unique constraint violation",
 			slog.String("constraint", pgErr.ConstraintName),
 			slog.String("session_id", sessionID),
+			slog.String("user_id", userID),
 		)
 		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
 			"session access token already exists",
-			errcode.WithDetails(slog.String("constraint", pgErr.ConstraintName)),
-			errcode.WithInternal("session_id="+sessionID),
+			errcode.WithInternal("constraint="+pgErr.ConstraintName+" session_id="+sessionID),
 		)
 	}
-	return errcode.Wrap(errcode.KindInternal, ErrSessionRepoQuery, "session repo: create", err)
+	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: create", err)
 }
 
 // GetByID retrieves a session by primary key.
@@ -176,7 +173,7 @@ func (r *PGSessionRepository) GetByID(ctx context.Context, id string) (*domain.S
 				errcode.WithInternal("id="+id),
 			)
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, ErrSessionRepoQuery, "session repo: get by id", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: get by id", err)
 	}
 	return s, nil
 }
@@ -188,6 +185,11 @@ func (r *PGSessionRepository) GetByID(ctx context.Context, id string) (*domain.S
 // not found → ErrSessionNotFound; version mismatch → ErrSessionConflict.
 //
 // On success, session.Version is incremented to match the new DB value.
+//
+// Disambiguation depends on READ COMMITTED isolation: the follow-up
+// GetByID inside the same ambient TX must see this TX's prior writes.
+// If repository moves to REPEATABLE READ or stricter, this branch must
+// be replaced by a single SQL (UPDATE ... RETURNING ...).
 func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Session) error {
 	ct, err := r.execCtx(ctx, updateSessionSQL,
 		session.ID,
@@ -197,7 +199,7 @@ func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Sessio
 		session.RevokedAt,
 	)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrSessionRepoQuery, "session repo: update", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: update", err)
 	}
 	if ct.RowsAffected() == 0 {
 		// Distinguish not-found from version-conflict via a follow-up probe.
@@ -227,7 +229,7 @@ func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Sessio
 func (r *PGSessionRepository) RevokeByIDAndOwner(ctx context.Context, id, ownerUserID string) error {
 	ct, err := r.execCtx(ctx, revokeByIDAndOwnerSQL, id, ownerUserID)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrSessionRepoQuery, "session repo: revoke by id and owner", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: revoke by id and owner", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
@@ -244,7 +246,7 @@ func (r *PGSessionRepository) RevokeByIDAndOwner(ctx context.Context, id, ownerU
 func (r *PGSessionRepository) RevokeByUserID(ctx context.Context, userID string) error {
 	_, err := r.execCtx(ctx, revokeByUserIDSQL, userID)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrSessionRepoQuery, "session repo: revoke by user id", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: revoke by user id", err)
 	}
 	return nil
 }
@@ -254,7 +256,7 @@ func (r *PGSessionRepository) RevokeByUserID(ctx context.Context, userID string)
 func (r *PGSessionRepository) Delete(ctx context.Context, id string) error {
 	ct, err := r.execCtx(ctx, deleteSessionSQL, id)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrSessionRepoQuery, "session repo: delete", err)
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: delete", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,

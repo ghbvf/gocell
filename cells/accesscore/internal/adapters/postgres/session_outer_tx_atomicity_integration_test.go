@@ -32,14 +32,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // cross-store test durations (TEST-TIME-LITERAL-01: extract to package-level consts).
@@ -63,32 +60,13 @@ type crossStoreFixture struct {
 	clock        *storetest.FakeClock
 }
 
+// newCrossStoreFixture builds a crossStoreFixture using the shared base
+// container + an isolated schema pool (B1 fix: one container per test run).
 func newCrossStoreFixture(t *testing.T) *crossStoreFixture {
 	t.Helper()
-	testutil.RequireDocker(t)
 
+	pool := setupPGPool(t)
 	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	fsys, err := adapterpg.MigrationsFS()
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, fsys, "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
 
 	clk := storetest.NewFakeClock(time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC))
 	policy := refresh.Policy{
@@ -101,16 +79,13 @@ func newCrossStoreFixture(t *testing.T) *crossStoreFixture {
 
 	txm := adapterpg.NewTxManager(pool)
 
-	sessionRepo, err := NewPGSessionRepository(pool.DB(), clock.Real())
+	sessionRepo, err := NewPGSessionRepository(pool.DB())
 	require.NoError(t, err)
 
 	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txm, policy, clk, nil)
 	require.NoError(t, err)
 
-	t.Cleanup(func() {
-		_ = pool.Close(ctx)
-		_ = container.Terminate(ctx)
-	})
+	_ = ctx // pool cleanup is registered by setupPGPool via t.Cleanup
 
 	return &crossStoreFixture{
 		sessionRepo:  sessionRepo,
