@@ -13,6 +13,49 @@ import (
 	"testing"
 )
 
+// TestArchtestInventoryNoIDTruncation guards against a regex defect in
+// scripts/audit/list-archtests.sh that truncated multi-segment governance
+// rule IDs in docs/audit/archtest-inventory.md.
+//
+// History: the original alternation used `\b...|CONSISTENCY|...-[A-Z0-9-]+`
+// which matched `\bCONSISTENCY-EMIT-01` mid-token inside
+// CONTRACT-CONSISTENCY-EMIT-01, producing CONSISTENCY-EMIT-01 in the
+// inventory output. Fix in PR-FUNNEL-03 reordered alternation so longer
+// compound prefixes (CONTRACT-CONSISTENCY-EMIT / SLICE-CONSISTENCY /
+// DOC-NAME) come before their shorter substrings.
+//
+// This test asserts that every governance rule ID with a compound prefix
+// (one or more internal hyphens before the canonical -NN suffix) appears
+// verbatim in the inventory file. New compound-prefix rules MUST be added
+// here when introduced.
+func TestArchtestInventoryNoIDTruncation(t *testing.T) {
+	t.Parallel()
+
+	atRisk := []string{
+		"CONTRACT-CONSISTENCY-EMIT-01", // truncated to CONSISTENCY-EMIT-01 pre-fix
+		"SLICE-CONSISTENCY-01",
+		"DOC-NAME-01",
+		"WRAPPER-CONTRACTSPEC-IMPORT-01", // archtest cross-ref kept verbatim
+		"WRAPPER-NO-PACKAGE-STATE",
+		"FMT-CONTRACT-DIR-ID-MATCH-01",
+	}
+
+	inventoryPath := filepath.Join("..", "..", "docs", "audit", "archtest-inventory.md")
+	data, err := os.ReadFile(inventoryPath) //nolint:gosec // hardcoded relative path under repo root, test-only
+	if err != nil {
+		t.Fatalf("read inventory %s: %v", inventoryPath, err)
+	}
+	body := string(data)
+
+	for _, id := range atRisk {
+		if !strings.Contains(body, id) {
+			t.Errorf("inventory missing full rule ID %q — likely truncated by "+
+				"scripts/audit/list-archtests.sh regex; check alternation "+
+				"orders longer prefixes first.", id)
+		}
+	}
+}
+
 // TestRuleInventoryGolden is the migration equivalence guard for PR-FUNNEL-03
 // (governance rules consolidation). It pins the full set of rule IDs declared
 // as string literals across kernel/governance/*.go (non-test) so that any
@@ -45,7 +88,8 @@ func TestRuleInventoryGolden(t *testing.T) {
 // the registered governance series (and may itself contain '-', e.g.
 // CONTRACT-CONSISTENCY-EMIT) and SUFFIX is alphanumeric.
 var ruleIDPattern = regexp.MustCompile(
-	`^(ADV|CH|CONTRACT-CONSISTENCY-EMIT|DEP|DOC-NAME|FMT|OUTGUARD|REF|SLICE-CONSISTENCY|TOPO|VERIFY)-[A-Z0-9]+$`)
+	`^(ADV|CH|CONTRACT-CONSISTENCY-EMIT|DEP|DOC-NAME|FMT|OUTGUARD|REF|SLICE-CONSISTENCY|TOPO|VERIFY)-[A-Z0-9]+$`,
+)
 
 // scanRuleIDs walks dir for non-test .go files, parses each, and returns the
 // sorted unique set of rule-ID string literals (matched by ruleIDPattern).
