@@ -61,7 +61,7 @@ Authorization: Basic base64(<GOCELL_BOOTSTRAP_ADMIN_USERNAME>:<GOCELL_BOOTSTRAP_
 
 env = operator identity (authenticator)；body = admin identity (subject)。
 
-- **FMT-27**：`auth.public` / `auth.bootstrap` / `auth.passwordResetExempt` 三方两两互斥
+- **FMT-27**：`auth.public` / `auth.bootstrap` / `auth.passwordResetExempt` / `auth.clientsOnly` 互斥；`auth.serviceOwned` 可与 `passwordResetExempt` 共存，但不可与 `public` / `bootstrap` / `clientsOnly` 共存
 - **FMT-28**：`auth.bootstrap:true` 仅允许在路径匹配 **`metadata.IsBootstrapPath`**（精确 segment 匹配 `^/api/v\d+/[^/]+/setup/admin$`）的 contract 上声明
 - 单一谓词锁定：`tools/archtest/bootstrap_path_predicate_test.go` (`BOOTSTRAP-PATH-PREDICATE-SOLE-01`) 静态扫描禁止任何位置出现 `strings.Contains(.+, "setup/admin")`，避免规则在多处近似复制
 - contract.schema.json `auth.responses []int` 字段 + CH-04 双源校验：`declared = responses ∪ auth.responses`，handler AST 不需发出 listener middleware 注入的码（401/429）

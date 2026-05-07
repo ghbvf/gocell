@@ -996,17 +996,18 @@ const (
 	codeFMT30 = "FMT-30"
 )
 
-// validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
-// are three-way mutually exclusive on HTTP contract auth metadata.
+// validateFMT27 checks mutually exclusive HTTP auth metadata modes.
 //
-// The three flags are semantically contradictory when combined:
+// These flags are semantically contradictory when combined:
 //   - public skips JWT entirely (no authentication)
 //   - bootstrap requires env-credential Basic Auth (dedicated first-admin gate)
 //   - passwordResetExempt requires a valid JWT carrying password_reset_required
+//   - clientsOnly relies on Contract.Clients caller-cell authorization
+//   - serviceOwned relies on listener JWT auth plus service-layer ownership checks
 //
-// Any combination of two or more is a misconfiguration that the runtime resolves
-// ambiguously. FMT-27 extends FMT-26 (which only checked public+passwordResetExempt)
-// to cover all three pairs.
+// serviceOwned may combine with passwordResetExempt. All other combinations among
+// public/bootstrap/passwordResetExempt/clientsOnly, and serviceOwned with
+// public/bootstrap/clientsOnly, are rejected.
 //
 // ref: kubernetes/kubernetes validation-gen declarative + handwritten dual-layer pattern
 func (v *Validator) validateFMT27() []ValidationResult {
@@ -1016,17 +1017,7 @@ func (v *Validator) validateFMT27() []ValidationResult {
 			continue
 		}
 		auth := c.Endpoints.HTTP.Auth
-		truthy := 0
-		if auth.Public {
-			truthy++
-		}
-		if auth.Bootstrap {
-			truthy++
-		}
-		if auth.PasswordResetExempt {
-			truthy++
-		}
-		if truthy <= 1 {
+		if !hasFMT27AuthModeConflict(auth) {
 			continue
 		}
 		results = append(results, v.newResult(
@@ -1034,15 +1025,35 @@ func (v *Validator) validateFMT27() []ValidationResult {
 			contractFile(c),
 			"endpoints.http.auth",
 			fmt.Sprintf(
-				"contract %q declares more than one of auth.public, auth.bootstrap, "+
-					"auth.passwordResetExempt; they are mutually exclusive: "+
-					"public skips JWT entirely, bootstrap uses env-credential Basic Auth, "+
-					"passwordResetExempt requires a valid JWT",
+				"contract %q declares incompatible auth mode flags; auth.public, "+
+					"auth.bootstrap, auth.passwordResetExempt, auth.clientsOnly, and "+
+					"auth.serviceOwned have distinct route-auth semantics. "+
+					"Only auth.serviceOwned may combine with auth.passwordResetExempt",
 				c.ID,
 			),
 		))
 	}
 	return results
+}
+
+func hasFMT27AuthModeConflict(auth metadata.HTTPAuthMeta) bool {
+	coreModes := 0
+	if auth.Public {
+		coreModes++
+	}
+	if auth.Bootstrap {
+		coreModes++
+	}
+	if auth.PasswordResetExempt {
+		coreModes++
+	}
+	if auth.ClientsOnly {
+		coreModes++
+	}
+	if coreModes > 1 {
+		return true
+	}
+	return auth.ServiceOwned && (auth.Public || auth.Bootstrap || auth.ClientsOnly)
 }
 
 // validateFMT30 enforces that every assembly's build.deployTemplate is one of

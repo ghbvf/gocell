@@ -302,6 +302,12 @@ func validateAuthClientsOnly(
 	if !auth.ClientsOnly {
 		return nil
 	}
+	if auth.Public || auth.Bootstrap || auth.PasswordResetExempt {
+		return fmt.Errorf(
+			"contractgen build: contract %q declares auth.clientsOnly:true with auth.public/auth.bootstrap/auth.passwordResetExempt; "+
+				"clientsOnly relies on caller-cell identity only and cannot be combined with listener-bypass or password-reset auth modes",
+			contractID)
+	}
 	if !isInternalPath {
 		return fmt.Errorf(
 			"contractgen build: contract %q declares auth.clientsOnly:true but path %q is not an internal path (must match /internal/v1/*); "+

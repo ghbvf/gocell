@@ -428,6 +428,67 @@ func TestFMT27_BootstrapAndPasswordResetExemptBothTrue(t *testing.T) {
 	}
 }
 
+func TestFMT27_ClientsOnlyWithExclusiveAuthModes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		auth metadata.HTTPAuthMeta
+	}{
+		{name: "public", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Public: true}},
+		{name: "bootstrap", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Bootstrap: true}},
+		{name: "passwordResetExempt", auth: metadata.HTTPAuthMeta{ClientsOnly: true, PasswordResetExempt: true}},
+		{name: "serviceOwned", auth: metadata.HTTPAuthMeta{ClientsOnly: true, ServiceOwned: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := NewValidator(fmt27ProjectWithAuth(tc.auth), "", clock.Real())
+			matches := findByCode(v.validateFMT27(), codeFMT27)
+			if len(matches) == 0 {
+				t.Fatalf("FMT-27: expected error for clientsOnly combined with %s, got none", tc.name)
+			}
+		})
+	}
+}
+
+func TestFMT27_ServiceOwnedAllowsPasswordResetExempt(t *testing.T) {
+	v := NewValidator(fmt27ProjectWithAuth(metadata.HTTPAuthMeta{
+		ServiceOwned:        true,
+		PasswordResetExempt: true,
+	}), "", clock.Real())
+
+	matches := findByCode(v.validateFMT27(), codeFMT27)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-27: serviceOwned + passwordResetExempt must be allowed, got: %v", matches)
+	}
+}
+
+func fmt27ProjectWithAuth(auth metadata.HTTPAuthMeta) *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.mode.fixture.v1": {
+				ID:               "http.auth.mode.fixture.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/internal/v1/access/auth-mode-fixture",
+						SuccessStatus: 200,
+						Auth:          auth,
+					},
+				},
+				Dir:  "contracts/http/auth/mode/fixture/v1",
+				File: "contracts/http/auth/mode/fixture/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+}
+
 // --- FMT-28 (auth.bootstrap:true only allowed on IsBootstrapPath paths) ---
 
 // TestFMT28_BootstrapOnNonSetupAdminPath verifies that auth.bootstrap:true on a

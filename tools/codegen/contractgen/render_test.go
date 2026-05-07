@@ -1229,4 +1229,34 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 			t.Errorf("error should mention 'clients is empty', got: %v", err)
 		}
 	})
+
+	t.Run("clientsOnly + exclusive auth mode returns error", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name string
+			auth metadata.HTTPAuthMeta
+		}{
+			{name: "public", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Public: true}},
+			{name: "bootstrap", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Bootstrap: true}},
+			{name: "passwordResetExempt", auth: metadata.HTTPAuthMeta{ClientsOnly: true, PasswordResetExempt: true}},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				contract := makeContract("/internal/v1/sample/list", []string{"testcell"})
+				http := contract.Endpoints.HTTP
+				http.Auth = tc.auth
+				pathParams := buildPathParams(http)
+				queryParams := buildQueryParams(http)
+				_, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+				if err == nil {
+					t.Fatal("expected error for clientsOnly combined with exclusive auth mode")
+				}
+				if !strings.Contains(err.Error(), "auth.clientsOnly:true") {
+					t.Errorf("error should mention auth.clientsOnly:true, got: %v", err)
+				}
+			})
+		}
+	})
 }
