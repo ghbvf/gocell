@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // ---------------------------------------------------------------------------
@@ -369,9 +370,10 @@ func TestPGRoleRepository_Integration_ListByUserID_HappyPath_ReturnsRoles(t *tes
 	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
+	// Use names with known alphabetical order so the sort assertion is deterministic.
 	suffix := uuid.NewString()[:8]
-	role1 := newTestRoleNoPerms("viewer-" + suffix)
-	role2 := newTestRoleNoPerms("editor-" + suffix)
+	role1 := newTestRoleNoPerms("aaa-viewer-" + suffix)
+	role2 := newTestRoleNoPerms("bbb-editor-" + suffix)
 	require.NoError(t, b.roleRepo.Create(ctx, role1))
 	require.NoError(t, b.roleRepo.Create(ctx, role2))
 
@@ -381,24 +383,71 @@ func TestPGRoleRepository_Integration_ListByUserID_HappyPath_ReturnsRoles(t *tes
 	_, err = b.roleRepo.AssignToUser(ctx, userID, role2.ID)
 	require.NoError(t, err)
 
-	roles, err := b.roleRepo.GetByUserID(ctx, userID)
+	params := query.ListParams{
+		Limit: 50,
+		Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
+	}
+	roles, err := b.roleRepo.ListByUserID(ctx, userID, params)
 	require.NoError(t, err)
-	assert.Len(t, roles, 2)
+	require.Len(t, roles, 2)
 
+	// Assert all expected role IDs are present.
 	ids := make([]string, len(roles))
 	for i, r := range roles {
 		ids[i] = r.ID
 	}
 	assert.Contains(t, ids, role1.ID)
 	assert.Contains(t, ids, role2.ID)
+
+	// Assert ascending sort by name (in-memory, matches mem repo behavior).
+	assert.Equal(t, role1.Name, roles[0].Name, "first result must be alphabetically first")
+	assert.Equal(t, role2.Name, roles[1].Name, "second result must be alphabetically second")
 }
 
-func TestPGRoleRepository_Integration_ListByUserID_NoRoles_ReturnsEmpty(t *testing.T) {
+func TestPGRoleRepository_Integration_ListByUserID_LimitPagination_ReturnsSubset(t *testing.T) {
+	b := setupRoleRepoPGFull(t)
+	ctx := context.Background()
+
+	// Seed 3 roles for one user; request only 2 → must return exactly 2.
+	suffix := uuid.NewString()[:8]
+	role1 := newTestRoleNoPerms("aaa-pg-" + suffix)
+	role2 := newTestRoleNoPerms("bbb-pg-" + suffix)
+	role3 := newTestRoleNoPerms("ccc-pg-" + suffix)
+	require.NoError(t, b.roleRepo.Create(ctx, role1))
+	require.NoError(t, b.roleRepo.Create(ctx, role2))
+	require.NoError(t, b.roleRepo.Create(ctx, role3))
+
+	userID := createTestUser(t, ctx, b.userRepo)
+	for _, roleID := range []string{role1.ID, role2.ID, role3.ID} {
+		_, err := b.roleRepo.AssignToUser(ctx, userID, roleID)
+		require.NoError(t, err)
+	}
+
+	params := query.ListParams{
+		Limit: 2,
+		Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
+	}
+	roles, err := b.roleRepo.ListByUserID(ctx, userID, params)
+	require.NoError(t, err)
+	// With Limit=2 and 3 items, ApplyCursor returns min(start+FetchLimit, len) =
+	// min(0+3, 3) = 3 rows (N+1 detection). The caller is responsible for
+	// BuildPageResult trimming. Repository contract: returns ≤ Limit+1 rows.
+	assert.LessOrEqual(t, len(roles), 3, "must not return more than Limit+1 rows")
+	assert.GreaterOrEqual(t, len(roles), 2, "must return at least Limit rows when data exists")
+	// The first result must be alphabetically smallest.
+	assert.Equal(t, role1.Name, roles[0].Name, "first result must be alphabetically first")
+}
+
+func TestPGRoleRepository_Integration_ListByUserID_EmptyUser_ReturnsEmpty(t *testing.T) {
 	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	userID := createTestUser(t, ctx, b.userRepo)
-	roles, err := b.roleRepo.GetByUserID(ctx, userID)
+	params := query.ListParams{
+		Limit: 50,
+		Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
+	}
+	roles, err := b.roleRepo.ListByUserID(ctx, userID, params)
 	require.NoError(t, err)
 	assert.Empty(t, roles)
 }

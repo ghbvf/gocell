@@ -195,18 +195,24 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 
 	t.Run("RevokeByUserID_DeletesAll_ReturnsNilError", func(t *testing.T) {
 		userID := "user-revall-" + uuid.NewString()
+		sessions := make([]*domain.Session, 3)
 		for i := range 3 {
 			s := newTestSession(userID, "tok-revall-"+uuid.NewString()+"-"+string(rune('a'+i)))
 			require.NoError(t, repo.Create(ctx, s))
+			sessions[i] = s
 		}
 
 		require.NoError(t, repo.RevokeByUserID(ctx, userID))
 
-		// All three rows should be gone — try inserting a fresh session to prove
-		// the table is intact; no rows for that userID should survive.
-		probe := newTestSession(userID, "tok-probe-"+uuid.NewString())
-		require.NoError(t, repo.Create(ctx, probe))
-		require.NoError(t, repo.Delete(ctx, probe.ID))
+		// Strict assertion: every revoked session must be invisible via GetByID.
+		for _, s := range sessions {
+			_, err := repo.GetByID(ctx, s.ID)
+			require.Error(t, err, "session %s must not be found after RevokeByUserID", s.ID)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrSessionNotFound, ec.Code,
+				"session %s must return ErrSessionNotFound after RevokeByUserID", s.ID)
+		}
 	})
 
 	t.Run("Delete_HappyPath", func(t *testing.T) {
