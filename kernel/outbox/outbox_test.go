@@ -185,8 +185,15 @@ func TestNoopWriter_WriteBatch(t *testing.T) {
 func TestNoopWriter_WriteBatchRejectsInvalidEntry(t *testing.T) {
 	writer := NoopWriter{}
 	err := writer.WriteBatch(context.Background(), []Entry{validEntry("noop-1"), {}})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "entry[1]")
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error (runtime data layered into Details, not message)")
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+
+	idxAttr, ok := ecErr.FindAttr("entry_index")
+	require.True(t, ok, "expected entry_index attribute in Details")
+	assert.Equal(t, int64(1), idxAttr.Value.Int64())
 }
 
 func TestNoopWriter_Noop(t *testing.T) {
@@ -332,7 +339,20 @@ func TestSubscriberWithMiddleware_RequiresConsumerBase(t *testing.T) {
 		})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ConsumerBase")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error (subscription identity layered into Details, not message)")
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "ConsumerBase", "const message must describe the missing dependency")
+
+	topicAttr, ok := ecErr.FindAttr("topic")
+	require.True(t, ok, "expected topic attribute in Details")
+	assert.Equal(t, "test.topic", topicAttr.Value.String())
+
+	cgAttr, ok := ecErr.FindAttr("consumer_group")
+	require.True(t, ok, "expected consumer_group attribute in Details")
+	assert.Equal(t, "cg-test", cgAttr.Value.String())
+
 	assert.False(t, inner.subscribeCalled, "inner subscriber must not start without ConsumerBase")
 }
 
@@ -753,9 +773,16 @@ func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
 	}
 
 	err := WriteBatchFallback(context.Background(), w, entries)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "entry[1]")
-	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+
+	idxAttr, ok := ecErr.FindAttr("entry_index")
+	require.True(t, ok, "expected entry_index attribute in Details")
+	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+
 	assert.Nil(t, w.batchEntries, "no writes should occur on validation failure")
 	assert.Nil(t, w.writeEntries)
 }
@@ -796,10 +823,21 @@ func TestWriteBatchFallback_SequentialFallbackError(t *testing.T) {
 	entries := []Entry{validEntry("e1"), validEntry("e2"), validEntry("e3")}
 
 	err := WriteBatchFallback(context.Background(), w, entries)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "entry[1]")
-	assert.Contains(t, err.Error(), "id=e2")
-	assert.Contains(t, err.Error(), "db write failed")
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+
+	idxAttr, ok := ecErr.FindAttr("entry_index")
+	require.True(t, ok, "expected entry_index attribute in Details")
+	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+
+	idAttr, ok := ecErr.FindAttr("entry_id")
+	require.True(t, ok, "expected entry_id attribute in Details")
+	assert.Equal(t, "e2", idAttr.Value.String())
+
+	assert.ErrorContains(t, err, "db write failed", "wrapped cause must remain reachable via %%w chain")
 	assert.Len(t, w.entries, 1, "only the first entry should have been written")
 }
 

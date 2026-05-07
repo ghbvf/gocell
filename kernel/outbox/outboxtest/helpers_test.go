@@ -229,17 +229,15 @@ func (s *immediateReadySub) Ready(_ outbox.Subscription) <-chan struct{} {
 }
 
 func TestWaitForSubscription_WaitsForReadyChannel(t *testing.T) {
-	// When Ready returns a pre-closed channel, waitForSubscription returns fast.
+	// Behavioral assertion: with a pre-closed Ready channel, the select arm
+	// for sub.Ready() must win, returning true. We assert the select outcome
+	// directly rather than measuring wall-clock elapsed — CI GC/scheduling
+	// jitter could make elapsed exceed subscribeReadyTimeout (50ms) even on
+	// the fast path, producing false flakes (OUTBOX-READY-TEST-TIMING-FLAKE).
 	sub := &immediateReadySub{}
 	ctx := context.Background()
-
-	start := time.Now()
-	waitForSubscription(t, ctx, sub, "any.topic", "")
-	elapsed := time.Since(start)
-
-	// Should return quickly since Ready() is already closed (pre-closed channel).
-	if elapsed >= subscribeReadyTimeout {
-		t.Fatalf("expected fast return (pre-closed Ready channel), but took %v", elapsed)
+	if !waitForSubscription(t, ctx, sub, "any.topic", "") {
+		t.Fatalf("expected fast Ready path (pre-closed channel), got timeout fallthrough")
 	}
 }
 
@@ -255,17 +253,8 @@ func TestWaitForSubscription_MiddlewareWrappedSubscriber_UsesSetup(t *testing.T)
 		Middleware: nil,
 	}
 	ctx := context.Background()
-
-	start := time.Now()
-	// Pass wrapped.Inner: SubscriberWithMiddleware.Setup/Ready delegate to it,
-	// so the test still validates the delegation via Inner's fast Ready path.
-	waitForSubscription(t, ctx, wrapped.Inner, "test.topic", "")
-	elapsed := time.Since(start)
-
-	// Must NOT fall back to sleep -- Setup returns nil immediately and
-	// Inner.Ready returns a pre-closed channel.
-	if elapsed >= subscribeReadyTimeout {
-		t.Fatalf("middleware-wrapped subscriber must not sleep (Setup+Ready fast path), but took %v", elapsed)
+	if !waitForSubscription(t, ctx, wrapped.Inner, "test.topic", "") {
+		t.Fatalf("middleware-wrapped subscriber: expected fast Ready path (Setup+Ready), got timeout fallthrough")
 	}
 }
 
