@@ -60,14 +60,38 @@ func TestNewEntry_UniqueIDs(t *testing.T) {
 }
 
 func TestNewEntryWithMetadata(t *testing.T) {
-	md := map[string]string{"trace_id": "abc"}
+	// Use a business key, not a reserved key. trace_id / request_id /
+	// correlation_id / span_id / traceparent / tracestate are owned by the
+	// observability bridge (Entry.Observability) and outbox.Validate rejects
+	// them in entry.Metadata — see TestNewEntry_ReservedMetadataRejected
+	// below. The previous example used "trace_id" which is misleading: it
+	// works in this assertion (which never calls Validate) but would fail
+	// at write time in production.
+	md := map[string]string{"order_id": "abc"}
 	entry := NewEntryWithMetadata("t", []byte(`{}`), md)
 
 	if entry.Metadata == nil {
 		t.Fatal("Metadata must not be nil")
 	}
-	if entry.Metadata["trace_id"] != "abc" {
-		t.Fatalf("want trace_id 'abc', got %q", entry.Metadata["trace_id"])
+	if entry.Metadata["order_id"] != "abc" {
+		t.Fatalf("want order_id 'abc', got %q", entry.Metadata["order_id"])
+	}
+}
+
+// TestNewEntry_ReservedMetadataRejected pins the contract that
+// trace_id / request_id / correlation_id / span_id / traceparent /
+// tracestate must not appear in entry.Metadata. The reserved-key check
+// is part of outbox.Entry.Validate (see kernel/outbox/outbox.go
+// reservedMetadataKeySet) — producers must use Entry.Observability.
+func TestNewEntry_ReservedMetadataRejected(t *testing.T) {
+	for _, key := range []string{
+		"trace_id", "traceparent", "trace_state", "tracestate",
+		"span_id", "request_id", "correlation_id",
+	} {
+		entry := NewEntryWithMetadata("t", []byte(`{}`), map[string]string{key: "abc"})
+		if err := entry.Validate(); err == nil {
+			t.Fatalf("Validate must reject reserved metadata key %q, got nil", key)
+		}
 	}
 }
 
