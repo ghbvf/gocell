@@ -1119,24 +1119,21 @@ func (v *Validator) validateFMT29() []ValidationResult {
 	return results
 }
 
-// validateFMT28 checks that auth.bootstrap:true is only allowed on HTTP contracts
-// whose path matches IsBootstrapPath. Bootstrap credentials are exclusively for
-// the first-admin setup endpoint; enabling bootstrap auth on other paths would
-// expose env credentials in unintended contexts.
+// validateFMT28 checks auth mode placement/shape constraints that require fields
+// outside the auth object itself.
 //
-// Path matching uses metadata.IsBootstrapPath — the single authoritative predicate
-// for the bootstrap admin endpoint pattern /api/v{N}/{cell}/setup/admin.
+//   - bootstrap is only allowed on paths matching metadata.IsBootstrapPath.
+//   - clientsOnly is only allowed on metadata.IsInternalHTTPPath paths and must
+//     declare endpoints.clients so RequireCallerCell has an allowlist.
 func (v *Validator) validateFMT28() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if c.Endpoints.HTTP == nil {
 			continue
 		}
-		if !c.Endpoints.HTTP.Auth.Bootstrap {
-			continue
-		}
 		path := c.Endpoints.HTTP.Path
-		if !metadata.IsBootstrapPath(path) {
+		auth := c.Endpoints.HTTP.Auth
+		if auth.Bootstrap && !metadata.IsBootstrapPath(path) {
 			results = append(results, v.newResult(
 				codeFMT28, SeverityError, IssueForbidden,
 				contractFile(c),
@@ -1146,6 +1143,34 @@ func (v *Validator) validateFMT28() []ValidationResult {
 						"bootstrap auth is only permitted on setup/admin contracts "+
 						"(path must match IsBootstrapPath: /api/v{N}/{cell}/setup/admin)",
 					c.ID, path,
+				),
+			))
+		}
+		if !auth.ClientsOnly {
+			continue
+		}
+		if !metadata.IsInternalHTTPPath(path) {
+			results = append(results, v.newResult(
+				codeFMT28, SeverityError, IssueForbidden,
+				contractFile(c),
+				"endpoints.http.auth.clientsOnly",
+				fmt.Sprintf(
+					"contract %q has auth.clientsOnly:true on path %q; "+
+						"clientsOnly auth is only permitted on internal HTTP paths "+
+						"(path must match IsInternalHTTPPath: /internal/v1 or /internal/v1/...)",
+					c.ID, path,
+				),
+			))
+		}
+		if len(c.Endpoints.Clients) == 0 {
+			results = append(results, v.newResult(
+				codeFMT28, SeverityError, IssueRequired,
+				contractFile(c),
+				"endpoints.clients",
+				fmt.Sprintf(
+					"contract %q has auth.clientsOnly:true but endpoints.clients is empty; "+
+						"clientsOnly auth requires at least one declared client cell",
+					c.ID,
 				),
 			))
 		}

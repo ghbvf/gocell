@@ -55,9 +55,9 @@ type HTTPAuthMeta struct {
 	// single-arg NewHandler(svc Service) constructor and emits auth.Route without
 	// a Policy field. auth.Mount auto-injects RequireCallerCell guard when
 	// Clients is non-empty. Mutually exclusive with Public, Bootstrap, and
-	// PasswordResetExempt. Requires endpoints.clients to be non-empty AND the
-	// path to match /internal/v1/* (semantically meaningful only for internal
-	// endpoints where caller-cell identity is verifiable via the service token).
+	// PasswordResetExempt. Requires endpoints.clients to be non-empty and the
+	// path to match IsInternalHTTPPath (/internal/v1 or /internal/v1/...)
+	// where caller-cell identity is verifiable via the service token.
 	ClientsOnly bool `yaml:"clientsOnly,omitempty" json:"clientsOnly,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware
 	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as

@@ -223,7 +223,7 @@ func buildHTTPEndpointSpec(
 	// informational metadata (who calls this endpoint) — auth.Mount rejects
 	// Clients on non-internal paths (wrapper.ContractSpec validation rule).
 	var clients []string
-	isInternalPath := strings.HasPrefix(http.Path, "/internal/v1/") || http.Path == "/internal/v1"
+	isInternalPath := metadata.IsInternalHTTPPath(http.Path)
 	if isInternalPath && len(contract.Endpoints.Clients) > 0 {
 		clients = append(clients, contract.Endpoints.Clients...)
 	}
@@ -310,7 +310,8 @@ func validateAuthClientsOnly(
 	}
 	if !isInternalPath {
 		return fmt.Errorf(
-			"contractgen build: contract %q declares auth.clientsOnly:true but path %q is not an internal path (must match /internal/v1/*); "+
+			"contractgen build: contract %q declares auth.clientsOnly:true but path %q is "+
+				"not an internal path (must match /internal/v1 or /internal/v1/...); "+
 				"clientsOnly is only meaningful for internal endpoints where caller-cell identity is verifiable",
 			contractID, path)
 	}

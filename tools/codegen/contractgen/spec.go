@@ -132,8 +132,9 @@ type HTTPEndpointSpec struct {
 	// The generated NewHandler takes a single svc Service argument (no policy arg) and
 	// emits auth.Route without a Policy field. Authorization is provided solely by
 	// Contract.Clients caller-cell allowlist — auth.Mount auto-injects RequireCallerCell
-	// guard when Clients is non-empty. Requires isInternalPath && len(Clients) > 0.
-	// Mutually exclusive with AuthPublic, AuthBootstrap, and AuthPasswordResetExempt.
+	// guard when Clients is non-empty. Requires metadata.IsInternalHTTPPath(Path)
+	// and len(Clients) > 0. Mutually exclusive with AuthPublic, AuthBootstrap,
+	// and AuthPasswordResetExempt.
 	AuthClientsOnly bool
 	// AuthServiceOwned is true when contract.yaml endpoints.http.auth.serviceOwned is set.
 	// The generated NewHandler takes a single svc Service argument (no policy arg) and

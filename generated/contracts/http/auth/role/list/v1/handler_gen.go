@@ -32,10 +32,11 @@ func NewHandler(svc Service, policy auth.Policy) *Handler {
 	if policy == nil {
 		// B-class assertion: caller must supply a non-nil auth.Policy. For public
 		// endpoints declare auth.public:true in contract.yaml. For internal endpoints
-		// relying solely on caller-cell allowlist declare auth.clientsOnly:true.
+		// relying solely on caller-cell allowlist declare auth.clientsOnly:true. For
+		// service-owned endpoints declare auth.serviceOwned:true.
 		// errcode.Assertion routes through kernel recover middleware (500 + log)
 		// instead of bare panic so PANIC-REGISTERED-01 archtest stays clean.
-		panic(errcode.Assertion("generated handler http.auth.role.list.v1: policy must not be nil (non-public, non-bootstrap, non-clientsOnly endpoints require a real auth.Policy; for public/clients-only endpoints update contract.yaml auth flag and regenerate)"))
+		panic(errcode.Assertion("generated handler http.auth.role.list.v1: policy must not be nil (non-public, non-bootstrap, non-clientsOnly, non-serviceOwned endpoints require a real auth.Policy; for public/clients-only/service-owned endpoints update contract.yaml auth flag and regenerate)"))
 	}
 	h := &Handler{svc: svc, policy: policy}
 	return h

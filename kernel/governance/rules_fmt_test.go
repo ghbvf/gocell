@@ -489,7 +489,7 @@ func fmt27ProjectWithAuth(auth metadata.HTTPAuthMeta) *metadata.ProjectMeta {
 	}
 }
 
-// --- FMT-28 (auth.bootstrap:true only allowed on IsBootstrapPath paths) ---
+// --- FMT-28 (HTTP auth mode placement/shape constraints) ---
 
 // TestFMT28_BootstrapOnNonSetupAdminPath verifies that auth.bootstrap:true on a
 // path that does not match IsBootstrapPath is rejected by FMT-28.
@@ -626,6 +626,67 @@ func TestFMT28_BootstrapOnSetupAdminPath(t *testing.T) {
 		if r.Code == "FMT-28" && r.Severity == SeverityError {
 			t.Errorf("FMT-28: unexpected error for auth.bootstrap on IsBootstrapPath-valid path: %v", r)
 		}
+	}
+}
+
+func TestFMT28_ClientsOnlyOnNonInternalPath(t *testing.T) {
+	project := fmt28ProjectWithClientsOnlyPath("/api/v1/sample/list", []string{"edge-bff"})
+	v := NewValidator(project, "", clock.Real())
+
+	matches := findByCode(v.validateFMT28(), codeFMT28)
+	if len(matches) == 0 {
+		t.Fatal("FMT-28: expected error when auth.clientsOnly:true uses a non-internal path, got none")
+	}
+}
+
+func TestFMT28_ClientsOnlyWithEmptyClients(t *testing.T) {
+	project := fmt28ProjectWithClientsOnlyPath("/internal/v1/sample/list", nil)
+	v := NewValidator(project, "", clock.Real())
+
+	matches := findByCode(v.validateFMT28(), codeFMT28)
+	if len(matches) == 0 {
+		t.Fatal("FMT-28: expected error when auth.clientsOnly:true has empty endpoints.clients, got none")
+	}
+}
+
+func TestFMT28_ClientsOnlyInternalPathWithClients(t *testing.T) {
+	project := fmt28ProjectWithClientsOnlyPath("/internal/v1/sample/list", []string{"edge-bff"})
+	v := NewValidator(project, "", clock.Real())
+
+	matches := findByCode(v.validateFMT28(), codeFMT28)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-28: expected auth.clientsOnly:true on internal path with clients to pass, got: %v", matches)
+	}
+}
+
+func fmt28ProjectWithClientsOnlyPath(path string, clients []string) *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.sample.list.v1": {
+				ID:               "http.sample.list.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "samplecore",
+					Clients: clients,
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          path,
+						SuccessStatus: 200,
+						Auth: metadata.HTTPAuthMeta{
+							ClientsOnly: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/sample/list/v1",
+				File: "contracts/http/sample/list/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 }
 

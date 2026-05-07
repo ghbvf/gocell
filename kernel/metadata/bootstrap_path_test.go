@@ -44,3 +44,29 @@ func TestIsBootstrapPath(t *testing.T) {
 		})
 	}
 }
+
+func TestIsInternalHTTPPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/internal/v1", true},
+		{"/internal/v1/access/sessions", true},
+		{"/internal/v1/", true},
+		{"/api/v1/access/sessions", false},
+		{"/internal/v10/access", false},
+		{"/internal/v1foo", false},
+		{"internal/v1/access", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			if got := IsInternalHTTPPath(tc.path); got != tc.want {
+				t.Errorf("IsInternalHTTPPath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
