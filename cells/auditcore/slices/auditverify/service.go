@@ -61,9 +61,12 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	// Pass the domain error through unchanged — cell.initSlices owns the
+	// "auditverify: %w" wrapping for slice ownership; double-wrapping here
+	// would render "auditverify: auditverify: …".
 	chain, err := domain.NewHashChain(hmacKey)
 	if err != nil {
-		return nil, fmt.Errorf("auditverify: %w", err)
+		return nil, err
 	}
 	s := &Service{
 		repo:    repo,

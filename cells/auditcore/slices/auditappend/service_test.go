@@ -66,6 +66,42 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
+// TestNewService_HMACKeyTooShort locks the slice-layer wrapping contract for
+// the domain.NewHashChain failure branch. Without this the cell-level error
+// would surface only when AuditCore.Init() runs end-to-end, which obscures
+// regressions to the constructor's error pass-through (e.g. an accidental
+// fmt.Errorf wrapping that hides the *errcode.Error).
+func TestNewService_HMACKeyTooShort(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	shortKey := make([]byte, 31) // one short of RFC 2104 §3 minimum
+	_, err := NewService(repo, shortKey, slog.Default(), clock.Real(),
+		WithClock(clock.Real()), WithTxManager(directRunner{}))
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "domain *errcode.Error must pass through unchanged")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, ec.Message, "audit hmac key too short")
+	// The slice constructor must not double-wrap the message — cell.initSlices
+	// owns the "auditappend: %w" prefix.
+	assert.NotContains(t, err.Error(), "auditappend: auditappend:",
+		"slice constructor must not double-wrap; cell.initSlices owns the prefix")
+
+	var sawMin, sawActual bool
+	for _, attr := range ec.Details {
+		switch attr.Key {
+		case "minimumBytes":
+			sawMin = true
+			assert.Equal(t, int64(32), attr.Value.Int64())
+		case "actualBytes":
+			sawActual = true
+			assert.Equal(t, int64(31), attr.Value.Int64())
+		}
+	}
+	assert.True(t, sawMin, "details must include minimumBytes")
+	assert.True(t, sawActual, "details must include actualBytes")
+}
+
 func TestService_HandleEvent(t *testing.T) {
 	tests := []struct {
 		name       string

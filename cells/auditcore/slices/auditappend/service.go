@@ -92,9 +92,12 @@ func NewService(
 	opts ...Option,
 ) (*Service, error) {
 	clock.MustHaveClock(clk, "auditappend.NewService")
+	// Pass the domain error through unchanged — cell.initSlices owns the
+	// "auditappend: %w" wrapping for slice ownership; double-wrapping here
+	// would render "auditappend: auditappend: …".
 	chain, err := domain.NewHashChain(hmacKey)
 	if err != nil {
-		return nil, fmt.Errorf("auditappend: %w", err)
+		return nil, err
 	}
 	s := &Service{
 		repo:    repo,
