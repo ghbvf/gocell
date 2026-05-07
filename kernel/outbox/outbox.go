@@ -746,6 +746,12 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 // directly; Subscriber adapters (rabbitmq, eventbus) call Inner.Subscribe.
 func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subscription, h EntryHandler) error {
 	if err := sub.Validate(); err != nil {
+		// fmt.Errorf with %w is intentional here: sub.Validate() already
+		// returns *errcode.Error with full Code/Details/Internal layering;
+		// re-wrapping via errcode.Wrap would erase the inner Code at the
+		// outer layer, forcing callers to errors.As twice. Adding a const
+		// context prefix via %w keeps the cause discoverable while making
+		// the operation site visible in the error chain.
 		return fmt.Errorf("outbox: SubscriberWithMiddleware: %w", err)
 	}
 	if s.ConsumerBase == nil {

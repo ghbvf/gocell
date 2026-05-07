@@ -353,6 +353,10 @@ func TestSubscriberWithMiddleware_RequiresConsumerBase(t *testing.T) {
 	require.True(t, ok, "expected consumer_group attribute in Details")
 	assert.Equal(t, "cg-test", cgAttr.Value.String())
 
+	contractAttr, ok := ecErr.FindAttr("contract_id")
+	require.True(t, ok, "expected contract_id attribute in Details")
+	assert.Equal(t, "event.test.topic.v1", contractAttr.Value.String())
+
 	assert.False(t, inner.subscribeCalled, "inner subscriber must not start without ConsumerBase")
 }
 
@@ -782,6 +786,16 @@ func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
 	idxAttr, ok := ecErr.FindAttr("entry_index")
 	require.True(t, ok, "expected entry_index attribute in Details")
 	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+
+	// Cause chain must remain reachable: the inner Entry.Validate failure
+	// (a *errcode.Error from kernel/outbox/entry.go) is wrapped into the
+	// batch-validation error via errcode.Wrap; future Wrap regressions that
+	// drop the Cause field would silently break observability.
+	var innerErr *errcode.Error
+	require.True(t, errors.As(ecErr.Cause, &innerErr),
+		"inner Entry.Validate error must remain accessible via errors.As (errcode.Error)")
+	assert.NotEmpty(t, innerErr.Message,
+		"inner errcode.Error must carry a descriptive message about the missing field")
 
 	assert.Nil(t, w.batchEntries, "no writes should occur on validation failure")
 	assert.Nil(t, w.writeEntries)
