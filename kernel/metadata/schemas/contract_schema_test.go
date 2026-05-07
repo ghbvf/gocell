@@ -2,6 +2,7 @@ package schemas
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -183,6 +184,81 @@ func TestContractSchemaRejectsAuthPublicAndPasswordResetExemptBoth(t *testing.T)
 			"must fail schema validation (mutually exclusive)")
 }
 
+func TestContractSchemaAllowsAuthServiceOwnedWithPasswordResetExempt(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.session.delete.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "DELETE",
+				"path": "/api/v1/auth/sessions/{sessionId}",
+				"pathParams": {
+					"sessionId": {
+						"type": "string",
+						"format": "uuid"
+					}
+				},
+				"successStatus": 204,
+				"noContent": true,
+				"auth": {
+					"serviceOwned": true,
+					"passwordResetExempt": true
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc),
+		"auth.serviceOwned:true must be allowed to combine with auth.passwordResetExempt:true")
+}
+
+func TestContractSchemaRejectsAuthServiceOwnedWithExclusiveModes(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	for _, tc := range []struct {
+		name  string
+		field string
+	}{
+		{name: "public", field: "public"},
+		{name: "bootstrap", field: "bootstrap"},
+		{name: "clientsOnly", field: "clientsOnly"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var contractDoc any
+			require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{
+				"id": "http.auth.bad.serviceowned.%s.v1",
+				"kind": "http",
+				"consistencyLevel": "L1",
+				"lifecycle": "active",
+				"endpoints": {
+					"server": "accesscore",
+					"clients": ["edge-bff"],
+					"http": {
+						"method": "POST",
+						"path": "/internal/v1/auth/bad/%s",
+						"successStatus": 200,
+						"noContent": false,
+						"auth": {
+							"serviceOwned": true,
+							"%s": true
+						}
+					}
+				}
+			}`, tc.name, tc.name, tc.field)), &contractDoc))
+
+			assert.Error(t, schema.Validate(contractDoc),
+				"auth.serviceOwned:true must be mutually exclusive with auth.%s:true", tc.field)
+		})
+	}
+}
+
 func TestContractSchemaAllowsAuthBootstrapWithResponses(t *testing.T) {
 	raw, err := FS.ReadFile("contract.schema.json")
 	require.NoError(t, err)
@@ -220,6 +296,23 @@ func TestContractSchemaAllowsAuthBootstrapWithResponses(t *testing.T) {
 
 	assert.NoError(t, schema.Validate(contractDoc),
 		"contract with auth.bootstrap:true and auth.responses must pass strict validation")
+}
+
+func compileContractSchemaForTest(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+	return schema
 }
 
 func TestContractSchemaRejectsAuthBootstrapAndPublicBoth(t *testing.T) {

@@ -194,11 +194,15 @@
                         "type": "boolean",
                         "description": "If true, route is mounted as public (no JWT required). auth.Route{Public: true} is emitted by RegisterRoutes. Mutually exclusive with passwordResetExempt and bootstrap."
                       },
-                      "passwordResetExempt": {
-                        "type": "boolean",
-                        "description": "If true, route bypasses the force-password-reset gate. auth.Route{PasswordResetExempt: true} is emitted. Mutually exclusive with public and bootstrap."
-                      },
-                      "bootstrap": {
+	                      "passwordResetExempt": {
+	                        "type": "boolean",
+	                        "description": "If true, route bypasses the force-password-reset gate. auth.Route{PasswordResetExempt: true} is emitted. Mutually exclusive with public and bootstrap."
+	                      },
+	                      "serviceOwned": {
+	                        "type": "boolean",
+	                        "description": "If true, listener JWT authentication still applies but generated handlers omit route-level Policy because ownership authorization is enforced inside the service. May be combined with passwordResetExempt. Mutually exclusive with public, bootstrap, and clientsOnly."
+	                      },
+	                      "bootstrap": {
                         "type": "boolean",
                         "description": "If true, contractgen generates a NewHandler(bootstrapAuth func(http.Handler) http.Handler, ...) constructor and emits auth.Route{BootstrapAuth: bootstrapAuth} from RegisterRoutes; the listener-level JWT middleware skips this route. Composition root injects the bootstrap Basic Auth + per-IP rate-limit middleware (GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials). Mutually exclusive with public and passwordResetExempt. FMT-28 limits to setup/admin paths."
                       },
@@ -220,11 +224,14 @@
                     "allOf": [
                       {"not": {"required": ["public", "bootstrap"]}, "description": "auth.public and auth.bootstrap are mutually exclusive."},
                       {"not": {"required": ["public", "passwordResetExempt"]}, "description": "auth.public and auth.passwordResetExempt are mutually exclusive."},
-                      {"not": {"required": ["bootstrap", "passwordResetExempt"]}, "description": "auth.bootstrap and auth.passwordResetExempt are mutually exclusive."},
-                      {"not": {"required": ["clientsOnly", "public"]}, "description": "auth.clientsOnly and auth.public are mutually exclusive."},
-                      {"not": {"required": ["clientsOnly", "bootstrap"]}, "description": "auth.clientsOnly and auth.bootstrap are mutually exclusive."},
-                      {"not": {"required": ["clientsOnly", "passwordResetExempt"]}, "description": "auth.clientsOnly and auth.passwordResetExempt are mutually exclusive."}
-                    ]
+	                      {"not": {"required": ["bootstrap", "passwordResetExempt"]}, "description": "auth.bootstrap and auth.passwordResetExempt are mutually exclusive."},
+	                      {"not": {"required": ["clientsOnly", "public"]}, "description": "auth.clientsOnly and auth.public are mutually exclusive."},
+	                      {"not": {"required": ["clientsOnly", "bootstrap"]}, "description": "auth.clientsOnly and auth.bootstrap are mutually exclusive."},
+	                      {"not": {"required": ["clientsOnly", "passwordResetExempt"]}, "description": "auth.clientsOnly and auth.passwordResetExempt are mutually exclusive."},
+	                      {"not": {"required": ["serviceOwned", "public"]}, "description": "auth.serviceOwned and auth.public are mutually exclusive."},
+	                      {"not": {"required": ["serviceOwned", "bootstrap"]}, "description": "auth.serviceOwned and auth.bootstrap are mutually exclusive."},
+	                      {"not": {"required": ["serviceOwned", "clientsOnly"]}, "description": "auth.serviceOwned and auth.clientsOnly are mutually exclusive."}
+	                    ]
                   }
                 }
               }

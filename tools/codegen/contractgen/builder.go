@@ -228,20 +228,12 @@ func buildHTTPEndpointSpec(
 		clients = append(clients, contract.Endpoints.Clients...)
 	}
 
-	// ClientsOnly requires internal path + non-empty clients.
-	if http.Auth.ClientsOnly {
-		if !isInternalPath {
-			return nil, fmt.Errorf(
-				"contractgen build: contract %q declares auth.clientsOnly:true but path %q is not an internal path (must match /internal/v1/*); "+
-					"clientsOnly is only meaningful for internal endpoints where caller-cell identity is verifiable",
-				contract.ID, http.Path)
-		}
-		if len(contract.Endpoints.Clients) == 0 {
-			return nil, fmt.Errorf(
-				"contractgen build: contract %q declares auth.clientsOnly:true but endpoints.clients is empty; "+
-					"clientsOnly requires at least one declared client cell so RequireCallerCell has an allowlist to enforce",
-				contract.ID)
-		}
+	if err := validateAuthServiceOwned(contract.ID, http.Auth); err != nil {
+		return nil, err
+	}
+
+	if err := validateAuthClientsOnly(contract.ID, http.Path, http.Auth, contract.Endpoints.Clients, isInternalPath); err != nil {
+		return nil, err
 	}
 
 	spec := &HTTPEndpointSpec{
@@ -256,6 +248,7 @@ func buildHTTPEndpointSpec(
 		AuthPasswordResetExempt: http.Auth.PasswordResetExempt,
 		AuthBootstrap:           http.Auth.Bootstrap,
 		AuthClientsOnly:         http.Auth.ClientsOnly,
+		AuthServiceOwned:        http.Auth.ServiceOwned,
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams
@@ -283,6 +276,45 @@ func buildHTTPEndpointSpec(
 		return nil, liftErr
 	}
 	return spec, nil
+}
+
+func validateAuthServiceOwned(contractID string, auth metadata.HTTPAuthMeta) error {
+	if !auth.ServiceOwned {
+		return nil
+	}
+	if !auth.Public && !auth.Bootstrap && !auth.ClientsOnly {
+		return nil
+	}
+	return fmt.Errorf(
+		"contractgen build: contract %q declares auth.serviceOwned:true with auth.public/auth.bootstrap/auth.clientsOnly; "+
+			"serviceOwned keeps listener JWT auth and delegates ownership authorization to the service, "+
+			"so it cannot be combined with auth modes that replace or bypass that route shape",
+		contractID)
+}
+
+func validateAuthClientsOnly(
+	contractID string,
+	path string,
+	auth metadata.HTTPAuthMeta,
+	declaredClients []string,
+	isInternalPath bool,
+) error {
+	if !auth.ClientsOnly {
+		return nil
+	}
+	if !isInternalPath {
+		return fmt.Errorf(
+			"contractgen build: contract %q declares auth.clientsOnly:true but path %q is not an internal path (must match /internal/v1/*); "+
+				"clientsOnly is only meaningful for internal endpoints where caller-cell identity is verifiable",
+			contractID, path)
+	}
+	if len(declaredClients) == 0 {
+		return fmt.Errorf(
+			"contractgen build: contract %q declares auth.clientsOnly:true but endpoints.clients is empty; "+
+				"clientsOnly requires at least one declared client cell so RequireCallerCell has an allowlist to enforce",
+			contractID)
+	}
+	return nil
 }
 
 // detectPagination scans QueryParams; if both cursor (string) and limit

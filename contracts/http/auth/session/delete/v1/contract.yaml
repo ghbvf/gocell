@@ -20,6 +20,7 @@ endpoints:
     successStatus: 204
     noContent: true
     auth:
+      serviceOwned: true
       passwordResetExempt: true
     responses:
       400:

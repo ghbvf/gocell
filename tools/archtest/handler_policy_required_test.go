@@ -1,6 +1,6 @@
 // Package archtest enforces HANDLER-POLICY-REQUIRED-01 — the simplified caller-side
 // invariant from the original handler_invariants_test.go cluster that cannot
-// be golden-pinned because it scans hand-written cells/.../cell.go wiring
+// be golden-pinned because it scans hand-written cells/... and examples/... wiring
 // rather than codegen template output.
 //
 // PR-FUNNEL-02 (PR #411) migrated 4 of the 5 handler invariants to funnel-only
@@ -13,19 +13,19 @@
 // HANDLER-POLICY-REQUIRED-01 funnel-first upgrade (F1 fix):
 //
 // The funnel end is the primary defense:
-//   - Public/ClientsOnly endpoints generate single-arg NewHandler(svc Service) — there
+//   - Public/ClientsOnly/ServiceOwned endpoints generate single-arg NewHandler(svc Service) — there
 //     is no second argument to pass nil to; the call site cannot violate the invariant.
-//   - Default branch (non-public, non-bootstrap, non-clientsOnly) NewHandler now has
+//   - Default branch (non-public, non-bootstrap, non-clientsOnly, non-serviceOwned) NewHandler now has
 //     a construction-time `if policy == nil { panic(errcode.Assertion(...)) }` — a
 //     2-arg call with a typed nil panics at startup rather than silently fail-open.
 //
 // This archtest is the simplified flat backstop: it catches "caller passes the
 // literal nil to a 2-arg NewHandler but hasn't updated contract.yaml to declare
-// public/clientsOnly yet" — a code that would panic at startup anyway, but which
+// public/clientsOnly/serviceOwned yet" — code that would panic at startup anyway, but which
 // the scanner catches earlier (in CI) rather than at service boot.
 //
 // No exemption list needed: the funnel guarantees that any legitimate single-arg
-// call site uses a contract-declared Public or ClientsOnly flag, which changes the
+// call site uses a contract-declared Public, ClientsOnly, or ServiceOwned flag, which changes the
 // generated signature to 1-arg. Any 2-arg site passing literal nil is always wrong.
 package archtest
 
@@ -37,6 +37,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,13 +48,13 @@ const handlerPolicyRequiredRule = "HANDLER-POLICY-REQUIRED-01"
 // INVARIANT: HANDLER-POLICY-REQUIRED-01
 //
 // Funnel end (primary defense): handler.tmpl generates single-arg NewHandler for
-// Public/ClientsOnly endpoints and a construction-time nil-panic for the default
+// Public/ClientsOnly/ServiceOwned endpoints and a construction-time nil-panic for the default
 // 2-arg branch. This archtest is the simplified flat backstop that catches the
 // code-smell earlier (in CI) rather than at service startup.
 //
-// Scan: any `<pkg>.NewHandler(<expr>, nil)` call in cells/ or examples/ cell.go
+// Scan: any `<pkg>.NewHandler(<expr>, nil)` call in production .go files under cells/ or examples/
 // is a violation — no exemption list. Rationale:
-//   - Legitimate single-arg call sites use a contract-declared Public or ClientsOnly
+//   - Legitimate single-arg call sites use a contract-declared Public, ClientsOnly, or ServiceOwned
 //     flag → codegen changes the signature to 1-arg → the 2-arg site disappears.
 //   - The old handlerPolicyPublicExemptPkgs alias-string exemption was fragile
 //     (alias spoofing, import renaming). The new funnel makes it unnecessary.
@@ -69,7 +70,7 @@ func TestHANDLER_POLICY_REQUIRED_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	cellFiles := collectCellGoFiles(t, root)
+	cellFiles := collectProductionGoFiles(t, root)
 
 	var violations []string
 	for _, f := range cellFiles {
@@ -86,7 +87,7 @@ func TestHANDLER_POLICY_REQUIRED_01(t *testing.T) {
 	if len(violations) > 0 {
 		t.Logf(`%s: %d violation(s) found.
 Fix: all 2-arg NewHandler call sites must supply a non-nil auth.Policy.
-For public/clients-only endpoints regenerate after declaring auth.public/auth.clientsOnly
+For public/clients-only/service-owned endpoints regenerate after declaring auth.public/auth.clientsOnly/auth.serviceOwned
 in contract.yaml — the generated NewHandler then takes no policy argument,
 so the nil call site disappears entirely.`, handlerPolicyRequiredRule, len(violations))
 	}
@@ -101,20 +102,20 @@ func TestHANDLER_POLICY_REQUIRED_01_NegativeFixture(t *testing.T) {
 	root := findModuleRoot(t)
 
 	fixture := filepath.Join(root, "tools", "archtest", "testdata",
-		"handler_nil_policy", "cell.go")
+		"handler_nil_policy", "slice_handler.go")
 	if _, err := os.Stat(fixture); os.IsNotExist(err) {
 		t.Fatalf("negative fixture missing: %s", fixture)
 	}
 
-	rel := "tools/archtest/testdata/handler_nil_policy/cell.go"
+	rel := "tools/archtest/testdata/handler_nil_policy/slice_handler.go"
 	hits := scanForNilPolicyNewHandler(fixture, rel)
 	if len(hits) == 0 {
 		t.Errorf("negative fixture produced no violations — scanner broken")
 	}
 }
 
-// collectCellGoFiles returns all cell.go files in cells/ and examples/ subtrees.
-func collectCellGoFiles(t *testing.T, root string) []string {
+// collectProductionGoFiles returns all production Go files in cells/ and examples/ subtrees.
+func collectProductionGoFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
 
@@ -123,15 +124,22 @@ func collectCellGoFiles(t *testing.T, root string) []string {
 			if err != nil {
 				return fmt.Errorf("walk %s: %w", path, err)
 			}
-			if info == nil || info.IsDir() {
+			if info == nil {
 				return nil
 			}
-			if info.Name() == "cell.go" {
+			if info.IsDir() {
+				switch info.Name() {
+				case "generated", "testdata", "vendor":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
 				files = append(files, path)
 			}
 			return nil
 		})
-		require.NoError(t, walkErr, "collectCellGoFiles: walking %s", dir)
+		require.NoError(t, walkErr, "collectProductionGoFiles: walking %s", dir)
 	}
 	walk("cells")
 	walk("examples")
@@ -141,7 +149,7 @@ func collectCellGoFiles(t *testing.T, root string) []string {
 // scanForNilPolicyNewHandler parses the Go file at path and returns a list of
 // violation strings for any call of the form <pkg>.NewHandler(<expr>, nil).
 // No exemption list: the funnel guarantees that all legitimate single-arg call
-// sites use a contract-declared Public or ClientsOnly flag (which produces a
+// sites use a contract-declared Public, ClientsOnly, or ServiceOwned flag (which produces a
 // 1-arg generated signature), so any 2-arg site with literal nil is always wrong.
 func scanForNilPolicyNewHandler(path, rel string) []string {
 	fset := token.NewFileSet()
@@ -178,7 +186,8 @@ func scanForNilPolicyNewHandler(path, rel string) []string {
 		violations = append(violations, fmt.Sprintf(
 			"%s:%d: %s.NewHandler called with literal nil policy — "+
 				"all 2-arg NewHandler call sites must supply a non-nil auth.Policy; "+
-				"for public/clients-only endpoints regenerate after declaring auth.public/auth.clientsOnly in contract.yaml",
+				"for public/clients-only/service-owned endpoints regenerate after declaring "+
+				"auth.public/auth.clientsOnly/auth.serviceOwned in contract.yaml",
 			rel, pos.Line, pkgAlias,
 		))
 		return true

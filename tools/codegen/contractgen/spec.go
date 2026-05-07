@@ -135,6 +135,13 @@ type HTTPEndpointSpec struct {
 	// guard when Clients is non-empty. Requires isInternalPath && len(Clients) > 0.
 	// Mutually exclusive with AuthPublic, AuthBootstrap, and AuthPasswordResetExempt.
 	AuthClientsOnly bool
+	// AuthServiceOwned is true when contract.yaml endpoints.http.auth.serviceOwned is set.
+	// The generated NewHandler takes a single svc Service argument (no policy arg) and
+	// emits auth.Route without a Policy field. Listener JWT authentication still applies;
+	// ownership authorization is enforced inside the service. May combine with
+	// AuthPasswordResetExempt. Mutually exclusive with AuthPublic, AuthBootstrap,
+	// and AuthClientsOnly.
+	AuthServiceOwned bool
 }
 
 // IsPagination reports whether this endpoint uses the canonical cursor+limit

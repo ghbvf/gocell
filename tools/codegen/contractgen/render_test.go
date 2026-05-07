@@ -473,6 +473,7 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		{"http.sample.bootstrap.v1", "synth_http_auth_modes_bootstrap"},
 		{"http.sample.passwordresetexempt.v1", "synth_http_auth_modes_passwordresetexempt"},
 		{"http.sample.clientsonly.v1", "synth_http_auth_modes_clientsonly"},
+		{"http.sample.serviceowned.v1", "synth_http_auth_modes_serviceowned"},
 	}
 
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}

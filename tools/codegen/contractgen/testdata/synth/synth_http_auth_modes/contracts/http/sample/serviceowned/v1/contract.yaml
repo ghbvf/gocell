@@ -1,0 +1,29 @@
+id: http.sample.serviceowned.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/sample/service-owned/{id}
+    pathParams:
+      id:
+        type: string
+        format: uuid
+    successStatus: 204
+    auth:
+      serviceOwned: true
+      passwordResetExempt: true
+    noContent: true
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

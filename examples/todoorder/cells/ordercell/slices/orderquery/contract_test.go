@@ -18,6 +18,8 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
+var allowAllContractPolicy = func(*http.Request) error { return nil }
+
 func newContractQuerySvc(orders ...*domain.Order) *Service {
 	repo := mem.NewOrderRepository()
 	for _, order := range orders {
@@ -40,7 +42,7 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 		Status:    "pending",
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	h := getv1.NewHandler(svc, nil)
+	h := getv1.NewHandler(svc, allowAllContractPolicy)
 
 	// r.PathValue relies on stdlib ServeMux pattern routing; mount through
 	// http.NewServeMux so the {id} placeholder is populated.
@@ -57,7 +59,7 @@ func TestHttpOrderGetV1Serve_NotFound(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.get.v1")
 	svc := newContractQuerySvc()
-	h := getv1.NewHandler(svc, nil)
+	h := getv1.NewHandler(svc, allowAllContractPolicy)
 
 	mux := http.NewServeMux()
 	mux.Handle(c.HTTP.Method+" "+c.HTTP.Path, h)
@@ -79,7 +81,7 @@ func TestHttpOrderListV1Serve(t *testing.T) {
 		&domain.Order{ID: "ord-a", Item: "widget", Status: "pending", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		&domain.Order{ID: "ord-b", Item: "gizmo", Status: "pending", CreatedAt: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)},
 	)
-	h := listv1.NewHandler(svc, nil)
+	h := listv1.NewHandler(svc, allowAllContractPolicy)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=2", nil)

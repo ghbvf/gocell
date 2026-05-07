@@ -16,13 +16,15 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
+var allowAllContractPolicy = func(*http.Request) error { return nil }
+
 func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	t.Helper()
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
 	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
 	require.NoError(t, err)
-	h := createv1.NewHandler(svc, nil)
+	h := createv1.NewHandler(svc, allowAllContractPolicy)
 	return h, writer
 }
 

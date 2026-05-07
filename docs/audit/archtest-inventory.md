@@ -64,7 +64,7 @@
 | `EXPORTED-ERROR-NEW-01` | `errcode_invariants_test.go` | 1460 | errcode |
 | `EXPORTED-ERROR-NEW-01` | `exported_error_new_fixtures_test.go` | 2 | errcode |
 | `GOOSE-SESSION-LOCKER-01` | `goose_session_locker_test.go` | 3 | goose |
-| `HANDLER-POLICY-REQUIRED-01` | `handler_policy_required_test.go` | 46 | handler |
+| `HANDLER-POLICY-REQUIRED-01` | `handler_policy_required_test.go` | 48 | handler |
 | `HEALTH-AGG-01` | `health_aggregation_test.go` | 3 | health |
 | `HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01` | `http_metrics_label_test.go` | 20 | http |
 | `HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01` | `http_metrics_label_test.go` | 21 | http |

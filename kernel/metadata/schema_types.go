@@ -25,7 +25,7 @@ type HTTPTransportMeta struct {
 }
 
 // HTTPAuthMeta carries route-level authentication override flags for contractgen.
-// These map directly to auth.Route fields (Public, PasswordResetExempt, Bootstrap).
+// These map to generated auth.Route wiring and handler constructor shape.
 //
 // ref: kubernetes-sigs/controller-tools markers/registry.go (declarative auth metadata)
 type HTTPAuthMeta struct {
@@ -37,6 +37,13 @@ type HTTPAuthMeta struct {
 	// to reach this route. The generated handler emits auth.Route{PasswordResetExempt: true}.
 	// Mutually exclusive with Public and Bootstrap.
 	PasswordResetExempt bool `yaml:"passwordResetExempt,omitempty" json:"passwordResetExempt,omitempty"`
+	// ServiceOwned indicates that the listener must still authenticate the caller,
+	// but route-level authorization is intentionally absent because the service
+	// validates ownership against domain state. When true, contractgen generates a
+	// single-arg NewHandler(svc Service) constructor and emits auth.Route without
+	// a Policy field. May be combined with PasswordResetExempt. Mutually exclusive
+	// with Public, Bootstrap, and ClientsOnly.
+	ServiceOwned bool `yaml:"serviceOwned,omitempty" json:"serviceOwned,omitempty"`
 	// Bootstrap marks the route as protected by HTTP Basic Auth using
 	// GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials. Listener-level
 	// JWT middleware skips routes flagged as Bootstrap (matcher in FinalizeAuth).
