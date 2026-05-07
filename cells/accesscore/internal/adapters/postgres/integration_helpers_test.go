@@ -95,8 +95,8 @@ func setupPGPool(t *testing.T) *adapterpg.Pool {
 	_ = bootstrap.Close(ctx)
 
 	// Build a DSN that pins search_path to the new schema.
-	// pgx DSNs accept ?options=-c%20search_path%3D{schema} for runtime params.
-	schemaDSN := baseConnStr + fmt.Sprintf("&options=-c%%20search_path%%3D%s", schema)
+	// pgx v5 accepts search_path as a URL query parameter appended to the base DSN.
+	schemaDSN := baseConnStr + fmt.Sprintf("&search_path=%s", schema)
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: schemaDSN})
 	if err != nil {

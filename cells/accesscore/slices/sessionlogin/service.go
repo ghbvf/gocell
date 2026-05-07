@@ -190,7 +190,9 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	}
 
 	s.logger.Info("user logged in",
-		slog.String("user_id", user.ID), slog.String("session_id", session.ID))
+		slog.String("user_id", user.ID),
+		slog.String("session_id", session.ID),
+		slog.Any("roles", minted.Roles))
 	return dto.TokenPair{
 		AccessToken:           minted.AccessToken,
 		RefreshToken:          refreshWire,

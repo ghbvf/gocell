@@ -5,13 +5,17 @@
 //
 // Constructs sessionrefresh.Service with a real PGSessionRepository
 // (cell-internal PG) and a real PGRefreshStore (adapter-layer PG) sharing
-// a single TxManager, then verifies that a commit-failure at the Refresh
-// boundary rolls back both the session row update and the refresh token
-// rotation atomically.
+// a single TxManager, then exercises:
 //
-// This lifts the "Honest test-scope boundary" note from
-// adapters/postgres/refresh_outer_tx_atomicity_integration_test.go: session-
-// side rollback is now testable end-to-end once PGSessionRepository is wired.
+//   - TestStoreLevel_OuterTxAtomicity_SessionAndRefresh: store-level outer-TX
+//     rollback (honest scope — does NOT call svc.Refresh(); proves the
+//     underlying PG stores honor outer-TX semantics).
+//
+//   - TestService_Refresh_PG_HappyPath: end-to-end call to svc.Refresh(),
+//     verifying that session.Update + refresh.Rotate both commit in one
+//     atomic boundary and the returned TokenPair carries the expected fields
+//     (B4 fix: proves sessionrefresh.Service.Refresh() works end-to-end with
+//     real PG stores).
 //
 // ref: adapters/postgres/refresh_outer_tx_atomicity_integration_test.go
 // ref: cells/accesscore/slices/sessionrefresh/service.go Refresh()
@@ -27,17 +31,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/testfx"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // errInjectedRollback is a sentinel error used to trigger outer-TX rollback
@@ -53,42 +56,22 @@ const (
 
 // servicePGFixture holds all wired-up dependencies for a service-level PG test.
 type servicePGFixture struct {
-	svc        *Service
-	sessionPG  *cellpg.PGSessionRepository
+	svc          *Service
+	sessionPG    *cellpg.PGSessionRepository
 	refreshStore *adapterpg.PGRefreshStore
-	txm        *adapterpg.TxManager
-	pool       *adapterpg.Pool
-	clock      *storetest.FakeClock
-	userRepo   *mem.UserRepository
-	roleRepo   *mem.RoleRepository
+	txm          *adapterpg.TxManager
+	pool         *adapterpg.Pool
+	clock        *storetest.FakeClock
+	userRepo     *mem.UserRepository
+	roleRepo     *mem.RoleRepository
 }
 
+// newServicePGFixture builds a servicePGFixture using the shared base container
+// + an isolated schema pool (B1/B2 fix: one container per test binary run).
 func newServicePGFixture(t *testing.T) *servicePGFixture {
 	t.Helper()
-	testutil.RequireDocker(t)
 
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	fsys, err := adapterpg.MigrationsFS()
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, fsys, "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	pool := testfx.SetupPGPool(t)
 
 	clk := storetest.NewFakeClock(time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC))
 	policy := refresh.Policy{
@@ -101,7 +84,7 @@ func newServicePGFixture(t *testing.T) *servicePGFixture {
 
 	txm := adapterpg.NewTxManager(pool)
 
-	sessionPG, err := cellpg.NewPGSessionRepository(pool.DB(), clock.Real())
+	sessionPG, err := cellpg.NewPGSessionRepository(pool.DB())
 	require.NoError(t, err)
 
 	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txm, policy, clk, nil)
@@ -120,11 +103,6 @@ func newServicePGFixture(t *testing.T) *servicePGFixture {
 		WithClock(clock.Real()), WithTxManager(txm))
 	require.NoError(t, err)
 
-	t.Cleanup(func() {
-		_ = pool.Close(ctx)
-		_ = container.Terminate(ctx)
-	})
-
 	return &servicePGFixture{
 		svc:          svc,
 		sessionPG:    sessionPG,
@@ -137,16 +115,18 @@ func newServicePGFixture(t *testing.T) *servicePGFixture {
 	}
 }
 
-// TestServicePG_Refresh_CommitFailure_RollsBackBothSessionAndRefreshRows verifies
-// that a Refresh call that succeeds internally but then the outer TxManager
-// commit fails (injected via returning an error from the outer closure)
-// results in zero visible changes: the session row retains its original
-// access_token + version, and the original refresh wire remains valid while
-// no rotated child is peekable.
+// TestStoreLevel_OuterTxAtomicity_SessionAndRefresh verifies store-level outer-TX
+// rollback semantics: a RunInTx closure that manually performs session.Update +
+// refresh.Rotate then returns an injected error must leave both stores unchanged.
+//
+// This test does NOT call svc.Refresh() — it directly exercises the underlying
+// store layer. The name is intentionally honest about the scope (B4 fix:
+// previous name "TestServicePG_Refresh_CommitFailure_RollsBackBothSessionAndRefreshRows"
+// incorrectly implied service-level coverage).
 //
 // This is the B5.FU(b) "honest boundary" lifted: with real PGSessionRepository,
-// the session.Update inside Refresh() is now subject to outer-TX rollback.
-func TestServicePG_Refresh_CommitFailure_RollsBackBothSessionAndRefreshRows(t *testing.T) {
+// the session.Update inside a RunInTx is now subject to outer-TX rollback.
+func TestStoreLevel_OuterTxAtomicity_SessionAndRefresh(t *testing.T) {
 	fx := newServicePGFixture(t)
 	ctx := context.Background()
 
@@ -171,19 +151,8 @@ func TestServicePG_Refresh_CommitFailure_RollsBackBothSessionAndRefreshRows(t *t
 	wire, _, err := fx.refreshStore.Issue(ctx, sess.ID, userID)
 	require.NoError(t, err)
 
-	// Inject a rollback by wrapping the Refresh call in an outer RunInTx that
-	// returns an injected error after Refresh succeeds internally.
-	// NOTE: sessionrefresh.Service.Refresh() already wraps its logic in
-	// txRunner.RunInTx internally. We test the service at the Refresh() API
-	// level — a successful Refresh must commit both changes atomically. To
-	// simulate commit-failure we verify using an outer wrapping transaction
-	// via manual TxManager: run session+refresh setup inside a tx and inject
-	// rollback. This proves that the underlying PG stores honor outer-tx
-	// rollback semantics.
-	//
-	// Strategy: directly test the TX rollback at the store layer (not through
-	// Refresh()) for the commit-failure path. The TxManager wraps both stores
-	// and we verify session.Version and refresh token state after rollback.
+	// Directly test TX rollback at the store layer (not through Refresh()).
+	// This proves that the underlying PG stores honor outer-tx rollback semantics.
 	var capturedRotatedWire string
 	err = fx.txm.RunInTx(ctx, func(txCtx context.Context) error {
 		// Simulate what Refresh does internally:
@@ -223,4 +192,66 @@ func TestServicePG_Refresh_CommitFailure_RollsBackBothSessionAndRefreshRows(t *t
 	require.Error(t, childPeekErr, "rotated child must not be peekable after rollback")
 	assert.True(t, errors.Is(childPeekErr, refresh.ErrRejected),
 		"rotated child peek error must be ErrRejected (got %v)", childPeekErr)
+}
+
+// TestService_Refresh_PG_HappyPath verifies that svc.Refresh() successfully
+// commits both the session.Update and refresh.Rotate atomically when given a
+// valid refresh token backed by real PG stores.
+//
+// B4 fix: this is the first test that genuinely calls fx.svc.Refresh() end-to-
+// end, proving that sessionrefresh.Service's internal RunInTx wraps session.Update
+// + refresh.Rotate in one commit boundary and the returned TokenPair is coherent.
+func TestService_Refresh_PG_HappyPath(t *testing.T) {
+	fx := newServicePGFixture(t)
+	ctx := context.Background()
+
+	userID := "user-happy-" + uuid.NewString()[:8]
+
+	// Seed user so fetchPasswordResetRequired succeeds.
+	u, err := domain.NewUser(userID, userID+"@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = userID
+	require.NoError(t, fx.userRepo.Create(ctx, u))
+
+	// Create a session in PG.
+	sess, err := domain.NewSession(userID, "at-happy-"+uuid.NewString(), time.Now().Add(time.Hour), time.Now())
+	require.NoError(t, err)
+	sess.ID = "sess-happy-" + uuid.NewString()[:8]
+	require.NoError(t, fx.sessionPG.Create(ctx, sess))
+
+	originalVersion := sess.Version
+
+	// Issue a refresh token outside any transaction.
+	wire, _, err := fx.refreshStore.Issue(ctx, sess.ID, userID)
+	require.NoError(t, err)
+
+	// Call the real service Refresh().
+	pair, err := fx.svc.Refresh(ctx, wire)
+	require.NoError(t, err, "Refresh must succeed with valid wire token + real PG stores")
+
+	// TokenPair must carry the expected session/user context.
+	assert.Equal(t, sess.ID, pair.SessionID, "returned SessionID must match the original session")
+	assert.Equal(t, userID, pair.UserID, "returned UserID must match the seeded user")
+	assert.NotEmpty(t, pair.AccessToken, "returned AccessToken must be non-empty")
+	assert.NotEmpty(t, pair.RefreshToken, "returned RefreshToken must be non-empty")
+	assert.NotEqual(t, wire, pair.RefreshToken, "rotated refresh token must differ from the original wire")
+
+	// Session row must be updated (new access token, incremented version).
+	gotSess, err := fx.sessionPG.GetByID(ctx, sess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, pair.AccessToken, gotSess.AccessToken,
+		"session.AccessToken must match the newly issued token after Refresh")
+	assert.Greater(t, gotSess.Version, originalVersion,
+		"session.Version must be incremented after Refresh")
+
+	// Original wire must be rotated (Peek should be rejected).
+	_, peekErr := fx.refreshStore.Peek(ctx, wire)
+	require.Error(t, peekErr, "original wire must be invalid after rotation")
+	assert.True(t, errors.Is(peekErr, refresh.ErrRejected),
+		"Peek on original wire after Refresh must return ErrRejected (got %v)", peekErr)
+
+	// New wire must be peekable.
+	newTok, newPeekErr := fx.refreshStore.Peek(ctx, pair.RefreshToken)
+	require.NoError(t, newPeekErr, "new refresh wire from Refresh must be peekable")
+	assert.Equal(t, sess.ID, newTok.SessionID, "new refresh token must be bound to the same session")
 }

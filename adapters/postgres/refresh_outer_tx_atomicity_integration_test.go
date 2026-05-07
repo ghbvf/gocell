@@ -22,9 +22,10 @@
 //     invariant). Locks B5's interaction with cascade-revoke paths.
 //
 // Honest test-scope boundary: this proves PG refresh-side rollback semantics
-// under the outer wrap. Session-side rollback assertion is held until B2
-// lands postgres.PGSessionRepository (the wired session repo today is mem,
-// which doesn't honor TX rollback by design).
+// under the outer wrap. Both refresh and session sides honor outer-TX rollback
+// as of B2.A (PGSessionRepository in cells/accesscore/internal/adapters/postgres).
+// See cells/accesscore/internal/adapters/postgres/session_outer_tx_atomicity_integration_test.go
+// for the cell-side cross-store fixture.
 //
 // ref: jackc/pgx tx savepoint nesting; ory/fosite refresh.Store contract.
 package postgres

@@ -171,7 +171,9 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 		return dto.TokenPair{}, err
 	}
 
-	s.logger.Info("token refreshed", slog.String("user_id", pair.UserID))
+	s.logger.Info("token refreshed",
+		slog.String("user_id", pair.UserID),
+		slog.String("session_id", pair.SessionID))
 	return pair, nil
 }
 
