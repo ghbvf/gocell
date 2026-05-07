@@ -1,18 +1,20 @@
-package scanner
+package scanner_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 func TestFormatReport_SortsAndDeduplicates(t *testing.T) {
-	diags := []Diagnostic{
+	diags := []scanner.Diagnostic{
 		{Rel: "b/b.go", Line: 10, Message: "msg B"},
 		{Rel: "a/a.go", Line: 5, Message: "msg A"},
 		{Rel: "a/a.go", Line: 5, Message: "msg A"}, // duplicate
 		{Rel: "a/a.go", Line: 3, Message: "msg A2"},
 	}
-	msgs := formatReport("RULE-01", diags)
+	msgs := scanner.FormatReportForTest("RULE-01", diags)
 	// Expect 3 unique messages (duplicate removed), sorted by Rel then Line.
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d: %v", len(msgs), msgs)
@@ -32,17 +34,17 @@ func TestFormatReport_SortsAndDeduplicates(t *testing.T) {
 }
 
 func TestFormatReport_EmptySlice(t *testing.T) {
-	msgs := formatReport("RULE-01", nil)
+	msgs := scanner.FormatReportForTest("RULE-01", nil)
 	if len(msgs) != 0 {
 		t.Errorf("expected empty, got %v", msgs)
 	}
 }
 
 func TestFormatReport_RuleIDPrefix(t *testing.T) {
-	diags := []Diagnostic{
+	diags := []scanner.Diagnostic{
 		{Rel: "x.go", Line: 1, Message: "bad import"},
 	}
-	msgs := formatReport("MY-RULE-42", diags)
+	msgs := scanner.FormatReportForTest("MY-RULE-42", diags)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
@@ -52,10 +54,10 @@ func TestFormatReport_RuleIDPrefix(t *testing.T) {
 }
 
 func TestFormatReport_Format(t *testing.T) {
-	diags := []Diagnostic{
+	diags := []scanner.Diagnostic{
 		{Rel: "pkg/foo.go", Line: 42, Message: "some violation"},
 	}
-	msgs := formatReport("RULE-01", diags)
+	msgs := scanner.FormatReportForTest("RULE-01", diags)
 	want := "RULE-01: pkg/foo.go:42: some violation"
 	if msgs[0] != want {
 		t.Errorf("got %q, want %q", msgs[0], want)
@@ -64,16 +66,16 @@ func TestFormatReport_Format(t *testing.T) {
 
 func TestReport_NoPanic(t *testing.T) {
 	// Report wraps formatReport and calls t.Errorf. With empty diags it should be no-op.
-	Report(t, "RULE-01", nil)
+	scanner.Report(t, "RULE-01", nil)
 }
 
 func TestFormatReport_SameLine_DifferentMessage(t *testing.T) {
 	// Tests the third comparison branch in less(): same Rel + same Line → sort by Message.
-	diags := []Diagnostic{
+	diags := []scanner.Diagnostic{
 		{Rel: "a.go", Line: 1, Message: "z violation"},
 		{Rel: "a.go", Line: 1, Message: "a violation"},
 	}
-	msgs := formatReport("RULE-01", diags)
+	msgs := scanner.FormatReportForTest("RULE-01", diags)
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2, got %d", len(msgs))
 	}

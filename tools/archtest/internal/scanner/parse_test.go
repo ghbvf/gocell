@@ -1,4 +1,4 @@
-package scanner
+package scanner_test
 
 import (
 	"go/parser"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 func TestParseFile_ErrorFailLoud(t *testing.T) {
@@ -21,8 +23,8 @@ func TestParseFile_ErrorFailLoud(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"."})
-	err = eachFile(s, parser.ImportsOnly, func(fc FileContext) error {
+	s := scanner.DirsScope(tmp, []string{"."})
+	err = scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		return nil
 	})
 	if err == nil {
@@ -50,9 +52,9 @@ func TestParseFile_OkFileSucceeds(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"."})
+	s := scanner.DirsScope(tmp, []string{"."})
 	var visited []string
-	err = eachFile(s, parser.ImportsOnly, func(fc FileContext) error {
+	err = scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		visited = append(visited, fc.Rel)
 		return nil
 	})
@@ -73,9 +75,9 @@ func TestParseFile_ImportsOnlyMode(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"."})
+	s := scanner.DirsScope(tmp, []string{"."})
 	var gotImports []string
-	err := eachFile(s, parser.ImportsOnly, func(fc FileContext) error {
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		for _, imp := range fc.File.Imports {
 			gotImports = append(gotImports, imp.Path.Value)
 		}
@@ -86,5 +88,35 @@ func TestParseFile_ImportsOnlyMode(t *testing.T) {
 	}
 	if len(gotImports) != 1 || gotImports[0] != `"fmt"` {
 		t.Errorf("expected [\"fmt\"], got %v", gotImports)
+	}
+}
+
+func TestParseFile_ImportsOnly_Mode_Assertions(t *testing.T) {
+	// C5 finding: assert fc.Rel is slash-separated, fc.AbsPath non-empty,
+	// fc.File and fc.Fset non-nil.
+	tmp := t.TempDir()
+	content := []byte("package bar\nimport \"os\"\n")
+	if err := os.WriteFile(filepath.Join(tmp, "bar.go"), content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	s := scanner.DirsScope(tmp, []string{"."})
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
+		if strings.Contains(fc.Rel, "\\") {
+			t.Errorf("fc.Rel should be slash-separated, got %q", fc.Rel)
+		}
+		if fc.AbsPath == "" {
+			t.Error("fc.AbsPath should be non-empty")
+		}
+		if fc.File == nil {
+			t.Error("fc.File should be non-nil")
+		}
+		if fc.Fset == nil {
+			t.Error("fc.Fset should be non-nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

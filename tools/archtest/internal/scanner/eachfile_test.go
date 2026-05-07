@@ -1,4 +1,4 @@
-package scanner
+package scanner_test
 
 import (
 	"errors"
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 func TestEachFile_DefaultExcludesTests(t *testing.T) {
@@ -22,9 +24,9 @@ func TestEachFile_DefaultExcludesTests(t *testing.T) {
 		t.Fatalf("WriteFile a_test.go: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"src"})
+	s := scanner.DirsScope(tmp, []string{"src"})
 	var rels []string
-	err := eachFile(s, parser.ImportsOnly, func(fc FileContext) error {
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		rels = append(rels, fc.Rel)
 		return nil
 	})
@@ -53,9 +55,9 @@ func TestEachFile_IncludeTests(t *testing.T) {
 		t.Fatalf("WriteFile a_test.go: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"src"}, IncludeTests())
+	s := scanner.DirsScope(tmp, []string{"src"}, scanner.IncludeTests())
 	var rels []string
-	err := eachFile(s, parser.ImportsOnly, func(fc FileContext) error {
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		rels = append(rels, fc.Rel)
 		return nil
 	})
@@ -87,8 +89,8 @@ func TestEachFile_ParseErrorIsPropagated(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"."})
-	err = eachFile(s, parser.ImportsOnly, func(fc FileContext) error {
+	s := scanner.DirsScope(tmp, []string{"."})
+	err = scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		return nil
 	})
 	if err == nil {
@@ -105,9 +107,9 @@ func TestEachFile_FnErrorIsPropagated(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"."})
+	s := scanner.DirsScope(tmp, []string{"."})
 	sentinel := errors.New("fn error sentinel")
-	err := eachFile(s, parser.ImportsOnly, func(fc FileContext) error {
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		return sentinel
 	})
 	if err == nil {
@@ -121,9 +123,9 @@ func TestEachFile_ExportedWrapper_Success(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	s := DirsScope(tmp, []string{"."})
+	s := scanner.DirsScope(tmp, []string{"."})
 	var visited []string
-	EachFile(t, s, parser.ImportsOnly, func(tt *testing.T, fc FileContext) {
+	scanner.EachFile(t, s, parser.ImportsOnly, func(tt *testing.T, fc scanner.FileContext) {
 		visited = append(visited, fc.Rel)
 	})
 	if len(visited) != 1 {
