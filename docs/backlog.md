@@ -284,17 +284,10 @@
 | JOURNEY-STATUS-BOARD-LIFECYCLE-CONSISTENCY-01 | **Journey status-board 状态机一致性** — 现状: board state 与 yaml lifecycle 双状态机各表；修复: 定义强映射 + 双向校验 | arch-opt | P1/Cx2 | 🟡 | 第 9 条 journey 写 board 时 | `kernel/governance/rules_journey.go` + status-board + J-*.yaml | systems-layer-06 §P1-4+5 |
 | IDUTIL-UUID-RAND-FAILURE-TEST-01 | **UUID rand failure test** — 现状: rand.Read 失败路径无回归；修复: fault injection test | test | Cx1 | 🟡 | — | `pkg/idutil/` | GitHub #23 |
 | FU2-GOVERNANCE-STATIC | **Governance static analysis** — 现状: typed gate (→ PR#321) 已落，static 后续；修复: 跟进 | arch-opt | Cx3 | 🟢 | — | `tools/archtest/` | — |
-| PR266-AUDITAPPEND-STRICT | **AuditAppend strict** — 现状: append 验证缺；修复: 加严 | arch-opt | P2/Cx2 | 🟡 | — | `cells/auditcore/` | PR#266 |
+| PR266-AUDITAPPEND-STRICT | **AUDITAPPEND-STRICT-UNMARSHAL-01** — 现状: `cells/auditcore/slices/auditappend/service.go:102` 用宽松 json.Unmarshal 接受未知字段，与 audit 合规"严格记录"语义存在张力；当前是 best-effort by design（lenient path 让事件不丢）；修复方向: (a) 注释加强说明 lenient 取舍；(b) strict 模式 toggle 给将来需要严格审计的 deployment；(c) 永久错误路径（PermanentError → DLX）的 unmarshal 失败行为与 lenient 区分；(b)(c) 待第一个 strict-audit 客户出现实施 | arch-opt | P2/Cx2 | 🟡 | strict-audit 客户出现 | `cells/auditcore/slices/auditappend/service.go` | PR#266 round-2 OPS reviewer F-OPS-03 |
 | PR332-VERIFY-GENERATED-REMEDIATION-DRIFT-01 | **Verify codegen drift remediation 提示** — 现状: drift 报错不提示修复命令；修复: 补 hint | arch-opt | Cx2 | 🟡 | — | `cmd/gocell/` | PR#332 |
 | VERIFY-CODEGEN-SANDBOX-INTEGRATION | **VERIFY-CODEGEN-SANDBOX-INTEGRATION** — 现状: --local=false sandbox 路径无端到端回归；修复: 补 1-2 条 git worktree integration test | test | Cx2 | 🟠 | 修改 verify-codegen-*.sh 或 runVerifyCodegen* | `cmd/gocell/app/codegen_*_drift_test.go` + tools/codegen helper | PR #404 K#10 review P2 |
-| F2 | **Framework doc F2** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F2 |
-| F3 | **Framework doc F3** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F3 |
-| F4 | **Framework doc F4** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F4 |
-| F5 | **Framework doc F5** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F5 |
-| F6 | **Framework doc F6** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F6 |
-| F7 | **Framework doc F7** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F7 |
-| F8 | **Framework doc F8** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F8 |
-| F9 | **Framework doc F9** — 详情待确认 | doc | Cx2 | 🟡 | — | `docs/` | F9 |
+| F2 | **SYSTEM-TOPOLOGY-API** — 现状: 缺 `GET /internal/v1/system/topology`；修复: 基于 `kernel/registry` 返回 cell/slice/contract 拓扑 JSON | feat | P3/Cx2 | 🟡 | — | 新 slice 或 `runtime/bootstrap/` | 历史 Batch 8 |
 | NOLINT-AUDIT-01 | **Nolint audit** — 现状: 全仓 101 处 nolint 含 errcheck 类豁免；修复: 审查 | arch-opt | Cx2 | 🟡 | — | 全仓 *.go | NOLINT-AUDIT-01 |
 | ADR-INDEX-01 | **ADR index** — 现状: 缺 ADR 索引；修复: 生成 docs/architecture/INDEX.md | doc | Cx1 | 🟡 | — | `docs/architecture/` | ADR-INDEX-01 |
 | TEST-CHDIR-PARALLEL-CLI-01 | **TEST-CHDIR-PARALLEL-CLI-01** — 现状: 4 个 CLI test 用 os.Chdir 阻碍 t.Parallel()；修复: 抽 RootResolver helper | test | P3/Cx2 | 🟡 | CLI 测试 > 30s 或新 generate sub-cmd | `cmd/gocell/app/generate_*_test.go` + `verify_codegen_*_test.go` | PR #361 round-2 #3 |
@@ -340,12 +333,11 @@
 | ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 | **A-03 ADAPTER-ERROR-CLASSIFICATION-TRANSIENT** — 现状: 各 adapter 错误分类不统一；修复: postgres 40001/40P01/08* + redis i/o timeout + s3 5xx/429 标 transient | arch-opt | Cx3 | 🟠 | 首个 handler disposition 收口 | `adapters/{postgres,redis,s3}/errors.go` + `pkg/errcode/` | systems layer review |
 | ADAPTER-FAKE-EXPORT-01 | **Adapter fake export 一致性** — 现状: fake/exports 散；修复: 统一规范 | arch-opt | Cx3 | 🟠 | cell mock 扩展 | `adapters/*/fake/` | systems layer review |
 | PR-A41-FU1 | **PR-A41 advisory rules follow-up** — 现状: governance advisory 规则余项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `kernel/governance/` | PR-A41 |
-| PR237-F06 | **Listener DX follow-up** — 现状: Listener DX 余项；修复: 跟进 | arch-opt | Cx2 | 🟡 | — | `runtime/http/middleware/` | PR#237 |
-| PR237-DX1 | **Listener DX docs** — 现状: DX docs 缺；修复: 补 | doc | Cx2 | 🟡 | — | `docs/` | PR#237 |
+| PR237-F06 | **DUAL-LISTENER-DEVMODE-WARN-TEST-01** — 现状: PR-A14a 留尾，`cmd/corebundle/shared_deps.go::internalGuardFromEnv` 在 dev 模式（`GOCELL_ADAPTER_MODE=""`、未设 `GOCELL_SERVICE_SECRET`）返回 nil guard 并 `slog.Warn`，无测试断言 Warn 触发；修复: 加 `internal_guard_env_test.go` table-driven 覆盖 dev/real × 有/无 SERVICE_SECRET 四象限 | test | Cx1 | 🟡 | — | `cmd/corebundle/internal_guard_env_test.go` (新) | PR#237 reviewer F-06 |
+| PR237-DX1 | **LISTENER-OPTION-NAMING-UNIFY-01** — 现状: PR-A14a 选项前缀不对称，`WithHTTPPrimaryAddr` / `WithHTTPInternalAddr`（带 HTTP）与 `WithPrimaryListener` / `WithInternalListener`（不带 HTTP），IDE 补全时两组不相邻；修复: 统一为 `WithHTTP*Listener` 或去掉 addr 侧 HTTP 前缀；当前 gocell 自身无外部调用方，可任意时间一次改名 | refactor | Cx2 | 🟡 | — | `runtime/bootstrap/bootstrap.go` + 测试 + `cmd/corebundle` + `examples/*/main.go` | PR#237 第二轮 reviewer DX F3 |
 | PR237-A4 | **Listener architecture** — 现状: 双 listener 架构 doc 缺；修复: 写架构说明 | arch-opt | Cx2 | 🟡 | — | `runtime/http/` | PR#237 |
-| PR238-FU4 | **PR238 audit follow-up 4** — 详情见 PR#238 | arch-opt | Cx2 | 🟡 | — | `cells/auditcore/` | PR#238 |
-| PR238-FU5 | **PR238 audit follow-up 5** — 详情见 PR#238 | arch-opt | Cx2 | 🟡 | — | `cells/auditcore/` | PR#238 |
-| PR280-FU1 | **PR280 adapter follow-up 1** — 详情见 PR#280 | arch-opt | Cx2 | 🟡 | — | `adapters/` | PR#280 |
+| PR238-FU4 | **CONFIGREPO-LEGACY-NOTFOUND-TEST-DEDUP-01** — 现状: `config_repo_test.go` 中 `TestConfigRepository_GetByKey_NotFound` (line ~172) 与 `TestConfigRepository_GetVersion_NotFound` 用 `assert.AnError` 测的是 other-error 分支，与 `TestGetByKey_OtherScanError_ReturnsErrConfigRepoQuery` / `TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery` 重复，造成 mutation-test 误导；修复: 删除两个 legacy 命名函数或重构为 table 行 | test | P3/Cx1 | 🟡 | — | `cells/configcore/internal/adapters/postgres/config_repo_test.go` | PR#238 L4 reviewer T-04 |
+| PR280-FU1 | **CHANGEPASSWORD-CONCURRENT-SEMANTICS-01** — 现状: `cells/accesscore/slices/identitymanage/service.go::ChangePassword` 旧密码 bcrypt 校验在 RunInTx 之外，新 hash 写入在事务内；并发改密用同一旧密码均通过事务外校验，写入新 hash 时无 CAS 保护，后到者覆盖先到者；IssueForUser 也在事务外，进一步放大语义模糊；修复方向 menu: (A) 闭包顶部重读 user 二次 bcrypt（双倍成本）/ (B) `users.password_version` 列 + `UPDATE ... WHERE id=? AND password_version=?` CAS（Keycloak 模式，需 migration）/ (C) 接受当前语义，contract+SDK 明示并发后到者生效；对标: Keycloak 实体版本、Ory Kratos password settings hook、Supabase Auth 事务内收敛 | arch-opt | P2/Cx3 | 🟡 | 客户端反馈不可预测或安全审查要求 CAS | `cells/accesscore/slices/identitymanage/service.go` + 选项 B 时 `cells/accesscore/internal/domain/user.go` + adapters/postgres user_repo + migration | PR#280 六席位审查（3/6 OUT_OF_SCOPE 共识） |
 | DEVOPS-INTEGRATION-CLEANUP-WAIT-TIMEOUT-01 | **Devops integration cleanup wait timeout** — 现状: e2e cleanup 超时；修复: 加 wait helper | arch-opt | Cx1 | 🟡 | — | `tests/e2e/` | GitHub #19 |
 | X4 | **WM-7 泛型 BulkResult** — 现状: 各 cell 各写 BulkResult；修复: 抽泛型 | feat | P3/— | 🟡 | — | `pkg/` | 历史 Batch 8 |
 | B-FLOOR-FOLLOWUP | **TYPED-ENVELOPE-ADAPTER-FLOOR-UPGRADE** — 现状: PR#403 段 1 是 Ceiling 守；修复: 段 2.5 升 Success-Floor + 段 4 升 Full-Floor | refactor | 段 2.5 Cx3 / 段 4 Cx3 | 🟠 | 段 2 invariant Registry 工具产品化 | `cells/*/slices/*/handler.go` (~20) + archtest + ADR D7 演进锚点 | PR #403 第三轮 review §R1 |
