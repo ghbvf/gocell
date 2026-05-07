@@ -232,7 +232,7 @@ func validateConfig(cfg Config) error {
 	// value to inspect, or opt in via AllowUnsafeNoPassword.
 	if !hasRedisCredential(cfg) && !cfg.AllowUnsafeNoPassword {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			"redis: connection credential required (set AllowUnsafeNoPassword=true for dev/test only)")
+			"redis: connection credential required (enable AllowUnsafeNoPassword for dev/test only)")
 	}
 	return nil
 }
