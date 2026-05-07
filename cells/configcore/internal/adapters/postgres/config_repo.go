@@ -96,6 +96,13 @@ const cellID = "configcore"
 
 const configRepoQueryFailedMessage = "config repo query failed"
 
+type encryptedPayload struct {
+	Ciphertext []byte
+	KeyID      string
+	Nonce      []byte
+	EDK        []byte
+}
+
 // Compile-time interface check.
 var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
@@ -178,18 +185,22 @@ func (r *ConfigRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 }
 
 // encryptValue encrypts value for a sensitive entry using the transformer.
-// Returns (ciphertext, keyID, nonce, edk) or error.
-func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) (ct []byte, keyID string, nonce, edk []byte, err error) {
+func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) (encryptedPayload, error) {
 	if r.transformer == nil {
-		return nil, "", nil, nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
+		return encryptedPayload{}, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
 	aad := configcrypto.AADForConfig(cellID, key)
 	result, err := r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key="+key, err)
+		return encryptedPayload{}, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key="+key, err)
 	}
-	return result.Ciphertext, result.KeyID, result.Nonce, result.EDK, nil
+	return encryptedPayload{
+		Ciphertext: result.Ciphertext,
+		KeyID:      result.KeyID,
+		Nonce:      result.Nonce,
+		EDK:        result.EDK,
+	}, nil
 }
 
 // decryptValue decrypts a cipher-column tuple for a sensitive entry.
@@ -213,17 +224,22 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 // configID is the UUID primary key from config_entries.
 func (r *ConfigRepository) encryptVersionValue(
 	ctx context.Context, configID, value string,
-) (ct []byte, keyID string, nonce, edk []byte, err error) {
+) (encryptedPayload, error) {
 	if r.transformer == nil {
-		return nil, "", nil, nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
+		return encryptedPayload{}, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive version")
 	}
 	aad := configcrypto.AADForVersion(cellID, configID)
 	result, err := r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "EncryptVersion", "config_id="+configID, err)
+		return encryptedPayload{}, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "EncryptVersion", "config_id="+configID, err)
 	}
-	return result.Ciphertext, result.KeyID, result.Nonce, result.EDK, nil
+	return encryptedPayload{
+		Ciphertext: result.Ciphertext,
+		KeyID:      result.KeyID,
+		Nonce:      result.Nonce,
+		EDK:        result.EDK,
+	}, nil
 }
 
 // decryptVersionValue decrypts a cipher-column tuple for a sensitive config version.
@@ -262,12 +278,10 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 	}
 
 	if entry.Sensitive {
-		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, entry.Key, entry.Value)
+		payload, encErr := r.encryptValue(ctx, entry.Key, entry.Value)
 		if encErr != nil {
 			return encErr
 		}
-		// NOTE: SQL param order (edk, nonce) differs from encryptValue return
-		// order (nonce, edk). Matches column order: value_edk=$10, value_nonce=$11.
 		const q = `INSERT INTO config_entries
 			(id, key, value, sensitive, version, created_at, updated_at,
 			 value_cipher, value_key_id, value_edk, value_nonce)
@@ -275,7 +289,7 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		_, err = db.Exec(ctx, q,
 			entry.ID, entry.Key, "", entry.Sensitive, entry.Version,
 			entry.CreatedAt, entry.UpdatedAt,
-			ct, keyID, edk, nonce,
+			payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce,
 		)
 	} else {
 		const q = `INSERT INTO config_entries
@@ -499,18 +513,16 @@ func (r *ConfigRepository) doUpdate(
 ) (*domain.ConfigEntry, error) {
 	var row Row
 	if sensitive {
-		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, key, value)
+		payload, encErr := r.encryptValue(ctx, key, value)
 		if encErr != nil {
 			return nil, encErr
 		}
-		// NOTE: SQL param order (edk, nonce) differs from encryptValue return
-		// order (nonce, edk). Matches the column order: value_edk=$3, value_nonce=$4.
 		const q = `UPDATE config_entries
 			SET value = '', sensitive = true, version = version+1, updated_at = now(),
 			    value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4
 			WHERE key = $5
 			RETURNING ` + configEntryColumns
-		row = db.QueryRow(ctx, q, ct, keyID, edk, nonce, key)
+		row = db.QueryRow(ctx, q, payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce, key)
 	} else {
 		const q = `UPDATE config_entries
 			SET value = $1, sensitive = false, version = version+1, updated_at = now(),
@@ -657,7 +669,7 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 	}
 
 	if version.Sensitive {
-		ct, keyID, nonce, edk, encErr := r.encryptVersionValue(ctx, version.ConfigID, version.Value)
+		payload, encErr := r.encryptVersionValue(ctx, version.ConfigID, version.Value)
 		if encErr != nil {
 			return encErr
 		}
@@ -668,7 +680,7 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 		_, err = db.Exec(ctx, q,
 			version.ID, version.ConfigID, version.Version,
 			"", version.Sensitive, version.PublishedAt,
-			ct, keyID, edk, nonce,
+			payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce,
 		)
 	} else {
 		const q = `INSERT INTO config_versions

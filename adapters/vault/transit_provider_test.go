@@ -890,6 +890,26 @@ func TestParseVaultKeyID(t *testing.T) {
 			ciphertext: "vault:notv:data",
 			wantErr:    true,
 		},
+		{
+			name:       "empty version after v → error",
+			ciphertext: "vault:v:data",
+			wantErr:    true,
+		},
+		{
+			name:       "non-numeric version → error",
+			ciphertext: "vault:vx:data",
+			wantErr:    true,
+		},
+		{
+			name:       "signed version → error",
+			ciphertext: "vault:v-1:data",
+			wantErr:    true,
+		},
+		{
+			name:       "zero version → error",
+			ciphertext: "vault:v0:data",
+			wantErr:    true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1349,51 +1369,91 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 
 	ctx := context.Background()
 	const encryptWorkers = 8
+	const encryptIterations = 20
 	const rotations = 5
 
 	var wg sync.WaitGroup
+	errCh := make(chan error, encryptWorkers+1)
+	var encryptSuccesses atomic.Int64
+	var rotateSuccesses atomic.Int64
 
 	// 8 goroutines concurrently encrypting.
 	for range encryptWorkers {
-		wg.Go(func() { runConcurrentEncryptLoop(ctx, p, 20) })
+		wg.Go(func() {
+			successes, err := runConcurrentEncryptLoop(ctx, p, encryptIterations)
+			encryptSuccesses.Add(int64(successes))
+			if err != nil {
+				errCh <- err
+			}
+		})
 	}
 
 	// 1 goroutine doing periodic rotations.
-	wg.Go(func() { runConcurrentRotateLoop(ctx, p, rotations) })
+	wg.Go(func() {
+		successes, err := runConcurrentRotateLoop(ctx, p, rotations)
+		rotateSuccesses.Add(int64(successes))
+		if err != nil {
+			errCh <- err
+		}
+	})
 
 	wg.Wait()
-	// No race detector report = pass. The test itself needs -race to be meaningful.
+	close(errCh)
+
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		t.Fatalf("concurrent encrypt/rotate produced errors: %v", errors.Join(errs...))
+	}
+
+	wantEncrypts := int64(encryptWorkers * encryptIterations)
+	if got := encryptSuccesses.Load(); got != wantEncrypts {
+		t.Fatalf("encrypt successes = %d, want %d", got, wantEncrypts)
+	}
+	if got := rotateSuccesses.Load(); got != rotations {
+		t.Fatalf("rotate successes = %d, want %d", got, rotations)
+	}
+
+	if got := p.cachedLatestVersion.Load(); got != int64(1+rotations) {
+		t.Fatalf("cached latest version = %d, want %d", got, 1+rotations)
+	}
 }
 
 // runConcurrentEncryptLoop is the per-worker body of
 // TestTransitKeyProvider_ConcurrentEncryptRotate. Pulled out so the test
-// itself stays under the cognitive-complexity threshold; transient errors
-// from a parallel Rotate are expected and silently terminate the loop.
-func runConcurrentEncryptLoop(ctx context.Context, p *TransitKeyProvider, iterations int) {
-	for range iterations {
+// itself stays under the cognitive-complexity threshold.
+func runConcurrentEncryptLoop(ctx context.Context, p *TransitKeyProvider, iterations int) (int, error) {
+	successes := 0
+	for i := range iterations {
 		h, err := p.Current(ctx)
 		if err != nil {
-			return
+			return successes, fmt.Errorf("Current iteration %d: %w", i, err)
 		}
 		vh, ok := h.(*vaultTransitHandle)
 		if !ok {
-			return
+			return successes, fmt.Errorf("Current iteration %d returned %T, want *vaultTransitHandle", i, h)
 		}
 		if _, err := vh.Encrypt(ctx, []byte("payload"), []byte("aad")); err != nil {
-			return // transient error during concurrent rotation is expected
+			return successes, fmt.Errorf("Encrypt iteration %d: %w", i, err)
 		}
+		successes++
 	}
+	return successes, nil
 }
 
 // runConcurrentRotateLoop is the rotator body of
-// TestTransitKeyProvider_ConcurrentEncryptRotate. Transient rotate errors
-// are acceptable in this race test and silently terminate the loop.
-func runConcurrentRotateLoop(ctx context.Context, p *TransitKeyProvider, iterations int) {
-	for range iterations {
+// TestTransitKeyProvider_ConcurrentEncryptRotate.
+func runConcurrentRotateLoop(ctx context.Context, p *TransitKeyProvider, iterations int) (int, error) {
+	successes := 0
+	for i := range iterations {
 		if _, err := p.Rotate(ctx); err != nil {
-			return
+			return successes, fmt.Errorf("Rotate iteration %d: %w", i, err)
 		}
+		successes++
 	}
+	return successes, nil
 }
 
 // ---------------------------------------------------------------------------

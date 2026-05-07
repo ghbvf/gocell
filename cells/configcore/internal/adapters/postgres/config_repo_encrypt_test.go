@@ -1043,7 +1043,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 	t.Run("encryptValue direct call (covers Update sensitive write path)", func(t *testing.T) {
 		tr := &fakeValueTransformer{currentKeyID: "v1", failEncrypt: true}
 		repo := newEncryptedRepoFromDBTX(&mockDB{}, tr)
-		_, _, _, _, err := repo.encryptValue(ctx, "update_key", "new_value")
+		_, err := repo.encryptValue(ctx, "update_key", "new_value")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec), "error must be *errcode.Error")

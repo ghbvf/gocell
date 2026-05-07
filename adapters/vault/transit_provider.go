@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1096,7 +1097,7 @@ func isTransientHTTPStatus(code int) bool {
 func parseVaultKeyID(ciphertext string, errCode errcode.Code) (string, error) {
 	// Expected format: "vault:vN:base64payload"
 	parts := strings.SplitN(ciphertext, ":", 3)
-	if len(parts) != 3 || parts[0] != "vault" || !strings.HasPrefix(parts[1], "v") {
+	if len(parts) != 3 || parts[0] != "vault" || !validVaultKeyVersion(parts[1]) {
 		// Do NOT include the full ciphertext in the error message — it contains
 		// the wrapped DEK and would leak to server-side logs via the 5xx error chain.
 		prefix := ciphertext
@@ -1109,6 +1110,20 @@ func parseVaultKeyID(ciphertext string, errCode errcode.Code) (string, error) {
 			errcode.WithInternal(fmt.Sprintf("prefix=%q", prefix)))
 	}
 	return vaultKeyIDPrefix + parts[1], nil
+}
+
+func validVaultKeyVersion(version string) bool {
+	digits, ok := strings.CutPrefix(version, "v")
+	if !ok || digits == "" || digits[0] == '0' {
+		return false
+	}
+	for _, ch := range digits {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	_, err := strconv.Atoi(digits)
+	return err == nil
 }
 
 // ---------------------------------------------------------------------------
