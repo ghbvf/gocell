@@ -7,7 +7,6 @@ package archtest
 //   PANIC-REGISTERED-01    production panic() calls must be in Must* functions or ADR-registered whitelist
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -127,8 +126,7 @@ type panicRegisteredScope struct {
 func TestPanicRegistered(t *testing.T) {
 	root := findModuleRoot(t)
 
-	violations, usedWhitelist, err := scanRootForPanicRegisteredViolations(root, architecturalPanicWhitelist)
-	require.NoError(t, err)
+	violations, usedWhitelist := scanRootForPanicRegisteredViolations(t, root, architecturalPanicWhitelist)
 	assertPanicWhitelistMatchesADR(t, root, usedWhitelist)
 
 	if len(violations) > 0 {
@@ -267,7 +265,8 @@ func scanSourceForPanicRegisteredViolations(
 	return scanPanicRegisteredAST(fset, file, rel, whitelist, used), used
 }
 
-func scanRootForPanicRegisteredViolations(root string, whitelist map[string]string) ([]panicRegisteredViolation, map[string]bool, error) {
+func scanRootForPanicRegisteredViolations(t *testing.T, root string, whitelist map[string]string) ([]panicRegisteredViolation, map[string]bool) {
+	t.Helper()
 	usedWhitelist := map[string]bool{}
 	var violations []panicRegisteredViolation
 
@@ -277,24 +276,12 @@ func scanRootForPanicRegisteredViolations(root string, whitelist map[string]stri
 	scope := scanner.ModuleScope(root,
 		scanner.ExcludeRels("tools/archtest/doc.go"),
 	)
-	files, err := scope.Files()
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, absPath := range files {
-		rel, relErr := filepath.Rel(root, absPath)
-		if relErr != nil {
-			return nil, nil, relErr
-		}
-		rel = filepath.ToSlash(rel)
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, absPath, nil, parser.SkipObjectResolution|parser.ParseComments)
-		if parseErr != nil {
-			return nil, nil, fmt.Errorf("parse %s: %w", absPath, parseErr)
-		}
-		violations = append(violations, scanPanicRegisteredAST(fset, file, rel, whitelist, usedWhitelist)...)
-	}
-	return violations, usedWhitelist, nil
+	// EachFile is fail-loud: any parse error calls t.Fatalf immediately,
+	// replacing the previous manual loop + error return pattern (PANIC-REGISTERED-01 dogfooding).
+	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		violations = append(violations, scanPanicRegisteredAST(fc.Fset, fc.File, fc.Rel, whitelist, usedWhitelist)...)
+	})
+	return violations, usedWhitelist
 }
 
 func scanPanicRegisteredAST(

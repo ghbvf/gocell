@@ -1,3 +1,6 @@
+// INVARIANT: KERNEL-POOLSTATS-LOCATION-01a
+// INVARIANT: KERNEL-POOLSTATS-LOCATION-01b
+//
 // KERNEL-POOLSTATS-LOCATION-01
 //
 // Invariants:
@@ -72,7 +75,7 @@ func TestKERNEL_POOLSTATS_LOCATION_01b_ContractIsImportZero(t *testing.T) {
 			}
 			diags = append(diags, scanner.Diagnostic{
 				Rel:     fc.Rel,
-				Line:    fc.Fset.Position(imp.Pos()).Line,
+				Line:    fc.Fset.Position(imp.Path.Pos()).Line,
 				Message: `non-stdlib import "` + imported + `" — pool-stats contract must remain import-zero`,
 			})
 		}
