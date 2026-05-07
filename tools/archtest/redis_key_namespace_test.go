@@ -148,40 +148,57 @@ func assertConstructorReturnsErrorFirst(t *testing.T, spec redisConstructorSpec,
 		spec.file, spec.fnName)
 }
 
-// assertConstructorValidatesNamespace looks for `if err := ns.Validate(); ...`
-// or `if err := ns.Validate(); err != nil { ... }` near the start of the
-// function body.
+// assertConstructorValidatesNamespace requires `if err := ns.Validate(); ...`
+// to appear at the TOP of the function body — within the first
+// validateNamespaceMaxLeadingStmts statements. A nested or post-assignment
+// Validate call would let invalid namespaces touch struct fields before
+// the guard fires; the gate explicitly rejects that shape.
 func assertConstructorValidatesNamespace(t *testing.T, spec redisConstructorSpec, fn *ast.FuncDecl) {
 	t.Helper()
 	require.NotNil(t, fn.Body, "%s.%s: must have a body", spec.file, spec.fnName)
 
+	limit := len(fn.Body.List)
+	if limit > validateNamespaceMaxLeadingStmts {
+		limit = validateNamespaceMaxLeadingStmts
+	}
+	leading := fn.Body.List[:limit]
+
 	found := false
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		ifStmt, ok := n.(*ast.IfStmt)
+	for _, stmt := range leading {
+		ifStmt, ok := stmt.(*ast.IfStmt)
 		if !ok || ifStmt.Init == nil {
-			return true
+			continue
 		}
 		assign, ok := ifStmt.Init.(*ast.AssignStmt)
 		if !ok || len(assign.Rhs) != 1 {
-			return true
+			continue
 		}
 		call, ok := assign.Rhs[0].(*ast.CallExpr)
 		if !ok {
-			return true
+			continue
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Validate" {
-			return true
+			continue
 		}
 		recv, ok := sel.X.(*ast.Ident)
 		if !ok || recv.Name != "ns" {
-			return true
+			continue
 		}
 		found = true
-		return false
-	})
+		break
+	}
 	require.True(t, found,
-		"%s.%s: must call `ns.Validate()` at construction so invalid "+
-			"namespaces fail-fast (REDIS-KEY-NAMESPACE-01)",
-		spec.file, spec.fnName)
+		"%s.%s: must call `ns.Validate()` within the first %d body statements "+
+			"so invalid namespaces fail-fast before any field assignment "+
+			"(REDIS-KEY-NAMESPACE-01)",
+		spec.file, spec.fnName, validateNamespaceMaxLeadingStmts)
 }
+
+// validateNamespaceMaxLeadingStmts is the position budget for the
+// `ns.Validate()` guard. Three allows a constructor to nil-check a
+// surrounding parameter (e.g. `client *Client`) before reaching the
+// namespace check, which is the existing pattern in NewNonceStore. The
+// budget is intentionally tight — if a fourth pre-Validate statement is
+// needed, justify it in code review and bump the constant explicitly.
+const validateNamespaceMaxLeadingStmts = 3

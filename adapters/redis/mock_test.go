@@ -314,7 +314,7 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 	case len(keys) == 2 && len(args) >= 2 && strings.HasSuffix(keys[0], ":done"):
 		doneKey, leaseKey := keys[0], keys[1]
 		token := toString(args[0])
-		leaseSec := toInt64(args[1])
+		leaseMs := toInt64(args[1])
 
 		if entry, ok := m.store[doneKey]; ok {
 			// Treat expired done key as absent (same as Get with expiry check).
@@ -333,7 +333,7 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 		}
 		m.store[leaseKey] = mockEntry{
 			value:  token,
-			expiry: time.Now().Add(time.Duration(leaseSec) * time.Second),
+			expiry: time.Now().Add(time.Duration(leaseMs) * time.Millisecond),
 		}
 		cmd.SetVal(int64(1)) // ClaimAcquired
 		return cmd
@@ -342,13 +342,13 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 	case len(keys) == 2 && len(args) == 2 && strings.HasSuffix(keys[0], ":lease"):
 		leaseKey, doneKey := keys[0], keys[1]
 		token := toString(args[0])
-		doneSec := toInt64(args[1])
+		doneMs := toInt64(args[1])
 
 		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
 			delete(m.store, leaseKey)
 			m.store[doneKey] = mockEntry{
 				value:  "1",
-				expiry: time.Now().Add(time.Duration(doneSec) * time.Second),
+				expiry: time.Now().Add(time.Duration(doneMs) * time.Millisecond),
 			}
 			cmd.SetVal(int64(1))
 		} else {

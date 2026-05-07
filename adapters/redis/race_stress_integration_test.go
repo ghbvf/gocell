@@ -21,7 +21,9 @@ import (
 
 // race-stress test goroutine count. Stays well within go-redis's default
 // PoolSize of 10×GOMAXPROCS for standalone clients while still amplifying
-// timing windows under -race + -count=N.
+// timing windows under -race + -count=N. Used by every test in this file
+// — a single file-level constant keeps contention level uniform across
+// the four primitives.
 const raceStressGoroutines = 50
 
 // TestRaceStress_DistLock_SetNX_ExactlyOneWinner asserts that 50 concurrent
@@ -59,6 +61,15 @@ func TestRaceStress_DistLock_SetNX_ExactlyOneWinner(t *testing.T) {
 
 	assert.Equal(t, int64(1), winners.Load(),
 		"exactly one of %d concurrent SetNX must win the lock", raceStressGoroutines)
+
+	// Pin the wire-level key shape: namespace prefix MUST be operative under
+	// concurrency. Without this, an empty / mis-derived namespace would still
+	// pass the exactly-one-winner assertion above. Get returns the holder
+	// token (any non-empty string) when the prefixed key exists.
+	prefixed := string(testNamespace) + ":" + key
+	got, err := client.cmdable().Get(ctx, prefixed).Result()
+	require.NoError(t, err, "lock key must exist under namespace prefix %q", prefixed)
+	assert.NotEmpty(t, got, "lock key value (token) under prefix %q must be non-empty", prefixed)
 }
 
 // TestRaceStress_IdempotencyClaimer_ExactlyOneAcquired asserts that 50
@@ -117,6 +128,14 @@ func TestRaceStress_IdempotencyClaimer_ExactlyOneAcquired(t *testing.T) {
 	require.NotNil(t, winner, "winner receipt must be non-nil")
 	require.NoError(t, winner.Commit(ctx), "Commit on winning receipt must succeed")
 
+	// Pin the wire-level done-key shape post-Commit: prefix outside the
+	// hashtag, role suffix `:done`. An empty namespace or a hashtag
+	// regression would surface as a Get miss here.
+	doneKey := string(testNamespace) + ":{" + bizKey + "}:done"
+	got, err := client.cmdable().Get(ctx, doneKey).Result()
+	require.NoError(t, err, "done key must exist post-Commit at %q", doneKey)
+	assert.Equal(t, "1", got, "done sentinel value must be \"1\"")
+
 	// Second wave: every Claim should now see ClaimDone.
 	results2 := make(chan idempotency.ClaimState, raceStressGoroutines)
 	var wg2 sync.WaitGroup
@@ -146,7 +165,9 @@ func TestRaceStress_IdempotencyClaimer_ExactlyOneAcquired(t *testing.T) {
 
 // TestRaceStress_NonceStore_ExactlyOneSuccess asserts that 50 concurrent
 // CheckAndMark calls for the same nonce return nil for exactly one caller
-// and ErrNonceReused for the rest.
+// and ErrNonceReused for the rest. nonceTestNamespace is defined in
+// nonce_test.go (same package) — distinct from testNamespace so cross-prefix
+// regressions surface as a missed lookup.
 func TestRaceStress_NonceStore_ExactlyOneSuccess(t *testing.T) {
 	client, cleanup := startRedis(t)
 	defer cleanup()
@@ -201,10 +222,9 @@ func TestRaceStress_Cache_ConcurrentSetGet_NoDataRace(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	const goroutines = 20
 	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := range goroutines {
+	wg.Add(raceStressGoroutines)
+	for i := range raceStressGoroutines {
 		go func(i int) {
 			defer wg.Done()
 			key := fmt.Sprintf("race:cache:%s:%d", t.Name(), i)

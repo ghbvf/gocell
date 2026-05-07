@@ -27,6 +27,13 @@ type NonceStore struct {
 var _ auth.NonceStore = (*NonceStore)(nil)
 
 // NewNonceStore creates a Redis-backed service-token nonce store.
+//
+// The body validates `ns` before the `client == nil` check so the archtest
+// REDIS-KEY-NAMESPACE-01 gate (which requires `ns.Validate()` near the top
+// of every public Redis constructor) sees the call within its statement
+// budget. The internal helper newNonceStoreFromCmdable re-validates as
+// defense-in-depth: integration tests bypass the public constructor by
+// calling the helper directly, so the helper has to police its own input.
 func NewNonceStore(client *Client, ns KeyNamespace, ttl time.Duration) (*NonceStore, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
@@ -37,6 +44,10 @@ func NewNonceStore(client *Client, ns KeyNamespace, ttl time.Duration) (*NonceSt
 	return newNonceStoreFromCmdable(client.cmdable(), ns, ttl)
 }
 
+// newNonceStoreFromCmdable is the cmdable-level constructor. It is also
+// called directly from tests, so it re-validates `ns` to maintain the
+// invariant that no NonceStore can be assembled with a malformed
+// namespace — see NewNonceStore's doc comment for context.
 func newNonceStoreFromCmdable(rdb cmdable, ns KeyNamespace, ttl time.Duration) (*NonceStore, error) {
 	if rdb == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis nonce store: cmdable is nil")

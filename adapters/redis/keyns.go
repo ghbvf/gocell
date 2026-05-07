@@ -46,32 +46,53 @@ var keyNamespacePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`)
 
 // Validate reports whether n is a legal namespace. Errors are descriptive
 // const-literal messages so MESSAGE-CONST-LITERAL-01 stays satisfied.
+//
+// Validation order:
+//
+//  1. Empty / over-length checks first — these have actionable single-cause
+//     diagnostics that the regex would compress into a generic "shape"
+//     error.
+//  2. Targeted character checks for the three security-sensitive
+//     forbidden characters (`:`, `{`/`}`, uppercase) — same single-cause
+//     diagnostics; these characters would also fail the regex below, but
+//     a precise error message helps callers fix misconfigurations
+//     quickly.
+//  3. Regex catch-all — authoritative full-pattern enforcer; rejects
+//     leading digits/dashes, dots, slashes, whitespace, and any other
+//     non-`[a-z0-9_-]` character.
+//
+// Both the targeted checks and the regex are intentional: the targeted
+// checks improve diagnostics, the regex is the single-source of the
+// allowed shape. Removing either weakens the contract.
+//
+// KindInvalid (not KindInternal) — this is a config-time programmer
+// error from a constructor caller, not an infrastructure failure.
 func (n KeyNamespace) Validate() error {
 	s := string(n)
 	if s == "" {
-		return errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"redis key namespace must not be empty")
 	}
 	if len(s) > keyNamespaceMaxLen {
-		return errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"redis key namespace exceeds maximum length of 48 characters")
 	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
 		case c == ':':
-			return errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"redis key namespace must not contain colon (key separator)")
 		case c == '{' || c == '}':
-			return errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"redis key namespace must not contain curly brace (cluster hashtag)")
 		case c >= 'A' && c <= 'Z':
-			return errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"redis key namespace must be lowercase")
 		}
 	}
 	if !keyNamespacePattern.MatchString(s) {
-		return errcode.New(errcode.KindInternal, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"redis key namespace contains forbidden characters or shape")
 	}
 	return nil

@@ -89,10 +89,15 @@ func TestIdempotency_LuaHashtag(t *testing.T) {
 }
 
 // isApplyHashtagCall checks whether expr is a method call of the shape
-// `<receiver>.ns.applyHashtag(<anyKey>, "<role>")`. The receiver chain is
-// allowed to be any selector chain ending in `.ns.applyHashtag` so the
+// `<receiver>.ns.applyHashtag(<keyParam>, "<role>")`. The receiver chain
+// is allowed to be any selector chain ending in `.ns.applyHashtag` so the
 // claimer's struct field name (`ns`) is the only fixed part — renaming
 // the outer receiver (`c` → `claimer`) does not break the gate.
+//
+// The first argument MUST be a plain identifier (not a literal, not a
+// composite expression). This catches a regression where a hardcoded
+// string sneaks into the hashtag — e.g. `c.ns.applyHashtag("", "lease")`
+// — which would silently disable per-call slot colocation.
 func isApplyHashtagCall(expr ast.Expr, wantRole string) bool {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok || len(call.Args) != 2 {
@@ -104,6 +109,9 @@ func isApplyHashtagCall(expr ast.Expr, wantRole string) bool {
 	}
 	inner, ok := outer.X.(*ast.SelectorExpr)
 	if !ok || inner.Sel.Name != "ns" {
+		return false
+	}
+	if _, ok := call.Args[0].(*ast.Ident); !ok {
 		return false
 	}
 	role, ok := stringLit(call.Args[1])
