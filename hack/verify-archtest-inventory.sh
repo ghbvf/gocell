@@ -14,6 +14,11 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "verify-archtest-inventory: must run inside a git work tree" >&2
+  exit 1
+fi
+
 target="docs/audit/archtest-inventory.md"
 generator="scripts/audit/list-archtests.sh"
 

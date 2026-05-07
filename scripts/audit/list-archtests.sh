@@ -21,7 +21,10 @@ set -euo pipefail
 # treats punctuation differently than BSD sort, which surfaces as drift.
 export LC_ALL=C
 
-repo_root="$(git rev-parse --show-toplevel)"
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "list-archtests.sh: must run inside a git work tree" >&2
+  exit 1
+}
 cd "${repo_root}"
 
 archtest_dir="tools/archtest"
@@ -49,7 +52,15 @@ theme_for_id() {
 # theme files expand to one row per anchor. Sort by id then by file for stable
 # diffs across renames.
 archtest_files=()
-while IFS= read -r line; do archtest_files+=("${line}"); done < <(find "${archtest_dir}" -maxdepth 1 -type f -name '*_test.go' | sort)
+# git ls-files: tracked files only — drafts/.bak/IDE temp files cannot pollute
+# the inventory. The awk filter mimics `find -maxdepth 1 -type f` semantics:
+# git pathspec wildcards match across `/`, so we count slash segments.
+archtest_depth="$(awk -F/ '{print NF + 1}' <<<"${archtest_dir}")"
+while IFS= read -r line; do archtest_files+=("${line}"); done < <(
+  git ls-files -- "${archtest_dir}/" \
+    | awk -F/ -v want="${archtest_depth}" 'NF == want && /_test\.go$/' \
+    | sort
+)
 archtest_count="${#archtest_files[@]}"
 
 # extract_rules collects rule rows (id<TAB>basename<TAB>line) for one file.
@@ -201,7 +212,13 @@ done
 # `_test.go` companions are excluded so the inventory reports the real rule
 # definition surface (the *_test.go count would double-count rules).
 governance_files=()
-while IFS= read -r line; do governance_files+=("${line}"); done < <(find "${governance_dir}" -maxdepth 1 -type f -name 'rules_*.go' ! -name '*_test.go' 2>/dev/null | sort || true)
+governance_depth="$(awk -F/ '{print NF + 1}' <<<"${governance_dir}")"
+while IFS= read -r line; do governance_files+=("${line}"); done < <(
+  git ls-files -- "${governance_dir}/" \
+    | awk -F/ -v want="${governance_depth}" \
+        'NF == want && $NF ~ /^rules_.*\.go$/ && $NF !~ /_test\.go$/' \
+    | sort
+)
 governance_count="${#governance_files[@]}"
 
 cat <<HEADER
