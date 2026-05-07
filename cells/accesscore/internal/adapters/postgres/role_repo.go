@@ -8,8 +8,9 @@
 // ref: cells/accesscore/internal/adapters/postgres/user_repo.go (Dev A pattern)
 // ref: cells/configcore/internal/adapters/postgres/session.go (TxCtxKey pattern)
 // ref: jackc/pgx v5 pgconn PgError 23505 unique_violation detection
+// ref: jackc/pgx v5 pgconn PgError 23503 foreign_key_violation detection
 // ref: PostgreSQL indexes-partial.html (partial index conflict via ConstraintName)
-// ref: jackc/pgx v5 pgconn PgError 23505 unique_violation (two distinct scenarios)
+// ref: adapters/postgres/migrations/020_role_assignments_fk.sql (FK + cascade)
 package postgres
 
 import (
@@ -108,10 +109,11 @@ SELECT COUNT(*) FROM role_assignments WHERE user_id = $1 AND role_id = $2`
 // All CRUD methods are single-statement — no pool.Begin / BeginTx call is made
 // (PG-REPO-AMBIENT-TX-01).
 //
-// AssignToUser handles two distinct 23505 scenarios:
+// AssignToUser handles 23505 and 23503 scenarios (see mapAssignError for details):
 //   - (user_id, role_id) PK collision → absorbed by ON CONFLICT DO NOTHING (changed=false)
-//   - idx_role_assignments_single_admin partial index conflict → caught via
-//     pgErr.ConstraintName, mapped to ErrAuthRoleDuplicate (multi-pod concurrent assign)
+//   - idx_role_assignments_single_admin partial index conflict → ErrAuthRoleDuplicate
+//   - fk_role_assignments_user violation → ErrAuthUserNotFound (migration 020)
+//   - fk_role_assignments_role violation → ErrAuthRoleNotFound (migration 020)
 type PGRoleRepository struct {
 	pool *pgxpool.Pool
 	clk  clock.Clock
@@ -245,34 +247,70 @@ func (r *PGRoleRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 //
 // Idempotent: if the user already holds the role, returns changed=false.
 //
-// Two distinct 23505 scenarios:
+// 23505 scenarios:
 //   - (user_id, role_id) PK collision — absorbed by ON CONFLICT DO NOTHING;
 //     RowsAffected==0 → changed=false. No error returned.
 //   - idx_role_assignments_single_admin partial index collision — NOT absorbed
 //     by DO NOTHING (PG ON CONFLICT only matches the explicit conflict target).
 //     Caught via pgErr.ConstraintName=="idx_role_assignments_single_admin",
 //     mapped to ErrAuthRoleDuplicate (multi-pod concurrent assign).
+//
+// 23503 scenarios (migration 020 FK constraints):
+//   - fk_role_assignments_user: userID does not exist → ErrAuthUserNotFound.
+//   - fk_role_assignments_role: roleID does not exist → ErrAuthRoleNotFound.
 func (r *PGRoleRepository) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
 	ct, err := r.execCtx(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-			if pgErr.ConstraintName == adminRoleConstraint {
-				slog.Warn("role assign: single-admin constraint violation",
-					slog.String("constraint", pgErr.ConstraintName),
-					slog.String("role_id", roleID),
-					slog.String("user_id", userID),
-				)
-				// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
-				return false, errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate,
-					"admin role already assigned to another user",
-					errcode.WithInternal(fmt.Sprintf("constraint=%s user_id=%s role_id=%s", pgErr.ConstraintName, userID, roleID)),
-				)
-			}
-		}
-		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user", err)
+		return false, r.mapAssignError(err, userID, roleID)
 	}
 	return ct.RowsAffected() != 0, nil
+}
+
+// mapAssignError converts a raw pgx error from AssignToUser into an errcode.Error.
+//
+// 23505 (unique_violation):
+//   - adminRoleConstraint → ErrAuthRoleDuplicate (single-admin race)
+//   - other → unexpected infra error (maps to KindInternal)
+//
+// 23503 (foreign_key_violation, added by migration 020):
+//   - fk_role_assignments_user → ErrAuthUserNotFound (non-existent user)
+//   - fk_role_assignments_role → ErrAuthRoleNotFound (non-existent role)
+func (r *PGRoleRepository) mapAssignError(err error, userID, roleID string) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user", err)
+	}
+	switch pgErr.Code {
+	case pgUniqueViolation:
+		if pgErr.ConstraintName == adminRoleConstraint {
+			slog.Warn("role assign: single-admin constraint violation",
+				slog.String("constraint", pgErr.ConstraintName),
+				slog.String("role_id", roleID),
+				slog.String("user_id", userID),
+			)
+			// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
+			return errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate,
+				"admin role already assigned to another user",
+				errcode.WithInternal(fmt.Sprintf("constraint=%s user_id=%s role_id=%s", pgErr.ConstraintName, userID, roleID)),
+			)
+		}
+	case pgForeignKeyViolation:
+		switch pgErr.ConstraintName {
+		case "fk_role_assignments_user":
+			return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
+				"user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal("user_id="+userID+" constraint="+pgErr.ConstraintName),
+			)
+		case "fk_role_assignments_role":
+			return errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound,
+				"role not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal("role_id="+roleID+" constraint="+pgErr.ConstraintName),
+			)
+		}
+	}
+	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user", err)
 }
 
 // RemoveFromUser removes a role assignment.

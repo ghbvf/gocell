@@ -12,3 +12,9 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 // Unexported: only for use within this package. The adapter package cannot be
 // re-imported because cells/ must not depend on adapters/ (depguard cells-isolation rule).
 const errAdapterPGQuery errcode.Code = "ERR_ADAPTER_PG_QUERY"
+
+// pgForeignKeyViolation is the PostgreSQL SQLSTATE code for foreign_key_violation.
+// Triggered when an INSERT/UPDATE references a non-existent parent row.
+// Added alongside migration 020_role_assignments_fk.sql which introduces FK
+// constraints on role_assignments (user_id → users, role_id → roles).
+const pgForeignKeyViolation = "23503"

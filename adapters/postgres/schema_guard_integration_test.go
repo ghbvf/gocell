@@ -456,6 +456,59 @@ func TestSchemaGuard_Migration018_Sessions_TableAndIndexes(t *testing.T) {
 	assert.True(t, accessTokenIsUnique, "access_token column must have a UNIQUE index")
 }
 
+// TestSchemaGuard_Migration020_RoleAssignmentsFK verifies that migration 020
+// adds the two FK constraints on role_assignments with the expected referential
+// actions: fk_role_assignments_user (CASCADE) and fk_role_assignments_role (RESTRICT).
+//
+// confdeltype values (pg_constraint):
+//
+//	'a' = NO ACTION (default)
+//	'r' = RESTRICT
+//	'c' = CASCADE
+//	'n' = SET NULL
+//	'd' = SET DEFAULT
+//
+// ref: adapters/postgres/migrations/020_role_assignments_fk.sql
+// ref: PostgreSQL pg_constraint catalog (confdeltype column)
+func TestSchemaGuard_Migration020_RoleAssignmentsFK(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_020")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 020")
+
+	// Assert: fk_role_assignments_user exists with confdeltype='c' (CASCADE).
+	var userFKDelType string
+	err = pool.DB().QueryRow(ctx,
+		`SELECT con.confdeltype
+		 FROM pg_constraint con
+		 JOIN pg_class rel ON rel.oid = con.conrelid
+		 WHERE rel.relname = 'role_assignments'
+		   AND con.conname = 'fk_role_assignments_user'
+		   AND con.contype = 'f'`,
+	).Scan(&userFKDelType)
+	require.NoError(t, err, "fk_role_assignments_user must exist")
+	assert.Equal(t, "c", userFKDelType,
+		"fk_role_assignments_user must have ON DELETE CASCADE (confdeltype='c')")
+
+	// Assert: fk_role_assignments_role exists with confdeltype='r' (RESTRICT).
+	var roleFKDelType string
+	err = pool.DB().QueryRow(ctx,
+		`SELECT con.confdeltype
+		 FROM pg_constraint con
+		 JOIN pg_class rel ON rel.oid = con.conrelid
+		 WHERE rel.relname = 'role_assignments'
+		   AND con.conname = 'fk_role_assignments_role'
+		   AND con.contype = 'f'`,
+	).Scan(&roleFKDelType)
+	require.NoError(t, err, "fk_role_assignments_role must exist")
+	assert.Equal(t, "r", roleFKDelType,
+		"fk_role_assignments_role must have ON DELETE RESTRICT (confdeltype='r')")
+}
+
 // TestSchemaGuard_Migration019_Roles_TableAndIndexes verifies that migration 019
 // creates the roles and role_assignments tables with the expected columns, and that
 // idx_role_assignments_single_admin is a partial UNIQUE index with WHERE role_id='admin'.

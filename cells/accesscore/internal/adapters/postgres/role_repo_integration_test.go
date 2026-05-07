@@ -6,8 +6,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,6 +33,33 @@ func setupRoleRepoPG(t *testing.T) *PGRoleRepository {
 	return repo
 }
 
+// repoBundle holds the repositories and underlying pool for FK-related
+// integration tests that need to execute direct SQL statements (e.g. DELETE
+// FROM users, DELETE FROM roles) to trigger FK cascade/restrict behavior.
+type repoBundle struct {
+	roleRepo *PGRoleRepository
+	userRepo *PGUserRepository
+	pool     *pgxpool.Pool // raw pgx pool for direct SQL access in tests
+}
+
+// setupRoleRepoPGFull returns a repoBundle backed by the same isolated PG
+// schema. Use this when tests need to create real users in the users table or
+// execute direct SQL statements (required after migration 020 added FK on
+// role_assignments).
+func setupRoleRepoPGFull(t *testing.T) repoBundle {
+	t.Helper()
+	p := setupPGPool(t)
+	roleRepo, err := NewPGRoleRepository(p.DB(), clock.Real())
+	require.NoError(t, err)
+	userRepo, err := NewPGUserRepository(p.DB())
+	require.NoError(t, err)
+	return repoBundle{
+		roleRepo: roleRepo,
+		userRepo: userRepo,
+		pool:     p.DB(),
+	}
+}
+
 // newTestRole builds a minimal valid domain.Role for test insertion.
 func newTestRole(name string) *domain.Role {
 	return &domain.Role{
@@ -51,8 +80,27 @@ func newTestRoleNoPerms(name string) *domain.Role {
 	}
 }
 
-// newUserID returns a new unique user ID string.
-func newUserID() string { return uuid.NewString() }
+// createTestUser inserts a user row via the given userRepo and returns its ID.
+// All users created here are unique (random username+email) to avoid
+// unique-constraint collisions across parallel tests.
+func createTestUser(t *testing.T, ctx context.Context, userRepo *PGUserRepository) string {
+	t.Helper()
+	suffix := uuid.NewString()[:8]
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	u := &domain.User{
+		ID:                    uuid.NewString(),
+		Username:              "user-" + suffix,
+		Email:                 "user-" + suffix + "@test.example",
+		PasswordHash:          "$2a$10$testhash",
+		PasswordResetRequired: false,
+		Status:                domain.StatusActive,
+		CreationSource:        domain.UserSourceIdentity,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	require.NoError(t, userRepo.Create(ctx, u))
+	return u.ID
+}
 
 // ---------------------------------------------------------------------------
 // TestPGRoleRepository_Integration
@@ -102,37 +150,37 @@ func TestPGRoleRepository_Integration_GetByID_NotFound_ReturnsRoleNotFound(t *te
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_HappyPath_ReturnsChangedTrue(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("assignable-" + uuid.NewString()[:8])
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, b.roleRepo.Create(ctx, role))
 
-	userID := newUserID()
-	changed, err := repo.AssignToUser(ctx, userID, role.ID)
+	userID := createTestUser(t, ctx, b.userRepo)
+	changed, err := b.roleRepo.AssignToUser(ctx, userID, role.ID)
 	require.NoError(t, err)
 	assert.True(t, changed, "first assign must return changed=true")
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_Duplicate_ReturnsChangedFalse(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("dup-assign-" + uuid.NewString()[:8])
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, b.roleRepo.Create(ctx, role))
 
-	userID := newUserID()
-	changed1, err := repo.AssignToUser(ctx, userID, role.ID)
+	userID := createTestUser(t, ctx, b.userRepo)
+	changed1, err := b.roleRepo.AssignToUser(ctx, userID, role.ID)
 	require.NoError(t, err)
 	assert.True(t, changed1)
 
-	changed2, err := repo.AssignToUser(ctx, userID, role.ID)
+	changed2, err := b.roleRepo.AssignToUser(ctx, userID, role.ID)
 	require.NoError(t, err)
 	assert.False(t, changed2, "second assign of same role must return changed=false")
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_Admin_FirstWins_SecondReturnsRoleDuplicate(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	// Create the admin role with fixed ID "admin" to match the partial index.
@@ -141,16 +189,16 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_FirstWins_SecondReturns
 		Name:        "admin",
 		Permissions: []domain.Permission{},
 	}
-	require.NoError(t, repo.Create(ctx, adminRole))
+	require.NoError(t, b.roleRepo.Create(ctx, adminRole))
 
-	user1 := newUserID()
-	changed, err := repo.AssignToUser(ctx, user1, "admin")
+	user1 := createTestUser(t, ctx, b.userRepo)
+	changed, err := b.roleRepo.AssignToUser(ctx, user1, "admin")
 	require.NoError(t, err)
 	assert.True(t, changed, "first admin assign must succeed with changed=true")
 
 	// Second user trying to claim admin must hit the partial index constraint.
-	user2 := newUserID()
-	_, err = repo.AssignToUser(ctx, user2, "admin")
+	user2 := createTestUser(t, ctx, b.userRepo)
+	_, err = b.roleRepo.AssignToUser(ctx, user2, "admin")
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -159,7 +207,7 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_FirstWins_SecondReturns
 }
 
 func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_OnlyOneSucceeds(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	// Use a fresh unique admin role with fixed prefix for partial index matching.
@@ -169,12 +217,12 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 		Name:        "admin-concurrent-test",
 		Permissions: []domain.Permission{},
 	}
-	require.NoError(t, repo.Create(ctx, adminRole))
+	require.NoError(t, b.roleRepo.Create(ctx, adminRole))
 
 	const N = 5
 	users := make([]string, N)
 	for i := range N {
-		users[i] = newUserID()
+		users[i] = createTestUser(t, ctx, b.userRepo)
 	}
 
 	// B5 fix: use a channel to collect per-goroutine results so that goroutine
@@ -192,7 +240,7 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 	for i := range N {
 		go func(idx int) {
 			defer wg.Done()
-			changed, err := repo.AssignToUser(ctx, users[idx], "admin")
+			changed, err := b.roleRepo.AssignToUser(ctx, users[idx], "admin")
 			resultsCh <- result{changed: changed, err: err}
 		}(i)
 	}
@@ -220,35 +268,35 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUser_HappyPath(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("removable-" + uuid.NewString()[:8])
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, b.roleRepo.Create(ctx, role))
 
-	userID := newUserID()
-	_, err := repo.AssignToUser(ctx, userID, role.ID)
+	userID := createTestUser(t, ctx, b.userRepo)
+	_, err := b.roleRepo.AssignToUser(ctx, userID, role.ID)
 	require.NoError(t, err)
 
-	require.NoError(t, repo.RemoveFromUser(ctx, userID, role.ID))
+	require.NoError(t, b.roleRepo.RemoveFromUser(ctx, userID, role.ID))
 
 	// Should be idempotent (no error on second remove).
-	require.NoError(t, repo.RemoveFromUser(ctx, userID, role.ID))
+	require.NoError(t, b.roleRepo.RemoveFromUser(ctx, userID, role.ID))
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_LastHolder_ReturnsForbidden(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("sole-holder-" + uuid.NewString()[:8])
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, b.roleRepo.Create(ctx, role))
 
-	userID := newUserID()
-	_, err := repo.AssignToUser(ctx, userID, role.ID)
+	userID := createTestUser(t, ctx, b.userRepo)
+	_, err := b.roleRepo.AssignToUser(ctx, userID, role.ID)
 	require.NoError(t, err)
 
 	// Count is 1, user is the sole holder.
-	_, err = repo.RemoveFromUserIfNotLast(ctx, userID, role.ID)
+	_, err = b.roleRepo.RemoveFromUserIfNotLast(ctx, userID, role.ID)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -257,83 +305,83 @@ func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_LastHolder_Returns
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_NotLast_RemovesRow(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("multi-holder-" + uuid.NewString()[:8])
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, b.roleRepo.Create(ctx, role))
 
-	user1 := newUserID()
-	user2 := newUserID()
-	_, err := repo.AssignToUser(ctx, user1, role.ID)
+	user1 := createTestUser(t, ctx, b.userRepo)
+	user2 := createTestUser(t, ctx, b.userRepo)
+	_, err := b.roleRepo.AssignToUser(ctx, user1, role.ID)
 	require.NoError(t, err)
-	_, err = repo.AssignToUser(ctx, user2, role.ID)
+	_, err = b.roleRepo.AssignToUser(ctx, user2, role.ID)
 	require.NoError(t, err)
 
 	// user1 is not the last holder (user2 also holds the role).
-	changed, err := repo.RemoveFromUserIfNotLast(ctx, user1, role.ID)
+	changed, err := b.roleRepo.RemoveFromUserIfNotLast(ctx, user1, role.ID)
 	require.NoError(t, err)
 	assert.True(t, changed, "removing non-last holder must return changed=true")
 
 	// Verify count decreased.
-	count, err := repo.CountByRole(ctx, role.ID)
+	count, err := b.roleRepo.CountByRole(ctx, role.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_UserNotHolder_ReturnsChangedFalse(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("not-assigned-" + uuid.NewString()[:8])
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, b.roleRepo.Create(ctx, role))
 
-	userID := newUserID() // never assigned
-	changed, err := repo.RemoveFromUserIfNotLast(ctx, userID, role.ID)
+	userID := createTestUser(t, ctx, b.userRepo) // created but never assigned
+	changed, err := b.roleRepo.RemoveFromUserIfNotLast(ctx, userID, role.ID)
 	require.NoError(t, err)
 	assert.False(t, changed, "removing role user never held must return changed=false")
 }
 
 func TestPGRoleRepository_Integration_CountByRole_HappyPath(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	role := newTestRoleNoPerms("counted-" + uuid.NewString()[:8])
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, b.roleRepo.Create(ctx, role))
 
-	count0, err := repo.CountByRole(ctx, role.ID)
+	count0, err := b.roleRepo.CountByRole(ctx, role.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count0)
 
-	user1 := newUserID()
-	user2 := newUserID()
-	_, err = repo.AssignToUser(ctx, user1, role.ID)
+	user1 := createTestUser(t, ctx, b.userRepo)
+	user2 := createTestUser(t, ctx, b.userRepo)
+	_, err = b.roleRepo.AssignToUser(ctx, user1, role.ID)
 	require.NoError(t, err)
-	_, err = repo.AssignToUser(ctx, user2, role.ID)
+	_, err = b.roleRepo.AssignToUser(ctx, user2, role.ID)
 	require.NoError(t, err)
 
-	count2, err := repo.CountByRole(ctx, role.ID)
+	count2, err := b.roleRepo.CountByRole(ctx, role.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count2)
 }
 
 func TestPGRoleRepository_Integration_ListByUserID_HappyPath_ReturnsRoles(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
 	suffix := uuid.NewString()[:8]
 	role1 := newTestRoleNoPerms("viewer-" + suffix)
 	role2 := newTestRoleNoPerms("editor-" + suffix)
-	require.NoError(t, repo.Create(ctx, role1))
-	require.NoError(t, repo.Create(ctx, role2))
+	require.NoError(t, b.roleRepo.Create(ctx, role1))
+	require.NoError(t, b.roleRepo.Create(ctx, role2))
 
-	userID := newUserID()
-	_, err := repo.AssignToUser(ctx, userID, role1.ID)
+	userID := createTestUser(t, ctx, b.userRepo)
+	_, err := b.roleRepo.AssignToUser(ctx, userID, role1.ID)
 	require.NoError(t, err)
-	_, err = repo.AssignToUser(ctx, userID, role2.ID)
+	_, err = b.roleRepo.AssignToUser(ctx, userID, role2.ID)
 	require.NoError(t, err)
 
-	roles, err := repo.GetByUserID(ctx, userID)
+	roles, err := b.roleRepo.GetByUserID(ctx, userID)
 	require.NoError(t, err)
 	assert.Len(t, roles, 2)
 
@@ -346,11 +394,11 @@ func TestPGRoleRepository_Integration_ListByUserID_HappyPath_ReturnsRoles(t *tes
 }
 
 func TestPGRoleRepository_Integration_ListByUserID_NoRoles_ReturnsEmpty(t *testing.T) {
-	repo := setupRoleRepoPG(t)
+	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
-	userID := newUserID()
-	roles, err := repo.GetByUserID(ctx, userID)
+	userID := createTestUser(t, ctx, b.userRepo)
+	roles, err := b.roleRepo.GetByUserID(ctx, userID)
 	require.NoError(t, err)
 	assert.Empty(t, roles)
 }
@@ -388,4 +436,127 @@ func TestPGRoleRepository_Integration_Create_RoundTrip(t *testing.T) {
 	assert.Equal(t, role.ID, got.ID)
 	assert.Equal(t, role.Name, got.Name)
 	assert.Empty(t, got.Permissions)
+}
+
+// ---------------------------------------------------------------------------
+// FK constraint tests (migration 020_role_assignments_fk.sql)
+// ---------------------------------------------------------------------------
+
+// TestPGRoleRepository_Integration_AssignToUser_NonExistentRoleID_ReturnsRoleNotFound
+// verifies that assigning a non-existent roleID (FK violation on roles.id)
+// returns ErrAuthRoleNotFound after migration 020 adds fk_role_assignments_role.
+func TestPGRoleRepository_Integration_AssignToUser_NonExistentRoleID_ReturnsRoleNotFound(t *testing.T) {
+	b := setupRoleRepoPGFull(t)
+	ctx := context.Background()
+
+	userID := createTestUser(t, ctx, b.userRepo)
+	nonExistentRoleID := uuid.NewString()
+
+	_, err := b.roleRepo.AssignToUser(ctx, userID, nonExistentRoleID)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRoleNotFound, ec.Code,
+		"assigning non-existent roleID must return ErrAuthRoleNotFound")
+}
+
+// TestPGRoleRepository_Integration_AssignToUser_NonExistentUserID_ReturnsUserNotFound
+// verifies that assigning a role to a non-existent userID (FK violation on users.id)
+// returns ErrAuthUserNotFound after migration 020 adds fk_role_assignments_user.
+func TestPGRoleRepository_Integration_AssignToUser_NonExistentUserID_ReturnsUserNotFound(t *testing.T) {
+	b := setupRoleRepoPGFull(t)
+	ctx := context.Background()
+
+	// Create a real role but use a non-existent userID.
+	role := newTestRoleNoPerms("fk-user-test-" + uuid.NewString()[:8])
+	require.NoError(t, b.roleRepo.Create(ctx, role))
+
+	nonExistentUserID := uuid.NewString()
+	_, err := b.roleRepo.AssignToUser(ctx, nonExistentUserID, role.ID)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code,
+		"assigning to non-existent userID must return ErrAuthUserNotFound")
+}
+
+// TestPGRoleRepository_Integration_DeleteUser_CascadesAssignments verifies that
+// deleting a user from the users table cascades and removes their role_assignments
+// rows (fk_role_assignments_user ON DELETE CASCADE, migration 020).
+func TestPGRoleRepository_Integration_DeleteUser_CascadesAssignments(t *testing.T) {
+	b := setupRoleRepoPGFull(t)
+	ctx := context.Background()
+
+	role := newTestRoleNoPerms("cascade-test-" + uuid.NewString()[:8])
+	require.NoError(t, b.roleRepo.Create(ctx, role))
+
+	userID := createTestUser(t, ctx, b.userRepo)
+	_, err := b.roleRepo.AssignToUser(ctx, userID, role.ID)
+	require.NoError(t, err)
+
+	// Verify assignment exists.
+	count, err := b.roleRepo.CountByRole(ctx, role.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "assignment must exist before user deletion")
+
+	// Delete the user — CASCADE should remove the assignment.
+	require.NoError(t, b.userRepo.Delete(ctx, userID), "deleting user must succeed")
+
+	// The role_assignments row must be gone (CASCADE).
+	count, err = b.roleRepo.CountByRole(ctx, role.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count,
+		"role_assignments row must be cascade-deleted when user is deleted")
+}
+
+// TestPGRoleRepository_Integration_DeleteAdminUser_AllowsReassignAdmin verifies
+// that after an admin user is deleted, the admin role becomes assignable again
+// (fk_role_assignments_user ON DELETE CASCADE removes the "occupation" row).
+func TestPGRoleRepository_Integration_DeleteAdminUser_AllowsReassignAdmin(t *testing.T) {
+	b := setupRoleRepoPGFull(t)
+	ctx := context.Background()
+
+	adminRole := &domain.Role{
+		ID:          "admin",
+		Name:        "admin",
+		Permissions: []domain.Permission{},
+	}
+	require.NoError(t, b.roleRepo.Create(ctx, adminRole))
+
+	// Assign first admin user.
+	user1 := createTestUser(t, ctx, b.userRepo)
+	_, err := b.roleRepo.AssignToUser(ctx, user1, "admin")
+	require.NoError(t, err)
+
+	// Delete the first admin — CASCADE removes their role_assignment row.
+	require.NoError(t, b.userRepo.Delete(ctx, user1), "deleting user1 must succeed")
+
+	// Now a second user should be able to become admin (occupation released).
+	user2 := createTestUser(t, ctx, b.userRepo)
+	changed, err := b.roleRepo.AssignToUser(ctx, user2, "admin")
+	require.NoError(t, err)
+	assert.True(t, changed,
+		"after deleting the admin user, a second user must be assignable to admin")
+}
+
+// TestPGRoleRepository_Integration_DeleteRole_RestrictedWhenAssigned verifies
+// that deleting a role that has active assignments is blocked by the FK
+// RESTRICT constraint (fk_role_assignments_role ON DELETE RESTRICT, migration 020).
+func TestPGRoleRepository_Integration_DeleteRole_RestrictedWhenAssigned(t *testing.T) {
+	b := setupRoleRepoPGFull(t)
+	ctx := context.Background()
+
+	role := newTestRoleNoPerms("restrict-test-" + uuid.NewString()[:8])
+	require.NoError(t, b.roleRepo.Create(ctx, role))
+
+	userID := createTestUser(t, ctx, b.userRepo)
+	_, err := b.roleRepo.AssignToUser(ctx, userID, role.ID)
+	require.NoError(t, err)
+
+	// Attempt to delete the role directly via SQL — FK RESTRICT must block this.
+	_, execErr := b.pool.Exec(ctx, "DELETE FROM roles WHERE id = $1", role.ID)
+	require.Error(t, execErr,
+		"deleting a role with active assignments must fail (FK RESTRICT)")
+	assert.Contains(t, execErr.Error(), "23503",
+		"error must contain FK violation code 23503")
 }
