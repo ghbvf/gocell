@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.sample.bootstrap.v1.request",
+  "type": "object",
+  "properties": {
+    "message": { "type": "string" }
+  },
+  "required": ["message"],
+  "additionalProperties": false
+}

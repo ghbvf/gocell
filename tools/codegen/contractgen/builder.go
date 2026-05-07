@@ -99,8 +99,11 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	// declared request schema). GET/DELETE may declare schemaRefs.request as
 	// metadata (e.g. "no body" placeholder), but the generated handler reads no
 	// body and the validator wiring would be dead code (init-time compile cost +
-	// binary bloat). HANDLER-NO-SCHEMA-FOR-NOBODY-01 archtest enforces that
-	// no-body handlers contain no requestSchemaJSON literal.
+	// binary bloat). The `endpointSpec.HasBody` gate here combined with the
+	// `if .RequestSchemaJSON` template gate is the single funnel — generated
+	// no-body handlers cannot contain a requestSchemaJSON literal, byte-pinned
+	// by the http_order_get_v1 / http_order_list_v1 / synth_http_full handler
+	// goldens in render_test.go.
 	// ref: oapi-codegen — request validator emitted only for operations with
 	// a requestBody.
 	if contract.SchemaRefs.Request != "" && endpointSpec.HasBody {

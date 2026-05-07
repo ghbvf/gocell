@@ -440,6 +440,59 @@ func TestRender_Golden_Synth_HTTPFull(t *testing.T) {
 	}
 }
 
+// TestRender_Golden_Synth_HTTPAuthModes tests the auth-modes synth fixture
+// (Public + Bootstrap branches of handler.tmpl). Pinning these golden bytes
+// prevents silent removal of branch-specific literals: Public NewHandler with
+// no policy arg, Bootstrap nil-bootstrapAuth panic, and the schema-compile
+// panic on each branch.
+func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	cases := []struct {
+		contractID string
+		goldenKey  string
+	}{
+		{"http.sample.public.v1", "synth_http_auth_modes_public"},
+		{"http.sample.bootstrap.v1", "synth_http_auth_modes_bootstrap"},
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
+	for _, tc := range cases {
+		t.Run(tc.contractID, func(t *testing.T) {
+			contract := p.Contracts[tc.contractID]
+			if contract == nil {
+				t.Fatalf("%s not found in synth fixture", tc.contractID)
+			}
+			spec, err := BuildContractSpec(absTestDir, p, tc.contractID)
+			if err != nil {
+				t.Fatalf("BuildContractSpec: %v", err)
+			}
+			for _, outFile := range outputs {
+				t.Run(outFile, func(t *testing.T) {
+					content := renderFile(t, spec, outFile)
+					goldenFile := goldenFilePath(tc.goldenKey, outFile)
+
+					if *updateGolden {
+						writeGolden(t, goldenFile, content)
+						return
+					}
+					assertGolden(t, goldenFile, content)
+				})
+			}
+		})
+	}
+}
+
 // TestRender_Golden_Synth_Event tests the event synth fixture.
 func TestRender_Golden_Synth_Event(t *testing.T) {
 	testDir := filepath.Join("testdata", "synth", "synth_event")

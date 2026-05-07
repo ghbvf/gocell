@@ -63,9 +63,17 @@ Together they replace the fragile "single AST scan reverse-inferring everything"
 
 `tools/codegen/contractgen/doc.go` is rewritten as the one-page maintainer map: the artifact-by-kind matrix, the typed-envelope naming convention, the cell attribution constraint (existing), and pointers to CH-04 / CH-06 / archtest. The previous 30-line stub is replaced wholesale.
 
-### D5. archtest `HANDLER-NO-INLINE-LIMIT-PARSE-01`
+### D5. funnel-first 守门：pagination shape relax + golden 字节锁定
 
-`tools/archtest/handler_inline_limit_parse_test.go` walks `generated/contracts/http/**/handler_gen.go` and flags any function whose body contains both `strconv.ParseInt` and a `"limit"` string literal. The two-condition match keeps the rule from firing on legitimate generic `int64` query parsing for unrelated params. Guards the generator template against regressing to per-param limit parsing — the symptom of D2's old behavior.
+PR #403 当时引入了 `tools/archtest/handler_invariants_test.go::TestHandlerNoInlineLimitParse`（archtest `HANDLER-NO-INLINE-LIMIT-PARSE-01`），扫描 `generated/contracts/http/**/handler_gen.go` 中同时含 `strconv.ParseInt` 与 `"limit"` 字面量的函数体，作为 generator 退化到 per-param inline limit 解析的兜底守卫。
+
+PR-FUNNEL-02（参见 `docs/plans/202605070431-pr403-funnel-fix-roadmap.md` §7）把这条 archtest 连同同主题 4 条（HANDLER-NO-SCHEMA-FOR-NOBODY-01 / HANDLER-PATH-QUERY-LENGTH-VALIDATION-01 / HANDLER-VALIDATOR-FAIL-FAST-01 / HANDLER-POLICY-REQUIRED-01）整体迁移到单一 funnel：
+
+- **Funnel 入口**：`tools/codegen/contractgen/templates/handler.tmpl` 已通过 pagination shape relax 走 `pkg/httputil.ParsePageParams`，per-param inline limit 解析无生成路径；`if .RequestSchemaJSON` template gate + builder `methodHasBody && SchemaRefs.Request != ""` 联合守 schema 嵌入；schema-compile panic 在 Auth/Public/Bootstrap 三分支均硬编为 literal；policy 参数按 `not .AuthPublic` 模板条件出现。
+- **Funnel 出口**：`tools/codegen/contractgen/render_test.go` 的 8 个 golden（http_order_create/get/list、synth_http_minimal/full/keyword_conflict、synth_http_auth_modes_public/bootstrap）字节锁定 funnel 三分支全部关键 literal。任意分支 panic literal 或 policy 参数声明被改动 → 至少一个 golden diff 失败。
+- **Funnel 性质**：golden 字节级 diff 严格强于 archtest AST 扫已生成代码 —— 任何模板改动都会反映在 golden 字节差异中，且无 false positive。
+
+主流对照（K8s / CockroachDB / Linux / Rust / Go 工具链）都接受 funnel 不到的残留平铺管理；handler 这五条约束已 100% funnel 化，archtest 散点守卫（含 fixture 目录 4 个）已删除。
 
 ### D6. 5xx wire/log 隔离强化
 
