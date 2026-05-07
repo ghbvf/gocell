@@ -7,7 +7,7 @@
 ## 概览
 
 - archtest 文件总数：72
-- archtest INVARIANT 锚点数：173
+- archtest INVARIANT 锚点数：174
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
@@ -82,6 +82,7 @@
 | `KERNEL-CLOCK-RESET-RELATIVE-PROD-01` | `clock_invariants_test.go` | 793 | kernel |
 | `KERNEL-METADATA-NO-WIRE-01` | `kernel_metadata_no_wire_test.go` | 1 | kernel |
 | `KERNEL-POOLSTATS-LOCATION-01` | `kernel_poolstats_location_test.go` | 1 | kernel |
+| `KERNEL-POOLSTATS-LOCATION-01` | `kernel_poolstats_location_test.go` | 2 | kernel |
 | `LAYER-01` | `archtest_test.go` | 46 | layer |
 | `LAYER-01` | `lintgate_smoke_test.go` | 6 | layer |
 | `LAYER-06` | `archtest_test.go` | 94 | layer |
@@ -121,8 +122,8 @@
 | `OUTBOX-SERVICE-05` | `outbox_invariants_test.go` | 823 | outbox |
 | `OUTBOX-TOPIC-FAILOPEN-01` | `outbox_invariants_test.go` | 1253 | outbox |
 | `OUTBOX-TOPIC-FAILOPEN-01` | `outbox_invariants_test.go` | 1469 | outbox |
-| `PANIC-REDACT-01` | `panic_invariants_test.go` | 27 | panic |
-| `PANIC-REGISTERED-01` | `panic_invariants_test.go` | 91 | panic |
+| `PANIC-REDACT-01` | `panic_invariants_test.go` | 26 | panic |
+| `PANIC-REGISTERED-01` | `panic_invariants_test.go` | 90 | panic |
 | `PATCH-OPTIONAL-BOOL-POINTER-01` | `patch_optional_bool_pointer_test.go` | 1 | patch |
 | `PG-CONSTRUCTOR-MUST-FREE-01` | `postgres_constructor_error_first_test.go` | 3 | pg |
 | `PGQUERY-01` | `pgquery_boundary_test.go` | 20 | pgquery |
