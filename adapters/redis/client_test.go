@@ -255,7 +255,7 @@ func TestNewClient_PasswordRequired_FailClosed(t *testing.T) {
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
 		assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
-		assert.Contains(t, err.Error(), "Password required")
+		assert.Contains(t, err.Error(), "connection credential required")
 	})
 
 	t.Run("AllowUnsafeNoPassword opt-in passes validation", func(t *testing.T) {
@@ -291,7 +291,7 @@ func TestNewClient_PasswordRequired_FailClosed(t *testing.T) {
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
 		assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
-		assert.Contains(t, err.Error(), "Password required")
+		assert.Contains(t, err.Error(), "connection credential required")
 	})
 }
 

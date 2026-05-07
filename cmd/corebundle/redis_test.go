@@ -64,6 +64,60 @@ func TestLoadRedisConfigFromEnv_ConfiguredParsesPasswordAndDB(t *testing.T) {
 	assert.Equal(t, 3, cfg.DB)
 }
 
+// TestLoadRedisConfigFromEnv_AllowUnsafeNoPasswordMatrix pins the
+// AllowUnsafeNoPassword derivation. The flag mirrors requiresDistributedReplay
+// inverted: production multi-pod (real + !single-pod) demands an explicit
+// password; everything else (dev, real + single-pod) auto-opts-in to
+// unauthenticated local Redis (testcontainers, e2e compose, single-pod
+// production with a localhost Redis).
+func TestLoadRedisConfigFromEnv_AllowUnsafeNoPasswordMatrix(t *testing.T) {
+	tests := []struct {
+		name            string
+		topo            bootstrap.Topology
+		wantAllowUnsafe bool
+		wantConfigDescr string
+	}{
+		{
+			name:            "dev mode allows missing password",
+			topo:            bootstrap.Topology{AdapterMode: "dev"},
+			wantAllowUnsafe: true,
+			wantConfigDescr: "dev never requires production credentials",
+		},
+		{
+			name: "real + single-pod allows missing password (e2e/single-pod prod)",
+			topo: bootstrap.Topology{
+				AdapterMode:               "real",
+				StorageBackend:            "postgres",
+				SinglePodReplayProtection: true,
+			},
+			wantAllowUnsafe: true,
+			wantConfigDescr: "single-pod real with localhost Redis is a recognized e2e shape",
+		},
+		{
+			name: "real multi-pod fails closed without password",
+			topo: bootstrap.Topology{
+				AdapterMode:    "real",
+				StorageBackend: "postgres",
+			},
+			wantAllowUnsafe: false,
+			wantConfigDescr: "production multi-pod must set GOCELL_REDIS_PASSWORD",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(envRedisAddr, "127.0.0.1:6379")
+			t.Setenv(envRedisPassword, "")
+			t.Setenv(envRedisDB, "")
+
+			cfg, configured, err := loadRedisConfigFromEnv(tt.topo)
+			require.NoError(t, err)
+			assert.True(t, configured)
+			assert.Equal(t, tt.wantAllowUnsafe, cfg.AllowUnsafeNoPassword,
+				"AllowUnsafeNoPassword should be %v: %s", tt.wantAllowUnsafe, tt.wantConfigDescr)
+		})
+	}
+}
+
 func TestLoadRedisConfigFromEnv_InvalidDBFailFast(t *testing.T) {
 	tests := []struct {
 		name string

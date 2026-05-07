@@ -222,17 +222,17 @@ func validateConfig(cfg Config) error {
 				"redis: Config.DB is not supported in cluster mode (no SELECT command)")
 		}
 	}
-	// B2-A-28: fail-closed on missing Password. The dev/test escape hatch is
-	// the explicit AllowUnsafeNoPassword flag — composition root sets it
-	// only when topology indicates a non-production deployment. Without
-	// this gate a missing GOCELL_REDIS_PASSWORD env silently produces an
-	// unauthenticated connection in production. URL-form addrs (rediss://
-	// user:pass@host) are not parsed here; for those topologies the caller
-	// must set Password explicitly so validation has a value to inspect, or
-	// opt in via AllowUnsafeNoPassword.
+	// B2-A-28: fail-closed on missing connection credential. The dev/test
+	// escape hatch is the explicit AllowUnsafeNoPassword flag — composition
+	// root sets it only when topology indicates a non-production deployment.
+	// Without this gate a missing GOCELL_REDIS_PASSWORD env silently
+	// produces an unauthenticated connection in production. URL-form addrs
+	// (rediss://user:pass@host) are not parsed here; for those topologies
+	// the caller must set the credential explicitly so validation has a
+	// value to inspect, or opt in via AllowUnsafeNoPassword.
 	if cfg.Password == "" && !cfg.AllowUnsafeNoPassword {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			"redis: Config.Password required (set AllowUnsafeNoPassword=true for dev/test only)")
+			"redis: connection credential required (set AllowUnsafeNoPassword=true for dev/test only)")
 	}
 	return nil
 }

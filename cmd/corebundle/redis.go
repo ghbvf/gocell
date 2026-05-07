@@ -93,7 +93,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 			Mode:                  adapterredis.ModeCluster,
 			ClusterAddrs:          clusterAddrs,
 			Password:              os.Getenv(envRedisPassword),
-			AllowUnsafeNoPassword: !topo.RequireProductionControlPlane(),
+			AllowUnsafeNoPassword: !requiresDistributedReplay(topo),
 		}, true, nil
 	}
 
@@ -123,7 +123,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 		Addr:                  addr,
 		Password:              os.Getenv(envRedisPassword),
 		DB:                    db,
-		AllowUnsafeNoPassword: !topo.RequireProductionControlPlane(),
+		AllowUnsafeNoPassword: !requiresDistributedReplay(topo),
 	}, true, nil
 }
 

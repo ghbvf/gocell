@@ -32,20 +32,28 @@ func TestKeyNamespace_Validate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.ns.Validate()
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error for ns=%q, got nil", string(tt.ns))
-				}
-				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
-					t.Fatalf("expected error containing %q, got %v", tt.errSub, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error for ns=%q: %v", string(tt.ns), err)
-			}
+			assertNamespaceValidation(t, tt.ns, tt.wantErr, tt.errSub)
 		})
+	}
+}
+
+// assertNamespaceValidation checks the outcome of Validate against the
+// table case's expectations. Extracted from the test loop so the loop
+// body stays under SonarCloud's 15-cognitive-complexity threshold.
+func assertNamespaceValidation(t *testing.T, ns KeyNamespace, wantErr bool, errSub string) {
+	t.Helper()
+	err := ns.Validate()
+	if !wantErr {
+		if err != nil {
+			t.Fatalf("unexpected error for ns=%q: %v", string(ns), err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("expected error for ns=%q, got nil", string(ns))
+	}
+	if errSub != "" && !strings.Contains(err.Error(), errSub) {
+		t.Fatalf("expected error containing %q, got %v", errSub, err)
 	}
 }
 
