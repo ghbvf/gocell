@@ -11,6 +11,30 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+// findAllGoFilesInDir walks dir and returns all .go files (including _test.go).
+// Skips vendor, .git, generated, and testdata directories.
+func findAllGoFilesInDir(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "vendor", ".git", "generated", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files, err
+}
+
 // receiverTypeName extracts the base type name from a receiver type expression.
 // Handles *T (StarExpr), T (Ident), and T[P] (IndexExpr generic).
 func receiverTypeName(expr ast.Expr) string {
