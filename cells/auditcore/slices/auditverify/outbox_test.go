@@ -54,7 +54,8 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build a small valid chain.
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
@@ -87,7 +88,8 @@ func TestService_VerifyChain_OutboxWriteError_ReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build a valid chain so we reach the outbox write path.
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
@@ -110,7 +112,8 @@ func TestService_VerifyChain_WithTxRunner_RunsInTx(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 	require.NoError(t, err)
 
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
@@ -132,7 +135,8 @@ func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(ftx))
 	require.NoError(t, err)
 
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
@@ -163,7 +167,8 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
@@ -181,7 +186,8 @@ func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
-	chain := domain.NewHashChain(testHMACKey)
+	chain, err := domain.NewHashChain(testHMACKey)
+	require.NoError(t, err)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		if i == 1 {

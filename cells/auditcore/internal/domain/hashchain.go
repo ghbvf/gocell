@@ -5,8 +5,26 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// minHMACKeyBytes is the smallest HMAC-SHA256 key the audit chain accepts.
+// Keys shorter than the hash output (32 bytes) make the HMAC strength itself
+// the weakest link of the audit chain, which violates RFC 2104 §3 and
+// NIST SP 800-107 / FIPS 198-1 — they are rejected at construction time.
+//
+// INVARIANT: AUDIT-HMAC-KEY-MINLEN-01
+// Enforcement: Go type system — NewHashChain returns (*HashChain, error),
+// and every caller (cell.Init → auditappend.NewService / auditverify.NewService)
+// is forced to handle the error. Per CLAUDE.md "新增 invariant 决策原则" step 2
+// (type system 自然拦), no archtest layer is added: no caller can construct a
+// HashChain without going through this function. Regression test:
+// TestNewHashChain_KeyLength (table-driven) + TestAuditCore_HMACKeyTooShort
+// (end-to-end propagation through the slice wrapper).
+const minHMACKeyBytes = 32
 
 // HashChain maintains an append-only, HMAC-linked chain of AuditEntry records.
 // Each entry's Hash is HMAC-SHA256(prevHash + entry fields) using the chain's
@@ -17,11 +35,24 @@ type HashChain struct {
 }
 
 // NewHashChain creates a HashChain with the given HMAC key.
-func NewHashChain(hmacKey []byte) *HashChain {
+//
+// HMAC-SHA256 keys must be at least 32 bytes (RFC 2104 §3, NIST SP 800-107):
+// keys shorter than the hash output collapse HMAC's security strength, so this
+// function returns errcode.ErrValidationFailed with minimumBytes / actualBytes
+// details (the key bytes themselves are never echoed back).
+func NewHashChain(hmacKey []byte) (*HashChain, error) {
+	if len(hmacKey) < minHMACKeyBytes {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit hmac key too short",
+			errcode.WithDetails(
+				slog.Int("minimumBytes", minHMACKeyBytes),
+				slog.Int("actualBytes", len(hmacKey)),
+			))
+	}
 	return &HashChain{
 		hmacKey: hmacKey,
 		entries: make([]*AuditEntry, 0),
-	}
+	}, nil
 }
 
 // Append adds a new entry to the chain. It computes the HMAC-SHA256 hash
