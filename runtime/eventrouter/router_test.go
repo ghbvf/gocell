@@ -530,7 +530,11 @@ func wrap(sub outbox.Subscriber) *outbox.SubscriberWithMiddleware {
 	if err != nil {
 		panic(err)
 	}
-	return &outbox.SubscriberWithMiddleware{Inner: sub, ConsumerBase: cb}
+	swm, err := outbox.NewSubscriberWithMiddleware(sub, cb)
+	if err != nil {
+		panic(err)
+	}
+	return swm
 }
 
 type routerTestClaimer struct{}

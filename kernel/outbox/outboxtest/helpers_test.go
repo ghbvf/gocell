@@ -2,6 +2,7 @@ package outboxtest
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -228,33 +229,70 @@ func (s *immediateReadySub) Ready(_ outbox.Subscription) <-chan struct{} {
 	return ch
 }
 
-func TestWaitForSubscription_WaitsForReadyChannel(t *testing.T) {
-	// Behavioral assertion: with a pre-closed Ready channel, the select arm
-	// for sub.Ready() must win, returning true. We assert the select outcome
-	// directly rather than measuring wall-clock elapsed — CI GC/scheduling
-	// jitter could make elapsed exceed subscribeReadyTimeout (50ms) even on
-	// the fast path, producing false flakes (OUTBOX-READY-TEST-TIMING-FLAKE).
+func TestWaitForSubscription_ReturnsOnReadyClose(t *testing.T) {
+	// Behavioral assertion: with a pre-closed Ready channel, waitForSubscription
+	// returns without invoking t.Fatalf. We verify completion directly rather
+	// than measuring wall-clock elapsed — CI GC/scheduling jitter could exceed
+	// subscribeReadyTimeout (50ms) even on the fast path (the
+	// OUTBOX-READY-TEST-TIMING-FLAKE root cause).
 	sub := &immediateReadySub{}
 	ctx := context.Background()
-	if !waitForSubscription(t, ctx, sub, "any.topic", "") {
-		t.Fatalf("expected fast Ready path (pre-closed channel), got timeout fallthrough")
-	}
+	waitForSubscription(t, ctx, sub, "any.topic", "")
 }
 
-func TestWaitForSubscription_MiddlewareWrappedSubscriber_UsesSetup(t *testing.T) {
-	// SubscriberWithMiddleware delegates Setup/Ready to Inner. Since
-	// SubscriberWithMiddleware no longer implements outbox.Subscriber
-	// (Subscribe method removed to prevent lift→discard footgun), we pass
-	// Inner to waitForSubscription directly to verify the delegation path.
-	// When Inner.Ready returns a pre-closed channel, the fast path is taken.
-	inner := &immediateReadySub{} // Ready() returns pre-closed channel
-	wrapped := &outbox.SubscriberWithMiddleware{
-		Inner:      inner,
-		Middleware: nil,
+// neverReadySub satisfies outbox.Subscriber but its Ready channel never closes.
+// Used to verify waitForSubscription's adapter-contract-violation t.Fatalf path.
+type neverReadySub struct {
+	fakePubSub
+}
+
+func (s *neverReadySub) Ready(_ outbox.Subscription) <-chan struct{} {
+	return make(chan struct{})
+}
+
+// recordingTB captures Fatalf without aborting the parent test. We mimic the
+// real *testing.T contract: Fatalf records the message, then runtime.Goexit
+// terminates the goroutine — same control-flow as testing.T.Fatalf so the
+// caller sees identical semantics.
+type recordingTB struct {
+	testing.TB
+	mu      sync.Mutex
+	fatal   bool
+	fatalFmt string
+}
+
+func (r *recordingTB) Helper() {}
+
+func (r *recordingTB) Fatalf(format string, args ...any) {
+	r.mu.Lock()
+	r.fatal = true
+	r.fatalFmt = format
+	r.mu.Unlock()
+	runtime.Goexit()
+}
+
+func TestWaitForSubscription_NeverReadyFailsTest(t *testing.T) {
+	// Behavioral assertion: a Subscriber whose Ready channel never closes is
+	// a contract violation; waitForSubscription must surface it as t.Fatalf
+	// (not silently continue, which would risk first-message delivery loss).
+	// Run inside a goroutine so runtime.Goexit (Fatalf semantics) does not
+	// abort this test.
+	sub := &neverReadySub{}
+	rt := &recordingTB{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		waitForSubscription(rt, context.Background(), sub, "any.topic", "")
+	}()
+	<-done
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !rt.fatal {
+		t.Fatal("expected waitForSubscription to call Fatalf when Ready never closes")
 	}
-	ctx := context.Background()
-	if !waitForSubscription(t, ctx, wrapped.Inner, "test.topic", "") {
-		t.Fatalf("middleware-wrapped subscriber: expected fast Ready path (Setup+Ready), got timeout fallthrough")
+	if !strings.Contains(rt.fatalFmt, "Ready must close") {
+		t.Fatalf("expected fatal message to mention contract violation, got %q", rt.fatalFmt)
 	}
 }
 

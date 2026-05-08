@@ -706,7 +706,12 @@ type SubscriberIntakeStopper interface {
 // This prevents the lift→discard footgun where callers could assign
 // *SubscriberWithMiddleware to outbox.Subscriber and bypass the business
 // middleware chain. Adapter-layer tests that need raw SubscriberHandler delivery
-// must call Inner.Subscribe directly.
+// must call the inner subscriber directly.
+//
+// Construction is funneled through NewSubscriberWithMiddleware: fields are
+// unexported so struct literals cannot create an invalid (nil-inner /
+// nil-ConsumerBase) instance. This mirrors the OUTBOX-SERVICE-01 ctor
+// fail-fast pattern that 12 outbox-bound services already follow.
 //
 // ref: ThreeDotsLabs/watermill message/router.go — handleMessage applies
 // middleware then calls handler; Ack/Nack monopoly stays in router.
@@ -715,35 +720,53 @@ type SubscriberIntakeStopper interface {
 // ref: IBM/sarama consumer_group.go — ConsumeClaim owns MarkMessage;
 // business handler in ConsumeClaim body never calls MarkMessage directly.
 type SubscriberWithMiddleware struct {
-	Inner        Subscriber
-	Middleware   []SubscriptionMiddleware
-	ConsumerBase *ConsumerBase
+	inner        Subscriber
+	middleware   []SubscriptionMiddleware
+	consumerBase *ConsumerBase
 }
 
-// Setup delegates topology pre-declaration to Inner.
+// NewSubscriberWithMiddleware constructs a SubscriberWithMiddleware. inner and
+// cb are required (nil → error); mw is optional. The constructor is the only
+// path to a valid instance — fields are unexported so a struct literal cannot
+// bypass the nil-guards. Methods (Setup / Ready / SubscribeEntry / Close /
+// StopIntake) therefore delegate without runtime nil checks; the boundary is
+// closed at construction time.
+func NewSubscriberWithMiddleware(inner Subscriber, cb *ConsumerBase, mw ...SubscriptionMiddleware) (*SubscriberWithMiddleware, error) {
+	if inner == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"outbox: NewSubscriberWithMiddleware requires non-nil inner Subscriber")
+	}
+	if cb == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"outbox: NewSubscriberWithMiddleware requires non-nil ConsumerBase")
+	}
+	return &SubscriberWithMiddleware{inner: inner, consumerBase: cb, middleware: mw}, nil
+}
+
+// Setup delegates topology pre-declaration to the inner subscriber.
 func (s *SubscriberWithMiddleware) Setup(ctx context.Context, sub Subscription) error {
-	return s.Inner.Setup(ctx, sub)
+	return s.inner.Setup(ctx, sub)
 }
 
-// Ready delegates to Inner.
+// Ready delegates to the inner subscriber.
 func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
-	return s.Inner.Ready(sub)
+	return s.inner.Ready(sub)
 }
 
 // SubscribeEntry is the entry point for callers that hold an EntryHandler
 // (e.g. eventrouter.Router). It applies the full pipeline:
-// business middleware chain → ConsumerBase.Wrap → observability restore → Inner.Subscribe.
+// business middleware chain → ConsumerBase.Wrap → observability restore → inner Subscribe.
 //
-// The business middleware chain is applied via slices.Backward(s.Middleware):
-// Middleware[0] is the outermost layer (first to wrap, last to return) and
-// Middleware[len-1] is the innermost layer (adjacent to ConsumerBase). This is
+// The business middleware chain is applied via slices.Backward(s.middleware):
+// middleware[0] is the outermost layer (first to wrap, last to return) and
+// middleware[len-1] is the innermost layer (adjacent to ConsumerBase). This is
 // the opposite of chi/Kratos forward composition where index 0 is applied last.
-// Example with Middleware = [A, B, C]: execution order is A → B → C → handler.
+// Example with middleware = [A, B, C]: execution order is A → B → C → handler.
 //
 // This method is intentionally not part of the Subscriber interface: it accepts
 // the business-layer EntryHandler rather than the framework-layer SubscriberHandler,
 // enforcing the boundary at the type level. eventrouter.Router calls SubscribeEntry
-// directly; Subscriber adapters (rabbitmq, eventbus) call Inner.Subscribe.
+// directly; Subscriber adapters (rabbitmq, eventbus) implement Subscribe directly.
 func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subscription, h EntryHandler) error {
 	if err := sub.Validate(); err != nil {
 		// fmt.Errorf with %w is intentional here: sub.Validate() already
@@ -754,45 +777,36 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 		// the operation site visible in the error chain.
 		return fmt.Errorf("outbox: SubscriberWithMiddleware: %w", err)
 	}
-	if s.ConsumerBase == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			"outbox: SubscriberWithMiddleware requires ConsumerBase",
-			errcode.WithDetails(
-				slog.String("topic", sub.Topic),
-				slog.String("consumer_group", sub.ConsumerGroup),
-				slog.String("contract_id", sub.ContractID),
-			))
-	}
 
 	// Step 1: apply business middleware chain (EntryHandler → EntryHandler).
 	wrapped := h
-	for _, mw := range slices.Backward(s.Middleware) {
+	for _, mw := range slices.Backward(s.middleware) {
 		wrapped = mw(sub, wrapped)
 	}
 
 	// Step 2: ConsumerBase converts EntryHandler → SubscriberHandler, injecting
 	// idempotency Settlement.
-	subHandler := s.ConsumerBase.Wrap(sub, wrapped)
+	subHandler := s.consumerBase.Wrap(sub, wrapped)
 
 	// Step 3: observability restore — built-in OUTERMOST wrapper so all layers
-	// (business middleware, ConsumerBase, Inner.Subscribe) see a populated ctx.
+	// (business middleware, ConsumerBase, inner Subscribe) see a populated ctx.
 	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
 		return subHandler(entry.Observability.RestoreToContext(reqCtx), entry)
 	}
-	return s.Inner.Subscribe(ctx, sub, withRestore)
+	return s.inner.Subscribe(ctx, sub, withRestore)
 }
 
 // Close delegates to the inner subscriber, forwarding the ctx unchanged so
 // the inner implementation can honor the shutdown budget.
 func (s *SubscriberWithMiddleware) Close(ctx context.Context) error {
-	return s.Inner.Close(ctx)
+	return s.inner.Close(ctx)
 }
 
-// StopIntake forwards to Inner if it implements SubscriberIntakeStopper.
-// Returns nil if Inner does not implement the optional interface (graceful
-// degradation). Safe to call multiple times (idempotent, assuming Inner is).
+// StopIntake forwards to the inner subscriber if it implements
+// SubscriberIntakeStopper. Returns nil if it does not (graceful degradation).
+// Safe to call multiple times (idempotent, assuming inner is).
 func (s *SubscriberWithMiddleware) StopIntake(ctx context.Context) error {
-	stopper, ok := s.Inner.(SubscriberIntakeStopper)
+	stopper, ok := s.inner.(SubscriberIntakeStopper)
 	if !ok {
 		return nil
 	}

@@ -82,11 +82,8 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	}
 
 	attempts := 0
-	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:        inner,
-		Middleware:   consumerMiddlewares(shared),
-		ConsumerBase: consumerBase,
-	}
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(inner, consumerBase, consumerMiddlewares(shared)...)
+	require.NoError(t, err)
 	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			attempts++
@@ -124,11 +121,8 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 		ContractID: "event.config.entry-upserted.v1", ContractKind: "event", ContractTransport: "memory",
 	}
 
-	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:        inner,
-		Middleware:   consumerMiddlewares(shared),
-		ConsumerBase: consumerBase,
-	}
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(inner, consumerBase, consumerMiddlewares(shared)...)
+	require.NoError(t, err)
 	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{
