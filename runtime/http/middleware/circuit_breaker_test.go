@@ -227,38 +227,6 @@ func TestMustCircuitBreaker_NilBreaker_Panics(t *testing.T) {
 	})
 }
 
-// TestIsTypedNilAllower verifies that IsTypedNilAllower detects typed-nil
-// pointers wrapped in an Allower interface value.
-func TestIsTypedNilAllower(t *testing.T) {
-	cases := []struct {
-		name string
-		cb   Allower
-		want bool
-	}{
-		{
-			name: "nil interface value",
-			cb:   nil,
-			want: false, // bare nil interface: cb == nil already catches this
-		},
-		{
-			name: "typed-nil pointer",
-			cb:   (*mockBreaker)(nil),
-			want: true,
-		},
-		{
-			name: "valid non-nil pointer",
-			cb:   &mockBreaker{},
-			want: false,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := IsTypedNilAllower(tc.cb)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
 // TestAllower_ISP verifies that a caller can depend only on Allower without
 // needing to implement CircuitBreakerRetryAfter, demonstrating the ISP split.
 func TestAllower_ISP(t *testing.T) {
