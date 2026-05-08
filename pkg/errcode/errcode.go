@@ -86,10 +86,27 @@ const (
 	ErrAuthInvalidTokenIntent Code = "ERR_AUTH_INVALID_TOKEN_INTENT"
 
 	// Access-core cell error codes.
-	ErrAuthUserNotFound         Code = "ERR_AUTH_USER_NOT_FOUND"
-	ErrAuthUserDuplicate        Code = "ERR_AUTH_USER_DUPLICATE"
-	ErrAuthRoleNotFound         Code = "ERR_AUTH_ROLE_NOT_FOUND"
-	ErrAuthRoleDuplicate        Code = "ERR_AUTH_ROLE_DUPLICATE"
+	ErrAuthUserNotFound  Code = "ERR_AUTH_USER_NOT_FOUND"
+	ErrAuthUserDuplicate Code = "ERR_AUTH_USER_DUPLICATE"
+	// ErrAuthEmailDuplicate signals that a user write (Create or UpdateProfile)
+	// would collide with an existing email. Distinct from ErrAuthUserDuplicate,
+	// which targets username collision: clients see different remediation paths
+	// (change email vs change username) and the constraints can be violated
+	// independently. Maps to HTTP 409.
+	//
+	// ref: PostgreSQL idx_users_email partial unique constraint (017 migration)
+	// ref: ory/kratos identity store unique-violation error mapping
+	ErrAuthEmailDuplicate Code = "ERR_AUTH_EMAIL_DUPLICATE"
+	ErrAuthRoleNotFound   Code = "ERR_AUTH_ROLE_NOT_FOUND"
+	ErrAuthRoleDuplicate  Code = "ERR_AUTH_ROLE_DUPLICATE"
+	// ErrAuthConcurrentUpdate signals that an optimistic-concurrency UPDATE
+	// gated on `version = $n` matched zero rows because another writer advanced
+	// the version first. Distinct from ErrAuthUserNotFound: the row exists,
+	// just at a higher version. Caller must re-fetch and retry. Maps to HTTP 409.
+	//
+	// ref: kubernetes apimachinery resourceVersion conflict (StatusReasonConflict)
+	// ref: 022_users_add_version.sql + 018_sessions.sql version columns
+	ErrAuthConcurrentUpdate Code = "ERR_AUTH_CONCURRENT_UPDATE"
 	ErrAuthInvalidInput         Code = "ERR_AUTH_INVALID_INPUT"
 	ErrAuthUserLocked           Code = "ERR_AUTH_USER_LOCKED"
 	ErrAuthSessionInvalidInput  Code = "ERR_AUTH_SESSION_INVALID_INPUT"
