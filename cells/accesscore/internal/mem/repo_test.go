@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -91,9 +92,10 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 			wantInternal: `username="missing"`,
 		},
 		{
-			name: "update",
+			name: "apply patch not found",
 			call: func() error {
-				return repo.Update(ctx, &domain.User{ID: "usr-missing", Username: "missing"})
+				_, err := repo.ApplyPatch(ctx, ports.UserPatch{ID: "usr-missing", CurrentVersion: 1})
+				return err
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
 			wantInternal: "id=usr-missing",

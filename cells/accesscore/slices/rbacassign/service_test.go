@@ -230,9 +230,12 @@ func TestService_Revoke_InvalidatesSessions(t *testing.T) {
 
 	require.NoError(t, svc.Revoke(ctx, "usr-1", "admin"))
 
-	s, err := sessionRepo.GetByID(ctx, "sess-1")
-	require.NoError(t, err)
-	assert.True(t, s.IsRevoked(), "session must be revoked after role change")
+	// After P2b soft-revoke: revoked sessions are invisible via GetByID.
+	_, revokeErr := sessionRepo.GetByID(ctx, "sess-1")
+	require.Error(t, revokeErr, "session must be invisible after soft-revoke")
+	var ec *errcode.Error
+	require.ErrorAs(t, revokeErr, &ec)
+	assert.Equal(t, errcode.ErrSessionNotFound, ec.Code, "session must return ErrSessionNotFound")
 }
 
 func TestService_Assign_InvalidatesSessions(t *testing.T) {
@@ -244,9 +247,12 @@ func TestService_Assign_InvalidatesSessions(t *testing.T) {
 
 	require.NoError(t, svc.Assign(ctx, "usr-2", "admin"))
 
-	s, err := sessionRepo.GetByID(ctx, "sess-2")
-	require.NoError(t, err)
-	assert.True(t, s.IsRevoked(), "session must be revoked after role assignment")
+	// After P2b soft-revoke: revoked sessions are invisible via GetByID.
+	_, revokeErr2 := sessionRepo.GetByID(ctx, "sess-2")
+	require.Error(t, revokeErr2, "session must be invisible after soft-revoke")
+	var ec2 *errcode.Error
+	require.ErrorAs(t, revokeErr2, &ec2)
+	assert.Equal(t, errcode.ErrSessionNotFound, ec2.Code, "session must return ErrSessionNotFound")
 }
 
 // failingSessionRepo returns an error on RevokeByUserID to test fail-closed behavior.
@@ -306,9 +312,12 @@ func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 			svc := mustNewService(t, roleRepo, sessionRepo, slog.Default())
 			require.NoError(t, svc.Assign(context.Background(), tc.userID, tc.roleID))
 
-			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
-			require.NoError(t, err)
-			assert.True(t, s.IsRevoked(), "demo mode: session must be revoked after Assign")
+			// After P2b soft-revoke: revoked sessions are invisible via GetByID.
+			_, revokeErr := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
+			require.Error(t, revokeErr, "session must be invisible after soft-revoke")
+			var ec *errcode.Error
+			require.ErrorAs(t, revokeErr, &ec)
+			assert.Equal(t, errcode.ErrSessionNotFound, ec.Code, "demo mode: session must return ErrSessionNotFound after Assign")
 		})
 	}
 }
@@ -339,9 +348,12 @@ func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
 			svc := mustNewService(t, roleRepo, sessionRepo, slog.Default())
 			require.NoError(t, svc.Revoke(context.Background(), tc.userID, tc.roleID))
 
-			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
-			require.NoError(t, err)
-			assert.True(t, s.IsRevoked(), "demo mode: session must be revoked after Revoke")
+			// After P2b soft-revoke: revoked sessions are invisible via GetByID.
+			_, revokeErr := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
+			require.Error(t, revokeErr, "session must be invisible after soft-revoke")
+			var ec *errcode.Error
+			require.ErrorAs(t, revokeErr, &ec)
+			assert.Equal(t, errcode.ErrSessionNotFound, ec.Code, "demo mode: session must return ErrSessionNotFound after Revoke")
 		})
 	}
 }

@@ -141,6 +141,16 @@ type LoginInput struct {
 }
 
 // Login authenticates a user and returns a JWT token pair.
+//
+// The credential-check uses GetByUsernameForUpdate (SELECT … FOR UPDATE inside
+// the TxRunner) to acquire a row-level write lock, preventing the P1#1a race
+// where two concurrent logins could both pass the IsLocked check before either
+// commits a new session.
+//
+// Session persistence, refresh issuance, and event emission are delegated to
+// persistSessionWithRefresh which handles noop-tx cleanup compensation.
+//
+// ref: ory/kratos persister_session.go login flow FOR UPDATE pattern
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
@@ -149,21 +159,31 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, err
 	}
 
-	user, err := s.userRepo.GetByUsername(ctx, input.Username)
-	if err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	// Step 1: credential check inside a transaction with FOR UPDATE lock.
+	var user *domain.User
+	var minted sessionmint.Result
+	var sessionID string
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		u, err := s.userRepo.GetByUsernameForUpdate(txCtx, input.Username)
+		if err != nil {
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+		}
+		if u.IsLocked() {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(input.Password)); err != nil {
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+		}
+		user = u
+		return nil
+	}); err != nil {
+		return dto.TokenPair{}, err
 	}
 
-	if user.IsLocked() {
-		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
-	}
-
-	sessionID := uuid.NewString()
-	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
+	// Step 2: mint access token (outside the FOR UPDATE tx: crypto ops don't need the lock).
+	sessionID = uuid.NewString()
+	var err error
+	minted, err = sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
 		Clk:      s.clock,
@@ -178,6 +198,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, err
 	}
 
+	// Step 3: persist session + refresh + event (with noop-tx cleanup compensation).
 	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: create session: %w", err)

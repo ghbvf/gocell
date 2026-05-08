@@ -59,6 +59,10 @@ type User struct {
 	CreationSource        UserSource
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+	// Version is the optimistic-concurrency fencing token (ref: K8s apimachinery
+	// resourceVersion). Incremented by the repo on every successful write.
+	// Migration 022 initializes this column to 1 for all existing rows.
+	Version int64
 }
 
 // NewUser creates a new active User with the given timestamp.
@@ -81,6 +85,7 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 		CreationSource: UserSourceIdentity,
 		CreatedAt:      now,
 		UpdatedAt:      now,
+		Version:        1,
 	}, nil
 }
 

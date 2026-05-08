@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,6 +28,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// nowUTC returns the current wall-clock time in UTC.
+// Extracted for consistent usage across soft-revoke operations.
+func nowUTC() time.Time { return time.Now().UTC() }
+
 // Compile-time assertion: PGSessionRepository implements ports.SessionRepository.
 var _ ports.SessionRepository = (*PGSessionRepository)(nil)
 
@@ -35,10 +40,13 @@ const (
 INSERT INTO sessions (id, user_id, access_token, expires_at, revoked_at, created_at, version)
 VALUES ($1, $2, $3, $4, $5, $6, $7)`
 
+	// selectSessionByIDSQL only returns non-revoked sessions.
+	// Revoked sessions are retained in the table for audit/FK integrity but
+	// must not be visible to application read paths.
 	selectSessionByIDSQL = `
 SELECT id, user_id, access_token, expires_at, revoked_at, created_at, version
 FROM sessions
-WHERE id = $1`
+WHERE id = $1 AND revoked_at IS NULL`
 
 	// updateSessionSQL performs an optimistic-lock UPDATE: WHERE id=$1 AND version=$2.
 	// On success, version advances by 1.
@@ -50,13 +58,23 @@ UPDATE sessions
 SET access_token = $3, expires_at = $4, revoked_at = $5, version = version + 1
 WHERE id = $1 AND version = $2`
 
+	// revokeByIDAndOwnerSQL soft-deletes a session by setting revoked_at to now.
+	// RowsAffected==0 covers both "not found" and "wrong owner" (intentionally
+	// conflated to hide enumeration of other users' session IDs).
+	// Only touches rows where revoked_at IS NULL to be idempotent.
+	//
+	// ref: ory/kratos persister_session.go RevokeSession soft-revoke pattern
 	revokeByIDAndOwnerSQL = `
-DELETE FROM sessions
-WHERE id = $1 AND user_id = $2`
+UPDATE sessions
+SET revoked_at = $3
+WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`
 
+	// revokeByUserIDSQL soft-deletes all active sessions for a given user.
+	// Only touches rows where revoked_at IS NULL.
 	revokeByUserIDSQL = `
-DELETE FROM sessions
-WHERE user_id = $1`
+UPDATE sessions
+SET revoked_at = $2
+WHERE user_id = $1 AND revoked_at IS NULL`
 
 	deleteSessionSQL = `
 DELETE FROM sessions
@@ -220,14 +238,17 @@ func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Sessio
 	return nil
 }
 
-// RevokeByIDAndOwner atomically deletes a session only if both id and
-// ownerUserID match. Returns ErrSessionNotFound when the session does not
-// exist OR does not belong to the caller — the two cases are intentionally
-// conflated to hide enumeration of other users' session ids.
+// RevokeByIDAndOwner soft-revokes a session by setting revoked_at to now,
+// only if both id and ownerUserID match and the session is not already revoked.
+// Returns ErrSessionNotFound when the session does not exist OR does not belong
+// to the caller — the two cases are intentionally conflated to hide enumeration
+// of other users' session IDs.
 //
-// ref: Ory Kratos session/handler.go deleteMySession
+// ref: ory/kratos persister_session.go RevokeSession soft-revoke pattern
+// ref: ory/kratos session/handler.go deleteMySession ownership enforcement
 func (r *PGSessionRepository) RevokeByIDAndOwner(ctx context.Context, id, ownerUserID string) error {
-	ct, err := r.execCtx(ctx, revokeByIDAndOwnerSQL, id, ownerUserID)
+	now := nowUTC()
+	ct, err := r.execCtx(ctx, revokeByIDAndOwnerSQL, id, ownerUserID, now)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: revoke by id and owner", err)
 	}
@@ -241,10 +262,11 @@ func (r *PGSessionRepository) RevokeByIDAndOwner(ctx context.Context, id, ownerU
 	return nil
 }
 
-// RevokeByUserID deletes all sessions for a given user.
-// Returns the number of deleted rows and any query error.
+// RevokeByUserID soft-revokes all active sessions for a given user by setting
+// revoked_at to now. Already-revoked sessions are skipped (idempotent).
 func (r *PGSessionRepository) RevokeByUserID(ctx context.Context, userID string) error {
-	_, err := r.execCtx(ctx, revokeByUserIDSQL, userID)
+	now := nowUTC()
+	_, err := r.execCtx(ctx, revokeByUserIDSQL, userID, now)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: revoke by user id", err)
 	}

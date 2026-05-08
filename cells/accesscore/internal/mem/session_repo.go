@@ -54,7 +54,7 @@ func (r *SessionRepository) GetByID(_ context.Context, id string) (*domain.Sessi
 	defer r.mu.RUnlock()
 
 	s, ok := r.byID[id]
-	if !ok {
+	if !ok || s.RevokedAt != nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, msgSessionNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", id)))

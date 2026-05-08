@@ -268,11 +268,12 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		if err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-		applyUpdateFields(u, input, s.clock.Now())
-		if err := s.repo.Update(txCtx, u); err != nil {
+		patch := buildUpdatePatch(u, input, s.clock.Now())
+		updated, err := s.repo.ApplyPatch(txCtx, patch)
+		if err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-		user = u
+		user = updated
 		if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor}); err != nil {
 			return err
 		}
@@ -285,28 +286,30 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	return user, nil
 }
 
-// applyUpdateFields applies JSON-merge-patch semantics in-place on u: every
-// non-nil field in input overwrites the corresponding field on u. Pure
-// function — extracted from Update to keep that method's cognitive complexity
-// inside the 15-line CLAUDE.md budget once the RunInTx closure was added.
-func applyUpdateFields(u *domain.User, input UpdateInput, now time.Time) {
+// buildUpdatePatch converts UpdateInput into a UserPatch gated on u.Version.
+// Applies JSON-merge-patch semantics: only non-nil fields are included.
+// Pure function — extracted from Update to keep that method's cognitive
+// complexity inside the ≤15 budget.
+func buildUpdatePatch(u *domain.User, input UpdateInput, now time.Time) ports.UserPatch {
+	p := ports.UserPatch{
+		ID:             input.ID,
+		CurrentVersion: u.Version,
+		UpdatedAt:      now,
+	}
 	if input.Name != nil {
-		u.Username = *input.Name
+		p.Username = input.Name
 	}
 	if input.Email != nil {
-		u.Email = *input.Email
+		p.Email = input.Email
 	}
 	if input.Status != nil {
-		u.Status = domain.UserStatus(*input.Status)
+		s := domain.UserStatus(*input.Status)
+		p.Status = &s
 	}
 	if input.RequirePasswordReset != nil {
-		if *input.RequirePasswordReset {
-			u.MarkPasswordResetRequired(now)
-		} else {
-			u.ClearPasswordResetRequired(now)
-		}
+		p.PasswordResetRequired = input.RequirePasswordReset
 	}
-	u.UpdatedAt = now
+	return p
 }
 
 // Delete removes a user. Before the user row is deleted, all sessions and
@@ -380,8 +383,15 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		user.LockAccount(s.clock.Now())
-		if err := s.repo.Update(txCtx, user); err != nil {
+		now := s.clock.Now()
+		status := domain.StatusLocked
+		patch := ports.UserPatch{
+			ID:             id,
+			Status:         &status,
+			UpdatedAt:      now,
+			CurrentVersion: user.Version,
+		}
+		if _, err := s.repo.ApplyPatch(txCtx, patch); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
 		// F17: revoke all sessions for the locked user. Failure must abort the
@@ -424,8 +434,14 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		if err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
-		user.UnlockAccount(s.clock.Now())
-		if err := s.repo.Update(txCtx, user); err != nil {
+		status := domain.StatusActive
+		patch := ports.UserPatch{
+			ID:             id,
+			Status:         &status,
+			UpdatedAt:      s.clock.Now(),
+			CurrentVersion: user.Version,
+		}
+		if _, err := s.repo.ApplyPatch(txCtx, patch); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
 		if err := s.publish(txCtx, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor}); err != nil {
@@ -503,9 +519,6 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password hash: %w", err)
 	}
 
-	user.PasswordHash = string(newHash)
-	user.ClearPasswordResetRequired(s.clock.Now())
-
 	// F2 session convergence + F10 atomic boundary: wrap the password write and
 	// the session revoke in a single transaction so a RevokeByUserID failure
 	// rolls back the password change. Without this, PG could commit the new hash
@@ -514,7 +527,17 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// the tx because it creates a NEW session that must not be caught by the
 	// revoke sweep, and because signing failure should not roll back a
 	// legitimate password change.
-	if err := s.updatePasswordAndRevokeSessions(ctx, user); err != nil {
+	now := s.clock.Now()
+	hashStr := string(newHash)
+	prf := false
+	patch := ports.UserPatch{
+		ID:                    user.ID,
+		PasswordHash:          &hashStr,
+		PasswordResetRequired: &prf,
+		UpdatedAt:             now,
+		CurrentVersion:        user.Version,
+	}
+	if err := s.updatePasswordAndRevokeSessions(ctx, user.ID, patch); err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -528,15 +551,15 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	return pair, nil
 }
 
-func (s *Service) updatePasswordAndRevokeSessions(ctx context.Context, user *domain.User) error {
+func (s *Service) updatePasswordAndRevokeSessions(ctx context.Context, userID string, patch ports.UserPatch) error {
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, user); err != nil {
+		if _, err := s.repo.ApplyPatch(txCtx, patch); err != nil {
 			return fmt.Errorf("identity-manage: change-password update: %w", err)
 		}
-		if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
+		if err := s.sessionRepo.RevokeByUserID(txCtx, userID); err != nil {
 			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
 		}
-		if err := s.refreshStore.RevokeUser(txCtx, user.ID); err != nil {
+		if err := s.refreshStore.RevokeUser(txCtx, userID); err != nil {
 			return fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", err)
 		}
 		return nil

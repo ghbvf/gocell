@@ -165,10 +165,13 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 	// Lock the user — sessions should be revoked.
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 
-	// Verify session was revoked.
-	got, err := sessionRepo.GetByID(context.Background(), "sess-carol")
-	require.NoError(t, err)
-	assert.True(t, got.IsRevoked(), "session should be revoked after user lock")
+	// Verify session was soft-revoked: GetByID must return not-found since the
+	// session is no longer visible to application read paths after soft-revoke.
+	_, err = sessionRepo.GetByID(context.Background(), "sess-carol")
+	require.Error(t, err, "session must be invisible after user lock soft-revoke")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrSessionNotFound, ec.Code, "session must return ErrSessionNotFound after soft-revoke")
 }
 
 func TestService_Delete(t *testing.T) {
@@ -401,10 +404,15 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
-		got, gerr := sessionRepo.GetByID(context.Background(), sid)
-		require.NoError(t, gerr)
-		assert.True(t, got.IsRevoked(),
-			"session %s must be revoked after ChangePassword (fail-closed on stolen refresh)", sid)
+		// After soft-revoke, GetByID must return not-found — revoked sessions
+		// are invisible to application read paths (P2b: domain.RevokedAt alignment).
+		_, gerr := sessionRepo.GetByID(context.Background(), sid)
+		require.Error(t, gerr,
+			"session %s must be invisible after ChangePassword soft-revoke (fail-closed on stolen refresh)", sid)
+		var ec *errcode.Error
+		require.ErrorAs(t, gerr, &ec)
+		assert.Equal(t, errcode.ErrSessionNotFound, ec.Code,
+			"session %s must return ErrSessionNotFound after soft-revoke", sid)
 	}
 }
 
@@ -437,7 +445,26 @@ func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Cont
 	}
 	if err := fn(ctx); err != nil {
 		// Restore the snapshot — equivalent to PG ROLLBACK on the user row.
-		_ = s.repo.Update(ctx, pre)
+		// Re-read the current version to get the correct CurrentVersion for the rollback patch.
+		cur, readErr := s.repo.GetByID(ctx, s.userID)
+		if readErr == nil {
+			// Build a patch that restores all fields from the snapshot.
+			hash := pre.PasswordHash
+			prf := pre.PasswordResetRequired
+			status := pre.Status
+			name := pre.Username
+			email := pre.Email
+			_, _ = s.repo.ApplyPatch(ctx, ports.UserPatch{
+				ID:                    pre.ID,
+				Username:              &name,
+				Email:                 &email,
+				PasswordHash:          &hash,
+				PasswordResetRequired: &prf,
+				Status:                &status,
+				UpdatedAt:             pre.UpdatedAt,
+				CurrentVersion:        cur.Version,
+			})
+		}
 		return err
 	}
 	return nil
@@ -651,12 +678,12 @@ func (r *observingUserRepo) GetByID(ctx context.Context, id string) (*domain.Use
 	return r.UserRepository.GetByID(ctx, id)
 }
 
-func (r *observingUserRepo) Update(ctx context.Context, user *domain.User) error {
+func (r *observingUserRepo) ApplyPatch(ctx context.Context, p ports.UserPatch) (*domain.User, error) {
 	r.updInTx = r.runner.inTx
-	return r.UserRepository.Update(ctx, user)
+	return r.UserRepository.ApplyPatch(ctx, p)
 }
 
-// failingUpdateRepo wraps a real repo but always fails Update — used to
+// failingUpdateRepo wraps a real repo but always fails ApplyPatch — used to
 // drive the Unlock-error-propagation test. GetByID is forwarded so the
 // service's read step succeeds.
 type failingUpdateRepo struct {
@@ -665,9 +692,9 @@ type failingUpdateRepo struct {
 	updates   int
 }
 
-func (r *failingUpdateRepo) Update(_ context.Context, _ *domain.User) error {
+func (r *failingUpdateRepo) ApplyPatch(_ context.Context, _ ports.UserPatch) (*domain.User, error) {
 	r.updates++
-	return r.updateErr
+	return nil, r.updateErr
 }
 
 // newAtomicitySvc wires Service with a recordingTxRunner + observingUserRepo

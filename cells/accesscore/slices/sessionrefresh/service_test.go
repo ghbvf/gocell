@@ -1002,8 +1002,12 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 			},
 		},
 		{
+			// After P2b soft-revoke: revoked sessions are invisible via GetByID,
+			// so the cascade reason is "session-not-found" (not "revoked-session").
+			// The revoked-session code path in service.go is retained for adapters
+			// that still surface RevokedAt directly; the mem repo filters at read.
 			name:       "revoked session",
-			wantReason: "revoked-session",
+			wantReason: "session-not-found",
 			build: func(t *testing.T, logger *slog.Logger) (*Service, string) {
 				t.Helper()
 				svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-log-revoked")

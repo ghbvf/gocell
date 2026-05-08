@@ -8,12 +8,15 @@
 // ref: cells/configcore/internal/adapters/postgres/session.go (TxCtxKey pattern)
 // ref: jackc/pgx v5 pgconn PgError 23505 unique_violation detection
 // ref: ory/kratos persistence/sql persister_identity.go
+// ref: K8s apimachinery resourceVersion CAS pattern (ApplyPatch version gating)
 package postgres
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -31,30 +34,47 @@ var _ ports.UserRepository = (*PGUserRepository)(nil)
 // pgUniqueViolation is the PostgreSQL error code for UNIQUE constraint violations.
 const pgUniqueViolation = "23505"
 
+// Constraint name constants — used as the uniqueness white-list so no dynamic
+// column names are ever interpolated into SQL (SQL-injection prevention).
+const (
+	constraintUsersUsername = "idx_users_username"
+	constraintUsersEmail    = "idx_users_email"
+)
+
 const (
 	insertUserSQL = `
-INSERT INTO users (id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+INSERT INTO users (id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at, version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	selectUserByIDSQL = `
-SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at, version
 FROM users
 WHERE id = $1`
 
 	selectUserByUsernameSQL = `
-SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at, version
 FROM users
 WHERE username = $1`
 
-	updateUserSQL = `
-UPDATE users
-SET username = $2, email = $3, password_hash = $4, password_reset_required = $5,
-    status = $6, creation_source = $7, updated_at = $8
-WHERE id = $1`
+	// selectUserByUsernameForUpdateSQL uses SELECT … FOR UPDATE to acquire a
+	// row-level write lock within the caller's ambient transaction. Used by
+	// login flows to prevent concurrent modification between the credential
+	// check and the session creation.
+	//
+	// ref: ory/kratos persister_session.go GetSessionByToken FOR UPDATE pattern
+	selectUserByUsernameForUpdateSQL = `
+SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at, version
+FROM users
+WHERE username = $1
+FOR UPDATE`
 
 	deleteUserSQL = `
 DELETE FROM users
 WHERE id = $1`
+
+	// selectUserExistsSQL checks existence without returning all columns.
+	// Used by ApplyPatch to distinguish NotFound from ConcurrentUpdate.
+	selectUserExistsSQL = `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`
 )
 
 // PGUserRepository implements ports.UserRepository on PostgreSQL.
@@ -64,14 +84,15 @@ WHERE id = $1`
 //
 // TX semantics: ambient — if a pgx.Tx is stored in ctx under
 // persistence.TxCtxKey (placed there by adapters/postgres.TxManager), each
-// method joins it. Otherwise the call falls back to the pool. This is identical
-// to the pattern in cells/configcore/internal/adapters/postgres/session.go.
+// method joins it. Otherwise the call falls back to the pool.
+//
+// Optimistic concurrency: ApplyPatch uses WHERE id=$1 AND version=$N with
+// RETURNING so a single round-trip detects both "not found" (no row) and
+// "version mismatch" (row exists, version changed). A follow-up EXISTS query
+// disambiguates RowsAffected==0 into the two error kinds.
 //
 // All CRUD methods are single-statement — no pool.Begin / BeginTx call is made
-// (PG-REPO-AMBIENT-TX-01: that archtest scans adapters/postgres/ only, but the
-// same design principle applies here). 23505 UNIQUE violations are mapped to
-// ErrAuthUserDuplicate; ConstraintName distinguishes idx_users_username vs
-// idx_users_email.
+// (PG-REPO-AMBIENT-TX-01).
 type PGUserRepository struct {
 	pool *pgxpool.Pool
 }
@@ -107,7 +128,8 @@ func (r *PGUserRepository) queryRowCtx(ctx context.Context, sql string, args ...
 
 // Create inserts a new user row.
 //
-// Returns ErrAuthUserDuplicate (KindConflict) on UNIQUE 23505 violation.
+// Returns ErrAuthUserDuplicate (KindConflict) on UNIQUE 23505 violation for
+// username; ErrAuthEmailDuplicate for email constraint.
 // ConstraintName distinguishes idx_users_username from idx_users_email.
 func (r *PGUserRepository) Create(ctx context.Context, user *domain.User) error {
 	_, err := r.execCtx(ctx, insertUserSQL,
@@ -120,37 +142,36 @@ func (r *PGUserRepository) Create(ctx context.Context, user *domain.User) error 
 		string(user.CreationSource),
 		user.CreatedAt,
 		user.UpdatedAt,
+		user.Version,
 	)
 	if err != nil {
-		return r.mapCreateError(err, user.Username, user.Email)
+		return r.mapUniqueViolation(err, "user repo: create", user.Username, user.Email)
 	}
 	return nil
 }
 
-// mapCreateError converts a raw pgx error from Create into an errcode.Error.
-func (r *PGUserRepository) mapCreateError(err error, username, email string) error {
+// mapUniqueViolation converts a 23505 pgx error into an errcode.Error.
+// Non-23505 errors are wrapped as KindInternal.
+func (r *PGUserRepository) mapUniqueViolation(err error, op, username, email string) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-		// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
-		// A8: username and email are PII — stay in WithInternal, not wire-visible.
-		slog.Warn("user create: unique constraint violation",
+		slog.Warn("user repo: unique constraint violation",
+			slog.String("op", op),
 			slog.String("constraint", pgErr.ConstraintName),
 		)
-		switch pgErr.ConstraintName {
-		case "idx_users_email":
-			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
+		if pgErr.ConstraintName == constraintUsersEmail {
+			return errcode.New(errcode.KindConflict, errcode.ErrAuthEmailDuplicate,
 				"email already exists",
-				errcode.WithInternal("constraint="+pgErr.ConstraintName+" email="+email),
-			)
-		default:
-			// idx_users_username or any other unique constraint
-			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
-				"username already exists",
-				errcode.WithInternal("constraint="+pgErr.ConstraintName+" username="+username),
+				errcode.WithInternal(fmt.Sprintf("constraint=%s email=%s", pgErr.ConstraintName, email)),
 			)
 		}
+		// idx_users_username or any other unique constraint.
+		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
+			"username already exists",
+			errcode.WithInternal(fmt.Sprintf("constraint=%s username=%s", pgErr.ConstraintName, username)),
+		)
 	}
-	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: create", err)
+	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, op, err)
 }
 
 // GetByID retrieves a user by primary key.
@@ -189,30 +210,133 @@ func (r *PGUserRepository) GetByUsername(ctx context.Context, username string) (
 	return u, nil
 }
 
-// Update persists a modified user aggregate.
-// Returns ErrAuthUserNotFound (KindNotFound) when no row was updated (id not found).
-func (r *PGUserRepository) Update(ctx context.Context, user *domain.User) error {
-	ct, err := r.execCtx(ctx, updateUserSQL,
-		user.ID,
-		user.Username,
-		user.Email,
-		user.PasswordHash,
-		user.PasswordResetRequired,
-		string(user.Status),
-		string(user.CreationSource),
-		user.UpdatedAt,
-	)
+// GetByUsernameForUpdate retrieves a user by username with a row-level write
+// lock (SELECT … FOR UPDATE). Must be called inside an active TxRunner.RunInTx.
+// Returns ErrAuthUserNotFound (KindNotFound) when the row does not exist.
+//
+// ref: ory/kratos persister_session.go GetSessionByToken FOR UPDATE pattern
+func (r *PGUserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	row := r.queryRowCtx(ctx, selectUserByUsernameForUpdateSQL, username)
+	u, err := scanUser(row)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: update", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
+				"user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal("username="+username),
+			)
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: get by username for update", err)
 	}
-	if ct.RowsAffected() == 0 {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
+	return u, nil
+}
+
+// ApplyPatch updates the user atomically, gated on p.CurrentVersion.
+//
+// The UPDATE only fires when the row's version matches p.CurrentVersion.
+// RowsAffected==0 is disambiguated: a follow-up EXISTS query determines
+// whether the row is missing (ErrAuthUserNotFound) or was concurrently
+// modified (ErrAuthConcurrentUpdate).
+//
+// Uniqueness constraint violations (23505) are mapped to ErrAuthUserDuplicate
+// (username) or ErrAuthEmailDuplicate (email).
+//
+// ref: K8s apimachinery resourceVersion CAS pattern
+// ref: ory/kratos persister_identity.go UpdateIdentity optimistic lock
+func (r *PGUserRepository) ApplyPatch(ctx context.Context, p ports.UserPatch) (*domain.User, error) {
+	setClauses, args := buildSetClauses(p)
+	if len(setClauses) == 0 {
+		// Nothing to update — just return the current state.
+		return r.GetByID(ctx, p.ID)
+	}
+
+	// Always advance version and set updated_at.
+	nextArgN := len(args) + 1
+	setClauses = append(setClauses,
+		"version = version + 1",
+		fmt.Sprintf("updated_at = $%d", nextArgN),
+	)
+	args = append(args, p.UpdatedAt)
+	nextArgN++
+
+	// WHERE id=$N AND version=$M
+	args = append(args, p.ID, p.CurrentVersion)
+	whereIDN := nextArgN
+	whereVerN := nextArgN + 1
+
+	sql := fmt.Sprintf(`
+UPDATE users
+SET %s
+WHERE id = $%d AND version = $%d
+RETURNING id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at, version`,
+		strings.Join(setClauses, ", "),
+		whereIDN, whereVerN,
+	)
+
+	row := r.queryRowCtx(ctx, sql, args...)
+	u, err := scanUser(row)
+	if err == nil {
+		return u, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, r.mapUniqueViolation(err, "user repo: apply patch", p.ID, "")
+	}
+
+	// RowsAffected==0: distinguish not-found from version mismatch.
+	var exists bool
+	existsErr := r.queryRowCtx(ctx, selectUserExistsSQL, p.ID).Scan(&exists)
+	if existsErr != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: apply patch exists check", existsErr)
+	}
+	if !exists {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
 			"user not found",
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal("id="+user.ID),
+			errcode.WithInternal("id="+p.ID),
 		)
 	}
-	return nil
+	return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthConcurrentUpdate,
+		"user was modified by another request, please retry",
+		errcode.WithCategory(errcode.CategoryDomain),
+		errcode.WithInternal(fmt.Sprintf("id=%s version_expected=%d", p.ID, p.CurrentVersion)),
+	)
+}
+
+// buildSetClauses constructs the SET clause fragments for ApplyPatch.
+// Only non-nil patch fields are included; column names are hard-coded
+// constants (never user-supplied strings) to prevent SQL injection.
+func buildSetClauses(p ports.UserPatch) ([]string, []any) {
+	var clauses []string
+	var args []any
+	n := 1
+
+	if p.Username != nil {
+		clauses = append(clauses, fmt.Sprintf("username = $%d", n))
+		args = append(args, *p.Username)
+		n++
+	}
+	if p.Email != nil {
+		clauses = append(clauses, fmt.Sprintf("email = $%d", n))
+		args = append(args, *p.Email)
+		n++
+	}
+	if p.PasswordHash != nil {
+		clauses = append(clauses, fmt.Sprintf("password_hash = $%d", n))
+		args = append(args, *p.PasswordHash)
+		n++
+	}
+	if p.PasswordResetRequired != nil {
+		clauses = append(clauses, fmt.Sprintf("password_reset_required = $%d", n))
+		args = append(args, *p.PasswordResetRequired)
+		n++
+	}
+	if p.Status != nil {
+		clauses = append(clauses, fmt.Sprintf("status = $%d", n))
+		args = append(args, string(*p.Status))
+		n++
+	}
+	_ = n // suppress "declared but not used" if last increment is unused
+	return clauses, args
 }
 
 // Delete removes a user row by primary key.
@@ -246,6 +370,7 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		&source,
 		&u.CreatedAt,
 		&u.UpdatedAt,
+		&u.Version,
 	)
 	if err != nil {
 		return nil, err

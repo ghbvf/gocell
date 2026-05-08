@@ -428,8 +428,16 @@ func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) 
 	u.ID = "usr-orphan"
 	return u, nil
 }
-func (r *duplicateUserRepo) Update(ctx context.Context, u *domain.User) error { return nil }
-func (r *duplicateUserRepo) Delete(ctx context.Context, id string) error      { return nil }
+
+func (r *duplicateUserRepo) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	return r.GetByUsername(ctx, username)
+}
+
+func (r *duplicateUserRepo) ApplyPatch(_ context.Context, _ ports.UserPatch) (*domain.User, error) {
+	return nil, errors.New("not expected on duplicate-user path")
+}
+
+func (r *duplicateUserRepo) Delete(ctx context.Context, id string) error { return nil }
 
 // scriptedRoleRepo returns CountByRole values from a scripted sequence; tracks
 // whether AssignToUser / Create was called.
@@ -587,5 +595,13 @@ func (r *errUserRepo) GetByID(ctx context.Context, id string) (*domain.User, err
 func (r *errUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return nil, errors.New("not seeded")
 }
-func (r *errUserRepo) Update(ctx context.Context, u *domain.User) error { return nil }
-func (r *errUserRepo) Delete(ctx context.Context, id string) error      { return r.deleteErr }
+
+func (r *errUserRepo) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	return nil, errors.New("not seeded")
+}
+
+func (r *errUserRepo) ApplyPatch(_ context.Context, _ ports.UserPatch) (*domain.User, error) {
+	return nil, errors.New("not expected on err-user-repo path")
+}
+
+func (r *errUserRepo) Delete(ctx context.Context, id string) error { return r.deleteErr }
