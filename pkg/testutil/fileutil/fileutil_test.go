@@ -51,7 +51,11 @@ func TestMustReadFile_FailFatal(t *testing.T) {
 	missing := filepath.Join(dir, "does-not-exist")
 
 	func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if p := recover(); p != nil && p != fatalSentinel {
+				panic(p) // surface unexpected panic instead of swallowing it
+			}
+		}()
 		fileutil.MustReadFile(probe, missing)
 	}()
 	if !probe.failed {
@@ -65,13 +69,21 @@ func TestMustWriteFile_FailFatal(t *testing.T) {
 	bogus := filepath.Join(t.TempDir(), "no-such-dir", "out")
 
 	func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if p := recover(); p != nil && p != fatalSentinel {
+				panic(p) // surface unexpected panic instead of swallowing it
+			}
+		}()
 		fileutil.MustWriteFile(probe, bogus, []byte("x"))
 	}()
 	if !probe.failed {
 		t.Fatalf("MustWriteFile to invalid path did not call Fatalf")
 	}
 }
+
+// fatalSentinel is the recover() value Fatalf panics with so callers can
+// distinguish "Fatalf fired as expected" from "an unexpected panic happened".
+const fatalSentinel = "fakeT.Fatalf"
 
 // fakeT captures Fatalf so error-path tests can assert it fired without
 // aborting the parent test. Only Fatalf and Helper are exercised; panic
@@ -83,7 +95,7 @@ type fakeT struct {
 
 func (f *fakeT) Fatalf(string, ...any) {
 	f.failed = true
-	panic("fakeT.Fatalf")
+	panic(fatalSentinel)
 }
 
 func (f *fakeT) Helper() {}

@@ -47,18 +47,24 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 // when collect / build errors occur.
 func loadCellBundle(projectRoot, cellID string, cell *metadata.CellMeta) (WireBundle, bool, []error) {
 	cellGoPath := filepath.Join(projectRoot, filepath.Dir(cell.File), "cell.go")
+	relPath := cellGoPath
+	if rel, err := filepath.Rel(projectRoot, cellGoPath); err == nil {
+		relPath = rel
+	}
 
 	if _, err := os.Stat(cellGoPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return WireBundle{}, true, nil
 		}
 		// K05-10: classify os.Stat errors instead of treating all failures as absent.
-		return WireBundle{}, false, []error{fmt.Errorf("cell %s: stat %s: %w", cellID, cellGoPath, err)}
-	}
-
-	relPath := cellGoPath
-	if rel, err := filepath.Rel(projectRoot, cellGoPath); err == nil {
-		relPath = rel
+		// Rewrite the embedded fs.PathError so operator-facing messages do not
+		// leak the absolute filesystem path (defense-in-depth alongside our own
+		// format which already uses relPath).
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			pathErr.Path = relPath
+		}
+		return WireBundle{}, false, []error{fmt.Errorf("cell %s: stat %s: %w", cellID, relPath, err)}
 	}
 
 	markers, err := CollectFromCellFile(cellGoPath)

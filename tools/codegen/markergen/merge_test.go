@@ -114,6 +114,53 @@ func TestMerge_EmptyBundleWhenNoCellGo(t *testing.T) {
 	}
 }
 
+// TestMerge_StatErrorClassified covers loadCellBundle's K05-10 branch:
+// when os.Stat returns a non-ErrNotExist error (e.g. EACCES because the
+// parent directory is unreadable), the error must surface and the message
+// must use a project-relative path so absolute filesystem layout does not
+// leak into operator logs.
+func TestMerge_StatErrorClassified(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("permission semantics differ on windows; covered on unix CI")
+	}
+	tmp := t.TempDir()
+
+	// cells/locked exists with a parent dir we will strip read perms from.
+	parent := filepath.Join(tmp, "cells", "locked")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatalf("mkdir parent: %v", err)
+	}
+	cellGo := filepath.Join(parent, "cell.go")
+	if err := os.WriteFile(cellGo, []byte("package locked\n"), 0o600); err != nil {
+		t.Fatalf("write cell.go: %v", err)
+	}
+	// Drop traversal permission on the parent so os.Stat on cell.go fails.
+	if err := os.Chmod(parent, 0o000); err != nil {
+		t.Fatalf("chmod parent: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"locked": {ID: "locked", File: "cells/locked/cell.yaml"},
+		},
+		map[string]*metadata.SliceMeta{},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected stat error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "cells/locked/cell.go") {
+		t.Errorf("error message %q should reference relative path cells/locked/cell.go", msg)
+	}
+	if strings.Contains(msg, tmp) {
+		t.Errorf("error message %q must not leak absolute tempdir path %s", msg, tmp)
+	}
+}
+
 // TestMerge_EmptyBundleWhenNoMarkers tests that a cell.go with zero markers
 // yields an empty WireBundle (no fallback to yaml).
 func TestMerge_EmptyBundleWhenNoMarkers(t *testing.T) {

@@ -7,7 +7,11 @@
 //
 // Use MustReadFile / MustWriteFile when the test owns the path (constructed
 // from t.TempDir, repo-relative join, known fixture, or scanner-discovered
-// repo path). Do not use these from production code.
+// repo path). Do not use these from production code, and do not use them
+// when the path originates from external input (env var, CLI arg, HTTP
+// query) even in test code — those sites must call os.ReadFile directly
+// with an inline lint suppression that documents the input's safety
+// argument.
 package fileutil
 
 import (
@@ -30,7 +34,14 @@ func MustReadFile(t testing.TB, path string) []byte {
 }
 
 // MustWriteFile writes data to path with mode 0o600, calling t.Fatalf on error.
+//
 // Path safety contract: same as MustReadFile.
+//
+// Mode rationale: 0o600 (owner read-write only) is sufficient because tests
+// run as the same user that reads the file back; group/other permissions are
+// not needed and the tighter mode also passes gosec G306 without further
+// suppression. Migrate 0o644 sites to this helper rather than relaxing the
+// helper's mode.
 func MustWriteFile(t testing.TB, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0o600); err != nil {
