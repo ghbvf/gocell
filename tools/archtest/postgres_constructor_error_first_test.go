@@ -12,14 +12,12 @@ package archtest
 import (
 	"go/ast"
 	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const rulePGConstructorMustFree01 = "PG-CONSTRUCTOR-MUST-FREE-01"
@@ -28,7 +26,7 @@ const rulePGConstructorMustFree01 = "PG-CONSTRUCTOR-MUST-FREE-01"
 // reports any exported MustNew* function declaration.
 func TestPGConstructorMustFree01(t *testing.T) {
 	root := findModuleRoot(t)
-	pgDir := filepath.Join(root, "adapters", "postgres")
+	scope := scanner.DirsScope(root, []string{"adapters/postgres"})
 
 	type violation struct {
 		file string
@@ -37,32 +35,11 @@ func TestPGConstructorMustFree01(t *testing.T) {
 	}
 	var violations []violation
 
-	err := filepath.WalkDir(pgDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		if strings.HasSuffix(fc.AbsPath, "_test.go") {
+			return
 		}
-		if d.IsDir() {
-			// skip sub-directories that aren't the postgres package itself
-			if d.Name() == "migrations" || d.Name() == "testdata" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
-		if parseErr != nil {
-			return parseErr
-		}
-
-		rel, _ := filepath.Rel(root, path)
-		for _, decl := range file.Decls {
+		for _, decl := range fc.File.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
 			if !ok {
 				continue
@@ -75,16 +52,14 @@ func TestPGConstructorMustFree01(t *testing.T) {
 			if !strings.HasPrefix(name, "MustNew") {
 				continue
 			}
-			pos := fset.Position(fd.Pos())
+			pos := fc.Fset.Position(fd.Pos())
 			violations = append(violations, violation{
-				file: filepath.ToSlash(rel),
+				file: fc.Rel,
 				line: pos.Line,
 				name: name,
 			})
 		}
-		return nil
 	})
-	require.NoError(t, err, "walking adapters/postgres/")
 
 	if len(violations) > 0 {
 		t.Logf("%s: %d violation(s):", rulePGConstructorMustFree01, len(violations))

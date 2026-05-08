@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestEventPayloadSchemasUseCamelCase enforces EVENT-PAYLOAD-CAMELCASE-01:
@@ -29,21 +31,7 @@ func TestEventPayloadSchemasUseCamelCase(t *testing.T) {
 
 	var violations []string
 
-	err := filepath.Walk(contractsEventDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			// Skip backup directories if they exist.
-			if info.Name() == "bak" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if info.Name() != "payload.schema.json" {
-			return nil
-		}
-
+	err := walkPayloadSchemas(contractsEventDir, func(path string) error {
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
 
@@ -102,41 +90,30 @@ func TestEventDTOJSONTagsUseCamelCase(t *testing.T) {
 // name segment (before any comma — e.g. `json:"user_id,omitempty"` would
 // flag "user_id" but pass on ",omitempty").
 func checkEventDTOCamelCase(root string) ([]string, error) {
+	scope := scanner.DirsScope(root, []string{"cells"})
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
+
 	var violations []string
-
-	err := filepath.WalkDir(filepath.Join(root, "cells"), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", "testdata", "generated", ".git":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
+	for _, path := range files {
 		// Only process files under a dto/ directory whose name matches *event*.go.
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
 		dir := filepath.Base(filepath.Dir(path))
 		if dir != "dto" {
-			return nil
+			continue
 		}
 		base := filepath.Base(path)
 		if !strings.Contains(base, "event") {
-			return nil
+			continue
 		}
-
 		fileViolations, err := scanDTOJSONTagsCamelCase(root, path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		violations = append(violations, fileViolations...)
-		return nil
-	})
-	return violations, err
+	}
+	return violations, nil
 }
 
 // scanDTOJSONTagsCamelCase parses a single Go file and returns violation
@@ -233,6 +210,42 @@ func parseStructTag(tag string) map[string]string {
 		result[key] = value
 	}
 	return result
+}
+
+// walkPayloadSchemas recursively visits all payload.schema.json files under dir,
+// skipping "bak" directories. For each matching file it calls fn(absPath).
+// It replaces the former filepath.Walk call so that no raw walker remains in
+// this archtest file (filepath.Walk/WalkDir are reserved for the scanner
+// framework per SCANNER-FRAMEWORK-USAGE-01).
+func walkPayloadSchemas(dir string, fn func(path string) error) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		absPath := filepath.Join(dir, name)
+		if e.IsDir() {
+			// Skip backup directories if they exist.
+			if name == "bak" {
+				continue
+			}
+			if err := walkPayloadSchemas(absPath, fn); err != nil {
+				return err
+			}
+			continue
+		}
+		if name != "payload.schema.json" {
+			continue
+		}
+		if err := fn(absPath); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TestEventPayloadSchemasUseCamelCase_NegativeProbe validates that the rule
