@@ -27,7 +27,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -39,13 +38,7 @@ func TestVisitBufferThenCommit(t *testing.T) {
 		t.Skip("pending Wave 3 regenerate; archtest will GREEN after go generate ./tools/codegen/...")
 	}
 
-	// Resolve repo root relative to this test file's location.
-	// tools/archtest/ → ../../ = repo root.
-	repoRoot, err := filepath.Abs("../../")
-	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
-	}
-
+	repoRoot := findModuleRoot(t)
 	scope := scanner.DirsScope(repoRoot, []string{"generated/contracts"})
 	allFiles, err := scope.Files()
 	if err != nil {
