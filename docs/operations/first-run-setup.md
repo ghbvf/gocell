@@ -145,7 +145,11 @@ spec:
                   key: password
 ```
 
-部署语义：当前 `UserRepository` 仅有 in-memory 实现，进程内 `sync.Mutex` 保证 admin 唯一；first-run admin 必须落到单 pod replica。多 pod 幂等承诺要等 `ACCESSCORE-PG-USERS-MIGRATION-01`（PG `users` 表 + `UNIQUE(role='admin')` 部分索引）落地后才成立——届时第一个 INSERT 胜出，后续 POST 返回 409 或 410。
+部署语义：`UserRepository` 提供 mem / PG 两种实现 — 单 pod 测试 / 开发用 mem，
+多 pod 生产用 PG（`adapters/postgres` + 017/022 migration）。多 pod 幂等已落地：
+PG schema 强制 username/email UNIQUE + role_assignments single-admin 部分
+UNIQUE，并发 setup/admin 由 race-loser → 410 折叠（savepoint +
+`TestSetupOrphan_PGE2E_RaceLoser_Returns410` 集成测试覆盖）。
 
 ---
 

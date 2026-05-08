@@ -89,3 +89,30 @@ DROP INDEX CONCURRENTLY <index_name>;
 - [Atlas lint](https://atlasgo.io/versioned/lint)：在版本推进前做 lint/pre-check 的设计原则
 - [golang-migrate Source](https://github.com/golang-migrate/migrate)：Source.Read 先验证再执行
 - [PostgreSQL CREATE INDEX CONCURRENTLY](https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY)：限制与 INVALID 索引处理
+
+## 已落地 migration 索引
+
+| 编号 | 文件 | 说明 |
+|------|------|------|
+| 001 | `001_create_outbox_entries.sql` | outbox_entries 表（事务型 outbox 基础） |
+| 002 | `002_add_topic_column.sql` | outbox_entries 增加 topic 列 |
+| 003 | `003_outbox_status_columns.sql` | outbox status / last_error / retry 列 |
+| 004 | `004_create_config_entries_and_versions.sql` | config_entries + config_versions 表 + 索引（no transaction） |
+| 005 | `005_recreate_outbox_pending_concurrent.sql` | 重建 outbox pending 索引（CONCURRENTLY，no transaction） |
+| 006 | `006_add_config_versions_config_id_index.sql` | config_versions(config_id) 索引（CONCURRENTLY，no transaction） |
+| 007 | `007_refresh_tokens.sql` | refresh_tokens 表 |
+| 008 | `008_create_feature_flags.sql` | feature_flags 表 |
+| 009 | `009_create_feature_flags_index.sql` | feature_flags(name) 索引（CONCURRENTLY，no transaction） |
+| 010 | `010_add_config_value_cipher.sql` | config_entries 增加加密值列 |
+| 011 | `011_refresh_tokens_token_index.sql` | refresh_tokens(token) 索引（CONCURRENTLY，no transaction） |
+| 012 | `012_refresh_tokens_rebuild.sql` | 重建 refresh_tokens 表结构 |
+| 013 | `013_add_outbox_observability_column.sql` | outbox 增加 published_at / dead_at 可观测列 |
+| 014 | `014_add_outbox_lease_id.sql` | outbox 增加 lease_id（fencing token，pg outbox CAS 守护） |
+| 015 | `015_add_outbox_claiming_lease_check.sql` | outbox claiming 状态的 lease check 约束 |
+| 016 | `016_refresh_tokens_idle_grace.sql` | refresh_tokens 增加 idle grace 字段 |
+| 017 | `017_users.sql` | users 表（username/email UNIQUE，accesscore PG 用户存储） |
+| 018 | `018_sessions.sql` | sessions 表（含 version 列，乐观并发） |
+| 019 | `019_roles.sql` | roles 表 + role_assignments 表（single-admin partial UNIQUE） |
+| 020 | `020_role_assignments_fk.sql` | role_assignments(user_id) → users(id) FK ON DELETE CASCADE |
+| 021 | `021_sessions_fk.sql` | sessions(user_id) → users(id) FK ON DELETE CASCADE |
+| 022 | `022_users_add_version.sql` | users 表增加 version 列（K8s resourceVersion 风格乐观并发） |
