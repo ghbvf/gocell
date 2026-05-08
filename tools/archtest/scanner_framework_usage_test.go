@@ -38,6 +38,20 @@ import (
 // (the scanner framework), so it must be a hand-written archtest. type-system
 // can't tell apart "framework-internal walk" (legitimate) from "consumer raw
 // walk" (forbidden); both are *ast.SelectorExpr against path/filepath.
+//
+// Authorized escape hatch — io/fs.WalkDir(os.DirFS(...)) for non-Go content:
+// the scanner framework's EachFile is .go-only (it parses Go ASTs). Rules
+// that scan non-Go content (YAML, JSON schemas, .md docs, opaque testdata
+// fixtures) are allowed to use io/fs.WalkDir(os.DirFS(root), ...) directly.
+// This rule only matches path/filepath.Walk[Dir] selectors; it does not
+// match io/fs.WalkDir, so the escape hatch is silent by construction.
+// Approved sites at the time of writing (each scans non-Go content):
+//   - listener_dx_test.go (.md doc enumeration)
+//   - event_camelcase_test.go (payload.schema.json files via os.ReadDir)
+//   - security_defaults_test.go (examples docker-compose YAML via os.ReadDir)
+//   - span_record_error_redact_test.go (fixture YAML under testdata/)
+//
+// New rules scanning .go files MUST go through the scanner framework.
 func TestScannerFrameworkUsage01(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, []string{"tools/archtest"}, scanner.IncludeTests())

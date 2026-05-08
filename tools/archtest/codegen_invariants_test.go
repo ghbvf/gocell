@@ -1082,7 +1082,22 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 // Helpers — spec gen topic equals contract id
 // ============================================================
 
+// Note on fixture-local DirsScope usage in this file
+// ----------------------------------------------------
+// Several rules below scan generated/contract fixture subtrees where the
+// scanned root is *not* the module root (e.g. user_file_overlap fixture root,
+// or a per-test scanRoot). For those sites we pass the fixture dir as
+// DirsScope's modRoot and use []string{"."} as dirs. This is intentional:
+//   - selfProtectRel filtering ("tools/archtest/internal/scanner") is harmless
+//     here because fixture trees never contain the scanner package
+//   - error-message rel paths are computed relative to the fixture root,
+//     which is the correct frame of reference for fixture diagnostics
+// New rules scanning module-rooted subtrees should still pass findModuleRoot(t)
+// as modRoot and a relative dir like "generated/contracts" — see line 320.
+
 // findSpecGenFiles walks dir recursively and returns all spec_gen.go paths.
+// dir is a fixture root (not module root); see "Note on fixture-local DirsScope
+// usage" above.
 func findSpecGenFiles(dir string) ([]string, error) {
 	scope := scanner.DirsScope(dir, []string{"."})
 	allFiles, err := scope.Files()
