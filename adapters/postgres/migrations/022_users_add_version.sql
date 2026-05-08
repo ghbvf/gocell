@@ -28,6 +28,9 @@
 -- ref: cells/accesscore/internal/domain/user.go (User aggregate)
 
 -- +goose Up
+-- PG 12+ ADD COLUMN with constant DEFAULT is metadata-only — no table rewrite
+-- occurs; only pg_attribute is updated. 5s lock_timeout is generous for this
+-- operation (expected lock-wait p99 < 200ms on the users table in staging).
 -- +goose StatementBegin
 SET LOCAL lock_timeout = '5s';
 

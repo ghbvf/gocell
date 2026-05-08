@@ -22,6 +22,14 @@ import (
 // ApplyPatch calls starting from the same version=1 snapshot serialize correctly:
 // exactly one succeeds and advances the row to version=2, while the other returns
 // ErrAuthConcurrentUpdate. The final row reflects only the winner's change.
+//
+// Concurrency note: this test relies on PG READ COMMITTED row-lock
+// serialization. Both goroutines BEGIN+UPDATE concurrently; PG places
+// a write lock on the row, the second UPDATE waits, then re-evaluates
+// the WHERE version=$N predicate against the committed value and
+// finds zero rows affected → ErrAuthConcurrentUpdate. The barrier
+// only raises the collision probability — version CAS correctness
+// does not require deterministic ordering.
 func TestApplyPatch_ConcurrentLockVsProfile_VersionCAS(t *testing.T) {
 	pool := setupPGPool(t)
 	ctx := context.Background()

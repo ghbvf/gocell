@@ -155,13 +155,19 @@ func lockUser(ctx context.Context, repo *pgadapter.PGUserRepository, txm *adapte
 // ApplyPatch commits before Login's FOR UPDATE reads the row, Login sees
 // status=locked and rejects. This is a probabilistic test; N=20 increases
 // confidence that the FOR UPDATE path is exercised at least some of the time.
+//
+// Fixture is created once outside the loop to share the PG pool and all repo
+// instances across iterations. Each iteration seeds a fresh user so state does
+// not carry over between runs.
 func TestLogin_ConcurrentAdminLock_RejectsAfterLock(t *testing.T) {
 	ctx := context.Background()
 	const N = 20
 	const plainPwd = "TestP@ss1234"
 
+	// Create the fixture once; only the per-iteration user differs.
+	f := newLoginLockFixture(t)
+
 	for iter := range N {
-		f := newLoginLockFixture(t)
 		userID, username := seedPGUser(t, ctx, f.userRepo, plainPwd)
 
 		var (
