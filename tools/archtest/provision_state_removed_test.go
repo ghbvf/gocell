@@ -1,14 +1,11 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01
@@ -34,52 +31,31 @@ var bannedProvisionIdentifiers = []string{
 func TestProvisionStateAndUserSourceBootstrapRemoved(t *testing.T) {
 	t.Parallel()
 
-	modRoot := findModuleRoot(t)
-	scanDirs := []string{
-		filepath.Join(modRoot, "cells", "accesscore"),
-	}
+	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, []string{"cells/accesscore"},
+		scanner.IncludeTests(),
+		scanner.ExcludeRels("tools/archtest/provision_state_removed_test.go"),
+	)
 
-	fset := token.NewFileSet()
-	var violations []string
-
-	for _, dir := range scanDirs {
-		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() || !strings.HasSuffix(path, ".go") {
-				return nil
-			}
-			// 豁免本文件自身
-			if strings.Contains(path, "provision_state_removed_test.go") {
-				return nil
-			}
-			f, parseErr := parser.ParseFile(fset, path, nil, 0)
-			if parseErr != nil {
-				return fmt.Errorf("archtest parse %s: %w", path, parseErr)
-			}
-			ast.Inspect(f, func(n ast.Node) bool {
-				ident, ok := n.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				for _, banned := range bannedProvisionIdentifiers {
-					if ident.Name == banned {
-						pos := fset.Position(ident.Pos())
-						violations = append(violations, pos.String()+": "+banned)
-					}
-				}
+	var diags []scanner.Diagnostic
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		ast.Inspect(fc.File, func(n ast.Node) bool {
+			ident, ok := n.(*ast.Ident)
+			if !ok {
 				return true
-			})
-			return nil
+			}
+			for _, banned := range bannedProvisionIdentifiers {
+				if ident.Name == banned {
+					diags = append(diags, scanner.Diagnostic{
+						Rel:     fc.Rel,
+						Line:    fc.Fset.Position(ident.Pos()).Line,
+						Message: banned,
+					})
+				}
+			}
+			return true
 		})
-		if err != nil {
-			t.Fatalf("walk %s: %v", dir, err)
-		}
-	}
+	})
 
-	if len(violations) > 0 {
-		t.Errorf("PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01: %d 个被禁标识符仍在 cells/accesscore/ 中出现:\n  %s",
-			len(violations), strings.Join(violations, "\n  "))
-	}
+	scanner.Report(t, "PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01", diags)
 }

@@ -1,37 +1,25 @@
 package archtest
 
 import (
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // findAllGoFilesInDir walks dir and returns all .go files (including _test.go).
 // Skips vendor, .git, generated, and testdata directories.
 func findAllGoFilesInDir(dir string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", ".git", "generated", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(path, ".go") {
-			files = append(files, path)
-		}
-		return nil
-	})
+	scope := scanner.ModuleScope(dir, scanner.IncludeTests())
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	sort.Strings(files)
-	return files, err
+	return files, nil
 }
 
 // findCellProductionGoFiles enumerates production .go files for every cell
@@ -44,32 +32,14 @@ func findCellProductionGoFiles(root string) ([]string, error) {
 		return nil, err
 	}
 
-	var files []string
+	relDirs := make([]string, 0, len(project.Cells))
 	for _, c := range project.Cells {
-		cellDir := filepath.Join(root, filepath.Dir(c.File))
-		walkErr := filepath.WalkDir(cellDir, func(path string, d os.DirEntry, werr error) error {
-			if werr != nil {
-				return werr
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", "generated", ".git":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") {
-				return nil
-			}
-			if strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			files = append(files, path)
-			return nil
-		})
-		if walkErr != nil {
-			return nil, walkErr
-		}
+		relDirs = append(relDirs, filepath.Dir(c.File))
+	}
+	scope := scanner.DirsScope(root, relDirs)
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
 	}
 	sort.Strings(files)
 	return files, nil
