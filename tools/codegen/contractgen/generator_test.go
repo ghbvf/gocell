@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // --- helpers ------------------------------------------------------------------
@@ -213,10 +214,7 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 
 	// spec_gen.go: must declare "var spec" (lowercase — private to package).
 	if specPath, ok := filesByName["spec_gen.go"]; ok {
-		content, err := os.ReadFile(specPath) //nolint:gosec // test reads its own tmp file
-		if err != nil {
-			t.Fatalf("read spec_gen.go: %v", err)
-		}
+		content := fileutil.MustReadFile(t, specPath)
 		if !strings.Contains(string(content), "var spec = wrapper.ContractSpec{") {
 			t.Errorf("spec_gen.go should contain 'var spec = wrapper.ContractSpec{' (private), content:\n%s", string(content))
 		}
@@ -224,10 +222,7 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 
 	// subscription_gen.go: must expose NewSubscription with 3 args (handler, consumerGroup, sliceID).
 	if subPath, ok := filesByName["subscription_gen.go"]; ok {
-		content, err := os.ReadFile(subPath) //nolint:gosec // test reads its own tmp file
-		if err != nil {
-			t.Fatalf("read subscription_gen.go: %v", err)
-		}
+		content := fileutil.MustReadFile(t, subPath)
 		if !strings.Contains(string(content), "func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string)") {
 			t.Errorf("subscription_gen.go should contain 3-arg NewSubscription signature, content:\n%s", string(content))
 		}
@@ -277,14 +272,9 @@ func TestGenerate_VerifyDrift(t *testing.T) {
 	tampered := false
 	for _, path := range res1.Generated {
 		if strings.HasSuffix(path, "types_gen.go") {
-			content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
-			if err != nil {
-				t.Fatalf("read for tamper: %v", err)
-			}
+			content := fileutil.MustReadFile(t, path)
 			modified := strings.Replace(string(content), "package", "// tampered\npackage", 1)
-			if err := os.WriteFile(path, []byte(modified), 0o644); err != nil { //nolint:gosec // G306: test writes to tmp
-				t.Fatalf("write tampered: %v", err)
-			}
+			fileutil.MustWriteFile(t, path, []byte(modified))
 			tampered = true
 			break
 		}

@@ -6,8 +6,8 @@
 
 ## 概览
 
-- archtest 文件总数：72
-- archtest INVARIANT 锚点数：174
+- archtest 文件总数：73
+- archtest INVARIANT 锚点数：175
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
@@ -42,15 +42,15 @@
 | `CI-PINNING-WORKFLOW-DIGEST-01` | `ci_pinning_test.go` | 1 | ci |
 | `CLOCK-INJECTION-PROD-CALLSITE-01` | `clock_invariants_test.go` | 446 | clock |
 | `CLOCK-INJECTION-TEST-CALLSITE-01` | `clock_invariants_test.go` | 261 | clock |
-| `CODEGEN-CELL-GEN-01` | `codegen_invariants_test.go` | 57 | codegen |
-| `CODEGEN-CELL-GEN-02` | `codegen_invariants_test.go` | 58 | codegen |
-| `CODEGEN-CELL-GEN-03` | `codegen_invariants_test.go` | 59 | codegen |
-| `CODEGEN-CELL-GEN-04` | `codegen_invariants_test.go` | 60 | codegen |
-| `CODEGEN-CONTRACT-GEN-01` | `codegen_invariants_test.go` | 254 | codegen |
+| `CODEGEN-CELL-GEN-01` | `codegen_invariants_test.go` | 58 | codegen |
+| `CODEGEN-CELL-GEN-02` | `codegen_invariants_test.go` | 59 | codegen |
+| `CODEGEN-CELL-GEN-03` | `codegen_invariants_test.go` | 60 | codegen |
+| `CODEGEN-CELL-GEN-04` | `codegen_invariants_test.go` | 61 | codegen |
+| `CODEGEN-CONTRACT-GEN-01` | `codegen_invariants_test.go` | 249 | codegen |
 | `CODEGEN-CONTRACT-GEN-01` | `patch_optional_bool_pointer_test.go` | 68 | codegen |
-| `CODEGEN-CONTRACT-GEN-02` | `codegen_invariants_test.go` | 255 | codegen |
-| `CODEGEN-CONTRACT-USER-OVERLAP-01` | `codegen_invariants_test.go` | 256 | codegen |
-| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 417 | command |
+| `CODEGEN-CONTRACT-GEN-02` | `codegen_invariants_test.go` | 250 | codegen |
+| `CODEGEN-CONTRACT-USER-OVERLAP-01` | `codegen_invariants_test.go` | 251 | codegen |
+| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 406 | command |
 | `CONTRACT-KINDS-CLOSED-SET-01` | `contract_kinds_closed_set_test.go` | 1 | contract |
 | `CONTRACTTEST-BOUNDARY-01` | `contracttest_boundary_test.go` | 1 | contracttest |
 | `COREBUNDLE-DEPS-01` | `corebundle_deps_test.go` | 1 | corebundle |
@@ -72,9 +72,9 @@
 | `HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01` | `http_metrics_label_test.go` | 22 | http |
 | `HTTP-METRICS-LABEL-ROUTER-ATTRIBUTION-01` | `http_metrics_label_test.go` | 24 | http |
 | `HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01` | `http_metrics_label_test.go` | 23 | http |
-| `HTTPUTIL-5XX-KIND-NORMALIZE-01` | `httputil_invariants_test.go` | 20 | httputil |
-| `HTTPUTIL-5XX-LOG-REDACT-01` | `httputil_invariants_test.go` | 116 | httputil |
-| `HTTPUTIL-SURFACE-REGISTERED-01` | `httputil_invariants_test.go` | 179 | httputil |
+| `HTTPUTIL-5XX-KIND-NORMALIZE-01` | `httputil_invariants_test.go` | 22 | httputil |
+| `HTTPUTIL-5XX-LOG-REDACT-01` | `httputil_invariants_test.go` | 118 | httputil |
+| `HTTPUTIL-SURFACE-REGISTERED-01` | `httputil_invariants_test.go` | 181 | httputil |
 | `IDEMPOTENCY-LUA-HASHTAG-01` | `redis_idempotency_hashtag_test.go` | 3 | idempotency |
 | `INTEGRATION-GUARD-01` | `integration_guard_test.go` | 1 | integration |
 | `INTERNAL-CONTRACT-CLIENTS-REQUIRED-01` | `contract_spec_clients_test.go` | 1 | internal |
@@ -91,9 +91,9 @@
 | `LISTENER-DX-01` | `listener_dx_test.go` | 1 | listener |
 | `LITERAL-01` | `errcode_message_const_fixtures_test.go` | 71 | literal |
 | `MANAGED-RESOURCE-CONTRACT-01` | `managed_resource_contract_test.go` | 1 | managed |
-| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 565 | marker |
-| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 567 | marker |
-| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 566 | markergen |
+| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 551 | marker |
+| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 553 | marker |
+| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 552 | markergen |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_invariants_test.go` | 286 | errcode |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_message_const_fixtures_test.go` | 2 | errcode |
 | `META-QUERYPARAM-DRIFT-01` | `queryparam_drift_test.go` | 34 | meta |
@@ -103,9 +103,9 @@
 | `NO-DELETED-AUTH-SYMBOLS-01` | `no_deleted_auth_symbols_test.go` | 1 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `cells_no_wrapper_contractspec_import_test.go` | 7 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `no_manual_contractspec_literal_test.go` | 1 | no |
-| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 563 | no |
+| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 549 | no |
 | `NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01` | `no_test_service_context_in_production_test.go` | 1 | no |
-| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 564 | no |
+| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 550 | no |
 | `OBS-01` | `observability_metrics_test.go` | 12 | obs |
 | `OUTBOX-CELL-01` | `outbox_invariants_test.go` | 61 | outbox |
 | `OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01` | `outbox_invariants_test.go` | 600 | outbox |
@@ -161,21 +161,21 @@
 | `ROLE-ADMIN-LITERAL-01` | `role_admin_literal_test.go` | 1 | role |
 | `ROLE-ADMIN-LITERAL-02` | `role_admin_literal_test.go` | 2 | role |
 | `SEC-FAIL-CLOSED-01` | `security_defaults_test.go` | 5 | sec |
-| `SEC-FAIL-CLOSED-02` | `security_defaults_test.go` | 47 | sec |
-| `SEC-FAIL-CLOSED-03` | `security_defaults_test.go` | 48 | sec |
-| `SEC-FAIL-CLOSED-04` | `security_defaults_test.go` | 49 | sec |
-| `SEC-FAIL-CLOSED-05` | `security_defaults_test.go` | 50 | sec |
-| `SEC-FAIL-CLOSED-06` | `security_defaults_test.go` | 51 | sec |
-| `SEC-FAIL-CLOSED-07` | `security_defaults_test.go` | 52 | sec |
-| `SEC-FAIL-CLOSED-08` | `security_defaults_test.go` | 53 | sec |
-| `SEC-FAIL-CLOSED-09` | `security_defaults_test.go` | 54 | sec |
+| `SEC-FAIL-CLOSED-02` | `security_defaults_test.go` | 49 | sec |
+| `SEC-FAIL-CLOSED-03` | `security_defaults_test.go` | 50 | sec |
+| `SEC-FAIL-CLOSED-04` | `security_defaults_test.go` | 51 | sec |
+| `SEC-FAIL-CLOSED-05` | `security_defaults_test.go` | 52 | sec |
+| `SEC-FAIL-CLOSED-06` | `security_defaults_test.go` | 53 | sec |
+| `SEC-FAIL-CLOSED-07` | `security_defaults_test.go` | 54 | sec |
+| `SEC-FAIL-CLOSED-08` | `security_defaults_test.go` | 55 | sec |
+| `SEC-FAIL-CLOSED-09` | `security_defaults_test.go` | 56 | sec |
 | `SETUP-ADMIN-CODEGEN-BOOTSTRAP-AUTH-WIRED-01` | `setup_admin_bootstrap_closure_test.go` | 24 | setup |
 | `SETUP-ADMIN-NOT-PUBLIC-01` | `setup_admin_auth_test.go` | 1 | setup |
 | `SLOWGATE-ALLOWLIST-01` | `slowgate_allowlist_test.go` | 1 | slowgate |
 | `SPAN-RECORD-ERROR-REDACT-01` | `span_record_error_redact_test.go` | 1 | span |
 | `SPAN-RECORD-ERROR-REDACT-ARCHTEST-01` | `span_record_error_redact_test.go` | 22 | span |
-| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 740 | codegen |
-| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 418 | codegen |
+| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 723 | codegen |
+| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 407 | codegen |
 | `STORAGE-BACKEND-MEMORY-NO-PG-01` | `storage_backend_test.go` | 11 | storage |
 | `STORAGE-BACKEND-PG-WIRING-01` | `storage_backend_test.go` | 6 | storage |
 | `SVCTOKEN-CALLER-CELL-REQUIRED-01` | `svctoken_caller_cell_test.go` | 1 | svctoken |
@@ -185,6 +185,7 @@
 | `TEST-TIME-LITERAL-01` | `test_sleep_discipline_test.go` | 25 | test |
 | `TEST-TIME-LITERAL-01` | `test_time_literal_fixtures_test.go` | 2 | test |
 | `TEST-TIME-LITERAL-01` | `test_time_literal_test.go` | 1 | test |
+| `TESTUTIL-BOUNDARY-01` | `testutil_boundary_negprobe_test.go` | 1 | testutil |
 | `TESTUTIL-BOUNDARY-01` | `testutil_boundary_test.go` | 1 | testutil |
 | `VISIT-BUFFER-THEN-COMMIT-01` | `visit_buffer_then_commit_test.go` | 1 | visit |
 | `WIRE-CODE-5XX-SINGLE-SOURCE-01` | `wire_code_5xx_single_source_test.go` | 1 | wire |

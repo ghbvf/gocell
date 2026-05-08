@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -14,17 +15,12 @@ func TestParseFile_ErrorFailLoud(t *testing.T) {
 	// Copy broken.go.txt → tmp/broken.go, then call eachFile and expect error.
 	tmp := t.TempDir()
 	src := filepath.Join("testdata", "parse_broken", "broken.go.txt")
-	data, err := os.ReadFile(src) //nolint:gosec // testdata path under test control
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
+	data := fileutil.MustReadFile(t, src)
 	dst := filepath.Join(tmp, "broken.go")
-	if err := os.WriteFile(dst, data, 0o644); err != nil { //nolint:gosec // temp dir under test control
-		t.Fatalf("WriteFile: %v", err)
-	}
+	fileutil.MustWriteFile(t, dst, data)
 
 	s := scanner.DirsScope(tmp, []string{"."})
-	err = scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		return nil
 	})
 	if err == nil {
@@ -43,18 +39,13 @@ func TestParseFile_ErrorFailLoud(t *testing.T) {
 func TestParseFile_OkFileSucceeds(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join("testdata", "parse_broken", "ok.go.txt")
-	data, err := os.ReadFile(src) //nolint:gosec // testdata path under test control
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
+	data := fileutil.MustReadFile(t, src)
 	dst := filepath.Join(tmp, "ok.go")
-	if err := os.WriteFile(dst, data, 0o644); err != nil { //nolint:gosec // temp dir under test control
-		t.Fatalf("WriteFile: %v", err)
-	}
+	fileutil.MustWriteFile(t, dst, data)
 
 	s := scanner.DirsScope(tmp, []string{"."})
 	var visited []string
-	err = scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		visited = append(visited, fc.Rel)
 		return nil
 	})

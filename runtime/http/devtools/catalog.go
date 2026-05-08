@@ -120,8 +120,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Marshal document.
 	body, err := catalog.MarshalDocument(doc, format)
 	if err != nil {
-		// format is validated above to be "json" or "yaml" — not user-controlled.
-		slog.Error("devtools: MarshalDocument failed", //nolint:gosec // format validated to "json"|"yaml" in parseQuery before reaching here
+		slog.Error("devtools: MarshalDocument failed", //nolint:gosec // G706 false-positive: format bounded to "json"|"yaml" by parseQuery
 			slog.String("format", format),
 			slog.Any("error", err),
 		)

@@ -178,7 +178,11 @@ type CellArtifact struct {
 // cell_gen.go plus one slice_gen.go per slice with subscribes). Cells
 // without GoStructName return (nil, nil) — same opt-in semantics as Generate.
 //
-//nolint:gocognit // sequential render-cell + per-slice render loop; complexity is the price of single-pass artifact emission
+// Implementation note: render must be ordered cell→slices in a single pass
+// because the cell template's imports are inferred from per-slice subscribes;
+// extracting per-slice render into a helper duplicates the import accumulator.
+//
+//nolint:gocognit // see comment above
 func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID string) ([]CellArtifact, error) {
 	if project == nil {
 		return nil, fmt.Errorf("cellgen render artifacts: project is nil")

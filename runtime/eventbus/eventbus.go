@@ -566,7 +566,7 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 func retryDelay(attempt int) time.Duration {
 	base := outbox.ExponentialDelay(baseRetryDelay, maxRetryDelay, attempt)
 	// G404 R2-approved: retry jitter has no cryptographic requirement.
-	jitter := time.Duration(rand.Int64N(int64(baseRetryDelay))) //nolint:gosec // G404
+	jitter := time.Duration(rand.Int64N(int64(baseRetryDelay))) //nolint:gosec // G404 non-crypto retry jitter, no cryptographic requirement
 	return base + jitter
 }
 

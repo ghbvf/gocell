@@ -2,11 +2,11 @@ package app
 
 import (
 	"go/format"
-	"os"
 	"path/filepath"
 	"testing"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/generatedcatalog"
 )
 
@@ -94,10 +94,7 @@ func TestGenerateCatalog_WritesFile(t *testing.T) {
 		t.Fatalf("generateCatalog: %v", err)
 	}
 
-	content, err := os.ReadFile(outPath) //nolint:gosec // test-only path
-	if err != nil {
-		t.Fatalf("read output: %v", err)
-	}
+	content := fileutil.MustReadFile(t, outPath)
 	if _, err := format.Source(content); err != nil {
 		t.Fatalf("output is not valid Go: %v", err)
 	}

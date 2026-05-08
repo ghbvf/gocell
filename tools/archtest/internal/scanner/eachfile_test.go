@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -81,16 +82,11 @@ func TestEachFile_IncludeTests(t *testing.T) {
 func TestEachFile_ParseErrorIsPropagated(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join("testdata", "parse_broken", "broken.go.txt")
-	data, err := os.ReadFile(src) //nolint:gosec // testdata path under test control
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "broken.go"), data, 0o644); err != nil { //nolint:gosec // temp dir under test control
-		t.Fatalf("WriteFile: %v", err)
-	}
+	data := fileutil.MustReadFile(t, src)
+	fileutil.MustWriteFile(t, filepath.Join(tmp, "broken.go"), data)
 
 	s := scanner.DirsScope(tmp, []string{"."})
-	err = scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
+	err := scanner.EachFileInternal(s, parser.ImportsOnly, func(fc scanner.FileContext) error {
 		return nil
 	})
 	if err == nil {

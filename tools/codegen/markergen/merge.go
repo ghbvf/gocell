@@ -23,106 +23,122 @@ var knownMarkers = []string{"cell:listener", "slice:route", "slice:subscribe"}
 // WireBundle — the yaml fallback path has been removed (W2 cleanup).
 // All five platform cells now declare markers; NO-WIRE-FIELDS-IN-YAML-01
 // archtest enforces yaml-side absence statically.
-//
-//nolint:gocognit,cyclop,funlen // sequential markergen pipeline (collect + merge + ownership cross-check); complexity intrinsic
 func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBundle, error) {
 	result := make(map[string]WireBundle, len(project.Cells))
 	var allErrs errList
 
 	for cellID, cell := range project.Cells {
-		cellGoPath := filepath.Join(projectRoot, filepath.Dir(cell.File), "cell.go")
-
-		if _, err := os.Stat(cellGoPath); err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				// cell.go absent — empty WireBundle (expected case).
-				result[cellID] = WireBundle{}
-				continue
-			}
-			// Unexpected IO error (permission denied, broken symlink, etc.) —
-			// surface instead of silently falling back to empty WireBundle.
-			// K05-10: classify os.Stat errors instead of treating all failures as absent.
-			allErrs.Append(fmt.Errorf("cell %s: stat %s: %w", cellID, cellGoPath, err))
-			continue
-		}
-
-		relPath := cellGoPath
-		if rel, err := filepath.Rel(projectRoot, cellGoPath); err == nil {
-			relPath = rel
-		}
-
-		markers, err := CollectFromCellFile(cellGoPath)
-		if err != nil {
-			allErrs.Append(fmt.Errorf("cell %s: collect %s: %w", cellID, relPath, err))
-			continue
-		}
-
-		if len(markers) == 0 {
-			// cell.go exists but no markers — empty WireBundle.
-			result[cellID] = WireBundle{}
-			continue
-		}
-
-		bundle, errs := buildBundle(markers)
+		bundle, ok, errs := loadCellBundle(projectRoot, cellID, cell)
 		for _, e := range errs {
-			allErrs.Append(fmt.Errorf("cell %s: %w", cellID, e))
+			allErrs.Append(e)
 		}
-		if len(errs) > 0 {
-			// Skip writing a partial bundle; the errors are in allErrs.
-			continue
+		if ok {
+			result[cellID] = bundle
 		}
-		result[cellID] = bundle
 	}
 
-	// Cross-check 1: every RouteSpec.Slice and SubscribeSpec.Slice must exist in
-	// project.Slices[cellID/<sliceID>]. Unknown slice names surface actionable
-	// errors listing the full declared-slice set.
-	//
-	// Cross-check 2 (K05-01a): the referenced slice must declare the expected
-	// contractUsages role — RouteSpec.Slice must have role "serve", and
-	// SubscribeSpec.Slice must have role "subscribe". Errors carry the actual
-	// declared roles for fast triage.
+	crossCheckSliceRefs(result, project, &allErrs)
+	return result, allErrs.AsError()
+}
+
+// loadCellBundle reads cell.go markers for a single cell and returns the
+// resulting WireBundle. The bool is true when result should be recorded
+// (success or expected-absent cases); false skips writing a partial bundle
+// when collect / build errors occur.
+func loadCellBundle(projectRoot, cellID string, cell *metadata.CellMeta) (WireBundle, bool, []error) {
+	cellGoPath := filepath.Join(projectRoot, filepath.Dir(cell.File), "cell.go")
+	relPath := cellGoPath
+	if rel, err := filepath.Rel(projectRoot, cellGoPath); err == nil {
+		relPath = rel
+	}
+
+	if _, err := os.Stat(cellGoPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return WireBundle{}, true, nil
+		}
+		// K05-10: classify os.Stat errors instead of treating all failures as absent.
+		// Rewrite the embedded fs.PathError so operator-facing messages do not
+		// leak the absolute filesystem path (defense-in-depth alongside our own
+		// format which already uses relPath).
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			pathErr.Path = relPath
+		}
+		return WireBundle{}, false, []error{fmt.Errorf("cell %s: stat %s: %w", cellID, relPath, err)}
+	}
+
+	markers, err := CollectFromCellFile(cellGoPath)
+	if err != nil {
+		return WireBundle{}, false, []error{fmt.Errorf("cell %s: collect %s: %w", cellID, relPath, err)}
+	}
+	if len(markers) == 0 {
+		return WireBundle{}, true, nil
+	}
+
+	bundle, errs := buildBundle(markers)
+	if len(errs) > 0 {
+		wrapped := make([]error, len(errs))
+		for i, e := range errs {
+			wrapped[i] = fmt.Errorf("cell %s: %w", cellID, e)
+		}
+		return WireBundle{}, false, wrapped
+	}
+	return bundle, true, nil
+}
+
+// crossCheckSliceRefs validates that every RouteSpec.Slice and
+// SubscribeSpec.Slice references a known slice in project.Slices and that the
+// referenced slice declares the expected contractUsages role (route → "serve",
+// subscribe → "subscribe"). Unknown slices and missing roles produce
+// actionable errors listing the declared set/roles for fast triage.
+//
+// K05-01a: contractUsages role must match the marker kind.
+func crossCheckSliceRefs(result map[string]WireBundle, project *metadata.ProjectMeta, allErrs *errList) {
 	for cellID, bundle := range result {
 		cell := project.Cells[cellID]
 		if cell == nil {
 			continue
 		}
-		sliceSet := make(map[string]struct{})
-		for sliceKey := range project.Slices {
-			if !strings.HasPrefix(sliceKey, cellID+"/") {
-				continue
-			}
-			sliceID := strings.TrimPrefix(sliceKey, cellID+"/")
-			sliceSet[sliceID] = struct{}{}
-		}
+		sliceSet := buildSliceSet(project, cellID)
 		for _, r := range bundle.Routes {
-			if _, ok := sliceSet[r.Slice]; !ok {
-				allErrs.Append(fmt.Errorf("cell %s: route marker references unknown slice %q (declared slices: %v)",
-					cellID, r.Slice, sortedSliceIDs(sliceSet)))
-				continue
-			}
-			// K05-01a: slice must declare role=serve in contractUsages.
-			sliceMeta := project.Slices[cellID+"/"+r.Slice]
-			if sliceMeta != nil && !hasContractUsageRole(sliceMeta, "serve") {
-				allErrs.Append(fmt.Errorf("cell %s: route marker slice %q missing contractUsages role %q (declared roles: %v)",
-					cellID, r.Slice, "serve", declaredRoles(sliceMeta)))
-			}
+			checkSliceRoleRef(cellID, r.Slice, "route", "serve", sliceSet, project, allErrs)
 		}
 		for _, s := range bundle.Subscribes {
-			if _, ok := sliceSet[s.Slice]; !ok {
-				allErrs.Append(fmt.Errorf("cell %s: subscribe marker references unknown slice %q (declared slices: %v)",
-					cellID, s.Slice, sortedSliceIDs(sliceSet)))
-				continue
-			}
-			// K05-01a: slice must declare role=subscribe in contractUsages.
-			sliceMeta := project.Slices[cellID+"/"+s.Slice]
-			if sliceMeta != nil && !hasContractUsageRole(sliceMeta, "subscribe") {
-				allErrs.Append(fmt.Errorf("cell %s: subscribe marker slice %q missing contractUsages role %q (declared roles: %v)",
-					cellID, s.Slice, "subscribe", declaredRoles(sliceMeta)))
-			}
+			checkSliceRoleRef(cellID, s.Slice, "subscribe", "subscribe", sliceSet, project, allErrs)
 		}
 	}
+}
 
-	return result, allErrs.AsError()
+// buildSliceSet returns the set of slice IDs declared under the given cell.
+func buildSliceSet(project *metadata.ProjectMeta, cellID string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for sliceKey := range project.Slices {
+		if !strings.HasPrefix(sliceKey, cellID+"/") {
+			continue
+		}
+		set[strings.TrimPrefix(sliceKey, cellID+"/")] = struct{}{}
+	}
+	return set
+}
+
+// checkSliceRoleRef appends errors when sliceID is unknown or its slice
+// metadata does not declare the expected contractUsages role.
+func checkSliceRoleRef(
+	cellID, sliceID, markerKind, expectedRole string,
+	sliceSet map[string]struct{},
+	project *metadata.ProjectMeta,
+	allErrs *errList,
+) {
+	if _, ok := sliceSet[sliceID]; !ok {
+		allErrs.Append(fmt.Errorf("cell %s: %s marker references unknown slice %q (declared slices: %v)",
+			cellID, markerKind, sliceID, sortedSliceIDs(sliceSet)))
+		return
+	}
+	sliceMeta := project.Slices[cellID+"/"+sliceID]
+	if sliceMeta != nil && !hasContractUsageRole(sliceMeta, expectedRole) {
+		allErrs.Append(fmt.Errorf("cell %s: %s marker slice %q missing contractUsages role %q (declared roles: %v)",
+			cellID, markerKind, sliceID, expectedRole, declaredRoles(sliceMeta)))
+	}
 }
 
 // sortedSliceIDs returns a deterministically sorted slice of IDs from the set.
@@ -178,7 +194,11 @@ func buildBundle(markers []collectedMarker) (WireBundle, []error) {
 // appends the result to bundle. Returns a non-nil error when the marker is
 // unknown, placed on the wrong target level, or otherwise malformed.
 //
-//nolint:gocognit // closed-set switch + target-level enforcement; complexity intrinsic
+// Implementation note: closed-set marker dispatcher; each switch arm encodes
+// schema enforcement (target level + parse + append) per marker kind. The
+// cognitive load comes from the schema rules, not nested control flow.
+//
+//nolint:gocognit // see comment above
 func dispatchMarker(m collectedMarker, bundle *WireBundle) error {
 	switch m.Name {
 	case "cell:listener":

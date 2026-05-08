@@ -5,22 +5,18 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // copyTestFile copies a single file for use in importban tests.
 func copyTestFile(t *testing.T, src, dst string) {
 	t.Helper()
-	data, err := os.ReadFile(src) //nolint:gosec // testdata path under test control
-	if err != nil {
-		t.Fatalf("copyTestFile ReadFile %s: %v", src, err)
-	}
+	data := fileutil.MustReadFile(t, src)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		t.Fatalf("copyTestFile MkdirAll %s: %v", filepath.Dir(dst), err)
 	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil { //nolint:gosec // temp dir under test control
-		t.Fatalf("copyTestFile WriteFile %s: %v", dst, err)
-	}
+	fileutil.MustWriteFile(t, dst, data)
 }
 
 func TestImportBan_DetectsForbidden(t *testing.T) {

@@ -100,7 +100,12 @@ l0Dependencies: []
 //   - <root>/<targetDir>/cell.go  — struct + stub markers + initInternal hook
 //   - <root>/<targetDir>/cell.yaml — metadata with goStructName set
 //
-//nolint:gocognit,cyclop,funlen // sequential validation + symlink guard + dual-template render path; complexity intrinsic
+// Implementation note: kept as a single pass (validate → defaults → symlink
+// guard → cell.go render → cell.yaml render) so the "all-or-nothing" write
+// semantics remain explicit; splitting into phases would force a second-pass
+// file walk just to recover state.
+//
+//nolint:gocognit,cyclop,funlen // see comment above
 func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	if err := validateScaffoldSpec(spec); err != nil {
 		return err
