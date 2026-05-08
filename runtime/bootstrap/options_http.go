@@ -18,6 +18,7 @@ import (
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/nilutil"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -63,6 +64,11 @@ func WithTracer(t tracing.Tracer) Option {
 // shutdown and startup rollback. ContextCloser is preferred so the shared
 // shutCtx budget flows through to the resource.
 //
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected at phase0 with a fatal error so operators are not silently left
+// without rate-limiter protection. This mirrors the WithCircuitBreaker /
+// WithManagedResource fail-fast pattern.
+//
 // Note: the rate limiter uses the client IP from RealIP middleware as the
 // bucket key. Ensure WithTrustedProxies is correctly configured; an overly
 // permissive trust list allows X-Forwarded-For spoofing, which bypasses
@@ -70,8 +76,14 @@ func WithTracer(t tracing.Tracer) Option {
 //
 // ref: go-zero — rate limiting configuration at app level
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser preferred over io.Closer
+// ref: kubernetes-sigs/controller-runtime pkg/manager/manager.go — strong
+// dependency fail-fast.
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(b *Bootstrap) {
+		if nilutil.IsNil(rl) {
+			b.rateLimiterNil = true
+			return
+		}
 		b.routerOpts = append(b.routerOpts, router.WithRateLimiter(rl))
 		b.closers = append(b.closers, rl)
 	}
@@ -93,7 +105,7 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser preferred over io.Closer
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(b *Bootstrap) {
-		if cb == nil || middleware.IsTypedNilAllower(cb) {
+		if nilutil.IsNil(cb) {
 			b.circuitBreakerNil = true
 			return
 		}

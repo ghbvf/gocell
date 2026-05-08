@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
-	"reflect"
 	"strings"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
@@ -28,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/nilutil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -189,7 +189,7 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // ref: kubernetes/kubernetes apiserver — option fail-fast at startup
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(r *Router) {
-		if cb == nil || middleware.IsTypedNilAllower(cb) {
+		if nilutil.IsNil(cb) {
 			r.circuitBreakerNil = true
 			return
 		}
@@ -211,24 +211,11 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // ref: go-zero — per-route WithJwt() opt-in auth
 func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 	return func(r *Router) {
-		if isNilIntentTokenVerifier(verifier) {
+		if nilutil.IsNil(verifier) {
 			r.authVerifierNil = true
 			return
 		}
 		r.authVerifier = verifier
-	}
-}
-
-func isNilIntentTokenVerifier(verifier auth.IntentTokenVerifier) bool {
-	if verifier == nil {
-		return true
-	}
-	v := reflect.ValueOf(verifier)
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
-		return v.IsNil()
-	default:
-		return false
 	}
 }
 
