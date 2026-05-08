@@ -1,9 +1,12 @@
 package postgres
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -127,4 +130,87 @@ func TestRoleFieldValue(t *testing.T) {
 	assert.Equal(t, "id-1", roleFieldValue(r, "id"))
 	assert.Equal(t, "admin", roleFieldValue(r, "name"))
 	assert.Equal(t, "", roleFieldValue(r, "unknown"))
+}
+
+// TestRemoveFromUserIfNotLast_RequiresAmbientTx covers the fail-fast guard
+// added to satisfy the no-TOCTOU port contract: P1#3 advisory_xact_lock is
+// only effective inside a TxRunner.RunInTx because the lock is released at
+// transaction end. A pool-only ctx is rejected with ErrInternal rather than
+// silently providing weaker isolation.
+func TestRemoveFromUserIfNotLast_RequiresAmbientTx(t *testing.T) {
+	r, err := NewPGRoleRepository(dummyPool(), clock.Real())
+	require.NoError(t, err)
+
+	_, err = r.RemoveFromUserIfNotLast(context.Background(), "user-1", "admin")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrInternal, ec.Code,
+		"P1#3 fail-fast: pool-only ctx must produce ErrInternal, not silent weaker isolation")
+}
+
+// TestMapAssignError_NonPgxError covers the non-pgx error fallback path of
+// mapAssignError (anything that isn't a pgconn.PgError must wrap as KindInternal).
+func TestMapAssignError_NonPgxError(t *testing.T) {
+	r, err := NewPGRoleRepository(dummyPool(), clock.Real())
+	require.NoError(t, err)
+
+	plain := errors.New("network timeout")
+	mapped := r.mapAssignError(plain, "user-1", "admin")
+	require.Error(t, mapped)
+	var ec *errcode.Error
+	require.ErrorAs(t, mapped, &ec)
+	assert.Equal(t, errAdapterPGQuery, ec.Code,
+		"non-pgx error must wrap as ErrAdapterPGQuery (infra)")
+}
+
+// TestMapAssignError_UnknownPgUniqueConstraint covers the 23505 default
+// branch when the violated constraint is not the single-admin partial idx.
+// (PK collision is absorbed by ON CONFLICT DO NOTHING upstream and never
+// reaches mapAssignError; here we exercise the "unknown constraint" fallback.)
+func TestMapAssignError_UnknownPgUniqueConstraint(t *testing.T) {
+	r, err := NewPGRoleRepository(dummyPool(), clock.Real())
+	require.NoError(t, err)
+
+	pgErr := &pgconn.PgError{
+		Code:           pgUniqueViolation,
+		ConstraintName: "some_other_unique_idx",
+		Message:        "duplicate key value violates unique constraint",
+	}
+	mapped := r.mapAssignError(pgErr, "user-1", "viewer")
+	require.Error(t, mapped)
+	var ec *errcode.Error
+	require.ErrorAs(t, mapped, &ec)
+	assert.Equal(t, errAdapterPGQuery, ec.Code,
+		"unknown 23505 constraint must wrap as KindInternal, not silently mapped to admin-duplicate")
+}
+
+// TestMapAssignError_FKViolations covers both 23503 mappings introduced by
+// migration 020: fk_role_assignments_user → ErrAuthUserNotFound and
+// fk_role_assignments_role → ErrAuthRoleNotFound.
+func TestMapAssignError_FKViolations(t *testing.T) {
+	r, err := NewPGRoleRepository(dummyPool(), clock.Real())
+	require.NoError(t, err)
+
+	cases := []struct {
+		name       string
+		constraint string
+		wantCode   errcode.Code
+	}{
+		{"user FK", "fk_role_assignments_user", errcode.ErrAuthUserNotFound},
+		{"role FK", "fk_role_assignments_role", errcode.ErrAuthRoleNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pgErr := &pgconn.PgError{
+				Code:           pgForeignKeyViolation,
+				ConstraintName: tc.constraint,
+			}
+			mapped := r.mapAssignError(pgErr, "user-1", "admin")
+			require.Error(t, mapped)
+			var ec *errcode.Error
+			require.ErrorAs(t, mapped, &ec)
+			assert.Equal(t, tc.wantCode, ec.Code)
+		})
+	}
 }
