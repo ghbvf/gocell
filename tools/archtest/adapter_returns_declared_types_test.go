@@ -18,12 +18,10 @@
 package archtest
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,6 +30,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const adapterReturnsDeclaredRule = "ADAPTER-RETURNS-DECLARED-TYPES-01"
@@ -260,44 +259,19 @@ func importPathToContractID(modulePath, importPath string) string {
 // gatherAdapterFiles collects candidate handler.go and service.go files
 // under cells/ and examples/*/cells/ in the given root directory.
 func gatherAdapterFiles(root string) ([]string, error) {
-	var files []string
-	patterns := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+	scope := scanner.DirsScope(root, []string{"cells", "examples"})
+	all, err := scope.Files()
+	if err != nil {
+		return nil, err
 	}
-
-	for _, base := range patterns {
-		err := filepath.WalkDir(base, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", "generated", ".git":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			name := d.Name()
-			if name != "handler.go" && name != "service.go" {
-				return nil
-			}
-			if strings.HasSuffix(name, "_test.go") {
-				return nil
-			}
+	var files []string
+	for _, path := range all {
+		name := filepath.Base(path)
+		if name == "handler.go" || name == "service.go" {
 			files = append(files, path)
-			return nil
-		})
-		if err != nil && !isNotExist(err) {
-			return nil, err
 		}
 	}
 	return files, nil
-}
-
-// isNotExist reports whether err indicates the path does not exist.
-func isNotExist(err error) bool {
-	return errors.Is(err, fs.ErrNotExist)
 }
 
 // checkAdapterFile parses one file and reports violations via t.Errorf.
