@@ -143,15 +143,15 @@ D1-D6 编码了 typed envelope 的"链中段"——`contract.yaml` 声明 → `t
 
 **Ceiling 语义边界**：return 集合 ⊆ declared 集合。**零 typed return（adapter 全部走 `return nil, err` framework fallback）合法**。理由：当前 cells/examples 下所有 adapter 全部 framework-fallback 是 Pre-CH-06 时代的历史包袱；一次性升级到 Floor 守需改 25+ 个 adapter，超出 Cx3 范围。
 
-**演进锚点（依赖段 2 invariant Registry 工具产品化）**
+**演进锚点**
 
 | 阶段 | 守语义升级 | adapter 改造 | 入口 | 触发条件 |
 |---|---|---|---|---|
 | 段 1（本 ADR） | ADAPTER-RETURNS-DECLARED-TYPES-01 = Ceiling 守 | 零改动；零 typed return 合法 | 已落地 | — |
-| 段 2.5（独立 PR） | + ADAPTER-RETURNS-SUCCESS-FLOOR-01（successStatus 必须至少有一处 typed return） | ~25 adapter `return nil, err` → `return XxxNNNJSONResponse{...}, nil` | docs/backlog.md `B-FLOOR-FOLLOWUP` | 段 2 invariant Registry PR ship 后启动；预估 16h dev + 4h review |
+| 段 2.5（独立 PR） | + ADAPTER-RETURNS-SUCCESS-FLOOR-01（successStatus 必须至少有一处 typed return） | ~25 adapter `return nil, err` → `return XxxNNNJSONResponse{...}, nil` | docs/backlog.md `B-FLOOR-FOLLOWUP` | 参见 backlog `B-FLOOR-FOLLOWUP` Trigger 字段；预估 16h dev + 4h review |
 | 段 4（独立 PR） | + ADAPTER-RETURNS-FULL-FLOOR-01（每个声明 status 都至少返一次） | 桩典型错误路径返 typed `XxxNNNErrorResponse` | 同上 | 段 2.5 ship 后再启动（依赖 Success-Floor 已稳定）；预估 24h dev + 6h review |
 
-**触发判定**：`B-FLOOR-FOLLOWUP.ready = true` 当且仅当（a）段 2 `INVARIANT-REGISTRY-COMPLETENESS-01` archtest 已绿、（b）`gocell check invariants` CLI 可用、（c）typed envelope 6 条 invariant 全部入注。三者任一未达成即维持 Ceiling 守，避免分批 floor 升级导致 archtest 与 adapter 状态不一致。
+**触发判定**：以 backlog `B-FLOOR-FOLLOWUP` Trigger 字段为唯一源，ADR 不重复维护。原计划依赖的 invariant Registry 工具链路径已被 `docs/plans/202605070431-pr403-funnel-fix-roadmap.md` §2 判定反模式永不落地，新触发锚定 contract.yaml 与 adapter typed return 漂移事故 / cells 数量增长 ROI 阈值。
 
 **Bijection 图**
 

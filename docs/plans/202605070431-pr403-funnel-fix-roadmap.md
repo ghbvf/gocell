@@ -1,325 +1,214 @@
-# PR #403 修复路线图（funnel 化优先 / 最终态）
+# PR #403 修复路线图（funnel 化优先 / 实施视角）
 
-**对接**: `docs/reviews/202605070153-pr403-third-wave-review.md` §4 修复方案
-**关系**: 替代原报告 §4 路线，§1-§3 症状/根因诊断保留
-**生成日期**: 2026-05-07
-**最后更新**: 2026-05-07（核实段 1 实际状态后修正）
+**对接**：`docs/reviews/202605070153-pr403-third-wave-review.md` §4 修复方案
+**关系**：替代原报告 §4 路线，§1-§3 症状/根因诊断保留在 review
+**生成日期**：2026-05-07
+**最后更新**：2026-05-08（激进合并：删 7 个切片视图，合一为单一任务表 + 实施叙事；吸收 PR #418 / #419 ship + 4 follow-up）
 
 ---
 
-## 0. 路线变更摘要（最终态）
+## 1. 当前状态（对齐时点 2026-05-08）
 
-原 §4 提出 4 段修复路线。逐项核实实际代码后修正：
+段 1（typed envelope 闭环 + ADR D6/D7）/ 段 3'（CLAUDE.md funnel-first 原则）/ PR-FUNNEL-01（archtest 文件 104→70）/ PR-FUNNEL-02（handler invariants funnel）/ PR-FUNNEL-03（governance rules 15→8）/ Batch 0 SCANNER-FRAMEWORK 全部 ✅。
 
-| 段 | 原计划 | 最终决策 | 状态 |
+实测基线：72 archtest 文件 / 89 INVARIANT 锚点（Go 源）/ 8 governance source 文件。
+
+剩余主线：Batch 1 6 条 follow-up（21-26h dev + 11h review）+ Batch 2 70+ 旧 scanner 渐进迁移 + Batch 2 末尾 USAGE-01 守卫闸 + Batch 3 外部信号触发项。
+
+---
+
+## 2. 决策与不做的事（最终路线立场）
+
+- **不建 Registry / 中心化注册表**：K8s / CockroachDB / Linux / Rust / Go 工具链均无 prior art；多份文档用 `// INVARIANT: <ID>` grep 锚点串联即可。
+- **不立 PR template / four-piece kit ADR**：项目大规模重构期填字段会变应付式；funnel-first 原则 < 10 行已写入 CLAUDE.md。
+- **接受 funnel 不到的物理残留**：Go 缺 sealed package / newtype / const string 区分，~50% 约束物理上 funnel 不掉（buffer-then-commit 顺序、message const literal、panic 白名单、readyz probe 命名等）；CockroachDB 同款语言天花板，残留 ~30 条平铺管理。
+- **archtest 数量基线**：CockroachDB ~30 是参照值，GoCell 规模可压更低；具体数值不立硬指标，按 PR-FUNNEL-NN 自然降。
+- **PR 切片纪律**：单 PR 范围控制在 Cx2-Cx3 / 单一概念边界；不为"同根因"叙事打包合并 PR。
+
+详细论证（K8s/CockroachDB/Linux/Rust/Go 工具链对照、Registry 无 prior art、Go 语言天花板）见原 326 行版本（git history `1472336b` 之前）。
+
+---
+
+## 3. 任务表（唯一事实表）
+
+| ID | Batch | Status | 工时 dev+review | 说明 |
+|---|---|---|---|---|
+| 段 1 typed envelope 闭环 | — | ✅ | — | PR #403（71be4d6e）；ADR D6/D7 |
+| 段 3' CLAUDE.md funnel-first | — | ✅ | — | `CLAUDE.md:73` `## 新增 invariant 决策原则` |
+| PR-FUNNEL-01 主题聚并 | — | ✅ | — | PR #408（5461d53e）；archtest 104→70 |
+| PR-FUNNEL-01 follow-up | — | ✅ | — | PR #412（16a13993）；parse-error fail-loud + git ls-files |
+| PR-FUNNEL-02 handler funnel | — | ✅ | — | PR #411（18b60a5c）；4 archtest 删 + HANDLER-POLICY-REQUIRED-01 升 funnel + auth.clientsOnly/serviceOwned spec flag + synth_http_auth_modes fixture |
+| Audit step A 清单化 | — | ✅ | — | `list-archtests.sh` + `inventory.md` + `verify-archtest-inventory.sh` 漂移闸 |
+| `PR408-FU-SCANNER-SHARED-FRAMEWORK-01` | 0 | ✅ | — | PR #419（996784cf）；`tools/archtest/internal/scanner/` 共享框架 + 4 demo 迁移；fail-closed by construction、structured scope predicate、内置 vendor/testdata/worktrees skip、统一 receiver-type 解析 |
+| `PR-FUNNEL-03` governance 聚并 | 1 | ✅ | — | PR #418（e8cdf3c9）；source 15→8 文件（fmt/ref/topo/verify/http/misc_advisory/misc_consistency/misc_strict）+ `rule_inventory_test.go` golden 锁 81 条规则 ID |
+| `PR408-FU-LEGACY-ANCHOR-BACKFILL-01` | 1 | ⏳ | 3-4h+2h | 46 个 `tools/archtest/*_test.go` 加 `// INVARIANT:` 锚点（实测 2026-05-08；backlog 写 39 偏少）+ `list-archtests.sh` 删 fallback + 新 archtest `INVENTORY-ANCHOR-REQUIRED-01` 守锚点必现 |
+| `PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01` | 1 | ⏳ | 4h+2h | `list-archtests.sh` 改 AST owner 提取（按 `Rule{ID:...}` struct literal / `const ruleID = "..."` 定位）+ inventory 加 `referenced_by` 列；冲突点：与 ANCHOR-BACKFILL 都改 `list-archtests.sh`（不同函数 trivial rebase） |
+| `PR411-AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01` | 1 | ⏳ | 4h | schema/governance 对显式 `false` 语义统一 + 回归测试 |
+| `GOVERNANCE-RULE-REACHABILITY-TEST-01` | 1 | ⏳ | ~6h+2h | `rule_inventory_test.go` 加静态 BFS：从 `rules()` / `strictRules()` / 公开 `Check*` 4 个注册根扩闭包，覆盖 const-ident emission（`ruleFMT20` 等）/ 双 receiver type（`*Validator` + `*DependencyChecker`）/ 闭包包装注册，断言 reachable rule IDs ⊇ golden 81 条；替代 PR-FUNNEL-03 当前 `gocell validate` zero-diff 反向证明的临时硬化 |
+| `PR419-FU-INVENTORY-CI-GATE-01` | 1 | ⏳ | 1-2h+1h | `bash hack/verify-archtest-inventory.sh` 加入 `.github/workflows/_build-lint.yml` integration-test job（或独立 verify job），漂移即 CI 红 |
+| `PR419-FU-PANIC-MUST-PATH-SCOPE-01` | 1 | ⏳ | 3-4h+2h | `panic_invariants_test.go` 把 `strings.HasPrefix(node.Name.Name, "Must")` 全局豁免改为受 `architecturalPanicWhitelist` path 前缀约束（仅 websocket/kernel/cell bootstrap 路径下豁免 Must*），或为 6 条 C 类显式补 whitelist 条目 |
+| `PR-FUNNEL-04` 候选评估 | 2 | ⏳ | 2h | 扫 70+ archtest 找可 type-system 化（typed `XxxResponseObject` 替代 `(*Response, error)`）/ 冗余 / 重复，发现 ≥3 条候选才启动小 PR 系列；否则保留为长期残留 |
+| 70+ 旧 scanner 渐进迁移 | 2 | ⏳ | 持续 | 按文件域（auth / cell / codegen / outbox / ...）分小 PR，每 PR 5-10 个 scanner |
+| `PR408-FU-SCANNER-USAGE-01-ENABLEMENT` | **1（RED-first）** | ⏳ | ~3-4h+2h | **修正 2026-05-08**（原计划 Batch 2 末尾启用是误判，违反 CLAUDE.md TDD 红→绿原则）。Day 0 ship `tools/archtest/scanner_framework_usage_test.go`（INVARIANT: SCANNER-FRAMEWORK-USAGE-01）+ `scanner_framework_usage_allowlist.go`（frozen allowlist 含 70+ 文件清单）+ ratchet test 守 size 单调递减；PR-E* 每 PR 缩 allowlist 直至 0；最后一个 PR-En 删 allowlist 机制变无条件硬约束 |
+| `PR411-HANDLER-POLICY-TYPEAWARE-SCANNER-01` | 3 | 触发 | — | trigger: scanner 误报/漏报；基于 Batch 0 framework 做 |
+| `PR411-SERVICEOWNED-OWNERSHIP-GUARD-01` | 3 | 触发 | — | trigger: `auth.serviceOwned` endpoint > 1 / auth ownership 模型硬化批次 |
+| `B-FLOOR-FOLLOWUP` §2.5 Success-Floor | 3 | 触发 | — | trigger: contract.yaml status 声明 ⇔ adapter typed return 漂移事故首现 / cells 数量增长到 Floor 升级 ROI > 16h dev |
+| `B-FLOOR-FOLLOWUP` §4 Full-Floor | 3 | 触发 | — | trigger: §2.5 Success-Floor 已 ship 且稳定 |
+
+---
+
+## 4. 实施计划（PR 合并分组 + 并行调度）
+
+### 4.1 PR 全集（Batch 1 + Batch 2 + Batch 3）
+
+按 CLAUDE.md "TDD 严格红→绿，archtest 必须先于实施 batch" + "单一概念边界 + 共享文件 + 一次性产物重生" 原则。Batch 1 5 个 PR 全部 Day 0 并行；Batch 2 渐进迁移按文件域分 N 个小 PR + 1 个 FUNNEL-04 评估；Batch 3 触发型按信号启动。
+
+#### Batch 1（5 个 PR，可全部 Day 0 并行）
+
+| PR | 合并条目 | 工时 dev+review | 文件域 |
 |---|---|---|---|
-| 段 1 | typed envelope 闭环（双向 + 四件套配齐） | 已在 PR #403 内闭环 | ✅ 已完成 |
-| 段 2 | Registry 派生物治理产品化（ADR + 注册表 + CLI + archtest） | **删除** | ✗ 反模式 |
-| 段 3 | PR 切片纪律 / four-piece kit ADR / PR template 改造 | **删除** | ✗ 项目不稳定期噪音 |
-| 段 3' | 顺手在 CLAUDE.md 加一段 funnel-first 原则（< 10 行） | 顺手做 | ⏳ 待做 |
-| 段 4 | 历史 invariant 审计 → 入 Registry | **重定向**：archtest funnel 化降数量（30+ → < 15） | ⏳ 待做 |
+| **PR-A** `INVENTORY-GOVERNANCE-HARDENING` | `ANCHOR-BACKFILL-01` + `OWNER-AST-EXTRACTION-01` + `INVENTORY-CI-GATE-01` 三条 | 9-12h + 4-5h | `scripts/audit/list-archtests.sh` + 46 个 `tools/archtest/*_test.go` + `tools/archtest/inventory_anchor_required_test.go`（新）+ `docs/audit/archtest-inventory.md`（重生 + referenced_by 列）+ `.github/workflows/_build-lint.yml` |
+| **PR-B** `GOVERNANCE-RULE-REACHABILITY-TEST-01` | 独立 | ~6h + 2h | `kernel/governance/rule_inventory_test.go`（扩展 ~280 LOC） |
+| **PR-C** `AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01` | 独立 | 4h + 1h | `kernel/metadata/schemas/contract.schema.json` + `contract_schema_test.go` + `rules_fmt_test.go` |
+| **PR-D** `PANIC-MUST-PATH-SCOPE-01` | 独立 | 3-4h + 2h | `tools/archtest/panic_invariants_test.go` |
+| **PR-G** `SCANNER-USAGE-01-GATE`（**RED-first，前置 Batch 2**）| `PR408-FU-SCANNER-USAGE-01-ENABLEMENT` | ~3-4h + 2h | `tools/archtest/scanner_framework_usage_test.go`（新）+ `tools/archtest/scanner_framework_usage_allowlist.go`（frozen allowlist，初始 70+ 文件清单）+ allowlist ratchet test（断言 allowlist size 只缩不长）|
 
-变更动因：
-- 段 1：14 个症状 + 链尾 archtest 在 PR #403 内已逐项落地（核查见 §3）
-- 段 2：主流路线（K8s / CockroachDB / Linux / Rust / Go 工具链）无 prior art，反模式（详见 §2）
-- 段 3：项目当前处于大规模重构期，invariant 增删频繁，PR template + ADR 会变成应付式填写而非治理；真正起作用的是段 4 的 funnel 化代码本身
-- 段 4：原"反推 invariant 入 Registry"目标错位，重定向为"funnel 化降数量"
+**PR-G 提前依据**（修正 2026-05-08）：
+- CLAUDE.md "TDD 严格红→绿"：archtest 必须先于实施 batch ship，单独 Wave commit RED 再让实施转 GREEN
+- 不先 ship 守卫，PR-E* 70+ 迁移 PR 无法用 CI 自动证明"确实改用 framework"，每个迁移 PR 都要 reviewer 反证（手工验证 framework 用对、没漏改、没新增 `filepath.WalkDir` 直调），review 成本爆炸
+- "建守卫 + 豁免所有违反者"软回退批评不成立：allowlist 是 **frozen ratchet**（只缩不长，由 ratchet test 守 size 单调下降），不是永久豁免；TS strict mode rollout / Go vet checks rollout / Linux kernel sparse rollout 都用这套
 
----
+PR-A 合并依据：三条共享根因 — 删 grep fallback（ANCHOR）必须补 AST 主路径（OWNER），CI gate 顺路接上立即生效，避免 inventory 重生两次。
 
-## 1. 根因（修正后）
+不再合并依据：
+- PR-B vs PR-A：`rule_inventory_test.go` vs `list-archtests.sh` + 46 archtest，文件域 0 重叠，概念不同（rule 可达性 vs inventory 准确性）
+- PR-C vs 其他：`schemas/contract.schema.json` 是数据契约，与 archtest 概念边界完全独立
+- PR-D vs PR-A：实测 `panic_invariants_test.go` 已有 INVARIANT 锚点，不在 PR-A 的 46 文件回填范围；PR-D 改 AllowMust 函数体，0 重叠
+- PR-G vs PR-A：scanner usage 守卫 + frozen allowlist 与 inventory 准确性硬化是两个独立概念边界，文件域 0 重叠
 
-原报告 R0 诊断："GoCell 派生物治理无产品化通道"——这是解法形状，不是根因。
+#### Batch 2（N 个迁移 PR + 1 评估，PR-G + PR-A merge 后启动）
 
-### L1 症状
-
-一条 invariant 散在 8-12 处（archtest / governance rule / godoc / ADR / journey YAML / 模板 / IR / 测试），加一条要在 8-12 处同时改，会漏会脱钩。
-
-### L2 直接因
-
-约束没收敛到单一 funnel 节点，被迫在每个出口手抄。archtest 必须守 N 处而非 1 处；godoc / ADR 也要在 N 处呼应。**四件套是散布态的下游补救**，不是治理本体。
-
-### L3 根因
-
-**新增约束的默认动作是"加一条 archtest 守散点"，而不是"重构出 funnel 让散点不可达"**。Go 缺类型系统级表达力（不像 Rust 用 trait + ownership 让非法状态不可表达），开发者顺手用 archtest 当类型系统替代品，但 archtest 守散点 ≠ funnel 守入口。
-
-**问题不是"如何治理多源"，是"为什么会有多源"**。
-
----
-
-## 2. 主流路线对照
-
-### 三种路线，没有一条是 Registry
-
-| 类型 | 代表 | 机制 | GoCell 适用 |
+| PR | 性质 | 工时 dev+review | 启动条件 |
 |---|---|---|---|
-| **Funnel + Codegen** | K8s kubebuilder marker / Envoy protoc-gen-validate / Buf protovalidate | 单源 schema/marker → codegen 派生多端执行 → 改一处全部派生物自动重生 | ✅ typed envelope `XxxResponseObject` 走这条 |
-| **Type System** | Rust trait + ownership / Linux `__user` annotation + sparse / Haskell GADT | 约束消失为类型签名一部分，违反 = 编译失败 | ❌ Go 不支持（无 newtype / sealed interface / private constructor 强制） |
-| **自家 linter（兜底）** | CockroachDB `pkg/testutils/lint/` ~30 / TiDB / Go 工具链 `cmd/api` / Linux sparse+checkpatch+coccinelle | archtest 平铺，每条 lint 一个独立文件，命名约定 + CI 调度 | ✅ GoCell 当前模式（archtest + governance） |
+| **PR-E1..En** Scanner 渐进迁移系列 | 按文件域（auth / cell / codegen / outbox / contract / governance / ...）分小 PR，每 PR 5-10 个 scanner 迁移到 `internal/scanner` 框架 + 同 PR 从 PR-G 的 frozen allowlist 中**移除已迁移文件名**（ratchet test 自动守 size 严格递减）| 每 PR 3-5h + 1-2h × N（70+ 文件 ≈ 8-12 PR）| **PR-G + PR-A merge 之后**（PR-G 提供 archtest 红→绿循环，PR-A 提供 inventory 行号变动 CI gate）|
+| **PR-F** `PR-FUNNEL-04` 候选评估 | 扫 70+ archtest 找可 type-system 化 / 冗余 / 重复，发现 ≥3 条候选才启动后续小 PR 系列 | 2h（仅评估）+ 后续小 PR 视情况 | Batch 2 期间穿插，单 worktree 完成 |
 
-### Registry 模式无 prior art
+**收尾**：当 PR-E* 把 frozen allowlist 缩到 0 时，最后一个 PR-En 顺路删 allowlist 文件 + ratchet test，archtest 守卫变为**无条件硬约束**。不需要单独"收尾闸 PR"。
 
-- **K8s** 30+ `hack/verify-*.sh`，各自独立 shell 脚本，**无中心 Registry**
-- **CockroachDB** 30+ linter，各自独立 Go 文件，**无中心 Registry**
-- **Linux** 三套独立工具（sparse / checkpatch / coccinelle），**无中心 Registry**
-- **Go 标准库** `cmd/api` golden 文件 + `cmd/dist test` 各自独立，**无中心 Registry**
+#### Batch 3（触发型，无固定时间）
 
-**没有任何主流项目把"代码中已存在的约束"再写进注册表去守完整性**。原段 2 是 GoCell 自创设计，反模式。
-
-### funnel 化的物理天花板
-
-GoCell ~50% 约束物理上 funnel 不掉：
-
-| 约束类型 | funnel 可能性 | 原因 |
+| PR | trigger | 顺序约束 |
 |---|---|---|
-| HTTP 出口 PII strip | ✅ 强制走 `httputil.WriteError` | 已 funnel（archtest 守"必经"） |
-| typed adapter return | ✅ codegen `XxxResponseObject` interface | type system 拦，最干净 |
-| buffer-then-commit 顺序 | ❌ funnel 不到 | "语句顺序"无汇聚点，必须 AST 模式守 |
-| message 必须 const literal | ❌ funnel 不到 | Go 编译器不区分 const string / runtime string |
-| 不暴露 errors.New | ❌ funnel 不到 | Go 无 sealed package |
-| panic 三类白名单 | ❌ funnel 不到 | Go 编译器不知道 panic 语义 |
-| readyz probe snake_case 命名 | ❌ funnel 不到 | 字符串 literal，编译器不感知语义 |
+| `PR411-HANDLER-POLICY-TYPEAWARE-SCANNER-01` | scanner 误报/漏报触发 | 基于 Batch 0 framework 做（直接用 `internal/scanner` API） |
+| `PR411-SERVICEOWNED-OWNERSHIP-GUARD-01` | `auth.serviceOwned` endpoint > 1 / auth ownership 模型硬化批次 | 与 framework 解耦，独立 |
+| `B-FLOOR-FOLLOWUP` §2.5 Success-Floor | contract.yaml status 声明 ⇔ adapter typed return 漂移事故首现 / cells 数量增长到 Floor 升级 ROI > 16h dev | **必须先做**段 2.5 |
+| `B-FLOOR-FOLLOWUP` §4 Full-Floor | §2.5 已 ship 且稳定 | 等 §2.5 |
 
-**做不到 100% funnel 是 Go 的语言天花板，不是 GoCell 的失败**。CockroachDB 同样吃这个亏，他们的解法是接受 + 平铺管理。
+### 4.2 并行性矩阵
 
----
+**Batch 1 内部**（5 个 PR）：
 
-## 3. 段 1 状态核查（已完成证据）
+| | PR-A | PR-B | PR-C | PR-D | PR-G |
+|---|---|---|---|---|---|
+| PR-A | — | 0 | 0 | 0（实测）| 0 |
+| PR-B | | — | 0 | 0 | 0 |
+| PR-C | | | — | 0 | 0 |
+| PR-D | | | | — | 0 |
+| PR-G | | | | | — |
 
-逐项 grep 实际代码，14 个症状 + 链尾 archtest 全部已在 PR #403 内闭环：
+PR-G 与 PR-D 都在 `tools/archtest/` 目录，但 PR-G 加新文件（`scanner_framework_usage_test.go` + `_allowlist.go`），PR-D 改已有文件（`panic_invariants_test.go` 函数体），0 重叠。
 
-| 症状 | 状态 | 证据 |
-|---|---|---|
-| S1 sentinel 内联化 | ✅ | `pkg/httputil/response.go:323` 调 `writeInternalErrorSentinel(w)` |
-| S2 AppendCorrelationAttrs 注册 | ✅ | `kernel/governance/rules_http.go:753` |
-| S3 idutil godoc 删 X-Request-Id | ✅ | `pkg/idutil/id.go` 不再举 X-Request-Id 名 |
-| S4 redaction LogValuer 测试 | ✅ | `pkg/redaction/redaction_test.go` `customLogValuer / secretLeakingLogValuer` |
-| S5 encodeErrorEnvelopeTo FailingWriter | ✅ | `pkg/httputil/response_test.go:759` `TestEncodeErrorEnvelopeTo_FailingWriter` |
-| S6 死代码删除 | ✅ | `response_test.go:591-599` 已为 marshalFailErrcodeWrapper 注释 |
-| S7 builder_test success-only 反例 | ✅ | `tools/codegen/contractgen/builder_test.go:1023` `"success-only no responses"` |
-| S8 archtest 排除注释 | ✅ | `tools/archtest/visit_buffer_then_commit_test.go:82-83` 写明 NoContent/Error 排除理由 |
-| S9 journey mode auto→manual | ✅ | `journeys/J-typed-envelope-roundtrip.yaml` buffer-then-commit 行 `mode: manual` |
-| S10 generator_test.go | ✅ | `tools/codegen/contractgen/generator_test.go` 存在 |
-| S11 doc 错位修复 | ✅ | `docs/guides/codegen-new-endpoint.md` `responses:` 在 `endpoints.http` 下 |
-| S12 C18 success-only 收紧 | ✅ | `builder.go:380` 加 `hasError` 检查，无 4xx/5xx 报错 |
-| S13 synth_http_minimal 含 400/500 | ✅ | `testdata/synth/synth_http_minimal/.../contract.yaml` |
-| S14 45 真实 contract.yaml 扫补 | ✅ | `grep -L "responses:" contracts/http/**/contract.yaml` 输出空 |
-| 链尾 archtest ADAPTER-RETURNS-DECLARED-TYPES-01 | ✅ | `tools/archtest/adapter_returns_declared_types_test.go` 存在 |
-| ADR D6/D7 升级 | ✅ | `docs/architecture/202605061500-adr-typed-response-envelope.md` |
+**Batch 1 与 Batch 2 之间**：
+- **PR-G 必须先于 PR-E***（archtest RED-first，让 PR-E* 用 CI 自动证明 GREEN，避免 reviewer 反证）
+- **PR-A 必须先于 PR-E***（CI gate 守迁移行号变动，inventory 漂移自动捕获）
+- PR-B/C/D 与 PR-E* 完全独立可并行
 
-**段 1 完成，无遗留。**
+**Batch 2 内部**：PR-E1..En 文件域按 cell/cap 切分，互不重叠（每 PR 改 5-10 个 scanner + allowlist 同 PR 移除）；PR-F（评估）只读分析与 PR-E* 不冲突。
 
----
+**Batch 3**：触发型，独立。
 
-## 4. ~~段 2（删除）~~
+### 4.3 ship 顺序与优先级
 
-原计划：建 `kernel/governance/invariants.go` Registry + `INVARIANT-REGISTRY-COMPLETENESS-01` archtest + `gocell check invariants` CLI + four-piece kit ADR。
+**P0 – Batch 1**（建议本周内 ship）：
+1. **PR-G** — 红→绿前置闸，**必须 Batch 2 启动前 ship**；工时小（~3-4h），优先排单
+2. **PR-A** — Batch 2 inventory 行号守，必须 Batch 2 启动前 ship；影响面大优先排
+3. **PR-B** — 替代 PR-FUNNEL-03 临时硬化（zero-diff 是反向证明，新规则漏挂静默通过）
+4. **PR-C / PR-D** — 工时小（< 5h），穿插 ship 解锁 reviewer 容量
 
-**删除理由**：
+**P1 – Batch 2**（PR-G + PR-A 都 merge 后启动）：
+- **PR-E* 渐进迁移**：8-12 个小 PR，每 PR 一个文件域 + 同 PR 缩 allowlist；按团队余量持续推进
+- **PR-F 候选评估**：单 worktree 穿插完成（2h）
+- **收尾**：最后一个 PR-En 顺路删 allowlist 机制（archtest 变无条件硬约束）
 
-1. **无 prior art**：K8s / CockroachDB / Linux / Go 工具链 / Rust 都不建 Registry
-2. **加 4 个新源头**（ADR + 注册表 + 守 archtest + CLI），把"散布态"工业化，不是解决散布
-3. **维护负担**：archtest 改名 → Registry 字段引用失效 → 守 Registry 完整性的 archtest 本身又成第 N+1 条 invariant，递归
-4. **解决错问题**：真问题是"散布"，Registry 解的是"中心索引"
+**P2 – Batch 3**：触发型，无固定排期。
 
-由 §6 段 4 的 funnel 化代码 + CLAUDE.md 一段原则替代。
+**reviewer 优先级**（同时多 PR 在审时）：**PR-G ≥ PR-A** > PR-B > PR-C = PR-D > PR-E* > PR-F
 
----
+### 4.4 调度建议
 
-## 5. ~~段 3（删除）~~
+```
+Week 1
+─────────────────────────────────────────────────
+Day 0：
+  worktree-1：PR-A  INVENTORY-HARDENING       [9-12h dev]
+  worktree-2：PR-B  REACHABILITY-TEST         [6h dev]
+  worktree-3：PR-C  AUTH-SCHEMA-BOOL          [4h dev]
+  worktree-4：PR-D  PANIC-MUST-SCOPE          [3-4h dev]
+  worktree-5：PR-G  SCANNER-USAGE-01-GATE     [3-4h dev]  ← RED-first 前置
 
-原计划：`.claude/rules/gocell/pr-slicing.md`（一个 PR ≤ 2 个新 invariant / L3 切片纪律）+ funnel-first ADR + PR template 增 invariant 字段。
+Day 1-2：
+  PR-G ship（最高优先级，前置 Batch 2）
+  PR-D / PR-C 穿插 ship
+  PR-B ship
+  PR-A ship（影响面最大，最后 ship）
 
-**删除理由**：
+Day 2-3（PR-G + PR-A merge 后）：
+  worktree-6..N：PR-E1..En 按文件域逐批开
+    例：PR-E1 archtest auth/* (5-10 个)     [3-5h dev + allowlist 缩 5-10 项]
+        PR-E2 archtest cell/* (5-10 个)     [3-5h dev]
+        PR-E3 archtest codegen/* (5-10 个)
+        ...
+  worktree-X：PR-F 候选评估                  [2h]
 
-1. **项目不稳定期噪音**：当前处于大规模重构期，invariant 增删频繁，PR template 字段会变成应付式填写
-2. **ADR 过度形式化**：funnel-first 是判断框架（< 10 行能讲清），不是需要长文档承载的架构决策
-3. **硬规则基于猜测**："PR ≤ 2 个 invariant" 没有数据支撑，等段 4 funnel 化数据出来再决定是否值得加
+Week 2-3
+─────────────────────────────────────────────────
+  PR-E* 持续渐进 ship（8-12 个小 PR），allowlist 单调缩小
+  ratchet test 自动守 allowlist size 严格递减
+  PR-F 发现 ≥3 候选则启动后续小 PR 系列
 
-由段 3' CLAUDE.md 一段补丁替代。等项目稳定（typed envelope / contract.yaml schema 不再大改）后再评估是否升级 ADR。
+Week 3-4（PR-E* 把 allowlist 缩到 0 时）
+─────────────────────────────────────────────────
+  最后一个 PR-En 顺路删 allowlist 文件 + ratchet test
+  → SCANNER-FRAMEWORK-USAGE-01 变无条件硬约束（无 allowlist）
 
----
-
-## 6. 段 3'（CLAUDE.md funnel-first 原则补丁，Cx1）
-
-`CLAUDE.md` 新增一节（< 10 行）：
-
-```markdown
-## 新增 invariant 决策原则
-
-新增任何"约束"（archtest / governance rule / godoc 强约定）前，按以下优先级决策载体：
-
-1. **funnel + codegen**：能否 schema / marker / interface 单源 → codegen 派生执行体？能 → 走这条
-2. **type system 自然拦**：能否用 Go interface / typed struct / 编译期 const 让违反不可表达？能 → 走这条
-3. **archtest 平铺兜底**：上面两条都不行 → 一个独立 `tools/archtest/{ID}_test.go` 文件，文件头 godoc 写约束 ID + 理由 + 不能 funnel 的原因
-
-**不准建 Registry / 中心化注册表**。多份文档用 grep 锚点串联（`// INVARIANT: {ID}` 在所有相关文件出现，grep 一次跳全套）。
-
-主流对照：K8s / CockroachDB / Linux / Rust 都接受 funnel 不到的残留，平铺管理；不建中心索引。
+Batch 3：外部信号触发，无固定排期
 ```
 
-无新代码、无新工具、无新 archtest。
+**wall-clock 估算**：
+- Batch 1（5 PR 并行）：~2-3 天
+- Batch 2（PR-E* 渐进 + PR-F）：~2-3 周（依团队余量）
+- Batch 3：触发型，无固定时间
 
 ---
 
-## 7. 段 4（archtest funnel 化降数量，独立 PR 系列，Cx3）
+## 5. 风险
 
-### 7.1 目标
-
-archtest 总数从 30+ 降到 < 15，把可 codegen 化 / type system 化的全消掉，剩余的接受为永久残留。
-
-### 7.2 审计步骤
-
-#### 步骤 A：清单化（0.5 天）
-
-`scripts/audit/list-archtests.sh`（30 行 shell）扫 `tools/archtest/*_test.go` + `kernel/governance/rules_*.go`，吐出每条 invariant 的：
-
-- ID（从文件头 godoc 抽，缺则补）
-- 守的对象（AST 模式 / 调用点 / 字段集合）
-- funnel 节点（如果有）
-
-输出 `docs/audit/archtest-inventory.md`，平铺表格，**不写 Go 注册表**。
-
-#### 步骤 B：funnel 化分类（1 天）
-
-对每条 invariant 判断：
-
-| 类别 | 处置 | 示例 |
-|---|---|---|
-| **可 codegen 化** | 用 contract.yaml / cell.yaml schema 约束 + codegen 替代 archtest | endpoints.http.responses 声明 → CH-06（已做） |
-| **可 type system 化** | 改接口签名让违反不可表达 | typed `XxxResponseObject` 替代 `(*Response, error)`（已做） |
-| **可 funnel + 单守门** | 已收敛到 funnel 函数，archtest 只守"必经" | `httputil.WriteError` PII strip |
-| **不可 funnel（保留）** | 平铺 archtest，加锚点注释 | message const literal、buffer-then-commit |
-| **冗余/重复** | 直接删除 | 多条 archtest 守同一约束的不同侧面 |
-
-#### 步骤 C：funnel 化 PR 系列（按类别分批，主线登记于本路线图）
-
-本路线图 §C 是 PR-FUNNEL-NN 主线工作的唯一 todo 登记位置。复审产生的跨批次 follow-up 以 `docs/backlog.md` 为单源，本节只保留路由索引，避免 roadmap/backlog 双写漂移。`docs/audit/archtest-inventory.md` §不在本 PR 范围 引用本节编号，但不重复内容。
-
-##### PR-FUNNEL-01（本 PR #408，已 ship）
-
-**HTTP-ARCHTEST-CLUSTER-MERGE-01** (Cx2, 已落地)：同主题聚并 + INVARIANT 锚点 + funnel-first CLAUDE.md 原则 + 路线图/inventory 落地（45 文件 → 11 主题文件 + 11 锚点修补 + 1 fail-closed 覆盖 gate `TestSpanRecordErrorScanDirsCoverage`，archtest 文件数 104 → 70）。
-
-##### PR-FUNNEL-02（PR #411 已 ship — 模板侧 4 条；调用侧 1 条保留为 archtest）
-
-**HTTP-RESPONSE-CONSTRAINTS-CODEGEN-MIGRATION-01** (Cx2，✅ 已 ship)：
-
-实际执行结果（与原计划差异）：
-
-- **5 条 archtest 拆为 2 类**：探索发现 `ParamSchema.{MinLength,MaxLength,Minimum,Maximum}` 已在 `kernel/metadata/schema_types.go` 存在；`handler.tmpl` 已 inline 发 len/value 检查、硬编 schema-compile panic、按 auth 模式条件发 policy 参数。Funnel 早已 100% 落地这 4 条模板侧约束，archtest 是 redundant 散点守卫。
-- **模板侧 4 条 archtest 删除**：HANDLER-NO-INLINE-LIMIT-PARSE-01 / HANDLER-NO-SCHEMA-FOR-NOBODY-01 / HANDLER-PATH-QUERY-LENGTH-VALIDATION-01 / HANDLER-VALIDATOR-FAIL-FAST-01 由 `tools/codegen/contractgen/testdata/golden/*_handler_gen_go.golden` 字节级锁定取代。新增 `synth_http_auth_modes` fixture 覆盖 Public / Bootstrap / PasswordResetExempt / ClientsOnly / ServiceOwned 五个 auth 分支（之前只覆盖默认 Auth 分支）。
-- **调用侧 1 条 archtest 升级为 funnel + 平铺兜底两级**：HANDLER-POLICY-REQUIRED-01 升级实施 F1 review fix：funnel 端通过 `auth.clientsOnly` 与 `auth.serviceOwned` 单参分支（新 `AuthClientsOnly` / `AuthServiceOwned` spec flag + handler.tmpl 分支）+ Default 分支构造期 `if policy == nil { panic(errcode.Assertion(...)) }` 把 route-level nil-policy 的主要产生源消灭；archtest scanner 退化为简化兜底，删除 `handlerPolicyPublicExemptPkgs` 豁免列表 + 删除 alias 字符串匹配，无需 typed-nil 形态分叉（typed-nil 由构造期 panic 在启动时炸出）。保留为 `tools/archtest/handler_policy_required_test.go`（独立文件）。
-- **治理侧 follow-up 已收敛**：`auth.clientsOnly` / `auth.serviceOwned` 互斥归入 FMT-27；`auth.bootstrap` 与 `auth.clientsOnly` 的跨字段 shape 约束归入 FMT-28，builder 保留防御性 fail-closed。
-- **不做的事**：不引入 invariant Registry；不把 HANDLER-POLICY-REQUIRED-01 升级为 type-aware scanner；不在本 PR 定义 serviceOwned ownership enforcement 静态钩子；不在本 PR 收 schema/governance 显式 `false` 语义一致性（3 项均已登记 backlog，见下方 follow-up 路由）。
-
-**关键文件**：`kernel/metadata/schema_types.go` + `kernel/governance/rules_fmt.go` + `tools/codegen/contractgen/{builder.go,spec.go,templates/handler.tmpl}` + `tools/codegen/contractgen/testdata/synth/synth_http_auth_modes/`（新 fixture）+ `tools/codegen/contractgen/testdata/golden/synth_http_auth_modes_*` 15 个 auth-mode golden + `tools/archtest/handler_policy_required_test.go`（新独立文件）+ `tools/archtest/handler_invariants_test.go`（删 1316 行）+ `tools/archtest/doc.go` / `docs/architecture/202605061500-adr-typed-response-envelope.md` §D5 / `docs/audit/archtest-inventory.md`（去 dangling 引用）。
-
-**实际工时**：~3h dev + 6 角色 L4 review（~14 finding 全部本 PR 修复）。原计划 16-24h 估算偏高，因 funnel 早已就位，实际工作集中在 fixture 补全 + 文档去 dangling。
-
-**性质**：funnel-first 原则的二分裁决落地（"模板可表达 → funnel + freeze；模板看不到 → 保留 archtest"）。
-
-**来源**：本路线图 §不在范围 + R6 architecture finding (PR#408) → PR #411 实际执行。
-
-##### PR-FUNNEL follow-up 路由（backlog 单源）
-
-| Backlog ID | 批次 | 处理策略 |
-|---|---|---|
-| `PR408-FU-LEGACY-ANCHOR-BACKFILL-01` | 下一批 P1 小 PR | 先补 legacy `// INVARIANT:` 锚点，再删除 inventory fallback；不和 PR411 auth follow-up 混做。 |
-| `PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01` | 下一批 P1 小 PR | 与 anchor backfill 同批，修 `list-archtests.sh` owner 提取精度并回灌 inventory。 |
-| `PR411-AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01` | PR411 后续 Cx2 小 PR | 独立处理 schema/governance 对显式 `false` 的语义一致性，优先级高于 serviceOwned 泛化护栏。 |
-| `PR411-SERVICEOWNED-OWNERSHIP-GUARD-01` | ownership hardening 批次 | 延后到 serviceOwned endpoint 增多或 auth ownership 模型硬化时做；先定义 enforcement 契约再加规则。 |
-| `PR411-HANDLER-POLICY-TYPEAWARE-SCANNER-01` | scanner 精度批次 | 延后；最好等 shared scanner framework 后再升级为 packages/type-aware。 |
-| `PR408-FU-SCANNER-SHARED-FRAMEWORK-01` | 独立 Cx4 大 PR | 不并入小修；先做框架，再渐进迁移现有 scanner。 |
-
-##### PR-FUNNEL-03 ✅（PR #538 / refactor/538-pr-funnel-03）
-
-**GOVERNANCE-RULES-CLUSTER-MERGE-01** (Cx2)：`kernel/governance/rules_*.go` 15→8 主题文件机械搬迁完成。
-
-**最终文件分组**：
-- `rules_fmt.go`（FMT-01..15, 24, 26..30, A1, REF-12 — REF-12 schemaRefs 文件存在性是 I/O 性质，搬到 FMT 簇）
-- `rules_ref.go`（REF-01..11, 13..17）
-- `rules_topo.go`（TOPO-01..09，未变）
-- `rules_verify.go`（VERIFY-01..06，未变）
-- `rules_http.go`（CH-04/05/06 — 合并 3 个 http_*.go，`parsedHandlerFile` 缓存 + `findHandlerFile` 共享方写一处）
-- `rules_misc_strict.go`（strict 编排器 + FMT-16/17/19/C1/A1 + FMT-20/21/22/23/25 — strict.go + strict_extra.go 合并）
-- `rules_misc_consistency.go`（CONTRACT-CONSISTENCY-EMIT-01，纯 rename）
-- `rules_misc_advisory.go`（ADV-01/03/04/05/06 + OUTGUARD-01 + SLICE-CONSISTENCY-01 + FMT-19 impl + DOC-NAME-01 impl — 5 文件合并；strict 编排器跨文件调用 impl，同包合法）
-
-**等价闸**：新增 `kernel/governance/rule_inventory_test.go`，golden 81 IDs 跨 11 series；任何规则增删改必须同步 golden 列表。
-
-**实测**：~6h dev + 1h review buffer（远低于估时 12-16h，因 batch 间无依赖且帮助发现工作量集中在 strict cluster）。
-
-##### PR-FUNNEL-04（按需触发，无固定工时）
-
-**ARCHTEST-REDUNDANCY-AND-TYPE-SYSTEM-MIGRATION-01** (Cx 视情况)：冗余删除 / type system 化（改接口签名让违反不可表达）。
-
-**触发条件**：PR-FUNNEL-02 + PR-FUNNEL-03 完成后，仍发现 ≥ 3 条可通过修改接口签名消除的 archtest，启动本 PR；否则保留为长期残留。
-
-**性质**：每条迁移独立小 PR，按案例评估。无固定 todo 列表。
-
-#### 步骤 D：固化（0.5 天）
-
-- 更新 `docs/audit/archtest-inventory.md` 为最终状态
-- archtest 数量验收：≤ 15（基线对标 CockroachDB ~30，GoCell 规模可压更低）
-
-### 7.3 验收标准
-
-- archtest 总数 ≤ 15
-- 每条保留 archtest 文件头 godoc 含 INVARIANT/Funnel/References 锚点注释
-- `scripts/audit/list-archtests.sh` 输出可重现
-- 无 Registry / 无 CLI / 无 four-piece kit 中心化
+| 风险 | 缓解 |
+|---|---|
+| PR-A 46 文件批量改 review 复杂度高 | 文件锚点回填是机械性改动（文件头加 `// INVARIANT: <ID>` 一行），reviewer 主要看 list-archtests.sh + 新 archtest + workflow yaml；机械部分可大段折叠 |
+| PR-A 删 grep fallback 后 list-archtests.sh AST 主路径有 bug 导致漏报 | 同 PR 加 `inventory_anchor_required_test.go` 守锚点必现 + 重生 inventory.md 与现状 zero-diff 验证；漂移闸进 CI 兜底 |
+| PR-B BFS 实现遗漏注册路径（如 const-ident emission / 闭包包装） | 任务表说明列已列出 4 类注册形态；PR 描述要求覆盖矩阵，reviewer 按矩阵逐项核 |
+| PR-G frozen allowlist 被当成永久豁免（破坏 ratchet 单向性）| 同 PR 加 ratchet test 守 `len(allowlist) <= initialSize` + 每次 PR-E* CI 跑回归确保 size 严格递减；PR review checklist 加"是否缩 allowlist"问句；backlog 登记 ratchet 触发条件（`len(allowlist) == 0` 时删机制）|
+| PR-G 初始 allowlist 漏文件（实际违反者 > 70 但只列了 70）| Day 0 用 `grep -lE 'filepath\.(WalkDir\|Walk)' tools/archtest/*_test.go` 自动生成初始 allowlist + 同 PR 加生成脚本 `hack/regen-scanner-usage-allowlist.sh`；ratchet test 双向校验"未在 allowlist 又 import filepath.WalkDir/Walk"立即 fail |
+| PR-A 与 Batch 2 第一个迁移 PR 同时 ship 导致 inventory 重复重生冲突 | PR-A + PR-G 都先 merge，Batch 2 worktree 在两者 merge 后再开 |
+| Batch 2 PR-E* 迁移漏改导致 framework 用法不正确 | PR-G 守卫强制每个迁移：(a) 删 `filepath.WalkDir/Walk` 直调（不删则 archtest 失败）+ (b) 从 allowlist 移除（不移则 ratchet test fail）；reviewer 不需"反证" |
+| Batch 2 70+ 迁移期间漏 regenerate inventory | PR-A 加的 CI gate 自动拦截（漂移即 CI 红） |
 
 ---
 
-## 8. 时间盘
+## 6. 引用
 
-| 段 | 估时 | 顺序 | 状态 |
-|---|---|---|---|
-| 段 1 | — | — | ✅ PR #403 已 ship |
-| ~~段 2~~ | — | — | ✗ 删除 |
-| ~~段 3~~ | — | — | ✗ 删除 |
-| 段 3' | < 10 分钟 | 顺手做 | ⏳ |
-| 段 4 | 4-5 天（A: 0.5 / B: 1 / C: 2-3 / D: 0.5） | 立即可启动 | ⏳ |
-
-总剩余 4-5 天，比原计划（6-8 天）省 2-3 天，且省掉 Registry + CLI + ADR 的长期维护负担。
-
----
-
-## 9. 取舍记录
-
-### 9.1 为什么不建 Registry
-
-- 主流项目无 prior art（K8s / CockroachDB / Linux / Go 工具链 / Rust 都不建）
-- 加 4 个新源头给"散布态"工业化，不是解决散布
-- 维护负担：守 Registry 完整性的 archtest 自身又是 invariant，递归
-- grep 锚点 + CLAUDE.md 一段原则已覆盖收益
-
-### 9.2 为什么删段 3 PR template / ADR
-
-- 项目当前处于大规模重构期，invariant 增删频繁，PR template 字段会变应付式填写
-- funnel-first 原则 < 10 行能讲清，不需要 ADR 长文档承载
-- 硬规则（PR ≤ 2 个 invariant）基于猜测，等段 4 funnel 化数据出来再判断
-
-### 9.3 为什么允许 < 15 条 archtest 残留
-
-Go 语言天花板（无 sealed package / 无 newtype / 无 const string 区分）决定 ~50% GoCell 约束物理上 funnel 不掉。CockroachDB 同样残留 30 条。GoCell 规模比 CockroachDB 小，目标 < 15 是数据量级的合理估计。
-
-### 9.4 为什么段 4 立即启动而非排到 roadmap 末尾
-
-原计划"段 4 依赖段 2 工具"是错位——段 4 自带 30 行 shell 脚本审计，无任何前置依赖。段 1 已 ship，段 4 可立即启动，不必等。
-
----
-
-## 10. 结论
-
-**PR #403 已 ship，剩余工作只剩段 3' + 段 4。**
-
-- 段 1：✅ 14 个症状 + 链尾 archtest + ADR D6/D7 全部在 PR #403 内闭环
-- 段 2：✗ Registry 反模式，删除（无 prior art）
-- 段 3：✗ PR template / ADR 不稳定期噪音，删除
-- 段 3'：⏳ CLAUDE.md 加一段 funnel-first 原则（< 10 行），顺手做
-- 段 4：⏳ archtest funnel 化降数量（30+ → < 15），独立 PR 系列，立即可启动
-
-**下一步**：
-1. 段 3'：直接 patch CLAUDE.md，10 分钟
-2. 段 4：单开一个 worktree，先做步骤 A 清单化，跑出 inventory 后再分批 PR
+- 决策原则：`CLAUDE.md` `## 新增 invariant 决策原则`
+- ADR：`docs/architecture/202605061500-adr-typed-response-envelope.md` §D6/D7
+- Inventory：`docs/audit/archtest-inventory.md`（自动生成）
+- 历史版本（含完整根因 / 主流路线对照 / 取舍记录 / 原 7 切片视图）：git history `1472336b` 之前

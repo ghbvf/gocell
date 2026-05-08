@@ -182,14 +182,14 @@
 | 工时 | 24h+12h |
 | 依赖 | W5-H |
 
-### PR-X5-J · M3-RULE-ENGINE-AND-INVARIANTS-REGISTRY
+### PR-X5-J · M3-RULE-ENGINE
 
 | 项 | 值 |
 |---|---|
-| 来源 | M3-RULE-ENGINE + GOVERNANCE-INVARIANTS-REGISTRY（"与 M3-RULE-ENGINE 同根"）|
-| 问题 | governance 64 规则散在 Go 代码 / 派生物 invariants 在 6-8 处独立声明 |
-| 同 PR 项 | 2 条同根；`kernel/governance/engine.go` 唯一执行体 + `rules/*.yaml` 数据化（5 槽位 detect/evidence/next/level/harvest）+ next-action 五级（autofix/suggest/advisory/block/escalate）+ 规则带 metric 距离函数 + 修 ADV-05 SeverityError 错分 + invariants Registry 四件套 |
-| Files | `kernel/governance/{engine.go(新),invariants.go(新),rules/*.yaml(新)}` |
+| 来源 | M3-RULE-ENGINE（GOVERNANCE-INVARIANTS-REGISTRY 已被 `docs/plans/202605070431-pr403-funnel-fix-roadmap.md` §2 判定反模式删除）|
+| 问题 | governance 64 规则散在 Go 代码 |
+| 同 PR 项 | `kernel/governance/engine.go` 唯一执行体 + `rules/*.yaml` 数据化（5 槽位 detect/evidence/next/level/harvest）+ next-action 五级（autofix/suggest/advisory/block/escalate）+ 规则带 metric 距离函数 + 修 ADV-05 SeverityError 错分 |
+| Files | `kernel/governance/{engine.go(新),rules/*.yaml(新)}` |
 | ship | L4 |
 | 工时 | 28h+14h |
 | 依赖 | W5-I（lifecycle 状态机供 governance rules 引用）|
