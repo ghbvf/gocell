@@ -203,7 +203,7 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 		return dto.TokenPair{}, authRefreshRejected()
 	}
 
-	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.ID, session.UserID)
+	passwordResetRequired, err := s.fetchUserAndCheckActive(ctx, session.ID, session.UserID)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -337,19 +337,48 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 	return nil
 }
 
-// fetchPasswordResetRequired reads the current PasswordResetRequired flag
-// from the user repo. Fail-closed: any error returns ErrAuthRefreshFailed so
-// the caller aborts refresh rather than signing a token that omits the
-// password_reset_required claim.
-func (s *Service) fetchPasswordResetRequired(ctx context.Context, sessionID, userID string) (bool, error) {
+// fetchUserAndCheckActive reads the user, fail-closes on any error, and
+// rejects refresh + cascade-revokes the chain when the user is no longer
+// active (locked or suspended). Refresh that proceeds for a locked user
+// would silently mint a new access token despite the admin's lock decision
+// — exactly the failure mode reviewer P2#7 flagged.
+//
+// Returns the PasswordResetRequired flag for the caller's claim emission.
+func (s *Service) fetchUserAndCheckActive(ctx context.Context, sessionID, userID string) (bool, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		s.logger.Error("session-refresh: failed to fetch user for reset flag (fail-closed)",
+		s.logger.Error("session-refresh: failed to fetch user (fail-closed)",
 			slog.Any("error", err), slog.String("user_id", userID))
 		if errcode.IsInfraError(err) {
 			return false, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
 		}
 		if err := s.cascadeRevoke(ctx, sessionID, "user-not-found"); err != nil {
+			return false, err
+		}
+		return false, authRefreshRejected()
+	}
+	// P2#7: refuse refresh for locked/suspended users + cascade-revoke any
+	// remaining session/refresh chain so a future refresh attempt with a
+	// surviving wire token also fails. Unlike the other cascadeRevoke call
+	// sites (where the session is already known to be missing/revoked), the
+	// user-not-active path is reached with a still-active session row that
+	// admin Lock may not have swept (manual status flip, mem-only Lock, etc.),
+	// so we explicitly revoke the session here in addition to the refresh
+	// chain. RevokeByIDAndOwner is idempotent on already-revoked rows.
+	if user.Status != domain.StatusActive {
+		s.logger.Warn("session-refresh: user not active; refusing refresh",
+			slog.String("user_id", userID),
+			slog.String("session_id", sessionID),
+			slog.String("status", string(user.Status)),
+		)
+		if revokeErr := s.sessionRepo.RevokeByIDAndOwner(ctx, sessionID, userID); revokeErr != nil &&
+			!errcode.IsDomainNotFound(revokeErr, errcode.ErrSessionNotFound) {
+			s.logger.Error("session-refresh: failed to revoke session for inactive user",
+				slog.Any("error", revokeErr),
+				slog.String("session_id", sessionID))
+			return false, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session repo unavailable", revokeErr)
+		}
+		if err := s.cascadeRevoke(ctx, sessionID, "user-not-active"); err != nil {
 			return false, err
 		}
 		return false, authRefreshRejected()

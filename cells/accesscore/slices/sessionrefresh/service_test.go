@@ -335,6 +335,61 @@ func (c *countingSessionRepo) Update(ctx context.Context, s *domain.Session) err
 	return c.SessionRepository.Update(ctx, s)
 }
 
+// TestService_Refresh_LockedUser_RejectsAndCascadeRevokes (P2#7) asserts that
+// Refresh refuses to mint a new token pair when the underlying user has been
+// locked (status != active), and cascade-revokes the session + refresh chain
+// so any surviving wire tokens cannot be used either.
+func TestService_Refresh_LockedUser_RejectsAndCascadeRevokes(t *testing.T) {
+	svc, sessionRepo, userRepo := newTestServiceWithUserRepo(t)
+
+	const uid = "usr-locked"
+	u, err := domain.NewUser(uid, uid+"@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = uid
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	// Issue a session + refresh wire while the user is still active.
+	sess, _ := domain.NewSession(uid, "at-locked", time.Now().Add(time.Hour), time.Now())
+	sess.ID = "sess-locked"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	// Drive Refresh through service-internal store path.
+	refreshStore := svcRefreshStore(svc)
+	wire, _, err := refreshStore.Issue(context.Background(), sess.ID, uid)
+	require.NoError(t, err)
+
+	// Admin locks the user via the repo's Lock patch.
+	now := time.Now()
+	locked := domain.StatusLocked
+	_, err = userRepo.ApplyPatch(context.Background(), ports.UserPatch{
+		ID:             uid,
+		Status:         &locked,
+		UpdatedAt:      now,
+		CurrentVersion: u.Version,
+	})
+	require.NoError(t, err)
+
+	// Refresh attempt: must be rejected; the session should be invisible
+	// after cascade-revoke, and the refresh wire rejected.
+	_, refreshErr := svc.Refresh(context.Background(), wire)
+	require.Error(t, refreshErr, "P2#7: Refresh must reject for locked user")
+	var ec *errcode.Error
+	require.ErrorAs(t, refreshErr, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"locked-user refresh must surface as ErrAuthRefreshFailed")
+
+	// Session must be soft-revoked (GetByID filters it out).
+	_, sessErr := sessionRepo.GetByID(context.Background(), sess.ID)
+	require.Error(t, sessErr, "session must be cascade-revoked when user is locked")
+}
+
+// svcRefreshStore exposes the service's internal refresh.Store via reflection
+// (testing only) so the new locked-user test does not need to thread the
+// store through every helper.
+func svcRefreshStore(s *Service) refresh.Store {
+	return s.refreshStore
+}
+
 // TestService_Refresh_RoleFetchFailure_AbortsRefresh asserts that when the
 // RoleRepository is unavailable, Refresh fails with ErrAuthRoleFetchFailed
 // and does NOT persist the rotated session — the fail-closed contract of
