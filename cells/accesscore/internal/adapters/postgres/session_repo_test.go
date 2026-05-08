@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -14,7 +15,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestNewPGSessionRepository_RequiresPool(t *testing.T) {
-	_, err := NewPGSessionRepository(nil)
+	_, err := NewPGSessionRepository(nil, clock.Real())
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -23,7 +24,7 @@ func TestNewPGSessionRepository_RequiresPool(t *testing.T) {
 }
 
 func TestNewPGSessionRepository_HappyPath(t *testing.T) {
-	repo, err := NewPGSessionRepository(dummyPool())
+	repo, err := NewPGSessionRepository(dummyPool(), clock.Real())
 	require.NoError(t, err)
 	assert.NotNil(t, repo)
 }

@@ -42,7 +42,7 @@ import (
 //   - 在 ADR docs/architecture/202605081600-adr-pg-accesscore-locking.md 中
 //     记录决策变更。
 //
-// INVARIANT: BUILTIN-ROLE-ID-NAME-EQ-01
+// INVARIANT: BUILTIN-ROLE-ID-NAME-EQ-01.
 func TestBuiltinRoleIDNameEq(t *testing.T) {
 	t.Parallel()
 

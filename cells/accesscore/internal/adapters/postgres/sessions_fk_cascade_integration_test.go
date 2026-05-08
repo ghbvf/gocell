@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // TestSessionsFKCascade verifies that deleting a user row cascades to remove
@@ -16,7 +18,7 @@ func TestSessionsFKCascade(t *testing.T) {
 	pool := setupPGPool(t)
 	ctx := context.Background()
 
-	sessionRepo, err := NewPGSessionRepository(pool.DB())
+	sessionRepo, err := NewPGSessionRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
 	userRepo, err := NewPGUserRepository(pool.DB())
 	require.NoError(t, err)

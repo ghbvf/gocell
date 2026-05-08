@@ -46,7 +46,7 @@ func WithPool(pool *pgxpool.Pool, clk clock.Clock) ([]accesscore.Option, error) 
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore/postgres: NewPGUserRepository", err)
 	}
-	sessionRepo, err := pgcell.NewPGSessionRepository(pool)
+	sessionRepo, err := pgcell.NewPGSessionRepository(pool, clk)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore/postgres: NewPGSessionRepository", err)

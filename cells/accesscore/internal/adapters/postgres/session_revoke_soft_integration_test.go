@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -35,7 +36,7 @@ func TestRevokeByIDAndOwner_Soft(t *testing.T) {
 	pool := setupPGPool(t)
 	ctx := context.Background()
 
-	sessionRepo, err := NewPGSessionRepository(pool.DB())
+	sessionRepo, err := NewPGSessionRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
 	userRepo, err := NewPGUserRepository(pool.DB())
 	require.NoError(t, err)
@@ -79,7 +80,7 @@ func TestRevokeByUserID_Soft(t *testing.T) {
 	pool := setupPGPool(t)
 	ctx := context.Background()
 
-	sessionRepo, err := NewPGSessionRepository(pool.DB())
+	sessionRepo, err := NewPGSessionRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
 	userRepo, err := NewPGUserRepository(pool.DB())
 	require.NoError(t, err)

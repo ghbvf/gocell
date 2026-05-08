@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -24,13 +23,11 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
-
-// nowUTC returns the current wall-clock time in UTC.
-// Extracted for consistent usage across soft-revoke operations.
-func nowUTC() time.Time { return time.Now().UTC() }
 
 // Compile-time assertion: PGSessionRepository implements ports.SessionRepository.
 var _ ports.SessionRepository = (*PGSessionRepository)(nil)
@@ -99,17 +96,22 @@ WHERE id = $1`
 // (PG-REPO-AMBIENT-TX-01).
 type PGSessionRepository struct {
 	pool *pgxpool.Pool
+	clk  clock.Clock
 }
 
 // NewPGSessionRepository constructs a PGSessionRepository backed by the provided pool.
 //
-// Returns a non-nil error if pool is nil.
-func NewPGSessionRepository(pool *pgxpool.Pool) (*PGSessionRepository, error) {
+// Returns a non-nil error if pool or clk is nil.
+func NewPGSessionRepository(pool *pgxpool.Pool, clk clock.Clock) (*PGSessionRepository, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pg.NewPGSessionRepository: pool must not be nil")
 	}
-	return &PGSessionRepository{pool: pool}, nil
+	if validation.IsNilInterface(clk) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"pg.NewPGSessionRepository: clock must not be nil")
+	}
+	return &PGSessionRepository{pool: pool, clk: clk}, nil
 }
 
 // Health pings the underlying PostgreSQL pool.
@@ -247,7 +249,7 @@ func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Sessio
 // ref: ory/kratos persister_session.go RevokeSession soft-revoke pattern
 // ref: ory/kratos session/handler.go deleteMySession ownership enforcement
 func (r *PGSessionRepository) RevokeByIDAndOwner(ctx context.Context, id, ownerUserID string) error {
-	now := nowUTC()
+	now := r.clk.Now().UTC()
 	ct, err := r.execCtx(ctx, revokeByIDAndOwnerSQL, id, ownerUserID, now)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: revoke by id and owner", err)
@@ -265,7 +267,7 @@ func (r *PGSessionRepository) RevokeByIDAndOwner(ctx context.Context, id, ownerU
 // RevokeByUserID soft-revokes all active sessions for a given user by setting
 // revoked_at to now. Already-revoked sessions are skipped (idempotent).
 func (r *PGSessionRepository) RevokeByUserID(ctx context.Context, userID string) error {
-	now := nowUTC()
+	now := r.clk.Now().UTC()
 	_, err := r.execCtx(ctx, revokeByUserIDSQL, userID, now)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: revoke by user id", err)

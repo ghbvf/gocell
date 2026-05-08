@@ -84,7 +84,7 @@ func newServicePGFixture(t *testing.T) *servicePGFixture {
 
 	txm := adapterpg.NewTxManager(pool)
 
-	sessionPG, err := cellpg.NewPGSessionRepository(pool.DB())
+	sessionPG, err := cellpg.NewPGSessionRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
 
 	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txm, policy, clk, nil)

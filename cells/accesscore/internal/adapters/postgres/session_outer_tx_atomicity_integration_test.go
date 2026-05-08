@@ -35,6 +35,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
@@ -79,7 +80,7 @@ func newCrossStoreFixture(t *testing.T) *crossStoreFixture {
 
 	txm := adapterpg.NewTxManager(pool)
 
-	sessionRepo, err := NewPGSessionRepository(pool.DB())
+	sessionRepo, err := NewPGSessionRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
 
 	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txm, policy, clk, nil)

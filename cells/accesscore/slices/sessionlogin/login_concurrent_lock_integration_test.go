@@ -26,9 +26,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	pgadapter "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/testfx"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -39,12 +39,18 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
 
+// Test durations (TEST-TIME-LITERAL-01: extract to package-level consts).
+const (
+	loginLockJWTTTL           = 15 * time.Minute
+	loginLockRefreshReuseWait = 2 * time.Second
+)
+
 // loginLockTestKeySet is a shared JWT key set for this integration test file.
 var loginLockTestKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
 
 // loginLockTestIssuer is used by the Login service.
 var loginLockTestIssuer = func() *auth.JWTIssuer {
-	i, err := auth.NewJWTIssuer(loginLockTestKeySet, "gocell-accesscore", 15*time.Minute, clock.Real(),
+	i, err := auth.NewJWTIssuer(loginLockTestKeySet, "gocell-accesscore", loginLockJWTTTL, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("integration test setup: " + err.Error())
@@ -67,7 +73,7 @@ func newLoginLockFixture(t *testing.T) *loginLockFixture {
 
 	userRepo, err := pgadapter.NewPGUserRepository(pool.DB())
 	require.NoError(t, err)
-	sessionRepo, err := pgadapter.NewPGSessionRepository(pool.DB())
+	sessionRepo, err := pgadapter.NewPGSessionRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
 	roleRepo, err := pgadapter.NewPGRoleRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
@@ -76,7 +82,7 @@ func newLoginLockFixture(t *testing.T) *loginLockFixture {
 
 	fakeClk := storetest.NewFakeClock(time.Now())
 	refreshStore, err := refreshmem.New(refresh.Policy{
-		ReuseInterval:  2 * time.Second,
+		ReuseInterval:  loginLockRefreshReuseWait,
 		MaxAge:         time.Hour,
 		MaxIdle:        refresh.DefaultMaxIdle,
 		GraceMaxReuses: refresh.DefaultGraceMaxReuses,

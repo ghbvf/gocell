@@ -51,7 +51,8 @@ func TestIntegrationCIDiscovery(t *testing.T) {
 	}
 	for _, s := range sentinels {
 		if !discovered[s] {
-			t.Errorf("INTEGRATION-CI-DISCOVERY-01: sentinel %s missing from go list output — did you forget //go:build integration on a new test file?", s)
+			t.Errorf("INTEGRATION-CI-DISCOVERY-01: sentinel %s missing from go list output "+
+				"— did you forget //go:build integration on a new test file?", s)
 		}
 	}
 }

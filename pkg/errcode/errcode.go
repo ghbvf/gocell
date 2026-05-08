@@ -106,7 +106,7 @@ const (
 	//
 	// ref: kubernetes apimachinery resourceVersion conflict (StatusReasonConflict)
 	// ref: 022_users_add_version.sql + 018_sessions.sql version columns
-	ErrAuthConcurrentUpdate Code = "ERR_AUTH_CONCURRENT_UPDATE"
+	ErrAuthConcurrentUpdate     Code = "ERR_AUTH_CONCURRENT_UPDATE"
 	ErrAuthInvalidInput         Code = "ERR_AUTH_INVALID_INPUT"
 	ErrAuthUserLocked           Code = "ERR_AUTH_USER_LOCKED"
 	ErrAuthSessionInvalidInput  Code = "ERR_AUTH_SESSION_INVALID_INPUT"

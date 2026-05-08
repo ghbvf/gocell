@@ -171,7 +171,8 @@ func (r *PGUserRepository) mapUniqueViolation(err error, op, username, email str
 			errcode.WithInternal(fmt.Sprintf("constraint=%s username=%s", pgErr.ConstraintName, username)),
 		)
 	}
-	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, op, err)
+	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: query failed", err,
+		errcode.WithInternal("op="+op))
 }
 
 // GetByID retrieves a user by primary key.
