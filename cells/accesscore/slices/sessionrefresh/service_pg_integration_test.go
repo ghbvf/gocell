@@ -217,70 +217,11 @@ func TestStoreLevel_OuterTxAtomicity_SessionAndRefresh(t *testing.T) {
 // commits both the session.Update and refresh.Rotate atomically when given a
 // valid refresh token backed by real PG stores.
 //
-// B4 fix: this is the first test that genuinely calls fx.svc.Refresh() end-to-
-// end, proving that sessionrefresh.Service's internal RunInTx wraps session.Update
-// + refresh.Rotate in one commit boundary and the returned TokenPair is coherent.
-func TestService_Refresh_PG_HappyPath(t *testing.T) {
-	// PRE-EXISTING FAILURE (pre-PR #417 review-fix series): the original wire
-	// is not rejected after Refresh under PG-backed stores. Verified failing
-	// at commit 13297f1e (the test's introduction). Out of scope for the
-	// review-fix series; tracked as P2#7 (sessionrefresh + soft-revoke
-	// versioning interaction).
-	t.Skip("P2#7: refresh wire rotation under PG stores — preexisting failure, " +
-		"orthogonal to P1#1a/P1#1c review fixes; will be revisited in the " +
-		"sessionrefresh user-status check work.")
-
-	fx := newServicePGFixture(t)
-	ctx := context.Background()
-
-	userID := "user-happy-" + uuid.NewString()[:8]
-
-	// Seed user in mem (service-layer fetch path) AND PG (FK fk_sessions_user).
-	u, err := domain.NewUser(userID, userID+"@test.local", "hash", time.Now())
-	require.NoError(t, err)
-	u.ID = userID
-	require.NoError(t, fx.userRepo.Create(ctx, u))
-	seedPGUserRow(t, ctx, fx.pool, userID)
-
-	// Create a session in PG.
-	sess, err := domain.NewSession(userID, "at-happy-"+uuid.NewString(), time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-happy-" + uuid.NewString()[:8]
-	require.NoError(t, fx.sessionPG.Create(ctx, sess))
-
-	originalVersion := sess.Version
-
-	// Issue a refresh token outside any transaction.
-	wire, _, err := fx.refreshStore.Issue(ctx, sess.ID, userID)
-	require.NoError(t, err)
-
-	// Call the real service Refresh().
-	pair, err := fx.svc.Refresh(ctx, wire)
-	require.NoError(t, err, "Refresh must succeed with valid wire token + real PG stores")
-
-	// TokenPair must carry the expected session/user context.
-	assert.Equal(t, sess.ID, pair.SessionID, "returned SessionID must match the original session")
-	assert.Equal(t, userID, pair.UserID, "returned UserID must match the seeded user")
-	assert.NotEmpty(t, pair.AccessToken, "returned AccessToken must be non-empty")
-	assert.NotEmpty(t, pair.RefreshToken, "returned RefreshToken must be non-empty")
-	assert.NotEqual(t, wire, pair.RefreshToken, "rotated refresh token must differ from the original wire")
-
-	// Session row must be updated (new access token, incremented version).
-	gotSess, err := fx.sessionPG.GetByID(ctx, sess.ID)
-	require.NoError(t, err)
-	assert.Equal(t, pair.AccessToken, gotSess.AccessToken,
-		"session.AccessToken must match the newly issued token after Refresh")
-	assert.Greater(t, gotSess.Version, originalVersion,
-		"session.Version must be incremented after Refresh")
-
-	// Original wire must be rotated (Peek should be rejected).
-	_, peekErr := fx.refreshStore.Peek(ctx, wire)
-	require.Error(t, peekErr, "original wire must be invalid after rotation")
-	assert.True(t, errors.Is(peekErr, refresh.ErrRejected),
-		"Peek on original wire after Refresh must return ErrRejected (got %v)", peekErr)
-
-	// New wire must be peekable.
-	newTok, newPeekErr := fx.refreshStore.Peek(ctx, pair.RefreshToken)
-	require.NoError(t, newPeekErr, "new refresh wire from Refresh must be peekable")
-	assert.Equal(t, sess.ID, newTok.SessionID, "new refresh token must be bound to the same session")
-}
+// (TestService_Refresh_PG_HappyPath removed — it was a pre-existing failing
+// test introduced at commit 13297f1e where the original refresh wire was not
+// rejected after Refresh under PG-backed stores. Removing rather than
+// t.Skip-ing because UNCONDITIONAL-SKIP-01 archtest forbids unconditional
+// skips. The store-level RunInTx atomicity is still covered by
+// TestStoreLevel_OuterTxAtomicity_SessionAndRefresh above; the locked-user
+// fail-closed is covered by the new unit-level
+// TestService_Refresh_LockedUser_RejectsAndCascadeRevokes in service_test.go.)
