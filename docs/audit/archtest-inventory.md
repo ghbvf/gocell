@@ -7,7 +7,7 @@
 ## 概览
 
 - archtest 文件总数：73
-- archtest INVARIANT 锚点数：174
+- archtest INVARIANT 锚点数：175
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
@@ -185,15 +185,10 @@
 | `TEST-TIME-LITERAL-01` | `test_sleep_discipline_test.go` | 25 | test |
 | `TEST-TIME-LITERAL-01` | `test_time_literal_fixtures_test.go` | 2 | test |
 | `TEST-TIME-LITERAL-01` | `test_time_literal_test.go` | 1 | test |
+| `TESTUTIL-BOUNDARY-01` | `testutil_boundary_negprobe_test.go` | 1 | testutil |
 | `TESTUTIL-BOUNDARY-01` | `testutil_boundary_test.go` | 1 | testutil |
 | `VISIT-BUFFER-THEN-COMMIT-01` | `visit_buffer_then_commit_test.go` | 1 | visit |
 | `WIRE-CODE-5XX-SINGLE-SOURCE-01` | `wire_code_5xx_single_source_test.go` | 1 | wire |
-
-## 未声明 INVARIANT 锚点的 archtest 文件
-
-下列文件没有 `// INVARIANT: <ID>` 锚点。helpers / fixtures 已排除；以下都是规则文件，请补锚点或加入排除列表。
-
-- `testutil_boundary_negprobe_test.go`
 
 ## governance `rules_*.go` 清单
 
