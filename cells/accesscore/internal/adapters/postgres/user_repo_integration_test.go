@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -80,19 +81,23 @@ func TestPGUserRepository_Integration_CRUD(t *testing.T) {
 		assert.Equal(t, "bob", got.Username)
 	})
 
-	t.Run("Update", func(t *testing.T) {
+	t.Run("ApplyPatch", func(t *testing.T) {
 		u := newTestUser("carol", "carol@example.com")
 		require.NoError(t, repo.Create(ctx, u))
 
-		u.Email = "carol-updated@example.com"
-		u.PasswordResetRequired = true
-		u.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
-		require.NoError(t, repo.Update(ctx, u))
-
-		got, err := repo.GetByID(ctx, u.ID)
+		newEmail := "carol-updated@example.com"
+		mustReset := true
+		got, err := repo.ApplyPatch(ctx, ports.UserPatch{
+			ID:                    u.ID,
+			Email:                 &newEmail,
+			PasswordResetRequired: &mustReset,
+			UpdatedAt:             time.Now().UTC().Truncate(time.Microsecond),
+			CurrentVersion:        u.Version,
+		})
 		require.NoError(t, err)
 		assert.Equal(t, "carol-updated@example.com", got.Email)
 		assert.True(t, got.PasswordResetRequired)
+		assert.Equal(t, u.Version+1, got.Version, "version must increment")
 	})
 
 	t.Run("Delete", func(t *testing.T) {
@@ -124,11 +129,14 @@ func TestPGUserRepository_Integration_CRUD(t *testing.T) {
 		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
 	})
 
-	t.Run("Update_NotFound", func(t *testing.T) {
-		ghost := newTestUser("ghost", "ghost@example.com")
-		ghost.ID = uuid.NewString() // not in DB
-
-		err := repo.Update(ctx, ghost)
+	t.Run("ApplyPatch_NotFound", func(t *testing.T) {
+		newEmail := "ghost@example.com"
+		_, err := repo.ApplyPatch(ctx, ports.UserPatch{
+			ID:             uuid.NewString(), // not in DB
+			Email:          &newEmail,
+			UpdatedAt:      time.Now().UTC().Truncate(time.Microsecond),
+			CurrentVersion: 1,
+		})
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
