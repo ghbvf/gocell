@@ -35,6 +35,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const redactionImportPath = `"github.com/ghbvf/gocell/pkg/redaction"`
@@ -186,36 +188,15 @@ func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []
 	return out
 }
 
-// scanSpanRecordErrorDir walks every non-test .go file under root/dir and
+// scanSpanRecordErrorDir scans every non-test .go file under root/dir and
 // returns SPAN-RECORD-ERROR-REDACT-01 violations.
 func scanSpanRecordErrorDir(t *testing.T, root, dir string) []string {
 	t.Helper()
-	abs := filepath.Join(root, dir)
+	scope := scanner.DirsScope(root, []string{dir})
 	var out []string
-
-	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
-		out = append(out, scanSpanRecordErrorFile(fset, file, rel)...)
-		return nil
+	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		out = append(out, scanSpanRecordErrorFile(fc.Fset, fc.File, fc.Rel)...)
 	})
-	require.NoError(t, err, "walk %s", abs)
 	return out
 }
 
@@ -255,47 +236,21 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 	}
 
 	var unenrolled []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	scope := scanner.ModuleScope(root)
+	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		if !fileHasNonImplRecordError(fc.File) {
+			return
 		}
-		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "vendor" || name == "node_modules" ||
-				name == "testdata" || name == "worktrees" || name == "bak" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			// fail-visible: silent skip would let a future syntactically
-			// broken file silently bypass the gate.
-			rel, _ := filepath.Rel(root, path)
-			return fmt.Errorf("%s: parse failed (must be syntactically valid): %w", rel, parseErr)
-		}
-		if !fileHasNonImplRecordError(file) {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
+		rel := filepath.ToSlash(fc.Rel)
 		dir := filepath.Dir(rel)
 		// Walk up looking for any enrolled prefix.
 		for d := dir; d != "." && d != "/"; d = filepath.Dir(d) {
-			if _, ok := enrolled[d]; ok {
-				return nil
+			if _, ok := enrolled[filepath.Clean(d)]; ok {
+				return
 			}
 		}
 		unenrolled = append(unenrolled, rel)
-		return nil
 	})
-	require.NoError(t, err)
 	sort.Strings(unenrolled)
 	assert.Empty(t, unenrolled,
 		"SPAN-RECORD-ERROR-REDACT-01 coverage: production files calling "+
@@ -305,33 +260,24 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 }
 
 // runSpanRecordErrorFixtureScan parses fixture .go files (non-test, no module
-// load) and reports violations relative to fixtureDir.
+// load) and reports violations relative to fixtureDir. Uses os.ReadDir to
+// iterate entries directly (fixtures live in testdata/ which scanner skips by
+// design; direct iteration avoids re-invoking the WalkDir pattern).
 func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
+	entries, err := os.ReadDir(fixtureDir)
+	require.NoError(t, err, "read fixture dir %s", fixtureDir)
 	var out []string
-	err := filepath.WalkDir(fixtureDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+		path := filepath.Join(fixtureDir, entry.Name())
 		fset := token.NewFileSet()
 		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-		rel, relErr := filepath.Rel(fixtureDir, path)
-		if relErr != nil {
-			rel = path
-		}
-		out = append(out, scanSpanRecordErrorFile(fset, file, rel)...)
-		return nil
-	})
-	require.NoError(t, err, "walk fixture %s", fixtureDir)
+		require.NoErrorf(t, parseErr, "parse fixture %s", path)
+		out = append(out, scanSpanRecordErrorFile(fset, file, entry.Name())...)
+	}
 	sort.Strings(out)
 	return out
 }

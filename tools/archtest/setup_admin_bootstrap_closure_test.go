@@ -34,11 +34,12 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestCellsNoRouteMuxWrapper enforces CELLS-NO-ROUTEMUX-WRAPPER-01.
@@ -52,35 +53,13 @@ import (
 func TestCellsNoRouteMuxWrapper(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	cellsDir := filepath.Join(root, "cells")
 
-	fset := token.NewFileSet()
+	scope := scanner.DirsScope(root, []string{"cells"})
 	var violations []string
-
-	walkErr := filepath.Walk(cellsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		// #nosec G304 -- path comes from filepath.Walk under findModuleRoot, not user input.
-		src, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
 		// Cheap filter: skip files that don't reference the symbol literally.
-		if !strings.Contains(string(src), "RouteMux") {
-			return nil
-		}
-		file, parseErr := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
-		if parseErr != nil {
-			return parseErr
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
+		// We re-read is not needed; the AST is already parsed — just inspect.
+		ast.Inspect(fc.File, func(n ast.Node) bool {
 			st, ok := n.(*ast.StructType)
 			if !ok || st.Fields == nil {
 				return true
@@ -91,15 +70,13 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 					continue
 				}
 				if exprNamesRouteMux(field.Type) {
-					rel, _ := filepath.Rel(root, path)
-					violations = append(violations, rel+":"+fset.Position(field.Pos()).String())
+					violations = append(violations,
+						fc.Rel+":"+fc.Fset.Position(field.Pos()).String())
 				}
 			}
 			return true
 		})
-		return nil
 	})
-	require.NoError(t, walkErr, "walk cells/")
 
 	assert.Empty(t, violations,
 		"CELLS-NO-ROUTEMUX-WRAPPER-01: cells/ must not embed cell.RouteMux. "+

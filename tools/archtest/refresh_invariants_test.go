@@ -10,13 +10,13 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleRefreshCrossStoreTX01 = "REFRESH-CROSS-STORE-TX-01"
@@ -282,33 +282,9 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 	}
 	var declarations []declarationSite
 
-	skipDirs := map[string]struct{}{
-		"vendor": {}, "worktrees": {}, "testdata": {}, "generated": {}, ".git": {},
-	}
-
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if _, skip := skipDirs[d.Name()]; skip {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
-		if parseErr != nil {
-			// fail-visible: a syntactically broken production file would
-			// otherwise silently bypass the rule.
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-
-		for _, decl := range file.Decls {
+	scope := scanner.ModuleScope(root)
+	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		for _, decl := range fc.File.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
 			if !ok {
 				continue
@@ -320,16 +296,13 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 			if fd.Recv != nil {
 				continue
 			}
-			rel, _ := filepath.Rel(root, path)
-			pos := fset.Position(fd.Pos())
+			pos := fc.Fset.Position(fd.Pos())
 			declarations = append(declarations, declarationSite{
-				rel:  filepath.ToSlash(rel),
+				rel:  filepath.ToSlash(fc.Rel),
 				line: pos.Line,
 			})
 		}
-		return nil
 	})
-	require.NoError(t, err, "walking repo root")
 
 	if len(declarations) == 0 {
 		t.Fatalf("%s: DetectInvalidIndexes not declared anywhere — expected it in %s",

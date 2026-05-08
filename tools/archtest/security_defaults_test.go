@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -627,27 +628,34 @@ services:
 func findExampleComposeCredentialViolations(root string) ([]string, error) {
 	var violations []string
 	examplesDir := filepath.Join(root, "examples")
-	err := filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if filepath.Base(path) != "docker-compose.yml" {
-			return nil
-		}
-		fileViolations, err := findComposeCredentialViolations(root, path)
-		if err != nil {
-			return err
-		}
-		violations = append(violations, fileViolations...)
-		return nil
-	})
+	entries, err := os.ReadDir(examplesDir)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
-	return violations, err
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		subDir := filepath.Join(examplesDir, entry.Name())
+		subEntries, readErr := os.ReadDir(subDir)
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, sub := range subEntries {
+			if sub.IsDir() || sub.Name() != "docker-compose.yml" {
+				continue
+			}
+			fileViolations, cvErr := findComposeCredentialViolations(root, filepath.Join(subDir, sub.Name()))
+			if cvErr != nil {
+				return nil, cvErr
+			}
+			violations = append(violations, fileViolations...)
+		}
+	}
+	return violations, nil
 }
 
 func findComposeCredentialViolations(root, path string) ([]string, error) {
@@ -1131,33 +1139,23 @@ func (h *Hub) shutdown() {
 // Parse errors fail-visible (callers receive an error) so a syntactically
 // broken entry point cannot silently bypass the SEC scans.
 func findAllProductionMainPackageFiles(root string) ([]string, error) {
+	scope := scanner.ModuleScope(root,
+		scanner.ExcludeRels("bak"),
+	)
+	candidates, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", ".git", "generated", "testdata", "node_modules", "worktrees", "bak":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+	for _, path := range candidates {
 		fset := token.NewFileSet()
 		af, perr := parser.ParseFile(fset, path, nil, parser.PackageClauseOnly)
 		if perr != nil {
-			return fmt.Errorf("parse %s: %w", path, perr)
+			return nil, fmt.Errorf("parse %s: %w", path, perr)
 		}
 		if af.Name != nil && af.Name.Name == "main" {
 			files = append(files, path)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return files, nil
 }

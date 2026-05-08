@@ -23,14 +23,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // ---------------------------------------------------------------------------
@@ -527,56 +527,32 @@ var _ = cell.Policy{}
 // ---------------------------------------------------------------------------
 
 // findAllProductionGoFiles returns all non-test .go files under root,
-// excluding vendor/, .git/, generated/, testdata/ directories and *_test.go.
+// excluding vendor/, .git/, generated/, testdata/, worktrees/ directories and *_test.go.
 func findAllProductionGoFiles(root string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", ".git", "generated", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
-	sort.Strings(files)
-	return files, err
+	return scanner.ModuleScope(root).Files()
 }
 
 // findProductionGoFilesInDir returns production .go files under a specific dir.
+// dir must be an absolute path under root (module root).
 func findProductionGoFilesInDir(dir string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	root := moduleRootOf(dir)
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return nil, err
+	}
+	return scanner.DirsScope(root, []string{filepath.ToSlash(rel)}).Files()
+}
+
+// moduleRootOf walks up from dir to find the nearest go.mod file and returns
+// the directory containing it. This avoids threading root through every caller.
+func moduleRootOf(dir string) string {
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := filepath.EvalSymlinks(filepath.Join(d, "go.mod")); err == nil {
+			return d
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", ".git", "generated", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
+		parent := filepath.Dir(d)
+		if parent == d {
+			panic("moduleRootOf: go.mod not found above " + dir)
 		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
-	sort.Strings(files)
-	return files, err
+	}
 }
