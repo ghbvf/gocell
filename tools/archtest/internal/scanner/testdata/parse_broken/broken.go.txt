@@ -1,0 +1,8 @@
+package broken
+
+import (
+	"fmt"
+	broken_import_syntax (  // intentional syntax error in import block
+)
+
+var _ = fmt.Sprintf

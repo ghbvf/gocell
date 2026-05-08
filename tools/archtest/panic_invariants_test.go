@@ -10,7 +10,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // INVARIANT: PANIC-REDACT-01
@@ -33,30 +34,14 @@ import (
 // Wave 0: fails against the current codebase (11 violations in Wave 0).
 // Wave 3: all violations remediated; white-list stays empty permanently.
 func TestPanicLogMustUseRedactAny(t *testing.T) {
-	repoRoot := findRepoRootPanicRedact(t)
-	fset := token.NewFileSet()
-	var violations []string
+	root := findModuleRoot(t)
+	scope := scanner.ModuleScope(root,
+		scanner.ExcludeRels("tools/archtest/doc.go"),
+	)
 
-	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			base := d.Name()
-			if base == "vendor" || base == "node_modules" || base == ".git" || base == "worktrees" || base == "generated" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if perr != nil {
-			//nolint:nilerr // unparseable files (generated, vendored 3p, broken WIP) are not the archtest's concern
-			return nil
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
+	var diags []scanner.Diagnostic
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		ast.Inspect(fc.File, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -81,49 +66,25 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 			arg := call.Args[1]
 			argCall, ok := arg.(*ast.CallExpr)
 			if !ok {
-				violations = append(violations, panicRedactPosStr(fset, call.Pos()))
+				diags = append(diags, scanner.Diagnostic{
+					Rel:     fc.Rel,
+					Line:    fc.Fset.Position(call.Pos()).Line,
+					Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
+				})
 				return true
 			}
 			argSel, ok := argCall.Fun.(*ast.SelectorExpr)
 			if !ok || argSel.Sel.Name != "RedactAny" {
-				violations = append(violations, panicRedactPosStr(fset, call.Pos()))
-				return true
+				diags = append(diags, scanner.Diagnostic{
+					Rel:     fc.Rel,
+					Line:    fc.Fset.Position(call.Pos()).Line,
+					Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
+				})
 			}
 			return true
 		})
-		return nil
 	})
-	if err != nil {
-		t.Fatalf("walk: %v", err)
-	}
-	if len(violations) > 0 {
-		t.Errorf("slog.Any(\"panic\", X) must wrap X with redaction.RedactAny(...). %d violation(s):\n%s",
-			len(violations), strings.Join(violations, "\n"))
-	}
-}
-
-func panicRedactPosStr(fset *token.FileSet, pos token.Pos) string {
-	p := fset.Position(pos)
-	return p.String()
-}
-
-func findRepoRootPanicRedact(t *testing.T) string {
-	t.Helper()
-	dir, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		fi, e := os.Stat(filepath.Join(dir, "go.mod"))
-		if e == nil && !fi.IsDir() {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("go.mod not found — cannot determine repo root")
-		}
-		dir = parent
-	}
+	scanner.Report(t, "PANIC-REDACT-01", diags)
 }
 
 // INVARIANT: PANIC-REGISTERED-01
@@ -165,8 +126,7 @@ type panicRegisteredScope struct {
 func TestPanicRegistered(t *testing.T) {
 	root := findModuleRoot(t)
 
-	violations, usedWhitelist, err := scanRootForPanicRegisteredViolations(root, architecturalPanicWhitelist)
-	require.NoError(t, err)
+	violations, usedWhitelist := scanRootForPanicRegisteredViolations(t, root, architecturalPanicWhitelist)
 	assertPanicWhitelistMatchesADR(t, root, usedWhitelist)
 
 	if len(violations) > 0 {
@@ -305,37 +265,25 @@ func scanSourceForPanicRegisteredViolations(
 	return scanPanicRegisteredAST(fset, file, rel, whitelist, used), used
 }
 
-func scanRootForPanicRegisteredViolations(root string, whitelist map[string]string) ([]panicRegisteredViolation, map[string]bool, error) {
+func scanRootForPanicRegisteredViolations(
+	t *testing.T, root string, whitelist map[string]string,
+) ([]panicRegisteredViolation, map[string]bool) {
+	t.Helper()
 	usedWhitelist := map[string]bool{}
 	var violations []panicRegisteredViolation
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if skipPanicRegisteredDir(root, path, d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
 
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
-		if err != nil {
-			return err
-		}
-		violations = append(violations, scanPanicRegisteredAST(fset, file, rel, whitelist, usedWhitelist)...)
-		return nil
+	// Exclude tools/archtest/doc.go — scanner self-protects internal/scanner;
+	// the archtest package itself only has *_test.go (excluded by default) plus
+	// doc.go which contains no production panic calls.
+	scope := scanner.ModuleScope(root,
+		scanner.ExcludeRels("tools/archtest/doc.go"),
+	)
+	// EachFile is fail-loud: any parse error calls t.Fatalf immediately,
+	// replacing the previous manual loop + error return pattern (PANIC-REGISTERED-01 dogfooding).
+	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		violations = append(violations, scanPanicRegisteredAST(fc.Fset, fc.File, fc.Rel, whitelist, usedWhitelist)...)
 	})
-	return violations, usedWhitelist, err
+	return violations, usedWhitelist
 }
 
 func scanPanicRegisteredAST(
@@ -433,23 +381,11 @@ func isPanicCallExpr(call *ast.CallExpr) bool {
 	return ok && ident.Name == "panic"
 }
 
-func skipPanicRegisteredDir(root, path, name string) bool {
-	switch name {
-	case ".git", "vendor", "worktrees", "generated", "node_modules", "testdata":
-		return true
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	return filepath.ToSlash(rel) == "tools/archtest"
-}
-
 func panicRegisteredFuncName(fd *ast.FuncDecl) string {
 	if fd.Recv == nil || len(fd.Recv.List) == 0 {
 		return fd.Name.Name
 	}
-	if recv := receiverTypeName(fd.Recv.List[0].Type); recv != "" {
+	if recv := scanner.ReceiverTypeName(fd.Recv.List[0].Type); recv != "" {
 		return recv + "." + fd.Name.Name
 	}
 	return fd.Name.Name

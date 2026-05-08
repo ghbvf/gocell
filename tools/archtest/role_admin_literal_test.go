@@ -1,3 +1,6 @@
+// INVARIANT: ROLE-ADMIN-LITERAL-01
+// INVARIANT: ROLE-ADMIN-LITERAL-02
+//
 // archtest: ROLE-ADMIN-LITERAL-01
 // archtest: ROLE-ADMIN-LITERAL-02
 //
@@ -11,6 +14,14 @@
 // argument to auth.AnyRole / auth.SelfOr / auth.RequireAnyRole / auth.AnyRoles.
 // All call sites must use the auth.RoleAdmin constant instead.
 //
+// The call-site rule is import-aware: the receiver of the selector
+// expression must resolve to a local alias of github.com/ghbvf/gocell/runtime/auth
+// (default name "auth" or any explicit rename via `import x "…/runtime/auth"`).
+// A same-named method on an unrelated type or package does NOT trigger the
+// rule. Literal comparison is normalized through scanner.StringLitValue, so
+// raw-string forms (“ `admin` “) and escape-encoded forms (`"\x61dmin"`)
+// are caught alongside the plain `"admin"` form.
+//
 // The authoritative definition lives in runtime/auth/roles.go (RoleAdmin).
 // Any other file re-declaring or hard-coding the same role string is a drift
 // risk: the names will diverge silently when the role value changes.
@@ -20,17 +31,13 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -38,7 +45,7 @@ const (
 	ruleRoleAdminLiteral02 = "ROLE-ADMIN-LITERAL-02"
 )
 
-// roleAdminAllowlist contains the files that are explicitly permitted to declare
+// roleAdminAllowRels contains the files that are explicitly permitted to declare
 // a const whose name contains "Admin"/"admin" with the value "admin".
 //
 //   - runtime/auth/roles.go: canonical definition of RoleAdmin.
@@ -46,112 +53,78 @@ const (
 //     until runtime/ gains an internal-only reference to runtime/auth.
 //   - cells/accesscore/initialadmin/bootstrap.go: defaultAdminUsername is the
 //     default account username at provisioning time, not a role name.
-var roleAdminAllowlist = map[string]struct{}{
-	"runtime/auth/roles.go":                      {},
-	"runtime/http/devtools/catalog.go":           {},
-	"cells/accesscore/initialadmin/bootstrap.go": {},
+var roleAdminAllowRels = []string{
+	"runtime/auth/roles.go",
+	"runtime/http/devtools/catalog.go",
+	"cells/accesscore/initialadmin/bootstrap.go",
 }
+
+// searchDirsRoleAdmin are the directories scanned by both ROLE-ADMIN-LITERAL rules.
+var searchDirsRoleAdmin = []string{"runtime", "cells", "adapters", "cmd"}
 
 // TestRoleAdminLiteralIsForbidden enforces ROLE-ADMIN-LITERAL-01.
 //
 // It walks production .go files under runtime/, cells/, adapters/, and cmd/,
 // scanning top-level const declarations for any identifier whose name
 // contains "Admin" or "admin" and whose value is the string literal "admin".
-// The only allowed file is the canonical definition in runtime/auth/roles.go.
+// The only allowed files are listed in roleAdminAllowRels.
 func TestRoleAdminLiteralIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, searchDirsRoleAdmin,
+		scanner.ExcludeRels(roleAdminAllowRels...),
+	)
 
-	searchDirs := []string{
-		filepath.Join(root, "runtime"),
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "adapters"),
-		filepath.Join(root, "cmd"),
-	}
-
-	var violations []string
-
-	for _, dir := range searchDirs {
-		files, err := findProductionGoFilesInDir(dir)
-		if os.IsNotExist(err) {
-			continue
-		}
-		require.NoErrorf(t, err, "reading dir %s", dir)
-
-		for _, f := range files {
-			rel, relErr := filepath.Rel(root, f)
-			if relErr != nil {
-				rel = f
-			}
-			rel = filepath.ToSlash(rel)
-			if _, allowed := roleAdminAllowlist[rel]; allowed {
+	var diags []scanner.Diagnostic
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		for _, decl := range fc.File.Decls {
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok || genDecl.Tok != token.CONST {
 				continue
 			}
-
-			hits, err := findRoleAdminConstLiterals(f)
-			require.NoErrorf(t, err, "scanning %s", f)
-
-			for _, line := range hits {
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: duplicate const *Admin* = \"admin\" violates %s; use auth.RoleAdmin from runtime/auth",
-					rel, line, ruleRoleAdminLiteral01))
-			}
-		}
-	}
-
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"%s: const declarations of `*Admin* = \"admin\"` are only allowed in the allowlisted files; "+
-			"all other packages must reference auth.RoleAdmin from runtime/auth.",
-		ruleRoleAdminLiteral01)
-}
-
-// findRoleAdminConstLiterals parses path and returns line numbers of every
-// top-level const declaration whose identifier name contains "admin" or
-// "Admin" and whose value is the string literal "admin".
-func findRoleAdminConstLiterals(path string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	var lines []int
-	for _, decl := range f.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for i, name := range vs.Names {
-				if !isAdminIdent(name.Name) {
+			// Go spec: a ValueSpec inside a const GenDecl with no Values
+			// inherits the previous spec's expression list (iota carry).
+			// Track the most recent non-empty Values within this GenDecl so
+			// that `const ( AdminRole = "admin"; OtherRole )` flags OtherRole.
+			var lastValues []ast.Expr
+			for _, spec := range genDecl.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				if i >= len(vs.Values) {
-					continue
+				values := vs.Values
+				if values == nil {
+					values = lastValues
+				} else {
+					lastValues = values
 				}
-				lit, ok := vs.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				// BasicLit.Value includes surrounding quotes: `"admin"`.
-				if lit.Value == `"admin"` {
-					lines = append(lines, fset.Position(name.Pos()).Line)
+				for i, name := range vs.Names {
+					if !isAdminIdent(name.Name) {
+						continue
+					}
+					if i >= len(values) {
+						continue
+					}
+					lit, ok := values[i].(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					value, ok := scanner.StringLitValue(lit)
+					if !ok || value != "admin" {
+						continue
+					}
+					diags = append(diags, scanner.Diagnostic{
+						Rel:  fc.Rel,
+						Line: fc.Fset.Position(name.Pos()).Line,
+						Message: `duplicate const *Admin* = "admin" violates ` + ruleRoleAdminLiteral01 +
+							`; use auth.RoleAdmin from runtime/auth`,
+					})
 				}
 			}
 		}
-	}
-	return lines, nil
+	})
+	scanner.Report(t, ruleRoleAdminLiteral01, diags)
 }
 
 // isAdminIdent reports whether name is a role-admin style identifier:
@@ -186,90 +159,52 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, searchDirsRoleAdmin)
 
-	searchDirs := []string{
-		filepath.Join(root, "runtime"),
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "adapters"),
-		filepath.Join(root, "cmd"),
-	}
-
-	var violations []string
-
-	for _, dir := range searchDirs {
-		files, err := findProductionGoFilesInDir(dir)
-		if os.IsNotExist(err) {
-			continue
+	var diags []scanner.Diagnostic
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		authAliases := scanner.PackageAliases(fc.File, "github.com/ghbvf/gocell/runtime/auth")
+		if len(authAliases) == 0 {
+			return // file does not import runtime/auth — selector cannot resolve to auth.*
 		}
-		require.NoErrorf(t, err, "reading dir %s", dir)
-
-		for _, f := range files {
-			rel, relErr := filepath.Rel(root, f)
-			if relErr != nil {
-				rel = f
+		ast.Inspect(fc.File, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
 			}
-			rel = filepath.ToSlash(rel)
-
-			hits, scanErr := findAdminLiteralCallSites(f)
-			require.NoErrorf(t, scanErr, "scanning %s", f)
-
-			for _, line := range hits {
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: string literal \"admin\" passed to auth.* call violates %s; use auth.RoleAdmin constant instead",
-					rel, line, ruleRoleAdminLiteral02))
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
 			}
-		}
-	}
-
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"%s: string literal \"admin\" must not appear as an argument to auth.AnyRole / auth.AnyRoles / "+
-			"auth.SelfOr / auth.RequireAnyRole; use auth.RoleAdmin from runtime/auth/roles.go.",
-		ruleRoleAdminLiteral02)
-}
-
-// findAdminLiteralCallSites parses path and returns line numbers of every
-// call expression of the form auth.<FuncName>(...) where any argument is the
-// string literal "admin". Test files (*_test.go) are excluded by
-// findProductionGoFilesInDir before this function is called.
-func findAdminLiteralCallSites(path string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-
-	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+			if _, matched := authCallSiteFuncNames[sel.Sel.Name]; !matched {
+				return true
+			}
+			id, isIdent := sel.X.(*ast.Ident)
+			if !isIdent {
+				return true
+			}
+			if _, isAuthAlias := authAliases[id.Name]; !isAuthAlias {
+				return true
+			}
+			for _, arg := range call.Args {
+				lit, isLit := arg.(*ast.BasicLit)
+				if !isLit {
+					continue
+				}
+				value, ok := scanner.StringLitValue(lit)
+				if !ok || value != "admin" {
+					continue
+				}
+				diags = append(diags, scanner.Diagnostic{
+					Rel:  fc.Rel,
+					Line: fc.Fset.Position(lit.Pos()).Line,
+					Message: `string literal "admin" passed to auth.` + sel.Sel.Name +
+						` violates ` + ruleRoleAdminLiteral02 +
+						`; use auth.RoleAdmin constant instead`,
+				})
+			}
 			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		// Match calls whose selector name is in authCallSiteFuncNames.
-		if _, matched := authCallSiteFuncNames[sel.Sel.Name]; !matched {
-			return true
-		}
-		// Scan each argument for a bare "admin" string literal.
-		for _, arg := range call.Args {
-			lit, isLit := arg.(*ast.BasicLit)
-			if !isLit || lit.Kind != token.STRING {
-				continue
-			}
-			if lit.Value == `"admin"` {
-				lines = append(lines, fset.Position(lit.Pos()).Line)
-			}
-		}
-		return true
+		})
 	})
-	return lines, nil
+	scanner.Report(t, ruleRoleAdminLiteral02, diags)
 }

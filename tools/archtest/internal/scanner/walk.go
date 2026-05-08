@@ -1,0 +1,75 @@
+package scanner
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// walkGoFiles walks root, skipping any directory whose base name appears in
+// skipDirs. If includeTests is false, files ending in _test.go are excluded.
+// Any walk error is wrapped and returned immediately (fail-closed).
+// If root does not exist, an empty slice is returned with no error.
+// modRoot is used to compute module-relative paths in error messages so that
+// absolute paths do not appear in CI logs unexpectedly.
+func walkGoFiles(modRoot, root string, skipDirs map[string]struct{}, includeTests bool) ([]string, error) {
+	// Silently skip non-existent roots (e.g. DirsScope with a missing directory).
+	if _, err := os.Lstat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		display := moduleRelDisplay(modRoot, root)
+		return nil, fmt.Errorf("lstat: %s: %w", display, err)
+	}
+
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			display := moduleRelDisplay(modRoot, path)
+			return fmt.Errorf("walk %s: %w", display, walkErr)
+		}
+		if d.IsDir() {
+			return skipDirCheck(d.Name(), skipDirs)
+		}
+		if isGoFile(path, includeTests) {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// moduleRelDisplay returns a module-relative display string for path.
+// If the relative computation fails, it returns the original absolute path
+// with a "rel-failed:" prefix so callers know the value may be absolute.
+func moduleRelDisplay(modRoot, path string) string {
+	rel, err := filepath.Rel(modRoot, path)
+	if err != nil {
+		return "rel-failed:" + path
+	}
+	return filepath.ToSlash(rel)
+}
+
+// skipDirCheck returns filepath.SkipDir if name is in skipDirs, else nil.
+func skipDirCheck(name string, skipDirs map[string]struct{}) error {
+	if _, skip := skipDirs[name]; skip {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+// isGoFile reports whether path is a Go source file that should be included.
+func isGoFile(path string, includeTests bool) bool {
+	if !strings.HasSuffix(path, ".go") {
+		return false
+	}
+	if !includeTests && strings.HasSuffix(path, "_test.go") {
+		return false
+	}
+	return true
+}
