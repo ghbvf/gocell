@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
-	"go/token"
 	"regexp"
 	"testing"
 
@@ -63,7 +62,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		authAliases := authPackageAliases(fc.File)
+		authAliases := scanner.PackageAliases(fc.File, "github.com/ghbvf/gocell/runtime/auth")
 		if len(authAliases) == 0 {
 			return // file does not import runtime/auth
 		}
@@ -89,8 +88,8 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 			}
 
 			arg1 := call.Args[1]
-			lit, ok := arg1.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
+			lit, isLit := arg1.(*ast.BasicLit)
+			if !isLit {
 				diags = append(diags, scanner.Diagnostic{
 					Rel:     fc.Rel,
 					Line:    pos.Line,
@@ -98,11 +97,14 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 				})
 				return true
 			}
-
-			// Strip quotes.
-			callerCell := lit.Value
-			if len(callerCell) >= 2 && callerCell[0] == '"' && callerCell[len(callerCell)-1] == '"' {
-				callerCell = callerCell[1 : len(callerCell)-1]
+			callerCell, ok := scanner.StringLitValue(lit)
+			if !ok {
+				diags = append(diags, scanner.Diagnostic{
+					Rel:     fc.Rel,
+					Line:    pos.Line,
+					Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
+				})
+				return true
 			}
 
 			if callerCell == "" {
@@ -181,28 +183,4 @@ func isAuthGenerateServiceTokenCall(call *ast.CallExpr, authAliases map[string]s
 	}
 	_, hit := authAliases[id.Name]
 	return hit
-}
-
-// authPackageAliases returns the set of local package names by which f
-// imports github.com/ghbvf/gocell/runtime/auth. Default name is "auth"
-// when no rename is given; explicit aliases (`import x "…"`) are honored;
-// dot-imports ("." alias) and blank imports ("_") are excluded because
-// neither produces an AST `<name>.GenerateServiceToken` call expression.
-func authPackageAliases(f *ast.File) map[string]struct{} {
-	const target = `"github.com/ghbvf/gocell/runtime/auth"`
-	out := map[string]struct{}{}
-	for _, imp := range f.Imports {
-		if imp.Path == nil || imp.Path.Value != target {
-			continue
-		}
-		name := "auth"
-		if imp.Name != nil {
-			if imp.Name.Name == "_" || imp.Name.Name == "." {
-				continue
-			}
-			name = imp.Name.Name
-		}
-		out[name] = struct{}{}
-	}
-	return out
 }

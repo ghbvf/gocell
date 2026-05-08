@@ -14,6 +14,14 @@
 // argument to auth.AnyRole / auth.SelfOr / auth.RequireAnyRole / auth.AnyRoles.
 // All call sites must use the auth.RoleAdmin constant instead.
 //
+// The call-site rule is import-aware: the receiver of the selector
+// expression must resolve to a local alias of github.com/ghbvf/gocell/runtime/auth
+// (default name "auth" or any explicit rename via `import x "…/runtime/auth"`).
+// A same-named method on an unrelated type or package does NOT trigger the
+// rule. Literal comparison is normalized through scanner.StringLitValue, so
+// raw-string forms (“ `admin` “) and escape-encoded forms (`"\x61dmin"`)
+// are caught alongside the plain `"admin"` form.
+//
 // The authoritative definition lives in runtime/auth/roles.go (RoleAdmin).
 // Any other file re-declaring or hard-coding the same role string is a drift
 // risk: the names will diverge silently when the role value changes.
@@ -75,30 +83,43 @@ func TestRoleAdminLiteralIsForbidden(t *testing.T) {
 			if !ok || genDecl.Tok != token.CONST {
 				continue
 			}
+			// Go spec: a ValueSpec inside a const GenDecl with no Values
+			// inherits the previous spec's expression list (iota carry).
+			// Track the most recent non-empty Values within this GenDecl so
+			// that `const ( AdminRole = "admin"; OtherRole )` flags OtherRole.
+			var lastValues []ast.Expr
 			for _, spec := range genDecl.Specs {
 				vs, ok := spec.(*ast.ValueSpec)
 				if !ok {
 					continue
 				}
+				values := vs.Values
+				if values == nil {
+					values = lastValues
+				} else {
+					lastValues = values
+				}
 				for i, name := range vs.Names {
 					if !isAdminIdent(name.Name) {
 						continue
 					}
-					if i >= len(vs.Values) {
+					if i >= len(values) {
 						continue
 					}
-					lit, ok := vs.Values[i].(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
+					lit, ok := values[i].(*ast.BasicLit)
+					if !ok {
 						continue
 					}
-					if lit.Value == `"admin"` {
-						diags = append(diags, scanner.Diagnostic{
-							Rel:  fc.Rel,
-							Line: fc.Fset.Position(name.Pos()).Line,
-							Message: `duplicate const *Admin* = "admin" violates ` + ruleRoleAdminLiteral01 +
-								`; use auth.RoleAdmin from runtime/auth`,
-						})
+					value, ok := scanner.StringLitValue(lit)
+					if !ok || value != "admin" {
+						continue
 					}
+					diags = append(diags, scanner.Diagnostic{
+						Rel:  fc.Rel,
+						Line: fc.Fset.Position(name.Pos()).Line,
+						Message: `duplicate const *Admin* = "admin" violates ` + ruleRoleAdminLiteral01 +
+							`; use auth.RoleAdmin from runtime/auth`,
+					})
 				}
 			}
 		}
@@ -142,6 +163,10 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		authAliases := scanner.PackageAliases(fc.File, "github.com/ghbvf/gocell/runtime/auth")
+		if len(authAliases) == 0 {
+			return // file does not import runtime/auth — selector cannot resolve to auth.*
+		}
 		ast.Inspect(fc.File, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -154,20 +179,29 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 			if _, matched := authCallSiteFuncNames[sel.Sel.Name]; !matched {
 				return true
 			}
+			id, isIdent := sel.X.(*ast.Ident)
+			if !isIdent {
+				return true
+			}
+			if _, isAuthAlias := authAliases[id.Name]; !isAuthAlias {
+				return true
+			}
 			for _, arg := range call.Args {
 				lit, isLit := arg.(*ast.BasicLit)
-				if !isLit || lit.Kind != token.STRING {
+				if !isLit {
 					continue
 				}
-				if lit.Value == `"admin"` {
-					diags = append(diags, scanner.Diagnostic{
-						Rel:  fc.Rel,
-						Line: fc.Fset.Position(lit.Pos()).Line,
-						Message: `string literal "admin" passed to auth.` + sel.Sel.Name +
-							` violates ` + ruleRoleAdminLiteral02 +
-							`; use auth.RoleAdmin constant instead`,
-					})
+				value, ok := scanner.StringLitValue(lit)
+				if !ok || value != "admin" {
+					continue
 				}
+				diags = append(diags, scanner.Diagnostic{
+					Rel:  fc.Rel,
+					Line: fc.Fset.Position(lit.Pos()).Line,
+					Message: `string literal "admin" passed to auth.` + sel.Sel.Name +
+						` violates ` + ruleRoleAdminLiteral02 +
+						`; use auth.RoleAdmin constant instead`,
+				})
 			}
 			return true
 		})
