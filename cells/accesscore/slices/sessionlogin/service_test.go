@@ -265,6 +265,55 @@ func TestService_Login(t *testing.T) {
 	}
 }
 
+// TestRecheckUserActive_EmptyUsername covers the IssueForUser fast path:
+// when username is empty, recheckUserActive returns nil without touching
+// the userRepo (the caller has already validated the user identity inside
+// its own write transaction).
+func TestRecheckUserActive_EmptyUsername(t *testing.T) {
+	svc, _ := newTestService(t)
+	require.NoError(t, svc.recheckUserActive(context.Background(), ""),
+		"empty username path must return nil without repo access")
+}
+
+// TestRecheckUserActive_UnknownUsername covers the GetByUsernameForUpdate
+// failure branch (e.g. the user was deleted between Login step 1 commit
+// and step 3 persistence). The error is mapped to ErrAuthLoginFailed
+// (constant message — no oracle on whether the user existed).
+func TestRecheckUserActive_UnknownUsername(t *testing.T) {
+	svc, _ := newTestService(t)
+	err := svc.recheckUserActive(context.Background(), "ghost-user")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code)
+}
+
+// TestRecheckUserActive_LockedUser covers the IsLocked branch: an admin Lock
+// committed between Login step 1 and step 3 is observed here and produces
+// ErrAuthUserLocked. This is the deterministic path that defends against
+// the P1#1a race window.
+func TestRecheckUserActive_LockedUser(t *testing.T) {
+	svc, userRepo := newTestService(t)
+	seedUser(userRepo, "alice", "pass")
+	u, err := userRepo.GetByUsername(context.Background(), "alice")
+	require.NoError(t, err)
+	locked := domain.StatusLocked
+	_, err = userRepo.ApplyPatch(context.Background(), ports.UserPatch{
+		ID:             u.ID,
+		Status:         &locked,
+		UpdatedAt:      time.Now(),
+		CurrentVersion: u.Version,
+	})
+	require.NoError(t, err)
+
+	err = svc.recheckUserActive(context.Background(), "alice")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserLocked, ec.Code,
+		"P1#1a re-check must surface as ErrAuthUserLocked when admin Lock committed")
+}
+
 func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
