@@ -8,13 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const pgQueryBoundaryRule = "PGQUERY-01"
@@ -89,8 +90,7 @@ func findLegacyQueryFiles(root string) []pgQueryBoundaryViolation {
 }
 
 func findLegacyQuerySymbols(root string) ([]pgQueryBoundaryViolation, error) {
-	queryDir := filepath.Join(root, "pkg", "query")
-	files, err := findGoFilesForPGQueryBoundary(queryDir)
+	files, err := scanner.DirsScope(root, []string{"pkg/query"}, scanner.IncludeTests()).Files()
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func scanLegacyQuerySymbolDecls(root, path string) ([]pgQueryBoundaryViolation, 
 }
 
 func findLegacyQueryBuilderUses(root, module string) ([]pgQueryBoundaryViolation, error) {
-	files, err := findGoFilesForPGQueryBoundary(root)
+	files, err := scanner.ModuleScope(root, scanner.IncludeTests()).Files()
 	if err != nil {
 		return nil, err
 	}
@@ -235,28 +235,6 @@ func pkgQueryImportAliases(fset *token.FileSet, file *ast.File, module string) (
 
 func isLegacyQueryBuilderSymbol(name string) bool {
 	return name == "NewBuilder" || name == "AppendKeyset"
-}
-
-func findGoFilesForPGQueryBoundary(root string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "testdata", "worktrees":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(path, ".go") {
-			files = append(files, path)
-		}
-		return nil
-	})
-	sort.Strings(files)
-	return files, err
 }
 
 func relSlash(root, path string) string {

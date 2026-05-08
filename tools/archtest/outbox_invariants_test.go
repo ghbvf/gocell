@@ -31,6 +31,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -120,34 +121,29 @@ func checkCellOutboxOptionRules(t *testing.T, root string) []outboxCellViolation
 
 // findCellFiles enumerates cell.go files for every cell declared in the
 // project's metadata (covering both top-level cells/ and examples/*/cells/).
-// Excludes slices/, internal/, vendor, worktrees, testdata, .git.
+// Excludes slices/, internal/, vendor, worktrees, testdata, .git, generated.
 func findCellFiles(root string) ([]string, error) {
 	project, err := metadata.NewParser(root).Parse()
 	if err != nil {
 		return nil, err
 	}
 
-	var files []string
+	var cellDirs []string
 	for _, c := range project.Cells {
-		cellDir := filepath.Join(root, filepath.Dir(c.File))
-		walkErr := filepath.WalkDir(cellDir, func(path string, d os.DirEntry, werr error) error {
-			if werr != nil {
-				return werr
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "slices", "internal":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if isCellFile(root, path) {
-				files = append(files, path)
-			}
-			return nil
-		})
-		if walkErr != nil {
-			return nil, walkErr
+		rel := filepath.ToSlash(filepath.Dir(c.File))
+		cellDirs = append(cellDirs, rel)
+	}
+	scope := scanner.DirsScope(root, cellDirs)
+
+	allFiles, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
+
+	var files []string
+	for _, path := range allFiles {
+		if isCellFile(root, path) {
+			files = append(files, path)
 		}
 	}
 	sort.Strings(files)
@@ -1668,41 +1664,30 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 	}
 	var hits []hit
 
-	walkErr := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	// scanner.ModuleScope auto-skips vendor/testdata/worktrees/generated/.git/node_modules.
+	// kernel/metautil (canonical home) and tools/archtest/ are excluded via rel-prefix
+	// check inside the loop — these are directory prefixes, not exact file paths.
+	scope := scanner.ModuleScope(repoRoot)
+	allFiles, err := scope.Files()
+	require.NoError(t, err, "enumerate repo files")
+
+	for _, path := range allFiles {
+		rel, _ := filepath.Rel(repoRoot, path)
+		rel = filepath.ToSlash(rel)
+		// Skip the canonical home (kernel/metautil) — that is where these consts live.
+		if strings.HasPrefix(rel, "kernel/metautil/") {
+			continue
 		}
-		if info.IsDir() {
-			rel, _ := filepath.Rel(repoRoot, path)
-			if rel == "." {
-				return nil
-			}
-			// Allow the canonical home; skip vendored/generated trees.
-			if rel == "kernel/metautil" {
-				return filepath.SkipDir
-			}
-			if strings.HasPrefix(rel, "vendor/") ||
-				strings.HasPrefix(rel, "generated/") ||
-				strings.HasPrefix(rel, "tools/archtest/") ||
-				strings.Contains(rel, "/testdata/") ||
-				strings.HasPrefix(rel, "testdata/") ||
-				strings.HasPrefix(rel, "worktrees/") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
+		// Skip the archtest package itself (contains these names as string literals).
+		if strings.HasPrefix(rel, "tools/archtest/") {
+			continue
 		}
 		fset := token.NewFileSet()
 		// Syntactically broken files are out of scope for this rule — gofmt /
 		// build invariants own that contract. Discard the parse error.
 		file, _ := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if file == nil {
-			return nil
+			continue
 		}
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
@@ -1718,7 +1703,6 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 					if _, bad := forbidden[name.Name]; !bad {
 						continue
 					}
-					rel, _ := filepath.Rel(repoRoot, path)
 					hits = append(hits, hit{
 						File:  rel,
 						Line:  fset.Position(name.Pos()).Line,
@@ -1727,9 +1711,7 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 				}
 			}
 		}
-		return nil
-	})
-	require.NoError(t, walkErr, "walk repo root")
+	}
 
 	if len(hits) == 0 {
 		return
