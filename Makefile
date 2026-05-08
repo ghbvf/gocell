@@ -86,7 +86,10 @@ down:
 # ---------------------------------------------------------------------------
 
 test-integration:
-	@pkgs=$$(go list -tags=integration,e2e -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./... | grep -v '^$$' | xargs); \
+	@pkgs=$$(go list -tags=integration,e2e -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./... \
+		| grep -v '^$$' \
+		| grep -vE '/tests/e2e$$' \
+		| xargs); \
 	if [ -z "$$pkgs" ]; then echo "no integration test packages discovered" >&2; exit 1; fi; \
 	GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e $$pkgs -count=1 -timeout 15m -v
 

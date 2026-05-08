@@ -120,11 +120,11 @@ func TestRevokeByUserID_Soft(t *testing.T) {
 
 // TestRevokeThenStaleVersionUpdate_DoesNotResurrect (P1#1c) — soft revoke must
 // not be reversible via a stale-version Update. Without protection:
-//   1. Caller B fetches session → version=1, revoked_at=nil
-//   2. Caller A calls RevokeByIDAndOwner → revoked_at=now (version unchanged in
-//      naive impl, OR version bumped if revoke increments)
-//   3. Caller B sends Update with stale snapshot → SET revoked_at=$5 writes
-//      back nil → session resurrected
+//  1. Caller B fetches session → version=1, revoked_at=nil
+//  2. Caller A calls RevokeByIDAndOwner → revoked_at=now (version unchanged in
+//     naive impl, OR version bumped if revoke increments)
+//  3. Caller B sends Update with stale snapshot → SET revoked_at=$5 writes
+//     back nil → session resurrected
 //
 // Two defenses required:
 //   - revoke MUST advance version so stale-version Update fails CAS

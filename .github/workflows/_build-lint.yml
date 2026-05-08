@@ -280,8 +280,17 @@ jobs:
         # under -tags=integration,e2e. This replaces the previous explicit list
         # which silently dropped newly added integration packages (PR-417 P1#4).
         # Fail-fast if go list returns nothing (e.g. tag spelling regression).
+        #
+        # Excludes the top-level tests/e2e package: its smoke tests
+        # (TestE2E_*) require the docker-compose harness in the dedicated `e2e`
+        # job, NOT the testcontainers harness used here. tests/e2e/internal/*
+        # remains included — those are e2e-tag client helpers that compile
+        # but do not own runtime fixtures.
         run: |
-          pkgs=$(go list -tags=integration,e2e -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./... | grep -v '^$' | xargs)
+          pkgs=$(go list -tags=integration,e2e -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./... \
+            | grep -v '^$' \
+            | grep -vE '/tests/e2e$' \
+            | xargs)
           if [ -z "$pkgs" ]; then echo "no integration test packages discovered" >&2; exit 1; fi
           echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
 

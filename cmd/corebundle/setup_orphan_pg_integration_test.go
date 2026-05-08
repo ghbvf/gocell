@@ -142,7 +142,7 @@ func bootOrphanAssembly(t *testing.T, pool *adapterpg.Pool) (addr string, shutdo
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 	}
-	acOpts = append(acOpts, pgRepoOpts...) // override user+session+role with PG repos
+	acOpts = append(acOpts, pgRepoOpts...)    // override user+session+role with PG repos
 	ac := accesscore.NewAccessCore(acOpts...) //archtest:allow:clock-injection:via-slice WithClock included in acOpts slice above; Go spread syntax prevents positional+spread mix
 
 	cc := configcore.NewConfigCore(
@@ -157,7 +157,7 @@ func bootOrphanAssembly(t *testing.T, pool *adapterpg.Pool) (addr string, shutdo
 		auditcore.WithClock(clk),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
-		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),
+		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!!")),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
