@@ -68,6 +68,22 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 	return cloneUser(u), nil
 }
 
+// GetByIDForUpdate is the row-locking variant used by flows that must
+// serialize against credential issuance. The mem implementation holds the
+// write lock while cloning the user, which serializes with ApplyPatch/Create.
+func (r *UserRepository) GetByIDForUpdate(_ context.Context, id string) (*domain.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	u, ok := r.byID[id]
+	if !ok {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+	}
+	return cloneUser(u), nil
+}
+
 func (r *UserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -82,12 +98,12 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 }
 
 // GetByUsernameForUpdate is the row-locking variant used by login flows.
-// The mem implementation is semantically equivalent to GetByUsername — the
-// in-memory store does not have row-level locks. Callers must invoke this
-// inside a TxRunner.RunInTx closure.
+// The mem implementation holds the write lock while cloning the user, which
+// serializes with ApplyPatch/Create. Callers must invoke this inside a
+// TxRunner.RunInTx closure.
 func (r *UserRepository) GetByUsernameForUpdate(_ context.Context, username string) (*domain.User, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	u, ok := r.byName[username]
 	if !ok {

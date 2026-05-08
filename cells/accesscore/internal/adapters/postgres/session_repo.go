@@ -34,14 +34,14 @@ var _ ports.SessionRepository = (*PGSessionRepository)(nil)
 
 const (
 	insertSessionSQL = `
-INSERT INTO sessions (id, user_id, access_token, expires_at, revoked_at, created_at, version)
-VALUES ($1, $2, $3, $4, $5, $6, $7)`
+INSERT INTO sessions (id, user_id, expires_at, revoked_at, created_at, version)
+VALUES ($1, $2, $3, $4, $5, $6)`
 
 	// selectSessionByIDSQL only returns non-revoked sessions.
 	// Revoked sessions are retained in the table for audit/FK integrity but
 	// must not be visible to application read paths.
 	selectSessionByIDSQL = `
-SELECT id, user_id, access_token, expires_at, revoked_at, created_at, version
+SELECT id, user_id, expires_at, revoked_at, created_at, version
 FROM sessions
 WHERE id = $1 AND revoked_at IS NULL`
 
@@ -53,13 +53,13 @@ WHERE id = $1 AND revoked_at IS NULL`
 	//      snapshot's version=N predicate misses
 	//   2. revoked_at IS NULL guard — even if a future change skips the
 	//      version bump, Update still refuses to touch revoked rows
-	// access_token / expires_at are the only mutable columns; revoked_at is
-	// owned exclusively by revokeBy*SQL paths and is NEVER written here.
+	// expires_at is the only mutable session state in refresh flows; revoked_at
+	// is owned exclusively by revokeBy*SQL paths and is NEVER written here.
 	//
 	// ref: K8s apimachinery ResourceVersion CAS pattern
 	updateSessionSQL = `
 UPDATE sessions
-SET access_token = $3, expires_at = $4, version = version + 1
+SET expires_at = $3, version = version + 1
 WHERE id = $1 AND version = $2 AND revoked_at IS NULL`
 
 	// revokeByIDAndOwnerSQL soft-deletes a session by setting revoked_at to now
@@ -163,13 +163,12 @@ func (r *PGSessionRepository) queryRowCtx(ctx context.Context, sql string, args 
 
 // Create inserts a new session row.
 //
-// Returns ErrSessionConflict (KindConflict) on UNIQUE 23505 violation
-// (access_token uniqueness).
+// Raw access JWTs are not stored on the session row; the JWT sid claim points
+// at this row for revocation and expiry checks.
 func (r *PGSessionRepository) Create(ctx context.Context, session *domain.Session) error {
 	_, err := r.execCtx(ctx, insertSessionSQL,
 		session.ID,
 		session.UserID,
-		session.AccessToken,
 		session.ExpiresAt,
 		session.RevokedAt,
 		session.CreatedAt,
@@ -187,15 +186,10 @@ func (r *PGSessionRepository) Create(ctx context.Context, session *domain.Sessio
 func (r *PGSessionRepository) mapCreateError(err error, sessionID, userID string) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-		// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
 		slog.Warn("session create: unique constraint violation",
 			slog.String("constraint", pgErr.ConstraintName),
 			slog.String("session_id", sessionID),
 			slog.String("user_id", userID),
-		)
-		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
-			"session access token already exists",
-			errcode.WithInternal("constraint="+pgErr.ConstraintName+" session_id="+sessionID),
 		)
 	}
 	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: create", err)
@@ -231,13 +225,12 @@ func (r *PGSessionRepository) GetByID(ctx context.Context, id string) (*domain.S
 //
 // On success, session.Version is incremented to match the new DB value.
 func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Session) error {
-	// updateSessionSQL writes only access_token + expires_at and refuses
-	// revoked rows (WHERE revoked_at IS NULL). RevokedAt is never propagated
-	// by Update — revoke is a separate write path that owns that column.
+	// updateSessionSQL writes only expires_at and refuses revoked rows
+	// (WHERE revoked_at IS NULL). RevokedAt is never propagated by Update —
+	// revoke is a separate write path that owns that column.
 	ct, err := r.execCtx(ctx, updateSessionSQL,
 		session.ID,
 		session.Version,
-		session.AccessToken,
 		session.ExpiresAt,
 	)
 	if err != nil {
@@ -329,7 +322,6 @@ func scanSession(row pgx.Row) (*domain.Session, error) {
 	err := row.Scan(
 		&s.ID,
 		&s.UserID,
-		&s.AccessToken,
 		&s.ExpiresAt,
 		&s.RevokedAt,
 		&s.CreatedAt,

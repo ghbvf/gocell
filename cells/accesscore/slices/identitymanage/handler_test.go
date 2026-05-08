@@ -104,8 +104,9 @@ func adminCtx() func(*http.Request) *http.Request {
 func TestToUserResponseData_NilInput(t *testing.T) {
 	// toUserResponseData must not panic on nil input and must return empty strings.
 	var id, username, email, status, createdAt, updatedAt string
+	var passwordResetRequired bool
 	assert.NotPanics(t, func() {
-		id, username, email, status, createdAt, updatedAt = toUserResponseData(nil)
+		id, username, email, status, createdAt, updatedAt, passwordResetRequired = toUserResponseData(nil)
 	})
 	assert.Empty(t, id)
 	assert.Empty(t, username)
@@ -113,6 +114,7 @@ func TestToUserResponseData_NilInput(t *testing.T) {
 	assert.Empty(t, status)
 	assert.Empty(t, createdAt)
 	assert.Empty(t, updatedAt)
+	assert.False(t, passwordResetRequired)
 }
 
 func TestToUserResponseData_Fields(t *testing.T) {
@@ -120,14 +122,16 @@ func TestToUserResponseData_Fields(t *testing.T) {
 	user := &domain.User{
 		ID: "u1", Username: "alice", Email: "a@b.com",
 		PasswordHash: "secret-hash-bcrypt", Status: domain.StatusActive,
-		CreatedAt: now, UpdatedAt: now,
+		PasswordResetRequired: true,
+		CreatedAt:             now, UpdatedAt: now,
 	}
-	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	id, username, email, status, createdAt, updatedAt, passwordResetRequired := toUserResponseData(user)
 
 	assert.Equal(t, "u1", id)
 	assert.Equal(t, "alice", username)
 	assert.Equal(t, "a@b.com", email)
 	assert.Equal(t, "active", status)
+	assert.True(t, passwordResetRequired)
 
 	// Timestamps are formatted as RFC3339; verify they do not contain the hash.
 	assert.NotContains(t, createdAt, "secret-hash-bcrypt")

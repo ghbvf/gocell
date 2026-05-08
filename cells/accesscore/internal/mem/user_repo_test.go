@@ -160,6 +160,136 @@ func TestUserRepo_GetByUsernameForUpdate_Equivalence(t *testing.T) {
 	assert.Equal(t, byName.Email, forUpdate.Email)
 }
 
+func TestUserRepo_GetByIDForUpdate_EquivalenceAndClone(t *testing.T) {
+	ctx := context.Background()
+	repo := NewUserRepository()
+
+	user, err := domain.NewUser("foru-id", "foru-id@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-foru-id-001"
+	require.NoError(t, repo.Create(ctx, user))
+
+	byID, err := repo.GetByID(ctx, user.ID)
+	require.NoError(t, err)
+
+	forUpdate, err := repo.GetByIDForUpdate(ctx, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, byID.ID, forUpdate.ID)
+	assert.Equal(t, byID.Version, forUpdate.Version)
+	assert.Equal(t, byID.Email, forUpdate.Email)
+
+	forUpdate.Username = "mutated-copy"
+	again, err := repo.GetByID(ctx, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "foru-id", again.Username)
+}
+
+func TestUserRepo_ForUpdateLookups_NotFound(t *testing.T) {
+	ctx := context.Background()
+	repo := NewUserRepository()
+
+	_, err := repo.GetByIDForUpdate(ctx, "usr-missing")
+	require.Error(t, err)
+	var idErr *errcode.Error
+	require.ErrorAs(t, err, &idErr)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, idErr.Code)
+
+	_, err = repo.GetByUsernameForUpdate(ctx, "missing")
+	require.Error(t, err)
+	var usernameErr *errcode.Error
+	require.ErrorAs(t, err, &usernameErr)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, usernameErr.Code)
+}
+
+func TestUserRepo_ApplyPatch_AllMutableFields(t *testing.T) {
+	ctx := context.Background()
+	repo := NewUserRepository()
+
+	user, err := domain.NewUser("patch-all", "patch-all@example.com", "$2a$12$old", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-patch-all-001"
+	require.NoError(t, repo.Create(ctx, user))
+
+	got, err := repo.GetByID(ctx, user.ID)
+	require.NoError(t, err)
+
+	username := "patch-all-updated"
+	email := "patch-all-updated@example.com"
+	passwordHash := "$2a$12$new"
+	passwordResetRequired := true
+	status := domain.StatusLocked
+	patched, err := repo.ApplyPatch(ctx, ports.UserPatch{
+		ID:                    user.ID,
+		Username:              &username,
+		Email:                 &email,
+		PasswordHash:          &passwordHash,
+		PasswordResetRequired: &passwordResetRequired,
+		Status:                &status,
+		UpdatedAt:             time.Now(),
+		CurrentVersion:        got.Version,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, username, patched.Username)
+	assert.Equal(t, email, patched.Email)
+	assert.Equal(t, passwordHash, patched.PasswordHash)
+	assert.True(t, patched.PasswordResetRequired)
+	assert.Equal(t, domain.StatusLocked, patched.Status)
+	assert.Equal(t, got.Version+1, patched.Version)
+
+	byNewName, err := repo.GetByUsername(ctx, username)
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, byNewName.ID)
+
+	_, err = repo.GetByUsername(ctx, "patch-all")
+	require.Error(t, err)
+}
+
+func TestUserRepo_ApplyPatch_UsernameDuplicate(t *testing.T) {
+	ctx := context.Background()
+	repo := NewUserRepository()
+
+	u1, err := domain.NewUser("taken", "taken@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	u1.ID = "usr-taken"
+	require.NoError(t, repo.Create(ctx, u1))
+
+	u2, err := domain.NewUser("rename-me", "rename-me@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	u2.ID = "usr-rename"
+	require.NoError(t, repo.Create(ctx, u2))
+
+	got, err := repo.GetByID(ctx, u2.ID)
+	require.NoError(t, err)
+	username := "taken"
+	_, err = repo.ApplyPatch(ctx, ports.UserPatch{
+		ID:             u2.ID,
+		Username:       &username,
+		UpdatedAt:      time.Now(),
+		CurrentVersion: got.Version,
+	})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
+}
+
+func TestUserRepo_Delete_RemovesIndexes(t *testing.T) {
+	ctx := context.Background()
+	repo := NewUserRepository()
+
+	user, err := domain.NewUser("delete-me", "delete-me@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-delete"
+	require.NoError(t, repo.Create(ctx, user))
+
+	require.NoError(t, repo.Delete(ctx, user.ID))
+	_, err = repo.GetByID(ctx, user.ID)
+	require.Error(t, err)
+	_, err = repo.GetByUsername(ctx, user.Username)
+	require.Error(t, err)
+}
+
 func TestUserRepo_ApplyPatch_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := NewUserRepository()

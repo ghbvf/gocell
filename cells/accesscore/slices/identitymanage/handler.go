@@ -22,13 +22,16 @@ import (
 // toUserResponseData converts a domain.User to the shared user DTO shape.
 // The generated contracts all use the same response field names; this helper
 // avoids repetition across 5 adapters.
-func toUserResponseData(u *domain.User) (id, username, email, status, createdAt, updatedAt string) {
+func toUserResponseData(
+	u *domain.User,
+) (id, username, email, status, createdAt, updatedAt string, passwordResetRequired bool) {
 	if u == nil {
 		return
 	}
 	return u.ID, u.Username, u.Email, string(u.Status),
 		u.CreatedAt.UTC().Format(time.RFC3339),
-		u.UpdatedAt.UTC().Format(time.RFC3339)
+		u.UpdatedAt.UTC().Format(time.RFC3339),
+		u.PasswordResetRequired
 }
 
 // toTokenPairResponseData converts an internal TokenPair to the change-password
@@ -70,14 +73,15 @@ func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (crea
 	if err != nil {
 		return nil, err
 	}
-	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	id, username, email, status, createdAt, updatedAt, passwordResetRequired := toUserResponseData(user)
 	return creategen.Create201JSONResponse{Data: &creategen.ResponseData{
-		ID:        id,
-		Username:  username,
-		Email:     email,
-		Status:    status,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		ID:                    id,
+		Username:              username,
+		Email:                 email,
+		Status:                status,
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
+		PasswordResetRequired: passwordResetRequired,
 	}}, nil
 }
 
@@ -89,14 +93,15 @@ func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (getgen.GetRes
 	if err != nil {
 		return nil, err
 	}
-	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	id, username, email, status, createdAt, updatedAt, passwordResetRequired := toUserResponseData(user)
 	return getgen.Get200JSONResponse{Data: &getgen.ResponseData{
-		ID:        id,
-		Username:  username,
-		Email:     email,
-		Status:    status,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		ID:                    id,
+		Username:              username,
+		Email:                 email,
+		Status:                status,
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
+		PasswordResetRequired: passwordResetRequired,
 	}}, nil
 }
 
@@ -111,14 +116,15 @@ func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (upda
 	if err != nil {
 		return nil, err
 	}
-	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	id, username, email, status, createdAt, updatedAt, passwordResetRequired := toUserResponseData(user)
 	return updategen.Update200JSONResponse{Data: &updategen.ResponseData{
-		ID:        id,
-		Username:  username,
-		Email:     email,
-		Status:    status,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		ID:                    id,
+		Username:              username,
+		Email:                 email,
+		Status:                status,
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
+		PasswordResetRequired: passwordResetRequired,
 	}}, nil
 }
 
@@ -140,14 +146,15 @@ func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (patchge
 	if err != nil {
 		return nil, err
 	}
-	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
+	id, username, email, status, createdAt, updatedAt, passwordResetRequired := toUserResponseData(user)
 	return patchgen.Patch200JSONResponse{Data: &patchgen.ResponseData{
-		ID:        id,
-		Username:  username,
-		Email:     email,
-		Status:    status,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		ID:                    id,
+		Username:              username,
+		Email:                 email,
+		Status:                status,
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
+		PasswordResetRequired: passwordResetRequired,
 	}}, nil
 }
 

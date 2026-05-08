@@ -32,6 +32,8 @@ ALTER TABLE role_assignments
 
 -- +goose Down
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE role_assignments
     DROP CONSTRAINT IF EXISTS fk_role_assignments_role,
     DROP CONSTRAINT IF EXISTS fk_role_assignments_user;

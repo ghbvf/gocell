@@ -388,8 +388,8 @@ func TestSchemaGuard_Migration017_Users_TableAndIndexes(t *testing.T) {
 }
 
 // TestSchemaGuard_Migration018_Sessions_TableAndIndexes verifies that migration 018
-// creates the sessions table with the expected columns and indexes including the
-// UNIQUE access_token constraint.
+// creates the sessions table with the expected columns and indexes and does not
+// persist raw access JWTs.
 //
 // ref: adapters/postgres/migrations/018_sessions.sql
 // ref: cells/accesscore/internal/domain/session.go (Session.Version)
@@ -415,7 +415,7 @@ func TestSchemaGuard_Migration018_Sessions_TableAndIndexes(t *testing.T) {
 
 	// Assert: all required columns present.
 	wantCols := []string{
-		"id", "user_id", "access_token", "expires_at",
+		"id", "user_id", "expires_at",
 		"revoked_at", "created_at", "version",
 	}
 	for _, col := range wantCols {
@@ -430,6 +430,15 @@ func TestSchemaGuard_Migration018_Sessions_TableAndIndexes(t *testing.T) {
 		assert.Truef(t, colExists, "sessions must have column %q", col)
 	}
 
+	var accessTokenExists bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'access_token'
+		)`).Scan(&accessTokenExists)
+	require.NoError(t, err)
+	assert.False(t, accessTokenExists, "sessions must not persist raw access JWTs")
+
 	// Assert: idx_sessions_user_id index exists.
 	var userIdxExists bool
 	err = pool.DB().QueryRow(ctx,
@@ -441,19 +450,17 @@ func TestSchemaGuard_Migration018_Sessions_TableAndIndexes(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, userIdxExists, "idx_sessions_user_id must exist")
 
-	// Assert: access_token has a UNIQUE index (enforced by UNIQUE column constraint).
-	// PostgreSQL creates an implicit unique index named sessions_access_token_key
-	// for UNIQUE column constraints; we verify uniqueness via pg_index.indisunique.
-	var accessTokenIsUnique bool
+	var accessTokenUniqueIndexExists bool
 	err = pool.DB().QueryRow(ctx,
-		`SELECT ix.indisunique
+		`SELECT EXISTS (
+		 SELECT 1
 		 FROM pg_class c
 		 JOIN pg_index ix ON ix.indrelid = c.oid
 		 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(ix.indkey)
 		 WHERE c.relname = 'sessions' AND a.attname = 'access_token' AND ix.indisunique = true
-		 LIMIT 1`).Scan(&accessTokenIsUnique)
+		)`).Scan(&accessTokenUniqueIndexExists)
 	require.NoError(t, err)
-	assert.True(t, accessTokenIsUnique, "access_token column must have a UNIQUE index")
+	assert.False(t, accessTokenUniqueIndexExists, "sessions must not have an access_token unique index")
 }
 
 // TestSchemaGuard_Migration020_RoleAssignmentsFK verifies that migration 020
@@ -515,11 +522,11 @@ func TestSchemaGuard_Migration020_RoleAssignmentsFK(t *testing.T) {
 }
 
 // TestSchemaGuard_Migration019_Roles_TableAndIndexes verifies that migration 019
-// creates the roles and role_assignments tables with the expected columns, and that
-// idx_role_assignments_single_admin is a partial UNIQUE index with WHERE role_id='admin'.
+// creates the roles and role_assignments tables with the expected columns and
+// non-unique lookup indexes. The admin invariant is enforced by service/repo
+// locking; multiple admins are allowed.
 //
 // ref: adapters/postgres/migrations/019_roles.sql
-// ref: PostgreSQL partial indexes (docs/indexes-partial.html)
 // ref: jackc/pgx v5 pgconn PgError 23505 unique_violation
 func TestSchemaGuard_Migration019_Roles_TableAndIndexes(t *testing.T) {
 	pool, cleanup := setupPostgres(t)
@@ -579,7 +586,22 @@ func TestSchemaGuard_Migration019_Roles_TableAndIndexes(t *testing.T) {
 		assert.Truef(t, colExists, "role_assignments must have column %q", col)
 	}
 
-	// Assert: idx_role_assignments_single_admin exists.
+	// Assert: lookup indexes exist. By-user lookups use the primary key prefix
+	// (user_id, role_id); by-role lookups need a standalone role_id index.
+	for _, idxName := range []string{"role_assignments_pkey", "idx_role_assignments_role_id"} {
+		idxName := idxName
+		var exists bool
+		err = pool.DB().QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM pg_indexes
+				WHERE schemaname = 'public' AND tablename = 'role_assignments'
+				  AND indexname = $1
+			)`, idxName).Scan(&exists)
+		require.NoError(t, err)
+		assert.Truef(t, exists, "%s must exist", idxName)
+	}
+
+	// Assert: the old single-admin partial UNIQUE index is gone.
 	var singleAdminIdxExists bool
 	err = pool.DB().QueryRow(ctx,
 		`SELECT EXISTS (
@@ -588,24 +610,5 @@ func TestSchemaGuard_Migration019_Roles_TableAndIndexes(t *testing.T) {
 			  AND indexname = 'idx_role_assignments_single_admin'
 		)`).Scan(&singleAdminIdxExists)
 	require.NoError(t, err)
-	assert.True(t, singleAdminIdxExists, "idx_role_assignments_single_admin must exist")
-
-	// Assert: idx_role_assignments_single_admin is UNIQUE and PARTIAL (indpred IS NOT NULL).
-	// indpred stores the WHERE clause predicate for partial indexes as a pg_node_tree;
-	// a non-NULL indpred confirms the index is partial (WHERE role_id = 'admin').
-	var isUnique bool
-	var indpred *string // NULL for non-partial indexes
-	err = pool.DB().QueryRow(ctx,
-		`SELECT ix.indisunique, pg_get_expr(ix.indpred, ix.indrelid)
-		 FROM pg_class c
-		 JOIN pg_index ix ON ix.indrelid = c.oid
-		 JOIN pg_class ci ON ci.oid = ix.indexrelid
-		 WHERE c.relname = 'role_assignments'
-		   AND ci.relname = 'idx_role_assignments_single_admin'`,
-	).Scan(&isUnique, &indpred)
-	require.NoError(t, err)
-	assert.True(t, isUnique, "idx_role_assignments_single_admin must be UNIQUE")
-	require.NotNil(t, indpred, "idx_role_assignments_single_admin must be a PARTIAL index (indpred IS NOT NULL)")
-	assert.Contains(t, *indpred, "admin",
-		"partial index predicate must reference 'admin' (WHERE role_id = 'admin')")
+	assert.False(t, singleAdminIdxExists, "single-admin partial index must not exist")
 }

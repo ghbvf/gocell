@@ -125,9 +125,9 @@ func TestService_WithTxManager(t *testing.T) {
 
 	_, err := svc.Login(context.Background(), LoginInput{Username: "bob", Password: string(testCredential)})
 	require.NoError(t, err)
-	// Login uses 2 RunInTx calls: one for FOR UPDATE credential check (P1#1a),
-	// one inside persistSessionWithRefresh for atomic session/refresh/event write.
-	assert.Equal(t, 2, tx.calls)
+	// Login uses one RunInTx call: the user row lock, role read, session create,
+	// refresh issue, and optional event write share the same transaction.
+	assert.Equal(t, 1, tx.calls)
 }
 
 // failingEmitter returns an error on every Emit call.

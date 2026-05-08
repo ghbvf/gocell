@@ -9,7 +9,7 @@
 // ref: cells/configcore/internal/adapters/postgres/session.go (TxCtxKey pattern)
 // ref: jackc/pgx v5 pgconn PgError 23505 unique_violation detection
 // ref: jackc/pgx v5 pgconn PgError 23503 foreign_key_violation detection
-// ref: PostgreSQL indexes-partial.html (partial index conflict via ConstraintName)
+// ref: PostgreSQL functions-admin.html (transaction-scoped advisory locks)
 // ref: adapters/postgres/migrations/020_role_assignments_fk.sql (FK + cascade)
 package postgres
 
@@ -36,11 +36,6 @@ import (
 // Compile-time assertion: PGRoleRepository implements ports.RoleRepository.
 var _ ports.RoleRepository = (*PGRoleRepository)(nil)
 
-// adminRoleConstraint is the partial index name that enforces at-most-one admin
-// role holder. The INSERT ON CONFLICT DO NOTHING clause absorbs the PK duplicate
-// scenario; this partial index collision must be caught by the application.
-const adminRoleConstraint = "idx_role_assignments_single_admin"
-
 const (
 	insertRoleSQL = `
 INSERT INTO roles (id, name, permissions, created_at)
@@ -56,11 +51,6 @@ WHERE id = $1`
 	// ON CONFLICT (user_id, role_id) DO NOTHING absorbs the PK duplicate case
 	// (same user already holds the role) → RowsAffected==0, changed=false.
 	//
-	// NOTE: idx_role_assignments_single_admin partial index conflict is NOT
-	// absorbed by DO NOTHING — that clause only matches the explicit conflict
-	// target (user_id, role_id). A partial-index violation produces a 23505
-	// error with ConstraintName=="idx_role_assignments_single_admin", which the
-	// application catches and maps to ErrAuthRoleDuplicate.
 	insertRoleAssignmentSQL = `
 INSERT INTO role_assignments (user_id, role_id, assigned_at)
 VALUES ($1, $2, $3)
@@ -90,6 +80,8 @@ WHERE user_id = $1 AND role_id = $2`
 	// ref: https://www.postgresql.org/docs/current/functions-admin.html
 	//      pg_advisory_xact_lock — released at end of current transaction.
 	acquireRoleAdvisoryLockSQL = `SELECT pg_advisory_xact_lock(hashtextextended('role:' || $1, 0))`
+
+	acquireAdminProvisionAdvisoryLockSQL = `SELECT pg_advisory_xact_lock(hashtextextended('accesscore:adminprovision', 0))`
 
 	// removeIfNotLastSQL is the count+delete CTE that runs AFTER the advisory
 	// lock has been acquired in a previous statement. Returns three signals so
@@ -139,7 +131,6 @@ WHERE ra.user_id = $1`
 //
 // AssignToUser handles 23505 and 23503 scenarios (see mapAssignError for details):
 //   - (user_id, role_id) PK collision → absorbed by ON CONFLICT DO NOTHING (changed=false)
-//   - idx_role_assignments_single_admin partial index conflict → ErrAuthRoleDuplicate
 //   - fk_role_assignments_user violation → ErrAuthUserNotFound (migration 020)
 //   - fk_role_assignments_role violation → ErrAuthRoleNotFound (migration 020)
 type PGRoleRepository struct {
@@ -278,63 +269,21 @@ func (r *PGRoleRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 // 23505 scenarios:
 //   - (user_id, role_id) PK collision — absorbed by ON CONFLICT DO NOTHING;
 //     RowsAffected==0 → changed=false. No error returned.
-//   - idx_role_assignments_single_admin partial index collision — NOT absorbed
-//     by DO NOTHING (PG ON CONFLICT only matches the explicit conflict target).
-//     Caught via pgErr.ConstraintName=="idx_role_assignments_single_admin",
-//     mapped to ErrAuthRoleDuplicate (multi-pod concurrent assign).
 //
 // 23503 scenarios (migration 020 FK constraints):
 //   - fk_role_assignments_user: userID does not exist → ErrAuthUserNotFound.
 //   - fk_role_assignments_role: roleID does not exist → ErrAuthRoleNotFound.
-//
-// P1#2 savepoint protection: when called inside an ambient transaction, the
-// INSERT is wrapped in a SAVEPOINT so a 23505 on idx_role_assignments_single_admin
-// rolls back to the savepoint instead of poisoning the outer tx. Without this,
-// adminprovision.Provisioner.handleAssignAdminError's recount on the same ctx
-// would fail with SQLSTATE 25P02 ("current transaction is aborted").
-//
-// ref: https://www.postgresql.org/docs/current/sql-savepoint.html
 func (r *PGRoleRepository) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
-	tx, hasTx := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
-	if !hasTx {
-		// No ambient tx: a single-statement INSERT failure cannot poison
-		// anything wider than this implicit txn. Fast path.
-		ct, err := r.pool.Exec(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
-		if err != nil {
-			return false, r.mapAssignError(err, userID, roleID)
-		}
-		return ct.RowsAffected() != 0, nil
-	}
-
-	// Ambient tx path: wrap in SAVEPOINT to absorb partial-idx 23505 without
-	// poisoning the outer tx. PK conflicts are still absorbed by ON CONFLICT
-	// DO NOTHING; the savepoint exists specifically for the single-admin
-	// partial unique index, which DO NOTHING cannot target.
-	const sp = "sp_assign_role"
-	if _, err := tx.Exec(ctx, "SAVEPOINT "+sp); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user (savepoint create)", err)
-	}
-	ct, err := tx.Exec(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
+	ct, err := r.execCtx(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
 	if err != nil {
-		// Roll back to the savepoint to clear the abort flag on the outer tx.
-		// The original error is then mapped and returned to the caller, which
-		// can issue further queries on the (still-valid) outer tx.
-		if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+sp); rbErr != nil {
-			return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user (savepoint rollback)", rbErr)
-		}
 		return false, r.mapAssignError(err, userID, roleID)
-	}
-	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+sp); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user (savepoint release)", err)
 	}
 	return ct.RowsAffected() != 0, nil
 }
 
 // mapAssignError converts a raw pgx error from AssignToUser into an errcode.Error.
 //
-// 23505 (unique_violation):
-//   - adminRoleConstraint → ErrAuthRoleDuplicate (single-admin race)
-//   - other → unexpected infra error (maps to KindInternal)
+// 23505 (unique_violation): unexpected infra error (maps to KindInternal).
 //
 // 23503 (foreign_key_violation, added by migration 020):
 //   - fk_role_assignments_user → ErrAuthUserNotFound (non-existent user)
@@ -346,18 +295,8 @@ func (r *PGRoleRepository) mapAssignError(err error, userID, roleID string) erro
 	}
 	switch pgErr.Code {
 	case pgUniqueViolation:
-		if pgErr.ConstraintName == adminRoleConstraint {
-			slog.Warn("role assign: single-admin constraint violation",
-				slog.String("constraint", pgErr.ConstraintName),
-				slog.String("role_id", roleID),
-				slog.String("user_id", userID),
-			)
-			// A9: ConstraintName is internal diagnostic — not exposed in 4xx body.
-			return errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate,
-				"admin role already assigned to another user",
-				errcode.WithInternal(fmt.Sprintf("constraint=%s user_id=%s role_id=%s", pgErr.ConstraintName, userID, roleID)),
-			)
-		}
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: unexpected unique constraint on assign", err,
+			errcode.WithInternal(fmt.Sprintf("constraint=%s user_id=%s role_id=%s", pgErr.ConstraintName, userID, roleID)))
 	case pgForeignKeyViolation:
 		switch pgErr.ConstraintName {
 		case "fk_role_assignments_user":
@@ -375,6 +314,20 @@ func (r *PGRoleRepository) mapAssignError(err error, userID, roleID string) erro
 		}
 	}
 	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user", err)
+}
+
+// LockAdminProvision acquires the cross-process transaction-scoped lock used
+// by adminprovision.Ensure. The method is intentionally not part of
+// ports.RoleRepository; adminprovision detects this narrow optional interface.
+func (r *PGRoleRepository) LockAdminProvision(ctx context.Context) error {
+	if _, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); !ok {
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"role repo: LockAdminProvision requires ambient transaction")
+	}
+	if _, err := r.execCtx(ctx, acquireAdminProvisionAdvisoryLockSQL); err != nil {
+		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: lock admin provision", err)
+	}
+	return nil
 }
 
 // RemoveFromUser removes a role assignment.

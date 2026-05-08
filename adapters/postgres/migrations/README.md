@@ -112,7 +112,7 @@ DROP INDEX CONCURRENTLY <index_name>;
 | 016 | `016_refresh_tokens_idle_grace.sql` | refresh_tokens 增加 idle grace 字段 |
 | 017 | `017_users.sql` | users 表（username/email UNIQUE，accesscore PG 用户存储） |
 | 018 | `018_sessions.sql` | sessions 表（含 version 列，乐观并发） |
-| 019 | `019_roles.sql` | roles 表 + role_assignments 表（single-admin partial UNIQUE） |
+| 019 | `019_roles.sql` | roles 表 + role_assignments 表（admin revoke advisory lock 依赖 role_id 索引） |
 | 020 | `020_role_assignments_fk.sql` | role_assignments(user_id) → users(id) FK ON DELETE CASCADE |
 | 021 | `021_sessions_fk.sql` | sessions(user_id) → users(id) FK ON DELETE CASCADE |
 | 022 | `022_users_add_version.sql` | users 表增加 version 列（K8s resourceVersion 风格乐观并发） |

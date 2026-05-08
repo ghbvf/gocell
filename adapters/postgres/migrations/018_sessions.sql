@@ -1,11 +1,10 @@
 -- Migration 018: create sessions table for accesscore session storage.
 --
--- domain.Session fields: id, user_id, access_token, expires_at,
--- revoked_at (nullable), created_at, version (optimistic lock).
+-- domain.Session fields: id, user_id, expires_at, revoked_at (nullable),
+-- created_at, version (optimistic lock).
 --
--- access_token UNIQUE constraint mirrors the lookup-by-token path used by
--- the JWT middleware and session validation; the index also enforces the
--- domain invariant that each token can belong to at most one session.
+-- Raw access JWTs are not persisted. The access JWT carries the session id
+-- in its sid claim; session validation checks this row for revocation/expiry.
 --
 -- version models K8s ResourceVersion-style optimistic concurrency: the PG
 -- repo increments version on every UPDATE and rejects updates where the
@@ -22,7 +21,6 @@ SET LOCAL lock_timeout = '5s';
 CREATE TABLE sessions (
     id           TEXT        PRIMARY KEY,
     user_id      TEXT        NOT NULL,
-    access_token TEXT        NOT NULL UNIQUE,
     expires_at   TIMESTAMPTZ NOT NULL,
     revoked_at   TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL,
@@ -34,6 +32,8 @@ CREATE INDEX idx_sessions_user_id ON sessions (user_id);
 
 -- +goose Down
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 DROP INDEX IF EXISTS idx_sessions_user_id;
 DROP TABLE IF EXISTS sessions;
 -- +goose StatementEnd

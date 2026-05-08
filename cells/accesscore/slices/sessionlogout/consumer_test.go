@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // --- stubs ---
@@ -37,6 +38,17 @@ func (r *errorSessionRepo) RevokeByUserID(_ context.Context, _ string) error {
 	return r.err
 }
 
+type trackingRefreshStore struct {
+	refresh.Store
+	revokeUserCalls int
+	err             error
+}
+
+func (s *trackingRefreshStore) RevokeUser(_ context.Context, _ string) error {
+	s.revokeUserCalls++
+	return s.err
+}
+
 // --- helpers ---
 
 func validPayload(userID string) []byte {
@@ -55,7 +67,8 @@ func makeEntry(id string, payload []byte) outbox.Entry {
 
 func TestHandleRoleChanged_Ack(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	refreshStore := &trackingRefreshStore{}
+	c := NewConsumer(repo, refreshStore, slog.Default())
 
 	entry := makeEntry("evt-abc", validPayload("u1"))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -63,11 +76,12 @@ func TestHandleRoleChanged_Ack(t *testing.T) {
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
 	assert.Equal(t, 1, repo.revokeCalls, "RevokeByUserID must be called exactly once")
+	assert.Equal(t, 1, refreshStore.revokeUserCalls, "refresh Store RevokeUser must be called exactly once")
 }
 
 func TestHandleRoleChanged_PermErrReject_MalformedPayload(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	c := NewConsumer(repo, &trackingRefreshStore{}, slog.Default())
 
 	entry := makeEntry("evt-bad", []byte("not-json"))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -80,7 +94,7 @@ func TestHandleRoleChanged_PermErrReject_MalformedPayload(t *testing.T) {
 
 func TestHandleRoleChanged_PermErrReject_EmptyUserID(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	c := NewConsumer(repo, &trackingRefreshStore{}, slog.Default())
 
 	entry := makeEntry("evt-empty", validPayload(""))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -94,7 +108,7 @@ func TestHandleRoleChanged_PermErrReject_EmptyUserID(t *testing.T) {
 func TestHandleRoleChanged_RepoErrRequeue(t *testing.T) {
 	dbErr := errors.New("db down")
 	repo := &errorSessionRepo{err: dbErr}
-	c := NewConsumer(repo, slog.Default())
+	c := NewConsumer(repo, &trackingRefreshStore{}, slog.Default())
 
 	entry := makeEntry("evt-transient", validPayload("u1"))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -107,6 +121,21 @@ func TestHandleRoleChanged_RepoErrRequeue(t *testing.T) {
 	assert.ErrorIs(t, result.Err, dbErr)
 }
 
+func TestHandleRoleChanged_RefreshErrRequeue(t *testing.T) {
+	dbErr := errors.New("refresh down")
+	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	c := NewConsumer(repo, &trackingRefreshStore{err: dbErr}, slog.Default())
+
+	entry := makeEntry("evt-refresh-transient", validPayload("u1"))
+	result := c.HandleRoleChanged(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
+	require.Error(t, result.Err)
+	var permErr *outbox.PermanentError
+	assert.False(t, errors.As(result.Err, &permErr), "transient refresh error must NOT be PermanentError")
+	assert.ErrorIs(t, result.Err, dbErr)
+}
+
 // TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe verifies that calling the
 // handler twice with the same entry ID is safe. The handler itself is naturally idempotent
 // because RevokeByUserID is idempotent (revoking already-revoked sessions is a no-op).
@@ -114,7 +143,8 @@ func TestHandleRoleChanged_RepoErrRequeue(t *testing.T) {
 // tested here — this test documents the handler's own idempotency contract.
 func TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	refreshStore := &trackingRefreshStore{}
+	c := NewConsumer(repo, refreshStore, slog.Default())
 
 	entry := makeEntry("evt-replay", validPayload("u1"))
 
@@ -128,4 +158,5 @@ func TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
 
 	// sessionRepo.RevokeByUserID is called twice — both are safe because the operation is idempotent.
 	assert.Equal(t, 2, repo.revokeCalls)
+	assert.Equal(t, 2, refreshStore.revokeUserCalls)
 }

@@ -3,7 +3,7 @@
 // PR-V1-PG-ACCESSCORE-REPO B2.A Dev B — PGSessionRepository integration tests.
 //
 // Exercises the real PostgreSQL backend: CRUD semantics, optimistic-lock
-// version CAS, UNIQUE 23505 collision, and owner-scoped deletion.
+// version CAS, and owner-scoped deletion.
 package postgres
 
 import (
@@ -22,6 +22,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
+
+const sessionRepoStaleExpiryDelta = 2 * time.Hour
 
 // setupSessionRepoPG spins up a PostgreSQL container, applies all migrations
 // (including 018 + 021 for the sessions table and FK), and returns a
@@ -95,15 +97,14 @@ func seedUser(t *testing.T, ctx context.Context, uRepo *PGUserRepository) string
 }
 
 // newTestSession builds a minimal valid domain.Session for test insertion.
-func newTestSession(userID, accessToken string) *domain.Session {
+func newTestSession(userID string) *domain.Session {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return &domain.Session{
-		ID:          uuid.NewString(),
-		UserID:      userID,
-		AccessToken: accessToken,
-		ExpiresAt:   now.Add(time.Hour),
-		CreatedAt:   now,
-		Version:     1,
+		ID:        uuid.NewString(),
+		UserID:    userID,
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+		Version:   1,
 	}
 }
 
@@ -118,30 +119,16 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 
 	t.Run("Create_GetByID_HappyPath", func(t *testing.T) {
 		userID := seedUser(t, ctx, uRepo)
-		s := newTestSession(userID, "tok-"+uuid.NewString())
+		s := newTestSession(userID)
 		require.NoError(t, repo.Create(ctx, s))
 
 		got, err := repo.GetByID(ctx, s.ID)
 		require.NoError(t, err)
 		assert.Equal(t, s.ID, got.ID)
 		assert.Equal(t, s.UserID, got.UserID)
-		assert.Equal(t, s.AccessToken, got.AccessToken)
 		assert.Equal(t, s.Version, got.Version)
 		assert.True(t, s.ExpiresAt.Equal(got.ExpiresAt))
 		assert.Nil(t, got.RevokedAt)
-	})
-
-	t.Run("Create_DuplicateAccessToken_ReturnsConflict", func(t *testing.T) {
-		token := "dup-tok-" + uuid.NewString()
-		s1 := newTestSession(seedUser(t, ctx, uRepo), token)
-		require.NoError(t, repo.Create(ctx, s1))
-
-		s2 := newTestSession(seedUser(t, ctx, uRepo), token)
-		err := repo.Create(ctx, s2)
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrSessionConflict, ec.Code)
 	})
 
 	t.Run("GetByID_NotFound_ReturnsSessionNotFound", func(t *testing.T) {
@@ -153,11 +140,11 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("Update_CorrectVersion_IncrementsToNext", func(t *testing.T) {
-		s := newTestSession(seedUser(t, ctx, uRepo), "tok-upd-"+uuid.NewString())
+		s := newTestSession(seedUser(t, ctx, uRepo))
 		require.NoError(t, repo.Create(ctx, s))
 		assert.Equal(t, int64(1), s.Version)
 
-		s.AccessToken = "tok-upd-new-" + uuid.NewString()
+		s.ExpiresAt = s.ExpiresAt.Add(time.Hour)
 		require.NoError(t, repo.Update(ctx, s))
 		// Version should have been incremented in-place.
 		assert.Equal(t, int64(2), s.Version)
@@ -165,21 +152,21 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 		got, err := repo.GetByID(ctx, s.ID)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), got.Version)
-		assert.Equal(t, s.AccessToken, got.AccessToken)
+		assert.True(t, s.ExpiresAt.Equal(got.ExpiresAt))
 	})
 
 	t.Run("Update_StaleVersion_ReturnsSessionConflict", func(t *testing.T) {
-		s := newTestSession(seedUser(t, ctx, uRepo), "tok-stale-"+uuid.NewString())
+		s := newTestSession(seedUser(t, ctx, uRepo))
 		require.NoError(t, repo.Create(ctx, s))
 
 		// First update succeeds, advances version to 2.
 		first := *s
-		first.AccessToken = "tok-stale-v2-" + uuid.NewString()
+		first.ExpiresAt = first.ExpiresAt.Add(time.Hour)
 		require.NoError(t, repo.Update(ctx, &first))
 		assert.Equal(t, int64(2), first.Version)
 
 		// Now try to update with the original version=1 (stale).
-		s.AccessToken = "tok-stale-conflict-" + uuid.NewString()
+		s.ExpiresAt = s.ExpiresAt.Add(sessionRepoStaleExpiryDelta)
 		err := repo.Update(ctx, s)
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -188,7 +175,7 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("Update_NotFound_ReturnsSessionNotFound", func(t *testing.T) {
-		ghost := newTestSession(seedUser(t, ctx, uRepo), "tok-ghost-"+uuid.NewString())
+		ghost := newTestSession(seedUser(t, ctx, uRepo))
 		ghost.ID = uuid.NewString() // not in DB
 
 		err := repo.Update(ctx, ghost)
@@ -199,7 +186,7 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("RevokeByIDAndOwner_HappyPath", func(t *testing.T) {
-		s := newTestSession(seedUser(t, ctx, uRepo), "tok-rev-"+uuid.NewString())
+		s := newTestSession(seedUser(t, ctx, uRepo))
 		require.NoError(t, repo.Create(ctx, s))
 
 		require.NoError(t, repo.RevokeByIDAndOwner(ctx, s.ID, s.UserID))
@@ -213,7 +200,7 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("RevokeByIDAndOwner_WrongOwner_ReturnsSessionNotFound", func(t *testing.T) {
-		s := newTestSession(seedUser(t, ctx, uRepo), "tok-wrong-"+uuid.NewString())
+		s := newTestSession(seedUser(t, ctx, uRepo))
 		require.NoError(t, repo.Create(ctx, s))
 
 		err := repo.RevokeByIDAndOwner(ctx, s.ID, seedUser(t, ctx, uRepo))
@@ -227,7 +214,7 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 		userID := seedUser(t, ctx, uRepo)
 		sessions := make([]*domain.Session, 3)
 		for i := range 3 {
-			s := newTestSession(userID, "tok-revall-"+uuid.NewString()+"-"+string(rune('a'+i)))
+			s := newTestSession(userID)
 			require.NoError(t, repo.Create(ctx, s))
 			sessions[i] = s
 		}
@@ -246,7 +233,7 @@ func TestPGSessionRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("Delete_HappyPath", func(t *testing.T) {
-		s := newTestSession(seedUser(t, ctx, uRepo), "tok-del-"+uuid.NewString())
+		s := newTestSession(seedUser(t, ctx, uRepo))
 		require.NoError(t, repo.Create(ctx, s))
 
 		require.NoError(t, repo.Delete(ctx, s.ID))

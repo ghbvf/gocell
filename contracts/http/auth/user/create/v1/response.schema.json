@@ -25,6 +25,9 @@
         "updatedAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "passwordResetRequired": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -33,7 +36,8 @@
         "email",
         "status",
         "createdAt",
-        "updatedAt"
+        "updatedAt",
+        "passwordResetRequired"
       ]
     }
   },

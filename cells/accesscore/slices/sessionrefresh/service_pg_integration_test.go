@@ -157,13 +157,14 @@ func TestStoreLevel_OuterTxAtomicity_SessionAndRefresh(t *testing.T) {
 	require.NoError(t, fx.userRepo.Create(ctx, u))
 	seedPGUserRow(t, ctx, fx.pool, userID)
 
-	// Create session in PG.
-	sess, err := domain.NewSession(userID, "original-at-"+uuid.NewString(), time.Now().Add(time.Hour), time.Now())
+	// Create session in PG. Match PostgreSQL timestamptz microsecond precision
+	// so the rollback assertion compares the stored value exactly.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sess, err := domain.NewSession(userID, now.Add(time.Hour), now)
 	require.NoError(t, err)
 	sess.ID = "sess-svcpg-" + uuid.NewString()[:8]
 	require.NoError(t, fx.sessionPG.Create(ctx, sess))
 
-	originalAccessToken := sess.AccessToken
 	originalVersion := sess.Version // = 1
 
 	// Issue a refresh token for the session.
@@ -175,9 +176,9 @@ func TestStoreLevel_OuterTxAtomicity_SessionAndRefresh(t *testing.T) {
 	var capturedRotatedWire string
 	err = fx.txm.RunInTx(ctx, func(txCtx context.Context) error {
 		// Simulate what Refresh does internally:
-		// 1) update session (new access token)
+		// 1) update session expiry
 		updSess := *sess
-		updSess.AccessToken = "updated-at-" + uuid.NewString()
+		updSess.ExpiresAt = updSess.ExpiresAt.Add(time.Hour)
 		if err := fx.sessionPG.Update(txCtx, &updSess); err != nil {
 			return err
 		}
@@ -196,8 +197,8 @@ func TestStoreLevel_OuterTxAtomicity_SessionAndRefresh(t *testing.T) {
 	// Session must be unchanged (Update rolled back).
 	gotSession, err := fx.sessionPG.GetByID(ctx, sess.ID)
 	require.NoError(t, err)
-	assert.Equal(t, originalAccessToken, gotSession.AccessToken,
-		"session.AccessToken must remain original after rollback")
+	assert.True(t, sess.ExpiresAt.Equal(gotSession.ExpiresAt),
+		"session.ExpiresAt must remain original after rollback")
 	assert.Equal(t, originalVersion, gotSession.Version,
 		"session.Version must remain %d after rollback", originalVersion)
 

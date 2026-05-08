@@ -6,22 +6,22 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialrevoke"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // Service handles RBAC role assignment and revocation.
 //
-// When the Cell injects an emitter for asynchronous role-change delivery, the
-// role mutation and event.role.{assigned,revoked}.v1 emission run in one
-// transaction and session revocation moves to the sessionlogout consumer.
-//
-// With the default noop emitter, the service preserves the in-process
-// role-change + session-revoke flow used by demo and in-memory wiring.
+// Role mutation, credential revocation, and optional event.role.{assigned,revoked}.v1
+// emission run in one transaction. The sessionlogout consumer remains an
+// idempotent replay/compensation path for role-change events, not the primary
+// invalidation protocol.
 //
 // The role repository reports whether the call actually changed state. On a
 // no-op (repeat assign or revoke-non-member), no event is emitted and no
@@ -29,23 +29,25 @@ import (
 //
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
-	roleRepo              ports.RoleRepository
-	sessionRepo           ports.SessionRepository
-	txRunner              persistence.TxRunner
-	emitter               outbox.Emitter
-	syncSessionRevocation bool
-	logger                *slog.Logger
+	userRepo      ports.UserRepository
+	roleRepo      ports.RoleRepository
+	sessionRepo   ports.SessionRepository
+	refreshStore  refresh.Store
+	txRunner      persistence.TxRunner
+	emitter       outbox.Emitter
+	durableEvents bool
+	logger        *slog.Logger
 }
 
 // Option configures a rbac-assign Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter and disables in-process session revoke.
+// WithEmitter sets the event emitter.
 func WithEmitter(e outbox.Emitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
-			s.syncSessionRevocation = false
+			s.durableEvents = true
 		}
 	}
 }
@@ -59,22 +61,39 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	}
 }
 
-// NewService creates a new rbac-assign service.
-// When WithEmitter is provided, session revocation is delegated to the
-// sessionlogout consumer. With default options, the legacy in-process revoke
-// path is used.
+// NewService creates a new rbac-assign service. Role mutation, credential
+// revocation, and optional event emission run inside the configured TxRunner.
+// The role-change consumer is retained as idempotent compensation/replay.
 func NewService(
+	userRepo ports.UserRepository,
 	roleRepo ports.RoleRepository,
 	sessionRepo ports.SessionRepository,
+	refreshStore refresh.Store,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	if validation.IsNilInterface(userRepo) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "rbacassign.NewService: userRepo must not be nil")
+	}
+	if validation.IsNilInterface(roleRepo) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "rbacassign.NewService: roleRepo must not be nil")
+	}
+	if validation.IsNilInterface(sessionRepo) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "rbacassign.NewService: sessionRepo must not be nil")
+	}
+	if validation.IsNilInterface(refreshStore) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "rbacassign.NewService: refreshStore must not be nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
-		roleRepo:              roleRepo,
-		sessionRepo:           sessionRepo,
-		emitter:               outbox.NewNoopEmitter(),
-		syncSessionRevocation: true,
-		logger:                logger,
+		userRepo:     userRepo,
+		roleRepo:     roleRepo,
+		sessionRepo:  sessionRepo,
+		refreshStore: refreshStore,
+		emitter:      outbox.NewNoopEmitter(),
+		logger:       logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -115,31 +134,25 @@ func (s *Service) persistChange(
 ) (changed bool, err error) {
 	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		var innerErr error
+		if _, innerErr = s.userRepo.GetByIDForUpdate(txCtx, evt.UserID); innerErr != nil {
+			return fmt.Errorf("rbac-assign: lock user: %w", innerErr)
+		}
 		changed, innerErr = writeFn(txCtx)
 		if innerErr != nil {
 			return innerErr
 		}
-		if !changed || s.syncSessionRevocation {
+		if !changed {
+			return nil
+		}
+		if err := credentialrevoke.User(txCtx, s.sessionRepo, s.refreshStore, evt.UserID, "rbac-assign: "+evt.Action); err != nil {
+			return err
+		}
+		if !s.durableEvents {
 			return nil
 		}
 		return s.writeOutboxEntry(txCtx, topic, evt)
 	})
-	if err != nil || !s.syncSessionRevocation {
-		return changed, err
-	}
-	if !changed {
-		return false, nil
-	}
-	if err := s.sessionRepo.RevokeByUserID(ctx, evt.UserID); err != nil {
-		s.logger.Error("rbac-assign: partial commit — role change persisted but session revoke failed;"+
-			" client JWTs retain stale roles until re-login",
-			slog.String("user_id", evt.UserID),
-			slog.String("role_id", evt.RoleID),
-			slog.String("action", evt.Action),
-			slog.Any("error", err))
-		return true, fmt.Errorf("rbac-assign: %s succeeded but session revoke failed: %w", evt.Action, err)
-	}
-	return true, nil
+	return changed, err
 }
 
 // Assign assigns a role to a user. Idempotent: re-assignment is a no-op —
@@ -173,7 +186,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	}
 
 	mode := "demo"
-	if !s.syncSessionRevocation {
+	if s.durableEvents {
 		mode = "durable"
 	}
 	s.logger.Info("role assigned",
@@ -213,7 +226,7 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	}
 
 	mode := "demo"
-	if !s.syncSessionRevocation {
+	if s.durableEvents {
 		mode = "durable"
 	}
 	s.logger.Info("role revoked",

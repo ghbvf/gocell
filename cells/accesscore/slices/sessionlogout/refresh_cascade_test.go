@@ -45,11 +45,10 @@ func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 	sessionID := "sess-logout-1"
 	userID := "user-logout-1"
 	session := &domain.Session{
-		ID:          sessionID,
-		UserID:      userID,
-		AccessToken: "at",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
+		ID:        sessionID,
+		UserID:    userID,
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
 	}
 	require.NoError(t, sessionRepo.Create(ctx, session))
 
@@ -74,7 +73,7 @@ func TestService_LogoutUser_RevokesAllRefreshChains(t *testing.T) {
 	// Two distinct sessions for the same user.
 	for _, sid := range []string{"sess-a", "sess-b"} {
 		require.NoError(t, sessionRepo.Create(ctx, &domain.Session{
-			ID: sid, UserID: userID, AccessToken: "at-" + sid,
+			ID: sid, UserID: userID,
 			ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
 		}))
 	}

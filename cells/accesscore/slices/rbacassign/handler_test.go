@@ -29,7 +29,7 @@ func setupHandler(t *testing.T) (http.Handler, *mem.RoleRepository) {
 	})
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
 
-	svc := mustNewService(t, roleRepo, testutil.RealSessionRepo(t), slog.Default())
+	svc := mustNewService(t, roleRepo, testutil.RealSessionRepo(t), &trackingRefreshStore{}, slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {

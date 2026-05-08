@@ -63,16 +63,12 @@ type UUIDGenerator func() string
 // it with their own TxRunner if atomicity across Ensure + adjacent writes is
 // required.
 //
-// Concurrency: Ensure is serialized through an internal mutex so the
-// CountByRole fast-path → Create → Assign sequence is atomic within a single
-// process. This closes the read-after-check window that would otherwise let
-// two concurrent callers with different usernames both pass the fast-path and
-// each persist an admin row (UserRepo's per-username uniqueness does not
-// protect against "admin role has two holders"). The mutex is sufficient for
-// single-process deployments (demo, single-instance PG). Multi-instance PG
-// deployments must layer a cross-process lock on top — the PG adapter is
-// expected to acquire pg_advisory_xact_lock at Ensure entry; see
-// ADMINPROVISION-DIST-LOCK-01 in docs/backlog.md.
+// Concurrency: Ensure is serialized through an internal mutex for in-memory
+// deployments. PG role repositories additionally implement a narrow
+// transaction-scoped advisory lock interface detected by this package, so the
+// CountByRole fast-path → Create → Assign sequence is serialized across pods.
+// The product invariant is "at least one admin exists"; multiple admin holders
+// are allowed after setup through normal RBAC assignment.
 type Provisioner struct {
 	mu       sync.Mutex
 	userRepo ports.UserRepository
@@ -80,6 +76,10 @@ type Provisioner struct {
 	logger   *slog.Logger
 	newID    UUIDGenerator
 	clock    clock.Clock
+}
+
+type provisionLock interface {
+	LockAdminProvision(ctx context.Context) error
 }
 
 // NewProvisioner constructs a Provisioner. All dependencies are required;
@@ -123,16 +123,18 @@ func (p *Provisioner) Status(ctx context.Context) (bool, error) {
 }
 
 // Ensure idempotently provisions the first admin. It is race-safe across
-// concurrent replicas; see ProvisionOutcome for branch semantics.
+// concurrent replicas when the RoleRepository implements the internal
+// provisionLock interface; see ProvisionOutcome for branch semantics.
 //
 // Steps:
-//  1. Fast-path CountByRole: if > 0, return OutcomeAlreadyExists (no I/O writes).
-//  2. Ensure admin role exists (tolerate ErrAuthRoleDuplicate).
-//  3. Build user with a fresh UUID, persist via UserRepo.Create.
+//  1. Acquire the optional cross-process provision lock.
+//  2. Fast-path CountByRole: if > 0, return OutcomeAlreadyExists (no I/O writes).
+//  3. Ensure admin role exists (tolerate ErrAuthRoleDuplicate).
+//  4. Build user with a fresh UUID, persist via UserRepo.Create.
 //     - On ErrAuthUserDuplicate: recount admins. > 0 → OutcomeRaceSkipped
 //     (concurrent replica finished first). == 0 → 409 ErrAuthUserDuplicate
 //     (username conflict, operator must use a different username).
-//  4. AssignToUser(user, admin) — idempotent per port contract.
+//  5. AssignToUser(user, admin) — idempotent per port contract.
 func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
 	if len(in.PasswordHash) == 0 {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: PasswordHash is required")
@@ -143,6 +145,10 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 	// distinct admin user. Single-process scope only; see Provisioner godoc.
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if err := p.lockProvision(ctx); err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, err
+	}
 
 	// 1. Fast path.
 	exists, err := p.Status(ctx)
@@ -174,12 +180,21 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 	return result, nil
 }
 
+func (p *Provisioner) lockProvision(ctx context.Context) error {
+	locker, ok := p.roleRepo.(provisionLock)
+	if !ok {
+		return nil
+	}
+	if err := locker.LockAdminProvision(ctx); err != nil {
+		return fmt.Errorf("adminprovision: lock admin provision: %w", err)
+	}
+	return nil
+}
+
 // handleAssignAdminError folds an AssignToUser failure observed during Ensure
-// step 4 into a ProvisionResult. The DB partial unique index
-// idx_role_assignments_single_admin rejects concurrent role assignments; an
-// ErrAuthRoleDuplicate here means another replica won the race between our
-// CountByRole fast-path and our AssignToUser call. We verify via recount,
-// then fold to setup terminal state. Any other error is wrapped and surfaced.
+// step 5 into a ProvisionResult. It primarily exists for defensive folding of
+// legacy or fake repositories that return ErrAuthRoleDuplicate during an admin
+// race; PG's current protocol prevents this by taking LockAdminProvision first.
 func (p *Provisioner) handleAssignAdminError(ctx context.Context, err error) (ProvisionResult, error) {
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthRoleDuplicate {

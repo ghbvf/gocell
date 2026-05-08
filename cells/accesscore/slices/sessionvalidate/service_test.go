@@ -40,32 +40,29 @@ func TestService_VerifyIntent(t *testing.T) {
 
 	// Seed an active session for revocation tests.
 	activeSession := &domain.Session{
-		ID:          "sess-active",
-		UserID:      "usr-1",
-		AccessToken: "dummy",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
+		ID:        "sess-active",
+		UserID:    "usr-1",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), activeSession))
 
 	// Seed a revoked session.
 	revokedSession := &domain.Session{
-		ID:          "sess-revoked",
-		UserID:      "usr-2",
-		AccessToken: "dummy2",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
+		ID:        "sess-revoked",
+		UserID:    "usr-2",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
 	}
 	revokedSession.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Create(context.Background(), revokedSession))
 
 	// Seed an expired session.
 	expiredSession := &domain.Session{
-		ID:          "sess-expired",
-		UserID:      "usr-3",
-		AccessToken: "dummy3",
-		ExpiresAt:   time.Now().Add(-time.Hour), // already expired
-		CreatedAt:   time.Now().Add(dNeg2h),
+		ID:        "sess-expired",
+		UserID:    "usr-3",
+		ExpiresAt: time.Now().Add(-time.Hour), // already expired
+		CreatedAt: time.Now().Add(dNeg2h),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), expiredSession))
 

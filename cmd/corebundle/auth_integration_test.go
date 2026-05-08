@@ -396,7 +396,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	})
 
 	// Internal listener + service token → guard passes → policy passes →
-	// handler returns 404 ERR_AUTH_ROLE_NOT_FOUND (role not seeded).
+	// handler returns 404 ERR_AUTH_USER_NOT_FOUND because RBAC mutation locks
+	// the user row before role lookup.
 	t.Run("internal_assign_service_token_policy_passes_to_handler", func(t *testing.T) {
 		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
 		// Spec: 4-part token — callerCell="accesscore" is the identity claim.
@@ -416,13 +417,13 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		resp.Body.Close()
 
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
-			"expected guard+policy to pass and handler to return 404 (role not found); body=%s", bodyBytes)
-		assert.Contains(t, string(bodyBytes), "ERR_AUTH_ROLE_NOT_FOUND",
-			"response must contain role-not-found error code; body=%s", bodyBytes)
+			"expected guard+policy to pass and handler to return 404 (user not found); body=%s", bodyBytes)
+		assert.Contains(t, string(bodyBytes), "ERR_AUTH_USER_NOT_FOUND",
+			"response must contain user-not-found error code; body=%s", bodyBytes)
 	})
 
 	// Internal listener + service token → guard passes → policy passes →
-	// handler returns 200 (idempotent revoke of unassigned role).
+	// handler returns 404 ERR_AUTH_USER_NOT_FOUND for an unknown target user.
 	t.Run("internal_revoke_service_token_policy_passes_to_handler", func(t *testing.T) {
 		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
 		// Spec: 4-part token — callerCell="accesscore".
@@ -441,14 +442,14 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"expected guard+policy to pass and handler to return 200 (idempotent revoke); body=%s", bodyBytes)
-		assert.Contains(t, string(bodyBytes), `"revoked"`,
-			"response must contain revoke result; body=%s", bodyBytes)
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+			"expected guard+policy to pass and handler to return 404 (user not found); body=%s", bodyBytes)
+		assert.Contains(t, string(bodyBytes), "ERR_AUTH_USER_NOT_FOUND",
+			"response must contain user-not-found error code; body=%s", bodyBytes)
 	})
 
-	// Internal listener + replay of the same service token → first 200 from
-	// handler, second 401 from guard (nonce store rejects the replay). Exercises
+	// Internal listener + replay of the same service token → first request
+	// reaches the handler, second 401 from guard (nonce store rejects the replay). Exercises
 	// the S-nonce P1 closure across the full HTTP stack: token signing, HMAC
 	// verification, nonce CheckAndMark, JSON error envelope formatting.
 	t.Run("internal_replay_same_nonce_401", func(t *testing.T) {
@@ -472,8 +473,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		}
 
 		status1, _ := doReq()
-		assert.Equal(t, http.StatusOK, status1,
-			"first use of valid token must pass through the guard")
+		assert.Equal(t, http.StatusNotFound, status1,
+			"first use of valid token must pass through the guard and reach the handler")
 
 		status2, body2 := doReq()
 		assert.Equal(t, http.StatusUnauthorized, status2,

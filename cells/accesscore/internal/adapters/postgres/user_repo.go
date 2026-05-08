@@ -51,6 +51,12 @@ SELECT id, username, email, password_hash, password_reset_required, status, crea
 FROM users
 WHERE id = $1`
 
+	selectUserByIDForUpdateSQL = `
+SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at, version
+FROM users
+WHERE id = $1
+FOR UPDATE`
+
 	selectUserByUsernameSQL = `
 SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at, version
 FROM users
@@ -126,6 +132,15 @@ func (r *PGUserRepository) queryRowCtx(ctx context.Context, sql string, args ...
 	return r.pool.QueryRow(ctx, sql, args...)
 }
 
+func (r *PGUserRepository) queryRowTxRequired(ctx context.Context, sql string, args ...any) (pgx.Row, error) {
+	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
+	if !ok {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"user repo: FOR UPDATE query requires ambient transaction")
+	}
+	return tx.QueryRow(ctx, sql, args...), nil
+}
+
 // Create inserts a new user row.
 //
 // Returns ErrAuthUserDuplicate (KindConflict) on UNIQUE 23505 violation for
@@ -162,17 +177,21 @@ func (r *PGUserRepository) mapUniqueViolation(err error, op, username, email str
 			slog.String("op", op),
 			slog.String("constraint", pgErr.ConstraintName),
 		)
-		if pgErr.ConstraintName == constraintUsersEmail {
+		switch pgErr.ConstraintName {
+		case constraintUsersEmail:
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthEmailDuplicate,
 				"email already exists",
 				errcode.WithInternal(fmt.Sprintf("constraint=%s email=%s", pgErr.ConstraintName, redactPII(email))),
 			)
+		case constraintUsersUsername:
+			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
+				"username already exists",
+				errcode.WithInternal(fmt.Sprintf("constraint=%s username=%s", pgErr.ConstraintName, redactPII(username))),
+			)
+		default:
+			return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: unexpected unique constraint", err,
+				errcode.WithInternal(fmt.Sprintf("op=%s constraint=%s", op, pgErr.ConstraintName)))
 		}
-		// idx_users_username or any other unique constraint.
-		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
-			"username already exists",
-			errcode.WithInternal(fmt.Sprintf("constraint=%s username=%s", pgErr.ConstraintName, redactPII(username))),
-		)
 	}
 	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: query failed", err,
 		errcode.WithInternal("op="+op))
@@ -192,6 +211,28 @@ func (r *PGUserRepository) GetByID(ctx context.Context, id string) (*domain.User
 			)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: get by id", err)
+	}
+	return u, nil
+}
+
+// GetByIDForUpdate retrieves a user by id with a row-level write lock
+// (SELECT ... FOR UPDATE). Must be called inside an active TxRunner.RunInTx.
+// Returns ErrAuthUserNotFound (KindNotFound) when the row does not exist.
+func (r *PGUserRepository) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	row, err := r.queryRowTxRequired(ctx, selectUserByIDForUpdateSQL, id)
+	if err != nil {
+		return nil, err
+	}
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
+				"user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal("id="+id),
+			)
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: get by id for update", err)
 	}
 	return u, nil
 }
@@ -220,7 +261,10 @@ func (r *PGUserRepository) GetByUsername(ctx context.Context, username string) (
 //
 // ref: ory/kratos persister_session.go GetSessionByToken FOR UPDATE pattern
 func (r *PGUserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
-	row := r.queryRowCtx(ctx, selectUserByUsernameForUpdateSQL, username)
+	row, txErr := r.queryRowTxRequired(ctx, selectUserByUsernameForUpdateSQL, username)
+	if txErr != nil {
+		return nil, txErr
+	}
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

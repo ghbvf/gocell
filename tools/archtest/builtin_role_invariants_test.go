@@ -2,9 +2,10 @@
 //
 // INVARIANT: BUILTIN-ROLE-ID-NAME-EQ-01
 //
-// 不能 funnel 的理由：role.id 与 role.Name 是 PG schema（019_roles.sql 的
-// partial UNIQUE）与 Go domain（runtime/auth/roles.go 的 string 常量）两侧的
-// 属性，funnel 不到单源；type system 也无法表达"两个独立 string 字段必须相等"。
+// 不能 funnel 的理由：role.id 与 role.Name 是 PG schema（019_roles.sql）、
+// advisory-lock key、admin provisioning 以及 Go domain（runtime/auth/roles.go
+// 的 string 常量）多侧共享的属性，funnel 不到单源；type system 也无法表达
+// "两个独立 string 字段必须相等"。
 // 平铺 archtest 兜底。
 package archtest
 
@@ -24,20 +25,20 @@ import (
 // TestBuiltinRoleIDNameEq enforces BUILTIN-ROLE-ID-NAME-EQ-01.
 //
 // 约束背景：
-//   - 019_roles.sql 以 partial UNIQUE 索引 `WHERE role_id = 'admin'` 保护
-//     single-admin 不变量，绑定的是字符串字面量 'admin'。
+//   - 019_roles.sql 和 PG role repo 以 role_id='admin' 作为 admin holder
+//     计数与 advisory-lock key 的业务对象。
 //   - sessionmint 等模块通过 role.Name（字符串）识别 admin 角色。
 //   - runtime/auth/roles.go 的 const RoleAdmin = "admin" 同时被用作 role.id
 //     与 role.Name 的比较值；两者相等是隐式约定。
 //
 // 本测试验证：
 //  1. runtime/auth/roles.go 中存在至少一个 Role* 前缀的 string 常量。
-//  2. RoleAdmin 常量值必须为 "admin"（与 019_roles.sql partial UNIQUE 字面量一致）。
+//  2. RoleAdmin 常量值必须为 "admin"（与 019_roles.sql/admin revoke 字面量一致）。
 //  3. 所有 Role* 常量值必须满足 ^[a-z][a-z0-9_-]*$——小写、可作 SQL 标识符段，
 //     确保 id 与 name 在格式层面不会出现大小写或特殊字符导致的静默不一致。
 //
 // 如果未来需要引入 id≠name 的 builtin role，必须同时：
-//   - 修改 019_roles.sql 的 partial UNIQUE 表达（从字面量改为显式列比较）；
+//   - 修改 019_roles.sql / PG role repo 中 admin holder 计数与 advisory-lock key；
 //   - 删除或放宽本测试中对应的断言；
 //   - 在 ADR docs/architecture/202605081600-adr-pg-accesscore-locking.md 中
 //     记录决策变更。
@@ -89,16 +90,16 @@ func TestBuiltinRoleIDNameEq(t *testing.T) {
 			"invariant scope broken; if the file was moved, update this test",
 		rolesFile)
 
-	// 断言 2：RoleAdmin 必须等于 "admin"（与 019_roles.sql partial UNIQUE 字面量绑定）
+	// 断言 2：RoleAdmin 必须等于 "admin"（与 admin holder 计数与 lock key 绑定）
 	adminVal, hasAdmin := found["RoleAdmin"]
 	assert.Truef(t, hasAdmin,
 		"BUILTIN-ROLE-ID-NAME-EQ-01: RoleAdmin constant missing from %s — "+
-			"single-admin partial UNIQUE in 019_roles.sql binds to literal 'admin'",
+			"admin holder invariant in 019_roles.sql/PG role repo binds to literal 'admin'",
 		rolesFile)
 	if hasAdmin {
 		assert.Equalf(t, "admin", adminVal,
 			"BUILTIN-ROLE-ID-NAME-EQ-01: RoleAdmin = %q, want \"admin\" — "+
-				"019_roles.sql partial UNIQUE WHERE role_id = 'admin' binds to this literal; "+
+				"admin holder counting and advisory lock keys bind to this literal; "+
 				"changing the value requires updating the migration and this test",
 			adminVal)
 	}

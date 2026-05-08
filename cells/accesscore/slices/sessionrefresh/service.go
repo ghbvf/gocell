@@ -147,13 +147,11 @@ func MustNewService(
 // persistRefreshedSession → Rotate sequence runs inside a single
 // txRunner.RunInTx, giving the rotate chain one commit boundary on PG-backed
 // stores. The PG refresh store joins via savepoints and rolls back on outer
-// abort. The session repo currently in production wiring is mem
-// (cells/accesscore/internal/mem.SessionRepository), which does not honor TX
-// rollback — its writes commit to the in-memory map immediately. Once B2
-// lands postgres.PGSessionRepository, full cross-store ACID becomes effective
-// without any change to this method. Cascade revokes go through
-// refreshStore.RevokeSessionDetached, which intentionally bypasses the outer
-// transaction (PR#395 detached-context invariant).
+// abort, and the PG session repository joins the same ambient transaction when
+// wired. The mem session repository still executes in-process without rollback
+// semantics, which is acceptable for demo/test wiring. Cascade revokes go
+// through refreshStore.RevokeSessionDetached, which intentionally bypasses the
+// outer transaction (PR#395 detached-context invariant).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
@@ -228,7 +226,7 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 	// Persist the session validation horizon before the final Rotate. With
 	// the outer RunInTx in place, a Rotate failure rolls the session update
 	// back as well — both stores share one commit boundary.
-	if err := s.persistRefreshedSession(ctx, session, minted.AccessToken, minted.ExpiresAt); err != nil {
+	if err := s.persistRefreshedSession(ctx, session, minted.ExpiresAt); err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -265,9 +263,8 @@ func authRefreshRejected() *errcode.Error {
 	return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthRefreshFailed, errMsgInvalidRefreshToken)
 }
 
-func (s *Service) persistRefreshedSession(ctx context.Context, session *domain.Session, accessToken string, expiresAt time.Time) error {
+func (s *Service) persistRefreshedSession(ctx context.Context, session *domain.Session, expiresAt time.Time) error {
 	refreshed := *session
-	refreshed.AccessToken = accessToken
 	refreshed.ExpiresAt = expiresAt
 	if err := s.sessionRepo.Update(ctx, &refreshed); err != nil {
 		if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {

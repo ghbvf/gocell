@@ -35,7 +35,7 @@ func setup(t testing.TB) (http.Handler, string) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newTestRefreshStore()
 
-	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour), time.Now())
+	sess, _ := domain.NewSession("usr-1", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
 

@@ -5,8 +5,8 @@ package main
 // TestSetupOrphan_PGE2E_RecoveryResumes and TestSetupOrphan_PGE2E_NoOrphan_NormalProvision
 // are provisioner-layer PG e2e tests (A26-R4).
 //
-// Design: HTTP assembly with PG user + role repos (cells/accesscore/postgres.WithPool)
-// and in-memory session repo (WithInMemoryDefaults provides the session repo).
+// Design: HTTP assembly with PG user + session + role repos
+// (cells/accesscore/postgres.WithPool overrides WithInMemoryDefaults).
 // No RabbitMQ or outbox relay — outbox.NoopWriter{} + eventbus.New suffice.
 //
 // The orphan scenario: a previous run crashed after inserting a user row into
@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +49,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
+
+const setupOrphanHMACKey = "test-hmac-key-32-bytes-long!!!!!"
 
 // orphanPGPool starts a PG container, applies all migrations, and returns
 // a connected Pool with a cleanup function. The caller owns the cleanup call.
@@ -153,11 +156,12 @@ func bootOrphanAssembly(t *testing.T, pool *adapterpg.Pool) (addr string, shutdo
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
+	require.GreaterOrEqual(t, len(setupOrphanHMACKey), 32, "test HMAC fixture must be at least 32 bytes")
 	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clk),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
-		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!!")),
+		auditcore.WithHMACKey([]byte(setupOrphanHMACKey)),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
@@ -316,14 +320,10 @@ func TestSetupOrphan_PGE2E_RecoveryResumes(t *testing.T) {
 		"users table must have exactly two rows: orphan + recovery-admin")
 }
 
-// TestSetupOrphan_PGE2E_RaceLoser_Returns410 verifies the concurrent race-loser scenario:
-// an admin user + role assignment already exist in PG (simulating another replica winning
-// the race). The setup POST must return 410 + ERR_SETUP_ALREADY_INITIALIZED, not
-// 409 + ERR_AUTH_ROLE_DUPLICATE.
-//
-// This covers the provisioner path where AssignToUser would receive ErrAuthRoleDuplicate
-// from the DB partial unique index idx_role_assignments_single_admin. The provisioner
-// folds this to OutcomeRaceSkipped which the setup service maps to 410.
+// TestSetupOrphan_PGE2E_RaceLoser_Returns410 verifies the race-loser scenario:
+// an admin user + role assignment already exist in PG (simulating another
+// replica winning the race). The setup POST must return 410 +
+// ERR_SETUP_ALREADY_INITIALIZED.
 func TestSetupOrphan_PGE2E_RaceLoser_Returns410(t *testing.T) {
 	pool, cleanup := orphanPGPool(t)
 	defer cleanup()
@@ -438,4 +438,80 @@ func TestSetupOrphan_PGE2E_NoOrphan_NormalProvision(t *testing.T) {
 		"SELECT count(*) FROM users",
 	).Scan(&totalUsers))
 	assert.Equal(t, 1, totalUsers, "users must have exactly one row after 410 rejection")
+}
+
+func TestSetupOrphan_PGE2E_ConcurrentFirstRun_One201Rest410(t *testing.T) {
+	pool, cleanup := orphanPGPool(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	addr, shutdown := bootOrphanAssembly(t, pool)
+	defer shutdown()
+	base := "http://" + addr
+
+	const n = 6
+	type result struct {
+		status int
+		body   string
+		err    error
+	}
+	results := make(chan result, n)
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		go func(idx int) {
+			defer wg.Done()
+			payload := fmt.Sprintf(`{"username":%q,"email":%q,"password":%q}`,
+				fmt.Sprintf("first-admin-%d", idx),
+				fmt.Sprintf("first-%d@local", idx),
+				"SecretPass!23")
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+				base+"/api/v1/access/setup/admin", strings.NewReader(payload))
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
+			resp, err := setupHTTPClient.Do(req)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			results <- result{status: resp.StatusCode, body: string(raw)}
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+
+	created := 0
+	gone := 0
+	for r := range results {
+		require.NoError(t, r.err)
+		switch r.status {
+		case http.StatusCreated:
+			created++
+		case http.StatusGone:
+			gone++
+			assert.Contains(t, r.body, "ERR_SETUP_ALREADY_INITIALIZED")
+		default:
+			t.Fatalf("unexpected setup status %d body=%s", r.status, r.body)
+		}
+	}
+	assert.Equal(t, 1, created, "exactly one concurrent setup POST must create the first admin")
+	assert.Equal(t, n-1, gone, "all race losers must return 410 Gone")
+
+	var totalUsers int
+	require.NoError(t, pool.DB().QueryRow(ctx, "SELECT count(*) FROM users").Scan(&totalUsers))
+	assert.Equal(t, 1, totalUsers, "only the winning setup request may create a user")
+
+	var roleCount int
+	require.NoError(t, pool.DB().QueryRow(ctx,
+		"SELECT count(*) FROM role_assignments WHERE role_id = 'admin'",
+	).Scan(&roleCount))
+	assert.Equal(t, 1, roleCount, "only one first-run admin assignment must be created")
 }

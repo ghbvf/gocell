@@ -11,36 +11,34 @@ import (
 // parameter so callers supply the time via an injected clock.Clock rather than
 // calling time.Now() directly. This keeps the domain free of framework deps.
 
-// Session represents an authenticated user session with its access token and
-// expiry. Refresh tokens live in runtime/auth/refresh.Store (append-only
-// lineage per migration 012) and are not mirrored on Session.
+// Session represents an authenticated user session and its expiry. Raw access
+// JWTs are never persisted; the sid claim links each JWT to this session row.
+// Refresh tokens live in runtime/auth/refresh.Store (append-only lineage per
+// migration 012) and are not mirrored on Session.
 type Session struct {
-	ID          string
-	UserID      string
-	AccessToken string
-	ExpiresAt   time.Time
-	RevokedAt   *time.Time // nil = not revoked
-	CreatedAt   time.Time
-	Version     int64 // optimistic lock version; incremented on each update
+	ID        string
+	UserID    string
+	ExpiresAt time.Time
+	RevokedAt *time.Time // nil = not revoked
+	CreatedAt time.Time
+	Version   int64 // optimistic lock version; incremented on each update
 }
 
 // NewSession creates a new session for the given user.
 // now is the wall-clock instant provided by the caller's clock.Clock.
 // Returns an errcode.Error if any required field is empty.
-func NewSession(userID, accessToken string, expiresAt time.Time, now time.Time) (*Session, error) {
+func NewSession(userID string, expiresAt time.Time, now time.Time) (*Session, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthSessionInvalidInput,
 		validation.F("userID", userID),
-		validation.F("accessToken", accessToken),
 	); err != nil {
 		return nil, err
 	}
 
 	return &Session{
-		UserID:      userID,
-		AccessToken: accessToken,
-		ExpiresAt:   expiresAt,
-		CreatedAt:   now,
-		Version:     1,
+		UserID:    userID,
+		ExpiresAt: expiresAt,
+		CreatedAt: now,
+		Version:   1,
 	}, nil
 }
 

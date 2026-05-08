@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialrevoke"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // Consumer handles role-change events and invalidates affected user sessions.
@@ -27,7 +29,7 @@ import (
 // concrete wiring (in-mem Claimer in corebundle; redis IdempotencyClaimer
 // in multi-pod deployments).
 //
-// Ack timing: after sessionRepo.RevokeByUserID returns nil
+// Ack timing: after session and refresh credentials are revoked
 // Disposition:
 //   - unmarshal fail / empty userID  → DispositionReject (PermanentError) → DLX
 //   - sessionRepo transient error    → DispositionRequeue → retry with backoff
@@ -35,13 +37,14 @@ import (
 //
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
 type Consumer struct {
-	sessionRepo ports.SessionRepository
-	logger      *slog.Logger
+	sessionRepo  ports.SessionRepository
+	refreshStore refresh.Store
+	logger       *slog.Logger
 }
 
 // NewConsumer creates a new role-change consumer.
-func NewConsumer(repo ports.SessionRepository, logger *slog.Logger) *Consumer {
-	return &Consumer{sessionRepo: repo, logger: logger}
+func NewConsumer(repo ports.SessionRepository, refreshStore refresh.Store, logger *slog.Logger) *Consumer {
+	return &Consumer{sessionRepo: repo, refreshStore: refreshStore, logger: logger}
 }
 
 // HandleRoleChanged is an EntryHandler (func(context.Context, outbox.Entry) outbox.HandleResult).
@@ -70,10 +73,10 @@ func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) ou
 		}
 	}
 
-	if err := c.sessionRepo.RevokeByUserID(ctx, payload.UserID); err != nil {
+	if err := credentialrevoke.User(ctx, c.sessionRepo, c.refreshStore, payload.UserID, "sessionlogout: role-change"); err != nil {
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionRequeue,
-			Err:         fmt.Errorf("sessionlogout: revoke sessions for user %s: %w", payload.UserID, err),
+			Err:         fmt.Errorf("sessionlogout: revoke credentials for user %s: %w", payload.UserID, err),
 		}
 	}
 

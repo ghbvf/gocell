@@ -65,7 +65,7 @@ func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 var _ persistence.TxRunner = noopTxRunner{}
 
 func seedContractSession(repo ports.SessionRepository) string {
-	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "at-1", time.Now().Add(time.Hour), time.Now())
+	sess, _ := domain.NewSession(testutil.TestID("usr-1"), time.Now().Add(time.Hour), time.Now())
 	sess.ID = testutil.TestID("sess-1")
 	_ = repo.Create(context.Background(), sess)
 	return sess.ID
@@ -140,7 +140,7 @@ func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
 	repo := testutil.RealSessionRepo(t)
-	consumer := NewConsumer(repo, slog.Default())
+	consumer := NewConsumer(repo, newContractRefreshStore(), slog.Default())
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"assigned"}`)
 	c.ValidatePayload(t, payload)
@@ -162,7 +162,7 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
 	repo := testutil.RealSessionRepo(t)
-	consumer := NewConsumer(repo, slog.Default())
+	consumer := NewConsumer(repo, newContractRefreshStore(), slog.Default())
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"revoked"}`)
 	c.ValidatePayload(t, payload)

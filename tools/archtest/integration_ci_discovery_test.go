@@ -7,10 +7,9 @@ import (
 )
 
 // TestIntegrationCIDiscovery validates that every package containing a Go
-// test file with a `//go:build integration` (or comma-list including it)
-// build tag is reachable via the same `go list` command the Makefile and CI
-// workflow use, so that adding a new integration package does not silently
-// fall outside the gate.
+// test file with a `//go:build integration` or `//go:build e2e` build tag is
+// reachable via the same script the Makefile and CI workflow use, so adding a
+// new integration package does not silently fall outside the gate.
 //
 // INVARIANT: INTEGRATION-CI-DISCOVERY-01
 //
@@ -20,10 +19,7 @@ import (
 func TestIntegrationCIDiscovery(t *testing.T) {
 	repoRoot := repoRootFromTestPath(t)
 
-	cmd := exec.Command("go", "list",
-		"-tags=integration,e2e",
-		"-f", "{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}",
-		"./...")
+	cmd := exec.Command("bash", "scripts/list-integration-packages.sh", ".")
 	cmd.Dir = repoRoot
 
 	out, err := cmd.Output()
@@ -53,6 +49,15 @@ func TestIntegrationCIDiscovery(t *testing.T) {
 		if !discovered[s] {
 			t.Errorf("INTEGRATION-CI-DISCOVERY-01: sentinel %s missing from go list output "+
 				"— did you forget //go:build integration on a new test file?", s)
+		}
+	}
+
+	unitOnlyPackages := []string{
+		"github.com/ghbvf/gocell/cells/accesscore/slices/rbaccheck",
+	}
+	for _, p := range unitOnlyPackages {
+		if discovered[p] {
+			t.Errorf("INTEGRATION-CI-DISCOVERY-01: unit-only package %s must not be discovered", p)
 		}
 	}
 }

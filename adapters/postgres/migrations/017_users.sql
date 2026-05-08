@@ -32,6 +32,8 @@ CREATE UNIQUE INDEX idx_users_email    ON users (email);
 
 -- +goose Down
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 DROP INDEX IF EXISTS idx_users_email;
 DROP INDEX IF EXISTS idx_users_username;
 DROP TABLE IF EXISTS users;

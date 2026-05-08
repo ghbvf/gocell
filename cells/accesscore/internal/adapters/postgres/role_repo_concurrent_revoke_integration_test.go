@@ -42,8 +42,8 @@ func setupConcurrentRevokeBundle(t *testing.T) concurrentRevokeBundle {
 // for the same role: 7 succeed (changed=true) and exactly 1 is rejected with
 // ErrAuthForbidden because it is the sole remaining holder at that point.
 //
-// Uses role "guest" (not "admin") to avoid the single-admin partial-index
-// side effects.
+// Uses role "guest" to cover the generic role invariant independently from
+// the admin provisioning path.
 func TestRemoveFromUserIfNotLast_ConcurrentRevoke(t *testing.T) {
 	b := setupConcurrentRevokeBundle(t)
 	ctx := context.Background()
@@ -127,4 +127,73 @@ func TestRemoveFromUserIfNotLast_ConcurrentRevoke(t *testing.T) {
 	finalCount, err := b.roleRepo.CountByRole(ctx, guestRole.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 1, finalCount, "exactly 1 holder must remain after concurrent revoke")
+}
+
+func TestRemoveFromUserIfNotLast_AdminConcurrentRevoke_LeavesOneAdmin(t *testing.T) {
+	b := setupConcurrentRevokeBundle(t)
+	ctx := context.Background()
+
+	require.NoError(t, b.roleRepo.Create(ctx, &domain.Role{
+		ID:          "admin",
+		Name:        "admin",
+		Permissions: []domain.Permission{},
+	}))
+
+	const N = 4
+	users := make([]string, N)
+	for i := range N {
+		users[i] = createTestUser(t, ctx, b.userRepo)
+		_, err := b.roleRepo.AssignToUser(ctx, users[i], "admin")
+		require.NoError(t, err)
+	}
+
+	count, err := b.roleRepo.CountByRole(ctx, "admin")
+	require.NoError(t, err)
+	require.Equal(t, N, count, "multiple admins must exist before concurrent revoke")
+
+	type result struct {
+		changed bool
+		err     error
+	}
+	resultsCh := make(chan result, N)
+	txm := adapterpg.NewTxManager(b.adapPool)
+
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := range N {
+		go func(idx int) {
+			defer wg.Done()
+			var changed bool
+			txErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+				var err error
+				changed, err = b.roleRepo.RemoveFromUserIfNotLast(txCtx, users[idx], "admin")
+				return err
+			})
+			resultsCh <- result{changed: changed, err: txErr}
+		}(i)
+	}
+	wg.Wait()
+	close(resultsCh)
+
+	changedCount := 0
+	forbiddenCount := 0
+	for r := range resultsCh {
+		if r.err == nil && r.changed {
+			changedCount++
+			continue
+		}
+		require.Error(t, r.err)
+		var ec *errcode.Error
+		require.ErrorAs(t, r.err, &ec)
+		assert.Equal(t, errcode.ErrAuthForbidden, ec.Code,
+			"the last admin revoke must be rejected")
+		forbiddenCount++
+	}
+
+	assert.Equal(t, N-1, changedCount, "all but one admin revoke must succeed")
+	assert.Equal(t, 1, forbiddenCount, "exactly one last-admin revoke must be rejected")
+
+	finalCount, err := b.roleRepo.CountByRole(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, 1, finalCount, "at least one admin must remain")
 }

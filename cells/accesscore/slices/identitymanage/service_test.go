@@ -154,11 +154,10 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 
 	// Seed a session for this user.
 	session := &domain.Session{
-		ID:          "sess-carol",
-		UserID:      user.ID,
-		AccessToken: "at",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
+		ID:        "sess-carol",
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), session))
 
@@ -390,7 +389,7 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 
 	// Seed two active sessions for this user.
 	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
-		sess, sessErr := domain.NewSession("usr-cp-revoke", "at", time.Now().Add(time.Hour), time.Now())
+		sess, sessErr := domain.NewSession("usr-cp-revoke", time.Now().Add(time.Hour), time.Now())
 		require.NoError(t, sessErr)
 		sess.ID = sid
 		require.NoError(t, sessionRepo.Create(context.Background(), sess))

@@ -142,18 +142,11 @@ type LoginInput struct {
 
 // Login authenticates a user and returns a JWT token pair.
 //
-// P1#1a race-defense: Login uses two independent transactions; between them
-// the user row is briefly unlocked, and a concurrent admin Lock could mark
-// the user as Locked + RevokeByUserID before Login's session.Create commits.
-// Without re-locking and re-checking the user inside the persistence
-// transaction, Login would emit a session for a user the admin has just
-// locked, and Lock's RevokeByUserID would not see the post-lock session.
-//
-// Defense: the persistence transaction (step 3) calls GetByUsernameForUpdate
-// AGAIN as its first operation. This re-acquires the row write lock — any
-// concurrent Lock waiting on it blocks until session.Create commits; any
-// Lock that already committed bumps version + sets Status=Locked, and the
-// re-check rejects the login.
+// Race-defense: Login checks bcrypt against a normal user read first, then
+// performs credential issuance inside one transaction after re-locking the
+// same user row. RBAC mutations also lock the user row before changing roles
+// and revoking credentials, so "read roles → mint JWT → create session" cannot
+// interleave with a role change and leave a live stale-role session.
 //
 // ref: ory/kratos persister_session.go login flow FOR UPDATE pattern
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
@@ -164,31 +157,117 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, err
 	}
 
-	// Step 1: credential check inside a transaction with FOR UPDATE lock.
-	var user *domain.User
-	var minted sessionmint.Result
-	var sessionID string
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		u, err := s.userRepo.GetByUsernameForUpdate(txCtx, input.Username)
-		if err != nil {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
-		}
-		if u.IsLocked() {
-			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
-		}
-		if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(input.Password)); err != nil {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
-		}
-		user = u
-		return nil
-	}); err != nil {
+	// Step 1: ordinary read + bcrypt. This keeps the expensive hash check out
+	// of the user-row lock held during token/session persistence.
+	user, err := s.userRepo.GetByUsername(ctx, input.Username)
+	if err != nil {
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	}
+	if err := rejectInactiveUser(user); err != nil {
+		return dto.TokenPair{}, err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	}
+
+	sessionID := uuid.NewString()
+	pair, roles, err := s.issueLockedSession(ctx, user, sessionID, input.Password)
+	if err != nil {
 		return dto.TokenPair{}, err
 	}
 
-	// Step 2: mint access token (outside the FOR UPDATE tx: crypto ops don't need the lock).
-	sessionID = uuid.NewString()
-	var err error
-	minted, err = sessionmint.MintAccess(ctx, sessionmint.Deps{
+	s.logger.Info("user logged in",
+		slog.String("user_id", pair.UserID),
+		slog.String("session_id", pair.SessionID),
+		slog.Any("roles", roles))
+	return pair, nil
+}
+
+func (s *Service) issueLockedSession(
+	ctx context.Context,
+	snapshot *domain.User,
+	sessionID string,
+	password string,
+) (dto.TokenPair, []string, error) {
+	var pair dto.TokenPair
+	var roles []string
+	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		lockedUser, err := s.lockAndRecheckLoginUser(txCtx, snapshot, password)
+		if err != nil {
+			return err
+		}
+
+		minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
+			Issuer:   s.issuer,
+			RoleRepo: s.roleRepo,
+			Clk:      s.clock,
+		}, sessionmint.Request{
+			UserID:                lockedUser.ID,
+			SessionID:             sessionID,
+			PasswordResetRequired: lockedUser.PasswordResetRequired,
+		})
+		if err != nil {
+			s.logger.Error("session-login: token issuance failed",
+				slog.Any("error", err), slog.String("user_id", lockedUser.ID))
+			return err
+		}
+
+		session, err := domain.NewSession(lockedUser.ID, minted.ExpiresAt, s.clock.Now())
+		if err != nil {
+			return fmt.Errorf("session-login: create session: %w", err)
+		}
+		session.ID = sessionID
+
+		refreshWire, err := s.persistSessionWithRefreshInTx(txCtx, session, lockedUser.ID)
+		if err != nil {
+			return err
+		}
+		pair = dto.TokenPair{
+			AccessToken:           minted.AccessToken,
+			RefreshToken:          refreshWire,
+			ExpiresAt:             minted.ExpiresAt,
+			SessionID:             sessionID,
+			UserID:                lockedUser.ID,
+			PasswordResetRequired: lockedUser.PasswordResetRequired,
+		}
+		roles = minted.Roles
+		return nil
+	})
+	return pair, roles, err
+}
+
+func (s *Service) lockAndRecheckLoginUser(ctx context.Context, snapshot *domain.User, password string) (*domain.User, error) {
+	lockedUser, err := s.userRepo.GetByIDForUpdate(ctx, snapshot.ID)
+	if err != nil {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	}
+	if lockedUser.Username != snapshot.Username {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	}
+	if err := rejectInactiveUser(lockedUser); err != nil {
+		return nil, err
+	}
+	if lockedUser.PasswordHash == snapshot.PasswordHash {
+		return lockedUser, nil
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(lockedUser.PasswordHash), []byte(password)); err != nil {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	}
+	return lockedUser, nil
+}
+
+func rejectInactiveUser(user *domain.User) error {
+	if user.Status == domain.StatusLocked {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
+	}
+	if user.Status != domain.StatusActive {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is not active")
+	}
+	return nil
+}
+
+func (s *Service) issueForUserMint(ctx context.Context, user *domain.User, sessionID string) (sessionmint.Result, error) {
+	return sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
 		Clk:      s.clock,
@@ -197,38 +276,6 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired,
 	})
-	if err != nil {
-		s.logger.Error("session-login: token issuance failed",
-			slog.Any("error", err), slog.String("user_id", user.ID))
-		return dto.TokenPair{}, err
-	}
-
-	// Step 3: persist session + refresh + event under a re-acquired user row
-	// lock. The re-check inside persistSessionWithRefresh closes the P1#1a
-	// window between step 1 commit and session.Create.
-	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
-	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: create session: %w", err)
-	}
-	session.ID = sessionID
-
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID, input.Username)
-	if err != nil {
-		return dto.TokenPair{}, err
-	}
-
-	s.logger.Info("user logged in",
-		slog.String("user_id", user.ID),
-		slog.String("session_id", session.ID),
-		slog.Any("roles", minted.Roles))
-	return dto.TokenPair{
-		AccessToken:           minted.AccessToken,
-		RefreshToken:          refreshWire,
-		ExpiresAt:             minted.ExpiresAt,
-		SessionID:             sessionID,
-		UserID:                user.ID,
-		PasswordResetRequired: user.PasswordResetRequired,
-	}, nil
 }
 
 // persistSessionWithRefresh writes the session, issues the refresh root, and
@@ -239,38 +286,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // Always emits event.session.created.v1 — both Login and IssueForUser paths
 // must record session creation for audit trail (no emitCreated flag: removed
 // per PR-CFG-G1 commit 2).
-func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID, username string) (string, error) {
+func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID string) (string, error) {
 	var refreshWire string
 	do := func(txCtx context.Context) error {
-		if err := s.recheckUserActive(txCtx, username); err != nil {
+		wire, err := s.persistSessionWithRefreshInTx(txCtx, session, userID)
+		if err != nil {
 			return err
 		}
-		if err := s.sessionRepo.Create(txCtx, session); err != nil {
-			return fmt.Errorf("session-login: persist session: %w", err)
-		}
-		wire, _, err := s.refreshStore.Issue(txCtx, session.ID, userID)
-		if err != nil {
-			s.logger.Error("session-login: refresh store issue failed",
-				slog.Any("error", err), slog.String("user_id", userID))
-			// In demo/noop-tx mode, the session was already written without a real
-			// transaction; compensate explicitly. In durable-tx mode, the tx rollback
-			// handles atomicity — no explicit cleanup is needed (and would double-delete).
-			if isNoopTx(s.txRunner) {
-				_ = s.sessionRepo.Delete(context.WithoutCancel(txCtx), session.ID)
-			}
-			return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
-		}
 		refreshWire = wire
-		if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
-			SessionID: session.ID,
-			UserID:    userID,
-		}); err != nil {
-			// Same pattern: explicit cleanup only in noop/demo mode.
-			if isNoopTx(s.txRunner) {
-				s.cleanupIssuedSession(txCtx, session.ID)
-			}
-			return fmt.Errorf("session-login: emit event: %w", err)
-		}
 		return nil
 	}
 	if err := s.txRunner.RunInTx(ctx, do); err != nil {
@@ -279,30 +302,33 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain
 	return refreshWire, nil
 }
 
-// recheckUserActive re-acquires the user row write lock inside the persistence
-// transaction and verifies the user is still active before session creation.
-// This closes the P1#1a race window between the credential-check tx (already
-// committed, FOR UPDATE released) and the persistence tx: an admin Lock that
-// ran in between bumps version and sets Status=Locked — observed here as
-// ErrAuthUserLocked. An admin Lock that hasn't committed yet blocks on FOR
-// UPDATE until our session.Create commits, then sweeps our new session via
-// RevokeByUserID.
-//
-// Empty username signals the IssueForUser path: the user identity has already
-// been validated by the caller (e.g. ChangePassword) inside its own write
-// transaction, so this re-check is unnecessary.
-func (s *Service) recheckUserActive(txCtx context.Context, username string) error {
-	if username == "" {
-		return nil
+func (s *Service) persistSessionWithRefreshInTx(txCtx context.Context, session *domain.Session, userID string) (string, error) {
+	if err := s.sessionRepo.Create(txCtx, session); err != nil {
+		return "", fmt.Errorf("session-login: persist session: %w", err)
 	}
-	u, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
+	wire, _, err := s.refreshStore.Issue(txCtx, session.ID, userID)
 	if err != nil {
-		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+		s.logger.Error("session-login: refresh store issue failed",
+			slog.Any("error", err), slog.String("user_id", userID))
+		// In demo/noop-tx mode, the session was already written without a real
+		// transaction; compensate explicitly. In durable-tx mode, the tx rollback
+		// handles atomicity — no explicit cleanup is needed (and would double-delete).
+		if isNoopTx(s.txRunner) {
+			_ = s.sessionRepo.Delete(context.WithoutCancel(txCtx), session.ID)
+		}
+		return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 	}
-	if u.IsLocked() {
-		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
+	if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
+		SessionID: session.ID,
+		UserID:    userID,
+	}); err != nil {
+		// Same pattern: explicit cleanup only in noop/demo mode.
+		if isNoopTx(s.txRunner) {
+			s.cleanupIssuedSession(txCtx, session.ID)
+		}
+		return "", fmt.Errorf("session-login: emit event: %w", err)
 	}
-	return nil
+	return wire, nil
 }
 
 // isNoopTx reports whether r is a demo/noop TxRunner (implements cell.Nooper and
@@ -349,8 +375,8 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // — every successful call produces a session event with the new session ID.
 // Callers that do not want a session-creation event must avoid this method.
 // Refresh-token rotation (sessionrefresh.Refresh) does NOT call IssueForUser;
-// it reuses the existing session record and updates only AccessToken/ExpiresAt,
-// so refresh flows do not double-emit.
+// it reuses the existing session record and updates only ExpiresAt, so refresh
+// flows do not double-emit.
 //
 // Returns dto.TokenPair (internal/dto, value not pointer) so this method
 // implements the identitymanage.TokenIssuer interface without a cross-slice
@@ -362,15 +388,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	sessionID := uuid.NewString()
-	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
-		Issuer:   s.issuer,
-		RoleRepo: s.roleRepo,
-		Clk:      s.clock,
-	}, sessionmint.Request{
-		UserID:                userID,
-		SessionID:             sessionID,
-		PasswordResetRequired: user.PasswordResetRequired,
-	})
+	minted, err := s.issueForUserMint(ctx, user, sessionID)
 	if err != nil {
 		s.logger.Error("session-login: IssueForUser token issuance failed",
 			slog.Any("error", err), slog.String("user_id", userID))
@@ -378,14 +396,14 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	// Persist the session so sessionvalidate can look it up by sid claim.
-	session, err := domain.NewSession(userID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
+	session, err := domain.NewSession(userID, minted.ExpiresAt, s.clock.Now())
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
 	}
 	session.ID = sessionID
 	// IssueForUser path: user identity already validated by caller (e.g.
-	// ChangePassword); pass empty username to skip the FOR UPDATE re-check.
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID, "")
+	// ChangePassword); persist a fresh session/refresh pair.
+	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}

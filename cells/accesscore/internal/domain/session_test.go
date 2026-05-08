@@ -15,41 +15,30 @@ func TestNewSession(t *testing.T) {
 	future := time.Now().Add(testtime.D1h)
 
 	tests := []struct {
-		name        string
-		userID      string
-		accessToken string
-		expiresAt   time.Time
-		wantErr     bool
-		errMsg      string
+		name      string
+		userID    string
+		expiresAt time.Time
+		wantErr   bool
+		errMsg    string
 	}{
 		{
-			name:        "valid session",
-			userID:      "u-1",
-			accessToken: "at-abc",
-			expiresAt:   future,
-			wantErr:     false,
+			name:      "valid session",
+			userID:    "u-1",
+			expiresAt: future,
+			wantErr:   false,
 		},
 		{
-			name:        "empty userID",
-			userID:      "",
-			accessToken: "at-abc",
-			expiresAt:   future,
-			wantErr:     true,
-			errMsg:      "userID",
-		},
-		{
-			name:        "empty accessToken",
-			userID:      "u-1",
-			accessToken: "",
-			expiresAt:   future,
-			wantErr:     true,
-			errMsg:      "accessToken",
+			name:      "empty userID",
+			userID:    "",
+			expiresAt: future,
+			wantErr:   true,
+			errMsg:    "userID",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := NewSession(tt.userID, tt.accessToken, tt.expiresAt, time.Now())
+			session, err := NewSession(tt.userID, tt.expiresAt, time.Now())
 			if tt.wantErr {
 				require.Error(t, err)
 				// Lock the errcode classification — survives helper message
@@ -73,7 +62,6 @@ func TestNewSession(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.userID, session.UserID)
-			assert.Equal(t, tt.accessToken, session.AccessToken)
 			assert.Equal(t, tt.expiresAt, session.ExpiresAt)
 			assert.Nil(t, session.RevokedAt)
 			assert.False(t, session.CreatedAt.IsZero())
@@ -109,7 +97,7 @@ func TestSession_Revoke(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := NewSession("u-1", "at", time.Now().Add(time.Hour), time.Now())
+			session, err := NewSession("u-1", time.Now().Add(time.Hour), time.Now())
 			require.NoError(t, err)
 
 			tt.action(session)
@@ -139,7 +127,7 @@ func TestSession_IsExpired(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := NewSession("u-1", "at", tt.expiresAt, time.Now())
+			session, err := NewSession("u-1", tt.expiresAt, time.Now())
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantExpired, session.IsExpired(time.Now()))

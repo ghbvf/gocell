@@ -34,7 +34,8 @@ type ResponseData struct {
 	// format: date-time
 	CreatedAt string `json:"createdAt"`
 	// format: date-time
-	UpdatedAt string `json:"updatedAt"`
+	UpdatedAt             string `json:"updatedAt"`
+	PasswordResetRequired bool   `json:"passwordResetRequired"`
 }
 
 // GetResponseObject is the typed response envelope for

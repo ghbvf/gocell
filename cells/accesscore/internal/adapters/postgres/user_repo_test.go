@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,4 +27,16 @@ func TestNewPGUserRepository_HappyPath(t *testing.T) {
 	repo, err := NewPGUserRepository(dummyPool())
 	require.NoError(t, err)
 	assert.NotNil(t, repo)
+}
+
+func TestPGUserRepository_ForUpdateRequiresAmbientTx(t *testing.T) {
+	repo, err := NewPGUserRepository(dummyPool())
+	require.NoError(t, err)
+
+	_, err = repo.GetByIDForUpdate(context.Background(), "usr-1")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrInternal, ec.Code)
+	assert.Contains(t, err.Error(), "FOR UPDATE query requires ambient transaction")
 }

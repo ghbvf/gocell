@@ -403,17 +403,33 @@ func TestRoleRepository_Create(t *testing.T) {
 	assert.Len(t, got.Permissions, 1)
 }
 
-func TestRoleRepository_Create_Idempotent(t *testing.T) {
+func TestRoleRepository_Create_DuplicateReturnsRoleDuplicate(t *testing.T) {
 	repo := NewRoleRepository()
 	ctx := context.Background()
 
 	role := &domain.Role{ID: "admin", Name: "admin"}
 	require.NoError(t, repo.Create(ctx, role))
-	require.NoError(t, repo.Create(ctx, role)) // second call is no-op
+	err := repo.Create(ctx, role)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRoleDuplicate, ec.Code)
 
 	got, err := repo.GetByID(ctx, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, "admin", got.ID)
+}
+
+func TestRoleRepository_Create_DuplicateNameReturnsRoleDuplicate(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+
+	require.NoError(t, repo.Create(ctx, &domain.Role{ID: "role-1", Name: "admin"}))
+	err := repo.Create(ctx, &domain.Role{ID: "role-2", Name: "admin"})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRoleDuplicate, ec.Code)
 }
 
 func TestRoleRepository_CountByRole(t *testing.T) {

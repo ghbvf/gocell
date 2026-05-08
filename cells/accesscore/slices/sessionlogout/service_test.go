@@ -95,7 +95,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 }
 
 func seedSession(repo ports.SessionRepository, id, userID string) {
-	sess, _ := domain.NewSession(userID, "at-"+id, time.Now().Add(time.Hour), time.Now())
+	sess, _ := domain.NewSession(userID, time.Now().Add(time.Hour), time.Now())
 	sess.ID = id
 	_ = repo.Create(context.Background(), sess)
 }

@@ -147,9 +147,10 @@ spec:
 
 部署语义：`UserRepository` 提供 mem / PG 两种实现 — 单 pod 测试 / 开发用 mem，
 多 pod 生产用 PG（`adapters/postgres` + 017/022 migration）。多 pod 幂等已落地：
-PG schema 强制 username/email UNIQUE + role_assignments single-admin 部分
-UNIQUE，并发 setup/admin 由 race-loser → 410 折叠（savepoint +
-`TestSetupOrphan_PGE2E_RaceLoser_Returns410` 集成测试覆盖）。
+PG schema 强制 username/email UNIQUE；first-run provisioning 在 PG 事务内使用
+advisory lock 串行化检查/创建/赋权，mem 实现使用进程内 mutex。产品语义是
+**至少保留一个 admin**，不是 single-admin：系统允许多个 admin，但并发 setup/admin
+只有一个请求会创建首个 admin，其余 race-loser 折叠为 410。
 
 ---
 
@@ -200,11 +201,12 @@ curl -s -X POST "http://localhost:8080/api/v1/access/users/${USER_ID}/password" 
 UPDATE users
 SET password_hash = '$2a$12$<your-bcrypt-hash-here>',
     password_reset_required = true,
-    updated_at = NOW()
+    updated_at = NOW(),
+    version = version + 1
 WHERE username = 'admin';
 
 -- 3. 验证更新成功
-SELECT id, username, password_reset_required, updated_at FROM users WHERE username = 'admin';
+SELECT id, username, password_reset_required, version, updated_at FROM users WHERE username = 'admin';
 ```
 
 重置后：

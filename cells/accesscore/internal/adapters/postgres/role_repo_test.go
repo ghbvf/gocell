@@ -53,6 +53,18 @@ func TestNewPGRoleRepository_HappyPath(t *testing.T) {
 	assert.NotNil(t, repo)
 }
 
+func TestPGRoleRepository_LockAdminProvisionRequiresAmbientTx(t *testing.T) {
+	repo, err := NewPGRoleRepository(dummyPool(), clock.Real())
+	require.NoError(t, err)
+
+	err = repo.LockAdminProvision(context.Background())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrInternal, ec.Code)
+	assert.Contains(t, err.Error(), "requires ambient transaction")
+}
+
 // ---------------------------------------------------------------------------
 // permissionsToJSON / permissionsFromJSON round-trip
 // ---------------------------------------------------------------------------
@@ -165,9 +177,9 @@ func TestMapAssignError_NonPgxError(t *testing.T) {
 }
 
 // TestMapAssignError_UnknownPgUniqueConstraint covers the 23505 default
-// branch when the violated constraint is not the single-admin partial idx.
-// (PK collision is absorbed by ON CONFLICT DO NOTHING upstream and never
-// reaches mapAssignError; here we exercise the "unknown constraint" fallback.)
+// branch for unexpected assignment unique constraints. PK collision is absorbed
+// by ON CONFLICT DO NOTHING upstream and never reaches mapAssignError; here we
+// exercise the "unknown constraint" fallback.
 func TestMapAssignError_UnknownPgUniqueConstraint(t *testing.T) {
 	r, err := NewPGRoleRepository(dummyPool(), clock.Real())
 	require.NoError(t, err)

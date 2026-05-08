@@ -8,13 +8,13 @@
 --   userID -> set of roleIDs, with assigned_at for audit.
 -- PK (user_id, role_id) enforces the set semantics (no duplicate assignments).
 --
--- Partial UNIQUE index on role_assignments (role_id) WHERE role_id = 'admin'
--- enforces single-admin invariant at the DB layer across multi-pod POST races:
--- first INSERT wins, concurrent INSERT on same role_id='admin' gets a
--- unique_violation (23505) mapped to ErrAuthRoleDuplicate / 409.
+-- GoCell's admin invariant is "at least one admin must remain", not
+-- "exactly/singly one admin". Multiple admin holders are allowed; revoking the
+-- final admin is blocked by RoleRepository.RemoveFromUserIfNotLast with a
+-- transaction-scoped advisory lock.
 --
 -- ref: B3 ACCESSCORE-PG-USERS-MIGRATION-01
--- ref: PostgreSQL partial indexes (docs/indexes-partial.html)
+-- ref: PostgreSQL advisory locks (docs/functions-admin.html)
 -- ref: jackc/pgx v5 pgconn PgError 23505 unique_violation
 -- ref: cells/accesscore/internal/mem/role_repo.go (RoleRepository.userRoles map)
 
@@ -36,9 +36,6 @@ CREATE TABLE role_assignments (
     PRIMARY KEY (user_id, role_id)
 );
 
-CREATE UNIQUE INDEX idx_role_assignments_single_admin
-    ON role_assignments (role_id) WHERE role_id = 'admin';
-
 -- P2#8: PK is (user_id, role_id), so by-user lookups (ListByUserID) hit the
 -- prefix. CountByRole / RemoveFromUserIfNotLast filter by role_id alone, which
 -- has no PK prefix to leverage and degrades to a sequential scan once the
@@ -48,8 +45,9 @@ CREATE INDEX idx_role_assignments_role_id ON role_assignments (role_id);
 
 -- +goose Down
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 DROP INDEX  IF EXISTS idx_role_assignments_role_id;
-DROP INDEX  IF EXISTS idx_role_assignments_single_admin;
 DROP TABLE  IF EXISTS role_assignments;
 DROP TABLE  IF EXISTS roles;
 -- +goose StatementEnd

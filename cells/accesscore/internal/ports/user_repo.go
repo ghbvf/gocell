@@ -32,6 +32,11 @@ type UserPatch struct {
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByID(ctx context.Context, id string) (*domain.User, error)
+	// GetByIDForUpdate is the row-locking variant used by flows that must
+	// serialize against credential issuance by user id. PG implementation uses
+	// SELECT ... FOR UPDATE; mem implementation acquires the write mutex. Must
+	// be called inside an active TxRunner.RunInTx.
+	GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error)
 	GetByUsername(ctx context.Context, username string) (*domain.User, error)
 	// GetByUsernameForUpdate is the row-locking variant used by login flows.
 	// PG implementation uses SELECT … FOR UPDATE; mem implementation acquires

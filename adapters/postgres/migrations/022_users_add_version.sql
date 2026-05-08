@@ -19,9 +19,9 @@
 -- Sessions already carry the equivalent column (see 018_sessions.sql), so
 -- after this migration both writable accesscore aggregates use the same
 -- pattern. Roles are immutable (id+name set once at insert; permissions are
--- the only mutable column and are guarded by single-admin partial UNIQUE +
--- pg_advisory_xact_lock per role on revoke), so they don't need a version
--- column.
+-- the only mutable column). Role assignments are protected by PK set semantics,
+-- and admin revoke uses pg_advisory_xact_lock per role to guarantee at least
+-- one admin remains, so roles don't need a version column.
 --
 -- ref: kubernetes apimachinery pkg/api/meta resourceVersion
 -- ref: ory/kratos optimistic-lock pattern (UPDATE … WHERE version = $n)
@@ -40,6 +40,8 @@ ALTER TABLE users
 
 -- +goose Down
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE users
     DROP COLUMN IF EXISTS version;
 -- +goose StatementEnd

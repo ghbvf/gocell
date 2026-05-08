@@ -103,15 +103,14 @@ func newCrossStoreFixture(t *testing.T) *crossStoreFixture {
 }
 
 // newCrossStoreTestSession builds a domain.Session suitable for cross-store tests.
-func newCrossStoreTestSession(sessionID, userID, accessToken string) *domain.Session {
+func newCrossStoreTestSession(sessionID, userID string) *domain.Session {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return &domain.Session{
-		ID:          sessionID,
-		UserID:      userID,
-		AccessToken: accessToken,
-		ExpiresAt:   now.Add(time.Hour),
-		CreatedAt:   now,
-		Version:     1,
+		ID:        sessionID,
+		UserID:    userID,
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+		Version:   1,
 	}
 }
 
@@ -125,7 +124,7 @@ func TestCrossStore_SessionAndRefresh_BothCommit(t *testing.T) {
 	sessionID := "sess-commit-" + uuid.NewString()[:8]
 	userID := seedUser(t, ctx, fx.userRepo)
 
-	s := newCrossStoreTestSession(sessionID, userID, "tok-commit-"+uuid.NewString())
+	s := newCrossStoreTestSession(sessionID, userID)
 
 	var capturedWire string
 	err := fx.txm.RunInTx(ctx, func(txCtx context.Context) error {
@@ -162,7 +161,7 @@ func TestCrossStore_SessionAndRefresh_BothRollback(t *testing.T) {
 	sessionID := "sess-rb-" + uuid.NewString()[:8]
 	userID := seedUser(t, ctx, fx.userRepo)
 
-	s := newCrossStoreTestSession(sessionID, userID, "tok-rb-"+uuid.NewString())
+	s := newCrossStoreTestSession(sessionID, userID)
 
 	var capturedWire string
 	err := fx.txm.RunInTx(ctx, func(txCtx context.Context) error {
@@ -203,10 +202,8 @@ func TestCrossStore_RotateFails_SessionUpdateRollback(t *testing.T) {
 
 	sessionID := "sess-rotfail-" + uuid.NewString()[:8]
 	userID := seedUser(t, ctx, fx.userRepo)
-	originalToken := "tok-rotfail-" + uuid.NewString()
-
 	// Set up: create session and issue refresh token outside the outer TX.
-	s := newCrossStoreTestSession(sessionID, userID, originalToken)
+	s := newCrossStoreTestSession(sessionID, userID)
 	require.NoError(t, fx.sessionRepo.Create(ctx, s))
 
 	originalWire, _, err := fx.refreshStore.Issue(ctx, sessionID, userID)
@@ -215,11 +212,11 @@ func TestCrossStore_RotateFails_SessionUpdateRollback(t *testing.T) {
 	// Capture version before the TX.
 	originalVersion := s.Version // = 1
 
-	newToken := "tok-rotfail-updated-" + uuid.NewString()
+	updatedExpiresAt := s.ExpiresAt.Add(time.Hour)
 
 	// Run a TX: update session, rotate — inject error to trigger rollback.
 	updSession := *s
-	updSession.AccessToken = newToken
+	updSession.ExpiresAt = updatedExpiresAt
 	// Version matches the current DB value (1).
 	updSession.Version = originalVersion
 
@@ -236,11 +233,11 @@ func TestCrossStore_RotateFails_SessionUpdateRollback(t *testing.T) {
 	})
 	require.ErrorIs(t, err, errInjectedSessionRollback)
 
-	// Session.AccessToken must be the original value (Update rolled back).
+	// Session.ExpiresAt must be the original value (Update rolled back).
 	got, err := fx.sessionRepo.GetByID(ctx, sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, originalToken, got.AccessToken,
-		"session.AccessToken must remain unchanged after rollback of Update")
+	assert.True(t, s.ExpiresAt.Equal(got.ExpiresAt),
+		"session.ExpiresAt must remain unchanged after rollback of Update")
 	assert.Equal(t, originalVersion, got.Version,
 		"session.Version must remain %d after rollback of Update", originalVersion)
 

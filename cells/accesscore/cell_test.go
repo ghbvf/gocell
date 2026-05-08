@@ -680,7 +680,7 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// Role "admin" is not seeded in newTestCell(t) → domain-level 404 (role not found).
+	// User "usr-1" is not seeded in newTestCell(t) → domain-level 404 (user not found).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
@@ -692,7 +692,7 @@ func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 		"response should be JSON (handler reached, not router 404)")
-	assert.Contains(t, rec.Body.String(), "ERR_AUTH_ROLE_NOT_FOUND")
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_USER_NOT_FOUND")
 }
 
 func TestAccessCore_RouteRoleAssign_NoAuth_Returns401(t *testing.T) {
@@ -724,7 +724,7 @@ func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
 func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// Revoking a role that the user does not hold is an idempotent no-op → 200.
+	// User "usr-1" is not seeded in newTestCell(t) → domain-level 404 (user not found).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
@@ -733,9 +733,10 @@ func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 		"response should be JSON (handler reached, not router 404)")
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_USER_NOT_FOUND")
 }
 
 func TestAccessCore_RouteRoleRevoke_NoAuth_Returns401(t *testing.T) {

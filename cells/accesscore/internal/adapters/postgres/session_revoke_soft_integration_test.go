@@ -20,12 +20,11 @@ import (
 func newTestSessionForUser(userID string) *domain.Session {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return &domain.Session{
-		ID:          uuid.NewString(),
-		UserID:      userID,
-		AccessToken: "tok-" + uuid.NewString(),
-		ExpiresAt:   now.Add(time.Hour),
-		CreatedAt:   now,
-		Version:     1,
+		ID:        uuid.NewString(),
+		UserID:    userID,
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+		Version:   1,
 	}
 }
 
@@ -148,7 +147,7 @@ func TestRevokeThenStaleVersionUpdate_DoesNotResurrect(t *testing.T) {
 	// Caller B attempts to Update with the stale snapshot. The stale
 	// snapshot still has version=1 and revoked_at=nil — naive Update would
 	// SET revoked_at=nil, version=2 and resurrect the session.
-	stale.AccessToken = "attacker-resurrected-token-" + uuid.NewString()
+	stale.ExpiresAt = stale.ExpiresAt.Add(time.Hour)
 	updErr := sessionRepo.Update(ctx, &stale)
 	require.Error(t, updErr,
 		"P1#1c: stale-version Update after revoke MUST fail to prevent resurrection")
@@ -157,17 +156,17 @@ func TestRevokeThenStaleVersionUpdate_DoesNotResurrect(t *testing.T) {
 	assert.Equal(t, errcode.ErrSessionConflict, ec.Code,
 		"stale-version Update after revoke must surface as ErrSessionConflict")
 
-	// Direct DB check: the session row is still revoked, access_token unchanged.
+	// Direct DB check: the session row is still revoked, expires_at unchanged.
 	var revokedAt *time.Time
-	var dbToken string
+	var dbExpiresAt time.Time
 	err := rawPool.QueryRow(ctx,
-		"SELECT revoked_at, access_token FROM sessions WHERE id = $1", s.ID,
-	).Scan(&revokedAt, &dbToken)
+		"SELECT revoked_at, expires_at FROM sessions WHERE id = $1", s.ID,
+	).Scan(&revokedAt, &dbExpiresAt)
 	require.NoError(t, err)
 	assert.NotNil(t, revokedAt, "revoked_at must remain non-null after stale-Update attempt")
-	assert.NotEqual(t, stale.AccessToken, dbToken,
-		"stale Update must not have rewritten access_token")
-	assert.Equal(t, s.AccessToken, dbToken, "access_token must be the original")
+	assert.False(t, stale.ExpiresAt.Equal(dbExpiresAt),
+		"stale Update must not have rewritten expires_at")
+	assert.True(t, s.ExpiresAt.Equal(dbExpiresAt), "expires_at must be the original")
 
 	// GetByID still filters revoked sessions.
 	_, getErr := sessionRepo.GetByID(ctx, s.ID)

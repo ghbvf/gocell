@@ -110,6 +110,7 @@
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 | **B5 follow-up PG runtime wiring + archtest 类型化** — 现状: corebundle 仍走 `WithInMemoryDefaults`；修复: B2 落 PG SessionRepository 后切真实 PG + archtest 升 packages-aware | refactor+test | P1+P2/Cx2+Cx3 | 🟠 | B2 落地 PG SessionRepository | `cmd/corebundle/access_module.go` + `cells/accesscore/cell_init.go` + `tools/archtest/` | PR#399 review L2 |
+| ACCESSCORE-CREDENTIAL-RBAC-CONSISTENCY-FRAMEWORK-01 | **凭据/RBAC 一致性框架评估** — 现状: PR#417 采用窄 helper + user row lock + repo/advisory lock 承载当前不变量；修复方向: 未来若新增第 3 类凭据或第 3 条角色变更路径，再评估是否抽 credential/RBAC consistency framework；明确不在 #417 实现 | arch-opt | P3/Cx3 | 🟡 | 凭据/RBAC 失效路径继续扩张 | `cells/accesscore/internal/` + `runtime/auth/refresh/` | PR#417 design backlog |
 | ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 | **ACCOUNT-LOCKOUT-AUTO-LOCK-01** — 现状: sessionlogin 无失败次数累计 + 阈值 + auto-lock；修复: 完整业务设计 + PG schema + journey harness | feat | Cx3 | 🔴 | — | `cells/accesscore/slices/sessionlogin/` + user repo + integration test | PR-A63 复核 |
 | CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 | **identitymanage 一致性等级误标** — 现状: 标 L0 实为 L1；修复: 校正 slice.yaml | arch-opt | Cx1 | 🔴 | — | `cells/accesscore/slices/identitymanage/slice.yaml` | systems layer review |
 | OIDC-FAIL-FAST-DISCOVERY-01 | **OIDC discovery fail-fast** — 现状: discovery 错误不 fail-closed；修复: 引入 OIDC 时落地 | bug | Cx2 | 🟠 | 首个 prod OIDC 部署 | `adapters/oidc/` | systems layer review |
@@ -196,7 +197,7 @@
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| ACCESSCORE-PG-USERS-MIGRATION-01 | **AccessCore PG repository + migration** — 现状: 仅内存；修复: users/roles/role_assignments 表 + UNIQUE on admin role | feat | P1/— | 🔴 | — | `adapters/postgres/accesscore/` | PR #392 v2 review |
+| ACCESSCORE-PG-USERS-MIGRATION-01 | **AccessCore PG repository + migration** — 现状: 仅内存；修复: users/roles/role_assignments/sessions 表 + username/email UNIQUE + 至少保留一个 admin 的撤销保护 | feat | P1/— | 🔴 | — | `adapters/postgres/accesscore/` | PR #392 v2 review |
 | A26-R4 | **SETUP-ORPHAN-E2E-01** — 现状: orphan recovery 仅单元测；修复: PG adapter 落地后真 DB e2e | test | Cx2 | 🟠 | PG adapter for accesscore | `cmd/corebundle/setup_integration_test.go` | PR#247 round-2 N-06 |
 | PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | **TEST-RACE-COVERAGE-ADAPTERS-INTEGRATION-01** — 现状: PG concurrent Up CI 不带 -race；修复: test-race.yml 加 adapters/postgres 路径（评估） | test | P2/Cx3 | 🟡 | — | `.github/workflows/test-race.yml` | PR-V1-PG-STARTUP-HARDEN F5 |
 | X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE/SEED-ROLE-IFACE/AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |

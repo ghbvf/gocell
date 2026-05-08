@@ -56,7 +56,11 @@ func (r *trackingSessionRepo) RevokeByUserID(ctx context.Context, userID string)
 }
 
 // newDurableTestService creates a Service with emitter + txRunner injected (durable mode).
-func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *mem.RoleRepository, *trackingSessionRepo) {
+func newDurableTestService(
+	t testing.TB,
+	ow *stubOutboxWriter,
+	tx *stubTxRunner,
+) (*Service, *mem.RoleRepository, *trackingSessionRepo, *trackingRefreshStore) {
 	t.Helper()
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{
@@ -67,21 +71,22 @@ func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner)
 		},
 	})
 	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	svc := mustNewService(t, roleRepo, sessionRepo, slog.Default(),
+	refreshStore := &trackingRefreshStore{}
+	svc := mustNewService(t, roleRepo, sessionRepo, refreshStore, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(tx),
 	)
-	return svc, roleRepo, sessionRepo
+	return svc, roleRepo, sessionRepo, refreshStore
 }
 
 // TestService_Assign_Durable_WritesOutboxAtomically asserts that Assign in durable
 // mode writes exactly one outbox entry with the correct EventType and payload, runs
-// the operation inside a transaction, and does NOT call sessionRepo.RevokeByUserID
-// (consumer handles that asynchronously).
+// the operation inside a transaction, and revokes credentials before emitting the
+// event. The consumer remains a replay/compensation path.
 func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, _, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, _, sessionRepo, refreshStore := newDurableTestService(t, ow, tx)
 
 	err := svc.Assign(context.Background(), "alice", "admin")
 	require.NoError(t, err)
@@ -100,16 +105,17 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 	// Transaction invoked exactly once.
 	assert.Equal(t, 1, tx.calls)
 
-	// sessionRepo.RevokeByUserID must NOT be called in durable mode — consumer takes over.
-	assert.Equal(t, 0, sessionRepo.revokeCalls,
-		"durable mode: sessionRepo.RevokeByUserID must not be called by rbacassign (consumer handles it)")
+	assert.Equal(t, 1, sessionRepo.revokeCalls,
+		"durable mode: rbacassign must revoke sessions before emitting role-change event")
+	assert.Equal(t, 1, refreshStore.revokeUserCalls,
+		"durable mode: rbacassign must revoke refresh chains before emitting role-change event")
 }
 
 // TestService_Revoke_Durable_WritesOutboxAtomically is the symmetrical test for Revoke.
 func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, roleRepo, sessionRepo, refreshStore := newDurableTestService(t, ow, tx)
 
 	// Need two admins so last-admin guard passes.
 	_, _ = roleRepo.AssignToUser(context.Background(), "alice", "admin")
@@ -129,8 +135,10 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 
 	assert.Equal(t, 1, tx.calls)
 
-	assert.Equal(t, 0, sessionRepo.revokeCalls,
-		"durable mode: sessionRepo.RevokeByUserID must not be called by rbacassign (consumer handles it)")
+	assert.Equal(t, 1, sessionRepo.revokeCalls,
+		"durable mode: rbacassign must revoke sessions before emitting role-change event")
+	assert.Equal(t, 1, refreshStore.revokeUserCalls,
+		"durable mode: rbacassign must revoke refresh chains before emitting role-change event")
 }
 
 // TestService_Durable_OutboxWriteFailure_PropagatesError asserts that when the outbox
@@ -142,7 +150,7 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	outboxErr := errors.New("outbox write failed")
 	ow := &stubOutboxWriter{err: outboxErr}
 	tx := &stubTxRunner{}
-	svc, _, _ := newDurableTestService(t, ow, tx)
+	svc, _, _, _ := newDurableTestService(t, ow, tx)
 
 	err := svc.Assign(context.Background(), "alice", "admin")
 	require.Error(t, err, "Assign must return error when outbox write fails")
@@ -152,12 +160,13 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	assert.Empty(t, ow.entries)
 }
 
-// TestService_Durable_DoesNotCallSessionRepoDirectly asserts that in durable mode
-// sessionRepo.RevokeByUserID is never called by Assign or Revoke (counter must remain 0).
-func TestService_Durable_DoesNotCallSessionRepoDirectly(t *testing.T) {
+// TestService_Durable_InvalidatesCredentialsDirectly asserts that in durable
+// mode Assign and Revoke both invalidate credentials in the same transaction
+// before publishing the role-change event.
+func TestService_Durable_InvalidatesCredentialsDirectly(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, roleRepo, sessionRepo, refreshStore := newDurableTestService(t, ow, tx)
 
 	// Assign.
 	require.NoError(t, svc.Assign(context.Background(), "u1", "admin"))
@@ -166,8 +175,10 @@ func TestService_Durable_DoesNotCallSessionRepoDirectly(t *testing.T) {
 	_, _ = roleRepo.AssignToUser(context.Background(), "u2", "admin")
 	require.NoError(t, svc.Revoke(context.Background(), "u1", "admin"))
 
-	assert.Equal(t, 0, sessionRepo.revokeCalls,
-		"durable mode: sessionRepo.RevokeByUserID must never be called directly")
+	assert.Equal(t, 2, sessionRepo.revokeCalls,
+		"durable mode: Assign and Revoke must each revoke sessions directly")
+	assert.Equal(t, 2, refreshStore.revokeUserCalls,
+		"durable mode: Assign and Revoke must each revoke refresh chains directly")
 }
 
 // TestService_Assign_Durable_RepeatIsNoop asserts that re-assigning a role the
@@ -177,15 +188,17 @@ func TestService_Durable_DoesNotCallSessionRepoDirectly(t *testing.T) {
 func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, _, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, _, sessionRepo, refreshStore := newDurableTestService(t, ow, tx)
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
 	require.Len(t, ow.entries, 1, "first assign must publish exactly one event")
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
 	assert.Len(t, ow.entries, 1, "repeat assign must not publish a second event")
-	assert.Equal(t, 0, sessionRepo.revokeCalls,
-		"durable mode repeat assign must not call session revoke either")
+	assert.Equal(t, 1, sessionRepo.revokeCalls,
+		"durable mode repeat assign must not trigger a second session revoke")
+	assert.Equal(t, 1, refreshStore.revokeUserCalls,
+		"durable mode repeat assign must not trigger a second refresh revoke")
 }
 
 // TestService_Revoke_Durable_NonMemberIsNoop asserts that revoking a role the
@@ -196,7 +209,7 @@ func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
 func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, roleRepo, sessionRepo, refreshStore := newDurableTestService(t, ow, tx)
 
 	// Seed two other holders so the last-admin guard does not short-circuit.
 	_, _ = roleRepo.AssignToUser(context.Background(), "bob", "admin")
@@ -206,6 +219,8 @@ func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 	assert.Empty(t, ow.entries, "revoke of non-member must not publish any event")
 	assert.Equal(t, 0, sessionRepo.revokeCalls,
 		"durable mode revoke of non-member must not call session revoke")
+	assert.Equal(t, 0, refreshStore.revokeUserCalls,
+		"durable mode revoke of non-member must not call refresh revoke")
 }
 
 // TestService_Assign_Demo_RepeatIsNoop mirrors the durable no-op test for
@@ -220,7 +235,7 @@ func TestService_Assign_Demo_RepeatIsNoop(t *testing.T) {
 		},
 	})
 	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	svc := mustNewService(t, roleRepo, sessionRepo, slog.Default())
+	svc := mustNewService(t, roleRepo, sessionRepo, &trackingRefreshStore{}, slog.Default())
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
 	assert.Equal(t, 1, sessionRepo.revokeCalls, "first assign must revoke sessions once")

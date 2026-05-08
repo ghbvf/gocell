@@ -291,8 +291,9 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 //  1. Seed admin role + two users (bob with session, admin with a second admin role holder).
 //  2. Revoke bob's "member" role via rbacassign.Service in durable mode
 //     (stubOutboxWriter wrapped as an emitter, plus stubTxRunner).
-//  3. Deliver the outbox entry synchronously to the sessionlogout consumer.
-//  4. Assert that bob's session is now revoked.
+//  3. Confirm rbacassign revoked bob's credentials in-band.
+//  4. Deliver the outbox entry synchronously to the sessionlogout consumer and
+//     confirm replay is idempotent.
 //
 // This is a slice-layer integration test (not HTTP) because the HTTP round-trip adds
 // noise without testing the outbox→consumer wiring. The test runs the full service
@@ -300,13 +301,28 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 //
 // NOTE: The EventRouter / ConsumerBase dispatch path is tested by the kernel/outbox
 // and runtime/eventbus packages. Here we test the application-layer contract: that
-// rbacassign produces the right outbox entry and the consumer handles it correctly.
+// rbacassign performs primary credential invalidation, produces the right
+// outbox entry, and the consumer handles replay correctly.
 func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	ctx := context.Background()
 
 	// Shared repos (simulates cell's single repo wiring).
+	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
+	intClock := storetest.NewFakeClock(time.Now())
+	refreshStore, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, intClock, nil)
+	require.NoError(t, err)
+
+	bob, err := domain.NewUser("bob", "bob@gocell.local", seedAdminPasswordHash(), time.Now())
+	require.NoError(t, err)
+	bob.ID = "usr-bob"
+	require.NoError(t, userRepo.Create(ctx, bob))
 
 	// Seed "member" role.
 	roleRepo.SeedRole(&domain.Role{ID: "member", Name: "member"})
@@ -324,18 +340,35 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	// Wire rbacassign with outbox stubs (durable mode).
 	stubWriter := &rbacStubOutboxWriter{}
 	stubTx := &rbacStubTxRunner{}
-	assignSvc, err := rbacassign.NewService(roleRepo, sessionRepo, slog.Default(),
+	assignSvc, err := rbacassign.NewService(userRepo, roleRepo, sessionRepo, refreshStore, slog.Default(),
 		rbacassign.WithEmitter(testoutbox.MustEmitter(t, stubWriter)),
 		rbacassign.WithTxManager(stubTx),
 	)
 	require.NoError(t, err)
 
 	// Wire the sessionlogout consumer.
-	consumer := sessionlogout.NewConsumer(sessionRepo, slog.Default())
+	consumer := sessionlogout.NewConsumer(sessionRepo, refreshStore, slog.Default())
 
 	// Revoke bob's member role — should produce one outbox entry.
 	require.NoError(t, assignSvc.Revoke(ctx, "usr-bob", "member"))
 	require.Len(t, stubWriter.entries, 1, "Revoke must produce exactly one outbox entry")
+
+	assertSessionRevoked := func(reason string) {
+		t.Helper()
+		_, getErr := sessionRepo.GetByID(ctx, "sess-bob")
+		require.Error(t, getErr, reason)
+		var ec *errcode.Error
+		require.ErrorAs(t, getErr, &ec)
+		assert.Equal(t, errcode.ErrSessionNotFound, ec.Code,
+			"session must be invisible (revoked) after role-revoke")
+	}
+
+	// Bob's session must already be revoked by rbacassign. Soft-revoke
+	// semantics (W2-W5): GetByID filters out revoked rows, so the row is
+	// invisible — we assert the not-found surface as the post-revoke contract
+	// instead of probing the row's RevokedAt directly. mem.SessionRepository now
+	// mirrors PG.
+	assertSessionRevoked("GetByID after primary revoke must return ErrSessionNotFound")
 
 	// Deliver the outbox entry synchronously to the consumer (simulates relay dispatch).
 	res := consumer.HandleRoleChanged(ctx, stubWriter.entries[0])
@@ -343,16 +376,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 		"role-revoke event must be Acked; got %v err=%v", res.Disposition, res.Err)
 	assert.NoError(t, res.Err, "role-revoke Ack must carry nil Err")
 
-	// Bob's session must now be revoked. Soft-revoke semantics (W2-W5):
-	// GetByID filters out revoked rows, so the row is invisible — we assert
-	// the not-found surface as the post-revoke contract instead of probing
-	// the row's RevokedAt directly. mem.SessionRepository now mirrors PG.
-	_, getErr := sessionRepo.GetByID(ctx, "sess-bob")
-	require.Error(t, getErr, "GetByID after revoke must return ErrSessionNotFound (soft-revoke filter)")
-	var ec *errcode.Error
-	require.ErrorAs(t, getErr, &ec)
-	assert.Equal(t, errcode.ErrSessionNotFound, ec.Code,
-		"session must be invisible (revoked) after role-revoke outbox entry is consumed")
+	assertSessionRevoked("GetByID after outbox replay must remain ErrSessionNotFound")
 }
 
 // TestAuthIntegration_LoginAccessTokenAudienceDrift verifies that audience

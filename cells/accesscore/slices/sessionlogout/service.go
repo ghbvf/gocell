@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialrevoke"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -151,13 +152,7 @@ func (s *Service) LogoutUser(ctx context.Context, userID string) error {
 	}
 
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.sessionRepo.RevokeByUserID(txCtx, userID); err != nil {
-			return fmt.Errorf("session-logout: revoke all: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, userID); err != nil {
-			return fmt.Errorf("session-logout: revoke refresh chains: %w", err)
-		}
-		return nil
+		return credentialrevoke.User(txCtx, s.sessionRepo, s.refreshStore, userID, "session-logout: revoke all")
 	}); err != nil {
 		return err
 	}

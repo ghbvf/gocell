@@ -39,11 +39,21 @@ func (r *RoleRepository) SeedRole(role *domain.Role) {
 	r.roles[role.ID] = &clone
 }
 
-// Create persists a new role. Idempotent: if a role with the same ID already
-// exists, it is silently overwritten (upsert semantics for seed/bootstrap).
+// Create persists a new role. Insert-only: duplicate id or name returns
+// ErrAuthRoleDuplicate, matching the PG repository.
 func (r *RoleRepository) Create(_ context.Context, role *domain.Role) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, exists := r.roles[role.ID]; exists {
+		return errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate, "role already exists",
+			errcode.WithInternal(fmt.Sprintf("role_id=%q", role.ID)))
+	}
+	for _, existing := range r.roles {
+		if existing.Name == role.Name {
+			return errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate, "role name already exists",
+				errcode.WithInternal(fmt.Sprintf("role_name=%q", role.Name)))
+		}
+	}
 	clone := *role
 	clone.Permissions = make([]domain.Permission, len(role.Permissions))
 	copy(clone.Permissions, role.Permissions)

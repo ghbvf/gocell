@@ -276,10 +276,9 @@ jobs:
 
       - name: Discover integration test packages
         id: integration-pkgs
-        # Auto-discover every package that owns at least one test file compiled
-        # under -tags=integration,e2e. This replaces the previous explicit list
-        # which silently dropped newly added integration packages (PR-417 P1#4).
-        # Fail-fast if go list returns nothing (e.g. tag spelling regression).
+        # Auto-discover every package that owns at least one *_test.go file
+        # explicitly tagged with `//go:build integration` or `//go:build e2e`.
+        # Fail-fast if the shared script returns nothing (e.g. tag spelling regression).
         #
         # Excludes the top-level tests/e2e package: its smoke tests
         # (TestE2E_*) require the docker-compose harness in the dedicated `e2e`
@@ -287,10 +286,7 @@ jobs:
         # remains included — those are e2e-tag client helpers that compile
         # but do not own runtime fixtures.
         run: |
-          pkgs=$(go list -tags=integration,e2e -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./... \
-            | grep -v '^$' \
-            | grep -vE '/tests/e2e$' \
-            | xargs)
+          pkgs=$(bash scripts/list-integration-packages.sh . | xargs)
           if [ -z "$pkgs" ]; then echo "no integration test packages discovered" >&2; exit 1; fi
           echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
 
@@ -645,6 +641,8 @@ jobs:
     # counts toward the coverage gate.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
 
       # Downloads all per-shard unit coverage artifacts into the workspace
       # root (merge-multiple: true flattens shard-keyed directories). Each

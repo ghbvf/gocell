@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialrevoke"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -263,6 +264,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	}
 
 	var user *domain.User
+	revokeCredentials := input.RequirePasswordReset != nil && *input.RequirePasswordReset
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		u, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
@@ -274,6 +276,12 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
 		user = updated
+		if revokeCredentials {
+			if err := credentialrevoke.User(txCtx, s.sessionRepo, s.refreshStore, u.ID,
+				"identity-manage: update require password reset"); err != nil {
+				return err
+			}
+		}
 		if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor}); err != nil {
 			return err
 		}
@@ -328,11 +336,8 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	}
 
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
-			return fmt.Errorf("identity-manage: delete revoke sessions: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
-			return fmt.Errorf("identity-manage: delete revoke refresh chains: %w", err)
+		if err := credentialrevoke.User(txCtx, s.sessionRepo, s.refreshStore, id, "identity-manage: delete"); err != nil {
+			return err
 		}
 		if err := s.repo.Delete(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
@@ -399,11 +404,8 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		// the lock flag while leaving stolen access tokens able to call
 		// business endpoints until natural expiry — which is the exact attack
 		// vector "Lock" exists to prevent.
-		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
-			return fmt.Errorf("identity-manage: lock revoke sessions: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
-			return fmt.Errorf("identity-manage: lock revoke refresh chains: %w", err)
+		if err := credentialrevoke.User(txCtx, s.sessionRepo, s.refreshStore, id, "identity-manage: lock"); err != nil {
+			return err
 		}
 		if err := s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor}); err != nil {
 			return err
@@ -556,11 +558,8 @@ func (s *Service) updatePasswordAndRevokeSessions(ctx context.Context, userID st
 		if _, err := s.repo.ApplyPatch(txCtx, patch); err != nil {
 			return fmt.Errorf("identity-manage: change-password update: %w", err)
 		}
-		if err := s.sessionRepo.RevokeByUserID(txCtx, userID); err != nil {
-			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, userID); err != nil {
-			return fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", err)
+		if err := credentialrevoke.User(txCtx, s.sessionRepo, s.refreshStore, userID, "identity-manage: change-password"); err != nil {
+			return err
 		}
 		return nil
 	})

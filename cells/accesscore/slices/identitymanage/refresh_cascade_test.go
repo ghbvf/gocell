@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -141,4 +142,60 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	// F13: the other user's chain must survive the Delete.
 	_, _, err = refreshStore.Rotate(ctx, otherWire)
 	assert.NoError(t, err, "other user's refresh chain must survive Delete(user.ID)")
+}
+
+func TestService_UpdateRequirePasswordReset_RevokesCredentialsOnlyWhenSetTrue(t *testing.T) {
+	ctx := auth.TestContext("test-admin", []string{"admin"})
+	userRepo := mem.NewUserRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
+	refreshStore := newCascadeStore(t)
+
+	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+	require.NoError(t, err)
+
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "grace",
+		Email:    "g@h.i",
+		Password: "pwd",
+	})
+	require.NoError(t, err)
+
+	session := &domain.Session{
+		ID:        "sess-grace",
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+		Version:   1,
+	}
+	require.NoError(t, sessionRepo.Create(ctx, session))
+	wire, _, err := refreshStore.Issue(ctx, session.ID, user.ID)
+	require.NoError(t, err)
+
+	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-update-reset", "other-user-update-reset")
+	require.NoError(t, err)
+
+	flagFalse := false
+	_, err = svc.Update(ctx, UpdateInput{ID: user.ID, RequirePasswordReset: &flagFalse})
+	require.NoError(t, err)
+
+	_, err = sessionRepo.GetByID(ctx, session.ID)
+	require.NoError(t, err, "requirePasswordReset=false must not revoke sessions")
+	_, err = refreshStore.Peek(ctx, wire)
+	require.NoError(t, err, "requirePasswordReset=false must not revoke refresh chains")
+
+	flagTrue := true
+	updated, err := svc.Update(ctx, UpdateInput{ID: user.ID, RequirePasswordReset: &flagTrue})
+	require.NoError(t, err)
+	assert.True(t, updated.PasswordResetRequired)
+
+	_, err = sessionRepo.GetByID(ctx, session.ID)
+	require.Error(t, err, "requirePasswordReset=true must revoke sessions")
+	_, _, err = refreshStore.Rotate(ctx, wire)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, refresh.ErrRejected),
+		"refresh token after requirePasswordReset=true must be rejected")
+
+	_, _, err = refreshStore.Rotate(ctx, otherWire)
+	assert.NoError(t, err, "other user's refresh chain must survive Update(user.ID)")
 }

@@ -293,10 +293,10 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 }
 
 // TestProvisioner_Ensure_RaceLoser_AssignDuplicate_FoldsToRaceSkipped verifies
-// that when AssignToUser returns ErrAuthRoleDuplicate (DB partial unique index
-// idx_role_assignments_single_admin rejects a concurrent loser), and recount
-// confirms at least one admin exists, Ensure folds to OutcomeRaceSkipped with
-// no error — the setup layer maps this to 410 ERR_SETUP_ALREADY_INITIALIZED.
+// that when AssignToUser returns ErrAuthRoleDuplicate from an infra race path,
+// and recount confirms at least one admin exists, Ensure folds to
+// OutcomeRaceSkipped with no error — the setup layer maps this to 410
+// ERR_SETUP_ALREADY_INITIALIZED.
 func TestProvisioner_Ensure_RaceLoser_AssignDuplicate_FoldsToRaceSkipped(t *testing.T) {
 	t.Parallel()
 	// userRepo: fresh create succeeds (we are past CountByRole fast-path)
@@ -423,6 +423,10 @@ func (r *duplicateUserRepo) GetByID(ctx context.Context, id string) (*domain.Use
 	return nil, errors.New("not expected on race path")
 }
 
+func (r *duplicateUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	return r.GetByID(ctx, id)
+}
+
 func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	u, _ := domain.NewUser(username, username+"@x", "$2a$10$hashold", time.Now())
 	u.ID = "usr-orphan"
@@ -536,9 +540,8 @@ func (r *recountErrRoleRepo) CountByRole(ctx context.Context, roleID string) (in
 }
 
 // assignDuplicateRoleRepo simulates the race-loser scenario where AssignToUser
-// returns ErrAuthRoleDuplicate (DB partial unique index rejects the assignment).
-// CountByRole returns scripted values; if countErr is set it is returned after
-// the scripted counts are exhausted.
+// returns ErrAuthRoleDuplicate. CountByRole returns scripted values; if
+// countErr is set it is returned after the scripted counts are exhausted.
 type assignDuplicateRoleRepo struct {
 	counts    []int
 	i         int
@@ -589,6 +592,10 @@ type errUserRepo struct {
 
 func (r *errUserRepo) Create(ctx context.Context, u *domain.User) error { return r.createErr }
 func (r *errUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	return nil, errors.New("not seeded")
+}
+
+func (r *errUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
 	return nil, errors.New("not seeded")
 }
 

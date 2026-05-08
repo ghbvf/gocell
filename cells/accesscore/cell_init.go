@@ -241,7 +241,7 @@ func (c *AccessCore) initSlices() error {
 	}
 
 	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
-	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
+	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.refreshStore, c.logger)
 
 	// config-receive: subscribes to config state-sync events from configcore.
 	// WithConfigGetter is optional — nil disables the cross-cell GetEntry fetch.
@@ -283,7 +283,7 @@ func (c *AccessCore) initRbacAssign() error {
 	if c.rbacEmitterMode {
 		rbacOpts = append(rbacOpts, rbacassign.WithEmitter(c.emitter))
 	}
-	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger, rbacOpts...)
+	rbacAssignSvc, err := rbacassign.NewService(c.userRepo, c.roleRepo, c.sessionRepo, c.refreshStore, c.logger, rbacOpts...)
 	if err != nil {
 		return err
 	}

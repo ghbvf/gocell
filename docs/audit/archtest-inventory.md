@@ -33,7 +33,7 @@
 | `BOOTSTRAP-PATH-PREDICATE-SOLE-01` | `bootstrap_path_predicate_test.go` | 1 | bootstrap |
 | `BUILD-CONSTRAINT-INTEGRATION-TAG-01` | `build_constraint_test.go` | 1 | build |
 | `BUILTIN-ROLE-ID-NAME-EQ-01` | `builtin_role_invariants_test.go` | 3 | builtin |
-| `BUILTIN-ROLE-ID-NAME-EQ-01` | `builtin_role_invariants_test.go` | 45 | builtin |
+| `BUILTIN-ROLE-ID-NAME-EQ-01` | `builtin_role_invariants_test.go` | 46 | builtin |
 | `CELL-INIT-CONTRACTUSAGE-01` | `cell_init_test.go` | 1 | cell |
 | `CELLMETA-SINGLE-SOURCE-01` | `cellmeta_single_source_test.go` | 1 | cellmeta |
 | `CELLMETA-SINGLE-SOURCE-02` | `cellmeta_single_source_test.go` | 12 | cellmeta |
@@ -77,7 +77,7 @@
 | `HTTPUTIL-5XX-LOG-REDACT-01` | `httputil_invariants_test.go` | 116 | httputil |
 | `HTTPUTIL-SURFACE-REGISTERED-01` | `httputil_invariants_test.go` | 179 | httputil |
 | `IDEMPOTENCY-LUA-HASHTAG-01` | `redis_idempotency_hashtag_test.go` | 3 | idempotency |
-| `INTEGRATION-CI-DISCOVERY-01` | `integration_ci_discovery_test.go` | 15 | integration |
+| `INTEGRATION-CI-DISCOVERY-01` | `integration_ci_discovery_test.go` | 14 | integration |
 | `INTEGRATION-GUARD-01` | `integration_guard_test.go` | 1 | integration |
 | `INTERNAL-CONTRACT-CLIENTS-REQUIRED-01` | `contract_spec_clients_test.go` | 1 | internal |
 | `KERNEL-CLOCK-LEAF-FALLBACK-01` | `clock_invariants_test.go` | 559 | kernel |

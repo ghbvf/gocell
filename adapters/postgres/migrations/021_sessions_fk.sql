@@ -54,6 +54,8 @@ ALTER TABLE sessions
 
 -- +goose Down
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE sessions
     DROP CONSTRAINT IF EXISTS fk_sessions_user;
 -- +goose StatementEnd

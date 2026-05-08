@@ -202,11 +202,10 @@ func TestPGRoleRepository_Integration_AssignToUser_Duplicate_ReturnsChangedFalse
 	assert.False(t, changed2, "second assign of same role must return changed=false")
 }
 
-func TestPGRoleRepository_Integration_AssignToUser_Admin_FirstWins_SecondReturnsRoleDuplicate(t *testing.T) {
+func TestPGRoleRepository_Integration_AssignToUser_Admin_AllowsMultipleAdmins(t *testing.T) {
 	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
-	// Create the admin role with fixed ID "admin" to match the partial index.
 	adminRole := &domain.Role{
 		ID:          "admin",
 		Name:        "admin",
@@ -219,22 +218,20 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_FirstWins_SecondReturns
 	require.NoError(t, err)
 	assert.True(t, changed, "first admin assign must succeed with changed=true")
 
-	// Second user trying to claim admin must hit the partial index constraint.
 	user2 := createTestUser(t, ctx, b.userRepo)
-	_, err = b.roleRepo.AssignToUser(ctx, user2, "admin")
-	require.Error(t, err)
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrAuthRoleDuplicate, ec.Code,
-		"second admin assign must return ErrAuthRoleDuplicate")
+	changed, err = b.roleRepo.AssignToUser(ctx, user2, "admin")
+	require.NoError(t, err)
+	assert.True(t, changed, "second admin assign must also succeed")
+
+	count, err := b.roleRepo.CountByRole(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "multiple admins must be allowed")
 }
 
-func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_OnlyOneSucceeds(t *testing.T) {
+func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_AllSucceed(t *testing.T) {
 	b := setupRoleRepoPGFull(t)
 	ctx := context.Background()
 
-	// Use a fresh unique admin role with fixed prefix for partial index matching.
-	// The partial index is on WHERE role_id = 'admin'; only 'admin' triggers it.
 	adminRole := &domain.Role{
 		ID:          "admin",
 		Name:        "admin-concurrent-test",
@@ -271,7 +268,6 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 	close(resultsCh)
 
 	successCount := 0
-	dupCount := 0
 	for r := range resultsCh {
 		if r.err == nil && r.changed {
 			successCount++
@@ -281,13 +277,13 @@ func TestPGRoleRepository_Integration_AssignToUser_Admin_5GoroutineConcurrent_On
 			// ON CONFLICT DO NOTHING for same user (shouldn't happen here since all users are different)
 			continue
 		}
-		var ec *errcode.Error
-		require.ErrorAs(t, r.err, &ec)
-		assert.Equal(t, errcode.ErrAuthRoleDuplicate, ec.Code)
-		dupCount++
+		require.NoError(t, r.err)
 	}
-	assert.Equal(t, 1, successCount, "exactly one concurrent admin assign must succeed")
-	assert.Equal(t, N-1, dupCount, "all other concurrent admin assigns must return ErrAuthRoleDuplicate")
+	assert.Equal(t, N, successCount, "all concurrent admin assigns must succeed")
+
+	count, err := b.roleRepo.CountByRole(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, N, count, "every concurrent admin assignment must persist")
 }
 
 func TestPGRoleRepository_Integration_RemoveFromUser_HappyPath(t *testing.T) {
