@@ -274,37 +274,21 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Discover integration test packages
+        id: integration-pkgs
+        # Auto-discover every package that owns at least one test file compiled
+        # under -tags=integration,e2e. This replaces the previous explicit list
+        # which silently dropped newly added integration packages (PR-417 P1#4).
+        # Fail-fast if go list returns nothing (e.g. tag spelling regression).
+        run: |
+          pkgs=$(go list -tags=integration,e2e -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./... | grep -v '^$' | xargs)
+          if [ -z "$pkgs" ]; then echo "no integration test packages discovered" >&2; exit 1; fi
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+
       - name: Integration tests (testcontainers)
         env:
           GOCELL_TEST_DOCKER_REQUIRED: "1"
-        # cmd/corebundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
-        # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
-        # examples/ssobff carries the end-to-end walkthrough test (AUTH-SETUP-01
-        # regression guard — bootstrap credential flow, password-reset gate,
-        # change-password / refresh / logout contract shape). Without this job
-        # including it, the "integration" build tag was never compiled in CI.
-        # cells/accesscore/slices/identitymanage also has an integration test
-        # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
-        # runtime/bootstrap carries lifecycle_integration_test.go (HookStartStop
-        # ordering + LIFO rollback precision probes); without this path the
-        # //go:build integration file silently never compiles in CI.
-        # -coverpkg removed to match per-shard unit test profile semantics —
-        # each run only reports coverage for the packages it tested, avoiding
-        # per-file dilution in the merged Sonar view.
-        # tests/e2e/internal/... covers the require+clients helpers (pure
-        # unit tests); the smoke and encryption sub-packages are owned by
-        # the dedicated `e2e` job which runs the docker-compose harness.
-        # Earlier this scope used the broader ./tests/e2e/... — but
-        # require.Docker only skips when no docker socket is reachable, and
-        # GitHub runners always expose one for testcontainers, so smoke
-        # tests under ./tests/e2e ran here and blocked on a corebundle
-        # that never started in this job. Compile-time tag regressions
-        # for the smoke / encryption packages remain covered by the e2e
-        # job's `go test -tags=e2e ./tests/e2e/...`.
-        # tests/testutil owns shared testcontainer startup helpers; include it
-        # so new non-test helper code is covered by its own integration
-        # contract tests instead of relying on downstream packages.
-        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/testutil/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ${{ steps.integration-pkgs.outputs.pkgs }} -count=1 -timeout 15m
 
       - name: OTel collector smoke
         env:
