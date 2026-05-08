@@ -27,7 +27,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/pkg/nilutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -189,7 +189,7 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // ref: kubernetes/kubernetes apiserver — option fail-fast at startup
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(r *Router) {
-		if nilutil.IsNil(cb) {
+		if validation.IsNilInterface(cb) {
 			r.circuitBreakerNil = true
 			return
 		}
@@ -211,7 +211,7 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // ref: go-zero — per-route WithJwt() opt-in auth
 func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 	return func(r *Router) {
-		if nilutil.IsNil(verifier) {
+		if validation.IsNilInterface(verifier) {
 			r.authVerifierNil = true
 			return
 		}

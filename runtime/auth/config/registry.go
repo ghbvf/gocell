@@ -7,7 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/nilutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -140,11 +140,11 @@ func WithRealMode(v bool) EnvOption {
 // first method dispatch.
 func WithKeys(prov auth.SigningKeyProvider) EnvOption {
 	return func(c *envConfig) {
-		if nilutil.IsNil(prov) {
+		if validation.IsNilInterface(prov) {
 			return
 		}
 		c.keyProv = prov
-		if ks, ok := prov.(auth.VerificationKeyStore); ok && !nilutil.IsNil(ks) {
+		if ks, ok := prov.(auth.VerificationKeyStore); ok && !validation.IsNilInterface(ks) {
 			c.keyStore = ks
 		}
 	}
@@ -154,10 +154,10 @@ func WithKeys(prov auth.SigningKeyProvider) EnvOption {
 // Typed-nil inputs are filtered out per WithKeys' rationale.
 func WithKeySeparate(prov auth.SigningKeyProvider, store auth.VerificationKeyStore) EnvOption {
 	return func(c *envConfig) {
-		if !nilutil.IsNil(prov) {
+		if !validation.IsNilInterface(prov) {
 			c.keyProv = prov
 		}
-		if !nilutil.IsNil(store) {
+		if !validation.IsNilInterface(store) {
 			c.keyStore = store
 		}
 	}
@@ -222,7 +222,7 @@ func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWT
 	if reg == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
 	}
-	if nilutil.IsNil(reg.keyProv) {
+	if validation.IsNilInterface(reg.keyProv) {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "JWT registry: SigningKeyProvider is nil")
 	}
 
@@ -243,7 +243,7 @@ func NewJWTVerifierFromRegistry(reg *Registry, opts ...auth.JWTVerifierOption) (
 	if reg == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
 	}
-	if nilutil.IsNil(reg.keyStore) {
+	if validation.IsNilInterface(reg.keyStore) {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "JWT registry: VerificationKeyStore is nil")
 	}
 	auds := reg.Audiences()

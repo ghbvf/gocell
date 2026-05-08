@@ -10,7 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/nilutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // DefaultAccessTokenTTL is the default time-to-live for access tokens issued
@@ -121,7 +121,7 @@ func WithExpectedIssuer(iss string) JWTVerifierOption {
 // call downstream, so we fail fast at construction.
 func NewJWTVerifier(keys VerificationKeyStore, clk clock.Clock, opts ...JWTVerifierOption) (*JWTVerifier, error) {
 	clock.MustHaveClock(clk, "auth.NewJWTVerifier")
-	if nilutil.IsNil(keys) {
+	if validation.IsNilInterface(keys) {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "verification key store must not be nil")
 	}
 	v := &JWTVerifier{keys: keys}
@@ -330,7 +330,7 @@ func WithIssuerAudiencesFromSlice(auds []string) JWTIssuerOption {
 // Rejects both plain-nil and typed-nil keys (see NewJWTVerifier).
 func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, clk clock.Clock, opts ...JWTIssuerOption) (*JWTIssuer, error) {
 	clock.MustHaveClock(clk, "auth.NewJWTIssuer")
-	if nilutil.IsNil(keys) {
+	if validation.IsNilInterface(keys) {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
 	i := &JWTIssuer{

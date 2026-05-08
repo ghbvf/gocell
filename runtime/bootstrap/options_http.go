@@ -18,7 +18,7 @@ import (
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/nilutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -80,7 +80,7 @@ func WithTracer(t tracing.Tracer) Option {
 // dependency fail-fast.
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(b *Bootstrap) {
-		if nilutil.IsNil(rl) {
+		if validation.IsNilInterface(rl) {
 			b.rateLimiterNil = true
 			return
 		}
@@ -97,15 +97,16 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // rollback. ContextCloser is preferred so the shared shutCtx budget flows
 // through to the resource.
 //
-// A nil cb is rejected at Run() time with a fatal error so operators are not
-// silently left without circuit-breaker protection.
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected at phase0 with a fatal error so operators are not silently left
+// without circuit-breaker protection.
 //
 // ref: go-zero — resilience middleware configuration at app level
 // ref: kubernetes/kubernetes apiserver — option fail-fast at startup
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser preferred over io.Closer
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(b *Bootstrap) {
-		if nilutil.IsNil(cb) {
+		if validation.IsNilInterface(cb) {
 			b.circuitBreakerNil = true
 			return
 		}

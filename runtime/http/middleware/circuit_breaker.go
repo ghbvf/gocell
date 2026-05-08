@@ -10,7 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/pkg/nilutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // errServerFailure is the sentinel error reported to the circuit breaker done
@@ -65,7 +65,7 @@ type Allower interface {
 // ref: sony/gobreaker — TwoStepCircuitBreaker for HTTP request protection
 // ref: go-kit/kit circuitbreaker — middleware wrapping pattern
 func CircuitBreaker(cb Allower) (func(http.Handler) http.Handler, error) {
-	if nilutil.IsNil(cb) {
+	if validation.IsNilInterface(cb) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "middleware: Allower must not be nil")
 	}
 	return func(next http.Handler) http.Handler {

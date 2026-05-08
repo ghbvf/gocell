@@ -6,7 +6,7 @@ import (
 	"log/slog"
 
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/pkg/nilutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // WithManagedResource registers an external resource with the bootstrap
@@ -29,7 +29,7 @@ import (
 // does no nil-substitution; bad inputs surface before any component starts.
 func WithManagedResource(r kernellifecycle.ManagedResource) Option {
 	return func(b *Bootstrap) {
-		if nilutil.IsNil(r) {
+		if validation.IsNilInterface(r) {
 			b.managedResourceNil = true
 			return
 		}

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/pkg/nilutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // WithLifecycle registers a hook-registration callback invoked during New()
@@ -64,7 +64,7 @@ func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
 // dependency fail-fast.
 func WithManagedCloser(c kernellifecycle.ContextCloser) Option {
 	return func(b *Bootstrap) {
-		if nilutil.IsNil(c) {
+		if validation.IsNilInterface(c) {
 			b.closerNil = true
 			return
 		}
