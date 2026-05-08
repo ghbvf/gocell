@@ -6,8 +6,8 @@
 
 ## 概览
 
-- archtest 文件总数：72
-- archtest INVARIANT 锚点数：174
+- archtest 文件总数：74
+- archtest INVARIANT 锚点数：178
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
@@ -29,10 +29,11 @@
 | `AUTH-PLAN-03` | `auth_plan_test.go` | 11 | auth |
 | `AUTH-PLAN-04` | `auth_plan_test.go` | 12 | auth |
 | `AUTH-ROUTE-BOOTSTRAP-FLAG-REMOVED-01` | `setup_admin_bootstrap_closure_test.go` | 19 | auth |
-| `B2-A-11` | `postgres_constructor_error_first_test.go` | 6 | b2 |
 | `B2-A-27` | `redis_key_namespace_test.go` | 30 | b2 |
 | `BOOTSTRAP-PATH-PREDICATE-SOLE-01` | `bootstrap_path_predicate_test.go` | 1 | bootstrap |
 | `BUILD-CONSTRAINT-INTEGRATION-TAG-01` | `build_constraint_test.go` | 1 | build |
+| `BUILTIN-ROLE-ID-NAME-EQ-01` | `builtin_role_invariants_test.go` | 3 | builtin |
+| `BUILTIN-ROLE-ID-NAME-EQ-01` | `builtin_role_invariants_test.go` | 45 | builtin |
 | `CELL-INIT-CONTRACTUSAGE-01` | `cell_init_test.go` | 1 | cell |
 | `CELLMETA-SINGLE-SOURCE-01` | `cellmeta_single_source_test.go` | 1 | cellmeta |
 | `CELLMETA-SINGLE-SOURCE-02` | `cellmeta_single_source_test.go` | 12 | cellmeta |
@@ -76,6 +77,7 @@
 | `HTTPUTIL-5XX-LOG-REDACT-01` | `httputil_invariants_test.go` | 116 | httputil |
 | `HTTPUTIL-SURFACE-REGISTERED-01` | `httputil_invariants_test.go` | 179 | httputil |
 | `IDEMPOTENCY-LUA-HASHTAG-01` | `redis_idempotency_hashtag_test.go` | 3 | idempotency |
+| `INTEGRATION-CI-DISCOVERY-01` | `integration_ci_discovery_test.go` | 15 | integration |
 | `INTEGRATION-GUARD-01` | `integration_guard_test.go` | 1 | integration |
 | `INTERNAL-CONTRACT-CLIENTS-REQUIRED-01` | `contract_spec_clients_test.go` | 1 | internal |
 | `KERNEL-CLOCK-LEAF-FALLBACK-01` | `clock_invariants_test.go` | 559 | kernel |
@@ -125,7 +127,9 @@
 | `PANIC-REDACT-01` | `panic_invariants_test.go` | 26 | panic |
 | `PANIC-REGISTERED-01` | `panic_invariants_test.go` | 90 | panic |
 | `PATCH-OPTIONAL-BOOL-POINTER-01` | `patch_optional_bool_pointer_test.go` | 1 | patch |
-| `PG-CONSTRUCTOR-MUST-FREE-01` | `postgres_constructor_error_first_test.go` | 3 | pg |
+| `PG-CONSTRUCTOR-MUST-FREE-01` | `pg_repo_invariants_test.go` | 71 | pg |
+| `PG-REPO-AMBIENT-TX-01` | `pg_repo_invariants_test.go` | 164 | pg |
+| `PG-REPO-ROLLBACK-REDACT-01` | `pg_repo_invariants_test.go` | 295 | pg |
 | `PGQUERY-01` | `pgquery_boundary_test.go` | 20 | pgquery |
 | `POSTGRES-MIGRATOR-LOCK-ORDER-REGRESSION-01` | `goose_session_locker_test.go` | 7 | postgres |
 | `PR-CI-6` | `prod_duration_fixtures_test.go` | 5 | pr |
