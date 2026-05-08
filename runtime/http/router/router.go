@@ -174,9 +174,16 @@ func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 // WithRateLimiter enables per-IP rate limiting in the default middleware chain.
 // When provided, the rate limiter is placed after observability and before auth.
 //
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected by NewForListener so the rate limiter is never silently absent.
+//
 // ref: go-zero — rate limiting as default middleware when configured
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(r *Router) {
+		if validation.IsNilInterface(rl) {
+			r.rateLimiterNil = true
+			return
+		}
 		r.rateLimiter = rl
 	}
 }
@@ -379,6 +386,7 @@ type Router struct {
 	tracingOpts                 []middleware.TracingOption
 	requestIDOpts               []middleware.RequestIDOption
 	rateLimiter                 middleware.RateLimiter
+	rateLimiterNil              bool
 	circuitBreaker              middleware.Allower
 	circuitBreakerNil           bool
 	authVerifier                auth.IntentTokenVerifier
@@ -528,6 +536,9 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	// WithCircuitBreaker(nil) which would silently skip CB installation.
 	if r.circuitBreakerNil {
 		return nil, fmt.Errorf("router: circuit breaker must not be nil")
+	}
+	if r.rateLimiterNil {
+		return nil, fmt.Errorf("router: rate limiter must not be nil")
 	}
 	if r.authVerifierNil {
 		return nil, fmt.Errorf("router: auth middleware verifier must not be nil")

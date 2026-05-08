@@ -1154,6 +1154,26 @@ func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "circuit breaker")
 }
 
+// TestWithRateLimiter_NilInterface_Error verifies that a bare nil RateLimiter
+// causes NewForListener to return an error so Bootstrap fails fast instead of
+// silently skipping rate-limiter installation. Mirrors WithCircuitBreaker
+// fail-fast pattern.
+func TestWithRateLimiter_NilInterface_Error(t *testing.T) {
+	_, err := New(WithRateLimiter(nil))
+	require.Error(t, err, "nil interface RateLimiter must return error from New")
+	assert.Contains(t, err.Error(), "rate limiter")
+}
+
+// TestWithRateLimiter_TypedNilPointer_Error verifies that a typed-nil
+// (*routerTestLimiter)(nil) is rejected: the interface value is non-nil but
+// the underlying pointer is nil, so calling Allow() would panic at runtime.
+func TestWithRateLimiter_TypedNilPointer_Error(t *testing.T) {
+	var rl *routerTestLimiter // typed nil
+	_, err := New(WithRateLimiter(rl))
+	require.Error(t, err, "typed-nil RateLimiter must return error from New")
+	assert.Contains(t, err.Error(), "rate limiter")
+}
+
 // --- Infra endpoints bypass RL/CB ---
 
 func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
