@@ -271,7 +271,16 @@ GOVHEADER
 if (( governance_count > 0 )); then
   for f in "${governance_files[@]}"; do
     base="$(basename "${f}")"
-    rules="$(grep -hoE '\b(FMT|CH|REF|TOPO|VERIFY|ADV|SLICE|CONSISTENCY|OUTGUARD|DOC|WRAPPER)-[A-Z0-9-]+' "${f}" 2>/dev/null \
+    # NB: longer compound prefixes (CONTRACT-CONSISTENCY-EMIT / SLICE-
+    # CONSISTENCY / DOC-NAME) MUST come before their shorter substrings
+    # in the alternation so grep -oE picks the maximal match. Without this
+    # ordering, CONTRACT-CONSISTENCY-EMIT-01 was truncated to
+    # CONSISTENCY-EMIT-01 because \bCONSISTENCY matched mid-token at the
+    # dash boundary. The suffix part allows internal hyphens to keep
+    # legacy archtest IDs intact (e.g. WRAPPER-CONTRACTSPEC-IMPORT-01).
+    # Regression: PR-FUNNEL-03 review (2026-05-08), regression test in
+    # kernel/governance/rule_inventory_test.go::TestArchtestInventoryNoIDTruncation.
+    rules="$(grep -hoE '\b(CONTRACT-CONSISTENCY-EMIT|SLICE-CONSISTENCY|DOC-NAME|FMT|CH|REF|TOPO|VERIFY|ADV|OUTGUARD|DOC|WRAPPER)-[A-Z0-9-]+' "${f}" 2>/dev/null \
       | sort -u | paste -sd, - | sed 's/,/, /g')"
     if [[ -z "${rules}" ]]; then
       rules="_无显式 ID_"

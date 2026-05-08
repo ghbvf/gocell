@@ -9,7 +9,7 @@
 
 `tools/codegen/contractgen` previously emitted `Service.Method(ctx, *Request) (*Response, error)` for every HTTP contract and let the generated handler call `httputil.WriteError(err)` for the error path. Status codes were derived at runtime from `errcode.Kind`. Three problems compounded:
 
-1. **Three-way drift**. The handler implementation, the runtime `errcode.Kind → Status` map, and `contract.yaml http.responses[]` each held their own copy of the response status set. CH-04 governance had to reverse-infer the handler-emitted set from AST scanning + Kind name lookup (`kernel/governance/rules_http_response_alignment.go`), which is fragile and only catches one of the three pairs.
+1. **Three-way drift**. The handler implementation, the runtime `errcode.Kind → Status` map, and `contract.yaml http.responses[]` each held their own copy of the response status set. CH-04 governance had to reverse-infer the handler-emitted set from AST scanning + Kind name lookup (`kernel/governance/rules_http.go`, CH-04 section), which is fragile and only catches one of the three pairs.
 2. **Two limit error envelopes**. Builder's `detectPagination` required exactly `(cursor, limit)` query params and rejected any GET that also had path params or filter params. Endpoints like `auth/role/list/{userID}?cursor=&limit=&...` fell into the per-param branch in `handler.tmpl`, where `limit` was parsed inline by `strconv.ParseInt` and produced `ERR_VALIDATION_FAILED` instead of the canonical `ERR_PAGE_SIZE_EXCEEDED` from `pkg/httputil.ParsePageParams` — diverging from every other paginated endpoint.
 3. **Stale doc.go**. `tools/codegen/contractgen/doc.go` listed only three artifacts (types/iface/handler) and missed `spec_gen.go` / `subscription_gen.go`; new maintainers had no map of the generator surface.
 
@@ -46,13 +46,13 @@ Adopt a typed response envelope on the `oapi-codegen pkg/codegen/templates/stric
 
 ### D3. CH-06 governance (kernel/governance)
 
-A new rule `CH-06` (`kernel/governance/rules_http_typed_envelope.go`) enforces the contract.yaml ↔ generated bijection:
+A new rule `CH-06` (`kernel/governance/rules_http.go`, CH-06 section) enforces the contract.yaml ↔ generated bijection:
 
 - AST-scans `generated/contracts/<segments>/types_gen.go` for type declarations matching `^[A-Z]\w*?(\d{3})(JSONResponse|NoContentResponse|ErrorResponse)$`.
 - Compares the extracted status set against `SuccessStatus ∪ http.responses[]` keys.
 - Emits `SeverityError` for each declared-but-not-implemented status (codegen drift) and each implemented-but-not-declared status (orphan struct).
 
-CH-06 sits alongside the existing CH-04 (handler-emitted status ⊂ declared, owned by `rules_http_response_alignment.go`). The two are complementary:
+CH-06 sits alongside the existing CH-04 (handler-emitted status ⊂ declared, both now in `kernel/governance/rules_http.go` after PR-FUNNEL-03 consolidation). The two are complementary:
 
 - CH-04 covers **pre-service** error sources where the helper name carries the status (`DecodeJSONStrict` → 400/413, `ParsePageParams` → 400, `ParseUUIDPathParam` → 400) and path-param validation `errcode.New(KindInvalid, …)` calls in handler.tmpl.
 - CH-06 covers the **post-service** typed response set where the status is encoded in the struct identity rather than in `errcode.Kind`.
@@ -115,7 +115,7 @@ ref: ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` §"e
 - 24 cell + example slice adapters had to migrate to the typed signature in a single PR (no compatibility shim — see `feedback_no_backcompat_elegant`). Mechanical; absorbed by 4 parallel sub-agents in `Batch 3`.
 - `pkg/httputil` gains one new public function (`WriteErrorWithStatus`) which is now part of the framework's stable surface for typed-envelope generated code.
 - 46 generated http handlers + ~14 golden testdata files regenerated; a single Batch 2 commit churns 5k LOC of generated content.
-- Framework 5xx paths where service returns a non-nil error fall outside the CH-06 assertion surface — they are covered by CH-04's `httpHelperWritesStatuses` table (`kernel/governance/rules_http_response_alignment.go:90-97`), which maps `WriteError` and pre-service helpers to their emitted status set. CH-04 and CH-06 are thus complementary: CH-04 owns pre-service and framework-fallback error sources, CH-06 owns the post-service typed-struct bijection.
+- Framework 5xx paths where service returns a non-nil error fall outside the CH-06 assertion surface — they are covered by CH-04's `httpHelperWritesStatuses` table (`kernel/governance/rules_http.go:113-131`), which maps `WriteError` and pre-service helpers to their emitted status set. CH-04 and CH-06 are thus complementary: CH-04 owns pre-service and framework-fallback error sources, CH-06 owns the post-service typed-struct bijection.
 
 ### Runtime 行为
 

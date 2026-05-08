@@ -34,7 +34,7 @@
 // one per status declared in contract.yaml http.responses[] union with
 // http.successStatus. The generator's Responses IR slice is the single source
 // of truth — CH-06 governance enforces the contract.yaml ↔ types_gen.go
-// bijection (see kernel/governance/rules_http_typed_envelope.go).
+// bijection (see kernel/governance/rules_http.go).
 //
 // Naming convention for typed response structs:
 //
@@ -122,9 +122,9 @@
 //		go run ./cmd/gocell check contract-health   # CH-04 + CH-06 must pass
 //		golangci-lint run ./...                      # 0 issues
 //
-//	   CH-06 (rules_http_typed_envelope.go) verifies that the generated struct
+//	   CH-06 (rules_http.go) verifies that the generated struct
 //	   set exactly matches contract.yaml SuccessStatus ∪ responses[]; CH-04
-//	   (rules_http_response_alignment.go) verifies the handler-emitted status set
+//	   (rules_http.go) verifies the handler-emitted status set
 //	   is a subset of the declared set. Both must be green before committing.
 //
 // # Cross-tooling references
@@ -135,10 +135,10 @@
 //     the codegen.Render plumbing).
 //   - tools/archtest/handler_inline_limit_parse_test.go — HANDLER-NO-INLINE-
 //     LIMIT-PARSE-01, regression gate against per-param limit parsing.
-//   - kernel/governance/rules_http_response_alignment.go — CH-04
-//     (handler-emitted status ⊂ contract.yaml.responses[] ∪ auth.responses).
-//   - kernel/governance/rules_http_typed_envelope.go — CH-06 (contract.yaml.
-//     responses[] ∪ successStatus = generated typed-response struct set).
+//   - kernel/governance/rules_http.go — CH-04 (handler-emitted status ⊂
+//     contract.yaml.responses[] ∪ auth.responses), CH-05 (uuid path-param
+//     parse-call presence), CH-06 (contract.yaml.responses[] ∪ successStatus
+//     = generated typed-response struct set).
 //
 // ref: oapi-codegen pkg/codegen/templates/strict — typed-response-envelope
 // strict-server pattern this package adapts.
