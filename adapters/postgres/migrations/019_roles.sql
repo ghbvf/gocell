@@ -20,6 +20,8 @@
 
 -- +goose Up
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 CREATE TABLE roles (
     id          TEXT        PRIMARY KEY,
     name        TEXT        NOT NULL UNIQUE,
@@ -36,10 +38,17 @@ CREATE TABLE role_assignments (
 
 CREATE UNIQUE INDEX idx_role_assignments_single_admin
     ON role_assignments (role_id) WHERE role_id = 'admin';
+
+-- P2#8: PK is (user_id, role_id), so by-user lookups (ListByUserID) hit the
+-- prefix. CountByRole / RemoveFromUserIfNotLast filter by role_id alone, which
+-- has no PK prefix to leverage and degrades to a sequential scan once the
+-- table is non-trivial. A standalone non-unique index keeps those paths fast.
+CREATE INDEX idx_role_assignments_role_id ON role_assignments (role_id);
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
+DROP INDEX  IF EXISTS idx_role_assignments_role_id;
 DROP INDEX  IF EXISTS idx_role_assignments_single_admin;
 DROP TABLE  IF EXISTS role_assignments;
 DROP TABLE  IF EXISTS roles;

@@ -52,7 +52,7 @@ SET LOCAL lock_timeout = '5s';
 
 这将访问排他锁（ACCESS EXCLUSIVE）的等待时间限制在 5 秒内，避免长时间阻塞生产写入。
 
-**适用范围**：021 起所有新增事务型 migration 必须遵守。`go-standards.md` 的"migration 文件只增不改"硬规则压过本规则的回灌——已发布的 001–020 不补 lock_timeout，运维侧若需要限制锁等待请在 PG `ALTER ROLE … SET lock_timeout` 或部署期 GUC 配置中设置。
+**适用范围**：所有新增事务型 migration 必须遵守。017–022 是本 PR 引入、未合并 develop 之前的 PR-内 migration，已统一补齐 `SET LOCAL lock_timeout = '5s'`。`go-standards.md` 的"migration 文件只增不改"硬规则约束的是**已合并 develop** 的 migration——pre-merge 的 PR 内 migration 仍可调整。已合并的 001–016 不再补 lock_timeout，运维侧若需要限制锁等待请在 PG `ALTER ROLE … SET lock_timeout` 或部署期 GUC 配置中设置。
 
 ## 规则 5：INVALID 索引 pre-check 与启动期防线
 

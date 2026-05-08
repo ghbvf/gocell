@@ -17,6 +17,8 @@
 
 -- +goose Up
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 CREATE TABLE sessions (
     id           TEXT        PRIMARY KEY,
     user_id      TEXT        NOT NULL,

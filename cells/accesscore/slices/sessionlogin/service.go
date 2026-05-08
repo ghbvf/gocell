@@ -242,21 +242,8 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID, username string) (string, error) {
 	var refreshWire string
 	do := func(txCtx context.Context) error {
-		// P1#1a re-check: re-acquire the user row write lock and verify the
-		// user is still active before creating the session. This closes the
-		// race window between the credential-check tx (already committed) and
-		// the persistence tx: an admin Lock that ran in between bumps version
-		// and sets Status=Locked, and is observed here. An admin Lock that
-		// hasn't committed yet blocks on FOR UPDATE until our session.Create
-		// commits — its RevokeByUserID then sees and revokes our new session.
-		if username != "" { // empty username = IssueForUser path; user already validated
-			u, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
-			if err != nil {
-				return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
-			}
-			if u.IsLocked() {
-				return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
-			}
+		if err := s.recheckUserActive(txCtx, username); err != nil {
+			return err
 		}
 		if err := s.sessionRepo.Create(txCtx, session); err != nil {
 			return fmt.Errorf("session-login: persist session: %w", err)
@@ -290,6 +277,32 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain
 		return "", err
 	}
 	return refreshWire, nil
+}
+
+// recheckUserActive re-acquires the user row write lock inside the persistence
+// transaction and verifies the user is still active before session creation.
+// This closes the P1#1a race window between the credential-check tx (already
+// committed, FOR UPDATE released) and the persistence tx: an admin Lock that
+// ran in between bumps version and sets Status=Locked — observed here as
+// ErrAuthUserLocked. An admin Lock that hasn't committed yet blocks on FOR
+// UPDATE until our session.Create commits, then sweeps our new session via
+// RevokeByUserID.
+//
+// Empty username signals the IssueForUser path: the user identity has already
+// been validated by the caller (e.g. ChangePassword) inside its own write
+// transaction, so this re-check is unnecessary.
+func (s *Service) recheckUserActive(txCtx context.Context, username string) error {
+	if username == "" {
+		return nil
+	}
+	u, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
+	if err != nil {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	}
+	if u.IsLocked() {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
+	}
+	return nil
 }
 
 // isNoopTx reports whether r is a demo/noop TxRunner (implements cell.Nooper and

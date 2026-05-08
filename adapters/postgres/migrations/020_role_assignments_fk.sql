@@ -21,6 +21,8 @@
 
 -- +goose Up
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE role_assignments
     ADD CONSTRAINT fk_role_assignments_user
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,

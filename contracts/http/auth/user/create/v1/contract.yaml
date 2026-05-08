@@ -26,7 +26,7 @@ endpoints:
         description: "Forbidden — authenticated but lacks admin role"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       409:
-        description: "Conflict — username already exists (ErrAuthUserDuplicate)"
+        description: "Conflict — username already exists (ErrAuthUserDuplicate) or email already exists (ErrAuthEmailDuplicate)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"

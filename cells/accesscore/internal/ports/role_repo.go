@@ -26,6 +26,13 @@ type RoleRepository interface {
 	// Returns changed=true when the user actually held the role and it was
 	// removed; changed=false when the user did not hold the role (no-op).
 	// Callers gate outbox emission on changed.
+	//
+	// Caller MUST invoke this method inside an active TxRunner.RunInTx — the
+	// PostgreSQL implementation acquires a transaction-scoped advisory lock
+	// (pg_advisory_xact_lock) keyed by roleID to serialize concurrent revokes
+	// for the same role; the lock is released only at outer transaction end.
+	// Calling without an ambient transaction in PG returns ErrInternal
+	// fail-fast rather than silently providing weaker isolation.
 	RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (changed bool, err error)
 	CountByRole(ctx context.Context, roleID string) (int, error)
 	// ListByUserID returns a paginated list of roles assigned to userID,

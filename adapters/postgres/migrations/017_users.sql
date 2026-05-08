@@ -12,6 +12,8 @@
 
 -- +goose Up
 -- +goose StatementBegin
+SET LOCAL lock_timeout = '5s';
+
 CREATE TABLE users (
     id                     TEXT        PRIMARY KEY,
     username               TEXT        NOT NULL,
