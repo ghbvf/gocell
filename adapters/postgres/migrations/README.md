@@ -42,15 +42,17 @@ DROP INDEX CONCURRENTLY IF EXISTS <index_name>;
 
 以保证回滚同样不阻塞写入，且支持 `IF EXISTS` 的幂等性。
 
-## 规则 4：事务型 migration 首行建议 `SET LOCAL lock_timeout = '5s'`
+## 规则 4：事务型 migration 首行**必须** `SET LOCAL lock_timeout = '5s'`
 
-不含 CONCURRENTLY 的事务型 migration（001/002/003 模式）应在 `-- +goose Up` 之后第一行写：
+不含 CONCURRENTLY 的事务型 migration（001/002/003 模式）必须在 `-- +goose Up` 的 `-- +goose StatementBegin` 之后第一行写：
 
 ```sql
 SET LOCAL lock_timeout = '5s';
 ```
 
 这将访问排他锁（ACCESS EXCLUSIVE）的等待时间限制在 5 秒内，避免长时间阻塞生产写入。
+
+**适用范围**：021 起所有新增事务型 migration 必须遵守。`go-standards.md` 的"migration 文件只增不改"硬规则压过本规则的回灌——已发布的 001–020 不补 lock_timeout，运维侧若需要限制锁等待请在 PG `ALTER ROLE … SET lock_timeout` 或部署期 GUC 配置中设置。
 
 ## 规则 5：INVALID 索引 pre-check 与启动期防线
 
