@@ -117,3 +117,62 @@ func TestRevokeByUserID_Soft(t *testing.T) {
 			"GetByID must return ErrSessionNotFound after RevokeByUserID: id=%s", sid)
 	}
 }
+
+// TestRevokeThenStaleVersionUpdate_DoesNotResurrect (P1#1c) — soft revoke must
+// not be reversible via a stale-version Update. Without protection:
+//   1. Caller B fetches session → version=1, revoked_at=nil
+//   2. Caller A calls RevokeByIDAndOwner → revoked_at=now (version unchanged in
+//      naive impl, OR version bumped if revoke increments)
+//   3. Caller B sends Update with stale snapshot → SET revoked_at=$5 writes
+//      back nil → session resurrected
+//
+// Two defenses required:
+//   - revoke MUST advance version so stale-version Update fails CAS
+//   - Update MUST refuse to touch already-revoked rows (defense-in-depth)
+func TestRevokeThenStaleVersionUpdate_DoesNotResurrect(t *testing.T) {
+	sessionRepo, userRepo, cleanup := setupSessionRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	rawPool := sessionRepo.pool
+
+	userID := seedUser(t, ctx, userRepo)
+
+	// Caller B's snapshot: version=1, revoked_at=nil.
+	s := newTestSessionForUser(userID)
+	require.NoError(t, sessionRepo.Create(ctx, s))
+	stale := *s
+
+	// Caller A revokes the session.
+	require.NoError(t, sessionRepo.RevokeByIDAndOwner(ctx, s.ID, userID))
+
+	// Caller B attempts to Update with the stale snapshot. The stale
+	// snapshot still has version=1 and revoked_at=nil — naive Update would
+	// SET revoked_at=nil, version=2 and resurrect the session.
+	stale.AccessToken = "attacker-resurrected-token-" + uuid.NewString()
+	updErr := sessionRepo.Update(ctx, &stale)
+	require.Error(t, updErr,
+		"P1#1c: stale-version Update after revoke MUST fail to prevent resurrection")
+	var ec *errcode.Error
+	require.ErrorAs(t, updErr, &ec)
+	assert.Equal(t, errcode.ErrSessionConflict, ec.Code,
+		"stale-version Update after revoke must surface as ErrSessionConflict")
+
+	// Direct DB check: the session row is still revoked, access_token unchanged.
+	var revokedAt *time.Time
+	var dbToken string
+	err := rawPool.QueryRow(ctx,
+		"SELECT revoked_at, access_token FROM sessions WHERE id = $1", s.ID,
+	).Scan(&revokedAt, &dbToken)
+	require.NoError(t, err)
+	assert.NotNil(t, revokedAt, "revoked_at must remain non-null after stale-Update attempt")
+	assert.NotEqual(t, stale.AccessToken, dbToken,
+		"stale Update must not have rewritten access_token")
+	assert.Equal(t, s.AccessToken, dbToken, "access_token must be the original")
+
+	// GetByID still filters revoked sessions.
+	_, getErr := sessionRepo.GetByID(ctx, s.ID)
+	require.Error(t, getErr)
+	require.ErrorAs(t, getErr, &ec)
+	assert.Equal(t, errcode.ErrSessionNotFound, ec.Code,
+		"revoked session must remain not-found, not resurrected")
+}

@@ -45,25 +45,36 @@ SELECT id, user_id, access_token, expires_at, revoked_at, created_at, version
 FROM sessions
 WHERE id = $1 AND revoked_at IS NULL`
 
-	// updateSessionSQL performs an optimistic-lock UPDATE: WHERE id=$1 AND version=$2.
-	// On success, version advances by 1.
-	// RowsAffected == 0 means either the row does not exist or the version was stale.
+	// updateSessionSQL performs an optimistic-lock UPDATE on ACTIVE sessions
+	// only: WHERE id=$1 AND version=$2 AND revoked_at IS NULL. Two defenses
+	// prevent a stale-snapshot Update from resurrecting an already-revoked
+	// session (P1#1c):
+	//   1. CAS on version — revoke increments version too, so a stale
+	//      snapshot's version=N predicate misses
+	//   2. revoked_at IS NULL guard — even if a future change skips the
+	//      version bump, Update still refuses to touch revoked rows
+	// access_token / expires_at are the only mutable columns; revoked_at is
+	// owned exclusively by revokeBy*SQL paths and is NEVER written here.
 	//
 	// ref: K8s apimachinery ResourceVersion CAS pattern
 	updateSessionSQL = `
 UPDATE sessions
-SET access_token = $3, expires_at = $4, revoked_at = $5, version = version + 1
-WHERE id = $1 AND version = $2`
+SET access_token = $3, expires_at = $4, version = version + 1
+WHERE id = $1 AND version = $2 AND revoked_at IS NULL`
 
-	// revokeByIDAndOwnerSQL soft-deletes a session by setting revoked_at to now.
-	// RowsAffected==0 covers both "not found" and "wrong owner" (intentionally
-	// conflated to hide enumeration of other users' session IDs).
-	// Only touches rows where revoked_at IS NULL to be idempotent.
+	// revokeByIDAndOwnerSQL soft-deletes a session by setting revoked_at to now
+	// AND incrementing version. Bumping version is critical: any concurrent
+	// caller holding a stale snapshot (version=N, revoked_at=nil) will fail
+	// CAS on its next Update (because the row's version is now N+1) and
+	// cannot resurrect the revoked row. RowsAffected==0 covers both "not
+	// found" and "wrong owner" (intentionally conflated to hide enumeration
+	// of other users' session IDs). Only touches rows where revoked_at IS
+	// NULL — idempotent on already-revoked rows.
 	//
 	// ref: ory/kratos persister_session.go RevokeSession soft-revoke pattern
 	revokeByIDAndOwnerSQL = `
 UPDATE sessions
-SET revoked_at = $3
+SET revoked_at = $3, version = version + 1
 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`
 
 	// selectSessionExistsSQL checks raw existence of a session row without
@@ -73,11 +84,14 @@ WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`
 	// soft-revoked rows are not misclassified as not-found.
 	selectSessionExistsSQL = `SELECT 1 FROM sessions WHERE id = $1`
 
-	// revokeByUserIDSQL soft-deletes all active sessions for a given user.
+	// revokeByUserIDSQL soft-deletes all active sessions for a given user
+	// AND increments their versions so any concurrent caller holding a stale
+	// snapshot fails CAS on the next Update (defends against resurrection;
+	// see updateSessionSQL / revokeByIDAndOwnerSQL).
 	// Only touches rows where revoked_at IS NULL.
 	revokeByUserIDSQL = `
 UPDATE sessions
-SET revoked_at = $2
+SET revoked_at = $2, version = version + 1
 WHERE user_id = $1 AND revoked_at IS NULL`
 
 	deleteSessionSQL = `
@@ -217,12 +231,14 @@ func (r *PGSessionRepository) GetByID(ctx context.Context, id string) (*domain.S
 //
 // On success, session.Version is incremented to match the new DB value.
 func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Session) error {
+	// updateSessionSQL writes only access_token + expires_at and refuses
+	// revoked rows (WHERE revoked_at IS NULL). RevokedAt is never propagated
+	// by Update — revoke is a separate write path that owns that column.
 	ct, err := r.execCtx(ctx, updateSessionSQL,
 		session.ID,
 		session.Version,
 		session.AccessToken,
 		session.ExpiresAt,
-		session.RevokedAt,
 	)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: update", err)
