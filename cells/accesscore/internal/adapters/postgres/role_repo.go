@@ -70,29 +70,35 @@ ON CONFLICT (user_id, role_id) DO NOTHING`
 DELETE FROM role_assignments
 WHERE user_id = $1 AND role_id = $2`
 
-	// removeIfNotLastWithLockSQL is a single-round-trip CTE that:
-	//  1. Acquires pg_advisory_xact_lock(hashtextextended('role:' || roleID, 0)) so
-	//     concurrent revokes for the same role serialize at the transaction level.
-	//  2. Checks whether the user actually holds the role (holds CTE).
-	//  3. Counts current holders (cnt CTE).
-	//  4. DELETEs the row only when cnt > 1 (del CTE).
-	//  5. Returns all four signals in one row so the Go caller can distinguish
-	//     "user did not hold the role" from "sole holder" without a second query.
+	// acquireRoleAdvisoryLockSQL acquires a transaction-scoped advisory lock
+	// keyed by role_id. MUST be issued as a separate statement BEFORE
+	// removeIfNotLastSQL — embedding pg_advisory_xact_lock in a CTE alongside
+	// the count/delete does NOT serialize concurrent callers because Read
+	// Committed takes a single statement-start snapshot for the whole
+	// statement, so the cnt CTE is computed against the pre-lock snapshot.
 	//
-	// Result columns: lock_acquired int, held bool, holders bigint, deleted bigint.
+	// Issuing the lock as its own statement forces the next statement to
+	// take a fresh snapshot taken after this lock is held, so concurrent
+	// transactions waiting on the lock observe each other's committed
+	// DELETEs in the cnt CTE that follows.
 	//
-	// Atomicity: pg_advisory_xact_lock holds until the surrounding transaction
-	// commits or rolls back, so the lock+check+delete is fully atomic. This
-	// eliminates the two-roundtrip TOCTOU window that existed in the old
-	// userHoldsRole + removeIfNotLastSQL approach.
-	//
-	// ref: PostgreSQL pg_advisory_xact_lock docs
-	// ref: ory/keto internal/persistence/sql advisory_lock pattern
-	removeIfNotLastWithLockSQL = `
-WITH lock_acquire AS (
-    SELECT pg_advisory_xact_lock(hashtextextended('role:' || $2, 0))
-),
-holds AS (
+	// ref: https://www.postgresql.org/docs/current/queries-with.html
+	//      "The sub-statements in WITH are executed concurrently with each
+	//       other and with the main query."
+	// ref: https://www.postgresql.org/docs/current/transaction-iso.html
+	//      Read Committed: each statement sees a snapshot taken at its start.
+	// ref: https://www.postgresql.org/docs/current/functions-admin.html
+	//      pg_advisory_xact_lock — released at end of current transaction.
+	acquireRoleAdvisoryLockSQL = `SELECT pg_advisory_xact_lock(hashtextextended('role:' || $1, 0))`
+
+	// removeIfNotLastSQL is the count+delete CTE that runs AFTER the advisory
+	// lock has been acquired in a previous statement. Returns three signals so
+	// the Go caller can distinguish:
+	//   - held=false             → user did not hold role (idempotent no-op)
+	//   - held=true && deleted=1 → revoke succeeded
+	//   - held=true && deleted=0 → user is sole holder, ErrAuthForbidden
+	removeIfNotLastSQL = `
+WITH holds AS (
     SELECT 1 FROM role_assignments WHERE user_id = $1 AND role_id = $2
 ),
 cnt AS (
@@ -104,10 +110,9 @@ del AS (
     RETURNING 1
 )
 SELECT
-    (SELECT 1 FROM lock_acquire) AS lock_acquired,
-    EXISTS(SELECT 1 FROM holds)  AS held,
-    (SELECT n FROM cnt)          AS holders,
-    (SELECT count(*) FROM del)   AS deleted`
+    EXISTS(SELECT 1 FROM holds) AS held,
+    (SELECT n FROM cnt)         AS holders,
+    (SELECT count(*) FROM del)  AS deleted`
 
 	countByRoleSQL = `
 SELECT COUNT(*) FROM role_assignments WHERE role_id = $1`
@@ -372,14 +377,24 @@ func (r *PGRoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, 
 			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)),
 		)
 	}
+	// Step 1: acquire the advisory lock as its OWN statement so the next
+	// statement takes a fresh snapshot taken after the lock is held.
+	// Embedding the lock in the CTE below would make the cnt clause read
+	// the pre-lock snapshot — concurrent revokes would all see the original
+	// holder count and all proceed to DELETE, defeating the lock.
+	if _, err := r.execCtx(ctx, acquireRoleAdvisoryLockSQL, roleID); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: acquire advisory lock", err)
+	}
+
+	// Step 2: count + conditional delete. Now-fresh snapshot reflects any
+	// committed deletes by sibling transactions that completed step 1 first.
 	var (
-		lockAcquired *int // SELECT 1 FROM lock_acquire — always 1 if executed
-		held         bool
-		holders      int64
-		deleted      int64
+		held    bool
+		holders int64
+		deleted int64
 	)
-	row := r.queryRowCtx(ctx, removeIfNotLastWithLockSQL, userID, roleID)
-	if err := row.Scan(&lockAcquired, &held, &holders, &deleted); err != nil {
+	row := r.queryRowCtx(ctx, removeIfNotLastSQL, userID, roleID)
+	if err := row.Scan(&held, &holders, &deleted); err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: remove if not last", err)
 	}
 

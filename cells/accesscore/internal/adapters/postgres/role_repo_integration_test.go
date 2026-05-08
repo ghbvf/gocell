@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -34,12 +35,17 @@ func setupRoleRepoPG(t *testing.T) *PGRoleRepository {
 	return repo
 }
 
-// repoBundle holds the repositories and underlying pool for FK-related
+// repoBundle holds the repositories, txm, and underlying pool for FK-related
 // integration tests that need to execute direct SQL statements (e.g. DELETE
 // FROM users, DELETE FROM roles) to trigger FK cascade/restrict behavior.
+//
+// txm is exposed so RemoveFromUserIfNotLast tests can wrap the call in a
+// real ambient transaction — the repo's advisory-lock fail-fast guard
+// rejects calls without a TxCtxKey-bearing ctx.
 type repoBundle struct {
 	roleRepo *PGRoleRepository
 	userRepo *PGUserRepository
+	txm      *adapterpg.TxManager
 	pool     *pgxpool.Pool // raw pgx pool for direct SQL access in tests
 }
 
@@ -57,8 +63,23 @@ func setupRoleRepoPGFull(t *testing.T) repoBundle {
 	return repoBundle{
 		roleRepo: roleRepo,
 		userRepo: userRepo,
+		txm:      adapterpg.NewTxManager(p),
 		pool:     p.DB(),
 	}
+}
+
+// removeIfNotLastInTx wraps RemoveFromUserIfNotLast in a TxRunner.RunInTx so
+// the repo's ambient-TX guard is satisfied. Returns the (changed, err) tuple
+// the repo would have produced.
+func removeIfNotLastInTx(t *testing.T, b repoBundle, userID, roleID string) (bool, error) {
+	t.Helper()
+	var changed bool
+	txErr := b.txm.RunInTx(context.Background(), func(txCtx context.Context) error {
+		c, err := b.roleRepo.RemoveFromUserIfNotLast(txCtx, userID, roleID)
+		changed = c
+		return err
+	})
+	return changed, txErr
 }
 
 // newTestRole builds a minimal valid domain.Role for test insertion.
@@ -98,6 +119,7 @@ func createTestUser(t *testing.T, ctx context.Context, userRepo *PGUserRepositor
 		CreationSource:        domain.UserSourceIdentity,
 		CreatedAt:             now,
 		UpdatedAt:             now,
+		Version:               1,
 	}
 	require.NoError(t, userRepo.Create(ctx, u))
 	return u.ID
@@ -297,7 +319,7 @@ func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_LastHolder_Returns
 	require.NoError(t, err)
 
 	// Count is 1, user is the sole holder.
-	_, err = b.roleRepo.RemoveFromUserIfNotLast(ctx, userID, role.ID)
+	_, err = removeIfNotLastInTx(t, b, userID, role.ID)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -320,7 +342,7 @@ func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_NotLast_RemovesRow
 	require.NoError(t, err)
 
 	// user1 is not the last holder (user2 also holds the role).
-	changed, err := b.roleRepo.RemoveFromUserIfNotLast(ctx, user1, role.ID)
+	changed, err := removeIfNotLastInTx(t, b, user1, role.ID)
 	require.NoError(t, err)
 	assert.True(t, changed, "removing non-last holder must return changed=true")
 
@@ -338,7 +360,7 @@ func TestPGRoleRepository_Integration_RemoveFromUserIfNotLast_UserNotHolder_Retu
 	require.NoError(t, b.roleRepo.Create(ctx, role))
 
 	userID := createTestUser(t, ctx, b.userRepo) // created but never assigned
-	changed, err := b.roleRepo.RemoveFromUserIfNotLast(ctx, userID, role.ID)
+	changed, err := removeIfNotLastInTx(t, b, userID, role.ID)
 	require.NoError(t, err)
 	assert.False(t, changed, "removing role user never held must return changed=false")
 }

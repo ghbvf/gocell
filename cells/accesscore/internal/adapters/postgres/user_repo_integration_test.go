@@ -32,7 +32,10 @@ func setupUserRepoPG(t *testing.T) *PGUserRepository {
 	return repo
 }
 
-// newTestUser builds a minimal valid domain.User for test insertion.
+// newTestUser builds a minimal valid domain.User for test insertion. Version
+// is set to 1 to match the 022 migration default and domain.NewUser semantics;
+// otherwise PG persists version=0 and ApplyPatch CAS callers reading the row
+// see version=0 instead of the expected initial version=1.
 func newTestUser(username, email string) *domain.User {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return &domain.User{
@@ -45,6 +48,7 @@ func newTestUser(username, email string) *domain.User {
 		CreationSource:        domain.UserSourceIdentity,
 		CreatedAt:             now,
 		UpdatedAt:             now,
+		Version:               1,
 	}
 }
 
@@ -163,7 +167,7 @@ func TestPGUserRepository_Integration_CRUD(t *testing.T) {
 		assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 	})
 
-	t.Run("Create_DuplicateEmail_returns_ErrAuthUserDuplicate", func(t *testing.T) {
+	t.Run("Create_DuplicateEmail_returns_ErrAuthEmailDuplicate", func(t *testing.T) {
 		u1 := newTestUser("emaildup1", "sharedemail@example.com")
 		require.NoError(t, repo.Create(ctx, u1))
 
@@ -172,7 +176,8 @@ func TestPGUserRepository_Integration_CRUD(t *testing.T) {
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
+		assert.Equal(t, errcode.ErrAuthEmailDuplicate, ec.Code,
+			"email-only collision must return ErrAuthEmailDuplicate (mapUniqueViolation dispatches by ConstraintName)")
 	})
 }
 

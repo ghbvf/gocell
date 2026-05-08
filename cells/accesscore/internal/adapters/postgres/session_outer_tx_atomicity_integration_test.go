@@ -56,6 +56,7 @@ var errInjectedSessionRollback = errors.New("cross-store test: injected rollback
 type crossStoreFixture struct {
 	sessionRepo  *PGSessionRepository
 	refreshStore *adapterpg.PGRefreshStore
+	userRepo     *PGUserRepository // for seeding users(id) FK target post-021
 	txm          *adapterpg.TxManager
 	pool         *adapterpg.Pool
 	clock        *storetest.FakeClock
@@ -83,6 +84,9 @@ func newCrossStoreFixture(t *testing.T) *crossStoreFixture {
 	sessionRepo, err := NewPGSessionRepository(pool.DB(), clock.Real())
 	require.NoError(t, err)
 
+	userRepo, err := NewPGUserRepository(pool.DB())
+	require.NoError(t, err)
+
 	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txm, policy, clk, nil)
 	require.NoError(t, err)
 
@@ -91,6 +95,7 @@ func newCrossStoreFixture(t *testing.T) *crossStoreFixture {
 	return &crossStoreFixture{
 		sessionRepo:  sessionRepo,
 		refreshStore: refreshStore,
+		userRepo:     userRepo,
 		txm:          txm,
 		pool:         pool,
 		clock:        clk,
@@ -118,7 +123,7 @@ func TestCrossStore_SessionAndRefresh_BothCommit(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := "sess-commit-" + uuid.NewString()[:8]
-	userID := "user-commit-" + uuid.NewString()[:8]
+	userID := seedUser(t, ctx, fx.userRepo)
 
 	s := newCrossStoreTestSession(sessionID, userID, "tok-commit-"+uuid.NewString())
 
@@ -155,7 +160,7 @@ func TestCrossStore_SessionAndRefresh_BothRollback(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := "sess-rb-" + uuid.NewString()[:8]
-	userID := "user-rb-" + uuid.NewString()[:8]
+	userID := seedUser(t, ctx, fx.userRepo)
 
 	s := newCrossStoreTestSession(sessionID, userID, "tok-rb-"+uuid.NewString())
 
@@ -197,7 +202,7 @@ func TestCrossStore_RotateFails_SessionUpdateRollback(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := "sess-rotfail-" + uuid.NewString()[:8]
-	userID := "user-rotfail-" + uuid.NewString()[:8]
+	userID := seedUser(t, ctx, fx.userRepo)
 	originalToken := "tok-rotfail-" + uuid.NewString()
 
 	// Set up: create session and issue refresh token outside the outer TX.
