@@ -66,6 +66,13 @@ UPDATE sessions
 SET revoked_at = $3
 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`
 
+	// selectSessionExistsSQL checks raw existence of a session row without
+	// filtering revoked_at. Used by Update to disambiguate RowsAffected==0:
+	// a revoked row still exists (version conflict) whereas a missing row is
+	// a genuine not-found. Must NOT include revoked_at IS NULL so that
+	// soft-revoked rows are not misclassified as not-found.
+	selectSessionExistsSQL = `SELECT 1 FROM sessions WHERE id = $1`
+
 	// revokeByUserIDSQL soft-deletes all active sessions for a given user.
 	// Only touches rows where revoked_at IS NULL.
 	revokeByUserIDSQL = `
@@ -201,15 +208,14 @@ func (r *PGSessionRepository) GetByID(ctx context.Context, id string) (*domain.S
 // Update persists a modified session aggregate using optimistic concurrency.
 //
 // The WHERE clause includes version=$2 so concurrent updates on the same
-// version are detected. RowsAffected==0 is disambiguated via a GetByID probe:
-// not found → ErrSessionNotFound; version mismatch → ErrSessionConflict.
+// version are detected. RowsAffected==0 is disambiguated via a raw existence
+// probe (selectSessionExistsSQL, no revoked_at filter): if the row is missing
+// entirely, it is a genuine not-found; if it exists (including revoked rows),
+// the version was stale — treated as a conflict. Using GetByID here would be
+// wrong because GetByID filters revoked_at IS NULL, causing soft-revoked rows
+// to be misclassified as not-found under a version conflict.
 //
 // On success, session.Version is incremented to match the new DB value.
-//
-// Disambiguation depends on READ COMMITTED isolation: the follow-up
-// GetByID inside the same ambient TX must see this TX's prior writes.
-// If repository moves to REPEATABLE READ or stricter, this branch must
-// be replaced by a single SQL (UPDATE ... RETURNING ...).
 func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Session) error {
 	ct, err := r.execCtx(ctx, updateSessionSQL,
 		session.ID,
@@ -222,13 +228,22 @@ func (r *PGSessionRepository) Update(ctx context.Context, session *domain.Sessio
 		return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: update", err)
 	}
 	if ct.RowsAffected() == 0 {
-		// Distinguish not-found from version-conflict via a follow-up probe.
-		_, lookupErr := r.GetByID(ctx, session.ID)
-		if lookupErr != nil {
-			// Row does not exist — propagate the not-found error.
-			return lookupErr
+		// Existence probe: does the row exist at all (regardless of revoked_at)?
+		// A revoked row → version conflict (caller holds stale version).
+		// Missing row → genuine not-found.
+		var exists int
+		existsErr := r.queryRowCtx(ctx, selectSessionExistsSQL, session.ID).Scan(&exists)
+		if errors.Is(existsErr, pgx.ErrNoRows) {
+			return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
+				"session not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal("id="+session.ID),
+			)
 		}
-		// Row exists but version did not match.
+		if existsErr != nil {
+			return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "session repo: update exists check", existsErr)
+		}
+		// Row exists (active or revoked) but version did not match.
 		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
 			"session was modified by another request, please retry",
 			errcode.WithCategory(errcode.CategoryDomain),

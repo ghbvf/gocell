@@ -357,14 +357,21 @@ func (r *PGRoleRepository) RemoveFromUser(ctx context.Context, userID, roleID st
 // persistence.TxCtxKey). pg_advisory_xact_lock serializes concurrent revokes
 // for the same role at the transaction level, so the lock+check+delete is
 // fully atomic within the surrounding transaction. The lock is held until the
-// transaction commits or rolls back — calling without an ambient TX means the
-// advisory lock is released immediately after the statement, which still
-// eliminates the old TOCTOU window but provides weaker isolation than an
-// explicit outer TX.
+// transaction commits or rolls back. Without an ambient TX, the advisory lock
+// is released immediately after the statement, which leaves a TOCTOU window
+// between the COUNT check and the DELETE — this method fails fast in that case
+// to enforce the documented contract rather than silently providing weaker
+// isolation.
 //
 // ref: PostgreSQL pg_advisory_xact_lock docs
 // ref: ory/keto internal/persistence/sql advisory_lock pattern
 func (r *PGRoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
+	if _, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); !ok {
+		return false, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"role repo: RemoveFromUserIfNotLast requires ambient transaction",
+			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)),
+		)
+	}
 	var (
 		lockAcquired *int // SELECT 1 FROM lock_acquire — always 1 if executed
 		held         bool

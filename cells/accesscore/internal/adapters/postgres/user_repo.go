@@ -152,6 +152,9 @@ func (r *PGUserRepository) Create(ctx context.Context, user *domain.User) error 
 
 // mapUniqueViolation converts a 23505 pgx error into an errcode.Error.
 // Non-23505 errors are wrapped as KindInternal.
+//
+// PII safety: email and username are redacted before being written to
+// WithInternal (first 3 chars + ***) to limit log-backend PII exposure.
 func (r *PGUserRepository) mapUniqueViolation(err error, op, username, email string) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
@@ -162,13 +165,13 @@ func (r *PGUserRepository) mapUniqueViolation(err error, op, username, email str
 		if pgErr.ConstraintName == constraintUsersEmail {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthEmailDuplicate,
 				"email already exists",
-				errcode.WithInternal(fmt.Sprintf("constraint=%s email=%s", pgErr.ConstraintName, email)),
+				errcode.WithInternal(fmt.Sprintf("constraint=%s email=%s", pgErr.ConstraintName, redactPII(email))),
 			)
 		}
 		// idx_users_username or any other unique constraint.
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 			"username already exists",
-			errcode.WithInternal(fmt.Sprintf("constraint=%s username=%s", pgErr.ConstraintName, username)),
+			errcode.WithInternal(fmt.Sprintf("constraint=%s username=%s", pgErr.ConstraintName, redactPII(username))),
 		)
 	}
 	return errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "user repo: query failed", err,
@@ -245,25 +248,24 @@ func (r *PGUserRepository) GetByUsernameForUpdate(ctx context.Context, username 
 // ref: K8s apimachinery resourceVersion CAS pattern
 // ref: ory/kratos persister_identity.go UpdateIdentity optimistic lock
 func (r *PGUserRepository) ApplyPatch(ctx context.Context, p ports.UserPatch) (*domain.User, error) {
-	setClauses, args := buildSetClauses(p)
+	setClauses, args, nextN := buildSetClauses(p)
 	if len(setClauses) == 0 {
 		// Nothing to update — just return the current state.
 		return r.GetByID(ctx, p.ID)
 	}
 
 	// Always advance version and set updated_at.
-	nextArgN := len(args) + 1
 	setClauses = append(setClauses,
 		"version = version + 1",
-		fmt.Sprintf("updated_at = $%d", nextArgN),
+		fmt.Sprintf("updated_at = $%d", nextN),
 	)
 	args = append(args, p.UpdatedAt)
-	nextArgN++
+	nextN++
 
 	// WHERE id=$N AND version=$M
 	args = append(args, p.ID, p.CurrentVersion)
-	whereIDN := nextArgN
-	whereVerN := nextArgN + 1
+	whereIDN := nextN
+	whereVerN := nextN + 1
 
 	sql := fmt.Sprintf(`
 UPDATE users
@@ -280,7 +282,15 @@ RETURNING id, username, email, password_hash, password_reset_required, status, c
 		return u, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, r.mapUniqueViolation(err, "user repo: apply patch", p.ID, "")
+		// Pass actual patch values so unique-constraint diagnostics include them.
+		var email, username string
+		if p.Email != nil {
+			email = *p.Email
+		}
+		if p.Username != nil {
+			username = *p.Username
+		}
+		return nil, r.mapUniqueViolation(err, "user repo: apply patch", username, email)
 	}
 
 	// RowsAffected==0: distinguish not-found from version mismatch.
@@ -306,9 +316,13 @@ RETURNING id, username, email, password_hash, password_reset_required, status, c
 // buildSetClauses constructs the SET clause fragments for ApplyPatch.
 // Only non-nil patch fields are included; column names are hard-coded
 // constants (never user-supplied strings) to prevent SQL injection.
-func buildSetClauses(p ports.UserPatch) ([]string, []any) {
-	var clauses []string
-	var args []any
+//
+// Returns the clause list, the corresponding args slice, and nextN — the
+// next available positional parameter index ($nextN) for the caller to use
+// in WHERE / additional SET clauses. Using the returned nextN removes the
+// implicit coupling where the caller had to derive the next index from
+// len(args).
+func buildSetClauses(p ports.UserPatch) (clauses []string, args []any, nextN int) {
 	n := 1
 
 	if p.Username != nil {
@@ -336,8 +350,7 @@ func buildSetClauses(p ports.UserPatch) ([]string, []any) {
 		args = append(args, string(*p.Status))
 		n++
 	}
-	_ = n // suppress "declared but not used" if last increment is unused
-	return clauses, args
+	return clauses, args, n
 }
 
 // Delete removes a user row by primary key.
@@ -379,4 +392,20 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 	u.Status = domain.UserStatus(status)
 	u.CreationSource = domain.UserSource(source)
 	return &u, nil
+}
+
+// redactPII returns only the first 3 characters of s followed by "***".
+// Used to limit PII exposure in WithInternal log fields for email/username.
+//
+//   - empty string → ""
+//   - len ≤ 3 → "***"
+//   - otherwise → s[:3] + "***"
+func redactPII(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 3 {
+		return "***"
+	}
+	return s[:3] + "***"
 }
