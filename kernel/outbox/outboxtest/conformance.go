@@ -821,11 +821,8 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 		clock.Real(),
 	)
 	assertNoError(t, err)
-	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:        h.Sub,
-		Middleware:   []outbox.SubscriptionMiddleware{middleware},
-		ConsumerBase: cb,
-	}
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(h.Sub, cb, middleware)
+	assertNoError(t, err)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	h.cancel = cancel

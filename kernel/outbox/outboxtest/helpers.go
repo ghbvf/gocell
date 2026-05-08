@@ -23,10 +23,14 @@ import (
 const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
 
 // waitForSubscription waits until the subscriber is ready to receive messages
-// for the given topic. It calls Setup to declare topology, then waits for the
-// Ready channel to close. For persistent brokers, Setup pre-declares queues so
-// messages are durably queued before Subscribe starts consuming. For in-memory
-// implementations, Ready blocks until the goroutine calls Subscribe.
+// for the given topic. It calls Setup to declare topology, then blocks on the
+// Ready channel. Subscriber.Ready MUST close once the subscription is delivery-
+// safe — every production adapter (rabbitmq, in-memory eventbus) honors this:
+// rabbitmq returns a pre-closed channel because Setup synchronously declares
+// the durable topology, and the in-memory bus closes Ready when Subscribe
+// registers. A never-closing Ready channel is a contract violation, surfaced
+// here as a t.Fatalf so the offending adapter fails the suite immediately
+// instead of silently losing the first message.
 //
 // Contract: consumerGroup MUST equal the ConsumerGroup field of the Subscription
 // passed to the eventual Subscribe / SubscribeEntry call. RabbitMQ derives the
@@ -36,7 +40,7 @@ const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
 // wrong queue under broker scheduling, producing flaky timeouts.
 //
 // ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
-func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
+func waitForSubscription(t testing.TB, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
 	t.Helper()
 	subSpec := outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup}
 	if err := sub.Setup(ctx, subSpec); err != nil {
@@ -44,14 +48,14 @@ func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscribe
 	}
 	select {
 	case <-sub.Ready(subSpec):
+		return
 	case <-ctx.Done():
 		t.Fatalf("waitForSubscription: context canceled before subscriber ready: %v", ctx.Err())
 	case <-time.After(subscribeReadyTimeout):
-		// Fallback: subscriber did not signal Ready within init delay. This is
-		// acceptable for implementations that return a never-closing Ready channel
-		// (e.g., persistent brokers where setup is fire-and-forget). The caller
-		// may experience delivery loss on the first message; that is acceptable
-		// for non-persistent test setups.
+		t.Fatalf(
+			"waitForSubscription: %s did not signal Ready within %s — "+
+				"Subscriber.Ready must close once delivery-safe",
+			topic, subscribeReadyTimeout)
 	}
 }
 

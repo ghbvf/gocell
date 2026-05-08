@@ -33,20 +33,42 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	if sub == nil {
 		return b.checkNoSubscriptionsWhenSubscriberNil(s)
 	}
+	if !cellSnapshotsHaveSubscriptions(s) {
+		// No subscriptions to drain: skip router build entirely. Avoids
+		// invoking NewSubscriberWithMiddleware (which requires a non-nil
+		// ConsumerBase) when the deployment wires a Subscriber for future use
+		// but has no current handlers.
+		return nil
+	}
 	if err := b.checkConsumerBaseConfiguredForSubscriptions(s); err != nil {
 		return err
 	}
 
-	evtRouter := b.buildEventRouter(sub)
+	evtRouter, err := b.buildEventRouter(sub)
+	if err != nil {
+		return err
+	}
 	if err := b.drainCellSubscriptions(s, evtRouter); err != nil {
 		return err
 	}
 
-	if evtRouter.HandlerCount() == 0 {
-		return nil
-	}
-
 	return b.startAndRegisterEventRouter(runCtx, s, evtRouter)
+}
+
+// cellSnapshotsHaveSubscriptions reports whether any cell snapshot in the
+// phase state declared at least one event subscription. Used to short-circuit
+// router construction when there is no work to drain.
+func cellSnapshotsHaveSubscriptions(s *phaseState) bool {
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		if len(snap.Subscriptions) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // buildEventRouter creates the event router with middleware and validators.
@@ -54,21 +76,26 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 // The SubscriberWithMiddleware wires the business middleware chain and
 // ConsumerBase. The inner Subscriber is decorated with contract tracing so each
 // delivery span closes after final broker settlement (Commit/Ack/Nack/Release).
-func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) *eventrouter.Router {
+// Returns an error if the SubscriberWithMiddleware ctor rejects nil deps.
+func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) (*eventrouter.Router, error) {
 	var evtRouterOpts []eventrouter.Option
 	if b.routerReadyTimeoutSet {
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.routerReadyTimeout))
 	}
-	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
-		Inner:        eventrouter.NewContractTracingSubscriber(sub, b.wrapperTracer),
-		Middleware:   b.consumerMiddleware,
-		ConsumerBase: b.consumerBase,
-	}, b.clock, evtRouterOpts...)
+	swm, err := outbox.NewSubscriberWithMiddleware(
+		eventrouter.NewContractTracingSubscriber(sub, b.wrapperTracer),
+		b.consumerBase,
+		b.consumerMiddleware...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: buildEventRouter: %w", err)
+	}
+	evtRouter := eventrouter.New(swm, b.clock, evtRouterOpts...)
 
 	for _, v := range b.subscriptionValidators {
 		evtRouter.AddSubscriptionValidator(v)
 	}
-	return evtRouter
+	return evtRouter, nil
 }
 
 // drainCellSubscriptions registers all cell snapshot subscriptions into the router.

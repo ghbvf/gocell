@@ -10,11 +10,18 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
-// MaxObservabilityTotalSize bounds the total bytes of all observability
-// fields combined. With four ID-shaped fields each capped at
-// idutil.MaxMetadataIDLen (256B), the worst-case is 1024B; the constant
-// matches that ceiling so producers see a single failure mode at write
-// time and consumers can size scan-time guards accordingly.
+// MaxObservabilityTotalSize is a sizing-ceiling reference for downstream
+// adapters that allocate buffers proportional to the worst-case total
+// length of all observability fields combined. With four ID-shaped fields
+// each capped at idutil.MaxMetadataIDLen (256B), the worst-case is 1024B;
+// adapters/postgres uses 4× this value for the JSONB column allocation.
+//
+// Validate() does NOT enforce this aggregate bound: TraceParent is
+// constrained to a fixed 55B W3C string and the three ID fields are each
+// per-field-capped at MaxMetadataIDLen, so the reachable maximum is
+// 3×256 + 55 = 823 < 1024. Per-field limits already cover the worst case
+// at write time; the aggregate cap is unreachable and intentionally not
+// enforced (see backlog OBS-TOTAL-CAP-DEAD-BRANCH-01 / PR#415 review F4).
 const MaxObservabilityTotalSize = 4 * idutil.MaxMetadataIDLen
 
 // ObservabilityMetadata carries cross-async tracing context that the
@@ -48,11 +55,13 @@ func (o ObservabilityMetadata) IsZero() bool {
 		o.RequestID == "" && o.CorrelationID == ""
 }
 
-// Validate enforces per-field and aggregate size bounds. Each non-empty
-// field must satisfy idutil.IsSafeID and len ≤ idutil.MaxMetadataIDLen
-// (TraceParent is a fixed 55-byte W3C string and is checked separately
-// via validTraceParent). The total size of all fields combined must not
-// exceed MaxObservabilityTotalSize.
+// Validate enforces per-field size + charset bounds. Each non-empty ID
+// field (TraceID/RequestID/CorrelationID) must satisfy idutil.IsSafeID
+// and len ≤ idutil.MaxMetadataIDLen; TraceParent must be a valid W3C
+// traceparent (fixed 55-byte format, checked via validTraceParent).
+//
+// No aggregate size check: per-field caps already cover the worst case
+// (see MaxObservabilityTotalSize doc).
 //
 // Producers MUST call Validate (via Entry.Validate, which is called by
 // every Writer.Write impl) so size violations surface at write time
@@ -71,12 +80,6 @@ func (o ObservabilityMetadata) Validate() error {
 	}
 	if err := validateObservabilityID("correlationId", o.CorrelationID); err != nil {
 		return err
-	}
-	total := len(o.TraceID) + len(o.TraceParent) + len(o.RequestID) + len(o.CorrelationID)
-	if total > MaxObservabilityTotalSize {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"outbox: observability total size exceeds max",
-			errcode.WithDetails(slog.Int("total", total), slog.Int("max", MaxObservabilityTotalSize)))
 	}
 	return nil
 }

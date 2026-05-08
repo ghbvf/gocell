@@ -55,14 +55,17 @@ func TestSubscriberWithMiddleware_Close_ForwardsCtx(t *testing.T) {
 			return nil
 		},
 	}
-	swm := &SubscriberWithMiddleware{Inner: inner}
+	swm, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	if err != nil {
+		t.Fatalf("ctor error: %v", err)
+	}
 	key := contextKey("test-key")
 	sentCtx := context.WithValue(context.Background(), key, "test-val")
 	if err := swm.Close(sentCtx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if capturedCtx != sentCtx {
-		t.Fatal("Close must forward the ctx to Inner.Close")
+		t.Fatal("Close must forward the ctx to inner Subscriber.Close")
 	}
 }
 
@@ -79,7 +82,10 @@ func TestSubscriberWithMiddleware_Close_PropagatesCtxErr(t *testing.T) {
 			return ctx.Err()
 		},
 	}
-	swm := &SubscriberWithMiddleware{Inner: inner}
+	swm, ctorErr := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	if ctorErr != nil {
+		t.Fatalf("ctor error: %v", ctorErr)
+	}
 	err := swm.Close(cancelledCtx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
@@ -185,8 +191,15 @@ func TestNoopWriter_WriteBatch(t *testing.T) {
 func TestNoopWriter_WriteBatchRejectsInvalidEntry(t *testing.T) {
 	writer := NoopWriter{}
 	err := writer.WriteBatch(context.Background(), []Entry{validEntry("noop-1"), {}})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "entry[1]")
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error (runtime data layered into Details, not message)")
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+
+	idxAttr, ok := ecErr.FindAttr("entry_index")
+	require.True(t, ok, "expected entry_index attribute in Details")
+	assert.Equal(t, int64(1), idxAttr.Value.Int64())
 }
 
 func TestNoopWriter_Noop(t *testing.T) {
@@ -195,6 +208,20 @@ func TestNoopWriter_Noop(t *testing.T) {
 
 func TestDiscardPublisher_Noop(t *testing.T) {
 	assert.True(t, (&DiscardPublisher{}).Noop())
+}
+
+// TestDiscardPublisher_Close_NoOp pins the documented contract that Close is
+// resource-free: any ctx (including a canceled one) yields nil. Sole guard
+// against a future implementation accidentally leaking ctx-aware behavior
+// (e.g., returning ctx.Err()) which would surprise callers wiring the publisher
+// into a graceful-shutdown chain.
+func TestDiscardPublisher_Close_NoOp(t *testing.T) {
+	dp := &DiscardPublisher{}
+	assert.NoError(t, dp.Close(context.Background()))
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.NoError(t, dp.Close(canceled), "Close must remain a no-op even with a canceled ctx")
 }
 
 func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
@@ -304,10 +331,11 @@ func TestSubscriberWithMiddleware_DoesNotImplementSubscriberInterface(t *testing
 
 func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	inner := &recordingSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner, ConsumerBase: testConsumerBase(t)}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
 	called := false
-	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"),
+	err = sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"),
 		func(_ context.Context, _ Entry) HandleResult {
 			called = true
 			return Ack()
@@ -322,18 +350,58 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	assert.True(t, called)
 }
 
-func TestSubscriberWithMiddleware_RequiresConsumerBase(t *testing.T) {
+// TestSubscriberWithMiddleware_SubscribeEntry_RejectsInvalidSubscription
+// pins the sub.Validate guard at the SubscribeEntry boundary: a Subscription
+// missing the contract triple (ContractID/Kind/Transport) must be rejected
+// before any inner Subscribe call, with the underlying *errcode.Error reachable
+// via errors.As (no double-wrapping that would erase the inner Code).
+func TestSubscriberWithMiddleware_SubscribeEntry_RejectsInvalidSubscription(t *testing.T) {
 	inner := &recordingSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	swm, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
-	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"),
-		func(_ context.Context, _ Entry) HandleResult {
-			return Ack()
-		})
+	// Topic + ConsumerGroup but missing ContractID — Subscription.Validate fails.
+	bad := Subscription{Topic: "t", ConsumerGroup: "cg"}
+	err = swm.SubscribeEntry(context.Background(), bad,
+		func(_ context.Context, _ Entry) HandleResult { return Ack() })
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ConsumerBase")
-	assert.False(t, inner.subscribeCalled, "inner subscriber must not start without ConsumerBase")
+	assert.Contains(t, err.Error(), "outbox: SubscriberWithMiddleware",
+		"error must carry the operation prefix from the wrapping fmt.Errorf")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr),
+		"inner *errcode.Error must remain accessible via errors.As (no double-wrap)")
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+	assert.False(t, inner.subscribeCalled,
+		"inner Subscribe must not run when Subscription.Validate fails")
+}
+
+// TestNewSubscriberWithMiddleware_RejectsNilInner verifies the constructor
+// fail-fasts when the inner Subscriber is nil. This replaces the previous
+// per-method ConsumerBase nil check with a structural guarantee.
+func TestNewSubscriberWithMiddleware_RejectsNilInner(t *testing.T) {
+	swm, err := NewSubscriberWithMiddleware(nil, testConsumerBase(t))
+	require.Error(t, err)
+	require.Nil(t, swm)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "non-nil inner Subscriber")
+}
+
+// TestNewSubscriberWithMiddleware_RejectsNilConsumerBase verifies the
+// constructor fail-fasts on nil ConsumerBase.
+func TestNewSubscriberWithMiddleware_RejectsNilConsumerBase(t *testing.T) {
+	inner := &recordingSubscriber{}
+	swm, err := NewSubscriberWithMiddleware(inner, nil)
+	require.Error(t, err)
+	require.Nil(t, swm)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "non-nil ConsumerBase")
 }
 
 func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
@@ -348,11 +416,8 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 		}
 	}
 
-	sub := &SubscriberWithMiddleware{
-		Inner:        inner,
-		Middleware:   []SubscriptionMiddleware{middleware},
-		ConsumerBase: testConsumerBase(t),
-	}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t), middleware)
+	require.NoError(t, err)
 
 	var receivedEntry Entry
 	handler := func(_ context.Context, e Entry) HandleResult {
@@ -360,7 +425,7 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 		return Ack()
 	}
 
-	err := sub.SubscribeEntry(context.Background(), testFullSub("orders.created", "cg-orders"), handler)
+	err = sub.SubscribeEntry(context.Background(), testFullSub("orders.created", "cg-orders"), handler)
 	assert.NoError(t, err)
 	assert.Equal(t, "orders.created", middlewareTopic)
 
@@ -387,21 +452,20 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 		}
 	}
 
-	sub := &SubscriberWithMiddleware{
-		Inner: inner,
-		Middleware: []SubscriptionMiddleware{
-			makeMiddleware("outer"),
-			makeMiddleware("inner"),
-		},
-		ConsumerBase: testConsumerBase(t),
-	}
+	sub, err := NewSubscriberWithMiddleware(
+		inner,
+		testConsumerBase(t),
+		makeMiddleware("outer"),
+		makeMiddleware("inner"),
+	)
+	require.NoError(t, err)
 
 	handler := func(_ context.Context, _ Entry) HandleResult {
 		order = append(order, "handler")
 		return Ack()
 	}
 
-	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"), handler)
+	err = sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"), handler)
 	assert.NoError(t, err)
 
 	_, _ = inner.capturedHandler(context.Background(), Entry{})
@@ -418,19 +482,20 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 
 func TestSubscriberWithMiddleware_Close_DelegatesToInner(t *testing.T) {
 	inner := &recordingSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
-	err := sub.Close(context.Background())
-	assert.NoError(t, err)
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 func TestSubscriberWithMiddleware_Close_PropagatesError(t *testing.T) {
 	inner := &recordingSubscriber{closeErr: assert.AnError}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
-	err := sub.Close(context.Background())
-	assert.Error(t, err)
-	assert.Equal(t, assert.AnError, err)
+	closeErr := sub.Close(context.Background())
+	assert.Error(t, closeErr)
+	assert.Equal(t, assert.AnError, closeErr)
 }
 
 func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
@@ -442,11 +507,8 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 		}
 	}
 
-	sub := &SubscriberWithMiddleware{
-		Inner:        inner,
-		Middleware:   []SubscriptionMiddleware{shortCircuit},
-		ConsumerBase: testConsumerBase(t),
-	}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t), shortCircuit)
+	require.NoError(t, err)
 
 	handlerCalled := false
 	handler := func(_ context.Context, _ Entry) HandleResult {
@@ -454,7 +516,7 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 		return Ack()
 	}
 
-	err := sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"), handler)
+	err = sub.SubscribeEntry(context.Background(), testFullSub("test.topic", "cg-test"), handler)
 	assert.NoError(t, err)
 
 	// Call captured handler — middleware should short-circuit.
@@ -482,22 +544,44 @@ func (s *setupSubscriber) Setup(_ context.Context, sub Subscription) error {
 
 func TestSubscriberWithMiddleware_Setup_DelegatesToInner(t *testing.T) {
 	inner := &setupSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
-	err := sub.Setup(context.Background(), Subscription{Topic: "test.topic", ConsumerGroup: "cg-1"})
-	assert.NoError(t, err)
+	setupErr := sub.Setup(context.Background(), Subscription{Topic: "test.topic", ConsumerGroup: "cg-1"})
+	assert.NoError(t, setupErr)
 	assert.True(t, inner.setupCalled)
 	assert.Equal(t, "test.topic", inner.setupSub.Topic)
 	assert.Equal(t, "cg-1", inner.setupSub.ConsumerGroup)
 }
 
+// TestSubscriberWithMiddleware_Ready_DelegatesToInner pins the contract that
+// Ready returns the inner subscriber's channel verbatim. waitForSubscription's
+// adapter-contract guard relies on this delegation closing once the inner
+// signals ready (rabbitmq pre-closed channel; in-memory bus closes on first
+// Subscribe). A regression that returned a fresh, never-closing channel here
+// would re-open the OUTBOX-READY-DUAL-BARRIER footgun.
+func TestSubscriberWithMiddleware_Ready_DelegatesToInner(t *testing.T) {
+	inner := &recordingSubscriber{}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
+
+	ch := sub.Ready(Subscription{Topic: "t", ConsumerGroup: "cg"})
+	select {
+	case <-ch:
+		// recordingSubscriber.Ready returns a pre-closed channel.
+	default:
+		t.Fatal("Ready must return the inner subscriber's pre-closed channel verbatim")
+	}
+}
+
 func TestSubscriberWithMiddleware_Setup_PropagatesError(t *testing.T) {
 	inner := &setupSubscriber{setupErr: errors.New("init failed")}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
-	err := sub.Setup(context.Background(), Subscription{Topic: "t", ConsumerGroup: "g"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "init failed")
+	setupErr := sub.Setup(context.Background(), Subscription{Topic: "t", ConsumerGroup: "g"})
+	assert.Error(t, setupErr)
+	assert.Contains(t, setupErr.Error(), "init failed")
 }
 
 func TestEntry_RoutingTopic(t *testing.T) {
@@ -673,6 +757,19 @@ func TestEntry_Validate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "missing ID",
 		},
+		{
+			// Pins propagation of Observability.Validate errors through
+			// Entry.Validate. A regression that drops this branch would let
+			// malformed observability IDs (unsafe chars / oversized fields)
+			// reach the persistence layer.
+			name: "invalid Observability propagates",
+			entry: Entry{
+				ID: "evt-obs", Topic: "t", Payload: []byte("{}"),
+				Observability: ObservabilityMetadata{TraceID: "trace; DROP TABLE"},
+			},
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -753,9 +850,26 @@ func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
 	}
 
 	err := WriteBatchFallback(context.Background(), w, entries)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "entry[1]")
-	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+
+	idxAttr, ok := ecErr.FindAttr("entry_index")
+	require.True(t, ok, "expected entry_index attribute in Details")
+	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+
+	// Cause chain must remain reachable: the inner Entry.Validate failure
+	// (a *errcode.Error from kernel/outbox/entry.go) is wrapped into the
+	// batch-validation error via errcode.Wrap; future Wrap regressions that
+	// drop the Cause field would silently break observability.
+	var innerErr *errcode.Error
+	require.True(t, errors.As(ecErr.Cause, &innerErr),
+		"inner Entry.Validate error must remain accessible via errors.As (errcode.Error)")
+	assert.NotEmpty(t, innerErr.Message,
+		"inner errcode.Error must carry a descriptive message about the missing field")
+
 	assert.Nil(t, w.batchEntries, "no writes should occur on validation failure")
 	assert.Nil(t, w.writeEntries)
 }
@@ -796,10 +910,21 @@ func TestWriteBatchFallback_SequentialFallbackError(t *testing.T) {
 	entries := []Entry{validEntry("e1"), validEntry("e2"), validEntry("e3")}
 
 	err := WriteBatchFallback(context.Background(), w, entries)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "entry[1]")
-	assert.Contains(t, err.Error(), "id=e2")
-	assert.Contains(t, err.Error(), "db write failed")
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+
+	idxAttr, ok := ecErr.FindAttr("entry_index")
+	require.True(t, ok, "expected entry_index attribute in Details")
+	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+
+	idAttr, ok := ecErr.FindAttr("entry_id")
+	require.True(t, ok, "expected entry_id attribute in Details")
+	assert.Equal(t, "e2", idAttr.Value.String())
+
+	assert.ErrorContains(t, err, "db write failed", "wrapped cause must remain reachable via %%w chain")
 	assert.Len(t, w.entries, 1, "only the first entry should have been written")
 }
 
@@ -1014,17 +1139,14 @@ func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
 		return next
 	}
 
-	swm := &SubscriberWithMiddleware{
-		Inner:        inner,
-		Middleware:   []SubscriptionMiddleware{mw},
-		ConsumerBase: testConsumerBase(t),
-	}
+	swm, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t), mw)
+	require.NoError(t, err)
 
 	wantSub := Subscription{
 		Topic: "orders.created.v1", ConsumerGroup: "cg-auditcore", CellID: "auditcore",
 		ContractID: "event.orders.created.v1", ContractKind: "event", ContractTransport: "memory",
 	}
-	err := swm.SubscribeEntry(context.Background(), wantSub, func(_ context.Context, _ Entry) HandleResult {
+	err = swm.SubscribeEntry(context.Background(), wantSub, func(_ context.Context, _ Entry) HandleResult {
 		return Ack()
 	})
 	assert.NoError(t, err)
@@ -1071,28 +1193,28 @@ var (
 
 func TestSubscriberWithMiddleware_ForwardsStopIntake(t *testing.T) {
 	inner := &intakeStopperSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
 	stopper, ok := any(sub).(SubscriberIntakeStopper)
-	assert.True(t, ok, "SubscriberWithMiddleware must implement SubscriberIntakeStopper when Inner does")
+	assert.True(t, ok, "SubscriberWithMiddleware must implement SubscriberIntakeStopper when inner does")
 
 	ctx := context.Background()
 
-	err := stopper.StopIntake(ctx)
-	assert.NoError(t, err)
+	assert.NoError(t, stopper.StopIntake(ctx))
 	assert.Equal(t, 1, inner.stopIntakeCalls, "StopIntake must be forwarded to inner on first call")
 
-	err = stopper.StopIntake(ctx)
-	assert.NoError(t, err, "second call must return nil (idempotent)")
+	assert.NoError(t, stopper.StopIntake(ctx), "second call must return nil (idempotent)")
 	assert.Equal(t, 2, inner.stopIntakeCalls, "StopIntake must be forwarded to inner on second call")
 }
 
 func TestSubscriberWithMiddleware_StopIntake_InnerNotStopper(t *testing.T) {
 	inner := &plainSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	sub, err := NewSubscriberWithMiddleware(inner, testConsumerBase(t))
+	require.NoError(t, err)
 
-	err := sub.StopIntake(context.Background())
-	assert.NoError(t, err, "StopIntake must return nil when inner does not implement SubscriberIntakeStopper")
+	assert.NoError(t, sub.StopIntake(context.Background()),
+		"StopIntake must return nil when inner does not implement SubscriberIntakeStopper")
 }
 
 // TestNotifySettlement_ObserverPanic_DoesNotKillCaller verifies that a panicking
@@ -1145,6 +1267,44 @@ func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
 	assert.True(t, spy3Called, "spy3 (after panic observer) must still be called after panic isolation")
 	assert.Contains(t, logBuf.String(), "settlement observer panicked",
 		"panic must be logged with structured message")
+}
+
+// TestNotifySettlement_NoObservers_NoOp pins the early-return when the result
+// carries no observers. Subscriber delivery loops invoke NotifySettlement on
+// every message; the no-op path is the hot path and must remain allocation-
+// free (no SettlementObservation construction) to avoid GC pressure.
+func TestNotifySettlement_NoObservers_NoOp(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("NotifySettlement must be a no-op when no observers attached, got panic: %v", r)
+		}
+	}()
+	NotifySettlement(context.Background(),
+		HandleResult{Disposition: DispositionAck},
+		Entry{ID: "evt-noop", Topic: "t"},
+		DispositionAck, SettlementResultSuccess, nil)
+}
+
+// TestNotifySettlement_NilObserverInList_Skipped pins the nil-tolerant
+// contract: a nil entry inside SettlementObservers must be skipped without
+// panic, and subsequent observers must still be notified. Defends against a
+// regression that removes the nil-check, which would NPE on the first nil
+// observer and silently drop later observers.
+func TestNotifySettlement_NilObserverInList_Skipped(t *testing.T) {
+	called := 0
+	spy := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
+		called++
+	})
+	result := HandleResult{
+		Disposition:         DispositionAck,
+		SettlementObservers: []SettlementObserver{nil, spy, nil},
+	}
+
+	NotifySettlement(context.Background(), result,
+		Entry{ID: "evt-nil-obs", Topic: "t"},
+		DispositionAck, SettlementResultSuccess, nil)
+
+	assert.Equal(t, 1, called, "non-nil observer must run exactly once; nil entries skipped")
 }
 
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {

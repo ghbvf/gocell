@@ -92,20 +92,6 @@ func TestObservabilityMetadata_Validate(t *testing.T) {
 		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "field length exceeds max"},
 		{name: "TraceID unsafe chars", o: ObservabilityMetadata{TraceID: "trace; DROP TABLE"}, wantError: "unsafe characters"},
 		{name: "TraceParent malformed", o: ObservabilityMetadata{TraceParent: "not-a-valid-traceparent"}, wantError: "valid W3C traceparent"},
-		// Maximum reachable total: 3 ID fields × MaxMetadataIDLen + 55B
-		// TraceParent = 768 + 55 = 823 < MaxObservabilityTotalSize (1024).
-		// The Validate per-field branch caps each ID at MaxMetadataIDLen and
-		// TraceParent at the W3C-format-fixed 55 bytes; the aggregate cap is
-		// therefore unreachable today (Validate's `total > MaxObservabilityTotalSize`
-		// guard is effectively dead defense-in-depth). See backlog
-		// `OBS-TOTAL-CAP-DEAD-BRANCH-01` for whether to delete the guard or
-		// raise per-field limits.
-		{name: "max reachable total stays under cap", o: ObservabilityMetadata{
-			TraceID:       strings.Repeat("a", idutil.MaxMetadataIDLen),
-			RequestID:     strings.Repeat("b", idutil.MaxMetadataIDLen),
-			CorrelationID: strings.Repeat("c", idutil.MaxMetadataIDLen),
-			TraceParent:   validTP,
-		}, wantError: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -453,7 +439,8 @@ func (c *captureSubscriber) Close(context.Context) error { return nil }
 
 func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T) {
 	cap := &captureSubscriber{}
-	wrapped := &SubscriberWithMiddleware{Inner: cap, ConsumerBase: testConsumerBase(t)}
+	wrapped, err := NewSubscriberWithMiddleware(cap, testConsumerBase(t))
+	require.NoError(t, err)
 
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
 		testFullSub("test", "cg-obs"),
@@ -492,7 +479,8 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 
 func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *testing.T) {
 	cap := &captureSubscriber{}
-	wrapped := &SubscriberWithMiddleware{Inner: cap, ConsumerBase: testConsumerBase(t)}
+	wrapped, err := NewSubscriberWithMiddleware(cap, testConsumerBase(t))
+	require.NoError(t, err)
 
 	called := false
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
@@ -522,7 +510,8 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 			return next(ctx, entry)
 		}
 	}
-	wrapped := &SubscriberWithMiddleware{Inner: cap, Middleware: []SubscriptionMiddleware{userMW}, ConsumerBase: testConsumerBase(t)}
+	wrapped, err := NewSubscriberWithMiddleware(cap, testConsumerBase(t), userMW)
+	require.NoError(t, err)
 
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(), testFullSub("test", "cg-obs"),
 		func(_ context.Context, _ Entry) HandleResult {
