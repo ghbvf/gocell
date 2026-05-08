@@ -317,26 +317,14 @@ func TestCodegenContractGen02_GeneratedHeader(t *testing.T) {
 func TestCodegenContractUserOverlap01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	genContractsDir := filepath.Join(root, generatedContractsSubdir)
-
-	walkErr := filepath.WalkDir(genContractsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("walk %s: %w", path, err)
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_gen.go") {
-			return nil
+	scope := scanner.DirsScope(root, []string{generatedContractsSubdir})
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		if strings.HasSuffix(fc.AbsPath, "_gen.go") {
+			return
 		}
 		t.Errorf("CODEGEN-CONTRACT-USER-OVERLAP-01: %s is a hand-written .go file under generated/contracts/"+
-			" — only _gen.go files are permitted; move helpers to the consuming package", path)
-		return nil
+			" — only _gen.go files are permitted; move helpers to the consuming package", fc.AbsPath)
 	})
-	require.NoError(t, walkErr, "TestCodegenContractUserOverlap01: walk %s", genContractsDir)
 }
 
 // TestCodegenContractGates_NegativeFixtures runs the gate scanners against
@@ -382,20 +370,16 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 		dir := filepath.Join(fixtureBase, "user_file_overlap")
 		genDir := filepath.Join(dir, "generated", "contracts")
 
+		scope := scanner.DirsScope(genDir, []string{"."})
+		allFiles, filesErr := scope.Files()
+		require.NoError(t, filesErr, "user_file_overlap fixture: scan %s", genDir)
 		foundUserFile := false
-		walkErr := filepath.WalkDir(genDir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("walk %s: %w", path, err)
-			}
-			if d.IsDir() || !strings.HasSuffix(path, ".go") {
-				return nil
-			}
+		for _, path := range allFiles {
 			if !strings.HasSuffix(path, "_gen.go") {
 				foundUserFile = true
+				break
 			}
-			return nil
-		})
-		require.NoError(t, walkErr, "user_file_overlap fixture: walk %s", genDir)
+		}
 		if !foundUserFile {
 			t.Error("user_file_overlap fixture: no hand-written .go file found under generated/contracts — fixture is broken")
 		}
@@ -849,19 +833,14 @@ func findGeneratedCellFilesIn(t *testing.T, roots []string) []string {
 	t.Helper()
 	var found []string
 	for _, scanRoot := range roots {
-		walkErr := filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("walk %s: %w", path, err)
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if d.Name() == "cell_gen.go" {
+		scope := scanner.DirsScope(scanRoot, []string{"."})
+		allFiles, err := scope.Files()
+		require.NoError(t, err, "findGeneratedCellFilesIn: scanning %s", scanRoot)
+		for _, path := range allFiles {
+			if filepath.Base(path) == "cell_gen.go" {
 				found = append(found, path)
 			}
-			return nil
-		})
-		require.NoError(t, walkErr, "findGeneratedCellFilesIn: walking %s", scanRoot)
+		}
 	}
 	sort.Strings(found)
 	return found
@@ -1027,23 +1006,14 @@ func findGeneratedContractFilesIn(t *testing.T, roots []string) []string {
 	t.Helper()
 	var found []string
 	for _, scanRoot := range roots {
-		walkErr := filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("walk %s: %w", path, err)
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
+		scope := scanner.DirsScope(scanRoot, []string{"."})
+		allFiles, err := scope.Files()
+		require.NoError(t, err, "findGeneratedContractFilesIn: scanning %s", scanRoot)
+		for _, path := range allFiles {
 			if strings.HasSuffix(path, "_gen.go") {
 				found = append(found, path)
 			}
-			return nil
-		})
-		require.NoError(t, walkErr, "findGeneratedContractFilesIn: walking %s", scanRoot)
+		}
 	}
 	sort.Strings(found)
 	return found
@@ -1114,17 +1084,18 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 
 // findSpecGenFiles walks dir recursively and returns all spec_gen.go paths.
 func findSpecGenFiles(dir string) ([]string, error) {
+	scope := scanner.DirsScope(dir, []string{"."})
+	allFiles, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	var files []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && d.Name() == "spec_gen.go" {
+	for _, path := range allFiles {
+		if filepath.Base(path) == "spec_gen.go" {
 			files = append(files, path)
 		}
-		return nil
-	})
-	return files, err
+	}
+	return files, nil
 }
 
 // parseContractSpecFields parses a spec_gen.go file and extracts the ID and

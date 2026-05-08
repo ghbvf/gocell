@@ -46,23 +46,16 @@ func TestVisitBufferThenCommit(t *testing.T) {
 		t.Fatalf("resolve repo root: %v", err)
 	}
 
-	generatedContracts := filepath.Join(repoRoot, "generated", "contracts")
-
+	scope := scanner.DirsScope(repoRoot, []string{"generated/contracts"})
+	allFiles, err := scope.Files()
+	if err != nil {
+		t.Fatalf("walk generated/contracts: %v", err)
+	}
 	var typesFiles []string
-	err = filepath.Walk(generatedContracts, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
+	for _, path := range allFiles {
 		if strings.HasSuffix(path, "/types_gen.go") {
 			typesFiles = append(typesFiles, path)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk generated/contracts: %v", err)
 	}
 	if len(typesFiles) == 0 {
 		t.Skip("no generated/contracts/**/types_gen.go found — run go generate ./tools/codegen/... first")
