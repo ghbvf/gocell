@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
@@ -150,19 +151,14 @@ func TestVerifyCodegenCell_SandboxDriftWhenStaleCommit(t *testing.T) {
 	// drift we must commit a cell.yaml change WITHOUT regenerating
 	// cell_gen.go. The HEAD then has stale cell_gen.go vs new cell.yaml.
 	cellPath := filepath.Join(root, "cells", "demo", "cell.yaml")
-	content, err := os.ReadFile(cellPath) //nolint:gosec // test reads its own tmp file
-	if err != nil {
-		t.Fatalf("read cell.yaml: %v", err)
-	}
+	content := fileutil.MustReadFile(t, cellPath)
 	mutated := strings.Replace(string(content), "goStructName: Demo", "goStructName: DemoX", 1)
-	if err := os.WriteFile(cellPath, []byte(mutated), 0o644); err != nil { //nolint:gosec // test writes its own tmp file under t.TempDir
-		t.Fatalf("write cell.yaml: %v", err)
-	}
+	fileutil.MustWriteFile(t, cellPath, []byte(mutated))
 	mustGitCmd(t, root, "add", "cells/demo/cell.yaml")
 	mustGitCmd(t, root, "commit", "-q", "-m", "stale yaml change without regen")
 
 	chdirToRoot(t, root)
-	err = verifyCodegenCell([]string{"--local=false"})
+	err := verifyCodegenCell([]string{"--local=false"})
 	if err == nil || !strings.Contains(err.Error(), "drift") {
 		t.Fatalf("expected sandbox drift error, got %v", err)
 	}

@@ -841,7 +841,8 @@ func (r *Relay) retryDelay(attempts int) time.Duration {
 	delay := r.cappedDelay(r.cfg.BaseRetryDelay * (retryDelayBase << shift))
 	if delay > 0 {
 		// G404 R2-approved: backoff jitter has no cryptographic requirement.
-		jitter := time.Duration(rand.Int64N(int64(delay/retryJitterDivisor) + 1)) //nolint:gosec // G404
+		// G404 non-crypto retry jitter — no cryptographic requirement.
+		jitter := time.Duration(rand.Int64N(int64(delay/retryJitterDivisor) + 1)) //nolint:gosec // see comment above
 		delay += jitter
 	}
 	return delay

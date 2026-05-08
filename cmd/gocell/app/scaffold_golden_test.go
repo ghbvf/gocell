@@ -1,11 +1,11 @@
 package app
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
@@ -36,10 +36,7 @@ func TestScaffoldCell_GoldenCellGo(t *testing.T) {
 	}
 
 	cellGoPath := filepath.Join(dir, "cells", "goldcell", "cell.go")
-	content, err := os.ReadFile(cellGoPath) //nolint:gosec // test reads files it just wrote
-	if err != nil {
-		t.Fatalf("read cell.go: %v", err)
-	}
+	content := fileutil.MustReadFile(t, cellGoPath)
 	got := string(content)
 
 	// Required patterns — each entry is a load-bearing invariant.
@@ -95,10 +92,7 @@ func TestScaffoldCell_GoldenCellYAML(t *testing.T) {
 	}
 
 	cellYAMLPath := filepath.Join(dir, "cells", "goldcell", "cell.yaml")
-	content, err := os.ReadFile(cellYAMLPath) //nolint:gosec // test reads files it just wrote
-	if err != nil {
-		t.Fatalf("read cell.yaml: %v", err)
-	}
+	content := fileutil.MustReadFile(t, cellYAMLPath)
 	got := string(content)
 
 	required := []struct {

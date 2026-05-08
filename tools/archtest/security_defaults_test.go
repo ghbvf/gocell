@@ -36,6 +36,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 const (
@@ -499,10 +501,7 @@ func TestSecurityDefaultsSEC03_NegativeFixture_StringLiteralOnly(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	fixturePath := filepath.Join(root, "tools", "archtest", "testdata", "security_defaults_fixtures", "missing_tls_validate", "main.go")
-	body, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
+	body := fileutil.MustReadFile(t, fixturePath)
 	src := string(body)
 	if secutilCallsValidateTLSEndpoint(src) {
 		t.Errorf("SEC-FAIL-CLOSED-03 negative fixture missing_tls_validate: legacy " +

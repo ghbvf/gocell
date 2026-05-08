@@ -6,6 +6,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -25,13 +26,8 @@ func copyDir(t *testing.T, src, dst string) {
 			}
 			copyDir(t, srcPath, dstPath)
 		} else {
-			data, err := os.ReadFile(srcPath) //nolint:gosec // testdata path under test control
-			if err != nil {
-				t.Fatalf("copyDir ReadFile %s: %v", srcPath, err)
-			}
-			if err := os.WriteFile(dstPath, data, 0o644); err != nil { //nolint:gosec // temp dir under test control
-				t.Fatalf("copyDir WriteFile %s: %v", dstPath, err)
-			}
+			data := fileutil.MustReadFile(t, srcPath)
+			fileutil.MustWriteFile(t, dstPath, data)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
@@ -304,10 +305,7 @@ func TestRenderCell_GoldenSynth(t *testing.T) {
 		return
 	}
 
-	golden, err := os.ReadFile(goldenPath) //nolint:gosec // test reads its own committed fixture path
-	if err != nil {
-		t.Fatalf("read golden %s: %v (run with -update to generate)", goldenPath, err)
-	}
+	golden := fileutil.MustReadFile(t, goldenPath)
 	if !bytes.Equal(out, golden) {
 		t.Errorf("rendered output diverges from golden:\n--- got ---\n%s\n--- want ---\n%s", out, golden)
 	}
@@ -325,14 +323,9 @@ func TestGenerate_VerifyDriftAfterManualEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "cells", "demo", "cell_gen.go")
-	content, err := os.ReadFile(path) //nolint:gosec // test reads its own freshly-written tmp file
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := fileutil.MustReadFile(t, path)
 	tampered := strings.Replace(string(content), "Init", "InitX", 1)
-	if err := os.WriteFile(path, []byte(tampered), 0o644); err != nil { //nolint:gosec // G306: test writes to its own tmp file with mode 0644
-		t.Fatal(err)
-	}
+	fileutil.MustWriteFile(t, path, []byte(tampered))
 	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true})
 	if err != nil {
 		t.Fatal(err)

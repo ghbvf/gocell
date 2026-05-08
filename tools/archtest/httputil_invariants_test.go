@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // INVARIANT: HTTPUTIL-5XX-KIND-NORMALIZE-01
@@ -265,10 +267,7 @@ func collectExportedFuncs(t *testing.T, dir string) map[string]bool {
 // of doc.go. It matches lines of the form "  - FuncName" (with optional args).
 func collectDocRegistered(t *testing.T, path string) map[string]bool {
 	t.Helper()
-	content, err := os.ReadFile(path) //nolint:gosec // archtest reads governance/source files via repo-relative paths only
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
+	content := fileutil.MustReadFile(t, path)
 	result := make(map[string]bool)
 	for _, line := range strings.Split(string(content), "\n") {
 		// Match "//   - FuncName" or "//   - FuncName(...)"
@@ -297,10 +296,7 @@ func collectDocRegistered(t *testing.T, path string) map[string]bool {
 // stable map literals with one entry per line.
 func collectGovernanceRegistered(t *testing.T, path string) map[string]bool {
 	t.Helper()
-	content, err := os.ReadFile(path) //nolint:gosec // archtest reads governance/source files via repo-relative paths only
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
+	content := fileutil.MustReadFile(t, path)
 	result := make(map[string]bool)
 	for _, line := range strings.Split(string(content), "\n") {
 		trimmed := strings.TrimSpace(line)

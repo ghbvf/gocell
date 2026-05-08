@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // exportFixturePath points to the checked-in minimal GoCell fixture used for
@@ -137,8 +139,7 @@ func TestRunExport_IncludeNone(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "out.json")
 	require.NoError(t, runExport([]string{"catalog", "--root=" + root, "--include=", "--out=" + outPath}))
 
-	data, err := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, err)
+	data := fileutil.MustReadFile(t, outPath)
 
 	var doc map[string]any
 	require.NoError(t, json.Unmarshal(data, &doc))
@@ -157,8 +158,7 @@ func TestRunExport_IncludeOnlyEntities(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "out.json")
 	require.NoError(t, runExport([]string{"catalog", "--root=" + root, "--include=relations", "--out=" + outPath}))
 
-	data, err := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, err)
+	data := fileutil.MustReadFile(t, outPath)
 
 	var doc map[string]any
 	require.NoError(t, json.Unmarshal(data, &doc))
@@ -175,8 +175,7 @@ func TestRunExport_IncludeCellDepsOnly(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "out.json")
 	require.NoError(t, runExport([]string{"catalog", "--root=" + root, "--include=cellDeps", "--out=" + outPath}))
 
-	data, err := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, err)
+	data := fileutil.MustReadFile(t, outPath)
 
 	var doc map[string]any
 	require.NoError(t, json.Unmarshal(data, &doc))
@@ -326,8 +325,7 @@ func TestRunExport_FormatYAML(t *testing.T) {
 	err := runExport([]string{"catalog", "--root=" + root, "--format=yaml", "--include=", "--out=" + outPath})
 	require.NoError(t, err)
 
-	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, readErr)
+	data := fileutil.MustReadFile(t, outPath)
 
 	// MarshalDocument produces YAML that starts with "schemaVersion:".
 	require.NotEmpty(t, data, "YAML output must not be empty")
@@ -347,8 +345,7 @@ func TestRunExport_KindsFilter(t *testing.T) {
 		"--out=" + outPath,
 	}))
 
-	data, err := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, err)
+	data := fileutil.MustReadFile(t, outPath)
 
 	var doc struct {
 		Entities []struct {
@@ -436,8 +433,7 @@ func TestRunExport_WireSummaryInjected(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, readErr)
+	data := fileutil.MustReadFile(t, outPath)
 
 	// Parse as generic JSON to find the Cell entity spec.
 	var doc struct {
@@ -541,8 +537,7 @@ allowedFiles:
 	// Graceful degrade: exit 0 even when wire summary scan fails.
 	require.NoError(t, err, "CLI must exit 0 even when wire summary scan fails")
 
-	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, readErr)
+	data := fileutil.MustReadFile(t, outPath)
 
 	var doc struct {
 		Entities []struct {
@@ -584,8 +579,7 @@ func TestRunExport_DefaultPackageDepsLoadError(t *testing.T) {
 	// Graceful degrade: exit 0.
 	require.NoError(t, err, "CLI must exit 0 even when packageDeps load fails")
 
-	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
-	require.NoError(t, readErr)
+	data := fileutil.MustReadFile(t, outPath)
 
 	var doc struct {
 		Dependencies *struct {

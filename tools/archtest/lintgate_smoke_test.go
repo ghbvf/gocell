@@ -29,6 +29,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // lintGateCase models one fixture: a synthetic module's file tree plus the
@@ -283,9 +285,8 @@ func writeFixtureFile(t *testing.T, root, rel, content string) {
 // G304/G703 false positives are suppressed at the call sites.
 func copyConfig(t *testing.T, src, dst string) {
 	t.Helper()
-	data, err := os.ReadFile(src) //nolint:gosec // R2-approved: G304 test harness, src is project config
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(dst, data, 0o600)) //nolint:gosec // R2-approved: G703 t.TempDir() path
+	data := fileutil.MustReadFile(t, src)
+	fileutil.MustWriteFile(t, dst, data)
 }
 
 // runGolangciLint invokes the binary in cwd=workDir, capturing the JSON
@@ -305,12 +306,9 @@ func runGolangciLint(t *testing.T, workDir string) []golangciIssue {
 		"./...",
 	)
 	cmd.Dir = workDir
-	combined, _ := cmd.CombinedOutput()
+	_, _ = cmd.CombinedOutput()
 
-	data, err := os.ReadFile(out) //nolint:gosec // R2-approved: G304 t.TempDir() output path
-	if err != nil {
-		t.Fatalf("read JSON report failed: %v\ngolangci-lint stdout/stderr:\n%s", err, combined)
-	}
+	data := fileutil.MustReadFile(t, out)
 	var report golangciReport
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatalf("parse JSON report failed: %v\nraw:\n%s", err, data)

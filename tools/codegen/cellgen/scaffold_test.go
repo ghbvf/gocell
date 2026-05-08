@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // TestScaffoldCell_GeneratesFiles verifies that ScaffoldCell creates both
@@ -53,10 +55,7 @@ func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 		t.Fatalf("ScaffoldCell() error = %v", err)
 	}
 
-	content, err := os.ReadFile(filepath.Join(dir, "cells", "barcell", "cell.go")) //nolint:gosec // test reads files it just wrote
-	if err != nil {
-		t.Fatalf("read cell.go: %v", err)
-	}
+	content := fileutil.MustReadFile(t, filepath.Join(dir, "cells", "barcell", "cell.go"))
 
 	if !strings.Contains(string(content), "// +cell:listener:") {
 		t.Error("cell.go missing // +cell:listener: stub marker")
@@ -80,10 +79,7 @@ func TestScaffoldCell_CellYAMLContainsGoStructName(t *testing.T) {
 		t.Fatalf("ScaffoldCell() error = %v", err)
 	}
 
-	content, err := os.ReadFile(filepath.Join(dir, "cells", "bazcore", "cell.yaml")) //nolint:gosec // test reads files it just wrote
-	if err != nil {
-		t.Fatalf("read cell.yaml: %v", err)
-	}
+	content := fileutil.MustReadFile(t, filepath.Join(dir, "cells", "bazcore", "cell.yaml"))
 
 	if !strings.Contains(string(content), "goStructName:") {
 		t.Error("cell.yaml missing goStructName field")
@@ -110,10 +106,7 @@ func TestScaffoldCell_CellYAMLContainsOwnerRole(t *testing.T) {
 		t.Fatalf("ScaffoldCell() error = %v", err)
 	}
 
-	content, err := os.ReadFile(filepath.Join(dir, "cells", "rolecell", "cell.yaml")) //nolint:gosec // test reads files it just wrote
-	if err != nil {
-		t.Fatalf("read cell.yaml: %v", err)
-	}
+	content := fileutil.MustReadFile(t, filepath.Join(dir, "cells", "rolecell", "cell.yaml"))
 
 	if !strings.Contains(string(content), "role: cell-owner") {
 		t.Errorf("cell.yaml should contain 'role: cell-owner', got:\n%s", content)
@@ -191,14 +184,8 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				t.Fatalf("ScaffoldCell() error = %v", err)
 			}
 
-			cellGo, err := os.ReadFile(filepath.Join(dir, targetDir, "cell.go")) //nolint:gosec // test reads files it just wrote
-			if err != nil {
-				t.Fatalf("read cell.go: %v", err)
-			}
-			cellYAML, err := os.ReadFile(filepath.Join(dir, targetDir, "cell.yaml")) //nolint:gosec // test reads files it just wrote
-			if err != nil {
-				t.Fatalf("read cell.yaml: %v", err)
-			}
+			cellGo := fileutil.MustReadFile(t, filepath.Join(dir, targetDir, "cell.go"))
+			cellYAML := fileutil.MustReadFile(t, filepath.Join(dir, targetDir, "cell.yaml"))
 
 			for _, want := range tc.wantInCellGo {
 				if !strings.Contains(string(cellGo), want) {
@@ -263,10 +250,7 @@ func TestScaffoldCell_TypeAndLevelRendered(t *testing.T) {
 			if err := ScaffoldCell(dir, "cells/typecell", spec); err != nil {
 				t.Fatalf("ScaffoldCell() error = %v", err)
 			}
-			content, err := os.ReadFile(filepath.Join(dir, "cells", "typecell", "cell.yaml")) //nolint:gosec // test reads files it just wrote
-			if err != nil {
-				t.Fatalf("read cell.yaml: %v", err)
-			}
+			content := fileutil.MustReadFile(t, filepath.Join(dir, "cells", "typecell", "cell.yaml"))
 			if !strings.Contains(string(content), tc.wantType) {
 				t.Errorf("cell.yaml missing %q, got:\n%s", tc.wantType, content)
 			}

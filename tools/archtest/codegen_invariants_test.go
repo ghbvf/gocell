@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
@@ -96,10 +97,7 @@ func TestCodegenCellGen02_GeneratedHeader(t *testing.T) {
 	root := findModuleRoot(t)
 	files := findGeneratedCellFiles(t, root)
 	for _, f := range files {
-		content, err := os.ReadFile(f) //nolint:gosec // archtest scans repo paths it discovered itself
-		if err != nil {
-			t.Fatalf("CODEGEN-CELL-GEN-02: read %s: %v", f, err)
-		}
+		content := fileutil.MustReadFile(t, f)
 		first := firstLine(content)
 		if !strings.HasPrefix(first, codegenGenHeader) {
 			t.Errorf("CODEGEN-CELL-GEN-02: %s does not start with %q (got %q)", f, codegenGenHeader, first)
@@ -185,10 +183,7 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 		dir := filepath.Join(fixtureBase, "missing_header")
 		files := findGeneratedCellFilesIn(t, []string{dir})
 		for _, f := range files {
-			content, err := os.ReadFile(f) //nolint:gosec // test reads fixture paths discovered by the scanner itself
-			if err != nil {
-				t.Fatalf("read fixture %s: %v", f, err)
-			}
+			content := fileutil.MustReadFile(t, f)
 			first := firstLine(content)
 			if strings.HasPrefix(first, codegenGenHeader) {
 				t.Errorf("fixture %s unexpectedly has the correct header — fixture is broken", f)
@@ -308,10 +303,7 @@ func TestCodegenContractGen02_GeneratedHeader(t *testing.T) {
 	root := findModuleRoot(t)
 	files := findGeneratedContractFiles(t, root)
 	for _, f := range files {
-		content, err := os.ReadFile(f) //nolint:gosec // archtest scans repo paths it discovered itself
-		if err != nil {
-			t.Fatalf("CODEGEN-CONTRACT-GEN-02: read %s: %v", f, err)
-		}
+		content := fileutil.MustReadFile(t, f)
 		first := firstLine(content)
 		if !strings.HasPrefix(first, codegenContractGenHeader) {
 			t.Errorf("CODEGEN-CONTRACT-GEN-02: %s does not start with %q (got %q)", f, codegenContractGenHeader, first)
@@ -377,10 +369,7 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 			return
 		}
 		for _, f := range files {
-			content, err := os.ReadFile(f) //nolint:gosec // test reads fixture paths it discovered
-			if err != nil {
-				t.Fatalf("read fixture %s: %v", f, err)
-			}
+			content := fileutil.MustReadFile(t, f)
 			first := firstLine(content)
 			if strings.HasPrefix(first, codegenContractGenHeader) {
 				t.Errorf("missing_header fixture %s unexpectedly has the correct header — fixture is broken", f)
@@ -539,10 +528,7 @@ func TestSPEC_GEN_VALUE_PARITY_01_NegativeFixture_WrongIDInStruct(t *testing.T) 
 	t.Parallel()
 	archDir := findArchTestDir(t)
 	fixturePath := filepath.Join(archDir, "testdata", "spec_gen_value_parity_fixtures", "wrong_id", "spec_gen.go")
-	body, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
+	body := fileutil.MustReadFile(t, fixturePath)
 	id, topic, ok := extractSpecGenIDTopic(string(body))
 	if !ok {
 		t.Fatalf("extractSpecGenIDTopic: ContractSpec literal not found in fixture %s", fixturePath)
@@ -725,10 +711,7 @@ func TestMarkerWireSingleSource01_NegativeFixture_StringLiteralOnly(t *testing.T
 	t.Parallel()
 	archDir := findArchTestDir(t)
 	fixturePath := filepath.Join(archDir, "testdata", "marker_wire_single_source_fixtures", "listener_in_string_literal", "cell.go")
-	content, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
+	content := fileutil.MustReadFile(t, fixturePath)
 	if cellGoHasListenerMarker(content) {
 		t.Errorf("MARKER-WIRE-SINGLE-SOURCE-01 negative fixture listener_in_string_literal: " +
 			"legacy bytes.Contains FALSE-PASSes on string-constant carrier; AST GREEN " +

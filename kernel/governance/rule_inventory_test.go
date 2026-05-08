@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // TestArchtestInventoryNoIDTruncation guards against a regex defect in
@@ -41,10 +43,7 @@ func TestArchtestInventoryNoIDTruncation(t *testing.T) {
 	}
 
 	inventoryPath := filepath.Join("..", "..", "docs", "audit", "archtest-inventory.md")
-	data, err := os.ReadFile(inventoryPath) //nolint:gosec // hardcoded relative path under repo root, test-only
-	if err != nil {
-		t.Fatalf("read inventory %s: %v", inventoryPath, err)
-	}
+	data := fileutil.MustReadFile(t, inventoryPath)
 	body := string(data)
 
 	for _, id := range atRisk {

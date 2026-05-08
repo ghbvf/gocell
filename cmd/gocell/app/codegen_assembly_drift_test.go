@@ -3,8 +3,11 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // minimalAssemblyProject creates a fake project root with:
@@ -103,14 +106,9 @@ func TestCollectAssemblyModulesGenDrift_DetectsTampering(t *testing.T) {
 
 	// Tamper with the generated file by appending a byte.
 	genPath := filepath.Join(root, "cmd", "myasm", "modules_gen.go")
-	content, err := os.ReadFile(genPath) //nolint:gosec // test reads its own tmp file
-	if err != nil {
-		t.Fatalf("read modules_gen.go: %v", err)
-	}
-	tampered := append(content, '\n')                              //nolint:gocritic // intentional extra newline for drift
-	if err := os.WriteFile(genPath, tampered, 0o644); err != nil { //nolint:gosec // test writes its own tmp file under t.TempDir
-		t.Fatalf("write tampered modules_gen.go: %v", err)
-	}
+	content := fileutil.MustReadFile(t, genPath)
+	tampered := slices.Concat(content, []byte{'\n'})
+	fileutil.MustWriteFile(t, genPath, tampered)
 
 	project, err := parseProject(root)
 	if err != nil {

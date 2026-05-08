@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // update flag: run with -update to regenerate golden files.
@@ -951,19 +952,13 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 	// Verify content of spec_gen.go is non-empty and has expected markers.
 	for _, path := range res.Generated {
 		if filepath.Base(path) == "spec_gen.go" {
-			content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
-			if err != nil {
-				t.Fatalf("read spec_gen.go: %v", err)
-			}
+			content := fileutil.MustReadFile(t, path)
 			if !strings.Contains(string(content), "var spec = wrapper.ContractSpec{") {
 				t.Errorf("spec_gen.go missing private spec var:\n%s", content)
 			}
 		}
 		if filepath.Base(path) == "subscription_gen.go" {
-			content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
-			if err != nil {
-				t.Fatalf("read subscription_gen.go: %v", err)
-			}
+			content := fileutil.MustReadFile(t, path)
 			if !strings.Contains(string(content), "func NewSubscription(") {
 				t.Errorf("subscription_gen.go missing NewSubscription:\n%s", content)
 			}

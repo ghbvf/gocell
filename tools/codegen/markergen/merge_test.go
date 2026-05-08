@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
 // testdataDir returns the absolute path to the testdata directory.
@@ -540,11 +541,6 @@ func TestMerge_ContractUsageRoleSkippedWhenNilMeta(t *testing.T) {
 // copyFile copies src to dst (test helper).
 func copyFile(t *testing.T, src, dst string) {
 	t.Helper()
-	data, err := os.ReadFile(src) //nolint:gosec // test helper reads known testdata paths
-	if err != nil {
-		t.Fatalf("copyFile: read %s: %v", src, err)
-	}
-	if err := os.WriteFile(dst, data, 0o600); err != nil { //nolint:gosec // test helper writes to t.TempDir()
-		t.Fatalf("copyFile: write %s: %v", dst, err)
-	}
+	data := fileutil.MustReadFile(t, src)
+	fileutil.MustWriteFile(t, dst, data)
 }
