@@ -286,10 +286,46 @@ func (r *PGRoleRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 // 23503 scenarios (migration 020 FK constraints):
 //   - fk_role_assignments_user: userID does not exist → ErrAuthUserNotFound.
 //   - fk_role_assignments_role: roleID does not exist → ErrAuthRoleNotFound.
+//
+// P1#2 savepoint protection: when called inside an ambient transaction, the
+// INSERT is wrapped in a SAVEPOINT so a 23505 on idx_role_assignments_single_admin
+// rolls back to the savepoint instead of poisoning the outer tx. Without this,
+// adminprovision.Provisioner.handleAssignAdminError's recount on the same ctx
+// would fail with SQLSTATE 25P02 ("current transaction is aborted").
+//
+// ref: https://www.postgresql.org/docs/current/sql-savepoint.html
 func (r *PGRoleRepository) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
-	ct, err := r.execCtx(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
+	tx, hasTx := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
+	if !hasTx {
+		// No ambient tx: a single-statement INSERT failure cannot poison
+		// anything wider than this implicit txn. Fast path.
+		ct, err := r.pool.Exec(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
+		if err != nil {
+			return false, r.mapAssignError(err, userID, roleID)
+		}
+		return ct.RowsAffected() != 0, nil
+	}
+
+	// Ambient tx path: wrap in SAVEPOINT to absorb partial-idx 23505 without
+	// poisoning the outer tx. PK conflicts are still absorbed by ON CONFLICT
+	// DO NOTHING; the savepoint exists specifically for the single-admin
+	// partial unique index, which DO NOTHING cannot target.
+	const sp = "sp_assign_role"
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+sp); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user (savepoint create)", err)
+	}
+	ct, err := tx.Exec(ctx, insertRoleAssignmentSQL, userID, roleID, r.clk.Now())
 	if err != nil {
+		// Roll back to the savepoint to clear the abort flag on the outer tx.
+		// The original error is then mapped and returned to the caller, which
+		// can issue further queries on the (still-valid) outer tx.
+		if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+sp); rbErr != nil {
+			return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user (savepoint rollback)", rbErr)
+		}
 		return false, r.mapAssignError(err, userID, roleID)
+	}
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+sp); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: assign to user (savepoint release)", err)
 	}
 	return ct.RowsAffected() != 0, nil
 }
