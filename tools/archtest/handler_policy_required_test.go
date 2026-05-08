@@ -37,10 +37,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const handlerPolicyRequiredRule = "HANDLER-POLICY-REQUIRED-01"
@@ -117,32 +118,10 @@ func TestHANDLER_POLICY_REQUIRED_01_NegativeFixture(t *testing.T) {
 // collectProductionGoFiles returns all production Go files in cells/ and examples/ subtrees.
 func collectProductionGoFiles(t *testing.T, root string) []string {
 	t.Helper()
-	var files []string
-
-	walk := func(dir string) {
-		walkErr := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return fmt.Errorf("walk %s: %w", path, err)
-			}
-			if info == nil {
-				return nil
-			}
-			if info.IsDir() {
-				switch info.Name() {
-				case "generated", "testdata", "vendor":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
-				files = append(files, path)
-			}
-			return nil
-		})
-		require.NoError(t, walkErr, "collectProductionGoFiles: walking %s", dir)
-	}
-	walk("cells")
-	walk("examples")
+	scope := scanner.DirsScope(root, []string{"cells", "examples"})
+	files, err := scope.Files()
+	require.NoError(t, err, "collectProductionGoFiles: DirsScope.Files")
+	sort.Strings(files)
 	return files
 }
 

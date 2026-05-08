@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	archscanner "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // ---- ASSEMBLY-MODULES-GEN-01 / ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02 /
@@ -120,10 +122,10 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 	require.NoError(t, err, "%s: open %s", ruleAssemblyModulesGen01, rel)
 	defer func() { require.NoError(t, f.Close()) }()
 
-	scanner := bufio.NewScanner(f)
-	require.True(t, scanner.Scan(),
+	bscan := bufio.NewScanner(f)
+	require.True(t, bscan.Scan(),
 		"%s: %s is empty — must start with DO NOT EDIT marker", ruleAssemblyModulesGen01, rel)
-	firstLine := scanner.Text()
+	firstLine := bscan.Text()
 	assert.True(t,
 		strings.HasPrefix(firstLine, generatedMarkerPrefix),
 		"%s: %s first line must be %q; got %q",
@@ -189,7 +191,6 @@ func hasGeneratedCellModulesFunc(af *ast.File) bool {
 func TestRunGoNoCellIDSwitch(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	cmdDir := filepath.Join(root, "cmd")
 
 	knownCellIDs := loadKnownCellIDs(t)
 	knownIDSet := make(map[string]struct{}, len(knownCellIDs))
@@ -197,24 +198,7 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 		knownIDSet[id] = struct{}{}
 	}
 
-	// Collect all non-test .go files under cmd/.
-	var goFiles []string
-	walkErr := filepath.WalkDir(cmdDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == "vendor" || d.Name() == "testdata" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
-			goFiles = append(goFiles, path)
-		}
-		return nil
-	})
-	require.NoError(t, walkErr, "%s: walk cmd/", ruleAssemblySwitchForbidden02)
+	scope := archscanner.DirsScope(root, []string{"cmd"})
 
 	type violation struct {
 		file   string
@@ -223,15 +207,8 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 	}
 	var violations []violation
 
-	fset := token.NewFileSet()
-	for _, path := range goFiles {
-		af, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			// Unparseable files are a build error; surface but don't block.
-			t.Logf("%s: parse %s: %v", ruleAssemblySwitchForbidden02, path, err)
-			continue
-		}
-		ast.Inspect(af, func(n ast.Node) bool {
+	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc archscanner.FileContext) {
+		ast.Inspect(fc.File, func(n ast.Node) bool {
 			sw, ok := n.(*ast.SwitchStmt)
 			if !ok {
 				return true
@@ -251,11 +228,9 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 						continue
 					}
 					if _, found := knownIDSet[unquoted]; found {
-						pos := fset.Position(lit.Pos())
-						rel, _ := filepath.Rel(root, pos.Filename)
 						violations = append(violations, violation{
-							file:   rel,
-							line:   pos.Line,
+							file:   fc.Rel,
+							line:   fc.Fset.Position(lit.Pos()).Line,
 							cellID: unquoted,
 						})
 					}
@@ -263,7 +238,7 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 			}
 			return true
 		})
-	}
+	})
 
 	for _, v := range violations {
 		t.Errorf("%s: %s:%d — cell-ID literal %q found as switch case; "+
@@ -1042,26 +1017,13 @@ func asnViolation(file string, line int) string {
 // asnFindAssemblyProductionGoFiles returns all non-test .go files under
 // kernel/assembly/.
 func asnFindAssemblyProductionGoFiles(root string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(filepath.Join(root, "kernel", "assembly"), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", "worktrees", "testdata", ".git":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
+	scope := archscanner.DirsScope(root, []string{"kernel/assembly"})
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	sort.Strings(files)
-	return files, err
+	return files, nil
 }
 
 // ---- ASSEMBLYREF-METHOD-SET-01 ----

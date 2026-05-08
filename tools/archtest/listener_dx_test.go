@@ -18,6 +18,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +27,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleListenerDXA52 = "LISTENER-DX-A52"
@@ -117,51 +120,43 @@ func TestListenerDXA52Guard(t *testing.T) {
 }
 
 func listenerDXProductionGoFiles(root string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "testdata", "generated", "worktrees":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
+	scope := scanner.ModuleScope(root)
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	sort.Strings(files)
-	return files, err
+	return files, nil
+}
+
+// listenerDXActiveDocSkipDirs are directory base-names skipped when collecting
+// active doc files. Matches the scanner framework's defaultSkipDirs plus
+// the original walk's exclusions.
+var listenerDXActiveDocSkipDirs = map[string]struct{}{
+	".git":      {},
+	"vendor":    {},
+	"testdata":  {},
+	"worktrees": {},
 }
 
 func listenerDXActiveDocs(root string) ([]string, error) {
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := fs.WalkDir(os.DirFS(root), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "testdata", "worktrees":
-				return filepath.SkipDir
+			if _, skip := listenerDXActiveDocSkipDirs[d.Name()]; skip {
+				return fs.SkipDir
 			}
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if listenerDXDocExcluded(rel) {
+		relSlash := filepath.ToSlash(rel)
+		if listenerDXDocExcluded(relSlash) {
 			return nil
 		}
-		if strings.HasSuffix(rel, ".md") || strings.HasSuffix(rel, "/doc.go") {
-			files = append(files, path)
+		if strings.HasSuffix(relSlash, ".md") || strings.HasSuffix(relSlash, "/doc.go") {
+			files = append(files, filepath.Join(root, rel))
 		}
 		return nil
 	})

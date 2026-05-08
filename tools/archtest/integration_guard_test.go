@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 func TestVaultIntegrationContainerFailuresFailFast(t *testing.T) {
@@ -111,43 +112,17 @@ func TestTestcontainerHelpersRequireDockerBeforeRun(t *testing.T) {
 
 func collectTestcontainerDockerGuardFindings(t *testing.T, root string) []string {
 	t.Helper()
-	var findings []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if skipDir := dockerGuardSkipDir(d); skipDir {
-			return filepath.SkipDir
-		}
-		if d.IsDir() || !isGoSourceFile(path) {
-			return nil
-		}
-
-		fileFindings, err := testcontainerDockerGuardFindingsForFile(path)
-		if err != nil {
-			return err
-		}
-		findings = append(findings, fileFindings...)
-		return nil
-	})
+	scope := scanner.ModuleScope(root, scanner.IncludeTests())
+	files, err := scope.Files()
 	require.NoError(t, err)
+
+	var findings []string
+	for _, path := range files {
+		fileFindings, ferr := testcontainerDockerGuardFindingsForFile(path)
+		require.NoError(t, ferr)
+		findings = append(findings, fileFindings...)
+	}
 	return findings
-}
-
-func dockerGuardSkipDir(d fs.DirEntry) bool {
-	if !d.IsDir() {
-		return false
-	}
-	switch d.Name() {
-	case ".git", "vendor", "generated", "worktrees", "testdata":
-		return true
-	default:
-		return false
-	}
-}
-
-func isGoSourceFile(path string) bool {
-	return filepath.Ext(path) == ".go"
 }
 
 func testcontainerDockerGuardFindingsForFile(path string) ([]string, error) {
