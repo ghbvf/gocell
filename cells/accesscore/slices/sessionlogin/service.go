@@ -142,13 +142,18 @@ type LoginInput struct {
 
 // Login authenticates a user and returns a JWT token pair.
 //
-// The credential-check uses GetByUsernameForUpdate (SELECT … FOR UPDATE inside
-// the TxRunner) to acquire a row-level write lock, preventing the P1#1a race
-// where two concurrent logins could both pass the IsLocked check before either
-// commits a new session.
+// P1#1a race-defense: Login uses two independent transactions; between them
+// the user row is briefly unlocked, and a concurrent admin Lock could mark
+// the user as Locked + RevokeByUserID before Login's session.Create commits.
+// Without re-locking and re-checking the user inside the persistence
+// transaction, Login would emit a session for a user the admin has just
+// locked, and Lock's RevokeByUserID would not see the post-lock session.
 //
-// Session persistence, refresh issuance, and event emission are delegated to
-// persistSessionWithRefresh which handles noop-tx cleanup compensation.
+// Defense: the persistence transaction (step 3) calls GetByUsernameForUpdate
+// AGAIN as its first operation. This re-acquires the row write lock — any
+// concurrent Lock waiting on it blocks until session.Create commits; any
+// Lock that already committed bumps version + sets Status=Locked, and the
+// re-check rejects the login.
 //
 // ref: ory/kratos persister_session.go login flow FOR UPDATE pattern
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
@@ -198,14 +203,16 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, err
 	}
 
-	// Step 3: persist session + refresh + event (with noop-tx cleanup compensation).
+	// Step 3: persist session + refresh + event under a re-acquired user row
+	// lock. The re-check inside persistSessionWithRefresh closes the P1#1a
+	// window between step 1 commit and session.Create.
 	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: create session: %w", err)
 	}
 	session.ID = sessionID
 
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID, input.Username)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -232,9 +239,25 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // Always emits event.session.created.v1 — both Login and IssueForUser paths
 // must record session creation for audit trail (no emitCreated flag: removed
 // per PR-CFG-G1 commit 2).
-func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID string) (string, error) {
+func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID, username string) (string, error) {
 	var refreshWire string
 	do := func(txCtx context.Context) error {
+		// P1#1a re-check: re-acquire the user row write lock and verify the
+		// user is still active before creating the session. This closes the
+		// race window between the credential-check tx (already committed) and
+		// the persistence tx: an admin Lock that ran in between bumps version
+		// and sets Status=Locked, and is observed here. An admin Lock that
+		// hasn't committed yet blocks on FOR UPDATE until our session.Create
+		// commits — its RevokeByUserID then sees and revokes our new session.
+		if username != "" { // empty username = IssueForUser path; user already validated
+			u, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
+			if err != nil {
+				return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+			}
+			if u.IsLocked() {
+				return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
+			}
+		}
 		if err := s.sessionRepo.Create(txCtx, session); err != nil {
 			return fmt.Errorf("session-login: persist session: %w", err)
 		}
@@ -347,7 +370,9 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
 	}
 	session.ID = sessionID
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID)
+	// IssueForUser path: user identity already validated by caller (e.g.
+	// ChangePassword); pass empty username to skip the FOR UPDATE re-check.
+	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID, "")
 	if err != nil {
 		return dto.TokenPair{}, err
 	}

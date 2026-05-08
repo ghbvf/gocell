@@ -343,11 +343,16 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 		"role-revoke event must be Acked; got %v err=%v", res.Disposition, res.Err)
 	assert.NoError(t, res.Err, "role-revoke Ack must carry nil Err")
 
-	// Bob's session must now be revoked.
-	sess, err := sessionRepo.GetByID(ctx, "sess-bob")
-	require.NoError(t, err)
-	assert.True(t, sess.IsRevoked(),
-		"session must be revoked after role-revoke outbox entry is consumed")
+	// Bob's session must now be revoked. Soft-revoke semantics (W2-W5):
+	// GetByID filters out revoked rows, so the row is invisible — we assert
+	// the not-found surface as the post-revoke contract instead of probing
+	// the row's RevokedAt directly. mem.SessionRepository now mirrors PG.
+	_, getErr := sessionRepo.GetByID(ctx, "sess-bob")
+	require.Error(t, getErr, "GetByID after revoke must return ErrSessionNotFound (soft-revoke filter)")
+	var ec *errcode.Error
+	require.ErrorAs(t, getErr, &ec)
+	assert.Equal(t, errcode.ErrSessionNotFound, ec.Code,
+		"session must be invisible (revoked) after role-revoke outbox entry is consumed")
 }
 
 // TestAuthIntegration_LoginAccessTokenAudienceDrift verifies that audience

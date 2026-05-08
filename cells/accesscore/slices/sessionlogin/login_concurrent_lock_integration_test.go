@@ -240,6 +240,43 @@ func TestLogin_ConcurrentAdminLock_RejectsAfterLock(t *testing.T) {
 	}
 }
 
+// TestLogin_AfterLock_RejectsDeterministic is the deterministic counterpart
+// to the probabilistic concurrent test above. It first locks the user (and
+// waits for the Lock tx to commit), then issues Login. The invariant is
+// strict: once Lock has committed, every subsequent Login MUST fail with
+// ErrAuthUserLocked. No race window, no flakiness — if this fails, the P1#1a
+// re-check inside persistSessionWithRefresh is broken.
+func TestLogin_AfterLock_RejectsDeterministic(t *testing.T) {
+	ctx := context.Background()
+	const plainPwd = "TestP@ss1234"
+
+	f := newLoginLockFixture(t)
+	userID, username := seedPGUser(t, ctx, f.userRepo, plainPwd)
+
+	// Lock the user. By the time this returns, the Lock tx is committed.
+	require.NoError(t, lockUser(ctx, f.userRepo, f.txm, userID),
+		"deterministic Lock must succeed against an active user")
+
+	// Login attempt AFTER Lock committed must be rejected.
+	_, loginErr := f.loginSvc.Login(ctx, LoginInput{Username: username, Password: plainPwd})
+	require.Error(t, loginErr,
+		"P1#1a: Login after Lock committed must be rejected; got nil error")
+	var ec *errcode.Error
+	require.ErrorAs(t, loginErr, &ec)
+	assert.Equal(t, errcode.ErrAuthUserLocked, ec.Code,
+		"Login after Lock must fail with ErrAuthUserLocked, got %s", ec.Code)
+
+	// Verify no active sessions exist for the locked user.
+	var activeCount int
+	err := f.pool.DB().QueryRow(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND revoked_at IS NULL",
+		userID,
+	).Scan(&activeCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, activeCount,
+		"after Lock + rejected Login: no active sessions can exist for locked user")
+}
+
 // Ensure the mem.RoleRepository and mem.NewSessionRepository references compile
 // in this package (needed only for unused-import avoidance in some setups).
 var _ = mem.NewRoleRepository
