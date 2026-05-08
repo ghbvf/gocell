@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"reflect"
 	"strconv"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // errServerFailure is the sentinel error reported to the circuit breaker done
@@ -49,30 +49,6 @@ type Allower interface {
 	Allow() (allowed bool, done func(err error))
 }
 
-// IsTypedNilAllower reports whether cb is a typed-nil pointer wrapped in an
-// Allower interface. A typed-nil passes a plain cb == nil check because the
-// interface value is non-nil (it carries type information), but calling any
-// method on the underlying pointer will panic.
-//
-// Usage: call this after the cb == nil interface check, so the fast path still
-// short-circuits on a bare nil interface:
-//
-//	if cb == nil || middleware.IsTypedNilAllower(cb) {
-//	    // reject
-//	}
-//
-// ref: golang.org/src/reflect Value.IsNil — kind-gated to avoid panic on
-// non-nilable kinds (string, int, struct, …).
-func IsTypedNilAllower(cb Allower) bool {
-	v := reflect.ValueOf(cb)
-	switch v.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Map,
-		reflect.Slice, reflect.Chan, reflect.Func:
-		return v.IsNil()
-	}
-	return false
-}
-
 // CircuitBreaker returns HTTP middleware that protects upstream handlers using
 // the given Allower. When the circuit is open, requests are rejected with 503
 // Service Unavailable. When closed or half-open, requests proceed to the next
@@ -89,7 +65,7 @@ func IsTypedNilAllower(cb Allower) bool {
 // ref: sony/gobreaker — TwoStepCircuitBreaker for HTTP request protection
 // ref: go-kit/kit circuitbreaker — middleware wrapping pattern
 func CircuitBreaker(cb Allower) (func(http.Handler) http.Handler, error) {
-	if cb == nil || IsTypedNilAllower(cb) {
+	if validation.IsNilInterface(cb) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "middleware: Allower must not be nil")
 	}
 	return func(next http.Handler) http.Handler {

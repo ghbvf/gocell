@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
-	"reflect"
 	"strings"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
@@ -28,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -174,9 +174,16 @@ func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 // WithRateLimiter enables per-IP rate limiting in the default middleware chain.
 // When provided, the rate limiter is placed after observability and before auth.
 //
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected by NewForListener so the rate limiter is never silently absent.
+//
 // ref: go-zero — rate limiting as default middleware when configured
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(r *Router) {
+		if validation.IsNilInterface(rl) {
+			r.rateLimiterNil = true
+			return
+		}
 		r.rateLimiter = rl
 	}
 }
@@ -189,7 +196,7 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // ref: kubernetes/kubernetes apiserver — option fail-fast at startup
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(r *Router) {
-		if cb == nil || middleware.IsTypedNilAllower(cb) {
+		if validation.IsNilInterface(cb) {
 			r.circuitBreakerNil = true
 			return
 		}
@@ -211,24 +218,11 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // ref: go-zero — per-route WithJwt() opt-in auth
 func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 	return func(r *Router) {
-		if isNilIntentTokenVerifier(verifier) {
+		if validation.IsNilInterface(verifier) {
 			r.authVerifierNil = true
 			return
 		}
 		r.authVerifier = verifier
-	}
-}
-
-func isNilIntentTokenVerifier(verifier auth.IntentTokenVerifier) bool {
-	if verifier == nil {
-		return true
-	}
-	v := reflect.ValueOf(verifier)
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
-		return v.IsNil()
-	default:
-		return false
 	}
 }
 
@@ -392,6 +386,7 @@ type Router struct {
 	tracingOpts                 []middleware.TracingOption
 	requestIDOpts               []middleware.RequestIDOption
 	rateLimiter                 middleware.RateLimiter
+	rateLimiterNil              bool
 	circuitBreaker              middleware.Allower
 	circuitBreakerNil           bool
 	authVerifier                auth.IntentTokenVerifier
@@ -541,6 +536,9 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	// WithCircuitBreaker(nil) which would silently skip CB installation.
 	if r.circuitBreakerNil {
 		return nil, fmt.Errorf("router: circuit breaker must not be nil")
+	}
+	if r.rateLimiterNil {
+		return nil, fmt.Errorf("router: rate limiter must not be nil")
 	}
 	if r.authVerifierNil {
 		return nil, fmt.Errorf("router: auth middleware verifier must not be nil")

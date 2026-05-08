@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -4016,13 +4017,76 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 	assert.True(t, resource.closed.Load(), "WithManagedCloser resource must be closed during teardown")
 }
 
-// TestBootstrap_WithManagedCloser_NilIgnored verifies that a nil ContextCloser
-// is silently ignored without panic.
-func TestBootstrap_WithManagedCloser_NilIgnored(t *testing.T) {
-	// Passing a nil ContextCloser must not panic at option-construction time.
-	assert.NotPanics(t, func() {
-		_ = New(WithClock(clock.Real()), WithManagedCloser(nil))
-	}, "WithManagedCloser(nil) must not panic")
+// TestBootstrap_WithManagedCloser_NilFailFast verifies that WithManagedCloser(nil)
+// sets the closerNil flag and Run() rejects it at phase0 before any side effects.
+// Mirrors the WithManagedResource / WithCircuitBreaker fail-fast pattern.
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go Append — bad inputs surface
+// before any component starts.
+func TestBootstrap_WithManagedCloser_NilFailFast(t *testing.T) {
+	app := New(WithClock(clock.Real()), WithManagedCloser(nil))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithManagedCloser(nil) was used")
+	}
+	const want = "managed closer must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestBootstrap_WithManagedCloser_TypedNilFailFast verifies that a typed-nil
+// (non-nil interface wrapping a nil pointer) is detected at phase0 and causes
+// Run() to return an error.
+func TestBootstrap_WithManagedCloser_TypedNilFailFast(t *testing.T) {
+	var c *mockContextCloser // typed nil
+	var iface kernellifecycle.ContextCloser = c
+
+	app := New(WithClock(clock.Real()), WithManagedCloser(iface))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithManagedCloser receives a typed-nil interface")
+	}
+	const want = "managed closer must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// mockRateLimiter is a test double satisfying middleware.RateLimiter.
+type mockRateLimiter struct{ allow bool }
+
+func (m *mockRateLimiter) Allow(string) bool { return m.allow }
+
+// TestBootstrap_WithRateLimiter_NilFailFast verifies that WithRateLimiter(nil)
+// sets the rateLimiterNil flag and Run() rejects it at phase0.
+func TestBootstrap_WithRateLimiter_NilFailFast(t *testing.T) {
+	app := New(WithClock(clock.Real()), WithRateLimiter(nil))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithRateLimiter(nil) was used")
+	}
+	const want = "rate limiter must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestBootstrap_WithRateLimiter_TypedNilFailFast verifies that a typed-nil
+// RateLimiter is rejected at phase0.
+func TestBootstrap_WithRateLimiter_TypedNilFailFast(t *testing.T) {
+	var rl *mockRateLimiter // typed nil
+	var iface middleware.RateLimiter = rl
+
+	app := New(WithClock(clock.Real()), WithRateLimiter(iface))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithRateLimiter receives a typed-nil interface")
+	}
+	const want = "rate limiter must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
 }
 
 // ---------------------------------------------------------------------------

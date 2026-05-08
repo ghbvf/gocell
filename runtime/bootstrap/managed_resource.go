@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"reflect"
 
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // WithManagedResource registers an external resource with the bootstrap
@@ -29,27 +29,11 @@ import (
 // does no nil-substitution; bad inputs surface before any component starts.
 func WithManagedResource(r kernellifecycle.ManagedResource) Option {
 	return func(b *Bootstrap) {
-		if isNilManagedResource(r) {
+		if validation.IsNilInterface(r) {
 			b.managedResourceNil = true
 			return
 		}
 		b.managedResources = append(b.managedResources, r)
-	}
-}
-
-// isNilManagedResource returns true if r is either a bare nil interface or a
-// typed-nil (non-nil interface wrapping a nil pointer/map/slice/chan/func).
-// Mirrors the typed-nil rejection used by WithCircuitBreaker.
-func isNilManagedResource(r kernellifecycle.ManagedResource) bool {
-	if r == nil {
-		return true
-	}
-	v := reflect.ValueOf(r)
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
-		return v.IsNil()
-	default:
-		return false
 	}
 }
 

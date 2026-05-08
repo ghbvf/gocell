@@ -36,6 +36,12 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
+	if b.closerNil {
+		return fmt.Errorf("bootstrap: managed closer must not be nil in WithManagedCloser")
+	}
+	if b.rateLimiterNil {
+		return fmt.Errorf("bootstrap: rate limiter must not be nil in WithRateLimiter")
+	}
 	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
 		return err
 	}
