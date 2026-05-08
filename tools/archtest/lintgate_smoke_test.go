@@ -306,12 +306,19 @@ func runGolangciLint(t *testing.T, workDir string) []golangciIssue {
 		"./...",
 	)
 	cmd.Dir = workDir
-	_, _ = cmd.CombinedOutput()
+	combined, _ := cmd.CombinedOutput()
 
-	data := fileutil.MustReadFile(t, out)
+	// Read inline (not via fileutil.MustReadFile) so the failure message can
+	// surface golangci-lint's stdout/stderr — diagnosing "binary missing /
+	// segfault before writing JSON" needs the combined output, which the
+	// helper would discard.
+	data, err := os.ReadFile(out) //nolint:gosec // R2-approved: G304 t.TempDir() output path; helper would discard combined diagnostic
+	if err != nil {
+		t.Fatalf("read JSON report failed: %v\ngolangci-lint stdout/stderr:\n%s", err, combined)
+	}
 	var report golangciReport
 	if err := json.Unmarshal(data, &report); err != nil {
-		t.Fatalf("parse JSON report failed: %v\nraw:\n%s", err, data)
+		t.Fatalf("parse JSON report failed: %v\nraw:\n%s\ngolangci-lint stdout/stderr:\n%s", err, data, combined)
 	}
 	return report.Issues
 }
