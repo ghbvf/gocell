@@ -52,7 +52,10 @@ func waitForSubscription(t testing.TB, ctx context.Context, sub outbox.Subscribe
 	case <-ctx.Done():
 		t.Fatalf("waitForSubscription: context canceled before subscriber ready: %v", ctx.Err())
 	case <-time.After(subscribeReadyTimeout):
-		t.Fatalf("waitForSubscription: %s did not signal Ready within %s — Subscriber.Ready must close once delivery-safe", topic, subscribeReadyTimeout)
+		t.Fatalf(
+			"waitForSubscription: %s did not signal Ready within %s — "+
+				"Subscriber.Ready must close once delivery-safe",
+			topic, subscribeReadyTimeout)
 	}
 }
 

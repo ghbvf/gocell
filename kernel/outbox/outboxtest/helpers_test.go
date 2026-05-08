@@ -256,8 +256,8 @@ func (s *neverReadySub) Ready(_ outbox.Subscription) <-chan struct{} {
 // caller sees identical semantics.
 type recordingTB struct {
 	testing.TB
-	mu      sync.Mutex
-	fatal   bool
+	mu       sync.Mutex
+	fatal    bool
 	fatalFmt string
 }
 

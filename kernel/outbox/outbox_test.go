@@ -219,9 +219,9 @@ func TestDiscardPublisher_Close_NoOp(t *testing.T) {
 	dp := &DiscardPublisher{}
 	assert.NoError(t, dp.Close(context.Background()))
 
-	cancelled, cancel := context.WithCancel(context.Background())
+	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	assert.NoError(t, dp.Close(cancelled), "Close must remain a no-op even with a canceled ctx")
+	assert.NoError(t, dp.Close(canceled), "Close must remain a no-op even with a canceled ctx")
 }
 
 func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
@@ -757,6 +757,19 @@ func TestEntry_Validate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "missing ID",
 		},
+		{
+			// Pins propagation of Observability.Validate errors through
+			// Entry.Validate. A regression that drops this branch would let
+			// malformed observability IDs (unsafe chars / oversized fields)
+			// reach the persistence layer.
+			name: "invalid Observability propagates",
+			entry: Entry{
+				ID: "evt-obs", Topic: "t", Payload: []byte("{}"),
+				Observability: ObservabilityMetadata{TraceID: "trace; DROP TABLE"},
+			},
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1254,6 +1267,44 @@ func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
 	assert.True(t, spy3Called, "spy3 (after panic observer) must still be called after panic isolation")
 	assert.Contains(t, logBuf.String(), "settlement observer panicked",
 		"panic must be logged with structured message")
+}
+
+// TestNotifySettlement_NoObservers_NoOp pins the early-return when the result
+// carries no observers. Subscriber delivery loops invoke NotifySettlement on
+// every message; the no-op path is the hot path and must remain allocation-
+// free (no SettlementObservation construction) to avoid GC pressure.
+func TestNotifySettlement_NoObservers_NoOp(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("NotifySettlement must be a no-op when no observers attached, got panic: %v", r)
+		}
+	}()
+	NotifySettlement(context.Background(),
+		HandleResult{Disposition: DispositionAck},
+		Entry{ID: "evt-noop", Topic: "t"},
+		DispositionAck, SettlementResultSuccess, nil)
+}
+
+// TestNotifySettlement_NilObserverInList_Skipped pins the nil-tolerant
+// contract: a nil entry inside SettlementObservers must be skipped without
+// panic, and subsequent observers must still be notified. Defends against a
+// regression that removes the nil-check, which would NPE on the first nil
+// observer and silently drop later observers.
+func TestNotifySettlement_NilObserverInList_Skipped(t *testing.T) {
+	called := 0
+	spy := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
+		called++
+	})
+	result := HandleResult{
+		Disposition:         DispositionAck,
+		SettlementObservers: []SettlementObserver{nil, spy, nil},
+	}
+
+	NotifySettlement(context.Background(), result,
+		Entry{ID: "evt-nil-obs", Topic: "t"},
+		DispositionAck, SettlementResultSuccess, nil)
+
+	assert.Equal(t, 1, called, "non-nil observer must run exactly once; nil entries skipped")
 }
 
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
