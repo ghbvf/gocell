@@ -70,18 +70,44 @@ ON CONFLICT (user_id, role_id) DO NOTHING`
 DELETE FROM role_assignments
 WHERE user_id = $1 AND role_id = $2`
 
-	// removeIfNotLastSQL is a CTE-based DELETE that atomically checks the count
-	// of holders for a role and removes the given user only when count > 1.
-	// RowsAffected == 0 means either the count check failed (sole holder) or the
-	// user did not hold the role at all.
-	removeIfNotLastSQL = `
-WITH cnt AS (
+	// removeIfNotLastWithLockSQL is a single-round-trip CTE that:
+	//  1. Acquires pg_advisory_xact_lock(hashtextextended('role:' || roleID, 0)) so
+	//     concurrent revokes for the same role serialize at the transaction level.
+	//  2. Checks whether the user actually holds the role (holds CTE).
+	//  3. Counts current holders (cnt CTE).
+	//  4. DELETEs the row only when cnt > 1 (del CTE).
+	//  5. Returns all four signals in one row so the Go caller can distinguish
+	//     "user did not hold the role" from "sole holder" without a second query.
+	//
+	// Result columns: lock_acquired int, held bool, holders bigint, deleted bigint.
+	//
+	// Atomicity: pg_advisory_xact_lock holds until the surrounding transaction
+	// commits or rolls back, so the lock+check+delete is fully atomic. This
+	// eliminates the two-roundtrip TOCTOU window that existed in the old
+	// userHoldsRole + removeIfNotLastSQL approach.
+	//
+	// ref: PostgreSQL pg_advisory_xact_lock docs
+	// ref: ory/keto internal/persistence/sql advisory_lock pattern
+	removeIfNotLastWithLockSQL = `
+WITH lock_acquire AS (
+    SELECT pg_advisory_xact_lock(hashtextextended('role:' || $2, 0))
+),
+holds AS (
+    SELECT 1 FROM role_assignments WHERE user_id = $1 AND role_id = $2
+),
+cnt AS (
     SELECT COUNT(*) AS n FROM role_assignments WHERE role_id = $2
+),
+del AS (
+    DELETE FROM role_assignments
+    WHERE user_id = $1 AND role_id = $2 AND (SELECT n FROM cnt) > 1
+    RETURNING 1
 )
-DELETE FROM role_assignments
-WHERE user_id = $1
-  AND role_id = $2
-  AND (SELECT n FROM cnt) > 1`
+SELECT
+    (SELECT 1 FROM lock_acquire) AS lock_acquired,
+    EXISTS(SELECT 1 FROM holds)  AS held,
+    (SELECT n FROM cnt)          AS holders,
+    (SELECT count(*) FROM del)   AS deleted`
 
 	countByRoleSQL = `
 SELECT COUNT(*) FROM role_assignments WHERE role_id = $1`
@@ -91,9 +117,6 @@ SELECT r.id, r.name, r.permissions, r.created_at
 FROM roles r
 JOIN role_assignments ra ON ra.role_id = r.id
 WHERE ra.user_id = $1`
-
-	userHoldsRoleSQL = `
-SELECT COUNT(*) FROM role_assignments WHERE user_id = $1 AND role_id = $2`
 )
 
 // PGRoleRepository implements ports.RoleRepository on PostgreSQL.
@@ -330,49 +353,41 @@ func (r *PGRoleRepository) RemoveFromUser(ctx context.Context, userID, roleID st
 // holder of the role. Returns changed=false when the user did not hold the role
 // (idempotent no-op, matching mem.RoleRepository semantics).
 //
-// Atomicity: This method MUST be called within an ambient transaction
-// (resolved via persistence.TxCtxKey). The two-statement pattern
-// (userHoldsRole SELECT + CTE-based DELETE) is only race-safe under a
-// shared TX snapshot. Direct pool calls (no ambient TX) have a TOCTOU
-// window between the existence probe and the DELETE.
+// Atomicity: MUST be called within an ambient transaction (resolved via
+// persistence.TxCtxKey). pg_advisory_xact_lock serializes concurrent revokes
+// for the same role at the transaction level, so the lock+check+delete is
+// fully atomic within the surrounding transaction. The lock is held until the
+// transaction commits or rolls back — calling without an ambient TX means the
+// advisory lock is released immediately after the statement, which still
+// eliminates the old TOCTOU window but provides weaker isolation than an
+// explicit outer TX.
 //
-// The CTE COUNT + DELETE execute in a single server round-trip,
-// eliminating the TOCTOU gap between count check and removal within the CTE.
+// ref: PostgreSQL pg_advisory_xact_lock docs
+// ref: ory/keto internal/persistence/sql advisory_lock pattern
 func (r *PGRoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
-	// First, check whether the user actually holds the role.
-	// This check distinguishes "sole holder" from "user does not hold role" —
-	// the CTE cannot distinguish those two cases on RowsAffected==0 alone.
-	holds, err := r.userHoldsRole(ctx, userID, roleID)
-	if err != nil {
-		return false, err
+	var (
+		lockAcquired *int // SELECT 1 FROM lock_acquire — always 1 if executed
+		held         bool
+		holders      int64
+		deleted      int64
+	)
+	row := r.queryRowCtx(ctx, removeIfNotLastWithLockSQL, userID, roleID)
+	if err := row.Scan(&lockAcquired, &held, &holders, &deleted); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: remove if not last", err)
 	}
-	if !holds {
+
+	if !held {
 		// Idempotent no-op: user did not hold the role.
 		return false, nil
 	}
-
-	ct, err := r.execCtx(ctx, removeIfNotLastSQL, userID, roleID)
-	if err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: remove if not last", err)
+	if deleted == 1 {
+		return true, nil
 	}
-	if ct.RowsAffected() == 0 {
-		// CTE count check prevented the DELETE: this user is the sole holder.
-		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
-			"cannot revoke role: this is the only holder; assign the role to another user first",
-			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)),
-		)
-	}
-	return true, nil
-}
-
-// userHoldsRole returns true when userID has roleID in role_assignments.
-func (r *PGRoleRepository) userHoldsRole(ctx context.Context, userID, roleID string) (bool, error) {
-	var count int
-	row := r.queryRowCtx(ctx, userHoldsRoleSQL, userID, roleID)
-	if err := row.Scan(&count); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, errAdapterPGQuery, "role repo: check user holds role", err)
-	}
-	return count > 0, nil
+	// held=true but deleted=0: this user is the sole holder.
+	return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+		"cannot revoke role: this is the only holder; assign the role to another user first",
+		errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q holders=%d", roleID, userID, holders)),
+	)
 }
 
 // CountByRole returns the number of users assigned to the given role.
