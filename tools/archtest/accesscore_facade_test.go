@@ -37,6 +37,11 @@ func TestAccessCoreFacadePolishA61Guard(t *testing.T) {
 	})
 }
 
+// SCANNER-ESCAPE-HATCH: deferred-scanner-migration
+//
+// Scans cells/accesscore/*.go for facade declarations. Predates the scanner
+// framework and uses os.ReadDir directly; legitimate migration target to
+// scanner.EachFile when this file is next touched. Migration drops the anchor.
 func scanAccesscoreFacadeDeclarations(t *testing.T, fset *token.FileSet, root string) []string {
 	t.Helper()
 	var violations []string

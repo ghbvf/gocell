@@ -4,9 +4,9 @@ package archtest
 // reverting to raw filepath.WalkDir/filepath.Walk after PR #419 introduced the
 // shared scanner framework at tools/archtest/internal/scanner/.
 //
-// Single-rule file per CLAUDE.md "新增 invariant 决策原则" file naming branch
-// (single rule → {rule}_test.go). Promote to {theme}_invariants_test.go if
-// related SCANNER-* invariants accumulate to ≥ 3.
+// Houses the SCANNER-FRAMEWORK-USAGE-{01,02} invariants. Per CLAUDE.md
+// "新增 invariant 决策原则" file naming branch, ≥ 3 related rules → rename to
+// scanner_invariants_test.go; current count = 2, stay single file.
 
 import (
 	"go/ast"
@@ -183,5 +183,214 @@ func _() string { return Join("a", "b") }
 	}
 	if len(aliases) != 0 {
 		t.Fatalf("PackageAliases on dot-import-only file: expected 0 named aliases, got %d (%v)", len(aliases), aliases)
+	}
+}
+
+// INVARIANT: SCANNER-FRAMEWORK-USAGE-02
+//
+// Functions in tools/archtest/*_test.go that contain directory traversal
+// (os.ReadDir / fs.WalkDir / fs.Glob / fs.ReadDir) MUST declare a
+// `// SCANNER-ESCAPE-HATCH: <category>` anchor in their function doc comment.
+//
+// Background: SCANNER-FRAMEWORK-USAGE-01 forbids path/filepath.WalkDir|Walk
+// in archtest tests because the scanner framework is the canonical funnel.
+// Non-Go content (YAML, JSON, MD, SQL) cannot be parsed by go/parser, so the
+// framework's .go-only EachFile is unusable; io/fs.WalkDir(os.DirFS(...)) and
+// os.ReadDir are authorized escape hatches. Without an anchor on each escape
+// site, AI-generated rules can silently introduce new directory walks and
+// the docstring-maintained "approved sites" list in -01 drifts out of date.
+//
+// Cannot funnel: same reason as -01 (the rule enforces consumer use of the
+// funnel; cannot itself live in the funnel).
+//
+// Approved categories at the time of writing:
+//
+//	non-go-md-doc                .md documentation enumeration
+//	non-go-json-schema           payload.schema.json files
+//	non-go-yaml-compose          docker-compose.yml + similar
+//	non-go-yaml-workflow         .github/workflows/*.yml
+//	non-go-sql-migration         adapters/postgres/migrations/*.sql
+//	testdata-fixture-bypass      scanner skips testdata/, fixture re-walk needed
+//	deferred-scanner-migration   scans .go files but predates the scanner
+//	                             framework; legitimate migration target,
+//	                             tracked as backlog (grep this token to find
+//	                             the candidate set)
+//
+// Adding a new category: include `// SCANNER-ESCAPE-HATCH: <new-cat>` in the
+// function's doc comment and extend the list above. Reviewers verify the
+// bypass is justified.
+//
+// "deferred-scanner-migration" is intentionally a category, not an exception:
+// it exposes the funnel-incomplete state in code where future AI sees it,
+// rather than burying the candidate set in an external doc that drifts.
+// Migrating any of these to scanner.EachFile and dropping the anchor is
+// always safe and welcomed.
+func TestScannerFrameworkUsage02_EscapeHatchAnchor(t *testing.T) {
+	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, []string{"tools/archtest"}, scanner.IncludeTests())
+
+	var diags []scanner.Diagnostic
+	scanner.EachFile(t, scope, parser.ParseComments|parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		if filepath.ToSlash(filepath.Dir(fc.Rel)) != "tools/archtest" {
+			return
+		}
+		if !strings.HasSuffix(fc.AbsPath, "_test.go") {
+			return
+		}
+		for _, decl := range fc.File.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			if !escapeHatchCallSite(fn.Body) {
+				continue
+			}
+			if escapeHatchAnchorPresent(fn.Doc) {
+				continue
+			}
+			diags = append(diags, scanner.Diagnostic{
+				Rel:     fc.Rel,
+				Line:    fc.Fset.Position(fn.Pos()).Line,
+				Message: "function calls os.ReadDir / fs.WalkDir / fs.Glob / fs.ReadDir but doc comment lacks `// SCANNER-ESCAPE-HATCH: <category>` anchor — see SCANNER-FRAMEWORK-USAGE-02 for approved categories",
+			})
+		}
+	})
+	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
+}
+
+// escapeHatchCallSite reports whether body contains a directory-traversal
+// call (os.ReadDir / fs.WalkDir / fs.Glob / fs.ReadDir). Plain selector
+// match — no type info needed because the rule's purpose is precisely to
+// flag the AST-level call shape regardless of receiver type.
+func escapeHatchCallSite(body *ast.BlockStmt) bool {
+	var found bool
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch ident.Name {
+		case "os":
+			if sel.Sel.Name == "ReadDir" {
+				found = true
+			}
+		case "fs":
+			switch sel.Sel.Name {
+			case "WalkDir", "Glob", "ReadDir":
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// escapeHatchAnchorPresent reports whether doc contains the
+// `SCANNER-ESCAPE-HATCH:` anchor token in any of its comment lines.
+// Substring match is sufficient — the anchor format is stable enough that
+// false positives (e.g. a comment containing the literal string) are
+// negligible and would still represent a deliberate acknowledgement.
+func escapeHatchAnchorPresent(doc *ast.CommentGroup) bool {
+	if doc == nil {
+		return false
+	}
+	for _, c := range doc.List {
+		if strings.Contains(c.Text, "SCANNER-ESCAPE-HATCH:") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestScannerFrameworkUsage02_DetectionFixture proves both helpers
+// (escapeHatchCallSite + escapeHatchAnchorPresent) behave as expected on
+// hand-crafted fixtures. AI refactors that silently weaken either helper
+// (e.g. drop a case from the switch, return false unconditionally) would
+// flip one of these table cases.
+func TestScannerFrameworkUsage02_DetectionFixture(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		src        string
+		wantHit    bool // true == expect SCANNER-FRAMEWORK-USAGE-02 violation
+		wantSkip   bool // true == fn has no escape-hatch call (rule should skip)
+		wantAnchor bool // true == anchor present in doc
+	}{
+		{
+			name: "missing_anchor_with_os_readdir",
+			src: `package fake
+import "os"
+func walk(dir string) { _, _ = os.ReadDir(dir) }
+`,
+			wantHit: true,
+		},
+		{
+			name: "anchor_present_with_os_readdir",
+			src: `package fake
+import "os"
+// SCANNER-ESCAPE-HATCH: non-go-yaml-compose
+func walk(dir string) { _, _ = os.ReadDir(dir) }
+`,
+			wantHit: false, wantAnchor: true,
+		},
+		{
+			name: "missing_anchor_with_fs_walkdir",
+			src: `package fake
+import (
+	"io/fs"
+	"os"
+)
+func walk(root string) { _ = fs.WalkDir(os.DirFS(root), ".", nil) }
+`,
+			wantHit: true,
+		},
+		{
+			name: "no_call_no_anchor_needed",
+			src: `package fake
+func helper() string { return "" }
+`,
+			wantHit: false, wantSkip: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fake.go", tc.src, parser.ParseComments|parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var hits int
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				hasCall := escapeHatchCallSite(fn.Body)
+				hasAnchor := escapeHatchAnchorPresent(fn.Doc)
+				if !hasCall {
+					if !tc.wantSkip {
+						t.Fatalf("escapeHatchCallSite: expected call site in fixture, got none")
+					}
+					continue
+				}
+				if hasAnchor != tc.wantAnchor {
+					t.Errorf("escapeHatchAnchorPresent: got %v, want %v", hasAnchor, tc.wantAnchor)
+				}
+				if !hasAnchor {
+					hits++
+				}
+			}
+			gotHit := hits > 0
+			if gotHit != tc.wantHit {
+				t.Errorf("violation: got %v (hits=%d), want %v", gotHit, hits, tc.wantHit)
+			}
+		})
 	}
 }

@@ -34,6 +34,10 @@ import (
 // No allowlist: per the N8 design directive, 014 was retroactively patched to
 // pass this rule rather than carved out, since adding `IF NOT EXISTS` to an
 // already-applied migration is idempotent and harmless on existing DBs.
+//
+// SCANNER-ESCAPE-HATCH: non-go-sql-migration
+// Scans adapters/postgres/migrations/*.sql files; scanner framework is
+// .go-only, so os.ReadDir is the natural primitive here.
 func TestMigrationNoTransactionRerunSafe01(t *testing.T) {
 	root := findModuleRoot(t)
 	dir := filepath.Join(root, "adapters", "postgres", "migrations")

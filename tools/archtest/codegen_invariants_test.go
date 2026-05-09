@@ -108,6 +108,10 @@ func TestCodegenCellGen02_GeneratedHeader(t *testing.T) {
 // TestCodegenUserFileOverlap01 verifies CODEGEN-USER-FILE-OVERLAP-01. For
 // each cell directory containing cell_gen.go, every other .go file in the
 // same package must NOT define func (c *<StructName>) Init.
+//
+// SCANNER-ESCAPE-HATCH: deferred-scanner-migration
+// Iterates per-cell directories via os.ReadDir; predates scanner framework,
+// candidate for scanner.DirsScope-based migration.
 func TestCodegenUserFileOverlap01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -173,6 +177,10 @@ func TestCodegenInitInternal01(t *testing.T) {
 // TestCodegenGates_NegativeFixtures runs the gate scanners against
 // known-bad fixture directories and asserts each scanner reports at
 // least one violation.
+//
+// SCANNER-ESCAPE-HATCH: testdata-fixture-bypass
+// Iterates testdata fixture .go files; scanner framework auto-skips testdata/,
+// so direct iteration is required to drive the negative fixtures.
 func TestCodegenGates_NegativeFixtures(t *testing.T) {
 	t.Parallel()
 	archDir := findArchTestDir(t)
@@ -848,6 +856,10 @@ func findGeneratedCellFilesIn(t *testing.T, roots []string) []string {
 
 // checkInitInternalHook AST-scans the .go files in dir and returns violation
 // messages when no file declares func (c *<structName>) initInternal(...).
+//
+// SCANNER-ESCAPE-HATCH: deferred-scanner-migration
+// Single-dir .go scan via os.ReadDir; predates scanner framework, candidate
+// for scanner.DirsScope migration.
 func checkInitInternalHook(t *testing.T, dir string, structName string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -1210,6 +1222,10 @@ func findAllCellFiles(t *testing.T, root string) []string {
 // findAllCellInitFiles enumerates cell.go / cell_init.go / cell_routes.go /
 // cell_providers.go for every cell registered in ProjectMeta.Cells.
 // Excludes cell_gen.go and *_test.go.
+//
+// SCANNER-ESCAPE-HATCH: deferred-scanner-migration
+// Per-cell .go enumeration via os.ReadDir; predates scanner framework,
+// candidate for scanner.DirsScope migration.
 func findAllCellInitFiles(t *testing.T, root string) []string {
 	t.Helper()
 	project := mustProjectFromMetadata(t, root)
