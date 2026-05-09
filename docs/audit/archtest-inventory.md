@@ -6,8 +6,8 @@
 
 ## 概览
 
-- archtest 文件总数：73
-- archtest INVARIANT 锚点数：175
+- archtest 文件总数：74
+- archtest INVARIANT 锚点数：176
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
@@ -16,12 +16,12 @@
 |---|---|---|---|
 | `ACCESSCORE-FACADE-A61-01` | `accesscore_facade_test.go` | 1 | accesscore |
 | `ADAPTER-RETURNS-DECLARED-TYPES-01` | `adapter_returns_declared_types_test.go` | 1 | adapter |
-| `ASSEMBLY-CELLMODULE-TYPE-04` | `assembly_invariants_test.go` | 378 | assembly |
-| `ASSEMBLY-MAXCONSISTENCY-DERIVED-03` | `assembly_invariants_test.go` | 276 | assembly |
-| `ASSEMBLY-MODULES-GEN-01` | `assembly_invariants_test.go` | 82 | assembly |
-| `ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02` | `assembly_invariants_test.go` | 182 | assembly |
-| `ASSEMBLY-SNAPSHOTS-LOCKED-01` | `assembly_invariants_test.go` | 474 | assembly |
-| `ASSEMBLYREF-METHOD-SET-01` | `assembly_invariants_test.go` | 1069 | assembly |
+| `ASSEMBLY-CELLMODULE-TYPE-04` | `assembly_invariants_test.go` | 353 | assembly |
+| `ASSEMBLY-MAXCONSISTENCY-DERIVED-03` | `assembly_invariants_test.go` | 251 | assembly |
+| `ASSEMBLY-MODULES-GEN-01` | `assembly_invariants_test.go` | 84 | assembly |
+| `ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02` | `assembly_invariants_test.go` | 184 | assembly |
+| `ASSEMBLY-SNAPSHOTS-LOCKED-01` | `assembly_invariants_test.go` | 449 | assembly |
+| `ASSEMBLYREF-METHOD-SET-01` | `assembly_invariants_test.go` | 1031 | assembly |
 | `AUTH-AUTHTEST-BOUNDARY-01` | `auth_authtest_boundary_test.go` | 1 | auth |
 | `AUTH-BOOTSTRAP-PATH-RESTRICTED-01` | `setup_admin_auth_test.go` | 7 | auth |
 | `AUTH-PLAN-01` | `auth_plan_test.go` | 7 | auth |
@@ -50,22 +50,22 @@
 | `CODEGEN-CONTRACT-GEN-01` | `patch_optional_bool_pointer_test.go` | 68 | codegen |
 | `CODEGEN-CONTRACT-GEN-02` | `codegen_invariants_test.go` | 250 | codegen |
 | `CODEGEN-CONTRACT-USER-OVERLAP-01` | `codegen_invariants_test.go` | 251 | codegen |
-| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 406 | command |
+| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 390 | command |
 | `CONTRACT-KINDS-CLOSED-SET-01` | `contract_kinds_closed_set_test.go` | 1 | contract |
 | `CONTRACTTEST-BOUNDARY-01` | `contracttest_boundary_test.go` | 1 | contracttest |
 | `COREBUNDLE-DEPS-01` | `corebundle_deps_test.go` | 1 | corebundle |
 | `CTXCANCEL-LOCAL-IMPL-BAN-01` | `repoerr_test.go` | 19 | ctxcancel |
-| `DETAILS-SLOG-ATTR-01` | `errcode_invariants_test.go` | 1226 | errcode |
-| `ERRCODE-KIND-LITERAL-01` | `errcode_invariants_test.go` | 182 | errcode |
-| `ERROR-FIRST-API-01` | `errcode_invariants_test.go` | 517 | errcode |
-| `ERROR-FIRST-TYPED-NIL-01` | `errcode_invariants_test.go` | 554 | errcode |
-| `EVENT-DTO-CAMELCASE-01` | `event_camelcase_test.go` | 79 | event |
-| `EVENT-PAYLOAD-CAMELCASE-01` | `event_camelcase_test.go` | 18 | event |
+| `DETAILS-SLOG-ATTR-01` | `errcode_invariants_test.go` | 1227 | errcode |
+| `ERRCODE-KIND-LITERAL-01` | `errcode_invariants_test.go` | 183 | errcode |
+| `ERROR-FIRST-API-01` | `errcode_invariants_test.go` | 518 | errcode |
+| `ERROR-FIRST-TYPED-NIL-01` | `errcode_invariants_test.go` | 555 | errcode |
+| `EVENT-DTO-CAMELCASE-01` | `event_camelcase_test.go` | 67 | event |
+| `EVENT-PAYLOAD-CAMELCASE-01` | `event_camelcase_test.go` | 20 | event |
 | `EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01` | `event_subscription_contractgen_coverage_test.go` | 1 | event |
-| `EXPORTED-ERROR-NEW-01` | `errcode_invariants_test.go` | 1460 | errcode |
+| `EXPORTED-ERROR-NEW-01` | `errcode_invariants_test.go` | 1419 | errcode |
 | `EXPORTED-ERROR-NEW-01` | `exported_error_new_fixtures_test.go` | 2 | errcode |
 | `GOOSE-SESSION-LOCKER-01` | `goose_session_locker_test.go` | 3 | goose |
-| `HANDLER-POLICY-REQUIRED-01` | `handler_policy_required_test.go` | 48 | handler |
+| `HANDLER-POLICY-REQUIRED-01` | `handler_policy_required_test.go` | 49 | handler |
 | `HEALTH-AGG-01` | `health_aggregation_test.go` | 3 | health |
 | `HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01` | `http_metrics_label_test.go` | 20 | http |
 | `HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01` | `http_metrics_label_test.go` | 21 | http |
@@ -89,44 +89,44 @@
 | `LAYER-09` | `auth_plan_test.go` | 70 | layer |
 | `LINT-GATE-SMOKE-01` | `lintgate_smoke_test.go` | 1 | lint |
 | `LISTENER-DX-01` | `listener_dx_test.go` | 1 | listener |
-| `LITERAL-01` | `errcode_message_const_fixtures_test.go` | 71 | literal |
+| `LITERAL-01` | `errcode_message_const_fixtures_test.go` | 50 | literal |
 | `MANAGED-RESOURCE-CONTRACT-01` | `managed_resource_contract_test.go` | 1 | managed |
-| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 551 | marker |
-| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 553 | marker |
-| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 552 | markergen |
-| `MESSAGE-CONST-LITERAL-01` | `errcode_invariants_test.go` | 286 | errcode |
+| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 535 | marker |
+| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 537 | marker |
+| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 536 | markergen |
+| `MESSAGE-CONST-LITERAL-01` | `errcode_invariants_test.go` | 287 | errcode |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_message_const_fixtures_test.go` | 2 | errcode |
 | `META-QUERYPARAM-DRIFT-01` | `queryparam_drift_test.go` | 34 | meta |
-| `METADATA-LIMITS-SINGLE-SOURCE-01` | `outbox_invariants_test.go` | 1645 | metadata |
+| `METADATA-LIMITS-SINGLE-SOURCE-01` | `outbox_invariants_test.go` | 1641 | metadata |
 | `MIGRATION-NO-TRANSACTION-RERUN-SAFE-01` | `migration_no_transaction_rerun_safe_test.go` | 11 | migration |
 | `MODULE-ORDER-CONFIGCORE-FIRST-01` | `module_order_test.go` | 17 | module |
 | `NO-DELETED-AUTH-SYMBOLS-01` | `no_deleted_auth_symbols_test.go` | 1 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `cells_no_wrapper_contractspec_import_test.go` | 7 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `no_manual_contractspec_literal_test.go` | 1 | no |
-| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 549 | no |
+| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 533 | no |
 | `NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01` | `no_test_service_context_in_production_test.go` | 1 | no |
-| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 550 | no |
+| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 534 | no |
 | `OBS-01` | `observability_metrics_test.go` | 12 | obs |
-| `OUTBOX-CELL-01` | `outbox_invariants_test.go` | 61 | outbox |
-| `OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01` | `outbox_invariants_test.go` | 600 | outbox |
-| `OUTBOX-LEASE-ID-CAS-01` | `outbox_invariants_test.go` | 232 | outbox |
-| `OUTBOX-MARK-RETURNS-BOOL-01` | `outbox_invariants_test.go` | 289 | outbox |
-| `OUTBOX-METADATA-MAX-BYTES-01` | `outbox_invariants_test.go` | 352 | outbox |
-| `OUTBOX-PAYLOAD-SIZE-01` | `outbox_invariants_test.go` | 472 | outbox |
-| `OUTBOX-RELAY-LOST-METRIC-01` | `outbox_invariants_test.go` | 661 | outbox |
-| `OUTBOX-RELAY-LOST-METRIC-01` | `outbox_invariants_test.go` | 743 | outbox |
-| `OUTBOX-SERVICE-01` | `outbox_invariants_test.go` | 819 | outbox |
-| `OUTBOX-SERVICE-02` | `outbox_invariants_test.go` | 820 | outbox |
-| `OUTBOX-SERVICE-03` | `outbox_invariants_test.go` | 821 | outbox |
-| `OUTBOX-SERVICE-04` | `outbox_invariants_test.go` | 822 | outbox |
-| `OUTBOX-SERVICE-05` | `outbox_invariants_test.go` | 823 | outbox |
-| `OUTBOX-TOPIC-FAILOPEN-01` | `outbox_invariants_test.go` | 1253 | outbox |
-| `OUTBOX-TOPIC-FAILOPEN-01` | `outbox_invariants_test.go` | 1469 | outbox |
+| `OUTBOX-CELL-01` | `outbox_invariants_test.go` | 62 | outbox |
+| `OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01` | `outbox_invariants_test.go` | 596 | outbox |
+| `OUTBOX-LEASE-ID-CAS-01` | `outbox_invariants_test.go` | 228 | outbox |
+| `OUTBOX-MARK-RETURNS-BOOL-01` | `outbox_invariants_test.go` | 285 | outbox |
+| `OUTBOX-METADATA-MAX-BYTES-01` | `outbox_invariants_test.go` | 348 | outbox |
+| `OUTBOX-PAYLOAD-SIZE-01` | `outbox_invariants_test.go` | 468 | outbox |
+| `OUTBOX-RELAY-LOST-METRIC-01` | `outbox_invariants_test.go` | 657 | outbox |
+| `OUTBOX-RELAY-LOST-METRIC-01` | `outbox_invariants_test.go` | 739 | outbox |
+| `OUTBOX-SERVICE-01` | `outbox_invariants_test.go` | 815 | outbox |
+| `OUTBOX-SERVICE-02` | `outbox_invariants_test.go` | 816 | outbox |
+| `OUTBOX-SERVICE-03` | `outbox_invariants_test.go` | 817 | outbox |
+| `OUTBOX-SERVICE-04` | `outbox_invariants_test.go` | 818 | outbox |
+| `OUTBOX-SERVICE-05` | `outbox_invariants_test.go` | 819 | outbox |
+| `OUTBOX-TOPIC-FAILOPEN-01` | `outbox_invariants_test.go` | 1249 | outbox |
+| `OUTBOX-TOPIC-FAILOPEN-01` | `outbox_invariants_test.go` | 1465 | outbox |
 | `PANIC-REDACT-01` | `panic_invariants_test.go` | 26 | panic |
 | `PANIC-REGISTERED-01` | `panic_invariants_test.go` | 90 | panic |
 | `PATCH-OPTIONAL-BOOL-POINTER-01` | `patch_optional_bool_pointer_test.go` | 1 | patch |
 | `PG-CONSTRUCTOR-MUST-FREE-01` | `postgres_constructor_error_first_test.go` | 3 | pg |
-| `PGQUERY-01` | `pgquery_boundary_test.go` | 20 | pgquery |
+| `PGQUERY-01` | `pgquery_boundary_test.go` | 21 | pgquery |
 | `POSTGRES-MIGRATOR-LOCK-ORDER-REGRESSION-01` | `goose_session_locker_test.go` | 7 | postgres |
 | `PR-CI-6` | `prod_duration_fixtures_test.go` | 5 | pr |
 | `PR-MODE-1` | `security_defaults_test.go` | 3 | pr |
@@ -138,10 +138,10 @@
 | `PROD-DURATION-CONST-01` | `prod_invariants_test.go` | 35 | prod |
 | `PROD-DURATION-CONST-01` | `test_time_literal_fixtures_test.go` | 7 | prod |
 | `PROD-DURATION-CONST-01` | `test_time_literal_test.go` | 29 | prod |
-| `PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01` | `provision_state_removed_test.go` | 14 | provision |
+| `PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01` | `provision_state_removed_test.go` | 11 | provision |
 | `READYZ-PROBE-NAMING-01` | `readyz_probe_naming_test.go` | 3 | readyz |
 | `REDIS-KEY-NAMESPACE-01` | `redis_key_namespace_test.go` | 3 | redis |
-| `REFRESH-AMBIENT-TX-01` | `refresh_invariants_test.go` | 358 | refresh |
+| `REFRESH-AMBIENT-TX-01` | `refresh_invariants_test.go` | 331 | refresh |
 | `REFRESH-CROSS-STORE-TX-01` | `refresh_invariants_test.go` | 31 | refresh |
 | `REFRESH-INVALID-INDEX-SINGLE-SOURCE-01` | `refresh_invariants_test.go` | 265 | refresh |
 | `REPO-LOG-KEY-ID-REDACT-01` | `repoerr_test.go` | 20 | repo |
@@ -160,22 +160,23 @@
 | `RMQ-STOPINTAKE-INFLIGHT-WAIT-01` | `rmq_invariants_test.go` | 1313 | rmq |
 | `ROLE-ADMIN-LITERAL-01` | `role_admin_literal_test.go` | 1 | role |
 | `ROLE-ADMIN-LITERAL-02` | `role_admin_literal_test.go` | 2 | role |
+| `SCANNER-FRAMEWORK-USAGE-01` | `scanner_framework_usage_test.go` | 21 | scanner |
 | `SEC-FAIL-CLOSED-01` | `security_defaults_test.go` | 5 | sec |
-| `SEC-FAIL-CLOSED-02` | `security_defaults_test.go` | 49 | sec |
-| `SEC-FAIL-CLOSED-03` | `security_defaults_test.go` | 50 | sec |
-| `SEC-FAIL-CLOSED-04` | `security_defaults_test.go` | 51 | sec |
-| `SEC-FAIL-CLOSED-05` | `security_defaults_test.go` | 52 | sec |
-| `SEC-FAIL-CLOSED-06` | `security_defaults_test.go` | 53 | sec |
-| `SEC-FAIL-CLOSED-07` | `security_defaults_test.go` | 54 | sec |
-| `SEC-FAIL-CLOSED-08` | `security_defaults_test.go` | 55 | sec |
-| `SEC-FAIL-CLOSED-09` | `security_defaults_test.go` | 56 | sec |
+| `SEC-FAIL-CLOSED-02` | `security_defaults_test.go` | 50 | sec |
+| `SEC-FAIL-CLOSED-03` | `security_defaults_test.go` | 51 | sec |
+| `SEC-FAIL-CLOSED-04` | `security_defaults_test.go` | 52 | sec |
+| `SEC-FAIL-CLOSED-05` | `security_defaults_test.go` | 53 | sec |
+| `SEC-FAIL-CLOSED-06` | `security_defaults_test.go` | 54 | sec |
+| `SEC-FAIL-CLOSED-07` | `security_defaults_test.go` | 55 | sec |
+| `SEC-FAIL-CLOSED-08` | `security_defaults_test.go` | 56 | sec |
+| `SEC-FAIL-CLOSED-09` | `security_defaults_test.go` | 57 | sec |
 | `SETUP-ADMIN-CODEGEN-BOOTSTRAP-AUTH-WIRED-01` | `setup_admin_bootstrap_closure_test.go` | 24 | setup |
 | `SETUP-ADMIN-NOT-PUBLIC-01` | `setup_admin_auth_test.go` | 1 | setup |
 | `SLOWGATE-ALLOWLIST-01` | `slowgate_allowlist_test.go` | 1 | slowgate |
 | `SPAN-RECORD-ERROR-REDACT-01` | `span_record_error_redact_test.go` | 1 | span |
 | `SPAN-RECORD-ERROR-REDACT-ARCHTEST-01` | `span_record_error_redact_test.go` | 22 | span |
-| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 723 | codegen |
-| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 407 | codegen |
+| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 707 | codegen |
+| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 391 | codegen |
 | `STORAGE-BACKEND-MEMORY-NO-PG-01` | `storage_backend_test.go` | 11 | storage |
 | `STORAGE-BACKEND-PG-WIRING-01` | `storage_backend_test.go` | 6 | storage |
 | `SVCTOKEN-CALLER-CELL-REQUIRED-01` | `svctoken_caller_cell_test.go` | 1 | svctoken |
