@@ -228,6 +228,10 @@ func TestHttputilExportedRegistry(t *testing.T) {
 
 // collectExportedFuncs returns a set of top-level exported function names
 // declared in non-test .go files under dir.
+//
+// SCANNER-ESCAPE-HATCH: deferred-scanner-migration
+// Single-dir .go scan via os.ReadDir; predates scanner framework, candidate
+// for scanner.DirsScope migration.
 func collectExportedFuncs(t *testing.T, dir string) map[string]bool {
 	t.Helper()
 	entries, err := os.ReadDir(dir)

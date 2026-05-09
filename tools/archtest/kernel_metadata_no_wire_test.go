@@ -61,6 +61,10 @@ type wireViolation struct {
 // TestKernelMetadataDoesNotContainWireSymbols enforces KERNEL-METADATA-NO-WIRE-01.
 // It parses all non-test .go files in kernel/metadata/ and fails if any of the
 // forbidden wire-format top-level declaration names are found.
+//
+// SCANNER-ESCAPE-HATCH: deferred-scanner-migration
+// Scans kernel/metadata/*.go via os.ReadDir; predates scanner framework,
+// candidate for scanner.DirsScope migration.
 func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 	root := findModuleRoot(t)
 	metadataDir := filepath.Join(root, "kernel", "metadata")
