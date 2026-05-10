@@ -4,6 +4,10 @@
 // CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 negative fixture loaded only when the
 // archtest_fixture build tag is set.
 //
+// 本 fixture 包含 10 个违规的 With* Option 函数（4 基础 + 3 嵌入形式 + 1 纯方法接口
+// + 1 命名本地嵌入 + 1 泛型）。修改本文件请同步更新
+// tools/archtest/cell_public_option_param_test.go 的 expectedRawParamFixtureViolations 常量。
+//
 // The build tag excludes this package from `go build ./...` and `go test
 // ./...` so it never pollutes real-repo scans. It is loaded explicitly by
 // TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation via

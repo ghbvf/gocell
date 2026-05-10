@@ -45,6 +45,11 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
+// expectedRawParamFixtureViolations is the number of CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01
+// violations declared in tools/archtest/internal/rawparamfixture/cell.go.
+// When adding new violation cases to the fixture, update this constant first.
+const expectedRawParamFixtureViolations = 10
+
 // rawPublicOptionForbidden is the closed set of raw infra types that public
 // With* Options on cells/<x>/*.go + examples/<demo>/cells/<x>/*.go must NOT
 // accept. Adding a new type is permanent (AI-HARD): every existing exported
@@ -386,7 +391,7 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	require.NoError(t, err)
 
 	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), false)
-	require.Len(t, violations, 10,
+	require.Len(t, violations, expectedRawParamFixtureViolations,
 		"fixture must yield 10 violations: WithBadTxRunner / WithBadPublisher / "+
 			"WithBadWriter / WithAliasedBadTxRunner (4 baseline) + "+
 			"WithBadEmbedPublisher / WithBadEmbedWriter / WithBadEmbedTxRunner "+
