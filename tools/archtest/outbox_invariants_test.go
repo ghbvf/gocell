@@ -1875,8 +1875,11 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // plumbing, shared conformance harness).
 //
 // Test files (_test.go) are excluded by tests=false in
-// typeseval.SharedResolver; generated/, vendor/, testdata/ are skipped by
-// go list module-load defaults.
+// typeseval.SharedResolver; vendor/, testdata/ are skipped by go list
+// module-load defaults; generated/ is skipped via
+// typeseval.IsGeneratedRelPath (NOT by go list — `go list ./...` does
+// include generated/contracts/.../v1 packages, so the rule must apply
+// the path filter explicitly. Closes PR445-FU finding F4).
 //
 // Type-aware via go/types: the scanner detects two literal forms via
 // pkg.TypesInfo:
@@ -1913,7 +1916,14 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
+			// Allowlist (explicit opt-in) is checked first so the kernel
+			// internal sites in handleResultLiteralAllowlist remain
+			// permitted; generated/ skip (implicit opt-out) is then
+			// applied for codegen output that must never be flagged.
 			if _, ok := handleResultLiteralAllowlist[rel]; ok {
+				continue
+			}
+			if typeseval.IsGeneratedRelPath(rel) {
 				continue
 			}
 			violations = append(violations,
@@ -1962,7 +1972,7 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
-			if strings.HasPrefix(rel, "generated/") {
+			if typeseval.IsGeneratedRelPath(rel) {
 				generatedFiles = append(generatedFiles, rel)
 			}
 		}
