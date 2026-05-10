@@ -1,0 +1,132 @@
+# ADR: Cell Interface ISP Split + Raw-Infra Closure
+
+> Status: Accepted
+> Date: 2026-05-10
+> ref: docs/plans/202605011500-029-master-roadmap.md #13 PR-A22
+> Implementation: PR-V1-CELL-IFACE-ISP-SPLIT（吸收 PR245-F10 + 030 G-17）
+
+## Context
+
+`kernel/cell/interfaces.go` 的 `Cell` 接口在物理合一（K#04/K#05 PR#363/PR#365）后保留了 12 个方法，混合了四类正交职责：
+
+- 静态身份（3）：`ID` / `Type` / `ConsistencyLevel`
+- 状态机驱动（3）：`Init` / `Start` / `Stop`
+- 运行时探针（2）：`Health` / `Ready`
+- 声明态读取（4）：`Metadata` / `OwnedSlices` / `ProducedContracts` / `ConsumedContracts`
+
+各类的消费者群截然不同：路由归属与 metrics label 只读 identity；assembly 编排只调 lifecycle；`/healthz`/`/readyz` 只读 status；contract validator 与 codegen 只读 inventory。聚合到单接口违反 ISP，且让 AI 实施者「拿到 `Cell` 就用 `Cell` 全集」，破坏最小依赖原则。
+
+平行问题：`OUTBOX-CELL-01` 仅禁 platform `cells/*/cell.go` 暴露 `WithPublisher` / `WithOutboxWriter`，但对 `WithTxManager(persistence.TxRunner)` 等其他 raw infra 类型无守护，且整套规则不覆盖 `examples/*/cells/*/cell.go`。已确认 `examples/todoorder/cells/ordercell.WithOutboxWriter` 与 `examples/iotdevice/cells/devicecell.WithPublisher` 在审查时仍暴露 raw infra——AI 抄 example 写新 cell 会复制这一漏洞。
+
+K#04/K#05 已让 `*metadata.CellMeta` 成为数据层单源，但接口形态层未跟进切分；`CELLMETA-SINGLE-SOURCE-03` 还在守顶层 `Cell.Metadata()`。
+
+## Decisions
+
+### D1. Cell 接口按 ISP 切分四子接口
+
+`Cell` 拆为四个正交子接口，命名采用领域名词前缀 + 不加 `-er` 后缀（对齐 K8s `apimachinery/pkg/apis/meta/v1` 的 `Object` / `Type` / `Common` 系列命名）：
+
+| 子接口 | 方法 | 消费者 |
+|---|---|---|
+| `CellIdentity` | `ID` / `Type` / `ConsistencyLevel` | registry lookup / metrics labels / log correlation / route attribution |
+| `CellLifecycle` | `Init` / `Start` / `Stop` | `kernel/cell.Assembly` / bootstrap phases / lifecycle test harnesses |
+| `CellStatus` | `Health` / `Ready` | `/healthz` `/readyz` HTTP handlers / runtime supervision |
+| `CellInventory` | `Metadata` / `OwnedSlices` / `ProducedContracts` / `ConsumedContracts` | contract validators / metadata inspectors / `gocell validate` / codegen |
+
+每个子接口 godoc 末段写明 `Consumers: <谁>`，引导 AI 实施时按消费者群声明最小子接口依赖（Soft 引导 + Medium archtest 联合，主线由四段式 compile-time check Hard 锁定）。
+
+### D2. Cell 复合形保留（io.ReadWriter 范式）
+
+`Cell` 重定义为 `interface { CellIdentity; CellLifecycle; CellStatus; CellInventory }`。复合接口本身是 ISP 工具，不是兼容 shim：
+
+- 调用方零代码变更（`kernel/assembly` 9 处 `cell.Cell` 引用 / `runtime/bootstrap/*_test.go` / `cells/*/cell_gen.go` 全部继续工作）
+- 下游接收 Cell 无需枚举四子接口
+- BaseCell 实现完全无需修改（已实现 12 方法，复合 ≡ 全集）
+- 命名学习 `io.ReadWriter = interface { Reader; Writer }` 与 K8s `apimachinery` `Object` 嵌入复合范式
+
+### D3. BaseCell compile-time check 四段式分写
+
+`kernel/cell/base.go` 删除单条 `var _ Cell = (*BaseCell)(nil)`，替换为四行独立断言：
+
+```go
+var (
+    _ CellIdentity  = (*BaseCell)(nil)
+    _ CellLifecycle = (*BaseCell)(nil)
+    _ CellStatus    = (*BaseCell)(nil)
+    _ CellInventory = (*BaseCell)(nil)
+    _ Slice         = (*BaseSlice)(nil)
+    _ Contract      = (*BaseContract)(nil)
+)
+```
+
+缺方法时编译错误精确定位到子接口；单条 `_ Cell` 的 12-方法笼统报错被替换为 3 / 3 / 2 / 4 方法粒度的精确定位。复合 `Cell` 由四子接口同时满足时自动满足，无需冗余声明。
+
+### D4. Slice 接口默认不拆 + 触发条件登记 backlog
+
+`Slice` 7 方法（`ID` / `BelongsToCell` / `ConsistencyLevel` / `Init` / `Verify` / `AllowedFiles` / `AffectedJourneys`）形态与 Cell 类似，但本 PR **默认不拆**：
+
+- cells/* 全部嵌 `BaseSlice`，实现疲劳为 0；无第三方 Slice 实现
+- Slice 字段为简单值，无 `metadata.SliceMeta` 单源化数据层驱动（与 `metadata.CellMeta` 不对称）
+- 激进自审「避免预设未来需求」原则：拆 Slice 只有形态对称收益，无 ISP 实际收益、无单事实源加强
+
+触发条件 = 首次出现需替换 `BaseSlice` 7 方法之一的第三方 Slice 实现。届时按本 ADR 同精神拆分（SliceIdentity / SliceLifecycle / SliceMetadata），登记到 `docs/backlog.md cap-14` 同槽位（Source: ADR 202605101800 §D4）。
+
+### D5. CELLMETA-SINGLE-SOURCE-03 升级到子接口
+
+`tools/archtest/cellmeta_single_source_test.go::TestCellmetaSingleSource03_MetadataInterfaceReturn` 原扫顶层 `Cell.Metadata()`，PR-A22 后 `Metadata()` 落入 `CellInventory` 子接口，gate 同步升级（AST `ts.Name.Name == "CellInventory"`）。配套 `cellmeta_single_source_test.go` 顶部 `Known limits` 删除已落地的"嵌入子接口可绕过"条目。
+
+注：`CELLMETA-SINGLE-SOURCE-01` forbidden 列表保留 `CellMetadata` 旧名（防止历史 struct 复活），新接口选用 `CellInventory` 而非 `CellMetadata`，与该护栏不冲突——本决议同时解决了名字层面的"接口与 struct 同名混淆"。
+
+### D6. CELL-RAW-DEPS-01 新增 + 全 cell.go 范围（吸收 PR245-F10 / 030 G-17）
+
+新建 archtest `tools/archtest/cell_raw_deps_test.go` 守 `CELL-RAW-DEPS-01`：
+
+- **范围**：platform `cells/<x>/cell.go` + examples `examples/<demo>/cells/<x>/cell.go`（OUTBOX-CELL-01 当前 `isCellFile` 仅平台范围是 AI-HARD 漏洞——本 PR 同步修复 `ordercell.WithOutboxWriter` 与 `devicecell.WithPublisher` 两处历史暴露）
+- **forbidden type set（5 类，闭集）**：`persistence.TxRunner` / `outbox.Publisher` / `outbox.Writer` / `eventbus.Bus` / `kvstore.Store`
+- **allowlist（2 条结构必要）**：
+  - `(WithTxManager → persistence.TxRunner)`：`OUTBOX-SERVICE-01` fail-fast on nil TxRunner 的事务边界注入唯一路径——删除会破坏 service 构造期 nil 检查的单源约束
+  - `(WithOutboxDeps → outbox.Publisher, outbox.Writer)`：PR-A5c 决定的合法 pre-composed emitter 替代 raw `Publisher`/`Writer` 暴露——两参一同被 `cell.ResolveCellEmitter` 在 Init 时组装
+
+**这两条 allowlist 是结构必要而非软兼容**——区别在于：软兼容是为旧调用方留旧接口同时引入新接口（双路径并存），而本 allowlist 是「框架仅认这两条单一注入路径，新增 raw infra 类型必须先评估是否纳入 forbidden set」的单源约定。
+
+allowlist 由静态 SHA-256 hash guard 锁定（`cellRawDepsAllowlistSHA256` 常量 + `TestCellRawDeps01_AllowlistHashGuard`）：修改 allowlist 编译期不可静默——hash 漂移触发测试失败，强制评审注意到决议变更。新增 raw infra 类型（如 `audit.Sink` / `refresh.Store`）触发时需评估是否纳入 forbidden set 并写新 ADR 修订本节。
+
+### D7. CellInventory 接口名命名约定
+
+`CellInventory` 选名理由：
+
+- **避开 SOURCE-01 forbidden 历史 struct 名 `CellMetadata`**——这是命名层冲突的现实约束
+- **方法集语义匹配**：`Metadata()` + `OwnedSlices()` + `ProducedContracts()` + `ConsumedContracts()` 共同构成 cell 的 declarative inventory，而不是单一 metadata accessor
+- **与 `metadata.CellMeta` 数据层关系**：`CellInventory.Metadata() returns *metadata.CellMeta`——接口承载读路径，类型名不必同名（消费者通过 `cell.CellInventory` 与 `metadata.CellMeta` 前缀清晰区分）
+
+cell 包内 `CellInventory`（type）与 `metadata` 包名（imported）共存无歧义；不引入别名，不重命名包。
+
+## Consequences
+
+### 正向
+- ✅ ISP 严格满足，AI 实施按消费者声明子接口依赖
+- ✅ 调用方零代码变更（破坏面 = 0，BaseCell 实现完全保留）
+- ✅ examples raw infra 漏洞堵住（AI-HARD ↑：AI 抄 example 路径锁住）
+- ✅ `ordercell.resolveOutboxDeps` 私有逻辑（~30 行）删除，统一走 `cell.ResolveCellEmitter`，与 platform 三 cell 的 emitter 解析路径完全对齐
+- ✅ `CELLMETA-SINGLE-SOURCE-03` 升级使 SOURCE-01..03 三 gate 共同守 metadata 单源化的接口形态层
+
+### 负向 / 风险
+- ⚠️ 测试桩需声明四子接口而非单 `Cell`——探索阶段确认无现存子接口 mock，本 PR 无此类破坏
+- ⚠️ 后续如需 `CellIdentity` 加字段（如 `Tier`），需新 ADR 决定加 `CellIdentity` 还是新 `CellTier` 子接口
+- ⚠️ Slice 接口 D4 决议「默认不拆」与 review 可能的「对称切分」诉求存在张力——以单事实源驱动而非形态对称为准，触发条件清晰可追
+
+### AI-HARD 三档分级一览
+- **Hard**：四段式 compile-time check（缺方法编译失败 = 违反不可表达）；allowlist SHA-256 hash guard（修改不可静默）
+- **Medium**：`CELL-RAW-DEPS-01`（AST type-aware 识别函数参数 type expression）；`CELLMETA-SINGLE-SOURCE-03` 升级（AST 扫子接口）；`CELL-IFACE-ISP-COMPOSITE-01` / `METHODSETS-01` / `BASECELL-CHECK-01`（AST 扫接口形态）
+- **Soft**（非 mandatory，仅作引导）：godoc `Consumers: <谁>` 段；本 ADR §D4 Slice 默认不拆决议（文本决策 + backlog 触发条件）
+
+满足 CLAUDE.md `.claude/rules/gocell/ai-collab.md` 「新增约束 ≥ Medium 立项硬门槛」——所有新增 mandatory 约束均 ≥ Medium。
+
+## References
+
+- 前置 ADR `docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md`（K#04/K#05 数据层单源）
+- 同精神 ADR `docs/architecture/202605031900-adr-handler-vocabulary-collapse.md`（领域名词统一收敛）
+- K8s `apimachinery/pkg/apis/meta/v1.Object` ISP 拆分 + 复合接口范式
+- `io.ReadWriter` / `io.ReadCloser` 同文件嵌入复合范式
+- Uber fx `lifecycle.go` / controller-runtime `Runnable` ISP 极致单方法
+- `docs/backlog.md` cap-14 PR245-F10（吸收）
