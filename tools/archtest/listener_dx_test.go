@@ -139,12 +139,6 @@ var listenerDXActiveDocSkipDirs = map[string]struct{}{
 	"worktrees": {},
 }
 
-// listenerDXActiveDocs walks the repository for .md docs and doc.go files
-// participating in the listener-DX gate.
-//
-// SCANNER-ESCAPE-HATCH: non-go-md-doc
-// Walks .md documentation; scanner framework is .go-only, so
-// fs.WalkDir(os.DirFS(...)) is the natural primitive here.
 func listenerDXActiveDocs(root string) ([]string, error) {
 	var files []string
 	err := fs.WalkDir(os.DirFS(root), ".", func(rel string, d fs.DirEntry, err error) error {

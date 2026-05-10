@@ -625,12 +625,6 @@ services:
 	assert.Contains(t, violations[0], "POSTGRES_PASSWORD")
 }
 
-// findExampleComposeCredentialViolations enumerates per-example
-// docker-compose.yml files and checks for hard-coded credentials.
-//
-// SCANNER-ESCAPE-HATCH: non-go-yaml-compose
-// Scans examples/<name>/docker-compose.yml YAML files; scanner framework
-// is .go-only, so os.ReadDir is the natural primitive here.
 func findExampleComposeCredentialViolations(root string) ([]string, error) {
 	var violations []string
 	examplesDir := filepath.Join(root, "examples")

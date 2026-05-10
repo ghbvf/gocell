@@ -37,10 +37,6 @@ import (
 
 // TestCellmetaSingleSource01_NoForbiddenTypes verifies CELLMETA-SINGLE-SOURCE-01.
 // kernel/cell/*.go (excluding _test.go) 必须不得声明 5 个被合并的类型。
-//
-// SCANNER-ESCAPE-HATCH: deferred-scanner-migration
-// Scans kernel/cell/*.go via os.ReadDir; predates scanner framework, candidate
-// for scanner.EachFile migration when next touched.
 func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

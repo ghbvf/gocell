@@ -217,10 +217,6 @@ func parseStructTag(tag string) map[string]string {
 // It replaces the former filepath.Walk call so that no raw walker remains in
 // this archtest file (filepath.Walk/WalkDir are reserved for the scanner
 // framework per SCANNER-FRAMEWORK-USAGE-01).
-//
-// SCANNER-ESCAPE-HATCH: non-go-json-schema
-// Scans payload.schema.json files; scanner framework is .go-only, so
-// os.ReadDir-based recursion is the natural primitive here.
 func walkPayloadSchemas(dir string, fn func(path string) error) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

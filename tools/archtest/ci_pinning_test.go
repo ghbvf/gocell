@@ -428,10 +428,6 @@ func validateLocalUsesResolve(repoRoot, path string, body []byte) error {
 // are both in scope: a tag-pinned external action inside a composite
 // action would otherwise bypass the pin check because the workflow file
 // only lists the local wrapper.
-//
-// SCANNER-ESCAPE-HATCH: non-go-yaml-workflow
-// Scans .github/workflows and .github/actions YAML files; scanner framework
-// is .go-only, so filepath.Glob is the natural primitive here.
 func pinnableYAMLFiles(root string) ([]string, error) {
 	var out []string
 	workflowsDir := filepath.Join(root, ".github", "workflows")
