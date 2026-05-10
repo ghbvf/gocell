@@ -234,7 +234,7 @@ func TestFakeStore_WaitFor_WakesOnMutation(t *testing.T) {
 }
 
 // TestFakeStore_WaitFor_CtxCancelled verifies that WaitFor returns ctx.Err()
-// when ctx is cancelled while cond is still false (no false positives).
+// when ctx is canceled while cond is still false (no false positives).
 func TestFakeStore_WaitFor_CtxCancelled(t *testing.T) {
 	s := outboxtest.NewFakeStore()
 

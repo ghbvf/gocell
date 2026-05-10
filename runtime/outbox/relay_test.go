@@ -104,7 +104,7 @@ func (p *fakePublisher) Publish(_ context.Context, topic string, payload []byte)
 }
 
 // WaitForCaptured blocks until at least want successful Publish calls have
-// been recorded or ctx is cancelled. Re-evaluated synchronously after every
+// been recorded or ctx is canceled. Re-evaluated synchronously after every
 // successful publish via the notify channel — no polling, no timing coupling.
 func (p *fakePublisher) WaitForCaptured(ctx context.Context, want int) error {
 	for {

@@ -166,7 +166,7 @@ func (s *FakeStore) snapshotLocked() []FakeRow {
 }
 
 // WaitFor blocks until cond evaluates true on a current FakeStore snapshot
-// or ctx is cancelled, returning ctx.Err() in the latter case.
+// or ctx is canceled, returning ctx.Err() in the latter case.
 //
 // cond is re-evaluated synchronously after every state mutation (Seed,
 // ClaimPending, MarkPublished, MarkRetry, MarkDead, ReclaimStale,
