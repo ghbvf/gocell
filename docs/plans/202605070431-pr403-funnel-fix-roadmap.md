@@ -59,12 +59,12 @@ Path C ship 后启动彻底版 5-PR：PR-Φ（节点遍历漏斗，彻底解决 
 | PR-FUNNEL-01 主题聚并 | — | ✅ | — | PR #408（5461d53e）；archtest 104→70 |
 | PR-FUNNEL-01 follow-up | — | ✅ | — | PR #412（16a13993）；parse-error fail-loud + git ls-files |
 | PR-FUNNEL-02 handler funnel | — | ✅ | — | PR #411（18b60a5c）；HANDLER-POLICY-REQUIRED-01 升 funnel |
-| Audit step A 清单化 | — | ✅ | — | `list-archtests.sh` + `inventory.md` + `verify-archtest-inventory.sh` 漂移闸 |
+| Audit step A 清单化 | — | ✅ shipped (彻底版 by PR-A') | — | `list-archtests.sh` 改 stdout-only；`inventory.md` + `verify-archtest-inventory.sh` 漂移闸已被 PR-A' 删除（INVENTORY-ANCHOR-REQUIRED-01 archtest 单源接替） |
 | `PR408-FU-SCANNER-SHARED-FRAMEWORK-01` | 0 | ✅ | — | PR #419（996784cf）；framework **文件遍历层** + 4 demo 迁移 |
 | `PR-FUNNEL-03` governance 聚并 | 1 | ✅ | — | PR #418（e8cdf3c9）；source 15→8 文件 + `rule_inventory_test.go` golden 锁 81 条 |
 | **Path C** scanner 文件扫描漏斗收编 | 0' | ⏳ 他人推进 | ~12h | PR #424 衍生：USAGE-01 traversal symbol table 升级 + scanner 加 EachContentFile / MatchRels / IncludeTestdata + 19 bypass 站点全 framework + USAGE-02 删除 |
 | **PR-Φ** `SCANNER-FRAMEWORK-NODE-API-COMPLETE` | 1 | ⏳ Path C ship 后 | 14-18h+5-7h | framework **节点遍历层** API（EachFuncDecl / EachCallExpr / EachImportSpec / EachGenDecl）+ USAGE-02 archtest（**复用 Path C 删空的 ID**，无条件，与 USAGE-01 同样原子）+ 一锅替换 65 手写 for-loop + 131 裸 ast.Inspect → 全 typed callback；保留出口走严格 category 就地注释 |
-| **PR-A'** `INVENTORY-HARDENING`（瘦身）| 1 | ⏳ | 5-7h+2-3h | 46 个 `tools/archtest/*_test.go` 加 `// INVARIANT:` 锚点 + `list-archtests.sh` 删 grep fallback **+ 删 hardcode 黑名单** + INVENTORY-ANCHOR-REQUIRED-01 archtest + CI gate 接 verify-archtest-inventory.sh。**OWNER-AST-EXTRACTION 砍掉** |
+| **PR-A'** `INVENTORY-ANCHOR-SINGLE-SOURCE`（彻底版）| 1 | ✅ shipped | — | 55 个 `tools/archtest/*_test.go` 加 `// INVARIANT:` 锚点 + INVENTORY-ANCHOR-REQUIRED-01 archtest 单源 + 删 `docs/audit/archtest-inventory.md` 持久产物 + 删 `hack/verify-archtest-inventory.sh` drift gate（make verify glob discovery 自动出 CI）+ 删 `kernel/governance/rule_inventory_test.go::TestArchtestInventoryNoIDTruncation`（底层 .md 没了，truncation 场景消失）+ `list-archtests.sh` 改 stdout-only（删 fallback / hardcode 黑名单 / governance section）+ doc.go / backlog.md / 033-pg-plan 同步。**OWNER-AST-EXTRACTION 砍掉** |
 | **PR-B** `GOVERNANCE-RULE-REACHABILITY-TEST-01` | 1 | ⏳ | 6h+2h | `rule_inventory_test.go` 加静态 BFS：从 `rules()` / `strictRules()` / `DependencyChecker.Check()` / 公开 `Check*` 4 注册根扩闭包，覆盖 const-ident emission / 双 receiver type / 闭包包装注册，断言 reachable rule IDs ⊇ golden 81 条；替代 PR-FUNNEL-03 zero-diff 临时硬化 |
 | **PR-C** `AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01` | 1 | ⏳ | 4h+1h | schema/governance 显式 `false` 语义统一（6 个 auth 布尔字段：public/passwordResetExempt/serviceOwned/bootstrap/clientsOnly/responses 全组合覆盖）+ 回归测试 |
 | **PR-D'** `PANIC-WHITELIST-INLINE-COMMENT-SINGLE-SOURCE-01` | 1 | ⏳ | 5-7h+2h | 删 architecturalPanicWhitelist Go map + 删 AllowMust 全局豁免 + 删 assertPanicWhitelistMatchesADR reconciliation → 改就地注释 `// PANIC-REGISTERED-01: ADR-approved: <reason>`；4 处 re-throw + 30+ Must* 站点逐个加注释；ADR markdown 改写为元规则文档（删函数名清单表格）。ref: cockroachdb/cockroach pkg/testutils/lint/passes/forbiddenmethod |
@@ -74,7 +74,7 @@ Path C ship 后启动彻底版 5-PR：PR-Φ（节点遍历漏斗，彻底解决 
 | ~~`PR408-FU-LEGACY-ANCHOR-BACKFILL-01`~~ | — | 合入 PR-A' | — | — |
 | ~~`PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01`~~ | — | ❌ 取消（决策见 §2）| — | — |
 | ~~`PR411-AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01`~~ | — | 改名 PR-C | — | — |
-| ~~`PR419-FU-INVENTORY-CI-GATE-01`~~ | — | 合入 PR-A' | — | — |
+| ~~`PR419-FU-INVENTORY-CI-GATE-01`~~ | — | ❌ 取消（gate 整体删除 by PR-A'） | — | — |
 | ~~`PR419-FU-PANIC-MUST-PATH-SCOPE-01`~~ | — | ❌ 升级为 PR-D'（path scope 是双源反模式，改就地注释单源）| — | — |
 | ~~`PR408-FU-SCANNER-USAGE-01-ENABLEMENT`~~ | — | 由 Path C 实现 | — | — |
 | `PR411-HANDLER-POLICY-TYPEAWARE-SCANNER-01` | 3 | 触发 | — | trigger: scanner 误报/漏报；基于 framework 做（直接用 internal/scanner API） |
@@ -276,7 +276,7 @@ reviewer 优先级：**PR-Φ ≫ PR-B = PR-C > PR-A' > PR-D' > PR-F**。
 
 - 决策原则：`CLAUDE.md` `## 新增 invariant 决策原则`
 - ADR：`docs/architecture/202605061500-adr-typed-response-envelope.md` §D6/D7（typed envelope）/ `docs/architecture/202604270030-architectural-panic-whitelist.md`（PR-D' 改写目标）
-- Inventory：`docs/audit/archtest-inventory.md`（自动生成）
+- Inventory（**已被 PR-A' 删除**；现场清单：`bash scripts/audit/list-archtests.sh`，唯一守卫 `INVENTORY-ANCHOR-REQUIRED-01` archtest）
 - 配套 plan（含开源对标 K8s/CockroachDB/staticcheck/golang.org/x/tools 报告）：`~/.claude-ming/plans/ast-ast-inspect-inherited-wadler.md`
 - ref（PR-Φ）：golang/tools `go/analysis/passes/lostcancel/lostcancel.go@master`（typed-callback 单遍 idiom）
 - ref（PR-D'）：cockroachdb/cockroach `pkg/testutils/lint/passes/forbiddenmethod/forbiddenmethod.go@master`（nolint 就地注释单源）
