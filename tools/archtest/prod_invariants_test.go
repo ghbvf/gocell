@@ -99,12 +99,14 @@ func TestProdDurationConst(t *testing.T) {
 // inspects every sub-expression. An expression that (a) has static type
 // time.Duration and (b) whose subtree contains a BasicLit is a violation.
 //
-// Migration note (PR-Φ): the original ast.Inspect+return-false-prune walked
-// every ast.Node, casting each to ast.Expr, and skipped descending into a
-// matched sub-tree to avoid double-counting. EachNode has no proceed-bool;
-// we collect candidate hits across BinaryExpr/CallExpr/UnaryExpr/ParenExpr/
-// BasicLit, then drop any hit fully contained inside another (range-based
-// outer-wins dedup, equivalent to the original prune semantics).
+// Implementation: scanner.EachNode is preorder-only (no proceed-bool), so
+// we collect candidate hits across every concrete Expr kind that
+// isLiteralDurationExpr can recognize standalone (BinaryExpr/CallExpr/
+// UnaryExpr/ParenExpr/BasicLit), sort by start position, and drop any hit
+// fully contained inside an outer hit (outer-wins range dedup). This
+// preserves the "report only the outermost match" semantics — without the
+// dedup, `time.Duration(30)*time.Second` would be reported twice (the outer
+// BinaryExpr and the inner CallExpr both match).
 func scanProdDurationAST(
 	fset *token.FileSet,
 	file *ast.File,

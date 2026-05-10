@@ -22,6 +22,19 @@
 // than a silent runtime miss — critical for AI-rebust archtest authoring
 // (see .claude/rules/gocell/ai-collab.md AI-rebust 三档分级).
 //
+// [EachNode] silently no-ops on a nil root; callers need not guard against
+// nil before calling.
+//
+// # Subpackage scan exemption
+//
+// SCANNER-FRAMEWORK-USAGE-01 only scans top-level archtest test files
+// (tools/archtest/<file>_test.go). Files under tools/archtest/internal/...
+// (this package, typeseval, etc.) are exempt by design — they ARE the
+// framework and may legitimately use bare go/ast walks. AI authors must NOT
+// extend "subpackage exempt" reasoning to other tools/archtest/internal/
+// helpers: only the framework implementation files (this package) and the
+// stdlib type-checker plumbing (typeseval) qualify.
+//
 // # Why not go/analysis
 //
 // GoCell archtests have no inter-rule dependencies (no Requires/FactType DAG),

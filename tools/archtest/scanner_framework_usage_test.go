@@ -143,6 +143,13 @@ var forbiddenWalkSymbols = map[string][]string{
 //	(*os.File).ReadDir
 //	(fs.FS).ReadDir / (fs.ReadDirFS).ReadDir / (fs.GlobFS).Glob / WalkDir variants
 //
+// Coverage limit: embed.FS is intentionally NOT listed here. Although
+// embed.FS exposes a ReadDir method, archtest never reads embedded data
+// at-rest (it scans live source code via go/parser); embed.FS misuse is
+// a runtime-data concern, not a scanner-bypass route. If an archtest ever
+// needs to ban embed.FS.ReadDir, add `"embed": {"ReadDir"}` here and a
+// fixture case.
+//
 // Closes backlog PR430-FU-USAGE-01-TYPE-AWARE — the prior PackageAliases-
 // based AST scan could not see these because it had no type info.
 var forbiddenMethodSymbols = map[string][]string{
@@ -275,11 +282,31 @@ func contains(ss []string, s string) bool {
 }
 
 // namedTypeImportPath returns the import path of the package that declares
-// the named type underlying t. Strips one pointer wrapping if present.
-// Returns "" if t is not a named (or pointer-to-named) type.
+// the named type underlying t. Handles three wrappings:
+//   - *types.Pointer (one level)
+//   - *types.Named (the base case)
+//   - *types.TypeParam (generic constraint): when a method is called on a
+//     generic-bound value (e.g. `func [F fs.ReadDirFS](fsys F) { fsys.ReadDir(...) }`),
+//     the receiver's static type is *types.TypeParam — its constraint's
+//     core type or sole named-interface embedding identifies the package.
+//
+// Returns "" if t resolves to none of these.
 func namedTypeImportPath(t types.Type) string {
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
+	}
+	if tp, ok := t.(*types.TypeParam); ok {
+		// Walk the constraint interface for an embedded named type from a
+		// banned package. types.TypeParam.Constraint() returns *types.Interface
+		// (possibly via Underlying for aliases).
+		if iface, ok := tp.Constraint().Underlying().(*types.Interface); ok {
+			for i := 0; i < iface.NumEmbeddeds(); i++ {
+				if path := namedTypeImportPath(iface.EmbeddedType(i)); path != "" {
+					return path
+				}
+			}
+		}
+		return ""
 	}
 	named, ok := t.(*types.Named)
 	if !ok {
@@ -543,6 +570,39 @@ func _(fsys fs.ReadDirFS) error {
 `,
 			wantHits: 1,
 		},
+		{
+			// Generic TypeParam constraint: receiver is a type parameter bound
+			// by fs.ReadDirFS — namedTypeImportPath must descend into the
+			// constraint interface to find the banned package, otherwise the
+			// generic form silently bypasses path A'.
+			name: "method_call_generic_typeparam_bypass",
+			src: `package fake
+import "io/fs"
+func _[F fs.ReadDirFS](fsys F) error {
+	_, err := fsys.ReadDir(".") // F.ReadDir resolves to (fs.ReadDirFS).ReadDir
+	return err
+}
+`,
+			wantHits: 1,
+		},
+		{
+			// Generic API form (Go 1.23+): inspector.All[*ast.X] produces a
+			// SelectorExpr `inspector.All` wrapped by IndexExpr; SelectorExpr
+			// scan still sees `inspector.All` and path A flags it.
+			name: "inspector_all_generic_form",
+			src: `package fake
+import (
+	"go/ast"
+	"golang.org/x/tools/go/ast/inspector"
+)
+func _(insp *inspector.Inspector) {
+	for n := range inspector.All[*ast.FuncDecl](insp) {
+		_ = n
+	}
+}
+`,
+			wantHits: 1,
+		},
 
 		// ============ Path B: for-range over []ast.X + type assertion ============
 
@@ -614,6 +674,26 @@ func _(file *ast.File) {
 }
 `,
 			wantHits: 0, // *MyDecl is not in package go/ast — path B excludes
+		},
+		{
+			// Path B is INTENTIONALLY scoped to the binding-name form
+			// (rs.Value != nil). The paired-index form `for i := range Y { Y[i].(*ast.W) }`
+			// is treated as legitimate list iteration (e.g. LHS/RHS pairing,
+			// or restricting access to a sub-slice). This negative fixture
+			// locks that design — if path B is ever broadened to also flag
+			// the index form, this case will start hitting.
+			name: "for_range_index_no_binding_passes",
+			src: `package fake
+import "go/ast"
+func _(file *ast.File) {
+	for i := range file.Decls {
+		if _, ok := file.Decls[i].(*ast.FuncDecl); ok {
+			_ = i
+		}
+	}
+}
+`,
+			wantHits: 0,
 		},
 
 		// ============ Negatives (must NOT hit any path) ============

@@ -819,8 +819,8 @@ func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	// Independently inspect every FuncLit (closure / goroutine body / inline
 	// callback). A FuncLit owns its lock scope: writes inside a closure do
 	// not inherit the caller's lockDepth, so each starts fresh at 0. The
-	// outer ast.Walk catches FuncLits anywhere in the file (top-level decls,
-	// nested calls, struct field initializers, ...).
+	// outer EachNode[ast.FuncLit] catches FuncLits anywhere in the file
+	// (top-level decls, nested calls, struct field initializers, ...).
 	archscanner.EachNode[ast.FuncLit](f, func(fl *ast.FuncLit) {
 		if fl.Body == nil {
 			return
