@@ -1025,11 +1025,11 @@ func (v *Validator) validateFMT27() []ValidationResult {
 			contractFile(c),
 			"endpoints.http.auth",
 			fmt.Sprintf(
-				"contract %q declares incompatible auth mode flags; auth.public, "+
-					"auth.bootstrap, auth.passwordResetExempt, auth.clientsOnly, and "+
-					"auth.serviceOwned have distinct route-auth semantics. "+
-					"Only auth.serviceOwned may combine with auth.passwordResetExempt",
-				c.ID,
+				"contract %q has incompatible auth mode combination: %s set to true. "+
+					"Set at most one of {auth.public, auth.bootstrap, "+
+					"auth.passwordResetExempt, auth.clientsOnly}; "+
+					"only auth.serviceOwned may pair with auth.passwordResetExempt",
+				c.ID, formatTrueAuthFields(auth),
 			),
 		))
 	}
@@ -1042,6 +1042,29 @@ func (v *Validator) validateFMT27() []ValidationResult {
 // IterateAuthBoolCombos; no FMT-27 changes needed.
 func hasFMT27AuthModeConflict(auth metadata.HTTPAuthMeta) bool {
 	return !metadata.AuthComboLegal(auth)
+}
+
+// formatTrueAuthFields lists the auth bool fields currently set to true, in
+// the canonical P-R-S-B-C order, so FMT-27 diagnostics pinpoint the offending
+// flags rather than only naming the contract. Used by validateFMT27.
+func formatTrueAuthFields(auth metadata.HTTPAuthMeta) string {
+	var fields []string
+	if auth.Public {
+		fields = append(fields, "auth.public")
+	}
+	if auth.PasswordResetExempt {
+		fields = append(fields, "auth.passwordResetExempt")
+	}
+	if auth.ServiceOwned {
+		fields = append(fields, "auth.serviceOwned")
+	}
+	if auth.Bootstrap {
+		fields = append(fields, "auth.bootstrap")
+	}
+	if auth.ClientsOnly {
+		fields = append(fields, "auth.clientsOnly")
+	}
+	return strings.Join(fields, ", ")
 }
 
 // validateFMT30 enforces that every assembly's build.deployTemplate is one of

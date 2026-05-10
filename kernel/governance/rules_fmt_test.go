@@ -358,6 +358,68 @@ func fmt27ProjectWithAuth(auth metadata.HTTPAuthMeta) *metadata.ProjectMeta {
 	}
 }
 
+// TestFMT27ErrorDiagnostics locks the FMT-27 message format so contract
+// authors get actionable diagnostics: the message must (1) name every auth
+// field currently set to true, (2) signal the conflict ("incompatible"),
+// and (3) carry the fix hint ("Set at most one"). Without these assertions
+// the message text could regress silently.
+//
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
+func TestFMT27ErrorDiagnostics(t *testing.T) {
+	cases := []struct {
+		name     string
+		auth     metadata.HTTPAuthMeta
+		mustName []string
+	}{
+		{
+			name:     "public+bootstrap",
+			auth:     metadata.HTTPAuthMeta{Public: true, Bootstrap: true},
+			mustName: []string{"auth.public", "auth.bootstrap"},
+		},
+		{
+			name:     "clientsOnly+serviceOwned",
+			auth:     metadata.HTTPAuthMeta{ClientsOnly: true, ServiceOwned: true},
+			mustName: []string{"auth.serviceOwned", "auth.clientsOnly"},
+		},
+		{
+			name: "all four core modes",
+			auth: metadata.HTTPAuthMeta{
+				Public:              true,
+				PasswordResetExempt: true,
+				Bootstrap:           true,
+				ClientsOnly:         true,
+			},
+			mustName: []string{"auth.public", "auth.passwordResetExempt", "auth.bootstrap", "auth.clientsOnly"},
+		},
+		{
+			name:     "serviceOwned+bootstrap",
+			auth:     metadata.HTTPAuthMeta{ServiceOwned: true, Bootstrap: true},
+			mustName: []string{"auth.serviceOwned", "auth.bootstrap"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := NewValidator(fmt27ProjectWithAuth(tc.auth), "", clock.Real())
+			matches := findByCode(v.validateFMT27(), codeFMT27)
+			if len(matches) != 1 {
+				t.Fatalf("FMT-27: expected exactly 1 violation, got %d: %v", len(matches), matches)
+			}
+			msg := matches[0].Message
+			for _, field := range tc.mustName {
+				if !strings.Contains(msg, field) {
+					t.Errorf("FMT-27 diagnostic missing %q in message: %s", field, msg)
+				}
+			}
+			if !strings.Contains(msg, "incompatible") {
+				t.Errorf("FMT-27 diagnostic missing 'incompatible' keyword in message: %s", msg)
+			}
+			if !strings.Contains(msg, "Set at most one") {
+				t.Errorf("FMT-27 diagnostic missing 'Set at most one' fix hint in message: %s", msg)
+			}
+		})
+	}
+}
+
 // TestFMT27AuthBoolMatrix enumerates all 32 combinations of the 5 auth bool
 // fields and asserts validateFMT27's behavior against metadata.LegalAuthComboNames
 // — the hand-maintained whitelist that is independent of AuthComboLegal. Using
