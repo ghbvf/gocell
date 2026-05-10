@@ -369,17 +369,28 @@ func writeAssemblyScaffoldFiles(dirs []string, rendered map[string][]byte) error
 	return nil
 }
 
-// validateAssemblyPathComponent rejects path traversal sequences and path
-// separators in identifier fields. It does NOT reject empty values; the
-// caller is responsible for empty-string guards so that error messages can
-// carry field-specific wording (e.g. "ID is required"). This is a kernel-side
-// mirror of cmd/gocell/app.validateScaffoldID — duplicated rather than shared
-// because kernel/ may not import cmd/. Rule must stay synchronized.
+// validateAssemblyPathComponent rejects path traversal sequences, path
+// separators, AND newline / carriage-return / NUL control characters in
+// identifier fields. Identifiers are written verbatim into both filesystem
+// paths (defending traversal) and inline YAML scalars (defending newline
+// injection). The control-char branch is a strict superset of
+// validateAssemblyTextComponent so all ID call sites get newline rejection.
+//
+// It does NOT reject empty values; the caller is responsible for empty-string
+// guards so that error messages can carry field-specific wording (e.g.
+// "ID is required"). This is a kernel-side mirror of
+// cmd/gocell/app.validateScaffoldID — duplicated rather than shared because
+// kernel/ may not import cmd/. Rule must stay synchronized.
 func validateAssemblyPathComponent(value, field string) error {
 	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: field contains path traversal or separator",
 			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
+	}
+	if strings.ContainsAny(value, "\n\r\x00") {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: field contains forbidden control characters",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
 	}
 	return nil
 }

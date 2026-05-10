@@ -21,9 +21,15 @@ import (
 // by hack/verify-scaffold-reject.sh CI gate.
 const ErrScaffoldInvalidOpts errcode.Code = "ERR_SCAFFOLD_INVALID_OPTS"
 
-// validateScaffoldID rejects empty / "." / ".." / path separators in identifier
-// flags. Mirrors cellgen.validateScaffoldSpec for parity across all scaffold
-// CLI paths after kernel/scaffold removal in K#09.
+// validateScaffoldID rejects empty / "." / ".." / path separators / control
+// characters in identifier flags. Identifiers are written verbatim into both
+// filesystem paths (defending traversal) and inline YAML scalars (defending
+// newline injection that could fabricate adjacent YAML fields). The
+// control-char branch is a strict superset of validateScaffoldText so all
+// ID call sites get newline rejection automatically.
+//
+// Mirrors cellgen.validateScaffoldSpec for parity across all scaffold CLI
+// paths after kernel/scaffold removal in K#09.
 func validateScaffoldID(value, field string) error {
 	if value == "" {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
@@ -34,6 +40,11 @@ func validateScaffoldID(value, field string) error {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains path traversal or separator",
 			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
+	}
+	if strings.ContainsAny(value, "\n\r\x00") {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold field contains forbidden control characters",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
 	}
 	return nil
 }

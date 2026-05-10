@@ -61,10 +61,22 @@ func TestRunScaffold_ControlCharInjection(t *testing.T) {
 		name string
 		args []string
 	}{
+		// Free-text fields (validateScaffoldText path).
 		{"journey_goal_newline", []string{"journey", "--id=mj", "--team=t", "--cells=examplecell", "--goal=evil\nextra: pwned"}},
 		{"journey_team_newline", []string{"journey", "--id=mj", "--goal=g", "--cells=examplecell", "--team=evil\nextra: pwned"}},
 		{"assembly_team_newline", []string{"assembly", "--id=as", "--cells=examplecell", "--role=r", "--team=evil\nextra: pwned"}},
 		{"assembly_role_newline", []string{"assembly", "--id=as", "--cells=examplecell", "--team=t", "--role=evil\nextra: pwned"}},
+		// Identifier fields (validateScaffoldID path) — must reject newlines too.
+		// These fields reach inline YAML scalars (ownerCell, belongsToCell, etc.)
+		// so newline injection would fabricate adjacent YAML keys without this guard.
+		{"slice_id_newline", []string{"slice", "--cell=examplecell", "--id=evil\nextra: pwned"}},
+		{"slice_cell_newline", []string{"slice", "--id=foo", "--cell=evil\nextra: pwned"}},
+		{"contract_id_newline", []string{"contract", "--kind=http", "--owner=examplecell", "--id=evil\nextra: pwned"}},
+		{"contract_owner_newline", []string{"contract", "--id=http.foo.bar.v1", "--kind=http", "--owner=evil\nextra: pwned"}},
+		{"journey_id_newline", []string{"journey", "--goal=g", "--team=t", "--cells=examplecell", "--id=evil\nextra: pwned"}},
+		{"journey_cells_newline", []string{"journey", "--id=mj", "--goal=g", "--team=t", "--cells=evil\nextra: pwned"}},
+		{"assembly_id_newline", []string{"assembly", "--cells=examplecell", "--team=t", "--role=r", "--id=evil\nextra: pwned"}},
+		{"assembly_cells_newline", []string{"assembly", "--id=as", "--team=t", "--role=r", "--cells=evil\nextra: pwned"}},
 	}
 
 	for _, tc := range cases {
