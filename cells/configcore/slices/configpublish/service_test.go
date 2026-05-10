@@ -1,6 +1,7 @@
 package configpublish
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,9 +40,9 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	return svc, repo
 }
 
-func newDirectTestEmitter(t *testing.T, pub outbox.Publisher, mode outbox.DirectPublishFailureMode) outbox.Emitter {
+func newDirectTestEmitter(t *testing.T, pub outbox.Publisher, mode outbox.DirectPublishFailureMode, logger *slog.Logger) outbox.Emitter {
 	t.Helper()
-	emitter, err := outbox.NewDirectEmitter(pub, mode, metrics.NopProvider{}, clock.Real(), "configcore", outbox.WithLogger(slog.Default()))
+	emitter, err := outbox.NewDirectEmitter(pub, mode, metrics.NopProvider{}, clock.Real(), "configcore", outbox.WithLogger(logger))
 	require.NoError(t, err)
 	return emitter
 }
@@ -183,7 +184,7 @@ func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default())),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
@@ -367,7 +368,7 @@ func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default())),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
@@ -379,12 +380,17 @@ func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
 
 // TestService_Publish_FailOpen_PublisherError verifies that when configured
 // with PublishFailureMode=FailOpen, a publisher error is swallowed and logged
-// rather than failing the entire Publish operation.
+// rather than failing the entire Publish operation. Asserts the WARN signal
+// is emitted (single-source const) so a future "silent swallow" regression
+// fails CI rather than slipping through.
 func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen)),
+	svc, err := NewService(repo, logger, clock.Real(),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger)),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
@@ -392,6 +398,9 @@ func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
 	ver, err := svc.Publish(adminSvcCtx(), "app.timeout")
 	require.NoError(t, err, "FailOpen: publisher failure must be swallowed")
 	assert.Equal(t, 1, ver.Version)
+
+	assert.Contains(t, buf.String(), outbox.WarnDirectPublishFailOpen,
+		"FailOpen path must emit observable WARN; missing → silent swallow regression")
 }
 
 // TestService_Rollback_FailClosed_PublisherError verifies fail-closed on the
@@ -400,7 +409,7 @@ func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default())),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
@@ -416,12 +425,17 @@ func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 }
 
 // TestService_Rollback_FailOpen_PublisherError verifies fail-open on the
-// Rollback path's direct-publisher fallback.
+// Rollback path's direct-publisher fallback. Asserts the WARN signal is
+// emitted (Rollback emits two events: entry-upserted + rollback; Contains
+// is satisfied by either).
 func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen)),
+	svc, err := NewService(repo, logger, clock.Real(),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger)),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
@@ -434,6 +448,9 @@ func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 	rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1)
 	require.NoError(t, err, "FailOpen: publisher failure must be swallowed on rollback")
 	assert.Equal(t, "v1", rolled.Value)
+
+	assert.Contains(t, buf.String(), outbox.WarnDirectPublishFailOpen,
+		"FailOpen rollback path must emit observable WARN; missing → silent swallow regression")
 }
 
 // TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly asserts that the
