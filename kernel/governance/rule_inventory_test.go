@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,87 +54,84 @@ func TestArchtestInventoryNoIDTruncation(t *testing.T) {
 	}
 }
 
-// TestRuleInventoryGolden is the migration equivalence guard for PR-FUNNEL-03
-// (governance rules consolidation). It pins the full set of rule IDs declared
-// as string literals across kernel/governance/*.go (non-test) so that any
-// add / rename / delete of a rule must be paired with an explicit golden
-// update.
+// TestRuleReachabilityFromRegistrationRoots proves that every rule ID in
+// goldenRuleIDs() is reachable from at least one of the four registration
+// roots, AND that nothing reachable is missing from goldenRuleIDs().
 //
-// Scope rationale: the inventory covers EVERY rule ID emitted by the
-// governance package, not just rules_*.go. Files outside the consolidation
-// scope (contracthealth.go for CH-01..03, depcheck.go for DEP-01..03) are
-// included so the equivalence check stays precise across the package and
-// drift from any quarter is caught.
+// Roots:
+//  1. (*Validator).rules()           — base pipeline (validate.go)
+//  2. (*Validator).strictRules()     — strict-only pipeline (rules_misc_strict.go)
+//  3. (*DependencyChecker).checks()  — dependency pipeline (depcheck.go)
+//  4. (*Validator).Check<X>          — public CI entry points (CH-01..06)
 //
-// ref: kubernetes/apimachinery/pkg/util/validation/field/errors_test.go
-// (golden error-code allowlist).
-func TestRuleInventoryGolden(t *testing.T) {
+// Edges:
+//   - <recvName>.<methodName> selector / call → enqueue same-receiver method
+//   - freeFunc(...) call → enqueue free function (e.g. docNamingResult)
+//   - <recvName>.newResult / newScopedResult call → extract first arg as ID
+//   - ValidationResult{Code: ...} composite literal → extract Code value
+//
+// ID arg resolution is fail-fast: only string literals and package-level
+// const idents are accepted. Any other shape triggers t.Fatalf to force
+// new emission patterns through PR review (rather than silently slipping
+// past governance).
+//
+// Replaces TestRuleInventoryGolden (the PR-FUNNEL-03 zero-diff temporary
+// hardening): BFS reachability is strictly stronger than literal scanning
+// because every reachable ID must come from a literal somewhere in the
+// reachable code, while literal scanning misses the "defined but never
+// registered" case.
+//
+// INVARIANT: GOVERNANCE-RULE-REACHABILITY-TEST-01
+//
+// ref: kubernetes/apimachinery pkg/util/validation/field/errors_test.go
+// (golden error-code allowlist + AST-based equivalence check).
+func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 	t.Parallel()
 
-	golden := goldenRuleIDs()
-	actual := scanRuleIDs(t, ".")
-
-	if diff := symmetricDiff(golden, actual); len(diff) > 0 {
-		t.Fatalf("rule inventory drift detected — golden vs actual differ.\n"+
-			"To fix: add the new ID to goldenRuleIDs() OR remove the stray "+
-			"literal.\nDiff (- only in golden, + only in actual):\n%s",
-			strings.Join(diff, "\n"))
-	}
-}
-
-// ruleIDPattern matches rule-ID literals: PREFIX-SUFFIX where PREFIX is one of
-// the registered governance series (and may itself contain '-', e.g.
-// CONTRACT-CONSISTENCY-EMIT) and SUFFIX is alphanumeric.
-var ruleIDPattern = regexp.MustCompile(
-	`^(ADV|CH|CONTRACT-CONSISTENCY-EMIT|DEP|DOC-NAME|FMT|OUTGUARD|REF|SLICE-CONSISTENCY|TOPO|VERIFY)-[A-Z0-9]+$`,
-)
-
-// scanRuleIDs walks dir for non-test .go files, parses each, and returns the
-// sorted unique set of rule-ID string literals (matched by ruleIDPattern).
-// Comments are excluded because go/parser exposes them separately from
-// *ast.BasicLit nodes.
-func scanRuleIDs(t *testing.T, dir string) []string {
-	t.Helper()
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read governance dir: %v", err)
-	}
-
-	seen := map[string]struct{}{}
 	fset := token.NewFileSet()
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+	files := loadGovernancePackageFiles(t, fset, ".")
+
+	constMap := scanPackageConstStrings(files)
+	funcIdx := buildFuncIndex(files)
+	roots := collectBFSRoots(funcIdx)
+
+	if len(roots) == 0 {
+		t.Fatalf("BFS: no registration roots found; expected (Validator,rules), " +
+			"(Validator,strictRules), (DependencyChecker,checks), and Check* " +
+			"public methods on Validator")
+	}
+
+	reachable := map[string]struct{}{}
+	visited := map[funcKey]struct{}{}
+	queue := append([]funcKey(nil), roots...)
+
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+		if _, seen := visited[key]; seen {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+		visited[key] = struct{}{}
+		fd, ok := funcIdx[key]
+		if !ok || fd.Body == nil {
+			continue
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			s, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return true
-			}
-			if ruleIDPattern.MatchString(s) {
-				seen[s] = struct{}{}
-			}
-			return true
-		})
+		_, recvName := extractReceiverInfo(fd)
+		walkRule(t, fset, fd, recvName, key.recv, funcIdx, constMap, reachable, &queue)
 	}
 
-	out := make([]string, 0, len(seen))
-	for id := range seen {
-		out = append(out, id)
+	actual := sortedStringKeys(reachable)
+	golden := goldenRuleIDs()
+
+	if diff := symmetricDiff(golden, actual); len(diff) > 0 {
+		t.Fatalf("rule reachability drift detected — BFS reachable IDs from "+
+			"the four registration roots disagree with goldenRuleIDs().\n"+
+			"To fix: register the missing rule in rules() / strictRules() / "+
+			"checks() / a public Check* method, OR update goldenRuleIDs() if "+
+			"the new ID is intentional.\nDiff (- only in golden, + only in "+
+			"reachable):\n%s",
+			strings.Join(diff, "\n"))
 	}
-	sort.Strings(out)
-	return out
 }
 
 // goldenRuleIDs returns the pinned set of all rule IDs declared in
@@ -220,4 +216,310 @@ func symmetricDiff(want, got []string) []string {
 		}
 	}
 	return diff
+}
+
+// =============================================================================
+// BFS reachability helpers
+// =============================================================================
+
+// funcKey identifies a top-level function in the governance package.
+// recv is the dereferenced receiver type name (e.g. "Validator"); recv == ""
+// denotes a free function.
+type funcKey struct {
+	recv string
+	name string
+}
+
+// loadGovernancePackageFiles parses every non-test .go file directly under
+// dir into ast.Files sharing fset.
+func loadGovernancePackageFiles(t *testing.T, fset *token.FileSet, dir string) []*ast.File {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read governance dir %q: %v", dir, err)
+	}
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
+		t.Fatalf("no governance .go files parsed in %q", dir)
+	}
+	return files
+}
+
+// scanPackageConstStrings collects package-level `const NAME = "literal"`
+// pairs across files. Function-body consts are intentionally ignored — they
+// cannot serve as cross-method emission constants.
+func scanPackageConstStrings(files []*ast.File) map[string]string {
+	out := map[string]string{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, ident := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					val, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						continue
+					}
+					out[ident.Name] = val
+				}
+			}
+		}
+	}
+	return out
+}
+
+// buildFuncIndex maps every top-level func / method declaration in the
+// package to its FuncDecl, keyed by (receiver type, function name). Free
+// functions use receiver type "".
+func buildFuncIndex(files []*ast.File) map[funcKey]*ast.FuncDecl {
+	out := map[funcKey]*ast.FuncDecl{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			recvType, _ := extractReceiverInfo(fd)
+			out[funcKey{recv: recvType, name: fd.Name.Name}] = fd
+		}
+	}
+	return out
+}
+
+// extractReceiverInfo returns the dereferenced receiver type name and the
+// receiver identifier name from a FuncDecl. Free functions return ("", "").
+func extractReceiverInfo(fd *ast.FuncDecl) (recvType, recvName string) {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return "", ""
+	}
+	field := fd.Recv.List[0]
+	if len(field.Names) > 0 {
+		recvName = field.Names[0].Name
+	}
+	switch typ := field.Type.(type) {
+	case *ast.StarExpr:
+		if id, ok := typ.X.(*ast.Ident); ok {
+			recvType = id.Name
+		}
+	case *ast.Ident:
+		recvType = typ.Name
+	}
+	return recvType, recvName
+}
+
+// collectBFSRoots returns the seed set:
+//   - the three fixed registration-list methods (rules, strictRules, checks),
+//   - every (*Validator).Check<X> public method (CI-only entry points).
+//
+// Roots are sorted for deterministic visitation order.
+func collectBFSRoots(funcIdx map[funcKey]*ast.FuncDecl) []funcKey {
+	fixed := []funcKey{
+		{recv: "Validator", name: "rules"},
+		{recv: "Validator", name: "strictRules"},
+		{recv: "DependencyChecker", name: "checks"},
+	}
+	var roots []funcKey
+	for _, k := range fixed {
+		if _, ok := funcIdx[k]; ok {
+			roots = append(roots, k)
+		}
+	}
+	for k := range funcIdx {
+		if k.recv != "Validator" {
+			continue
+		}
+		if !strings.HasPrefix(k.name, "Check") || len(k.name) < 6 {
+			continue
+		}
+		next := k.name[5]
+		if next < 'A' || next > 'Z' {
+			continue
+		}
+		roots = append(roots, k)
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		if roots[i].recv != roots[j].recv {
+			return roots[i].recv < roots[j].recv
+		}
+		return roots[i].name < roots[j].name
+	})
+	return roots
+}
+
+// walkRule performs the BFS step for one node. ast.Inspect walks the
+// function body, simultaneously enqueuing newly-discovered methods / free
+// functions and collecting rule IDs emitted via newResult, newScopedResult,
+// or ValidationResult composite literals.
+//
+// recvName is the enclosing method's receiver identifier ("v" / "dc"; ""
+// for free functions). recvType is its declared receiver type name (e.g.
+// "Validator"; "" for free functions).
+func walkRule(
+	t *testing.T,
+	fset *token.FileSet,
+	fd *ast.FuncDecl,
+	recvName, recvType string,
+	funcIdx map[funcKey]*ast.FuncDecl,
+	constMap map[string]string,
+	reachable map[string]struct{},
+	queue *[]funcKey,
+) {
+	t.Helper()
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			if recvName == "" {
+				return true
+			}
+			id, ok := x.X.(*ast.Ident)
+			if !ok || id.Name != recvName {
+				return true
+			}
+			method := x.Sel.Name
+			if _, exists := funcIdx[funcKey{recv: recvType, name: method}]; exists {
+				*queue = append(*queue, funcKey{recv: recvType, name: method})
+			}
+		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok {
+				if _, exists := funcIdx[funcKey{recv: "", name: id.Name}]; exists {
+					*queue = append(*queue, funcKey{recv: "", name: id.Name})
+				}
+				return true
+			}
+			sel, ok := x.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			recvIdent, ok := sel.X.(*ast.Ident)
+			if !ok || recvName == "" || recvIdent.Name != recvName {
+				return true
+			}
+			if !isResultEmitter(sel.Sel.Name) || len(x.Args) == 0 {
+				return true
+			}
+			id := resolveIDArg(t, fset, x.Args[0], constMap)
+			if id != "" {
+				reachable[id] = struct{}{}
+			}
+		case *ast.CompositeLit:
+			if !looksLikeValidationResult(x) {
+				return true
+			}
+			for _, el := range x.Elts {
+				kv, ok := el.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				key, ok := kv.Key.(*ast.Ident)
+				if !ok || key.Name != "Code" {
+					continue
+				}
+				id := resolveIDArg(t, fset, kv.Value, constMap)
+				if id != "" {
+					reachable[id] = struct{}{}
+				}
+			}
+		}
+		return true
+	})
+}
+
+// isResultEmitter reports whether the named locator method emits a
+// ValidationResult whose first positional argument is the rule code.
+func isResultEmitter(name string) bool {
+	return name == "newResult" || name == "newScopedResult"
+}
+
+// looksLikeValidationResult returns true when the composite literal is
+// either explicitly typed as ValidationResult / []ValidationResult or has
+// no Type at all (inferred from an outer slice/array context — covers the
+// nested literal in `[]ValidationResult{{Code: "X"}}`).
+//
+// Composite literals of unrelated named types (e.g. errcode.Error) return
+// false and are skipped, preventing accidental capture of foreign Code
+// fields.
+func looksLikeValidationResult(c *ast.CompositeLit) bool {
+	switch typ := c.Type.(type) {
+	case nil:
+		return true
+	case *ast.Ident:
+		return typ.Name == "ValidationResult"
+	case *ast.ArrayType:
+		if id, ok := typ.Elt.(*ast.Ident); ok {
+			return id.Name == "ValidationResult"
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// resolveIDArg returns the rule-ID string from a newResult / newScopedResult
+// first argument or a ValidationResult.Code field value. Acceptable forms:
+//
+//  1. *ast.BasicLit (string literal) — strconv.Unquote
+//  2. *ast.Ident bound to a package-level const string in constMap
+//
+// Anything else triggers t.Fatalf, forcing any new emission shape through
+// PR review (the alternative — silently skipping — would let new misshapen
+// emissions slip past governance).
+func resolveIDArg(
+	t *testing.T,
+	fset *token.FileSet,
+	expr ast.Expr,
+	constMap map[string]string,
+) string {
+	t.Helper()
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.STRING {
+			if v, err := strconv.Unquote(e.Value); err == nil {
+				return v
+			}
+		}
+	case *ast.Ident:
+		if v, ok := constMap[e.Name]; ok {
+			return v
+		}
+	}
+	t.Fatalf("BFS: unrecognized rule-ID arg pattern at %s — only string "+
+		"literal or package const ident are accepted; refactor the call "+
+		"site or extend scanPackageConstStrings to cover the new shape",
+		fset.Position(expr.Pos()))
+	return ""
+}
+
+// sortedStringKeys returns the keys of m in ascending order.
+func sortedStringKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
