@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 )
@@ -273,12 +274,19 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("--role is required")
 	}
 
+	// F11: reject kebab-case cell IDs (aligned with scaffoldSlice behavior).
+	if strings.Contains(*id, "-") {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold cell: --id must not contain '-'; use no-dash identifier",
+			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", *id, strings.ReplaceAll(*id, "-", ""))))
+	}
+
 	// Resolve Go identifiers shared by both dry-run and live paths.
 	resolvedStruct := *structName
 	if resolvedStruct == "" {
 		resolvedStruct = cellIDToPascalCase(*id)
 	}
-	pkg := strings.ReplaceAll(*id, "-", "")
+	pkg := *id
 
 	mod, err := readModule(root)
 	if err != nil {
@@ -303,11 +311,35 @@ func scaffoldCell(root string, args []string) error {
 	}
 
 	if *dryRun {
-		// Report each file the bundle would write so callers can see paths.
-		yamlPath := filepath.Join("cells", *id, "cell.yaml")
-		goPath := filepath.Join("cells", *id, "cell.go")
-		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(yamlPath))
-		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(goPath))
+		// F8: list the full plan so callers can see all paths that would be written.
+		// ScaffoldCellBundle already called WritePlannedFiles(dryRun=true) which
+		// validates and returns nil without writing. Re-derive paths from the spec
+		// for display purposes using root (already resolved by the caller).
+		if realRoot, resolveErr := pathsafe.ResolveRoot(root); resolveErr == nil {
+			plan, planErr := cellgen.PlanCellBundleForDryRun(realRoot, cellgen.ScaffoldSpec{
+				CellID:           *id,
+				StructName:       resolvedStruct,
+				Package:          pkg,
+				ModulePath:       mod,
+				OwnerTeam:        *team,
+				OwnerRole:        *role,
+				Type:             *cellType,
+				ConsistencyLevel: *level,
+				WithHTTP:         *withHTTP,
+				WithEvents:       *withEvents,
+				WithBoth:         *withBoth,
+			})
+			if planErr == nil {
+				for _, absPath := range pathsafe.PlannedPaths(plan) {
+					rel, _ := filepath.Rel(root, absPath)
+					fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
+				}
+				return nil
+			}
+		}
+		// Fallback: print minimal info when plan cannot be derived.
+		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", *id, "cell.yaml")))
+		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", *id, "cell.go")))
 		fmt.Printf("(dry-run) Would create cell bundle (slice + contract) under %s\n",
 			filepath.ToSlash(filepath.Join("cells", *id)))
 		return nil
@@ -379,6 +411,8 @@ func cellIDToPascalCase(id string) string {
 // produces a richer slice via cellgen.ScaffoldCellBundle. For a complete
 // slice with service.go + service_test.go skeleton, prefer
 // `gocell scaffold cell --id=<cell> --with-http`.
+//
+// All filesystem writes go through pathsafe.WritePlannedFiles (SCAFFOLD-WRITE-FUNNEL-01).
 func scaffoldSlice(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold slice", flag.ContinueOnError)
 	id := fs.String("id", "", "slice ID (required)")
@@ -406,16 +440,19 @@ func scaffoldSlice(root string, args []string) error {
 			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", *id, strings.ReplaceAll(*id, "-", ""))))
 	}
 
-	cellDir := filepath.Join(root, "cells", *cellID)
-	if _, err := os.Stat(cellDir); err != nil {
-		return fmt.Errorf("scaffold slice: parent cell does not exist (%s); create it first via `gocell scaffold cell --id=%s ...`",
-			*cellID, *cellID)
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold slice: resolve root: %w", err)
 	}
 
-	sliceDir := filepath.Join(cellDir, "slices", *id)
-	yamlPath := filepath.Join(sliceDir, "slice.yaml")
-	if _, err := os.Stat(yamlPath); err == nil {
-		return fmt.Errorf("scaffold slice: file already exists: %s", yamlPath)
+	// Verify parent cell exists.
+	cellDirAbs, err := pathsafe.ContainPath(realRoot, filepath.Join("cells", *cellID))
+	if err != nil {
+		return fmt.Errorf("scaffold slice: %w", err)
+	}
+	if _, statErr := os.Stat(cellDirAbs); statErr != nil {
+		return fmt.Errorf("scaffold slice: parent cell does not exist (%s); create it first via `gocell scaffold cell --id=%s ...`",
+			*cellID, *cellID)
 	}
 
 	content, err := renderInlineSliceYAML(*id, *cellID)
@@ -423,17 +460,28 @@ func scaffoldSlice(root string, args []string) error {
 		return fmt.Errorf("scaffold slice: render: %w", err)
 	}
 
-	if !*dryRun {
-		if err := os.MkdirAll(sliceDir, 0o750); err != nil {
-			return fmt.Errorf("scaffold slice: mkdir: %w", err)
+	sliceRelDir := filepath.Join("cells", *cellID, "slices", *id)
+	absYAML, err := pathsafe.ContainPath(realRoot, filepath.Join(sliceRelDir, "slice.yaml"))
+	if err != nil {
+		return fmt.Errorf("scaffold slice: %w", err)
+	}
+	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+
+	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
+	// and live write paths.
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+		return fmt.Errorf("scaffold slice: %w", err)
+	}
+
+	if *dryRun {
+		for _, absPath := range pathsafe.PlannedPaths(plan) {
+			rel, _ := filepath.Rel(root, absPath)
+			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
-		if err := os.WriteFile(yamlPath, content, 0o600); err != nil {
-			return fmt.Errorf("scaffold slice: write: %w", err)
-		}
+		return nil
 	}
 
 	reportScaffold(scaffoldReport{
-		DryRun: *dryRun,
 		Kind:   "slice",
 		ID:     *cellID + "/" + *id,
 		Target: filepath.Join("cells", *cellID, "slices", *id, "slice.yaml"),
@@ -461,11 +509,15 @@ func scaffoldContract(root string, args []string) error {
 		return err
 	}
 
-	pathParts := append([]string{root, "contracts"}, parts...)
-	dir := filepath.Join(pathParts...)
-	yamlPath := filepath.Join(dir, "contract.yaml")
-	if _, statErr := os.Stat(yamlPath); statErr == nil {
-		return fmt.Errorf("scaffold contract: file already exists: %s", yamlPath)
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold contract: resolve root: %w", err)
+	}
+
+	contractRelDir := filepath.Join(append([]string{"contracts"}, parts...)...)
+	absYAML, err := pathsafe.ContainPath(realRoot, filepath.Join(contractRelDir, "contract.yaml"))
+	if err != nil {
+		return fmt.Errorf("scaffold contract: %w", err)
 	}
 
 	content, err := renderInlineContractYAML(*id, *kind, *owner)
@@ -473,19 +525,25 @@ func scaffoldContract(root string, args []string) error {
 		return fmt.Errorf("scaffold contract: render: %w", err)
 	}
 
-	if !*dryRun {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return fmt.Errorf("scaffold contract: mkdir: %w", err)
+	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+
+	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
+	// and live write paths. On dry-run it returns nil or a conflict/containment error.
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+		return fmt.Errorf("scaffold contract: %w", err)
+	}
+
+	if *dryRun {
+		for _, absPath := range pathsafe.PlannedPaths(plan) {
+			rel, _ := filepath.Rel(root, absPath)
+			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
-		if err := os.WriteFile(yamlPath, content, 0o600); err != nil {
-			return fmt.Errorf("scaffold contract: write: %w", err)
-		}
+		return nil
 	}
 
 	reportRel := append([]string{"contracts"}, parts...)
 	reportRel = append(reportRel, "contract.yaml")
 	reportScaffold(scaffoldReport{
-		DryRun: *dryRun,
 		Kind:   "contract",
 		ID:     *id,
 		Target: filepath.Join(reportRel...),
@@ -520,10 +578,14 @@ func scaffoldJourney(root string, args []string) error {
 	rawID = "J-" + strings.ReplaceAll(rawID[2:], "-", "")
 	filename := rawID + ".yaml"
 
-	dir := filepath.Join(root, "journeys")
-	yamlPath := filepath.Join(dir, filename)
-	if _, statErr := os.Stat(yamlPath); statErr == nil {
-		return fmt.Errorf("scaffold journey: file already exists: %s", yamlPath)
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold journey: resolve root: %w", err)
+	}
+
+	absYAML, err := pathsafe.ContainPath(realRoot, filepath.Join("journeys", filename))
+	if err != nil {
+		return fmt.Errorf("scaffold journey: %w", err)
 	}
 
 	content, err := renderInlineJourneyYAML(rawID, *goal, *team, cellList)
@@ -531,17 +593,23 @@ func scaffoldJourney(root string, args []string) error {
 		return fmt.Errorf("scaffold journey: render: %w", err)
 	}
 
-	if !*dryRun {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return fmt.Errorf("scaffold journey: mkdir: %w", err)
+	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+
+	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
+	// and live write paths.
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+		return fmt.Errorf("scaffold journey: %w", err)
+	}
+
+	if *dryRun {
+		for _, absPath := range pathsafe.PlannedPaths(plan) {
+			rel, _ := filepath.Rel(root, absPath)
+			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
-		if err := os.WriteFile(yamlPath, content, 0o600); err != nil {
-			return fmt.Errorf("scaffold journey: write: %w", err)
-		}
+		return nil
 	}
 
 	reportScaffold(scaffoldReport{
-		DryRun: *dryRun,
 		Kind:   "journey",
 		ID:     *id,
 		Target: filepath.Join("journeys", filename),

@@ -25,8 +25,18 @@
 package pathsafe
 
 import (
-	"errors"
+	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+const (
+	defaultDirMode  = os.FileMode(0o755)
+	defaultFileMode = os.FileMode(0o644)
 )
 
 // PlannedFile pairs an absolute output path with its rendered content.
@@ -44,7 +54,13 @@ type PlannedFile struct {
 // subsequent ContainPath comparisons are stable even when root itself is a
 // symlink. Returns an error if root does not exist or cannot be evaluated.
 func ResolveRoot(root string) (string, error) {
-	return "", errors.New("pathsafe: not implemented")
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", errcode.Wrap(errcode.KindNotFound, errcode.ErrValidationFailed,
+			"pathsafe: resolve root", err,
+			errcode.WithInternal("root="+root))
+	}
+	return resolved, nil
 }
 
 // ContainPath returns the cleaned absolute path of targetRel under realRoot
@@ -56,13 +72,66 @@ func ResolveRoot(root string) (string, error) {
 //   - targetRel contains ".." segments that escape realRoot
 //   - any existing parent directory in the resolved path lies outside realRoot
 func ContainPath(realRoot, targetRel string) (string, error) {
-	return "", errors.New("pathsafe: not implemented")
+	if filepath.IsAbs(targetRel) {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"pathsafe: target must be relative",
+			errcode.WithDetails(slog.String("target", targetRel)))
+	}
+
+	sep := string(filepath.Separator)
+	cleanTarget := filepath.Clean(filepath.Join(realRoot, targetRel))
+
+	// Ensure cleanTarget is strictly inside realRoot (not equal, and not escaping).
+	if !strings.HasPrefix(cleanTarget, realRoot+sep) && cleanTarget != realRoot {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"pathsafe: target escapes root",
+			errcode.WithDetails(slog.String("target", targetRel)))
+	}
+
+	// Walk existing parent components from filepath.Dir(cleanTarget) up to realRoot.
+	// For each that exists, check it is not a symlink pointing outside realRoot.
+	parent := filepath.Dir(cleanTarget)
+	for parent != realRoot && parent != "/" && parent != "." && parent != sep {
+		info, statErr := os.Lstat(parent)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				parent = filepath.Dir(parent)
+				continue
+			}
+			return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"pathsafe: stat parent", statErr,
+				errcode.WithInternal(fmt.Sprintf("parent=%s", parent)))
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, resolveErr := filepath.EvalSymlinks(parent)
+			if resolveErr != nil {
+				return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+					"pathsafe: resolve symlink", resolveErr,
+					errcode.WithInternal(fmt.Sprintf("parent=%s", parent)))
+			}
+			if !strings.HasPrefix(resolved, realRoot+sep) && resolved != realRoot {
+				return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+					"pathsafe: parent symlink escapes root",
+					errcode.WithDetails(slog.String("target", targetRel)))
+			}
+		}
+		parent = filepath.Dir(parent)
+	}
+
+	return cleanTarget, nil
 }
 
 // PlannedPaths returns the absolute target paths in plan order. Callers use
 // this to surface dry-run output without parsing PlannedFile structs.
 func PlannedPaths(plan []PlannedFile) []string {
-	return nil
+	if len(plan) == 0 {
+		return []string{}
+	}
+	paths := make([]string, len(plan))
+	for i, f := range plan {
+		paths[i] = f.AbsPath
+	}
+	return paths
 }
 
 // WritePlannedFiles is the SINGLE filesystem write entry for scaffold/codegen.
@@ -82,5 +151,128 @@ func PlannedPaths(plan []PlannedFile) []string {
 // os.MkdirAll / os.WriteFile in scaffold paths. All other call sites are
 // statically rejected by archtest SCAFFOLD-WRITE-FUNNEL-01.
 func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
-	return errors.New("pathsafe: not implemented")
+	if len(plan) == 0 {
+		return nil
+	}
+
+	// Step 1: verify containment for every path.
+	// AbsPath is already absolute (caller-constructed), so we derive targetRel.
+	sep := string(filepath.Separator)
+	for _, f := range plan {
+		targetRel, err := filepath.Rel(realRoot, f.AbsPath)
+		if err != nil {
+			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"pathsafe: cannot relativize path", err,
+				errcode.WithDetails(slog.String("path", f.AbsPath)))
+		}
+		// targetRel must not escape root.
+		cleanTarget := filepath.Clean(filepath.Join(realRoot, targetRel))
+		if !strings.HasPrefix(cleanTarget, realRoot+sep) && cleanTarget != realRoot {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"pathsafe: target escapes root",
+				errcode.WithDetails(slog.String("path", f.AbsPath)))
+		}
+		// Walk parents for symlink containment.
+		if _, err := ContainPath(realRoot, targetRel); err != nil {
+			return err
+		}
+	}
+
+	// Step 2: conflict detection — full plan, no partial writes.
+	for _, f := range plan {
+		if _, err := os.Stat(f.AbsPath); err == nil {
+			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+				"pathsafe: file already exists",
+				errcode.WithDetails(slog.String("path", f.AbsPath)),
+				errcode.WithInternal(fmt.Sprintf("already exists: path=%s", f.AbsPath)))
+		}
+	}
+
+	// Step 3: dry-run returns nil after validation succeeds.
+	if dryRun {
+		return nil
+	}
+
+	// Step 4: write — track created dirs and written files for rollback.
+	var writtenPaths []string
+	var createdDirs []string
+
+	rollback := func(originalErr error) error {
+		// Remove written files in reverse order.
+		for i := len(writtenPaths) - 1; i >= 0; i-- {
+			_ = os.Remove(writtenPaths[i])
+		}
+		// Remove created directories in reverse order (leaves first).
+		for i := len(createdDirs) - 1; i >= 0; i-- {
+			_ = os.Remove(createdDirs[i])
+		}
+		removedFiles := len(writtenPaths)
+		removedDirs := len(createdDirs)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"pathsafe: write failed; rollback removed files and dirs", originalErr,
+			errcode.WithInternal(fmt.Sprintf("rollback removed %d files %d dirs", removedFiles, removedDirs)))
+	}
+
+	for _, f := range plan {
+		dirMode := f.DirMode
+		if dirMode == 0 {
+			dirMode = defaultDirMode
+		}
+		fileMode := f.FileMode
+		if fileMode == 0 {
+			fileMode = defaultFileMode
+		}
+
+		dir := filepath.Dir(f.AbsPath)
+
+		// Track newly created directories by checking existence level-by-level.
+		if err := mkdirAllTracked(dir, dirMode, realRoot, &createdDirs); err != nil {
+			return rollback(err)
+		}
+
+		if err := os.WriteFile(f.AbsPath, f.Content, fileMode); err != nil {
+			return rollback(err)
+		}
+		writtenPaths = append(writtenPaths, f.AbsPath)
+	}
+
+	return nil
+}
+
+// mkdirAllTracked creates dir (and all parents) using os.MkdirAll, tracking
+// each directory that did not exist before. Only directories under realRoot are
+// tracked (realRoot itself is assumed to pre-exist).
+func mkdirAllTracked(dir string, mode os.FileMode, realRoot string, created *[]string) error {
+	// Collect non-existent components from innermost outward.
+	toCreate := collectMissingDirs(dir, realRoot)
+
+	if err := os.MkdirAll(dir, mode); err != nil {
+		return err
+	}
+
+	// Record in creation order (outermost first) so reverse-order removal
+	// during rollback removes leaves before parents.
+	for i := len(toCreate) - 1; i >= 0; i-- {
+		*created = append(*created, toCreate[i])
+	}
+	return nil
+}
+
+// collectMissingDirs returns the directories that do not exist yet, starting
+// from dir and walking up to (but not including) realRoot. Returned slice is
+// ordered leaf-first (innermost first), so callers that reverse it get
+// outermost-first creation order.
+func collectMissingDirs(dir, realRoot string) []string {
+	var missing []string
+	cur := dir
+	for cur != realRoot && cur != filepath.Dir(cur) {
+		if _, err := os.Stat(cur); os.IsNotExist(err) {
+			missing = append(missing, cur)
+		} else {
+			// Once we hit an existing dir, all parents exist too.
+			break
+		}
+		cur = filepath.Dir(cur)
+	}
+	return missing
 }

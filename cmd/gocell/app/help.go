@@ -171,12 +171,17 @@ func printVerifyHelp() error {
 func printScaffoldHelp() error {
 	printHelp("scaffold", []helpEntry{
 		{"cell", []string{
-			"Create cells/<id>/cell.yaml. --id=<id> --team=<team>",
-			"[--type=core|edge|support] [--level=L0..L4] [--dry-run]",
+			"Create cell skeleton + example slice + example contract.",
+			"--id=<id> --team=<team> --role=<role>",
+			"[--type=core|edge|support] [--level=L0..L4]",
+			"[--with-http] [--with-events] [--with-both]",
+			"[--skip-generate] [--dry-run]",
+			"Note: --id must not contain '-' (use nodash identifiers).",
 		}},
 		{"slice", []string{
 			"Create cells/<cellID>/slices/<id>/slice.yaml.",
 			"--id=<id> --cell=<cellID> [--dry-run]",
+			"Note: --id must not contain '-' (use nodash identifiers).",
 		}},
 		{"contract", []string{
 			"Create contracts/<kind>/<domain>/<v>/contract.yaml.",
@@ -186,6 +191,11 @@ func printScaffoldHelp() error {
 			"Create journeys/<id>.yaml.",
 			"--id=<id> --goal=<goal> --team=<team> --cells=<a,b,...>",
 			"[--dry-run]",
+		}},
+		{"assembly", []string{
+			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
+			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
+			"[--deploy=k8s|compose|binary] [--skip-generate] [--dry-run]",
 		}},
 	},
 		"--dry-run validates inputs and path conflicts without writing.",

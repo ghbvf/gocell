@@ -24,11 +24,11 @@ package cellgen
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -61,34 +61,101 @@ type bundleData struct {
 // Defaults: when neither WithHTTP nor WithEvents is set, WithHTTP applies.
 // WithBoth produces both an HTTP contract and an event contract.
 //
-// On any rendering or write failure the function returns immediately —
-// callers should treat partial output as failed and rerun after resolving.
+// Writes are atomic: all files are planned first, then written in a single
+// pathsafe.WritePlannedFiles call. On failure the entire bundle is rolled back.
 func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 	if err := validateScaffoldSpec(spec); err != nil {
 		return err
 	}
 
-	// Step 1 — cell skeleton (cell.go + cell.yaml). Reuse existing ScaffoldCell.
-	cellTarget := filepath.Join("cells", spec.CellID)
-	if err := ScaffoldCell(root, cellTarget, spec); err != nil {
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold bundle: %w", err)
+	}
+
+	plan, err := planCellBundle(realRoot, spec)
+	if err != nil {
 		return err
 	}
 
-	withHTTP, withEvents := resolveBundleVariants(spec)
-	cellNoDash := strings.ReplaceAll(spec.CellID, "-", "")
-	sliceID := cellNoDash + "example" // Go package + slice ID, dash-stripped
-
-	if withHTTP {
-		if err := scaffoldHTTPExampleArtifacts(root, spec, cellNoDash, sliceID); err != nil {
-			return err
-		}
-	}
-	if withEvents {
-		if err := scaffoldEventExampleArtifacts(root, spec, cellNoDash, sliceID); err != nil {
-			return err
-		}
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
+		return fmt.Errorf("scaffold bundle: %w", err)
 	}
 	return nil
+}
+
+// PlanCellBundleForDryRun is the exported equivalent of planCellBundle,
+// allowing callers (e.g. scaffoldCell dry-run in cmd/gocell/app) to enumerate
+// the full file list without writing anything. realRoot must be the output of
+// pathsafe.ResolveRoot.
+func PlanCellBundleForDryRun(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
+	return planCellBundle(realRoot, spec)
+}
+
+// planCellBundle builds the full []pathsafe.PlannedFile for a cell bundle
+// (cell skeleton + example slice(s) + example contract(s)) without writing
+// any files. All template rendering happens here.
+func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
+	// Apply defaults.
+	if spec.Type == "" {
+		spec.Type = "core"
+	}
+	if spec.ConsistencyLevel == "" {
+		spec.ConsistencyLevel = "L1"
+	}
+
+	var plan []pathsafe.PlannedFile
+
+	// Cell skeleton (cell.go + cell.yaml).
+	cellItems, err := planCell(realRoot, spec)
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, cellItems...)
+
+	withHTTP, withEvents := resolveBundleVariants(spec)
+	cellNoDash := strings.ReplaceAll(spec.CellID, "-", "")
+	sliceID := cellNoDash + "example"
+
+	if withHTTP {
+		items, err := planHTTPExampleArtifacts(realRoot, spec, cellNoDash, sliceID)
+		if err != nil {
+			return nil, err
+		}
+		plan = append(plan, items...)
+	}
+	if withEvents {
+		items, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, sliceID)
+		if err != nil {
+			return nil, err
+		}
+		plan = append(plan, items...)
+	}
+
+	return plan, nil
+}
+
+// planCell renders cell.go + cell.yaml and returns them as PlannedFiles.
+func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
+	cellGoContent, err := renderTemplate(cellGoTemplate, spec, true)
+	if err != nil {
+		return nil, fmt.Errorf("scaffold cell: render cell.go: %w", err)
+	}
+	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
+	if err != nil {
+		return nil, fmt.Errorf("scaffold cell: render cell.yaml: %w", err)
+	}
+
+	targetDir := filepath.Join("cells", spec.CellID)
+	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
+	if err != nil {
+		return nil, fmt.Errorf("scaffold cell: %w", err)
+	}
+
+	return []pathsafe.PlannedFile{
+		{AbsPath: filepath.Join(absDir, "cell.go"), Content: cellGoContent},
+		{AbsPath: filepath.Join(absDir, "cell.yaml"), Content: cellYAMLContent},
+	}, nil
 }
 
 // resolveBundleVariants picks the contract variants to scaffold from the
@@ -100,8 +167,9 @@ func resolveBundleVariants(spec ScaffoldSpec) (withHTTP, withEvents bool) {
 	return withHTTP, withEvents
 }
 
-// scaffoldHTTPExampleArtifacts produces the HTTP slice + contract pair.
-func scaffoldHTTPExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, sliceID string) error {
+// planHTTPExampleArtifacts renders the HTTP slice + contract pair and returns
+// them as PlannedFiles.
+func planHTTPExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string) ([]pathsafe.PlannedFile, error) {
 	bd := bundleData{
 		CellID:       spec.CellID,
 		SlicePackage: sliceID,
@@ -109,17 +177,20 @@ func scaffoldHTTPExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, sl
 		SliceRole:    "serve",
 		ContractID:   fmt.Sprintf("http.%s.example.v1", cellNoDash),
 	}
-	if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
-		return err
+	sliceItems, err := planExampleSlice(realRoot, bd)
+	if err != nil {
+		return nil, err
 	}
-	return scaffoldExampleContract(root, bd, "http", cellNoDash, spec.DryRun)
+	contractItems, err := planExampleContract(realRoot, bd, "http", cellNoDash)
+	if err != nil {
+		return nil, err
+	}
+	return append(sliceItems, contractItems...), nil
 }
 
-// scaffoldEventExampleArtifacts produces the event slice + contract pair.
-// When the spec also requested HTTP (WithBoth), a separate event slice is
-// written under sliceID "{cellNoDash}eventexample" so the event contract
-// has its own contractUsages entry and gocell validate ADV-06 passes.
-func scaffoldEventExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, sliceID string) error {
+// planEventExampleArtifacts renders the event slice + contract pair and returns
+// them as PlannedFiles. When spec.WithBoth, uses a separate event slice ID.
+func planEventExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string) ([]pathsafe.PlannedFile, error) {
 	eventSliceID := sliceID
 	if spec.WithBoth {
 		eventSliceID = cellNoDash + "eventexample"
@@ -131,10 +202,15 @@ func scaffoldEventExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, s
 		SliceRole:    "publish",
 		ContractID:   fmt.Sprintf("event.%s.example.v1", cellNoDash),
 	}
-	if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
-		return err
+	sliceItems, err := planExampleSlice(realRoot, bd)
+	if err != nil {
+		return nil, err
 	}
-	return scaffoldExampleContract(root, bd, "event", cellNoDash, spec.DryRun)
+	contractItems, err := planExampleContract(realRoot, bd, "event", cellNoDash)
+	if err != nil {
+		return nil, err
+	}
+	return append(sliceItems, contractItems...), nil
 }
 
 // sliceBundleFiles returns the canonical set of files emitted under each
@@ -148,45 +224,37 @@ func sliceBundleFiles() []bundleFileSpec {
 	}
 }
 
-// scaffoldExampleSlice renders the slice triple (slice.yaml + service.go +
-// service_test.go) under cells/{cellID}/slices/{sliceID}/. Conflict detection
-// matches ScaffoldCell's all-or-nothing semantics.
-func scaffoldExampleSlice(root string, bd bundleData, dryRun bool) error {
-	dir := filepath.Join(root, "cells", bd.CellID, "slices", bd.SliceID)
+// planExampleSlice renders the slice triple (slice.yaml + service.go +
+// service_test.go) under cells/{cellID}/slices/{sliceID}/ and returns them
+// as PlannedFiles. No filesystem writes occur here.
+func planExampleSlice(realRoot string, bd bundleData) ([]pathsafe.PlannedFile, error) {
+	targetDir := filepath.Join("cells", bd.CellID, "slices", bd.SliceID)
 	files := sliceBundleFiles()
-	return renderBundleFiles(dir, files, sliceBundleTemplate, bd, dryRun, "slice")
+	return planBundleFiles(realRoot, targetDir, files, sliceBundleTemplate, bd, "slice")
 }
 
-// renderBundleFiles is the shared render→conflict-check→format→write pipeline
-// for slice and contract bundle outputs. The kindLabel ("slice" / "contract")
-// is used in error messages so callers can identify the failing step.
-func renderBundleFiles(dir string, files []bundleFileSpec, tpl *template.Template, data any, dryRun bool, kindLabel string) error {
-	for _, f := range files {
-		path := filepath.Join(dir, f.Name)
-		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("scaffold %s: file already exists: %s", kindLabel, path)
-		}
+// planBundleFiles is the shared render→format→plan pipeline for slice and
+// contract bundle outputs. The kindLabel ("slice" / "contract") is used in
+// error messages. Returns PlannedFiles without touching the filesystem.
+func planBundleFiles(realRoot, targetDir string, files []bundleFileSpec, tpl *template.Template, data any, kindLabel string) ([]pathsafe.PlannedFile, error) {
+	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
+	if err != nil {
+		return nil, fmt.Errorf("scaffold %s: %w", kindLabel, err)
 	}
 
 	rendered, err := renderBundleSections(tpl, files, data, kindLabel)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if dryRun {
-		return nil
-	}
-
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("scaffold %s: mkdir %s: %w", kindLabel, dir, err)
-	}
+	items := make([]pathsafe.PlannedFile, 0, len(files))
 	for _, f := range files {
-		content := rendered[f.Name]
-		if err := os.WriteFile(filepath.Join(dir, f.Name), content, 0o600); err != nil {
-			return fmt.Errorf("scaffold %s: write %s: %w", kindLabel, f.Name, err)
-		}
+		items = append(items, pathsafe.PlannedFile{
+			AbsPath: filepath.Join(absDir, f.Name),
+			Content: rendered[f.Name],
+		})
 	}
-	return nil
+	return items, nil
 }
 
 // renderBundleSections runs each file spec's template section through
@@ -221,18 +289,16 @@ type bundleFileSpec struct {
 	Description string
 }
 
-// scaffoldExampleContract renders the contract.yaml + 2 JSON schemas under
-// contracts/{kind}/{cellPathSegment}/example/v1/. cellPathSegment is the
-// dash-stripped cell ID (so contract.yaml IDs match Go package conventions).
-// K#09 funnel: contract.yaml never embeds the `codegen:` field — kernel/
-// metadata parser defaults it to true when absent.
-func scaffoldExampleContract(root string, bd bundleData, kind, cellPathSegment string, dryRun bool) error {
-	dir := filepath.Join(root, "contracts", kind, cellPathSegment, "example", "v1")
+// planExampleContract renders contract.yaml + JSON schemas under
+// contracts/{kind}/{cellPathSegment}/example/v1/ and returns them as
+// PlannedFiles. K#09 funnel: contract.yaml never embeds the `codegen:` field.
+func planExampleContract(realRoot string, bd bundleData, kind, cellPathSegment string) ([]pathsafe.PlannedFile, error) {
+	targetDir := filepath.Join("contracts", kind, cellPathSegment, "example", "v1")
 	files, err := contractBundleFiles(kind)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return renderBundleFiles(dir, files, contractBundleTemplate, bd, dryRun, "contract")
+	return planBundleFiles(realRoot, targetDir, files, contractBundleTemplate, bd, "contract")
 }
 
 // contractBundleFiles returns the canonical files emitted for an example

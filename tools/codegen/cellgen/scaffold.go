@@ -3,12 +3,12 @@ package cellgen
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
 
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -107,12 +107,7 @@ l0Dependencies: []
 //   - <root>/<targetDir>/cell.go  — struct + stub markers + initInternal hook
 //   - <root>/<targetDir>/cell.yaml — metadata with goStructName set
 //
-// Implementation note: kept as a single pass (validate → defaults → symlink
-// guard → cell.go render → cell.yaml render) so the "all-or-nothing" write
-// semantics remain explicit; splitting into phases would force a second-pass
-// file walk just to recover state.
-//
-//nolint:gocognit,cyclop,funlen // see comment above
+// All filesystem writes go through pathsafe.WritePlannedFiles (SCAFFOLD-WRITE-FUNNEL-01).
 func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	if err := validateScaffoldSpec(spec); err != nil {
 		return err
@@ -126,91 +121,34 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 		spec.ConsistencyLevel = "L1"
 	}
 
-	dir := filepath.Join(root, targetDir)
-
-	cellGoPath := filepath.Join(dir, "cell.go")
-	cellYAMLPath := filepath.Join(dir, "cell.yaml")
-
-	// Conflict detection: refuse to overwrite any output file.
-	for _, p := range []string{cellGoPath, cellYAMLPath} {
-		if _, err := os.Stat(p); err == nil {
-			return fmt.Errorf("scaffold cell: file already exists: %s", p)
-		}
-	}
-
-	// DryRun: render templates to catch template/input errors (codegen.FormatGoSource
-	// (goimports + gofumpt) validates cell.go syntax), but do not write any files to disk.
-	if spec.DryRun {
-		if _, err := renderTemplate(cellGoTemplate, spec, true); err != nil {
-			return fmt.Errorf("scaffold cell: dry-run render cell.go: %w", err)
-		}
-		if _, err := renderTemplate(cellYAMLTemplate, spec, false); err != nil {
-			return fmt.Errorf("scaffold cell: dry-run render cell.yaml: %w", err)
-		}
-		return nil
-	}
-
-	// Symlink guard: resolve the true on-disk root and verify that the target
-	// directory stays inside it even if intermediate components are symlinks.
-	// This prevents a pre-placed symlink (e.g. cells/foo → /tmp/evil) from
-	// redirecting scaffold writes outside the repository.
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return fmt.Errorf("scaffold cell: resolve root %q: %w", root, err)
-	}
-	cleanTarget := filepath.Clean(filepath.Join(realRoot, targetDir))
-	if !strings.HasPrefix(cleanTarget, realRoot+string(filepath.Separator)) {
-		return fmt.Errorf("scaffold cell: target %q escapes root %q", targetDir, realRoot)
-	}
-	// Walk existing parent components and verify each symlink resolves inside root.
-	parent := filepath.Dir(cleanTarget)
-	for parent != realRoot && parent != "/" && parent != "." {
-		info, statErr := os.Lstat(parent)
-		if statErr != nil {
-			if os.IsNotExist(statErr) {
-				parent = filepath.Dir(parent)
-				continue
-			}
-			return fmt.Errorf("scaffold cell: stat parent %q: %w", parent, statErr)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			resolved, resolveErr := filepath.EvalSymlinks(parent)
-			if resolveErr != nil {
-				return fmt.Errorf("scaffold cell: resolve symlink %q: %w", parent, resolveErr)
-			}
-			if !strings.HasPrefix(resolved, realRoot+string(filepath.Separator)) && resolved != realRoot {
-				return fmt.Errorf("scaffold cell: parent path %q resolves outside root via symlink (resolved to %q)", parent, resolved)
-			}
-		}
-		parent = filepath.Dir(parent)
-	}
-	// Use the realRoot-based dir so subsequent writes go to the true path.
-	dir = cleanTarget
-	cellGoPath = filepath.Join(dir, "cell.go")
-	cellYAMLPath = filepath.Join(dir, "cell.yaml")
-
+	// Always render templates to catch template/input errors early (even on dry-run).
 	cellGoContent, err := renderTemplate(cellGoTemplate, spec, true)
 	if err != nil {
 		return fmt.Errorf("scaffold cell: render cell.go: %w", err)
 	}
-
 	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
 	if err != nil {
 		return fmt.Errorf("scaffold cell: render cell.yaml: %w", err)
 	}
 
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("scaffold cell: create directory %s: %w", dir, err)
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold cell: %w", err)
 	}
 
-	if err := os.WriteFile(cellGoPath, cellGoContent, 0o600); err != nil {
-		return fmt.Errorf("scaffold cell: write cell.go: %w", err)
+	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
+	if err != nil {
+		return fmt.Errorf("scaffold cell: %w", err)
 	}
 
-	if err := os.WriteFile(cellYAMLPath, cellYAMLContent, 0o600); err != nil {
-		return fmt.Errorf("scaffold cell: write cell.yaml: %w", err)
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: filepath.Join(absDir, "cell.go"), Content: cellGoContent},
+		{AbsPath: filepath.Join(absDir, "cell.yaml"), Content: cellYAMLContent},
 	}
 
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
+		return fmt.Errorf("scaffold cell: %w", err)
+	}
 	return nil
 }
 

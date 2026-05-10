@@ -28,7 +28,11 @@ const (
 	ErrLifecycleInvalid   Code = "ERR_LIFECYCLE_INVALID"
 	ErrDependencyCycle    Code = "ERR_DEPENDENCY_CYCLE"
 	ErrValidationFailed   Code = "ERR_VALIDATION_FAILED"
-	ErrReferenceBroken    Code = "ERR_REFERENCE_BROKEN"
+	// ErrConflict signals that an operation was rejected because the target
+	// resource already exists or is in a conflicting state. Maps to HTTP 409.
+	// Used by scaffold/codegen paths to signal file-already-exists conflicts.
+	ErrConflict        Code = "ERR_CONFLICT"
+	ErrReferenceBroken Code = "ERR_REFERENCE_BROKEN"
 	ErrInternal           Code = "ERR_INTERNAL"
 	ErrServiceUnavailable Code = "ERR_SERVICE_UNAVAILABLE"
 	ErrAuthUnauthorized   Code = "ERR_AUTH_UNAUTHORIZED"

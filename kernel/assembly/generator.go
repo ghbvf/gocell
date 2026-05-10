@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
 // Generator produces derived files for an assembly.
@@ -242,6 +243,8 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 // written verbatim. Callers may run GenerateModulesGen / GenerateEntrypoint
 // / GenerateBoundary after Scaffold to materialize cmd/{id}/main.go +
 // modules_gen.go + assemblies/{id}/generated/boundary.yaml.
+//
+// All filesystem writes go through pathsafe.WritePlannedFiles (SCAFFOLD-WRITE-FUNNEL-01).
 func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
 	if g.projectRoot == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -256,24 +259,31 @@ func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
 		return err
 	}
 
-	asmDir := filepath.Join(g.projectRoot, "assemblies", spec.ID)
-	cmdDir := filepath.Join(g.projectRoot, "cmd", spec.ID)
+	realRoot, err := pathsafe.ResolveRoot(g.projectRoot)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"assembly.Generator.Scaffold: resolve project root", err)
+	}
 
-	files := []scaffoldAssemblyFile{
+	asmDir := filepath.Join("assemblies", spec.ID)
+	cmdDir := filepath.Join("cmd", spec.ID)
+
+	templateFiles := []scaffoldAssemblyFile{
 		{Path: filepath.Join(asmDir, "assembly.yaml"), Template: "scaffold-assembly-yaml.tpl"},
 		{Path: filepath.Join(cmdDir, "run.go"), Template: "scaffold-run-go.tpl"},
 		{Path: filepath.Join(cmdDir, "app.go"), Template: "scaffold-app-go.tpl"},
 	}
 
-	rendered, err := g.renderAssemblyScaffoldFiles(files, ctx)
+	plan, err := g.renderAssemblyScaffoldFiles(realRoot, templateFiles, ctx)
 	if err != nil {
 		return err
 	}
 
-	if spec.DryRun {
-		return nil
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"assembly.Generator.Scaffold: write files", err)
 	}
-	return writeAssemblyScaffoldFiles([]string{asmDir, cmdDir}, rendered)
+	return nil
 }
 
 // scaffoldAssemblyFile pairs an output path with the template used to render
@@ -326,47 +336,28 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 	}, nil
 }
 
-// renderAssemblyScaffoldFiles runs conflict detection then renders each
-// template; the returned map is keyed by output path so the writer step
-// stays trivial.
-func (g *Generator) renderAssemblyScaffoldFiles(files []scaffoldAssemblyFile, ctx scaffoldAssemblyContext) (map[string][]byte, error) {
-	for _, f := range files {
-		if _, err := os.Stat(f.Path); err == nil {
-			return nil, errcode.New(errcode.KindConflict, errcode.ErrValidationFailed,
-				"scaffold assembly: file already exists",
-				errcode.WithInternal(fmt.Sprintf("path=%s", f.Path)))
-		}
-	}
-	rendered := make(map[string][]byte, len(files))
+// renderAssemblyScaffoldFiles renders each template and returns a []PlannedFile
+// ready for pathsafe.WritePlannedFiles. Conflict detection is delegated to
+// WritePlannedFiles (F14: render/write decoupled).
+func (g *Generator) renderAssemblyScaffoldFiles(realRoot string, files []scaffoldAssemblyFile, ctx scaffoldAssemblyContext) ([]pathsafe.PlannedFile, error) {
+	plan := make([]pathsafe.PlannedFile, 0, len(files))
 	for _, f := range files {
 		out, err := g.executeTemplate(f.Template, ctx)
 		if err != nil {
 			return nil, err
 		}
-		rendered[f.Path] = out
-	}
-	return rendered, nil
-}
-
-// writeAssemblyScaffoldFiles materializes rendered bytes — directories first,
-// then files — wrapping every error with errcode so callers see the failing
-// path.
-func writeAssemblyScaffoldFiles(dirs []string, rendered map[string][]byte) error {
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-				"scaffold assembly: mkdir failed", err,
-				errcode.WithInternal(fmt.Sprintf("dir=%s", dir)))
+		absPath, containErr := pathsafe.ContainPath(realRoot, f.Path)
+		if containErr != nil {
+			return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold assembly: path containment check failed", containErr,
+				errcode.WithInternal(fmt.Sprintf("path=%s", f.Path)))
 		}
+		plan = append(plan, pathsafe.PlannedFile{
+			AbsPath: absPath,
+			Content: out,
+		})
 	}
-	for path, content := range rendered {
-		if err := os.WriteFile(path, content, 0o600); err != nil {
-			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-				"scaffold assembly: write failed", err,
-				errcode.WithInternal(fmt.Sprintf("path=%s", path)))
-		}
-	}
-	return nil
+	return plan, nil
 }
 
 // validateAssemblyPathComponent rejects path traversal sequences, path
