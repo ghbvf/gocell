@@ -2,10 +2,29 @@
 // session-related protocol decisions for accesscore (and any future cell that
 // owns server-side session state).
 //
-// This package is the protocol vocabulary; it does not implement persistence.
-// A Store interface, mem implementation, and storetest conformance suite live
-// alongside this Protocol in subsequent PRs (see plan
-// docs/plans/202605082145-034-pg-corecell-b-route-plan.md S2 onward).
+// This package is the protocol vocabulary plus a Store interface, an in-
+// memory implementation (MemStore), and the Protocol-driven storetest
+// conformance suite. The PG-backed Store implementation and the cell-side
+// composition root wiring land in later phases of the same plan
+// (docs/plans/202605082145-034-pg-corecell-b-route-plan.md, S3+S5 / S4).
+//
+// MemStore scope (intentional design tradeoffs):
+//
+//   - Dev / test only. The production session path is the PG Store landing
+//     in S3+S5; cells inject *Protocol + Store via composition root in S4.
+//   - No GC and no capacity bound. Expired sessions remain Get-able by
+//     design (ADR-Session D3 fail-closed: callers decide via Session
+//     fields, not by absence). PG store handles purge via janitor / TTL
+//     cron in S3+S5; the protocol vocabulary itself does not own GC.
+//   - O(n) RevokeForSubject. The mem implementation scans the session map
+//     under a single RWMutex; this matches the existing same-tier mem
+//     primitives (cells/accesscore/internal/mem/session_repo.go,
+//     runtime/auth/refresh/memstore) and is acceptable at dev/test
+//     subject counts. PG store delivers indexed revoke at scale via
+//     UPDATE ... WHERE user_id = $1.
+//   - No instrumentation (slog / metrics). Observability is a cell-layer
+//     responsibility per GoCell layering (cells/, not runtime/);
+//     accesscore wires slog around Store calls in S4.
 //
 // The protocol decisions encoded here are governed by:
 //
@@ -35,9 +54,10 @@
 //
 //	proto := session.MustNewProtocol(...)
 //
-// session.NewProtocol / MustNewProtocol must only be called from cmd/* — cells
-// must consume an injected *Protocol, never construct their own. This boundary
-// is enforced by archtest SESSION-PROTOCOL-COMPOSITION-ROOT-01 (added in S4 PR
-// when the first cell consumer lands; see backlog S1-CO-01 in
-// docs/plans/202605082130-pg-corecell-open-issues.md).
+// session.NewProtocol / MustNewProtocol must only be called from cmd/* (or
+// from this package's own storetest sub-package, which constructs the
+// canonical test Protocol) — cells must consume an injected *Protocol, never
+// construct their own. This boundary is enforced by archtest
+// SESSION-PROTOCOL-COMPOSITION-ROOT-01 (active; cell consumers begin
+// arriving in S4 of the plan above).
 package session
