@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
@@ -30,16 +32,14 @@ func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 
 func TestWorkflowExternalUsesPinnedToSHA(t *testing.T) {
 	root := findModuleRoot(t)
-	pinPaths, err := pinnableYAMLFiles(root)
-	require.NoError(t, err)
-	require.NotEmpty(t, pinPaths)
-
-	for _, path := range pinPaths {
-		body, readErr := os.ReadFile(filepath.Clean(path))
-		require.NoError(t, readErr)
-		require.NoError(t, validateWorkflowUsesPinned(path, body))
-		require.NoError(t, validateLocalUsesResolve(root, path, body))
-	}
+	scope := pinnableYAMLScope(root)
+	hits := 0
+	scanner.EachContentFile(t, scope, []string{".yml", ".yaml"}, func(_ *testing.T, fc scanner.ContentContext) {
+		hits++
+		require.NoError(t, validateWorkflowUsesPinned(fc.AbsPath, fc.Bytes))
+		require.NoError(t, validateLocalUsesResolve(root, fc.AbsPath, fc.Bytes))
+	})
+	require.Greater(t, hits, 0, "no pinnable YAML files found — expected at least one workflow or action")
 }
 
 func TestWorkflowUsesPinnedRejectsTagPinnedAction(t *testing.T) {
@@ -422,37 +422,36 @@ func validateLocalUsesResolve(repoRoot, path string, body []byte) error {
 	return nil
 }
 
-// pinnableYAMLFiles returns every YAML file the SHA-pin and local-reference
-// audits must visit. Workflow files (.github/workflows/*.{yml,yaml}) and
-// composite/local reusable actions (.github/actions/**/action.{yml,yaml})
-// are both in scope: a tag-pinned external action inside a composite
-// action would otherwise bypass the pin check because the workflow file
-// only lists the local wrapper.
-func pinnableYAMLFiles(root string) ([]string, error) {
-	var out []string
-	workflowsDir := filepath.Join(root, ".github", "workflows")
-	for _, ext := range []string{"*.yml", "*.yaml"} {
-		paths, err := filepath.Glob(filepath.Join(workflowsDir, ext))
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, paths...)
-	}
-	actionsDir := filepath.Join(root, ".github", "actions")
-	if entries, err := os.ReadDir(actionsDir); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
+// pinnableYAMLScope returns the scope covering every YAML file the SHA-pin
+// and local-reference audits must visit. Workflow files
+// (.github/workflows/*.{yml,yaml}) and composite/local reusable actions
+// (.github/actions/<name>/action.{yml,yaml}) are both in scope: a tag-pinned
+// external action inside a composite action would otherwise bypass the pin
+// check because the workflow file only lists the local wrapper.
+//
+// Implementation: DirsScope rooted at .github with a MatchRels predicate
+// expressing the union of the two file shapes. Composite-action scope is
+// fixed at depth 3 (.github/actions/<name>/action.yml) — nested action.yml
+// files in deeper sub-directories are ignored, matching the original walk.
+func pinnableYAMLScope(root string) scanner.Scope {
+	return scanner.DirsScope(root, []string{".github"},
+		scanner.MatchRels(func(rel string) bool {
+			rel = filepath.ToSlash(rel)
+			parts := strings.Split(rel, "/")
+			if len(parts) < 2 {
+				return false
 			}
-			for _, name := range []string{"action.yml", "action.yaml"} {
-				candidate := filepath.Join(actionsDir, entry.Name(), name)
-				if _, statErr := os.Stat(candidate); statErr == nil {
-					out = append(out, candidate)
-				}
+			// Workflow file: .github/workflows/<name>.{yml,yaml}
+			if len(parts) == 3 && parts[1] == "workflows" {
+				return true
 			}
-		}
-	}
-	return out, nil
+			// Composite action: .github/actions/<name>/action.{yml,yaml}
+			if len(parts) == 4 && parts[1] == "actions" {
+				return parts[3] == "action.yml" || parts[3] == "action.yaml"
+			}
+			return false
+		}),
+	)
 }
 
 func walkWorkflowUses(node *yaml.Node, visit func(string)) {

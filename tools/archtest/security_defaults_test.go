@@ -592,8 +592,7 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 func testSEC05ExampleComposeCredentialsFromEnv(t *testing.T, root string) {
 	t.Helper()
 
-	violations, err := findExampleComposeCredentialViolations(root)
-	require.NoError(t, err)
+	violations := findExampleComposeCredentialViolations(t, root)
 
 	if len(violations) > 0 {
 		for _, v := range violations {
@@ -618,54 +617,42 @@ services:
       RABBITMQ_DEFAULT_PASS: ${FUTURE_RABBITMQ_PASSWORD:?required}
 `), 0o644))
 
-	violations, err := findExampleComposeCredentialViolations(root)
-	require.NoError(t, err)
+	violations := findExampleComposeCredentialViolations(t, root)
 	require.Len(t, violations, 1)
 	assert.Contains(t, violations[0], "examples/futuredevice/docker-compose.yml:5")
 	assert.Contains(t, violations[0], "POSTGRES_PASSWORD")
 }
 
-func findExampleComposeCredentialViolations(root string) ([]string, error) {
+// findExampleComposeCredentialViolations scans examples/<example>/docker-compose.yml
+// for committed credential literals. Uses scanner.DirsScope("examples") with
+// a MatchRels predicate restricting to docker-compose.yml at depth 2 to
+// preserve the original semantics (only the top-level compose file per
+// example, not nested compose.yml in sub-directories).
+func findExampleComposeCredentialViolations(t *testing.T, root string) []string {
+	t.Helper()
+	scope := scanner.DirsScope(root, []string{"examples"},
+		scanner.MatchRels(func(rel string) bool {
+			rel = filepath.ToSlash(rel)
+			if filepath.Base(rel) != "docker-compose.yml" {
+				return false
+			}
+			// Original 2-level walk: examples/<example>/docker-compose.yml.
+			// Reject nested compose files (examples/<a>/<b>/docker-compose.yml).
+			return strings.Count(rel, "/") == 2
+		}),
+	)
 	var violations []string
-	examplesDir := filepath.Join(root, "examples")
-	entries, err := os.ReadDir(examplesDir)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		subDir := filepath.Join(examplesDir, entry.Name())
-		subEntries, readErr := os.ReadDir(subDir)
-		if readErr != nil {
-			return nil, readErr
-		}
-		for _, sub := range subEntries {
-			if sub.IsDir() || sub.Name() != "docker-compose.yml" {
-				continue
-			}
-			fileViolations, cvErr := findComposeCredentialViolations(root, filepath.Join(subDir, sub.Name()))
-			if cvErr != nil {
-				return nil, cvErr
-			}
-			violations = append(violations, fileViolations...)
-		}
-	}
-	return violations, nil
+	scanner.EachContentFile(t, scope, []string{".yml"}, func(_ *testing.T, fc scanner.ContentContext) {
+		violations = append(violations, scanComposeCredentialViolations(fc.Rel, fc.Bytes)...)
+	})
+	return violations
 }
 
-func findComposeCredentialViolations(root, path string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	rel, _ := filepath.Rel(root, path)
-	rel = filepath.ToSlash(rel)
-
+// scanComposeCredentialViolations inspects compose YAML bytes for committed
+// credential literals (any line whose key matches isComposeCredentialKey
+// must use ${VAR:?required} env interpolation). Decoupled from file reading
+// so callers funneled through scanner.EachContentFile can pass bytes directly.
+func scanComposeCredentialViolations(rel string, data []byte) []string {
 	var violations []string
 	for i, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -679,7 +666,7 @@ func findComposeCredentialViolations(root, path string) ([]string, error) {
 					rel, i+1, key, secFailClosed05))
 		}
 	}
-	return violations, nil
+	return violations
 }
 
 func isComposeCredentialKey(key string) bool {

@@ -1,11 +1,11 @@
 package archtest
 
 import (
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // INVARIANT: MIGRATION-NO-TRANSACTION-RERUN-SAFE-01
@@ -36,37 +36,21 @@ import (
 // already-applied migration is idempotent and harmless on existing DBs.
 func TestMigrationNoTransactionRerunSafe01(t *testing.T) {
 	root := findModuleRoot(t)
-	dir := filepath.Join(root, "adapters", "postgres", "migrations")
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read migration dir: %v", err)
-	}
+	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
 
 	noTxMarker := regexp.MustCompile(`(?m)^\s*--\s*\+goose\s+NO\s+TRANSACTION\b`)
 	scanned := 0
 
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		// #nosec G304 -- archtest reads checked-in migration files; path is
-		// derived from a fixed directory listing, not user input.
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", path, readErr)
-		}
-		if !noTxMarker.Match(raw) {
-			continue
+	scanner.EachContentFile(t, scope, []string{".sql"}, func(_ *testing.T, fc scanner.ContentContext) {
+		if !noTxMarker.Match(fc.Bytes) {
+			return
 		}
 		scanned++
-		violations := scanRerunSafetyViolations(string(raw))
-		for _, v := range violations {
+		for _, v := range scanRerunSafetyViolations(string(fc.Bytes)) {
 			t.Errorf("MIGRATION-NO-TRANSACTION-RERUN-SAFE-01: %s:%d: %s",
-				path, v.line, v.message)
+				fc.Rel, v.line, v.message)
 		}
-	}
+	})
 
 	if scanned == 0 {
 		t.Fatal("MIGRATION-NO-TRANSACTION-RERUN-SAFE-01: no NO TRANSACTION migration files were scanned; " +

@@ -27,35 +27,38 @@ import (
 // be caught here before it reaches CI.
 func TestEventPayloadSchemasUseCamelCase(t *testing.T) {
 	root := findModuleRoot(t)
-	contractsEventDir := filepath.Join(root, "contracts", "event")
+	scope := scanner.DirsScope(root, []string{"contracts/event"},
+		scanner.MatchRels(func(rel string) bool {
+			if filepath.Base(rel) != "payload.schema.json" {
+				return false
+			}
+			// Skip the historical "bak/" sub-trees: backups should not contribute
+			// to the live rule.
+			for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+				if seg == "bak" {
+					return false
+				}
+			}
+			return true
+		}),
+	)
 
 	var violations []string
-
-	err := walkPayloadSchemas(contractsEventDir, func(path string) error {
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-
-		data, err := os.ReadFile(filepath.Clean(path))
-		if err != nil {
-			return fmt.Errorf("read %s: %w", rel, err)
-		}
-
+	scanner.EachContentFile(t, scope, []string{".json"}, func(_ *testing.T, fc scanner.ContentContext) {
 		var schema struct {
 			Properties map[string]json.RawMessage `json:"properties"`
 		}
-		if err := json.Unmarshal(data, &schema); err != nil {
-			return fmt.Errorf("parse %s: %w", rel, err)
+		if err := json.Unmarshal(fc.Bytes, &schema); err != nil {
+			t.Errorf("EVENT-PAYLOAD-CAMELCASE-01: parse %s: %v", fc.Rel, err)
+			return
 		}
-
 		for key := range schema.Properties {
 			if strings.Contains(key, "_") {
 				violations = append(violations,
-					fmt.Sprintf("EVENT-PAYLOAD-CAMELCASE-01: %s: property %q contains underscore — use camelCase", rel, key))
+					fmt.Sprintf("EVENT-PAYLOAD-CAMELCASE-01: %s: property %q contains underscore — use camelCase", fc.Rel, key))
 			}
 		}
-		return nil
 	})
-	require.NoError(t, err, "failed to walk contracts/event")
 
 	for _, v := range violations {
 		t.Logf("%s", v)
@@ -210,42 +213,6 @@ func parseStructTag(tag string) map[string]string {
 		result[key] = value
 	}
 	return result
-}
-
-// walkPayloadSchemas recursively visits all payload.schema.json files under dir,
-// skipping "bak" directories. For each matching file it calls fn(absPath).
-// It replaces the former filepath.Walk call so that no raw walker remains in
-// this archtest file (filepath.Walk/WalkDir are reserved for the scanner
-// framework per SCANNER-FRAMEWORK-USAGE-01).
-func walkPayloadSchemas(dir string, fn func(path string) error) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, e := range entries {
-		name := e.Name()
-		absPath := filepath.Join(dir, name)
-		if e.IsDir() {
-			// Skip backup directories if they exist.
-			if name == "bak" {
-				continue
-			}
-			if err := walkPayloadSchemas(absPath, fn); err != nil {
-				return err
-			}
-			continue
-		}
-		if name != "payload.schema.json" {
-			continue
-		}
-		if err := fn(absPath); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // TestEventPayloadSchemasUseCamelCase_NegativeProbe validates that the rule
