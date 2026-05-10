@@ -351,6 +351,10 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"Update not-found must have Category=CategoryDomain")
+	assert.Contains(t, ec.InternalMessage, opUpdate,
+		"Update path InternalMessage must carry opUpdate label")
+	assert.NotContains(t, ec.InternalMessage, opUpdateForRollback,
+		"Update path must not be mislabeled as UpdateForRollback (op argument hardcode regression)")
 }
 
 // TestConfigRepository_UpdateForRollback tests the 4-arg UpdateForRollback method.
@@ -391,6 +395,8 @@ func TestConfigRepository_UpdateForRollback_NotFound(t *testing.T) {
 		"UpdateForRollback not-found must have Category=CategoryDomain")
 	require.False(t, errcode.IsInfraError(err),
 		"domain not-found must not be treated as infra")
+	assert.Contains(t, ec.InternalMessage, opUpdateForRollback,
+		"UpdateForRollback path InternalMessage must carry opUpdateForRollback label")
 }
 
 func TestConfigRepository_Delete(t *testing.T) {
