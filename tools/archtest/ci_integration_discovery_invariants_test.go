@@ -16,43 +16,42 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// discoverPackagesUnderTag walks rootDir and returns relative paths of every
-// directory containing at least one .go file whose //go:build expression
-// evaluates true under {tag} alone AND false under no tags.
+// discoverPackagesUnderTag walks rootDir via the scanner framework and
+// returns relative paths of every directory containing at least one .go
+// file whose //go:build expression evaluates true under {tag} alone AND
+// false under no tags.
 //
 // "{tag} alone" matches the visibility a `go list -tags=<tag>` invocation
-// would produce: a file with `integration && otelcollector` is NOT discovered
-// because that expression is false under {integration} alone. This mirrors
-// the carve-out semantics of the dedicated OTel/race CI steps.
+// would produce: a file with `integration && otelcollector` is NOT
+// discovered because that expression is false under {integration} alone.
+// This mirrors the carve-out semantics of the dedicated OTel/race CI steps.
+//
+// Uses scanner.ModuleScope so the default skip-dir set (vendor, testdata,
+// worktrees, generated, .git, node_modules) is enforced uniformly with
+// every other archtest walk per SCANNER-FRAMEWORK-USAGE-01.
 func discoverPackagesUnderTag(rootDir, tag string) ([]string, error) {
+	files, err := scanner.ModuleScope(rootDir, scanner.IncludeTests()).Files()
+	if err != nil {
+		return nil, err
+	}
+
 	seen := map[string]bool{}
 	var pkgs []string
-
-	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") {
-			return nil
-		}
+	for _, path := range files {
 		ok, parseErr := fileHasExclusivelyTag(path, tag)
 		if parseErr != nil {
-			return parseErr
+			return nil, parseErr
 		}
 		if !ok {
-			return nil
+			continue
 		}
 		dir := filepath.Dir(path)
 		if seen[dir] {
-			return nil
+			continue
 		}
 		seen[dir] = true
 		rel, relErr := filepath.Rel(rootDir, dir)
@@ -60,10 +59,6 @@ func discoverPackagesUnderTag(rootDir, tag string) ([]string, error) {
 			rel = dir
 		}
 		pkgs = append(pkgs, rel)
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	sort.Strings(pkgs)
 	return pkgs, nil

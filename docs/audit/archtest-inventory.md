@@ -6,8 +6,8 @@
 
 ## 概览
 
-- archtest 文件总数：74
-- archtest INVARIANT 锚点数：176
+- archtest 文件总数：75
+- archtest INVARIANT 锚点数：177
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
