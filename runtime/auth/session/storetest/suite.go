@@ -148,6 +148,9 @@ const (
 	caseEpoch         int64 = 7
 	subjectA                = "subject-A"
 	subjectB                = "subject-B"
+	// fatal-format strings used by ≥3 cases — go-standards.md "同义字符串 ≥3 次抽常量".
+	errFmtCreate = "Create: %v"
+	errFmtGet    = "Get %s: %v"
 )
 
 // runCreateGet — Create persists the record; Get returns a defensive copy
@@ -221,7 +224,7 @@ func runRevokeDirect(t *testing.T, factory Factory) {
 
 	fixture := NewSessionFixture(t, subjectA, "jti-revoke", caseEpoch, caseTTL, fc.Now())
 	if err := store.Create(context.Background(), fixture); err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf(errFmtCreate, err)
 	}
 	revokeAt := fc.Now()
 	if err := store.Revoke(context.Background(), fixture.ID); err != nil {
@@ -247,7 +250,7 @@ func runRevokeIdempotent(t *testing.T, factory Factory) {
 
 	fixture := NewSessionFixture(t, subjectA, "jti-idem", caseEpoch, caseTTL, fc.Now())
 	if err := store.Create(context.Background(), fixture); err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf(errFmtCreate, err)
 	}
 	firstRevokeAt := fc.Now()
 	if err := store.Revoke(context.Background(), fixture.ID); err != nil {
@@ -291,7 +294,7 @@ func runExpiredStillReturned(t *testing.T, factory Factory) {
 
 	fixture := NewSessionFixture(t, subjectA, "jti-exp", caseEpoch, caseTTL, fc.Now())
 	if err := store.Create(context.Background(), fixture); err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf(errFmtCreate, err)
 	}
 	fc.Advance(caseExpiryAdvance) // past expiry
 
@@ -374,7 +377,7 @@ func assertActiveSessionsRevoked(t *testing.T, store session.Store, want time.Ti
 	for _, fix := range fixtures {
 		got, err := store.Get(ctx, fix.ID)
 		if err != nil {
-			t.Fatalf("Get %s: %v", fix.ID, err)
+			t.Fatalf(errFmtGet, fix.ID, err)
 		}
 		if got.RevokedAt == nil {
 			t.Errorf("subjectA session %s: expected RevokedAt non-nil after RevokeForSubject", fix.ID)
@@ -392,7 +395,7 @@ func assertSessionRevokedAtUnchanged(t *testing.T, store session.Store, id strin
 	t.Helper()
 	got, err := store.Get(context.Background(), id)
 	if err != nil {
-		t.Fatalf("Get %s: %v", id, err)
+		t.Fatalf(errFmtGet, id, err)
 	}
 	if got.RevokedAt == nil || !got.RevokedAt.Equal(want) {
 		t.Errorf("pre-revoked session %s: RevokedAt re-stamped to %v, want preserved at %s", id, got.RevokedAt, want)
@@ -406,7 +409,7 @@ func assertSessionUnrevoked(t *testing.T, store session.Store, id string) {
 	t.Helper()
 	got, err := store.Get(context.Background(), id)
 	if err != nil {
-		t.Fatalf("Get %s: %v", id, err)
+		t.Fatalf(errFmtGet, id, err)
 	}
 	if got.RevokedAt != nil {
 		t.Errorf("session %s must remain active after RevokeForSubject(other-subject), got RevokedAt %v", id, got.RevokedAt)
