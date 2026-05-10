@@ -67,16 +67,23 @@ WHERE namespace = $1
   AND seq_no <= $3
 ORDER BY seq_no ASC`
 
-	// selectFingerprintSQL checks for an existing entry with the same content
-	// fields used by the ContentFingerprint idempotency mode.
+	// selectFingerprintSQL checks for an existing entry with the same stable
+	// identity key used by the ContentFingerprint idempotency mode.
+	//
+	// F-CR-2: fingerprint is now EventID-only (not EventID+EventType+ActorID+
+	// Timestamp+Payload). At-least-once redelivery produces the same EventID
+	// each time; Timestamp changes on every retry — the old multi-field form
+	// produced a different fingerprint on each attempt, defeating idempotency.
+	//
+	// The DB-level uq_audit_namespace_event_id UNIQUE INDEX (migration 018)
+	// provides a second-line guard against concurrent bypass of this check.
+	//
+	// ref: Watermill router.go — message.UUID as dedup key.
+	// ref: NServiceBus MessageDeduplicationBehavior — message ID as idempotency key.
 	selectFingerprintSQL = `
 SELECT 1 FROM audit_entries
-WHERE namespace   = $1
-  AND event_id    = $2
-  AND event_type  = $3
-  AND actor_id    = $4
-  AND timestamp   = $5
-  AND payload     = $6
+WHERE namespace = $1
+  AND event_id  = $2
 LIMIT 1`
 )
 
@@ -88,8 +95,11 @@ LIMIT 1`
 //     int64 hash keys, so their advisory locks never contend (B2-C-10).
 //   - SELECT ... FOR UPDATE on the tail row fences the read-modify-write cycle.
 //   - All DML runs inside the caller's ambient transaction via txRunner.RunInTx.
-//   - Idempotency uses a content-fingerprint check on (event_id, event_type,
-//     actor_id, timestamp, payload) before inserting.
+//   - Idempotency uses a stable EventID fingerprint check before inserting.
+//     EventID (UUID from the outbox entry) is the same across at-least-once
+//     redeliveries; Timestamp changes per retry so it is excluded (F-CR-2).
+//     A DB-level UNIQUE INDEX on (namespace, event_id) (migration 018) is the
+//     second-line guard against concurrent bypass of the application check.
 //
 // Consistency level: L1 LocalTx — Append is a single-transaction write that
 // participates in the caller's ambient transaction. L2 callers compose this
@@ -181,8 +191,10 @@ func (s *LedgerStore) queryCtx(ctx context.Context, sql string, args ...any) (pg
 // Algorithm (all within txRunner.RunInTx):
 //  1. Validate payload is valid JSON.
 //  2. Acquire pg_advisory_xact_lock(hashtextextended(namespace, 0)) to serialize.
-//  3. Check idempotency fingerprint (event_id + event_type + actor_id + timestamp + payload)
-//     inside the lock to eliminate TOCTOU between concurrent Appends.
+//  3. Check idempotency fingerprint (event_id only) inside the lock to eliminate
+//     TOCTOU between concurrent Appends. Timestamp is excluded from the check:
+//     at-least-once redelivery produces the same EventID but a new clk.Now(),
+//     so fingerprinting on Timestamp would defeat idempotency (F-CR-2).
 //  4. SELECT tail row FOR UPDATE (prevents concurrent tail reads in the same namespace).
 //  5. Compute next seq_no = tail.seq_no + 1 (or 1 for empty).
 //  6. Compute hash = protocol.ComputeHash(tail.hash, entry).
@@ -249,13 +261,13 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 	})
 }
 
-// checkFingerprint returns true if an entry with the same content fields
-// already exists in the namespace.
+// checkFingerprint returns true if an entry with the same EventID already
+// exists in the namespace. EventID (UUID from the outbox entry) is the stable
+// identity across at-least-once redeliveries; other fields (Timestamp, Payload)
+// may change between retries and must not be part of the fingerprint.
 func (s *LedgerStore) checkFingerprint(ctx context.Context, ns string, e *ledger.Entry) (bool, error) {
 	var marker int
-	err := s.queryRowCtx(ctx, selectFingerprintSQL,
-		ns, e.EventID, e.EventType, e.ActorID, e.Timestamp, e.Payload,
-	).Scan(&marker)
+	err := s.queryRowCtx(ctx, selectFingerprintSQL, ns, e.EventID).Scan(&marker)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -422,6 +434,12 @@ func (s *LedgerStore) scanEntries(rows pgx.Rows, ns string) ([]*ledger.Entry, er
 // Verify re-computes HMAC-SHA256 hash for each entry in [fromSeq, toSeq]
 // and checks chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1
 // when all entries are intact. Uses the pool directly (read-only path).
+//
+// Sub-range correctness: when fromSeq > 1 the first entry in the range has a
+// non-empty PrevHash pointing at entries[fromSeq-1]. Verify fetches that
+// predecessor's hash as the baseline so the first PrevHash linkage check is
+// evaluated against the correct expected value rather than the empty string used
+// for the chain's genesis entry.
 func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
 	ns := s.namespace()
 
@@ -430,6 +448,42 @@ func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid b
 			"audit ledger: Verify requires 1 <= fromSeq <= toSeq")
 	}
 
+	prevHash, baseErr := s.verifyBaseline(ctx, ns, fromSeq)
+	if baseErr != nil {
+		return false, fromSeq, baseErr
+	}
+
+	return s.verifyRange(ctx, ns, fromSeq, toSeq, prevHash)
+}
+
+// verifyBaseline returns the hash of entries[fromSeq-1] when fromSeq > 1 (the
+// sub-range baseline), or "" when fromSeq == 1 (chain genesis). A missing
+// baseline row returns ErrAuditLedgerNotFound.
+func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int64) (string, error) {
+	if fromSeq == 1 {
+		return "", nil
+	}
+	var baselineHash string
+	err := s.pool.QueryRow(ctx,
+		`SELECT hash FROM audit_entries WHERE namespace=$1 AND seq_no=$2`,
+		ns, fromSeq-1,
+	).Scan(&baselineHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+			"audit ledger: Verify baseline entry not found",
+			errcode.WithDetails(slog.Int64("baselineSeqNo", fromSeq-1)))
+	}
+	if err != nil {
+		return "", ctxcancel.WrapOrInfra(err, "verify_baseline", ns,
+			ErrAdapterPGQuery, "audit ledger: verify baseline lookup failed")
+	}
+	return baselineHash, nil
+}
+
+// verifyRange scans entries in [fromSeq, toSeq] and validates gap-freeness,
+// PrevHash linkage, and hash recomputation. prevHash is the expected PrevHash
+// of the first scanned entry (empty string for the chain genesis).
+func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq int64, prevHash string) (bool, int64, error) {
 	rows, queryErr := s.pool.Query(ctx, selectRangeSQL, ns, fromSeq, toSeq)
 	if queryErr != nil {
 		return false, 0, ctxcancel.WrapOrInfra(queryErr, "verify_query", ns,
@@ -437,9 +491,7 @@ func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid b
 	}
 	defer rows.Close()
 
-	var prevHash string
 	expectedSeq := fromSeq
-
 	for rows.Next() {
 		var e ledger.Entry
 		if scanErr := rows.Scan(
@@ -450,19 +502,13 @@ func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid b
 			return false, 0, ctxcancel.WrapOrInfra(scanErr, "verify_scan", ns,
 				ErrAdapterPGQuery, "audit ledger: verify scan failed")
 		}
-
-		// Gap check: seq_no must be contiguous.
 		if e.SeqNo != expectedSeq {
 			return false, expectedSeq, nil
 		}
 		expectedSeq++
-
-		// PrevHash linkage check.
 		if e.PrevHash != prevHash {
 			return false, e.SeqNo, nil
 		}
-
-		// Hash recompute check.
 		if e.Hash != s.protocol.ComputeHash(e.PrevHash, &e) {
 			return false, e.SeqNo, nil
 		}
@@ -472,15 +518,12 @@ func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid b
 		return false, 0, ctxcancel.WrapOrInfra(rowsErr, "verify_rows_err", ns,
 			ErrAdapterPGQuery, "audit ledger: verify rows error")
 	}
-
-	// If we scanned fewer rows than expected (gap at end or missing entries).
 	if expectedSeq <= toSeq {
 		return false, expectedSeq, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found during Verify",
 			errcode.WithDetails(slog.Int64("missingSeqNo", expectedSeq)),
 		)
 	}
-
 	return true, -1, nil
 }
 

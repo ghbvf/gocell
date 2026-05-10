@@ -176,6 +176,87 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestPGVerify_SubRange_Valid + TestPGVerify_SubRange_Tampered (F-CR-1)
+// ---------------------------------------------------------------------------
+
+// TestPGVerify_SubRange_Valid verifies that Verify(fromSeq=2, toSeq=5) returns
+// valid=true when the sub-range is intact. This tests the F-CR-1 baseline-fetch
+// fix: without the fix, Verify would compare e[2].PrevHash against "" (the zero
+// value) and incorrectly report corruption even for a valid chain.
+func TestPGVerify_SubRange_Valid(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	protocol := newTestLedgerProtocol(t, ns)
+
+	store, storeCleanup := newIsolatedLedgerStore(t, ctx, base, protocol, clockmock.New(storetest.EpochAnchor()))
+	t.Cleanup(storeCleanup)
+
+	fc := clockmock.New(storetest.EpochAnchor())
+	const total = 5
+	for i := 1; i <= total; i++ {
+		e := storetest.NewEntryFixture(t,
+			fmt.Sprintf("sub-range-valid-%d", i),
+			"sub.range.test", "actor", fc.Now())
+		require.NoError(t, store.Append(ctx, e), "Append seq %d", i)
+	}
+
+	// Sub-range [2, 5] must be valid (F-CR-1 regression guard).
+	valid, firstInvalid, err := store.Verify(ctx, 2, 5)
+	require.NoError(t, err)
+	assert.True(t, valid, "Verify(2,5) on intact chain must return valid=true; firstInvalid=%d", firstInvalid)
+	assert.Equal(t, int64(-1), firstInvalid, "firstInvalid must be -1 for a valid chain")
+}
+
+// TestPGVerify_SubRange_Tampered verifies that Verify(fromSeq=2, toSeq=5)
+// returns valid=false at seq 3 when entry seq=3's hash is tampered via direct
+// SQL UPDATE (PG store; MemStore internal helpers are not available).
+func TestPGVerify_SubRange_Tampered(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	protocol := newTestLedgerProtocol(t, ns)
+
+	p := isolatedSchemaPool(t, ctx, base)
+	t.Cleanup(func() { _ = p.Close(context.Background()) })
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_subrange_tampered")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	fc := clockmock.New(storetest.EpochAnchor())
+	txm := NewTxManager(p)
+	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
+	require.NoError(t, err)
+
+	const total = 5
+	for i := 1; i <= total; i++ {
+		e := storetest.NewEntryFixture(t,
+			fmt.Sprintf("sub-range-tamper-%d", i),
+			"sub.range.tamper", "actor", fc.Now())
+		require.NoError(t, store.Append(ctx, e), "Append seq %d", i)
+	}
+
+	// Tamper seq=3's hash directly in the DB.
+	_, execErr := p.DB().Exec(ctx,
+		`UPDATE audit_entries SET hash = 'tampered-hash-fcr1'
+		 WHERE namespace = $1 AND seq_no = 3`, "auditcore")
+	require.NoError(t, execErr, "direct hash tamper must succeed")
+
+	// Verify sub-range [2, 5] must detect corruption at seq=3 (hash recompute fails).
+	valid, firstInvalid, err := store.Verify(ctx, 2, 5)
+	require.NoError(t, err)
+	assert.False(t, valid, "Verify(2,5) after hash tamper at seq=3 must return valid=false")
+	assert.Equal(t, int64(3), firstInvalid,
+		"firstInvalid must be 3 (the tampered entry); got %d", firstInvalid)
+}
+
+// ---------------------------------------------------------------------------
 // TestAuditLedgerStore_AdvisoryLockSerializesAppend (B2-C-10)
 // ---------------------------------------------------------------------------
 

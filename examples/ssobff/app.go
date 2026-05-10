@@ -230,36 +230,6 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Build ledger.Protocol and ledger.MemStore (composition root responsibility).
-	// Cells never hold the raw HMAC key; the key is sealed inside ledger.Protocol.
-	// ref: cmd/corebundle/audit_module.go — production composition uses MustNewProtocol.
-	auditNS, err := ledger.ParseNamespaceID("auditcore")
-	if err != nil {
-		return nil, fmt.Errorf("ssobff: parse audit namespace: %w", err)
-	}
-	auditProtocol, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
-		ledger.WithNamespace(auditNS),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
-	}
-	auditStore, err := ledger.NewMemStore(auditProtocol, clock.Real())
-	if err != nil {
-		return nil, fmt.Errorf("ssobff: build audit store: %w", err)
-	}
-	auc := auditcore.NewAuditCore(
-		auditcore.WithClock(clock.Real()),
-		auditcore.WithLedgerProtocol(auditProtocol),
-		auditcore.WithLedgerStore(auditStore),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
-		auditcore.WithCursorCodec(auditCursorCodec),
-		auditcore.WithLogger(cfg.logger),
-		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	)
 
 	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
 	if err != nil {
@@ -342,8 +312,8 @@ func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, nw outbox.Wr
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithLedgerProtocol(protocol),
 		auditcore.WithLedgerStore(store),
-		auditcore.WithOutboxDeps(eb, nw),
-		auditcore.WithTxManager(demoTxRunner{}),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		auditcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 		auditcore.WithCursorCodec(cursorCodec),
 		auditcore.WithLogger(logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),

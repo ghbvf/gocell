@@ -51,6 +51,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_namespace_event_type
 -- Future index additions on this table must use CREATE INDEX CONCURRENTLY (table no longer empty after first deploy).
 
 -- +goose Down
+-- WARNING: This down migration drops audit_entries and PERMANENTLY DELETES
+-- all audit data. Production rollback MUST back up the table first
+-- (e.g., `pg_dump -t audit_entries`). The down path is intended for
+-- development/test environments where audit retention is not required.
 DROP INDEX IF EXISTS idx_audit_namespace_event_type;
 DROP INDEX IF EXISTS idx_audit_namespace_ts_id;
 DROP TABLE IF EXISTS audit_entries;
