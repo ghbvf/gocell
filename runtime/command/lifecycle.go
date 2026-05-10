@@ -10,10 +10,31 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 )
 
 const defaultSweeperHookName = "command.sweeper"
+
+// startProbeTimeout is the window given to the sweeper goroutine after launch
+// to surface an immediate startup failure. If the goroutine exits within this
+// window with an error, lifecycle.Start propagates it to the caller.
+// The value is chosen to be large enough for in-process failures (misconfigured
+// sweeper, nil queue, …) but small enough not to delay a healthy startup.
+//
+// ref: runtime/outbox/relay.go — readyCh pattern (relay blocks in Start;
+// sweeper is fire-and-forget so we use a time-bounded probe instead).
+const startProbeTimeout = 50 * time.Millisecond
+
+// SweeperRunner is the minimal interface consumed by SweeperLifecycle.
+// *kcommand.Sweeper satisfies it; tests may inject mocks directly.
+type SweeperRunner interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+}
+
+// Compile-time check: *kcommand.Sweeper satisfies SweeperRunner.
+var _ SweeperRunner = (*kcommand.Sweeper)(nil)
 
 // SweeperLifecycle exposes a kernel command Sweeper as a Cell lifecycle hook.
 // OnStart launches the sweeper in a background goroutine; OnStop cancels it and
@@ -23,10 +44,11 @@ const defaultSweeperHookName = "command.sweeper"
 // is owned by the hook and canceled from OnStop.
 type SweeperLifecycle struct {
 	Name         string
-	Sweeper      *kcommand.Sweeper
+	Sweeper      SweeperRunner
 	StartTimeout time.Duration
 	StopTimeout  time.Duration
 	Logger       *slog.Logger
+	Clock        clock.Clock
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -34,8 +56,12 @@ type SweeperLifecycle struct {
 }
 
 // NewSweeperLifecycle creates a lifecycle contributor for sweeper.
-func NewSweeperLifecycle(name string, sweeper *kcommand.Sweeper) *SweeperLifecycle {
-	return &SweeperLifecycle{Name: name, Sweeper: sweeper}
+// clk must be non-nil; it is validated at construction time via clock.MustHaveClock.
+// The composition root constructs the Clock (clock.Real() or a test double) and
+// passes it here; lifecycle.go does not call clock.Real() directly.
+func NewSweeperLifecycle(name string, sweeper *kcommand.Sweeper, clk clock.Clock) *SweeperLifecycle {
+	clock.MustHaveClock(clk, "command.NewSweeperLifecycle: clock required")
+	return &SweeperLifecycle{Name: name, Sweeper: sweeper, Clock: clk}
 }
 
 // Hook returns the single lifecycle hook managed by SweeperLifecycle.
@@ -90,6 +116,35 @@ func (l *SweeperLifecycle) Start(_ context.Context) error {
 		done <- err
 	}()
 
+	// Startup probe: give the goroutine a brief window to surface an immediate
+	// failure (misconfigured sweeper, nil dependency, …). If the goroutine
+	// exits within startProbeTimeout with an error, propagate it to the caller
+	// so bootstrap can abort and roll back instead of silently swallowing the
+	// error in the background.
+	//
+	// ref: runtime/outbox/relay.go readyCh pattern — relay blocks in Start so
+	// it can close readyCh synchronously; sweeper is fire-and-forget so we use
+	// a time-bounded probe as the equivalent synchronization point.
+	select {
+	case err := <-done:
+		// Goroutine exited before the probe window closed.
+		if err != nil {
+			// Cancel the run ctx (belt-and-suspenders cleanup) and reset state
+			// so a subsequent Start call is not blocked by a stale cancel.
+			cancel()
+			l.cancel = nil
+			l.done = nil
+			return fmt.Errorf("runtime/command: sweeper failed on startup: %w", err)
+		}
+		// Goroutine exited without error (e.g. ctx was already canceled) —
+		// treat as a clean early exit; leave cancel/done nil so Stop is a no-op.
+		l.cancel = nil
+		l.done = nil
+		return nil
+	case <-l.clk().NewTimerAt(l.clk().Now().Add(startProbeTimeout)).C():
+		// Probe window elapsed — sweeper is running normally.
+	}
+
 	l.logger().Info("runtime/command: sweeper started", slog.String("hook", l.hookName()))
 	return nil
 }
@@ -136,4 +191,8 @@ func (l *SweeperLifecycle) logger() *slog.Logger {
 		return l.Logger
 	}
 	return slog.Default()
+}
+
+func (l *SweeperLifecycle) clk() clock.Clock {
+	return l.Clock
 }

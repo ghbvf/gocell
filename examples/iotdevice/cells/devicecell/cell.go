@@ -311,7 +311,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command sweeper: %w", err)
 	}
-	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper)
+	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, c.clk)
 	c.AddSlice(cell.NewBaseSlice("devicecommand", "devicecell", cell.L4))
 
 	// device-status slice

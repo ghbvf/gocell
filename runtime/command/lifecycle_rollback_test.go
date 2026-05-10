@@ -46,7 +46,7 @@ func TestSweeperLifecycle_StartupFailRollback(t *testing.T) {
 	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
 		kcommand.WithSweeperInterval(time.Hour)) // long interval — no tick fires during this test
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("devicecommand.sweeper", sw)
+	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, clock.Real())
 
 	// Step 1: simulate cell A startup completing (Start returns prompt).
 	// Per uber-go/fx hook semantics, OnStart's ctx is the startup deadline;
