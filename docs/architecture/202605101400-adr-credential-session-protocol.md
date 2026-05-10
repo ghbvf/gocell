@@ -220,7 +220,7 @@ JWT 签名密钥泄露 / key rotation 由 `runtime/auth/jwt.go` issuer key manag
 - **role 变更立即生效**：epoch bump 让旧 token 自动失效，无需 sweep 已签发 token（D2）
 - **统一 credential 失效协议**：4 事件 + fail-closed by default，无散落实现（D3）
 - **协议决策类型化**：sealed FingerprintMode / OrderingModel / typed CredentialEvent → 编译期检查；mem/PG conform 同一 typed Protocol（D6）
-- **archtest 减负**：`PG-REPO-CONSTRUCTOR-FAIL-FAST-01` 由 typed signature + body 顶层校验直接覆盖；`PG-REPO-INVARIANT-LIST` 索引由 storetest 派生（参见 ADR-Typed §4.5）
+- **archtest 减负**：`PG-REPO-CONSTRUCTOR-FAIL-FAST-01` 由 typed signature + `NewProtocol` 末尾 sentinel 校验直接覆盖；`PG-REPO-INVARIANT-LIST` 索引由 storetest 派生（参见 ADR-Typed §4.5）
 
 ### 4.2 负面
 

@@ -80,9 +80,11 @@ func (OrderingAuthzEpoch) orderingModelOK() {}
 // immutable after construction. Accessor methods return defensive copies
 // where applicable.
 type Protocol struct {
-	fingerprint FingerprintMode
-	revokeOn    []CredentialEvent
-	ordering    OrderingModel
+	fingerprint    FingerprintMode
+	fingerprintNil bool // sentinel: WithFingerprint received a nil interface value
+	revokeOn       []CredentialEvent
+	ordering       OrderingModel
+	orderingNil    bool // sentinel: WithOrdering received a nil interface value
 }
 
 // Fingerprint returns the configured fingerprint mode.
@@ -106,14 +108,15 @@ type Option func(*Protocol) error
 // WithFingerprint declares the token fingerprint mode.
 //
 // This is a strong-dependency wiring option (see runtime-api.md §Option 范式
-// 分层): a typed-nil value is rejected at construction time. There is no
-// "accumulate" semantics — a second WithFingerprint call overwrites the
-// previous value, which would be a wiring contradiction.
+// 分层): a typed-nil value is recorded via sentinel flag and rejected at
+// NewProtocol construction time. There is no "accumulate" semantics — a
+// second WithFingerprint call overwrites the previous value, which would be a
+// wiring contradiction.
 func WithFingerprint(fp FingerprintMode) Option {
 	return func(p *Protocol) error {
 		if validation.IsNilInterface(fp) {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"session protocol: fingerprint mode required (use WithFingerprint)")
+			p.fingerprintNil = true
+			return nil
 		}
 		p.fingerprint = fp
 		return nil
@@ -122,12 +125,13 @@ func WithFingerprint(fp FingerprintMode) Option {
 
 // WithOrdering declares the login-vs-revoke ordering primitive (ADR D2).
 //
-// Strong-dependency wiring option: typed-nil is rejected at construction.
+// Strong-dependency wiring option: typed-nil is recorded via sentinel flag and
+// rejected at NewProtocol construction time.
 func WithOrdering(om OrderingModel) Option {
 	return func(p *Protocol) error {
 		if validation.IsNilInterface(om) {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"session protocol: ordering model required (use WithOrdering)")
+			p.orderingNil = true
+			return nil
 		}
 		p.ordering = om
 		return nil
@@ -175,11 +179,11 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 			return nil, err
 		}
 	}
-	if validation.IsNilInterface(p.fingerprint) {
+	if p.fingerprintNil || validation.IsNilInterface(p.fingerprint) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session protocol: fingerprint mode required (use WithFingerprint)")
 	}
-	if validation.IsNilInterface(p.ordering) {
+	if p.orderingNil || validation.IsNilInterface(p.ordering) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session protocol: ordering model required (use WithOrdering)")
 	}
@@ -197,6 +201,7 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 func MustNewProtocol(opts ...Option) *Protocol {
 	p, err := NewProtocol(opts...)
 	if err != nil {
+		// B 类 panic（参数约定违反，编程错误）：composition-root 静态字面量配错；Must* 是 fail-fast 包装。
 		panic(err)
 	}
 	return p

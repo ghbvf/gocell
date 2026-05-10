@@ -9,6 +9,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// Compile-time verification that package-internal types implement the sealed
+// marker interfaces. The marker methods (fingerprintModeOK / orderingModelOK)
+// are unexported, so package-external types cannot satisfy these interfaces —
+// any attempt to add an external implementer would fail to compile here.
+var (
+	_ session.FingerprintMode = session.FingerprintJTIRef{}
+	_ session.OrderingModel   = session.OrderingAuthzEpoch{}
+)
+
 // TestNewProtocol_NoOptions_Error: NewProtocol with zero options must fail
 // because Fingerprint and Ordering are required (D1 / D2).
 func TestNewProtocol_NoOptions_Error(t *testing.T) {
@@ -253,6 +262,7 @@ func TestCredentialEvent_String(t *testing.T) {
 		{session.CredentialEventLock, "Lock"},
 		{session.CredentialEventDelete, "Delete"},
 		{session.CredentialEventRoleRevoke, "RoleRevoke"},
+		{session.CredentialEvent(99), "Unknown"},
 	}
 	for _, c := range cases {
 		if got := c.ev.String(); got != c.want {
