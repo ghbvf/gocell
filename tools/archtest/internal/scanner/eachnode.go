@@ -20,6 +20,17 @@ import "go/ast"
 // handlers on parent kinds and check ancestor in handler body, OR call
 // EachNode again with the chosen sub-root.
 //
+// Trap (transitional, removed once PR-Φ-Hard ships): EachNode walks the
+// entire sub-tree rooted at root (preorder). When the caller really wants
+// only the direct children of a node — e.g. KeyValueExpr elements of a
+// CompositeLit, CommClause elements of a SelectStmt, or the top-level
+// Body.List of an *ast.IfStmt — DO NOT use EachNode; iterate the parent's
+// child slice directly. Otherwise nested literals' inner nodes leak into
+// outer-scope decisions (PR445-FU finding F1 was this exact pattern).
+// PR-Φ-Hard splits this API into EachInSubtree[N] / EachInChildren[N] so
+// the walk depth becomes a compile-time choice. Tracking: backlog item
+// PR-Φ-HARD-EACHNODE-WALKDEPTH-01.
+//
 // Why no testing.T parameter (unlike [EachFile]): EachNode is pure — no
 // parse error, no I/O, no t.Fatalf path. Callers' own t.Errorf inside fn
 // handles violations. The pure-function form is reusable from non-test paths
