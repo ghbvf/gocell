@@ -202,15 +202,14 @@ jobs:
           # or release/* lint against their actual merge-base, not develop.
           args: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
 
-      # Build slowgate (G9 SLOW-TEST-BUDGET) — wall-clock budget gate that
-      # consumes `go test -json` events and fails the shard when any
-      # (Package, Test) Elapsed exceeds the threshold without an allowlist
-      # entry. Mirrors the e2egate build pattern at the integration job. Any
-      # PR that adds a slow test must either optimize it or add a justified
-      # allowlist entry in tools/slowgate/allowlist.txt; SLOWGATE-ALLOWLIST-01
-      # archtest enforces no-orphan + must-justify on the file itself.
-      - name: Build slowgate
-        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
+      # Build slowgate / Upload test-json artifact steps removed in PR
+      # #305 hotfix together with the `-json | tee | slowgate` pipe.
+      # tools/slowgate the binary still exists in-tree and remains
+      # type-checked by the tools shard's own `go test ./tools/...`; only
+      # the CI plumbing that wired its stdout-consuming usage is gone.
+      # SLOWGATE-ALLOWLIST-01 archtest still enforces allowlist hygiene
+      # on the source file itself, so the entries are not orphaned even
+      # while the runtime gate is dormant.
 
       # Test step: per-shard coverage profile with covermode=atomic. Atomic is
       # harmless without -race and keeps a single mode across all shards so
@@ -228,29 +227,27 @@ jobs:
       # (macOS leg, continue-on-error) — separate ownership: linux-shard
       # owns the strict gate, os-smoke owns cross-platform smoke.
       #
-      # `-json` redirects test framework events to stdout (test2json schema);
-      # `-coverprofile` continues to write the coverage atomic file
-      # independently. `tee` archives the raw event stream to RUNNER_TEMP
-      # so that *non*-slowgate failures (test panics, build errors, sub-
-      # test stack traces) remain diagnosable from the uploaded artifact —
-      # without `tee`, slowgate consumes the event stream and only its own
-      # threshold-summary survives in stderr, which is insufficient for
-      # arbitrary test failures. The artifact upload below is conditional
-      # on step failure (`if: failure()`) to keep the success-path
-      # exposure surface and storage cost minimal.
+      # PR #305 hotfix (2026-05-10): the `-json | tee | slowgate` pipe
+      # topology added by PR #409 (G9 SLOW-TEST-BUDGET) has been removed
+      # from the Test step. Four consecutive CI runs on the tools shard
+      # exhibited pathological wall times (51m / 20m / 33m cancelled),
+      # with go test's own `-timeout 10m` failing to fire — strong
+      # evidence that the multi-stage pipe (-json producer → tee[file] →
+      # jq tee[stderr] → slowgate consumer) introduces IO-level blocking
+      # that the go test internal timer cannot pre-empt. Reverting to
+      # direct console output restores: (1) live `=== RUN / --- PASS / ---
+      # FAIL` chatter visible during the run, (2) immediate panic-on-
+      # timeout behaviour, (3) the test-json artifact upload path
+      # (currently gated by `if: failure()`) is no longer driven from
+      # this pipe.
       #
-      # `set -o pipefail` is explicitly set here — GHA bash does NOT enable
-      # it by default, and without it a non-zero `go test` exit code would
-      # be masked by `tee`/`slowgate` success. Do not remove this line.
-      #
-      # `--threshold=15s` matches `defaultThreshold` in tools/slowgate/main.go;
-      # the literal is duplicated to keep the workflow self-documenting at
-      # the call site. Calibrated for GHA ubuntu-latest 2-CPU runners where
-      # packages.Load-bound tests run 5–15× slower than developer laptops.
+      # The 15s per-test budget gate that slowgate enforced is recoverable
+      # as a post-test analyser over a separately-captured -json file —
+      # tracked in backlog as PR305-FU-SLOWGATE-PIPE-RESTORATION-01.
+      # Until that lands, slow tests can creep in without budget signal.
       - name: Test
         shell: bash
         run: |
-          set -o pipefail
           # Format-guard matrix.timeout. `go test -timeout` accepts a bare
           # number (interpreted as nanoseconds), so a typo like
           # `timeout: 5` would silently produce sub-second timeouts and
@@ -260,58 +257,20 @@ jobs:
             echo "FAIL: matrix.timeout must be <N>s/<N>m/<N>h, got: ${{ matrix.timeout }}"
             exit 1
           }
-          # Live progress emitter (PR #305 review-round-2 fix): tee a third
-          # copy of the -json stream through jq to stderr so the CI log
-          # shows per-test RUN/PASS/FAIL events as they happen. Without
-          # this, slowgate (added in PR #409 G9 SLOW-TEST-BUDGET) consumes
-          # the entire -json stream and the console stays silent for the
-          # full test duration — operators cannot tell whether the job is
-          # healthy, slow, or stuck (observed 2026-05-10 on the tools
-          # shard with 11+ min silent wall time before this fix).
-          #
-          # Pipe topology:
-          #   go test -json
-          #     → tee[file artifact]                   (unchanged: file)
-          #     → tee >( jq → stderr )                 (NEW: live progress)
-          #     → slowgate                             (unchanged: budget gate)
-          #
-          # Process substitution exits do not enter `set -o pipefail`
-          # so jq cannot mask a real go test failure. `--unbuffered`
-          # forces line-by-line emission. jq is pre-installed on
-          # actions/runner ubuntu-latest. The `|| true` guards a jq parse
-          # crash from breaking the live emitter (slowgate still gates).
           go test \
             -covermode=atomic \
             -coverprofile=coverage-shard-${{ matrix.shard }}.out \
-            -json \
             ${{ matrix.pkgs }} \
-            -count=1 -timeout ${{ matrix.timeout }} \
-            | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
-            | tee >(jq --unbuffered -r '
-                select(.Test != null) |
-                (.Package | sub("github.com/ghbvf/gocell/"; "")) as $pkg |
-                if   .Action == "run"  then "[RUN]   \($pkg) :: \(.Test)"
-                elif .Action == "pass" then "[PASS]  \($pkg) :: \(.Test)  (\(.Elapsed)s)"
-                elif .Action == "fail" then "[FAIL]  \($pkg) :: \(.Test)  (\(.Elapsed)s)"
-                elif .Action == "skip" then "[SKIP]  \($pkg) :: \(.Test)"
-                else empty end
-              ' >&2 || true) \
-            | "$RUNNER_TEMP/slowgate" --threshold=15s --allowlist=tools/slowgate/allowlist.txt
+            -count=1 -timeout ${{ matrix.timeout }}
 
-      # Upload the raw `go test -json` event stream only on Test step
-      # failure. Restored as a P1 review fix: without it, a non-slowgate
-      # failure (test panic, race report, build error) loses the full
-      # event context because slowgate consumes the JSON stream and only
-      # surfaces threshold-summary lines on stderr. retention 3 days is
-      # the diagnostic window — past that, the failing CI run itself
-      # already contains the GHA step log via 90-day step-log retention.
-      - name: Upload test-json artifact (failure only)
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-json-${{ matrix.shard }}
-          path: ${{ runner.temp }}/test-${{ matrix.shard }}.json
-          retention-days: 3
+      # Test-json artifact upload step removed in PR #305 hotfix — the
+      # source file (-json stream) is no longer produced because the Test
+      # step prints directly to console. Test panics, race reports, and
+      # build errors are now visible in the GHA step log itself (90-day
+      # retention). When `PR305-FU-SLOWGATE-PIPE-RESTORATION-01` lands as
+      # a post-test analyser, the -json file capture will be reintroduced
+      # as a non-pipe side-channel (separate `-json` invocation or write
+      # to a tee target) and this upload step restored alongside it.
 
       # Static governance gates (validate --strict, verify journey, check
       # contract-health, check unconditional-skip, examples internal-import
