@@ -236,7 +236,13 @@ func planExampleSlice(realRoot string, bd bundleData) ([]pathsafe.PlannedFile, e
 // planBundleFiles is the shared render→format→plan pipeline for slice and
 // contract bundle outputs. The kindLabel ("slice" / "contract") is used in
 // error messages. Returns PlannedFiles without touching the filesystem.
-func planBundleFiles(realRoot, targetDir string, files []bundleFileSpec, tpl *template.Template, data any, kindLabel string) ([]pathsafe.PlannedFile, error) {
+func planBundleFiles(
+	realRoot, targetDir string,
+	files []bundleFileSpec,
+	tpl *template.Template,
+	data any,
+	kindLabel string,
+) ([]pathsafe.PlannedFile, error) {
 	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
 	if err != nil {
 		return nil, fmt.Errorf("scaffold %s: %w", kindLabel, err)

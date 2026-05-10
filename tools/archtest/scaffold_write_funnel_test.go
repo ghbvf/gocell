@@ -106,4 +106,3 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 			"Violations:\n  %s", strings.Join(violations, "\n  "))
 	}
 }
-

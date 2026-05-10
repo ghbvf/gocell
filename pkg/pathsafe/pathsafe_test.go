@@ -239,7 +239,7 @@ func TestWritePlannedFiles_SingleFile(t *testing.T) {
 	if err := pathsafe.WritePlannedFiles(root, plan, false); err != nil {
 		t.Fatalf("WritePlannedFiles(single): unexpected error: %v", err)
 	}
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(abs) //nolint:gosec // tempdir test fixture
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

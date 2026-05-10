@@ -90,6 +90,18 @@ func ContainPath(realRoot, targetRel string) (string, error) {
 
 	// Walk existing parent components from filepath.Dir(cleanTarget) up to realRoot.
 	// For each that exists, check it is not a symlink pointing outside realRoot.
+	if err := walkParentsForSymlinkContainment(realRoot, cleanTarget, targetRel); err != nil {
+		return "", err
+	}
+
+	return cleanTarget, nil
+}
+
+// walkParentsForSymlinkContainment walks the existing parent directories of
+// cleanTarget (up to realRoot) and verifies that no symlink among them resolves
+// outside realRoot. targetRel is used only for error context.
+func walkParentsForSymlinkContainment(realRoot, cleanTarget, targetRel string) error {
+	sep := string(filepath.Separator)
 	parent := filepath.Dir(cleanTarget)
 	for parent != realRoot && parent != "/" && parent != "." && parent != sep {
 		info, statErr := os.Lstat(parent)
@@ -98,27 +110,35 @@ func ContainPath(realRoot, targetRel string) (string, error) {
 				parent = filepath.Dir(parent)
 				continue
 			}
-			return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"pathsafe: stat parent", statErr,
 				errcode.WithInternal(fmt.Sprintf("parent=%s", parent)))
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			resolved, resolveErr := filepath.EvalSymlinks(parent)
-			if resolveErr != nil {
-				return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-					"pathsafe: resolve symlink", resolveErr,
-					errcode.WithInternal(fmt.Sprintf("parent=%s", parent)))
-			}
-			if !strings.HasPrefix(resolved, realRoot+sep) && resolved != realRoot {
-				return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-					"pathsafe: parent symlink escapes root",
-					errcode.WithDetails(slog.String("target", targetRel)))
+			if err := checkSymlinkContained(parent, realRoot, targetRel, sep); err != nil {
+				return err
 			}
 		}
 		parent = filepath.Dir(parent)
 	}
+	return nil
+}
 
-	return cleanTarget, nil
+// checkSymlinkContained resolves a symlink at symlinkPath and returns an error
+// if it points outside realRoot. targetRel is used only in error context.
+func checkSymlinkContained(symlinkPath, realRoot, targetRel, sep string) error {
+	resolved, resolveErr := filepath.EvalSymlinks(symlinkPath)
+	if resolveErr != nil {
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"pathsafe: resolve symlink", resolveErr,
+			errcode.WithInternal(fmt.Sprintf("parent=%s", symlinkPath)))
+	}
+	if !strings.HasPrefix(resolved, realRoot+sep) && resolved != realRoot {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"pathsafe: parent symlink escapes root",
+			errcode.WithDetails(slog.String("target", targetRel)))
+	}
+	return nil
 }
 
 // PlannedPaths returns the absolute target paths in plan order. Callers use
@@ -154,9 +174,21 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 	if len(plan) == 0 {
 		return nil
 	}
+	if err := containmentPass(realRoot, plan); err != nil {
+		return err
+	}
+	if err := conflictPass(plan); err != nil {
+		return err
+	}
+	if dryRun {
+		return nil
+	}
+	return writePass(realRoot, plan)
+}
 
-	// Step 1: verify containment for every path.
-	// AbsPath is already absolute (caller-constructed), so we derive targetRel.
+// containmentPass verifies that every AbsPath in plan is contained within
+// realRoot (no path traversal, no escaping symlinks).
+func containmentPass(realRoot string, plan []PlannedFile) error {
 	sep := string(filepath.Separator)
 	for _, f := range plan {
 		targetRel, err := filepath.Rel(realRoot, f.AbsPath)
@@ -165,20 +197,22 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 				"pathsafe: cannot relativize path", err,
 				errcode.WithDetails(slog.String("path", f.AbsPath)))
 		}
-		// targetRel must not escape root.
 		cleanTarget := filepath.Clean(filepath.Join(realRoot, targetRel))
 		if !strings.HasPrefix(cleanTarget, realRoot+sep) && cleanTarget != realRoot {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"pathsafe: target escapes root",
 				errcode.WithDetails(slog.String("path", f.AbsPath)))
 		}
-		// Walk parents for symlink containment.
 		if _, err := ContainPath(realRoot, targetRel); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
-	// Step 2: conflict detection — full plan, no partial writes.
+// conflictPass checks that none of the planned output paths already exist.
+// The full plan is checked before any write (no partial-write semantics).
+func conflictPass(plan []PlannedFile) error {
 	for _, f := range plan {
 		if _, err := os.Stat(f.AbsPath); err == nil {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
@@ -187,31 +221,14 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 				errcode.WithInternal(fmt.Sprintf("already exists: path=%s", f.AbsPath)))
 		}
 	}
+	return nil
+}
 
-	// Step 3: dry-run returns nil after validation succeeds.
-	if dryRun {
-		return nil
-	}
-
-	// Step 4: write — track created dirs and written files for rollback.
+// writePass creates directories and writes all files, rolling back on the
+// first failure. Returns the original error wrapped with rollback outcome.
+func writePass(realRoot string, plan []PlannedFile) error {
 	var writtenPaths []string
 	var createdDirs []string
-
-	rollback := func(originalErr error) error {
-		// Remove written files in reverse order.
-		for i := len(writtenPaths) - 1; i >= 0; i-- {
-			_ = os.Remove(writtenPaths[i])
-		}
-		// Remove created directories in reverse order (leaves first).
-		for i := len(createdDirs) - 1; i >= 0; i-- {
-			_ = os.Remove(createdDirs[i])
-		}
-		removedFiles := len(writtenPaths)
-		removedDirs := len(createdDirs)
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"pathsafe: write failed; rollback removed files and dirs", originalErr,
-			errcode.WithInternal(fmt.Sprintf("rollback removed %d files %d dirs", removedFiles, removedDirs)))
-	}
 
 	for _, f := range plan {
 		dirMode := f.DirMode
@@ -224,19 +241,29 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 		}
 
 		dir := filepath.Dir(f.AbsPath)
-
-		// Track newly created directories by checking existence level-by-level.
 		if err := mkdirAllTracked(dir, dirMode, realRoot, &createdDirs); err != nil {
-			return rollback(err)
+			return rollbackWrites(writtenPaths, createdDirs, err)
 		}
-
 		if err := os.WriteFile(f.AbsPath, f.Content, fileMode); err != nil {
-			return rollback(err)
+			return rollbackWrites(writtenPaths, createdDirs, err)
 		}
 		writtenPaths = append(writtenPaths, f.AbsPath)
 	}
-
 	return nil
+}
+
+// rollbackWrites removes all written files and created directories (in reverse
+// creation order) and wraps originalErr with rollback statistics.
+func rollbackWrites(written, dirs []string, originalErr error) error {
+	for i := len(written) - 1; i >= 0; i-- {
+		_ = os.Remove(written[i])
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		_ = os.Remove(dirs[i])
+	}
+	return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+		"pathsafe: write failed; rollback removed files and dirs", originalErr,
+		errcode.WithInternal(fmt.Sprintf("rollback removed %d files %d dirs", len(written), len(dirs))))
 }
 
 // mkdirAllTracked creates dir (and all parents) using os.MkdirAll, tracking

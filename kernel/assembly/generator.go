@@ -339,7 +339,11 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 // renderAssemblyScaffoldFiles renders each template and returns a []PlannedFile
 // ready for pathsafe.WritePlannedFiles. Conflict detection is delegated to
 // WritePlannedFiles (F14: render/write decoupled).
-func (g *Generator) renderAssemblyScaffoldFiles(realRoot string, files []scaffoldAssemblyFile, ctx scaffoldAssemblyContext) ([]pathsafe.PlannedFile, error) {
+func (g *Generator) renderAssemblyScaffoldFiles(
+	realRoot string,
+	files []scaffoldAssemblyFile,
+	ctx scaffoldAssemblyContext,
+) ([]pathsafe.PlannedFile, error) {
 	plan := make([]pathsafe.PlannedFile, 0, len(files))
 	for _, f := range files {
 		out, err := g.executeTemplate(f.Template, ctx)

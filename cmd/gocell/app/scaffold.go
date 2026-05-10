@@ -239,6 +239,52 @@ func reportScaffold(r scaffoldReport) {
 	fmt.Printf("Created %s %s at %s\n", r.Kind, r.ID, r.Target)
 }
 
+// buildScaffoldCellSpec constructs a cellgen.ScaffoldSpec from the parsed
+// flag values. resolvedStruct must already be computed (PascalCase of id if
+// --struct was not provided). DryRun is always false here; callers that need
+// DryRun=true set it after construction.
+func buildScaffoldCellSpec(
+	id, resolvedStruct, pkg, mod, team, role, cellType, level string,
+	withHTTP, withEvents, withBoth bool,
+) cellgen.ScaffoldSpec {
+	return cellgen.ScaffoldSpec{
+		CellID:           id,
+		StructName:       resolvedStruct,
+		Package:          pkg,
+		ModulePath:       mod,
+		OwnerTeam:        team,
+		OwnerRole:        role,
+		Type:             cellType,
+		ConsistencyLevel: level,
+		WithHTTP:         withHTTP,
+		WithEvents:       withEvents,
+		WithBoth:         withBoth,
+	}
+}
+
+// printScaffoldCellDryRunPlan resolves the output plan and prints the paths
+// that would be created. Falls back to a minimal summary when plan derivation
+// fails (e.g. symlink resolution error in a restricted environment).
+func printScaffoldCellDryRunPlan(root string, spec cellgen.ScaffoldSpec) error {
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err == nil {
+		plan, planErr := cellgen.PlanCellBundleForDryRun(realRoot, spec)
+		if planErr == nil {
+			for _, absPath := range pathsafe.PlannedPaths(plan) {
+				rel, _ := filepath.Rel(root, absPath)
+				fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
+			}
+			return nil
+		}
+	}
+	// Fallback: print minimal info when plan cannot be derived.
+	fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", spec.CellID, "cell.yaml")))
+	fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", spec.CellID, "cell.go")))
+	fmt.Printf("(dry-run) Would create cell bundle (slice + contract) under %s\n",
+		filepath.ToSlash(filepath.Join("cells", spec.CellID)))
+	return nil
+}
+
 // scaffoldCell implements the K#09 SCAFFOLD-ONE-CMD bundle: a one-shot
 // command that produces cell + 1 example slice + 1 example contract +
 // JSON schemas, then auto-invokes cell + contract codegen so the bundle
@@ -293,20 +339,11 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("scaffold cell: read module path: %w", err)
 	}
 
-	if err := cellgen.ScaffoldCellBundle(root, cellgen.ScaffoldSpec{
-		CellID:           *id,
-		StructName:       resolvedStruct,
-		Package:          pkg,
-		ModulePath:       mod,
-		OwnerTeam:        *team,
-		OwnerRole:        *role,
-		Type:             *cellType,
-		ConsistencyLevel: *level,
-		DryRun:           *dryRun,
-		WithHTTP:         *withHTTP,
-		WithEvents:       *withEvents,
-		WithBoth:         *withBoth,
-	}); err != nil {
+	spec := buildScaffoldCellSpec(*id, resolvedStruct, pkg, mod, *team, *role, *cellType, *level, *withHTTP, *withEvents, *withBoth)
+
+	bundleSpec := spec
+	bundleSpec.DryRun = *dryRun
+	if err := cellgen.ScaffoldCellBundle(root, bundleSpec); err != nil {
 		return err
 	}
 
@@ -315,34 +352,7 @@ func scaffoldCell(root string, args []string) error {
 		// ScaffoldCellBundle already called WritePlannedFiles(dryRun=true) which
 		// validates and returns nil without writing. Re-derive paths from the spec
 		// for display purposes using root (already resolved by the caller).
-		if realRoot, resolveErr := pathsafe.ResolveRoot(root); resolveErr == nil {
-			plan, planErr := cellgen.PlanCellBundleForDryRun(realRoot, cellgen.ScaffoldSpec{
-				CellID:           *id,
-				StructName:       resolvedStruct,
-				Package:          pkg,
-				ModulePath:       mod,
-				OwnerTeam:        *team,
-				OwnerRole:        *role,
-				Type:             *cellType,
-				ConsistencyLevel: *level,
-				WithHTTP:         *withHTTP,
-				WithEvents:       *withEvents,
-				WithBoth:         *withBoth,
-			})
-			if planErr == nil {
-				for _, absPath := range pathsafe.PlannedPaths(plan) {
-					rel, _ := filepath.Rel(root, absPath)
-					fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
-				}
-				return nil
-			}
-		}
-		// Fallback: print minimal info when plan cannot be derived.
-		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", *id, "cell.yaml")))
-		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", *id, "cell.go")))
-		fmt.Printf("(dry-run) Would create cell bundle (slice + contract) under %s\n",
-			filepath.ToSlash(filepath.Join("cells", *id)))
-		return nil
+		return printScaffoldCellDryRunPlan(root, spec)
 	}
 
 	reportScaffold(scaffoldReport{
