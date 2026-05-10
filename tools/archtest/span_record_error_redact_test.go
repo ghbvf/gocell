@@ -27,7 +27,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -259,25 +258,23 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 			"the directory to the enrollment list or relocate the call.")
 }
 
-// runSpanRecordErrorFixtureScan parses fixture .go files (non-test, no module
-// load) and reports violations relative to fixtureDir. Uses os.ReadDir to
-// iterate entries directly (fixtures live in testdata/ which scanner skips by
-// design; direct iteration avoids re-invoking the WalkDir pattern).
-func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {
+// runSpanRecordErrorFixtureScan parses fixture .go files (non-test) and reports
+// violations relative to fixtureDir. Uses scanner.DirsScope+IncludeTestdata to
+// funnel through the framework even though fixtures live under testdata/
+// (the default skip set excludes testdata; IncludeTestdata is the authorized
+// opt-in).
+//
+// fixtureDirRel is the module-relative slash path to the fixture directory.
+func runSpanRecordErrorFixtureScan(t *testing.T, root, fixtureDirRel string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(fixtureDir)
-	require.NoError(t, err, "read fixture dir %s", fixtureDir)
+	scope := scanner.DirsScope(root, []string{fixtureDirRel}, scanner.IncludeTestdata())
 	var out []string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
+	scanner.EachFile(t, scope, parser.ParseComments, func(_ *testing.T, fc scanner.FileContext) {
+		if strings.HasSuffix(fc.AbsPath, "_test.go") {
+			return
 		}
-		path := filepath.Join(fixtureDir, entry.Name())
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		require.NoErrorf(t, parseErr, "parse fixture %s", path)
-		out = append(out, scanSpanRecordErrorFile(fset, file, entry.Name())...)
-	}
+		out = append(out, scanSpanRecordErrorFile(fc.Fset, fc.File, filepath.Base(fc.AbsPath))...)
+	})
 	sort.Strings(out)
 	return out
 }
@@ -287,7 +284,7 @@ func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {
 func TestSpanRecordErrorRedactedFixtures(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	base := filepath.Join(root, "tools", "archtest", "testdata", "span_record_error_fixtures")
+	baseRel := "tools/archtest/testdata/span_record_error_fixtures"
 
 	cases := []struct {
 		pkg           string
@@ -301,7 +298,7 @@ func TestSpanRecordErrorRedactedFixtures(t *testing.T) {
 		tc := tc
 		t.Run(tc.pkg, func(t *testing.T) {
 			t.Parallel()
-			got := runSpanRecordErrorFixtureScan(t, filepath.Join(base, tc.pkg))
+			got := runSpanRecordErrorFixtureScan(t, root, baseRel+"/"+tc.pkg)
 			assert.Equal(t, tc.wantViolCount, len(got),
 				"fixture %s: expected %d violation(s), got %d: %v",
 				tc.pkg, tc.wantViolCount, len(got), got)

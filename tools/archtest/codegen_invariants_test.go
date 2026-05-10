@@ -207,29 +207,22 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 
 	t.Run("marker_present", func(t *testing.T) {
 		t.Parallel()
-		dir := filepath.Join(fixtureBase, "marker_present")
+		root := findModuleRoot(t)
+		scope := scanner.DirsScope(root,
+			[]string{"tools/archtest/testdata/codegen_cell_gen_fixtures/marker_present"},
+			scanner.IncludeTestdata(),
+		)
+
 		var hits []string
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("read fixture dir %s: %v", dir, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-				continue
-			}
-			path := filepath.Join(dir, e.Name())
-			content, err := os.ReadFile(path) //nolint:gosec // test reads fixture paths it discovered itself
-			if err != nil {
-				continue
-			}
-			for i, line := range strings.Split(string(content), "\n") {
+		scanner.EachContentFile(t, scope, []string{".go"}, func(_ *testing.T, fc scanner.ContentContext) {
+			for i, line := range strings.Split(string(fc.Bytes), "\n") {
 				trim := strings.TrimSpace(line)
 				if strings.HasPrefix(trim, codegenMarkerCellPrefix) ||
 					strings.HasPrefix(trim, codegenMarkerSlicePrefix) {
-					hits = append(hits, filepath.ToSlash(path)+":"+strconv.Itoa(i+1))
+					hits = append(hits, fc.Rel+":"+strconv.Itoa(i+1))
 				}
 			}
-		}
+		})
 		if len(hits) == 0 {
 			t.Error("marker_present fixture: no marker comments detected — fixture is broken")
 		}
