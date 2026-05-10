@@ -11,7 +11,7 @@ import (
 // D1/D2 — jti-only fingerprint reference, AuthzEpoch ordering snapshot, no
 // access-token plaintext.
 //
-// Session is a value record; behaviour (revoked/expired predicates) is left
+// Session is a value record; behavior (revoked/expired predicates) is left
 // to call sites until ≥ 3 distinct call sites emerge (then we can extract
 // methods — go-standards.md repetition rule).
 type Session struct {

@@ -2,20 +2,29 @@
 // session.Store implementations. Each backend (mem, postgres) supplies a
 // Factory and runs Run with the same Protocol; the suite derives test cases
 // from Protocol.RevokeOn() and Protocol.Fingerprint() so every backend is
-// proved to honour the same protocol decisions (ADR-Session §4.3).
+// proved to honor the same protocol decisions (ADR-Session §4.3).
 //
 // Helpers (NewTestProtocol / NewSessionFixture) are exported so future PG
 // store integration tests in S3+S5 reuse the same fixture surface; the path
 // runtime/auth/session/storetest/ is in the SESSION-PROTOCOL-COMPOSITION-ROOT-01
 // archtest allowlist so calls to session.NewProtocol from this package are
 // permitted.
+//
+// All test backends share NewTestProtocol so they prove parity on the same
+// protocol decisions; backends differ only in their Factory implementation.
 package storetest
 
 import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -104,41 +113,319 @@ func Run(t *testing.T, factory Factory, protocol *session.Protocol) {
 		})
 	}
 
-	switch protocol.Fingerprint().(type) {
-	case session.FingerprintJTIRef:
+	if _, ok := protocol.Fingerprint().(session.FingerprintJTIRef); ok {
 		t.Run("Fingerprint_JTI_NoPlaintextToken", func(t *testing.T) {
 			runFingerprintJTINoPlaintext(t)
 		})
 	}
 }
 
-// runCreateGet — Wave 1 RED stub. Wave 2 fills the body.
-func runCreateGet(t *testing.T, _ Factory) { t.Skip("RED: storetest body lands in Wave 2") }
+const (
+	caseTTL                 = time.Hour
+	caseExpiryAdvance       = 2 * caseTTL
+	caseEpoch         int64 = 7
+	subjectA                = "subject-A"
+	subjectB                = "subject-B"
+)
 
-// runGetNotFound — Wave 1 RED stub.
-func runGetNotFound(t *testing.T, _ Factory) { t.Skip("RED: storetest body lands in Wave 2") }
+// runCreateGet — Create persists the record; Get returns a defensive copy
+// that round-trips every field through the store.
+func runCreateGet(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
 
-// runCreateDuplicateID — Wave 1 RED stub.
-func runCreateDuplicateID(t *testing.T, _ Factory) { t.Skip("RED: storetest body lands in Wave 2") }
-
-// runRevokeDirect — Wave 1 RED stub.
-func runRevokeDirect(t *testing.T, _ Factory) { t.Skip("RED: storetest body lands in Wave 2") }
-
-// runRevokeIdempotent — Wave 1 RED stub.
-func runRevokeIdempotent(t *testing.T, _ Factory) { t.Skip("RED: storetest body lands in Wave 2") }
-
-// runRevokeNotFoundNoop — Wave 1 RED stub.
-func runRevokeNotFoundNoop(t *testing.T, _ Factory) { t.Skip("RED: storetest body lands in Wave 2") }
-
-// runExpiredStillReturned — Wave 1 RED stub.
-func runExpiredStillReturned(t *testing.T, _ Factory) { t.Skip("RED: storetest body lands in Wave 2") }
-
-// runRevokeForSubject — Wave 1 RED stub.
-func runRevokeForSubject(t *testing.T, _ Factory, _ session.CredentialEvent) {
-	t.Skip("RED: storetest body lands in Wave 2")
+	fixture := NewSessionFixture(t, subjectA, "jti-create-get", caseEpoch, caseTTL, fc.Now())
+	if err := store.Create(context.Background(), fixture); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+	got, err := store.Get(context.Background(), fixture.ID)
+	if err != nil {
+		t.Fatalf("Get: unexpected error: %v", err)
+	}
+	if got == fixture {
+		t.Error("Get must return a defensive copy, not the original pointer")
+	}
+	if got.JTI != fixture.JTI {
+		t.Errorf("JTI: got %q, want %q", got.JTI, fixture.JTI)
+	}
+	if got.SubjectID != fixture.SubjectID {
+		t.Errorf("SubjectID: got %q, want %q", got.SubjectID, fixture.SubjectID)
+	}
+	if got.AuthzEpochAtIssue != fixture.AuthzEpochAtIssue {
+		t.Errorf("AuthzEpochAtIssue: got %d, want %d", got.AuthzEpochAtIssue, fixture.AuthzEpochAtIssue)
+	}
+	if !got.CreatedAt.Equal(fixture.CreatedAt) {
+		t.Errorf("CreatedAt: got %s, want %s", got.CreatedAt, fixture.CreatedAt)
+	}
+	if !got.ExpiresAt.Equal(fixture.ExpiresAt) {
+		t.Errorf("ExpiresAt: got %s, want %s", got.ExpiresAt, fixture.ExpiresAt)
+	}
+	if got.RevokedAt != nil {
+		t.Errorf("RevokedAt: got %v, want nil", got.RevokedAt)
+	}
 }
 
-// runFingerprintJTINoPlaintext — Wave 1 RED stub.
+// runGetNotFound — missing IDs return ErrSessionNotFound (errcode.Code).
+func runGetNotFound(t *testing.T, factory Factory) {
+	store, _, cleanup := factory(t)
+	defer cleanup()
+
+	got, err := store.Get(context.Background(), "missing-id")
+	if got != nil {
+		t.Errorf("expected nil session on miss, got %+v", got)
+	}
+	assertErrCode(t, err, errcode.ErrSessionNotFound)
+}
+
+// runCreateDuplicateID — duplicate Session.ID is rejected with
+// ErrSessionConflict (防枚举 / KindConflict envelope).
+func runCreateDuplicateID(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fixture := NewSessionFixture(t, subjectA, "jti-dup", caseEpoch, caseTTL, fc.Now())
+	if err := store.Create(context.Background(), fixture); err != nil {
+		t.Fatalf("first Create unexpected error: %v", err)
+	}
+	err := store.Create(context.Background(), fixture)
+	assertErrCode(t, err, errcode.ErrSessionConflict)
+}
+
+// runRevokeDirect — Revoke flips RevokedAt to clock.Now(); subsequent Get
+// returns the same session with RevokedAt set.
+func runRevokeDirect(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fixture := NewSessionFixture(t, subjectA, "jti-revoke", caseEpoch, caseTTL, fc.Now())
+	if err := store.Create(context.Background(), fixture); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	revokeAt := fc.Now()
+	if err := store.Revoke(context.Background(), fixture.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	got, err := store.Get(context.Background(), fixture.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.RevokedAt == nil {
+		t.Fatal("RevokedAt: expected non-nil after Revoke")
+	}
+	if !got.RevokedAt.Equal(revokeAt) {
+		t.Errorf("RevokedAt: got %s, want %s", got.RevokedAt, revokeAt)
+	}
+}
+
+// runRevokeIdempotent — second Revoke on the same ID is a no-op (RevokedAt
+// timestamp must not be re-stamped; append-only revoke semantics).
+func runRevokeIdempotent(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fixture := NewSessionFixture(t, subjectA, "jti-idem", caseEpoch, caseTTL, fc.Now())
+	if err := store.Create(context.Background(), fixture); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	firstRevokeAt := fc.Now()
+	if err := store.Revoke(context.Background(), fixture.ID); err != nil {
+		t.Fatalf("first Revoke: %v", err)
+	}
+
+	fc.Advance(testtime.D5min)
+
+	if err := store.Revoke(context.Background(), fixture.ID); err != nil {
+		t.Fatalf("second Revoke: %v", err)
+	}
+	got, err := store.Get(context.Background(), fixture.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.RevokedAt == nil {
+		t.Fatal("RevokedAt: expected non-nil after Revoke")
+	}
+	if !got.RevokedAt.Equal(firstRevokeAt) {
+		t.Errorf("RevokedAt re-stamped on second Revoke: got %s, want %s (append-only)", got.RevokedAt, firstRevokeAt)
+	}
+}
+
+// runRevokeNotFoundNoop — Revoke of a missing ID returns nil (防枚举 — caller
+// cannot distinguish "session existed, now revoked" from "never existed").
+func runRevokeNotFoundNoop(t *testing.T, factory Factory) {
+	store, _, cleanup := factory(t)
+	defer cleanup()
+
+	if err := store.Revoke(context.Background(), "ghost-id"); err != nil {
+		t.Errorf("Revoke on missing ID must be no-op nil, got %v", err)
+	}
+}
+
+// runExpiredStillReturned — expired sessions are still returned by Get; the
+// store does not garbage-collect or hide them. Caller decides via
+// Session.ExpiresAt comparison.
+func runExpiredStillReturned(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fixture := NewSessionFixture(t, subjectA, "jti-exp", caseEpoch, caseTTL, fc.Now())
+	if err := store.Create(context.Background(), fixture); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fc.Advance(caseExpiryAdvance) // past expiry
+
+	got, err := store.Get(context.Background(), fixture.ID)
+	if err != nil {
+		t.Fatalf("Get on expired must still succeed, got %v", err)
+	}
+	if !fc.Now().After(got.ExpiresAt) {
+		t.Error("clock did not advance past ExpiresAt; test setup wrong")
+	}
+	if got.RevokedAt != nil {
+		t.Error("expiry must not auto-revoke; RevokedAt should remain nil")
+	}
+}
+
+// revokeForSubjectFixtures bundles the four session fixtures used by the
+// per-event RevokeForSubject case so they can be threaded through helpers
+// without exploding the parent function's signature.
+type revokeForSubjectFixtures struct {
+	a1, a2, aRevoked, b *session.Session
+}
+
+// seedRevokeForSubjectFixtures creates the case fixtures, persists them, and
+// performs the pre-revoke on aRevoked so caller can assert that
+// RevokeForSubject does not re-stamp its RevokedAt timestamp.
+func seedRevokeForSubjectFixtures(
+	t *testing.T,
+	store session.Store,
+	fc *clockmock.FakeClock,
+	event session.CredentialEvent,
+) (revokeForSubjectFixtures, time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	fix := revokeForSubjectFixtures{
+		a1:       NewSessionFixture(t, subjectA, "jti-a1-"+event.String(), caseEpoch, caseTTL, fc.Now()),
+		a2:       NewSessionFixture(t, subjectA, "jti-a2-"+event.String(), caseEpoch, caseTTL, fc.Now()),
+		aRevoked: NewSessionFixture(t, subjectA, "jti-aRevoked-"+event.String(), caseEpoch, caseTTL, fc.Now()),
+		b:        NewSessionFixture(t, subjectB, "jti-b-"+event.String(), caseEpoch, caseTTL, fc.Now()),
+	}
+	for _, s := range []*session.Session{fix.a1, fix.a2, fix.aRevoked, fix.b} {
+		if err := store.Create(ctx, s); err != nil {
+			t.Fatalf("Create %s: %v", s.ID, err)
+		}
+	}
+	preRevokeAt := fc.Now()
+	if err := store.Revoke(ctx, fix.aRevoked.ID); err != nil {
+		t.Fatalf("pre-Revoke: %v", err)
+	}
+	return fix, preRevokeAt
+}
+
+// assertActiveSessionsRevoked asserts every supplied session is now revoked
+// at exactly want; non-revoked or off-timestamp sessions are reported per ID.
+func assertActiveSessionsRevoked(t *testing.T, store session.Store, want time.Time, fixtures ...*session.Session) {
+	t.Helper()
+	ctx := context.Background()
+	for _, fix := range fixtures {
+		got, err := store.Get(ctx, fix.ID)
+		if err != nil {
+			t.Fatalf("Get %s: %v", fix.ID, err)
+		}
+		if got.RevokedAt == nil {
+			t.Errorf("subjectA session %s: expected RevokedAt non-nil after RevokeForSubject", fix.ID)
+			continue
+		}
+		if !got.RevokedAt.Equal(want) {
+			t.Errorf("subjectA session %s: RevokedAt = %s, want %s", fix.ID, got.RevokedAt, want)
+		}
+	}
+}
+
+// assertSessionRevokedAtUnchanged asserts the session keyed by id has
+// RevokedAt == want (defensive — pre-revoked rows must not be re-stamped).
+func assertSessionRevokedAtUnchanged(t *testing.T, store session.Store, id string, want time.Time) {
+	t.Helper()
+	got, err := store.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get %s: %v", id, err)
+	}
+	if got.RevokedAt == nil || !got.RevokedAt.Equal(want) {
+		t.Errorf("pre-revoked session %s: RevokedAt re-stamped to %v, want preserved at %s", id, got.RevokedAt, want)
+	}
+}
+
+// assertSessionUnrevoked asserts the session keyed by id has nil RevokedAt
+// (subject-scope isolation — RevokeForSubject(subjectA) must leave subjectB's
+// session untouched).
+func assertSessionUnrevoked(t *testing.T, store session.Store, id string) {
+	t.Helper()
+	got, err := store.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get %s: %v", id, err)
+	}
+	if got.RevokedAt != nil {
+		t.Errorf("session %s must remain active after RevokeForSubject(other-subject), got RevokedAt %v", id, got.RevokedAt)
+	}
+}
+
+// runRevokeForSubject — revokes every active session for subjectA on the
+// given event; subjectB's session must remain untouched. Already-revoked
+// sessions for subjectA must keep their original RevokedAt timestamp.
+func runRevokeForSubject(t *testing.T, factory Factory, event session.CredentialEvent) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fix, preRevokeAt := seedRevokeForSubjectFixtures(t, store, fc, event)
+
+	fc.Advance(time.Minute) // ensure subsequent revoke would have a distinct timestamp
+	revokeAt := fc.Now()
+
+	if err := store.RevokeForSubject(context.Background(), subjectA, event); err != nil {
+		t.Fatalf("RevokeForSubject(%s, %s): %v", subjectA, event, err)
+	}
+
+	assertActiveSessionsRevoked(t, store, revokeAt, fix.a1, fix.a2)
+	assertSessionRevokedAtUnchanged(t, store, fix.aRevoked.ID, preRevokeAt)
+	assertSessionUnrevoked(t, store, fix.b.ID)
+}
+
+// runFingerprintJTINoPlaintext is Protocol-Fingerprint-driven: under
+// FingerprintJTIRef the Session struct must NOT carry any plaintext-token
+// shaped field. The check is a reflective field-name audit so backends
+// adding their own Session decorations cannot regress D1.
 func runFingerprintJTINoPlaintext(t *testing.T) {
-	t.Skip("RED: storetest body lands in Wave 2")
+	st := reflect.TypeOf(session.Session{})
+	forbidden := []string{"AccessToken", "Token", "Plaintext", "Secret", "Password"}
+	for i := 0; i < st.NumField(); i++ {
+		name := st.Field(i).Name
+		for _, bad := range forbidden {
+			if strings.EqualFold(name, bad) {
+				t.Errorf("Session.%s violates FingerprintJTIRef D1 (no plaintext token shape)", name)
+			}
+		}
+	}
+	// JTI must remain present and string-typed under the JTIRef mode.
+	jtiField, ok := st.FieldByName("JTI")
+	if !ok {
+		t.Fatal("Session.JTI field missing under FingerprintJTIRef")
+	}
+	if jtiField.Type.Kind() != reflect.String {
+		t.Errorf("Session.JTI must be string, got %s", jtiField.Type.Kind())
+	}
+}
+
+// assertErrCode asserts err wraps an *errcode.Error with the given Code.
+// Centralized here so storetest cases stay focused on protocol semantics.
+func assertErrCode(t *testing.T, err error, want errcode.Code) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error with code %s, got nil", want)
+	}
+	var coded *errcode.Error
+	if !errors.As(err, &coded) {
+		t.Fatalf("expected *errcode.Error with code %s, got %T: %v", want, err, err)
+	}
+	if coded.Code != want {
+		t.Errorf("errcode mismatch: got %s, want %s (msg=%q)", coded.Code, want, coded.Message)
+	}
 }
