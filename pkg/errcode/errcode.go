@@ -170,6 +170,16 @@ const (
 	ErrArchiveMarshal    Code = "ERR_ARCHIVE_MARSHAL"
 	ErrNotImplemented    Code = "ERR_NOT_IMPLEMENTED"
 
+	// Audit ledger (runtime/audit/ledger) error codes.
+	// ErrAuditLedgerNotFound signals that a requested audit entry (by SeqNo)
+	// does not exist in the ledger store.
+	ErrAuditLedgerNotFound Code = "ERR_AUDIT_LEDGER_NOT_FOUND"
+	// ErrAuditLedgerAlreadyExists signals that an Append was rejected because
+	// the content fingerprint (HMAC of eventID+eventType+actorID+timestamp+payload)
+	// already exists in the idempotency set. The caller should treat the entry
+	// as already committed and not retry.
+	ErrAuditLedgerAlreadyExists Code = "ERR_AUDIT_LEDGER_ALREADY_EXISTS"
+
 	// Pagination / validation error codes.
 	ErrCursorInvalid     Code = "ERR_CURSOR_INVALID"
 	ErrPageSizeExceeded  Code = "ERR_PAGE_SIZE_EXCEEDED"
