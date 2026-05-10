@@ -2,12 +2,26 @@ package scanner
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// DirsScopeEscapeError is the structured error returned via [Scope.Files] when
+// one or more directories supplied to [DirsScope] would resolve outside the
+// module root. Callers verify this condition with errors.As and inspect Dirs;
+// keep the field exported so tests can assert on the offending paths without
+// resorting to substring matching on the message.
+type DirsScopeEscapeError struct {
+	// Dirs are the offending input directories, preserved in their original
+	// (caller-supplied, pre-clean) form so error messages stay meaningful.
+	Dirs []string
+}
+
+func (e *DirsScopeEscapeError) Error() string {
+	return "DirsScope: dirs escape module root: " + strings.Join(e.Dirs, ", ")
+}
 
 // defaultSkipDirs is the set of directory base-names that are never walked.
 var defaultSkipDirs = map[string]struct{}{
@@ -156,7 +170,7 @@ func DirsScope(modRoot string, dirs []string, opts ...option) Scope {
 	}
 	s := newScope(modRoot, roots, cfg)
 	if len(invalidRoots) > 0 {
-		s.setupErr = fmt.Errorf("DirsScope: dir %q escapes module root", invalidRoots[0])
+		s.setupErr = &DirsScopeEscapeError{Dirs: invalidRoots}
 	}
 	return s
 }
@@ -238,41 +252,28 @@ var selfProtectRel = filepath.Join("tools", "archtest", "internal", "scanner")
 // scope. It returns an error if the scope was not constructed via a constructor
 // or if any walk operation fails.
 func (s Scope) Files() ([]string, error) {
-	if !s.valid {
-		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
-	}
-	if s.setupErr != nil {
-		return nil, s.setupErr
-	}
-	seen := make(map[string]struct{})
-	var files []string
-	for _, root := range s.roots {
-		walked, err := walkGoFiles(s.modRoot, root, s.skipDirs, s.includeTests)
-		if err != nil {
-			return nil, err
-		}
-		for _, f := range walked {
-			if err := s.collectFile(f, seen, &files); err != nil {
-				return nil, err
-			}
-		}
-	}
-	sort.Strings(files)
-	return files, nil
+	return s.collect(func(p string) bool { return isGoFile(p, s.includeTests) })
 }
 
 // contentFiles returns the sorted, deduplicated list of absolute file paths
 // in the scope whose path ends in any of suffixes. It mirrors [Scope.Files]
 // but with a content-suffix predicate instead of the .go filter, and is the
-// internal primitive backing [EachContentFile].
+// internal primitive backing [LoadContentFiles] (which in turn backs
+// [EachContentFile]).
 func (s Scope) contentFiles(suffixes []string) ([]string, error) {
+	return s.collect(func(p string) bool { return matchesSuffix(p, suffixes) })
+}
+
+// collect is the shared backbone of [Scope.Files] and [Scope.contentFiles]:
+// validates the scope, walks every root with accept as the per-file predicate,
+// applies the exclusion chain via collectFile, deduplicates and sorts.
+func (s Scope) collect(accept func(string) bool) ([]string, error) {
 	if !s.valid {
 		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
 	}
 	if s.setupErr != nil {
 		return nil, s.setupErr
 	}
-	accept := func(p string) bool { return matchesSuffix(p, suffixes) }
 	seen := make(map[string]struct{})
 	var files []string
 	for _, root := range s.roots {

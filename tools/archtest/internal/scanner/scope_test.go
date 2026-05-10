@@ -1,8 +1,10 @@
 package scanner_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -280,19 +282,59 @@ func TestDirsScope_EscapeReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for dir escaping module root, got nil")
 	}
-	if !containsAny(err.Error(), "escapes", "DirsScope") {
-		t.Errorf("error message should mention escape: %v", err)
+	var escapeErr *scanner.DirsScopeEscapeError
+	if !errors.As(err, &escapeErr) {
+		t.Fatalf("expected *DirsScopeEscapeError, got %T: %v", err, err)
+	}
+	if len(escapeErr.Dirs) != 1 || escapeErr.Dirs[0] != ".." {
+		t.Errorf("expected Dirs=[..], got %v", escapeErr.Dirs)
 	}
 }
 
-// containsAny returns true if s contains any of the given substrings.
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		for i := 0; i <= len(s)-len(sub); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
+// TestDirsScope_RootInsideSkippedAncestorIsAllowed locks in the boundary
+// behavior exercised by TestCodegenContractUserOverlap01: even though
+// "generated" is in defaultSkipDirs, a DirsScope rooted at "generated/contracts"
+// must still walk normally because skipDirs is consulted on directories
+// encountered DURING the walk (matched by base name), not on the supplied root.
+func TestDirsScope_RootInsideSkippedAncestorIsAllowed(t *testing.T) {
+	tmp := t.TempDir()
+	rootDir := filepath.Join(tmp, "generated", "contracts")
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
 	}
-	return false
+	want := filepath.Join(rootDir, "x_gen.go")
+	if err := os.WriteFile(want, []byte("package contracts\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	files, err := scanner.DirsScope(tmp, []string{"generated/contracts"}).Files()
+	if err != nil {
+		t.Fatalf("Files() error: %v", err)
+	}
+	if len(files) != 1 || files[0] != want {
+		t.Errorf("expected [%s], got %v", want, files)
+	}
+}
+
+// TestDirsScope_EscapeErrorListsAllOutOfBoundPaths verifies the docstring
+// promise on DirsScope ("returns an error listing every out-of-bound path"):
+// when multiple dirs escape modRoot, the structured error must enumerate ALL
+// offenders in Dirs, not just the first.
+func TestDirsScope_EscapeErrorListsAllOutOfBoundPaths(t *testing.T) {
+	tmp := t.TempDir()
+	s := scanner.DirsScope(tmp, []string{"../sibling-a", "../sibling-b", "valid"})
+	_, err := s.Files()
+	if err == nil {
+		t.Fatal("expected error for dirs escaping module root, got nil")
+	}
+	var escapeErr *scanner.DirsScopeEscapeError
+	if !errors.As(err, &escapeErr) {
+		t.Fatalf("expected *DirsScopeEscapeError, got %T: %v", err, err)
+	}
+	wantDirs := []string{"../sibling-a", "../sibling-b"}
+	sort.Strings(escapeErr.Dirs)
+	sort.Strings(wantDirs)
+	if !reflect.DeepEqual(escapeErr.Dirs, wantDirs) {
+		t.Errorf("expected Dirs=%v, got %v", wantDirs, escapeErr.Dirs)
+	}
 }

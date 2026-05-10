@@ -14,20 +14,33 @@ import (
 // returned immediately (fail-closed). Non-existent root returns nil slice +
 // nil error. modRoot is used to compute module-relative paths in error
 // messages so that absolute paths do not appear in CI logs unexpectedly.
+//
+// Symlinks are rejected fail-loud: archtest scans the static repository
+// structure, so any symlink under modRoot (the root itself or an entry
+// surfaced by the walk) signals either a misconfigured caller or an attempt
+// to redirect the scan to arbitrary host content. Silently skipping a symlink
+// would let an evil_gen.go → /etc/passwd entry be compiled by Go tooling
+// (which follows the link) while bypassing every archtest gate. Returning an
+// error makes the misconfiguration visible in CI immediately.
 func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(path string) bool) ([]string, error) {
-	if _, err := os.Lstat(root); err != nil {
+	info, err := os.Lstat(root)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		display := moduleRelDisplay(modRoot, root)
-		return nil, fmt.Errorf("lstat: %s: %w", display, err)
+		return nil, fmt.Errorf("lstat: %s: %w", moduleRelDisplay(modRoot, root), err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, errSymlink(modRoot, root)
 	}
 
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			display := moduleRelDisplay(modRoot, path)
-			return fmt.Errorf("walk %s: %w", display, walkErr)
+			return fmt.Errorf("walk %s: %w", moduleRelDisplay(modRoot, path), walkErr)
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return errSymlink(modRoot, path)
 		}
 		if d.IsDir() {
 			return skipDirCheck(d.Name(), skipDirs)
@@ -43,12 +56,13 @@ func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(p
 	return files, nil
 }
 
-// walkGoFiles is walkFiles specialized for Go source files. The includeTests
-// flag controls whether *_test.go files are included.
-func walkGoFiles(modRoot, root string, skipDirs map[string]struct{}, includeTests bool) ([]string, error) {
-	return walkFiles(modRoot, root, skipDirs, func(p string) bool {
-		return isGoFile(p, includeTests)
-	})
+// errSymlink is the single error returned by walkFiles whenever a symlink is
+// encountered (root or entry, file or directory). The message carries a
+// module-relative path so it stays useful in CI logs without leaking absolute
+// host paths, and the wording is unambiguous about the fail-loud intent.
+func errSymlink(modRoot, path string) error {
+	return fmt.Errorf("walk: %s is a symlink (refused; archtest scans the static repository structure, real files only)",
+		moduleRelDisplay(modRoot, path))
 }
 
 // moduleRelDisplay returns a module-relative display string for path.
