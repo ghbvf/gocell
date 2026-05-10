@@ -41,36 +41,9 @@ func scaffoldAssembly(root string, args []string) error {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id is required")
-	}
-	if *cells == "" {
-		return fmt.Errorf("--cells is required")
-	}
-	if *team == "" {
-		return fmt.Errorf("--team is required")
-	}
-	if *role == "" {
-		return fmt.Errorf("--role is required")
-	}
-	if err := validateScaffoldID(*id, "--id"); err != nil {
+	cellList, err := validateAssemblyFlags(*id, *cells, *team, *role)
+	if err != nil {
 		return err
-	}
-	if err := validateScaffoldText(*team, "--team"); err != nil {
-		return err
-	}
-	if err := validateScaffoldText(*role, "--role"); err != nil {
-		return err
-	}
-
-	cellList := splitAndTrim(*cells, ",")
-	if len(cellList) == 0 {
-		return fmt.Errorf("--cells must list at least one cell")
-	}
-	for _, c := range cellList {
-		if err := validateScaffoldID(c, "--cells[]"); err != nil {
-			return err
-		}
 	}
 
 	mod, err := readModule(root)
@@ -175,6 +148,44 @@ func autoGenerateAssemblyArtifacts(root, mod string, project *metadata.ProjectMe
 		return fmt.Errorf("write boundary.yaml: %w", err)
 	}
 	return nil
+}
+
+// validateAssemblyFlags consolidates the required-field + path/control-char
+// checks for `gocell scaffold assembly` flags. Returns the parsed cell list
+// on success. Lifted out of scaffoldAssembly to keep cognitive complexity
+// inside the project budget.
+func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
+	if id == "" {
+		return nil, fmt.Errorf("--id is required")
+	}
+	if cells == "" {
+		return nil, fmt.Errorf("--cells is required")
+	}
+	if team == "" {
+		return nil, fmt.Errorf("--team is required")
+	}
+	if role == "" {
+		return nil, fmt.Errorf("--role is required")
+	}
+	if err := validateScaffoldID(id, "--id"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldText(team, "--team"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldText(role, "--role"); err != nil {
+		return nil, err
+	}
+	cellList := splitAndTrim(cells, ",")
+	if len(cellList) == 0 {
+		return nil, fmt.Errorf("--cells must list at least one cell")
+	}
+	for _, c := range cellList {
+		if err := validateScaffoldID(c, "--cells[]"); err != nil {
+			return nil, err
+		}
+	}
+	return cellList, nil
 }
 
 // splitAndTrim splits s by sep and trims whitespace from each segment;

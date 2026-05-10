@@ -49,6 +49,81 @@ func validateScaffoldText(value, field string) error {
 	return nil
 }
 
+// validateContractFlags consolidates required-field + traversal/control-char
+// + kind whitelist + ID-segment checks for `gocell scaffold contract`.
+// Returns the parsed dot-separated ID segments on success. Lifted out of
+// scaffoldContract to keep cognitive complexity inside the project budget.
+func validateContractFlags(id, kind, owner string) ([]string, error) {
+	if id == "" {
+		return nil, fmt.Errorf("--id is required")
+	}
+	if kind == "" {
+		return nil, fmt.Errorf("--kind is required")
+	}
+	if owner == "" {
+		return nil, fmt.Errorf("--owner is required")
+	}
+	if err := validateScaffoldID(id, "--id"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldID(kind, "--kind"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldID(owner, "--owner"); err != nil {
+		return nil, err
+	}
+	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
+	if !validKinds[kind] {
+		return nil, fmt.Errorf("scaffold contract: --kind must be one of [http event command projection], got %q", kind)
+	}
+	parts := strings.Split(id, ".")
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("scaffold contract: --id must have at least 3 dot-separated segments (got %q)", id)
+	}
+	if parts[0] != kind {
+		return nil, fmt.Errorf("scaffold contract: --id prefix %q must match --kind %q", parts[0], kind)
+	}
+	return parts, nil
+}
+
+// validateJourneyFlags consolidates required-field + traversal/control-char
+// checks for `gocell scaffold journey`. Returns the parsed cell list on
+// success. Lifted out of scaffoldJourney to keep cognitive complexity
+// inside the project budget.
+func validateJourneyFlags(id, goal, team, cells string) ([]string, error) {
+	if id == "" {
+		return nil, fmt.Errorf("--id is required")
+	}
+	if goal == "" {
+		return nil, fmt.Errorf("--goal is required")
+	}
+	if team == "" {
+		return nil, fmt.Errorf("--team is required")
+	}
+	if cells == "" {
+		return nil, fmt.Errorf("--cells is required")
+	}
+	if err := validateScaffoldID(id, "--id"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldText(goal, "--goal"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldText(team, "--team"); err != nil {
+		return nil, err
+	}
+	cellList := splitAndTrim(cells, ",")
+	if len(cellList) == 0 {
+		return nil, fmt.Errorf("scaffold journey: --cells must list at least one cell")
+	}
+	for _, c := range cellList {
+		if err := validateScaffoldID(c, "--cells[]"); err != nil {
+			return nil, err
+		}
+	}
+	return cellList, nil
+}
+
 // Shared flag name + usage for scaffold sub-commands. Constants avoid the
 // "magic string" duplication SonarCloud flags across scaffoldCell/Slice/
 // Contract/Journey/Assembly; also makes it safe to rename in one place if
@@ -360,42 +435,15 @@ func scaffoldContract(root string, args []string) error {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id is required")
-	}
-	if *kind == "" {
-		return fmt.Errorf("--kind is required")
-	}
-	if *owner == "" {
-		return fmt.Errorf("--owner is required")
-	}
-	if err := validateScaffoldID(*id, "--id"); err != nil {
+	parts, err := validateContractFlags(*id, *kind, *owner)
+	if err != nil {
 		return err
-	}
-	if err := validateScaffoldID(*kind, "--kind"); err != nil {
-		return err
-	}
-	if err := validateScaffoldID(*owner, "--owner"); err != nil {
-		return err
-	}
-
-	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
-	if !validKinds[*kind] {
-		return fmt.Errorf("scaffold contract: --kind must be one of [http event command projection], got %q", *kind)
-	}
-
-	parts := strings.Split(*id, ".")
-	if len(parts) < 3 {
-		return fmt.Errorf("scaffold contract: --id must have at least 3 dot-separated segments (got %q)", *id)
-	}
-	if parts[0] != *kind {
-		return fmt.Errorf("scaffold contract: --id prefix %q must match --kind %q", parts[0], *kind)
 	}
 
 	pathParts := append([]string{root, "contracts"}, parts...)
 	dir := filepath.Join(pathParts...)
 	yamlPath := filepath.Join(dir, "contract.yaml")
-	if _, err := os.Stat(yamlPath); err == nil {
+	if _, statErr := os.Stat(yamlPath); statErr == nil {
 		return fmt.Errorf("scaffold contract: file already exists: %s", yamlPath)
 	}
 
@@ -437,36 +485,9 @@ func scaffoldJourney(root string, args []string) error {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id is required")
-	}
-	if *goal == "" {
-		return fmt.Errorf("--goal is required")
-	}
-	if *team == "" {
-		return fmt.Errorf("--team is required")
-	}
-	if *cells == "" {
-		return fmt.Errorf("--cells is required")
-	}
-
-	cellList := splitAndTrim(*cells, ",")
-	if len(cellList) == 0 {
-		return fmt.Errorf("scaffold journey: --cells must list at least one cell")
-	}
-	if err := validateScaffoldID(*id, "--id"); err != nil {
+	cellList, err := validateJourneyFlags(*id, *goal, *team, *cells)
+	if err != nil {
 		return err
-	}
-	if err := validateScaffoldText(*goal, "--goal"); err != nil {
-		return err
-	}
-	if err := validateScaffoldText(*team, "--team"); err != nil {
-		return err
-	}
-	for _, c := range cellList {
-		if err := validateScaffoldID(c, "--cells[]"); err != nil {
-			return err
-		}
 	}
 
 	// Normalize: ensure ID carries the J- prefix for both filename and yaml,
@@ -480,7 +501,7 @@ func scaffoldJourney(root string, args []string) error {
 
 	dir := filepath.Join(root, "journeys")
 	yamlPath := filepath.Join(dir, filename)
-	if _, err := os.Stat(yamlPath); err == nil {
+	if _, statErr := os.Stat(yamlPath); statErr == nil {
 		return fmt.Errorf("scaffold journey: file already exists: %s", yamlPath)
 	}
 

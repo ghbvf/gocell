@@ -28,8 +28,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	cellgen "github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
 // scaffoldSmokeSpec is the ScaffoldSpec reused by both invariant tests.
@@ -74,7 +75,7 @@ func TestScaffoldBundle_ContractYAMLOmitsCodegenKey(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	require.NoError(t, cellgen.ScaffoldCellBundle(dir, scaffoldSmokeSpec))
-	contractPath := filepath.Join(dir, "contracts/http/smokecell/example/v1/contract.yaml")
+	contractPath := filepath.Join(dir, "contracts", "http", "smokecell", "example", "v1", "contract.yaml")
 	raw, err := os.ReadFile(contractPath) //nolint:gosec // tempdir test fixture
 	require.NoError(t, err)
 
@@ -87,7 +88,9 @@ func TestScaffoldBundle_ContractYAMLOmitsCodegenKey(t *testing.T) {
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		key := mapping.Content[i]
 		if key.Kind == yaml.ScalarNode && key.Value == "codegen" {
-			t.Errorf("INVARIANT SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 violated: scaffolded contract.yaml top-level mapping must not declare `codegen:` key (parser default true is the K#09 funnel); got:\n%s", raw)
+			t.Errorf("INVARIANT SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 violated: scaffolded "+
+				"contract.yaml top-level mapping must not declare `codegen:` key "+
+				"(parser default true is the K#09 funnel); got:\n%s", raw)
 			return
 		}
 	}
