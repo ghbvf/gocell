@@ -33,16 +33,16 @@ import (
 // (YAML/JSON/MD/SQL/...), MatchRels (glob-style filter), IncludeTestdata
 // (fixtures under testdata/) instead.
 //
-// Coverage:
+// Coverage (all funneled through forbiddenWalkRefs):
 //   - SelectorExpr scan walks every selector node, not just CallExpr.Fun, so
 //     direct call / function-value binding (`fp := filepath.WalkDir; fp(...)`)
 //     / var declaration (`var w = filepath.WalkDir`) / argument passing
 //     (`runWith(filepath.WalkDir)`) / struct or slice literal — all caught at
 //     the definition site.
-//   - Dot-import scan (dotImportForbidden) flags `import . "<pkg>"` directly,
-//     since with a dot-import the symbol is unqualified and no SelectorExpr
-//     exists.
-//   - PackageAliases handles renamed imports (`import iofs "io/fs"`).
+//   - Dot-import scan flags `import . "<pkg>"` directly, since with a
+//     dot-import the symbol is unqualified and no SelectorExpr exists.
+//   - PackageAliases handles renamed imports (`import iofs "io/fs"`) for the
+//     SelectorExpr branch.
 //
 // Cannot funnel: the rule itself enforces consumer use of the funnel; type
 // system can't tell apart "framework-internal walk" (legitimate) from
@@ -63,50 +63,8 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 		if !strings.HasSuffix(fc.AbsPath, "_test.go") {
 			return
 		}
-
 		for _, importPath := range forbiddenWalkImports {
-			symbols := forbiddenWalkSymbols[importPath]
-
-			// Dot-import branch.
-			if pos, ok := dotImportForbidden(fc.File, importPath); ok {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    fc.Fset.Position(pos).Line,
-					Message: fmt.Sprintf(`dot-import of %q forbidden in archtest tests; use named import + tools/archtest/internal/scanner`, importPath),
-				})
-			}
-
-			// Aliased-import branch.
-			aliases := scanner.PackageAliases(fc.File, importPath)
-			if len(aliases) == 0 {
-				continue
-			}
-			symbolSet := make(map[string]struct{}, len(symbols))
-			for _, s := range symbols {
-				symbolSet[s] = struct{}{}
-			}
-			ast.Inspect(fc.File, func(n ast.Node) bool {
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				ident, ok := sel.X.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				if _, isAlias := aliases[ident.Name]; !isAlias {
-					return true
-				}
-				if _, banned := symbolSet[sel.Sel.Name]; !banned {
-					return true
-				}
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    fc.Fset.Position(sel.Pos()).Line,
-					Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of %s.%s", importPath, sel.Sel.Name),
-				})
-				return true
-			})
+			diags = append(diags, forbiddenWalkRefs(fc.File, fc.Fset, fc.Rel, importPath, forbiddenWalkSymbols[importPath])...)
 		}
 	})
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-01", diags)
@@ -126,40 +84,86 @@ var forbiddenWalkSymbols = map[string][]string{
 	"io/fs":         {"WalkDir", "Walk", "Glob", "ReadDir"},
 }
 
-// dotImportForbidden reports whether file dot-imports importPath. When found,
-// it returns the position of the import declaration so callers can emit a
-// diagnostic with the correct line. PackageAliases excludes dot-imports
-// (imports.go honors imp.Name == "."), so without this dedicated check the
-// SelectorExpr scan would early-return on len(aliases)==0 and miss the file.
-func dotImportForbidden(file *ast.File, importPath string) (token.Pos, bool) {
+// forbiddenWalkRefs returns the diagnostics for every banned reference to
+// importPath/symbols in file. Two branches, both AST-only:
+//
+//  1. Dot-import: `import . "<importPath>"` exposes symbols as unqualified
+//     identifiers; the SelectorExpr scan in (2) cannot see them. Flag the
+//     import declaration directly.
+//  2. SelectorExpr: walks every *ast.SelectorExpr (not just CallExpr.Fun) so
+//     direct calls, function-value bindings, var declarations, argument
+//     passing, struct/slice literals are all caught at the definition site.
+//
+// Used by both the live TestScannerFrameworkUsage01 and the
+// TestScannerFrameworkUsage01_ForbiddenWalkFixture table-driven proof —
+// fixture and rule cannot drift apart because they call the same function.
+func forbiddenWalkRefs(file *ast.File, fset *token.FileSet, rel, importPath string, symbols []string) []scanner.Diagnostic {
+	var out []scanner.Diagnostic
+
+	// (1) Dot-import branch.
 	target := `"` + importPath + `"`
 	for _, imp := range file.Imports {
-		if imp == nil || imp.Path == nil {
-			continue
-		}
-		if imp.Path.Value != target {
+		if imp == nil || imp.Path == nil || imp.Path.Value != target {
 			continue
 		}
 		if imp.Name == nil || imp.Name.Name != "." {
 			continue
 		}
-		return imp.Pos(), true
+		out = append(out, scanner.Diagnostic{
+			Rel:     rel,
+			Line:    fset.Position(imp.Pos()).Line,
+			Message: fmt.Sprintf(`dot-import of %q forbidden in archtest tests; use named import + tools/archtest/internal/scanner`, importPath),
+		})
 	}
-	return token.NoPos, false
+
+	// (2) Aliased / direct SelectorExpr branch.
+	aliases := scanner.PackageAliases(file, importPath)
+	if len(aliases) == 0 {
+		return out
+	}
+	symbolSet := make(map[string]struct{}, len(symbols))
+	for _, s := range symbols {
+		symbolSet[s] = struct{}{}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if _, isAlias := aliases[ident.Name]; !isAlias {
+			return true
+		}
+		if _, banned := symbolSet[sel.Sel.Name]; !banned {
+			return true
+		}
+		out = append(out, scanner.Diagnostic{
+			Rel:     rel,
+			Line:    fset.Position(sel.Pos()).Line,
+			Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of %s.%s", importPath, sel.Sel.Name),
+		})
+		return true
+	})
+	return out
 }
 
-// TestScannerFrameworkUsage01_DotImportFixture proves dotImportForbidden
-// behaves correctly on hand-crafted fixtures for every banned import path.
-// AI refactors that silently drop a case from forbiddenWalkImports, or weaken
-// the helper's import-path comparison, would flip a fixture case to red.
-func TestScannerFrameworkUsage01_DotImportFixture(t *testing.T) {
+// TestScannerFrameworkUsage01_ForbiddenWalkFixture exercises forbiddenWalkRefs
+// directly via parsed-from-string fixtures. The 10 cases enumerate every
+// AST shape the live rule must catch, plus negatives. Because both the live
+// rule and this fixture call forbiddenWalkRefs, they cannot drift: a
+// refactor that weakens the rule would flip at least one fixture case red.
+func TestScannerFrameworkUsage01_ForbiddenWalkFixture(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name       string
 		src        string
 		importPath string
-		wantHit    bool
+		wantHits   int // expected diagnostic count
 	}{
+		// --- Dot-import branch (3 cases × 3 banned import paths) ---
 		{
 			name: "dot_import_path_filepath",
 			src: `package fake
@@ -167,7 +171,7 @@ import . "path/filepath"
 func _() string { return Join("a", "b") }
 `,
 			importPath: "path/filepath",
-			wantHit:    true,
+			wantHits:   1,
 		},
 		{
 			name: "dot_import_os",
@@ -176,7 +180,7 @@ import . "os"
 func _() error { _, err := ReadDir("/tmp"); return err }
 `,
 			importPath: "os",
-			wantHit:    true,
+			wantHits:   1,
 		},
 		{
 			name: "dot_import_io_fs",
@@ -185,34 +189,79 @@ import . "io/fs"
 func _() error { return WalkDir(nil, ".", nil) }
 `,
 			importPath: "io/fs",
-			wantHit:    true,
+			wantHits:   1,
 		},
+
+		// --- SelectorExpr branch — 5 AST shapes that must all be caught ---
 		{
-			name: "named_import_no_dot_filepath",
+			name: "direct_call",
 			src: `package fake
 import "path/filepath"
-func _() string { return filepath.Join("a", "b") }
+func _() error { return filepath.WalkDir(".", nil) }
 `,
 			importPath: "path/filepath",
-			wantHit:    false,
+			wantHits:   1,
 		},
 		{
-			name: "different_package_dot_import",
+			name: "function_value_binding",
 			src: `package fake
-import . "strings"
-func _() string { return Join([]string{}, "/") }
+import "path/filepath"
+func _() { fp := filepath.WalkDir; _ = fp }
 `,
 			importPath: "path/filepath",
-			wantHit:    false,
+			wantHits:   1, // RHS SelectorExpr caught at binding site
 		},
 		{
-			name: "renamed_import_not_dot",
+			name: "var_declaration",
+			src: `package fake
+import "path/filepath"
+import "io/fs"
+var _ fs.WalkDirFunc
+var _ = filepath.Walk
+`,
+			importPath: "path/filepath",
+			wantHits:   1, // Walk in var init
+		},
+		{
+			name: "argument_passing",
+			src: `package fake
+import "path/filepath"
+func consume(any) {}
+func _() { consume(filepath.WalkDir) }
+`,
+			importPath: "path/filepath",
+			wantHits:   1, // SelectorExpr as call argument
+		},
+		{
+			name: "struct_or_slice_literal",
+			src: `package fake
+import "path/filepath"
+var _ = []any{filepath.WalkDir}
+`,
+			importPath: "path/filepath",
+			wantHits:   1, // SelectorExpr inside composite literal
+		},
+
+		// --- Alias propagation positive (the bypass concern from review) ---
+		{
+			name: "renamed_import_alias_call",
 			src: `package fake
 import iofs "io/fs"
 func _() error { return iofs.WalkDir(nil, ".", nil) }
 `,
 			importPath: "io/fs",
-			wantHit:    false,
+			wantHits:   1, // PackageAliases finds "iofs"; SelectorExpr scan flags it
+		},
+
+		// --- Negatives (must NOT hit) ---
+		{
+			name: "named_import_non_banned_symbol",
+			src: `package fake
+import "path/filepath"
+func _() string { return filepath.Join("a", "b") }
+`,
+			importPath: "path/filepath",
+			wantHits:   0, // Join is not banned
 		},
 	}
 
@@ -224,21 +273,20 @@ func _() error { return iofs.WalkDir(nil, ".", nil) }
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			_, found := dotImportForbidden(file, tc.importPath)
-			if found != tc.wantHit {
-				t.Errorf("dotImportForbidden(file, %q): got %v, want %v", tc.importPath, found, tc.wantHit)
+			diags := forbiddenWalkRefs(file, fset, "fake.go", tc.importPath, forbiddenWalkSymbols[tc.importPath])
+			if len(diags) != tc.wantHits {
+				t.Errorf("forbiddenWalkRefs(%q): got %d hits, want %d (diags=%v)", tc.importPath, len(diags), tc.wantHits, diags)
 			}
 		})
 	}
 }
 
 // TestScannerFrameworkUsage01_PackageAliasesExcludesDot pins the contract that
-// scanner.PackageAliases excludes dot-imports — the existence of the
-// dotImportForbidden branch in TestScannerFrameworkUsage01 depends on this.
-// If a future scanner refactor includes "." in the alias set, the SelectorExpr
-// scan would emit a diagnostic on every unqualified identifier and the
-// dot-import branch would become redundant; we'd need to revisit both. This
-// test catches that drift early.
+// scanner.PackageAliases excludes dot-imports — the existence of the dot-import
+// branch in forbiddenWalkRefs depends on this. If a future scanner refactor
+// includes "." in the alias set, the SelectorExpr scan would emit a diagnostic
+// on every unqualified identifier and the dot-import branch would become
+// redundant; we'd need to revisit both. This test catches that drift early.
 func TestScannerFrameworkUsage01_PackageAliasesExcludesDot(t *testing.T) {
 	t.Parallel()
 	src := `package fake
