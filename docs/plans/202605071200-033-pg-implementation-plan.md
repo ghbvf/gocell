@@ -1,5 +1,19 @@
 # 033 PG 实施计划
 
+> **状态（2026-05-10）⚠️ 已被 034 取代**
+>
+> A 路线（在 cell 内一次落地 PG repo）经 PR#417 验证不可行：accesscore PG 接入暴露 5 个 P0/P1 协议缺口（token 重放 / role revoke 排序 / admin 不变量 / credential 失效 / CAS），review 抓表层 bug 后协议问题再爆。
+>
+> 路线已切换到 `docs/plans/202605082145-034-pg-corecell-b-route-plan.md`（v3 修订：typed-Go-heavy 协议 primitive 范式），锚于 `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`。
+>
+> 本计划保留作为：
+> - migration 编号预分配（017-022）记录 → 034 重新组织调用
+> - B2.B device PG repo 子任务 → 034 Wave 0 原样保留
+> - 033 §6 archtest 设计**大部分降级删除**（`PG-REPO-CONSTRUCTOR-FAIL-FAST-01` / `PG-REPO-INVARIANT-LIST` 由 typed `(*T, error)` 签名 + storetest 注册派生覆盖；仅 `PG-REPO-AMBIENT-TX-01` 保留为调用形态兜底）
+> - 不再作为活动实施计划
+
+---
+
 **生成日期**: 2026-05-07
 **最后更新**: 2026-05-08（激进合并：删 6 个切片视图，合一为单一任务表 + 实施叙事；W4-W8 全部 ship 同步状态）
 **对接来源**:
@@ -8,7 +22,7 @@
 - `docs/backlog2.md` §5.1 PostgreSQL 路由
 - 029 关键路径已 ship 项：B1 PR#373+#384 / B4+B8 PR#401 / B5 PR#399 / B6 PR#380 / B7+B9 PR#388+#395 / #12 PR#369+#374
 
-**关系**：本计划是 029 roadmap Track B 中所有未 ship PG 项的实施落地文档；不重复已 ship 项细节，仅引用。
+**关系**：本计划是 029 roadmap Track B 中所有未 ship PG 项的实施落地文档；不重复已 ship 项细节，仅引用。**已被 034 取代（见上方状态）**。
 
 ---
 
@@ -137,15 +151,24 @@ archtest `PG-REPO-AMBIENT-TX-01` 守该模式。
 
 ## 6. archtest 设计（funnel-first 单文件主题）
 
+> **⚠️ 已被 034 v3 大部分降级删除**（2026-05-10）
+>
+> 按 ADR-Typed (`docs/architecture/202605101200-...`) D6：archtest 是兜底，不是主防线。原计划 3 条 INVARIANT 处置：
+> - `PG-REPO-CONSTRUCTOR-FAIL-FAST-01` → **删除**：由 typed `func New(pool, txRunner, proto) (*T, error)` 签名 + body 顶层校验直接覆盖
+> - `PG-REPO-AMBIENT-TX-01` → **保留**：调用形态约束，typed signature 不能拦
+> - `PG-REPO-INVARIANT-LIST` 索引 → **删除**：由 storetest 注册派生
+>
+> 新增 archtest（兜底，由 034 S2 落）：`SESSION-PROTOCOL-COMPOSITION-ROOT-01` 守 `session.NewProtocol` / `MustNewProtocol` 仅在 `cmd/` 调用。
+
 按 CLAUDE.md `## 新增 invariant 决策原则`：单文件 `tools/archtest/pg_repo_invariants_test.go` 聚并所有 PG repo 主题约束，每条规则函数前 godoc 加 `// INVARIANT: PG-REPO-*-01` 锚点。
 
 **初始 3 条**（B2.A 落）：
 
-| INVARIANT ID | 守的范式 | 不能 funnel 的原因 |
-|---|---|---|
-| `PG-REPO-CONSTRUCTOR-FAIL-FAST-01` | `NewXxxRepository` 必须 `(*XxxRepository, error)` 签名 + body 顶层 nil 校验 | Go 无强制构造器签名约束，函数签名是 contract 但实现里能漏检 |
-| `PG-REPO-AMBIENT-TX-01` | 写路径必须 `txRunner.RunInTx`，禁 `pool.Begin/Commit` 直调 | 调用形态级约束，无类型钩子 |
-| `PG-REPO-INVARIANT-LIST` 索引 | `// INVARIANT:` 锚点必须在 inventory.md 出现 | grep 锚点串联 |
+| INVARIANT ID | 守的范式 | 不能 funnel 的原因 | v3 处置 |
+|---|---|---|---|
+| `PG-REPO-CONSTRUCTOR-FAIL-FAST-01` | `NewXxxRepository` 必须 `(*XxxRepository, error)` 签名 + body 顶层 nil 校验 | Go 无强制构造器签名约束，函数签名是 contract 但实现里能漏检 | **删除**（typed signature 覆盖） |
+| `PG-REPO-AMBIENT-TX-01` | 写路径必须 `txRunner.RunInTx`，禁 `pool.Begin/Commit` 直调 | 调用形态级约束，无类型钩子 | **保留** |
+| `PG-REPO-INVARIANT-LIST` 索引 | `// INVARIANT:` 锚点必须在 inventory.md 出现 | grep 锚点串联 | **删除**（storetest 注册派生） |
 
 **后续 append**（B2.B 落 1 条 / B2.C 按需）：
 - `PG-REPO-LIST-PARAMS-VALIDATE-01`（如分页参数校验需统一守）
