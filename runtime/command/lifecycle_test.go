@@ -23,14 +23,12 @@ type errSweeperMock struct {
 func (m *errSweeperMock) Start(_ context.Context) error { return m.startErr }
 func (m *errSweeperMock) Stop(_ context.Context) error  { return nil }
 
-// TestSweeperLifecycle_StartFailImmediately verifies A2: when the underlying
-// sweeper's Start returns an error immediately, lifecycle.Start must propagate
-// that error to the caller (rather than silently swallowing it in a goroutine).
-//
-// The startup probe window (startProbeTimeout) gives the goroutine a brief
-// opportunity to surface immediate failures — matching the relay.go readyCh
-// pattern.
+// TestSweeperLifecycle_StartFailImmediately 验证 mock Sweeper.Run 立即返 error 时
+// Start 在 50ms 探针窗口内传播 error。
+// clock.Real() 而非 fake clock：mock 立即退出不依赖时间推进，使用 real clock
+// 让测试在生产路径下验证 select-on-done 的真实行为。
 func TestSweeperLifecycle_StartFailImmediately(t *testing.T) {
+	t.Parallel()
 	wantErr := errors.New("sweeper-start-failed")
 	mock := &errSweeperMock{startErr: wantErr}
 	lc := &SweeperLifecycle{Name: "test.sweeper", Sweeper: mock, Clock: clock.Real()}
@@ -41,6 +39,7 @@ func TestSweeperLifecycle_StartFailImmediately(t *testing.T) {
 }
 
 func TestSweeperLifecycle_ContributesHook(t *testing.T) {
+	t.Parallel()
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
 		kcommand.WithSweeperInterval(time.Hour))
@@ -54,6 +53,7 @@ func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 }
 
 func TestSweeperLifecycle_StartStop(t *testing.T) {
+	t.Parallel()
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
 		kcommand.WithSweeperInterval(time.Hour))
