@@ -12,6 +12,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -437,6 +438,57 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 	n := errCalled
 	errMu.Unlock()
 	assert.GreaterOrEqual(t, n, 1, "OnError must be called when Queue.Ack returns error")
+}
+
+// TestNewSweeper_TypedNilScannerRejected pins the typed-nil interface guard
+// for the scanner positional dep. Composition roots routinely write
+// `var s *postgresActiveScanner; command.NewSweeper(s, ...)` and a bare
+// nil check returns false; the typed-nil pointer would be stored as a
+// non-nil interface and panic on the first ScanActive call.
+//
+// We use mockScanner (already implementing ActiveScanner) as the typed-nil
+// vessel — declaring a fresh interface-implementing type just for this test
+// would duplicate the full method set without changing what we're testing.
+func TestNewSweeper_TypedNilScannerRejected(t *testing.T) {
+	t.Parallel()
+	var s *mockScanner
+	var scanner command.ActiveScanner = s
+	_, err := command.NewSweeper(scanner, &mockAckQueue{}, clock.Real())
+	require.Error(t, err, "NewSweeper must reject typed-nil scanner")
+}
+
+func TestNewSweeper_TypedNilQueueRejected(t *testing.T) {
+	t.Parallel()
+	var q *mockAckQueue
+	var queue command.Queue = q
+	_, err := command.NewSweeper(&mockScanner{}, queue, clock.Real())
+	require.Error(t, err, "NewSweeper must reject typed-nil queue")
+}
+
+// TestNewSweeper_TypedNilClockRejected uses clockmock.FakeClock as the
+// typed-nil vessel — clock.Real() returns a concrete value, so we need
+// any *T that implements Clock to construct the typed-nil interface.
+func TestNewSweeper_TypedNilClockRejected(t *testing.T) {
+	t.Parallel()
+	var c *clockmock.FakeClock
+	var clk clock.Clock = c
+	_, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clk)
+	require.Error(t, err, "NewSweeper must reject typed-nil clock")
+}
+
+// TestSweeper_StartZeroValueLiteralRejected closes the zero-value literal
+// attack surface: `&command.Sweeper{}` from outside the package is legal
+// (no unexported field references), so callers can bypass NewSweeper. The
+// built-sentinel + Start head fail-closed turns this into a clean error
+// instead of a panic on nil clock.NewTicker.
+//
+// Repro of pre-fix bug: deleting the `built` field check from Start makes
+// this test panic with a nil pointer dereference inside s.clk.NewTicker.
+func TestSweeper_StartZeroValueLiteralRejected(t *testing.T) {
+	t.Parallel()
+	var s command.Sweeper
+	err := s.Start(context.Background())
+	require.Error(t, err, "zero-value Sweeper.Start must fail-closed instead of panicking on nil clock")
 }
 
 func TestSweeper_DefaultInterval(t *testing.T) {

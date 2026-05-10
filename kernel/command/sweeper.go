@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 const (
@@ -80,11 +81,17 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 //
 // Implements kernel/worker.Worker (Start blocks until ctx canceled; Stop idempotent).
 //
-// All fields are unexported — callers MUST construct via NewSweeper, which
-// fail-fasts on missing required deps. AI-HARD per ai-collab.md
-// §"违反不可表达": &command.Sweeper{...} literal construction is impossible
-// from outside the kernel/command package, so a developer cannot accidentally
-// omit the required Clock dependency.
+// All non-built fields are unexported — callers cannot populate them via
+// `&command.Sweeper{Scanner: ...}` literals. The remaining attack surface is
+// the bare zero-value literal `&command.Sweeper{}`, which produces an
+// instance with nil scanner / queue / clk and would panic on Start's first
+// `s.clk.NewTicker` call. The unexported `built` sentinel + Start head
+// fail-closed turns that panic into a clean error: only NewSweeper sets
+// `built=true`, so any literal-zero Sweeper short-circuits at Start.
+//
+// AI-HARD per ai-collab.md §"违反不可表达": zero-value `&command.Sweeper{}`
+// literal Start is unreachable (built=false → typed error); typed-nil
+// dependencies are rejected at construction via validation.IsNilInterface.
 //
 // Filter narrows the scan; zero value (default) means "all devices, all
 // non-terminal statuses". Adapters decide whether ScanFilter is honored
@@ -92,6 +99,7 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 //
 // ref: Temporal HistoryService timer scan loop — role-based periodic scan
 // over active timers; disposition (expire vs retry) is a separate decision.
+// ref: kernel/outbox.ConsumerBase.built — same sentinel pattern.
 type Sweeper struct {
 	scanner  ActiveScanner
 	queue    Queue
@@ -99,6 +107,11 @@ type Sweeper struct {
 	interval time.Duration
 	clk      clock.Clock
 	onError  func(error)
+
+	// built is the construction sentinel; only NewSweeper sets it to true.
+	// Start() rejects any Sweeper with built==false, closing the
+	// `&command.Sweeper{}` zero-value literal attack surface.
+	built bool
 }
 
 // SweeperOption configures optional Sweeper fields. Pass into NewSweeper as
@@ -138,15 +151,15 @@ func WithSweeperOnError(fn func(error)) SweeperOption {
 //	    return fmt.Errorf("sweeper: %w", err)
 //	}
 func NewSweeper(scanner ActiveScanner, queue Queue, clk clock.Clock, opts ...SweeperOption) (*Sweeper, error) {
-	if scanner == nil {
+	if validation.IsNilInterface(scanner) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command: NewSweeper: scanner required")
 	}
-	if queue == nil {
+	if validation.IsNilInterface(queue) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command: NewSweeper: queue required")
 	}
-	if clk == nil {
+	if validation.IsNilInterface(clk) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command: NewSweeper: clock required")
 	}
@@ -155,6 +168,7 @@ func NewSweeper(scanner ActiveScanner, queue Queue, clk clock.Clock, opts ...Swe
 		queue:    queue,
 		clk:      clk,
 		interval: defaultCommandSweeperInterval,
+		built:    true,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -163,9 +177,15 @@ func NewSweeper(scanner ActiveScanner, queue Queue, clk clock.Clock, opts ...Swe
 }
 
 // Start begins the sweep loop, blocking until ctx is canceled. Required
-// dependencies are validated at NewSweeper construction time, so Start does
-// not re-check them.
+// dependencies are validated at NewSweeper construction time. The
+// `if !s.built` guard fail-closes any zero-value `&command.Sweeper{}`
+// literal that bypassed NewSweeper — it returns a typed error rather than
+// panicking on the nil clk method call below.
 func (s *Sweeper) Start(ctx context.Context) error {
+	if !s.built {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper must be constructed via NewSweeper")
+	}
 	interval := s.interval
 	if interval <= 0 {
 		interval = defaultCommandSweeperInterval
