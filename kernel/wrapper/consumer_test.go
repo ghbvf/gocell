@@ -22,7 +22,7 @@ func eventSpec() wrapper.ContractSpec {
 func TestWrapConsumer_PassesAckResultThrough(t *testing.T) {
 	tr := &spyTracer{}
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{EventType: "session.revoked.v1"})
@@ -54,7 +54,7 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 	tr := &spyTracer{}
 	transient := errors.New("db unreachable")
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: transient}
+		return outbox.Requeue(transient)
 	}
 	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
@@ -77,10 +77,7 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 func TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan(t *testing.T) {
 	tr := &spyTracer{}
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         errors.New(`upstream rejected: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`),
-		}
+		return outbox.Requeue(errors.New(`upstream rejected: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`))
 	}
 	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
@@ -105,7 +102,7 @@ func TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan(t *testing.T) {
 func TestWrapConsumer_RecordsFallbackOnNilDispositionError(t *testing.T) {
 	tr := &spyTracer{}
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionReject}
+		return outbox.Reject(nil)
 	}
 	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
@@ -120,7 +117,7 @@ func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 	tr := &spyTracer{}
 	permanent := outbox.NewPermanentError(errors.New("schema mismatch"))
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: permanent}
+		return outbox.Reject(permanent)
 	}
 	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
@@ -137,7 +134,7 @@ func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 func TestWrapConsumer_ReturnsErrorOnNonEventSpec(t *testing.T) {
 	t.Parallel()
 	_, err := wrapper.WrapConsumer(wrapper.NoopTracer{}, loginSpec(), func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 	if err == nil {
 		t.Fatal("expected error on http spec")
@@ -167,7 +164,7 @@ func TestWrapConsumer_PutsContractIDInContext(t *testing.T) {
 	var seen string
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		seen = wrapper.ContractIDFromContext(ctx)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 	w := wrapper.MustWrapConsumer(wrapper.NoopTracer{}, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
@@ -182,7 +179,7 @@ func TestWrapConsumer_PutsContractIDInContext(t *testing.T) {
 func TestWrapConsumer_NilTracer_FallsBackToNoop(t *testing.T) {
 	t.Parallel()
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 	w := wrapper.MustWrapConsumer(nil, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})

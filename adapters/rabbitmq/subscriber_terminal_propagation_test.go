@@ -88,7 +88,7 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 		subErrCh <- sub.Subscribe(ctx,
 			outbox.Subscription{Topic: "t.permanent", ConsumerGroup: "g"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 	}()
 

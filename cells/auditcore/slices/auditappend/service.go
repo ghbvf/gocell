@@ -5,7 +5,7 @@ package auditappend
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"sync"
 
@@ -130,12 +130,10 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	// never be audited correctly and retrying will not fix it. Route to DLX
 	// via DispositionReject so operators can inspect the dead letter.
 	if !json.Valid(entry.Payload) {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err: outbox.NewPermanentError(fmt.Errorf(
-				"audit-append: invalid JSON payload event=%s type=%s",
-				entry.ID, entry.EventType)),
-		}
+		s.logger.Warn("audit-append: invalid JSON payload",
+			slog.String("event_id", entry.ID),
+			slog.String("event_type", entry.EventType))
+		return outbox.Reject(outbox.NewPermanentError(errors.New("audit-append: invalid JSON payload")))
 	}
 
 	// Extract actorId from payload. PR-CFG-G1 G.2 made actorId required for all
@@ -190,13 +188,13 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
 		// Transient failure — ConsumerBase will back-off and retry.
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: persistErr}
+		return outbox.Requeue(persistErr)
 	}
 
 	s.logger.Info("audit entry appended",
 		slog.String("entry_id", auditEntry.ID),
 		slog.String("event_type", entry.EventType))
-	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	return outbox.Ack()
 }
 
 // buildPersistFn returns a transaction function that persists the audit entry

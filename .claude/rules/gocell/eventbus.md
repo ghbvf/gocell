@@ -22,23 +22,19 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
     event, err := unmarshal(entry.Payload)
     if err != nil {
         // 永久错误 — Reject 路由到 DLX，不重试
-        return outbox.HandleResult{
-            Disposition: outbox.DispositionReject,
-            Err:         outbox.NewPermanentError(err),
-        }
+        return outbox.Reject(outbox.NewPermanentError(err))
     }
 
     if err := processEvent(ctx, event); err != nil {
         // 瞬态错误 — ConsumerBase 退避重试
-        return outbox.HandleResult{
-            Disposition: outbox.DispositionRequeue,
-            Err:         err,
-        }
+        return outbox.Requeue(err)
     }
 
-    return outbox.HandleResult{Disposition: outbox.DispositionAck}
+    return outbox.Ack()
 }
 ```
+
+> **回落字面量**：`outbox.HandleResult.ProcessReason` / `SettlementObservers` 字段无法用 factory 表达，需要时直接构造 `outbox.HandleResult{...}` 字面量（典型场景：kernel internal retry plumbing、middleware-handler 协议）。
 
 ### Disposition 语义
 

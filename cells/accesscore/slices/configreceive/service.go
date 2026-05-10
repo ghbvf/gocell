@@ -84,10 +84,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err)),
-		}
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err)))
 	}
 
 	s.logger.Debug("config-receive: config upserted",
@@ -105,7 +102,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 					slog.String("key", event.Key),
 					slog.Int("version", event.Version))
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}
 			// 401/403 are permanent auth/authz failures (invalid token,
 			// caller_cell not in contract.clients allowlist). Retrying with
@@ -118,17 +115,14 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 					slog.String("key", event.Key),
 					slog.Int("version", event.Version))
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-				return outbox.HandleResult{
-					Disposition: outbox.DispositionReject,
-					Err:         outbox.NewPermanentError(fetchErr),
-				}
+				return outbox.Reject(outbox.NewPermanentError(fetchErr))
 			}
 			// Transient failure — Requeue so the consumer pipeline retries.
 			s.logger.Error("config-receive: failed to fetch config entry after upsert",
 				slog.Any("error", fetchErr),
 				slog.String("key", event.Key),
 				slog.Int("version", event.Version))
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: fetchErr}
+			return outbox.Requeue(fetchErr)
 		}
 		s.logger.Info("config-receive: fetched config entry",
 			slog.String("key", cfg.Key),
@@ -137,7 +131,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 	}
 
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	return outbox.Ack()
 }
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
@@ -147,17 +141,14 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 		s.logger.Error("config-receive: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err)),
-		}
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err)))
 	}
 
 	s.logger.Debug("config-receive: config deleted",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	return outbox.Ack()
 }
 
 // isPermanentAuthFailure reports whether err is an *errcode.Error with

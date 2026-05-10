@@ -135,10 +135,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 		s.logger.Error("config-subscribe: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err)),
-		}
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err)))
 	}
 
 	s.cache.mu.Lock()
@@ -150,7 +147,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: true}
 	s.cache.mu.Unlock()
@@ -158,7 +155,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	return outbox.Ack()
 }
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
@@ -182,10 +179,7 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 		s.logger.Error("config-subscribe: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err)),
-		}
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err)))
 	}
 
 	s.cache.mu.Lock()
@@ -201,7 +195,7 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: false}
 	s.cache.mu.Unlock()
@@ -209,5 +203,5 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	return outbox.Ack()
 }

@@ -69,7 +69,7 @@ func TestConfigEventMiddleware_RecordsProcessReasonFromSubscriptionOwner(t *test
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		},
 	)
 
@@ -89,7 +89,7 @@ func TestConfigEventMiddleware_RecordsSettlementOnlyAfterNotification(t *testing
 	wrapped := mw(
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		func(context.Context, outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
+			return outbox.Requeue(nil)
 		},
 	)
 
@@ -113,7 +113,7 @@ func TestConfigEventMiddleware_SkipsSubscriptionsWithoutOwnerOrConfigTopic(t *te
 	} {
 		wrapped := mw(sub, func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 		result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
 		outbox.NotifySettlement(context.Background(), result,

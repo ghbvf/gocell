@@ -344,7 +344,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
 				slog.Any("error", err))
-			return HandleResult{Disposition: DispositionRequeue, Err: err}, nil
+			return Requeue(err), nil
 		}
 		return cb.handleClaimState(ctx, consumerGroup, topic, entry, handler, state, receipt)
 	}
@@ -434,7 +434,7 @@ func (cb *ConsumerBase) handleClaimState(
 		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
 			slog.String(logKeyEventID, entry.ID),
 			slog.String(logKeyTopic, topic))
-		return HandleResult{Disposition: DispositionAck}, nil
+		return Ack(), nil
 	case idempotency.ClaimBusy:
 		delay := cb.config.RetryBaseDelay
 		logWithContext(ctx, slog.LevelDebug, "outbox: event being processed by another consumer, requeuing after backoff",
@@ -448,7 +448,7 @@ func (cb *ConsumerBase) handleClaimState(
 		case <-ctx.Done():
 			t.Stop()
 		}
-		return HandleResult{Disposition: DispositionRequeue}, nil
+		return Requeue(nil), nil
 	default:
 		// ClaimAcquired -- start lease-renewal goroutine before invoking handler.
 		result := cb.runWithRenewal(ctx, consumerGroup, topic, entry, handler, receipt)

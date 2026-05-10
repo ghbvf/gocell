@@ -931,10 +931,7 @@ func TestWriteBatchFallback_SequentialFallbackError(t *testing.T) {
 // --- HandleResult tests ---
 
 func TestHandleResult_Fields(t *testing.T) {
-	res := HandleResult{
-		Disposition: DispositionReject,
-		Err:         assert.AnError,
-	}
+	res := Reject(assert.AnError)
 	assert.Equal(t, DispositionReject, res.Disposition)
 	assert.Error(t, res.Err)
 }
@@ -1280,7 +1277,7 @@ func TestNotifySettlement_NoObservers_NoOp(t *testing.T) {
 		}
 	}()
 	NotifySettlement(context.Background(),
-		HandleResult{Disposition: DispositionAck},
+		Ack(),
 		Entry{ID: "evt-noop", Topic: "t"},
 		DispositionAck, SettlementResultSuccess, nil)
 }

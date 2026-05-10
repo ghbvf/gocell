@@ -99,7 +99,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		handlerCount.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	// Enqueue deliveries before starting Subscribe.
@@ -207,7 +207,7 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-neverDone
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := newSubNoShutdown(conn, "close-deadline-queue", "close-deadline.dlx")
@@ -311,7 +311,7 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(drainD30ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := newSubNoShutdown(conn, "graceful-queue", "graceful.dlx")
@@ -373,7 +373,7 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(testtime.D80ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := newSubNoShutdown(conn, "inflight-complete-queue", "inflight-complete.dlx")
@@ -421,7 +421,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(testtime.D150ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := newSubNoShutdown(conn, "nodeadline-queue", "nodeadline.dlx")

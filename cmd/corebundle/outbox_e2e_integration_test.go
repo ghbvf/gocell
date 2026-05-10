@@ -168,7 +168,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 			recvMu.Lock()
 			recvs = append(recvs, received{entry: e, payload: p, parsed: err == nil})
 			recvMu.Unlock()
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	}()
 	// Give subscriber goroutine a moment to register before first publish.

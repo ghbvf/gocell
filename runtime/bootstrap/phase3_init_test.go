@@ -139,7 +139,7 @@ func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registry) err
 		Transport: "amqp",
 		Topic:     c.topic,
 	}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}, c.ID())
 }
 

@@ -431,7 +431,7 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 
 	r := New(wrap(h), clock.Real())
 	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}, "test-cg", "test"))
 
 	runCtx := t.Context()
@@ -497,7 +497,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 
 		r := New(wrap(h), clock.Real())
 		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}, "test-cg", "test"))
 
 		runCtx := t.Context()
@@ -543,7 +543,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 
 		r := New(wrap(sub), clock.Real())
 		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}, "test-cg", "test"))
 
 		runCtx, runCancel := context.WithCancel(context.Background())
@@ -600,7 +600,7 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 
 	r := New(wrap(h), clock.Real())
 	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}, "test-cg", "test"))
 
 	runCtx := t.Context()

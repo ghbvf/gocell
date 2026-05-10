@@ -76,7 +76,7 @@ func TestNewContractTracingSubscriber_WrapsSubscribeAndDelegatesLifecycle(t *tes
 
 	require.NoError(t, decorated.Subscribe(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			return outbox.Ack(), nil
 		}))
 	require.NotNil(t, inner.capturedHandler)
 
@@ -107,7 +107,7 @@ func subscribeCapturingPanic(t *testing.T, decorated outbox.Subscriber, sub outb
 		defer func() { panicked = recover() }()
 		subscribeErr = decorated.Subscribe(context.Background(), sub,
 			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+				return outbox.Ack(), nil
 			})
 	}()
 	return panicked, subscribeErr
@@ -216,7 +216,7 @@ func TestContractTracingSubscriber_NilInnerLifecycle(t *testing.T) {
 
 	require.Error(t, decorated.Subscribe(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			return outbox.Ack(), nil
 		}),
 		"Subscribe must error when inner is nil")
 
@@ -323,7 +323,7 @@ func TestContractTracingSubscriber_Subscribe_PropagatesWrapSubscriberError(t *te
 		ContractKind:      "command", // WrapSubscriber rejects non-"event" kinds.
 		ContractTransport: "amqp",
 	}, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		return outbox.Ack(), nil
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be \"event\"",

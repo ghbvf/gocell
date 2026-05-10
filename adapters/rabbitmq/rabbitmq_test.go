@@ -1541,7 +1541,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	handled := make(chan outbox.Entry, 1)
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handled <- e
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1598,7 +1598,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		t.Fatal("handler should not be called for unmarshal failure")
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1696,7 +1696,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
+		return outbox.Requeue(errors.New("transient error"))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1744,7 +1744,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.NoError(t, err)
 
@@ -1769,7 +1769,7 @@ func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_SUBSCRIBE")
@@ -1806,7 +1806,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	handled := make(chan string, 1)
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handled <- e.ID
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	// Run Subscribe in a goroutine so require.Eventually can be called safely
@@ -1893,7 +1893,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
 }
@@ -2023,7 +2023,7 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	// subscribeOnce should return an error (channel acquisition failure).
 	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue",
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
@@ -2078,7 +2078,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 	}()
 
@@ -2127,7 +2127,7 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.NoError(t, err)
 
@@ -2159,7 +2159,7 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.NoError(t, err)
 
@@ -2189,7 +2189,7 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.NoError(t, err)
 
@@ -2219,7 +2219,7 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.NoError(t, err)
 
@@ -2252,7 +2252,7 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	assert.NoError(t, err)
 
@@ -2275,7 +2275,7 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange required")
@@ -2336,7 +2336,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		// Simulate ctx cancel happening before/during handler.
 		cancel()
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error during shutdown")}
+		return outbox.Requeue(errors.New("transient error during shutdown"))
 	}
 
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 42, Body: entryBytes}
@@ -2524,7 +2524,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	entry := outbox.Entry{ID: "evt-claimer-001"}
@@ -2550,7 +2550,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-done"})
@@ -2569,7 +2569,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-busy"})
@@ -2589,7 +2589,7 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("fail")}
+			return outbox.Requeue(errors.New("fail"))
 		})
 
 	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-reject"})
@@ -2616,10 +2616,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCallCount++
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionReject,
-				Err:         errors.New("bad payload"),
-			}
+			return outbox.Reject(errors.New("bad payload"))
 		})
 
 	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-reject-direct"})
@@ -2684,7 +2681,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-retry-ok"})
@@ -2712,7 +2709,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	start := time.Now()
@@ -2739,7 +2736,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2768,7 +2765,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	start := time.Now()
@@ -2803,7 +2800,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	start := time.Now()
@@ -2833,7 +2830,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	start := time.Now()
@@ -2857,7 +2854,7 @@ func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	// Must not panic; negative delay is clamped to default by setDefaults.
@@ -2877,7 +2874,7 @@ func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
 
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-neg-cap"})
@@ -2903,7 +2900,7 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx := context.Background()
@@ -2940,10 +2937,7 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         errors.New("permanent"),
-		}, receipt
+		return outbox.Reject(errors.New("permanent")), receipt
 	}
 
 	ctx := context.Background()
@@ -2980,7 +2974,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	ctx := context.Background()
@@ -3037,7 +3031,7 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 		observed["trace_id"], _ = ctxkeys.TraceIDFrom(ctx)
 		observedSentinel, _ = ctx.Value(sentinelKey).(string)
 		observedErr = ctx.Err()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub.wg.Add(1)
@@ -3092,7 +3086,7 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	handler := entryToSubHandler(func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 		capturedRequestID, _ = ctxkeys.RequestIDFrom(ctx)
 		capturedTraceID, _ = ctxkeys.TraceIDFrom(ctx)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub.wg.Add(1)
@@ -3124,7 +3118,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	// Use a canceled context to simulate shutdown.
@@ -3163,10 +3157,7 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         errors.New("transient"),
-		}, receipt
+		return outbox.Requeue(errors.New("transient")), receipt
 	}
 
 	sub.wg.Add(1)
@@ -3197,7 +3188,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange required")
@@ -3249,7 +3240,7 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx := context.Background()
@@ -3284,7 +3275,7 @@ func TestProcessDelivery_CommitFails_NackRequeueSuccess_ReleasesReceipt(t *testi
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	sub.wg.Add(1)
@@ -3323,7 +3314,7 @@ func TestProcessDelivery_CommitFails_NackRequeueFails_ReleasesReceipt(t *testing
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	sub.wg.Add(1)
@@ -3362,7 +3353,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-fail-closed"})
@@ -3384,7 +3375,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalled = true
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-fail-open-explicit"})
@@ -3460,7 +3451,7 @@ func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testin
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			// Cancel context during the handler — simulates shutdown mid-processing.
 			cancel()
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+			return outbox.Requeue(errors.New("transient"))
 		})
 
 	res, _ := handler(ctx, outbox.Entry{ID: "evt-ctx-final"})
@@ -3528,10 +3519,7 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         errors.New("transient"),
-		}, receipt
+		return outbox.Requeue(errors.New("transient")), receipt
 	}
 
 	sub.wg.Add(1)
@@ -3708,12 +3696,9 @@ func TestConsumerBase_WrapWithClaimer_TransientError_ThenSuccess(t *testing.T) {
 			n := attempt
 			attempt++
 			if n == 0 {
-				return outbox.HandleResult{
-					Disposition: outbox.DispositionRequeue,
-					Err:         errors.New("transient failure"),
-				}
+				return outbox.Requeue(errors.New("transient failure"))
 			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	entry := outbox.Entry{ID: "evt-transient-ok"}
@@ -3739,10 +3724,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			callCount++
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionReject,
-				Err:         errors.New("bad payload shape"),
-			}
+			return outbox.Reject(errors.New("bad payload shape"))
 		})
 
 	entry := outbox.Entry{ID: "evt-explicit-reject"}
@@ -4386,7 +4368,7 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 	wrappedHandler := cb.Wrap(outbox.Subscription{Topic: "test.retry.unit", ConsumerGroup: "test-group"},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			callCount++
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
+			return outbox.Requeue(assert.AnError)
 		})
 
 	entry := outbox.Entry{

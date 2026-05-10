@@ -229,7 +229,7 @@ func TestRouter_Run_HandlerReceivesMessages(t *testing.T) {
 	var received atomic.Int32
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		received.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	r := New(wrap(bus), clock.Real())
@@ -261,11 +261,11 @@ func TestRouter_Run_MultipleHandlersSameSubscriber(t *testing.T) {
 	r := New(wrap(bus), clock.Real())
 	require.NoError(t, r.AddContractHandler(testEventSpec("topic.a"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countA.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}, "test", "test"))
 	require.NoError(t, r.AddContractHandler(testEventSpec("topic.b"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countB.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}, "test", "test"))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -295,7 +295,7 @@ func TestRouter_RegistryRecorder_Integration(t *testing.T) {
 
 	handler := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		received.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	// Simulate bootstrap drain: AddContractHandler directly (mirrors phase6 loop).
@@ -516,7 +516,7 @@ func (s *panickingSubscriber) Close(_ context.Context) error { return nil }
 // --- Helpers ---
 
 var noopHandler = func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	return outbox.Ack()
 }
 
 // wrap wraps an outbox.Subscriber in a *outbox.SubscriberWithMiddleware with

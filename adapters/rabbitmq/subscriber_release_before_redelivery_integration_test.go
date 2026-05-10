@@ -82,7 +82,7 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	wrapped := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: group},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalls.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 
 	sub := NewSubscriber(conn, SubscriberConfig{

@@ -324,7 +324,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 				correlationID: correlationID,
 				traceID:       traceID,
 			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 	}()
 
@@ -573,7 +573,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 				traceID:       traceID,
 				traceOK:       traceOK,
 			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		})
 	}()
 

@@ -59,7 +59,7 @@ func (c *stubEventCell) Init(ctx context.Context, reg cell.Registry) error {
 		return err
 	}
 	noopHandler := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 	return reg.Subscribe(c.spec, noopHandler, "stub-cg")
 }

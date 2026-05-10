@@ -215,7 +215,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(processingDelay) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		processed.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	// Start subscriber.
@@ -355,7 +355,7 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 	var consumed atomic.Int64
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		consumed.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	subCtx, subCancel := context.WithCancel(context.Background())
