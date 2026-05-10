@@ -229,7 +229,7 @@ func TestRunScaffoldAssembly_LiveRollback_OnSecondStageConflict(t *testing.T) {
 // setupAssemblyTestProject creates a tempdir project with go.mod and the
 // supplied cell skeleton (cell.yaml only — sufficient for assembly scaffold
 // validation).
-func setupAssemblyTestProject(t *testing.T, cellID string) string { //nolint:unparam // cellID kept as param for test readability
+func setupAssemblyTestProject(t *testing.T, cellID string) string {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"),
