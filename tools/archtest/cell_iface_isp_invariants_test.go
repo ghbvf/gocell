@@ -342,7 +342,7 @@ func TestCellIfaceISP00_MethodSetsHashGuard(t *testing.T) {
 			"  expected = %s\n"+
 			"Modifying the 4 sub-interface method sets requires:\n"+
 			"  1. New ADR amending docs/architecture/202605101800-adr-cell-interface-isp-split.md §D1\n"+
-			"  2. Update expectedMethodSetsSHA256 in tools/archtest/cell_iface_isp_test.go to: %s",
+			"  2. Update expectedMethodSetsSHA256 in tools/archtest/cell_iface_isp_invariants_test.go to: %s",
 			got, expectedMethodSetsSHA256, got)
 	}
 }

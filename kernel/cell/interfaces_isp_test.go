@@ -9,7 +9,7 @@ import (
 )
 
 // PR-A22 ISP 拆分守卫 — 通过编译期断言验证四子接口可独立 mock，复合 Cell
-// 等价于四者并集。配套 archtest 在 tools/archtest/cell_iface_isp_test.go 守
+// 等价于四者并集。配套 archtest 在 tools/archtest/cell_iface_isp_invariants_test.go 守
 // kernel/cell/interfaces.go 文件级形态。
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D1/D2/D3
