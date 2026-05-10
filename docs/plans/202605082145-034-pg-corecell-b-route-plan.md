@@ -239,6 +239,7 @@ runtime/auth/session/
 - B2-X-03 PG invalid index warn continue（PG schema 启动 fail-fast 在此 PR 配套）
 - B2-A-13 PG pool tx rollback 日志泄漏（顺路，PG adapter 同主题）
 - PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE（PG integration test 加 -race）
+- **PR444-FU-SESSIONSTORE-BENCH-01** 🟡 P2（PR #444 review carry-over）：`runtime/auth/session/storetest/` 新增 benchmark suite — 1000+ session × subject scope `RevokeForSubject` 与 mixed Create/Get/Revoke 并发场景，PG store 与 mem store 共跑共享 baseline；PG 负载下确认索引 + 单 update 路径性能符合预期，mem 顺路验收 O(n) 仍在 dev/test 可接受档位
 
 ---
 

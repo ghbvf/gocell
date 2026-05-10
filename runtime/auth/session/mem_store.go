@@ -9,10 +9,22 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// MemStore is an in-memory Store implementation suitable for tests and dev.
-// All operations take a single RWMutex; the contract test suite exercises
-// concurrent access (`go test -race`) and the protocol decisions encoded in
-// *Protocol drive RevokeForSubject scoping.
+// MemStore is an in-memory Store implementation for dev and tests. It is
+// not a production substrate — the PG-backed Store landing in S3+S5 owns
+// the production path. Three properties follow from the dev/test scope and
+// are documented design choices, not gaps:
+//
+//   - Single RWMutex over a map[ID]*Session. RevokeForSubject scans under
+//     the write lock (O(n) in subject count). Acceptable at dev/test
+//     scale; PG handles batch revoke via SQL with indexed user_id.
+//   - No GC and no capacity ceiling. Expired sessions remain Get-able
+//     (ADR-Session D3); cleanup is a PG janitor concern.
+//   - No instrumentation. Observability is a cell-layer concern (S4
+//     wires slog/metrics around Store calls in accesscore).
+//
+// The contract test suite exercises concurrent access (`go test -race`) and
+// the protocol decisions encoded in *Protocol drive RevokeForSubject
+// scoping. See package doc for the full scope rationale.
 type MemStore struct {
 	protocol *Protocol
 	clock    clock.Clock
