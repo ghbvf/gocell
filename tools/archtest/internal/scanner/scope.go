@@ -160,6 +160,35 @@ func (s Scope) Files() ([]string, error) {
 	return files, nil
 }
 
+// contentFiles returns the sorted, deduplicated list of absolute file paths
+// in the scope whose path ends in any of suffixes. It mirrors [Scope.Files]
+// but with a content-suffix predicate instead of the .go filter, and is the
+// internal primitive backing [EachContentFile].
+func (s Scope) contentFiles(suffixes []string) ([]string, error) {
+	if !s.valid {
+		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
+	}
+	if s.escapeErr != nil {
+		return nil, s.escapeErr
+	}
+	accept := func(p string) bool { return matchesSuffix(p, suffixes) }
+	seen := make(map[string]struct{})
+	var files []string
+	for _, root := range s.roots {
+		walked, err := walkFiles(s.modRoot, root, s.skipDirs, accept)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range walked {
+			if err := s.collectFile(f, seen, &files); err != nil {
+				return nil, err
+			}
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
 // collectFile adds f to files if it passes all exclusion filters.
 func (s Scope) collectFile(f string, seen map[string]struct{}, files *[]string) error {
 	rel, err := filepath.Rel(s.modRoot, f)

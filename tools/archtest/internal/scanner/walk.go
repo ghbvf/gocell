@@ -8,14 +8,13 @@ import (
 	"strings"
 )
 
-// walkGoFiles walks root, skipping any directory whose base name appears in
-// skipDirs. If includeTests is false, files ending in _test.go are excluded.
-// Any walk error is wrapped and returned immediately (fail-closed).
-// If root does not exist, an empty slice is returned with no error.
-// modRoot is used to compute module-relative paths in error messages so that
-// absolute paths do not appear in CI logs unexpectedly.
-func walkGoFiles(modRoot, root string, skipDirs map[string]struct{}, includeTests bool) ([]string, error) {
-	// Silently skip non-existent roots (e.g. DirsScope with a missing directory).
+// walkFiles walks root, skipping any directory whose base name appears in
+// skipDirs. accept is consulted on every non-directory entry; paths for which
+// accept(path) returns true are returned. Any walk error is wrapped and
+// returned immediately (fail-closed). Non-existent root returns nil slice +
+// nil error. modRoot is used to compute module-relative paths in error
+// messages so that absolute paths do not appear in CI logs unexpectedly.
+func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(path string) bool) ([]string, error) {
 	if _, err := os.Lstat(root); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -33,7 +32,7 @@ func walkGoFiles(modRoot, root string, skipDirs map[string]struct{}, includeTest
 		if d.IsDir() {
 			return skipDirCheck(d.Name(), skipDirs)
 		}
-		if isGoFile(path, includeTests) {
+		if accept(path) {
 			files = append(files, path)
 		}
 		return nil
@@ -42,6 +41,14 @@ func walkGoFiles(modRoot, root string, skipDirs map[string]struct{}, includeTest
 		return nil, err
 	}
 	return files, nil
+}
+
+// walkGoFiles is walkFiles specialized for Go source files. The includeTests
+// flag controls whether *_test.go files are included.
+func walkGoFiles(modRoot, root string, skipDirs map[string]struct{}, includeTests bool) ([]string, error) {
+	return walkFiles(modRoot, root, skipDirs, func(p string) bool {
+		return isGoFile(p, includeTests)
+	})
 }
 
 // moduleRelDisplay returns a module-relative display string for path.
@@ -72,4 +79,16 @@ func isGoFile(path string, includeTests bool) bool {
 		return false
 	}
 	return true
+}
+
+// matchesSuffix reports whether path ends with any of suffixes (exact-string
+// suffix match, case-sensitive). Used by Scope.contentFiles to filter on
+// file extensions like ".yaml" / ".sql" / ".md".
+func matchesSuffix(path string, suffixes []string) bool {
+	for _, s := range suffixes {
+		if strings.HasSuffix(path, s) {
+			return true
+		}
+	}
+	return false
 }
