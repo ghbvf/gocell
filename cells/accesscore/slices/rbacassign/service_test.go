@@ -170,7 +170,7 @@ func TestService_Revoke(t *testing.T) {
 				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
 			},
 			wantErr:  true,
-			wantCode: errcode.ErrAuthForbidden,
+			wantCode: errcode.ErrAuthLastAdminProtected,
 		},
 		{
 			name:    "revoke unassigned role with no holders is guarded",

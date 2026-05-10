@@ -142,7 +142,11 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 	}
 
 	if count == 1 {
-		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+		// Same business invariant as the DB last_admin_protected trigger: refuse
+		// removal of the sole holder. Both app-level (this branch) and DB-trigger
+		// paths return ErrAuthLastAdminProtected so client-side handlers can match
+		// a single errcode (S3+S5 PR #449 round-3 unification).
+		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 			"cannot revoke role: this is the only holder; assign the role to another user first",
 			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
 	}

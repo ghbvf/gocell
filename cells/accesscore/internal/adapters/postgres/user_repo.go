@@ -23,12 +23,27 @@ var _ ports.UserRepository = (*PGUserRepo)(nil)
 // PGUserRepo is the cell-private PostgreSQL implementation of ports.UserRepository.
 // It reads/writes the `users` table (migration 017).
 //
-// Write paths (Create/Update/Delete) participate in the ambient transaction when
-// one is present in ctx (stored under kernel/persistence.TxCtxKey by
-// adapters/postgres.TxManager). This is required for outbox atomicity: the setup
-// service wraps user.Create + outbox.Write in a single txRunner.RunInTx call.
+// Transaction contract — dual-signal pattern (S3+S5 PR #449 round-3
+// clarification). The txRunner field is a *construction-time policy
+// declaration*: it fail-fasts at NewPGUserRepo when the L2 caller has not
+// wired a real TxRunner (single source of truth for "this repo is intended
+// for L2-atomic call sites"). The repo methods themselves do NOT invoke
+// txRunner.RunInTx directly because all current write paths are
+// single-statement (Create / Update / Delete). Instead, methods extract any
+// ambient pgx.Tx from ctx via kernel/persistence.TxCtxKey (the value stored
+// by adapters/postgres.TxManager.RunInTx); when no tx is in ctx the methods
+// fall through to the pool. The setup service wraps Create + outbox.Write
+// in a single TxManager.RunInTx call so both writes share the tx that
+// execCtx picks up here.
+//
+// Compare runtime/auth/refresh adapters/postgres/refresh_store.go where
+// txRunner IS invoked directly because its multi-statement methods (Peek,
+// Rotate) need an explicit boundary. PGUserRepo's pattern is the
+// "single-statement repo" variant of the same dual-signal contract.
 type PGUserRepo struct {
-	pool     *pgxpool.Pool
+	pool *pgxpool.Pool
+	// txRunner is retained at construction time as policy declaration only —
+	// see the type godoc above. Repo methods read tx from ctx, not this field.
 	txRunner persistence.TxRunner
 	clock    clock.Clock
 }

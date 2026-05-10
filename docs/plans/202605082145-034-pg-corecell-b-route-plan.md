@@ -256,7 +256,7 @@ runtime/auth/session/
 
 **收口 backlog**（PR #449 review carry-over entries）：
 - LASTADMINGUARD-SERVICE-WIRING-S4 🟠 P1（PR #449 review carry-over）：本 PR (S3+S5) 仅落 LastAdminGuard struct + 单测 + DB trigger 兜底；service-level wiring 在 S4 — identitymanage.DeleteUser / ChangeUserStatus(Locked) / rbacassign.RevokeRole 三个入口调用 LastAdminGuard.CheckRemove，把 DB trigger 触发的 P0001 raw exception 转成 ErrAuthLastAdminProtected 精准 errcode（ADR-admin §4 migration table 锁定）
-- S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01 🟠 P0（PR #449 review carry-over）：S3+S5 仅 wiring user/role/outbox PG，session/refresh repo 仍是 mem；当前 PG 模式下 sessionlogin.persistSessionWithRefresh 在真 PG tx 里写 mem session/refresh，rollback 不回滚 mem 状态（pre-existing hazard，S3+S5 PG TxManager wiring 让区域更显眼）。S4 必须同 PR：(a) cell consume runtime session.Store + adapters/postgres PG session store；(b) PG refresh store 接入；(c) 删除 cell-private SessionRepository + cell-internal mem session 路径；(d) 启动期 forced re-login 全员 session
+- S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01 🟠 P0（PR #449 review round-2 + round-3 重提 carry-over）：S3+S5 仅 wiring user/role/outbox PG，session/refresh repo 仍是 mem；当前 PG 模式下 sessionlogin.persistSessionWithRefresh 在真 PG tx 里写 mem session/refresh，rollback 不回滚 mem 状态（pre-existing hazard，S3+S5 PG TxManager wiring 让区域更显眼；round-3 reviewer 重申此为合并风险，用户裁决"忽略 + 更新计划文档"以本条目落地）。S4 必须同 PR：(a) cell consume runtime session.Store + adapters/postgres PG session store；(b) PG refresh store 接入；(c) 删除 cell-private SessionRepository + cell-internal mem session 路径；(d) 启动期 forced re-login 全员 session；(e) 同 PR 验证：sessionlogin happy path + 故障注入下 mem-in-tx hazard 消失（rollback 完整回滚 session/refresh PG 行）。
 - JWT-AUTHZEPOCH-CLOSED-LOOP-S4-01 🟠 P0（PR #449 review carry-over）：S3+S5 仅落 schema (users.authz_epoch + sessions.authz_epoch_at_issue + sessions.jti) + Protocol primitive；JWT issue/validate 闭环在 S4：(a) runtime/auth/jwt issuer 写 jti + epoch claim；(b) verifier 读 epoch；(c) sessionvalidate 加 user.authz_epoch lookup + 比对；(d) 4 个 CredentialEvent 撤销路径在每个 slice 接入；(e) ADR-credential D2 在 S4 闭环前不真实生效，旧 access JWT 仍只靠 session revoke + 自然过期失效
 
 **收口 backlog**（原有）：
@@ -272,7 +272,7 @@ runtime/auth/session/
 - PR267-FU-AUTHTEST-INTERNAL 🟡
 - PR250-F3 Event wire byte pinning 🟡
 - B2-C-13 L2 跨层 e2e 回归不足 🟡 P2（accesscore 接入完成后顺路）
-- **PR449-FU-SETUP-PG-E2E-REAL-WRITER-01** 🟡 P2（PR #449 review F6 carry-over）：S3+S5 落地的 `cmd/corebundle/setup_pg_integration_test.go` 用 `outbox.NoopWriter{}`，未实测 L2 outbox 原子性；S4 cell 切到 runtime Store 时同 PR 落 `TestSetupEndpoints_FirstRunFlow_PG_WithRealWriter`，使用 `adapterpg.NewOutboxWriter` + outbox migrations + relay worker，端到端验证 setup user 写入 + `user.created` 事件原子提交（同 tx 失败回滚）
+- **PR449-FU-SETUP-PG-E2E-REAL-WRITER-01** 🟠 P1（PR #449 review round-2 F6 + round-3 重提 — 升级 P2→P1）：S3+S5 落地的 `cmd/corebundle/setup_pg_integration_test.go` 用 `outbox.NoopWriter{}`，未实测 L2 outbox 原子性。round-3 reviewer 重新提出此项并主张为合并阻塞；用户裁决"忽略 + 更新计划文档"——本条目即裁决落地。S4 cell 切到 runtime Store 时**必须**同 PR 落 `TestSetupEndpoints_FirstRunFlow_PG_WithRealWriter`：(a) wire `adapterpg.NewOutboxWriter` 替代 `NoopWriter`；(b) 验证 happy path 同 tx 提交后 `outbox` 表 `user.created.v1` 行存在；(c) 通过故障注入（`TxRunner` 包装层）验证 user 写入失败时 outbox 行不存在（rollback 同步）；(d) 通过 outbox emit 失败注入验证 user 行不存在。具体 fault-injection 范式参考 `runtime/outbox/relay_test.go::WaitFor` + 自定义 wrapper TxRunner。该测试是 ADR-credential D5 同 tx 撤销协议的端到端验证，不应再延迟到 S6/S7。
 
 **联动激活**（033 B2.A 4 项重新组织）：
 - RBAC-ASSIGN-LEVEL-UPGRADE-01：rbacassign L0 → L1

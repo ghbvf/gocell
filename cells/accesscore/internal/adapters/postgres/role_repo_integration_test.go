@@ -273,7 +273,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		assert.Equal(t, 1, count)
 	})
 
-	t.Run("RemoveFromUserIfNotLast_sole_holder_returns_ErrAuthForbidden", func(t *testing.T) {
+	t.Run("RemoveFromUserIfNotLast_sole_holder_returns_ErrAuthLastAdminProtected", func(t *testing.T) {
 		roleID := "sole_" + uuid.NewString()[:8]
 		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "SOLE")))
 
@@ -286,7 +286,9 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		assert.False(t, changed)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
-		assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
+		// Both app-level CTE detect path and DB-trigger safety-net path return
+		// the same errcode for the "sole holder" invariant (round-3 unification).
+		assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code)
 		assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
 		assert.Contains(t, ec.Message, "only holder")
 	})
@@ -357,7 +359,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 // TestRemoveFromUserIfNotLast_ConcurrentRace verifies that the FOR UPDATE CTE
 // in removeIfNotLastSQL serializes two concurrent callers correctly when exactly
 // two holders exist for a role. Only one removal may succeed; the other must
-// return ErrAuthForbidden (last-holder error).
+// return ErrAuthLastAdminProtected (last-holder error).
 func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
 	defer cleanup()
@@ -393,8 +395,8 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 	wg.Wait()
 
 	// Exactly one should succeed (changed=true, err=nil) and one should get
-	// either ErrAuthForbidden (role held, sole holder) or (false, nil) idempotent
-	// no-op (the second call arrived after the first committed).
+	// either ErrAuthLastAdminProtected (role held, sole holder) or (false, nil)
+	// idempotent no-op (the second call arrived after the first committed).
 	successCount := 0
 	forbiddenCount := 0
 	for _, r := range results {
@@ -408,7 +410,7 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 			continue
 		}
 		var ec *errcode.Error
-		if errors.As(r.err, &ec) && ec.Code == errcode.ErrAuthForbidden {
+		if errors.As(r.err, &ec) && ec.Code == errcode.ErrAuthLastAdminProtected {
 			forbiddenCount++
 			continue
 		}

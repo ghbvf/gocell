@@ -291,7 +291,7 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 			continue
 		}
 		var ecErr *errcode.Error
-		if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthForbidden {
+		if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthLastAdminProtected {
 			rejected++
 			continue
 		}

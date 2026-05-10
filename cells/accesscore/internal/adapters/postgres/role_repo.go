@@ -252,8 +252,11 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 // when exactly two holders exist (TOCTOU-safe under READ COMMITTED). Returns:
 //   - (true, nil)  — role was held and successfully removed.
 //   - (false, nil) — role was not held (idempotent no-op).
-//   - (false, ErrAuthForbidden) — user is the sole holder; removal refused.
-//   - (false, ErrAuthLastAdminProtected) — DB trigger safety net fired (direct DELETE path).
+//   - (false, ErrAuthLastAdminProtected) — user is the sole holder; both the
+//     app-level CTE detect path and the DB trigger safety-net path return the
+//     same errcode so client handlers match a single business invariant
+//     (S3+S5 PR #449 round-3 unification — was split between ErrAuthForbidden
+//     for app-level and ErrAuthLastAdminProtected for trigger).
 func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	var userHeldRole, wasDeleted bool
 	row := r.queryRowCtx(ctx, removeIfNotLastSQL, userID, roleID)
@@ -276,8 +279,9 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 		// Role held and removed successfully.
 		return true, nil
 	default:
-		// Role held but not removed: user is the sole holder.
-		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+		// Role held but not removed: user is the sole holder. Same errcode as
+		// the DB trigger path (line 263) — single business invariant.
+		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 			"cannot revoke role: this is the only holder; assign the role to another user first",
 			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
 	}
