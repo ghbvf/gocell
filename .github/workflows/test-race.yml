@@ -55,3 +55,15 @@ jobs:
             ./runtime/... \
             ./pkg/... \
             ./tools/archtest/internal/typeseval/...
+
+      # PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE: race detection for the PG
+      # adapter integration tests. Closes the gap where startup-hardening
+      # store concurrency (txRunner ambient-tx + jti UNIQUE retries +
+      # session.Store conformance fan-out) was previously only exercised
+      # without -race. The integration build tag opts in the testcontainer
+      # PG path; the runner image carries Docker so containers come up.
+      - name: go test -race -tags=integration (postgres adapter)
+        run: |
+          go test -race -count=1 -timeout 12m -tags=integration \
+            ./adapters/postgres/... \
+            ./cells/accesscore/internal/adapters/postgres/...

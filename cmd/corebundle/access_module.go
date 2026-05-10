@@ -99,6 +99,23 @@ func (m AccessCoreModule) Provide(
 			accesscore.WithOutboxDeps(nil, writer),
 			accesscore.WithTxManager(txMgr),
 		)
+		// Cell-private PG repos override the in-memory defaults installed by
+		// WithInMemoryDefaults above (S3+S5: users/roles persisted in PG).
+		// Session repository stays mem until S4 wires the runtime
+		// session.Store (PG implementation lives in adapters/postgres but is
+		// not consumed by the cell yet).
+		pgUserRepo, err := accesscore.NewPGUserRepository(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGUserRepository: %w", err)
+		}
+		pgRoleRepo, err := accesscore.NewPGRoleRepository(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGRoleRepository: %w", err)
+		}
+		accessOpts = append(accessOpts,
+			accesscore.WithUserRepository(pgUserRepo),
+			accesscore.WithRoleRepository(pgRoleRepo),
+		)
 		// Wire the ConfigGetter for the configreceive slice to fetch entry values
 		// from configcore's internal GET /internal/v1/config/{key} endpoint after
 		// an upsert event (contract: http.config.internal.get.v1).

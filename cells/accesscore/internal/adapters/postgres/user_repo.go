@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -78,8 +79,10 @@ func (r *PGUserRepo) queryRowCtx(ctx context.Context, sql string, args ...any) p
 
 const (
 	insertUserSQL = `
-INSERT INTO users (id, username, email, password_hash, password_reset_required, status, creation_source, authz_epoch, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`
+INSERT INTO users (
+    id, username, email, password_hash, password_reset_required,
+    status, creation_source, authz_epoch, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`
 
 	selectUserByIDSQL = `
 SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at
@@ -130,7 +133,7 @@ func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, erro
 	row := r.queryRowCtx(ctx, selectUserByIDSQL, id)
 	u, err := scanUser(row)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
@@ -145,7 +148,7 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 	row := r.queryRowCtx(ctx, selectUserByUsernameSQL, username)
 	u, err := scanUser(row)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("username=%q", username)))

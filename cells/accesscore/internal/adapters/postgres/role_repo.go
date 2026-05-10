@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -151,7 +152,7 @@ func (r *PGRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, erro
 	row := r.queryRowCtx(ctx, selectRoleByIDSQL, id)
 	role, err := scanRole(row)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
