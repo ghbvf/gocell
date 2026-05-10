@@ -35,7 +35,7 @@ The K#09 plan originally called for a new `tools/codegen/assemblygen/` subpackag
 
 **3. Flip `ContractMeta.Codegen` default from false to true (parser funnel).**
 
-`kernel/metadata.parseContract` now inspects the yaml AST: when `codegen:` is absent, `m.Codegen = true`. Explicit `codegen: false` is the only opt-out. The 5 deferred `kind=command` contracts in `examples/iotdevice/contracts/command/device-command/*` were marked explicit `codegen: false` to preserve their K#06 deferred status under the new default-true world.
+`kernel/metadata.parseContract` now inspects the yaml AST: when `codegen:` is absent, `m.Codegen = true`. Explicit `codegen: false` is the only opt-out. The 5 deferred `kind=command` contracts under `examples/iotdevice/contracts/command/devicecommand/` (filesystem path retains the legacy hyphen for git history; ADR refers to the logical contract bundle) were marked explicit `codegen: false` to preserve their K#06 deferred status under the new default-true world.
 
 This change closes the K#06 ADR's pending "remove the opt-in" item: the funnel mechanism is the parser, not a per-contract flag. Scaffold output (`tools/codegen/cellgen/templates/scaffold-contract.tmpl`) **never emits `codegen:`** — guarded by archtest `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01`.
 

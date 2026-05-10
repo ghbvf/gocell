@@ -74,9 +74,9 @@ func scaffoldAssembly(root string, args []string) error {
 		yamlRel := filepath.Join("assemblies", *id, "assembly.yaml")
 		runRel := filepath.Join("cmd", *id, "run.go")
 		appRel := filepath.Join("cmd", *id, "app.go")
-		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(yamlRel))
-		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(runRel))
-		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(appRel))
+		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(yamlRel))
+		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(runRel))
+		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(appRel))
 		return nil
 	}
 

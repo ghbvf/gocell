@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -55,7 +56,7 @@ func validateScaffoldText(value, field string) error {
 // scaffoldContract to keep cognitive complexity inside the project budget.
 func validateContractFlags(id, kind, owner string) ([]string, error) {
 	if id == "" {
-		return nil, fmt.Errorf("--id is required")
+		return nil, errors.New(errMsgIDRequired)
 	}
 	if kind == "" {
 		return nil, fmt.Errorf("--kind is required")
@@ -92,7 +93,7 @@ func validateContractFlags(id, kind, owner string) ([]string, error) {
 // inside the project budget.
 func validateJourneyFlags(id, goal, team, cells string) ([]string, error) {
 	if id == "" {
-		return nil, fmt.Errorf("--id is required")
+		return nil, errors.New(errMsgIDRequired)
 	}
 	if goal == "" {
 		return nil, fmt.Errorf("--goal is required")
@@ -137,8 +138,17 @@ const (
 	withHTTPUsage     = "include an HTTP example contract in the bundle (default if neither --with-events nor --with-both is set)"
 	withEventsFlag    = "with-events"
 	withEventsUsage   = "include an event example contract in the bundle"
-	withBothFlag      = "with-both"
-	withBothUsage     = "include both HTTP and event example contracts in the bundle"
+	// errMsgIDRequired is the canonical "--id required" CLI error message.
+	// Extracted to avoid SonarCloud duplicate-literal smell across the four
+	// scaffold subcommand validators (cell/slice/contract/journey/assembly).
+	errMsgIDRequired = "--id is required"
+	// dryRunCreatePathFmt is the canonical single-path dry-run report line.
+	// Used by scaffold cell + scaffold assembly when listing the files that
+	// would be written. The 3-argument variant (Kind/ID/Target) lives only
+	// in reportScaffold and stays inline.
+	dryRunCreatePathFmt = "(dry-run) Would create %s\n"
+	withBothFlag        = "with-both"
+	withBothUsage       = "include both HTTP and event example contracts in the bundle"
 )
 
 // runScaffold implements:
@@ -243,7 +253,7 @@ func scaffoldCell(root string, args []string) error {
 	}
 
 	if *id == "" {
-		return fmt.Errorf("--id is required")
+		return errors.New(errMsgIDRequired)
 	}
 	if *team == "" {
 		return fmt.Errorf("--team is required")
@@ -285,8 +295,8 @@ func scaffoldCell(root string, args []string) error {
 		// Report each file the bundle would write so callers can see paths.
 		yamlPath := filepath.Join("cells", *id, "cell.yaml")
 		goPath := filepath.Join("cells", *id, "cell.go")
-		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(yamlPath))
-		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(goPath))
+		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(yamlPath))
+		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(goPath))
 		fmt.Printf("(dry-run) Would create cell bundle (slice + contract) under %s\n",
 			filepath.ToSlash(filepath.Join("cells", *id)))
 		return nil
@@ -368,7 +378,7 @@ func scaffoldSlice(root string, args []string) error {
 	}
 
 	if *id == "" {
-		return fmt.Errorf("--id is required")
+		return errors.New(errMsgIDRequired)
 	}
 	if *cellID == "" {
 		return fmt.Errorf("--cell is required")
