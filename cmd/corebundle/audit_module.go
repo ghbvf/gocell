@@ -54,7 +54,8 @@ func (AuditCoreModule) Provide(
 		AdapterMode: shared.Topology.AdapterMode,
 		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     hmacPrimary,
-		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
+		// DEMO-KEY: registered in wellKnownDemoKeys; rejected by rejectDemoKey in real mode.
+		DevDefault: "dev-hmac-key-replace-in-prod!!!!",
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
@@ -72,6 +73,10 @@ func (AuditCoreModule) Provide(
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
+	// F7: Zero the HMAC key local variable after Protocol construction.
+	// WithChainHMAC already zeroes the caller's slice internally; this is a
+	// belt-and-suspenders clear for any residual local reference.
+	clear(hmacKey)
 
 	// Build ledger.Store: postgres or mem.
 	var ledgerStore ledger.Store

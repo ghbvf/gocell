@@ -48,6 +48,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_namespace_ts_id
 CREATE INDEX IF NOT EXISTS idx_audit_namespace_event_type
     ON audit_entries (namespace, event_type);
 
+-- Future index additions on this table must use CREATE INDEX CONCURRENTLY (table no longer empty after first deploy).
+
 -- +goose Down
 DROP INDEX IF EXISTS idx_audit_namespace_event_type;
 DROP INDEX IF EXISTS idx_audit_namespace_ts_id;

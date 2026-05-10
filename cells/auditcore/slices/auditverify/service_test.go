@@ -87,6 +87,8 @@ func TestService_VerifyChain_ValidEntries(t *testing.T) {
 	result, err := svc.VerifyChain(context.Background(), 1, 3)
 	require.NoError(t, err)
 	assert.True(t, result.Valid)
+	// F25: valid chain must return FirstInvalidSeq == -1 (sentinel from store).
+	assert.Equal(t, int64(-1), result.FirstInvalidSeq)
 }
 
 func TestService_VerifyChain_InvalidRange_Error(t *testing.T) {

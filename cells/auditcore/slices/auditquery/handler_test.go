@@ -21,12 +21,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func TestToAuditEntryResponse_NilInput(t *testing.T) {
-	var got AuditEntryResponse
-	assert.NotPanics(t, func() { got = toAuditEntryResponse(nil) })
-	assert.Zero(t, got.ID)
-}
-
 // newHandlerMux registers auditquery routes under the canonical API prefix,
 // mirroring production wiring so all auth.Mount guards are exercised.
 func newHandlerMux(svc *Service) http.Handler {
@@ -239,28 +233,68 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 	}
 }
 
+// TestAuditEntryResponse_ExcludesInternalFields verifies B2-C-09 boundary:
+// internal hash-chain fields (PrevHash, Hash) are excluded from API responses,
+// and sensitive payload fields are redacted.
 func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
-	// Use a ledger.Entry to validate that internal hash-chain fields (PrevHash,
-	// Hash) are excluded from the API response (B2-C-09 boundary enforcement).
-	resp := toAuditEntryResponse(&ledger.Entry{
-		ID: "ae-1", EventID: "evt-1", EventType: "test.event.v1",
-		ActorID: "usr-1", Timestamp: time.Now(),
-		Payload:  []byte(`{"secret":"data"}`),
-		PrevHash: "abc123", Hash: "def456",
-	})
-	b, err := json.Marshal(resp)
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
-	body := string(b)
+	mux := newHandlerMux(svc)
 
-	assert.Contains(t, body, `"id"`)
-	assert.Contains(t, body, `"eventId"`)
-	assert.Contains(t, body, `"eventType"`)
-	assert.Contains(t, body, `"actorId"`)
-	assert.Contains(t, body, `"timestamp"`)
-	assert.Contains(t, body, `"payload"`)
+	// Seed an entry with sensitive payload and internal hash-chain fields.
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ae-1", EventID: "evt-1", EventType: "test.event.v1",
+		ActorID: "usr-1", Timestamp: base,
+		Payload: []byte(`{"data":"public","password":"secret123"}`),
+	}))
 
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-1", nil)
+	req = req.WithContext(auth.TestContext("usr-1", nil))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// Internal hash-chain fields must not appear in the response.
 	assert.NotContains(t, body, `"prevHash"`)
 	assert.NotContains(t, body, `"hash"`)
+
+	// F23: Sensitive payload fields must be redacted (password → <REDACTED>).
+	// json.Marshal HTML-escapes '<' and '>' in string values; the wire body
+	// therefore contains the unicode-escape form of the mask.
+	assert.NotContains(t, body, "secret123", "sensitive value must not appear in response")
+	assert.Contains(t, body, `\u003cREDACTED\u003e`, "redaction mask must appear in payload")
+}
+
+// TestAuditEntryResponse_SensitivePayload_Redacted verifies that a payload
+// containing a sensitive key ('password') is returned with the value replaced
+// by the redaction mask, and the original value is not present.
+// F23: HTTP-path redaction coverage.
+func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ae-pw", EventID: "evt-pw", EventType: "test.redact.v1",
+		ActorID: "usr-2", Timestamp: base,
+		Payload: []byte(`{"password":"secret123","data":"public"}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-2", nil)
+	req = req.WithContext(auth.TestContext("usr-2", nil))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.NotContains(t, body, "secret123", "secret value must be redacted")
+	assert.Contains(t, body, `\u003cREDACTED\u003e`, "redaction mask must be present")
 }
 
 // TestHandler_RegisterRoutes_AuthzNegative validates that RegisterRoutes installs

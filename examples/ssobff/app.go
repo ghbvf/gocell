@@ -324,6 +324,7 @@ func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, nw outbox.Wr
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: parse audit namespace: %w", err)
 	}
+	// WARNING: demo key only. Production deployments must inject from a secret manager.
 	protocol, err := ledger.NewProtocol(
 		ledger.WithChainHMAC([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
 		ledger.WithNamespace(ns),

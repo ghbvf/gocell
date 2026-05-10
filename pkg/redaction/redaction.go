@@ -252,14 +252,25 @@ func redactSlogValue(v slog.Value) slog.Value {
 	}
 }
 
+// redactPayloadKeyPattern matches JSON object keys that contain sensitive
+// field names. Compiled once at package init (F9 package-level var).
+var redactPayloadKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern + `)$`)
+
 // RedactPayload scrubs sensitive JSON field values from a raw JSON payload
 // before it is returned to API consumers (B2-C-09). It parses the JSON,
-// removes any key whose name matches the sensitiveKeyPattern regex, and
-// re-marshals the result.
+// replaces the value of any key whose name matches the sensitiveKeyPattern
+// regex with Mask, and re-marshals the result.
 //
-// Non-JSON input is returned as-is (fail-closed: don't mask → return raw bytes
-// so callers can log the failure and decide on redaction policy themselves;
-// the callers in auditquery handler already gate on valid JSON).
+// F8: non-JSON-object input (arrays, scalars, malformed JSON) is returned as
+// []byte("<REDACTED>") — fail-closed. The previous behavior of returning the
+// raw bytes is unsafe: a non-object payload arriving at the audit query
+// endpoint would have been forwarded to API consumers without redaction.
+//
+// Note: json.Marshal HTML-escapes the Mask value ("<REDACTED>") to
+// "<REDACTED>" in the returned bytes. Callers that embed the
+// result as json.RawMessage in a response struct should be aware that a
+// default json.Encoder on the outer struct will re-apply the same escaping,
+// preserving the unicode-escape form in the wire body.
 //
 // Known limitation: only top-level keys are scrubbed. Nested sensitive keys
 // require recursive traversal — acceptable given audit payloads are event
@@ -271,18 +282,19 @@ func RedactPayload(payload []byte) []byte {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(payload, &m); err != nil {
-		// Not a JSON object — return as-is.
-		return payload
+		// F8: not a JSON object (array, scalar, malformed JSON) — fail-closed.
+		return []byte(Mask)
 	}
-	re := regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern + `)$`)
 	for k := range m {
-		if re.MatchString(k) {
+		if redactPayloadKeyPattern.MatchString(k) {
 			m[k] = Mask
 		}
 	}
 	out, err := json.Marshal(m)
 	if err != nil {
-		return payload
+		// Marshal failure is extremely unlikely for a map[string]any that
+		// was just unmarshalled from valid JSON; fall-closed.
+		return []byte(Mask)
 	}
 	return out
 }

@@ -29,8 +29,10 @@ func buildTestAuditProtocol(t testing.TB, hmacKey []byte) *ledger.Protocol {
 	return p
 }
 
-// buildTestAuditStore creates a ledger.MemStore for integration tests.
-func buildTestAuditStore(t testing.TB, p *ledger.Protocol) *ledger.MemStore {
+// buildTestAuditStore creates a ledger.Store (backed by MemStore) for integration tests.
+// F16: return type is ledger.Store (interface) so callers are decoupled from the
+// concrete MemStore type; only storetest tamper-helpers need the concrete type.
+func buildTestAuditStore(t testing.TB, p *ledger.Protocol) ledger.Store {
 	t.Helper()
 	store, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err, "audit mem store construction")

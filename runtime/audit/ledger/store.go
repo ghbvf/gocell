@@ -72,9 +72,27 @@ type QueryListParams struct {
 //     chain linkage. Returns valid=true and firstInvalidSeq=-1 when all
 //     entries are intact.
 type Store interface {
+	// Append persists a new entry into the namespace's hash chain. Computes
+	// PrevHash from Tail, assigns SeqNo, and computes Hash via Protocol.ComputeHash.
+	// Rejects invalid JSON payload (ErrValidationFailed) and duplicate content
+	// fingerprints (ErrAuditLedgerAlreadyExists). Thread-safe.
 	Append(ctx context.Context, e *Entry) error
+
+	// Tail returns the current chain tail snapshot (SeqNo, PrevHash, EntryCount).
+	// Returns zero TailSnapshot when the store is empty (not an error).
 	Tail(ctx context.Context) (TailSnapshot, error)
+
+	// GetBySeq fetches a single entry by sequence number. Returns
+	// ErrAuditLedgerNotFound when the sequence number does not exist.
 	GetBySeq(ctx context.Context, seq int64) (*Entry, error)
+
+	// Query lists entries matching AuditFilters with simple pagination.
+	// Returns an empty (non-nil) slice when no entries match.
 	Query(ctx context.Context, filters AuditFilters, params QueryListParams) ([]*Entry, error)
+
+	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks
+	// chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1 when
+	// all entries are intact. Returns valid=false and the first invalid seq_no
+	// when tampering is detected.
 	Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error)
 }

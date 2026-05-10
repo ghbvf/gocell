@@ -102,6 +102,13 @@ func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 // constructed against pool B correctly reads the tail state written by pool A.
 // This simulates an application restart where the new process opens a fresh
 // connection pool to the same DB.
+//
+// F26: Current limitation — both pool A and pool B share the same *pgxpool.Pool
+// from setupPostgres. This simulates application restart by constructing a fresh
+// TxManager + Store on the same DB; true cross-pool restart (separate pgxpool.New
+// calls to the same DSN) needs testcontainer-level DSN access which is not exposed
+// by the current setupPostgres helper. The Tail-consistency invariant is verified
+// by constructing a second LedgerStore on the same underlying pool.
 func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	base, cleanup := setupPostgres(t)
 	t.Cleanup(cleanup)

@@ -15,7 +15,7 @@
 | CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 | 🔴 Cx1 | 标 L0 实为 L1 |
 | B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 | 🟠 P1 | corebundle 仍 `WithInMemoryDefaults` + archtest 类型化 |
 | PR338-FU-LOGIN-DURABLE-TX-ATOMICITY-TEST | 🟠 | 卡 PG session repo |
-| ~~PR392-FU-AUDIT-CHAIN-WIRING~~ | ✅ closed S7 | auditappend-session sub-slice 显式订阅 event.session.auth-failed.v1 |
+| PR392-FU-AUDIT-CHAIN-WIRING | 🟠 P2 待合同（event.session.auth-failed.v1 schema 未发布；S7 sub-slice 留接入 stub）|
 | P3-TD-10 TOCTOU 竞态修复 | 🟠 P2 | 卡 PG session repo + Redis distlock |
 | B2-PROVISIONER-MUTEX-REVIEW | 🟠 P2 | PG adapter 落地后审视 mutex 是否仍需 |
 | B2-T-02 RBACASSIGN event contract waiver expiry | 🟠 P1 | waiver 到期前补真实 contract |
@@ -27,7 +27,7 @@
 | X5 P3-TD-11 accesscore domain 拆分 | 🟡 P3 | User/Session/Role 拆分（卡 X1） |
 | X13 REFRESH-PARTITION-01 | 🟠 P3 | `expires_at` range 分区，触发条件未达 |
 
-## D. auditcore — 全部 closed by S7（PR #TBD，refactor/554-pg-s7-audit-ledger）
+## D. auditcore — S7 大部分 closed by PR #450（refactor/554-pg-s7-audit-ledger）
 
 | ID | 状态 | 落地点 |
 |---|---|---|
@@ -40,6 +40,7 @@
 | ~~C-DC9 auditarchive 死代码~~ | ✅ closed S7 | 整 slice + s3archive adapter + ports/mem 全部删除（不留 stub） |
 | ~~PR266-AUDITAPPEND-STRICT~~ | ✅ closed S7 | Protocol 默认 strict（json.Decoder.DisallowUnknownFields），删除 toggle 设计 |
 | ~~CELLS-SLICE-MULTI-VERB-DECOMPOSE-01（auditappend）~~ | ✅ closed S7 | 13 topic → 4 sub-slice（auditappend-session/user/config/role），无共享 dispatch |
+| PR392-FU-AUDIT-CHAIN-WIRING | 🟠 P2 待合同 | event.session.auth-failed.v1 schema 未发布；S7 auditappendsession sub-slice 留接入 stub，待合同发布后补充订阅 |
 
 ## E. configcore
 

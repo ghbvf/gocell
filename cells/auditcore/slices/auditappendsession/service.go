@@ -138,7 +138,8 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 
 	s.logger.Info("audit entry appended",
 		slog.String("entry_id", e.ID),
-		slog.String("event_type", entry.EventType))
+		slog.String("event_type", entry.EventType),
+		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
 }
 

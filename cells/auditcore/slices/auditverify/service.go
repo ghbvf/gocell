@@ -104,9 +104,21 @@ func (s *Service) VerifyChain(ctx context.Context, fromSeq, toSeq int64) (*Verif
 		return result, fmt.Errorf("audit-verify: persist: %w", persistErr)
 	}
 
-	s.logger.Info("hash chain verification completed",
-		slog.Bool("valid", valid),
-		slog.Int64("entries_checked", entriesChecked))
+	// F19: add from_seq/to_seq to all log lines; escalate to Warn when chain is invalid.
+	if !valid {
+		s.logger.Warn("hash chain verification failed",
+			slog.Bool("valid", valid),
+			slog.Int64("from_seq", fromSeq),
+			slog.Int64("to_seq", toSeq),
+			slog.Int64("entries_checked", entriesChecked),
+			slog.Int64("first_invalid_seq", firstInvalidSeq))
+	} else {
+		s.logger.Info("hash chain verification completed",
+			slog.Bool("valid", valid),
+			slog.Int64("from_seq", fromSeq),
+			slog.Int64("to_seq", toSeq),
+			slog.Int64("entries_checked", entriesChecked))
+	}
 
 	return result, nil
 }

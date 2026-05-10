@@ -1,7 +1,8 @@
 # ADR: Audit Ledger Protocol（typed Protocol primitive 决议）
 
 **Date**: 2026-05-10
-**Status**: Proposed
+**Status**: Accepted
+**Accepted by**: PR #450 / 2026-05-10
 **Related plan**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` S7
 **Related ADRs**:
 

@@ -16,32 +16,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// AuditEntryResponse is the public DTO for ledger.Entry, excluding internal
-// hash-chain integrity fields (PrevHash, Hash) that are implementation details.
-// Payload is redacted of sensitive fields (B2-C-09) before being returned.
-type AuditEntryResponse struct {
-	ID        string          `json:"id"`
-	EventID   string          `json:"eventId"`
-	EventType string          `json:"eventType"`
-	ActorID   string          `json:"actorId"`
-	Timestamp time.Time       `json:"timestamp"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-}
-
-func toAuditEntryResponse(e *ledger.Entry) AuditEntryResponse {
-	if e == nil {
-		return AuditEntryResponse{}
-	}
-	return AuditEntryResponse{
-		ID:        e.ID,
-		EventID:   e.EventID,
-		EventType: e.EventType,
-		ActorID:   e.ActorID,
-		Timestamp: e.Timestamp,
-		Payload:   e.Payload,
-	}
-}
-
 // auditQueryPolicy permits the request when:
 //   - actorId query param is empty or equals authenticated subject (self-access)
 //   - OR subject has the "admin" role
