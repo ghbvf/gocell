@@ -81,7 +81,22 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	assert.Contains(t, ec.Message, "auditappenduser")
+	// Const-literal message (MESSAGE-CONST-LITERAL-01); slice identity flows
+	// through WithDetails so wire output stays PII-safe.
+	assert.Equal(t, "auditappender: TxRunner required; use WithTxManager", ec.Message)
+	assertDetail(t, ec, "slice", "auditappenduser")
+}
+
+// assertDetail asserts a slog.Attr key/value pair appears in ec.Details.
+func assertDetail(t *testing.T, ec *errcode.Error, key, want string) {
+	t.Helper()
+	for _, attr := range ec.Details {
+		if attr.Key == key {
+			assert.Equal(t, want, attr.Value.String(), "errcode detail %q value", key)
+			return
+		}
+	}
+	t.Fatalf("errcode detail %q not present (got %v)", key, ec.Details)
 }
 
 // TestActorExtraction is the strategy decision table for the two ActorMode

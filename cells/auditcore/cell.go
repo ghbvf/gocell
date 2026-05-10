@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendconfig"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendrole"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendsession"
@@ -347,60 +348,39 @@ func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 
 // initSlices constructs the 4 auditappend sub-slices and the auditverify slice.
 // auditquery is initialized separately in initQuerySlice after cursor codec resolve.
+//
+// All 4 auditappend* slices share the same appender.Service implementation;
+// each slice package contributes only its Spec (see slices/auditappendxxx/
+// service.go). The single-source ext is enforced by AUDITCORE-APPENDER-
+// SINGLE-SOURCE-01 archtest plus the type-system Hard defenses in
+// cells/auditcore/internal/appender (sealed Spec / sealed ActorMode /
+// type alias forbidding methods on non-local types).
+//
+// L2: store.Append + emitter.Emit run inside the same txRunner.RunInTx block
+// (OutboxFact pattern). Consumer receives cross-cell events (L3 source), but
+// the write side is L2 atomic — F3 correction.
 func (c *AuditCore) initSlices() error {
-	// auditappend-session
-	sessionSvc, err := auditappendsession.NewService(
-		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
-		auditappendsession.WithEmitter(c.emitter),
-		auditappendsession.WithTxManager(c.txRunner),
-	)
-	if err != nil {
-		return fmt.Errorf("auditappend-session: %w", err)
+	appenders := []struct {
+		spec   appender.Spec
+		target **appender.Service
+	}{
+		{auditappendsession.Spec, &c.appendSessionSvc},
+		{auditappenduser.Spec, &c.appendUserSvc},
+		{auditappendconfig.Spec, &c.appendConfigSvc},
+		{auditappendrole.Spec, &c.appendRoleSvc},
 	}
-	c.appendSessionSvc = sessionSvc
-	// L2: store.Append + emitter.Emit run inside the same txRunner.RunInTx block
-	// (OutboxFact pattern). Consumer receives cross-cell events (L3 source), but
-	// the write side is L2 atomic — F3 correction.
-	c.AddSlice(cell.NewBaseSlice("auditappendsession", "auditcore", cell.L2))
-
-	// auditappend-user
-	userSvc, err := auditappenduser.NewService(
-		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
-		auditappenduser.WithEmitter(c.emitter),
-		auditappenduser.WithTxManager(c.txRunner),
-	)
-	if err != nil {
-		return fmt.Errorf("auditappend-user: %w", err)
+	for _, a := range appenders {
+		svc, err := appender.NewService(
+			a.spec, c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
+			appender.WithEmitter(c.emitter),
+			appender.WithTxManager(c.txRunner),
+		)
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.spec.Name(), err)
+		}
+		*a.target = svc
+		c.AddSlice(cell.NewBaseSlice(a.spec.Name(), "auditcore", cell.L2))
 	}
-	c.appendUserSvc = userSvc
-	// L2: same OutboxFact pattern as auditappendsession — F3 correction.
-	c.AddSlice(cell.NewBaseSlice("auditappenduser", "auditcore", cell.L2))
-
-	// auditappend-config
-	configSvc, err := auditappendconfig.NewService(
-		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
-		auditappendconfig.WithEmitter(c.emitter),
-		auditappendconfig.WithTxManager(c.txRunner),
-	)
-	if err != nil {
-		return fmt.Errorf("auditappend-config: %w", err)
-	}
-	c.appendConfigSvc = configSvc
-	// L2: same OutboxFact pattern as auditappendsession — F3 correction.
-	c.AddSlice(cell.NewBaseSlice("auditappendconfig", "auditcore", cell.L2))
-
-	// auditappend-role
-	roleSvc, err := auditappendrole.NewService(
-		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
-		auditappendrole.WithEmitter(c.emitter),
-		auditappendrole.WithTxManager(c.txRunner),
-	)
-	if err != nil {
-		return fmt.Errorf("auditappend-role: %w", err)
-	}
-	c.appendRoleSvc = roleSvc
-	// L2: same OutboxFact pattern as auditappendsession — F3 correction.
-	c.AddSlice(cell.NewBaseSlice("auditappendrole", "auditcore", cell.L2))
 
 	// auditverify
 	verifySvc, err := auditverify.NewService(
