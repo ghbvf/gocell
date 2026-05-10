@@ -176,7 +176,7 @@ metrics:
         - cell
         - slice
         - reason
-      file: cmd/corebundle/shared_deps.go
+      file: cmd/corebundle/shared_deps_build.go
     - name: config_event_settlement_total
       fqName: gocell_config_event_settlement_total
       namespace: gocell
@@ -187,7 +187,7 @@ metrics:
         - slice
         - disposition
         - result
-      file: cmd/corebundle/shared_deps.go
+      file: cmd/corebundle/shared_deps_build.go
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell
@@ -246,7 +246,7 @@ metrics:
         - "100"
         - "200"
         - "500"
-      file: cmd/corebundle/bundle.go
+      file: cmd/corebundle/bundle_configcore_storage.go
     - name: outbox_cleaned_total
       fqName: gocell_outbox_cleaned_total
       namespace: gocell
@@ -255,7 +255,7 @@ metrics:
       labels:
         - cell
         - status
-      file: cmd/corebundle/bundle.go
+      file: cmd/corebundle/bundle_configcore_storage.go
     - name: outbox_emit_failopen_dropped_total
       fqName: gocell_outbox_emit_failopen_dropped_total
       namespace: gocell
@@ -285,7 +285,7 @@ metrics:
         - "2.5"
         - "5"
         - "10"
-      file: cmd/corebundle/bundle.go
+      file: cmd/corebundle/bundle_configcore_storage.go
     - name: outbox_reclaimed_total
       fqName: gocell_outbox_reclaimed_total
       namespace: gocell
@@ -293,7 +293,7 @@ metrics:
       help: Total number of stale entries reclaimed by the relay.
       labels:
         - cell
-      file: cmd/corebundle/bundle.go
+      file: cmd/corebundle/bundle_configcore_storage.go
     - name: outbox_relayed_total
       fqName: gocell_outbox_relayed_total
       namespace: gocell
@@ -302,7 +302,7 @@ metrics:
       labels:
         - cell
         - outcome
-      file: cmd/corebundle/bundle.go
+      file: cmd/corebundle/bundle_configcore_storage.go
     - name: stale_cipher_total
       fqName: gocell_config_stale_cipher_total
       namespace: gocell

@@ -178,10 +178,10 @@ cells, cellOpts, err := BuildApp(ctx, shared,
 )
 ```
 
-### Step 4. 在 `bundle.go`（或独立文件）写 `buildFooCoreOpts`
+### Step 4. 在 `bundle_<cell>_storage.go`（per-concern 文件，参照 `bundle_configcore_storage.go`）写 `buildFooCoreOpts`
 
 ```go
-// cmd/corebundle/bundle.go  (or foo_bundle.go)
+// cmd/corebundle/bundle_foocore_storage.go
 func buildFooCoreOpts(
 	ctx context.Context,
 	topo bootstrap.Topology,

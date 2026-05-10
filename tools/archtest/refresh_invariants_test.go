@@ -269,7 +269,7 @@ func bareServiceFieldCall(call *ast.CallExpr) (string, bool) {
 // production (non-_test.go) Go file across the entire repository:
 // adapters/postgres/schema_guard.go.
 //
-// Callers of DetectInvalidIndexes (e.g. migrator.go, cmd/corebundle/bundle.go)
+// Callers of DetectInvalidIndexes (e.g. migrator.go, cmd/corebundle/bundle_configcore_storage.go)
 // are allowed. Only a second *declaration* (func DetectInvalidIndexes ...) would
 // violate the rule, which would indicate B8 or future work introducing a
 // parallel invalid-index check path outside schema_guard.
