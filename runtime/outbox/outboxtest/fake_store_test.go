@@ -3,6 +3,7 @@ package outboxtest_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -252,5 +253,75 @@ func TestFakeStore_WaitFor_CtxCancelled(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("WaitFor err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestFakeStore_ReclaimStale_DeterministicBatchSelection verifies that when
+// stale claiming rows exceed batchSize, the reclaimed subset is deterministic
+// (oldest claimedAt first, id ASC tiebreaker) — mirroring the PG adapter's
+// ORDER BY claimed_at LIMIT N semantics. Without sorting, map iteration
+// would pick a random subset across runs.
+func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nowVal := base
+	s := outboxtest.NewFakeStore().WithClock(func() time.Time { return nowVal })
+
+	// Seed 5 rows with ascending CreatedAt so ClaimPending visits them in known order.
+	ids := []string{"e-1", "e-2", "e-3", "e-4", "e-5"}
+	for i, id := range ids {
+		s.Seed(outbox.ClaimedEntry{
+			Entry: kout.Entry{
+				ID:        id,
+				EventType: "test",
+				Topic:     "test",
+				Payload:   []byte(`{}`),
+				CreatedAt: base.Add(time.Duration(i) * time.Second),
+			},
+		})
+	}
+
+	// Claim each one at a time, advancing the clock between calls so each
+	// row gets a distinct claimedAt aligned with claim order.
+	for _, id := range ids {
+		claimed, err := s.ClaimPending(context.Background(), 1)
+		if err != nil {
+			t.Fatalf("ClaimPending: %v", err)
+		}
+		if len(claimed) != 1 || claimed[0].ID != id {
+			t.Fatalf("ClaimPending got %v, want single %s", claimed, id)
+		}
+		nowVal = nowVal.Add(time.Second)
+	}
+
+	// Advance the clock so all five claims are stale (claimTTL=5s; oldest is
+	// base+0s, youngest is base+4s, current time is base+15s, cutoff base+10s).
+	nowVal = nowVal.Add(10 * time.Second)
+
+	// batchSize=2 — must pick the two oldest claimedAt rows: e-1 and e-2.
+	count, err := s.ReclaimStale(context.Background(),
+		5*time.Second, 99, time.Millisecond, time.Millisecond, 2)
+	if err != nil {
+		t.Fatalf("ReclaimStale: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("ReclaimStale count = %d, want 2", count)
+	}
+
+	var reclaimed, stillClaiming []string
+	for _, row := range s.Snapshot() {
+		switch row.Status {
+		case "pending":
+			reclaimed = append(reclaimed, row.Entry.ID)
+		case "claiming":
+			stillClaiming = append(stillClaiming, row.Entry.ID)
+		}
+	}
+	wantReclaimed := []string{"e-1", "e-2"}
+	wantStill := []string{"e-3", "e-4", "e-5"}
+	if !slices.Equal(reclaimed, wantReclaimed) {
+		t.Errorf("reclaimed = %v, want %v (oldest claimedAt first, deterministic)", reclaimed, wantReclaimed)
+	}
+	if !slices.Equal(stillClaiming, wantStill) {
+		t.Errorf("stillClaiming = %v, want %v", stillClaiming, wantStill)
 	}
 }

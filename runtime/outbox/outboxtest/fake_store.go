@@ -105,8 +105,9 @@ func (s *FakeStore) notifyLocked() {
 }
 
 // Seed inserts rows directly (bypasses normal Writer). Used by test setup.
-// Rows with status "" default to "pending". Existing rows with the same ID
-// are overwritten.
+// Each row starts in "pending" status with the supplied Attempts; LeaseID,
+// claimed_at / published_at / dead_at / next_retry_at, and last_error are
+// reset to zero. Existing rows with the same ID are overwritten.
 func (s *FakeStore) Seed(entries ...outbox.ClaimedEntry) {
 	if len(entries) == 0 {
 		return
@@ -332,9 +333,10 @@ func (s *FakeStore) MarkDead(_ context.Context, id, leaseID string, attempts int
 
 // ReclaimStale transitions up to batchSize claiming rows whose claimed_at is
 // older than claimTTL back to pending or to dead (when attempts+1 >= maxAttempts).
-// Returns count of rows recovered across both destinations. Rows are visited
-// in stable map iteration order capped at batchSize so a backlog larger than
-// the cap is split across loop iterations on the caller side.
+// Returns count of rows recovered across both destinations. Eligible rows are
+// visited in claimed_at ASC order with id ASC tiebreaker, mirroring the PG
+// adapter's ORDER BY claimed_at LIMIT N semantics so a backlog larger than the
+// cap is split across loop iterations deterministically.
 func (s *FakeStore) ReclaimStale(
 	_ context.Context,
 	claimTTL time.Duration,
@@ -348,16 +350,16 @@ func (s *FakeStore) ReclaimStale(
 	now := s.now()
 	cutoff := now.Add(-claimTTL)
 
-	for _, r := range s.rows {
+	// Reuse the cleanup-path stable ordering helper so reclaim and cleanup
+	// share a single source of "eligible rows in deterministic order".
+	ids := s.eligibleIDsByTimeAsc(statusClaiming, cutoff,
+		func(r *fakeRow) *time.Time { return r.claimedAt })
+
+	for _, id := range ids {
 		if count >= batchSize {
 			break
 		}
-		if r.status != statusClaiming {
-			continue
-		}
-		if r.claimedAt == nil || !r.claimedAt.Before(cutoff) {
-			continue
-		}
+		r := s.rows[id]
 		newAttempts := r.attempts + 1
 		if newAttempts >= maxAttempts {
 			r.status = statusDead

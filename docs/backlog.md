@@ -406,7 +406,6 @@
 | F-04 | **CMD-GOCELL-VS-COREBUNDLE-DOC** — cmd/CLAUDE.md 主题是 corebundle 三层组装，对 cmd/gocell 在 Composition Root 中地位完全没着墨；修复: 文首加对照段：cmd/gocell = 治理/元数据/生成器 CLI（dev+CI）；cmd/corebundle = assemblies/corebundle/ 运行时组装产物 | doc | P2/Cx1 | 🟡 | — | `cmd/CLAUDE.md` | 030 §3 F-04 |
 | F-05 | **QODANA-WORKFLOW-AUDIT** — Qodana 与 CodeQL/Semgrep 双重覆盖、增量价值未在 yaml 注释说明；`pr-mode: false` 不阻断 PR；修复: 二选一 (a) 补 yaml 头部注释明确差异化覆盖；(b) retire workflow + 删 `QODANA_TOKEN` secret | doc | P2/Cx1 | 🟡 | — | `.github/workflows/qodana_code_quality.yml` | 030 §3 F-05 |
 | F-06 | **REQUIREMENTS-TRACEABILITY-CHAIN** — 无 `docs/requirements/` 目录；ADR/Roadmap/journey goal 三处隐含需求；contract.yaml/journey 无 `requirementID` 反向链；V 模型左侧追溯断点；修复: 引入 `docs/requirements/REQ-*.yaml` (id/text/category/priority/satisfiedBy/verify) + contract.yaml + journey schema 加 `requirementID: []` + archtest `REQ-TRACE-01` 双向校验 + 1-2 ADR | feat | P2/Cx3 | 🟡 | V 模型左侧补全启动 | `docs/requirements/` (新) + `kernel/metadata/` + `tools/archtest/` + ADR | 030 §3 F-06 |
-| TEST-D500MS-EVENTUALLY-MONITOR-01 | **`Eventually + D500ms` flake 监控** — 现状: PR#546 inventory 时识别两处 `require.Eventually(..., D500ms, ...)` 是 latency-上限断言（500ms 即测试参数本身），不能简单提 budget；修复: 若任一处出现 race CI flake，改用 deterministic sync(channel/Cond)（参考 `outboxtest.FakeStore.WaitFor` 模式） | test | Cx2 | 🟡 | 任一文件出现首次 race flake | `runtime/bootstrap/shutdown_barrier_test.go:98` + `runtime/bootstrap/bootstrap_test.go:2424` | PR#546 inventory carve-out |
 
 ---
 
