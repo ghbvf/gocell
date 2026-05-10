@@ -61,9 +61,24 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 	return func(c *DeviceCell) { c.deviceRepo = r }
 }
 
-// WithPublisher sets the outbox Publisher for event publishing.
-func WithPublisher(p outbox.Publisher) Option {
-	return func(c *DeviceCell) { c.publisher = p }
+// WithOutboxDeps wires the outbox Publisher for event publishing. devicecell
+// is L4 (DeviceLatent) — the direct-publish path is the source of truth and
+// there is no transactional outbox writer; the writer parameter is part of
+// the unified (pub, writer) signature shared with platform cells but is
+// intentionally unused here. Pass writer=nil at call sites.
+//
+// Accumulative: a nil pub leaves the previously-set value in place; multiple
+// calls combine non-nil arguments. `WithOutboxDeps(nil, nil)` is a no-op,
+// not a reset.
+//
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
+// ref: cells/auditcore/cell.go::WithOutboxDeps (platform-cell pattern)
+func WithOutboxDeps(pub outbox.Publisher, _ outbox.Writer) Option {
+	return func(c *DeviceCell) {
+		if pub != nil {
+			c.publisher = pub
+		}
+	}
 }
 
 // WithCursorCodec sets the cursor codec for pagination.
@@ -202,7 +217,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 	// Publisher is required (NIL-PUB-P1). Use &DiscardPublisher{} for demo mode.
 	if c.publisher == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			"devicecell requires publisher; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
+			"devicecell requires publisher; use WithOutboxDeps(&outbox.DiscardPublisher{}, nil) for demo mode")
 	}
 
 	// Durable mode still rejects noop publishers, but direct publish remains

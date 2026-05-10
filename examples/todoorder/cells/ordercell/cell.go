@@ -46,9 +46,28 @@ func WithRepository(r domain.OrderRepository) Option {
 	return func(c *OrderCell) { c.repo = r }
 }
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(c *OrderCell) { c.outboxWriter = w }
+// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer). The
+// framework composes them into an outbox.Emitter at Init() time via
+// cell.ResolveCellEmitter — the same path platform cells use.
+//
+// Accumulative: a nil argument leaves the previously-set value in place;
+// multiple calls combine their non-nil arguments. Does NOT clear previous
+// state — `WithOutboxDeps(nil, nil)` is a no-op, not a reset.
+//
+// Tests typically pass `(nil, outbox.NoopWriter{})` for a sink that swallows
+// events without producing real fan-out.
+//
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
+// ref: cells/auditcore/cell.go::WithOutboxDeps (platform-cell pattern)
+func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+	return func(c *OrderCell) {
+		if pub != nil {
+			c.pendingOutboxPub = pub
+		}
+		if writer != nil {
+			c.pendingOutboxWriter = writer
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees.
@@ -65,12 +84,16 @@ func WithLogger(l *slog.Logger) Option {
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type OrderCell struct {
 	*cell.BaseCell
-	repo         domain.OrderRepository
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	emitter      outbox.Emitter
-	cursorCodec  *query.CursorCodec
-	logger       *slog.Logger
+	repo     domain.OrderRepository
+	txRunner persistence.TxRunner
+	emitter  outbox.Emitter
+	// Outbox wiring — raw deps are accumulated via WithOutboxDeps and
+	// composed into emitter at Init() via cell.ResolveCellEmitter; archtest
+	// CELL-RAW-DEPS-01 forbids exporting raw outbox.Publisher/Writer Options.
+	pendingOutboxPub    outbox.Publisher
+	pendingOutboxWriter outbox.Writer
+	cursorCodec         *query.CursorCodec
+	logger              *slog.Logger
 
 	// +slice:route:slice=ordercreate,subPath=/orders
 	createHandler *createv1.Handler
@@ -163,30 +186,33 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	return nil
 }
 
+// resolveOutboxDeps delegates to cell.ResolveCellEmitter — the same path
+// platform cells (accesscore/auditcore/configcore) use. After this call,
+// pendingOutboxPub/pendingOutboxWriter are cleared and c.emitter is the
+// composed sink.
+//
+// ordercell uses the framework default (DirectPublishMode = zero value;
+// publisher path requires MetricsProvider which ordercell does not wire,
+// so pendingOutboxPub == nil in current usage). The (pub, writer) pair
+// keeps the door open without committing ordercell to publisher semantics.
 func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
-	if err := cell.CheckNotNoop(mode, "ordercell", c.outboxWriter, c.txRunner); err != nil {
-		return err
-	}
-	if mode == cell.DurabilityDurable {
-		if c.outboxWriter == nil || c.txRunner == nil {
-			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-				"ordercell durable mode requires real outboxWriter and txRunner")
-		}
-		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
-		if err != nil {
-			return err
-		}
-		c.emitter = emitter
-		return nil
-	}
-	if c.outboxWriter == nil || c.txRunner == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			"ordercell demo mode requires outboxWriter and txRunner together; inject both explicitly")
-	}
-	emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
+			CellID:       "ordercell",
+			Mode:         mode,
+			Publisher:    c.pendingOutboxPub,
+			OutboxWriter: c.pendingOutboxWriter,
+			TxRunner:     c.txRunner,
+			Logger:       c.logger,
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
 	if err != nil {
 		return err
 	}
-	c.emitter = emitter
+	c.emitter = outcome.Emitter
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
 	return nil
 }

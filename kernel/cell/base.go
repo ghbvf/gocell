@@ -10,10 +10,21 @@ import (
 )
 
 // Compile-time interface compliance checks.
+//
+// PR-A22 ISP split: Cell decomposes into four sub-interfaces. We assert each
+// sub-interface independently — a missing method points to the exact subset
+// being violated rather than a single "missing methods on Cell" error against
+// the 12-method composite. The composite Cell type is automatically satisfied
+// when all four sub-interface assertions hold.
+//
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D3
 var (
-	_ Cell     = (*BaseCell)(nil)
-	_ Slice    = (*BaseSlice)(nil)
-	_ Contract = (*BaseContract)(nil)
+	_ CellIdentity  = (*BaseCell)(nil)
+	_ CellLifecycle = (*BaseCell)(nil)
+	_ CellStatus    = (*BaseCell)(nil)
+	_ CellInventory = (*BaseCell)(nil)
+	_ Slice         = (*BaseSlice)(nil)
+	_ Contract      = (*BaseContract)(nil)
 )
 
 // ---------------------------------------------------------------------------

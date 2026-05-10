@@ -65,7 +65,7 @@ func main() {
 	// a real outbox.Writer (e.g., postgres.OutboxWriter) + persistence.TxRunner
 	// (e.g., postgres.TxManager) for durable event delivery via relay.
 	oc := ordercell.NewOrderCell(
-		ordercell.WithOutboxWriter(outbox.NoopWriter{}),
+		ordercell.WithOutboxDeps(nil, outbox.NoopWriter{}),
 		ordercell.WithTxManager(demoTxRunner{}),
 		ordercell.WithCursorCodec(cursorCodec),
 		ordercell.WithLogger(logger),
