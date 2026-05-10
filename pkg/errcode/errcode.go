@@ -19,15 +19,19 @@ type Code string
 
 // Sentinel error codes used throughout the GoCell framework.
 const (
-	ErrMetadataInvalid    Code = "ERR_METADATA_INVALID"
-	ErrMetadataNotFound   Code = "ERR_METADATA_NOT_FOUND"
-	ErrCellNotFound       Code = "ERR_CELL_NOT_FOUND"
-	ErrSliceNotFound      Code = "ERR_SLICE_NOT_FOUND"
-	ErrContractNotFound   Code = "ERR_CONTRACT_NOT_FOUND"
-	ErrAssemblyNotFound   Code = "ERR_ASSEMBLY_NOT_FOUND"
-	ErrLifecycleInvalid   Code = "ERR_LIFECYCLE_INVALID"
-	ErrDependencyCycle    Code = "ERR_DEPENDENCY_CYCLE"
-	ErrValidationFailed   Code = "ERR_VALIDATION_FAILED"
+	ErrMetadataInvalid  Code = "ERR_METADATA_INVALID"
+	ErrMetadataNotFound Code = "ERR_METADATA_NOT_FOUND"
+	ErrCellNotFound     Code = "ERR_CELL_NOT_FOUND"
+	ErrSliceNotFound    Code = "ERR_SLICE_NOT_FOUND"
+	ErrContractNotFound Code = "ERR_CONTRACT_NOT_FOUND"
+	ErrAssemblyNotFound Code = "ERR_ASSEMBLY_NOT_FOUND"
+	ErrLifecycleInvalid Code = "ERR_LIFECYCLE_INVALID"
+	ErrDependencyCycle  Code = "ERR_DEPENDENCY_CYCLE"
+	ErrValidationFailed Code = "ERR_VALIDATION_FAILED"
+	// ErrConflict signals that an operation was rejected because the target
+	// resource already exists or is in a conflicting state. Maps to HTTP 409.
+	// Used by scaffold/codegen paths to signal file-already-exists conflicts.
+	ErrConflict           Code = "ERR_CONFLICT"
 	ErrReferenceBroken    Code = "ERR_REFERENCE_BROKEN"
 	ErrInternal           Code = "ERR_INTERNAL"
 	ErrServiceUnavailable Code = "ERR_SERVICE_UNAVAILABLE"

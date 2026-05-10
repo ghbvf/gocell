@@ -1,0 +1,156 @@
+// scaffold_assembly.go implements `gocell scaffold assembly` (K#09).
+//
+// Produces an assembly bundle via kernel/assembly.Generator.PlanAssemblyScaffold:
+// 3 skeleton files (assembly.yaml, run.go, app.go) + 3 K#10 derived files
+// (modules_gen.go, main.go, boundary.yaml), written through a single
+// pathsafe.WritePlannedFiles call (SCAFFOLD-WRITE-FUNNEL-01).
+// --skip-generate limits the plan to the 3 skeleton files only.
+package app
+
+import (
+	"flag"
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/pathsafe"
+)
+
+// scaffoldAssembly is the subcommand entry for `gocell scaffold assembly`.
+// Flag set:
+//
+//	--id=<assemblyID>           required
+//	--cells=<a,b,c>             required (comma-separated existing cells)
+//	--team=<team>               required
+//	--role=<role>               required
+//	--deploy=<k8s|compose|binary> default k8s — k8s is omitted from yaml
+//	--dry-run                   render only, no writes
+//	--skip-generate             skip K#10 derived files (modules_gen.go / main.go / boundary.yaml)
+func scaffoldAssembly(root string, args []string) error {
+	fs := flag.NewFlagSet("scaffold assembly", flag.ContinueOnError)
+	id := fs.String("id", "", "assembly ID (required)")
+	cells := fs.String("cells", "", "comma-separated cell IDs (required, must already exist)")
+	team := fs.String("team", "", "owner team (required)")
+	role := fs.String("role", "", "owner role, e.g. maintainer (required)")
+	deploy := fs.String("deploy", "k8s", "deployment template: one of [k8s compose binary]")
+	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
+	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateAssemblyUsage)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cellList, err := validateAssemblyFlags(*id, *cells, *team, *role)
+	if err != nil {
+		return err
+	}
+
+	mod, err := readModule(root)
+	if err != nil {
+		return fmt.Errorf("scaffold assembly: read module path: %w", err)
+	}
+
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		return fmt.Errorf("scaffold assembly: parse project: %w", err)
+	}
+
+	spec := assembly.AssemblyScaffoldSpec{
+		ID:           *id,
+		Cells:        cellList,
+		OwnerTeam:    *team,
+		OwnerRole:    *role,
+		Deploy:       *deploy,
+		SkipGenerate: *skipGenerate,
+	}
+
+	gen := assembly.NewGenerator(project, mod, root)
+	plan, err := gen.PlanAssemblyScaffold(spec)
+	if err != nil {
+		return err
+	}
+
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold assembly: resolve project root: %w", err)
+	}
+
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+		return fmt.Errorf("scaffold assembly: write files: %w", err)
+	}
+
+	if *dryRun {
+		for _, p := range pathsafe.PlannedPaths(plan) {
+			rel, _ := filepath.Rel(realRoot, p)
+			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
+		}
+		return nil
+	}
+
+	reportScaffold(scaffoldReport{
+		Kind:   "assembly",
+		ID:     *id,
+		Target: filepath.Join("assemblies", *id),
+	})
+
+	if *skipGenerate {
+		fmt.Printf("scaffold assembly: skipped auto-generate (--skip-generate). "+
+			"Run `gocell generate assembly --id=%s` to materialize "+
+			"modules_gen.go / main.go / boundary.yaml.\n", *id)
+	}
+	return nil
+}
+
+// validateAssemblyFlags consolidates the required-field + path/control-char
+// checks for `gocell scaffold assembly` flags. Returns the parsed cell list
+// on success. Lifted out of scaffoldAssembly to keep cognitive complexity
+// inside the project budget.
+func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
+	if id == "" {
+		return nil, fmt.Errorf("--id is required")
+	}
+	if cells == "" {
+		return nil, fmt.Errorf("--cells is required")
+	}
+	if team == "" {
+		return nil, fmt.Errorf("--team is required")
+	}
+	if role == "" {
+		return nil, fmt.Errorf("--role is required")
+	}
+	if err := validateScaffoldID(id, "--id"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldText(team, "--team"); err != nil {
+		return nil, err
+	}
+	if err := validateScaffoldText(role, "--role"); err != nil {
+		return nil, err
+	}
+	cellList := splitAndTrim(cells, ",")
+	if len(cellList) == 0 {
+		return nil, fmt.Errorf("--cells must list at least one cell")
+	}
+	for _, c := range cellList {
+		if err := validateScaffoldID(c, "--cells[]"); err != nil {
+			return nil, err
+		}
+	}
+	return cellList, nil
+}
+
+// splitAndTrim splits s by sep and trims whitespace from each segment;
+// empty segments are dropped.
+func splitAndTrim(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}

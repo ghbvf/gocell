@@ -141,7 +141,7 @@ func TestGenerate_DryRun_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res := mustGenerate(t, root, p, Options{DryRun: true})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, DryRun: true})
 
 	// DryRun should report paths in Generated (ActionWouldWrite → Generated).
 	if len(res.Generated) == 0 {
@@ -161,7 +161,7 @@ func TestGenerate_WriteMode_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res := mustGenerate(t, root, p, Options{})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 
 	// HTTP contract → 3 files: types_gen.go, iface_gen.go, handler_gen.go.
 	if len(res.Generated) != 3 {
@@ -190,7 +190,7 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	res := mustGenerate(t, root, p, Options{})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 
 	// Event contract → 4 files: types, iface, spec, subscription.
 	if len(res.Generated) != 4 {
@@ -236,10 +236,10 @@ func TestGenerate_IdempotentSecondRun(t *testing.T) {
 	root, p := setupHTTPMinimalRoot(t)
 
 	// First run: write files.
-	mustGenerate(t, root, p, Options{})
+	mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 
 	// Second run: should report unchanged (still in Generated), no Drifted.
-	res2 := mustGenerate(t, root, p, Options{})
+	res2 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 	if len(res2.Drifted) != 0 {
 		t.Errorf("second run should not report drift, got: %v", res2.Drifted)
 	}
@@ -253,9 +253,9 @@ func TestGenerate_VerifyClean(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	mustGenerate(t, root, p, Options{})
+	mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 
-	res := mustGenerate(t, root, p, Options{Verify: true})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true})
 	if len(res.Drifted) != 0 {
 		t.Errorf("verify after clean write should have no drift, got: %v", res.Drifted)
 	}
@@ -266,7 +266,7 @@ func TestGenerate_VerifyDrift(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res1 := mustGenerate(t, root, p, Options{})
+	res1 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 
 	// Tamper with one of the written files.
 	tampered := false
@@ -283,7 +283,7 @@ func TestGenerate_VerifyDrift(t *testing.T) {
 		t.Fatal("could not find types_gen.go to tamper")
 	}
 
-	res2 := mustGenerate(t, root, p, Options{Verify: true})
+	res2 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true})
 	if len(res2.Drifted) == 0 {
 		t.Error("verify should detect drift after tamper")
 	}
@@ -296,7 +296,7 @@ func TestGenerate_VerifyMissingFile(t *testing.T) {
 	root, p := setupHTTPMinimalRoot(t)
 
 	// Verify without writing first — all files are missing → all drifted.
-	res := mustGenerate(t, root, p, Options{Verify: true})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true})
 	if len(res.Drifted) == 0 {
 		t.Error("verify with no prior write should report drift (files missing)")
 	}
@@ -308,11 +308,11 @@ func TestGenerate_OnlyContract_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res := mustGenerate(t, root, p, Options{OnlyContract: "http.order.ping.v1"})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"})})
 
 	// Should still get 3 files for the HTTP contract.
 	if len(res.Generated) != 3 {
-		t.Errorf("expected 3 files for OnlyContract=http.order.ping.v1, got %d: %v", len(res.Generated), res.Generated)
+		t.Errorf("expected 3 files for ScopeContracts([http.order.ping.v1]), got %d: %v", len(res.Generated), res.Generated)
 	}
 }
 
@@ -358,7 +358,7 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 		merged.Contracts[id] = &cp
 	}
 
-	res, err := Generate(mergedRoot, merged, Options{})
+	res, err := Generate(mergedRoot, merged, Options{Scope: ScopeAll{}})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -376,12 +376,12 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 
 // --- Error path tests ---------------------------------------------------------
 
-// TestGenerate_OnlyContract_NotFound verifies error when OnlyContract id
+// TestGenerate_OnlyContract_NotFound verifies error when ScopeContracts id
 // does not exist in the project.
 func TestGenerate_OnlyContract_NotFound(t *testing.T) {
 	t.Parallel()
 	p := &metadata.ProjectMeta{Contracts: map[string]*metadata.ContractMeta{}}
-	_, err := Generate(t.TempDir(), p, Options{OnlyContract: "http.does.not.exist.v1"})
+	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeContracts([]string{"http.does.not.exist.v1"})})
 	if err == nil {
 		t.Fatal("expected error for non-existent contract")
 	}
@@ -390,7 +390,7 @@ func TestGenerate_OnlyContract_NotFound(t *testing.T) {
 	}
 }
 
-// TestGenerate_OnlyContract_CodegenFalse verifies error when OnlyContract
+// TestGenerate_OnlyContract_CodegenFalse verifies error when ScopeContracts
 // points to a contract with Codegen=false.
 func TestGenerate_OnlyContract_CodegenFalse(t *testing.T) {
 	t.Parallel()
@@ -403,7 +403,7 @@ func TestGenerate_OnlyContract_CodegenFalse(t *testing.T) {
 			},
 		},
 	}
-	_, err := Generate(t.TempDir(), p, Options{OnlyContract: "http.foo.bar.v1"})
+	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeContracts([]string{"http.foo.bar.v1"})})
 	if err == nil {
 		t.Fatal("expected error for Codegen=false contract")
 	}
@@ -415,7 +415,7 @@ func TestGenerate_OnlyContract_CodegenFalse(t *testing.T) {
 // TestGenerate_NilProject verifies that a nil project returns an error.
 func TestGenerate_NilProject(t *testing.T) {
 	t.Parallel()
-	_, err := Generate(t.TempDir(), nil, Options{})
+	_, err := Generate(t.TempDir(), nil, Options{Scope: ScopeAll{}})
 	if err == nil {
 		t.Fatal("expected error for nil project")
 	}
@@ -424,7 +424,7 @@ func TestGenerate_NilProject(t *testing.T) {
 // TestGenerate_EmptyRoot verifies that an empty root returns an error.
 func TestGenerate_EmptyRoot(t *testing.T) {
 	t.Parallel()
-	_, err := Generate("", &metadata.ProjectMeta{}, Options{})
+	_, err := Generate("", &metadata.ProjectMeta{}, Options{Scope: ScopeAll{}})
 	if err == nil {
 		t.Fatal("expected error for empty root")
 	}
@@ -444,7 +444,7 @@ func TestGenerate_BuildSpecError(t *testing.T) {
 			},
 		},
 	}
-	_, err := Generate(t.TempDir(), p, Options{})
+	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}})
 	if err == nil {
 		t.Fatal("expected error propagated from BuildContractSpec")
 	}
@@ -463,7 +463,7 @@ func TestGenerate_NoCodegenContracts(t *testing.T) {
 			},
 		},
 	}
-	res, err := Generate(t.TempDir(), p, Options{})
+	res, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -595,7 +595,7 @@ func TestGenerate_DryRun_DoesNotCreateDirectory(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	mustGenerate(t, root, p, Options{DryRun: true})
+	mustGenerate(t, root, p, Options{Scope: ScopeAll{}, DryRun: true})
 
 	genDir := filepath.Join(root, "generated")
 	if _, err := os.Stat(genDir); !os.IsNotExist(err) {
@@ -653,7 +653,7 @@ func TestGenerate_WriteMode_HTTPFull(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPFullRoot(t)
 
-	res := mustGenerate(t, root, p, Options{})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 
 	// HTTP contract → 3 files: types_gen.go, iface_gen.go, handler_gen.go.
 	if len(res.Generated) != 3 {
@@ -720,7 +720,7 @@ func TestGenerate_PackageNameKeywordSanitize(t *testing.T) {
 		t.Errorf("PackageName = %q, want configdelete", spec.PackageName)
 	}
 
-	res := mustGenerate(t, root, p, Options{})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 	// DELETE contract → 3 files (types, iface, handler).
 	if len(res.Generated) != 3 {
 		t.Errorf("expected 3 generated files for keyword-conflict contract, got %d: %v", len(res.Generated), res.Generated)
@@ -758,7 +758,7 @@ func TestGenerate_RequiresErrorStatus(t *testing.T) {
 	pingContract.Endpoints.HTTP.Responses = nil
 	t.Cleanup(func() { pingContract.Endpoints.HTTP.Responses = origResponses })
 
-	_, err := Generate(root, p, Options{OnlyContract: "http.order.ping.v1"})
+	_, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"})})
 	if err == nil {
 		t.Fatal("expected error for contract with no 4xx/5xx responses, got nil")
 	}
@@ -797,7 +797,7 @@ func TestGenerate_PropagatesBuildSpecError_C5(t *testing.T) {
 			},
 		},
 	}
-	_, err := Generate(t.TempDir(), p, Options{})
+	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}})
 	if err == nil {
 		t.Fatal("expected C5 error for 3xx in responses[], got nil")
 	}
@@ -812,11 +812,64 @@ func TestGenerate_BuildSpecError_OneOf(t *testing.T) {
 	t.Parallel()
 	root, p := setupOneOfRoot(t)
 
-	_, err := Generate(root, p, Options{})
+	_, err := Generate(root, p, Options{Scope: ScopeAll{}})
 	if err == nil {
 		t.Fatal("expected error for contract with oneOf in request schema")
 	}
 	if !strings.Contains(err.Error(), "oneOf") {
 		t.Errorf("error should mention 'oneOf', got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scope sealed interface tests (RED — Generate does not yet read Options.Scope)
+// ---------------------------------------------------------------------------
+
+// TestGenerate_Options_ScopeNilFailFast verifies that passing Scope: nil to
+// Generate returns an error mentioning "Scope is required".
+// RED: Generate currently ignores Options.Scope entirely.
+func TestGenerate_Options_ScopeNilFailFast(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPMinimalRoot(t)
+	_, err := Generate(root, p, Options{Scope: nil})
+	if err == nil {
+		t.Fatal("expected error for nil Scope, got nil")
+	}
+	if !strings.Contains(err.Error(), "Scope") && !strings.Contains(err.Error(), "required") {
+		t.Errorf("error should mention Scope/required, got: %v", err)
+	}
+}
+
+// TestGenerate_Options_ScopeContractsLimitsToList verifies that ScopeContracts
+// restricts generation to only the listed contract IDs.
+// RED: Generate currently ignores Options.Scope; it will process all contracts.
+func TestGenerate_Options_ScopeContractsLimitsToList(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPMinimalRoot(t)
+	// http.order.ping.v1 → 3 files.
+	res, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"})})
+	if err != nil {
+		t.Fatalf("Generate with ScopeContracts: %v", err)
+	}
+	if len(res.Generated) != 3 {
+		t.Errorf("ScopeContracts([http.order.ping.v1]): expected 3 files, got %d: %v", len(res.Generated), res.Generated)
+	}
+}
+
+// TestGenerate_Options_ScopeAllProcessesAll verifies that ScopeAll maintains
+// the existing "all Codegen=true contracts" behavior.
+// RED: Generate currently ignores Options.Scope, so this might coincidentally
+// pass once Scope is nil-guarded above — but it documents the intent.
+func TestGenerate_Options_ScopeAllProcessesAll(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPMinimalRoot(t)
+	// ScopeAll should produce same result as default (all opted-in contracts).
+	res, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	if err != nil {
+		t.Fatalf("Generate with ScopeAll: %v", err)
+	}
+	// synth_http_minimal has one HTTP contract → 3 files.
+	if len(res.Generated) != 3 {
+		t.Errorf("ScopeAll: expected 3 files for synth_http_minimal, got %d: %v", len(res.Generated), res.Generated)
 	}
 }

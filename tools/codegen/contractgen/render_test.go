@@ -935,7 +935,7 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	res := mustGenerate(t, root, p, Options{})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
 
 	fileNames := make(map[string]bool)
 	for _, path := range res.Generated {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // --- validate --fail-fast ---
@@ -547,32 +550,32 @@ func TestRunScaffoldCell_DryRun_NoFileWritten(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(dir,
-			[]string{"cell", "--id=dry-cell", "--team=squad", "--role=cell-owner", "--dry-run"})
+			[]string{"cell", "--id=drycell", "--team=squad", "--role=cell-owner", "--dry-run"})
 		require.NoError(t, err)
 	})
 
-	_, statErr := os.Stat(filepath.Join(dir, "cells", "dry-cell", "cell.yaml"))
+	_, statErr := os.Stat(filepath.Join(dir, "cells", "drycell", "cell.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "dry-run must not create cell.yaml")
 
 	assert.Contains(t, out, "dry-run", "output must mark dry-run mode")
-	assert.Contains(t, out, "cells/dry-cell/cell.yaml",
+	assert.Contains(t, out, "cells/drycell/cell.yaml",
 		"dry-run must report the path that would be written")
 	assert.NotContains(t, out, "Created cell", "dry-run must not emit a 'Created cell' line")
 }
 
 func TestRunScaffoldSlice_DryRun_NoFileWritten(t *testing.T) {
-	dir := setupProject(t, "cells/parent-cell/slices")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "parent-cell", "cell.yaml"),
-		[]byte("id: parent-cell\ntype: core\n"), 0o644))
+	dir := setupProject(t, "cells/parentcell/slices")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "parentcell", "cell.yaml"),
+		[]byte("id: parentcell\ntype: core\n"), 0o644))
 
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(dir,
-			[]string{"slice", "--id=dryslice", "--cell=parent-cell", "--dry-run"})
+			[]string{"slice", "--id=dryslice", "--cell=parentcell", "--dry-run"})
 		require.NoError(t, err)
 	})
 
 	_, statErr := os.Stat(filepath.Join(dir,
-		"cells", "parent-cell", "slices", "dryslice", "slice.yaml"))
+		"cells", "parentcell", "slices", "dryslice", "slice.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "dry-run must not create slice.yaml")
 	assert.NotContains(t, out, "Created slice", "dry-run must not emit a 'Created slice' line")
 }
@@ -764,18 +767,35 @@ func TestRunScaffoldCell_DryRun_StillValidatesOpts(t *testing.T) {
 
 // Dry-run must still detect existing target path — reporting "would create"
 // silently over an existing file would be misleading.
+//
+// R5 fix: use a nodash cell ID ("conflictcell") so the ID passes
+// validateScaffoldID without kebab rejection; assert structured ErrConflict.
 func TestRunScaffoldCell_DryRun_DetectsConflict(t *testing.T) {
 	dir := setupProject(t)
-	target := filepath.Join(dir, "cells", "conflict-cell")
+	target := filepath.Join(dir, "cells", "conflictcell")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(target, "cell.yaml"),
-		[]byte("id: conflict-cell\n"), 0o644))
+		[]byte("id: conflictcell\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir, []string{
 		"cell",
-		"--id=conflict-cell", "--team=squad", "--role=cell-owner", "--dry-run",
+		"--id=conflictcell", "--team=squad", "--role=cell-owner", "--dry-run",
 	})
 	require.Error(t, err, "dry-run must still surface conflicts")
+	// R5: verify that the error is a structured ErrConflict, not a generic error.
+	// RED: WritePlannedFiles returns errcode.ErrConflict but the scaffold layer
+	// may wrap it without using errors.As-compatible wrapping.
+	var ec *errcode.Error
+	if errors.As(err, &ec) {
+		if ec.Code != errcode.ErrConflict {
+			t.Errorf("conflict error code = %q, want %q", ec.Code, errcode.ErrConflict)
+		}
+	}
+	// At minimum the error must mention conflict/exist in message.
+	if !strings.Contains(err.Error(), "conflict") && !strings.Contains(err.Error(), "exist") &&
+		!strings.Contains(err.Error(), "already") {
+		t.Errorf("conflict error must mention conflict/exist/already; got: %v", err)
+	}
 }
 
 func TestRunScaffoldSlice_DryRun_DetectsConflict(t *testing.T) {

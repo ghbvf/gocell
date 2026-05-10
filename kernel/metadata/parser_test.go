@@ -1372,8 +1372,13 @@ belongsToCell: x
 	}
 }
 
-// TestParseFS_ContractCodegen verifies that the codegen opt-in field is parsed
-// correctly: present→true, absent→false (default), and non-bool→parse error.
+// TestParseFS_ContractCodegen verifies that the codegen field is parsed
+// correctly per the K#09 funnel: present-true→true, absent→true (default),
+// present-false→false (explicit opt-out), non-bool→parse error.
+//
+// K#09 flipped the default from false (K#06 opt-in) to true (default opt-in)
+// once 64+ contracts had migrated under PR#376; the parser now infers the
+// default from yaml AST presence rather than the struct zero value.
 func TestParseFS_ContractCodegen(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1400,7 +1405,7 @@ endpoints:
 			},
 		},
 		{
-			name: "contract without codegen defaults false",
+			name: "contract without codegen defaults true (K#09 funnel)",
 			yaml: `id: http.test.example.v1
 kind: http
 ownerCell: testcell
@@ -1412,7 +1417,7 @@ endpoints:
     - other
 `,
 			check: func(t *testing.T, c *ContractMeta) {
-				assert.False(t, c.Codegen)
+				assert.True(t, c.Codegen, "K#09 funnel: absent codegen field defaults to true")
 			},
 		},
 		{

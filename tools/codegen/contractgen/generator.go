@@ -19,9 +19,11 @@ type Options struct {
 	// Mutually exclusive with DryRun at the CLI layer; combining them here
 	// is harmless — Verify dominates (no write either way).
 	Verify bool
-	// OnlyContract, when non-empty, restricts generation to a single contract id.
-	// The contract must have Codegen=true; empty means all opted-in metadata.
-	OnlyContract string
+	// Scope controls which contracts are processed. When nil, Generate returns
+	// an error (fail-fast). Use ScopeAll{} for the default "all Codegen=true"
+	// behavior, ScopeContracts for a specific ID list, or ScopeCell to restrict
+	// to one cell's contracts.
+	Scope Scope
 }
 
 // Result reports the outcome of Generate.
@@ -53,6 +55,10 @@ type CodegenArtifact struct {
 // opted-in metadata.
 // root is the repository root (absolute path; from which go.mod is read for
 // module path).
+//
+// opts.Scope must be non-nil. Use ScopeAll{} for the default "all Codegen=true"
+// behavior, ScopeContracts for a specific ID list, or ScopeCell to restrict to
+// one cell's contracts. A nil Scope is rejected with an error.
 func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error) {
 	var res Result
 	if root == "" {
@@ -61,8 +67,11 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 	if p == nil {
 		return res, fmt.Errorf("contractgen generate: project is nil")
 	}
+	if opts.Scope == nil {
+		return res, fmt.Errorf("contractgen generate: Scope is required; use ScopeAll{} for all contracts")
+	}
 
-	contractIDs, err := selectContractIDs(p, opts.OnlyContract)
+	contractIDs, err := selectContractIDsByScope(p, opts)
 	if err != nil {
 		return res, err
 	}
@@ -299,24 +308,65 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 	return out, nil
 }
 
-// selectContractIDs returns the ordered list of contract IDs to process.
-// If only is non-empty, validates it exists and has Codegen=true.
-// If only is empty, returns all Codegen=true contracts sorted by ID.
-func selectContractIDs(p *metadata.ProjectMeta, only string) ([]string, error) {
-	if only != "" {
-		contract, ok := p.Contracts[only]
-		if !ok {
-			return nil, fmt.Errorf("contractgen generate: contract %q not found", only)
-		}
-		if !contract.Codegen {
-			return nil, fmt.Errorf("contractgen generate: contract %q has codegen=false", only)
-		}
-		return []string{only}, nil
+// selectContractIDsByScope returns the ordered list of contract IDs to process
+// based on opts.Scope.
+func selectContractIDsByScope(p *metadata.ProjectMeta, opts Options) ([]string, error) {
+	switch s := opts.Scope.(type) {
+	case ScopeAll:
+		return selectAllCodegenContracts(p)
+	case ScopeContracts:
+		return selectByContractList(p, []string(s))
+	case ScopeCell:
+		return selectByCellID(p, string(s))
+	default:
+		// Unknown Scope implementation — treat as ScopeAll.
+		return selectAllCodegenContracts(p)
 	}
+}
 
+// selectAllCodegenContracts returns all Codegen=true contracts sorted by ID.
+func selectAllCodegenContracts(p *metadata.ProjectMeta) ([]string, error) {
 	var ids []string
 	for id, c := range p.Contracts {
 		if c.Codegen {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// selectByContractList validates and returns the given list of contract IDs,
+// checking each exists and has Codegen=true.
+func selectByContractList(p *metadata.ProjectMeta, ids []string) ([]string, error) {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		contract, ok := p.Contracts[id]
+		if !ok {
+			return nil, fmt.Errorf("contractgen generate: contract %q not found", id)
+		}
+		if !contract.Codegen {
+			return nil, fmt.Errorf("contractgen generate: contract %q has codegen=false", id)
+		}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// selectByCellID returns all Codegen=true contracts whose server/publisher
+// cell matches cellID.
+func selectByCellID(p *metadata.ProjectMeta, cellID string) ([]string, error) {
+	var ids []string
+	for id, c := range p.Contracts {
+		if !c.Codegen {
+			continue
+		}
+		owner := c.Endpoints.Server
+		if owner == "" {
+			owner = c.Endpoints.Publisher
+		}
+		if owner == cellID {
 			ids = append(ids, id)
 		}
 	}

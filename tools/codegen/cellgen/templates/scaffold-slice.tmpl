@@ -1,0 +1,64 @@
+{{define "slice-yaml"}}id: {{.SliceID}}
+belongsToCell: {{.CellID}}
+contractUsages:
+  - contract: {{.ContractID}}
+    role: {{.SliceRole}}
+verify:
+  unit:
+    - unit.{{.SliceID}}.service
+  contract:
+    - contract.{{.ContractID}}.{{.SliceRole}}
+allowedFiles:
+  - cells/{{.CellID}}/slices/{{.SliceID}}/**
+{{end}}
+
+{{define "service-go"}}// Package {{.SlicePackage}} implements the {{.SliceID}} example slice for
+// the {{.CellID}} cell. Replace the Echo skeleton with real business logic.
+package {{.SlicePackage}}
+
+// Service is the example slice business logic. NewService returns a fresh
+// instance; it carries no dependencies because the K#09 scaffold targets
+// the simplest passing-test outcome. Wire repository / event publisher
+// dependencies in via constructor parameters as the slice grows.
+type Service struct{}
+
+// NewService returns a new example Service.
+func NewService() *Service {
+	return &Service{}
+}
+
+// Echo returns the input message unchanged. Replace with real domain logic.
+func (s *Service) Echo(message string) string {
+	return message
+}
+{{end}}
+
+{{define "service-test-go"}}package {{.SlicePackage}}
+
+import "testing"
+
+// TestService_Echo verifies the example slice's stub business logic.
+// Replace this when Echo is replaced.
+func TestService_Echo(t *testing.T) {
+	t.Parallel()
+	svc := NewService()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "simple", in: "hello", want: "hello"},
+		{name: "empty", in: "", want: ""},
+		{name: "unicode", in: "你好", want: "你好"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := svc.Echo(tc.in); got != tc.want {
+				t.Errorf("Echo(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+{{end}}

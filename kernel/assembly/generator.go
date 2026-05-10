@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
@@ -22,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
 // Generator produces derived files for an assembly.
@@ -105,6 +107,52 @@ type modulesContext struct {
 	Modules    []string // CellModule struct names, in cells.yaml order
 }
 
+// AssemblyScaffoldSpec drives Generator.PlanAssemblyScaffold (K#09 SCAFFOLD-ONE-CMD).
+// The Generator already owns the assembly.yaml / run.go / app.go renderers
+// and downstream codegen (modules_gen.go, main.go, boundary.yaml) so a
+// single PlanAssemblyScaffold method composes the full assembly bundle without a new
+// subpackage.
+type AssemblyScaffoldSpec struct {
+	// ID is the assembly identifier (e.g. "myassembly"). Required.
+	ID string
+	// Cells lists the cell IDs that compose this assembly, in startup order.
+	// Each entry must reference an existing cells/{cellID}/cell.yaml.
+	Cells []string
+	// OwnerTeam, OwnerRole identify the maintainers of this assembly.
+	// Both required; written verbatim to assembly.yaml owner.
+	OwnerTeam string
+	OwnerRole string
+	// Deploy selects the target deployment template; legal values are
+	// "k8s" (default), "compose", "binary". Per ADR 202605061800 the
+	// k8s value is omitted from assembly.yaml — the parser inherits the
+	// default. compose/binary are written verbatim.
+	Deploy string
+	// SkipGenerate when true causes PlanAssemblyScaffold to return only the
+	// 3 skeleton PlannedFiles (assembly.yaml + cmd/{id}/run.go + cmd/{id}/app.go),
+	// skipping in-memory codegen for the 3 K#10 derived files.
+	SkipGenerate bool
+}
+
+// scaffoldAssemblyContext is the template context for the K#09 scaffold
+// templates (assembly-yaml / run-go / app-go).
+type scaffoldAssemblyContext struct {
+	ID             string
+	Cells          []string
+	OwnerTeam      string
+	OwnerRole      string
+	DeployTemplate string                      // empty when --deploy=k8s (default — omitted from yaml)
+	HelperName     string                      // run{ID-PascalCase} for runXxx() in run.go
+	CellModules    []scaffoldAssemblyCellEntry // {StructName + Module suffix, cellID} pairs for run.go stubs
+}
+
+// scaffoldAssemblyCellEntry pairs a generated *Module struct name with the
+// cell ID it identifies. Used inside scaffold-run-go.tpl to declare a stub
+// Module per cell so modules_gen.go references compile immediately.
+type scaffoldAssemblyCellEntry struct {
+	Name string // {GoStructName}Module — same convention as K#10 modules_gen.go
+	ID   string // cell ID (cell.yaml `id:`)
+}
+
 // GenerateBoundary generates the boundary.yaml content for an assembly.
 //
 // Boundary contains:
@@ -183,6 +231,314 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		Modules:    modules,
 	}
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
+}
+
+// PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new
+// assembly: 3 skeleton files (assembly.yaml + cmd/{id}/run.go + cmd/{id}/app.go)
+// plus 3 K#10 derived files (cmd/{id}/modules_gen.go + cmd/{id}/main.go +
+// assemblies/{id}/generated/boundary.yaml) when SkipGenerate=false.
+//
+// PURE RENDER: no filesystem mutation, no re-parse. Caller (typically cmd/
+// CLI) feeds the returned plan into pathsafe.WritePlannedFiles, which is the
+// single funnel for both dry-run and live writes (SCAFFOLD-WRITE-FUNNEL-01).
+//
+// Generator is not safe for concurrent use.
+//
+// PlanAssemblyScaffold may be called sequentially on the same Generator
+// instance; each call leaves g.project.Assemblies in its original state
+// (defer revert in appendGeneratedFiles).
+//
+// The Generator must have been constructed with a non-empty projectRoot.
+// Each cell in spec.Cells must exist in g.project.Cells.
+//
+// K#10 derived files are produced by in-memory injection of a synthesized
+// metadata.AssemblyMeta into g.project.Assemblies[spec.ID] before calling
+// GenerateModulesGen / GenerateEntrypoint / GenerateBoundary; injection is
+// reverted before return so the Generator stays idempotent across calls.
+//
+// Returns the plan or an error; the plan is empty on error.
+func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.PlannedFile, error) {
+	if g.projectRoot == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly.Generator.PlanAssemblyScaffold requires non-empty projectRoot")
+	}
+	if err := validateAssemblyScaffoldSpec(g, spec); err != nil {
+		return nil, err
+	}
+
+	ctx, err := g.buildScaffoldContext(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	realRoot, err := pathsafe.ResolveRoot(g.projectRoot)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"assembly.Generator.PlanAssemblyScaffold: resolve project root", err)
+	}
+
+	asmDir := filepath.Join("assemblies", spec.ID)
+	cmdDir := filepath.Join("cmd", spec.ID)
+
+	templateFiles := []scaffoldAssemblyFile{
+		{Path: filepath.Join(asmDir, "assembly.yaml"), Template: "scaffold-assembly-yaml.tpl"},
+		{Path: filepath.Join(cmdDir, "run.go"), Template: "scaffold-run-go.tpl"},
+		{Path: filepath.Join(cmdDir, "app.go"), Template: "scaffold-app-go.tpl"},
+	}
+
+	plan, err := g.renderAssemblyScaffoldFiles(realRoot, templateFiles, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if spec.SkipGenerate {
+		return plan, nil
+	}
+
+	return g.appendGeneratedFiles(plan, spec, realRoot, asmDir, cmdDir)
+}
+
+// appendGeneratedFiles injects a synthesized AssemblyMeta, calls the three
+// Generate* methods, appends their output to plan, and reverts the injection
+// before returning. Kept separate from PlanAssemblyScaffold to stay under the
+// cognitive-complexity limit.
+func (g *Generator) appendGeneratedFiles(
+	plan []pathsafe.PlannedFile,
+	spec AssemblyScaffoldSpec,
+	realRoot, asmDir, cmdDir string,
+) ([]pathsafe.PlannedFile, error) {
+	// In-memory inject synthesized AssemblyMeta so Generate* see the new assembly.
+	synth := synthesizeAssemblyMeta(spec)
+	prior, hadPrior := g.project.Assemblies[spec.ID]
+	g.project.Assemblies[spec.ID] = synth
+	defer func() {
+		if hadPrior {
+			g.project.Assemblies[spec.ID] = prior
+		} else {
+			delete(g.project.Assemblies, spec.ID)
+		}
+	}()
+
+	type derivedFile struct {
+		relPath string
+		gen     func(string) ([]byte, error)
+	}
+	derived := []derivedFile{
+		{filepath.Join(cmdDir, "modules_gen.go"), g.GenerateModulesGen},
+		{filepath.Join(cmdDir, "main.go"), g.GenerateEntrypoint},
+		{filepath.Join(asmDir, "generated", "boundary.yaml"), g.GenerateBoundary},
+	}
+
+	for _, d := range derived {
+		content, gerr := d.gen(spec.ID)
+		if gerr != nil {
+			return nil, gerr
+		}
+		absPath, cerr := pathsafe.ContainPath(realRoot, d.relPath)
+		if cerr != nil {
+			return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold assembly: derived path containment failed", cerr,
+				errcode.WithInternal(fmt.Sprintf("path=%s", d.relPath)))
+		}
+		plan = append(plan, pathsafe.PlannedFile{
+			AbsPath: absPath,
+			Content: content,
+		})
+	}
+	return plan, nil
+}
+
+// synthesizeAssemblyMeta builds an in-memory AssemblyMeta for spec so that
+// GenerateModulesGen / GenerateEntrypoint / GenerateBoundary can produce K#10
+// derived files before the assembly exists on disk.
+//
+// In-memory only; reverted by PlanAssemblyScaffold after Generate* completes.
+// Field set must stay in sync with what GenerateModulesGen/Entrypoint/Boundary
+// read — see backlog ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
+//
+// Build.Binary intentionally omitted — new assembly has no binary name
+// declared; GenerateBoundary/Entrypoint do not read this field (verified
+// by grep). Tracked in backlog ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
+func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
+	return &metadata.AssemblyMeta{
+		ID:    spec.ID,
+		Cells: append([]string(nil), spec.Cells...),
+		Owner: metadata.OwnerMeta{
+			Team: spec.OwnerTeam,
+			Role: spec.OwnerRole,
+		},
+		Build: metadata.BuildMeta{
+			Entrypoint: filepath.Join("cmd", spec.ID, "main.go"),
+		},
+	}
+}
+
+// scaffoldAssemblyFile pairs an output path with the template used to render
+// it; lifted out of Scaffold for readability and to keep funlen happy.
+type scaffoldAssemblyFile struct {
+	Path     string
+	Template string
+}
+
+// buildScaffoldContext builds the scaffoldAssemblyContext for a spec by
+// resolving the helper name, normalizing the deploy template, and collecting
+// per-cell Module stub entries.
+func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAssemblyContext, error) {
+	helperName, err := assemblyRunHelperName(spec.ID)
+	if err != nil {
+		return scaffoldAssemblyContext{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"assembly id has no identifier characters", err,
+			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID)))
+	}
+
+	deployTemplate := spec.Deploy
+	if deployTemplate == "k8s" {
+		// K#10 minimal default — parser/schema inherits k8s; omit from yaml.
+		deployTemplate = ""
+	}
+
+	cellModuleEntries := make([]scaffoldAssemblyCellEntry, 0, len(spec.Cells))
+	for _, cellID := range spec.Cells {
+		cellMeta := g.cells.Get(cellID)
+		// Cell existence already validated; fall back to cellID when
+		// GoStructName is unset so legacy cells still produce a compilable stub.
+		structName := cellID
+		if cellMeta != nil && !cellMeta.GoStructName.IsZero() {
+			structName = cellMeta.GoStructName.String()
+		}
+		cellModuleEntries = append(cellModuleEntries, scaffoldAssemblyCellEntry{
+			Name: structName + "Module",
+			ID:   cellID,
+		})
+	}
+
+	return scaffoldAssemblyContext{
+		ID:             spec.ID,
+		Cells:          append([]string(nil), spec.Cells...),
+		OwnerTeam:      spec.OwnerTeam,
+		OwnerRole:      spec.OwnerRole,
+		DeployTemplate: deployTemplate,
+		HelperName:     helperName,
+		CellModules:    cellModuleEntries,
+	}, nil
+}
+
+// renderAssemblyScaffoldFiles renders each template and returns a []PlannedFile
+// ready for pathsafe.WritePlannedFiles. Conflict detection is delegated to
+// WritePlannedFiles (F14: render/write decoupled).
+func (g *Generator) renderAssemblyScaffoldFiles(
+	realRoot string,
+	files []scaffoldAssemblyFile,
+	ctx scaffoldAssemblyContext,
+) ([]pathsafe.PlannedFile, error) {
+	plan := make([]pathsafe.PlannedFile, 0, len(files))
+	for _, f := range files {
+		out, err := g.executeTemplate(f.Template, ctx)
+		if err != nil {
+			return nil, err
+		}
+		absPath, containErr := pathsafe.ContainPath(realRoot, f.Path)
+		if containErr != nil {
+			return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold assembly: path containment check failed", containErr,
+				errcode.WithInternal(fmt.Sprintf("path=%s", f.Path)))
+		}
+		plan = append(plan, pathsafe.PlannedFile{
+			AbsPath: absPath,
+			Content: out,
+		})
+	}
+	return plan, nil
+}
+
+// validateAssemblyPathComponent rejects path traversal sequences, path
+// separators, AND newline / carriage-return / NUL control characters in
+// identifier fields. Identifiers are written verbatim into both filesystem
+// paths (defending traversal) and inline YAML scalars (defending newline
+// injection). The control-char branch is a strict superset of
+// validateAssemblyTextComponent so all ID call sites get newline rejection.
+//
+// It does NOT reject empty values; the caller is responsible for empty-string
+// guards so that error messages can carry field-specific wording (e.g.
+// "ID is required"). This is a kernel-side mirror of
+// cmd/gocell/app.validateScaffoldID — duplicated rather than shared because
+// kernel/ may not import cmd/. Rule must stay synchronized.
+func validateAssemblyPathComponent(value, field string) error {
+	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: field contains path traversal or separator",
+			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
+	}
+	if strings.ContainsAny(value, "\n\r\x00") {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: field contains forbidden control characters",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+	}
+	return nil
+}
+
+// validateAssemblyTextComponent rejects newline / carriage-return / NUL in
+// free-text fields (OwnerTeam, OwnerRole) so user values cannot inject extra
+// YAML fields or break scalar quoting in the inline templates.
+// Kernel-side mirror of cmd/gocell/app.validateScaffoldText.
+func validateAssemblyTextComponent(value, field string) error {
+	if strings.ContainsAny(value, "\n\r\x00") {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: field contains forbidden control characters",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+	}
+	return nil
+}
+
+// validateAssemblyScaffoldSpec checks required fields and verifies that every
+// cell in spec.Cells exists in the parsed project. Unknown cell IDs are
+// rejected with KindInvalid so `gocell scaffold assembly --cells=...` cannot
+// silently produce an assembly that points at non-existent cells.
+func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error {
+	if spec.ID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: ID is required")
+	}
+	if err := validateAssemblyPathComponent(spec.ID, "ID"); err != nil {
+		return err
+	}
+	if len(spec.Cells) == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: at least one cell is required")
+	}
+	if spec.OwnerTeam == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: OwnerTeam is required")
+	}
+	if err := validateAssemblyTextComponent(spec.OwnerTeam, "OwnerTeam"); err != nil {
+		return err
+	}
+	if spec.OwnerRole == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: OwnerRole is required")
+	}
+	if err := validateAssemblyTextComponent(spec.OwnerRole, "OwnerRole"); err != nil {
+		return err
+	}
+	switch spec.Deploy {
+	case "", "k8s", "compose", "binary":
+		// ok — empty defaults to k8s
+	default:
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: --deploy must be one of [k8s compose binary]",
+			errcode.WithInternal(fmt.Sprintf("deploy=%q", spec.Deploy)))
+	}
+	for _, cellID := range spec.Cells {
+		if err := validateAssemblyPathComponent(cellID, "Cells[]"); err != nil {
+			return err
+		}
+		if g.cells.Get(cellID) == nil {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"assembly scaffold: --cells references unknown cell",
+				errcode.WithInternal(fmt.Sprintf("cell=%q", cellID)))
+		}
+	}
+	return nil
 }
 
 // computeBoundaryContracts determines which contracts cross the assembly boundary.
@@ -434,6 +790,10 @@ func writeHash(w io.Writer, format string, args ...any) error {
 	return err
 }
 
+// assemblyRunHelperName derives the Go function name for the assembly run
+// helper from the assembly ID. Only ASCII alphanumerics are preserved; other
+// characters are skipped (assembly IDs are validated upstream to be
+// ASCII-only).
 func assemblyRunHelperName(assemblyID string) (string, error) {
 	var suffix strings.Builder
 	upperNext := true
