@@ -85,12 +85,20 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			_ = pool.Close(ctx)
 			return ConfigCoreModuleResult{}, schemaErr
 		}
-		// A4: warn on INVALID indexes (non-fatal).
-		if invalid, detectErr := adapterpg.DetectInvalidIndexes(ctx, pool); detectErr != nil {
-			slog.Warn("configcore: could not detect invalid indexes", slog.Any("error", detectErr))
-		} else if len(invalid) > 0 {
-			slog.Warn("configcore: invalid indexes detected; manual cleanup required",
-				slog.Any("indexes", invalid))
+		// S3+S5: fail-fast on schema shape (column existence post-migration).
+		// Catches partial migrations where the version table reports N but
+		// the migration's DDL never reached the column (e.g. sessions.jti
+		// missing while sessions.access_token still present).
+		if shapeErr := adapterpg.VerifyExpectedShape(ctx, pool); shapeErr != nil {
+			_ = pool.Close(ctx)
+			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG schema shape: %w", shapeErr)
+		}
+		// B2-X-03: fail-fast on INVALID indexes (replaces prior warn-continue).
+		// Operators must DROP INDEX manually before the binary will start —
+		// silent continue can hide INSERT-time failures in tests / staging.
+		if idxErr := adapterpg.VerifyNoInvalidIndexes(ctx, pool); idxErr != nil {
+			_ = pool.Close(ctx)
+			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG invalid indexes: %w", idxErr)
 		}
 
 		outboxWriter := adapterpg.NewOutboxWriter(cfg.Clock)

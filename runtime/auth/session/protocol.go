@@ -145,9 +145,14 @@ func WithOrdering(om OrderingModel) Option {
 	}
 }
 
-// credentialEventValid reports whether e is a declared CredentialEvent.
-// Used to reject open-int values like CredentialEvent(99) at construction.
-func credentialEventValid(e CredentialEvent) bool {
+// ValidateCredentialEvent reports whether e is a declared CredentialEvent.
+// Used to reject open-int values like CredentialEvent(99) at store boundaries.
+//
+// Exported so that adapter-layer stores (e.g. adapters/postgres.PGSessionStore)
+// can delegate to this single predicate instead of maintaining a parallel switch.
+// Having one source of truth prevents silent divergence when a new CredentialEvent
+// constant is added in the future.
+func ValidateCredentialEvent(e CredentialEvent) bool {
 	switch e {
 	case CredentialEventPasswordReset,
 		CredentialEventLock,
@@ -187,7 +192,7 @@ func WithRevokeOn(events ...CredentialEvent) Option {
 				"session protocol: WithRevokeOn requires at least one event")
 		}
 		for _, e := range events {
-			if !credentialEventValid(e) {
+			if !ValidateCredentialEvent(e) {
 				return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 					"session protocol: WithRevokeOn received unknown CredentialEvent")
 			}

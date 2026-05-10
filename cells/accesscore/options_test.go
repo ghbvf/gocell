@@ -24,6 +24,25 @@ func TestWithLogger(t *testing.T) {
 	assert.Equal(t, logger, c.logger)
 }
 
+// stubSetupLock is a minimal ports.SetupLock used to verify WithSetupLock wiring.
+type stubSetupLock struct{}
+
+func (stubSetupLock) Acquire(_ context.Context) error { return nil }
+
+func TestWithSetupLock(t *testing.T) {
+	lock := stubSetupLock{}
+	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(lock))
+	assert.Equal(t, lock, c.setupLock)
+}
+
+// TestWithSetupLock_NilNoop verifies that passing nil keeps the cell's setupLock
+// unset (mem-mode contract: intra-process sync.Mutex in adminprovision.Provisioner
+// is sufficient when no cross-process lock is wired).
+func TestWithSetupLock_NilNoop(t *testing.T) {
+	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(nil))
+	assert.Nil(t, c.setupLock)
+}
+
 func TestWithInMemoryDefaults(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),

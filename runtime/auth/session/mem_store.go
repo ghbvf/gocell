@@ -136,7 +136,7 @@ func (m *MemStore) RevokeForSubject(_ context.Context, subjectID string, event C
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: RevokeForSubject requires non-empty subjectID")
 	}
-	if !credentialEventValid(event) {
+	if !ValidateCredentialEvent(event) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: RevokeForSubject received unknown CredentialEvent")
 	}

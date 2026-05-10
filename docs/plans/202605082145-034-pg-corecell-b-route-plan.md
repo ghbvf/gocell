@@ -254,7 +254,12 @@ runtime/auth/session/
 - `cells/accesscore/cell_init.go`：Redis session cache adapter 注入
 - `cells/accesscore/internal/{ports,domain,mem}/`：5 联动激活
 
-**收口 backlog**：
+**收口 backlog**（PR #449 review carry-over entries）：
+- LASTADMINGUARD-SERVICE-WIRING-S4 🟠 P1（PR #449 review carry-over）：本 PR (S3+S5) 仅落 LastAdminGuard struct + 单测 + DB trigger 兜底；service-level wiring 在 S4 — identitymanage.DeleteUser / ChangeUserStatus(Locked) / rbacassign.RevokeRole 三个入口调用 LastAdminGuard.CheckRemove，把 DB trigger 触发的 P0001 raw exception 转成 ErrAuthLastAdminProtected 精准 errcode（ADR-admin §4 migration table 锁定）。**并发隔离要求**：S4 wiring 必须保证所有 admin removal 路径（`DeleteUser` cascade、`Locked` 状态切换、`RevokeRole`）在同一 tx 内对 admin holder 集合上序列化锁——优先用 `pg_advisory_xact_lock(hashtextextended('accesscore.admin.removal', 0))`（与 `PGSetupLock` 同模式，xact-scoped 自动释放），或对 `role_assignments WHERE role_id='admin'` 行集合 `SELECT...FOR UPDATE` 锁定。理由：DB trigger `last_admin_protected_fn`（migration 019）的 `SELECT count(*)` 在 READ COMMITTED 下两个并发删除可能都看到 `remaining_admins=1` 而双双 RETURN OLD（彼此忽略对方未提交 delete），最终 0 admin。trigger 仍保留作 safety net 不补 FOR UPDATE（避免 cascade DELETE 路径下 lock contention 与 false-positive；ADR-admin §3.2 主防线由应用层承担）。同 PR 必须落 integration test 覆盖：两个并发 `DeleteUser(adminA)` + `DeleteUser(adminB)` 的 race，期望恰好一个 ErrAuthLastAdminProtected。
+- S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01 🟠 P0（PR #449 review round-2 + round-3 重提 carry-over）：S3+S5 仅 wiring user/role/outbox PG，session/refresh repo 仍是 mem；当前 PG 模式下 sessionlogin.persistSessionWithRefresh 在真 PG tx 里写 mem session/refresh，rollback 不回滚 mem 状态（pre-existing hazard，S3+S5 PG TxManager wiring 让区域更显眼；round-3 reviewer 重申此为合并风险，用户裁决"忽略 + 更新计划文档"以本条目落地）。S4 必须同 PR：(a) cell consume runtime session.Store + adapters/postgres PG session store；(b) PG refresh store 接入；(c) 删除 cell-private SessionRepository + cell-internal mem session 路径；(d) 启动期 forced re-login 全员 session；(e) 同 PR 验证：sessionlogin happy path + 故障注入下 mem-in-tx hazard 消失（rollback 完整回滚 session/refresh PG 行）。
+- JWT-AUTHZEPOCH-CLOSED-LOOP-S4-01 🟠 P0（PR #449 review carry-over）：S3+S5 仅落 schema (users.authz_epoch + sessions.authz_epoch_at_issue + sessions.jti) + Protocol primitive；JWT issue/validate 闭环在 S4：(a) runtime/auth/jwt issuer 写 jti + epoch claim；(b) verifier 读 epoch；(c) sessionvalidate 加 user.authz_epoch lookup + 比对；(d) 4 个 CredentialEvent 撤销路径在每个 slice 接入；(e) ADR-credential D2 在 S4 闭环前不真实生效，旧 access JWT 仍只靠 session revoke + 自然过期失效
+
+**收口 backlog**（原有）：
 - ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 🔴 P1（session 状态机一并）
 - CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 🔴 Cx1（ACCESS-LEVEL-AUDIT 同主题）
 - B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 🟠 P1
@@ -267,6 +272,7 @@ runtime/auth/session/
 - PR267-FU-AUTHTEST-INTERNAL 🟡
 - PR250-F3 Event wire byte pinning 🟡
 - B2-C-13 L2 跨层 e2e 回归不足 🟡 P2（accesscore 接入完成后顺路）
+- **PR449-FU-SETUP-PG-E2E-REAL-WRITER-01** 🔴 P0（PR #449 review round-2 F6 + round-3 重提 + round-4 复议 — 三轮升级 P2→P1→P0）：S3+S5 落地的 `cmd/corebundle/setup_pg_integration_test.go` 用 `outbox.NoopWriter{}`，未实测 L2 outbox 原子性。round-3 reviewer 重新提出此项并主张为合并阻塞；用户裁决"忽略 + 更新计划文档"——本条目即裁决落地。S4 cell 切到 runtime Store 时**必须**同 PR 落 `TestSetupEndpoints_FirstRunFlow_PG_WithRealWriter`：(a) wire `adapterpg.NewOutboxWriter` 替代 `NoopWriter`；(b) 验证 happy path 同 tx 提交后 `outbox` 表 `user.created.v1` 行存在；(c) 通过故障注入（`TxRunner` 包装层）验证 user 写入失败时 outbox 行不存在（rollback 同步）；(d) 通过 outbox emit 失败注入验证 user 行不存在。具体 fault-injection 范式参考 `runtime/outbox/relay_test.go::WaitFor` + 自定义 wrapper TxRunner。该测试是 ADR-credential D5 同 tx 撤销协议的端到端验证，不应再延迟到 S6/S7。
 
 **联动激活**（033 B2.A 4 项重新组织）：
 - RBAC-ASSIGN-LEVEL-UPGRADE-01：rbacassign L0 → L1
@@ -307,6 +313,8 @@ runtime/state/cas/
 - PR280-FU1 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01 🟡 P2
 
 **为什么三件一起**：CAS Protocol 不能只抽不接入（违反"不留半成品"），两个消费点同时接入证明 typed Protocol 接口可用。
+
+**S3+S5 PR449-F7 维护责任**：S6 落 `runtime/state/cas` PG migration 时（如新增 `version` 列、CAS conflict 索引等），必须同步更新 `adapters/postgres/schema_guard.go::VerifyExpectedShape` 的 `required` / `forbidden` 列清单，让 phase0 fail-fast 同步覆盖新 schema 形态。该清单是 hardcode 列表（非声明式派生），是 ADR-credential §5.1.3 部署 playbook 的契约一部分。
 
 ---
 
@@ -351,6 +359,8 @@ adapters/postgres/
 - PR392-FU-AUDIT-CHAIN-WIRING 🟠 P2（auditcore framework 化后 onAuthFail 接入自然）
 
 **为什么单 cell 框架抽与接入合并**：auditcore 是 ledger 唯一消费者，拆"先框架后接入"两 PR 没收益（mem store 已是 storetest 实现），合并 PR 边界更清。
+
+**S3+S5 PR449-F7 维护责任**：S7 落 `adapters/postgres/migrations/02x_audit_entries.sql` 时，必须同步在 `adapters/postgres/schema_guard.go::VerifyExpectedShape` 的 `required` 列加入 `audit_entries.{prev_hash, idempotency_key, ...}` 等关键列，让 binary 启动期 fail-fast 拒绝缺列的 partial migration。
 
 ---
 

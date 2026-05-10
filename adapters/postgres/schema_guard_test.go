@@ -42,9 +42,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 16 migrations (001-016).
-	assert.Equal(t, int64(16), v,
-		"expected version should be exactly 16 (current migration count)")
+	// Currently 19 migrations (001-019). 017/018/019 land users/sessions/
+	// roles schema for accesscore PG repos (S3+S5).
+	assert.Equal(t, int64(19), v,
+		"expected version should be exactly 19 (current migration count)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

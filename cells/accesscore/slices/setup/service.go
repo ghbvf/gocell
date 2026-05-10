@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -61,12 +62,31 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	}
 }
 
+// WithSetupLock injects a cross-process advisory lock for the admin-provisioning
+// path. When set, CreateAdmin acquires the lock at the start of the RunInTx body
+// before calling adminprovision.Ensure — the lock, user write, and outbox emit
+// share a single transaction scope. A nil argument is a silent no-op (mem mode
+// keeps the intra-process sync.Mutex serialization). Closes backlog
+// ADMINPROVISION-DIST-LOCK-01.
+func WithSetupLock(lock ports.SetupLock) Option {
+	return func(s *Service) {
+		if lock != nil {
+			s.setupLock = lock
+		}
+	}
+}
+
 // Service implements the setup slice's business logic.
 type Service struct {
 	provisioner *adminprovision.Provisioner
 	txRunner    persistence.TxRunner
 	emitter     outbox.Emitter
 	logger      *slog.Logger
+	// setupLock is an optional cross-process advisory lock (PG mode). When set,
+	// CreateAdmin acquires it inside RunInTx before calling provisioner.Ensure so
+	// that multi-pod deployments cannot both persist an admin concurrently.
+	// Nil in mem mode — the intra-process sync.Mutex in Provisioner is sufficient.
+	setupLock ports.SetupLock
 }
 
 // NewService constructs a Service. provisioner is required; passing nil returns
@@ -165,6 +185,16 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 
 	var out *CreateAdminOutput
 	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		// Acquire the cross-process advisory lock first so that concurrent pods
+		// cannot both pass the CountByRole==0 fast-path and each persist an admin
+		// row. The xact-scoped lock is released automatically at tx commit/rollback.
+		// In mem mode setupLock is nil and the existing sync.Mutex in Provisioner
+		// serializes within-process concurrency.
+		if s.setupLock != nil {
+			if err := s.setupLock.Acquire(txCtx); err != nil {
+				return fmt.Errorf("setup: acquire setup lock: %w", err)
+			}
+		}
 		user, err := s.provisionAndMaybeEmit(txCtx, in, hash)
 		if err != nil {
 			return err

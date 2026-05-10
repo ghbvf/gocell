@@ -170,7 +170,18 @@ func TestService_Revoke(t *testing.T) {
 				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
 			},
 			wantErr:  true,
-			wantCode: errcode.ErrAuthForbidden,
+			wantCode: errcode.ErrAuthLastAdminProtected,
+		},
+		{
+			// ADR-admin-invariant §3.2: last-holder guard is admin-scoped.
+			// Non-admin roles must be revocable to zero holders.
+			name:   "revoke last non-admin holder is allowed (admin-scoped guard)",
+			userID: "usr-1",
+			roleID: "editor",
+			setup: func(r *mem.RoleRepository) {
+				_, _ = r.AssignToUser(context.Background(), "usr-1", "editor")
+			},
+			wantErr: false,
 		},
 		{
 			name:    "revoke unassigned role with no holders is guarded",

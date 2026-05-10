@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 var _ ports.RoleRepository = (*RoleRepository)(nil)
@@ -133,18 +134,25 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 		return false, nil
 	}
 
-	// Count holders under the same lock.
-	count := 0
-	for _, roleIDs := range r.userRoles {
-		if _, ok := roleIDs[roleID]; ok {
-			count++
+	// Last-holder protection is admin-scoped (ADR-admin-invariant §3.2 +
+	// migration 019:50 trigger condition `OLD.role_id = 'admin'`). For
+	// non-admin roles, allow revocation down to zero holders.
+	if roleID == auth.RoleAdmin {
+		count := 0
+		for _, roleIDs := range r.userRoles {
+			if _, ok := roleIDs[roleID]; ok {
+				count++
+			}
 		}
-	}
-
-	if count == 1 {
-		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
-			"cannot revoke role: this is the only holder; assign the role to another user first",
-			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+		if count == 1 {
+			// Same business invariant as the DB last_admin_protected trigger:
+			// refuse removal of the sole admin. Both app-level (this branch)
+			// and DB-trigger paths return ErrAuthLastAdminProtected so
+			// client-side handlers match a single errcode.
+			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
+				"cannot revoke admin: this is the only admin; assign the admin role to another user first",
+				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+		}
 	}
 
 	delete(r.userRoles[userID], roleID)

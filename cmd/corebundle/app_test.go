@@ -192,3 +192,34 @@ func TestBuildApp_PartialFailure_CleansUpManagedResource(t *testing.T) {
 	assert.Contains(t, err.Error(), "cell-b")
 	assert.True(t, res.closeCalled, "resource from module A must be closed when module B's Provide fails")
 }
+
+// TestCorebundleModules_ConfigCoreBeforeAccessCore asserts the ordering invariant
+// documented in access_module.go line 91-92:
+//
+//	"ConfigCoreModule must run before AccessCoreModule"
+//
+// AccessCoreModule.Provide reads shared.SharedPGPool which is populated by
+// ConfigCoreModule. If the modules were reordered, accesscore would start
+// against a nil pool and fail at runtime rather than at construction.
+// This test will fail if a future refactor reorders generatedCellModules().
+func TestCorebundleModules_ConfigCoreBeforeAccessCore(t *testing.T) {
+	mods := generatedCellModules()
+
+	configIdx, accessIdx := -1, -1
+	for i, m := range mods {
+		switch m.ID() {
+		case "configcore":
+			configIdx = i
+		case "accesscore":
+			accessIdx = i
+		}
+	}
+
+	require.NotEqual(t, -1, configIdx, "configcore module not found in generatedCellModules()")
+	require.NotEqual(t, -1, accessIdx, "accesscore module not found in generatedCellModules()")
+
+	assert.Less(t, configIdx, accessIdx,
+		"ConfigCoreModule (idx=%d) must appear before AccessCoreModule (idx=%d): "+
+			"configcore initializes SharedPGPool which accesscore consumes via shared.SharedPGPool",
+		configIdx, accessIdx)
+}
