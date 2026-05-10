@@ -197,8 +197,6 @@ func NewAuditCore(opts ...Option) *AuditCore {
 // cell_gen.go::Init calls it after BaseCell.Init and before mounting the
 // generated route-group and subscribe blocks. This is a permanent convention,
 // not a transitional shim.
-//
-//nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	clock.MustHaveClock(c.clk, "auditcore.initInternal")
 
@@ -230,6 +228,19 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	if err := cell.CheckNotNoop(durabilityMode, "auditcore", c.txRunner); err != nil {
 		return err
 	}
+
+	// F1: RestartRecoveryStrictTailVerify — verify hash chain integrity before
+	// accepting new entries. Runs before initSlices so a tampered or corrupted
+	// chain surfaces at startup rather than at the first consumer HandleEvent.
+	//
+	// ref: google/trillian log/sequencer.go IntegrateBatch — verifies tree
+	// integrity before accepting new leaves (same fail-fast invariant).
+	if _, ok := c.ledgerProtocol.RestartRecovery().(ledger.RestartRecoveryStrictTailVerify); ok {
+		if err := c.strictTailVerifyOnStartup(ctx); err != nil {
+			return err
+		}
+	}
+
 	if err := c.initSlices(); err != nil {
 		return err
 	}
@@ -245,13 +256,57 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 		return err
 	}
 
+	c.registerHealthProbes(reg)
+	return nil
+}
+
+// registerHealthProbes registers all health probes from the emitter and the
+// ledger store (when the latter implements cell.HealthProber). Extracted from
+// initInternal to keep cognitive complexity ≤ 15.
+func (c *AuditCore) registerHealthProbes(reg cell.Registry) {
 	// Register health probes (emitter fail-open rate checker).
 	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}
 	}
+	// F6: Register ledger store readyz probe when the store implements HealthProber.
+	// The audit_ledger_ready probe calls Tail(ctx) to check PG connectivity.
+	// MemStore does not implement HealthProber — in-memory stores are always ready.
+	if hp, ok := c.ledgerStore.(cell.HealthProber); ok {
+		for k, v := range hp.Probes() {
+			reg.Health(k, v)
+		}
+	}
+}
 
+// strictTailVerifyOnStartup implements the RestartRecoveryStrictTailVerify
+// protocol: reads the tail and verifies the entire chain before accepting
+// new entries. Returns ErrAuditChainBroken if any entry is tampered or
+// the chain linkage is invalid.
+//
+// Called from initInternal before initSlices; a failure prevents the cell
+// from ever serving traffic, surfacing corruption at process startup.
+func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
+	tail, err := c.ledgerStore.Tail(ctx)
+	if err != nil {
+		return fmt.Errorf("auditcore: tail recovery failed: %w", err)
+	}
+	if tail.SeqNo == 0 {
+		// Empty store — nothing to verify.
+		c.logger.Info("auditcore: tail verify passed (empty store)")
+		return nil
+	}
+	valid, firstInvalid, err := c.ledgerStore.Verify(ctx, 1, tail.SeqNo)
+	if err != nil {
+		return fmt.Errorf("auditcore: tail verify failed: %w", err)
+	}
+	if !valid {
+		return errcode.New(errcode.KindInternal, errcode.ErrAuditChainBroken,
+			"auditcore: chain integrity broken on startup",
+			errcode.WithDetails(slog.Int64("first_invalid_seq", firstInvalid)))
+	}
+	c.logger.Info("auditcore: tail verify passed", slog.Int64("seq_no", tail.SeqNo))
 	return nil
 }
 
@@ -303,8 +358,10 @@ func (c *AuditCore) initSlices() error {
 		return fmt.Errorf("auditappend-session: %w", err)
 	}
 	c.appendSessionSvc = sessionSvc
-	// L3: consumes cross-cell session events.
-	c.AddSlice(cell.NewBaseSlice("auditappendsession", "auditcore", cell.L3))
+	// L2: store.Append + emitter.Emit run inside the same txRunner.RunInTx block
+	// (OutboxFact pattern). Consumer receives cross-cell events (L3 source), but
+	// the write side is L2 atomic — F3 correction.
+	c.AddSlice(cell.NewBaseSlice("auditappendsession", "auditcore", cell.L2))
 
 	// auditappend-user
 	userSvc, err := auditappenduser.NewService(
@@ -316,7 +373,8 @@ func (c *AuditCore) initSlices() error {
 		return fmt.Errorf("auditappend-user: %w", err)
 	}
 	c.appendUserSvc = userSvc
-	c.AddSlice(cell.NewBaseSlice("auditappenduser", "auditcore", cell.L3))
+	// L2: same OutboxFact pattern as auditappendsession — F3 correction.
+	c.AddSlice(cell.NewBaseSlice("auditappenduser", "auditcore", cell.L2))
 
 	// auditappend-config
 	configSvc, err := auditappendconfig.NewService(
@@ -328,7 +386,8 @@ func (c *AuditCore) initSlices() error {
 		return fmt.Errorf("auditappend-config: %w", err)
 	}
 	c.appendConfigSvc = configSvc
-	c.AddSlice(cell.NewBaseSlice("auditappendconfig", "auditcore", cell.L3))
+	// L2: same OutboxFact pattern as auditappendsession — F3 correction.
+	c.AddSlice(cell.NewBaseSlice("auditappendconfig", "auditcore", cell.L2))
 
 	// auditappend-role
 	roleSvc, err := auditappendrole.NewService(
@@ -340,7 +399,8 @@ func (c *AuditCore) initSlices() error {
 		return fmt.Errorf("auditappend-role: %w", err)
 	}
 	c.appendRoleSvc = roleSvc
-	c.AddSlice(cell.NewBaseSlice("auditappendrole", "auditcore", cell.L3))
+	// L2: same OutboxFact pattern as auditappendsession — F3 correction.
+	c.AddSlice(cell.NewBaseSlice("auditappendrole", "auditcore", cell.L2))
 
 	// auditverify
 	verifySvc, err := auditverify.NewService(

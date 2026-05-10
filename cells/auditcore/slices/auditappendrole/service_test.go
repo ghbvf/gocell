@@ -3,6 +3,8 @@ package auditappendrole
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -15,6 +17,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
+
+// failingStore always fails Append with a sentinel error.
+type failingStore struct {
+	ledger.Store
+	err error
+}
+
+func (f *failingStore) Append(_ context.Context, _ *ledger.Entry) error { return f.err }
 
 type directRunner struct{}
 
@@ -87,6 +97,45 @@ func TestService_HandleEvent_ActorMissing_Reject(t *testing.T) {
 		ID:        "evt-no-actor",
 		EventType: "event.role.assigned.v1",
 		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "roleId": "admin"}),
+	}
+	result := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, result.Err, &permErr)
+}
+
+func TestService_HandleEvent_AppendFails_Requeue(t *testing.T) {
+	sentinel := fmt.Errorf("db unavailable")
+	p := newTestProtocol(t)
+	realStore, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	svc, err := NewService(&failingStore{Store: realStore, err: sentinel}, p, slog.Default(), clock.Real(), WithTxManager(directRunner{}))
+	require.NoError(t, err)
+
+	entry := outbox.Entry{
+		ID:        "evt-fail",
+		EventType: "event.role.assigned.v1",
+		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "roleId": "admin", "actorId": "admin-1"}),
+	}
+	result := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
+	assert.ErrorIs(t, result.Err, sentinel)
+
+	var permErr *outbox.PermanentError
+	assert.False(t, errors.As(result.Err, &permErr), "transient persist error must NOT be PermanentError")
+}
+
+func TestService_HandleEvent_InvalidJSON_Reject(t *testing.T) {
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	svc, err := NewService(store, p, slog.Default(), clock.Real(), WithTxManager(directRunner{}))
+	require.NoError(t, err)
+
+	entry := outbox.Entry{
+		ID:        "evt-bad-json",
+		EventType: "event.role.assigned.v1",
+		Payload:   []byte("{invalid json}"),
 	}
 	result := svc.HandleEvent(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)

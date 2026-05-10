@@ -45,9 +45,6 @@ ORDER BY seq_no DESC
 LIMIT 1
 FOR UPDATE`
 
-	// selectCountSQL counts total rows for a given namespace.
-	selectCountSQL = `SELECT COUNT(*) FROM audit_entries WHERE namespace = $1`
-
 	// insertEntrySQL inserts a new audit entry row.
 	insertEntrySQL = `
 INSERT INTO audit_entries
@@ -183,12 +180,18 @@ func (s *LedgerStore) queryCtx(ctx context.Context, sql string, args ...any) (pg
 //
 // Algorithm (all within txRunner.RunInTx):
 //  1. Validate payload is valid JSON.
-//  2. Check idempotency fingerprint (event_id + event_type + actor_id + timestamp + payload).
-//  3. Acquire pg_advisory_xact_lock(hashtextextended(namespace, 0)) to serialize.
+//  2. Acquire pg_advisory_xact_lock(hashtextextended(namespace, 0)) to serialize.
+//  3. Check idempotency fingerprint (event_id + event_type + actor_id + timestamp + payload)
+//     inside the lock to eliminate TOCTOU between concurrent Appends.
 //  4. SELECT tail row FOR UPDATE (prevents concurrent tail reads in the same namespace).
 //  5. Compute next seq_no = tail.seq_no + 1 (or 1 for empty).
 //  6. Compute hash = protocol.ComputeHash(tail.hash, entry).
 //  7. INSERT.
+//
+// F2: advisory lock (step 2) must precede fingerprint check (step 3) so that
+// concurrent Appends with identical content cannot both pass the fingerprint
+// check and both insert. MemStore acquires its mutex before the fingerprint
+// check — PG Append now mirrors that ordering.
 func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 	if e == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -201,7 +204,16 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 	ns := s.namespace()
 
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		// Step 2: idempotency fingerprint check before advisory lock (fast path).
+		// Step 2: advisory lock — serializes all Append calls for this namespace.
+		// Must run BEFORE the fingerprint check to prevent TOCTOU: two concurrent
+		// goroutines with identical payloads would both pass a pre-lock fingerprint
+		// check and both attempt to INSERT, causing a duplicate chain entry.
+		if lockErr := s.execCtx(txCtx, lockNamespaceSQL, ns); lockErr != nil {
+			return ctxcancel.WrapOrInfra(lockErr, "advisory_lock", ns,
+				ErrAdapterPGQuery, "audit ledger: namespace advisory lock failed")
+		}
+
+		// Step 3: idempotency fingerprint check — now inside the advisory lock.
 		dup, err := s.checkFingerprint(txCtx, ns, e)
 		if err != nil {
 			return err
@@ -209,12 +221,6 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 		if dup {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuditLedgerAlreadyExists,
 				"audit ledger: duplicate content fingerprint")
-		}
-
-		// Step 3: advisory lock — serializes all Append calls for this namespace.
-		if lockErr := s.execCtx(txCtx, lockNamespaceSQL, ns); lockErr != nil {
-			return ctxcancel.WrapOrInfra(lockErr, "advisory_lock", ns,
-				ErrAdapterPGQuery, "audit ledger: namespace advisory lock failed")
 		}
 
 		// Step 4: read current tail (SELECT FOR UPDATE).
@@ -276,21 +282,30 @@ func (s *LedgerStore) readTailForUpdate(ctx context.Context, ns string) (prevHas
 	return tailHash, tailSeqNo + 1, nil
 }
 
+// tailWithCountSQL retrieves the latest seq_no + hash + total row count in a
+// single query, avoiding a separate COUNT(*) round-trip.
+// Returns (0, "", 0) via ErrNoRows when the namespace is empty.
+//
+// F13: merged Tail + Count into one query.
+const tailWithCountSQL = `
+SELECT seq_no, hash,
+       (SELECT COUNT(*) FROM audit_entries WHERE namespace=$1) AS total
+FROM audit_entries
+WHERE namespace=$1
+ORDER BY seq_no DESC
+LIMIT 1`
+
 // Tail returns the current chain tail snapshot. Returns zero TailSnapshot for
 // an empty namespace (not an error). Uses the pool directly (read path).
+//
+// F13: uses a single SQL query to retrieve seq_no, hash, and total count.
 func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 	ns := s.namespace()
 
 	var seqNo int64
 	var hash string
-	const tailQ = `
-SELECT seq_no, hash
-FROM audit_entries
-WHERE namespace = $1
-ORDER BY seq_no DESC
-LIMIT 1`
-
-	err := s.pool.QueryRow(ctx, tailQ, ns).Scan(&seqNo, &hash)
+	var count int64
+	err := s.pool.QueryRow(ctx, tailWithCountSQL, ns).Scan(&seqNo, &hash, &count)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ledger.TailSnapshot{}, nil
 	}
@@ -299,19 +314,25 @@ LIMIT 1`
 			ErrAdapterPGQuery, "audit ledger: tail query failed")
 	}
 
-	// Retrieve EntryCount separately to avoid a OVER() window function that
-	// makes the FOR UPDATE tail query more complex.
-	var count int64
-	if countErr := s.pool.QueryRow(ctx, selectCountSQL, ns).Scan(&count); countErr != nil {
-		return ledger.TailSnapshot{}, ctxcancel.WrapOrInfra(countErr, "tail_count", ns,
-			ErrAdapterPGQuery, "audit ledger: tail count query failed")
-	}
-
 	return ledger.TailSnapshot{
 		SeqNo:      seqNo,
 		PrevHash:   hash,
 		EntryCount: count,
 	}, nil
+}
+
+// Probes returns a readiness probe for the audit ledger store.
+// The probe "audit_ledger_ready" calls Tail to verify PG connectivity.
+// This method satisfies the cell.HealthProber duck-type interface so that
+// cells/auditcore/cell.go can register it via type assertion without
+// importing kernel/cell in adapters/.
+func (s *LedgerStore) Probes() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"audit_ledger_ready": func(ctx context.Context) error {
+			_, err := s.Tail(ctx)
+			return err
+		},
+	}
 }
 
 // GetBySeq fetches a single entry by sequence number.
@@ -463,17 +484,18 @@ func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid b
 	return true, -1, nil
 }
 
-// validateAuditPayloadJSON checks that payload is valid JSON.
-// nil or empty payload is treated as valid (JSON null semantics).
+// validateAuditPayloadJSON checks that payload is a valid JSON object or null.
+// nil or empty payload is treated as JSON null (valid).
+// F21: arrays and scalar JSON values are rejected — audit entries must carry
+// structured event metadata, not bare scalars or lists.
 func validateAuditPayloadJSON(payload []byte) error {
 	if len(payload) == 0 {
 		return nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	var v interface{}
-	if err := dec.Decode(&v); err != nil {
+	var m map[string]any
+	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&m); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger: payload is not valid JSON",
+			"audit ledger: payload must be a JSON object or null",
 			errcode.WithInternal(fmt.Sprintf("json decode: %v", err)),
 		)
 	}

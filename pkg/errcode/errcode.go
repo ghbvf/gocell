@@ -179,6 +179,11 @@ const (
 	// already exists in the idempotency set. The caller should treat the entry
 	// as already committed and not retry.
 	ErrAuditLedgerAlreadyExists Code = "ERR_AUDIT_LEDGER_ALREADY_EXISTS"
+	// ErrAuditChainBroken signals that hash chain integrity verification failed
+	// during startup (RestartRecoveryStrictTailVerify mode). The process cannot
+	// accept new entries without first resolving the tampered or corrupted chain.
+	// Maps to HTTP 500 (infrastructure fault). Operator action required.
+	ErrAuditChainBroken Code = "ERR_AUDIT_CHAIN_BROKEN"
 
 	// Pagination / validation error codes.
 	ErrCursorInvalid     Code = "ERR_CURSOR_INVALID"

@@ -212,17 +212,49 @@ func (m *MemStore) Verify(_ context.Context, fromSeq, toSeq int64) (valid bool, 
 	return true, -1, nil
 }
 
-// validatePayloadJSON checks that payload is valid JSON. nil or empty payload
-// is treated as JSON null (valid). Uses bytes.NewReader to avoid alloc.
+// MustTamperEntryHash directly modifies the Hash field of the stored entry at
+// the given seq_no (1-indexed). Used only by storetest for negative Verify cases.
+//
+// This method is intentionally exported from the test-only MemStore so that
+// storetest can construct tampered-chain scenarios without coupling the test
+// infrastructure to the concrete store type outside this package. The Must*
+// prefix follows PANIC-REGISTERED-01: panicking on an out-of-range seq_no is a
+// B-class assertion (programming error in the test caller).
+func (m *MemStore) MustTamperEntryHash(seq int64, newHash string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	idx := seq - 1
+	if int(idx) < 0 || int(idx) >= len(m.entries) {
+		panic(errcode.Assertion("MustTamperEntryHash: seq %d out of range [1, %d]", seq, len(m.entries)))
+	}
+	m.entries[idx].Hash = newHash
+}
+
+// MustTamperEntryPrevHash directly modifies the PrevHash field of the stored
+// entry at the given seq_no (1-indexed). Used only by storetest for negative
+// Verify cases. The Must* prefix follows PANIC-REGISTERED-01: panicking on an
+// out-of-range seq_no is a B-class assertion (programming error in the test caller).
+func (m *MemStore) MustTamperEntryPrevHash(seq int64, newPrevHash string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	idx := seq - 1
+	if int(idx) < 0 || int(idx) >= len(m.entries) {
+		panic(errcode.Assertion("MustTamperEntryPrevHash: seq %d out of range [1, %d]", seq, len(m.entries)))
+	}
+	m.entries[idx].PrevHash = newPrevHash
+}
+
+// validatePayloadJSON checks that payload is a valid JSON object or null.
+// nil or empty payload is treated as JSON null (valid). Uses bytes.NewReader to avoid alloc.
+// F21: arrays and scalar JSON values are rejected — must be a JSON object.
 func validatePayloadJSON(payload []byte) error {
 	if len(payload) == 0 {
 		return nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	var v interface{}
-	if err := dec.Decode(&v); err != nil {
+	var m map[string]any
+	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&m); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger: payload is not valid JSON",
+			"audit ledger: payload must be a JSON object or null",
 			errcode.WithInternal(fmt.Sprintf("json decode: %v", err)),
 		)
 	}

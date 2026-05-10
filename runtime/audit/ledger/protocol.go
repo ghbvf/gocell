@@ -185,8 +185,15 @@ type Option func(*Protocol) error
 // valid WithChainHMAC call does NOT clear it — misconfiguration must surface
 // at startup rather than being silently masked.
 //
+// F7: after the defensive copy is made, the caller's key slice is zeroed
+// (clear(key)) so that sensitive key material does not remain live in the
+// caller's memory. The Protocol retains its own internal copy.
+//
 // Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency wiring
 // option — runtime-api.md §Option 范式分层).
+//
+// Both bare-nil and typed-nil are rejected by NewProtocol. The nil sentinel is
+// sticky: once set, a subsequent valid WithChainHMAC call does NOT clear it.
 func WithChainHMAC(key []byte) Option {
 	return func(p *Protocol) error {
 		if len(key) == 0 {
@@ -205,6 +212,10 @@ func WithChainHMAC(key []byte) Option {
 		}
 		dst := make([]byte, len(key))
 		copy(dst, key)
+		// Zero the caller's slice immediately after the defensive copy so that
+		// HMAC key material does not remain accessible in the caller's allocation.
+		// The Protocol retains the only live copy.
+		clear(key)
 		p.hmacKey = dst
 		return nil
 	}
@@ -214,8 +225,10 @@ func WithChainHMAC(key []byte) Option {
 // this ledger instance.
 //
 // Both bare-nil (zero-value NamespaceID "") and invalid values are rejected
-// by NewProtocol. Pattern mirrors runtime/http/router.WithRateLimiter
-// (strong-dependency wiring option).
+// by NewProtocol. The nil sentinel is sticky: once set, a subsequent valid
+// WithNamespace call does NOT clear it — mirrors WithRestartRecovery.
+// Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency
+// wiring option — runtime-api.md §Option 范式分层).
 func WithNamespace(ns NamespaceID) Option {
 	return func(p *Protocol) error {
 		if ns == "" {

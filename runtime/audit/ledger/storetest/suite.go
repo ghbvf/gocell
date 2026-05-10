@@ -102,6 +102,9 @@ func NewEntryFixture(t *testing.T, eventID, eventType, actorID string, now time.
 
 // Run executes the Protocol-driven contract suite against factory. All backends
 // share NewTestProtocol to prove parity on the same protocol decisions.
+//
+// The protocol parameter is used by the Verify_Tampered* cases to recompute
+// expected hashes for comparison. It must match the protocol passed to Factory.
 func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Helper()
 	if factory == nil {
@@ -118,6 +121,8 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Concurrent_Append_HashChainValid", func(t *testing.T) { runConcurrentAppendHashChainValid(t, factory) })
 	t.Run("StrictPayload_InvalidJSON", func(t *testing.T) { runStrictPayloadInvalidJSON(t, factory) })
 	t.Run("Verify_FullRange", func(t *testing.T) { runVerifyFullRange(t, factory) })
+	t.Run("Verify_TamperedHash", func(t *testing.T) { runVerifyTamperedHash(t, factory, protocol) })
+	t.Run("Verify_TamperedPrevHash", func(t *testing.T) { runVerifyTamperedPrevHash(t, factory, protocol) })
 	t.Run("GetBySeq_NotFound", func(t *testing.T) { runGetBySeqNotFound(t, factory) })
 	t.Run("Query_ByFilters", func(t *testing.T) { runQueryByFilters(t, factory) })
 }
@@ -259,12 +264,13 @@ func runIdempotencyDuplicateContent(t *testing.T, factory Factory) {
 	assertErrCode(t, err, errcode.ErrAuditLedgerAlreadyExists)
 }
 
-// runConcurrentAppendHashChainValid: 50 concurrent appends; chain must be valid.
+// runConcurrentAppendHashChainValid: 100 concurrent appends; chain must be valid.
+// F24: increased from 50 to 100 to align with PG integration test concurrency level.
 func runConcurrentAppendHashChainValid(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
 
-	const n = 50
+	const n = 100
 	errCh := make(chan error, n)
 	var wg sync.WaitGroup
 	wg.Add(n)
@@ -350,6 +356,89 @@ func runVerifyFullRange(t *testing.T, factory Factory) {
 	if !valid {
 		t.Errorf("Verify: expected valid, first invalid at seq %d", firstInvalid)
 	}
+}
+
+// runVerifyTamperedHash: a MemStore entry with a corrupted Hash field must
+// cause Verify to return valid=false at that seq_no.
+//
+// F5: negative Verify case using protocol.ComputeHash for expected-hash reference.
+// This function uses a type-switch to access MemStore internals — only MemStore
+// (the test-only in-process backend) supports direct field tampering; PG store
+// tampered cases require external SQL manipulation and belong in integration tests.
+func runVerifyTamperedHash(t *testing.T, factory Factory, protocol *ledger.Protocol) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	e := NewEntryFixture(t, "tamper-hash-evt", "tamper.test", "actor", fc.Now())
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	ms, ok := store.(*ledger.MemStore)
+	if !ok {
+		t.Skip("Verify_TamperedHash requires *ledger.MemStore; skipping for non-MemStore backends")
+	}
+
+	// Tamper the stored entry's Hash via MemStore test helper.
+	ms.MustTamperEntryHash(1, "tampered-hash-value")
+
+	valid, firstInvalid, err := store.Verify(context.Background(), 1, 1)
+	if err != nil {
+		t.Fatalf("Verify: unexpected error: %v", err)
+	}
+	if valid {
+		t.Error("Verify: expected valid=false after Hash tampering")
+	}
+	if firstInvalid != 1 {
+		t.Errorf("Verify: firstInvalidSeq: got %d, want 1", firstInvalid)
+	}
+
+	// Confirm protocol can still recompute the correct hash from stored data.
+	entry, err := store.GetBySeq(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetBySeq: %v", err)
+	}
+	correctHash := protocol.ComputeHash(entry.PrevHash, entry)
+	if entry.Hash == correctHash {
+		t.Error("tampered hash unexpectedly matches recomputed hash")
+	}
+}
+
+// runVerifyTamperedPrevHash: a MemStore entry with a corrupted PrevHash field
+// must cause Verify to return valid=false at that seq_no.
+//
+// F5: negative Verify case; mirrors runVerifyTamperedHash but targets PrevHash linkage.
+func runVerifyTamperedPrevHash(t *testing.T, factory Factory, protocol *ledger.Protocol) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	// Append two entries so seq 2 has a meaningful PrevHash linkage.
+	for i, id := range []string{"prev-hash-evt-1", "prev-hash-evt-2"} {
+		e := NewEntryFixture(t, id, "tamper.test", "actor", fc.Now())
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append %d: %v", i+1, err)
+		}
+	}
+
+	ms, ok := store.(*ledger.MemStore)
+	if !ok {
+		t.Skip("Verify_TamperedPrevHash requires *ledger.MemStore; skipping for non-MemStore backends")
+	}
+
+	// Tamper the second entry's PrevHash — breaks the chain link between seq 1 and seq 2.
+	ms.MustTamperEntryPrevHash(2, "tampered-prev-hash")
+
+	valid, firstInvalid, err := store.Verify(context.Background(), 1, 2)
+	if err != nil {
+		t.Fatalf("Verify: unexpected error: %v", err)
+	}
+	if valid {
+		t.Error("Verify: expected valid=false after PrevHash tampering")
+	}
+	if firstInvalid != 2 {
+		t.Errorf("Verify: firstInvalidSeq: got %d, want 2", firstInvalid)
+	}
+	_ = protocol // used for documentation; hash recomputation is in runVerifyTamperedHash
 }
 
 // runGetBySeqNotFound: missing seqNo returns errcode error.
