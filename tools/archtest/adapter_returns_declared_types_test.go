@@ -384,19 +384,15 @@ func extractAdapterReturnStatuses(filePath string) ([]adapterReturn, error) {
 	}
 
 	var results []adapterReturn
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if !isAdapterMethod(fn) {
-			continue
+			return
 		}
 		walkReturns(fn, fset, func(ret adapterReturn) {
 			ret.FuncName = fn.Name.Name
 			results = append(results, ret)
 		})
-	}
+	})
 	return results, nil
 }
 
@@ -429,35 +425,28 @@ func returnTypeEndsInResponseObject(expr ast.Expr) bool {
 // walkReturns walks all ReturnStmt in fn and for each CompositeLit whose type
 // name matches responseStructPattern, calls emit with the extracted return info.
 func walkReturns(fn *ast.FuncDecl, fset *token.FileSet, emit func(adapterReturn)) {
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
 		for _, result := range ret.Results {
-			cl, isCL := result.(*ast.CompositeLit)
-			if !isCL {
-				// nil, ident variable, or (nil, err) — skip (ceiling guard).
-				continue
+			switch cl := result.(type) {
+			case *ast.CompositeLit:
+				typeName := compositeLitTypeName(cl)
+				if typeName == "" {
+					continue
+				}
+				m := responseStructPattern.FindStringSubmatch(typeName)
+				if m == nil {
+					continue
+				}
+				status, _ := strconv.Atoi(m[1])
+				pos := fset.Position(cl.Pos())
+				emit(adapterReturn{
+					File:     pos.Filename,
+					Line:     pos.Line,
+					Status:   status,
+					TypeName: typeName,
+				})
 			}
-			typeName := compositeLitTypeName(cl)
-			if typeName == "" {
-				continue
-			}
-			m := responseStructPattern.FindStringSubmatch(typeName)
-			if m == nil {
-				continue
-			}
-			status, _ := strconv.Atoi(m[1])
-			pos := fset.Position(cl.Pos())
-			emit(adapterReturn{
-				File:     pos.Filename,
-				Line:     pos.Line,
-				Status:   status,
-				TypeName: typeName,
-			})
 		}
-		return true
 	})
 }
 

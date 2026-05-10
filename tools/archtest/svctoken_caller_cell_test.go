@@ -66,13 +66,9 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 		if len(authAliases) == 0 {
 			return // file does not import runtime/auth
 		}
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			if !isAuthGenerateServiceTokenCall(call, authAliases) {
-				return true
+				return
 			}
 			pos := fc.Fset.Position(call.Pos())
 
@@ -84,7 +80,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 					Line:    pos.Line,
 					Message: "auth.GenerateServiceToken called with fewer than 2 arguments — missing callerCell",
 				})
-				return true
+				return
 			}
 
 			arg1 := call.Args[1]
@@ -95,7 +91,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 					Line:    pos.Line,
 					Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
 				})
-				return true
+				return
 			}
 			callerCell, ok := scanner.StringLitValue(lit)
 			if !ok {
@@ -104,7 +100,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 					Line:    pos.Line,
 					Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
 				})
-				return true
+				return
 			}
 
 			if callerCell == "" {
@@ -113,7 +109,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 					Line:    pos.Line,
 					Message: "auth.GenerateServiceToken callerCell must not be empty",
 				})
-				return true
+				return
 			}
 
 			if !cellIDRegex.MatchString(callerCell) {
@@ -122,7 +118,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 					Line:    pos.Line,
 					Message: fmt.Sprintf("auth.GenerateServiceToken callerCell %q does not match ^[a-z][a-z0-9-]*$", callerCell),
 				})
-				return true
+				return
 			}
 
 			if !knownCells[callerCell] {
@@ -134,7 +130,6 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 							" — register it in cells/ or actors.yaml", callerCell),
 				})
 			}
-			return true
 		})
 	})
 	scanner.Report(t, ruleSvctokenCallerCellRequired01, diags)

@@ -78,21 +78,16 @@ func TestRoleAdminLiteralIsForbidden(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		for _, decl := range fc.File.Decls {
-			genDecl, ok := decl.(*ast.GenDecl)
-			if !ok || genDecl.Tok != token.CONST {
-				continue
+		scanner.EachNode[ast.GenDecl](fc.File, func(genDecl *ast.GenDecl) {
+			if genDecl.Tok != token.CONST {
+				return
 			}
 			// Go spec: a ValueSpec inside a const GenDecl with no Values
 			// inherits the previous spec's expression list (iota carry).
 			// Track the most recent non-empty Values within this GenDecl so
 			// that `const ( AdminRole = "admin"; OtherRole )` flags OtherRole.
 			var lastValues []ast.Expr
-			for _, spec := range genDecl.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			scanner.EachNode[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
 				values := vs.Values
 				if values == nil {
 					values = lastValues
@@ -121,8 +116,8 @@ func TestRoleAdminLiteralIsForbidden(t *testing.T) {
 							`; use auth.RoleAdmin from runtime/auth`,
 					})
 				}
-			}
-		}
+			})
+		})
 	})
 	scanner.Report(t, ruleRoleAdminLiteral01, diags)
 }
@@ -167,33 +162,25 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 		if len(authAliases) == 0 {
 			return // file does not import runtime/auth — selector cannot resolve to auth.*
 		}
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			if _, matched := authCallSiteFuncNames[sel.Sel.Name]; !matched {
-				return true
+				return
 			}
 			id, isIdent := sel.X.(*ast.Ident)
 			if !isIdent {
-				return true
+				return
 			}
 			if _, isAuthAlias := authAliases[id.Name]; !isAuthAlias {
-				return true
+				return
 			}
-			for _, arg := range call.Args {
-				lit, isLit := arg.(*ast.BasicLit)
-				if !isLit {
-					continue
-				}
+			scanner.EachNode[ast.BasicLit](call, func(lit *ast.BasicLit) {
 				value, ok := scanner.StringLitValue(lit)
 				if !ok || value != "admin" {
-					continue
+					return
 				}
 				diags = append(diags, scanner.Diagnostic{
 					Rel:  fc.Rel,
@@ -202,8 +189,7 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 						` violates ` + ruleRoleAdminLiteral02 +
 						`; use auth.RoleAdmin constant instead`,
 				})
-			}
-			return true
+			})
 		})
 	})
 	scanner.Report(t, ruleRoleAdminLiteral02, diags)

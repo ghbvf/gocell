@@ -35,6 +35,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleNoDeletedAuthSymbols01 = "NO-DELETED-AUTH-SYMBOLS-01"
@@ -125,24 +127,19 @@ func scanDeletedAuthSymbols(path, rel string) ([]string, error) {
 	}
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
 		if !deletedAuthSymbols[sel.Sel.Name] {
-			return true
+			return
 		}
 		// Only flag auth.X (receiver named "auth").
 		id, ok := sel.X.(*ast.Ident)
 		if !ok || id.Name != "auth" {
-			return true
+			return
 		}
 		pos := fset.Position(sel.Pos())
 		violations = append(violations, fmt.Sprintf(
 			"%s:%d: deprecated symbol auth.%s — replace with caller-cell identity pattern",
 			rel, pos.Line, sel.Sel.Name))
-		return true
 	})
 
 	// Also scan for bare references (e.g. inside the auth package itself where
@@ -152,20 +149,15 @@ func scanDeletedAuthSymbols(path, rel string) ([]string, error) {
 	//
 	// For the runtime/auth package tests, check Ident nodes too.
 	if strings.Contains(rel, "runtime/auth/") {
-		ast.Inspect(f, func(n ast.Node) bool {
-			ident, ok := n.(*ast.Ident)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.Ident](f, func(ident *ast.Ident) {
 			if !deletedAuthSymbols[ident.Name] {
-				return true
+				return
 			}
 			// Exclude the selector's Sel field — already caught above.
 			pos := fset.Position(ident.Pos())
 			violations = append(violations, fmt.Sprintf(
 				"%s:%d: deprecated symbol %s — replace with caller-cell identity pattern",
 				rel, pos.Line, ident.Name))
-			return true
 		})
 	}
 

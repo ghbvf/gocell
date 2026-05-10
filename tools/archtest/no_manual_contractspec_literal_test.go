@@ -32,6 +32,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // migrationAllowlistNoLiteral parallels migrationAllowlistCells. Must be empty
@@ -162,40 +164,37 @@ func scanForContractSpecLiterals(fset *token.FileSet, path, rel string) []string
 	}
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.CompositeLit:
-			// Match wrapper.ContractSpec{…}
-			sel, ok := node.Type.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			ident, ok2 := sel.X.(*ast.Ident)
-			if !ok2 || ident.Name != alias || sel.Sel.Name != "ContractSpec" {
-				return true
-			}
-			pos := fset.Position(node.Pos())
-			violations = append(violations, fmt.Sprintf(
-				"%s:%d: manual %s.ContractSpec{} literal — must be in generated/contracts/**/*_gen.go only",
-				rel, pos.Line, alias,
-			))
-		case *ast.CallExpr:
-			// Match wrapper.EventSpec(…)
-			sel, ok := node.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			ident, ok2 := sel.X.(*ast.Ident)
-			if !ok2 || ident.Name != alias || sel.Sel.Name != "EventSpec" {
-				return true
-			}
-			pos := fset.Position(node.Pos())
-			violations = append(violations, fmt.Sprintf(
-				"%s:%d: manual %s.EventSpec() call — must be in generated/contracts/**/*_gen.go only",
-				rel, pos.Line, alias,
-			))
+	// Match wrapper.ContractSpec{…} composite literals.
+	scanner.EachNode[ast.CompositeLit](f, func(node *ast.CompositeLit) {
+		sel, ok := node.Type.(*ast.SelectorExpr)
+		if !ok {
+			return
 		}
-		return true
+		ident, ok2 := sel.X.(*ast.Ident)
+		if !ok2 || ident.Name != alias || sel.Sel.Name != "ContractSpec" {
+			return
+		}
+		pos := fset.Position(node.Pos())
+		violations = append(violations, fmt.Sprintf(
+			"%s:%d: manual %s.ContractSpec{} literal — must be in generated/contracts/**/*_gen.go only",
+			rel, pos.Line, alias,
+		))
+	})
+	// Match wrapper.EventSpec(…) call expressions.
+	scanner.EachNode[ast.CallExpr](f, func(node *ast.CallExpr) {
+		sel, ok := node.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		ident, ok2 := sel.X.(*ast.Ident)
+		if !ok2 || ident.Name != alias || sel.Sel.Name != "EventSpec" {
+			return
+		}
+		pos := fset.Position(node.Pos())
+		violations = append(violations, fmt.Sprintf(
+			"%s:%d: manual %s.EventSpec() call — must be in generated/contracts/**/*_gen.go only",
+			rel, pos.Line, alias,
+		))
 	})
 	return violations
 }

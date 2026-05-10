@@ -84,16 +84,15 @@ func TestRedisConstructorsRequireKeyNamespace(t *testing.T) {
 
 func findRedisConstructorDecl(file *ast.File, name string) *ast.FuncDecl {
 	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-		if fn.Recv != nil {
-			// Only top-level (non-method) functions are constructors.
-			continue
-		}
-		if fn.Name.Name == name {
-			return fn
+		switch fn := decl.(type) {
+		case *ast.FuncDecl:
+			if fn.Recv != nil {
+				// Only top-level (non-method) functions are constructors.
+				continue
+			}
+			if fn.Name.Name == name {
+				return fn
+			}
 		}
 	}
 	return nil
@@ -167,28 +166,32 @@ func assertConstructorValidatesNamespace(t *testing.T, spec redisConstructorSpec
 
 	found := false
 	for _, stmt := range leading {
-		ifStmt, ok := stmt.(*ast.IfStmt)
-		if !ok || ifStmt.Init == nil {
-			continue
+		switch ifStmt := stmt.(type) {
+		case *ast.IfStmt:
+			if ifStmt.Init == nil {
+				continue
+			}
+			assign, ok := ifStmt.Init.(*ast.AssignStmt)
+			if !ok || len(assign.Rhs) != 1 {
+				continue
+			}
+			call, ok := assign.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Validate" {
+				continue
+			}
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok || recv.Name != "ns" {
+				continue
+			}
+			found = true
 		}
-		assign, ok := ifStmt.Init.(*ast.AssignStmt)
-		if !ok || len(assign.Rhs) != 1 {
-			continue
+		if found {
+			break
 		}
-		call, ok := assign.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			continue
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Validate" {
-			continue
-		}
-		recv, ok := sel.X.(*ast.Ident)
-		if !ok || recv.Name != "ns" {
-			continue
-		}
-		found = true
-		break
 	}
 	require.True(t, found,
 		"%s.%s: must call `ns.Validate()` within the first %d body statements "+

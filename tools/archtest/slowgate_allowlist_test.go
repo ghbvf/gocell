@@ -106,12 +106,14 @@ func TestSlowgateAllowlist(t *testing.T) {
 		funcs := map[string]bool{}
 		for _, file := range p.Syntax {
 			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil {
-					continue
-				}
-				if strings.HasPrefix(fn.Name.Name, "Test") {
-					funcs[fn.Name.Name] = true
+				switch fn := decl.(type) {
+				case *ast.FuncDecl:
+					if fn.Recv != nil {
+						continue
+					}
+					if strings.HasPrefix(fn.Name.Name, "Test") {
+						funcs[fn.Name.Name] = true
+					}
 				}
 			}
 		}

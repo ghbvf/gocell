@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const subscriptionGenFilename = "subscription_gen.go"
@@ -80,14 +82,14 @@ func scanEventSubscriptionCoverage(contractID, subPath string) error {
 			subPath, parseErr,
 		)
 	}
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	found := false
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil && fn.Name.Name == "NewSubscription" {
-			return nil
+			found = true
 		}
+	})
+	if found {
+		return nil
 	}
 	return fmt.Errorf(
 		"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q: %s exists but does not "+

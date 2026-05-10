@@ -48,6 +48,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
@@ -112,26 +113,21 @@ func scanTestSleepDiscipline(fset *token.FileSet, file *ast.File, rel string) []
 	allowedLines := allowMarkerLines(fset, file)
 
 	var violations []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isTimeSleepCall(call) {
-			return true
+			return
 		}
 		// Match against the line of the closing `)` so multi-line calls
 		// can place the marker on the trailing-paren line. Common case
 		// (single-line call) collapses to the call's start line.
 		line := fset.Position(call.Rparen).Line
 		if allowedLines[line] {
-			return false
+			return
 		}
 		violations = append(violations, fmt.Sprintf(
 			"%s:%d: time.Sleep without %s <reason>",
 			rel, fset.Position(call.Pos()).Line, sleepAllowMarker,
 		))
-		return false
 	})
 	return violations
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	scannerPkg "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestAuthAuthtestBoundary enforces three rules related to the removal of
@@ -160,7 +160,7 @@ func collectGoFiles(root string) ([]string, error) {
 	// codegen output (generated/contracts/**) must also obey the boundary;
 	// otherwise a regenerated handler reintroducing auth.Authenticated() or
 	// importing runtime/auth/authtest would silently bypass the rule.
-	scope := scanner.ModuleScope(root, scanner.IncludeTests(), scanner.IncludeGenerated())
+	scope := scannerPkg.ModuleScope(root, scannerPkg.IncludeTests(), scannerPkg.IncludeGenerated())
 	all, err := scope.Files()
 	if err != nil {
 		return nil, err
@@ -220,23 +220,18 @@ func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scannerPkg.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		ident, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if ident.Name == pkgIdent && sel.Sel.Name == selName {
 			lines = append(lines, fset.Position(call.Lparen).Line)
 		}
-		return true
 	})
 	return lines, nil
 }

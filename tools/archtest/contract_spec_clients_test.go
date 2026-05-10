@@ -31,6 +31,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleInternalContractClients01 = "INTERNAL-CONTRACT-CLIENTS-REQUIRED-01"
@@ -114,24 +116,20 @@ func scanContractSpecMissingClients(path, rel string) ([]string, error) {
 	}
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		// Check if this looks like a ContractSpec by field names.
 		if !isContractSpecLit(cl) {
-			return true
+			return
 		}
 		// Extract Path value.
 		pathVal := contractSpecStringField(cl, "Path")
 		if pathVal == "" || !strings.HasPrefix(pathVal, "/internal/v1/") {
-			return true
+			return
 		}
 		// Extract ID value for allowlist check.
 		idVal := contractSpecStringField(cl, "ID")
 		if awaitingRealCallerAllowlist[idVal] {
-			return true
+			return
 		}
 		// Check whether Clients field is present and non-empty.
 		if !hasNonEmptyClientsField(cl) {
@@ -141,7 +139,6 @@ func scanContractSpecMissingClients(path, rel string) ([]string, error) {
 					"internal contracts must declare caller allowlist",
 				rel, pos.Line, idVal, pathVal))
 		}
-		return true
 	})
 	return violations, nil
 }
@@ -151,14 +148,10 @@ func scanContractSpecMissingClients(path, rel string) ([]string, error) {
 func isContractSpecLit(cl *ast.CompositeLit) bool {
 	hasID := false
 	hasPath := false
-	for _, elt := range cl.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok {
-			continue
+			return
 		}
 		switch key.Name {
 		case "ID":
@@ -166,54 +159,48 @@ func isContractSpecLit(cl *ast.CompositeLit) bool {
 		case "Path":
 			hasPath = true
 		}
-	}
+	})
 	return hasID && hasPath
 }
 
 // contractSpecStringField returns the string literal value of the named field
 // in a composite literal, or "" if absent or not a string literal.
 func contractSpecStringField(cl *ast.CompositeLit, fieldName string) string {
-	for _, elt := range cl.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	result := ""
+	scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != fieldName {
-			continue
+			return
 		}
 		lit, ok := kv.Value.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
-			return ""
+			return
 		}
 		// Strip surrounding quotes.
 		s := lit.Value
 		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-			return s[1 : len(s)-1]
+			result = s[1 : len(s)-1]
+		} else {
+			result = s
 		}
-		return s
-	}
-	return ""
+	})
+	return result
 }
 
 // hasNonEmptyClientsField returns true if the composite literal has a
 // Clients field that is a non-empty slice literal.
 func hasNonEmptyClientsField(cl *ast.CompositeLit) bool {
-	for _, elt := range cl.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	found := false
+	scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != "Clients" {
-			continue
+			return
 		}
 		// Clients field exists — check it's a non-empty slice literal.
 		compLit, ok := kv.Value.(*ast.CompositeLit)
-		if !ok {
-			return false
+		if ok && len(compLit.Elts) > 0 {
+			found = true
 		}
-		return len(compLit.Elts) > 0
-	}
-	return false
+	})
+	return found
 }
