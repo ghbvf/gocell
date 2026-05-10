@@ -16,7 +16,7 @@
 //
 // Detection: type-aware via go/types — for every *ast.CompositeLit, the
 // rule resolves cl.Type via pkg.TypesInfo and matches only when the named
-// type's import path equals kernel/cell/wrapper and the type name equals
+// type's import path equals kernel/wrapper and the type name equals
 // ContractSpec. Replaces the prior `hasID && hasPath` heuristic that
 // false-positived on any struct sharing those field names (closes
 // PR445-FU finding F1).
@@ -28,12 +28,14 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
@@ -41,8 +43,11 @@ import (
 const ruleInternalContractClients01 = "INTERNAL-CONTRACT-CLIENTS-REQUIRED-01"
 
 // wrapperContractSpecImportPath is the canonical import path of the package
-// declaring ContractSpec. Used by isContractSpecLit's type-aware check.
-const wrapperContractSpecImportPath = "github.com/ghbvf/gocell/kernel/cell/wrapper"
+// declaring ContractSpec. Derived at package init via reflect.TypeOf on
+// wrapper.ContractSpec — the import statement above is the single source
+// of truth, so a hardcoded-path typo (which silently fail-opened this rule
+// from PR #445 commit 876cca5b until this commit) is no longer expressible.
+var wrapperContractSpecImportPath = reflect.TypeOf(wrapper.ContractSpec{}).PkgPath()
 
 // awaitingRealCallerAllowlist holds spec IDs that are in transition:
 // the Clients field has not yet been set because Wave 3 has not landed.
@@ -109,7 +114,7 @@ func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 
 // isContractSpecLit reports whether cl is a wrapper.ContractSpec composite
 // literal. Type-aware via go/types: cl.Type is resolved through pkg.TypesInfo
-// and matched against the named ContractSpec type in kernel/cell/wrapper.
+// and matched against the named ContractSpec type in kernel/wrapper.
 //
 // Fail-safe: returns false when cl, cl.Type, or info is nil — callers using
 // inline parser.ParseFile (no TypesInfo) will see false, which is the
