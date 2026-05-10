@@ -283,33 +283,52 @@ func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 		}
 		pkgDir := filepath.Join(root, contractIDToExpectedPkgPath(contract.ID))
 
-		requireRealGeneratedFile(t, filepath.Join(pkgDir, "types_gen.go"), contract.ID)
-		requireRealGeneratedFile(t, filepath.Join(pkgDir, "iface_gen.go"), contract.ID)
+		requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "types_gen.go"), contract.ID)
+		requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "iface_gen.go"), contract.ID)
 		if contract.Kind == "http" {
-			requireRealGeneratedFile(t, filepath.Join(pkgDir, "handler_gen.go"), contract.ID)
+			requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "handler_gen.go"), contract.ID)
 		}
 	}
 }
 
-// requireRealGeneratedFile asserts that path exists and is a real file
-// (regular file, not a symlink). os.Stat would silently follow a symlink and
-// accept a hostile artifact, e.g. handler_gen.go → /etc/passwd: Go tooling
-// would compile the target while every archtest gate that relies on
-// scanning generated/ would skip the entry. os.Lstat avoids that whole class.
-func requireRealGeneratedFile(t *testing.T, path, contractID string) {
+// requireRealGeneratedFile asserts that path exists and is a real regular
+// file. os.Stat would silently follow a symlink and accept a hostile
+// artifact (handler_gen.go → /etc/passwd: Go tooling would compile the
+// target while every archtest gate that relies on scanning generated/ would
+// skip the entry); a path whose Lstat reports a directory or socket would
+// equally satisfy a bare existence check while breaking compilation. os.Lstat
+// + ModeSymlink + IsRegular together close the whole class. Diagnostics use
+// module-relative slash paths so CI logs don't leak host-absolute paths.
+func requireRealGeneratedFile(t *testing.T, root, path, contractID string) {
 	t.Helper()
+	rel := relSlashOrAbs(root, path)
 	info, err := os.Lstat(path)
 	switch {
 	case err != nil && os.IsNotExist(err):
 		t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q has codegen=true but missing %s; run `gocell generate contract %s`",
-			contractID, path, contractID)
+			contractID, rel, contractID)
 	case err != nil:
-		t.Errorf("CODEGEN-CONTRACT-GEN-01: lstat %s: %v", path, err)
+		t.Errorf("CODEGEN-CONTRACT-GEN-01: lstat %s: %v", rel, err)
 	case info.Mode()&os.ModeSymlink != 0:
 		t.Errorf("CODEGEN-CONTRACT-GEN-01: %s is a symlink "+
 			"(generated/ must contain real files only; remove the link "+
-			"and re-run `gocell generate contract %s`)", path, contractID)
+			"and re-run `gocell generate contract %s`)", rel, contractID)
+	case !info.Mode().IsRegular():
+		t.Errorf("CODEGEN-CONTRACT-GEN-01: %s is not a regular file (mode=%s); "+
+			"generated/ must contain real files only", rel, info.Mode())
 	}
+}
+
+// relSlashOrAbs returns path expressed module-relative in slash form, or
+// the original absolute path when filepath.Rel fails (different volume on
+// Windows, etc.). Used by archtest diagnostics so failure messages stay
+// terse and free of host-absolute paths.
+func relSlashOrAbs(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return path
+	}
+	return filepath.ToSlash(rel)
 }
 
 // TestCodegenContractGen02_GeneratedHeader verifies CODEGEN-CONTRACT-GEN-02.
@@ -334,17 +353,33 @@ func TestCodegenContractGen02_GeneratedHeader(t *testing.T) {
 func TestCodegenContractUserOverlap01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	// IncludeTests: the rule forbids any hand-written .go under
-	// generated/contracts/ regardless of suffix; without IncludeTests a
-	// hand-written *_test.go would silently slip past.
-	scope := scanner.DirsScope(root, []string{generatedContractsSubdir}, scanner.IncludeTests())
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+	for _, abs := range detectUserFilesUnderGeneratedContracts(t, root, generatedContractsSubdir) {
+		t.Errorf("CODEGEN-CONTRACT-USER-OVERLAP-01: %s is a hand-written .go file under generated/contracts/"+
+			" — only _gen.go files are permitted; move helpers to the consuming package",
+			relSlashOrAbs(root, abs))
+	}
+}
+
+// detectUserFilesUnderGeneratedContracts returns absolute paths of every
+// non-_gen.go file under root/dirRel.
+//
+// Single source for CODEGEN-CONTRACT-USER-OVERLAP-01's scope construction —
+// shared by the production rule (TestCodegenContractUserOverlap01) and the
+// fixture (TestCodegenContractGates_NegativeFixtures/user_file_overlap) so
+// that removing IncludeTests() flips both call sites red simultaneously. If
+// the fixture had its own DirsScope+IncludeTests(), removing the option in
+// production would leave the fixture green and the ratchet would be a no-op.
+func detectUserFilesUnderGeneratedContracts(t *testing.T, root, dirRel string) []string {
+	t.Helper()
+	scope := scanner.DirsScope(root, []string{dirRel}, scanner.IncludeTests())
+	var userFiles []string
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
 		if strings.HasSuffix(fc.AbsPath, "_gen.go") {
 			return
 		}
-		t.Errorf("CODEGEN-CONTRACT-USER-OVERLAP-01: %s is a hand-written .go file under generated/contracts/"+
-			" — only _gen.go files are permitted; move helpers to the consuming package", fc.AbsPath)
+		userFiles = append(userFiles, fc.AbsPath)
 	})
+	return userFiles
 }
 
 // TestCodegenContractGates_NegativeFixtures runs the gate scanners against
@@ -387,28 +422,20 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 
 	t.Run("user_file_overlap", func(t *testing.T) {
 		t.Parallel()
-		dir := filepath.Join(fixtureBase, "user_file_overlap")
-		genDir := filepath.Join(dir, "generated", "contracts")
+		fixtureRoot := filepath.Join(fixtureBase, "user_file_overlap")
 
-		// IncludeTests mirrors the option the production rule uses
-		// (TestCodegenContractUserOverlap01) so that the fixture exercises the
-		// exact scope contract — including hand-written *_test.go files. The
-		// fixture deliberately ships both helper.go and helper_test.go;
-		// removing IncludeTests() in production must turn this fixture red.
-		scope := scanner.DirsScope(genDir, []string{"."}, scanner.IncludeTests())
-		allFiles, filesErr := scope.Files()
-		require.NoError(t, filesErr, "user_file_overlap fixture: scan %s", genDir)
-		var userFiles []string
-		for _, path := range allFiles {
-			if !strings.HasSuffix(path, "_gen.go") {
-				userFiles = append(userFiles, filepath.Base(path))
-			}
-		}
+		// Call the same detector the production rule uses, with the fixture
+		// directory as root. The detector is the single source of the
+		// IncludeTests() option — if production removes IncludeTests(), this
+		// fixture's helper_test.go disappears from userFiles and hasTest stays
+		// false, so the test turns red. Reusing scanner.DirsScope locally
+		// would re-introduce the no-op ratchet that the deep review caught.
+		userFiles := detectUserFilesUnderGeneratedContracts(t, fixtureRoot, filepath.Join("generated", "contracts"))
 		require.NotEmpty(t, userFiles,
 			"user_file_overlap fixture: no hand-written .go file found under generated/contracts — fixture is broken")
 		var hasNonTest, hasTest bool
-		for _, name := range userFiles {
-			if strings.HasSuffix(name, "_test.go") {
+		for _, abs := range userFiles {
+			if strings.HasSuffix(abs, "_test.go") {
 				hasTest = true
 			} else {
 				hasNonTest = true
@@ -419,8 +446,8 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 		}
 		if !hasTest {
 			t.Error("user_file_overlap fixture: missing hand-written *_test.go " +
-				"(helper_test.go) — IncludeTests() ratchet would not catch its " +
-				"removal in production")
+				"(helper_test.go) — IncludeTests() ratchet in detectUserFilesUnderGeneratedContracts " +
+				"would not catch its removal in production")
 		}
 	})
 }

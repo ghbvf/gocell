@@ -277,10 +277,16 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 // (the default skip set excludes testdata; IncludeTestdata is the authorized
 // opt-in).
 //
+// IncludeGenerated mirrors the option used by the production enforcement walk
+// scanSpanRecordErrorDir, so the violates_in_generated fixture (which buries
+// the offending file under a "generated" subdirectory) actually reaches the
+// scanner. Without it the default skip set drops the file and the fixture
+// silently passes — making the production IncludeGenerated() a no-op.
+//
 // fixtureDirRel is the module-relative slash path to the fixture directory.
 func runSpanRecordErrorFixtureScan(t *testing.T, root, fixtureDirRel string) []string {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{fixtureDirRel}, scanner.IncludeTestdata())
+	scope := scanner.DirsScope(root, []string{fixtureDirRel}, scanner.IncludeTestdata(), scanner.IncludeGenerated())
 	var out []string
 	scanner.EachFile(t, scope, parser.ParseComments, func(_ *testing.T, fc scanner.FileContext) {
 		if strings.HasSuffix(fc.AbsPath, "_test.go") {
@@ -305,6 +311,11 @@ func TestSpanRecordErrorRedactedFixtures(t *testing.T) {
 	}{
 		{"compliant", 0},
 		{"violates", 1},
+		// violates_in_generated buries the offending file under a "generated"
+		// subdirectory; reaching it requires runSpanRecordErrorFixtureScan to
+		// pass IncludeGenerated() to the scope. Removing that option from the
+		// fixture scan flips wantViolCount=1 to observed=0 and turns red.
+		{"violates_in_generated", 1},
 	}
 
 	for _, tc := range cases {
