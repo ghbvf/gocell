@@ -132,7 +132,7 @@ func scanAppenderFuncDecl(fc scanner.FileContext, d *ast.FuncDecl) []string {
 	// this catches the abandonment case where someone reintroduces a local
 	// `type Service struct {}` and then attaches methods.
 	if d.Recv != nil && len(d.Recv.List) == 1 {
-		recvType := receiverTypeName(d.Recv.List[0].Type)
+		recvType := appenderReceiverTypeName(d.Recv.List[0].Type)
 		if recvType == "Service" {
 			return []string{fmt.Sprintf(
 				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
@@ -169,14 +169,14 @@ func scanAppenderFuncDecl(fc scanner.FileContext, d *ast.FuncDecl) []string {
 		fc.Rel, pos, d.Name.Name)}
 }
 
-// receiverTypeName extracts the named receiver type, unwrapping pointer
+// appenderReceiverTypeName extracts the named receiver type, unwrapping pointer
 // receivers (*Service → Service). The type switch here inspects a single
 // ast.Expr, not a range over []ast.X, so SCANNER-FRAMEWORK-USAGE-01 path B
 // does not apply.
-func receiverTypeName(expr ast.Expr) string {
+func appenderReceiverTypeName(expr ast.Expr) string {
 	switch t := expr.(type) {
 	case *ast.StarExpr:
-		return receiverTypeName(t.X)
+		return appenderReceiverTypeName(t.X)
 	case *ast.Ident:
 		return t.Name
 	}
