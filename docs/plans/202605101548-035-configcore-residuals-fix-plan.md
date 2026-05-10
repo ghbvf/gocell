@@ -141,7 +141,7 @@ PR-CFG-SLICE-DECOMPOSE (~1.5-2d) — 在 PR-CFG-CACHE-LIFECYCLE 后做
 1. `cells/accesscore/slices/configreceive/service.go` 头部注释自承「Real consumers (**JWT TTL refresh, key rotation interval**) will land in a follow-up; the current subscription is a placeholder per ADV-05」——并非空白占位，而是为 GoCell 配置热更新已搭好的业务接入骨架。
 2. 已规划业务对应：`docs/backlog.md::L132 (X3) WM-36 SecureCookie key rotation`（P3）+ `docs/backlog.md::L373 (K-02)` 提到 `J-confighotreload` journey 引用 `event.config.entry-deleted.v1`。
 3. 删除连锁含 ~8 文件 + cmd/corebundle wiring + `outbox_e2e_integration_test::L391-625` PR-CFG-G1 commit 4 HTTP 闭环守卫（accesscore.configreceive → ConfigGetter.GetEntry refetch loop）；业务接入时重做约 **10h 工作量**。
-4. 当前占位维护成本极低（仅 log），返工成本明显高于消除的认知噪音。
+4. 当前 service.go 已实现完整 ConfigGetter refetch + auth 失败分类 + metric 收集骨架（不是空 log 桩；service.go:94-131），占位的是「收到事件后触发 JWT TTL refresh / key rotation 的业务副作用」而非代码量；返工成本明显高于消除的认知噪音。
 
 **决策**：configreceive 保留作为业务接入骨架；不在占位清理 PR 中触碰。
 
