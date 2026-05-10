@@ -130,7 +130,7 @@ func scanProdDurationAST(
 			hits = append(hits, hit{expr: expr, pos: expr.Pos(), end: expr.End()})
 		}
 		// Cover every concrete Expr node kind that isLiteralDurationExpr can
-		// recognise: BasicLit (var x time.Duration = 5), BinaryExpr
+		// recognize: BasicLit (var x time.Duration = 5), BinaryExpr
 		// (5*time.Second), CallExpr (time.Duration(5)), UnaryExpr
 		// (-5*time.Second), ParenExpr ((5*time.Second)).
 		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
@@ -529,7 +529,7 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	// drop any hit fully contained inside another. This count test does NOT
 	// gate on exprIsTimeDuration (no types.Info here), so the BasicLit pass
 	// would over-count integer literals everywhere — restrict to outer kinds
-	// that isLiteralDurationExpr can recognise standalone.
+	// that isLiteralDurationExpr can recognize standalone.
 	countInRoot := func(root ast.Node) int {
 		type hit struct{ pos, end token.Pos }
 		var hits []hit
