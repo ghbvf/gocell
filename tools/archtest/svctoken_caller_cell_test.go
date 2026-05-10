@@ -58,21 +58,29 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 
 	// tests=true loads the test variants of every package, so test helpers
 	// (e.g. examples/ssobff/walkthrough_test.go) that call
-	// GenerateServiceToken are also scanned. Iterating
-	// typeseval.KnownNonDefaultTags() loads each //go:build-gated tag
-	// combination too — closing PR445-FU finding F2 (the prior nil-tags
-	// call silently skipped integration / e2e / examples_smoke files
-	// containing real GenerateServiceToken callsites).
+	// GenerateServiceToken are also scanned. typeseval.FlatNonDefaultTags()
+	// returns the union of every tag tracked in KnownNonDefaultTags(); a
+	// single SharedResolver call carrying all tags simultaneously satisfies
+	// every //go:build constraint at once (e.g. `//go:build integration` is
+	// included because `integration` is in the set; `//go:build integration
+	// && otelcollector` is included because both tags are present). This
+	// closes PR445-FU finding F2 (the prior nil-tags call silently skipped
+	// integration / e2e / examples_smoke files).
+	//
+	// Single-load avoids retaining 7 independent type graphs in
+	// SharedResolver's cache (one per tag combination), which OOM'd CI
+	// runners with ~7GB RAM. The flat-load is functionally equivalent for
+	// per-callsite rules; downstream callers that need per-tag-set
+	// disposition can iterate KnownNonDefaultTags() themselves with
+	// post-load filtering by file build constraints.
 	seen := map[string]struct{}{}
 	var diags []scanner.Diagnostic
-	for _, tags := range typeseval.KnownNonDefaultTags() {
-		resolver, err := typeseval.SharedResolver(root, true, tags,
-			"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
-		if err != nil {
-			t.Fatalf("typeseval.SharedResolver(tags=%v): %v", tags, err)
-		}
-		collectGenerateServiceTokenDiags(resolver, root, knownCells, seen, &diags)
+	resolver, err := typeseval.SharedResolver(root, true, typeseval.FlatNonDefaultTags(),
+		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}
+	collectGenerateServiceTokenDiags(resolver, root, knownCells, seen, &diags)
 	scanner.Report(t, ruleSvctokenCallerCellRequired01, diags)
 }
 
@@ -183,37 +191,41 @@ func collectGenerateServiceTokenDiags(
 //   - examples/ssobff/walkthrough_test.go  (//go:build integration)
 //   - tests/integration/internal_rpc_caller_cell_test.go  (//go:build integration)
 //
-// Wave 5 introduces typeseval.KnownNonDefaultTags() and iterates each
-// tag-set so the rule scans every variant. This test asserts the load
-// contract directly: build-tagged files MUST be loaded so the rule's
+// Wave 5 introduces typeseval.FlatNonDefaultTags() — the union of every
+// tag tracked in KnownNonDefaultTags() — and the production rule loads
+// once with all tags simultaneously. This test asserts the load contract
+// directly: build-tagged files MUST be loaded so the rule's
 // scanForCallExpr loop actually reaches their callsites.
 //
-// Wave 1 (current, tags=nil): integration-tagged files NOT in resolver
-// output → assertion fails → RED.
+// Wave 1 (tags=nil): integration-tagged files NOT in resolver output →
+// assertion fails → RED.
 //
-// Wave 5 (multi-tag): integration-tagged files loaded under {integration}
-// tag-set → assertion passes → GREEN. The sub-test must therefore also
-// switch to multi-tag iteration in Wave 5 to mirror the production loader.
+// Wave 5 (FlatNonDefaultTags single load): integration-tagged files
+// loaded → assertion passes → GREEN. The sub-test mirrors the production
+// loader exactly.
+//
+// Single-load (vs the obvious "iterate KnownNonDefaultTags() and call
+// SharedResolver per tag-set") avoids retaining 7 independent type graphs
+// in SharedResolver's package-cache, which OOM'd CI runners with ~7GB RAM
+// before this fix.
 func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	// Mirror the production rule's loader call (multi-tag) exactly.
+	// Mirror the production rule's loader call (single flat-tag load) exactly.
+	resolver, err := typeseval.SharedResolver(root, true, typeseval.FlatNonDefaultTags(),
+		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
+	}
 	loadedFiles := map[string]bool{}
-	for _, tags := range typeseval.KnownNonDefaultTags() {
-		resolver, err := typeseval.SharedResolver(root, true, tags,
-			"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
-		if err != nil {
-			t.Fatalf("typeseval.SharedResolver(tags=%v): %v", tags, err)
+	for _, pkg := range resolver.Packages() {
+		if pkg.Fset == nil {
+			continue
 		}
-		for _, pkg := range resolver.Packages() {
-			if pkg.Fset == nil {
-				continue
-			}
-			for _, file := range pkg.Syntax {
-				rel := pkgFileRel(root, pkg, file)
-				loadedFiles[rel] = true
-			}
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			loadedFiles[rel] = true
 		}
 	}
 
