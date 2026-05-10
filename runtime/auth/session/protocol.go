@@ -115,11 +115,9 @@ type Option func(*Protocol) error
 
 // WithFingerprint declares the token fingerprint mode.
 //
-// This is a strong-dependency wiring option (see runtime-api.md §Option 范式
-// 分层): a typed-nil value is recorded via sentinel flag and rejected at
-// NewProtocol construction time. There is no "accumulate" semantics — a
-// second WithFingerprint call overwrites the previous value, which would be a
-// wiring contradiction.
+// Both bare-nil and typed-nil are rejected by NewProtocol so the fingerprint
+// mode is never silently absent. Pattern mirrors runtime/http/router.WithRateLimiter
+// (see runtime-api.md §Option 范式分层 — strong-dependency wiring option).
 func WithFingerprint(fp FingerprintMode) Option {
 	return func(p *Protocol) error {
 		if validation.IsNilInterface(fp) {
@@ -133,8 +131,9 @@ func WithFingerprint(fp FingerprintMode) Option {
 
 // WithOrdering declares the login-vs-revoke ordering primitive (ADR D2).
 //
-// Strong-dependency wiring option: typed-nil is recorded via sentinel flag and
-// rejected at NewProtocol construction time.
+// Both bare-nil and typed-nil are rejected by NewProtocol so the ordering
+// model is never silently absent. Pattern mirrors runtime/http/router.WithRateLimiter
+// (see runtime-api.md §Option 范式分层 — strong-dependency wiring option).
 func WithOrdering(om OrderingModel) Option {
 	return func(p *Protocol) error {
 		if validation.IsNilInterface(om) {

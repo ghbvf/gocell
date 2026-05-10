@@ -312,6 +312,48 @@ func TestWithRevokeOn_MixedValid_Invalid(t *testing.T) {
 	}
 }
 
+// TestNewProtocol_FingerprintNilSticky_NilThenValid_StillFails locks the
+// fail-closed sentinel pattern: once typed-nil is observed, a subsequent valid
+// WithFingerprint call does NOT clear the sentinel — NewProtocol still fails.
+// Aligns with runtime/http/router.WithRateLimiter behavior. If a future change
+// introduces "valid call clears sentinel" semantics, this test fails and
+// forces re-evaluation of GoCell wiring-option contracts package-wide.
+func TestNewProtocol_FingerprintNilSticky_NilThenValid_StillFails(t *testing.T) {
+	t.Parallel()
+	var nilFp session.FingerprintMode // typed-nil
+	_, err := session.NewProtocol(
+		session.WithFingerprint(nilFp),
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	if err == nil {
+		t.Fatal("expected error: typed-nil sentinel must be sticky (caller misconfiguration must not be silently masked by a later valid call)")
+	}
+	if !strings.Contains(err.Error(), "fingerprint") {
+		t.Errorf("expected error to mention fingerprint, got %q", err.Error())
+	}
+}
+
+// TestNewProtocol_OrderingNilSticky_NilThenValid_StillFails: same pattern for
+// OrderingModel sentinel. See TestNewProtocol_FingerprintNilSticky_... rationale.
+func TestNewProtocol_OrderingNilSticky_NilThenValid_StillFails(t *testing.T) {
+	t.Parallel()
+	var nilOm session.OrderingModel // typed-nil
+	_, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(nilOm),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	if err == nil {
+		t.Fatal("expected error: typed-nil sentinel must be sticky for OrderingModel")
+	}
+	if !strings.Contains(err.Error(), "ordering") {
+		t.Errorf("expected error to mention ordering, got %q", err.Error())
+	}
+}
+
 // TestCredentialEvent_Stringer: typed enum has a stable String() representation
 // for diagnostics (storetest will key cases on it in S2).
 func TestCredentialEvent_String(t *testing.T) {
