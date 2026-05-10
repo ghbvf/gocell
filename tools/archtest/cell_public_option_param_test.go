@@ -25,8 +25,7 @@
 // and miss the violation.
 //
 // ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md
-// ref: ADR 202605101800 §D6 (predecessor archtest scanner retired; sealed
-//      marker (Hard) + this Medium guard combination replaces it).
+// ref: ADR 202605101800 §D6 — predecessor archtest scanner retired; sealed marker (Hard) + this Medium guard combination replaces it.
 package archtest
 
 import (

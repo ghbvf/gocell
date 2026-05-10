@@ -436,7 +436,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingWriter{})), // non-Nooper; durable-gated CheckNotNoop passes
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),        // non-Nooper; durable-gated CheckNotNoop passes
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),         // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
