@@ -27,15 +27,22 @@ type HTTPTransportMeta struct {
 // HTTPAuthMeta carries route-level authentication override flags for contractgen.
 // These map to generated auth.Route wiring and handler constructor shape.
 //
+// Mutex among the 5 bool fields is enforced by metadata.AuthComboLegal (the
+// single oracle shared by contract.schema.json if/then rules and governance
+// validateFMT27). When adding a new bool field, see auth_combo.go for the
+// checklist of files to update in lockstep.
+//
 // ref: kubernetes-sigs/controller-tools markers/registry.go (declarative auth metadata)
 type HTTPAuthMeta struct {
 	// Public marks the route as JWT-exempt. The generated NewHandler takes no
 	// policy argument; auth.Route{Public: true} is emitted by RegisterRoutes.
-	// Mutually exclusive with PasswordResetExempt and Bootstrap.
+	// Mutually exclusive with PasswordResetExempt, Bootstrap, ServiceOwned,
+	// and ClientsOnly.
 	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
 	// PasswordResetExempt allows callers whose JWT carries password_reset_required=true
 	// to reach this route. The generated handler emits auth.Route{PasswordResetExempt: true}.
-	// Mutually exclusive with Public and Bootstrap.
+	// Mutually exclusive with Public, Bootstrap, and ClientsOnly. May combine
+	// with ServiceOwned.
 	PasswordResetExempt bool `yaml:"passwordResetExempt,omitempty" json:"passwordResetExempt,omitempty"`
 	// ServiceOwned indicates that the listener must still authenticate the caller,
 	// but route-level authorization is intentionally absent because the service
@@ -47,17 +54,19 @@ type HTTPAuthMeta struct {
 	// Bootstrap marks the route as protected by HTTP Basic Auth using
 	// GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials. Listener-level
 	// JWT middleware skips routes flagged as Bootstrap (matcher in FinalizeAuth).
-	// Mutually exclusive with Public and PasswordResetExempt. FMT-28 limits this
-	// flag to contracts whose path matches IsBootstrapPath.
+	// Mutually exclusive with Public, PasswordResetExempt, ServiceOwned, and
+	// ClientsOnly. FMT-28 limits this flag to contracts whose path matches
+	// IsBootstrapPath.
 	Bootstrap bool `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty"`
 	// ClientsOnly indicates that this endpoint relies solely on Contract.Clients
 	// caller-cell allowlist for authorization. When true, contractgen generates a
 	// single-arg NewHandler(svc Service) constructor and emits auth.Route without
 	// a Policy field. auth.Mount auto-injects RequireCallerCell guard when
-	// Clients is non-empty. Mutually exclusive with Public, Bootstrap, and
-	// PasswordResetExempt. Requires endpoints.clients to be non-empty and the
-	// path to match IsInternalHTTPPath (/internal/v1 or /internal/v1/...)
-	// where caller-cell identity is verifiable via the service token.
+	// Clients is non-empty. Mutually exclusive with Public, Bootstrap,
+	// PasswordResetExempt, and ServiceOwned. Requires endpoints.clients to be
+	// non-empty and the path to match IsInternalHTTPPath (/internal/v1 or
+	// /internal/v1/...) where caller-cell identity is verifiable via the
+	// service token.
 	ClientsOnly bool `yaml:"clientsOnly,omitempty" json:"clientsOnly,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware
 	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as

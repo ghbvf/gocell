@@ -322,143 +322,12 @@ func TestFMT13_HTTPContractWithEndpoints(t *testing.T) {
 	}
 }
 
-// --- FMT-27 (auth.public/bootstrap/passwordResetExempt three-way mutually exclusive) ---
-// These tests are RED until validateFMT27 is implemented in Batch 1 / Agent-B.
-
-// TestFMT27_PublicAndBootstrapBothTrue verifies that a contract declaring both
-// auth.public:true and auth.bootstrap:true is rejected by FMT-27.
-// RED: validateFMT27 does not yet exist.
-func TestFMT27_PublicAndBootstrapBothTrue(t *testing.T) {
-	project := &metadata.ProjectMeta{
-		Cells:  map[string]*metadata.CellMeta{},
-		Slices: map[string]*metadata.SliceMeta{},
-		Contracts: map[string]*metadata.ContractMeta{
-			"http.auth.setup.admin.v1": {
-				ID:               "http.auth.setup.admin.v1",
-				Kind:             "http",
-				ConsistencyLevel: "L1",
-				Lifecycle:        "active",
-				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
-					HTTP: &metadata.HTTPTransportMeta{
-						Method:        "POST",
-						Path:          "/api/v1/access/setup/admin",
-						SuccessStatus: 201,
-						Auth: metadata.HTTPAuthMeta{
-							Public:    true,
-							Bootstrap: true,
-						},
-					},
-				},
-				Dir:  "contracts/http/auth/setup/admin/v1",
-				File: "contracts/http/auth/setup/admin/v1/contract.yaml",
-			},
-		},
-		Journeys:   map[string]*metadata.JourneyMeta{},
-		Assemblies: map[string]*metadata.AssemblyMeta{},
-	}
-
-	v := NewValidator(project, "", clock.Real())
-
-	// validateFMT27 does not exist yet — RED: calling a method that panics
-	// or returns no results.
-	results := v.validateFMT27()
-
-	var fmt27Errors []ValidationResult
-	for _, r := range results {
-		if r.Code == "FMT-27" && r.Severity == SeverityError {
-			fmt27Errors = append(fmt27Errors, r)
-		}
-	}
-
-	if len(fmt27Errors) == 0 {
-		t.Fatal("FMT-27: expected error when both auth.public and auth.bootstrap are true, got none — " +
-			"validateFMT27 not yet implemented (Batch 1 Agent-B)")
-	}
-}
-
-// TestFMT27_BootstrapAndPasswordResetExemptBothTrue verifies that
-// auth.bootstrap:true + auth.passwordResetExempt:true is rejected by FMT-27.
-// RED: validateFMT27 does not yet exist.
-func TestFMT27_BootstrapAndPasswordResetExemptBothTrue(t *testing.T) {
-	project := &metadata.ProjectMeta{
-		Cells:  map[string]*metadata.CellMeta{},
-		Slices: map[string]*metadata.SliceMeta{},
-		Contracts: map[string]*metadata.ContractMeta{
-			"http.auth.bad.v1": {
-				ID:               "http.auth.bad.v1",
-				Kind:             "http",
-				ConsistencyLevel: "L1",
-				Lifecycle:        "active",
-				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
-					HTTP: &metadata.HTTPTransportMeta{
-						Method:        "POST",
-						Path:          "/api/v1/access/setup/admin",
-						SuccessStatus: 201,
-						Auth: metadata.HTTPAuthMeta{
-							Bootstrap:           true,
-							PasswordResetExempt: true,
-						},
-					},
-				},
-				Dir:  "contracts/http/auth/bad/v1",
-				File: "contracts/http/auth/bad/v1/contract.yaml",
-			},
-		},
-		Journeys:   map[string]*metadata.JourneyMeta{},
-		Assemblies: map[string]*metadata.AssemblyMeta{},
-	}
-
-	v := NewValidator(project, "", clock.Real())
-	results := v.validateFMT27()
-
-	var fmt27Errors []ValidationResult
-	for _, r := range results {
-		if r.Code == "FMT-27" && r.Severity == SeverityError {
-			fmt27Errors = append(fmt27Errors, r)
-		}
-	}
-
-	if len(fmt27Errors) == 0 {
-		t.Fatal("FMT-27: expected error when both auth.bootstrap and auth.passwordResetExempt are true, got none — " +
-			"validateFMT27 not yet implemented (Batch 1 Agent-B)")
-	}
-}
-
-func TestFMT27_ClientsOnlyWithExclusiveAuthModes(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		auth metadata.HTTPAuthMeta
-	}{
-		{name: "public", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Public: true}},
-		{name: "bootstrap", auth: metadata.HTTPAuthMeta{ClientsOnly: true, Bootstrap: true}},
-		{name: "passwordResetExempt", auth: metadata.HTTPAuthMeta{ClientsOnly: true, PasswordResetExempt: true}},
-		{name: "serviceOwned", auth: metadata.HTTPAuthMeta{ClientsOnly: true, ServiceOwned: true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			v := NewValidator(fmt27ProjectWithAuth(tc.auth), "", clock.Real())
-			matches := findByCode(v.validateFMT27(), codeFMT27)
-			if len(matches) == 0 {
-				t.Fatalf("FMT-27: expected error for clientsOnly combined with %s, got none", tc.name)
-			}
-		})
-	}
-}
-
-func TestFMT27_ServiceOwnedAllowsPasswordResetExempt(t *testing.T) {
-	v := NewValidator(fmt27ProjectWithAuth(metadata.HTTPAuthMeta{
-		ServiceOwned:        true,
-		PasswordResetExempt: true,
-	}), "", clock.Real())
-
-	matches := findByCode(v.validateFMT27(), codeFMT27)
-	if len(matches) != 0 {
-		t.Fatalf("FMT-27: serviceOwned + passwordResetExempt must be allowed, got: %v", matches)
-	}
-}
+// --- FMT-27 (HTTP auth bool mutex) ---
+// All per-pair / per-bool subtests are subsumed by TestFMT27AuthBoolMatrix
+// (32-combo matrix sharing metadata.AuthComboLegal as oracle, defined below
+// alongside the fmt27ProjectWithAuth fixture). The matrix is the sole entry
+// point; happy-path documentation lives in contract_schema_test.go where
+// full contract YAML samples drive the schema layer.
 
 func fmt27ProjectWithAuth(auth metadata.HTTPAuthMeta) *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
@@ -487,6 +356,101 @@ func fmt27ProjectWithAuth(auth metadata.HTTPAuthMeta) *metadata.ProjectMeta {
 		Journeys:   map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
+}
+
+// TestFMT27ErrorDiagnostics locks the FMT-27 message format so contract
+// authors get actionable diagnostics: the message must (1) name every auth
+// field currently set to true, (2) signal the conflict ("incompatible"),
+// and (3) carry the fix hint ("Set at most one"). Without these assertions
+// the message text could regress silently.
+//
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
+func TestFMT27ErrorDiagnostics(t *testing.T) {
+	cases := []struct {
+		name     string
+		auth     metadata.HTTPAuthMeta
+		mustName []string
+	}{
+		{
+			name:     "public+bootstrap",
+			auth:     metadata.HTTPAuthMeta{Public: true, Bootstrap: true},
+			mustName: []string{"auth.public", "auth.bootstrap"},
+		},
+		{
+			name:     "clientsOnly+serviceOwned",
+			auth:     metadata.HTTPAuthMeta{ClientsOnly: true, ServiceOwned: true},
+			mustName: []string{"auth.serviceOwned", "auth.clientsOnly"},
+		},
+		{
+			name: "all four core modes",
+			auth: metadata.HTTPAuthMeta{
+				Public:              true,
+				PasswordResetExempt: true,
+				Bootstrap:           true,
+				ClientsOnly:         true,
+			},
+			mustName: []string{"auth.public", "auth.passwordResetExempt", "auth.bootstrap", "auth.clientsOnly"},
+		},
+		{
+			name:     "serviceOwned+bootstrap",
+			auth:     metadata.HTTPAuthMeta{ServiceOwned: true, Bootstrap: true},
+			mustName: []string{"auth.serviceOwned", "auth.bootstrap"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := NewValidator(fmt27ProjectWithAuth(tc.auth), "", clock.Real())
+			matches := findByCode(v.validateFMT27(), codeFMT27)
+			assertFMT27Diagnostic(t, matches, tc.mustName)
+		})
+	}
+}
+
+// assertFMT27Diagnostic asserts that a single FMT-27 violation was produced
+// and that its message names every field in mustName plus the conflict
+// keyword and fix hint. Extracted from TestFMT27ErrorDiagnostics to keep the
+// table-driven loop body within cognitive-complexity bounds.
+func assertFMT27Diagnostic(t *testing.T, matches []ValidationResult, mustName []string) {
+	t.Helper()
+	if len(matches) != 1 {
+		t.Fatalf("FMT-27: expected exactly 1 violation, got %d: %v", len(matches), matches)
+	}
+	msg := matches[0].Message
+	for _, field := range mustName {
+		if !strings.Contains(msg, field) {
+			t.Errorf("FMT-27 diagnostic missing %q in message: %s", field, msg)
+		}
+	}
+	if !strings.Contains(msg, "incompatible") {
+		t.Errorf("FMT-27 diagnostic missing 'incompatible' keyword in message: %s", msg)
+	}
+	if !strings.Contains(msg, "Set at most one") {
+		t.Errorf("FMT-27 diagnostic missing 'Set at most one' fix hint in message: %s", msg)
+	}
+}
+
+// TestFMT27AuthBoolMatrix enumerates all 32 combinations of the 5 auth bool
+// fields and asserts validateFMT27's behavior against metadata.LegalAuthComboNames
+// — the hand-maintained whitelist that is independent of AuthComboLegal. Using
+// the whitelist (rather than AuthComboLegal) ensures this test detects
+// divergence in the governance delegation chain rather than merely confirming
+// that governance and oracle move in lock-step.
+//
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
+func TestFMT27AuthBoolMatrix(t *testing.T) {
+	metadata.IterateAuthBoolCombos(func(auth metadata.HTTPAuthMeta, name string) {
+		t.Run(name, func(t *testing.T) {
+			v := NewValidator(fmt27ProjectWithAuth(auth), "", clock.Real())
+			matches := findByCode(v.validateFMT27(), codeFMT27)
+			_, expectedLegal := metadata.LegalAuthComboNames[name]
+			if expectedLegal && len(matches) != 0 {
+				t.Errorf("FMT-27 rejected legal combo %s: %v", name, matches)
+			}
+			if !expectedLegal && len(matches) == 0 {
+				t.Errorf("FMT-27 accepted illegal combo %s; expected reject per LegalAuthComboNames", name)
+			}
+		})
+	})
 }
 
 // --- FMT-28 (HTTP auth mode placement/shape constraints) ---
