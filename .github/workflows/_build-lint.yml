@@ -82,6 +82,15 @@ jobs:
   # sharding (consul-style `go list | shuf | split`) if shard timings diverge > 2x.
   build-test:
     runs-on: ubuntu-latest
+    # Job-level timeout = matrix test -timeout + setup overhead headroom
+    # (Pre-download up to 3m, build slowgate, coverage upload). Cap at
+    # matrix.timeout + 8m. Without this, a runaway test that escapes go
+    # test's own -timeout (e.g., a goroutine stuck in a syscall the
+    # scheduler cannot preempt) would inherit the GHA default 6h budget.
+    # Expressions in timeout-minutes need integer arithmetic on the
+    # matrix.timeout literal — not directly supported, so the matrix
+    # carries jobTimeoutMin explicitly to keep the expression trivial.
+    timeout-minutes: ${{ matrix.jobTimeoutMin }}
     strategy:
       fail-fast: false
       matrix:
@@ -90,34 +99,42 @@ jobs:
             pkgs: ./kernel/...
             static_checks: true
             timeout: 5m
+            jobTimeoutMin: 13
           - shard: tools
             # archtest / metricschema / generatedverify use go/packages to load
             # the full module type graph. CI cost reality (2026-05, post-PR-Φ
             # #445 EachNode funnel migration + R2 packages.Visit additions):
-            # archtest alone is ~100-200s on CI (was ~30s when this comment
-            # was first written), and the whole ./tools/... shard runs
-            # ~300-500s. Per the test-step header: packages.Load-bound tests
-            # run 5-15× slower on GHA ubuntu-latest 2-CPU runners than on
-            # developer laptops. The 10m timeout below gives this shard
-            # headroom to absorb that variance without triggering go test's
-            # own -timeout (which surfaces as a panic stack, not the
-            # ambiguous runner SIGTERM seen on the 5m-bound runs of
-            # 2026-05-10). Other shards keep 5m.
+            # archtest alone is ~92s on a developer laptop (measured on the
+            # PR #305 hotfix branch, 2026-05-10). Per the test-step header,
+            # packages.Load-bound tests run 5-15× slower on GHA ubuntu-latest
+            # 2-CPU runners — extrapolated CI cost 7-23 min for archtest
+            # alone, plus generatedverify (~20s local) and metricschema
+            # (~19s local) on the same shard. The 10m timeout this PR
+            # originally set was too tight (observed 11+ min wall on the
+            # second CI attempt of this branch). 20m absorbs the upper end
+            # of the variance with margin; collapse back to ~3m once the
+            # SharedResolver amortization optimisation lands (backlog
+            # PR305-FU-ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01). Other
+            # shards keep 5m.
             pkgs: ./tools/...
             static_checks: false
-            timeout: 10m
+            timeout: 20m
+            jobTimeoutMin: 28
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
             static_checks: false
             timeout: 5m
+            jobTimeoutMin: 13
           - shard: cells
             pkgs: ./cells/...
             static_checks: false
             timeout: 5m
+            jobTimeoutMin: 13
           - shard: others
             pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/...
             static_checks: false
             timeout: 5m
+            jobTimeoutMin: 13
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -243,6 +260,26 @@ jobs:
             echo "FAIL: matrix.timeout must be <N>s/<N>m/<N>h, got: ${{ matrix.timeout }}"
             exit 1
           }
+          # Live progress emitter (PR #305 review-round-2 fix): tee a third
+          # copy of the -json stream through jq to stderr so the CI log
+          # shows per-test RUN/PASS/FAIL events as they happen. Without
+          # this, slowgate (added in PR #409 G9 SLOW-TEST-BUDGET) consumes
+          # the entire -json stream and the console stays silent for the
+          # full test duration — operators cannot tell whether the job is
+          # healthy, slow, or stuck (observed 2026-05-10 on the tools
+          # shard with 11+ min silent wall time before this fix).
+          #
+          # Pipe topology:
+          #   go test -json
+          #     → tee[file artifact]                   (unchanged: file)
+          #     → tee >( jq → stderr )                 (NEW: live progress)
+          #     → slowgate                             (unchanged: budget gate)
+          #
+          # Process substitution exits do not enter `set -o pipefail`
+          # so jq cannot mask a real go test failure. `--unbuffered`
+          # forces line-by-line emission. jq is pre-installed on
+          # actions/runner ubuntu-latest. The `|| true` guards a jq parse
+          # crash from breaking the live emitter (slowgate still gates).
           go test \
             -covermode=atomic \
             -coverprofile=coverage-shard-${{ matrix.shard }}.out \
@@ -250,6 +287,15 @@ jobs:
             ${{ matrix.pkgs }} \
             -count=1 -timeout ${{ matrix.timeout }} \
             | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
+            | tee >(jq --unbuffered -r '
+                select(.Test != null) |
+                (.Package | sub("github.com/ghbvf/gocell/"; "")) as $pkg |
+                if   .Action == "run"  then "[RUN]   \($pkg) :: \(.Test)"
+                elif .Action == "pass" then "[PASS]  \($pkg) :: \(.Test)  (\(.Elapsed)s)"
+                elif .Action == "fail" then "[FAIL]  \($pkg) :: \(.Test)  (\(.Elapsed)s)"
+                elif .Action == "skip" then "[SKIP]  \($pkg) :: \(.Test)"
+                else empty end
+              ' >&2 || true) \
             | "$RUNNER_TEMP/slowgate" --threshold=15s --allowlist=tools/slowgate/allowlist.txt
 
       # Upload the raw `go test -json` event stream only on Test step
