@@ -16,9 +16,9 @@ import (
 
 // VerifyResult holds the outcome of a chain verification.
 type VerifyResult struct {
-	Valid            bool  `json:"valid"`
-	FirstInvalidSeq  int64 `json:"firstInvalidSeq"`
-	EntriesChecked   int64 `json:"entriesChecked"`
+	Valid           bool  `json:"valid"`
+	FirstInvalidSeq int64 `json:"firstInvalidSeq"`
+	EntriesChecked  int64 `json:"entriesChecked"`
 }
 
 // Option configures an audit-verify Service.

@@ -123,14 +123,14 @@ func ParseNamespaceID(s string) (NamespaceID, error) {
 // immutable after construction. Accessor methods return defensive copies
 // where applicable.
 type Protocol struct {
-	hmacKey              []byte
-	hmacKeyNil           bool // sentinel: WithChainHMAC received a nil/empty key
-	namespace            NamespaceID
-	namespaceNil         bool // sentinel: WithNamespace was never called
-	restartRecovery      RestartRecoveryMode
-	restartRecoveryNil   bool // sentinel: WithRestartRecovery received a nil interface value
-	idempotency          IdempotencyMode
-	idempotencyNil       bool // sentinel: WithIdempotency received a nil interface value
+	hmacKey            []byte
+	hmacKeyNil         bool // sentinel: WithChainHMAC received a nil/empty key
+	namespace          NamespaceID
+	namespaceNil       bool // sentinel: WithNamespace was never called
+	restartRecovery    RestartRecoveryMode
+	restartRecoveryNil bool // sentinel: WithRestartRecovery received a nil interface value
+	idempotency        IdempotencyMode
+	idempotencyNil     bool // sentinel: WithIdempotency received a nil interface value
 }
 
 // HMACKey returns a defensive copy of the configured HMAC key.

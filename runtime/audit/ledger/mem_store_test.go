@@ -1,12 +1,10 @@
 package ledger_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -662,18 +660,4 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	if got != expected {
 		t.Errorf("ComputeHash mismatch:\n  got  %s\n  want %s", got, expected)
 	}
-}
-
-// testJSONMarshal is a helper to verify JSON marshal round-trips for payload
-// strict validation (used to check that DisallowUnknownFields works for
-// store-internal validation).
-func testJSONMarshal(t *testing.T, payload []byte) bool {
-	t.Helper()
-	if len(payload) == 0 {
-		return true
-	}
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	dec.DisallowUnknownFields()
-	var v interface{}
-	return dec.Decode(&v) == nil
 }

@@ -36,7 +36,7 @@ type MemStore struct {
 	clock    clock.Clock
 
 	mu           sync.Mutex
-	entries      []*Entry          // indexed by SeqNo-1 (SeqNo starts at 1)
+	entries      []*Entry            // indexed by SeqNo-1 (SeqNo starts at 1)
 	fingerprints map[string]struct{} // content fingerprint → exists
 }
 
@@ -248,7 +248,9 @@ func contentFingerprint(e *Entry) string {
 	h.Write([]byte{0})
 	h.Write([]byte(e.ActorID))
 	h.Write([]byte{0})
-	h.Write([]byte(fmt.Sprintf("%d", e.Timestamp.UnixNano())))
+	// hash.Hash.Write per io.Writer contract always returns (len(b), nil);
+	// errcheck excludes Fprintf to *hash.Hash sinks (see .golangci.yml).
+	_, _ = fmt.Fprintf(h, "%d", e.Timestamp.UnixNano())
 	h.Write([]byte{0})
 	h.Write(e.Payload)
 	return hex.EncodeToString(h.Sum(nil))
