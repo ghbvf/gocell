@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 
 	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
 const (
 	generatedFileMode os.FileMode = 0o644
-	generatedDirMode  os.FileMode = 0o755
 )
 
 // WriteAction is an outcome enum for a Write call.
@@ -113,10 +113,7 @@ func Write(opts WriteOptions) (WriteResult, error) {
 		return res, nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(opts.Path), generatedDirMode); err != nil {
-		return res, fmt.Errorf("codegen write: create dir for %s: %w", opts.Path, err)
-	}
-	if err := os.WriteFile(opts.Path, opts.Content, generatedFileMode); err != nil {
+	if err := pathsafe.WriteFileForce(opts.RepoRoot, opts.Path, opts.Content, generatedFileMode); err != nil {
 		return res, fmt.Errorf("codegen write: write %s: %w", opts.Path, err)
 	}
 	res.Action = ActionWritten

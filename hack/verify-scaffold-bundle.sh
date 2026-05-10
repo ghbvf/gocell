@@ -7,13 +7,14 @@
 # Fails with a clear diagnostic if scaffold output drifts from the runnable
 # baseline guaranteed by the K#09 plan.
 #
-# Modes (default is `--local=true` — fast path that runs in the worktree):
-#   ./hack/verify-scaffold-bundle.sh             local fast path (default)
+# Modes (default is `--sandbox` — isolated git worktree clone, safe for CI):
+#   ./hack/verify-scaffold-bundle.sh             sandbox mode (default)
+#   ./hack/verify-scaffold-bundle.sh --local     local fast path (worktree writes)
 #   ./hack/verify-scaffold-bundle.sh --sandbox   isolated git worktree clone
 #
 # Sandbox mode protects the working tree from accidental writes when this
-# script is invoked from CI; the local fast path is intended for developer
-# workflow and runs in <5s.
+# script is invoked from CI or pre-commit hooks; the local fast path is
+# intended for developer workflow and runs in <5s.
 #
 # Pattern: tools/codegen sandbox model + K#10 verify-codegen-assembly.sh
 # scaffold smoke loop.
@@ -22,7 +23,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-MODE="local"
+MODE="sandbox"
 for arg in "$@"; do
   case "$arg" in
     --sandbox) MODE="sandbox" ;;

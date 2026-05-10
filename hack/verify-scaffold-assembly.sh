@@ -7,17 +7,18 @@
 # then runs `go build` over cmd/{id}/.... Fails with a clear diagnostic if
 # scaffold output drifts from the buildable baseline.
 #
-# Modes:
-#   ./hack/verify-scaffold-assembly.sh             local fast path (default)
+# Modes (default is `--sandbox` — isolated git worktree clone, safe for CI):
+#   ./hack/verify-scaffold-assembly.sh             sandbox mode (default)
+#   ./hack/verify-scaffold-assembly.sh --local     local fast path (worktree writes)
 #   ./hack/verify-scaffold-assembly.sh --sandbox   isolated git worktree clone
 #
-# Pattern: same fast-path + sandbox model as verify-scaffold-bundle.sh.
+# Pattern: same sandbox-default model as verify-scaffold-bundle.sh.
 
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-MODE="local"
+MODE="sandbox"
 for arg in "$@"; do
   case "$arg" in
     --sandbox) MODE="sandbox" ;;

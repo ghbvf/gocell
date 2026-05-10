@@ -18,7 +18,7 @@ func preRenderContracts(t *testing.T, root string) {
 	if err != nil {
 		t.Fatalf("pre-render metadata parse: %v", err)
 	}
-	if _, err := contractgen.Generate(root, project, contractgen.Options{Verify: false}); err != nil {
+	if _, err := contractgen.Generate(root, project, contractgen.Options{Scope: contractgen.ScopeAll{}, Verify: false}); err != nil {
 		t.Fatalf("pre-render generateAllContracts: %v", err)
 	}
 }

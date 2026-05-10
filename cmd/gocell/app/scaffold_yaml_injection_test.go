@@ -13,7 +13,7 @@ import (
 // handles a cell ID containing a YAML-meta character (colon) without injecting
 // extra YAML fields.
 //
-// Current behaviour: validateScaffoldID rejects path separators but NOT colons.
+// Current behavior: validateScaffoldID rejects path separators but NOT colons.
 // The inline template embeds the raw CellID value so "evil:abc" would render as
 // "belongsToCell: evil:abc" which yaml.Unmarshal parses as {belongsToCell: evil,
 // abc: nil} — field injection.
@@ -45,7 +45,7 @@ func TestScaffoldSlice_YAMLSafeQuote_ColonInCellID(t *testing.T) {
 	})
 	if err != nil {
 		// If validateScaffoldID is tightened, the test simply skips by checking
-		// the error message — acceptable RED behaviour.
+		// the error message — acceptable RED behavior.
 		if strings.Contains(err.Error(), "path traversal") ||
 			strings.Contains(err.Error(), "forbidden") ||
 			strings.Contains(err.Error(), "invalid") {

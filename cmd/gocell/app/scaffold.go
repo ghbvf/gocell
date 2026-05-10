@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/yamlsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 )
@@ -407,8 +408,11 @@ func autoGenerateCellBundleArtifacts(root, cellID string) error {
 		return fmt.Errorf("scaffold cell: re-parse project for codegen: %w", err)
 	}
 	// Generate contracts first so generated DTO types are available when
-	// cell_gen.go is rendered.
-	if _, err := contractgen.Generate(root, project, contractgen.Options{}); err != nil {
+	// cell_gen.go is rendered. Restrict to contracts owned by the new cell
+	// so we don't re-scan the entire project on every scaffold invocation.
+	if _, err := contractgen.Generate(root, project, contractgen.Options{
+		Scope: contractgen.ScopeCell(cellID),
+	}); err != nil {
 		return fmt.Errorf("scaffold cell: generate contracts: %w", err)
 	}
 	if _, err := cellgen.Generate(root, project, cellgen.Options{OnlyCell: cellID}); err != nil {
@@ -607,13 +611,12 @@ func scaffoldJourney(root string, args []string) error {
 		return err
 	}
 
-	// Normalize: ensure ID carries the J- prefix for both filename and yaml,
-	// then strip secondary dashes after the prefix (FMT-16 no-dash convention).
+	// Normalize: ensure ID carries the J- prefix for both filename and yaml.
+	// Dashes within the ID are preserved (journey IDs use dash-separated segments).
 	rawID := *id
 	if !strings.HasPrefix(rawID, "J-") {
 		rawID = "J-" + rawID
 	}
-	rawID = "J-" + strings.ReplaceAll(rawID[2:], "-", "")
 	filename := rawID + ".yaml"
 
 	realRoot, err := pathsafe.ResolveRoot(root)
@@ -656,6 +659,8 @@ func scaffoldJourney(root string, args []string) error {
 }
 
 // renderInlineSliceYAML returns the slice.yaml content for an empty slice.
+// ID and CellID are wrapped with yamlsafe.Quote so YAML-meta characters in
+// user input cannot inject extra fields or break scalar parsing.
 var inlineSliceYAMLTpl = template.Must(template.New("slice-yaml").Parse(`id: {{.ID}}
 belongsToCell: {{.CellID}}
 contractUsages: []
@@ -668,7 +673,11 @@ allowedFiles:
 
 func renderInlineSliceYAML(id, cellID string) ([]byte, error) {
 	var buf strings.Builder
-	if err := inlineSliceYAMLTpl.Execute(&buf, struct{ ID, CellID string }{id, cellID}); err != nil {
+	data := struct{ ID, CellID yamlsafe.Scalar }{
+		ID:     yamlsafe.Quote(id),
+		CellID: yamlsafe.Quote(cellID),
+	}
+	if err := inlineSliceYAMLTpl.Execute(&buf, data); err != nil {
 		return nil, err
 	}
 	return []byte(buf.String()), nil
@@ -678,6 +687,8 @@ func renderInlineSliceYAML(id, cellID string) ([]byte, error) {
 // K#09 standalone contract scaffold: emits explicit codegen: false because
 // this draft has no schemaRefs yet; flip to true (or remove) once schemas are
 // filled in. Mirrors the 5 deferred kind=command contracts.
+// ID, Kind, and OwnerCell are wrapped with yamlsafe.Quote so YAML-meta
+// characters in user input cannot inject extra fields or break scalar parsing.
 var inlineContractYAMLTpl = template.Must(template.New("contract-yaml").Parse(`id: {{.ID}}
 kind: {{.Kind}}
 ownerCell: {{.OwnerCell}}
@@ -704,15 +715,24 @@ endpoints:
 
 func renderInlineContractYAML(id, kind, owner string) ([]byte, error) {
 	var buf strings.Builder
-	if err := inlineContractYAMLTpl.Execute(&buf, struct{ ID, Kind, OwnerCell string }{id, kind, owner}); err != nil {
+	data := struct{ ID, Kind, OwnerCell yamlsafe.Scalar }{
+		ID:        yamlsafe.Quote(id),
+		Kind:      yamlsafe.Quote(kind),
+		OwnerCell: yamlsafe.Quote(owner),
+	}
+	if err := inlineContractYAMLTpl.Execute(&buf, data); err != nil {
 		return nil, err
 	}
 	return []byte(buf.String()), nil
 }
 
 // renderInlineJourneyYAML returns the journey skeleton.
+// ID, Goal, OwnerTeam, and each cell in Cells are wrapped with yamlsafe.Quote
+// so YAML-meta characters in user input cannot inject extra fields.
+// lifecycle: experimental is emitted as a const literal (schema-required default).
 var inlineJourneyYAMLTpl = template.Must(template.New("journey-yaml").Parse(`id: {{.ID}}
 goal: {{.Goal}}
+lifecycle: experimental
 owner:
   team: {{.OwnerTeam}}
   role: journey-owner
@@ -726,10 +746,20 @@ passCriteria: []
 
 func renderInlineJourneyYAML(id, goal, team string, cells []string) ([]byte, error) {
 	var buf strings.Builder
-	if err := inlineJourneyYAMLTpl.Execute(&buf, struct {
-		ID, Goal, OwnerTeam string
-		Cells               []string
-	}{id, goal, team, cells}); err != nil {
+	quotedCells := make([]yamlsafe.Scalar, len(cells))
+	for i, c := range cells {
+		quotedCells[i] = yamlsafe.Quote(c)
+	}
+	data := struct {
+		ID, Goal, OwnerTeam yamlsafe.Scalar
+		Cells               []yamlsafe.Scalar
+	}{
+		ID:        yamlsafe.Quote(id),
+		Goal:      yamlsafe.Quote(goal),
+		OwnerTeam: yamlsafe.Quote(team),
+		Cells:     quotedCells,
+	}
+	if err := inlineJourneyYAMLTpl.Execute(&buf, data); err != nil {
 		return nil, err
 	}
 	return []byte(buf.String()), nil

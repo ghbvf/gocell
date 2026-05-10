@@ -3,8 +3,9 @@ package yamlsafe_test
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/yamlsafe"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/pkg/yamlsafe"
 )
 
 // TestQuote_PlainSafe verifies that plain-safe scalars pass through unquoted.
@@ -101,7 +102,7 @@ func TestQuote_LeadingSpace(t *testing.T) {
 	}
 }
 
-// TestQuote_Empty verifies that an empty string is single-quoted as ''.
+// TestQuote_Empty verifies that an empty string is single-quoted as ”.
 // RED: Quote stub returns "".
 func TestQuote_Empty(t *testing.T) {
 	t.Parallel()

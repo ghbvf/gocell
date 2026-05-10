@@ -157,6 +157,7 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 // (it's a Go module path like "github.com/owner/repo"); other identifier
 // fields (CellID/StructName/Package) reject path separators.
 //
+// CellID must not contain '-' (kebab-case): use a no-dash identifier.
 // Type must be one of validCellTypes (schema-authoritative enum).
 // ConsistencyLevel must be one of validConsistencyLevels (schema-authoritative enum).
 // Empty Type and ConsistencyLevel are allowed here; defaults are applied by ScaffoldCell.
@@ -179,6 +180,11 @@ func validateScaffoldSpec(spec ScaffoldSpec) error {
 		if strings.ContainsAny(f.value, `/\`) || strings.Contains(f.value, "..") {
 			return fmt.Errorf("scaffold cell: %s contains path traversal or separator", f.name)
 		}
+	}
+	// CellID must not contain '-' (kebab-case). Silent dash-stripping is
+	// removed; callers must provide a no-dash identifier up front.
+	if strings.Contains(spec.CellID, "-") {
+		return fmt.Errorf("scaffold cell: CellID must not contain '-'; use no-dash identifier (got %q)", spec.CellID)
 	}
 	if spec.ModulePath == "" {
 		return fmt.Errorf("scaffold cell: ModulePath is required")

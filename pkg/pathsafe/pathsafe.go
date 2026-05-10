@@ -34,6 +34,57 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// WriteFile is the single-file shorthand for WritePlannedFiles. Creates
+// parent directories if missing, runs containment + leaf-symlink rejection +
+// O_NOFOLLOW write. Used by codegen.Write so derived-artifact writes share
+// the same safety contract as scaffold writes.
+//
+// Pre: realRoot is the output of ResolveRoot.
+func WriteFile(realRoot, absPath string, content []byte, mode os.FileMode) error {
+	return WritePlannedFiles(realRoot, []PlannedFile{{
+		AbsPath:  absPath,
+		Content:  content,
+		FileMode: mode,
+	}}, false)
+}
+
+// WriteFileForce writes content to absPath, overwriting any existing file.
+// This is the codegen variant: generated files may already exist on disk and
+// need to be replaced. The caller must have already verified the existing
+// content is a generated file (governance.IsGoCellGenerated) before calling.
+//
+// Safety contract:
+//  1. Parent directory is created via os.MkdirAll.
+//  2. Existing file (if any) is removed before the atomic write so that
+//     writeFileNoFollow (O_EXCL|O_NOFOLLOW) can reopen the slot safely.
+//  3. O_NOFOLLOW prevents a race-window symlink placed between Remove and
+//     the subsequent open from redirecting the write outside the tree.
+//
+// realRoot is used for path containment when non-empty (output of ResolveRoot).
+// When empty, containment is skipped (caller is responsible for path safety).
+func WriteFileForce(realRoot, absPath string, content []byte, mode os.FileMode) error {
+	if realRoot != "" {
+		// Derive a relative path and run containment check.
+		targetRel, err := filepath.Rel(realRoot, absPath)
+		if err != nil {
+			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"pathsafe: cannot relativize path", err,
+				errcode.WithDetails(slog.String("path", absPath)))
+		}
+		if _, err := ContainPath(realRoot, targetRel); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), defaultDirMode); err != nil {
+		return fmt.Errorf("pathsafe: create dir for %s: %w", absPath, err)
+	}
+	// Remove any existing file so writeFileNoFollow (O_EXCL) can create a fresh
+	// inode. Ignore "not exist" error — if the file disappeared concurrently the
+	// write below will still succeed.
+	_ = os.Remove(absPath)
+	return writeFileNoFollow(absPath, content, mode)
+}
+
 const (
 	defaultDirMode  = os.FileMode(0o755)
 	defaultFileMode = os.FileMode(0o644)
@@ -212,13 +263,26 @@ func containmentPass(realRoot string, plan []PlannedFile) error {
 
 // conflictPass checks that none of the planned output paths already exist.
 // The full plan is checked before any write (no partial-write semantics).
+// Uses os.Lstat (not os.Stat) so that leaf symlinks — both dangling and
+// non-dangling — are detected and rejected even when the symlink destination
+// does not exist. This prevents an attacker from pre-placing a symlink at the
+// target path to redirect writes outside root.
 func conflictPass(plan []PlannedFile) error {
 	for _, f := range plan {
-		if _, err := os.Stat(f.AbsPath); err == nil {
+		info, err := os.Lstat(f.AbsPath)
+		if err != nil {
+			// Path does not exist → no conflict. Continue.
+			continue
+		}
+		// Path exists as a regular file, directory, or symlink → conflict.
+		if info.Mode()&os.ModeSymlink != 0 {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
-				"pathsafe: file already exists",
+				"pathsafe: target is a symlink (rejected)",
 				errcode.WithDetails(slog.String("path", f.AbsPath)))
 		}
+		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			"pathsafe: file already exists",
+			errcode.WithDetails(slog.String("path", f.AbsPath)))
 	}
 	return nil
 }
@@ -243,7 +307,7 @@ func writePass(realRoot string, plan []PlannedFile) error {
 		if err := mkdirAllTracked(dir, dirMode, realRoot, &createdDirs); err != nil {
 			return rollbackWrites(writtenPaths, createdDirs, err)
 		}
-		if err := os.WriteFile(f.AbsPath, f.Content, fileMode); err != nil {
+		if err := writeFileNoFollow(f.AbsPath, f.Content, fileMode); err != nil {
 			return rollbackWrites(writtenPaths, createdDirs, err)
 		}
 		writtenPaths = append(writtenPaths, f.AbsPath)
