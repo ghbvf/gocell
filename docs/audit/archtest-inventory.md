@@ -7,7 +7,7 @@
 ## 概览
 
 - archtest 文件总数：74
-- archtest INVARIANT 锚点数：177
+- archtest INVARIANT 锚点数：176
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
@@ -46,11 +46,11 @@
 | `CODEGEN-CELL-GEN-02` | `codegen_invariants_test.go` | 59 | codegen |
 | `CODEGEN-CELL-GEN-03` | `codegen_invariants_test.go` | 60 | codegen |
 | `CODEGEN-CELL-GEN-04` | `codegen_invariants_test.go` | 61 | codegen |
-| `CODEGEN-CONTRACT-GEN-01` | `codegen_invariants_test.go` | 257 | codegen |
+| `CODEGEN-CONTRACT-GEN-01` | `codegen_invariants_test.go` | 249 | codegen |
 | `CODEGEN-CONTRACT-GEN-01` | `patch_optional_bool_pointer_test.go` | 68 | codegen |
-| `CODEGEN-CONTRACT-GEN-02` | `codegen_invariants_test.go` | 258 | codegen |
-| `CODEGEN-CONTRACT-USER-OVERLAP-01` | `codegen_invariants_test.go` | 259 | codegen |
-| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 398 | command |
+| `CODEGEN-CONTRACT-GEN-02` | `codegen_invariants_test.go` | 250 | codegen |
+| `CODEGEN-CONTRACT-USER-OVERLAP-01` | `codegen_invariants_test.go` | 251 | codegen |
+| `COMMAND-PROJECTION-EXPLICIT-01` | `codegen_invariants_test.go` | 390 | command |
 | `CONTRACT-KINDS-CLOSED-SET-01` | `contract_kinds_closed_set_test.go` | 1 | contract |
 | `CONTRACTTEST-BOUNDARY-01` | `contracttest_boundary_test.go` | 1 | contracttest |
 | `COREBUNDLE-DEPS-01` | `corebundle_deps_test.go` | 1 | corebundle |
@@ -91,9 +91,9 @@
 | `LISTENER-DX-01` | `listener_dx_test.go` | 1 | listener |
 | `LITERAL-01` | `errcode_message_const_fixtures_test.go` | 50 | literal |
 | `MANAGED-RESOURCE-CONTRACT-01` | `managed_resource_contract_test.go` | 1 | managed |
-| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 543 | marker |
-| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 545 | marker |
-| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 544 | markergen |
+| `MARKER-MISSING-FOR-WIRE-CALL-01` | `codegen_invariants_test.go` | 535 | marker |
+| `MARKER-WIRE-SINGLE-SOURCE-01` | `codegen_invariants_test.go` | 537 | marker |
+| `MARKERGEN-DRIFT-VERIFY-01` | `codegen_invariants_test.go` | 536 | markergen |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_invariants_test.go` | 287 | errcode |
 | `MESSAGE-CONST-LITERAL-01` | `errcode_message_const_fixtures_test.go` | 2 | errcode |
 | `META-QUERYPARAM-DRIFT-01` | `queryparam_drift_test.go` | 34 | meta |
@@ -103,9 +103,9 @@
 | `NO-DELETED-AUTH-SYMBOLS-01` | `no_deleted_auth_symbols_test.go` | 1 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `cells_no_wrapper_contractspec_import_test.go` | 7 | no |
 | `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | `no_manual_contractspec_literal_test.go` | 1 | no |
-| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 541 | no |
+| `NO-METADATA-LITERAL-IN-CELLGO-01` | `codegen_invariants_test.go` | 533 | no |
 | `NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01` | `no_test_service_context_in_production_test.go` | 1 | no |
-| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 542 | no |
+| `NO-WIRE-FIELDS-IN-YAML-01` | `codegen_invariants_test.go` | 534 | no |
 | `OBS-01` | `observability_metrics_test.go` | 12 | obs |
 | `OUTBOX-CELL-01` | `outbox_invariants_test.go` | 62 | outbox |
 | `OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01` | `outbox_invariants_test.go` | 596 | outbox |
@@ -160,8 +160,7 @@
 | `RMQ-STOPINTAKE-INFLIGHT-WAIT-01` | `rmq_invariants_test.go` | 1313 | rmq |
 | `ROLE-ADMIN-LITERAL-01` | `role_admin_literal_test.go` | 1 | role |
 | `ROLE-ADMIN-LITERAL-02` | `role_admin_literal_test.go` | 2 | role |
-| `SCANNER-FRAMEWORK-USAGE-01` | `scanner_framework_usage_test.go` | 22 | scanner |
-| `SCANNER-FRAMEWORK-USAGE-02` | `scanner_framework_usage_test.go` | 189 | scanner |
+| `SCANNER-FRAMEWORK-USAGE-01` | `scanner_framework_usage_test.go` | 21 | scanner |
 | `SEC-FAIL-CLOSED-01` | `security_defaults_test.go` | 5 | sec |
 | `SEC-FAIL-CLOSED-02` | `security_defaults_test.go` | 50 | sec |
 | `SEC-FAIL-CLOSED-03` | `security_defaults_test.go` | 51 | sec |
@@ -176,8 +175,8 @@
 | `SLOWGATE-ALLOWLIST-01` | `slowgate_allowlist_test.go` | 1 | slowgate |
 | `SPAN-RECORD-ERROR-REDACT-01` | `span_record_error_redact_test.go` | 1 | span |
 | `SPAN-RECORD-ERROR-REDACT-ARCHTEST-01` | `span_record_error_redact_test.go` | 22 | span |
-| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 715 | codegen |
-| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 399 | codegen |
+| `SPEC-GEN-TOPIC-EQUALS-CONTRACT-ID-01` | `codegen_invariants_test.go` | 707 | codegen |
+| `SPEC-GEN-VALUE-PARITY-01` | `codegen_invariants_test.go` | 391 | codegen |
 | `STORAGE-BACKEND-MEMORY-NO-PG-01` | `storage_backend_test.go` | 11 | storage |
 | `STORAGE-BACKEND-PG-WIRING-01` | `storage_backend_test.go` | 6 | storage |
 | `SVCTOKEN-CALLER-CELL-REQUIRED-01` | `svctoken_caller_cell_test.go` | 1 | svctoken |

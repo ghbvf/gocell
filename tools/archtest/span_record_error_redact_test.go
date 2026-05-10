@@ -263,10 +263,6 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 // load) and reports violations relative to fixtureDir. Uses os.ReadDir to
 // iterate entries directly (fixtures live in testdata/ which scanner skips by
 // design; direct iteration avoids re-invoking the WalkDir pattern).
-//
-// SCANNER-ESCAPE-HATCH: testdata-fixture-bypass
-// Scans testdata fixture .go files; scanner framework auto-skips testdata/,
-// so direct iteration is required to drive the negative fixtures.
 func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(fixtureDir)
