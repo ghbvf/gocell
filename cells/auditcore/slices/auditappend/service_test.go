@@ -1,8 +1,10 @@
 package auditappend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
 // directRunner is a test-only pass-through TxRunner for auditappend tests.
@@ -184,7 +187,9 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 // error that must not be retried.
 func TestService_HandleEvent_InvalidPayload_Reject(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithTxManager(directRunner{}))
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	svc, err := NewService(repo, testHMACKey, logger, clock.Real(), WithClock(clock.Real()), WithTxManager(directRunner{}))
 	require.NoError(t, err)
 
 	entry := outbox.Entry{
@@ -198,7 +203,16 @@ func TestService_HandleEvent_InvalidPayload_Reject(t *testing.T) {
 
 	var permErr *outbox.PermanentError
 	require.ErrorAs(t, result.Err, &permErr, "Err must wrap a PermanentError so ConsumerBase routes to DLX")
-	assert.Contains(t, result.Err.Error(), "evt-bad-json", "error message must contain event ID")
+
+	// Broker-controlled IDs (event_id, event_type) live on the structured log
+	// line, not in the error message — see CWE-117 fix in service.go HandleEvent
+	// invalid-JSON branch. Lock both fields plus the log level so a regression
+	// (dropping event_type or downgrading to Debug) trips the test.
+	logEntry := sloghelper.FindLogEntry(logBuf.String(), "audit-append: invalid JSON payload")
+	require.NotNil(t, logEntry, "expected Warn log line for invalid JSON")
+	assert.Equal(t, "WARN", logEntry["level"], "invalid JSON must emit at WARN level")
+	assert.Equal(t, "evt-bad-json", logEntry["event_id"], "log line must carry event_id")
+	assert.Equal(t, "event.user.created.v1", logEntry["event_type"], "log line must carry event_type")
 
 	// Verify the chain was NOT appended — invalid payload must not pollute the audit chain.
 	assert.Equal(t, 0, svc.ChainLen(), "invalid payload must not be appended to the audit chain")
@@ -318,6 +332,10 @@ func TestService_HandleEvent_RepoAppendFails_Requeue(t *testing.T) {
 	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
 	require.Error(t, result.Err)
 	assert.ErrorIs(t, result.Err, sentinel, "result.Err must wrap the sentinel repo error")
+	// Lock the transient classification: persist failures must NOT be wrapped
+	// as PermanentError (which would route to DLX instead of being retried).
+	var permErr *outbox.PermanentError
+	assert.False(t, errors.As(result.Err, &permErr), "transient persist error must NOT be PermanentError")
 }
 
 func mustJSON(v any) []byte {
