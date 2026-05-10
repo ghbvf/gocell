@@ -84,10 +84,50 @@ func TestRunScaffoldAssembly_DryRun(t *testing.T) {
 	}
 }
 
+// TestRunScaffoldAssembly_SkipGenerate verifies that --skip-generate writes the
+// scaffold skeleton (assembly.yaml + run.go) but does NOT write the auto-generate
+// artifacts (modules_gen.go, boundary.yaml).
+func TestRunScaffoldAssembly_SkipGenerate(t *testing.T) {
+	t.Parallel()
+
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	args := []string{
+		"--id=siasm",
+		"--cells=examplecell",
+		"--team=platform",
+		"--role=maintainer",
+		"--skip-generate",
+	}
+	if err := scaffoldAssembly(root, args); err != nil {
+		t.Fatalf("scaffoldAssembly --skip-generate: %v", err)
+	}
+
+	// Static files must exist.
+	for _, rel := range []string{
+		"assemblies/siasm/assembly.yaml",
+		"cmd/siasm/run.go",
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("expected %s to exist: %v", rel, err)
+		}
+	}
+
+	// Auto-generated files must NOT exist.
+	for _, rel := range []string{
+		"cmd/siasm/modules_gen.go",
+		"assemblies/siasm/generated/boundary.yaml",
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
+			t.Errorf("expected %s to be absent (--skip-generate), but it exists", rel)
+		}
+	}
+}
+
 // setupAssemblyTestProject creates a tempdir project with go.mod and the
 // supplied cell skeleton (cell.yaml only — sufficient for assembly scaffold
 // validation).
-func setupAssemblyTestProject(t *testing.T, cellID string) string {
+func setupAssemblyTestProject(t *testing.T, cellID string) string { //nolint:unparam // cellID kept as param for test readability
 	t.Helper()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"),

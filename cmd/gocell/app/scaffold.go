@@ -10,9 +10,15 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 )
+
+// ErrScaffoldInvalidOpts is the public error code surfaced when scaffold
+// arguments fail the input contract (e.g. kebab-case slice IDs). Asserted
+// by hack/verify-scaffold-reject.sh CI gate.
+const ErrScaffoldInvalidOpts errcode.Code = "ERR_SCAFFOLD_INVALID_OPTS"
 
 // Shared flag name + usage for scaffold sub-commands. Constants avoid the
 // "magic string" duplication SonarCloud flags across scaffoldCell/Slice/
@@ -245,7 +251,9 @@ func cellIDToPascalCase(id string) string {
 // scaffoldSlice produces an empty slice skeleton (slice.yaml only) under
 // cells/{cellID}/slices/{sliceID}/. K#09 inline-template path replaces the
 // deleted kernel/scaffold package; the bundle path used by `scaffold cell`
-// produces a richer slice via cellgen.ScaffoldCellBundle.
+// produces a richer slice via cellgen.ScaffoldCellBundle. For a complete
+// slice with service.go + service_test.go skeleton, prefer
+// `gocell scaffold cell --id=<cell> --with-http`.
 func scaffoldSlice(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold slice", flag.ContinueOnError)
 	id := fs.String("id", "", "slice ID (required)")
@@ -262,8 +270,9 @@ func scaffoldSlice(root string, args []string) error {
 		return fmt.Errorf("--cell is required")
 	}
 	if strings.Contains(*id, "-") {
-		return fmt.Errorf("scaffold slice: --id must not contain '-'; use no-dash identifier (suggest %q)",
-			strings.ReplaceAll(*id, "-", ""))
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold slice: --id must not contain '-'; use no-dash identifier",
+			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", *id, strings.ReplaceAll(*id, "-", ""))))
 	}
 
 	cellDir := filepath.Join(root, "cells", *cellID)

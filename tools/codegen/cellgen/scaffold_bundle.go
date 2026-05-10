@@ -116,20 +116,23 @@ func scaffoldHTTPExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, sl
 }
 
 // scaffoldEventExampleArtifacts produces the event slice + contract pair.
-// When the spec also requested HTTP (WithBoth), the slice already exists
-// from the HTTP path; only the event contract is added.
+// When the spec also requested HTTP (WithBoth), a separate event slice is
+// written under sliceID "{cellNoDash}eventexample" so the event contract
+// has its own contractUsages entry and gocell validate ADV-06 passes.
 func scaffoldEventExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, sliceID string) error {
+	eventSliceID := sliceID
+	if spec.WithBoth {
+		eventSliceID = cellNoDash + "eventexample"
+	}
 	bd := bundleData{
 		CellID:       spec.CellID,
-		SlicePackage: sliceID,
-		SliceID:      sliceID,
+		SlicePackage: eventSliceID,
+		SliceID:      eventSliceID,
 		SliceRole:    "publish",
 		ContractID:   fmt.Sprintf("event.%s.example.v1", cellNoDash),
 	}
-	if !spec.WithBoth {
-		if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
-			return err
-		}
+	if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
+		return err
 	}
 	return scaffoldExampleContract(root, bd, "event", cellNoDash, spec.DryRun)
 }
@@ -177,9 +180,10 @@ func renderBundleFiles(dir string, files []bundleFileSpec, tpl *template.Templat
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("scaffold %s: mkdir %s: %w", kindLabel, dir, err)
 	}
-	for name, content := range rendered {
-		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
-			return fmt.Errorf("scaffold %s: write %s: %w", kindLabel, name, err)
+	for _, f := range files {
+		content := rendered[f.Name]
+		if err := os.WriteFile(filepath.Join(dir, f.Name), content, 0o600); err != nil {
+			return fmt.Errorf("scaffold %s: write %s: %w", kindLabel, f.Name, err)
 		}
 	}
 	return nil

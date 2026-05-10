@@ -657,6 +657,10 @@ func writeHash(w io.Writer, format string, args ...any) error {
 	return err
 }
 
+// assemblyRunHelperName derives the Go function name for the assembly run
+// helper from the assembly ID. Only ASCII alphanumerics are preserved; other
+// characters are skipped (assembly IDs are validated upstream to be
+// ASCII-only).
 func assemblyRunHelperName(assemblyID string) (string, error) {
 	var suffix strings.Builder
 	upperNext := true

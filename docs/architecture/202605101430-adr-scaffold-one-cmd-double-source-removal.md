@@ -60,7 +60,7 @@ The following carve-outs are explicit and tracked in `docs/backlog.md`:
 
 - `kernel/scaffold` removal is **not back-compat**. Any external caller (none in-tree) would break; project rule "不向后兼容" applies — no deprecation shim.
 - The 5 `kind=command` contracts now carry an explicit `codegen: false` line documenting the deferred status. When command-kind codegen is implemented, those lines become the migration switch.
-- archtest `SCAFFOLD-BUNDLE-MARKER-01` and `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01` lock the two K#09 invariants. Both are AI-rebust Hard (template const literal embed + parser funnel).
+- archtest `SCAFFOLD-BUNDLE-MARKER-01` and `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01` lock the two K#09 invariants. Both archtests are AI-rebust **Soft** (string anchor on template content); the **Hard** enforcement is the parser funnel in `kernel/metadata.parseContract` via `contractYAMLHasKey` AST inspection — the archtests serve as belt-and-suspenders against template regression. Upgrade path tracked in `docs/backlog.md` as `SCAFFOLD-BUNDLE-ARCHTEST-HARDEN`.
 
 ## Alternatives considered
 

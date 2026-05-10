@@ -1,4 +1,4 @@
-// invariants:
+// invariants asserted in this file:
 //   - INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
 //   - INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01
 //
@@ -7,14 +7,17 @@
 // SCAFFOLD-BUNDLE-MARKER-01: scaffold-cell.tmpl must embed the K#05
 // // +cell:listener: marker as a const literal so the marker→cell.yaml
 // drift detection (MARKERGEN-DRIFT-VERIFY-01) extends to scaffold output.
-// AI-rebust: Hard — verified by template const literal embed (cannot be
-// dropped without changing the embedded template).
+// AI-rebust: Soft (string anchor on template content; the Hard funnel is in
+// kernel/metadata.parseContract via contractYAMLHasKey AST inspection —
+// these archtests are belt-and-suspenders against template regression).
 //
 // SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01: scaffold-contract template (the
 // K#09 ScaffoldExampleContract path) must NOT emit `codegen:` field —
 // parser defaults Codegen=true (K#09 funnel), so emitting it is redundant
-// and contradicts the funnel. AI-rebust: Hard — schema default value funnel
-// makes the field unrepresentable in scaffold output.
+// and contradicts the funnel. AI-rebust: Soft (string anchor on template
+// content; the Hard funnel is in kernel/metadata.parseContract via
+// contractYAMLHasKey AST inspection — these archtests are
+// belt-and-suspenders against template regression).
 package archtest
 
 import (
@@ -29,25 +32,6 @@ const (
 	scaffoldContractTplRel = "tools/codegen/cellgen/templates/scaffold-contract.tmpl"
 )
 
-// findRepoRoot walks upward from cwd looking for go.mod (the project root).
-func scaffoldFindRepoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("repo root not found from %s", dir)
-		}
-		dir = parent
-	}
-}
-
 // TestScaffoldBundle_CellMarkerEmbedded asserts that the cellgen scaffold
 // cell template embeds `// +cell:listener:` so K#05 marker drift detection
 // extends to scaffold output.
@@ -57,7 +41,7 @@ func scaffoldFindRepoRoot(t *testing.T) string {
 func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 	t.Parallel()
 
-	root := scaffoldFindRepoRoot(t)
+	root := findModuleRoot(t)
 	tmpl := filepath.Join(root, scaffoldCellTplRel)
 	content, err := os.ReadFile(tmpl) //nolint:gosec // archtest reads in-repo template files
 	if err != nil {
@@ -80,7 +64,7 @@ func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 func TestScaffoldBundle_ContractTemplateNoCodegenLiteral(t *testing.T) {
 	t.Parallel()
 
-	root := scaffoldFindRepoRoot(t)
+	root := findModuleRoot(t)
 	tmpl := filepath.Join(root, scaffoldContractTplRel)
 	content, err := os.ReadFile(tmpl) //nolint:gosec // archtest reads in-repo template files
 	if err != nil {

@@ -28,8 +28,6 @@ import (
 //	--deploy=<k8s|compose|binary> default k8s — k8s is omitted from yaml
 //	--dry-run                   render only, no writes
 //	--skip-generate             skip auto-invocation of assembly codegen
-//	--force                     reserved (currently no-op; conflict detection
-//	                            still applies — kept for parity with cell)
 func scaffoldAssembly(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold assembly", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
@@ -38,7 +36,7 @@ func scaffoldAssembly(root string, args []string) error {
 	role := fs.String("role", "", "owner role, e.g. maintainer (required)")
 	deploy := fs.String("deploy", "k8s", "deployment template: one of [k8s compose binary]")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
-	skipGenerate := fs.Bool("skip-generate", false, "skip auto-invocation of assembly codegen (modules_gen.go / main.go / boundary.yaml)")
+	skipGenerate := fs.Bool(skipGenerateFlag, false, "skip auto-invocation of assembly codegen (modules_gen.go / main.go / boundary.yaml)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

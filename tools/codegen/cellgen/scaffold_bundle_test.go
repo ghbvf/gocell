@@ -138,6 +138,80 @@ func TestScaffoldCellBundle_DryRun(t *testing.T) {
 	}
 }
 
+// TestScaffoldCellBundle_WithBoth verifies that --with-both produces both an HTTP
+// slice (sliceID={id}example) and a separate event slice (sliceID={id}eventexample),
+// each with their own contractUsages entry, so gocell validate ADV-06 passes.
+func TestScaffoldCellBundle_WithBoth(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:           "mybothcell",
+		StructName:       "MyBothCell",
+		Package:          "mybothcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithBoth:         true,
+	}
+
+	if err := ScaffoldCellBundle(dir, spec); err != nil {
+		t.Fatalf("ScaffoldCellBundle WithBoth: %v", err)
+	}
+
+	// HTTP slice and contract must exist.
+	httpFiles := []string{
+		"cells/mybothcell/slices/mybothcellexample/slice.yaml",
+		"cells/mybothcell/slices/mybothcellexample/service.go",
+		"cells/mybothcell/slices/mybothcellexample/service_test.go",
+		"contracts/http/mybothcell/example/v1/contract.yaml",
+		"contracts/http/mybothcell/example/v1/request.schema.json",
+		"contracts/http/mybothcell/example/v1/response.schema.json",
+	}
+	for _, rel := range httpFiles {
+		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+			t.Errorf("WithBoth: missing HTTP file %s: %v", rel, err)
+		}
+	}
+
+	// Event slice (separate sliceID) and contract must also exist.
+	eventFiles := []string{
+		"cells/mybothcell/slices/mybothcelleventexample/slice.yaml",
+		"cells/mybothcell/slices/mybothcelleventexample/service.go",
+		"cells/mybothcell/slices/mybothcelleventexample/service_test.go",
+		"contracts/event/mybothcell/example/v1/contract.yaml",
+		"contracts/event/mybothcell/example/v1/payload.schema.json",
+		"contracts/event/mybothcell/example/v1/headers.schema.json",
+	}
+	for _, rel := range eventFiles {
+		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+			t.Errorf("WithBoth: missing event file %s: %v", rel, err)
+		}
+	}
+
+	// HTTP slice.yaml must reference the HTTP contract.
+	httpSliceYAMLPath := filepath.Join(dir, "cells", "mybothcell", "slices", "mybothcellexample", "slice.yaml")
+	httpSliceYAML, err := os.ReadFile(httpSliceYAMLPath) //nolint:gosec // tempdir test fixture
+	if err != nil {
+		t.Fatalf("read HTTP slice.yaml: %v", err)
+	}
+	if !strings.Contains(string(httpSliceYAML), "http.mybothcell.example.v1") {
+		t.Errorf("HTTP slice.yaml must reference http.mybothcell.example.v1; got:\n%s", httpSliceYAML)
+	}
+
+	// Event slice.yaml must reference the event contract.
+	evtSliceYAMLPath := filepath.Join(dir, "cells", "mybothcell", "slices", "mybothcelleventexample", "slice.yaml")
+	evtSliceYAML, err := os.ReadFile(evtSliceYAMLPath) //nolint:gosec // tempdir test fixture
+	if err != nil {
+		t.Fatalf("read event slice.yaml: %v", err)
+	}
+	if !strings.Contains(string(evtSliceYAML), "event.mybothcell.example.v1") {
+		t.Errorf("event slice.yaml must reference event.mybothcell.example.v1; got:\n%s", evtSliceYAML)
+	}
+}
+
 // TestScaffoldCellBundle_BundleDefaultIsHTTP verifies that when neither
 // WithHTTP nor WithEvents is set, default is HTTP.
 func TestScaffoldCellBundle_BundleDefaultIsHTTP(t *testing.T) {
