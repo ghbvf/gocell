@@ -137,16 +137,31 @@ func readIntegrationTestStep(t *testing.T) workflowStep {
 }
 
 // TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages asserts
-// the static walker finds a non-trivial number of packages with files gated
-// under -tags=integration. The lower bound (15) is calibrated to the live
-// count (~17 in develop after the S0 orphan-package backfill); a count
-// below 15 signals regression past the pre-S0 hardcoded-list state.
+// the walker discovers a non-empty set AND every package in a small
+// sentinel list. Sentinels are foundational integration coverage anchors
+// (PG adapter, integration-test root, shared testcontainer helpers) whose
+// disappearance signals either walker breakage or major refactor — the
+// latter requiring an explicit update of this list rather than a silent
+// numeric-threshold drift. Avoiding a free-floating count threshold (which
+// ages with the codebase) keeps the gate stable across legitimate package
+// reorgs that don't affect integration coverage.
 func TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages(t *testing.T) {
 	root := findModuleRoot(t)
 	pkgs, err := discoverPackagesUnderTag(root, "integration")
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(pkgs), 15,
-		"expected ≥15 integration packages discovered, got %d: %v", len(pkgs), pkgs)
+	require.NotEmpty(t, pkgs,
+		"no integration packages discovered — walker likely broken")
+
+	sentinels := []string{
+		"adapters/postgres",
+		"tests/integration",
+		"tests/testutil",
+	}
+	for _, s := range sentinels {
+		assert.Contains(t, pkgs, s,
+			"sentinel integration package %q must be discovered; "+
+				"walker broken or package relocated (update sentinels intentionally)", s)
+	}
 	t.Logf("discovered %d integration packages", len(pkgs))
 }
 
@@ -185,27 +200,30 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList(t *testing.T) {
 }
 
 // TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery asserts that the
-// step fails fast if discovery returns zero packages. Without this guard, a
-// misconfigured build context (e.g., a tag typo) could silently zero out
-// the integration job and turn it into a no-op pass.
+// step fails fast if discovery returns zero packages. The guard must combine
+// (a) a discovery-emptiness check AND (b) an explicit `exit 1` on the empty
+// branch — a bare check without exit path is decorative (`test ... && echo
+// ok` would parse fine but never fail).
 //
-// Accepted forms (string scalar OR bash array):
-//   - test -n "$pkgs" || ...          (string discovery)
-//   - [ -z "$pkgs" ] && ...
-//   - test "${#pkgs[@]}" -gt 0 || ... (bash array discovery — current form)
-//   - [ "${#pkgs[@]}" -eq 0 ] && ...
+// Accepted forms (string scalar OR bash array; positive or negated):
+//   - test -n "$pkgs" || { ...; exit 1; }     (current: bash array form)
+//   - [ -z "$pkgs" ] && { ...; exit 1; }
+//   - test "${#pkgs[@]}" -gt 0 || { ...; exit 1; }
+//   - [ "${#pkgs[@]}" -eq 0 ] && { ...; exit 1; }
 func TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery(t *testing.T) {
 	step := readIntegrationTestStep(t)
 	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
 
 	guardRE := regexp.MustCompile(
-		`(test\s+-n\s+["']?\$\{?pkgs\}?["']?` +
-			`|\[\s+-z\s+["']?\$\{?pkgs\}?["']?\s+\]` +
-			`|test\s+"\$\{#pkgs\[@\]\}"\s+-gt\s+0` +
-			`|\[\s+"\$\{#pkgs\[@\]\}"\s+-eq\s+0\s+\])`)
+		`(test\s+-n\s+["']?\$\{?pkgs\}?["']?\s*\|\|.*\bexit\s+1\b` +
+			`|\[\s+-z\s+["']?\$\{?pkgs\}?["']?\s+\]\s*&&.*\bexit\s+1\b` +
+			`|test\s+"\$\{#pkgs\[@\]\}"\s+-gt\s+0\s*\|\|.*\bexit\s+1\b` +
+			`|\[\s+"\$\{#pkgs\[@\]\}"\s+-eq\s+0\s+\]\s*&&.*\bexit\s+1\b)`,
+	)
 	assert.True(t, guardRE.MatchString(step.Run),
-		"integration-test step must fail fast on empty discovery (e.g., `test -n \"$pkgs\"` "+
-			"or `test \"${#pkgs[@]}\" -gt 0`)")
+		"integration-test step must fail fast on empty discovery — the empty-check "+
+			"must be paired with `|| { ...; exit 1; }` (positive form) or `&& { ...; exit 1; }` "+
+			"(negated form); a check without an exit path is decorative")
 }
 
 // TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs
@@ -223,6 +241,26 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs(t
 			"($pkgs or \"${pkgs[@]}\"); got run block:\n%s", step.Run)
 }
 
+// TestArchtest_CIIntegrationDiscovery_WorkflowInvokesExactlyOneGoTest asserts
+// the integration-test step contains exactly one `go test` invocation. A
+// second hardcoded `go test ./somepath/...` co-existing alongside the
+// discovered set would silently dilute the discovery guarantee — the
+// uniqueness constraint forces the discovery output to be the single source
+// of truth for what gets tested.
+//
+// The line-anchored regex `(?m)^\s*go test\s` avoids false positives from
+// `go test` mentioned in shell comments or echo strings.
+func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesExactlyOneGoTest(t *testing.T) {
+	step := readIntegrationTestStep(t)
+	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
+
+	goTestRE := regexp.MustCompile(`(?m)^\s*go test\s`)
+	matches := goTestRE.FindAllString(step.Run, -1)
+	assert.Len(t, matches, 1,
+		"integration-test step must invoke `go test` exactly once on the discovered "+
+			"package set; found %d invocations: %v", len(matches), matches)
+}
+
 // TestArchtest_CIIntegrationDiscovery_FixtureMetaTest verifies the
 // discoverPackagesUnderTag walker classifies synthetic files correctly:
 //
@@ -236,34 +274,54 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs(t
 //   - `//go:build integration || e2e`       → discovered under both tags
 //   - pre-Go-1.17 `// +build integration` (no `//go:build` line) → NOT
 //     discovered (intentional; repo Go floor is 1.25)
+//   - production .go (filename != _test.go) with the tag → discovered;
+//     mirrors the workflow set-diff's .GoFiles coverage
+//   - `_test.go` filename with the tag → discovered; mirrors the workflow
+//     set-diff's .TestGoFiles / .XTestGoFiles coverage
 //
 // Each fixture lives in its own subdirectory so the directory-level
 // dedup logic in discoverPackagesUnderTag does not collapse multiple
-// fixtures into one entry.
+// fixtures into one entry. The `filename` field defaults to "f.go" when
+// blank; explicit values document filename-specific intent.
 func TestArchtest_CIIntegrationDiscovery_FixtureMetaTest(t *testing.T) {
 	t.Parallel()
 
 	fixtures := []struct {
-		name    string
-		content string
-		wantInt bool
-		wantE2E bool
+		name     string
+		filename string // defaults to "f.go" when empty
+		content  string
+		wantInt  bool
+		wantE2E  bool
 	}{
-		{"plain_integration", "//go:build integration\n\npackage f\n", true, false},
-		{"plain_e2e", "//go:build e2e\n\npackage f\n", false, true},
-		{"compound_otel", "//go:build integration && otelcollector\n\npackage f\n", false, false},
-		{"no_tag", "package f\n", false, false},
-		{"cluster", "//go:build integration_cluster\n\npackage f\n", false, false},
-		{"or_form", "//go:build integration || e2e\n\npackage f\n", true, true},
+		{name: "plain_integration", content: "//go:build integration\n\npackage f\n", wantInt: true},
+		{name: "plain_e2e", content: "//go:build e2e\n\npackage f\n", wantE2E: true},
+		{name: "compound_otel", content: "//go:build integration && otelcollector\n\npackage f\n"},
+		{name: "no_tag", content: "package f\n"},
+		{name: "cluster", content: "//go:build integration_cluster\n\npackage f\n"},
+		{name: "or_form", content: "//go:build integration || e2e\n\npackage f\n", wantInt: true, wantE2E: true},
 		// Pre-1.17 `// +build` form is silently undetected — documents the limitation.
-		{"old_plus_build", "// +build integration\n\npackage f\n", false, false},
+		{name: "old_plus_build", content: "// +build integration\n\npackage f\n"},
+		// Filename-typed cases: explicit production .go vs _test.go to mirror
+		// workflow set-diff symmetry across .GoFiles / .TestGoFiles axes.
+		{
+			name: "production_only_integration", filename: "production.go",
+			content: "//go:build integration\n\npackage f\n", wantInt: true,
+		},
+		{
+			name: "test_file_integration", filename: "service_integration_test.go",
+			content: "//go:build integration\n\npackage f\n", wantInt: true,
+		},
 	}
 
 	root := t.TempDir()
 	for _, fx := range fixtures {
 		sub := filepath.Join(root, fx.name)
 		require.NoError(t, os.MkdirAll(sub, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(sub, "f.go"), []byte(fx.content), 0o644))
+		fname := fx.filename
+		if fname == "" {
+			fname = "f.go"
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(sub, fname), []byte(fx.content), 0o644))
 	}
 
 	intPkgs, err := discoverPackagesUnderTag(root, "integration")
