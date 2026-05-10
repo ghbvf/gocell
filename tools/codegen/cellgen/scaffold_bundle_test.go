@@ -3,6 +3,7 @@ package cellgen
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -209,6 +210,200 @@ func TestScaffoldCellBundle_WithBoth(t *testing.T) {
 	}
 	if !strings.Contains(string(evtSliceYAML), "event.mybothcell.example.v1") {
 		t.Errorf("event slice.yaml must reference event.mybothcell.example.v1; got:\n%s", evtSliceYAML)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Symlink escape + atomic rollback tests (RED — 实现漏斗化后转 GREEN)
+// ---------------------------------------------------------------------------
+
+// TestScaffoldCellBundle_SymlinkEscape_Slice 验证 ScaffoldCellBundle 拒绝
+// slices 目录是 root 外 symlink 的情况，且 outside 目录不被写入。
+func TestScaffoldCellBundle_SymlinkEscape_Slice(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	// 预创建 cells/myhttpcell，并将 slices 目录指向 outside
+	cellDir := filepath.Join(root, "cells", "myhttpcell")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	slicesLink := filepath.Join(cellDir, "slices")
+	if err := os.Symlink(outside, slicesLink); err != nil {
+		t.Fatalf("Symlink slices → outside: %v", err)
+	}
+
+	spec := ScaffoldSpec{
+		CellID:           "myhttpcell",
+		StructName:       "MyHTTPCell",
+		Package:          "myhttpcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithHTTP:         true,
+	}
+
+	err := ScaffoldCellBundle(root, spec)
+	if err == nil {
+		t.Fatal("ScaffoldCellBundle(slices symlink escape): want error, got nil")
+	}
+	// 错误消息应包含逃逸相关描述
+	msg := err.Error()
+	if !strings.ContainsAny(msg, "outside root,escapes,containment") &&
+		!strings.Contains(msg, "outside") && !strings.Contains(msg, "escapes") &&
+		!strings.Contains(msg, "containment") {
+		t.Errorf("error must mention escape/containment; got: %v", err)
+	}
+
+	// outside 内不应有任何文件
+	entries, _ := os.ReadDir(outside)
+	if len(entries) > 0 {
+		t.Errorf("symlink escape: outside dir must be clean, got %v", entries)
+	}
+}
+
+// TestScaffoldCellBundle_SymlinkEscape_Contract 验证 ScaffoldCellBundle 拒绝
+// contracts 目录是 root 外 symlink 的情况。
+func TestScaffoldCellBundle_SymlinkEscape_Contract(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	// 预创建 contracts/http/myhttpcell → outside symlink
+	contractParent := filepath.Join(root, "contracts", "http")
+	if err := os.MkdirAll(contractParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contractLink := filepath.Join(contractParent, "myhttpcell")
+	if err := os.Symlink(outside, contractLink); err != nil {
+		t.Fatalf("Symlink contract → outside: %v", err)
+	}
+
+	spec := ScaffoldSpec{
+		CellID:           "myhttpcell",
+		StructName:       "MyHTTPCell",
+		Package:          "myhttpcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithHTTP:         true,
+	}
+
+	err := ScaffoldCellBundle(root, spec)
+	if err == nil {
+		t.Fatal("ScaffoldCellBundle(contract symlink escape): want error, got nil")
+	}
+
+	// outside 内不应有任何文件
+	entries, _ := os.ReadDir(outside)
+	if len(entries) > 0 {
+		t.Errorf("contract symlink escape: outside dir must be clean, got %v", entries)
+	}
+}
+
+// TestScaffoldCellBundle_AtomicRollback_OnContractConflict 验证：
+// 预置 contract.yaml 冲突时，bundle 整体失败且 cells/myhttpcell 内无文件。
+func TestScaffoldCellBundle_AtomicRollback_OnContractConflict(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	// 预置冲突 contract.yaml
+	contractPath := filepath.Join(root, "contracts", "http", "myhttpcell", "example", "v1", "contract.yaml")
+	if err := os.MkdirAll(filepath.Dir(contractPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(contractPath, []byte("id: existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spec := ScaffoldSpec{
+		CellID:           "myhttpcell",
+		StructName:       "MyHTTPCell",
+		Package:          "myhttpcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithHTTP:         true,
+	}
+
+	err := ScaffoldCellBundle(root, spec)
+	if err == nil {
+		t.Fatal("ScaffoldCellBundle(contract conflict): want error, got nil")
+	}
+
+	// atomic：cells/myhttpcell/cell.yaml、cell.go、slices/.../slice.yaml 全不存在
+	atomicAbsent := []string{
+		"cells/myhttpcell/cell.yaml",
+		"cells/myhttpcell/cell.go",
+		"cells/myhttpcell/slices/myhttpcellexample/slice.yaml",
+	}
+	for _, rel := range atomicAbsent {
+		abs := filepath.Join(root, rel)
+		if _, err := os.Stat(abs); err == nil {
+			t.Errorf("atomic rollback: %s must not exist after conflict error", rel)
+		}
+	}
+}
+
+// TestScaffoldCellBundle_AtomicRollback_OnContainmentFail 验证：
+// slices symlink 逃逸时，cell.yaml 和 cell.go 也未写入。
+func TestScaffoldCellBundle_AtomicRollback_OnContainmentFail(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	// slices → outside symlink
+	cellDir := filepath.Join(root, "cells", "myhttpcell")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cellDir, "slices")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	spec := ScaffoldSpec{
+		CellID:           "myhttpcell",
+		StructName:       "MyHTTPCell",
+		Package:          "myhttpcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithHTTP:         true,
+	}
+
+	err := ScaffoldCellBundle(root, spec)
+	if err == nil {
+		t.Fatal("ScaffoldCellBundle(containment fail): want error, got nil")
+	}
+
+	// atomic：cell.yaml 和 cell.go 均未写入
+	for _, rel := range []string{"cells/myhttpcell/cell.yaml", "cells/myhttpcell/cell.go"} {
+		abs := filepath.Join(root, rel)
+		if _, err := os.Stat(abs); err == nil {
+			t.Errorf("containment fail rollback: %s must not exist", rel)
+		}
 	}
 }
 

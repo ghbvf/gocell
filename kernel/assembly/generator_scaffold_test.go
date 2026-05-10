@@ -3,6 +3,7 @@ package assembly
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -260,6 +261,119 @@ func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
 	// operators can debug.
 	if !strings.Contains(err.Error(), "path=") {
 		t.Errorf("error must surface path detail; got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Symlink escape + atomic rollback tests (RED — 实现漏斗化后转 GREEN)
+// ---------------------------------------------------------------------------
+
+// TestGeneratorScaffold_SymlinkEscape_Asm 验证 Generator.Scaffold 拒绝
+// assemblies/<id> 目录是 root 外 symlink 的情况。
+func TestGeneratorScaffold_SymlinkEscape_Asm(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+	outside := t.TempDir()
+
+	// assemblies/symasm → outside
+	assembliesDir := filepath.Join(root, "assemblies")
+	if err := os.MkdirAll(assembliesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(assembliesDir, "symasm")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	err := gen.Scaffold(AssemblyScaffoldSpec{
+		ID:        "symasm",
+		Cells:     []string{"examplecell"},
+		OwnerTeam: "platform",
+		OwnerRole: "maintainer",
+	})
+	if err == nil {
+		t.Fatal("Generator.Scaffold(asm symlink escape): want error, got nil")
+	}
+
+	// outside 不应有任何文件
+	entries, _ := os.ReadDir(outside)
+	if len(entries) > 0 {
+		t.Errorf("asm symlink escape: outside must be clean, got %v", entries)
+	}
+}
+
+// TestGeneratorScaffold_SymlinkEscape_Cmd 验证 Generator.Scaffold 拒绝
+// cmd/<id> 目录是 root 外 symlink 的情况。
+func TestGeneratorScaffold_SymlinkEscape_Cmd(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+	outside := t.TempDir()
+
+	// cmd/symcmdasm → outside
+	cmdDir := filepath.Join(root, "cmd")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cmdDir, "symcmdasm")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	err := gen.Scaffold(AssemblyScaffoldSpec{
+		ID:        "symcmdasm",
+		Cells:     []string{"examplecell"},
+		OwnerTeam: "platform",
+		OwnerRole: "maintainer",
+	})
+	if err == nil {
+		t.Fatal("Generator.Scaffold(cmd symlink escape): want error, got nil")
+	}
+
+	// outside 不应有任何文件
+	entries, _ := os.ReadDir(outside)
+	if len(entries) > 0 {
+		t.Errorf("cmd symlink escape: outside must be clean, got %v", entries)
+	}
+}
+
+// TestGeneratorScaffold_AtomicRollback_OnConflict 验证：
+// 预置 assemblies/<id>/assembly.yaml 冲突时，cmd/<id> 不被创建（atomic）。
+func TestGeneratorScaffold_AtomicRollback_OnConflict(t *testing.T) {
+	t.Parallel()
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+
+	// 预置冲突 assembly.yaml
+	asmDir := filepath.Join(root, "assemblies", "conflictasm")
+	if err := os.MkdirAll(asmDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(asmDir, "assembly.yaml"), []byte("id: existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := gen.Scaffold(AssemblyScaffoldSpec{
+		ID:        "conflictasm",
+		Cells:     []string{"examplecell"},
+		OwnerTeam: "platform",
+		OwnerRole: "maintainer",
+	})
+	if err == nil {
+		t.Fatal("Generator.Scaffold(conflict): want error, got nil")
+	}
+
+	// atomic：cmd/conflictasm 不应存在
+	if _, err := os.Stat(filepath.Join(root, "cmd", "conflictasm")); err == nil {
+		t.Error("atomic rollback: cmd/conflictasm must not exist after conflict error")
 	}
 }
 
