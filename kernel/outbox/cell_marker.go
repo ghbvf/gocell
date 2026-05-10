@@ -1,5 +1,7 @@
 package outbox
 
+import "github.com/ghbvf/gocell/pkg/validation"
+
 // CellPublisher is the only Publisher-shaped type that cells/<x>/cell.go
 // public With* Options may accept. The unexported sealedCellPublisher()
 // method makes CellPublisher unimplementable outside this package —
@@ -68,10 +70,12 @@ func (i internalCellWriter) Noop() bool {
 }
 
 // WrapPublisherForCell is the sole authorized path for handing a Publisher
-// to a cell's With* Option. Returns nil when p is nil so caller-side
-// typed-nil detection keeps working in accumulative builder options
-// (e.g. WithOutboxDeps(WrapPublisherForCell(nil), ...) is a no-op for the
-// publisher slot, leaving any previously-set value in place).
+// to a cell's With* Option. Returns nil when p is bare-nil OR a typed-nil
+// interface (e.g. `var p *amqpPublisher`) so caller-side typed-nil
+// detection keeps working in accumulative builder options. Without
+// IsNilInterface the wrapper would emit a non-nil sealed value hiding the
+// inner nil, silently bypassing Init() fail-fast guards and panicking on
+// the first Publish call.
 //
 // Allowed callers (enforced by archtest CELL-RAW-INFRA-WRAPPER-LOCATION-01):
 //   - cmd/* composition roots
@@ -79,15 +83,16 @@ func (i internalCellWriter) Noop() bool {
 //   - *_test.go in any layer
 //   - kernel/outbox/cell_marker.go (this file)
 func WrapPublisherForCell(p Publisher) CellPublisher {
-	if p == nil {
+	if validation.IsNilInterface(p) {
 		return nil
 	}
 	return internalCellPublisher{Publisher: p}
 }
 
 // WrapWriterForCell mirrors WrapPublisherForCell for the Writer side.
+// Bare-nil and typed-nil are both rejected via validation.IsNilInterface.
 func WrapWriterForCell(w Writer) CellWriter {
-	if w == nil {
+	if validation.IsNilInterface(w) {
 		return nil
 	}
 	return internalCellWriter{Writer: w}

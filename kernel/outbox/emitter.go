@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"reflect"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Emitter emits an outbox entry either by writing it to a durable outbox or by
@@ -44,7 +44,7 @@ type WriterEmitter struct {
 
 // NewWriterEmitter adapts an outbox Writer into an Emitter.
 func NewWriterEmitter(w Writer) (*WriterEmitter, error) {
-	if isNilEmitterDependency(w) {
+	if validation.IsNilInterface(w) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil writer for WriterEmitter")
 	}
@@ -61,7 +61,7 @@ func NewNoopEmitter() Emitter {
 // caller's success path. Returns ErrCellMissingOutbox when the writer is
 // nil — a programmer error that should surface at construction time.
 func (e *WriterEmitter) Emit(ctx context.Context, entry Entry) error {
-	if e == nil || isNilEmitterDependency(e.writer) {
+	if e == nil || validation.IsNilInterface(e.writer) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil writer for WriterEmitter")
 	}
@@ -129,7 +129,7 @@ const defaultFailOpenRateThreshold = 0.05 // 5%
 func NewDirectEmitter(
 	p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, clk clock.Clock, cellID string, opts ...DirectEmitterOption,
 ) (*DirectEmitter, error) {
-	if isNilEmitterDependency(p) {
+	if validation.IsNilInterface(p) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
 	}
@@ -178,7 +178,7 @@ func NewDirectEmitter(
 // gocell_outbox_emit_failopen_dropped_total counter and return nil so the
 // caller's request path is not blocked on broker availability).
 func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
-	if e == nil || isNilEmitterDependency(e.publisher) {
+	if e == nil || validation.IsNilInterface(e.publisher) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
 	}
@@ -324,16 +324,3 @@ var (
 	_ DurabilityReporter = (*WriterEmitter)(nil)
 	_ DurabilityReporter = (*DirectEmitter)(nil)
 )
-
-func isNilEmitterDependency(v any) bool {
-	if v == nil {
-		return true
-	}
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return rv.IsNil()
-	default:
-		return false
-	}
-}

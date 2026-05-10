@@ -25,6 +25,26 @@ func TestCellTxManager_WrapNilReturnsNil(t *testing.T) {
 	}
 }
 
+// TestCellTxManager_WrapTypedNilReturnsNil pins the typed-nil interface
+// guard. Composition roots routinely write `var p *postgres.TxManager` and
+// pass `p` (which becomes a typed-nil interface — `type=*TxManager,
+// value=nil`). The bare `tr == nil` check returns false on a typed-nil, so
+// without IsNilInterface the wrapper would emit a non-nil sealed value
+// hiding the inner nil — caller-side `if tr == nil` checks would be
+// silently bypassed and the first RunInTx would panic.
+//
+// Repro of pre-fix bug: replacing validation.IsNilInterface with `tr == nil`
+// makes this test fail (WrapForCell(typedNil) returns a non-nil sealed
+// wrapper around the nil pointer).
+func TestCellTxManager_WrapTypedNilReturnsNil(t *testing.T) {
+	t.Parallel()
+	var p *fakeTxRunner
+	var tr persistence.TxRunner = p
+	if persistence.WrapForCell(tr) != nil {
+		t.Fatal("WrapForCell(typed-nil) must return nil interface, not a sealed wrapper hiding nil pointer")
+	}
+}
+
 // TestCellTxManager_WrapDelegatesRunInTx pins the transparent-proxy
 // invariant: cell.go fields hold CellTxManager, but service constructors
 // still expect raw TxRunner — the wrapper must satisfy TxRunner and

@@ -39,6 +39,29 @@ func TestCellWriter_WrapNilReturnsNil(t *testing.T) {
 	}
 }
 
+// TestCellPublisher_WrapTypedNilReturnsNil — see kernel/persistence
+// TestCellTxManager_WrapTypedNilReturnsNil for the typed-nil interface
+// pitfall rationale. Publisher path mirrors TxRunner path because composition
+// roots commonly write `var p *amqpPublisher; outbox.WrapPublisherForCell(p)`
+// and the bare nil check would silently return a non-nil sealed wrapper.
+func TestCellPublisher_WrapTypedNilReturnsNil(t *testing.T) {
+	t.Parallel()
+	var p *fakePublisher
+	var pub outbox.Publisher = p
+	if outbox.WrapPublisherForCell(pub) != nil {
+		t.Fatal("WrapPublisherForCell(typed-nil) must return nil interface, not a sealed wrapper hiding nil pointer")
+	}
+}
+
+func TestCellWriter_WrapTypedNilReturnsNil(t *testing.T) {
+	t.Parallel()
+	var w *fakeCellWriter
+	var writer outbox.Writer = w
+	if outbox.WrapWriterForCell(writer) != nil {
+		t.Fatal("WrapWriterForCell(typed-nil) must return nil interface, not a sealed wrapper hiding nil pointer")
+	}
+}
+
 // TestCellPublisher_WrapDelegates pins the transparent-proxy invariant
 // for the publisher path (DirectEmitter consumes raw outbox.Publisher).
 func TestCellPublisher_WrapDelegates(t *testing.T) {

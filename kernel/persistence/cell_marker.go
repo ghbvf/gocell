@@ -1,5 +1,7 @@
 package persistence
 
+import "github.com/ghbvf/gocell/pkg/validation"
+
 // CellTxManager is the only TxRunner-shaped type that cells/<x>/cell.go
 // public With* Options may accept. The unexported sealedCellTxManager()
 // method makes CellTxManager unimplementable outside this package —
@@ -52,9 +54,11 @@ func (i internalCellTxManager) Noop() bool {
 }
 
 // WrapForCell is the sole authorized path for handing a TxRunner to a
-// cell's With* Option. Returns nil when tr is nil so caller-side
-// typed-nil detection (e.g. validation.IsNilInterface in builder options)
-// keeps working.
+// cell's With* Option. Returns nil when tr is bare-nil OR a typed-nil
+// interface (e.g. `var p *postgres.TxManager`) so caller-side typed-nil
+// detection in builder options keeps working — without IsNilInterface
+// the wrapper would emit a non-nil sealed value hiding the inner nil
+// pointer, silently bypassing CheckNotNoop / Init() fail-fast guards.
 //
 // Allowed callers (enforced by archtest CELL-RAW-INFRA-WRAPPER-LOCATION-01):
 //   - cmd/* composition roots
@@ -65,7 +69,7 @@ func (i internalCellTxManager) Noop() bool {
 // Adding a new caller requires updating both the archtest allowlist and
 // reviewing whether the new path is truly composition-root.
 func WrapForCell(tr TxRunner) CellTxManager {
-	if tr == nil {
+	if validation.IsNilInterface(tr) {
 		return nil
 	}
 	return internalCellTxManager{TxRunner: tr}

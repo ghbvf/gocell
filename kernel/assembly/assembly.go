@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // assemblyState represents the lifecycle state of a CoreAssembly.
@@ -162,7 +163,7 @@ func New(cfg Config) *CoreAssembly {
 	// NopHookObserver. A typed nil that slips through would dispatch to a
 	// nil receiver on every hook and only manifest as panic-recover log
 	// spam from emitHookEvent.
-	if cell.IsNilHookObserver(cfg.HookObserver) {
+	if validation.IsNilInterface(cfg.HookObserver) {
 		cfg.HookObserver = cell.NopHookObserver{}
 	}
 	if cfg.HookTimeout == 0 {
