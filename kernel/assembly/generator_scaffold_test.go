@@ -95,6 +95,174 @@ l0Dependencies: []
 	}
 }
 
+// scaffoldTestProject sets up a tempdir project with one cell + go.mod and
+// returns (root, parsedProject) ready to feed into NewGenerator.
+func scaffoldTestProject(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+	root := t.TempDir()
+	cellDir := filepath.Join(root, "cells", "examplecell")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cellYAML := `id: examplecell
+type: core
+consistencyLevel: L1
+durabilityMode: durable
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: examplecell
+verify:
+  smoke:
+    - smoke.examplecell.startup
+goStructName: ExampleCell
+l0Dependencies: []
+`
+	if err := os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte(cellYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module github.com/ghbvf/gocell\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pm, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("metadata.Parse: %v", err)
+	}
+	return root, pm
+}
+
+// TestGenerator_Scaffold_ValidationErrors covers the validateAssemblyScaffoldSpec
+// branches: empty required fields, invalid deploy, unknown cell ref. Drives
+// coverage of validateAssemblyScaffoldSpec + the Scaffold early-return path.
+func TestGenerator_Scaffold_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+
+	cases := []struct {
+		name    string
+		spec    AssemblyScaffoldSpec
+		wantSub string
+	}{
+		{
+			name:    "empty_id",
+			spec:    AssemblyScaffoldSpec{Cells: []string{"examplecell"}, OwnerTeam: "t", OwnerRole: "r"},
+			wantSub: "ID is required",
+		},
+		{
+			name:    "empty_cells",
+			spec:    AssemblyScaffoldSpec{ID: "asm", OwnerTeam: "t", OwnerRole: "r"},
+			wantSub: "at least one cell",
+		},
+		{
+			name:    "empty_team",
+			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"examplecell"}, OwnerRole: "r"},
+			wantSub: "OwnerTeam is required",
+		},
+		{
+			name:    "empty_role",
+			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"examplecell"}, OwnerTeam: "t"},
+			wantSub: "OwnerRole is required",
+		},
+		{
+			name:    "invalid_deploy",
+			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"examplecell"}, OwnerTeam: "t", OwnerRole: "r", Deploy: "podman"},
+			wantSub: `deploy="podman"`,
+		},
+		{
+			name:    "unknown_cell",
+			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"nope"}, OwnerTeam: "t", OwnerRole: "r"},
+			wantSub: `cell="nope"`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := gen.Scaffold(tc.spec)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error must contain %q; got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+// TestGenerator_Scaffold_EmptyProjectRoot covers the projectRoot guard at
+// the top of Scaffold — generators built without a project root must reject
+// scaffold requests since they have nowhere to write.
+func TestGenerator_Scaffold_EmptyProjectRoot(t *testing.T) {
+	t.Parallel()
+
+	_, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", "") // empty projectRoot
+
+	err := gen.Scaffold(AssemblyScaffoldSpec{
+		ID: "asm", Cells: []string{"examplecell"}, OwnerTeam: "t", OwnerRole: "r",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty projectRoot, got nil")
+	}
+	if !strings.Contains(err.Error(), "projectRoot") {
+		t.Errorf("error must mention projectRoot; got: %v", err)
+	}
+}
+
+// TestGenerator_Scaffold_DryRun covers the dryRun early-return path —
+// templates render (catching errors) but no files are written.
+func TestGenerator_Scaffold_DryRun(t *testing.T) {
+	t.Parallel()
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+
+	if err := gen.Scaffold(AssemblyScaffoldSpec{
+		ID: "dryasm", Cells: []string{"examplecell"},
+		OwnerTeam: "t", OwnerRole: "r", DryRun: true,
+	}); err != nil {
+		t.Fatalf("dry-run Scaffold: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "assemblies", "dryasm")); err == nil {
+		t.Errorf("dry-run wrote assemblies/ to disk")
+	}
+	if _, err := os.Stat(filepath.Join(root, "cmd", "dryasm")); err == nil {
+		t.Errorf("dry-run wrote cmd/ to disk")
+	}
+}
+
+// TestGenerator_Scaffold_ConflictDetection covers the renderAssemblyScaffoldFiles
+// pre-existing-file branch: re-running Scaffold against the same id must
+// fail-fast before any write.
+func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
+	t.Parallel()
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+
+	spec := AssemblyScaffoldSpec{
+		ID: "conflict", Cells: []string{"examplecell"},
+		OwnerTeam: "t", OwnerRole: "r",
+	}
+	if err := gen.Scaffold(spec); err != nil {
+		t.Fatalf("first Scaffold: %v", err)
+	}
+	err := gen.Scaffold(spec)
+	if err == nil {
+		t.Fatal("expected conflict error on second Scaffold, got nil")
+	}
+	// errcode.Error formats as `[CODE] internal=...`; the Internal field
+	// carries the conflicting path. Assert the path segment surfaces so
+	// operators can debug.
+	if !strings.Contains(err.Error(), "path=") {
+		t.Errorf("error must surface path detail; got: %v", err)
+	}
+}
+
 // TestGenerator_Scaffold_DeployCompose verifies non-k8s deploy writes deployTemplate.
 func TestGenerator_Scaffold_DeployCompose(t *testing.T) {
 	t.Parallel()
