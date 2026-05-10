@@ -327,6 +327,42 @@ linters:
           deny:
             - pkg: github.com/ghbvf/gocell/kernel/clock/clockmock
               desc: "clockmock is test-only; production code must inject clock.Clock"
+        scaffold-os-ban:
+          # SCAFFOLD-WRITE-FUNNEL-DEPGUARD-01: Hard-level enforcement of
+          # SCAFFOLD-WRITE-FUNNEL-01. scaffold/codegen writes must funnel through
+          # pkg/pathsafe.WritePlannedFiles; direct os import in scaffold paths is
+          # statically rejected at lint time (package path level).
+          #
+          # Two-layer defense:
+          #   - depguard scaffold-os-ban → fails at golangci-lint (Hard, package-level)
+          #   - tools/archtest/scaffold_write_funnel_test.go → fails at go test
+          #     (Medium, AST method-call level — covers reflect/unsafe bypass)
+          #
+          # Exempted paths (not in this rule's files list):
+          #   - pkg/pathsafe/**   (funnel implementation itself)
+          #   - cmd/gocell/app/generate_catalog.go  (user --out path, no containment guarantee)
+          #   - cmd/gocell/app/export.go             (user --out path, no containment guarantee)
+          #   - *_test.go  (excluded via lax list-mode default test exclusion)
+          list-mode: lax
+          files:
+            - "**/tools/codegen/cellgen/scaffold_bundle.go"
+            - "**/tools/codegen/contractgen/generator.go"
+            - "**/tools/codegen/contractgen/scope.go"
+            - "**/cmd/gocell/app/scaffold_assembly.go"
+          deny:
+            - pkg: os
+              desc: |
+                scaffold/codegen writes must funnel through pkg/pathsafe.WritePlannedFiles
+                (SCAFFOLD-WRITE-FUNNEL-01 Hard upgrade via depguard).
+
+                All filesystem operations (MkdirAll, WriteFile, OpenFile, Remove, etc.)
+                are encapsulated in pkg/pathsafe with O_NOFOLLOW|O_EXCL safety contract.
+                Direct os import in this file is statically rejected at lint time.
+
+                Exempted paths (not in this rule's files list): pkg/pathsafe/** (the
+                funnel implementation), cmd/gocell/app/generate_catalog.go and
+                cmd/gocell/app/export.go (user-supplied --out paths outside root
+                containment guarantee), test files (*_test.go), and any other path.
 
     forbidigo:
       forbid:
