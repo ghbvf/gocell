@@ -141,34 +141,29 @@ func scanDTOJSONTagsCamelCase(root, path string) ([]string, error) {
 	rel = filepath.ToSlash(rel)
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		field, ok := n.(*ast.Field)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.Field](f, func(field *ast.Field) {
 		if field.Tag == nil {
-			return true
+			return
 		}
 		// Strip the outer backticks from the raw tag literal.
 		raw := strings.Trim(field.Tag.Value, "`")
 		tag := parseStructTag(raw)
 		jsonVal, ok := tag["json"]
 		if !ok {
-			return true
+			return
 		}
 		// The json tag value is "<name>[,options...]"; extract the name part.
 		parts := strings.SplitN(jsonVal, ",", 2)
 		jsonName := parts[0]
 		// Skip "-" (explicit omit) and empty names.
 		if jsonName == "-" || jsonName == "" {
-			return true
+			return
 		}
 		if strings.Contains(jsonName, "_") {
 			line := fset.Position(field.Pos()).Line
 			violations = append(violations,
 				fmt.Sprintf("EVENT-DTO-CAMELCASE-01: %s:%d: json tag %q contains underscore — use camelCase", rel, line, jsonName))
 		}
-		return true
 	})
 	return violations, nil
 }

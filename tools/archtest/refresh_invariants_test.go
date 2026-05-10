@@ -62,14 +62,12 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	require.NoError(t, err, "%s: parse failed", rel)
 
 	var refreshFunc *ast.FuncDecl
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil || fn.Name.Name != "Refresh" {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if refreshFunc != nil || fn.Recv == nil || fn.Name.Name != "Refresh" {
+			return
 		}
 		refreshFunc = fn
-		break
-	}
+	})
 	require.NotNil(t, refreshFunc, "%s: Refresh method not found in %s", ruleRefreshCrossStoreTX01, rel)
 
 	// Find s.txRunner.RunInTx call(s) at the top level of Refresh body. The
@@ -78,19 +76,14 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// `do := func(txCtx) error { ... }` pattern). Both are accepted.
 	var runInTxCalls []*ast.CallExpr
 	var closureArg ast.Expr
-	ast.Inspect(refreshFunc.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
 		if !isTxRunnerRunInTxCall(call) {
-			return true
+			return
 		}
 		runInTxCalls = append(runInTxCalls, call)
 		if len(call.Args) >= 2 {
 			closureArg = call.Args[1]
 		}
-		return true
 	})
 
 	require.Lenf(t, runInTxCalls, 1,
@@ -108,20 +101,17 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// without actually doing work. The closure body must contain at least one
 	// method call on `s`.
 	var hasReceiverCall bool
-	ast.Inspect(runInTxClosure.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	scanner.EachNode[ast.CallExpr](runInTxClosure.Body, func(call *ast.CallExpr) {
+		if hasReceiverCall {
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "s" {
 			hasReceiverCall = true
-			return false
 		}
-		return true
 	})
 	require.Truef(t, hasReceiverCall,
 		"%s: %s Refresh's RunInTx closure must invoke at least one method on `s` — an empty closure satisfies the wrap shape but does no work",
@@ -148,25 +138,24 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	}
 	var violations []violation
 
-	ast.Inspect(refreshFunc.Body, func(n ast.Node) bool {
+	// closureRange captures the [Lbrace, Rbrace] token range of the RunInTx
+	// closure body so we can skip calls that are inside the desired location.
+	closureLbrace := runInTxClosure.Body.Lbrace
+	closureRbrace := runInTxClosure.Body.Rbrace
+	scanner.EachNode[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
 		// Skip nodes inside the RunInTx closure body — those are the desired location.
-		if n == runInTxClosure {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+		if call.Pos() > closureLbrace && call.Pos() < closureRbrace {
+			return
 		}
 		name, ok := bareServiceFieldCall(call)
 		if !ok {
-			return true
+			return
 		}
 		if _, isGuarded := guardedCalls[name]; !isGuarded {
-			return true
+			return
 		}
 		pos := fset.Position(call.Pos())
 		violations = append(violations, violation{line: pos.Line, name: name})
-		return true
 	})
 
 	if len(violations) > 0 {
@@ -216,14 +205,19 @@ func resolveClosureArg(body *ast.BlockStmt, arg ast.Expr) *ast.FuncLit {
 		return nil
 	}
 	var lastAssigned *ast.FuncLit
-	ast.Inspect(body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		for i, lhs := range assign.Lhs {
-			lid, ok := lhs.(*ast.Ident)
-			if !ok || lid.Name != ident.Name {
+	scanner.EachNode[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
+		// Build an index map from Ident pointer to position in Lhs.
+		lhsIndex := make(map[*ast.Ident]int, len(assign.Lhs))
+		scanner.EachNode[ast.Ident](assign, func(id *ast.Ident) {
+			for i, lhs := range assign.Lhs {
+				if lhs == id {
+					lhsIndex[id] = i
+					break
+				}
+			}
+		})
+		for id, i := range lhsIndex {
+			if id.Name != ident.Name {
 				continue
 			}
 			if i >= len(assign.Rhs) {
@@ -239,7 +233,6 @@ func resolveClosureArg(body *ast.BlockStmt, arg ast.Expr) *ast.FuncLit {
 			}
 			lastAssigned = fl
 		}
-		return true
 	})
 	return lastAssigned
 }
@@ -284,24 +277,20 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 
 	scope := scanner.ModuleScope(root)
 	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		for _, decl := range fc.File.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 			if fd.Name.Name != "DetectInvalidIndexes" {
-				continue
+				return
 			}
 			// Only top-level function declarations (no receiver).
 			if fd.Recv != nil {
-				continue
+				return
 			}
 			pos := fc.Fset.Position(fd.Pos())
 			declarations = append(declarations, declarationSite{
 				rel:  filepath.ToSlash(fc.Rel),
 				line: pos.Line,
 			})
-		}
+		})
 	})
 
 	if len(declarations) == 0 {
@@ -355,24 +344,16 @@ func TestRefreshAmbientTX01(t *testing.T) {
 	}
 	var violations []violation
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if sel.Sel.Name != "Begin" {
-			return true
+		if !ok || sel.Sel.Name != "Begin" {
+			return
 		}
 		pos := fset.Position(call.Pos())
 		violations = append(violations, violation{
 			line: pos.Line,
 			expr: fmt.Sprintf("call to .Begin() at line %d", pos.Line),
 		})
-		return true
 	})
 
 	if len(violations) > 0 {

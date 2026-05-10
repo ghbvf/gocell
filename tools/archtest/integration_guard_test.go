@@ -28,11 +28,7 @@ func TestVaultIntegrationContainerFailuresFailFast(t *testing.T) {
 
 	var hasDockerPrecheck bool
 	var skipCalls []string
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 		if selectorName(call.Fun) == "RequireDocker" {
 			hasDockerPrecheck = true
 		}
@@ -40,7 +36,6 @@ func TestVaultIntegrationContainerFailuresFailFast(t *testing.T) {
 		case "Skip", "Skipf", "SkipNow":
 			skipCalls = append(skipCalls, fset.Position(call.Pos()).String())
 		}
-		return true
 	})
 
 	assert.True(t, hasDockerPrecheck, "startVaultContainer must explicitly skip only when Docker is unavailable")
@@ -58,18 +53,13 @@ func TestPostgresUnreachableHostIsNotEnvGated(t *testing.T) {
 	require.NotNil(t, fn, "TestNewPool_UnreachableHost must exist")
 
 	var findings []string
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 		switch selectorName(call.Fun) {
 		case "Skip", "Skipf", "SkipNow":
 			findings = append(findings, fset.Position(call.Pos()).String()+": unreachable-host test must not skip")
 		case "LookupEnv", "Getenv":
 			findings = append(findings, fset.Position(call.Pos()).String()+": unreachable-host test must not depend on env")
 		}
-		return true
 	})
 
 	assert.Empty(t, findings)
@@ -83,11 +73,7 @@ func TestCorebundleOutboxWiringDoesNotUseExternalDSNGate(t *testing.T) {
 	require.NoError(t, err)
 
 	var findings []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		switch selectorName(call.Fun) {
 		case "Skip", "Skipf", "SkipNow":
 			findings = append(findings, fset.Position(call.Pos()).String()+": corebundle wiring test must self-provision dependencies")
@@ -98,7 +84,6 @@ func TestCorebundleOutboxWiringDoesNotUseExternalDSNGate(t *testing.T) {
 						": corebundle wiring test must not require external GOCELL_CONFIGCORE_DATABASE_URL")
 			}
 		}
-		return true
 	})
 
 	assert.Empty(t, findings)
@@ -137,15 +122,14 @@ func testcontainerDockerGuardFindingsForFile(path string) ([]string, error) {
 	}
 
 	var findings []string
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
 		if finding := testcontainerDockerGuardFindingForFunc(fset, fn, aliases); finding != "" {
 			findings = append(findings, finding)
 		}
-	}
+	})
 	return findings, nil
 }
 
@@ -205,30 +189,24 @@ func importSelectorName(imp *ast.ImportSpec, defaultName string) string {
 }
 
 func findFuncDecl(file *ast.File, name string) *ast.FuncDecl {
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if ok && fn.Name.Name == name {
-			return fn
+	var found *ast.FuncDecl
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if found == nil && fn.Name.Name == name {
+			found = fn
 		}
-	}
-	return nil
+	})
+	return found
 }
 
 func firstTestcontainerRunPos(body *ast.BlockStmt, aliases testcontainerAliases) token.Pos {
 	var out token.Pos
-	ast.Inspect(body, func(n ast.Node) bool {
+	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
 		if out.IsValid() {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		if isTestcontainerRun(call.Fun, aliases) {
 			out = call.Pos()
-			return false
 		}
-		return true
 	})
 	return out
 }
@@ -255,19 +233,13 @@ func isTestcontainerRun(expr ast.Expr, aliases testcontainerAliases) bool {
 
 func firstSelectorCallPos(body *ast.BlockStmt, name string) token.Pos {
 	var out token.Pos
-	ast.Inspect(body, func(n ast.Node) bool {
+	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
 		if out.IsValid() {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		if selectorName(call.Fun) == name {
 			out = call.Pos()
-			return false
 		}
-		return true
 	})
 	return out
 }

@@ -226,14 +226,10 @@ func collectRouteBindings(fset *token.FileSet, file *ast.File, rel string, specI
 func routeBindingFromLiteral(fset *token.FileSet, lit *ast.CompositeLit, rel string, specIDs map[string]string) (routeQueryBinding, bool) {
 	var contractID string
 	var funcs []string
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok {
-			continue
+			return
 		}
 		switch key.Name {
 		case "Contract":
@@ -241,7 +237,7 @@ func routeBindingFromLiteral(fset *token.FileSet, lit *ast.CompositeLit, rel str
 		case "Handler", "Policy":
 			funcs = append(funcs, routeFuncKeys(rel, kv.Value)...)
 		}
-	}
+	})
 	if contractID == "" || len(funcs) == 0 {
 		return routeQueryBinding{}, false
 	}

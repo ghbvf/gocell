@@ -620,18 +620,17 @@ func TestNoMetadataLiteralInCellGo01(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.CompositeLit)
-			if !ok || lit.Type == nil {
-				return true
+		scanner.EachNode[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+			if lit.Type == nil {
+				return
 			}
 			sel, ok := lit.Type.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			pkgIdent, ok := sel.X.(*ast.Ident)
 			if !ok {
-				return true
+				return
 			}
 			if pkgIdent.Name == "metadata" && sel.Sel.Name == "CellMeta" {
 				rel, _ := filepath.Rel(root, path)
@@ -640,7 +639,6 @@ func TestNoMetadataLiteralInCellGo01(t *testing.T) {
 					"metadata is owned by cell_gen.go's loadCellMetadata() after K#05; run `gocell generate cell %s`",
 					rel, fset.Position(lit.Pos()).Line, deriveCellID(path))
 			}
-			return true
 		})
 	}
 }
@@ -879,19 +877,19 @@ func hasInitMethod(t *testing.T, path string, structName string) bool {
 	if err != nil {
 		return false
 	}
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
-			continue
+	found := false
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if found || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
+			return
 		}
 		if fd.Name.Name != "Init" {
-			continue
+			return
 		}
 		if scanner.ReceiverTypeName(fd.Recv.List[0].Type) == structName {
-			return true
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 // findGeneratedCellFilesIn is the parameterized variant of findGeneratedCellFiles.
@@ -941,22 +939,21 @@ func checkInitInternalHook(t *testing.T, root, dirRel, structName string) []stri
 		f := fc.File
 		path := fc.Rel
 		_ = path
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
-				continue
+		scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
+				return
 			}
 			if fd.Name.Name != "initInternal" {
-				continue
+				return
 			}
 			if scanner.ReceiverTypeName(fd.Recv.List[0].Type) != structName {
-				continue
+				return
 			}
 			found = true
 			if sig := initInternalSignatureViolation(fd, structName, path); sig != "" {
 				violations = append(violations, sig)
 			}
-		}
+		})
 	})
 
 	if !found && len(violations) == 0 {
@@ -1113,34 +1110,26 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 	}
 	var foundID, foundTopic string
 	found := false
-	ast.Inspect(f, func(n ast.Node) bool {
+	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		if found {
-			return false
-		}
-		cl, isCL := n.(*ast.CompositeLit)
-		if !isCL {
-			return true
+			return
 		}
 		sel, isSel := cl.Type.(*ast.SelectorExpr)
 		if !isSel || sel.Sel.Name != "ContractSpec" {
-			return true
+			return
 		}
-		for _, elt := range cl.Elts {
-			kv, isKV := elt.(*ast.KeyValueExpr)
-			if !isKV {
-				continue
-			}
+		scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 			key, isIdent := kv.Key.(*ast.Ident)
 			if !isIdent {
-				continue
+				return
 			}
 			val, isLit := kv.Value.(*ast.BasicLit)
 			if !isLit || val.Kind != token.STRING {
-				continue
+				return
 			}
 			unq, uqErr := strconv.Unquote(val.Value)
 			if uqErr != nil {
-				continue
+				return
 			}
 			switch key.Name {
 			case "ID":
@@ -1148,9 +1137,8 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 			case "Topic":
 				foundTopic = unq
 			}
-		}
+		})
 		found = true
-		return false
 	})
 	if !found {
 		return "", "", false
@@ -1205,37 +1193,23 @@ func parseContractSpecFields(t *testing.T, path string) (id, topic string, ok bo
 	}
 
 	var foundID, foundTopic string
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		sel, ok := cl.Type.(*ast.SelectorExpr)
-		if !ok {
-			return true
+		if !ok || sel.Sel.Name != "ContractSpec" {
+			return
 		}
-		if sel.Sel.Name != "ContractSpec" {
-			return true
-		}
-		for _, elt := range cl.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 			key, ok := kv.Key.(*ast.Ident)
 			if !ok {
-				continue
+				return
 			}
 			val, ok := kv.Value.(*ast.BasicLit)
-			if !ok {
-				continue
-			}
-			if val.Kind != token.STRING {
-				continue
+			if !ok || val.Kind != token.STRING {
+				return
 			}
 			unquoted, err := strconv.Unquote(val.Value)
 			if err != nil {
-				continue
+				return
 			}
 			switch key.Name {
 			case "ID":
@@ -1243,8 +1217,7 @@ func parseContractSpecFields(t *testing.T, path string) (id, topic string, ok bo
 			case "Topic":
 				foundTopic = unquoted
 			}
-		}
-		return false // do not recurse into the literal
+		})
 	})
 
 	if foundID == "" {
@@ -1368,30 +1341,22 @@ func forbiddenWireCall(path string) (found string, line int, err error) {
 	if err != nil {
 		return "", 0, err
 	}
-	ast.Inspect(f, func(n ast.Node) bool {
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		if found != "" {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		recv, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if recv.Name != "reg" {
-			return true
+		if !ok || recv.Name != "reg" {
+			return
 		}
 		if sel.Sel.Name == "RouteGroup" || sel.Sel.Name == "Subscribe" {
 			found = "reg." + sel.Sel.Name + "("
 			line = fset.Position(call.Pos()).Line
 		}
-		return true
 	})
 	return found, line, nil
 }
@@ -1404,27 +1369,23 @@ func cellGenHasRouteGroup(genPath string) bool {
 	if err != nil {
 		return false
 	}
+	_ = fset
 	found := false
-	ast.Inspect(f, func(n ast.Node) bool {
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		recv, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if recv.Name == "reg" && sel.Sel.Name == "RouteGroup" {
 			found = true
 		}
-		return true
 	})
 	return found
 }

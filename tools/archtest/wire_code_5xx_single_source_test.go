@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestWireCode5xxSingleSource enforces WIRE-CODE-5XX-SINGLE-SOURCE-01.
@@ -167,59 +169,49 @@ func collectSwitchCases(t *testing.T, f *ast.File, funcName string) map[int]stri
 	t.Helper()
 	result := make(map[int]string)
 
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		// Match both top-level func and method by name.
 		if fn.Name.Name != funcName {
-			continue
+			return
 		}
 
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			sw, ok := n.(*ast.SwitchStmt)
-			if !ok {
-				return true
-			}
-
+		scanner.EachNode[ast.SwitchStmt](fn.Body, func(sw *ast.SwitchStmt) {
 			kindIndex := -1 // used for Kind-based switch cases
-			for _, clause := range sw.Body.List {
-				cc, ok := clause.(*ast.CaseClause)
-				if !ok || cc.List == nil {
-					continue // default clause — skip
+			scanner.EachNode[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
+				if cc.List == nil {
+					return // default clause — skip
 				}
 
 				// Extract the returned Code identifier from the case body.
 				codeIdent := extractReturnIdent(cc.Body)
 				if codeIdent == "" {
-					continue
+					return
 				}
 
-				// Try to interpret the case expression as an http.StatusXxx
-				// selector (e.g. http.StatusServiceUnavailable → 503).
+				// Try to interpret each case expression as an http.StatusXxx selector.
 				for _, expr := range cc.List {
-					sel, ok := expr.(*ast.SelectorExpr)
-					if !ok {
+					var isSel bool
+					scanner.EachNode[ast.SelectorExpr](expr, func(sel *ast.SelectorExpr) {
+						isSel = true
+						statusVal := httpStatusValue(sel)
+						if statusVal != 0 {
+							result[statusVal] = codeIdent
+						} else {
+							// Selector but not an http package constant (e.g. errcode.KindXxx).
+							kindIndex--
+							result[kindIndex] = codeIdent
+						}
+					})
+					if !isSel {
 						// Not a selector; might be a Kind constant like KindUnavailable.
 						// Store with negative pseudo-key.
 						kindIndex--
 						result[kindIndex] = codeIdent
-						continue
-					}
-					statusVal := httpStatusValue(sel)
-					if statusVal != 0 {
-						result[statusVal] = codeIdent
-					} else {
-						// Selector but not an http package constant (e.g. errcode.KindXxx).
-						kindIndex--
-						result[kindIndex] = codeIdent
 					}
 				}
-			}
-			return true
+			})
 		})
-	}
+	})
 	return result
 }
 
@@ -227,19 +219,21 @@ func collectSwitchCases(t *testing.T, f *ast.File, funcName string) map[int]stri
 // identifier name of the first return value if it is a simple selector or
 // identifier (e.g. `return ErrServiceUnavailable` or `return errcode.ErrXxx`).
 func extractReturnIdent(stmts []ast.Stmt) string {
-	for _, stmt := range stmts {
-		ret, ok := stmt.(*ast.ReturnStmt)
-		if !ok || len(ret.Results) == 0 {
-			continue
+	// Wrap into a synthetic BlockStmt so EachNode can traverse the stmt list.
+	block := &ast.BlockStmt{List: stmts}
+	var result string
+	scanner.EachNode[ast.ReturnStmt](block, func(ret *ast.ReturnStmt) {
+		if result != "" || len(ret.Results) == 0 {
+			return
 		}
 		switch e := ret.Results[0].(type) {
 		case *ast.Ident:
-			return e.Name
+			result = e.Name
 		case *ast.SelectorExpr:
-			return e.Sel.Name
+			result = e.Sel.Name
 		}
-	}
-	return ""
+	})
+	return result
 }
 
 // httpStatusValue maps an ast.SelectorExpr (e.g. http.StatusServiceUnavailable)
