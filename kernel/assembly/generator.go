@@ -280,8 +280,11 @@ func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
 	}
 
 	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"assembly.Generator.Scaffold: write files", err)
+		// Transparent wrap (fmt.Errorf %w) preserves pathsafe's typed
+		// errcode.Error — its KindConflict + ErrConflict + WithDetails(path)
+		// stay reachable via errors.As. Re-wrapping with errcode.Wrap would
+		// fabricate an outer *errcode.Error and bury conflict semantics.
+		return fmt.Errorf("assembly.Generator.Scaffold: write files: %w", err)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package assembly
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestGenerator_Scaffold is a RED test for K#09 kernel/assembly.Generator.Scaffold:
@@ -256,11 +258,21 @@ func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected conflict error on second Scaffold, got nil")
 	}
-	// errcode.Error formats as `[CODE] internal=...`; the Internal field
-	// carries the conflicting path. Assert the path segment surfaces so
-	// operators can debug.
-	if !strings.Contains(err.Error(), "path=") {
-		t.Errorf("error must surface path detail; got: %v", err)
+	// pathsafe.WritePlannedFiles surfaces the conflicting path via
+	// errcode.WithDetails(slog.String("path", ...)) so 4xx responses + CLI
+	// stderr expose it (round-4 F16). Assert via structured Details API
+	// rather than err.Error() string match — see ADR §errcode three-layer
+	// redaction (Details vs Internal).
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("error must unwrap to *errcode.Error; got %T: %v", err, err)
+	}
+	pathAttr, ok := ec.FindAttr("path")
+	if !ok {
+		t.Fatalf("conflict error must carry 'path' detail; got %+v", ec.Details)
+	}
+	if !strings.Contains(pathAttr.Value.String(), "conflict") {
+		t.Errorf("path detail must reference the conflicting assembly id; got %q", pathAttr.Value.String())
 	}
 }
 
