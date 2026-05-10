@@ -160,6 +160,108 @@ func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
 		errcode.WithDetails(slog.Int("invalidCount", len(indexes))))
 }
 
+// VerifyExpectedShape checks that the post-migration column / table shape
+// matches the binary's expectation. Run **after** VerifyExpectedVersion
+// (which gates migration version) — VerifyExpectedShape catches
+// "version table says N but my migration's DDL never reached the column"
+// drift, e.g. partial migration that did not abort, or a 3rd-party tool
+// applying SQL out-of-band.
+//
+// ADR-credential §5.1.3 deployment playbook mandates these checks for the
+// S3+S5 schema (users.authz_epoch, sessions.jti, sessions.access_token must
+// NOT exist). Each fault returns ErrAdapterPGSchemaShape so operators see
+// the precise column at fault.
+func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
+	required := []requiredColumn{
+		{table: "users", column: "authz_epoch"},
+		{table: "sessions", column: "jti"},
+		{table: "sessions", column: "subject_id"},
+		{table: "sessions", column: "authz_epoch_at_issue"},
+		{table: "role_assignments", column: "user_id"},
+	}
+	for _, r := range required {
+		ok, err := columnExists(ctx, pool, r.table, r.column)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: required column missing",
+				errcode.WithDetails(slog.String("table", r.table), slog.String("column", r.column)))
+		}
+	}
+	// Forbidden columns: ADR-credential D1 forbids plaintext token storage.
+	// The legacy `sessions.access_token` column must not exist after
+	// migration 018; its presence indicates a partial / aborted migration.
+	forbidden := []requiredColumn{
+		{table: "sessions", column: "access_token"},
+	}
+	for _, r := range forbidden {
+		ok, err := columnExists(ctx, pool, r.table, r.column)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: forbidden legacy column present (partial migration)",
+				errcode.WithDetails(slog.String("table", r.table), slog.String("column", r.column)))
+		}
+	}
+	return nil
+}
+
+// requiredColumn pairs a (table, column) tuple for VerifyExpectedShape.
+type requiredColumn struct {
+	table  string
+	column string
+}
+
+// columnExists is the predicate behind VerifyExpectedShape. Scoped to
+// current_schema() so test-schema parallelism does not produce false
+// positives.
+func columnExists(ctx context.Context, pool *Pool, table, column string) (bool, error) {
+	const q = `SELECT EXISTS (
+		SELECT 1
+		  FROM information_schema.columns
+		 WHERE table_schema = current_schema()
+		   AND table_name = $1
+		   AND column_name = $2
+	)`
+	var exists bool
+	if err := pool.inner.QueryRow(ctx, q, table, column).Scan(&exists); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: probe column", err)
+	}
+	return exists, nil
+}
+
+// VerifyNoInvalidIndexes is the fail-fast counterpart of DetectInvalidIndexes
+// for the cmd/corebundle startup path. It returns ErrAdapterPGInvalidIndex
+// when any pg_index row has indisvalid=false, replacing the prior
+// warn-continue defense (B2-X-03 backlog). Operators must DROP the invalid
+// index manually before the binary will start.
+//
+// Use DetectInvalidIndexes when you need the index list for diagnostics
+// (e.g. /readyz?verbose response). Use VerifyNoInvalidIndexes when you want
+// startup to abort.
+func VerifyNoInvalidIndexes(ctx context.Context, pool *Pool) error {
+	indexes, err := DetectInvalidIndexes(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if len(indexes) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(indexes))
+	for _, idx := range indexes {
+		names = append(names, idx.Index)
+	}
+	return errcode.New(errcode.KindInternal, ErrAdapterPGInvalidIndex,
+		"schema_guard: invalid indexes present at startup",
+		errcode.WithDetails(slog.Int("count", len(indexes))),
+		errcode.WithInternal(fmt.Sprintf("invalid indexes: %s", strings.Join(names, ", "))))
+}
+
 // DetectInvalidIndexes queries pg_index for any indexes marked as invalid
 // (indisvalid = false) within the current schema. These can occur when
 // CREATE INDEX CONCURRENTLY is interrupted. The caller should log a warning

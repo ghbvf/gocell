@@ -136,6 +136,15 @@ const (
 	// is permanently retired for the lifetime of the deployment (one-shot
 	// lifecycle), not just temporarily conflicting.
 	ErrSetupAlreadyInitialized Code = "ERR_SETUP_ALREADY_INITIALIZED"
+	// ErrAuthLastAdminProtected signals that an operation would remove the last
+	// remaining admin from the system. The accesscore "at least one admin"
+	// invariant (ADR `docs/architecture/202605101400-adr-admin-invariant.md`)
+	// rejects DeleteUser / Lock / RevokeRole when the target is the sole admin
+	// holder. Maps to HTTP 403 Forbidden — the request is structurally valid
+	// but policy-blocked. The DB-level last_admin_protected trigger
+	// (migrations/019_roles.sql) is the SQL safety net behind the service-
+	// level LastAdminGuard (cells/accesscore/internal/domain/admin.go).
+	ErrAuthLastAdminProtected Code = "ERR_AUTH_LAST_ADMIN_PROTECTED"
 
 	// Config-core cell error codes.
 	ErrConfigNotFound            Code = "ERR_CONFIG_NOT_FOUND"
