@@ -204,3 +204,89 @@ func hasNonEmptyClientsField(cl *ast.CompositeLit) bool {
 	})
 	return found
 }
+
+// TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01_NotContractSpecFalsePositive_Wave2_RED
+// is a RED-step regression test (TDD per ai-collab.md). It pins down the
+// false-positive of the current `hasID && hasPath` heuristic — specifically
+// the family of bugs documented in PR445-FU finding F1:
+//
+//  1. A struct that merely shares the field names ID/Path/Clients but is NOT
+//     wrapper.ContractSpec (e.g. SubItem below) is currently mis-identified
+//     as ContractSpec. A type-aware identification (Wave 2) would resolve
+//     cl.Type via go/types and judge equality with wrapper.ContractSpec,
+//     correctly rejecting SubItem.
+//  2. The `scanner.EachNode[ast.KeyValueExpr](cl, ...)` recursion (PR-Φ
+//     subtree-walk semantics) leaks nested struct field names into the
+//     outer literal's identification. Outer{Inner: ContractSpec{...}}
+//     therefore appears to "have" ID/Path at the outer level.
+//
+// Wave 2 changes isContractSpecLit to type-aware (signature accepts
+// *types.Info; nil → fail-safe false; non-wrapper.ContractSpec → false), and
+// rewrites contractSpecStringField / hasNonEmptyClientsField to iterate
+// cl.Elts directly (not subtree). After Wave 2, this sub-test transitions
+// to GREEN by calling isContractSpecLit(cl, nil) which returns false for
+// inline-parsed sources (no TypesInfo), so SubItem is no longer matched.
+//
+// Wave 1 (current heuristic) — assertion fails because:
+//   - SubItem matches hasID && hasPath → true (false positive #1).
+//   - Outer matches via subtree recursion picking up inner ID/Path
+//     (false positive #2).
+func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01_NotContractSpecFalsePositive_Wave2_RED(t *testing.T) {
+	t.Parallel()
+
+	// Two false-positive cases for the `hasID && hasPath` heuristic:
+	//  - SubItem: same field names but not wrapper.ContractSpec.
+	//  - Outer:   not ContractSpec, but EachNode subtree walk leaks the
+	//             inner ContractSpec's ID/Path into the outer literal's
+	//             field-name set.
+	src := `package fake
+
+type SubItem struct {
+	ID      string
+	Path    string
+	Clients []string
+}
+
+type ContractSpec struct {
+	ID      string
+	Path    string
+	Clients []string
+}
+
+type Outer struct {
+	Inner ContractSpec
+}
+
+var subItem = SubItem{ID: "a", Path: "/internal/v1/x", Clients: []string{"y"}}
+
+var outer = Outer{
+	Inner: ContractSpec{ID: "b", Path: "/internal/v1/y"},
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fake.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err, "parse inline fixture")
+
+	var matched []string
+	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+		if !isContractSpecLit(cl) {
+			return
+		}
+		// Capture the outermost type identifier text for diagnosis.
+		switch t := cl.Type.(type) {
+		case *ast.Ident:
+			matched = append(matched, t.Name)
+		default:
+			matched = append(matched, fmt.Sprintf("%T", t))
+		}
+	})
+
+	// Wave 2 (type-aware) expectation: NEITHER SubItem nor Outer should be
+	// matched (only true wrapper.ContractSpec literals are matched, and inline
+	// parser.ParseFile has no TypesInfo so type-aware returns false → 0 matches).
+	//
+	// Wave 1 (current heuristic): matches SubItem (hasID && hasPath) AND
+	// Outer (subtree recursion leak). Test fails → RED.
+	require.Empty(t, matched,
+		"isContractSpecLit must not match non-ContractSpec types or outer wrappers; got %v", matched)
+}

@@ -701,96 +701,7 @@ func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 		t.Fatalf("RMQ-PUBLISHER-FAILURE-HANDLING-01-D: Publish method not found in %s", src)
 	}
 
-	// Walk all if-blocks and select-cases in Publish. For each error-returning
-	// block (contains at least one non-nil return), verify it also contains a
-	// RecordPublishFailure call somewhere in that block.
-	// ctx.Done() cases and nil returns are exempt.
-	var violations []string
-
-	var checkIfBlock func(ifStmt *ast.IfStmt, inCtxDone bool)
-
-	var checkStmt func(stmt ast.Stmt, inCtxDone bool)
-	checkStmt = func(stmt ast.Stmt, inCtxDone bool) {
-		switch s := stmt.(type) {
-		case *ast.IfStmt:
-			checkIfBlock(s, inCtxDone)
-		case *ast.SelectStmt:
-			scanner.EachNode[ast.CommClause](s, func(comm *ast.CommClause) {
-				isCtxDone := inCtxDone || isCtxDoneCase(comm)
-				for _, cs := range comm.Body {
-					checkStmt(cs, isCtxDone)
-				}
-			})
-		case *ast.BlockStmt:
-			for _, inner := range s.List {
-				checkStmt(inner, inCtxDone)
-			}
-		}
-	}
-
-	checkIfBlock = func(ifStmt *ast.IfStmt, inCtxDone bool) {
-		if ifStmt == nil || ifStmt.Body == nil {
-			return
-		}
-		body := ifStmt.Body.List
-
-		// Does THIS if-block (top-level Body.List only) contain a non-nil
-		// return? Nested returns inside an inner for/if/select are this
-		// block's child statements' concern — checkStmt will recurse and
-		// reach them via the inner if/select being its own checkIfBlock /
-		// SelectStmt handler. Counting them here would double-attribute the
-		// violation to two ancestor blocks.
-		hasNonNilReturn := false
-		for i := range body {
-			ret, ok := body[i].(*ast.ReturnStmt)
-			if !ok {
-				continue
-			}
-			if !isNilReturn(ret) {
-				hasNonNilReturn = true
-				break
-			}
-		}
-
-		// Exempt: if-block guarding the "publisher is closed" early exit.
-		// This is not a wire-level failure, so no metric is required.
-		// Detected by checking if the condition references a field/method named "closed".
-		isClosedGuard := ifCondRefersTo(ifStmt.Cond, "closed")
-
-		if hasNonNilReturn && !inCtxDone && !isClosedGuard {
-			// Does this block contain a RecordPublishFailure call?
-			hasRecord := blockContainsRecordPublishFailure(body)
-			if !hasRecord {
-				// Report the first top-level non-nil return.
-				for i := range body {
-					ret, ok := body[i].(*ast.ReturnStmt)
-					if !ok || isNilReturn(ret) {
-						continue
-					}
-					pos := fset.Position(ret.Pos())
-					violations = append(violations,
-						fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
-					break
-				}
-			}
-		}
-
-		// Recurse into nested if/select within this block.
-		for _, inner := range body {
-			checkStmt(inner, inCtxDone)
-		}
-
-		// Check else branch.
-		if ifStmt.Else != nil {
-			checkStmt(ifStmt.Else, inCtxDone)
-		}
-	}
-
-	// Walk top-level statements of Publish body to find if-blocks.
-	for _, stmt := range publish.Body.List {
-		checkStmt(stmt, false)
-	}
-
+	violations := scanPublishMissingFailureRecord(publish, fset)
 	for _, v := range violations {
 		t.Errorf(
 			"RMQ-PUBLISHER-FAILURE-HANDLING-01-D: Publish in %s: %s. "+
@@ -799,6 +710,165 @@ func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 				"Exemptions: success `return nil` and returns inside ctx.Done() case.",
 			src, v,
 		)
+	}
+}
+
+// scanPublishMissingFailureRecord walks every if-block and select-case in the
+// Publish FuncDecl. For each block with a non-nil return that lacks a
+// RecordPublishFailure call, it appends a "line N: ..." violation string.
+// Exemptions: ctx.Done() cases, nil returns, and the publisher-closed guard.
+//
+// Extracted to file-level so PR445-FU finding F3's RED sub-test can exercise
+// the same checker against fixture files without duplicating the closure
+// logic. The behavior is unchanged from the prior in-test closure form;
+// Wave 4 extends checkPublishStmtViolations' switch to cover ForStmt,
+// RangeStmt, SwitchStmt, TypeSwitchStmt and inlines SelectStmt's CommClause
+// iteration to direct-child semantics.
+func scanPublishMissingFailureRecord(publish *ast.FuncDecl, fset *token.FileSet) []string {
+	var violations []string
+	for _, stmt := range publish.Body.List {
+		checkPublishStmtViolations(stmt, fset, false, &violations)
+	}
+	return violations
+}
+
+// checkPublishStmtViolations recursively walks stmt searching for if-blocks
+// whose top-level Body.List contains an error return without a paired
+// RecordPublishFailure call. Wave 1 RED state: the switch covers IfStmt,
+// SelectStmt, BlockStmt only — for/range/switch containers are not
+// recursed into, so error returns inside them silently bypass the rule.
+// Wave 4 GREEN: switch is extended to cover all statement containers, and
+// SelectStmt iterates Body.List directly to avoid the EachNode subtree
+// double-traversal.
+func checkPublishStmtViolations(stmt ast.Stmt, fset *token.FileSet, inCtxDone bool, violations *[]string) {
+	switch s := stmt.(type) {
+	case *ast.IfStmt:
+		checkPublishIfBlockViolations(s, fset, inCtxDone, violations)
+	case *ast.SelectStmt:
+		scanner.EachNode[ast.CommClause](s, func(comm *ast.CommClause) {
+			isCtxDone := inCtxDone || isCtxDoneCase(comm)
+			for _, cs := range comm.Body {
+				checkPublishStmtViolations(cs, fset, isCtxDone, violations)
+			}
+		})
+	case *ast.BlockStmt:
+		for _, inner := range s.List {
+			checkPublishStmtViolations(inner, fset, inCtxDone, violations)
+		}
+	}
+}
+
+// checkPublishIfBlockViolations is the per-if-block worker for the
+// RMQ-PUBLISHER-FAILURE-HANDLING-01-D scan. See scanPublishMissingFailureRecord.
+func checkPublishIfBlockViolations(ifStmt *ast.IfStmt, fset *token.FileSet, inCtxDone bool, violations *[]string) {
+	if ifStmt == nil || ifStmt.Body == nil {
+		return
+	}
+	body := ifStmt.Body.List
+
+	// Does THIS if-block (top-level Body.List only) contain a non-nil
+	// return? Nested returns inside an inner for/if/select are this
+	// block's child statements' concern — checkStmt will recurse and
+	// reach them via the inner if/select being its own checkIfBlock /
+	// SelectStmt handler. Counting them here would double-attribute the
+	// violation to two ancestor blocks.
+	hasNonNilReturn := false
+	for i := range body {
+		ret, ok := body[i].(*ast.ReturnStmt)
+		if !ok {
+			continue
+		}
+		if !isNilReturn(ret) {
+			hasNonNilReturn = true
+			break
+		}
+	}
+
+	// Exempt: if-block guarding the "publisher is closed" early exit.
+	// This is not a wire-level failure, so no metric is required.
+	// Detected by checking if the condition references a field/method named "closed".
+	isClosedGuard := ifCondRefersTo(ifStmt.Cond, "closed")
+
+	if hasNonNilReturn && !inCtxDone && !isClosedGuard {
+		// Does this block contain a RecordPublishFailure call?
+		hasRecord := blockContainsRecordPublishFailure(body)
+		if !hasRecord {
+			// Report the first top-level non-nil return.
+			for i := range body {
+				ret, ok := body[i].(*ast.ReturnStmt)
+				if !ok || isNilReturn(ret) {
+					continue
+				}
+				pos := fset.Position(ret.Pos())
+				*violations = append(*violations,
+					fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
+				break
+			}
+		}
+	}
+
+	// Recurse into nested if/select within this block.
+	for _, inner := range body {
+		checkPublishStmtViolations(inner, fset, inCtxDone, violations)
+	}
+
+	// Check else branch.
+	if ifStmt.Else != nil {
+		checkPublishStmtViolations(ifStmt.Else, fset, inCtxDone, violations)
+	}
+}
+
+// TestRMQPublisherFailureHandling01_ContainerCoverage_Wave4_RED is a RED-step
+// regression test (TDD per ai-collab.md) for PR445-FU finding F3.
+//
+// checkPublishStmtViolations only recurses into IfStmt / SelectStmt /
+// BlockStmt. Error returns nested inside ForStmt / RangeStmt / SwitchStmt /
+// TypeSwitchStmt or in nested SelectStmt arms are silently skipped, so a
+// developer can introduce a publish failure path inside such a container
+// without RecordPublishFailure and the rule won't notice.
+//
+// Each fixture under testdata/rmq_return_container_fixtures/ defines a
+// minimal Publish method with an error-returning if-block embedded in one
+// of the un-recursed containers. After Wave 4 extends the switch, every
+// fixture must yield exactly one violation. Until then, this test fails.
+func TestRMQPublisherFailureHandling01_ContainerCoverage_Wave4_RED(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	base := filepath.Join(root, "tools", "archtest", "testdata", "rmq_return_container_fixtures")
+
+	cases := []struct {
+		file string
+		want int // expected number of violations after Wave 4
+	}{
+		{"for_body_return.go", 1},
+		{"range_body_return.go", 1},
+		{"switch_body_return.go", 1},
+		{"type_switch_return.go", 1},
+		{"select_case_nested_for_return.go", 1},
+		{"nested_select_in_select.go", 1},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.file, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(base, c.file)
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			publish := findMethod(f, "Publish")
+			if publish == nil {
+				t.Fatalf("Publish method not found in fixture %s", path)
+			}
+			got := scanPublishMissingFailureRecord(publish, fset)
+			if len(got) != c.want {
+				t.Errorf("%s: want %d violations (the error return inside the un-recursed container), got %d: %v",
+					c.file, c.want, len(got), got)
+			}
+		})
 	}
 }
 

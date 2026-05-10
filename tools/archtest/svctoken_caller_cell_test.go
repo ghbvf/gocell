@@ -142,6 +142,72 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	scanner.Report(t, ruleSvctokenCallerCellRequired01, diags)
 }
 
+// TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED is a
+// RED-step regression test (TDD per ai-collab.md) for PR445-FU finding F2.
+//
+// The production rule TestSVCTOKEN_CALLER_CELL_REQUIRED_01 calls
+// `typeseval.SharedResolver(root, true, nil, ...)` — the third argument
+// `tags []string` is nil, so packages.Load uses the default build set and
+// silently skips every file gated by `//go:build <tag>`. Two real callsites
+// of auth.GenerateServiceToken are gated this way and therefore escape the
+// rule:
+//
+//   - examples/ssobff/walkthrough_test.go  (//go:build integration)
+//   - tests/integration/internal_rpc_caller_cell_test.go  (//go:build integration)
+//
+// Wave 5 introduces typeseval.KnownNonDefaultTags() and iterates each
+// tag-set so the rule scans every variant. This test asserts the load
+// contract directly: build-tagged files MUST be loaded so the rule's
+// scanForCallExpr loop actually reaches their callsites.
+//
+// Wave 1 (current, tags=nil): integration-tagged files NOT in resolver
+// output → assertion fails → RED.
+//
+// Wave 5 (multi-tag): integration-tagged files loaded under {integration}
+// tag-set → assertion passes → GREEN. The sub-test must therefore also
+// switch to multi-tag iteration in Wave 5 to mirror the production loader.
+func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	// Mirror the production rule's loader call exactly.
+	resolver, err := typeseval.SharedResolver(root, true, nil,
+		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
+	}
+
+	loadedFiles := map[string]bool{}
+	for _, pkg := range resolver.Packages() {
+		if pkg.Fset == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			loadedFiles[rel] = true
+		}
+	}
+
+	// Files known to contain auth.GenerateServiceToken callsites under
+	// `//go:build integration`. Wave 5's KnownNonDefaultTags iteration must
+	// load each.
+	expectedScanned := []string{
+		"examples/ssobff/walkthrough_test.go",
+		"tests/integration/internal_rpc_caller_cell_test.go",
+	}
+
+	var missing []string
+	for _, want := range expectedScanned {
+		if !loadedFiles[want] {
+			missing = append(missing, want)
+		}
+	}
+
+	if len(missing) > 0 {
+		t.Errorf("SVCTOKEN-CALLER-CELL-REQUIRED-01: %d build-tagged files are silently skipped by the current tags=nil load — these contain auth.GenerateServiceToken callsites that the rule MUST scan: %v", len(missing), missing)
+	}
+}
+
 // discoverKnownCells returns the set of valid caller cell IDs from
 // ProjectMeta.Cells (covers both top-level and examples cells via
 // metadata path-pattern matching) plus actor IDs from actors.yaml.

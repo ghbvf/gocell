@@ -1930,6 +1930,53 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	}
 }
 
+// TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3 anchors
+// the load-vs-skip decision contract for the HandleResult factory rule.
+//
+// Anchor (informational, not a TDD RED): documents that
+// `typeseval.SharedResolver(root, false, nil, "./...")` DOES include
+// generated/ packages, contradicting the comment block above
+// TestOutboxHandleResultFactoryPreferred which claims `go list ./...`
+// default-skips generated/. Wave 3 introduces typeseval.IsGeneratedRelPath
+// + applies it before scanForHandleResultLiterals so the rule no longer
+// scans generated/ paths even though they ARE loaded. The Wave 3 commit
+// also adds a fixture-driven sub-test that exercises the skip with a
+// synthetic generated/-rel path containing a HandleResult literal.
+//
+// This test pins the load behavior so a future packages.Load default
+// change (or a `cfg.BuildFlags=["-tags=nogen"]` style filter at the
+// loader layer) doesn't silently mask the need for IsGeneratedRelPath.
+func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
+	}
+
+	var generatedFiles []string
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			if strings.HasPrefix(rel, "generated/") {
+				generatedFiles = append(generatedFiles, rel)
+			}
+		}
+	}
+
+	if len(generatedFiles) == 0 {
+		t.Fatalf("anchor invalidated: SharedResolver(./...) loaded 0 generated/ files; " +
+			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
+			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
+			"before removing the IsGeneratedRelPath skip")
+	}
+	t.Logf("anchor: SharedResolver(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
+}
+
 // scanForHandleResultLiterals scans file for HandleResult composite literals.
 // Returns "<rel>:<line>" diagnostics. Files that neither import kernel/outbox
 // nor declare package outbox produce no hits. Type-aware via pkg.TypesInfo.
