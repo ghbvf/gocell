@@ -60,3 +60,62 @@ func TestCellTxManager_SatisfiesTxRunner(t *testing.T) {
 		t.Fatal("CellTxManager must satisfy persistence.TxRunner")
 	}
 }
+
+// nooperTxRunner is a Nooper-implementing TxRunner used to verify the
+// internalCellTxManager.Noop() pass-through preserves cell.CheckNotNoop's
+// durable-rejection signal (mirrors kernel/cell.DemoTxRunner shape; we
+// redefine it locally to keep this package free of kernel/cell imports —
+// kernel/persistence does not depend on kernel/cell).
+type nooperTxRunner struct{}
+
+func (nooperTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx)
+}
+
+func (nooperTxRunner) Noop() bool { return true }
+
+// TestWrapForCell_PreservesNooperPassThrough is the end-to-end regression
+// for the Noop pass-through: WrapForCell(nooperTxRunner{}).(Nooper).Noop()
+// must return true. Without internalCellTxManager.Noop() the embed-of-
+// interface field would hide the inner Nooper method, breaking
+// cell.CheckNotNoop's durable mode rejection of demo runners.
+//
+// kernel/cell.CheckNotNoop is exercised end-to-end in
+// cells/<x>/cell_test.go::TestCheckNotNoop_DurableMode (path through
+// cell.ResolveCellEmitter). This unit-level test pins the contract at the
+// kernel/persistence boundary so a refactor that removes the Noop
+// pass-through fails here, before reaching cell-level integration tests.
+//
+// Repro of pre-fix bug: removing internalCellTxManager.Noop() makes this
+// test fail (type assertion `_, ok := wrapped.(nooper); ok` returns false).
+func TestWrapForCell_PreservesNooperPassThrough(t *testing.T) {
+	t.Parallel()
+	wrapped := persistence.WrapForCell(nooperTxRunner{})
+	type nooper interface{ Noop() bool }
+	n, ok := wrapped.(nooper)
+	if !ok {
+		t.Fatal("CellTxManager wrap must expose inner Nooper interface")
+	}
+	if !n.Noop() {
+		t.Fatal("wrapped nooperTxRunner.Noop() must return true (passthrough)")
+	}
+}
+
+// TestWrapForCell_NonNooperReturnsFalse confirms the pass-through default:
+// when the inner TxRunner does NOT implement Nooper, the wrapper's Noop()
+// returns false (durable mode accepts the runner as a real implementation).
+func TestWrapForCell_NonNooperReturnsFalse(t *testing.T) {
+	t.Parallel()
+	wrapped := persistence.WrapForCell(&fakeTxRunner{})
+	type nooper interface{ Noop() bool }
+	n, ok := wrapped.(nooper)
+	if !ok {
+		t.Fatal("CellTxManager always implements Noop() by structure")
+	}
+	if n.Noop() {
+		t.Fatal("non-Nooper inner TxRunner must produce Noop()==false")
+	}
+}

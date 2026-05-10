@@ -80,3 +80,73 @@ func TestCellWriter_SatisfiesWriter(t *testing.T) {
 	t.Parallel()
 	var _ outbox.Writer = outbox.WrapWriterForCell(&fakeCellWriter{})
 }
+
+// outbox.NoopWriter and outbox.DiscardPublisher both implement Nooper
+// (kernel/outbox/outbox.go::NoopWriter.Noop() / DiscardPublisher.Noop()).
+// The wrapper's Noop() pass-through preserves that signal so
+// cell.CheckNotNoop / mode_resolver.isNooperDep / emitter.ReportDurable
+// all see the inner Nooper status.
+
+// TestWrapPublisherForCell_PreservesNooperPassThrough is the end-to-end
+// regression for the publisher Nooper pass-through: removing
+// internalCellPublisher.Noop() makes this test fail (type assertion
+// returns ok=false), before reaching cell-level integration.
+func TestWrapPublisherForCell_PreservesNooperPassThrough(t *testing.T) {
+	t.Parallel()
+	wrapped := outbox.WrapPublisherForCell(&outbox.DiscardPublisher{})
+	type nooper interface{ Noop() bool }
+	n, ok := wrapped.(nooper)
+	if !ok {
+		t.Fatal("CellPublisher wrap must expose inner Nooper interface")
+	}
+	if !n.Noop() {
+		t.Fatal("wrapped DiscardPublisher.Noop() must return true (passthrough)")
+	}
+}
+
+// TestWrapWriterForCell_PreservesNooperPassThrough mirrors the publisher
+// case for outbox.NoopWriter — durable mode rejects NoopWriter via
+// CheckNotNoop / isNooperDep, both of which depend on this pass-through.
+func TestWrapWriterForCell_PreservesNooperPassThrough(t *testing.T) {
+	t.Parallel()
+	wrapped := outbox.WrapWriterForCell(outbox.NoopWriter{})
+	type nooper interface{ Noop() bool }
+	n, ok := wrapped.(nooper)
+	if !ok {
+		t.Fatal("CellWriter wrap must expose inner Nooper interface")
+	}
+	if !n.Noop() {
+		t.Fatal("wrapped NoopWriter.Noop() must return true (passthrough)")
+	}
+}
+
+// TestWrapPublisherForCell_NonNooperReturnsFalse confirms the default:
+// when the inner Publisher does not implement Nooper, the wrapper's Noop()
+// returns false (durable mode accepts the publisher as a real impl).
+func TestWrapPublisherForCell_NonNooperReturnsFalse(t *testing.T) {
+	t.Parallel()
+	wrapped := outbox.WrapPublisherForCell(&fakePublisher{})
+	type nooper interface{ Noop() bool }
+	n, ok := wrapped.(nooper)
+	if !ok {
+		t.Fatal("CellPublisher always implements Noop() by structure")
+	}
+	if n.Noop() {
+		t.Fatal("non-Nooper inner Publisher must produce Noop()==false")
+	}
+}
+
+// TestWrapWriterForCell_NonNooperReturnsFalse mirrors the publisher case
+// for the writer side.
+func TestWrapWriterForCell_NonNooperReturnsFalse(t *testing.T) {
+	t.Parallel()
+	wrapped := outbox.WrapWriterForCell(&fakeCellWriter{})
+	type nooper interface{ Noop() bool }
+	n, ok := wrapped.(nooper)
+	if !ok {
+		t.Fatal("CellWriter always implements Noop() by structure")
+	}
+	if n.Noop() {
+		t.Fatal("non-Nooper inner Writer must produce Noop()==false")
+	}
+}
