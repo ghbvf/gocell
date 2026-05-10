@@ -92,8 +92,9 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 	files := loadGovernancePackageFiles(t, fset, ".")
 
 	funcIdx := buildFuncIndex(files)
-	roots := collectBFSRoots(funcIdx)
+	assertEmitterMethodsRestrictedToLocator(t, funcIdx)
 
+	roots := collectBFSRoots(funcIdx)
 	if len(roots) == 0 {
 		t.Fatalf("BFS: no registration roots found; expected (Validator,rules), " +
 			"(Validator,strictRules), (DependencyChecker,checks), and Check* " +
@@ -247,33 +248,41 @@ func scanPackageConstStrings(files []*ast.File) map[string]string {
 	out := map[string]string{}
 	for _, f := range files {
 		for _, decl := range f.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for i, ident := range vs.Names {
-					if i >= len(vs.Values) {
-						continue
-					}
-					lit, ok := vs.Values[i].(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						continue
-					}
-					val, err := strconv.Unquote(lit.Value)
-					if err != nil {
-						continue
-					}
-					out[ident.Name] = val
-				}
-			}
+			collectConstStringSpecs(decl, out)
 		}
 	}
 	return out
+}
+
+// collectConstStringSpecs walks one top-level decl and forwards each
+// const ValueSpec to addConstStringSpec.
+func collectConstStringSpecs(decl ast.Decl, out map[string]string) {
+	gd, ok := decl.(*ast.GenDecl)
+	if !ok || gd.Tok != token.CONST {
+		return
+	}
+	for _, spec := range gd.Specs {
+		if vs, ok := spec.(*ast.ValueSpec); ok {
+			addConstStringSpec(vs, out)
+		}
+	}
+}
+
+// addConstStringSpec records each (name, string-literal value) pair from
+// one ValueSpec. Names without paired string-literal values are skipped.
+func addConstStringSpec(vs *ast.ValueSpec, out map[string]string) {
+	for i, ident := range vs.Names {
+		if i >= len(vs.Values) {
+			continue
+		}
+		lit, ok := vs.Values[i].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		if val, err := strconv.Unquote(lit.Value); err == nil {
+			out[ident.Name] = val
+		}
+	}
 }
 
 // buildFuncIndex maps every top-level func / method declaration in the
@@ -359,110 +368,146 @@ func collectBFSRoots(funcIdx map[funcKey]*ast.FuncDecl) []funcKey {
 // functions and collecting rule IDs emitted via newResult, newScopedResult,
 // or ValidationResult composite literals.
 //
+// bfsContext bundles the immutable inputs and mutable state of one BFS
+// run so individual visit-helpers don't need to thread eight or more
+// parameters through every call. runReachabilityBFS owns the lifecycle:
+// build context → call run(roots) → return sorted reachable IDs.
+type bfsContext struct {
+	t        *testing.T
+	fset     *token.FileSet
+	funcIdx  map[funcKey]*ast.FuncDecl
+	constMap map[string]string
+	inferred map[*ast.CompositeLit]struct{}
+
+	reachable map[string]struct{}
+	queue     []funcKey
+	visited   map[funcKey]struct{}
+}
+
+// run drives the BFS loop until queue drains.
+func (c *bfsContext) run(roots []funcKey) []string {
+	c.t.Helper()
+	c.reachable = map[string]struct{}{}
+	c.queue = append([]funcKey(nil), roots...)
+	c.visited = map[funcKey]struct{}{}
+
+	for len(c.queue) > 0 {
+		key := c.queue[0]
+		c.queue = c.queue[1:]
+		if _, seen := c.visited[key]; seen {
+			continue
+		}
+		c.visited[key] = struct{}{}
+		fd, ok := c.funcIdx[key]
+		if !ok || fd.Body == nil {
+			continue
+		}
+		_, recvName := extractReceiverInfo(fd)
+		c.walkRule(fd, recvName, key.recv)
+	}
+	return sortedStringKeys(c.reachable)
+}
+
+// walkRule visits the body of one BFS node, dispatching SelectorExpr,
+// CallExpr, and CompositeLit nodes to dedicated helpers so each branch
+// stays under cognitive-complexity limits.
+//
 // recvName is the enclosing method's receiver identifier ("v" / "dc"; ""
 // for free functions). recvType is its declared receiver type name (e.g.
 // "Validator"; "" for free functions).
-func walkRule(
-	t *testing.T,
-	fset *token.FileSet,
-	fd *ast.FuncDecl,
-	recvName, recvType string,
-	funcIdx map[funcKey]*ast.FuncDecl,
-	constMap map[string]string,
-	inferred map[*ast.CompositeLit]struct{},
-	reachable map[string]struct{},
-	queue *[]funcKey,
-) {
-	t.Helper()
+func (c *bfsContext) walkRule(fd *ast.FuncDecl, recvName, recvType string) {
+	c.t.Helper()
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
-			// Method-value enqueue: <recvName>.<methodName>. The receiver
-			// name check stays — guards against accidental enqueue of
-			// methods on unrelated types that happen to share a name.
-			// Free functions (recvName == "") cannot enqueue same-receiver
-			// methods, so they short-circuit here.
-			//
-			// INVARIANT: BFS does not currently follow `<param>.<method>`
-			// inside a free function (would require type-checking the
-			// param to resolve the method's receiver type). governance
-			// has no free function that takes *Validator/*DependencyChecker
-			// and chains into another method; if added, this branch must
-			// be extended via go/types or a structural fallback.
-			if recvName == "" {
-				return true
-			}
-			id, ok := x.X.(*ast.Ident)
-			if !ok || id.Name != recvName {
-				return true
-			}
-			method := x.Sel.Name
-			if _, exists := funcIdx[funcKey{recv: recvType, name: method}]; exists {
-				*queue = append(*queue, funcKey{recv: recvType, name: method})
-			}
+			c.enqueueMethodValue(x, recvName, recvType)
 		case *ast.CallExpr:
-			if id, ok := x.Fun.(*ast.Ident); ok {
-				if _, exists := funcIdx[funcKey{recv: "", name: id.Name}]; exists {
-					*queue = append(*queue, funcKey{recv: "", name: id.Name})
-				}
-				// Free-function callsites do not carry rule IDs as
-				// positional args by convention — IDs are only emitted via
-				// newResult / newScopedResult or ValidationResult{Code:...}
-				// composite literals. The queued function will be walked
-				// in a subsequent BFS step, where its body's emissions are
-				// collected. If a future helper takes a rule ID as a
-				// positional arg (e.g. `emitFinding("FMT-99", ...)`), this
-				// branch must be extended to extract from x.Args[0].
-				return true
-			}
-			sel, ok := x.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			// Emission detection: any selector whose method name is
-			// newResult / newScopedResult is treated as a rule emission
-			// site, regardless of the receiver expression. Within the
-			// governance package these names are uniquely defined on
-			// *locator (embedded into Validator and DependencyChecker),
-			// so any reachable .newResult / .newScopedResult call is a
-			// legitimate emission. Relaxing the receiver check here is
-			// what lets BFS see emissions inside free functions that take
-			// a *Validator parameter (where the enclosing recvName is "").
-			//
-			// INVARIANT: production code must keep newResult/newScopedResult
-			// method names unique to *locator. Adding a same-named method
-			// to an unrelated type would cause BFS to capture foreign
-			// emissions; static checking that constraint is impractical
-			// here, so rely on PR review when introducing new types in
-			// this package.
-			if !isResultEmitter(sel.Sel.Name) || len(x.Args) == 0 {
-				return true
-			}
-			id := resolveIDArg(t, fset, x.Args[0], constMap)
-			if id != "" {
-				reachable[id] = struct{}{}
-			}
+			c.handleCall(x)
 		case *ast.CompositeLit:
-			if !looksLikeValidationResult(x, inferred) {
-				return true
-			}
-			for _, el := range x.Elts {
-				kv, ok := el.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				key, ok := kv.Key.(*ast.Ident)
-				if !ok || key.Name != "Code" {
-					continue
-				}
-				id := resolveIDArg(t, fset, kv.Value, constMap)
-				if id != "" {
-					reachable[id] = struct{}{}
-				}
-			}
+			c.captureCodeFields(x)
 		}
 		return true
 	})
+}
+
+// enqueueMethodValue follows `<recvName>.<methodName>` selectors that
+// resolve to known methods on the enclosing receiver type. Free functions
+// short-circuit here (recvName == "").
+//
+// INVARIANT: BFS does not currently follow `<param>.<method>` inside a
+// free function — that would require type-checking the param to resolve
+// the method's receiver type. governance has no free function that takes
+// *Validator / *DependencyChecker and chains into another method; if
+// added, this branch must be extended via go/types or a structural
+// fallback.
+func (c *bfsContext) enqueueMethodValue(x *ast.SelectorExpr, recvName, recvType string) {
+	if recvName == "" {
+		return
+	}
+	id, ok := x.X.(*ast.Ident)
+	if !ok || id.Name != recvName {
+		return
+	}
+	method := x.Sel.Name
+	if _, exists := c.funcIdx[funcKey{recv: recvType, name: method}]; exists {
+		c.queue = append(c.queue, funcKey{recv: recvType, name: method})
+	}
+}
+
+// handleCall enqueues free-function callees and captures rule IDs from
+// emission selectors (newResult / newScopedResult).
+//
+// Emission detection accepts any selector with the matching method name
+// regardless of receiver expression. Within the governance package these
+// names are uniquely defined on *locator (verified at test setup by
+// assertEmitterMethodsRestrictedToLocator), so any reachable
+// .newResult / .newScopedResult call is a legitimate emission. Relaxing
+// the receiver check here is what lets BFS see emissions inside free
+// functions that take a *Validator parameter.
+func (c *bfsContext) handleCall(x *ast.CallExpr) {
+	if id, ok := x.Fun.(*ast.Ident); ok {
+		// Free-function callsite. Enqueue the callee; rule IDs are not
+		// carried as positional args at the callsite by convention.
+		if _, exists := c.funcIdx[funcKey{recv: "", name: id.Name}]; exists {
+			c.queue = append(c.queue, funcKey{recv: "", name: id.Name})
+		}
+		return
+	}
+	sel, ok := x.Fun.(*ast.SelectorExpr)
+	if !ok || !isResultEmitter(sel.Sel.Name) || len(x.Args) == 0 {
+		return
+	}
+	if id := c.resolveID(x.Args[0]); id != "" {
+		c.reachable[id] = struct{}{}
+	}
+}
+
+// captureCodeFields walks one CompositeLit and records the rule ID from
+// its Code field. Non-ValidationResult composites are skipped via
+// looksLikeValidationResult.
+func (c *bfsContext) captureCodeFields(x *ast.CompositeLit) {
+	if !looksLikeValidationResult(x, c.inferred) {
+		return
+	}
+	for _, el := range x.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != "Code" {
+			continue
+		}
+		if id := c.resolveID(kv.Value); id != "" {
+			c.reachable[id] = struct{}{}
+		}
+	}
+}
+
+// resolveID is a thin wrapper over resolveIDArg using the context's t /
+// fset / constMap.
+func (c *bfsContext) resolveID(expr ast.Expr) string {
+	return resolveIDArg(c.t, c.fset, expr, c.constMap)
 }
 
 // isResultEmitter reports whether the named locator method emits a
@@ -519,15 +564,7 @@ func collectInferredVRLits(files []*ast.File) map[*ast.CompositeLit]struct{} {
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			outer, ok := n.(*ast.CompositeLit)
-			if !ok {
-				return true
-			}
-			arr, ok := outer.Type.(*ast.ArrayType)
-			if !ok {
-				return true
-			}
-			id, ok := arr.Elt.(*ast.Ident)
-			if !ok || id.Name != "ValidationResult" {
+			if !ok || !isValidationResultArrayType(outer.Type) {
 				return true
 			}
 			for _, el := range outer.Elts {
@@ -539,6 +576,18 @@ func collectInferredVRLits(files []*ast.File) map[*ast.CompositeLit]struct{} {
 		})
 	}
 	return inferred
+}
+
+// isValidationResultArrayType reports whether expr is `[]ValidationResult`
+// or `[N]ValidationResult` — the only outer types whose nil-Type element
+// literals are accepted by looksLikeValidationResult.
+func isValidationResultArrayType(expr ast.Expr) bool {
+	arr, ok := expr.(*ast.ArrayType)
+	if !ok {
+		return false
+	}
+	id, ok := arr.Elt.(*ast.Ident)
+	return ok && id.Name == "ValidationResult"
 }
 
 // runReachabilityBFS walks files starting from roots and returns the
@@ -555,28 +604,42 @@ func runReachabilityBFS(
 	roots []funcKey,
 ) []string {
 	t.Helper()
-
-	constMap := scanPackageConstStrings(files)
-	inferred := collectInferredVRLits(files)
-
-	reachable := map[string]struct{}{}
-	visited := map[funcKey]struct{}{}
-	queue := append([]funcKey(nil), roots...)
-	for len(queue) > 0 {
-		key := queue[0]
-		queue = queue[1:]
-		if _, seen := visited[key]; seen {
-			continue
-		}
-		visited[key] = struct{}{}
-		fd, ok := funcIdx[key]
-		if !ok || fd.Body == nil {
-			continue
-		}
-		_, recvName := extractReceiverInfo(fd)
-		walkRule(t, fset, fd, recvName, key.recv, funcIdx, constMap, inferred, reachable, &queue)
+	ctx := &bfsContext{
+		t:        t,
+		fset:     fset,
+		funcIdx:  funcIdx,
+		constMap: scanPackageConstStrings(files),
+		inferred: collectInferredVRLits(files),
 	}
-	return sortedStringKeys(reachable)
+	return ctx.run(roots)
+}
+
+// assertEmitterMethodsRestrictedToLocator fails the test if the package
+// declares any newResult / newScopedResult method on a receiver other
+// than *locator. BFS emission detection (handleCall) accepts any
+// reachable .newResult / .newScopedResult call regardless of receiver
+// expression — that simplification is safe only while the names stay
+// uniquely defined on locator. This guard turns the convention into a
+// runtime invariant: introduce a same-named method on an unrelated
+// receiver and the production test fails immediately with a precise
+// fix path.
+func assertEmitterMethodsRestrictedToLocator(t *testing.T, funcIdx map[funcKey]*ast.FuncDecl) {
+	t.Helper()
+	allowed := map[string]bool{"locator": true}
+	for k := range funcIdx {
+		if !isResultEmitter(k.name) {
+			continue
+		}
+		if !allowed[k.recv] {
+			t.Fatalf("BFS invariant breach: method %q is defined on receiver "+
+				"%q (only *locator is allowed). BFS emission detection assumes "+
+				"newResult / newScopedResult are uniquely named within this "+
+				"package; rename the new method, OR extend the allowed set in "+
+				"assertEmitterMethodsRestrictedToLocator AND review whether "+
+				"BFS still produces the expected reachable set.",
+				k.name, k.recv)
+		}
+	}
 }
 
 // resolveIDArg returns the rule-ID string from a newResult / newScopedResult
