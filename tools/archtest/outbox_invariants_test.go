@@ -1756,3 +1756,222 @@ func repoRootFromTestPath(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// ---------------------------------------------------------------------------
+// OUTBOX-HANDLERESULT-FIELDS-FROZEN-01
+// ---------------------------------------------------------------------------
+
+// handleResultAllowedFields is the verbatim field set of kernel/outbox.HandleResult.
+// Adding a fifth field requires extending this allowlist deliberately, which
+// is the moment to (a) re-read ADR 202605031900-adr-handler-vocabulary-collapse.md,
+// (b) decide whether the new field belongs on the EntryHandler return contract
+// or in ConsumerBase internal state, and (c) extend the Ack/Requeue/Reject
+// factories in kernel/outbox/result.go if the field can be carried by them.
+var handleResultAllowedFields = map[string]struct{}{
+	"Disposition":         {},
+	"Err":                 {},
+	"ProcessReason":       {},
+	"SettlementObservers": {},
+}
+
+// INVARIANT: OUTBOX-HANDLERESULT-FIELDS-FROZEN-01
+//
+// TestOutboxHandleResultFieldsFrozen enforces OUTBOX-HANDLERESULT-FIELDS-FROZEN-01:
+// kernel/outbox.HandleResult must declare exactly the four fields listed in
+// handleResultAllowedFields. The factories Ack/Requeue/Reject cover the two
+// stable axes (Disposition, Err); ProcessReason and SettlementObservers are
+// intentional fallback-literal escape hatches for kernel internal retry
+// plumbing and middleware-handler protocol (see eventbus.md "回落字面量").
+//
+// Drift in this field set silently changes what every cell handler can/must
+// produce, so freezing the set keeps the fallback intentional.
+func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
+	root := findModuleRoot(t)
+	path := filepath.Join(root, "kernel", "outbox", "outbox.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	var (
+		found   bool
+		seen    = make(map[string]struct{})
+		unknown []string
+	)
+	ast.Inspect(f, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name == nil || ts.Name.Name != "HandleResult" {
+			return true
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return false
+		}
+		found = true
+		for _, field := range st.Fields.List {
+			for _, name := range field.Names {
+				seen[name.Name] = struct{}{}
+				if _, ok := handleResultAllowedFields[name.Name]; !ok {
+					line := fset.Position(name.Pos()).Line
+					unknown = append(unknown, fmt.Sprintf("kernel/outbox/outbox.go:%d: %s", line, name.Name))
+				}
+			}
+		}
+		return false
+	})
+
+	if !found {
+		t.Fatal("HandleResult struct definition not found in kernel/outbox/outbox.go")
+	}
+
+	var missing []string
+	for k := range handleResultAllowedFields {
+		if _, ok := seen[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+
+	sort.Strings(unknown)
+	sort.Strings(missing)
+	for _, u := range unknown {
+		t.Errorf("OUTBOX-HANDLERESULT-FIELDS-FROZEN-01: %s — field not in allowlist; "+
+			"to add a field, update handleResultAllowedFields and review "+
+			"ADR 202605031900-adr-handler-vocabulary-collapse.md plus the "+
+			"Ack/Requeue/Reject factories in kernel/outbox/result.go", u)
+	}
+	for _, m := range missing {
+		t.Errorf("OUTBOX-HANDLERESULT-FIELDS-FROZEN-01: required field %s missing from "+
+			"kernel/outbox.HandleResult — removing a field changes the EntryHandler return "+
+			"contract; review ADR 202605031900 and update handleResultAllowedFields "+
+			"deliberately if the removal is intentional", m)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01
+// ---------------------------------------------------------------------------
+
+// handleResultLiteralAllowlist lists the production (non-_test.go) files that
+// may construct outbox.HandleResult{...} composite literals. Every other
+// production file must use the Ack/Requeue/Reject factories from
+// kernel/outbox/result.go.
+//
+// Why these three:
+//   - kernel/outbox/result.go         — defines the factories themselves.
+//   - kernel/outbox/consumer_base.go  — kernel internal retry/settle plumbing
+//     constructs HandleResult with ProcessReason / SettlementObservers, which
+//     the factories do not expose (see eventbus.md "回落字面量").
+//   - kernel/outbox/outboxtest/conformance.go — shared conformance harness;
+//     non-_test.go by package convention but used only from test binaries.
+//
+// Adding a new entry requires a code-comment justification: the goal of
+// FACTORY-PREFERRED-01 is to keep the fallback-literal surface intentionally
+// small. New kernel/outbox files writing HandleResult literals are rare —
+// extend the list deliberately.
+var handleResultLiteralAllowlist = map[string]struct{}{
+	"kernel/outbox/result.go":                 {},
+	"kernel/outbox/consumer_base.go":          {},
+	"kernel/outbox/outboxtest/conformance.go": {},
+}
+
+// INVARIANT: OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01
+//
+// TestOutboxHandleResultFactoryPreferred enforces
+// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: production code (non-_test.go)
+// must use kernel/outbox factories Ack/Requeue/Reject instead of constructing
+// outbox.HandleResult{...} composite literals, except for the three files in
+// handleResultLiteralAllowlist (factories themselves, kernel internal
+// plumbing, shared conformance harness).
+//
+// Test files (_test.go) are excluded by default (scanner.ModuleScope skips
+// them unless IncludeTests is set); generated/, vendor/, testdata/, and
+// worktrees/ are also skipped by default.
+//
+// The scanner detects two literal forms:
+//  1. <alias>.HandleResult{...} where <alias> is the local name binding the
+//     kernel/outbox import (default: "outbox", but explicit aliases are
+//     honored via scanner.PackageAliases).
+//  2. Bare HandleResult{...} when the file's package is "outbox" itself
+//     (covers any future kernel/outbox/*.go file outside the allowlist).
+func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	files, err := scanner.ModuleScope(root).Files()
+	if err != nil {
+		t.Fatalf("ModuleScope.Files: %v", err)
+	}
+
+	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
+
+	var violations []string
+	for _, abs := range files {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if _, ok := handleResultLiteralAllowlist[rel]; ok {
+			continue
+		}
+		hits := scanForHandleResultLiterals(abs, rel, outboxImportPath)
+		violations = append(violations, hits...)
+	}
+
+	sort.Strings(violations)
+	for _, v := range violations {
+		t.Errorf("OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: %s — use outbox.Ack() / "+
+			"outbox.Requeue(err) / outbox.Reject(err) instead of constructing the "+
+			"struct literal; if you genuinely need ProcessReason or SettlementObservers, "+
+			"extend handleResultLiteralAllowlist with a code-comment justification", v)
+	}
+}
+
+// scanForHandleResultLiterals AST-scans the file at path for HandleResult
+// composite literals. Returns "<rel>:<line>" diagnostics. Files that neither
+// import kernel/outbox nor declare package outbox produce no hits.
+func scanForHandleResultLiterals(path, rel, outboxImportPath string) []string {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	if err != nil {
+		return nil
+	}
+
+	aliases := scanner.PackageAliases(f, outboxImportPath)
+	inPackageOutbox := f.Name != nil && f.Name.Name == "outbox"
+	if len(aliases) == 0 && !inPackageOutbox {
+		return nil
+	}
+
+	var hits []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		switch tn := cl.Type.(type) {
+		case *ast.SelectorExpr:
+			ident, ok := tn.X.(*ast.Ident)
+			if !ok || tn.Sel == nil || tn.Sel.Name != "HandleResult" {
+				return true
+			}
+			if _, ok := aliases[ident.Name]; !ok {
+				return true
+			}
+			pos := fset.Position(cl.Pos())
+			hits = append(hits, fmt.Sprintf("%s:%d: %s.HandleResult{} literal", rel, pos.Line, ident.Name))
+		case *ast.Ident:
+			if !inPackageOutbox || tn.Name != "HandleResult" {
+				return true
+			}
+			pos := fset.Position(cl.Pos())
+			hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal in package outbox", rel, pos.Line))
+		}
+		return true
+	})
+	return hits
+}
