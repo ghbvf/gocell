@@ -7,19 +7,19 @@ import (
 	"context"
 	"fmt"
 
-	sub4 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
-	sub5 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
-	sub6 "github.com/ghbvf/gocell/generated/contracts/event/config/rollback/v1"
-	sub7 "github.com/ghbvf/gocell/generated/contracts/event/config/version-published/v1"
-	sub8 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
-	sub9 "github.com/ghbvf/gocell/generated/contracts/event/role/revoked/v1"
-	sub0 "github.com/ghbvf/gocell/generated/contracts/event/session/created/v1"
-	sub1 "github.com/ghbvf/gocell/generated/contracts/event/session/revoked/v1"
-	sub10 "github.com/ghbvf/gocell/generated/contracts/event/user/created/v1"
-	sub11 "github.com/ghbvf/gocell/generated/contracts/event/user/deleted/v1"
-	sub12 "github.com/ghbvf/gocell/generated/contracts/event/user/locked/v1"
-	sub2 "github.com/ghbvf/gocell/generated/contracts/event/user/unlocked/v1"
-	sub3 "github.com/ghbvf/gocell/generated/contracts/event/user/updated/v1"
+	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
+	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
+	sub2 "github.com/ghbvf/gocell/generated/contracts/event/config/rollback/v1"
+	sub3 "github.com/ghbvf/gocell/generated/contracts/event/config/version-published/v1"
+	sub4 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
+	sub5 "github.com/ghbvf/gocell/generated/contracts/event/role/revoked/v1"
+	sub6 "github.com/ghbvf/gocell/generated/contracts/event/session/created/v1"
+	sub7 "github.com/ghbvf/gocell/generated/contracts/event/session/revoked/v1"
+	sub8 "github.com/ghbvf/gocell/generated/contracts/event/user/created/v1"
+	sub9 "github.com/ghbvf/gocell/generated/contracts/event/user/deleted/v1"
+	sub10 "github.com/ghbvf/gocell/generated/contracts/event/user/locked/v1"
+	sub11 "github.com/ghbvf/gocell/generated/contracts/event/user/unlocked/v1"
+	sub12 "github.com/ghbvf/gocell/generated/contracts/event/user/updated/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -70,61 +70,56 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	// auditappendsession: session lifecycle events
-	if err := sub0.NewSubscription(c.appendSessionSvc.HandleEvent, "auditcore", "auditappendsession").Mount(reg); err != nil {
-		return fmt.Errorf("auditcore: subscribe event.session.created.v1: %w", err)
-	}
-
-	if err := sub1.NewSubscription(c.appendSessionSvc.HandleEvent, "auditcore", "auditappendsession").Mount(reg); err != nil {
-		return fmt.Errorf("auditcore: subscribe event.session.revoked.v1: %w", err)
-	}
-
-	// auditappenduser: user lifecycle events
-	if err := sub2.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
-		return fmt.Errorf("auditcore: subscribe event.user.unlocked.v1: %w", err)
-	}
-
-	if err := sub3.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
-		return fmt.Errorf("auditcore: subscribe event.user.updated.v1: %w", err)
-	}
-
-	// auditappendconfig: config lifecycle events
-	if err := sub4.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
+	if err := sub0.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.entry-deleted.v1: %w", err)
 	}
 
-	if err := sub5.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
+	if err := sub1.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.entry-upserted.v1: %w", err)
 	}
 
-	if err := sub6.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
+	if err := sub2.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.rollback.v1: %w", err)
 	}
 
-	if err := sub7.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
+	if err := sub3.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.version-published.v1: %w", err)
 	}
 
-	// auditappendrole: role lifecycle events
-	if err := sub8.NewSubscription(c.appendRoleSvc.HandleEvent, "auditcore", "auditappendrole").Mount(reg); err != nil {
+	if err := sub4.NewSubscription(c.appendRoleSvc.HandleEvent, "auditcore", "auditappendrole").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.role.assigned.v1: %w", err)
 	}
 
-	if err := sub9.NewSubscription(c.appendRoleSvc.HandleEvent, "auditcore", "auditappendrole").Mount(reg); err != nil {
+	if err := sub5.NewSubscription(c.appendRoleSvc.HandleEvent, "auditcore", "auditappendrole").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.role.revoked.v1: %w", err)
 	}
 
-	// auditappenduser: remaining user events
-	if err := sub10.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
+	if err := sub6.NewSubscription(c.appendSessionSvc.HandleEvent, "auditcore", "auditappendsession").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.session.created.v1: %w", err)
+	}
+
+	if err := sub7.NewSubscription(c.appendSessionSvc.HandleEvent, "auditcore", "auditappendsession").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.session.revoked.v1: %w", err)
+	}
+
+	if err := sub8.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.created.v1: %w", err)
 	}
 
-	if err := sub11.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
+	if err := sub9.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.deleted.v1: %w", err)
 	}
 
-	if err := sub12.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
+	if err := sub10.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.locked.v1: %w", err)
+	}
+
+	if err := sub11.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.user.unlocked.v1: %w", err)
+	}
+
+	if err := sub12.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.user.updated.v1: %w", err)
 	}
 
 	return nil
