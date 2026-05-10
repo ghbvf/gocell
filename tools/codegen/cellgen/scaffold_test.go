@@ -294,8 +294,12 @@ func TestScaffoldCell_TypeWhitelistRejected(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for type %q, got nil", tc.cellType)
 			}
-			if !strings.Contains(err.Error(), "must be one of") {
-				t.Errorf("expected 'must be one of' in error, got: %v", err)
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != errcode.ErrValidationFailed {
+				t.Errorf("expected errcode.ErrValidationFailed, got %q", ec.Code)
 			}
 		})
 	}
@@ -330,8 +334,12 @@ func TestScaffoldCell_LevelWhitelistRejected(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for level %q, got nil", tc.level)
 			}
-			if !strings.Contains(err.Error(), "must be one of") {
-				t.Errorf("expected 'must be one of' in error, got: %v", err)
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != errcode.ErrValidationFailed {
+				t.Errorf("expected errcode.ErrValidationFailed, got %q", ec.Code)
 			}
 		})
 	}

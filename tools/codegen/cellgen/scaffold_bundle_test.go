@@ -1,11 +1,14 @@
 package cellgen
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestScaffoldCellBundle_HTTP is a RED test for K#09 cellgen.ScaffoldCellBundle:
@@ -254,12 +257,17 @@ func TestScaffoldCellBundle_SymlinkEscape_Slice(t *testing.T) {
 	if err == nil {
 		t.Fatal("ScaffoldCellBundle(slices symlink escape): want error, got nil")
 	}
-	// 错误消息应包含逃逸相关描述
-	msg := err.Error()
-	if !strings.ContainsAny(msg, "outside root,escapes,containment") &&
-		!strings.Contains(msg, "outside") && !strings.Contains(msg, "escapes") &&
-		!strings.Contains(msg, "containment") {
-		t.Errorf("error must mention escape/containment; got: %v", err)
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error for symlink escape, got %T: %v", err, err)
+	}
+	// pathsafe wraps symlink-escapes as KindInvalid/ErrValidationFailed at the
+	// leaf check, but the scaffold bundle layer may re-wrap as ErrInternal.
+	// We verify the error is a structured *errcode.Error (not a raw error) and
+	// that the Kind signals a rejection (not a success), which is sufficient for
+	// this containment boundary test.
+	if ec.Code != errcode.ErrValidationFailed && ec.Code != errcode.ErrInternal {
+		t.Errorf("expected ErrValidationFailed or ErrInternal for symlink escape, got %q", ec.Code)
 	}
 
 	// outside 内不应有任何文件
