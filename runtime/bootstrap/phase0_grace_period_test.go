@@ -45,11 +45,12 @@ const (
 // TestPhase0_TerminationGracePeriodWarn covers the three branches of the
 // terminationGracePeriod sanity check in phase0ValidateOptions:
 //   - unset (zero) → skip silently
-//   - declared and < shutdownTimeout + 10s → warn (non-blocking)
+//   - declared and < (2 × shutdownTimeout + 10s) → warn (non-blocking)
 //   - declared and ≥ threshold → no warn
 //
-// Common bootstrap scaffolding (shutdownTimeout=20s ⇒ minimum_required = 30s)
-// is shared across cases so each row only varies the declared grace period.
+// Common bootstrap scaffolding (shutdownTimeout=20s ⇒
+// minimum_required = 2*20 + 10 = 50s) is shared across cases so each row
+// only varies the declared grace period.
 //
 // This test intentionally does NOT call t.Parallel(): it mutates the global
 // slog.Default(), which would race with parallel tests in the same package

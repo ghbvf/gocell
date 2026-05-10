@@ -11,7 +11,7 @@ terminationGracePeriodSeconds  >=  2 × shutdownTimeout + 10s
 - `shutdownTimeout` — `bootstrap.WithShutdownTimeout(d)`，默认 30s（`runtime/shutdown.DefaultTimeout`）。**每个 stage bucket 独立分配** 这个时长：
   - **drainCtx**（stage 1+2）— readiness flip + `preShutdownDelay` + HTTP drain
   - **tearCtx**（stage 3）— LIFO teardown（workers / event router / assembly / kernel lifecycle / closers / managed resources）
-  
+
   两个 bucket 互不吞噬：HTTP drain 即使吃满 drainCtx，LIFO teardown 仍拿到完整的 tearCtx。最坏总耗时 ≈ `2 × shutdownTimeout + finalize 微小开销`。
 - `10s` 安全余量 — 覆盖 SIGTERM → kubelet 上报 → 进程主循环响应、以及操作系统 / runtime 调度抖动
 
