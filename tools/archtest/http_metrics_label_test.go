@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -48,15 +50,10 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 
 	oldStateHelper := "with" + "Cell" + "IDState"
 	var callsOldState bool
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == oldStateHelper {
 			callsOldState = true
 		}
-		return true
 	})
 
 	var (
@@ -67,28 +64,25 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		runtimeSentinelPos  token.Pos
 		recordRequestPos    token.Pos
 	)
-	ast.Inspect(metricsPath.Body, func(n ast.Node) bool {
-		switch v := n.(type) {
-		case *ast.CallExpr:
-			if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
-				readsCtxCellID = true
-				rememberFirstPos(&ctxCellIDPos, v.Pos())
-			}
-			if isSelectorCall(v, "collector", "RecordRequest") {
-				recordRequestPos = v.Pos()
-				if len(v.Args) > 0 {
-					if id, ok := v.Args[0].(*ast.Ident); ok && id.Name == "cellID" {
-						recordUsesCellIDArg = true
-					}
+	scanner.EachNode[ast.CallExpr](metricsPath.Body, func(v *ast.CallExpr) {
+		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
+			readsCtxCellID = true
+			rememberFirstPos(&ctxCellIDPos, v.Pos())
+		}
+		if isSelectorCall(v, "collector", "RecordRequest") {
+			recordRequestPos = v.Pos()
+			if len(v.Args) > 0 {
+				if id, ok := v.Args[0].(*ast.Ident); ok && id.Name == "cellID" {
+					recordUsesCellIDArg = true
 				}
 			}
-		case *ast.Ident:
-			if v.Name == "RuntimeCellIDSentinel" {
-				usesRuntimeSentinel = true
-				rememberFirstPos(&runtimeSentinelPos, v.Pos())
-			}
 		}
-		return true
+	})
+	scanner.EachNode[ast.Ident](metricsPath.Body, func(v *ast.Ident) {
+		if v.Name == "RuntimeCellIDSentinel" {
+			usesRuntimeSentinel = true
+			rememberFirstPos(&runtimeSentinelPos, v.Pos())
+		}
 	})
 
 	assert.Truef(t, readsCtxCellID,
@@ -135,11 +129,7 @@ func TestHTTPMetricsLabelRouterAttribution01(t *testing.T) {
 		authPos            token.Pos
 		bodyLimitPos       token.Pos
 	)
-	ast.Inspect(buildMux.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](buildMux.Body, func(call *ast.CallExpr) {
 		switch {
 		case isSelectorCall(call, "middleware", "CellAttribution"):
 			rememberFirstPos(&cellAttributionPos, call.Pos())
@@ -156,7 +146,6 @@ func TestHTTPMetricsLabelRouterAttribution01(t *testing.T) {
 		case isRouterUseWithDefaultMiddleware(call):
 			rememberFirstPos(&defaultMWPos, call.Pos())
 		}
-		return true
 	})
 
 	require.Truef(t, cellAttributionPos.IsValid(),
@@ -192,37 +181,33 @@ func TestHTTPMetricsLabelNoAssemblyDerive01(t *testing.T) {
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	var fn *ast.FuncDecl
-	for _, decl := range file.Decls {
-		f, ok := decl.(*ast.FuncDecl)
-		if ok && f.Name.Name == "autoWireHTTPMetricsCollector" {
+	scanner.EachNode[ast.FuncDecl](file, func(f *ast.FuncDecl) {
+		if fn == nil && f.Name.Name == "autoWireHTTPMetricsCollector" {
 			fn = f
-			break
 		}
-	}
+	})
 	require.NotNilf(t, fn, "%s: autoWireHTTPMetricsCollector func not found", rel)
 
 	var referencesAssemblyID, referencesAssemblyCoreID, referencesDefaultLiteral, referencesProviderCellKey bool
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		switch v := n.(type) {
-		case *ast.SelectorExpr:
-			if id, ok := v.X.(*ast.Ident); ok && id.Name == "b" && v.Sel.Name == "assemblyID" {
-				referencesAssemblyID = true
-			}
-			if call, ok := v.X.(*ast.SelectorExpr); ok {
-				if id, ok := call.X.(*ast.Ident); ok && id.Name == "b" && call.Sel.Name == "assemblyCore" && v.Sel.Name == "ID" {
-					referencesAssemblyCoreID = true
-				}
-			}
-		case *ast.BasicLit:
-			if v.Kind == token.STRING && v.Value == `"default"` {
-				referencesDefaultLiteral = true
-			}
-		case *ast.KeyValueExpr:
-			if id, ok := v.Key.(*ast.Ident); ok && id.Name == "CellID" {
-				referencesProviderCellKey = true
+	scanner.EachNode[ast.SelectorExpr](fn.Body, func(v *ast.SelectorExpr) {
+		if id, ok := v.X.(*ast.Ident); ok && id.Name == "b" && v.Sel.Name == "assemblyID" {
+			referencesAssemblyID = true
+		}
+		if call, ok := v.X.(*ast.SelectorExpr); ok {
+			if id, ok := call.X.(*ast.Ident); ok && id.Name == "b" && call.Sel.Name == "assemblyCore" && v.Sel.Name == "ID" {
+				referencesAssemblyCoreID = true
 			}
 		}
-		return true
+	})
+	scanner.EachNode[ast.BasicLit](fn.Body, func(v *ast.BasicLit) {
+		if v.Kind == token.STRING && v.Value == `"default"` {
+			referencesDefaultLiteral = true
+		}
+	})
+	scanner.EachNode[ast.KeyValueExpr](fn.Body, func(v *ast.KeyValueExpr) {
+		if id, ok := v.Key.(*ast.Ident); ok && id.Name == "CellID" {
+			referencesProviderCellKey = true
+		}
 	})
 
 	assert.Falsef(t, referencesAssemblyID,
@@ -249,29 +234,21 @@ func TestHTTPMetricsLabelNoConfigCellID01(t *testing.T) {
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	hasCellIDField := false
-	ast.Inspect(file, func(n ast.Node) bool {
-		decl, ok := n.(*ast.GenDecl)
-		if !ok || decl.Tok != token.TYPE {
-			return true
+	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+		if ts.Name.Name != "ProviderCollectorConfig" {
+			return
 		}
-		for _, spec := range decl.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "ProviderCollectorConfig" {
-				continue
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			for _, f := range st.Fields.List {
-				for _, name := range f.Names {
-					if name.Name == "CellID" {
-						hasCellIDField = true
-					}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			return
+		}
+		for _, f := range st.Fields.List {
+			for _, name := range f.Names {
+				if name.Name == "CellID" {
+					hasCellIDField = true
 				}
 			}
 		}
-		return true
 	})
 	assert.Falsef(t, hasCellIDField,
 		"%s: %s — ProviderCollectorConfig must not declare CellID; cellID is supplied per RecordRequest",
@@ -287,11 +264,14 @@ func slashRel(t *testing.T, root, target string) string {
 
 func findHTTPMetricsFuncDecl(t *testing.T, file *ast.File, name string) *ast.FuncDecl {
 	t.Helper()
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if ok && fn.Name.Name == name {
-			return fn
+	var result *ast.FuncDecl
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if result == nil && fn.Name.Name == name {
+			result = fn
 		}
+	})
+	if result != nil {
+		return result
 	}
 	require.Failf(t, "function not found", "expected function %s", name)
 	return nil
@@ -299,34 +279,23 @@ func findHTTPMetricsFuncDecl(t *testing.T, file *ast.File, name string) *ast.Fun
 
 func narrowestFuncLitWithCollectorRecordRequest(root ast.Node) *ast.FuncLit {
 	var best *ast.FuncLit
-	ast.Inspect(root, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncLit)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.FuncLit](root, func(fn *ast.FuncLit) {
 		if !containsCollectorRecordRequest(fn.Body) {
-			return true
+			return
 		}
 		if best == nil || fn.End()-fn.Pos() < best.End()-best.Pos() {
 			best = fn
 		}
-		return true
 	})
 	return best
 }
 
 func containsCollectorRecordRequest(root ast.Node) bool {
 	found := false
-	ast.Inspect(root, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if ok && isSelectorCall(call, "collector", "RecordRequest") {
+	scanner.EachNode[ast.CallExpr](root, func(call *ast.CallExpr) {
+		if !found && isSelectorCall(call, "collector", "RecordRequest") {
 			found = true
-			return false
 		}
-		return true
 	})
 	return found
 }

@@ -31,6 +31,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const queryParamDriftRule = "META-QUERYPARAM-DRIFT-01"
@@ -186,19 +187,14 @@ func TestScanQueryParamFile_ParseErrorFailsClosed(t *testing.T) {
 
 func collectContractSpecIDs(file *ast.File) map[string]string {
 	specs := map[string]string{}
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.VAR {
-			continue
+	scanner.EachNode[ast.GenDecl](file, func(gen *ast.GenDecl) {
+		if gen.Tok != token.VAR {
+			return
 		}
-		for _, spec := range gen.Specs {
-			valueSpec, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.ValueSpec](gen, func(valueSpec *ast.ValueSpec) {
 			collectValueSpecContractIDs(specs, valueSpec)
-		}
-	}
+		})
+	})
 	return specs
 }
 
@@ -215,16 +211,14 @@ func collectValueSpecContractIDs(out map[string]string, spec *ast.ValueSpec) {
 
 func collectRouteBindings(fset *token.FileSet, file *ast.File, rel string, specIDs map[string]string) []routeQueryBinding {
 	var bindings []routeQueryBinding
-	ast.Inspect(file, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok || !isAuthRouteLiteral(lit) {
-			return true
+	scanner.EachNode[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
+		if !isAuthRouteLiteral(lit) {
+			return
 		}
 		binding, ok := routeBindingFromLiteral(fset, lit, rel, specIDs)
 		if ok {
 			bindings = append(bindings, binding)
 		}
-		return true
 	})
 	return bindings
 }
@@ -261,26 +255,21 @@ func routeBindingFromLiteral(fset *token.FileSet, lit *ast.CompositeLit, rel str
 
 func collectQueryParamUses(file *ast.File, rel string) map[string]map[string]struct{} {
 	out := map[string]map[string]struct{}{}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
 		params := collectFuncQueryParams(fn.Body)
 		if len(params) > 0 {
 			out[funcKey(rel, fn.Name.Name)] = params
 		}
-	}
+	})
 	return out
 }
 
 func collectFuncQueryParams(body *ast.BlockStmt) map[string]struct{} {
 	params := map[string]struct{}{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
 		if queryParam, ok := queryGetParam(call); ok {
 			params[queryParam] = struct{}{}
 		}
@@ -288,7 +277,6 @@ func collectFuncQueryParams(body *ast.BlockStmt) map[string]struct{} {
 			params["cursor"] = struct{}{}
 			params["limit"] = struct{}{}
 		}
-		return true
 	})
 	return params
 }
@@ -378,18 +366,19 @@ func contractSpecIDFromExpr(expr ast.Expr) (string, bool) {
 	if !ok || !isContractSpecLiteral(lit) {
 		return "", false
 	}
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
+	var result string
+	var found bool
+	scanner.EachNode[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
+		if found {
+			return
 		}
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != "ID" {
-			continue
+			return
 		}
-		return stringLiteralValue(kv.Value)
-	}
-	return "", false
+		result, found = stringLiteralValue(kv.Value)
+	})
+	return result, found
 }
 
 func routeContractID(expr ast.Expr, specIDs map[string]string) (string, bool) {

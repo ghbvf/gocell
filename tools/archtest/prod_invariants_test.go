@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
@@ -105,27 +106,39 @@ func scanProdDurationAST(
 ) []string {
 	var violations []string
 
-	for _, decl := range file.Decls {
-		// Package-level const blocks are the unique compliant position.
-		if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
-			continue
-		}
-
-		ast.Inspect(decl, func(n ast.Node) bool {
-			expr, ok := n.(ast.Expr)
-			if !ok {
-				return true
-			}
+	checkExpr := func(root ast.Node) {
+		// Only scan concrete Expr node kinds that are the outermost duration
+		// literal shape: BinaryExpr (5*time.Second), CallExpr (time.Duration(5)),
+		// UnaryExpr (-5*time.Second), ParenExpr ((5*time.Second)). Bare BasicLit
+		// integers are not time.Duration in the types.Info map, so
+		// exprIsTimeDuration rejects them, avoiding double-counting sub-nodes.
+		scan := func(expr ast.Expr) {
 			if !exprIsTimeDuration(expr, info) {
-				return true
+				return
 			}
 			if !isLiteralDurationExpr(expr) {
-				return true
+				return
 			}
 			pos := fset.Position(expr.Pos())
 			violations = append(violations, fmt.Sprintf("%s:%d: %s", rel, pos.Line, formatDurationExpr(expr)))
-			return false
-		})
+		}
+		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { scan(e) })
+		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { scan(e) })
+		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { scan(e) })
+		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { scan(e) })
+	}
+
+	for _, decl := range file.Decls {
+		// Package-level const blocks are the unique compliant position — skip them.
+		switch d := decl.(type) {
+		case *ast.GenDecl:
+			if d.Tok == token.CONST {
+				continue
+			}
+			checkExpr(d)
+		default:
+			checkExpr(decl)
+		}
 	}
 
 	return violations
@@ -481,22 +494,36 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	f, err := parser.ParseFile(fset, "f.go", src, 0)
 	require.NoError(t, err)
 
+	// Scan outermost duration literal shapes: BinaryExpr (5*time.Second),
+	// CallExpr (time.Duration(5)), UnaryExpr, ParenExpr. Bare BasicLit integers
+	// are not the outermost form — they are only duration literals as part of a
+	// BinaryExpr (already counted there), so skip them to avoid double-counting.
+	countInRoot := func(root ast.Node) int {
+		n := 0
+		check := func(expr ast.Expr) {
+			if isLiteralDurationExpr(expr) {
+				n++
+			}
+		}
+		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { check(e) })
+		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { check(e) })
+		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { check(e) })
+		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { check(e) })
+		return n
+	}
+
 	count := 0
 	for _, decl := range f.Decls {
-		if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
-			continue
+		// Package-level const blocks are the unique compliant position — skip them.
+		switch d := decl.(type) {
+		case *ast.GenDecl:
+			if d.Tok == token.CONST {
+				continue
+			}
+			count += countInRoot(d)
+		default:
+			count += countInRoot(decl)
 		}
-		ast.Inspect(decl, func(n ast.Node) bool {
-			expr, ok := n.(ast.Expr)
-			if !ok {
-				return true
-			}
-			if !isLiteralDurationExpr(expr) {
-				return true
-			}
-			count++
-			return false
-		})
 	}
 	return count
 }

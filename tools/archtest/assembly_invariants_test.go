@@ -175,35 +175,38 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 // hasGeneratedCellModulesFunc returns true when the file contains a top-level
 // function declaration `func generatedCellModules() []CellModule`.
 func hasGeneratedCellModulesFunc(af *ast.File) bool {
-	for _, decl := range af.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil {
-			continue // skip non-functions and methods
+	found := false
+	archscanner.EachNode[ast.FuncDecl](af, func(fn *ast.FuncDecl) {
+		if found {
+			return
+		}
+		if fn.Recv != nil {
+			return // skip methods
 		}
 		if fn.Name.Name != "generatedCellModules" {
-			continue
+			return
 		}
 		ft := fn.Type
 		// No parameters.
 		if ft.Params != nil && len(ft.Params.List) != 0 {
-			continue
+			return
 		}
 		// Returns exactly one result: []CellModule.
 		if ft.Results == nil || len(ft.Results.List) != 1 {
-			continue
+			return
 		}
 		result := ft.Results.List[0]
 		arr, ok := result.Type.(*ast.ArrayType)
 		if !ok || arr.Len != nil {
-			continue
+			return
 		}
 		id, ok := arr.Elt.(*ast.Ident)
 		if !ok || id.Name != "CellModule" {
-			continue
+			return
 		}
-		return true
-	}
-	return false
+		found = true
+	})
+	return found
 }
 
 // INVARIANT: ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02
@@ -233,35 +236,27 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 	var violations []violation
 
 	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc archscanner.FileContext) {
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			sw, ok := n.(*ast.SwitchStmt)
-			if !ok {
-				return true
-			}
-			for _, stmt := range sw.Body.List {
-				cc, ok := stmt.(*ast.CaseClause)
-				if !ok {
-					continue
-				}
+		archscanner.EachNode[ast.SwitchStmt](fc.File, func(sw *ast.SwitchStmt) {
+			archscanner.EachNode[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
 				for _, expr := range cc.List {
-					lit, ok := expr.(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						continue
-					}
-					unquoted, err := strconv.Unquote(lit.Value)
-					if err != nil {
-						continue
-					}
-					if _, found := knownIDSet[unquoted]; found {
-						violations = append(violations, violation{
-							file:   fc.Rel,
-							line:   fc.Fset.Position(lit.Pos()).Line,
-							cellID: unquoted,
-						})
-					}
+					archscanner.EachNode[ast.BasicLit](expr, func(lit *ast.BasicLit) {
+						if lit.Kind != token.STRING {
+							return
+						}
+						unquoted, err := strconv.Unquote(lit.Value)
+						if err != nil {
+							return
+						}
+						if _, found := knownIDSet[unquoted]; found {
+							violations = append(violations, violation{
+								file:   fc.Rel,
+								line:   fc.Fset.Position(lit.Pos()).Line,
+								cellID: unquoted,
+							})
+						}
+					})
 				}
-			}
-			return true
+			})
 		})
 	})
 
@@ -357,22 +352,19 @@ func containsYAMLDashTag(rawTag string) bool {
 // findStructDecl returns the *ast.StructType for `type <name> struct { … }` in
 // af, or nil if not found.
 func findStructDecl(af *ast.File, name string) *ast.StructType {
-	for _, decl := range af.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
+	var result *ast.StructType
+	archscanner.EachNode[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+		if result != nil {
+			return
 		}
-		for _, spec := range gen.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != name {
-				continue
-			}
-			if st, ok := ts.Type.(*ast.StructType); ok {
-				return st
-			}
+		if ts.Name.Name != name {
+			return
 		}
-	}
-	return nil
+		if st, ok := ts.Type.(*ast.StructType); ok {
+			result = st
+		}
+	})
+	return result
 }
 
 // INVARIANT: ASSEMBLY-CELLMODULE-TYPE-04
@@ -460,19 +452,13 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, cmdDir string) {
 // with the given name, regardless of whether it is an interface, struct, or
 // any other type kind.
 func hasTopLevelTypeDecl(af *ast.File, name string) bool {
-	for _, decl := range af.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
+	found := false
+	archscanner.EachNode[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+		if !found && ts.Name.Name == name {
+			found = true
 		}
-		for _, spec := range gen.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if ok && ts.Name.Name == name {
-				return true
-			}
-		}
-	}
-	return false
+	})
+	return found
 }
 
 // ---- ASSEMBLY-SNAPSHOTS-LOCKED-01 ----
@@ -824,25 +810,22 @@ func asnCheckSource(label, src string) ([]string, error) {
 
 func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	var violations []string
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
+	archscanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
 		violations = append(violations, asnScanStmts(fset, fn.Body.List, asnNewLockState(), label)...)
-	}
+	})
 	// Independently inspect every FuncLit (closure / goroutine body / inline
 	// callback). A FuncLit owns its lock scope: writes inside a closure do
 	// not inherit the caller's lockDepth, so each starts fresh at 0. The
 	// outer ast.Walk catches FuncLits anywhere in the file (top-level decls,
 	// nested calls, struct field initializers, ...).
-	ast.Inspect(f, func(n ast.Node) bool {
-		fl, ok := n.(*ast.FuncLit)
-		if !ok || fl.Body == nil {
-			return true
+	archscanner.EachNode[ast.FuncLit](f, func(fl *ast.FuncLit) {
+		if fl.Body == nil {
+			return
 		}
 		violations = append(violations, asnScanStmts(fset, fl.Body.List, asnNewLockState(), label)...)
-		return true
 	})
 	return violations
 }
@@ -1125,22 +1108,19 @@ func TestAssemblyRefMethodSet(t *testing.T) {
 // findInterfaceDecl returns the *ast.InterfaceType declared as `type <name>
 // interface { … }` in af, or nil if not found.
 func findInterfaceDecl(af *ast.File, name string) *ast.InterfaceType {
-	for _, decl := range af.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
+	var result *ast.InterfaceType
+	archscanner.EachNode[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+		if result != nil {
+			return
 		}
-		for _, spec := range gen.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != name {
-				continue
-			}
-			if iface, ok := ts.Type.(*ast.InterfaceType); ok {
-				return iface
-			}
+		if ts.Name.Name != name {
+			return
 		}
-	}
-	return nil
+		if iface, ok := ts.Type.(*ast.InterfaceType); ok {
+			result = iface
+		}
+	})
+	return result
 }
 
 // formatFuncSignature renders an *ast.FuncType as "(<param-types>) <results>"
