@@ -27,6 +27,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -146,31 +147,26 @@ func checkFileForDirectChannelClose(
 ) {
 	t.Helper()
 
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
 		}
 		funcName := fd.Name.Name
 		if allowedChannelCloseFuncs[funcName] {
-			continue
+			return
 		}
 
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "Close" {
-				return true
+				return
 			}
 			recvType := info.TypeOf(sel.X)
 			if recvType == nil {
-				return true
+				return
 			}
 			if !implementsAMQPChannel(recvType, chanIface) {
-				return true
+				return
 			}
 
 			pos := fset.Position(call.Pos())
@@ -186,9 +182,8 @@ func checkFileForDirectChannelClose(
 					"  Replace: %s.Close() → conn.CloseEphemeralChannel(%s)",
 				rel, pos.Line, funcName, receiverHint, recvType.String(), receiverHint, receiverHint,
 			)
-			return true
 		})
-	}
+	})
 }
 
 // implementsAMQPChannel reports whether t (value or pointer) satisfies the
@@ -279,34 +274,28 @@ func waitAndClose() {
 	// recording test impl pattern: simpler to call the inspection directly
 	// and aggregate flagged function names locally.
 	flagged := map[string]bool{}
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
 		}
 		funcName := fd.Name.Name
 		if allowedChannelCloseFuncs[funcName] {
-			continue
+			return
 		}
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "Close" {
-				return true
+				return
 			}
 			rt := info.TypeOf(sel.X)
 			if rt == nil {
-				return true
+				return
 			}
 			if implementsAMQPChannel(rt, chanIface) {
 				flagged[funcName] = true
 			}
-			return true
 		})
-	}
+	})
 
 	wantFlagged := map[string]bool{
 		"violatorRenamedVar": true,
@@ -359,29 +348,22 @@ func TestRMQChannelMaxPerConn01_ConfigFieldExists(t *testing.T) {
 	}
 
 	var hasField bool
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			continue
+	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Name.Name != "Config" {
+			return
 		}
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "Config" {
-				continue
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			for _, field := range st.Fields.List {
-				for _, name := range field.Names {
-					if name.Name == "MaxChannelsPerConn" {
-						hasField = true
-					}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			return
+		}
+		for _, field := range st.Fields.List {
+			for _, name := range field.Names {
+				if name.Name == "MaxChannelsPerConn" {
+					hasField = true
 				}
 			}
 		}
-	}
+	})
 
 	if !hasField {
 		t.Errorf(
@@ -411,16 +393,11 @@ func TestRMQChannelMaxPerConn01_SetDefaultsPopulatesField(t *testing.T) {
 	}
 
 	var setDefaults *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "setDefaults" && fd.Recv != nil {
 			setDefaults = fd
-			break
 		}
-	}
+	})
 	if setDefaults == nil {
 		t.Fatalf("RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults not found in %s", src)
 	}
@@ -433,54 +410,46 @@ func TestRMQChannelMaxPerConn01_SetDefaultsPopulatesField(t *testing.T) {
 	// Accepting == 0 only would allow callers to pass -1 and silently skip the cap.
 	var assigns bool
 	var conditionIsLEQ bool
-	ast.Inspect(setDefaults.Body, func(n ast.Node) bool {
-		ifStmt, ok := n.(*ast.IfStmt)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.IfStmt](setDefaults.Body, func(ifStmt *ast.IfStmt) {
 		// Check if the condition is `<recv>.MaxChannelsPerConn <= 0`.
 		bin, ok := ifStmt.Cond.(*ast.BinaryExpr)
 		if !ok {
-			return true
+			return
 		}
 		if bin.Op != token.LEQ {
-			return true
+			return
 		}
 		// LHS must be a selector ending in MaxChannelsPerConn.
 		lhsSel, ok := bin.X.(*ast.SelectorExpr)
 		if !ok || lhsSel.Sel.Name != "MaxChannelsPerConn" {
-			return true
+			return
 		}
 		// RHS must be the literal 0.
 		rhs, ok := bin.Y.(*ast.BasicLit)
 		if !ok || rhs.Kind != token.INT || rhs.Value != "0" {
-			return true
+			return
 		}
 		// Found if MaxChannelsPerConn <= 0 — now verify body assigns default constant.
 		conditionIsLEQ = true
-		ast.Inspect(ifStmt.Body, func(inner ast.Node) bool {
-			assign, ok := inner.(*ast.AssignStmt)
-			if !ok || len(assign.Lhs) != 1 {
-				return true
+		scanner.EachNode[ast.AssignStmt](ifStmt.Body, func(assign *ast.AssignStmt) {
+			if assigns || len(assign.Lhs) != 1 {
+				return
 			}
 			sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "MaxChannelsPerConn" {
-				return true
+				return
 			}
 			if len(assign.Rhs) != 1 {
-				return true
+				return
 			}
 			ident, ok := assign.Rhs[0].(*ast.Ident)
 			if !ok {
-				return true
+				return
 			}
 			if ident.Name == expectedDefaultMaxChannelsPerConnConst {
 				assigns = true
-				return false
 			}
-			return true
 		})
-		return true
 	})
 
 	if !conditionIsLEQ {
@@ -522,31 +491,20 @@ func TestRMQChannelMaxPerConn01_AcquireChannelGuardsCounter(t *testing.T) {
 	}
 
 	var acquire *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "AcquireChannel" && fd.Recv != nil {
 			acquire = fd
-			break
 		}
-	}
+	})
 	if acquire == nil {
 		t.Fatalf("RMQ-CHANNEL-MAX-PER-CONN-01-C: AcquireChannel method not found in %s", src)
 	}
 
 	var refersToCounter bool
-	ast.Inspect(acquire.Body, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.SelectorExpr](acquire.Body, func(sel *ast.SelectorExpr) {
 		if sel.Sel.Name == "inUseChannels" {
 			refersToCounter = true
-			return false
 		}
-		return true
 	})
 
 	if !refersToCounter {
@@ -590,16 +548,10 @@ func TestRMQPublisherFailureHandling01_NackErrcodeReferenced(t *testing.T) {
 	}
 
 	var found bool
-	ast.Inspect(publish.Body, func(n ast.Node) bool {
-		ident, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.Ident](publish.Body, func(ident *ast.Ident) {
 		if ident.Name == "ErrAdapterAMQPNack" {
 			found = true
-			return false
 		}
-		return true
 	})
 
 	if !found {
@@ -641,26 +593,21 @@ func TestRMQPublisherFailureHandling01_AllBranchesEmitWarn(t *testing.T) {
 
 	const requiredWarnCalls = 3
 	var warnCount int
-	ast.Inspect(publish.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](publish.Body, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if sel.Sel.Name != "Warn" {
-			return true
+			return
 		}
 		ident, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if ident.Name == "slog" {
 			warnCount++
 		}
-		return true
 	})
 
 	if warnCount < requiredWarnCalls {
@@ -696,19 +643,14 @@ func TestRMQPublisherFailureHandling01_RecordsFailureMetric(t *testing.T) {
 	}
 
 	var calls int
-	ast.Inspect(publish.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](publish.Body, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if sel.Sel.Name == "RecordPublishFailure" {
 			calls++
 		}
-		return true
 	})
 
 	if calls < 1 {
@@ -773,14 +715,12 @@ func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 		case *ast.IfStmt:
 			checkIfBlock(s, inCtxDone)
 		case *ast.SelectStmt:
-			for _, c := range s.Body.List {
-				if comm, ok := c.(*ast.CommClause); ok {
-					isCtxDone := inCtxDone || isCtxDoneCase(comm)
-					for _, cs := range comm.Body {
-						checkStmt(cs, isCtxDone)
-					}
+			scanner.EachNode[ast.CommClause](s, func(comm *ast.CommClause) {
+				isCtxDone := inCtxDone || isCtxDoneCase(comm)
+				for _, cs := range comm.Body {
+					checkStmt(cs, isCtxDone)
 				}
-			}
+			})
 		case *ast.BlockStmt:
 			for _, inner := range s.List {
 				checkStmt(inner, inCtxDone)
@@ -796,12 +736,11 @@ func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 
 		// Does this if-block contain a non-nil return?
 		hasNonNilReturn := false
-		for _, s := range body {
-			if ret, ok := s.(*ast.ReturnStmt); ok && !isNilReturn(ret) {
+		scanner.EachNode[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
+			if !isNilReturn(ret) {
 				hasNonNilReturn = true
-				break
 			}
-		}
+		})
 
 		// Exempt: if-block guarding the "publisher is closed" early exit.
 		// This is not a wire-level failure, so no metric is required.
@@ -813,14 +752,16 @@ func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 			hasRecord := blockContainsRecordPublishFailure(body)
 			if !hasRecord {
 				// Find the first non-nil return for error reporting.
-				for _, s := range body {
-					if ret, ok := s.(*ast.ReturnStmt); ok && !isNilReturn(ret) {
-						pos := fset.Position(ret.Pos())
-						violations = append(violations,
-							fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
-						break
+				var reported bool
+				scanner.EachNode[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
+					if reported || isNilReturn(ret) {
+						return
 					}
-				}
+					reported = true
+					pos := fset.Position(ret.Pos())
+					violations = append(violations,
+						fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
+				})
 			}
 		}
 
@@ -892,14 +833,10 @@ func isNilReturn(ret *ast.ReturnStmt) bool {
 // `if p.closed.Load()` without full type resolution.
 func ifCondRefersTo(cond ast.Expr, name string) bool {
 	var found bool
-	ast.Inspect(cond, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok {
-			if id.Name == name {
-				found = true
-				return false
-			}
+	scanner.EachNode[ast.Ident](cond, func(id *ast.Ident) {
+		if id.Name == name {
+			found = true
 		}
-		return true
 	})
 	return found
 }
@@ -909,17 +846,11 @@ func ifCondRefersTo(cond ast.Expr, name string) bool {
 func blockContainsRecordPublishFailure(stmts []ast.Stmt) bool {
 	for _, s := range stmts {
 		var found bool
-		ast.Inspect(s, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](s, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if ok && sel.Sel.Name == "RecordPublishFailure" {
 				found = true
-				return false
 			}
-			return true
 		})
 		if found {
 			return true
@@ -933,16 +864,13 @@ func blockContainsRecordPublishFailure(stmts []ast.Stmt) bool {
 //
 //nolint:unparam // name is "Publish" in all callers; kept as param for readability
 func findMethod(f *ast.File, name string) *ast.FuncDecl {
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
+	var result *ast.FuncDecl
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if result == nil && fd.Name.Name == name && fd.Recv != nil {
+			result = fd
 		}
-		if fd.Name.Name == name && fd.Recv != nil {
-			return fd
-		}
-	}
-	return nil
+	})
+	return result
 }
 
 // ---------------------------------------------------------------------------
@@ -982,34 +910,25 @@ func TestRMQPublisherReleasesChannel01(t *testing.T) {
 
 	// Locate Publisher.Publish method.
 	var publishMethod *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv == nil || fd.Name.Name != "Publish" {
-			continue
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if publishMethod == nil && fd.Recv != nil && fd.Name.Name == "Publish" {
+			publishMethod = fd
 		}
-		publishMethod = fd
-		break
-	}
+	})
 	if publishMethod == nil {
 		t.Fatalf("RMQ-PUBLISHER-RELEASES-CHANNEL-01: Publisher.Publish method not found in %s", src)
 	}
 
 	// Check that AcquireChannel is called in the method body.
 	var hasAcquire bool
-	ast.Inspect(publishMethod.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](publishMethod.Body, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if sel.Sel.Name == "AcquireChannel" {
 			hasAcquire = true
-			return false
 		}
-		return true
 	})
 	if !hasAcquire {
 		t.Errorf(
@@ -1032,24 +951,16 @@ func TestRMQPublisherReleasesChannel01(t *testing.T) {
 	}
 
 	var hasRelease bool
-	ast.Inspect(publishMethod.Body, func(n ast.Node) bool {
-		ds, ok := n.(*ast.DeferStmt)
-		if !ok {
-			return true
+	scanner.EachNode[ast.DeferStmt](publishMethod.Body, func(ds *ast.DeferStmt) {
+		if hasRelease {
+			return
 		}
 		// Walk the entire defer statement subtree for the release selector.
-		ast.Inspect(ds, func(inner ast.Node) bool {
-			sel, ok := inner.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.SelectorExpr](ds, func(sel *ast.SelectorExpr) {
 			if releaseSelectors[sel.Sel.Name] {
 				hasRelease = true
-				return false
 			}
-			return true
 		})
-		return !hasRelease
 	})
 
 	if !hasRelease {
@@ -1091,16 +1002,11 @@ func TestRMQStopIntakeInflightWait01_StopIntakeWaitsForInflight(t *testing.T) {
 	}
 
 	var stopIntake *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
 			stopIntake = fd
-			break
 		}
-	}
+	})
 	if stopIntake == nil {
 		t.Fatalf("RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A: StopIntake method not found in %s", src)
 	}
@@ -1119,39 +1025,31 @@ func TestRMQStopIntakeInflightWait01_StopIntakeWaitsForInflight(t *testing.T) {
 	// re-introduce a wait-style API (e.g. behind a sync.Cond) still satisfy
 	// the gate without needing to update this test.
 	var found bool
-	ast.Inspect(stopIntake.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](stopIntake.Body, func(call *ast.CallExpr) {
 		// Bare identifier call form, e.g. `waitInflightDrain(...)`.
 		if id, ok := call.Fun.(*ast.Ident); ok {
 			if id.Name == "waitInflightDrain" {
 				found = true
-				return false
 			}
-			return true
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		switch sel.Sel.Name {
 		case "Wait":
 			// Accept any selector ending in localWg.Wait or inflightWg.Wait.
 			inner, ok := sel.X.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			if inner.Sel.Name == "localWg" || inner.Sel.Name == "inflightWg" {
 				found = true
-				return false
 			}
 		case "waitInflight", "waitDrained", "wgDone", "inflightCount":
 			found = true
-			return false
 		}
-		return true
 	})
 
 	if !found {
@@ -1188,16 +1086,11 @@ func TestRMQStopIntakeInflightWait01_DrainNoParentCtxDone(t *testing.T) {
 	}
 
 	var drain *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "drainRemaining" && fd.Recv != nil {
 			drain = fd
-			break
 		}
-	}
+	})
 	if drain == nil {
 		t.Fatalf("RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining method not found in %s", src)
 	}
@@ -1206,38 +1099,33 @@ func TestRMQStopIntakeInflightWait01_DrainNoParentCtxDone(t *testing.T) {
 	// a detached context (context.WithoutCancel) so a parent ctx cancel does not
 	// silently drop prefetched-but-unacked deliveries.
 	var violations []token.Pos
-	ast.Inspect(drain.Body, func(n ast.Node) bool {
-		comm, ok := n.(*ast.CommClause)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CommClause](drain.Body, func(comm *ast.CommClause) {
 		// CommClause.Comm is one of: SendStmt, AssignStmt, ExprStmt (for receive-only).
 		// The "case <-ctx.Done():" appears as ExprStmt with UnaryExpr Op=ARROW
 		// and X=CallExpr(ctx.Done).
 		expr, ok := comm.Comm.(*ast.ExprStmt)
 		if !ok {
-			return true
+			return
 		}
 		unary, ok := expr.X.(*ast.UnaryExpr)
 		if !ok || unary.Op != token.ARROW {
-			return true
+			return
 		}
 		call, ok := unary.X.(*ast.CallExpr)
 		if !ok {
-			return true
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		ident, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if ident.Name == "ctx" && sel.Sel.Name == "Done" {
 			violations = append(violations, comm.Pos())
 		}
-		return true
 	})
 
 	for _, p := range violations {
@@ -1270,38 +1158,30 @@ func TestRMQStopIntakeInflightWait01_DrainUsesDetachedContext(t *testing.T) {
 
 	bodyHasWithoutCancel := func(body *ast.BlockStmt) bool {
 		var found bool
-		ast.Inspect(body, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
 			ident, ok := sel.X.(*ast.Ident)
 			if !ok {
-				return true
+				return
 			}
 			if ident.Name == "context" && sel.Sel.Name == "WithoutCancel" {
 				found = true
-				return false
 			}
-			return true
 		})
 		return found
 	}
 
 	var found bool
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv == nil || fd.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if found || fd.Recv == nil || fd.Body == nil {
+			return
 		}
 		if fd.Name.Name != "drainRemaining" && fd.Name.Name != "consumeLoop" {
-			continue
+			return
 		}
 		if bodyHasWithoutCancel(fd.Body) {
 			found = true
-			break
 		}
-	}
+	})
 
 	if !found {
 		rel, _ := filepath.Rel(root, src)
@@ -1340,16 +1220,11 @@ func TestRMQStopIntakeInflightWait01_StopIntakeAvoidsLocalWgWait(t *testing.T) {
 	}
 
 	var stopIntake *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
 			stopIntake = fd
-			break
 		}
-	}
+	})
 	if stopIntake == nil {
 		t.Fatalf("StopIntake method not found in %s", src)
 	}
@@ -1358,21 +1233,17 @@ func TestRMQStopIntakeInflightWait01_StopIntakeAvoidsLocalWgWait(t *testing.T) {
 	if rel == "" {
 		rel = src
 	}
-	ast.Inspect(stopIntake.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](stopIntake.Body, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Wait" {
-			return true
+			return
 		}
 		inner, ok := sel.X.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if inner.Sel.Name != "localWg" {
-			return true
+			return
 		}
 		t.Errorf(
 			"RMQ-STOPINTAKE-INFLIGHT-WAIT-01: %s:%s — StopIntake body must not call "+
@@ -1382,6 +1253,5 @@ func TestRMQStopIntakeInflightWait01_StopIntakeAvoidsLocalWgWait(t *testing.T) {
 				"\"WaitGroup misuse: Add called concurrently with Wait\".",
 			rel, fset.Position(call.Pos()),
 		)
-		return true
 	})
 }
