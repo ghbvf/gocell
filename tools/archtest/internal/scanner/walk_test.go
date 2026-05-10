@@ -141,6 +141,39 @@ func TestWalk_SkipsSymlinkDir(t *testing.T) {
 	}
 }
 
+// TestWalk_RejectsSymlinkRoot pins down fail-closed behavior when the modRoot
+// path itself is a symbolic link. filepath.WalkDir does not descend into a
+// symlink root (it emits one Type==Symlink callback then stops), so silently
+// returning zero files would mask a misconfigured caller. The scanner returns
+// an explicit error so that the misconfiguration surfaces immediately.
+//
+// Note: macOS /var → /private/var lives on path segments above the temp root,
+// never at the root itself, so this check does not affect t.TempDir-based
+// fixtures used elsewhere in the suite.
+func TestWalk_RejectsSymlinkRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Symlink requires admin/Developer Mode on Windows")
+	}
+
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "a.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	parent := t.TempDir()
+	link := filepath.Join(parent, "modroot")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	_, err := scanner.ModuleScope(link).Files()
+	if err == nil {
+		t.Fatal("expected error when modRoot is a symlink, got nil")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("error message should mention symlink, got: %v", err)
+	}
+}
+
 func TestWalk_LstatNonExistError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 0000 not reliable on Windows")

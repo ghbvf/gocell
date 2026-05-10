@@ -2,12 +2,26 @@ package scanner
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// DirsScopeEscapeError is the structured error returned via [Scope.Files] when
+// one or more directories supplied to [DirsScope] would resolve outside the
+// module root. Callers verify this condition with errors.As and inspect Dirs;
+// keep the field exported so tests can assert on the offending paths without
+// resorting to substring matching on the message.
+type DirsScopeEscapeError struct {
+	// Dirs are the offending input directories, preserved in their original
+	// (caller-supplied, pre-clean) form so error messages stay meaningful.
+	Dirs []string
+}
+
+func (e *DirsScopeEscapeError) Error() string {
+	return "DirsScope: dirs escape module root: " + strings.Join(e.Dirs, ", ")
+}
 
 // defaultSkipDirs is the set of directory base-names that are never walked.
 var defaultSkipDirs = map[string]struct{}{
@@ -156,7 +170,7 @@ func DirsScope(modRoot string, dirs []string, opts ...option) Scope {
 	}
 	s := newScope(modRoot, roots, cfg)
 	if len(invalidRoots) > 0 {
-		s.setupErr = fmt.Errorf("DirsScope: dirs escape module root: %s", strings.Join(invalidRoots, ", "))
+		s.setupErr = &DirsScopeEscapeError{Dirs: invalidRoots}
 	}
 	return s
 }

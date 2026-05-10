@@ -15,28 +15,40 @@ import (
 // nil error. modRoot is used to compute module-relative paths in error
 // messages so that absolute paths do not appear in CI logs unexpectedly.
 func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(path string) bool) ([]string, error) {
-	if _, err := os.Lstat(root); err != nil {
+	info, err := os.Lstat(root)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		display := moduleRelDisplay(modRoot, root)
 		return nil, fmt.Errorf("lstat: %s: %w", display, err)
 	}
+	// fail-closed: refuse to walk a root that is itself a symlink.
+	// filepath.WalkDir does not descend into a symlink root anyway (it emits a
+	// single Type==Symlink callback and stops), so silently returning zero
+	// files would hide a misconfigured caller. A real directory is the only
+	// legitimate input — the macOS /var → /private/var system symlink is on
+	// path segments above the temp root, never at the root itself, so this
+	// check does not affect t.TempDir-based fixtures.
+	if info.Mode()&os.ModeSymlink != 0 {
+		display := moduleRelDisplay(modRoot, root)
+		return nil, fmt.Errorf("walk: root %s is a symlink (refused; scanner requires a real directory)", display)
+	}
 
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			display := moduleRelDisplay(modRoot, path)
 			return fmt.Errorf("walk %s: %w", display, walkErr)
 		}
 		// fail-closed: archtest scans the static repository structure, so symlinks
-		// are never a legitimate input. filepath.WalkDir does not descend into
-		// symlink directories on its own, but it still surfaces symlink files via
-		// the callback. Reject every entry whose Type bit is ModeSymlink so a
-		// malicious or accidental symlink under modRoot cannot redirect a scan to
-		// arbitrary host content. d.IsDir() is always false here (a symlink's
-		// Type does not carry ModeDir even when the target is a directory), so a
-		// single return nil suffices.
+		// inside the tree are never a legitimate input. Reject every entry whose
+		// Type bit is ModeSymlink so a malicious or accidental symlink under
+		// modRoot cannot redirect a scan to arbitrary host content. The root
+		// path is screened separately above, so this branch only fires for
+		// entries discovered during the walk. d.IsDir() is always false here
+		// (a symlink's Type carries ModeSymlink, not ModeDir, even when the
+		// target is a directory), so a bare return nil suffices.
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
