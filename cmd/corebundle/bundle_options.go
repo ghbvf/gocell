@@ -89,7 +89,7 @@ func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the
 // shared cross-cutting deps, a pre-built assembly, a ConsumerBase, a metrics
-// handler, and the adapter info map. Called by run() after BuildApp returns.
+// handler, and the adapter info map. Called by runCorebundle after BuildApp returns.
 //
 // PGResource options are contributed per-Cell by CellModule.Provide (via
 // BuildApp opts). This function covers only the cross-cutting concerns:
@@ -109,7 +109,7 @@ func defaultRuntimeOptions(
 	// accesscore post-Init (lazy phase4 resolution, fail-closed).
 	// Internal listener: AuthServiceToken from InternalGuard. The listener is
 	// always registered in the runtime path; SharedDeps.Validate requires both
-	// InternalHTTPAddr and InternalGuard before run() reaches this point.
+	// InternalHTTPAddr and InternalGuard before runCorebundle reaches this point.
 	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
 	// when shared.VerboseToken is set, the health handler's strict-gate path
 	// (WithReadyzVerboseToken → SetVerboseToken) requires a matching X-Readyz-Token

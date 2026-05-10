@@ -268,6 +268,13 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 
 	if err := deps.Validate(); err != nil {
+		// Surface adapter mode on the failure path so operators can correlate the
+		// validation error with the requested vs. effective topology without
+		// chasing the typed Error's structured fields. The success-path Info log
+		// below intentionally fires only after Validate passes (see Wave 4 fix).
+		slog.Warn("corebundle: SharedDeps validation failed",
+			slog.String("requested_mode", adapterMode),
+			slog.String("effective_mode", topo.AdapterInfo()["mode"]))
 		return nil, err
 	}
 	slog.Info("adapter mode",

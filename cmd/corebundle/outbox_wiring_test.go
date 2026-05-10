@@ -76,7 +76,7 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 // TestBuildConfigCoreOpts_PGMode_MissingDSN asserts that postgres mode with an
 // empty DSN returns a non-nil error containing the env var name, so operators
 // know which variable to set. Corresponds to the fail-fast branch at
-// bundle.go:171-172.
+// bundle_configcore_storage.go:75-77.
 func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
