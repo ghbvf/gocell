@@ -1785,6 +1785,14 @@ var handleResultAllowedFields = map[string]struct{}{
 //
 // Drift in this field set silently changes what every cell handler can/must
 // produce, so freezing the set keeps the fallback intentional.
+//
+// Cannot funnel: HandleResult is a kernel-owned type whose literal construction
+// is required by consumer_base.go internal plumbing — making fields unexported
+// to force factory-only access would break that intra-package construction and
+// the typed-test conformance harness. No schema/marker source can express
+// "exactly these field names" as a Go compile-time constraint without
+// regenerating the type itself, which loses hand-tuned tags and comments.
+// Archtest is the minimum-friction gate.
 func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "kernel", "outbox", "outbox.go")
@@ -1810,6 +1818,14 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 		}
 		found = true
 		for _, field := range st.Fields.List {
+			// Embedded / anonymous field: field.Names is nil. Treat the embedded
+			// type as a virtual field — it adds API surface that Ack/Requeue/Reject
+			// cannot express, so it must go through allowlist review.
+			if len(field.Names) == 0 {
+				line := fset.Position(field.Type.Pos()).Line
+				unknown = append(unknown, fmt.Sprintf("kernel/outbox/outbox.go:%d: <embedded field>", line))
+				continue
+			}
 			for _, name := range field.Names {
 				seen[name.Name] = struct{}{}
 				if _, ok := handleResultAllowedFields[name.Name]; !ok {
@@ -1822,7 +1838,9 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 	})
 
 	if !found {
-		t.Fatal("HandleResult struct definition not found in kernel/outbox/outbox.go")
+		t.Fatalf("HandleResult struct definition not found in kernel/outbox/outbox.go " +
+			"— if the type was relocated to another file in package outbox, update " +
+			"this test's hardcoded path along with the move")
 	}
 
 	var missing []string
@@ -1865,10 +1883,12 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 //   - kernel/outbox/outboxtest/conformance.go — shared conformance harness;
 //     non-_test.go by package convention but used only from test binaries.
 //
-// Adding a new entry requires a code-comment justification: the goal of
-// FACTORY-PREFERRED-01 is to keep the fallback-literal surface intentionally
-// small. New kernel/outbox files writing HandleResult literals are rare —
-// extend the list deliberately.
+// Adding a new entry requires the justification to live **next to the map
+// entry below as a Go comment** (not in the file being scanned, since that
+// file is the subject of the rule). The goal of FACTORY-PREFERRED-01 is to
+// keep the fallback-literal surface intentionally small. New kernel/outbox
+// files writing HandleResult literals are rare — extend this list
+// deliberately.
 var handleResultLiteralAllowlist = map[string]struct{}{
 	"kernel/outbox/result.go":                 {},
 	"kernel/outbox/consumer_base.go":          {},
@@ -1894,6 +1914,18 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 //     honored via scanner.PackageAliases).
 //  2. Bare HandleResult{...} when the file's package is "outbox" itself
 //     (covers any future kernel/outbox/*.go file outside the allowlist).
+//
+// Cannot funnel: ProcessReason and SettlementObservers are runtime-determined
+// fields populated by handler code paths and middleware, with no schema /
+// marker source from which a literal-vs-factory choice can be derived. Type
+// system cannot express "callers in cells/ must use these three function
+// names" without unexporting HandleResult itself, which would break the
+// kernel-internal literal construction the allowlist exists to permit.
+// Archtest enforces the path discipline that no other layer can.
+//
+// t.Parallel: this rule walks the entire module (ModuleScope), unlike the
+// single-file FROZEN-01 sibling. Parallelism is intentional here and absent
+// there to keep the cheap test serial.
 func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
