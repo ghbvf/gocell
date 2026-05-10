@@ -10,7 +10,7 @@
 
 | ID | 优先级 | 一句话 |
 |---|---|---|
-| B2-C-02 SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT | 🔴 P0 | setup 端点常驻 Public，需移到 `/internal/v1/setup/` |
+| B2-C-02 SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT | 🔴 P0 | 产品决议已锁（ADR-Admin §3.3：留 Primary + 409 + bootstrap-only lifecycle）；代码落地待 S3+S5 PR |
 | ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 | 🔴 P1 | sessionlogin 无失败累计 + 阈值 + auto-lock |
 | CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 | 🔴 Cx1 | 标 L0 实为 L1 |
 | B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 | 🟠 P1 | corebundle 仍 `WithInMemoryDefaults` + archtest 类型化 |
