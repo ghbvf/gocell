@@ -34,6 +34,15 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
+// ListenerMarker is the K#05 cell:listener marker literal embedded in
+// scaffolded cell.go output. Templates reference this typed constant via
+// {{.ListenerMarker}} so the marker-string → cell.yaml drift guard
+// (MARKERGEN-DRIFT-VERIFY-01) is fed by a single source of truth.
+//
+// Hand-typing the marker literal in templates is statically rejected by
+// archtest SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01.
+const ListenerMarker = "// +cell:listener:"
+
 // sliceBundleTemplate parses the multi-section scaffold-slice.tmpl which
 // defines slice-yaml / service-go / service-test-go template blocks.
 var sliceBundleTemplate = template.Must(template.New("scaffold-slice.tmpl").
@@ -48,11 +57,12 @@ var contractBundleTemplate = template.Must(template.New("scaffold-contract.tmpl"
 // bundleData is the shared template context for slice + contract bundle
 // templates. Computed once in ScaffoldCellBundle from a ScaffoldSpec.
 type bundleData struct {
-	CellID       string
-	SlicePackage string // SliceID with no dashes (Go package name)
-	SliceID      string
-	SliceRole    string // "serve" for HTTP, "publish" for event
-	ContractID   string // e.g. http.{id}.example.v1
+	CellID         string
+	SlicePackage   string // SliceID with no dashes (Go package name)
+	SliceID        string
+	SliceRole      string // "serve" for HTTP, "publish" for event
+	ContractID     string // e.g. http.{id}.example.v1
+	ListenerMarker string // K#05 cell:listener marker; sourced from ListenerMarker const
 }
 
 // ScaffoldCellBundle is the K#09 one-shot scaffold orchestrator. It composes
@@ -137,9 +147,21 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 	return plan, nil
 }
 
+// cellTemplateData wraps ScaffoldSpec with extra template-only fields so that
+// scaffold-cell.tmpl can reference {{.ListenerMarker}} (SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01)
+// without embedding the marker literal directly in the template.
+type cellTemplateData struct {
+	ScaffoldSpec
+	ListenerMarker string
+}
+
 // planCell renders cell.go + cell.yaml and returns them as PlannedFiles.
 func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
-	cellGoContent, err := renderTemplate(cellGoTemplate, spec, true)
+	cellData := cellTemplateData{
+		ScaffoldSpec:   spec,
+		ListenerMarker: ListenerMarker,
+	}
+	cellGoContent, err := renderTemplate(cellGoTemplate, cellData, true)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)
 	}
@@ -173,11 +195,12 @@ func resolveBundleVariants(spec ScaffoldSpec) (withHTTP, withEvents bool) {
 // them as PlannedFiles.
 func planHTTPExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string) ([]pathsafe.PlannedFile, error) {
 	bd := bundleData{
-		CellID:       spec.CellID,
-		SlicePackage: sliceID,
-		SliceID:      sliceID,
-		SliceRole:    "serve",
-		ContractID:   fmt.Sprintf("http.%s.example.v1", cellNoDash),
+		CellID:         spec.CellID,
+		SlicePackage:   sliceID,
+		SliceID:        sliceID,
+		SliceRole:      "serve",
+		ContractID:     fmt.Sprintf("http.%s.example.v1", cellNoDash),
+		ListenerMarker: ListenerMarker,
 	}
 	sliceItems, err := planExampleSlice(realRoot, bd)
 	if err != nil {
@@ -198,11 +221,12 @@ func planEventExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, s
 		eventSliceID = cellNoDash + "eventexample"
 	}
 	bd := bundleData{
-		CellID:       spec.CellID,
-		SlicePackage: eventSliceID,
-		SliceID:      eventSliceID,
-		SliceRole:    "publish",
-		ContractID:   fmt.Sprintf("event.%s.example.v1", cellNoDash),
+		CellID:         spec.CellID,
+		SlicePackage:   eventSliceID,
+		SliceID:        eventSliceID,
+		SliceRole:      "publish",
+		ContractID:     fmt.Sprintf("event.%s.example.v1", cellNoDash),
+		ListenerMarker: ListenerMarker,
 	}
 	sliceItems, err := planExampleSlice(realRoot, bd)
 	if err != nil {

@@ -137,16 +137,25 @@ func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 		return
 	}
 
-	// Additionally verify that the scaffold-cell template does NOT contain the
-	// bare literal string — it must use {{.ListenerMarker}} instead.
+	// Additionally verify that the scaffold-cell template:
+	//   (a) references {{.ListenerMarker}} (confirming the typed-const funnel is wired)
+	//   (b) does NOT contain the bare literal string outside of a template action
+	//       (e.g. hand-typed "// +cell:listener:" without {{.ListenerMarker}})
 	tmplPath := filepath.Join(root, "tools", "codegen", "cellgen", "templates", "scaffold-cell.tmpl")
 	tmplContent, err := os.ReadFile(tmplPath) //nolint:gosec // repo-relative path, not user-supplied
 	require.NoError(t, err, "read scaffold-cell.tmpl")
+	tmplStr := string(tmplContent)
 
-	if strings.Contains(string(tmplContent), wantMarker) {
+	const tmplRef = "{{.ListenerMarker}}"
+	if !strings.Contains(tmplStr, tmplRef) {
 		t.Errorf("INVARIANT SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01 violated: "+
-			"scaffold-cell.tmpl contains literal %q; replace with {{.ListenerMarker}} "+
-			"to enforce the typed-const funnel", wantMarker)
+			"scaffold-cell.tmpl does not reference %s; the template must use "+
+			"the typed-const funnel instead of a hand-typed literal", tmplRef)
+	}
+	if strings.Contains(tmplStr, wantMarker) {
+		t.Errorf("INVARIANT SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01 violated: "+
+			"scaffold-cell.tmpl contains literal %q outside of {{.ListenerMarker}}; "+
+			"remove the literal and rely solely on the typed-const reference", wantMarker)
 	}
 }
 

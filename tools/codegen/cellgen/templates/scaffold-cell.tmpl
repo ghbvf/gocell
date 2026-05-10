@@ -9,10 +9,10 @@ import (
 	"{{.ModulePath}}/kernel/cell"
 )
 
-// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
+// {{.ListenerMarker}}ref=cell.PrimaryListener,prefix=/api/v1
 // TODO: declare additional listeners (e.g. cell.InternalListener) by
-// adding more // +cell:listener: markers above this struct, or remove
-// the marker if this cell has no HTTP routes.
+// adding more listener markers (same format as the line above) above this
+// struct, or remove the marker if this cell has no HTTP routes.
 type {{.StructName}} struct {
 	*cell.BaseCell
 
