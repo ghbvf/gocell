@@ -15,9 +15,21 @@
 // bypass via reflect / unsafe / cgo, or side-effect import `_ "os"` not
 // caught by some depguard configurations.
 //
-// Two-layer defense:
-//   - depguard scaffold-os-ban → fails at golangci-lint (Hard, type-level)
-//   - this archtest → fails at go test (Medium, AST-level cross-check)
+// Two-layer defense and scope asymmetry:
+//   - depguard scaffold-os-ban (Hard, package-level): bans `import "os"` at
+//     lint time in 4 pure-render files — scaffold_bundle.go,
+//     contractgen/generator.go, contractgen/scope.go, scaffold_assembly.go.
+//     These files have no legitimate os.* use; the ban is total.
+//   - this archtest (Medium, AST method-call level): scans ALL scaffold paths
+//     listed in TestScaffoldWriteFunnel_NoDirectOSWrites, including paths
+//     intentionally excluded from the depguard ban list because they have
+//     legitimate non-write os.* calls:
+//   - tools/codegen/cellgen/scaffold.go  (no os import today; future guard)
+//   - tools/codegen/writer.go            (os.ReadFile for drift detection)
+//   - kernel/assembly/generator.go       (os.ReadFile/Stat for go.mod metadata)
+//   - cmd/gocell/app/scaffold.go         (os.Stat for target dir checks)
+//     For these paths depguard would produce false-positives; archtest enforces
+//     only the write-method subset (MkdirAll/WriteFile/Mkdir/Create/OpenFile).
 //
 // Extension contract: when adding a new scaffold sub-package that writes
 // files, add it to the scope in TestScaffoldWriteFunnel_NoDirectOSWrites

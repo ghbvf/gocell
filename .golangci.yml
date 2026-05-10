@@ -364,6 +364,18 @@ linters:
                 cmd/gocell/app/export.go (user-supplied --out paths outside root
                 containment guarantee), test files (*_test.go), and any other path.
 
+                Files NOT in this ban list intentionally:
+                  - tools/codegen/cellgen/scaffold.go: currently has no os import; if
+                    added in future, archtest SCAFFOLD-WRITE-FUNNEL-01 (Medium) catches
+                    method-level os.* write calls
+                  - tools/codegen/writer.go: legitimate os.ReadFile for drift detection
+                  - kernel/assembly/generator.go: legitimate os.ReadFile/Stat for go.mod metadata
+                  - cmd/gocell/app/scaffold.go: legitimate os.Stat for target dir checks
+                  - cmd/gocell/app/generate_catalog.go / export.go: user-supplied --out paths
+                    (no root containment guarantee)
+                All paths above are still guarded by archtest SCAFFOLD-WRITE-FUNNEL-01
+                (Medium, method-level enforcement) for write operations.
+
     forbidigo:
       forbid:
         - pattern: '^log\.(Printf|Println|Print|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$'
