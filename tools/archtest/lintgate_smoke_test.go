@@ -1,3 +1,5 @@
+// INVARIANT: LINT-GATE-SMOKE-01
+//
 // LINT-GATE-SMOKE-01 — behavior-level proof that .golangci.yml's depguard /
 // forbidigo / revive / goimports gates actually fire on the violations they
 // claim to forbid, and that the cmd/+examples/ exemption does NOT fire on

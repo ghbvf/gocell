@@ -1,3 +1,5 @@
+// INVARIANT: ARCHTEST-HELPERS-01
+
 package archtest
 
 import (

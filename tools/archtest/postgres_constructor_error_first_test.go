@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: PG-CONSTRUCTOR-MUST-FREE-01
+//
 // postgres_constructor_error_first_test.go enforces PG-CONSTRUCTOR-MUST-FREE-01:
 // no non-test .go file in adapters/postgres/ may declare an exported function
 // whose name starts with "Must" and whose first word after "Must" is "New"

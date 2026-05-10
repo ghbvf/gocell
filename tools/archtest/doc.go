@@ -37,14 +37,21 @@
 //	            pkg/query remains limited to generic pagination, cursor,
 //	            runmode, and in-memory pagination helpers
 //
-// # Themed invariant files
+// # Themed invariant files & reverse-index anchors
 //
-// Beyond the LAYER-* / PGQUERY-01 rules above, this package hosts ~70
-// additional invariant gates organized into per-theme `*_invariants_test.go`
-// files. Each file contains the Test functions for one rule cluster; every
-// rule has a `// INVARIANT: {ID}` anchor immediately above its Test func so
-// `grep "INVARIANT: <ID>"` jumps to the asserting code, source code, ADR,
-// and inventory in one shot.
+// Beyond the LAYER-* / PGQUERY-01 rules above, this package hosts the rest of
+// the invariant gates organized into per-theme `*_invariants_test.go` files
+// (and single-rule `{rule}_test.go` companions for narrowly-scoped invariants).
+// Every file carries a `// INVARIANT: {ID}` anchor in its file-header
+// CommentGroup; `INVENTORY-ANCHOR-REQUIRED-01` enforces this unconditionally,
+// making the anchors the single source of the reverse index from rule ID to
+// asserting test code:
+//
+//	grep -rn 'INVARIANT: <ID>' tools/archtest/
+//
+// jumps directly to the gate. Multi-rule themed files use list-form
+// continuation (`//   - INVARIANT: <ID>`) so every distinct rule the file
+// asserts is grep-discoverable.
 //
 //	assembly_invariants_test.go    ASSEMBLY-* / ASSEMBLYREF-*
 //	clock_invariants_test.go       CLOCK-* / KERNEL-CLOCK-* / PROD-CLOCK-*
@@ -68,6 +75,11 @@
 // `{theme}_invariants_test.go` once the theme accumulates ≥ 3 rules — see
 // CLAUDE.md `## 新增 invariant 决策原则` for the file-naming branch.
 //
-// Inventory of every invariant + its disposition:
-// docs/audit/archtest-inventory.md.
+// On-demand inventory listing (no persisted view):
+//
+//	bash scripts/audit/list-archtests.sh
+//
+// prints every anchor + file + line + theme to stdout. Persisted
+// `docs/audit/archtest-inventory.md` and its drift gate were removed in
+// PR-A' (2026-05-10); the archtest gate above is the single source.
 package archtest

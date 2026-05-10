@@ -1,3 +1,5 @@
+// INVARIANT: PROD-CLOCK-INJECTION-01
+//
 // prod_clock_injection_fixtures_test.go — fixture-based regression tests
 // for the PROD-CLOCK-INJECTION-01 invariant. Each subpackage under
 // testdata/prod_clock_injection_fixtures/ exercises one bypass path

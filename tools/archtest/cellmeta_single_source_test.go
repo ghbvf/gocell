@@ -1,3 +1,8 @@
+// invariants:
+//   - INVARIANT: CELLMETA-SINGLE-SOURCE-01
+//   - INVARIANT: CELLMETA-SINGLE-SOURCE-02
+//   - INVARIANT: CELLMETA-SINGLE-SOURCE-03
+//
 // CELLMETA-SINGLE-SOURCE-01..03 — kernel/cell ↔ kernel/metadata single-source gates.
 //
 // kernel/cell.CellMetadata + 4 衍生类型（Owner / SchemaConfig / CellVerify / L0Dep）

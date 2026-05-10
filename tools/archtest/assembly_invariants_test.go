@@ -1,5 +1,13 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: ASSEMBLY-MODULES-GEN-01
+//   - INVARIANT: ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02
+//   - INVARIANT: ASSEMBLY-MAXCONSISTENCY-DERIVED-03
+//   - INVARIANT: ASSEMBLY-CELLMODULE-TYPE-04
+//   - INVARIANT: ASSEMBLY-SNAPSHOTS-LOCKED-01
+//   - INVARIANT: ASSEMBLYREF-METHOD-SET-01
+//
 // assembly_invariants_test.go — consolidated AST guards for assembly-related invariants.
 //
 // Invariants covered:

@@ -1,4 +1,6 @@
-// INTERNAL-CONTRACT-CLIENTS-REQUIRED-01
+// INVARIANT: INTERNAL-CONTRACT-CLIENTS-REQUIRED-01
+//
+// # INTERNAL-CONTRACT-CLIENTS-REQUIRED-01
 //
 // Invariant: every wrapper.ContractSpec{...} composite literal whose Path
 // starts with "/internal/v1/" must declare a non-empty Clients field.

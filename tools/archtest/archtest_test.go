@@ -1,3 +1,16 @@
+// invariants asserted in this file
+// (LAYER-01..04 enforced by .golangci.yml depguard, see doc.go):
+//   - INVARIANT: LAYER-05
+//   - INVARIANT: LAYER-05T
+//   - INVARIANT: LAYER-06
+//   - INVARIANT: LAYER-06T
+//   - INVARIANT: LAYER-07
+//   - INVARIANT: LAYER-08
+//   - INVARIANT: LAYER-09
+//   - INVARIANT: LAYER-09T
+//   - INVARIANT: LAYER-10
+//   - INVARIANT: PGQUERY-01
+
 package archtest
 
 import (
@@ -229,7 +242,8 @@ func checkCellOwnedSubpackage(modPrefix, srcPath, imp, srcLayer string) *violati
 		Import: imp,
 		Message: fmt.Sprintf(
 			"LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
-			srcPath, imp, ownerPrefix),
+			srcPath, imp, ownerPrefix,
+		),
 	}
 }
 
@@ -562,7 +576,8 @@ func TestLayeringRules(t *testing.T) {
 						fmt.Sprintf(
 							"LAYER-07: %s imports %s (cells must not import the router directly;"+
 								" use cell.RouteMux / cell.RouteGroup)",
-							pkg.ID, imp))
+							pkg.ID, imp,
+						))
 				}
 			}
 		}
@@ -686,7 +701,8 @@ func checkLayer08TypedSeal(module string, pkgs []*packages.Package) []violation 
 				Pkg:  p.PkgPath,
 				Message: fmt.Sprintf(
 					"LAYER-08: %s declares type HTTPRegistrar (legacy interface must remain removed; PR-A14b)",
-					p.PkgPath),
+					p.PkgPath,
+				),
 			})
 		}
 	}
@@ -725,7 +741,8 @@ func checkTransitiveCrossCellInternal(module string, g *kerneldepgraph.Graph) []
 				Import: dep,
 				Message: fmt.Sprintf(
 					"LAYER-05T: %s transitively reaches %s (cross-cell internal via closure); via: %s",
-					src.ID, dep, formatTransitivePath(path)),
+					src.ID, dep, formatTransitivePath(path),
+				),
 			})
 		}
 	}
@@ -760,7 +777,8 @@ func checkTransitiveCellOwnedSubpackage(modPrefix string, g *kerneldepgraph.Grap
 				Import: dep,
 				Message: fmt.Sprintf(
 					"LAYER-06T: %s transitively reaches %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it); via: %s",
-					src.ID, dep, ownerPrefix, formatTransitivePath(path)),
+					src.ID, dep, ownerPrefix, formatTransitivePath(path),
+				),
 			})
 		}
 	}
@@ -790,7 +808,8 @@ func checkTransitiveCrossCellEvents(module string, g *kerneldepgraph.Graph) []vi
 				Import: dep,
 				Message: fmt.Sprintf(
 					"LAYER-09T: %s transitively reaches %s (cross-cell events via closure); via: %s",
-					src.ID, dep, formatTransitivePath(path)),
+					src.ID, dep, formatTransitivePath(path),
+				),
 			})
 		}
 	}

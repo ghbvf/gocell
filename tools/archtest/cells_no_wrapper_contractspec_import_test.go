@@ -1,4 +1,8 @@
-// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01
+// invariants:
+//   - INVARIANT: CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01
+//   - INVARIANT: NO-MANUAL-CONTRACTSPEC-LITERAL-01
+//
+// # CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01
 //
 // Invariant: non-generated .go files under cells/ and examples/**/cells/
 // must not import "kernel/wrapper" AND reference ContractSpec or EventSpec

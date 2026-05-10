@@ -59,12 +59,12 @@ Path C ship 后启动彻底版 5-PR：PR-Φ（节点遍历漏斗，彻底解决 
 | PR-FUNNEL-01 主题聚并 | — | ✅ | — | PR #408（5461d53e）；archtest 104→70 |
 | PR-FUNNEL-01 follow-up | — | ✅ | — | PR #412（16a13993）；parse-error fail-loud + git ls-files |
 | PR-FUNNEL-02 handler funnel | — | ✅ | — | PR #411（18b60a5c）；HANDLER-POLICY-REQUIRED-01 升 funnel |
-| Audit step A 清单化 | — | ✅ | — | `list-archtests.sh` + `inventory.md` + `verify-archtest-inventory.sh` 漂移闸 |
+| Audit step A 清单化 | — | ✅ shipped (彻底版 by PR-A') | — | `list-archtests.sh` 改 stdout-only；`inventory.md` + `verify-archtest-inventory.sh` 漂移闸已被 PR-A' 删除（INVENTORY-ANCHOR-REQUIRED-01 archtest 单源接替） |
 | `PR408-FU-SCANNER-SHARED-FRAMEWORK-01` | 0 | ✅ | — | PR #419（996784cf）；framework **文件遍历层** + 4 demo 迁移 |
 | `PR-FUNNEL-03` governance 聚并 | 1 | ✅ | — | PR #418（e8cdf3c9）；source 15→8 文件 + `rule_inventory_test.go` golden 锁 81 条 |
 | **Path C** scanner 文件扫描漏斗收编 | 0' | ⏳ 他人推进 | ~12h | PR #424 衍生：USAGE-01 traversal symbol table 升级 + scanner 加 EachContentFile / MatchRels / IncludeTestdata + 19 bypass 站点全 framework + USAGE-02 删除 |
 | **PR-Φ** `SCANNER-FRAMEWORK-NODE-API-COMPLETE` | 1 | ⏳ Path C ship 后 | 14-18h+5-7h | framework **节点遍历层** API（EachFuncDecl / EachCallExpr / EachImportSpec / EachGenDecl）+ USAGE-02 archtest（**复用 Path C 删空的 ID**，无条件，与 USAGE-01 同样原子）+ 一锅替换 65 手写 for-loop + 131 裸 ast.Inspect → 全 typed callback；保留出口走严格 category 就地注释 |
-| **PR-A'** `INVENTORY-HARDENING`（瘦身）| 1 | ⏳ | 5-7h+2-3h | 46 个 `tools/archtest/*_test.go` 加 `// INVARIANT:` 锚点 + `list-archtests.sh` 删 grep fallback **+ 删 hardcode 黑名单** + INVENTORY-ANCHOR-REQUIRED-01 archtest + CI gate 接 verify-archtest-inventory.sh。**OWNER-AST-EXTRACTION 砍掉** |
+| **PR-A'** `INVENTORY-ANCHOR-SINGLE-SOURCE`（彻底版）| 1 | ✅ shipped | — | 55 个 `tools/archtest/*_test.go` 加 `// INVARIANT:` 锚点 + INVENTORY-ANCHOR-REQUIRED-01 archtest 单源 + 删 `docs/audit/archtest-inventory.md` 持久产物 + 删 `hack/verify-archtest-inventory.sh` drift gate（make verify glob discovery 自动出 CI）+ 删 `kernel/governance/rule_inventory_test.go::TestArchtestInventoryNoIDTruncation`（底层 .md 没了，truncation 场景消失）+ `list-archtests.sh` 改 stdout-only（删 fallback / hardcode 黑名单 / governance section）+ doc.go / backlog.md / 033-pg-plan 同步。**OWNER-AST-EXTRACTION 砍掉** |
 | **PR-B** `GOVERNANCE-RULE-REACHABILITY-TEST-01` | 1 | ⏳ | 6h+2h | `rule_inventory_test.go` 加静态 BFS：从 `rules()` / `strictRules()` / `DependencyChecker.Check()` / 公开 `Check*` 4 注册根扩闭包，覆盖 const-ident emission / 双 receiver type / 闭包包装注册，断言 reachable rule IDs ⊇ golden 81 条；替代 PR-FUNNEL-03 zero-diff 临时硬化 |
 | **PR-C** `AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01` | 1 | ⏳ | 4h+1h | schema/governance 显式 `false` 语义统一（6 个 auth 布尔字段：public/passwordResetExempt/serviceOwned/bootstrap/clientsOnly/responses 全组合覆盖）+ 回归测试 |
 | **PR-D'** `PANIC-WHITELIST-INLINE-COMMENT-SINGLE-SOURCE-01` | 1 | ⏳ | 5-7h+2h | 删 architecturalPanicWhitelist Go map + 删 AllowMust 全局豁免 + 删 assertPanicWhitelistMatchesADR reconciliation → 改就地注释 `// PANIC-REGISTERED-01: ADR-approved: <reason>`；4 处 re-throw + 30+ Must* 站点逐个加注释；ADR markdown 改写为元规则文档（删函数名清单表格）。ref: cockroachdb/cockroach pkg/testutils/lint/passes/forbiddenmethod |
@@ -74,7 +74,7 @@ Path C ship 后启动彻底版 5-PR：PR-Φ（节点遍历漏斗，彻底解决 
 | ~~`PR408-FU-LEGACY-ANCHOR-BACKFILL-01`~~ | — | 合入 PR-A' | — | — |
 | ~~`PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01`~~ | — | ❌ 取消（决策见 §2）| — | — |
 | ~~`PR411-AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01`~~ | — | 改名 PR-C | — | — |
-| ~~`PR419-FU-INVENTORY-CI-GATE-01`~~ | — | 合入 PR-A' | — | — |
+| ~~`PR419-FU-INVENTORY-CI-GATE-01`~~ | — | ❌ 取消（gate 整体删除 by PR-A'） | — | — |
 | ~~`PR419-FU-PANIC-MUST-PATH-SCOPE-01`~~ | — | ❌ 升级为 PR-D'（path scope 是双源反模式，改就地注释单源）| — | — |
 | ~~`PR408-FU-SCANNER-USAGE-01-ENABLEMENT`~~ | — | 由 Path C 实现 | — | — |
 | `PR411-HANDLER-POLICY-TYPEAWARE-SCANNER-01` | 3 | 触发 | — | trigger: scanner 误报/漏报；基于 framework 做（直接用 internal/scanner API） |
@@ -137,19 +137,33 @@ C8 GREEN-F chore: remove unused ast/parser/token imports; go vet pass
 
 reviewer commit-by-commit 审，单次注意力 ~1-2h × 8 commit。
 
-### 4.2 PR-A' 详细设计
+### 4.2 PR-A' 详细设计（已 ship 实际形态）
 
 ```
-C1 RED      test(archtest): add INVENTORY-ANCHOR-REQUIRED-01 (red against 46 files)
-            +50 LOC tools/archtest/inventory_anchor_required_test.go
+C1 RED      test(archtest): add INVENTORY-ANCHOR-REQUIRED-01 + INVENTORY-ANCHOR-VALID-ID-01
+            tools/archtest/inventory_anchor_required_test.go：
+              - REQUIRED-01：每文件头第一个 CommentGroup 至少含一条合 grammar 的
+                // INVARIANT: <ID>
+              - VALID-ID-01：所有 INVARIANT 锚点（任意位置）必须合 canonical
+                grammar `^[A-Z][A-Z0-9]+(-[A-Z0-9]+)*-[0-9]+([A-Za-z]|-[A-Z0-9]+)?$`
+                覆盖 LAYER-05T / KERNEL-POOLSTATS-LOCATION-01a /
+                RMQ-CHANNEL-MAX-PER-CONN-01-A 等子序 / 字母后缀形态
 
-C2 GREEN-A  docs(archtest): backfill INVARIANT anchors for 46 files
-            机械改动；参照已存在的 27 个有 anchor 的文件作为模板
+C2 GREEN-A  docs(archtest): backfill INVARIANT anchors for 55 files
+            机械改动；参照已存在的 27 个有 anchor 的文件作为模板。
+            archtest_test.go 用真实 LAYER-05/05T/06/06T/07/08/09/09T/10 +
+            PGQUERY-01 多锚点列表，不立合成 alias。
 
-C3 GREEN-B  feat(audit): drop grep fallback + hardcode skip-list in list-archtests.sh
-            重新生成 docs/audit/archtest-inventory.md 与现状 zero-diff 验证
+C3 GREEN-B  chore(audit): drop archtest-inventory.md + verify gate, stdout-only listing
+            - 删 docs/audit/archtest-inventory.md
+            - 删 hack/verify-archtest-inventory.sh（make verify glob discovery 自动出 CI）
+            - 删 kernel/governance/rule_inventory_test.go::TestArchtestInventoryNoIDTruncation
+            - scripts/audit/list-archtests.sh 退化为 raw grep 输出
+              （删 awk grammar / theme_for_id / fallback / hardcode 黑名单）。
+              grammar 单源在 archtest 一处。
+            - tools/archtest/doc.go 改写指引为 on-demand 命令
 
-C4 GREEN-C  ci: wire hack/verify-archtest-inventory.sh into _build-lint.yml
+C4 GREEN-C  docs: sync backlog/plans/roadmap to PR-A' completion
 ```
 
 **hardcode 黑名单删除**（**修订自原 PR-A**）：旧规则 `archtest_test.go|helpers_test.go|*_fixtures_test.go` hardcode 排除是漂移源（lintgate_smoke_test.go 这种 case）。新规则：`tools/archtest/*_test.go` 全部必须有 `// INVARIANT:` 锚点；helper / fixture 含锚点也合规（锚点本质是"归属哪条规则"的反向索引）。
@@ -264,7 +278,7 @@ reviewer 优先级：**PR-Φ ≫ PR-B = PR-C > PR-A' > PR-D' > PR-F**。
 | **R2**：一锅迁移触发 CI 雪崩 | 中 | (a) 本地先跑全套 archtest 确认全绿再 push；(b) 不并行任何 worktree 改 tools/archtest（PR-A'/PR-D' 等到 PR-Φ merge）；(c) 万一雪崩可原子 revert 整 PR |
 | **R3**：framework API 漏 case | 中 | (a) 从已有 22 混用 + 65 处手写 + 131 裸 ast.Inspect 作为真实样本逆向设计；(b) 接受"保留出口" + 严格 category 就地注释，能力等价裸 ast.Inspect |
 | **R4**：PR-A' 46 文件批量改 review 复杂度高 | 中 | (a) 文件锚点回填是机械性改动（文件头加 `// INVARIANT: <ID>` 一行）；(b) reviewer 主要看 list-archtests.sh + 新 archtest + workflow yaml；机械部分可大段折叠 |
-| **R5**：PR-A' 删 grep fallback 后 list-archtests.sh AST 主路径有 bug 导致漏报 | 低 | 同 PR 加 `inventory_anchor_required_test.go` 守锚点必现 + 重生 inventory.md 与现状 zero-diff 验证；漂移闸进 CI 兜底 |
+| **R5**：PR-A' 删持久 inventory.md + drift gate 后规则锚点漂移无警告 | 低 | INVENTORY-ANCHOR-REQUIRED-01 archtest（每文件至少一锚点）+ INVENTORY-ANCHOR-VALID-ID-01 archtest（canonical grammar）共同单源守卫；漏写 / 格式漂移即 archtest 红，无需 drift gate 兜底；list-archtests.sh raw grep 仅作 audit 视图，不再有第二份 grammar |
 | **R6**：PR-B BFS 实现遗漏注册路径（const-ident emission / 闭包包装） | 低 | 任务表已列出 4 类注册形态；PR description 要求覆盖矩阵，reviewer 按矩阵逐项核 |
 | **R7**：PR-D' 30+ Must* 站点漏标 | 中 | (a) RED-first commit C1 让 archtest 红遍所有未标 panic 站点，CI 自动保证全标完才转绿；(b) 注释模板统一减少漏改 |
 | **R8**：新 USAGE-02 bypass 就地注释重蹈原 bf37fa8 USAGE-02 substring 反模式 | 中 | category 字符串严格属于已知集合（{scope-stack, cross-node-state, other}），不允许自由文本；live 规则用真实源码 fixture（不 hand-craft）；category 集合 grow 必走 PR review |
@@ -276,7 +290,7 @@ reviewer 优先级：**PR-Φ ≫ PR-B = PR-C > PR-A' > PR-D' > PR-F**。
 
 - 决策原则：`CLAUDE.md` `## 新增 invariant 决策原则`
 - ADR：`docs/architecture/202605061500-adr-typed-response-envelope.md` §D6/D7（typed envelope）/ `docs/architecture/202604270030-architectural-panic-whitelist.md`（PR-D' 改写目标）
-- Inventory：`docs/audit/archtest-inventory.md`（自动生成）
+- Inventory（**已被 PR-A' 删除**；现场清单：`bash scripts/audit/list-archtests.sh`，唯一守卫 `INVENTORY-ANCHOR-REQUIRED-01` archtest）
 - 配套 plan（含开源对标 K8s/CockroachDB/staticcheck/golang.org/x/tools 报告）：`~/.claude-ming/plans/ast-ast-inspect-inherited-wadler.md`
 - ref（PR-Φ）：golang/tools `go/analysis/passes/lostcancel/lostcancel.go@master`（typed-callback 单遍 idiom）
 - ref（PR-D'）：cockroachdb/cockroach `pkg/testutils/lint/passes/forbiddenmethod/forbiddenmethod.go@master`（nolint 就地注释单源）

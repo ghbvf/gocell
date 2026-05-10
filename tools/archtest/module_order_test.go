@@ -1,3 +1,5 @@
+// INVARIANT: MODULE-ORDER-CONFIGCORE-FIRST-01
+
 package archtest
 
 import (

@@ -1,3 +1,5 @@
+// INVARIANT: KERNEL-METADATA-NO-WIRE-01
+//
 // KERNEL-METADATA-NO-WIRE-01 — invariant-driven gate.
 //
 // Invariant: kernel/metadata/*.go must not declare any wire-format symbols.

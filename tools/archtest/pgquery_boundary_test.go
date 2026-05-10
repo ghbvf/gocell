@@ -1,3 +1,5 @@
+// INVARIANT: PGQUERY-01
+
 package archtest
 
 import (

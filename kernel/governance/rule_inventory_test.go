@@ -10,49 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
-
-// TestArchtestInventoryNoIDTruncation guards against a regex defect in
-// scripts/audit/list-archtests.sh that truncated multi-segment governance
-// rule IDs in docs/audit/archtest-inventory.md.
-//
-// History: the original alternation used `\b...|CONSISTENCY|...-[A-Z0-9-]+`
-// which matched `\bCONSISTENCY-EMIT-01` mid-token inside
-// CONTRACT-CONSISTENCY-EMIT-01, producing CONSISTENCY-EMIT-01 in the
-// inventory output. Fix in PR-FUNNEL-03 reordered alternation so longer
-// compound prefixes (CONTRACT-CONSISTENCY-EMIT / SLICE-CONSISTENCY /
-// DOC-NAME) come before their shorter substrings.
-//
-// This test asserts that every governance rule ID with a compound prefix
-// (one or more internal hyphens before the canonical -NN suffix) appears
-// verbatim in the inventory file. New compound-prefix rules MUST be added
-// here when introduced.
-func TestArchtestInventoryNoIDTruncation(t *testing.T) {
-	t.Parallel()
-
-	atRisk := []string{
-		"CONTRACT-CONSISTENCY-EMIT-01", // truncated to CONSISTENCY-EMIT-01 pre-fix
-		"SLICE-CONSISTENCY-01",
-		"DOC-NAME-01",
-		"WRAPPER-CONTRACTSPEC-IMPORT-01", // archtest cross-ref kept verbatim
-		"WRAPPER-NO-PACKAGE-STATE",
-		"FMT-CONTRACT-DIR-ID-MATCH-01",
-	}
-
-	inventoryPath := filepath.Join("..", "..", "docs", "audit", "archtest-inventory.md")
-	data := fileutil.MustReadFile(t, inventoryPath)
-	body := string(data)
-
-	for _, id := range atRisk {
-		if !strings.Contains(body, id) {
-			t.Errorf("inventory missing full rule ID %q — likely truncated by "+
-				"scripts/audit/list-archtests.sh regex; check alternation "+
-				"orders longer prefixes first.", id)
-		}
-	}
-}
 
 // TestRuleReachabilityFromRegistrationRoots proves that every rule ID in
 // goldenRuleIDs() is reachable from at least one of the four registration

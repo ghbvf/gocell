@@ -1,5 +1,16 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: SEC-FAIL-CLOSED-01
+//   - INVARIANT: SEC-FAIL-CLOSED-02
+//   - INVARIANT: SEC-FAIL-CLOSED-03
+//   - INVARIANT: SEC-FAIL-CLOSED-04
+//   - INVARIANT: SEC-FAIL-CLOSED-05
+//   - INVARIANT: SEC-FAIL-CLOSED-06
+//   - INVARIANT: SEC-FAIL-CLOSED-07
+//   - INVARIANT: SEC-FAIL-CLOSED-08
+//   - INVARIANT: SEC-FAIL-CLOSED-09
+//
 // security_defaults_test.go — static archtest rules for PR-MODE-1 SEC-FAIL-CLOSED.
 //
 // Sub-tests mirror the SEC-FAIL-CLOSED-01..09 rule IDs:

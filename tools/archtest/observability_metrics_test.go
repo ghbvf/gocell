@@ -1,3 +1,5 @@
+// INVARIANT: OBS-01
+
 package archtest
 
 import (

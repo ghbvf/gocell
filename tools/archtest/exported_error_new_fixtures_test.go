@@ -1,3 +1,5 @@
+// INVARIANT: EXPORTED-ERROR-NEW-01
+//
 // exported_error_new_fixtures_test.go — fixture-based regression tests for
 // EXPORTED-ERROR-NEW-01. Each subpackage under
 // testdata/exported_error_new_fixtures/ exercises one positive or boundary

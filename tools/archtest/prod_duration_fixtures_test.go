@@ -1,3 +1,5 @@
+// INVARIANT: PROD-DURATION-CONST-01
+//
 // prod_duration_fixtures_test.go — fixture-based regression tests for the
 // PROD-DURATION-CONST-01 invariant. Each subpackage under testdata/prod_duration_fixtures/
 // exercises one bypass path or boundary condition.

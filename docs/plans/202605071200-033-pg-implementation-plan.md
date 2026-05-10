@@ -185,7 +185,7 @@ archtest `PG-REPO-AMBIENT-TX-01` 守该模式。
 | `tools/archtest/pg_repo_invariants_test.go` | **首落主体 + 3 条 INVARIANT** | append 1-2 条 | append 0-1 条 |
 | `adapters/postgres/schema_guard.go` 表清单 | **首落主体 + 3 表** | append 1-2 表 | append 0-1 表 |
 | `adapters/postgres/errcode.go` | append-only | append-only | append-only |
-| `docs/audit/archtest-inventory.md` | append PG-REPO-* 主题行 | append | append |
+| ~~`docs/audit/archtest-inventory.md`~~ (已删除 by PR-A') | — | — | — |
 | `cmd/corebundle/access_module.go` | **改 wiring 声明**（不切 InMemoryDefaults） | 不碰 | 不碰 |
 
 git append-only 文件（errcode / inventory / schema_guard 表清单）三 PR 同时 append 走 git 文本合并，无逻辑冲突。

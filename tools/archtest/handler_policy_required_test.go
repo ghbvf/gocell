@@ -1,3 +1,5 @@
+// INVARIANT: HANDLER-POLICY-REQUIRED-01
+//
 // Package archtest enforces HANDLER-POLICY-REQUIRED-01 — the simplified caller-side
 // invariant from the original handler_invariants_test.go cluster that cannot
 // be golden-pinned because it scans hand-written cells/... and examples/... wiring

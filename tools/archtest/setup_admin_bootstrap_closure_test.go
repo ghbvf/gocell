@@ -1,3 +1,8 @@
+// invariants:
+//   - INVARIANT: CELLS-NO-ROUTEMUX-WRAPPER-01
+//   - INVARIANT: AUTH-ROUTE-BOOTSTRAP-FLAG-REMOVED-01
+//   - INVARIANT: SETUP-ADMIN-CODEGEN-BOOTSTRAP-AUTH-WIRED-01
+//
 // Setup-admin bootstrap closure invariants — codified into archtest after the
 // security boundary collapse described in
 // docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1 + §D10.

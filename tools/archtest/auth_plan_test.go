@@ -1,5 +1,11 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: AUTH-PLAN-01
+//   - INVARIANT: AUTH-PLAN-02
+//   - INVARIANT: AUTH-PLAN-03
+//   - INVARIANT: AUTH-PLAN-04
+//
 // auth_plan_test.go — AST guards for the typed AuthPlan migration (PR262).
 //
 // Four rules prevent regression to the old string-based cell.Policy dispatch:

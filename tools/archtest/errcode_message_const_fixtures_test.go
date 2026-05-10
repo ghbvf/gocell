@@ -1,3 +1,5 @@
+// INVARIANT: MESSAGE-CONST-LITERAL-01
+//
 // errcode_message_const_fixtures_test.go — fixture-based regression tests
 // for MESSAGE-CONST-LITERAL-01. Fixtures use pure-AST scanning (no
 // packages.Load) so they avoid go/types complexity and `replace` directives

@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: META-QUERYPARAM-DRIFT-01
+//
 // queryparam_drift_test.go - static archtest for PR-MODE-3 META-QUERYPARAM-DRIFT.
 //
 // The rule compares query parameters consumed by HTTP handlers/policies against

@@ -1,3 +1,7 @@
+// invariants:
+//   - INVARIANT: SPAN-RECORD-ERROR-REDACT-01
+//   - INVARIANT: SPAN-RECORD-ERROR-REDACT-ARCHTEST-01
+//
 // SPAN-RECORD-ERROR-REDACT-01 — every span.RecordError(...) call inside
 // kernel/wrapper/ and runtime/http/middleware/ must wrap its argument with
 // pkg/redaction.RedactError(...). Hardcoded fail-closed redaction has no

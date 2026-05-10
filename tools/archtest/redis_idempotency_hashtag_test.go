@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: IDEMPOTENCY-LUA-HASHTAG-01
+//
 // IDEMPOTENCY-LUA-HASHTAG-01 — invariant-driven gate.
 //
 // Invariant: adapters/redis IdempotencyClaimer constructs two Redis Cluster

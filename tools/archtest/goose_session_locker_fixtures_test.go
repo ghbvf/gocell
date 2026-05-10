@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: GOOSE-SESSION-LOCKER-01
+//
 // goose_session_locker_fixtures_test.go runs scanGooseSessionLocker against
 // the fixture module under testdata/goose_session_locker_fixtures/ to verify:
 //

@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: READYZ-PROBE-NAMING-01
+//
 // readyz_probe_naming_test.go — READYZ-PROBE-NAMING-01
 //
 // Rule: health probe names registered via reg.Health(name, fn) in cells/ and

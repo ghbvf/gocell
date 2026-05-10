@@ -1,5 +1,9 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: PANIC-REDACT-01
+//   - INVARIANT: PANIC-REGISTERED-01
+//
 // panic_invariants_test.go — consolidated AST guards for panic-related invariants.
 //
 // Invariants covered:

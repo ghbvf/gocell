@@ -1,5 +1,9 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: STORAGE-BACKEND-PG-WIRING-01
+//   - INVARIANT: STORAGE-BACKEND-MEMORY-NO-PG-01
+//
 // storage_backend_test.go enforces two rules about how PG adapters are wired in
 // cmd/corebundle cell modules:
 //
