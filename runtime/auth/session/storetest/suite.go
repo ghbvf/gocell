@@ -66,20 +66,30 @@ func NewTestProtocol(t *testing.T) *session.Protocol {
 	return p
 }
 
+// validateFixtureInputs centralizes the argument-validation rules used by
+// NewSessionFixture so the fatal vs. non-fatal split has a single source of
+// truth and the error-path is unit-testable without forking testing.TB.
+func validateFixtureInputs(subjectID, jti string, ttl time.Duration) error {
+	if subjectID == "" {
+		return errors.New("storetest: NewSessionFixture requires non-empty subjectID")
+	}
+	if jti == "" {
+		return errors.New("storetest: NewSessionFixture requires non-empty jti")
+	}
+	if ttl <= 0 {
+		return errors.New("storetest: NewSessionFixture requires positive ttl")
+	}
+	return nil
+}
+
 // NewSessionFixture constructs a Session with deterministic timestamps derived
 // from now + ttl. Callers control SubjectID / JTI / epoch explicitly so cases
 // can assert RevokeForSubject scoping precisely. ID is derived from JTI to
 // keep cases readable (Session.ID is opaque to the protocol).
 func NewSessionFixture(t *testing.T, subjectID, jti string, epoch int64, ttl time.Duration, now time.Time) *session.Session {
 	t.Helper()
-	if subjectID == "" {
-		t.Fatalf("storetest: NewSessionFixture requires non-empty subjectID")
-	}
-	if jti == "" {
-		t.Fatalf("storetest: NewSessionFixture requires non-empty jti")
-	}
-	if ttl <= 0 {
-		t.Fatalf("storetest: NewSessionFixture requires positive ttl, got %s", ttl)
+	if err := validateFixtureInputs(subjectID, jti, ttl); err != nil {
+		t.Fatal(err)
 	}
 	return &session.Session{
 		ID:                "sess-" + jti,
@@ -437,24 +447,38 @@ func runRevokeForSubject(t *testing.T, factory Factory, event session.Credential
 // must collide with a forbidden name, it is the field author's burden to
 // rename or to extend the forbidden list intentionally with a comment.
 func runFingerprintJTINoPlaintext(t *testing.T) {
-	st := reflect.TypeOf(session.Session{})
-	forbidden := []string{"AccessToken", "Token", "Plaintext", "Secret", "Password"}
+	for _, problem := range auditFingerprintJTIShape(reflect.TypeOf(session.Session{})) {
+		t.Error(problem)
+	}
+}
+
+// fingerprintJTIForbidden lists field names whose presence on the Session
+// struct would constitute plaintext-token storage under FingerprintJTIRef
+// (ADR-Session D1).
+var fingerprintJTIForbidden = []string{"AccessToken", "Token", "Plaintext", "Secret", "Password"}
+
+// auditFingerprintJTIShape returns a list of human-readable problems for
+// Session-shaped types under the FingerprintJTIRef mode. Splitting the audit
+// from the t.Error reporting lets internal tests exercise both legal and
+// illegal struct shapes without forking testing.TB.
+func auditFingerprintJTIShape(st reflect.Type) []string {
+	var problems []string
 	for i := 0; i < st.NumField(); i++ {
 		name := st.Field(i).Name
-		for _, bad := range forbidden {
+		for _, bad := range fingerprintJTIForbidden {
 			if strings.EqualFold(name, bad) {
-				t.Errorf("Session.%s violates FingerprintJTIRef D1 (no plaintext token shape)", name)
+				problems = append(problems, "Session."+name+" violates FingerprintJTIRef D1 (no plaintext token shape)")
 			}
 		}
 	}
-	// JTI must remain present and string-typed under the JTIRef mode.
 	jtiField, ok := st.FieldByName("JTI")
-	if !ok {
-		t.Fatal("Session.JTI field missing under FingerprintJTIRef")
+	switch {
+	case !ok:
+		problems = append(problems, "Session.JTI field missing under FingerprintJTIRef")
+	case jtiField.Type.Kind() != reflect.String:
+		problems = append(problems, "Session.JTI must be string, got "+jtiField.Type.Kind().String())
 	}
-	if jtiField.Type.Kind() != reflect.String {
-		t.Errorf("Session.JTI must be string, got %s", jtiField.Type.Kind())
-	}
+	return problems
 }
 
 // assertErrCode asserts err wraps an *errcode.Error with the given Code.

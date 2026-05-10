@@ -15,6 +15,13 @@ import (
 // memFactory is the storetest.Factory for the in-memory Store implementation.
 // Each call yields a fresh MemStore + FakeClock anchored at the deterministic
 // epoch the suite uses for its case timestamps.
+//
+// This factory is intentionally duplicated with the one in
+// runtime/auth/session/storetest/suite_test.go: per-package coverage attributes
+// executed lines to the package whose tests ran them, so we need session's
+// own tests to exercise mem_store.go (and storetest's own tests to exercise
+// suite.go). Without the duplication the Sonar per-package coverage gate
+// would see one of the packages at 0%.
 func memFactory(t *testing.T) (session.Store, *clockmock.FakeClock, func()) {
 	t.Helper()
 	fc := clockmock.New(storetest.EpochAnchor())
@@ -26,8 +33,8 @@ func memFactory(t *testing.T) (session.Store, *clockmock.FakeClock, func()) {
 }
 
 // TestMemStore_ConformsToStoretest exercises the full Protocol-driven contract
-// suite against MemStore. Wave 1 RED — bodies are skipped; Wave 2 GREEN turns
-// every t.Skip into a real assertion.
+// suite against MemStore — paired with TestSuite_AgainstMemStore in storetest's
+// own _test.go to keep both packages self-covered under per-package Sonar.
 func TestMemStore_ConformsToStoretest(t *testing.T) {
 	t.Parallel()
 	storetest.Run(t, memFactory, storetest.NewTestProtocol(t))
