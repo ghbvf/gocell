@@ -1101,7 +1101,7 @@ func findGeneratedContractFilesIn(t *testing.T, roots []string) []string {
 // ============================================================
 
 // extractSpecGenIDTopic parses src as Go source and returns the ID and Topic
-// field values from the first wrapper.ContractSpec composite literal.
+// field values from the first contractspec.ContractSpec composite literal.
 func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "spec_gen.go", src, parser.SkipObjectResolution)
@@ -1182,7 +1182,7 @@ func findSpecGenFiles(dir string) ([]string, error) {
 }
 
 // parseContractSpecFields parses a spec_gen.go file and extracts the ID and
-// Topic string values from the wrapper.ContractSpec composite literal.
+// Topic string values from the contractspec.ContractSpec composite literal.
 func parseContractSpecFields(t *testing.T, path string) (id, topic string, ok bool) {
 	t.Helper()
 	fset := token.NewFileSet()

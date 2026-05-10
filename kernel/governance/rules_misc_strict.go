@@ -48,7 +48,7 @@ import (
 // mirrors schemas/assembly.schema.json id.pattern and must apply on every
 // validate path so schema-aware tooling and `gocell validate` agree.
 //
-// FMT-18 (wrapper.ContractSpec literals in cells/** cross-check) was removed in
+// FMT-18 (contractspec.ContractSpec literals in cells/** cross-check) was removed in
 // PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0 ContractSpec literals,
 // enforced by archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
 // NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01.

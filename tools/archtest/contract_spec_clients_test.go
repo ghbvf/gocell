@@ -2,8 +2,8 @@
 //
 // # INTERNAL-CONTRACT-CLIENTS-REQUIRED-01
 //
-// Invariant: every wrapper.ContractSpec{...} composite literal whose Path
-// starts with "/internal/v1/" must declare a non-empty Clients field.
+// Invariant: every contractspec.ContractSpec{...} composite literal whose
+// Path starts with "/internal/v1/" must declare a non-empty Clients field.
 // Missing or empty Clients on an internal contract means there is no
 // caller-cell allowlist, which defeats the purpose of the 4-part
 // service-token caller-identity propagation.
@@ -16,7 +16,7 @@
 //
 // Detection: type-aware via go/types — for every *ast.CompositeLit, the
 // rule resolves cl.Type via pkg.TypesInfo and matches only when the named
-// type's import path equals kernel/wrapper and the type name equals
+// type's import path equals kernel/contractspec and the type name equals
 // ContractSpec. Replaces the prior `hasID && hasPath` heuristic that
 // false-positived on any struct sharing those field names (closes
 // PR445-FU finding F1).
@@ -35,19 +35,20 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const ruleInternalContractClients01 = "INTERNAL-CONTRACT-CLIENTS-REQUIRED-01"
 
-// wrapperContractSpecImportPath is the canonical import path of the package
+// contractSpecImportPath is the canonical import path of the package
 // declaring ContractSpec. Derived at package init via reflect.TypeOf on
-// wrapper.ContractSpec — the import statement above is the single source
-// of truth, so a hardcoded-path typo (which silently fail-opened this rule
-// from PR #445 commit 876cca5b until this commit) is no longer expressible.
-var wrapperContractSpecImportPath = reflect.TypeOf(wrapper.ContractSpec{}).PkgPath()
+// contractspec.ContractSpec — the import statement above is the single
+// source of truth, so a hardcoded-path typo (which silently fail-opened
+// this rule from PR #445 commit 876cca5b until this commit) is no longer
+// expressible.
+var contractSpecImportPath = reflect.TypeOf(contractspec.ContractSpec{}).PkgPath()
 
 // awaitingRealCallerAllowlist holds spec IDs that are in transition:
 // the Clients field has not yet been set because Wave 3 has not landed.
@@ -55,11 +56,11 @@ var wrapperContractSpecImportPath = reflect.TypeOf(wrapper.ContractSpec{}).PkgPa
 var awaitingRealCallerAllowlist = map[string]bool{}
 
 // TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01 enforces that every
-// wrapper.ContractSpec composite literal with an /internal/v1/* Path
+// contractspec.ContractSpec composite literal with an /internal/v1/* Path
 // declares a non-empty Clients field.
 //
 // Type-aware via typeseval.SharedResolver: only literals whose static type
-// resolves to wrapper.ContractSpec are inspected; structurally similar
+// resolves to contractspec.ContractSpec are inspected; structurally similar
 // types in unrelated packages are ignored.
 func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 	t.Parallel()
@@ -112,9 +113,10 @@ func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 	}
 }
 
-// isContractSpecLit reports whether cl is a wrapper.ContractSpec composite
-// literal. Type-aware via go/types: cl.Type is resolved through pkg.TypesInfo
-// and matched against the named ContractSpec type in kernel/wrapper.
+// isContractSpecLit reports whether cl is a contractspec.ContractSpec
+// composite literal. Type-aware via go/types: cl.Type is resolved through
+// pkg.TypesInfo and matched against the named ContractSpec type in
+// kernel/contractspec.
 //
 // Fail-safe: returns false when cl, cl.Type, or info is nil — callers using
 // inline parser.ParseFile (no TypesInfo) will see false, which is the
@@ -136,7 +138,7 @@ func isContractSpecLit(cl *ast.CompositeLit, info *types.Info) bool {
 	if obj == nil || obj.Pkg() == nil {
 		return false
 	}
-	return obj.Pkg().Path() == wrapperContractSpecImportPath && obj.Name() == "ContractSpec"
+	return obj.Pkg().Path() == contractSpecImportPath && obj.Name() == "ContractSpec"
 }
 
 // contractSpecStringField returns the string literal value of the named

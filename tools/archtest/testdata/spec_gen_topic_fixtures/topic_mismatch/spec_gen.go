@@ -9,9 +9,9 @@
 
 package broken
 
-import "github.com/ghbvf/gocell/kernel/wrapper"
+import "github.com/ghbvf/gocell/kernel/contractspec"
 
-var spec = wrapper.ContractSpec{
+var spec = contractspec.ContractSpec{
 	ID:        "event.demo.broken.v1",
 	Kind:      "event",
 	Transport: "amqp",

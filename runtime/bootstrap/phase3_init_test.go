@@ -22,9 +22,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -133,7 +133,7 @@ func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registry) err
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	return reg.Subscribe(wrapper.ContractSpec{
+	return reg.Subscribe(contractspec.ContractSpec{
 		ID:        c.topic,
 		Kind:      "event",
 		Transport: "amqp",

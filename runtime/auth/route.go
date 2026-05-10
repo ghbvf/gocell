@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -28,7 +29,7 @@ type Route struct {
 	// Method + Path drive both the chi registration pattern and the span
 	// attributes (gocell.contract.id / kind / transport + http.method /
 	// route). Contract.Kind MUST be "http".
-	Contract wrapper.ContractSpec
+	Contract contractspec.ContractSpec
 
 	// Handler is the inner http.Handler. REQUIRED.
 	Handler http.Handler
@@ -258,7 +259,7 @@ func (r Route) validate() error {
 	if r.Contract.ID == "" {
 		return fmt.Errorf("auth.Mount: Route.Contract.ID must be set — round-4 dropped the " +
 			"untraced legacy registration shape; every Mount call must bind a " +
-			"wrapper.ContractSpec literal. If the contract has no YAML yet, " +
+			"contractspec.ContractSpec literal. If the contract has no YAML yet, " +
 			"author one in contracts/ first")
 	}
 	if err := r.validateContractShape(); err != nil {

@@ -1,4 +1,4 @@
-package wrapper
+package contractspec
 
 import (
 	"fmt"
@@ -17,12 +17,9 @@ import (
 // NewHandler adapters in generated/contracts/**.
 //
 // Three archtest gates enforce this invariant:
-//   - CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01
+//   - CELLS-NO-CONTRACTSPEC-IMPORT-01
 //   - NO-MANUAL-CONTRACTSPEC-LITERAL-01
 //   - EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
-//
-// Replace any prior usage of the deleted `EventSpec(id, transport)` helper
-// with `<contractpkg>.NewSubscription(handler, consumerGroup, sliceID).Mount(reg)`.
 //
 // The zero value is invalid — callers must populate ID / Kind / Transport
 // and the kind-specific fields, then rely on auth.Mount / wrapper.HTTPHandler
@@ -63,13 +60,13 @@ type ContractSpec struct {
 // cost of a full wrapper.HTTPHandler call.
 func (s ContractSpec) Validate() error {
 	if strings.TrimSpace(s.ID) == "" {
-		return fmt.Errorf("wrapper.ContractSpec: ID must not be empty")
+		return fmt.Errorf("contractspec.ContractSpec: ID must not be empty")
 	}
 	if strings.TrimSpace(s.Kind) == "" {
-		return fmt.Errorf("wrapper.ContractSpec: Kind must not be empty")
+		return fmt.Errorf("contractspec.ContractSpec: Kind must not be empty")
 	}
 	if strings.TrimSpace(s.Transport) == "" {
-		return fmt.Errorf("wrapper.ContractSpec: Transport must not be empty")
+		return fmt.Errorf("contractspec.ContractSpec: Transport must not be empty")
 	}
 
 	switch s.Kind {
@@ -82,25 +79,25 @@ func (s ContractSpec) Validate() error {
 		// command/projection transports.
 		return nil
 	default:
-		return fmt.Errorf("wrapper.ContractSpec: Kind %q not recognized (http|event|command|projection)", s.Kind)
+		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection)", s.Kind)
 	}
 }
 
 func (s ContractSpec) validateHTTP() error {
 	if s.Method == "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind requires Method", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind requires Method", s.ID)
 	}
 	if s.Method != strings.ToUpper(s.Method) {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: Method %q must be upper-case", s.ID, s.Method)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: Method %q must be upper-case", s.ID, s.Method)
 	}
 	if s.Path == "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind requires Path", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind requires Path", s.ID)
 	}
 	if !strings.HasPrefix(s.Path, "/") {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: Path %q must start with '/'", s.ID, s.Path)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: Path %q must start with '/'", s.ID, s.Path)
 	}
 	if s.Topic != "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind must not carry Topic", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
 	isInternalPath := strings.HasPrefix(s.Path, "/internal/v1/") || s.Path == "/internal/v1"
 	if isInternalPath && len(s.Clients) == 0 {
@@ -123,10 +120,10 @@ func (s ContractSpec) validateHTTP() error {
 }
 
 // isCellIDLike reports whether s matches the cell-ID pattern
-// `^[a-z][a-z0-9-]*$`. Implemented byte-wise so that kernel/wrapper avoids a
-// package-level regexp var (FMT-19 forbids initializer state in kernel/).
-// Mirrors runtime/auth.callerCellPattern semantics but adds no runtime
-// dependency.
+// `^[a-z][a-z0-9-]*$`. Implemented byte-wise so that kernel/contractspec
+// avoids a package-level regexp var (FMT-19 forbids initializer state in
+// kernel/). Mirrors runtime/auth.callerCellPattern semantics but adds no
+// runtime dependency.
 func isCellIDLike(s string) bool {
 	if s == "" {
 		return false
@@ -149,10 +146,10 @@ func isCellIDLike(s string) bool {
 
 func (s ContractSpec) validateEvent() error {
 	if s.Topic == "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: event kind requires Topic", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind requires Topic", s.ID)
 	}
 	if s.Method != "" || s.Path != "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
 	}
 	return nil
 }

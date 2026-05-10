@@ -109,7 +109,7 @@ const (
 var errorFirstEnforcedFiles = []string{
 	"kernel/wrapper/handler.go",
 	"kernel/wrapper/consumer.go",
-	"kernel/wrapper/spec.go",
+	"kernel/contractspec/spec.go",
 	"kernel/wrapper/lifecycle.go",
 	"kernel/cell/auth_plan.go",
 	"kernel/outbox/entry_id.go",

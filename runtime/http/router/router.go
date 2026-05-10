@@ -23,6 +23,7 @@ import (
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -409,7 +410,7 @@ type Router struct {
 	// declaredHTTPContracts accumulates HTTP ContractSpec entries forwarded
 	// by auth.Mount. Tracing uses these as a fallback when upstream middleware
 	// short-circuits before wrapper.HTTPHandler can contribute attrs.
-	declaredHTTPContracts      []wrapper.ContractSpec
+	declaredHTTPContracts      []contractspec.ContractSpec
 	ownedRoutes                []ownedRoutePath
 	routePatterns              []registeredRoutePattern
 	ownedPrefixes              []ownedRoutePrefix
@@ -964,7 +965,7 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 // DeclareHTTPContract implements cell.HTTPContractDeclarer. It stores the
 // route contract metadata separately from auth metadata so Tracing can tag
 // spans for requests rejected before reaching wrapper.HTTPHandler.
-func (r *Router) DeclareHTTPContract(spec wrapper.ContractSpec) error {
+func (r *Router) DeclareHTTPContract(spec contractspec.ContractSpec) error {
 	if r.authFinalized {
 		return fmt.Errorf(
 			"router: DeclareHTTPContract called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
@@ -1491,7 +1492,7 @@ func cleanRoutePath(routePath string) string {
 	return cleaned
 }
 
-func httpContractAttrs(spec wrapper.ContractSpec) []wrapper.Attr {
+func httpContractAttrs(spec contractspec.ContractSpec) []wrapper.Attr {
 	return []wrapper.Attr{
 		{Key: "gocell.contract.id", Value: spec.ID},
 		{Key: "gocell.contract.kind", Value: spec.Kind},
@@ -1686,7 +1687,7 @@ func (a *nativeMuxAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 // DeclareHTTPContract forwards the route's full ContractSpec to the
 // Router-rooted declarer. ContractSpec.Path is already the canonical full
 // path, so unlike AuthRouteMeta it is not composed with the adapter prefix.
-func (a *nativeMuxAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error {
+func (a *nativeMuxAdapter) DeclareHTTPContract(spec contractspec.ContractSpec) error {
 	if a.owner != nil {
 		a.owner.recordRoutePattern(spec.Method, spec.Path)
 		if a.cellID != "" {

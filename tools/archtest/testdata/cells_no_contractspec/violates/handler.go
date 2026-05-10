@@ -3,12 +3,12 @@
 // to trigger the archtest scanner violation.
 package violates
 
-import "github.com/ghbvf/gocell/kernel/wrapper"
+import "github.com/ghbvf/gocell/kernel/contractspec"
 
-// RegisterRoutes is a stub that uses wrapper.ContractSpec directly —
+// RegisterRoutes is a stub that uses contractspec.ContractSpec directly —
 // the pattern forbidden in non-generated cells/ files post W3.
-func Register() wrapper.ContractSpec {
-	return wrapper.ContractSpec{
+func Register() contractspec.ContractSpec {
+	return contractspec.ContractSpec{
 		ID:   "http.bad.cell.v1",
 		Kind: "http",
 	}

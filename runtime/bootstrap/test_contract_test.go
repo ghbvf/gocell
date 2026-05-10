@@ -3,11 +3,11 @@ package bootstrap
 import (
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 )
 
-func testHTTPContract(method, path string) wrapper.ContractSpec {
-	spec := wrapper.ContractSpec{ID: "test:" + method + ":" + path, Kind: "http", Transport: "http", Method: method, Path: path}
+func testHTTPContract(method, path string) contractspec.ContractSpec {
+	spec := contractspec.ContractSpec{ID: "test:" + method + ":" + path, Kind: "http", Transport: "http", Method: method, Path: path}
 	// Internal paths require non-empty Clients (ContractSpec.Validate enforced by wrapper.HTTPHandler).
 	// Bootstrap integration tests use "accesscore" as the service-token caller cell.
 	if strings.HasPrefix(path, "/internal/v1/") {
@@ -16,6 +16,6 @@ func testHTTPContract(method, path string) wrapper.ContractSpec {
 	return spec
 }
 
-func testEventSpec(topic string) wrapper.ContractSpec {
-	return wrapper.ContractSpec{ID: "test:" + topic, Kind: "event", Transport: "amqp", Topic: topic}
+func testEventSpec(topic string) contractspec.ContractSpec {
+	return contractspec.ContractSpec{ID: "test:" + topic, Kind: "event", Transport: "amqp", Topic: topic}
 }

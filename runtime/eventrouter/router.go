@@ -26,8 +26,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 // DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
@@ -67,7 +67,7 @@ type handlerConfig struct {
 	consumerGroup string
 	cellID        string // ownerCellID resolved by AddContractHandler; used for Subscription.CellID
 	sliceID       string
-	contract      wrapper.ContractSpec
+	contract      contractspec.ContractSpec
 }
 
 // Router manages event subscription lifecycle. It is populated from
@@ -148,7 +148,7 @@ func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) 
 //
 // ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
 func (r *Router) AddContractHandler(
-	spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, ownerCellID string, opts ...cell.SubscriptionOption,
+	spec contractspec.ContractSpec, handler outbox.EntryHandler, consumerGroup string, ownerCellID string, opts ...cell.SubscriptionOption,
 ) error {
 	if handler == nil {
 		return fmt.Errorf("eventrouter: AddContractHandler called with nil handler")

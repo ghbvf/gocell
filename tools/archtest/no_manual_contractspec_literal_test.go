@@ -2,24 +2,25 @@
 //
 // # NO-MANUAL-CONTRACTSPEC-LITERAL-01
 //
-// Invariant: wrapper.ContractSpec{…} composite literals and wrapper.EventSpec(…)
-// call expressions must only appear in generated/contracts/**/*_gen.go files.
-// Hand-written production code under cells/, examples/**/cells/, runtime/,
-// kernel/cell/, adapters/ etc. must not define ContractSpec or EventSpec
-// literals once the codegen migration (W3) is complete.
+// Invariant: contractspec.ContractSpec{…} composite literals and
+// contractspec.EventSpec(…) call expressions must only appear in
+// generated/contracts/**/*_gen.go files. Hand-written production code under
+// cells/, examples/**/cells/, runtime/, kernel/cell/, adapters/ etc. must not
+// define ContractSpec or EventSpec literals once the codegen migration (W3)
+// is complete.
 //
 // Migration allowlist: the four cells still migrating in W3.2–W3.5 are
 // listed in migrationAllowlistNoLiteral. Each sub-wave removes the
 // corresponding entry. After W3.5 the list must be empty.
 //
 // Exclusions:
-//   - generated/contracts/**/*_gen.go  — the authoritative home after migration
-//   - tools/codegen/**/testdata/**     — codegen fixture files
-//   - **/fixtures/**                   — test fixture trees
-//   - kernel/wrapper/** itself         — defines the types (not instantiates them)
-//   - *_test.go                        — test helpers may reference specs for assertions
+//   - generated/contracts/**/*_gen.go    — the authoritative home after migration
+//   - tools/codegen/**/testdata/**       — codegen fixture files
+//   - **/fixtures/**                     — test fixture trees
+//   - kernel/contractspec/** itself      — defines the types (not instantiates them)
+//   - *_test.go                          — test helpers may reference specs for assertions
 //
-// ref: docs/plans/202605011500-029-master-roadmap.md K#PR4 W3
+// ref: docs/plans/202605011500-029-master-roadmap.md K#PR4 W3 + G-04
 package archtest
 
 import (
@@ -45,12 +46,12 @@ var migrationAllowlistNoLiteral = []string{}
 // W3.5 complete: all accesscore slices use generated NewHandler; auth flags
 // (Public/PasswordResetExempt) are declared in contract.yaml endpoints.http.auth
 // and emitted by contractgen handler.tmpl — no cells/ file needs a manual
-// wrapper.ContractSpec{} composite literal.
+// contractspec.ContractSpec{} composite literal.
 var permanentPathExceptionsLiteral = []string{}
 
 // TestNO_MANUAL_CONTRACTSPEC_LITERAL_01 scans production .go files (excluding
-// generated/, testdata, fixtures, kernel/wrapper) for wrapper.ContractSpec{…}
-// composite literals and wrapper.EventSpec(…) call expressions, failing on any
+// generated/, testdata, fixtures, kernel/contractspec) for contractspec.ContractSpec{…}
+// composite literals and contractspec.EventSpec(…) call expressions, failing on any
 // found outside the migration allowlist.
 func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 	t.Parallel()
@@ -120,7 +121,7 @@ func collectContractSpecScanFiles(t *testing.T, root string) []string {
 }
 
 // TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture verifies that the
-// scanner correctly identifies a wrapper.ContractSpec{} literal in a
+// scanner correctly identifies a contractspec.ContractSpec{} literal in a
 // hand-written file. The fixture in testdata/no_manual_contractspec_literal/
 // contains a deliberate violation.
 func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture(t *testing.T) {
@@ -144,10 +145,10 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture(t *testing.T) {
 }
 
 // scanForContractSpecLiterals AST-scans f for:
-//  1. wrapper.ContractSpec{…} composite literals
-//  2. wrapper.EventSpec(…) call expressions
+//  1. contractspec.ContractSpec{…} composite literals
+//  2. contractspec.EventSpec(…) call expressions
 //
-// where "wrapper" is the local alias for kernel/wrapper.
+// where "contractspec" is the local alias for kernel/contractspec.
 func scanForContractSpecLiterals(fset *token.FileSet, path, rel string) []string {
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
@@ -158,13 +159,13 @@ func scanForContractSpecLiterals(fset *token.FileSet, path, rel string) []string
 		return nil // syntax errors handled by build
 	}
 
-	alias := wrapperLocalAlias(f)
+	alias := contractspecLocalAlias(f)
 	if alias == "" {
-		return nil // file does not import kernel/wrapper
+		return nil // file does not import kernel/contractspec
 	}
 
 	var violations []string
-	// Match wrapper.ContractSpec{…} composite literals.
+	// Match contractspec.ContractSpec{…} composite literals.
 	scanner.EachInSubtree[ast.CompositeLit](f, func(node *ast.CompositeLit) {
 		sel, ok := node.Type.(*ast.SelectorExpr)
 		if !ok {
@@ -180,7 +181,7 @@ func scanForContractSpecLiterals(fset *token.FileSet, path, rel string) []string
 			rel, pos.Line, alias,
 		))
 	})
-	// Match wrapper.EventSpec(…) call expressions.
+	// Match contractspec.EventSpec(…) call expressions.
 	scanner.EachInSubtree[ast.CallExpr](f, func(node *ast.CallExpr) {
 		sel, ok := node.Fun.(*ast.SelectorExpr)
 		if !ok {

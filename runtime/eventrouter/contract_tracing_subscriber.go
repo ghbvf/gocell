@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
@@ -61,7 +62,7 @@ func (s *contractTracingSubscriber) Subscribe(
 	if err := sub.Validate(); err != nil {
 		return fmt.Errorf("eventrouter: contract tracing subscriber Subscribe: %w", err)
 	}
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        sub.ContractID,
 		Kind:      sub.ContractKind,
 		Transport: sub.ContractTransport,

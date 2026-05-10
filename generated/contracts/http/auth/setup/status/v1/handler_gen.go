@@ -7,12 +7,12 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-var contractSpec = wrapper.ContractSpec{
+var contractSpec = contractspec.ContractSpec{
 	ID:        "http.auth.setup.status.v1",
 	Kind:      "http",
 	Transport: "http",

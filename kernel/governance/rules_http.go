@@ -418,7 +418,7 @@ func parseHandlerFile(filename string, cache map[string]*parsedHandlerFile) (*pa
 	// The generated file's first comment group contains the DO NOT EDIT marker.
 	ph.generated = isGoCellGeneratedFile(f)
 
-	// Pass 1: collect spec var declarations (var specFoo = wrapper.ContractSpec{ID: "..."}).
+	// Pass 1: collect spec var declarations (var specFoo = contractspec.ContractSpec{ID: "..."}).
 	collectSpecVarIDs(f, ph.specVarToID)
 
 	// Pass 2: collect function declarations and whole-file status codes.
@@ -493,7 +493,7 @@ func collectAuthMountCorrelations(f *ast.File, specVarToID, contractToFuncs map[
 //
 // Handles two common forms:
 //
-//	var specFoo = wrapper.ContractSpec{ID: "http.x.v1", ...}
+//	var specFoo = contractspec.ContractSpec{ID: "http.x.v1", ...}
 //	var specFoo = SomeType{ID: "http.x.v1", ...}  // any struct with an ID field
 func collectSpecVarIDs(f *ast.File, out map[string]string) {
 	for _, decl := range f.Decls {
@@ -525,7 +525,7 @@ func collectSpecVarIDsFromGenDecl(gd *ast.GenDecl, out map[string]string) {
 }
 
 // extractContractIDFromLit extracts the ID string from a composite literal
-// that has an "ID" key field (e.g. wrapper.ContractSpec{ID: "http.x.v1"}).
+// that has an "ID" key field (e.g. contractspec.ContractSpec{ID: "http.x.v1"}).
 // Returns "" if expr is not a composite literal or has no ID field.
 func extractContractIDFromLit(expr ast.Expr) string {
 	lit, ok := expr.(*ast.CompositeLit)
@@ -550,7 +550,7 @@ func extractContractIDFromLit(expr ast.Expr) string {
 
 // isAuthMountCall returns true when the call is auth.Mount(…) or
 // auth.MustMount(…). Both signatures share the (mux, Route) shape and bind
-// a wrapper.ContractSpec literal; the governance scanner correlates the
+// a contractspec.ContractSpec literal; the governance scanner correlates the
 // route declaration regardless of which variant the cell uses.
 func isAuthMountCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)

@@ -3,11 +3,11 @@
 
 package ordercreated
 
-import "github.com/ghbvf/gocell/kernel/wrapper"
+import "github.com/ghbvf/gocell/kernel/contractspec"
 
 // spec is the ContractSpec for event.order-created.v1.
 // Private — callers must use NewSubscription.Mount(reg) to register this event.
-var spec = wrapper.ContractSpec{
+var spec = contractspec.ContractSpec{
 	ID:        "event.order-created.v1",
 	Kind:      "event",
 	Transport: "amqp",

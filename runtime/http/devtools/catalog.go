@@ -7,9 +7,9 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/csvparam"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -25,7 +25,7 @@ import (
 // level (apiVersion/kind/metadata/spec). They do NOT wrap in {"data": ...}
 // per api-versioning.md — that envelope rule applies to cell-owned business
 // routes; framework-internal routes follow their own wire formats.
-var specCatalog = wrapper.ContractSpec{
+var specCatalog = contractspec.ContractSpec{
 	ID:        "http.framework.devtools.catalog.v1",
 	Kind:      "http",
 	Transport: "http",

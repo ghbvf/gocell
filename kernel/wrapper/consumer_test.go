@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
-func eventSpec() wrapper.ContractSpec {
-	return wrapper.ContractSpec{
+func eventSpec() contractspec.ContractSpec {
+	return contractspec.ContractSpec{
 		ID:        "event.session.revoked.v1",
 		Kind:      "event",
 		Transport: "amqp",

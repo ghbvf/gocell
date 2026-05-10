@@ -1,29 +1,29 @@
-package wrapper_test
+package contractspec_test
 
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 )
 
 func TestContractSpec_HTTPSpec_Validate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name    string
-		spec    wrapper.ContractSpec
+		spec    contractspec.ContractSpec
 		wantErr bool
 	}{
-		{"happy — full http spec", wrapper.ContractSpec{
+		{"happy — full http spec", contractspec.ContractSpec{
 			ID: "http.auth.login.v1", Kind: "http", Transport: "http",
 			Method: "POST", Path: "/api/v1/auth/login",
 		}, false},
-		{"empty id rejected", wrapper.ContractSpec{Kind: "http", Transport: "http", Method: "POST", Path: "/x"}, true},
-		{"empty kind rejected", wrapper.ContractSpec{ID: "a", Transport: "http", Method: "POST", Path: "/x"}, true},
-		{"empty transport rejected", wrapper.ContractSpec{ID: "a", Kind: "http", Method: "POST", Path: "/x"}, true},
-		{"http kind requires method", wrapper.ContractSpec{ID: "a", Kind: "http", Transport: "http", Path: "/x"}, true},
-		{"http kind requires path", wrapper.ContractSpec{ID: "a", Kind: "http", Transport: "http", Method: "POST"}, true},
-		{"path must start with slash", wrapper.ContractSpec{ID: "a", Kind: "http", Transport: "http", Method: "POST", Path: "nope"}, true},
-		{"method must be upper case", wrapper.ContractSpec{ID: "a", Kind: "http", Transport: "http", Method: "post", Path: "/x"}, true},
+		{"empty id rejected", contractspec.ContractSpec{Kind: "http", Transport: "http", Method: "POST", Path: "/x"}, true},
+		{"empty kind rejected", contractspec.ContractSpec{ID: "a", Transport: "http", Method: "POST", Path: "/x"}, true},
+		{"empty transport rejected", contractspec.ContractSpec{ID: "a", Kind: "http", Method: "POST", Path: "/x"}, true},
+		{"http kind requires method", contractspec.ContractSpec{ID: "a", Kind: "http", Transport: "http", Path: "/x"}, true},
+		{"http kind requires path", contractspec.ContractSpec{ID: "a", Kind: "http", Transport: "http", Method: "POST"}, true},
+		{"path must start with slash", contractspec.ContractSpec{ID: "a", Kind: "http", Transport: "http", Method: "POST", Path: "nope"}, true},
+		{"method must be upper case", contractspec.ContractSpec{ID: "a", Kind: "http", Transport: "http", Method: "post", Path: "/x"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,15 +44,15 @@ func TestContractSpec_EventSpec_Validate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name    string
-		spec    wrapper.ContractSpec
+		spec    contractspec.ContractSpec
 		wantErr bool
 	}{
-		{"happy — event spec", wrapper.ContractSpec{
+		{"happy — event spec", contractspec.ContractSpec{
 			ID: "event.session.revoked.v1", Kind: "event", Transport: "amqp",
 			Topic: "session.revoked.v1",
 		}, false},
-		{"event kind requires topic", wrapper.ContractSpec{ID: "a", Kind: "event", Transport: "amqp"}, true},
-		{"event spec with http fields rejected", wrapper.ContractSpec{
+		{"event kind requires topic", contractspec.ContractSpec{ID: "a", Kind: "event", Transport: "amqp"}, true},
+		{"event spec with http fields rejected", contractspec.ContractSpec{
 			ID: "a", Kind: "event", Transport: "amqp", Topic: "t", Method: "POST",
 		}, true},
 	}
@@ -77,7 +77,7 @@ func TestContractSpec_EventSpec_Validate(t *testing.T) {
 func TestContractSpec_Validate_InternalRequiresClients(t *testing.T) {
 	t.Parallel()
 	// Spec: Path=/internal/v1/foo + Clients=nil → error
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "http.test.internal.v1",
 		Kind:      "http",
 		Transport: "http",
@@ -99,7 +99,7 @@ func TestContractSpec_Validate_InternalRequiresClients(t *testing.T) {
 func TestContractSpec_Validate_NonInternalRejectsClients(t *testing.T) {
 	t.Parallel()
 	// Spec: Path=/api/v1/foo + Clients=["x"] → error
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "http.test.api.v1",
 		Kind:      "http",
 		Transport: "http",
@@ -119,7 +119,7 @@ func TestContractSpec_Validate_NonInternalRejectsClients(t *testing.T) {
 // Spec: Path=/internal/v1/foo + Clients=["accesscore"] → nil.
 func TestContractSpec_Validate_InternalWithClientsOK(t *testing.T) {
 	t.Parallel()
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "http.test.internal.v1",
 		Kind:      "http",
 		Transport: "http",
@@ -157,7 +157,7 @@ func TestContractSpec_Validate_InvalidClientID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			spec := wrapper.ContractSpec{
+			spec := contractspec.ContractSpec{
 				ID:        "http.test.internal.v1",
 				Kind:      "http",
 				Transport: "http",

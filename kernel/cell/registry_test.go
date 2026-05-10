@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -24,8 +24,8 @@ func noopHandler(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 	return outbox.Ack()
 }
 
-func testRegistrySpec(topic string) wrapper.ContractSpec {
-	return wrapper.ContractSpec{
+func testRegistrySpec(topic string) contractspec.ContractSpec {
+	return contractspec.ContractSpec{
 		ID:        "event." + topic + ".v1",
 		Kind:      "event",
 		Transport: "amqp",
@@ -98,7 +98,7 @@ func TestRegistry_Subscribe_RejectsEmptyConsumerGroup(t *testing.T) {
 
 func TestRegistry_Subscribe_RejectsBadSpecKind(t *testing.T) {
 	rec := NewRegistryRecorder(nil, DurabilityDurable)
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "http.foo.v1",
 		Kind:      "http", // not "event"
 		Transport: "amqp",
@@ -338,7 +338,7 @@ func TestRouteGroupStruct_FieldCombinations(t *testing.T) {
 
 func TestRegistry_Subscribe_RejectsEmptyTopic(t *testing.T) {
 	rec := NewRegistryRecorder(nil, DurabilityDurable)
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "event.foo.v1",
 		Kind:      "event",
 		Transport: "amqp",

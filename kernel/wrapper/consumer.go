@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -36,7 +37,7 @@ const (
 // callers do not need to import kernel/outbox for the type.
 type ConsumerFunc = outbox.EntryHandler
 
-func defaultEventSpanName(spec ContractSpec) string {
+func defaultEventSpanName(spec contractspec.ContractSpec) string {
 	return "CONSUME " + spec.Topic
 }
 
@@ -69,7 +70,7 @@ func defaultEventSpanName(spec ContractSpec) string {
 // Returns a non-nil error when fn is nil, spec.Kind != "event", or
 // spec.Validate fails. Callers that want to fail-fast at composition time
 // should use MustWrapConsumer.
-func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc) (ConsumerFunc, error) {
+func WrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) (ConsumerFunc, error) {
 	if fn == nil {
 		return nil, fmt.Errorf("wrapper.WrapConsumer: fn must not be nil")
 	}
@@ -127,7 +128,7 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc) (ConsumerFunc, 
 // It panics when WrapConsumer returns an error. Suitable for static wiring
 // where the spec is a build-time literal; use WrapConsumer directly when the
 // spec is data-driven.
-func MustWrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc) ConsumerFunc {
+func MustWrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) ConsumerFunc {
 	c, err := WrapConsumer(tr, spec, fn)
 	if err != nil {
 		panic(errcode.Assertion("wrapper: consumer: %v", err))

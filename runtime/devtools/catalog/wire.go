@@ -218,10 +218,10 @@ type SliceSpecContractUsage struct {
 
 // ContractSpec is Document.Entities[Kind=="Contract"].Spec.
 //
-// Note: this name shadows wrapper.ContractSpec in some import contexts;
+// Note: this name shadows contractspec.ContractSpec in some import contexts;
 // callers in cmd/ and runtime/ should import this package as `catalog` so the
 // disambiguation reads naturally (`catalog.ContractSpec` vs
-// `wrapper.ContractSpec`).
+// `contractspec.ContractSpec`).
 type ContractSpec struct {
 	Kind              string   `json:"kind"               yaml:"kind"`
 	OwnerCell         string   `json:"ownerCell,omitempty" yaml:"ownerCell,omitempty"`

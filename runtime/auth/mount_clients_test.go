@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -19,8 +19,8 @@ import (
 //
 // Spec: auth.Mount auto-enforces a RequireCallerCell policy when spec.Clients != nil.
 func TestMount_AutoEnforceClients_InAllowlist_200(t *testing.T) {
-	// Spec: wrapper.ContractSpec.Clients declares the allowed caller cells.
-	spec := wrapper.ContractSpec{
+	// Spec: contractspec.ContractSpec.Clients declares the allowed caller cells.
+	spec := contractspec.ContractSpec{
 		ID:        "http.auth.role.assign.v1",
 		Kind:      "http",
 		Transport: "http",
@@ -55,7 +55,7 @@ func TestMount_AutoEnforceClients_InAllowlist_200(t *testing.T) {
 //
 // Spec: auto-enforced RequireCallerCell rejects callers not in spec.Clients.
 func TestMount_AutoEnforceClients_OutAllowlist_403(t *testing.T) {
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "http.auth.role.assign.v1",
 		Kind:      "http",
 		Transport: "http",
@@ -98,7 +98,7 @@ func TestMount_AutoEnforceClients_OutAllowlist_403(t *testing.T) {
 // Spec: Clients guard (RequireCallerCell) runs first; if the caller is in the
 // allowlist, the route-level Policy runs next. Both must pass for 200.
 func TestMount_AutoEnforceClients_ComposeWithPolicy(t *testing.T) {
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "http.auth.role.assign.v1",
 		Kind:      "http",
 		Transport: "http",
