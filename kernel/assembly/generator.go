@@ -242,6 +242,12 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 // CLI) feeds the returned plan into pathsafe.WritePlannedFiles, which is the
 // single funnel for both dry-run and live writes (SCAFFOLD-WRITE-FUNNEL-01).
 //
+// Generator is not safe for concurrent use.
+//
+// PlanAssemblyScaffold may be called sequentially on the same Generator
+// instance; each call leaves g.project.Assemblies in its original state
+// (defer revert in appendGeneratedFiles).
+//
 // The Generator must have been constructed with a non-empty projectRoot.
 // Each cell in spec.Cells must exist in g.project.Cells.
 //
@@ -349,6 +355,10 @@ func (g *Generator) appendGeneratedFiles(
 // In-memory only; reverted by PlanAssemblyScaffold after Generate* completes.
 // Field set must stay in sync with what GenerateModulesGen/Entrypoint/Boundary
 // read — see backlog ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
+//
+// Build.Binary intentionally omitted — new assembly has no binary name
+// declared; GenerateBoundary/Entrypoint do not read this field (verified
+// by grep). Tracked in backlog ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
 func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 	return &metadata.AssemblyMeta{
 		ID:    spec.ID,

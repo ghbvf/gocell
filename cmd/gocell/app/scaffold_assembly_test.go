@@ -108,6 +108,7 @@ func TestRunScaffoldAssembly_SkipGenerate(t *testing.T) {
 	for _, rel := range []string{
 		"assemblies/siasm/assembly.yaml",
 		"cmd/siasm/run.go",
+		"cmd/siasm/app.go",
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Errorf("expected %s to exist: %v", rel, err)

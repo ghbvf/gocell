@@ -36,7 +36,7 @@ func scaffoldAssembly(root string, args []string) error {
 	role := fs.String("role", "", "owner role, e.g. maintainer (required)")
 	deploy := fs.String("deploy", "k8s", "deployment template: one of [k8s compose binary]")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
-	skipGenerate := fs.Bool(skipGenerateFlag, false, "skip auto-invocation of assembly codegen (modules_gen.go / main.go / boundary.yaml)")
+	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateAssemblyUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

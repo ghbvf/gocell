@@ -55,7 +55,7 @@ import (
 //   - tools/codegen/contractgen/     (generator + writer — R5 expansion)
 //   - tools/codegen/writer.go        (codegen.Write — R5 expansion)
 //   - tools/codegen/cellgen/generate_*.go (Generate* funcs — R5 expansion)
-//   - kernel/assembly/               (Generator.Scaffold)
+//   - kernel/assembly/               (Generator.PlanAssemblyScaffold)
 //   - cmd/gocell/app/scaffold*.go    (scaffoldSlice, scaffoldContract, scaffoldJourney)
 //
 // Allowlist (only these files may call banned os selectors):

@@ -143,14 +143,15 @@ func validateJourneyFlags(id, goal, team, cells string) ([]string, error) {
 // Contract/Journey/Assembly; also makes it safe to rename in one place if
 // the CLI convention evolves.
 const (
-	dryRunFlag        = "dry-run"
-	dryRunUsage       = "validate inputs and path conflict; do not write files"
-	skipGenerateFlag  = "skip-generate"
-	skipGenerateUsage = "skip auto-invocation of cell + contract codegen after scaffold"
-	withHTTPFlag      = "with-http"
-	withHTTPUsage     = "include an HTTP example contract in the bundle (default if neither --with-events nor --with-both is set)"
-	withEventsFlag    = "with-events"
-	withEventsUsage   = "include an event example contract in the bundle"
+	dryRunFlag                = "dry-run"
+	dryRunUsage               = "validate inputs and path conflict; do not write files"
+	skipGenerateFlag          = "skip-generate"
+	skipGenerateCellUsage     = "skip auto-invocation of cell + contract codegen after scaffold"
+	skipGenerateAssemblyUsage = "skip auto-invocation of assembly codegen (modules_gen.go / main.go / boundary.yaml)"
+	withHTTPFlag              = "with-http"
+	withHTTPUsage             = "include an HTTP example contract in the bundle (default if neither --with-events nor --with-both is set)"
+	withEventsFlag            = "with-events"
+	withEventsUsage           = "include an event example contract in the bundle"
 	// errMsgIDRequired is the canonical "--id required" CLI error message.
 	// Extracted to avoid SonarCloud duplicate-literal smell across the four
 	// scaffold subcommand validators (cell/slice/contract/journey/assembly).
@@ -319,7 +320,7 @@ func scaffoldCell(root string, args []string) error {
 	role := fs.String("role", "", "owner role, e.g. cell-owner (required)")
 	structName := fs.String("struct", "", "Go struct name (default: PascalCase of --id)")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
-	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateUsage)
+	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateCellUsage)
 	withHTTP := fs.Bool(withHTTPFlag, false, withHTTPUsage)
 	withEvents := fs.Bool(withEventsFlag, false, withEventsUsage)
 	withBoth := fs.Bool(withBothFlag, false, withBothUsage)

@@ -665,6 +665,65 @@ func TestPlanAssemblyScaffold_FullPlan_RollbackOnLastFileConflict(t *testing.T) 
 	}
 }
 
+// TestPlanAssemblyScaffold_RollbackOnMidPlanWriteFailure 验证 writePass 中途失败时的
+// rollback 逻辑。与 TestPlanAssemblyScaffold_FullPlan_RollbackOnLastFileConflict 不同，
+// 这里的失败发生在 writePass（而非 conflictPass）：预置 assemblies/<id>/generated/ 为
+// 只读目录，conflictPass 对 boundary.yaml（不存在）通过，writePass 写入时因父目录
+// 只读而失败。此时 plan[0..4] 已经写入，rollback 必须删除它们。
+func TestPlanAssemblyScaffold_RollbackOnMidPlanWriteFailure(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod read-only dir semantics differ on windows")
+	}
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+
+	// 预建 assemblies/<id>/generated/ 目录并设为只读：
+	//   - conflictPass 用 os.Lstat 检查 boundary.yaml（文件不存在）→ 通过
+	//   - writePass mkdirAllTracked 时目录已存在 → 不算新建 → 直接写文件
+	//   - writeFileNoFollow 在只读父目录中创建文件 → 失败 → 触发 rollback
+	generatedDir := filepath.Join(root, "assemblies", "wprollbackasm", "generated")
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(generatedDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(generatedDir, 0o755) }()
+
+	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
+		ID:        "wprollbackasm",
+		Cells:     []string{"examplecell"},
+		OwnerTeam: "platform",
+		OwnerRole: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("PlanAssemblyScaffold: %v", err)
+	}
+	if len(plan) != 6 {
+		t.Fatalf("expected 6 PlannedFile, got %d", len(plan))
+	}
+
+	realRoot, _ := pathsafe.ResolveRoot(root)
+	err = pathsafe.WritePlannedFiles(realRoot, plan, false)
+	if err == nil {
+		t.Fatal("expected write failure (read-only parent dir), got nil")
+	}
+
+	// rollback 必须删除前 5 个已写入的文件
+	noPaths := scaffoldSixPaths("wprollbackasm")[:5]
+	for _, rel := range noPaths {
+		if _, statErr := os.Stat(filepath.Join(root, rel)); statErr == nil {
+			t.Errorf("writePass rollback: file must not exist after rollback: %s", rel)
+		}
+	}
+	// 预置的 generated/ 目录本身不在 plan 中，rollback 不应删除它
+	if _, statErr := os.Stat(generatedDir); statErr != nil {
+		t.Errorf("rollback must not remove pre-existing generated/ dir: %v", statErr)
+	}
+}
+
 // TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots 验证 6 个 slot 各自
 // pre-place 后 WritePlannedFiles 都失败，且其他 5 个 slot 不存在。
 func TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots(t *testing.T) {
