@@ -76,3 +76,17 @@
 | C-04 CELLS-INIT-TEMPLATE-CONVERGE（含 C-07） | 🟡 P2 | 3 cell Init 切分各异 + emitter health probe helper |
 | C-09 CELL-SPLIT-LAYOUT-NORMALIZE | 🟡 P2 | accesscore + configcore 三文件范式不一致 |
 | M1-OBSERVED HEALTHZ-INTERFACE-PACKAGE-01 | 🟡 P2 | 38 处 Health 实现分散 |
+
+## G. S1 PR carve-outs
+
+S1 PR（refactor/547 typed Protocol primitive 骨架）范围外的小条目，触发条件均为后续 S2-S7 PR。来源：`docs/plans/202605082145-034-pg-corecell-b-route-plan.md` S1 计划。
+
+### S1-CO-01 SESSION-PROTOCOL-COMPOSITION-ROOT-01 archtest
+
+- **类型**：carve-out（S1 PR 范围外）
+- **触发条件**：S4 PR（accesscore composition root 接入 typed Protocol）落地时一并加
+- **内容**：`tools/archtest/session_protocol_invariants_test.go`：
+  - `session.NewProtocol` / `session.MustNewProtocol` 仅允许在 `cmd/` 包调用
+  - 防止 cell / runtime 内部自定义 Protocol 绕过 composition-root 决策
+- **理由**：S1 阶段 cells/ 还没有 import `runtime/auth/session`，archtest 没有真实违规对象可拦；与 cell 接入同 PR 落地时 import-edge 检查上下文齐全
+- **AI-rebust 等级**：Medium（type-aware archtest，扫 `MustNewProtocol` call site 限定包路径）
