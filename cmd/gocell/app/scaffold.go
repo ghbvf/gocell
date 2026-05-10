@@ -35,7 +35,7 @@ func validateScaffoldID(value, field string) error {
 	if value == "" {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field is required",
-			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
 	}
 	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
@@ -45,7 +45,7 @@ func validateScaffoldID(value, field string) error {
 	if strings.ContainsAny(value, "\n\r\x00") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
 	}
 	return nil
 }
@@ -57,7 +57,7 @@ func validateScaffoldText(value, field string) error {
 	if strings.ContainsAny(value, "\n\r\x00") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
 	}
 	return nil
 }
@@ -161,6 +161,17 @@ const (
 	dryRunCreatePathFmt = "(dry-run) Would create %s\n"
 	withBothFlag        = "with-both"
 	withBothUsage       = "include both HTTP and event example contracts in the bundle"
+	// internalFieldFmt is the WithInternal format string for field-level
+	// validation context. Extracted to avoid duplicate-literal smell across
+	// validateScaffoldID and validateScaffoldText call sites.
+	internalFieldFmt = "field=%s"
+	// errFmtScaffoldSlice / errFmtScaffoldContract / errFmtScaffoldJourney are
+	// the canonical error-wrapping format strings for each scaffold sub-command.
+	// Extracted to avoid duplicate-literal smell across the multiple
+	// fmt.Errorf call sites within each sub-command.
+	errFmtScaffoldSlice    = "scaffold slice: %w"
+	errFmtScaffoldContract = "scaffold contract: %w"
+	errFmtScaffoldJourney  = "scaffold journey: %w"
 )
 
 // runScaffold implements:
@@ -239,26 +250,31 @@ func reportScaffold(r scaffoldReport) {
 	fmt.Printf("Created %s %s at %s\n", r.Kind, r.ID, r.Target)
 }
 
+// scaffoldCellInputs groups the parsed flag values for buildScaffoldCellSpec.
+// Introduced to replace the 11-parameter signature that exceeded the Sonar
+// cognitive-complexity cap (max 7 params per function).
+type scaffoldCellInputs struct {
+	ID, ResolvedStruct, Package, ModulePath, OwnerTeam, OwnerRole, CellType, Level string
+	WithHTTP, WithEvents, WithBoth                                                 bool
+}
+
 // buildScaffoldCellSpec constructs a cellgen.ScaffoldSpec from the parsed
 // flag values. resolvedStruct must already be computed (PascalCase of id if
 // --struct was not provided). DryRun is always false here; callers that need
 // DryRun=true set it after construction.
-func buildScaffoldCellSpec(
-	id, resolvedStruct, pkg, mod, team, role, cellType, level string,
-	withHTTP, withEvents, withBoth bool,
-) cellgen.ScaffoldSpec {
+func buildScaffoldCellSpec(in scaffoldCellInputs) cellgen.ScaffoldSpec {
 	return cellgen.ScaffoldSpec{
-		CellID:           id,
-		StructName:       resolvedStruct,
-		Package:          pkg,
-		ModulePath:       mod,
-		OwnerTeam:        team,
-		OwnerRole:        role,
-		Type:             cellType,
-		ConsistencyLevel: level,
-		WithHTTP:         withHTTP,
-		WithEvents:       withEvents,
-		WithBoth:         withBoth,
+		CellID:           in.ID,
+		StructName:       in.ResolvedStruct,
+		Package:          in.Package,
+		ModulePath:       in.ModulePath,
+		OwnerTeam:        in.OwnerTeam,
+		OwnerRole:        in.OwnerRole,
+		Type:             in.CellType,
+		ConsistencyLevel: in.Level,
+		WithHTTP:         in.WithHTTP,
+		WithEvents:       in.WithEvents,
+		WithBoth:         in.WithBoth,
 	}
 }
 
@@ -339,7 +355,19 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("scaffold cell: read module path: %w", err)
 	}
 
-	spec := buildScaffoldCellSpec(*id, resolvedStruct, pkg, mod, *team, *role, *cellType, *level, *withHTTP, *withEvents, *withBoth)
+	spec := buildScaffoldCellSpec(scaffoldCellInputs{
+		ID:             *id,
+		ResolvedStruct: resolvedStruct,
+		Package:        pkg,
+		ModulePath:     mod,
+		OwnerTeam:      *team,
+		OwnerRole:      *role,
+		CellType:       *cellType,
+		Level:          *level,
+		WithHTTP:       *withHTTP,
+		WithEvents:     *withEvents,
+		WithBoth:       *withBoth,
+	})
 
 	bundleSpec := spec
 	bundleSpec.DryRun = *dryRun
@@ -458,7 +486,7 @@ func scaffoldSlice(root string, args []string) error {
 	// Verify parent cell exists.
 	cellDirAbs, err := pathsafe.ContainPath(realRoot, filepath.Join("cells", *cellID))
 	if err != nil {
-		return fmt.Errorf("scaffold slice: %w", err)
+		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
 	if _, statErr := os.Stat(cellDirAbs); statErr != nil {
 		return fmt.Errorf("scaffold slice: parent cell does not exist (%s); create it first via `gocell scaffold cell --id=%s ...`",
@@ -473,14 +501,14 @@ func scaffoldSlice(root string, args []string) error {
 	sliceRelDir := filepath.Join("cells", *cellID, "slices", *id)
 	absYAML, err := pathsafe.ContainPath(realRoot, filepath.Join(sliceRelDir, "slice.yaml"))
 	if err != nil {
-		return fmt.Errorf("scaffold slice: %w", err)
+		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
 	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
 
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths.
 	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
-		return fmt.Errorf("scaffold slice: %w", err)
+		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
 
 	if *dryRun {
@@ -527,7 +555,7 @@ func scaffoldContract(root string, args []string) error {
 	contractRelDir := filepath.Join(append([]string{"contracts"}, parts...)...)
 	absYAML, err := pathsafe.ContainPath(realRoot, filepath.Join(contractRelDir, "contract.yaml"))
 	if err != nil {
-		return fmt.Errorf("scaffold contract: %w", err)
+		return fmt.Errorf(errFmtScaffoldContract, err)
 	}
 
 	content, err := renderInlineContractYAML(*id, *kind, *owner)
@@ -540,7 +568,7 @@ func scaffoldContract(root string, args []string) error {
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths. On dry-run it returns nil or a conflict/containment error.
 	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
-		return fmt.Errorf("scaffold contract: %w", err)
+		return fmt.Errorf(errFmtScaffoldContract, err)
 	}
 
 	if *dryRun {
@@ -595,7 +623,7 @@ func scaffoldJourney(root string, args []string) error {
 
 	absYAML, err := pathsafe.ContainPath(realRoot, filepath.Join("journeys", filename))
 	if err != nil {
-		return fmt.Errorf("scaffold journey: %w", err)
+		return fmt.Errorf(errFmtScaffoldJourney, err)
 	}
 
 	content, err := renderInlineJourneyYAML(rawID, *goal, *team, cellList)
@@ -608,7 +636,7 @@ func scaffoldJourney(root string, args []string) error {
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths.
 	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
-		return fmt.Errorf("scaffold journey: %w", err)
+		return fmt.Errorf(errFmtScaffoldJourney, err)
 	}
 
 	if *dryRun {

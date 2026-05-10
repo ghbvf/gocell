@@ -62,120 +62,152 @@ func TestResolveRoot(t *testing.T) {
 // TestContainPath
 // ---------------------------------------------------------------------------
 
+// resolveRealRoot resolves a fresh TempDir to its real (symlink-free) path.
+func resolveRealRoot(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	root, err := pathsafe.ResolveRoot(tmp)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+	return root
+}
+
+// setupSymlinkInRoot creates an in-root symlink pointing to an inner dir and
+// returns the root. The symlink itself stays within the root boundary.
+func setupSymlinkInRoot(t *testing.T) (root, relTarget string) {
+	t.Helper()
+	root = resolveRealRoot(t)
+	inner := filepath.Join(root, "inner")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(inner, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	return root, filepath.Join("link", "file.yaml")
+}
+
+// setupSymlinkOutOfRoot creates a symlink inside root that points outside and
+// returns the root and a relative target that would traverse via that symlink.
+func setupSymlinkOutOfRoot(t *testing.T) (root, relTarget string) {
+	t.Helper()
+	outside := t.TempDir()
+	root = resolveRealRoot(t)
+	link := filepath.Join(root, "cells", "escape")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	return root, filepath.Join("cells", "escape", "cell.yaml")
+}
+
 func TestContainPath(t *testing.T) {
 	t.Parallel()
 
-	// 构建一个干净的 realRoot 供所有子测试共用（非 symlink）
-	realRoot := func(t *testing.T) string {
-		t.Helper()
-		tmp := t.TempDir()
-		root, err := pathsafe.ResolveRoot(tmp)
-		if err != nil {
-			t.Fatalf("ResolveRoot: %v", err)
-		}
-		return root
+	type tc struct {
+		name      string
+		setup     func(t *testing.T) (root, relTarget string)
+		wantErr   bool
+		wantPath  func(root string) string // used only when wantErr=false and non-nil
+		skipOnWin bool
 	}
 
-	t.Run("normal_nested", func(t *testing.T) {
-		t.Parallel()
-		root := realRoot(t)
-		got, err := pathsafe.ContainPath(root, filepath.Join("cells", "mycell", "cell.yaml"))
-		if err != nil {
-			t.Fatalf("ContainPath: unexpected error: %v", err)
-		}
-		want := filepath.Join(root, "cells", "mycell", "cell.yaml")
-		if got != want {
-			t.Errorf("ContainPath = %q, want %q", got, want)
-		}
-	})
+	cases := []tc{
+		{
+			name: "normal_nested",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return resolveRealRoot(t), filepath.Join("cells", "mycell", "cell.yaml")
+			},
+			wantErr: false,
+			wantPath: func(root string) string {
+				return filepath.Join(root, "cells", "mycell", "cell.yaml")
+			},
+		},
+		{
+			name: "dotdot_traversal",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return resolveRealRoot(t), filepath.Join("..", "escape")
+			},
+			wantErr: true,
+		},
+		{
+			name: "abs_path",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return resolveRealRoot(t), "/etc/passwd"
+			},
+			wantErr: true,
+		},
+		{
+			name:      "parent_symlink_in_root",
+			setup:     setupSymlinkInRoot,
+			wantErr:   false,
+			skipOnWin: true,
+		},
+		{
+			name:      "parent_symlink_out_of_root",
+			setup:     setupSymlinkOutOfRoot,
+			wantErr:   true,
+			skipOnWin: true,
+		},
+		{
+			name: "non_existent_parent",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return resolveRealRoot(t), filepath.Join("cells", "newcell", "cell.yaml")
+			},
+			wantErr: false,
+			wantPath: func(root string) string {
+				return filepath.Join(root, "cells", "newcell", "cell.yaml")
+			},
+		},
+		{
+			name: "cleaned_redundant",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return resolveRealRoot(t), filepath.Join("cells", ".", "mycell", "cell.yaml")
+			},
+			wantErr: false,
+			wantPath: func(root string) string {
+				return filepath.Join(root, "cells", "mycell", "cell.yaml")
+			},
+		},
+	}
 
-	t.Run("dotdot_traversal", func(t *testing.T) {
-		t.Parallel()
-		root := realRoot(t)
-		_, err := pathsafe.ContainPath(root, filepath.Join("..", "escape"))
-		if err == nil {
-			t.Fatal("ContainPath(../escape): want error, got nil")
-		}
-	})
-
-	t.Run("abs_path", func(t *testing.T) {
-		t.Parallel()
-		root := realRoot(t)
-		_, err := pathsafe.ContainPath(root, "/etc/passwd")
-		if err == nil {
-			t.Fatal("ContainPath(/abs): want error, got nil")
-		}
-	})
-
-	t.Run("parent_symlink_in_root", func(t *testing.T) {
-		t.Parallel()
-		if runtime.GOOS == "windows" {
-			t.Skip("symlink semantics differ on windows")
-		}
-		root := realRoot(t)
-		// 在 root 内创建一个 symlink → root 内子目录（允许）
-		inner := filepath.Join(root, "inner")
-		if err := os.MkdirAll(inner, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		link := filepath.Join(root, "link")
-		if err := os.Symlink(inner, link); err != nil {
-			t.Fatalf("Symlink: %v", err)
-		}
-		// link 在 root 内，访问 link/file 应被允许
-		_, err := pathsafe.ContainPath(root, filepath.Join("link", "file.yaml"))
-		if err != nil {
-			t.Fatalf("ContainPath(in-root symlink): unexpected error: %v", err)
-		}
-	})
-
-	t.Run("parent_symlink_out_of_root", func(t *testing.T) {
-		t.Parallel()
-		if runtime.GOOS == "windows" {
-			t.Skip("symlink semantics differ on windows")
-		}
-		outside := t.TempDir()
-		root := realRoot(t)
-		// 在 root 内创建 link → outside（逃逸）
-		link := filepath.Join(root, "cells", "escape")
-		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(outside, link); err != nil {
-			t.Fatalf("Symlink: %v", err)
-		}
-		_, err := pathsafe.ContainPath(root, filepath.Join("cells", "escape", "cell.yaml"))
-		if err == nil {
-			t.Fatal("ContainPath(out-of-root symlink): want error, got nil")
-		}
-	})
-
-	t.Run("non_existent_parent", func(t *testing.T) {
-		t.Parallel()
-		root := realRoot(t)
-		// 父目录不存在，但路径本身合法 — 应允许（父目录由 WritePlannedFiles 创建）
-		got, err := pathsafe.ContainPath(root, filepath.Join("cells", "newcell", "cell.yaml"))
-		if err != nil {
-			t.Fatalf("ContainPath(non-existent parent): unexpected error: %v", err)
-		}
-		if got == "" {
-			t.Fatal("ContainPath returned empty string")
-		}
-	})
-
-	t.Run("cleaned_redundant", func(t *testing.T) {
-		t.Parallel()
-		root := realRoot(t)
-		// cells/./mycell/cell.yaml 应被清理为 cells/mycell/cell.yaml
-		got, err := pathsafe.ContainPath(root, filepath.Join("cells", ".", "mycell", "cell.yaml"))
-		if err != nil {
-			t.Fatalf("ContainPath(cleaned): unexpected error: %v", err)
-		}
-		want := filepath.Join(root, "cells", "mycell", "cell.yaml")
-		if got != want {
-			t.Errorf("ContainPath(cleaned) = %q, want %q", got, want)
-		}
-	})
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if c.skipOnWin && runtime.GOOS == "windows" {
+				t.Skip("symlink semantics differ on windows")
+			}
+			root, relTarget := c.setup(t)
+			got, err := pathsafe.ContainPath(root, relTarget)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("ContainPath(%s): want error, got nil", c.name)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ContainPath(%s): unexpected error: %v", c.name, err)
+			}
+			if c.wantPath != nil {
+				if want := c.wantPath(root); got != want {
+					t.Errorf("ContainPath(%s) = %q, want %q", c.name, got, want)
+				}
+			}
+			if got == "" {
+				t.Fatalf("ContainPath(%s): returned empty string", c.name)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
