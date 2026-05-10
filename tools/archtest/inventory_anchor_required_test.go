@@ -44,6 +44,7 @@ package archtest
 import (
 	"go/ast"
 	"go/parser"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -51,6 +52,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
@@ -87,7 +89,7 @@ func TestInventoryAnchorRequired(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"tools/archtest"}, scanner.IncludeTests())
+	scope := archtestScope(t, root)
 
 	var violators []string
 	scanner.EachFile(t, scope, parser.ParseComments|parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
@@ -118,7 +120,7 @@ func TestInventoryAnchorValidID(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"tools/archtest"}, scanner.IncludeTests())
+	scope := archtestScope(t, root)
 
 	type violation struct {
 		file  string
@@ -175,6 +177,51 @@ func isTopLevelArchtestTestFile(fc scanner.FileContext) bool {
 		return false
 	}
 	return strings.HasSuffix(fc.AbsPath, "_test.go")
+}
+
+// archtestScope returns a Scope over tools/archtest/ that **matches the
+// `scripts/audit/list-archtests.sh` discovery model exactly** — only files
+// tracked by git are considered. This eliminates the gate / audit-script
+// asymmetry where an untracked local `*_test.go` would fail the gate but
+// be invisible to the audit listing (and vice-versa for an `index`-removed
+// file still on disk).
+//
+// The predicate runs a single `git ls-files -- tools/archtest/` invocation,
+// builds a string set of slash-paths, and feeds it to `MatchRels`. Local
+// editor swap files (`.foo_test.go.swp`) and other untracked artifacts are
+// silently skipped, matching the script's behavior.
+func archtestScope(t *testing.T, root string) scanner.Scope {
+	t.Helper()
+	tracked := loadGitTrackedSet(t, root)
+	return scanner.DirsScope(root, []string{"tools/archtest"},
+		scanner.IncludeTests(),
+		scanner.MatchRels(func(rel string) bool {
+			return tracked[filepath.ToSlash(rel)]
+		}),
+	)
+}
+
+// loadGitTrackedSet runs `git ls-files -- tools/archtest/` and returns the
+// set of slash-form module-relative paths under tracking. The single shell
+// call is acceptable in test scope: CI and dev environments both have git;
+// archtest itself is a git-managed test corpus.
+func loadGitTrackedSet(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	// G204 false-positive: `root` is the module root resolved by
+	// findModuleRoot from go.mod, not user input. Same exception pattern
+	// as lintgate_smoke_test.go's golangci-lint invocation.
+	cmd := exec.Command("git", "-C", root, "ls-files", "--", "tools/archtest/") //nolint:gosec // G204 const args + go.mod-derived root
+	out, err := cmd.Output()
+	require.NoErrorf(t, err, "%s: git ls-files", inventoryAnchorRequiredRule)
+	set := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		set[line] = true
+	}
+	return set
 }
 
 // hasValidInventoryAnchorInHeader returns true if the file's first

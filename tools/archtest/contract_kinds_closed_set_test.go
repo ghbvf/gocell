@@ -1,6 +1,6 @@
 // INVARIANT: CONTRACT-KINDS-CLOSED-SET-01
 //
-// CONTRACT-KINDS-CLOSED-SET-01
+// # CONTRACT-KINDS-CLOSED-SET-01
 //
 // Invariant: all contract kinds in the project must be members of the closed
 // set {"http", "event", "command", "projection"}. Any new kind introduced

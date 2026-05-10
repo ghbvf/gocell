@@ -1,6 +1,6 @@
 // INVARIANT: EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
 //
-// EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
+// # EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
 //
 // Invariant: every contract with kind="event" and codegen=true must have a
 // generated subscription_gen.go containing func NewSubscription in the
