@@ -103,9 +103,18 @@ func isCellPackageRootFile(rel string) bool {
 //  1. Pointer indirection strip (`*T` → `T`)
 //  2. types.Unalias (Go 1.23+ alias materialization bypass)
 //  3. *types.Named extraction
+//  4. *types.Interface inline-embed walk — anonymous interface params
+//     `func WithBad(p interface{ outbox.Publisher })` resolve to
+//     *types.Interface (not *types.Named); the embedded named types are
+//     walked recursively and the first forbidden hit (or any embedded
+//     canonical) is returned. Without this branch the anonymous interface
+//     hides the raw infra dependency from the *types.Named-only matcher.
 //
-// Returns "" for non-Named types (struct literals, interfaces, etc.) —
-// those cannot match the forbidden set.
+// Returns "" for non-Named, non-Interface types (struct literals, etc.).
+// When the parameter is an anonymous interface with no embedded forbidden
+// type, returns the canonical of the first embedded *types.Named (or "" if
+// the interface has no embedded named types) — callers compare against
+// rawPublicOptionForbidden to decide whether to record a violation.
 func publicOptionParamCanonical(info *types.Info, expr ast.Expr) string {
 	if info == nil {
 		return ""
@@ -114,7 +123,13 @@ func publicOptionParamCanonical(info *types.Info, expr ast.Expr) string {
 	if !ok || tv.Type == nil {
 		return ""
 	}
-	t := tv.Type
+	return canonicalFromType(tv.Type)
+}
+
+// canonicalFromType is the recursive core of publicOptionParamCanonical
+// — separated so it can be called both with the parameter's tv.Type and
+// with each embedded type of an anonymous interface.
+func canonicalFromType(t types.Type) string {
 	for {
 		ptr, ok := t.(*types.Pointer)
 		if !ok {
@@ -123,15 +138,33 @@ func publicOptionParamCanonical(info *types.Info, expr ast.Expr) string {
 		t = ptr.Elem()
 	}
 	t = types.Unalias(t)
-	named, ok := t.(*types.Named)
-	if !ok {
-		return ""
+	if named, ok := t.(*types.Named); ok {
+		obj := named.Obj()
+		if obj.Pkg() == nil {
+			return obj.Name()
+		}
+		return obj.Pkg().Path() + "." + obj.Name()
 	}
-	obj := named.Obj()
-	if obj.Pkg() == nil {
-		return obj.Name()
+	// Anonymous interface walk: prefer a forbidden embed when present so
+	// `interface{ outbox.Publisher; otherIface }` is caught regardless of
+	// declaration order.
+	if iface, ok := t.(*types.Interface); ok {
+		var firstNonForbidden string
+		for i := 0; i < iface.NumEmbeddeds(); i++ {
+			canon := canonicalFromType(iface.EmbeddedType(i))
+			if canon == "" {
+				continue
+			}
+			if rawPublicOptionForbidden[canon] {
+				return canon
+			}
+			if firstNonForbidden == "" {
+				firstNonForbidden = canon
+			}
+		}
+		return firstNonForbidden
 	}
-	return obj.Pkg().Path() + "." + obj.Name()
+	return ""
 }
 
 // scanPackagesForRawPublicOption is the inner walker used by both the
@@ -239,9 +272,11 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	require.NoError(t, err)
 
 	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), false)
-	require.Len(t, violations, 4,
-		"fixture must yield 4 violations: WithBadTxRunner / WithBadPublisher / "+
-			"WithBadWriter / WithAliasedBadTxRunner")
+	require.Len(t, violations, 7,
+		"fixture must yield 7 violations: WithBadTxRunner / WithBadPublisher / "+
+			"WithBadWriter / WithAliasedBadTxRunner (4 baseline) + "+
+			"WithBadEmbedPublisher / WithBadEmbedWriter / WithBadEmbedTxRunner "+
+			"(3 inline-interface-embed forms)")
 
 	got := map[string]string{}
 	for _, v := range violations {
@@ -252,4 +287,10 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Writer", got["WithBadWriter"])
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithAliasedBadTxRunner"],
 		"types.Unalias must resolve type alias to canonical raw type")
+	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadEmbedPublisher"],
+		"inline interface embed must resolve to embedded raw type")
+	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Writer", got["WithBadEmbedWriter"],
+		"inline interface embed must resolve to embedded raw type")
+	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithBadEmbedTxRunner"],
+		"inline interface embed must resolve to embedded raw type")
 }

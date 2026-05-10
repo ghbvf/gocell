@@ -85,15 +85,28 @@ func isWrapperCallerAllowed(rel string) bool {
 	return false
 }
 
-// canonicalCalledFunc returns "<pkg-path>.<func-name>" for a SelectorExpr
-// CallExpr like `pkg.Func(...)`, or "" when the call is not resolvable to a
-// package-qualified function (method call, builtin, etc.).
+// canonicalCalledFunc returns "<pkg-path>.<func-name>" for a CallExpr that
+// resolves to a package-qualified function. Two AST forms map to the same
+// callee:
+//
+//  1. *ast.SelectorExpr — `pkg.Func(...)` (normal import)
+//  2. *ast.Ident         — `Func(...)` after `import . "pkg"` (dot-import)
+//
+// Without the *ast.Ident branch, dot-import would silently bypass the
+// wrapper-location guard. info.Uses resolves either form to the same
+// *types.Func with Pkg() pointing to the original package, so canonical
+// matching is consistent across both spellings.
 func canonicalCalledFunc(info *types.Info, call *ast.CallExpr) string {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
+	var ident *ast.Ident
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		ident = fn.Sel
+	case *ast.Ident:
+		ident = fn
+	default:
 		return ""
 	}
-	obj := info.Uses[sel.Sel]
+	obj := info.Uses[ident]
 	if obj == nil {
 		return ""
 	}
@@ -207,8 +220,10 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	require.NotEmpty(t, violations, "scanner must detect wrap calls from non-allowlisted fixture path")
 
 	got := map[string]string{}
+	gotLines := map[string][]int{}
 	for _, v := range violations {
 		got[v.FuncName] = v.File
+		gotLines[v.FuncName] = append(gotLines[v.FuncName], v.Line)
 		assert.True(t, strings.Contains(v.File, "wrapfixture"),
 			"violation expected in wrapfixture path, got %s", v.File)
 	}
@@ -222,4 +237,17 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 		"fixture must trigger outbox.WrapPublisherForCell detection")
 	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"],
 		"fixture must trigger outbox.WrapWriterForCell detection")
+
+	// dotimport.go uses `import . "kernel/outbox"` and writes the wrap
+	// calls without a package selector — call.Fun is *ast.Ident, not
+	// *ast.SelectorExpr. The scanner must walk the *ast.Ident branch via
+	// info.Uses so dot-import bypasses cannot mask wrap-location
+	// violations. We expect *both* the SelectorExpr-form (from violation.go)
+	// and the dot-import form (from dotimport.go) to fire — i.e., the
+	// publisher/writer wrappers each yield ≥ 2 line entries across the
+	// two fixture files.
+	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell"]), 2,
+		"WrapPublisherForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
+	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"]), 2,
+		"WrapWriterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
 }

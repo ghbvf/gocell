@@ -49,3 +49,17 @@ type AliasedTxRunner = persistence.TxRunner
 // be reported as a violation because the canonical resolves through Unalias
 // to persistence.TxRunner.
 func WithAliasedBadTxRunner(tx AliasedTxRunner) Option { return func(any) {} }
+
+// WithBadEmbedPublisher exposes outbox.Publisher via inline interface
+// embedding — Go allows `func(p interface{ outbox.Publisher })` as a
+// signature where tv.Type resolves to *types.Interface (anonymous) with
+// outbox.Publisher in EmbeddedTypes(). A *types.Named-only check would
+// miss this, so the scanner must also walk the embedded types of an
+// anonymous interface parameter.
+func WithBadEmbedPublisher(p interface{ outbox.Publisher }) Option { return func(any) {} }
+
+// WithBadEmbedWriter mirrors WithBadEmbedPublisher for the Writer leg.
+func WithBadEmbedWriter(w interface{ outbox.Writer }) Option { return func(any) {} }
+
+// WithBadEmbedTxRunner mirrors the embed pattern for the TxRunner leg.
+func WithBadEmbedTxRunner(tx interface{ persistence.TxRunner }) Option { return func(any) {} }
