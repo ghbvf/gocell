@@ -80,7 +80,13 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 // any GenerateServiceToken-callsite diagnostics to *diags, deduplicating
 // by (rel, line, message) via the seen map. Extracted as a helper so the
 // per-tag-set loop in TestSVCTOKEN_CALLER_CELL_REQUIRED_01 stays terse.
-func collectGenerateServiceTokenDiags(resolver *typeseval.Resolver, root string, knownCells map[string]bool, seen map[string]struct{}, diags *[]scanner.Diagnostic) {
+func collectGenerateServiceTokenDiags(
+	resolver *typeseval.Resolver,
+	root string,
+	knownCells map[string]bool,
+	seen map[string]struct{},
+	diags *[]scanner.Diagnostic,
+) {
 	add := func(d scanner.Diagnostic) {
 		key := fmt.Sprintf("%s:%d:%s", d.Rel, d.Line, d.Message)
 		if _, ok := seen[key]; ok {
@@ -227,7 +233,10 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *t
 	}
 
 	if len(missing) > 0 {
-		t.Errorf("SVCTOKEN-CALLER-CELL-REQUIRED-01: %d build-tagged files are silently skipped by the current tags=nil load — these contain auth.GenerateServiceToken callsites that the rule MUST scan: %v", len(missing), missing)
+		t.Errorf("SVCTOKEN-CALLER-CELL-REQUIRED-01: %d build-tagged files are "+
+			"silently skipped by the current tags=nil load — these contain "+
+			"auth.GenerateServiceToken callsites that the rule MUST scan: %v",
+			len(missing), missing)
 	}
 }
 

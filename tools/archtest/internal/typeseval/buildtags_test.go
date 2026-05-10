@@ -45,7 +45,7 @@ func isGoVersionTag(s string) bool {
 // repoSkipDirs lists top-level directories that walkBuildTagFiles must NOT
 // descend into. These contain fixtures, generated code, vendored deps,
 // VCS metadata, or worktree alternates — none of which gate production
-// behaviour.
+// behavior.
 var repoSkipDirs = map[string]bool{
 	"vendor":       true,
 	".git":         true,
@@ -138,7 +138,7 @@ func extractBuildTags(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var tags []string
 	scanner := bufio.NewScanner(f)
