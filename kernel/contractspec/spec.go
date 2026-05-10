@@ -5,6 +5,14 @@ import (
 	"strings"
 )
 
+// internalPathPrefix mirrors kernel/cellvocab.InternalPathPrefix. Duplicated
+// here because contractspec is a leaf and may not import any other kernel
+// sub-module (KERNEL-INTERNAL-DAG-01). Both constants must stay in lockstep;
+// changing one without the other is caught by tests under
+// runtime/auth/route_test.go and tools/archtest/contract_spec_clients_test.go
+// which exercise the /internal/v1/ branching from both sides.
+const internalPathPrefix = "/internal/v1/"
+
 // ContractSpec is the runtime descriptor for one contract endpoint.
 // It is consumed by:
 //   - runtime/auth.Mount (HTTP route binding)
@@ -99,7 +107,7 @@ func (s ContractSpec) validateHTTP() error {
 	if s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
-	isInternalPath := strings.HasPrefix(s.Path, "/internal/v1/") || s.Path == "/internal/v1"
+	isInternalPath := strings.HasPrefix(s.Path, internalPathPrefix) || s.Path == strings.TrimSuffix(internalPathPrefix, "/")
 	if isInternalPath && len(s.Clients) == 0 {
 		return fmt.Errorf(
 			"ContractSpec[%s]: internal path requires non-empty Clients "+

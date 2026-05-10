@@ -14,11 +14,11 @@
 // corresponding entry. After W3.5 the list must be empty.
 //
 // Exclusions:
-//   - generated/contracts/**/*_gen.go    — the authoritative home after migration
-//   - tools/codegen/**/testdata/**       — codegen fixture files
-//   - **/fixtures/**                     — test fixture trees
-//   - kernel/contractspec/** itself      — defines the types (not instantiates them)
-//   - *_test.go                          — test helpers may reference specs for assertions
+//   - generated/contracts/**/*_gen.go  — the authoritative home after migration
+//   - tools/codegen/**/testdata/**     — codegen fixture files
+//   - **/fixtures/**                   — test fixture trees
+//   - kernel/contractspec/** itself    — defines ContractSpec (not instantiates it)
+//   - *_test.go                        — test helpers may reference specs for assertions
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#PR4 W3 + G-04
 package archtest

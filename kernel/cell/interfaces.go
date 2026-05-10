@@ -155,7 +155,7 @@ type Contract interface {
 	OwnerCell() string
 	// ConsistencyLevel reports the contract's consistency tier (cellvocab.L0–cellvocab.L4).
 	ConsistencyLevel() cellvocab.Level
-	// cellvocab.Lifecycle returns the contract's governance state (draft / active / deprecated).
+	// Lifecycle returns the contract's governance state (draft / active / deprecated).
 	Lifecycle() cellvocab.Lifecycle
 }
 

@@ -69,6 +69,45 @@ func TestContractSpec_EventSpec_Validate(t *testing.T) {
 	}
 }
 
+// TestContractSpec_CommandProjection_Validate verifies that command and
+// projection kinds pass Validate when ID/Kind/Transport are populated; the
+// kind-specific validation surface is intentionally minimal until future
+// PRs add command/projection transports.
+func TestContractSpec_CommandProjection_Validate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		spec contractspec.ContractSpec
+	}{
+		{"command kind no extra fields", contractspec.ContractSpec{
+			ID: "command.device.enqueue.v1", Kind: "command", Transport: "internal",
+		}},
+		{"projection kind no extra fields", contractspec.ContractSpec{
+			ID: "projection.access.users.v1", Kind: "projection", Transport: "internal",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.spec.Validate(); err != nil {
+				t.Fatalf("expected no error for valid %s spec, got %v", tc.spec.Kind, err)
+			}
+		})
+	}
+}
+
+// TestContractSpec_UnknownKind_Validate verifies that an unrecognized kind
+// is rejected with a kind-specific error message.
+func TestContractSpec_UnknownKind_Validate(t *testing.T) {
+	t.Parallel()
+	spec := contractspec.ContractSpec{
+		ID: "x", Kind: "websocket", Transport: "ws",
+	}
+	err := spec.Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown kind")
+	}
+}
+
 // TestContractSpec_Validate_InternalRequiresClients verifies that an http ContractSpec
 // with a /internal/v1/* path and nil Clients fails validation.
 //

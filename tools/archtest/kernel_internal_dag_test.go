@@ -228,13 +228,20 @@ func TestKernelInternalDAG(t *testing.T) {
 		ruleKernelInternalDAG)
 
 	// Sub-test 1: kernelOwnerOf folds sub-packages to first segment.
+	//
+	// kernel/cell/levelrank was absorbed into kernel/cellvocab during G-04;
+	// the historical path is retained in this table to verify the folding
+	// rule itself (string-only, not filesystem-bound) still classifies
+	// hypothetical kernel sub-package paths correctly. This guards against
+	// regressions where a future re-introduction of a cell sub-package
+	// silently lands without owner-folding coverage.
 	t.Run("kernelOwnerOf_folds_subpackages", func(t *testing.T) {
 		cases := []struct {
 			id, want string
 		}{
 			{module + "/kernel/cell", "cell"},
 			{module + "/kernel/cell/celltest", "cell"},
-			{module + "/kernel/cell/levelrank", "cell"},
+			{module + "/kernel/cell/levelrank", "cell"}, // historical path; absorbed into cellvocab
 			{module + "/kernel/outbox/outboxtest", "outbox"},
 			{module + "/runtime/auth", ""},
 			{module + "/kernel", ""},
