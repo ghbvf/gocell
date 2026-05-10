@@ -29,7 +29,9 @@ type Waiver struct {
 // CellIdentity exposes the cell's stable architectural identity. Returned
 // values are immutable for the lifetime of the cell.
 //
-// Consumers: registry lookup, metrics labels, log correlation, route attribution.
+// Consumers: registry lookup (kernel/cell.Assembly), metrics labels
+// (runtime/http/middleware.Metrics), log correlation (slog), route
+// attribution (runtime/http/router.Router).
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D1
 type CellIdentity interface {
@@ -71,7 +73,8 @@ type CellLifecycle interface {
 // calls and reflect derived state from the cell's lifecycle state machine
 // (not declared metadata).
 //
-// Consumers: /healthz / /readyz HTTP handlers, runtime supervision.
+// Consumers: /healthz and /readyz HTTP handlers
+// (runtime/http/health.Handler), runtime supervision (kernel/cell.Assembly).
 type CellStatus interface {
 	// Health returns the current health snapshot for diagnostic surfaces.
 	Health() HealthStatus
@@ -85,7 +88,8 @@ type CellStatus interface {
 // interface is the read path. CELLMETA-SINGLE-SOURCE-03 archtest pins
 // Metadata() here.
 //
-// Consumers: contract validators, metadata inspectors, gocell validate, codegen.
+// Consumers: contract validators (kernel/governance), metadata inspectors
+// (cmd/gocell validate), codegen (tools/codegen/contractgen).
 type CellInventory interface {
 	// Metadata returns an independent deep copy of the cell's declarative
 	// metadata; callers may freely read and modify the returned value.

@@ -23,6 +23,11 @@
 //   - Gate-01 forbidden list is a closed set of historical type names; a
 //     "rename and re-introduce" pattern (e.g. type LegacyCellMeta = metadata.CellMeta)
 //     in kernel/cell would not be caught. Reviewers must catch such aliases.
+//   - Gate-03 / CellInventory.Metadata():
+//     PR-A22 (ADR 202605101800 §D5) moved Metadata() from top-level Cell to the
+//     CellInventory sub-interface; the previous limit ("Metadata() on embedded
+//     sub-interface false-fails") is now resolved — this gate explicitly scans
+//     the CellInventory type. Keep this note as a regression marker.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#05 PR-A1
 // ref: docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md

@@ -57,6 +57,9 @@ func WithRepository(r domain.OrderRepository) Option {
 // Tests typically pass `(nil, outbox.NoopWriter{})` for a sink that swallows
 // events without producing real fan-out.
 //
+// Demo mode: pass (nil, outbox.NoopWriter{}) — Publisher is unused when relay is absent;
+// the writer is a non-fan-out sink that swallows events for local testing.
+//
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
 // ref: cells/auditcore/cell.go::WithOutboxDeps (platform-cell pattern)
 func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
@@ -133,6 +136,14 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 
 	if err := c.resolveOutboxDeps(durabilityMode); err != nil {
 		return err
+	}
+
+	// Register emitter health probes (fail-open rate checker), aligning with
+	// platform cell pattern (auditcore/cell.go:220-224, configcore/cell.go).
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
+		for k, v := range hc.Probes() {
+			reg.Health(k, v)
+		}
 	}
 
 	// Default to in-memory repository if none injected.

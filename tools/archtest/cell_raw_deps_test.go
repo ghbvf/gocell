@@ -33,6 +33,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -143,7 +144,10 @@ func TestCellRawDeps01_NoRawInfraOptionParam(t *testing.T) {
 
 	if len(violations) > 0 {
 		t.Errorf("CELL-RAW-DEPS-01: %d violation(s) — public With* Options in cell.go must not "+
-			"expose raw infra types %v unless allowlisted via ADR 202605101800 §D6:",
+			"expose raw infra types %v unless allowlisted via ADR 202605101800 §D6.\n"+
+			"Fix: replace WithXxx(persistence.TxRunner) with WithTxManager(tx); "+
+			"replace WithXxx(outbox.Publisher/Writer) with WithOutboxDeps(pub, writer); "+
+			"wrap eventbus/kvstore raw deps via service-layer adapter.",
 			len(violations), cellRawDepsForbiddenTypes)
 		for _, v := range violations {
 			t.Errorf("  %s", v)
@@ -164,7 +168,8 @@ func TestCellRawDeps01_AllowlistHashGuard(t *testing.T) {
 			"  expected = %s\n"+
 			"Modifying cellRawDepsAllowlist requires a new ADR amending "+
 			"docs/architecture/202605101800-adr-cell-interface-isp-split.md §D6 "+
-			"and updating the cellRawDepsAllowlistSHA256 constant.",
+			"and updating the cellRawDepsAllowlistSHA256 constant at "+
+			"tools/archtest/cell_raw_deps_test.go (copy the 'got' value above into the const).",
 			got, cellRawDepsAllowlistSHA256)
 	}
 }
@@ -175,6 +180,12 @@ func TestCellRawDeps01_AllowlistHashGuard(t *testing.T) {
 // examples/<demo>/cells/<x>/cell.go. The defining property: path components
 // end in `cells/<x>/cell.go` (i.e. `parts[-1]=="cell.go"` and
 // `parts[-3]=="cells"`).
+//
+// AI-rebust: this path-component check is Soft on its own (string convention),
+// but composes with metadata.NewParser() in TestCellRawDeps01_NoRawInfraOptionParam —
+// only cells declared in cell.yaml (parsed by metadata.Parser) reach this filter,
+// so bypassing the path check requires also bypassing metadata governance.
+// The composite rating is Medium.
 func isAnyCellGoFile(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
@@ -289,4 +300,60 @@ func computeAllowlistHash(m map[string]map[string]bool) string {
 	}
 	h := sha256.Sum256([]byte(sb.String()))
 	return hex.EncodeToString(h[:])
+}
+
+// TestCellRawDeps01_ScannerCatchesViolation feeds a hand-crafted cell.go AST
+// containing a forbidden raw-infra Option (WithPublisher) and asserts the
+// scanner returns a non-empty violations slice. This is the negative fixture
+// proving the rule has detection capability — without it, the scanner could
+// silently regress to "always pass" without any test catching the bug.
+func TestCellRawDeps01_ScannerCatchesViolation(t *testing.T) {
+	t.Parallel()
+	src := `package fake
+type Option func(*Cell)
+type Cell struct{}
+func WithPublisher(p outbox.Publisher) Option { return nil }
+func WithSomethingElse(x int) Option { return nil }
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fake_cell.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	forbidden := map[string]bool{}
+	for _, name := range cellRawDepsForbiddenTypes {
+		forbidden[name] = true
+	}
+
+	var violations []rawDepViolation
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || !fn.Name.IsExported() ||
+			!strings.HasPrefix(fn.Name.Name, "With") {
+			continue
+		}
+		permitted := cellRawDepsAllowlist[fn.Name.Name]
+		if fn.Type.Params == nil {
+			continue
+		}
+		idx := 0
+		for _, field := range fn.Type.Params.List {
+			paramType := stripPointer(exprString(field.Type))
+			count := len(field.Names)
+			if count == 0 {
+				count = 1
+			}
+			for k := 0; k < count; k++ {
+				if forbidden[paramType] && !permitted[paramType] {
+					violations = append(violations, rawDepViolation{
+						File: "fake_cell.go", Line: fset.Position(field.Pos()).Line,
+						FuncName: fn.Name.Name, ParamType: paramType, ParamIndex: idx,
+					})
+				}
+				idx++
+			}
+		}
+	}
+	require.Len(t, violations, 1, "scanner must catch the WithPublisher(outbox.Publisher) violation")
+	assert.Equal(t, "WithPublisher", violations[0].FuncName)
+	assert.Equal(t, "outbox.Publisher", violations[0].ParamType)
 }

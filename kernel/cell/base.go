@@ -17,6 +17,9 @@ import (
 // the 12-method composite. The composite Cell type is automatically satisfied
 // when all four sub-interface assertions hold.
 //
+// e.g. missing Stop() fails exactly: "(*BaseCell) does not implement CellLifecycle (missing method Stop)"
+// rather than the diffuse "missing methods on Cell" against the 12-method composite.
+//
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D3
 var (
 	_ CellIdentity  = (*BaseCell)(nil)

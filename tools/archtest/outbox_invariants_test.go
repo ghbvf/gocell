@@ -97,6 +97,14 @@ func (v outboxCellViolation) String() string {
 //
 // Scope: scans every cells/**/cell.go declared in the repo (production
 // cells only — tests and example cells are skipped; see isCellFile).
+//
+// Relationship to CELL-RAW-DEPS-01 (PR-A22, ADR 202605101800 §D6):
+// OUTBOX-CELL-01 catches the historical raw-Option *names* (WithPublisher /
+// WithOutboxWriter); CELL-RAW-DEPS-01 catches the raw-infra *types* in any
+// With* function across both platform cells/ AND examples/*/cells/. The two
+// rules overlap on platform cells/ but cover orthogonal axes. Removing
+// OUTBOX-CELL-01 is OUT_OF_SCOPE for PR-A22 — kept as a name-based defense
+// in depth; future deprecation requires a new ADR.
 func TestCellsDoNotExposeRawOutboxOptions(t *testing.T) {
 	root := findModuleRoot(t)
 

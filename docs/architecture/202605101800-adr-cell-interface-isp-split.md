@@ -83,6 +83,12 @@ var (
 
 - **范围**：platform `cells/<x>/cell.go` + examples `examples/<demo>/cells/<x>/cell.go`（OUTBOX-CELL-01 当前 `isCellFile` 仅平台范围是 AI-HARD 漏洞——本 PR 同步修复 `ordercell.WithOutboxWriter` 与 `devicecell.WithPublisher` 两处历史暴露）
 - **forbidden type set（5 类，闭集）**：`persistence.TxRunner` / `outbox.Publisher` / `outbox.Writer` / `eventbus.Bus` / `kvstore.Store`
+
+**为何 vault / crypto 类型不进 forbidden set**：`adapters/vault.VaultClient` 等密钥
+基础设施仅在 `adapters/` 层暴露，通过 `kernel/crypto` 接口向上层提供能力，cell.go
+通过 `cmd/corebundle` 注入路径访问，不接受 With* Option 直接传入 raw vault 类型。
+若未来 cell.go 需要直接接受 `vault.KeyProvider` 类的 Option，应先评估纳入 forbidden
+set 并写新 ADR 修订本节。
 - **allowlist（2 条结构必要）**：
   - `(WithTxManager → persistence.TxRunner)`：`OUTBOX-SERVICE-01` fail-fast on nil TxRunner 的事务边界注入唯一路径——删除会破坏 service 构造期 nil 检查的单源约束
   - `(WithOutboxDeps → outbox.Publisher, outbox.Writer)`：PR-A5c 决定的合法 pre-composed emitter 替代 raw `Publisher`/`Writer` 暴露——两参一同被 `cell.ResolveCellEmitter` 在 Init 时组装
@@ -100,6 +106,12 @@ allowlist 由静态 SHA-256 hash guard 锁定（`cellRawDepsAllowlistSHA256` 常
 - **与 `metadata.CellMeta` 数据层关系**：`CellInventory.Metadata() returns *metadata.CellMeta`——接口承载读路径，类型名不必同名（消费者通过 `cell.CellInventory` 与 `metadata.CellMeta` 前缀清晰区分）
 
 cell 包内 `CellInventory`（type）与 `metadata` 包名（imported）共存无歧义；不引入别名，不重命名包。
+
+**验证新接口名是否与历史 forbidden 集冲突**：
+```
+grep -n "forbidden" tools/archtest/cellmeta_single_source_test.go
+```
+查 `forbidden` map 的 5 个历史 struct 名（CellMetadata / Owner / SchemaConfig / CellVerify / L0Dep）。新接口名不得与该列表重叠。
 
 ## Consequences
 

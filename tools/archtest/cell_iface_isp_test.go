@@ -19,12 +19,17 @@
 package archtest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // expectedSubInterfaces names the 4 sub-interfaces the Cell composite must
@@ -163,32 +168,43 @@ func TestCellIfaceISP03_BaseCellFourSegmentCheck(t *testing.T) {
 
 // ---------- helpers (file-local) ----------
 
-// loadInterfaceType parses kernel/cell/interfaces.go and returns the named
-// *ast.InterfaceType, or nil if the named type does not exist or is not an
-// interface.
+// loadInterfaceType scans all non-test *.go files in kernel/cell/ and returns
+// the named *ast.InterfaceType, or nil if the named type does not exist or is
+// not an interface. Scanning the whole package (not just interfaces.go) ensures
+// the invariant is not defeated by moving a type declaration to a new file.
+// Uses scanner.DirsScope to enumerate files (SCANNER-FRAMEWORK-USAGE-01 compliant).
 func loadInterfaceType(t *testing.T, root, name string) *ast.InterfaceType {
 	t.Helper()
-	path := filepath.Join(root, "kernel", "cell", "interfaces.go")
-	fset := token.NewFileSet()
-	f, perr := parser.ParseFile(fset, path, nil, 0)
-	if perr != nil {
-		t.Fatalf("parse %s: %v", path, perr)
+	scope := scanner.DirsScope(root, []string{"kernel/cell"})
+	files, err := scope.Files()
+	if err != nil {
+		t.Fatalf("scanner.DirsScope kernel/cell: %v", err)
 	}
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			continue
+	if len(files) == 0 {
+		t.Fatal("loadInterfaceType: no .go files found in kernel/cell")
+	}
+	for _, path := range files {
+		fset := token.NewFileSet()
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", filepath.Base(path), perr)
 		}
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != name {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
 				continue
 			}
-			iface, ok := ts.Type.(*ast.InterfaceType)
-			if !ok {
-				return nil
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || ts.Name.Name != name {
+					continue
+				}
+				iface, ok := ts.Type.(*ast.InterfaceType)
+				if !ok {
+					return nil
+				}
+				return iface
 			}
-			return iface
 		}
 	}
 	return nil
@@ -277,4 +293,50 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// expectedMethodSetsSHA256 freezes the (sub-interface → method-set) contract.
+// Modifying expectedSubInterfaceMethods or expectedSubInterfaces requires:
+//  1. New ADR amending 202605101800 §D1 with rationale
+//  2. Re-running this test once and copying the new "got" value into this constant
+const expectedMethodSetsSHA256 = "a2cf7188a2b0744897b672580bfc4df6e2e37f0ebc904a2428a4a38f829c90c7"
+
+// INVARIANT: CELL-IFACE-ISP-METHODSETS-01 (hash guard companion)
+//
+// TestCellIfaceISP00_MethodSetsHashGuard pins the (sub-interface → method-set)
+// contract to a SHA-256 digest. Any modification to expectedSubInterfaces or
+// expectedSubInterfaceMethods triggers a test failure until the constant is
+// updated, forcing an ADR amendment and reviewer attention.
+//
+// AI-rebust rating: Hard (SHA-256 hash guard — silent modification impossible).
+func TestCellIfaceISP00_MethodSetsHashGuard(t *testing.T) {
+	t.Parallel()
+	got := computeMethodSetsHash(expectedSubInterfaces, expectedSubInterfaceMethods)
+	if got != expectedMethodSetsSHA256 {
+		t.Errorf("CELL-IFACE-ISP-METHODSETS-01: expected method sets hash drift.\n"+
+			"  got      = %s\n"+
+			"  expected = %s\n"+
+			"Modifying expectedSubInterfaces or expectedSubInterfaceMethods requires "+
+			"a new ADR amending docs/architecture/202605101800-adr-cell-interface-isp-split.md §D1 "+
+			"and updating the expectedMethodSetsSHA256 constant at tools/archtest/cell_iface_isp_test.go.",
+			got, expectedMethodSetsSHA256)
+	}
+}
+
+// computeMethodSetsHash serializes (sub-interface → sorted method names) to a
+// deterministic canonical form and returns its SHA-256 hex digest.
+func computeMethodSetsHash(ifaces []string, methods map[string][]string) string {
+	sortedIfaces := append([]string(nil), ifaces...)
+	sort.Strings(sortedIfaces)
+	var sb strings.Builder
+	for _, name := range sortedIfaces {
+		sb.WriteString(name)
+		sb.WriteString("={")
+		ms := append([]string(nil), methods[name]...)
+		sort.Strings(ms)
+		sb.WriteString(strings.Join(ms, ","))
+		sb.WriteString("};")
+	}
+	h := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(h[:])
 }

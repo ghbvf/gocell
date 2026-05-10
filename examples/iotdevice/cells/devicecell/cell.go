@@ -61,11 +61,24 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 	return func(c *DeviceCell) { c.deviceRepo = r }
 }
 
+// MustHaveNilDeviceCellWriter panics when writer is non-nil (programming error).
+// L4 DeviceLatent cells use direct-publish only; passing a writer indicates a
+// misconfiguration (probably copied from an L1/L2 platform cell). Fail-fast
+// at the option site rather than silently dropping.
+// Panic class: B (parameter contract violation). ref: ADR 202604270030 §5.
+func MustHaveNilDeviceCellWriter(writer outbox.Writer) {
+	if writer != nil {
+		panic(errcode.Assertion(
+			"devicecell.WithOutboxDeps: writer arg must be nil; L4 cell uses direct-publish path only"))
+	}
+}
+
 // WithOutboxDeps wires the outbox Publisher for event publishing. devicecell
 // is L4 (DeviceLatent) — the direct-publish path is the source of truth and
-// there is no transactional outbox writer; the writer parameter is part of
-// the unified (pub, writer) signature shared with platform cells but is
-// intentionally unused here. Pass writer=nil at call sites.
+// there is no transactional outbox writer. The writer parameter must be nil;
+// passing a non-nil writer is a misconfiguration (probably copied from an L1/L2
+// platform cell) — MustHaveNilDeviceCellWriter panics at the option site rather
+// than silently dropping.
 //
 // Accumulative: a nil pub leaves the previously-set value in place; multiple
 // calls combine non-nil arguments. `WithOutboxDeps(nil, nil)` is a no-op,
@@ -73,7 +86,8 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
 // ref: cells/auditcore/cell.go::WithOutboxDeps (platform-cell pattern)
-func WithOutboxDeps(pub outbox.Publisher, _ outbox.Writer) Option {
+func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+	MustHaveNilDeviceCellWriter(writer)
 	return func(c *DeviceCell) {
 		if pub != nil {
 			c.publisher = pub
@@ -168,6 +182,11 @@ func NewDeviceCell(opts ...Option) *DeviceCell {
 // buildEmitter creates a DirectEmitter using the cell's publisher and metrics
 // provider. Falls back to metrics.NopProvider{} when no provider is injected.
 // Extracted from Init to keep Init's cognitive complexity within the ≤15 limit.
+//
+// L4 DeviceLatent: DirectPublishFailOpen is intentional — command persistence
+// succeeds independently of event publish; missed events are operational
+// follow-up, not request failures. Platform L1/L2 cells use FailClosed for
+// audit/compliance integrity. ref: ADR 202605101800 §D6 + KG-07 decision.
 func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 	mp := c.metricsProvider
 	if mp == nil {

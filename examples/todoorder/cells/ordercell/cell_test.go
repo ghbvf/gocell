@@ -140,17 +140,21 @@ func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) 
 	assert.Contains(t, ecErrDefault.Message+" "+ecErrDefault.InternalMessage, "outboxWriter+txRunner")
 }
 
+// TestOrderCell_DemoMode_RejectsHalfConfiguredPath verifies that exactly one
+// of (outboxWriter, txRunner) being set is rejected at Init() time.
+// Both sub-cases hit cell.ResolveCellEmitter::resolveDemoEmitter pairing
+// invariant (writer XOR txRunner = error).
 func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []Option
 	}{
 		{
-			name: "writer without tx manager",
+			name: "writer present, txRunner absent → demo pairing invariant",
 			opts: []Option{WithOutboxDeps(nil, outbox.NoopWriter{})},
 		},
 		{
-			name: "tx manager without writer",
+			name: "txRunner present, writer absent → demo pairing invariant",
 			opts: []Option{WithTxManager(demoTxRunner{})},
 		},
 	}

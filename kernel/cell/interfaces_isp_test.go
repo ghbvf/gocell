@@ -66,6 +66,8 @@ var _ CellInventory = (*inventoryMock)(nil)
 
 // TestCellSubInterfaces_IndependentMockability documents that each sub-interface
 // can be mocked without implementing the others, satisfying ISP.
+// Both sub-cases hit cell.ResolveCellEmitter::resolveDemoEmitter pairing invariant
+// (writer XOR txRunner = error).
 func TestCellSubInterfaces_IndependentMockability(t *testing.T) {
 	t.Parallel()
 	var ci CellIdentity = idMock{id: "x", ctype: "core", level: 1}
@@ -88,6 +90,16 @@ func TestCellSubInterfaces_IndependentMockability(t *testing.T) {
 	if cv.Metadata() != meta {
 		t.Error("CellInventory.Metadata() did not return injected meta pointer")
 	}
+
+	// Negative path: unhealthy mock must report unhealthy state.
+	unhealthy := statusMock{healthy: false, ready: false}
+	if unhealthy.Ready() {
+		t.Error("CellStatus.Ready() = true on unhealthy mock; want false")
+	}
+	if unhealthy.Health().Status != "unhealthy" {
+		t.Errorf("CellStatus.Health().Status = %q on unhealthy mock; want %q",
+			unhealthy.Health().Status, "unhealthy")
+	}
 }
 
 // TestCell_CompositeEquivalence verifies that the composite Cell interface is
@@ -96,5 +108,13 @@ func TestCellSubInterfaces_IndependentMockability(t *testing.T) {
 // is equivalent to satisfying the composite.
 func TestCell_CompositeEquivalence(t *testing.T) {
 	t.Parallel()
-	var _ Cell = (*BaseCell)(nil)
+	var c Cell = (*BaseCell)(nil) // composite satisfied via 4-segment checks
+	_ = c
+	// 4 sub-interfaces all satisfied by *BaseCell
+	var (
+		_ CellIdentity  = (*BaseCell)(nil)
+		_ CellLifecycle = (*BaseCell)(nil)
+		_ CellStatus    = (*BaseCell)(nil)
+		_ CellInventory = (*BaseCell)(nil)
+	)
 }
