@@ -34,7 +34,7 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 }
 ```
 
-> **回落字面量**：`outbox.HandleResult.ProcessReason` / `SettlementObservers` 字段无法用 factory 表达，需要时直接构造 `outbox.HandleResult{...}` 字面量（典型场景：kernel internal retry plumbing、middleware-handler 协议）。
+> **回落字面量**：`outbox.HandleResult.ProcessReason` / `SettlementObservers` 字段无法用 factory 表达，需要时直接构造 `outbox.HandleResult{...}` 字面量（典型场景：kernel internal retry plumbing、middleware-handler 协议）。`OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01` archtest 把字面量构造限定在 `kernel/outbox/result.go` / `consumer_base.go` / `outboxtest/conformance.go` 三处 allowlist；业务路径必须用 `outbox.Ack()` / `Requeue(err)` / `Reject(err)`。`HandleResult` 字段集本身由 `OUTBOX-HANDLERESULT-FIELDS-FROZEN-01` 冻结。
 
 ### Disposition 语义
 
