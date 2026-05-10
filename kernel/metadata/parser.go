@@ -271,11 +271,19 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 // the contract kind (http→server, event→publisher, command→handler,
 // projection→provider). If the provider endpoint is also empty, ownerCell
 // remains empty and governance rules will flag the issue.
+//
+// K#09 funnel: ContractMeta.Codegen defaults to true when the contract.yaml
+// omits the `codegen:` key. The yaml.Node AST is inspected before the struct
+// decode is finalized so an absent key (vs. an explicit `codegen: false`) is
+// distinguishable. Explicit `codegen: false` is the only way to opt out.
 func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m ContractMeta
 	node, err := unmarshalFile(fsys, path, &m)
 	if err != nil {
 		return err
+	}
+	if !contractYAMLHasKey(node, "codegen") {
+		m.Codegen = true
 	}
 	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
@@ -462,4 +470,31 @@ func emptyYAMLDocumentNode() *yaml.Node {
 
 func shouldCacheFileNode(node *yaml.Node) bool {
 	return node != nil && (node.Kind != yaml.DocumentNode || len(node.Content) != 0)
+}
+
+// contractYAMLHasKey reports whether the top-level mapping in the contract.yaml
+// AST root contains the named key. Used by parseContract to distinguish an
+// absent `codegen:` field (default true, K#09 funnel) from an explicit
+// `codegen: false` opt-out. Walks the DocumentNode → MappingNode → key list.
+func contractYAMLHasKey(node *yaml.Node, key string) bool {
+	if node == nil {
+		return false
+	}
+	root := node
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return false
+		}
+		root = root.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return false
+	}
+	// MappingNode.Content alternates key/value pairs.
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Kind == yaml.ScalarNode && root.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
 }

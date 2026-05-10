@@ -60,6 +60,13 @@ type ScaffoldSpec struct {
 	// DryRun, when true, renders all templates (validating their output) and
 	// performs conflict detection but does not write any files to disk.
 	DryRun bool
+	// WithHTTP, WithEvents, WithBoth control K#09 ScaffoldCellBundle's contract
+	// variant. WithHTTP produces an HTTP request/response contract (default
+	// when none of the three flags are set). WithEvents produces an event
+	// payload/headers contract. WithBoth produces both.
+	WithHTTP   bool
+	WithEvents bool
+	WithBoth   bool
 }
 
 // cellGoTemplate is parsed once from the shared templateFS. Uses

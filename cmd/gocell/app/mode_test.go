@@ -547,32 +547,32 @@ func TestRunScaffoldCell_DryRun_NoFileWritten(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(dir,
-			[]string{"cell", "--id=dry-cell", "--team=squad", "--role=cell-owner", "--dry-run"})
+			[]string{"cell", "--id=drycell", "--team=squad", "--role=cell-owner", "--dry-run"})
 		require.NoError(t, err)
 	})
 
-	_, statErr := os.Stat(filepath.Join(dir, "cells", "dry-cell", "cell.yaml"))
+	_, statErr := os.Stat(filepath.Join(dir, "cells", "drycell", "cell.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "dry-run must not create cell.yaml")
 
 	assert.Contains(t, out, "dry-run", "output must mark dry-run mode")
-	assert.Contains(t, out, "cells/dry-cell/cell.yaml",
+	assert.Contains(t, out, "cells/drycell/cell.yaml",
 		"dry-run must report the path that would be written")
 	assert.NotContains(t, out, "Created cell", "dry-run must not emit a 'Created cell' line")
 }
 
 func TestRunScaffoldSlice_DryRun_NoFileWritten(t *testing.T) {
-	dir := setupProject(t, "cells/parent-cell/slices")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "parent-cell", "cell.yaml"),
-		[]byte("id: parent-cell\ntype: core\n"), 0o644))
+	dir := setupProject(t, "cells/parentcell/slices")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "parentcell", "cell.yaml"),
+		[]byte("id: parentcell\ntype: core\n"), 0o644))
 
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(dir,
-			[]string{"slice", "--id=dryslice", "--cell=parent-cell", "--dry-run"})
+			[]string{"slice", "--id=dryslice", "--cell=parentcell", "--dry-run"})
 		require.NoError(t, err)
 	})
 
 	_, statErr := os.Stat(filepath.Join(dir,
-		"cells", "parent-cell", "slices", "dryslice", "slice.yaml"))
+		"cells", "parentcell", "slices", "dryslice", "slice.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "dry-run must not create slice.yaml")
 	assert.NotContains(t, out, "Created slice", "dry-run must not emit a 'Created slice' line")
 }

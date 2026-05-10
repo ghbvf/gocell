@@ -338,7 +338,9 @@ func TestGenerateContract_UnknownContractID(t *testing.T) {
 }
 
 // TestGenerateContract_AllNoOptedIn verifies that --all on a project with no
-// Codegen=true contracts returns no error and generates nothing.
+// Codegen=true contracts returns no error and generates nothing. Post-K#09
+// the parser default flipped to true, so explicit `codegen: false` is the
+// only opt-out — the fixture below uses it to keep this test's intent.
 func TestGenerateContract_AllNoOptedIn(t *testing.T) {
 	// Not parallel: uses os.Chdir which is process-global.
 	root := t.TempDir()
@@ -348,12 +350,13 @@ func TestGenerateContract_AllNoOptedIn(t *testing.T) {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	// Contract with codegen=false (default).
+	// Contract with explicit codegen=false (K#09 funnel: absent defaults true,
+	// so opt-out must be explicit).
 	contractDir := filepath.Join(root, "contracts", "http", "ping", "v1")
 	if err := os.MkdirAll(contractDir, 0o755); err != nil {
 		t.Fatalf("mkdir contracts: %v", err)
 	}
-	contractYAML := "id: http.ping.v1\nkind: http\n"
+	contractYAML := "id: http.ping.v1\nkind: http\ncodegen: false\n"
 	if err := os.WriteFile(filepath.Join(contractDir, "contract.yaml"), []byte(contractYAML), 0o644); err != nil {
 		t.Fatalf("write contract.yaml: %v", err)
 	}

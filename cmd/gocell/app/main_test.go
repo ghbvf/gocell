@@ -268,7 +268,7 @@ func TestRunScaffoldCellMissingFlags(t *testing.T) {
 }
 
 func TestRunScaffoldCellMissingTeam(t *testing.T) {
-	err := runScaffold([]string{"cell", "--id=test-cell"})
+	err := runScaffold([]string{"cell", "--id=testcell"})
 	if err == nil {
 		t.Error("scaffold cell without --team should return error")
 	}

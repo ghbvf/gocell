@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
@@ -105,6 +106,41 @@ type modulesContext struct {
 	Modules    []string // CellModule struct names, in cells.yaml order
 }
 
+// AssemblyScaffoldSpec drives Generator.Scaffold (K#09 SCAFFOLD-ONE-CMD).
+// The Generator already owns the assembly.yaml / run.go / app.go renderers
+// and downstream codegen (modules_gen.go, main.go, boundary.yaml) so a
+// single Scaffold method composes the full assembly bundle without a new
+// subpackage.
+type AssemblyScaffoldSpec struct {
+	// ID is the assembly identifier (e.g. "myassembly"). Required.
+	ID string
+	// Cells lists the cell IDs that compose this assembly, in startup order.
+	// Each entry must reference an existing cells/{cellID}/cell.yaml.
+	Cells []string
+	// OwnerTeam, OwnerRole identify the maintainers of this assembly.
+	// Both required; written verbatim to assembly.yaml owner.
+	OwnerTeam string
+	OwnerRole string
+	// Deploy selects the target deployment template; legal values are
+	// "k8s" (default), "compose", "binary". Per ADR 202605061800 the
+	// k8s value is omitted from assembly.yaml — the parser inherits the
+	// default. compose/binary are written verbatim.
+	Deploy string
+	// DryRun renders templates and runs conflict detection without writing.
+	DryRun bool
+}
+
+// scaffoldAssemblyContext is the template context for the K#09 scaffold
+// templates (assembly-yaml / run-go / app-go).
+type scaffoldAssemblyContext struct {
+	ID             string
+	Cells          []string
+	OwnerTeam      string
+	OwnerRole      string
+	DeployTemplate string // empty when --deploy=k8s (default — omitted from yaml)
+	HelperName     string // run{ID-PascalCase} for runXxx() in run.go
+}
+
 // GenerateBoundary generates the boundary.yaml content for an assembly.
 //
 // Boundary contains:
@@ -183,6 +219,142 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		Modules:    modules,
 	}
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
+}
+
+// Scaffold produces an assembly skeleton: assembly.yaml + cmd/{id}/run.go +
+// cmd/{id}/app.go. K#09 SCAFFOLD-ONE-CMD.
+//
+// Note: Scaffold writes to the filesystem under projectRoot. The Generator
+// must have been constructed with a non-empty projectRoot. Each cell in
+// spec.Cells must exist in g.project.Cells; unknown cell IDs fail-fast.
+//
+// On --deploy=k8s (the K#10 minimal default) the scaffolded assembly.yaml
+// omits the deployTemplate field per ADR 202605061800. compose/binary are
+// written verbatim. Callers may run GenerateModulesGen / GenerateEntrypoint
+// / GenerateBoundary after Scaffold to materialize cmd/{id}/main.go +
+// modules_gen.go + assemblies/{id}/generated/boundary.yaml.
+//
+//nolint:gocognit,cyclop // sequential scaffold steps; complexity intrinsic
+func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
+	if g.projectRoot == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly.Generator.Scaffold requires non-empty projectRoot")
+	}
+	if err := validateAssemblyScaffoldSpec(g, spec); err != nil {
+		return err
+	}
+
+	helperName, err := assemblyRunHelperName(spec.ID)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"assembly id has no identifier characters", err,
+			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID)))
+	}
+
+	deployTemplate := spec.Deploy
+	if deployTemplate == "k8s" {
+		// K#10 minimal default — parser/schema inherits k8s; omit from yaml.
+		deployTemplate = ""
+	}
+
+	ctx := scaffoldAssemblyContext{
+		ID:             spec.ID,
+		Cells:          append([]string(nil), spec.Cells...),
+		OwnerTeam:      spec.OwnerTeam,
+		OwnerRole:      spec.OwnerRole,
+		DeployTemplate: deployTemplate,
+		HelperName:     helperName,
+	}
+
+	asmDir := filepath.Join(g.projectRoot, "assemblies", spec.ID)
+	cmdDir := filepath.Join(g.projectRoot, "cmd", spec.ID)
+
+	files := []struct {
+		path     string
+		template string
+		isGo     bool
+	}{
+		{filepath.Join(asmDir, "assembly.yaml"), "scaffold-assembly-yaml.tpl", false},
+		{filepath.Join(cmdDir, "run.go"), "scaffold-run-go.tpl", true},
+		{filepath.Join(cmdDir, "app.go"), "scaffold-app-go.tpl", true},
+	}
+
+	// Conflict detection — any pre-existing file aborts before any write.
+	for _, f := range files {
+		if _, err := os.Stat(f.path); err == nil {
+			return errcode.New(errcode.KindConflict, errcode.ErrValidationFailed,
+				"scaffold assembly: file already exists",
+				errcode.WithInternal(fmt.Sprintf("path=%s", f.path)))
+		}
+	}
+
+	rendered := make(map[string][]byte, len(files))
+	for _, f := range files {
+		out, err := g.executeTemplate(f.template, ctx)
+		if err != nil {
+			return err
+		}
+		rendered[f.path] = out
+	}
+
+	if spec.DryRun {
+		return nil
+	}
+
+	for _, dir := range []string{asmDir, cmdDir} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"scaffold assembly: mkdir failed", err,
+				errcode.WithInternal(fmt.Sprintf("dir=%s", dir)))
+		}
+	}
+	for path, content := range rendered {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"scaffold assembly: write failed", err,
+				errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+		}
+	}
+	return nil
+}
+
+// validateAssemblyScaffoldSpec checks required fields and verifies that every
+// cell in spec.Cells exists in the parsed project. Unknown cell IDs are
+// rejected with KindInvalid so `gocell scaffold assembly --cells=...` cannot
+// silently produce an assembly that points at non-existent cells.
+func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error {
+	if spec.ID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: ID is required")
+	}
+	if len(spec.Cells) == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: at least one cell is required")
+	}
+	if spec.OwnerTeam == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: OwnerTeam is required")
+	}
+	if spec.OwnerRole == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: OwnerRole is required")
+	}
+	switch spec.Deploy {
+	case "", "k8s", "compose", "binary":
+		// ok — empty defaults to k8s
+	default:
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: --deploy must be one of [k8s compose binary]",
+			errcode.WithInternal(fmt.Sprintf("deploy=%q", spec.Deploy)))
+	}
+	for _, cellID := range spec.Cells {
+		if g.cells.Get(cellID) == nil {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"assembly scaffold: --cells references unknown cell",
+				errcode.WithInternal(fmt.Sprintf("cell=%q", cellID)))
+		}
+	}
+	return nil
 }
 
 // computeBoundaryContracts determines which contracts cross the assembly boundary.

@@ -24,23 +24,23 @@ func TestRunScaffoldCell_Success(t *testing.T) {
 		[]byte("module example.com/test\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir,
-		[]string{"cell", "--id=test-cell", "--team=squad", "--role=cell-owner"})
+		[]string{"cell", "--id=testcell", "--team=squad", "--role=cell-owner"})
 	require.NoError(t, err)
 
-	_, statErr := os.Stat(filepath.Join(dir, "cells", "test-cell", "cell.yaml"))
+	_, statErr := os.Stat(filepath.Join(dir, "cells", "testcell", "cell.yaml"))
 	assert.NoError(t, statErr)
 }
 
 func TestRunScaffoldSlice_Success(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cells", "test-cell", "slices"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cells", "testcell", "slices"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/test\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "test-cell", "cell.yaml"),
-		[]byte("id: test-cell\ntype: core\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "testcell", "cell.yaml"),
+		[]byte("id: testcell\ntype: core\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir,
-		[]string{"slice", "--id=myslice", "--cell=test-cell"})
+		[]string{"slice", "--id=myslice", "--cell=testcell"})
 	require.NoError(t, err)
 }
 
@@ -51,7 +51,7 @@ func TestRunScaffoldContract_Success(t *testing.T) {
 		[]byte("module example.com/test\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir,
-		[]string{"contract", "--id=http.test.v1", "--kind=http", "--owner=test-cell"})
+		[]string{"contract", "--id=http.test.v1", "--kind=http", "--owner=testcell"})
 	require.NoError(t, err)
 }
 

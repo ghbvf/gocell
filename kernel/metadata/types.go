@@ -136,7 +136,12 @@ type ContractMeta struct {
 	// Codegen opts the contract into `gocell generate contract` output.
 	// When true, contractgen produces types_gen.go / iface_gen.go (and
 	// handler_gen.go for kind=http) under generated/contracts/<kind>/<...>/v<N>/.
-	// Default false. PR-4 will remove this opt-in once all contracts are migrated.
+	//
+	// K#09 funnel: parser.parseContract defaults this to true when the
+	// contract.yaml omits the `codegen:` key (detected via yaml AST in
+	// contractYAMLHasKey). Explicit `codegen: false` is the only way to
+	// opt out. Scaffold output omits the field entirely so the funnel is
+	// the single source of truth (INVARIANT SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01).
 	Codegen bool `yaml:"codegen,omitempty"`
 	// Description / DeprecatedAt are documentation only — excluded from
 	// structural fingerprint via fingerprint:"-".
