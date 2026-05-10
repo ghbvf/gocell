@@ -426,26 +426,30 @@ func returnTypeEndsInResponseObject(expr ast.Expr) bool {
 // name matches responseStructPattern, calls emit with the extracted return info.
 func walkReturns(fn *ast.FuncDecl, fset *token.FileSet, emit func(adapterReturn)) {
 	scanner.EachNode[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
-		for _, result := range ret.Results {
-			switch cl := result.(type) {
-			case *ast.CompositeLit:
-				typeName := compositeLitTypeName(cl)
-				if typeName == "" {
-					continue
-				}
-				m := responseStructPattern.FindStringSubmatch(typeName)
-				if m == nil {
-					continue
-				}
-				status, _ := strconv.Atoi(m[1])
-				pos := fset.Position(cl.Pos())
-				emit(adapterReturn{
-					File:     pos.Filename,
-					Line:     pos.Line,
-					Status:   status,
-					TypeName: typeName,
-				})
+		// Paired index iteration: only top-level CompositeLit return values
+		// are adapter Response struct candidates. EachNode[ast.CompositeLit]
+		// would over-match nested composites (e.g. `return Foo{X: Bar{}}`).
+		for i := range ret.Results {
+			cl, ok := ret.Results[i].(*ast.CompositeLit)
+			if !ok {
+				continue
 			}
+			typeName := compositeLitTypeName(cl)
+			if typeName == "" {
+				continue
+			}
+			m := responseStructPattern.FindStringSubmatch(typeName)
+			if m == nil {
+				continue
+			}
+			status, _ := strconv.Atoi(m[1])
+			pos := fset.Position(cl.Pos())
+			emit(adapterReturn{
+				File:     pos.Filename,
+				Line:     pos.Line,
+				Status:   status,
+				TypeName: typeName,
+			})
 		}
 	})
 }

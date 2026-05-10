@@ -196,12 +196,15 @@ func isGooseFuncCall(info *types.Info, call *ast.CallExpr, gooseImportPath, func
 // hasGooseFuncArg reports whether any direct arg in args is a call to
 // gooseImportPath.funcName.
 func hasGooseFuncArg(info *types.Info, args []ast.Expr, gooseImportPath, funcName string) bool {
-	for _, arg := range args {
-		switch argCall := arg.(type) {
-		case *ast.CallExpr:
-			if isGooseFuncCall(info, argCall, gooseImportPath, funcName) {
-				return true
-			}
+	// Paired index iteration: only direct args (immediate children of args)
+	// are checked, not arbitrarily nested CallExprs inside an arg's subtree.
+	for i := range args {
+		argCall, ok := args[i].(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		if isGooseFuncCall(info, argCall, gooseImportPath, funcName) {
+			return true
 		}
 	}
 	return false

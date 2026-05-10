@@ -406,14 +406,6 @@ func appendPanicRegisteredViolation(
 	})
 }
 
-func panicRegisteredFuncLiteralName(scopes []panicRegisteredScope, index int) string {
-	parent := "<package>"
-	if len(scopes) > 0 {
-		parent = scopes[len(scopes)-1].FuncName
-	}
-	return parent + ".func" + strconv.Itoa(index)
-}
-
 func isPanicCallExpr(call *ast.CallExpr) bool {
 	ident, ok := call.Fun.(*ast.Ident)
 	return ok && ident.Name == "panic"

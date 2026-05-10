@@ -127,19 +127,16 @@ func scanLegacyQuerySymbolDecls(root, path string) ([]pgQueryBoundaryViolation, 
 				})
 			}
 		case *ast.GenDecl:
-			for _, spec := range d.Specs {
-				switch typeSpec := spec.(type) {
-				case *ast.TypeSpec:
-					if !slices.Contains(legacyQuerySymbols, typeSpec.Name.Name) {
-						continue
-					}
-					violations = append(violations, pgQueryBoundaryViolation{
-						File:    relSlash(root, path),
-						Line:    fset.Position(typeSpec.Pos()).Line,
-						Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", typeSpec.Name.Name),
-					})
+			scanner.EachNode[ast.TypeSpec](d, func(typeSpec *ast.TypeSpec) {
+				if !slices.Contains(legacyQuerySymbols, typeSpec.Name.Name) {
+					return
 				}
-			}
+				violations = append(violations, pgQueryBoundaryViolation{
+					File:    relSlash(root, path),
+					Line:    fset.Position(typeSpec.Pos()).Line,
+					Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", typeSpec.Name.Name),
+				})
+			})
 		}
 	}
 	return violations, nil

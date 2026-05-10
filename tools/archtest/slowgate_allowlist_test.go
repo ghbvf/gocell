@@ -41,6 +41,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -105,17 +106,14 @@ func TestSlowgateAllowlist(t *testing.T) {
 
 		funcs := map[string]bool{}
 		for _, file := range p.Syntax {
-			for _, decl := range file.Decls {
-				switch fn := decl.(type) {
-				case *ast.FuncDecl:
-					if fn.Recv != nil {
-						continue
-					}
-					if strings.HasPrefix(fn.Name.Name, "Test") {
-						funcs[fn.Name.Name] = true
-					}
+			scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Recv != nil {
+					return
 				}
-			}
+				if strings.HasPrefix(fn.Name.Name, "Test") {
+					funcs[fn.Name.Name] = true
+				}
+			})
 		}
 
 		for _, testName := range byPkg[pkgPath] {

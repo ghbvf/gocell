@@ -39,6 +39,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // redisConstructorSpec describes one expected constructor. file is relative
@@ -83,19 +85,20 @@ func TestRedisConstructorsRequireKeyNamespace(t *testing.T) {
 }
 
 func findRedisConstructorDecl(file *ast.File, name string) *ast.FuncDecl {
-	for _, decl := range file.Decls {
-		switch fn := decl.(type) {
-		case *ast.FuncDecl:
-			if fn.Recv != nil {
-				// Only top-level (non-method) functions are constructors.
-				continue
-			}
-			if fn.Name.Name == name {
-				return fn
-			}
+	var found *ast.FuncDecl
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if found != nil {
+			return // first-match wins; EachNode has no break
 		}
-	}
-	return nil
+		if fn.Recv != nil {
+			// Only top-level (non-method) functions are constructors.
+			return
+		}
+		if fn.Name.Name == name {
+			found = fn
+		}
+	})
+	return found
 }
 
 // assertConstructorTakesKeyNamespace verifies the parameter list contains a
@@ -165,33 +168,34 @@ func assertConstructorValidatesNamespace(t *testing.T, spec redisConstructorSpec
 	leading := fn.Body.List[:limit]
 
 	found := false
-	for _, stmt := range leading {
-		switch ifStmt := stmt.(type) {
-		case *ast.IfStmt:
-			if ifStmt.Init == nil {
-				continue
-			}
-			assign, ok := ifStmt.Init.(*ast.AssignStmt)
-			if !ok || len(assign.Rhs) != 1 {
-				continue
-			}
-			call, ok := assign.Rhs[0].(*ast.CallExpr)
-			if !ok {
-				continue
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Validate" {
-				continue
-			}
-			recv, ok := sel.X.(*ast.Ident)
-			if !ok || recv.Name != "ns" {
-				continue
-			}
-			found = true
+	// Paired index iteration over a sub-slice (leading): EachNode[ast.IfStmt]
+	// would over-match IfStmts deeper in fn.Body beyond the leading window.
+	for i := range leading {
+		ifStmt, ok := leading[i].(*ast.IfStmt)
+		if !ok {
+			continue
 		}
-		if found {
-			break
+		if ifStmt.Init == nil {
+			continue
 		}
+		assign, ok := ifStmt.Init.(*ast.AssignStmt)
+		if !ok || len(assign.Rhs) != 1 {
+			continue
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Validate" {
+			continue
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok || recv.Name != "ns" {
+			continue
+		}
+		found = true
+		break
 	}
 	require.True(t, found,
 		"%s.%s: must call `ns.Validate()` within the first %d body statements "+

@@ -203,19 +203,22 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 		if !ok || sel.Sel == nil || sel.Sel.Name != "Route" {
 			return
 		}
-		for _, elt := range node.Elts {
-			switch kv := elt.(type) {
-			case *ast.KeyValueExpr:
-				keyIdent, ok := kv.Key.(*ast.Ident)
-				if !ok || keyIdent.Name != "BootstrapAuth" {
-					continue
-				}
-				// Any non-nil expression as the value satisfies the wiring requirement;
-				// the codegen template cannot produce a literal nil because the param is
-				// a func value passed straight through.
-				if _, isNil := kv.Value.(*ast.Ident); !isNil || kv.Value.(*ast.Ident).Name != "nil" {
-					mountCallHasBootstrapAuthField = true
-				}
+		// Paired index iteration: only direct KeyValueExpr children of node.Elts
+		// are checked, not nested KeyValueExprs from inner composite literals.
+		for i := range node.Elts {
+			kv, ok := node.Elts[i].(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			keyIdent, ok := kv.Key.(*ast.Ident)
+			if !ok || keyIdent.Name != "BootstrapAuth" {
+				continue
+			}
+			// Any non-nil expression as the value satisfies the wiring requirement;
+			// the codegen template cannot produce a literal nil because the param is
+			// a func value passed straight through.
+			if _, isNil := kv.Value.(*ast.Ident); !isNil || kv.Value.(*ast.Ident).Name != "nil" {
+				mountCallHasBootstrapAuthField = true
 			}
 		}
 	})

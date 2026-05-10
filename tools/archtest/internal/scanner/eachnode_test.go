@@ -10,14 +10,17 @@ import (
 )
 
 // parseSrc is a test helper that parses Go source and fails fast on error.
-func parseSrc(t *testing.T, src string) (*token.FileSet, *ast.File) {
+// The token.FileSet is not returned because no test currently needs position
+// information; if a future case wants line numbers, switch to returning
+// (*token.FileSet, *ast.File) and update callers.
+func parseSrc(t *testing.T, src string) *ast.File {
 	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "fake.go", src, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	return fset, f
+	return f
 }
 
 func TestEachNode_PreorderSequence_File(t *testing.T) {
@@ -26,7 +29,7 @@ func TestEachNode_PreorderSequence_File(t *testing.T) {
 func first() { _ = 1 }
 func second() { _ = 2 }
 `
-	_, file := parseSrc(t, src)
+	file := parseSrc(t, src)
 	var names []string
 	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		names = append(names, fn.Name.Name)
@@ -49,7 +52,7 @@ func outer() {
 	_ = func() { _ = func() { _ = 1 }() }
 }
 `
-	_, file := parseSrc(t, src)
+	file := parseSrc(t, src)
 	var count int
 	scanner.EachNode[ast.FuncLit](file, func(*ast.FuncLit) { count++ })
 	if count != 2 {
@@ -66,7 +69,7 @@ func outer() {
 	_ = localIdent
 }
 `
-	_, file := parseSrc(t, src)
+	file := parseSrc(t, src)
 
 	// File-level: visits both globalIdent and localIdent (and others).
 	var fileIdents []string
@@ -124,7 +127,7 @@ type Store[K any, V any] struct{}
 func (s *Store[K, V]) Put(k K, v V) {}
 func (s *Store[K, V]) Get(k K) (V, bool) { var z V; return z, false }
 `
-	_, file := parseSrc(t, src)
+	file := parseSrc(t, src)
 	var methods []string
 	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil {
@@ -157,7 +160,7 @@ func _(file *ast.File) {
 	}
 }
 `
-	_, file := parseSrc(t, src)
+	file := parseSrc(t, src)
 	var taCount int
 	scanner.EachNode[ast.TypeAssertExpr](file, func(*ast.TypeAssertExpr) {
 		taCount++
@@ -177,7 +180,7 @@ func _(file *ast.File) {
 // known-good usages that DO compile, locking the API shape.
 func TestEachNode_TypeParamConstraint(t *testing.T) {
 	t.Parallel()
-	_, file := parseSrc(t, `package fake
+	file := parseSrc(t, `package fake
 func _() {}
 `)
 	// All these compile-and-run: concrete *ast.<Node> pointer type families.

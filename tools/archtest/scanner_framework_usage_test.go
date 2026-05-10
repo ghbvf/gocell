@@ -253,9 +253,10 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 				return
 			}
 			diags = append(diags, scanner.Diagnostic{
-				Rel:     rel,
-				Line:    fset.Position(ta.Pos()).Line,
-				Message: fmt.Sprintf("use scanner.EachNode[ast.X](root, func(*ast.X){...}) instead of for-range over []ast.%s + type assertion", elemKind),
+				Rel:  rel,
+				Line: fset.Position(ta.Pos()).Line,
+				Message: fmt.Sprintf("use scanner.EachNode[ast.X](root, func(*ast.X){...}) "+
+					"instead of for-range over []ast.%s + type assertion", elemKind),
 			})
 		})
 	})
