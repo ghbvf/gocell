@@ -210,7 +210,7 @@ func TestFakeStore_WaitFor_WakesOnMutation(t *testing.T) {
 	// Trigger publish in another goroutine after a short delay so we can
 	// observe that WaitFor was actually blocked (not polling).
 	go func() {
-		time.Sleep(testtime.D20ms)
+		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep deliberate delay to prove WaitFor is blocked, not polling
 		_, _ = s.MarkPublished(context.Background(), "wf-wake", leaseID)
 	}()
 
@@ -295,11 +295,11 @@ func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
 
 	// Advance the clock so all five claims are stale (claimTTL=5s; oldest is
 	// base+0s, youngest is base+4s, current time is base+15s, cutoff base+10s).
-	nowVal = nowVal.Add(10 * time.Second)
+	nowVal = nowVal.Add(testtime.D10s)
 
 	// batchSize=2 — must pick the two oldest claimedAt rows: e-1 and e-2.
 	count, err := s.ReclaimStale(context.Background(),
-		5*time.Second, 99, time.Millisecond, time.Millisecond, 2)
+		testtime.D5s, 99, testtime.D1ms, testtime.D1ms, 2)
 	if err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}
