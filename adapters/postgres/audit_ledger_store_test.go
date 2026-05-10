@@ -4,6 +4,8 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -16,6 +18,16 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
+
+// migrationsTableName builds a per-test migrations tracking table name that
+// fits PostgreSQL's 63-char identifier limit and contains only [a-zA-Z0-9_]
+// (passed through validateIdentifier). t.Name() may include "/" for sub-tests
+// and grow well beyond 63 chars, so we hash it to an 8-char hex suffix.
+func migrationsTableName(t *testing.T, prefix string) string {
+	t.Helper()
+	h := sha256.Sum256([]byte(t.Name()))
+	return prefix + hex.EncodeToString(h[:4]) // 8 hex chars
+}
 
 // newTestLedgerProtocol constructs a Protocol for the "auditcore" namespace used
 // throughout these integration tests. Fails the test immediately if construction fails.
@@ -48,7 +60,7 @@ func newIsolatedLedgerStore(
 	t.Helper()
 
 	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_ledger_"+t.Name())
+	migrator, err := NewMigrator(p, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_ledger_"))
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
@@ -79,7 +91,7 @@ func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 		fc := clockmock.New(storetest.EpochAnchor())
 
 		p := isolatedSchemaPool(t, ctx, base)
-		migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_suite_"+t.Name())
+		migrator, err := NewMigrator(p, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_suite_"))
 		require.NoError(t, err)
 		require.NoError(t, migrator.Up(ctx))
 
