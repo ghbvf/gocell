@@ -1,0 +1,188 @@
+// invariants:
+//   - INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01
+//
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01 — persistence.WrapForCell /
+// outbox.WrapPublisherForCell / outbox.WrapWriterForCell are the sole
+// authorized paths for handing raw infra types into a cell's With* Option.
+// They MUST be called only from composition roots (cmd/* +
+// examples/<demo>/main.go + examples/<demo>/app.go) or *_test.go. Any other
+// caller — most importantly a cell package — risks recreating the bypass
+// that the sealed marker (kernel/persistence.CellTxManager,
+// kernel/outbox.CellPublisher / CellWriter) eliminated.
+//
+// AI-rebust 评级：Medium (archtest type-aware via typeseval.SharedResolver
+// caller-package check). The sealed marker is the AI-HARD primary defense
+// (违反不可表达 — cells can no longer declare With* Options that accept raw
+// types because the type system rejects raw → CellXxx assignment without
+// the wrapper). This archtest is belt-and-suspenders that additionally pins
+// the authorized wrap-call locations, preventing a cell from importing
+// kernel/persistence and calling WrapForCell internally.
+//
+// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md §D2
+// ref: ADR 202605101800 §D6 (history; archtest scanner predecessor deleted)
+package archtest
+
+import (
+	"go/ast"
+	"go/types"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+)
+
+// wrapperFunctionsCanonical is the closed set of wrapper functions whose
+// callers are restricted by CELL-RAW-INFRA-WRAPPER-LOCATION-01. Adding a
+// new wrapper requires updating this set AND wrapperLocationAllowlistDoc
+// (godoc above) so the rule's surface stays trivially auditable.
+var wrapperFunctionsCanonical = map[string]bool{
+	"github.com/ghbvf/gocell/kernel/persistence.WrapForCell":     true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell": true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell":    true,
+}
+
+type wrapperViolation struct {
+	File     string
+	Line     int
+	FuncName string
+}
+
+// isWrapperCallerAllowed reports whether rel (slash-separated, relative to
+// module root) is an authorized site for wrapper-function calls.
+//
+// Allowed:
+//   - Any *_test.go (tests construct fakes / drive integration scenarios)
+//   - Any file under cmd/ (composition root)
+//   - examples/<demo>/main.go and examples/<demo>/app.go (composition root)
+//   - kernel/persistence/cell_marker.go and kernel/outbox/cell_marker.go
+//     (the wrapper definitions themselves)
+func isWrapperCallerAllowed(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if strings.HasSuffix(rel, "_test.go") {
+		return true
+	}
+	if strings.HasPrefix(rel, "cmd/") {
+		return true
+	}
+	if rel == "kernel/persistence/cell_marker.go" || rel == "kernel/outbox/cell_marker.go" {
+		return true
+	}
+	parts := strings.Split(rel, "/")
+	if len(parts) == 3 && parts[0] == "examples" && (parts[2] == "main.go" || parts[2] == "app.go") {
+		return true
+	}
+	return false
+}
+
+// canonicalCalledFunc returns "<pkg-path>.<func-name>" for a SelectorExpr
+// CallExpr like `pkg.Func(...)`, or "" when the call is not resolvable to a
+// package-qualified function (method call, builtin, etc.).
+func canonicalCalledFunc(info *types.Info, call *ast.CallExpr) string {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	obj := info.Uses[sel.Sel]
+	if obj == nil {
+		return ""
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return ""
+	}
+	pkg := fn.Pkg()
+	if pkg == nil {
+		return ""
+	}
+	return pkg.Path() + "." + fn.Name()
+}
+
+func scanWrapperViolations(root string, resolver *typeseval.Resolver) []wrapperViolation {
+	var out []wrapperViolation
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			absPath := pkg.Fset.Position(file.Pos()).Filename
+			rel, err := filepath.Rel(root, absPath)
+			if err != nil {
+				continue
+			}
+			relSlash := filepath.ToSlash(rel)
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				canon := canonicalCalledFunc(pkg.TypesInfo, call)
+				if !wrapperFunctionsCanonical[canon] {
+					return true
+				}
+				if isWrapperCallerAllowed(relSlash) {
+					return true
+				}
+				out = append(out, wrapperViolation{
+					File:     relSlash,
+					Line:     pkg.Fset.Position(call.Pos()).Line,
+					FuncName: canon,
+				})
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01
+//
+// TestCellRawInfraWrapperLocation01_RealRepoClean verifies that no
+// production code outside the authorized composition-root paths calls one
+// of the wrapper functions. Wrapper-detection capability is verified by
+// the sibling ScannerDetectsViolation test.
+func TestCellRawInfraWrapperLocation01_RealRepoClean(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
+	require.NoError(t, err)
+
+	violations := scanWrapperViolations(root, resolver)
+	for _, v := range violations {
+		t.Errorf("CELL-RAW-INFRA-WRAPPER-LOCATION-01: %s:%d calls %s — caller not in composition-root allowlist (cmd/* | examples/*/main.go | examples/*/app.go | *_test.go | kernel/{persistence,outbox}/cell_marker.go).",
+			v.File, v.Line, v.FuncName)
+	}
+}
+
+// INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01
+//
+// TestCellRawInfraWrapperLocation01_ScannerDetectsViolation loads the
+// build-tag-gated wrapfixture/violation package and asserts the scanner
+// reports the wrap call as a violation (caller path is not allowlisted).
+//
+// Per ai-collab.md §"real source AST capture (AI 难造假)": the fixture is
+// a real Go package loaded via packages.Load with the archtest_fixture
+// build tag. Bypassing this test requires modifying real source code — a
+// hand-crafted AST cannot satisfy go/types canonical-name resolution.
+func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
+		"./tools/archtest/internal/wrapfixture/violation")
+	require.NoError(t, err)
+
+	violations := scanWrapperViolations(root, resolver)
+	require.NotEmpty(t, violations, "scanner must detect at least one wrap call from non-allowlisted fixture path")
+	var seenWrapForCell bool
+	for _, v := range violations {
+		if v.FuncName == "github.com/ghbvf/gocell/kernel/persistence.WrapForCell" {
+			seenWrapForCell = true
+			assert.True(t, strings.Contains(v.File, "wrapfixture"),
+				"violation expected in wrapfixture path, got %s", v.File)
+		}
+	}
+	assert.True(t, seenWrapForCell, "fixture should call persistence.WrapForCell from non-allowlisted path")
+}
