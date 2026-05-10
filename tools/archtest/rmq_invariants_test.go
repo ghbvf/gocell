@@ -734,26 +734,74 @@ func scanPublishMissingFailureRecord(publish *ast.FuncDecl, fset *token.FileSet)
 
 // checkPublishStmtViolations recursively walks stmt searching for if-blocks
 // whose top-level Body.List contains an error return without a paired
-// RecordPublishFailure call. Wave 1 RED state: the switch covers IfStmt,
-// SelectStmt, BlockStmt only — for/range/switch containers are not
-// recursed into, so error returns inside them silently bypass the rule.
-// Wave 4 GREEN: switch is extended to cover all statement containers, and
-// SelectStmt iterates Body.List directly to avoid the EachNode subtree
-// double-traversal.
+// RecordPublishFailure call. The switch covers every Go statement container
+// that may legally contain an *ast.IfStmt: BlockStmt and the explicit
+// container forms (For, Range, Switch, TypeSwitch, Select).
+//
+// SelectStmt iterates Body.List directly (paired-index direct-child) rather
+// than via scanner.EachNode[ast.CommClause]. The EachNode form walks the
+// subtree, so a nested SelectStmt's CommClause is reached BOTH via the
+// outer EachNode walk AND via the recursive descent into the outer's
+// CommClause.Body — double-attributing the same violation. Direct-child
+// iteration confines the SelectStmt handler to its own arms; nested
+// SelectStmts are reached exclusively via the recursive descent. Closes
+// PR445-FU finding F3.
 func checkPublishStmtViolations(stmt ast.Stmt, fset *token.FileSet, inCtxDone bool, violations *[]string) {
 	switch s := stmt.(type) {
 	case *ast.IfStmt:
 		checkPublishIfBlockViolations(s, fset, inCtxDone, violations)
 	case *ast.SelectStmt:
-		scanner.EachNode[ast.CommClause](s, func(comm *ast.CommClause) {
-			isCtxDone := inCtxDone || isCtxDoneCase(comm)
-			for _, cs := range comm.Body {
-				checkPublishStmtViolations(cs, fset, isCtxDone, violations)
+		if s.Body != nil {
+			for _, cs := range s.Body.List {
+				comm, ok := cs.(*ast.CommClause)
+				if !ok {
+					continue
+				}
+				isCtxDone := inCtxDone || isCtxDoneCase(comm)
+				for _, inner := range comm.Body {
+					checkPublishStmtViolations(inner, fset, isCtxDone, violations)
+				}
 			}
-		})
+		}
 	case *ast.BlockStmt:
 		for _, inner := range s.List {
 			checkPublishStmtViolations(inner, fset, inCtxDone, violations)
+		}
+	case *ast.ForStmt:
+		if s.Body != nil {
+			for _, inner := range s.Body.List {
+				checkPublishStmtViolations(inner, fset, inCtxDone, violations)
+			}
+		}
+	case *ast.RangeStmt:
+		if s.Body != nil {
+			for _, inner := range s.Body.List {
+				checkPublishStmtViolations(inner, fset, inCtxDone, violations)
+			}
+		}
+	case *ast.SwitchStmt:
+		if s.Body != nil {
+			for _, cs := range s.Body.List {
+				cc, ok := cs.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, inner := range cc.Body {
+					checkPublishStmtViolations(inner, fset, inCtxDone, violations)
+				}
+			}
+		}
+	case *ast.TypeSwitchStmt:
+		if s.Body != nil {
+			for _, cs := range s.Body.List {
+				cc, ok := cs.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, inner := range cc.Body {
+					checkPublishStmtViolations(inner, fset, inCtxDone, violations)
+				}
+			}
 		}
 	}
 }
