@@ -16,6 +16,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
+// redeliveryAdvance is the clock advance used in at-least-once redelivery
+// simulation tests (F-CR-2 idempotency regression guard).
+const redeliveryAdvance = 10 * time.Second
+
 // testHMACKey returns a deterministic 32-byte test key.
 func testHMACKey() []byte {
 	key := make([]byte, 32)
@@ -581,7 +585,8 @@ func TestMemStore_Query_ByFilters(t *testing.T) {
 	}
 }
 
-// TestMemStore_ValidJSONPayload_Accepted: verify that well-formed JSON is accepted.
+// TestMemStore_ValidJSONPayload_Accepted: verify that JSON objects and null are accepted;
+// non-object JSON (arrays, scalars) are rejected per F21 strict-object validation.
 func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Now())
@@ -591,30 +596,54 @@ func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 
-	cases := []struct {
+	accepted := []struct {
 		name    string
 		payload []byte
 	}{
 		{"object", []byte(`{"foo":1,"bar":2}`)},
-		{"array", []byte(`[1,2,3]`)},
-		{"string", []byte(`"hello"`)},
-		{"number", []byte(`42`)},
 		{"null", []byte(`null`)},
 	}
-	for idx, tc := range cases {
+	for idx, tc := range accepted {
 		tc := tc
 		idx := idx
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run("accepted/"+tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := &ledger.Entry{
-				EventID:   fmt.Sprintf("json-valid-%d", idx),
+				EventID:   fmt.Sprintf("json-accepted-%d", idx),
 				EventType: "json.test",
 				ActorID:   "actor",
 				Timestamp: fc.Now(),
 				Payload:   tc.payload,
 			}
 			if err := store.Append(context.Background(), e); err != nil {
-				t.Errorf("valid JSON payload %q rejected: %v", tc.name, err)
+				t.Errorf("JSON object/null payload %q rejected: %v", tc.name, err)
+			}
+		})
+	}
+
+	// Non-object JSON (arrays, strings, numbers) must be rejected.
+	rejected := []struct {
+		name    string
+		payload []byte
+	}{
+		{"array", []byte(`[1,2,3]`)},
+		{"string", []byte(`"hello"`)},
+		{"number", []byte(`42`)},
+	}
+	for idx, tc := range rejected {
+		tc := tc
+		idx := idx
+		t.Run("rejected/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := &ledger.Entry{
+				EventID:   fmt.Sprintf("json-rejected-%d", idx),
+				EventType: "json.test",
+				ActorID:   "actor",
+				Timestamp: fc.Now(),
+				Payload:   tc.payload,
+			}
+			if err := store.Append(context.Background(), e); err == nil {
+				t.Errorf("non-object JSON payload %q should be rejected but was accepted", tc.name)
 			}
 		})
 	}
@@ -625,6 +654,12 @@ func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	t.Parallel()
 	key := testHMACKey()
+	// WithChainHMAC zeros the caller's key slice after making an internal copy
+	// (F7: HMAC key zeroing). Save a copy before calling MustNewProtocol so the
+	// reference HMAC computation below uses the original key bytes.
+	keyCopy := make([]byte, len(key))
+	copy(keyCopy, key)
+
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	p := ledger.MustNewProtocol(
 		ledger.WithChainHMAC(key),
@@ -652,12 +687,74 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 		fixedNow.UnixNano(),
 		string(e.Payload),
 	)
-	mac := hmac.New(sha256.New, key)
+	mac := hmac.New(sha256.New, keyCopy)
 	mac.Write([]byte(msg))
 	expected := hex.EncodeToString(mac.Sum(nil))
 
 	got := p.ComputeHash(e.PrevHash, e)
 	if got != expected {
 		t.Errorf("ComputeHash mismatch:\n  got  %s\n  want %s", got, expected)
+	}
+}
+
+// TestMemStore_Idempotency_DifferentTimestamp_SameEventID verifies that
+// appending an entry with the same EventID but a different Timestamp (simulating
+// at-least-once outbox redelivery) is correctly detected as a duplicate.
+//
+// F-CR-2 regression guard: the old fingerprint included Timestamp, so a
+// redelivered entry with a new clk.Now() would pass the idempotency check and
+// be written twice. The EventID-only fingerprint must return
+// ErrAuditLedgerAlreadyExists regardless of the timestamp difference.
+func TestMemStore_Idempotency_DifferentTimestamp_SameEventID(t *testing.T) {
+	p := newTestProtocol(t)
+	fc := clockmock.New(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	store, err := ledger.NewMemStore(p, fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+
+	ctx := context.Background()
+
+	e1 := &ledger.Entry{
+		EventID:   "redelivery-evt-001",
+		EventType: "user.login",
+		ActorID:   "actor-x",
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{"session":"abc"}`),
+	}
+	if err := store.Append(ctx, e1); err != nil {
+		t.Fatalf("first Append: %v", err)
+	}
+
+	// Simulate redelivery: same EventID, clock advanced by redeliveryAdvance.
+	fc.Advance(redeliveryAdvance)
+
+	e2 := &ledger.Entry{
+		EventID:   e1.EventID, // same stable identity — must be detected as dup
+		EventType: e1.EventType,
+		ActorID:   e1.ActorID,
+		Timestamp: fc.Now(), // different timestamp — at-least-once redelivery
+		Payload:   e1.Payload,
+	}
+	err = store.Append(ctx, e2)
+	if err == nil {
+		t.Fatal("expected ErrAuditLedgerAlreadyExists for redelivery with different Timestamp")
+	}
+	var coded *errcode.Error
+	if !errors.As(err, &coded) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if coded.Code != errcode.ErrAuditLedgerAlreadyExists {
+		t.Errorf("unexpected error code: got %s, want %s", coded.Code, errcode.ErrAuditLedgerAlreadyExists)
+	}
+
+	// Only 1 entry must have been appended.
+	tail, err := store.Tail(ctx)
+	if err != nil {
+		t.Fatalf("Tail: %v", err)
+	}
+	if tail.EntryCount != 1 {
+		t.Errorf("EntryCount: got %d, want 1 (duplicate must not be appended)", tail.EntryCount)
 	}
 }

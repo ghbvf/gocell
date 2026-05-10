@@ -33,6 +33,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
+// redeliveryAdvance is the clock advance used in at-least-once redelivery
+// simulation test cases (F-CR-2 idempotency regression guard).
+const redeliveryAdvance = 5 * time.Second
+
 // Factory constructs a fresh Store with a deterministic clock. Backends with
 // per-test setup (e.g. PG schema reset) do it inside Factory; cleanup is the
 // returned func and must be safe to call exactly once.
@@ -118,6 +122,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Tail_EmptyStore", func(t *testing.T) { runTailEmptyStore(t, factory) })
 	t.Run("Restart_Recovery", func(t *testing.T) { runRestartRecovery(t, factory) })
 	t.Run("Idempotency_DuplicateContent", func(t *testing.T) { runIdempotencyDuplicateContent(t, factory) })
+	t.Run("Idempotency_DifferentTimestamp_SameEventID", func(t *testing.T) { runIdempotencyDifferentTimestampSameEventID(t, factory) })
 	t.Run("Concurrent_Append_HashChainValid", func(t *testing.T) { runConcurrentAppendHashChainValid(t, factory) })
 	t.Run("StrictPayload_InvalidJSON", func(t *testing.T) { runStrictPayloadInvalidJSON(t, factory) })
 	t.Run("Verify_FullRange", func(t *testing.T) { runVerifyFullRange(t, factory) })
@@ -260,6 +265,48 @@ func runIdempotencyDuplicateContent(t *testing.T, factory Factory) {
 	err := store.Append(context.Background(), e2)
 	if err == nil {
 		t.Fatal("expected ErrAuditLedgerAlreadyExists for duplicate content")
+	}
+	assertErrCode(t, err, errcode.ErrAuditLedgerAlreadyExists)
+}
+
+// runIdempotencyDifferentTimestampSameEventID: same EventID with different
+// Timestamp must be detected as a duplicate (F-CR-2 regression guard).
+//
+// At-least-once outbox redelivery produces the same EventID but a new clk.Now()
+// timestamp on each attempt. The old multi-field fingerprint (eventID + eventType
+// + actorID + timestamp + payload) would produce a different fingerprint each
+// time and allow the same event to be appended multiple times. The EventID-only
+// fingerprint detects the duplicate regardless of the timestamp difference.
+func runIdempotencyDifferentTimestampSameEventID(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	e1 := &ledger.Entry{
+		EventID:   "idem-timestamp-evt",
+		EventType: "idempotency.timestamp.test",
+		ActorID:   "actor",
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{"key":"value"}`),
+	}
+	if err := store.Append(context.Background(), e1); err != nil {
+		t.Fatalf("first Append: %v", err)
+	}
+
+	// Advance clock to simulate at-least-once redelivery with a new timestamp.
+	fc.Advance(redeliveryAdvance)
+
+	// Second append with the same EventID but different Timestamp (simulating
+	// outbox relay redelivery). Must return ErrAuditLedgerAlreadyExists.
+	e2 := &ledger.Entry{
+		EventID:   e1.EventID, // same stable identity
+		EventType: e1.EventType,
+		ActorID:   e1.ActorID,
+		Timestamp: fc.Now(), // different timestamp — redelivery
+		Payload:   e1.Payload,
+	}
+	err := store.Append(context.Background(), e2)
+	if err == nil {
+		t.Fatal("expected ErrAuditLedgerAlreadyExists for same EventID with different Timestamp")
 	}
 	assertErrCode(t, err, errcode.ErrAuditLedgerAlreadyExists)
 }

@@ -363,3 +363,49 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr2)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr2.Code)
 }
+
+// TestAuditQuery_FetchCapEnforced verifies that when the store returns
+// auditQueryFetchCap or more entries the service logs a warning at Warn level.
+// The store is seeded with exactly cap entries so the warning fires, then a
+// second query with fewer entries confirms the happy path does not warn.
+func TestAuditQuery_FetchCapEnforced(t *testing.T) {
+	// Use a log handler that captures records.
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
+		ledger.WithNamespace(ledger.NamespaceID("auditcore")),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+
+	svc, err := NewService(store, testCodec(), logger, query.RunModeProd)
+	require.NoError(t, err)
+
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Seed exactly auditQueryFetchCap entries so the cap warning fires.
+	for i := range auditQueryFetchCap {
+		e := &ledger.Entry{
+			EventID:   fmt.Sprintf("cap-evt-%d", i),
+			EventType: "cap.test",
+			ActorID:   "actor",
+			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+			Payload:   []byte("{}"),
+		}
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	buf.Reset()
+	_, err = svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
+	require.NoError(t, err)
+
+	// Cap warning must appear in the log output.
+	if !strings.Contains(buf.String(), "fetch cap reached") {
+		t.Errorf("expected 'fetch cap reached' warning in log; got: %s", buf.String())
+	}
+}

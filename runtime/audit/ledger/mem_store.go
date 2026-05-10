@@ -261,30 +261,30 @@ func validatePayloadJSON(payload []byte) error {
 	return nil
 }
 
-// contentFingerprint computes a SHA-256 hex digest over the entry's identity
-// fields (eventID + eventType + actorID + UnixNano + payload). Used as the
-// idempotency key for IdempotencyContentFingerprint mode.
+// contentFingerprint computes a SHA-256 hex digest over the entry's stable
+// identity: EventID (UUID). At-least-once redelivery produces the same EventID
+// regardless of when the re-delivery occurs, so using only EventID guarantees
+// that duplicate events are detected even when the clock advances between
+// attempts (e.g., at-least-once outbox relay redelivery).
 //
-// Note: uses SHA-256 (not HMAC) for fingerprinting because the idempotency
-// key is not a security primitive — it is a collision-resistant content
-// address. The HMAC key is reserved for the tamper-evident chain (ComputeHash).
+// Fields deliberately excluded:
+//   - EventType, ActorID: stable per-event metadata but redundant when EventID
+//     is globally unique; including them adds no collision resistance while
+//     preventing dedup on partial-metadata redelivery.
+//   - Timestamp (clk.Now()): changes on every redelivery — including it would
+//     produce a different fingerprint for each retry, defeating idempotency.
+//   - Payload: may differ due to schema evolution; EventID is the stable key.
 //
-// ref: google/trillian types/logroot.go — LeafIdentityHash uses SHA-256 of
-// the leaf data as a content-addressed deduplication key.
+// The DB-level UNIQUE INDEX on (namespace, event_id) (migration 018) acts as a
+// second-line guard against concurrent bypass of this application-level check.
+//
+// ref: Watermill router.go — message.UUID as dedup key (handler receives each
+// UUID at most once per consumer group).
+// ref: NServiceBus MessageDeduplicationBehavior — message ID as idempotency key.
+// ref: google/trillian types/logroot.go — SHA-256 of leaf identity (not data).
 func contentFingerprint(e *Entry) string {
 	h := sha256.New()
-	// Write each field separated by a NUL byte to prevent prefix collisions.
 	h.Write([]byte(e.EventID))
-	h.Write([]byte{0})
-	h.Write([]byte(e.EventType))
-	h.Write([]byte{0})
-	h.Write([]byte(e.ActorID))
-	h.Write([]byte{0})
-	// hash.Hash.Write per io.Writer contract always returns (len(b), nil);
-	// errcheck excludes Fprintf to *hash.Hash sinks (see .golangci.yml).
-	_, _ = fmt.Fprintf(h, "%d", e.Timestamp.UnixNano())
-	h.Write([]byte{0})
-	h.Write(e.Payload)
 	return hex.EncodeToString(h.Sum(nil))
 }
 

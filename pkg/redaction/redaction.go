@@ -256,15 +256,31 @@ func redactSlogValue(v slog.Value) slog.Value {
 // field names. Compiled once at package init (F9 package-level var).
 var redactPayloadKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern + `)$`)
 
+// jsonMaskString is the JSON-encoded fail-closed mask value. It is a valid JSON
+// string token (`"<REDACTED>"`), safe to embed as json.RawMessage in a response
+// struct. Using a var (not a const) so callers receive a stable byte slice that
+// survives multiple calls without reallocation.
+var jsonMaskString = []byte(`"` + Mask + `"`)
+
 // RedactPayload scrubs sensitive JSON field values from a raw JSON payload
-// before it is returned to API consumers (B2-C-09). It parses the JSON,
-// replaces the value of any key whose name matches the sensitiveKeyPattern
-// regex with Mask, and re-marshals the result.
+// before it is returned to API consumers (B2-C-09). It unmarshals the JSON,
+// recursively replaces the value of any key whose name matches sensitiveKeyPattern
+// with Mask, and re-marshals the result.
 //
-// F8: non-JSON-object input (arrays, scalars, malformed JSON) is returned as
-// []byte("<REDACTED>") — fail-closed. The previous behavior of returning the
-// raw bytes is unsafe: a non-object payload arriving at the audit query
-// endpoint would have been forwarded to API consumers without redaction.
+// Recursive traversal (F-CR-3): nested objects and arrays are traversed so that
+// sensitive keys at any depth are scrubbed. Previously only top-level keys were
+// visited; deeply nested credentials (e.g., {"user":{"password":"..."}}) were
+// silently forwarded to API consumers.
+//
+// Fail-closed semantics:
+//   - Malformed JSON (not parseable at all) → returns jsonMaskString
+//     (`"<REDACTED>"`), a valid JSON string token. The old behavior returned
+//     []byte(Mask) = []byte("<REDACTED>"), which is NOT valid JSON and causes
+//     json.RawMessage embedding to produce a 500.
+//   - Marshal failure after traverse (extremely unlikely) → returns jsonMaskString.
+//   - Scalar values (numbers, booleans, null) have no keys; redactValue returns
+//     them unchanged. They are valid JSON and contain no sensitive key structure.
+//   - Top-level JSON arrays are now accepted and recursively traversed.
 //
 // Note: json.Marshal HTML-escapes the Mask value ("<REDACTED>") to
 // "<REDACTED>" in the returned bytes. Callers that embed the
@@ -272,31 +288,50 @@ var redactPayloadKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern 
 // default json.Encoder on the outer struct will re-apply the same escaping,
 // preserving the unicode-escape form in the wire body.
 //
-// Known limitation: only top-level keys are scrubbed. Nested sensitive keys
-// require recursive traversal — acceptable given audit payloads are event
-// metadata and rarely carry deeply nested secrets. A follow-up can add depth
-// if the field set grows.
+// ref: hashicorp/vault audit/entry_formatter.go — recursive field scrubbing.
 func RedactPayload(payload []byte) []byte {
 	if len(payload) == 0 {
 		return payload
 	}
-	var m map[string]any
-	if err := json.Unmarshal(payload, &m); err != nil {
-		// F8: not a JSON object (array, scalar, malformed JSON) — fail-closed.
-		return []byte(Mask)
+	var v any
+	if err := json.Unmarshal(payload, &v); err != nil {
+		// Malformed JSON — fail-closed with a valid JSON string token.
+		return jsonMaskString
 	}
-	for k := range m {
-		if redactPayloadKeyPattern.MatchString(k) {
-			m[k] = Mask
-		}
-	}
-	out, err := json.Marshal(m)
+	v = redactValue(v)
+	out, err := json.Marshal(v)
 	if err != nil {
-		// Marshal failure is extremely unlikely for a map[string]any that
-		// was just unmarshalled from valid JSON; fall-closed.
-		return []byte(Mask)
+		// Marshal failure is extremely unlikely; fail-closed.
+		return jsonMaskString
 	}
 	return out
+}
+
+// redactValue recursively traverses a JSON-decoded value and replaces the value
+// of any map key matching redactPayloadKeyPattern with Mask. Arrays are
+// traversed element-by-element. Scalar values (string, number, bool, nil) are
+// returned unchanged — they carry no key structure that could indicate sensitive
+// data.
+func redactValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		for k := range val {
+			if redactPayloadKeyPattern.MatchString(k) {
+				val[k] = Mask
+			} else {
+				val[k] = redactValue(val[k])
+			}
+		}
+		return val
+	case []any:
+		for i := range val {
+			val[i] = redactValue(val[i])
+		}
+		return val
+	default:
+		// string / float64 / bool / nil — no sensitive key structure; return as-is.
+		return v
+	}
 }
 
 // RedactAny scrubs sensitive substrings from arbitrary panic-style payloads
