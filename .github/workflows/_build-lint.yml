@@ -81,7 +81,24 @@ jobs:
   # not here. build-test is purely build / lint / coverage. Swap to dynamic
   # sharding (consul-style `go list | shuf | split`) if shard timings diverge > 2x.
   build-test:
-    runs-on: ubuntu-latest
+    # Per-shard runner size. tools shard escalated to ubuntu-latest-8-cores
+    # (32GB RAM, 8 vCPU) after PR #445 (PR-Φ EachNode funnel) merge to
+    # develop on 2026-05-10 19:47 UTC made the 2-CPU 7GB ubuntu-latest
+    # runner OOM during `go test ./tools/archtest/...` — observed across
+    # 15+ failed runs spanning multiple PRs, all dying at the Test step
+    # with SIGTERM exit 143 in 2-3 min wall time and zero test output.
+    # Triangulated to memory: archtest 70+ test functions each invoke
+    # typeseval.SharedResolver → packages.Load(...NeedTypesInfo) which
+    # holds a full module type graph (~200-500MB). Multiple distinct
+    # cacheKeys after PR #445's SCANNER-FRAMEWORK-USAGE-01 type-aware
+    # rewrite accumulate beyond 7GB. Larger runners are free for public
+    # repos owned by GitHub Organizations — gocelll/gocell qualifies.
+    # Other shards keep ubuntu-latest (2 vCPU, 7GB) — they consistently
+    # complete in under 150s with no resource pressure.
+    # This is a hotfix; the structural fix is `make verify-archtest`
+    # process isolation (backlog PR305-FU-ARCHTEST-VERIFY-PROCESS-
+    # ISOLATION-01) which lets us return tools shard to ubuntu-latest.
+    runs-on: ${{ matrix.runner }}
     # Job-level timeout = matrix test -timeout + setup overhead headroom
     # (Pre-download up to 3m, build slowgate, coverage upload). Cap at
     # matrix.timeout + 8m. Without this, a runaway test that escapes go
@@ -100,6 +117,7 @@ jobs:
             static_checks: true
             timeout: 5m
             jobTimeoutMin: 13
+            runner: ubuntu-latest
           - shard: tools
             # archtest / metricschema / generatedverify use go/packages to load
             # the full module type graph. CI cost reality (2026-05, post-PR-Φ
@@ -118,23 +136,27 @@ jobs:
             # shards keep 5m.
             pkgs: ./tools/...
             static_checks: false
-            timeout: 20m
-            jobTimeoutMin: 28
+            timeout: 10m
+            jobTimeoutMin: 18
+            runner: ubuntu-latest-8-cores
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
             static_checks: false
             timeout: 5m
             jobTimeoutMin: 13
+            runner: ubuntu-latest
           - shard: cells
             pkgs: ./cells/...
             static_checks: false
             timeout: 5m
             jobTimeoutMin: 13
+            runner: ubuntu-latest
           - shard: others
             pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/...
             static_checks: false
             timeout: 5m
             jobTimeoutMin: 13
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
