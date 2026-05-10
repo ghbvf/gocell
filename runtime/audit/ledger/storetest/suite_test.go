@@ -16,7 +16,7 @@ func TestSuite_MemStore(t *testing.T) {
 
 	factory := func(t *testing.T) (ledger.Store, *clockmock.FakeClock, func()) {
 		t.Helper()
-		fc := clockmock.NewFakeClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+		fc := clockmock.New(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 		store, err := ledger.NewMemStore(protocol, fc)
 		if err != nil {
 			t.Fatalf("NewMemStore: %v", err)

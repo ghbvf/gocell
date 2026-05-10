@@ -107,7 +107,8 @@ func TestNewProtocol_HMACKeyTooShort(t *testing.T) {
 				if !errors.As(err, &coded) {
 					t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
 				}
-				if strings.Contains(coded.Message, string(key)) {
+				// Only check for key material leakage when the key is non-empty.
+				if len(key) > 0 && strings.Contains(coded.Message, string(key)) {
 					t.Error("error message must not contain key material")
 				}
 			}

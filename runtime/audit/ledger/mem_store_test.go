@@ -49,7 +49,7 @@ func newTestProtocol(t *testing.T) *ledger.Protocol {
 // TestNewMemStore_NilProtocol_Rejected: bare-nil Protocol is rejected.
 func TestNewMemStore_NilProtocol_Rejected(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	_, err := ledger.NewMemStore(nil, fc)
 	if err == nil {
 		t.Fatal("expected error for nil Protocol")
@@ -94,7 +94,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 
 	key := testHMACKey()
 	fixedNow := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	fc := clockmock.NewFakeClock(fixedNow)
+	fc := clockmock.New(fixedNow)
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -150,7 +150,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 func TestMemStore_Append_ChainLinkage(t *testing.T) {
 	t.Parallel()
 
-	fc := clockmock.NewFakeClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	fc := clockmock.New(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -187,7 +187,7 @@ func TestMemStore_Append_ChainLinkage(t *testing.T) {
 // TestMemStore_Tail_Empty: empty store returns zero TailSnapshot.
 func TestMemStore_Tail_Empty(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -211,7 +211,7 @@ func TestMemStore_Tail_Empty(t *testing.T) {
 // TestMemStore_Tail_AfterAppend: Tail advances after each Append.
 func TestMemStore_Tail_AfterAppend(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -249,7 +249,7 @@ func TestMemStore_Tail_AfterAppend(t *testing.T) {
 // re-read entries from DB; MemStore simulates this via Append replay.
 func TestMemStore_Restart_Recovery(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC))
+	fc := clockmock.New(time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC))
 	p := newTestProtocol(t)
 
 	// Phase 1: write N entries to storeA.
@@ -314,7 +314,7 @@ func TestMemStore_Restart_Recovery(t *testing.T) {
 // TestMemStore_GetBySeq_NotFound: missing seqNo returns ErrAuditLedgerNotFound.
 func TestMemStore_GetBySeq_NotFound(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -334,7 +334,7 @@ func TestMemStore_GetBySeq_NotFound(t *testing.T) {
 // returns ErrAlreadyExists on the second call (content fingerprint check).
 func TestMemStore_Idempotency_DuplicateContent(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -377,7 +377,7 @@ func TestMemStore_Idempotency_DuplicateContent(t *testing.T) {
 // TestMemStore_StrictPayload_InvalidJSON: payload with invalid JSON is rejected.
 func TestMemStore_StrictPayload_InvalidJSON(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -408,7 +408,7 @@ func TestMemStore_StrictPayload_InvalidJSON(t *testing.T) {
 // rejected (DisallowUnknownFields strict mode — PR266 coverage).
 func TestMemStore_StrictPayload_UnknownFields(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -434,7 +434,7 @@ func TestMemStore_StrictPayload_UnknownFields(t *testing.T) {
 // valid JSON (empty object semantics or nil is treated as empty).
 func TestMemStore_StrictPayload_NilPayload(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -457,7 +457,7 @@ func TestMemStore_StrictPayload_NilPayload(t *testing.T) {
 // each append one entry; the resulting chain must be fully valid (B2-C-10).
 func TestMemStore_Concurrent_Append_HashChainValid(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC))
+	fc := clockmock.New(time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC))
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -512,7 +512,7 @@ func TestMemStore_Concurrent_Append_HashChainValid(t *testing.T) {
 // TestMemStore_Verify_FullRange: Verify on full range returns valid=true.
 func TestMemStore_Verify_FullRange(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -544,7 +544,7 @@ func TestMemStore_Verify_FullRange(t *testing.T) {
 // TestMemStore_Query_ByFilters: Query returns entries matching filters.
 func TestMemStore_Query_ByFilters(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC))
+	fc := clockmock.New(time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC))
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
@@ -586,7 +586,7 @@ func TestMemStore_Query_ByFilters(t *testing.T) {
 // TestMemStore_ValidJSONPayload_Accepted: verify that well-formed JSON is accepted.
 func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.NewFakeClock(time.Now())
+	fc := clockmock.New(time.Now())
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, fc)
 	if err != nil {
