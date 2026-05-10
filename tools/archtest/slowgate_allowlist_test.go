@@ -41,6 +41,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -75,14 +76,14 @@ func TestSlowgateAllowlist(t *testing.T) {
 	}
 	sort.Strings(patterns)
 
-	// We reuse testTimeLiteralBuildTags (the same build-tag set used by
+	// We reuse typeseval.FlatNonDefaultTags() (the same build-tag set used by
 	// TEST-TIME-LITERAL-01) because the slowgate allowlist contains
 	// integration- and pg-tagged tests (e.g. kernel/verify integration
 	// tests that exec subprocess go-toolchain) that would otherwise be
 	// invisible to packages.Load and falsely flagged as "orphan entries".
 	// Any new build tag introduced repo-wide must be added there; the two
 	// gates inherit the same scope by construction.
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -105,15 +106,14 @@ func TestSlowgateAllowlist(t *testing.T) {
 
 		funcs := map[string]bool{}
 		for _, file := range p.Syntax {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil {
-					continue
+			scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Recv != nil {
+					return
 				}
 				if strings.HasPrefix(fn.Name.Name, "Test") {
 					funcs[fn.Name.Name] = true
 				}
-			}
+			})
 		}
 
 		for _, testName := range byPkg[pkgPath] {

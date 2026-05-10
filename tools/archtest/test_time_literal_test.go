@@ -49,14 +49,6 @@ import (
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
-// testTimeLiteralBuildTags lists every build tag whose tagged test files must
-// participate in the gate. New build tags introduced by future tests must be
-// added here so the gate sees them; otherwise tagged test files with literal
-// durations would silently bypass the invariant.
-var testTimeLiteralBuildTags = []string{
-	"e2e", "integration", "pg", "examples_smoke", "otelcollector",
-}
-
 // TestTestTimeLiteralConst enforces TEST-TIME-LITERAL-01 using the same
 // universal AST walk as PROD-DURATION-CONST-01: for every declaration that
 // is not a package-level const block, any expression whose static type is
@@ -64,6 +56,13 @@ var testTimeLiteralBuildTags = []string{
 //
 // The only difference from PROD-DURATION-CONST-01 is the file filter: we
 // include exactly the files PROD-DURATION-CONST-01 excludes as "test code".
+//
+// Build tags: typeseval.FlatNonDefaultTags() returns the union of every
+// tag in typeseval.KnownNonDefaultTags() (single source); a fail-closed
+// self-test (TestKnownNonDefaultTagsCoverage in typeseval) refuses to
+// pass when a //go:build directive references a tag not on that list, so
+// new tagged test files with literal durations cannot silently bypass the
+// invariant.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md G6
 func TestTestTimeLiteralConst(t *testing.T) {
@@ -75,7 +74,7 @@ func TestTestTimeLiteralConst(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 

@@ -384,19 +384,15 @@ func extractAdapterReturnStatuses(filePath string) ([]adapterReturn, error) {
 	}
 
 	var results []adapterReturn
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if !isAdapterMethod(fn) {
-			continue
+			return
 		}
 		walkReturns(fn, fset, func(ret adapterReturn) {
 			ret.FuncName = fn.Name.Name
 			results = append(results, ret)
 		})
-	}
+	})
 	return results, nil
 }
 
@@ -429,15 +425,13 @@ func returnTypeEndsInResponseObject(expr ast.Expr) bool {
 // walkReturns walks all ReturnStmt in fn and for each CompositeLit whose type
 // name matches responseStructPattern, calls emit with the extracted return info.
 func walkReturns(fn *ast.FuncDecl, fset *token.FileSet, emit func(adapterReturn)) {
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok {
-			return true
-		}
-		for _, result := range ret.Results {
-			cl, isCL := result.(*ast.CompositeLit)
-			if !isCL {
-				// nil, ident variable, or (nil, err) — skip (ceiling guard).
+	scanner.EachNode[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
+		// Paired index iteration: only top-level CompositeLit return values
+		// are adapter Response struct candidates. EachNode[ast.CompositeLit]
+		// would over-match nested composites (e.g. `return Foo{X: Bar{}}`).
+		for i := range ret.Results {
+			cl, ok := ret.Results[i].(*ast.CompositeLit)
+			if !ok {
 				continue
 			}
 			typeName := compositeLitTypeName(cl)
@@ -457,7 +451,6 @@ func walkReturns(fn *ast.FuncDecl, fset *token.FileSet, emit func(adapterReturn)
 				TypeName: typeName,
 			})
 		}
-		return true
 	})
 }
 

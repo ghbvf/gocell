@@ -113,20 +113,15 @@ func isRedactErrorCall(expr ast.Expr, redactionLocal string) bool {
 func fileHasNonImplRecordError(file *ast.File) bool {
 	implRanges := collectRecordErrorImplRanges(file)
 	found := false
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
-			return true
+			return
 		}
 		if posInRanges(call.Pos(), implRanges) {
-			return true
+			return
 		}
 		found = true
-		return false
 	})
 	return found
 }
@@ -136,16 +131,15 @@ func fileHasNonImplRecordError(file *ast.File) bool {
 // are start positions, odd indices are end positions.
 func collectRecordErrorImplRanges(file *ast.File) []token.Pos {
 	var ranges []token.Pos
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil || fn.Recv == nil || fn.Name == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Body == nil || fn.Recv == nil || fn.Name == nil {
+			return
 		}
 		if fn.Name.Name != "RecordError" {
-			continue
+			return
 		}
 		ranges = append(ranges, fn.Body.Lbrace, fn.Body.Rbrace)
-	}
+	})
 	return ranges
 }
 
@@ -164,29 +158,24 @@ func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []
 	redactionLocal := redactionLocalName(file)
 
 	var out []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
-			return true
+			return
 		}
 		// Bare `RecordError()` with no arg — only legal in tests; in prod
 		// code this is structurally wrong (RecordError requires error arg).
 		if len(call.Args) == 0 {
-			return true
+			return
 		}
 		if isRedactErrorCall(call.Args[0], redactionLocal) {
-			return true
+			return
 		}
 		line := fset.Position(call.Pos()).Line
 		out = append(out, fmt.Sprintf(
 			"%s:%d: span.RecordError(...) first arg must be redaction.RedactError(...) "+
 				"— hardcoded fail-closed redaction has no caller-side opt-out (ADR §8)",
 			rel, line))
-		return true
 	})
 	return out
 }

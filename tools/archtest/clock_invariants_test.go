@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
@@ -164,20 +165,22 @@ func collectClockRequiredCtors(pkgs []*packages.Package) map[string]clockRequire
 	return result
 }
 
-// callsWithClock reports whether any of the call arguments in args contains a
+// callsWithClock reports whether any of the call arguments in parent contains a
 // direct CallExpr whose callee's FullName matches withClockFullName.
-func callsWithClock(args []ast.Expr, info *types.Info, withClockFullName string) bool {
-	for _, arg := range args {
-		call, ok := arg.(*ast.CallExpr)
-		if !ok {
-			continue
-		}
-		fn := resolvedFunc(call.Fun, info)
-		if fn != nil && fn.FullName() == withClockFullName {
-			return true
-		}
+func callsWithClock(parent *ast.CallExpr, info *types.Info, withClockFullName string) bool {
+	found := false
+	for _, arg := range parent.Args {
+		scanner.EachNode[ast.CallExpr](arg, func(call *ast.CallExpr) {
+			if found {
+				return
+			}
+			fn := resolvedFunc(call.Fun, info)
+			if fn != nil && fn.FullName() == withClockFullName {
+				found = true
+			}
+		})
 	}
-	return false
+	return found
 }
 
 // resolvedFunc returns the *types.Func for a call expression's function
@@ -220,33 +223,29 @@ func scanClockCallsiteAST(
 	var out []string
 	seen := map[string]bool{}
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		callee := resolvedFunc(call.Fun, info)
 		if callee == nil {
-			return true
+			return
 		}
 		ctor, isCtor := ctors[callee.FullName()]
 		if !isCtor {
-			return true
+			return
 		}
 		// Only flag calls that have at least one option argument (variadic slice
 		// non-empty). A bare NewXxx() with zero options has no WithXxx at all,
 		// which may be intentional (e.g. constructor with zero required options).
 		// We only flag the case where options ARE passed but WithClock is absent.
 		if len(call.Args) == 0 {
-			return true
+			return
 		}
-		if callsWithClock(call.Args, info, ctor.withClockFullName) {
-			return true
+		if callsWithClock(call, info, ctor.withClockFullName) {
+			return
 		}
 		// Check for explicit exemption via allow-marker on the closing-paren line.
 		closingLine := fset.Position(call.Rparen).Line
 		if allowedLines[closingLine] {
-			return true
+			return
 		}
 		line := fset.Position(call.Pos()).Line
 		key := fmt.Sprintf("%s:%d:%s", rel, line, callee.Name())
@@ -258,7 +257,6 @@ func scanClockCallsiteAST(
 					"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
 				rel, line, callee.FullName()))
 		}
-		return true
 	})
 
 	sort.Strings(out)
@@ -295,7 +293,7 @@ func TestClockInjectionCallsite(t *testing.T) {
 	patterns := prodscan.PatternsExtended(root)
 
 	// Load with tests=true so *_test.go files are included in Syntax.
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -589,7 +587,7 @@ func TestKernelClockLeafFallback(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -668,21 +666,17 @@ func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info 
 				"parameter and validate via clock.MustHaveClock", rel, line))
 	}
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch e := n.(type) {
-		case *ast.SelectorExpr:
-			// Standard form: clock.Real / c.Real (alias).
-			if matchedKernelClockReal(info, e.Sel) {
-				record(e)
-				return false
-			}
-		case *ast.Ident:
-			// Dot-import form: `import . "…/kernel/clock"; Real()`.
-			if matchedKernelClockReal(info, e) {
-				record(e)
-			}
+	scanner.EachNode[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
+		// Standard form: clock.Real / c.Real (alias).
+		if matchedKernelClockReal(info, e.Sel) {
+			record(e)
 		}
-		return true
+	})
+	scanner.EachNode[ast.Ident](file, func(e *ast.Ident) {
+		// Dot-import form: `import . "…/kernel/clock"; Real()`.
+		if matchedKernelClockReal(info, e) {
+			record(e)
+		}
 	})
 
 	sort.Strings(out)
@@ -818,7 +812,7 @@ func TestKernelClockResetRelativeProd(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, false, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -877,39 +871,35 @@ func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, 
 	var out []string
 	seen := map[string]bool{}
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Reset" {
-			return true
+			return
 		}
 		if info == nil {
-			return true
+			return
 		}
 		fn, ok := info.ObjectOf(sel.Sel).(*types.Func)
 		if !ok || fn == nil {
-			return true
+			return
 		}
 		sig, ok := fn.Type().(*types.Signature)
 		if !ok {
-			return true
+			return
 		}
 		// Must be a method (has receiver).
 		if sig.Recv() == nil {
-			return true
+			return
 		}
 		// Signature: Reset(time.Duration) bool
 		if !isResetDurationBool(sig) {
-			return true
+			return
 		}
 		// Receiver type must also expose ResetAt(time.Time) bool — the
 		// structural marker for clock.Timer-like types.
 		recvType := sig.Recv().Type()
 		if !typeHasResetAt(recvType) {
-			return true
+			return
 		}
 		line := fset.Position(call.Pos()).Line
 		key := fmt.Sprintf("%s:%d", rel, line)
@@ -921,7 +911,6 @@ func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, 
 					"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
 				rel, line))
 		}
-		return false
 	})
 
 	sort.Strings(out)
@@ -1136,7 +1125,7 @@ func TestProdClockInjection(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -1215,24 +1204,20 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 			rel, line, name, forbiddenTimeFns[name]))
 	}
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch e := n.(type) {
-		case *ast.SelectorExpr:
-			// Standard form: time.Now, t.Now (alias), pkg.Now (any pkg).
-			// Type info on .Sel resolves the actual function regardless of
-			// the receiver identifier name.
-			if name, ok := matchedTimeFn(info, e.Sel); ok {
-				record(e, name)
-				return false // do not descend into the resolved children
-			}
-		case *ast.Ident:
-			// Dot-import form: `import . "time"; Now()`. The Ident is the
-			// call function reference itself — no SelectorExpr surrounds it.
-			if name, ok := matchedTimeFn(info, e); ok {
-				record(e, name)
-			}
+	scanner.EachNode[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
+		// Standard form: time.Now, t.Now (alias), pkg.Now (any pkg).
+		// Type info on .Sel resolves the actual function regardless of
+		// the receiver identifier name.
+		if name, ok := matchedTimeFn(info, e.Sel); ok {
+			record(e, name)
 		}
-		return true
+	})
+	scanner.EachNode[ast.Ident](file, func(e *ast.Ident) {
+		// Dot-import form: `import . "time"; Now()`. The Ident is the
+		// call function reference itself — no SelectorExpr surrounds it.
+		if name, ok := matchedTimeFn(info, e); ok {
+			record(e, name)
+		}
 	})
 
 	sort.Strings(out)

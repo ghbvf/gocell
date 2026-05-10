@@ -41,6 +41,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
@@ -167,22 +168,17 @@ func scanGooseSessionLockerFile(
 ) []gooseLockerViolation {
 	var out []gooseLockerViolation
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isGooseFuncCall(info, call, gooseImportPath, "NewProvider") {
-			return true
+			return
 		}
 		if hasGooseFuncArg(info, call.Args, gooseImportPath, "WithSessionLocker") {
-			return true
+			return
 		}
 		out = append(out, gooseLockerViolation{
 			rel:  rel,
 			line: fset.Position(call.Pos()).Line,
 		})
-		return true
 	})
 	return out
 }
@@ -200,8 +196,10 @@ func isGooseFuncCall(info *types.Info, call *ast.CallExpr, gooseImportPath, func
 // hasGooseFuncArg reports whether any direct arg in args is a call to
 // gooseImportPath.funcName.
 func hasGooseFuncArg(info *types.Info, args []ast.Expr, gooseImportPath, funcName string) bool {
-	for _, arg := range args {
-		argCall, ok := arg.(*ast.CallExpr)
+	// Paired index iteration: only direct args (immediate children of args)
+	// are checked, not arbitrarily nested CallExprs inside an arg's subtree.
+	for i := range args {
+		argCall, ok := args[i].(*ast.CallExpr)
 		if !ok {
 			continue
 		}

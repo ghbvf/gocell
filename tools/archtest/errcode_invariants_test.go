@@ -242,13 +242,11 @@ func findErrcodeErrorLiterals(path string) ([]int, error) {
 	}
 
 	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok || !isErrcodeErrorType(lit.Type, errcodeNames) {
-			return true
+	scanner.EachNode[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+		if !isErrcodeErrorType(lit.Type, errcodeNames) {
+			return
 		}
 		lines = append(lines, fset.Position(lit.Pos()).Line)
-		return true
 	})
 	return lines, nil
 }
@@ -361,28 +359,23 @@ func scanErrcodeMessageAST(
 	info *types.Info,
 ) []string {
 	var out []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		callee, ok := resolveGatedCallee(call, info)
 		if !ok {
-			return true
+			return
 		}
 		if len(call.Args) <= callee.messageArgIndex {
-			return true
+			return
 		}
 		msgArg := call.Args[callee.messageArgIndex]
 		if isAcceptableMessageExpr(msgArg, info) {
-			return true
+			return
 		}
 		line := fset.Position(call.Pos()).Line
 		out = append(out, fmt.Sprintf(
 			"%s:%d: %s(...) message must be a const literal (got %T) "+
 				"— move runtime data to WithDetails(slog.Attr) or WithInternal",
 			rel, line, callee.displayName, msgArg))
-		return true
 	})
 	return out
 }
@@ -856,23 +849,22 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	var violations []errorFirstViolation
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
 		}
 		if isInitFunc(fd) {
-			continue
+			return
 		}
 		if strings.HasPrefix(fd.Name.Name, "Must") {
-			continue
+			return
 		}
 		if signatureReturnsError(fd.Type.Results) {
-			continue
+			return
 		}
 		whitelistKey := rel + "::" + fd.Name.Name
 		if _, whitelisted := architecturalPanicWhitelist[whitelistKey]; whitelisted {
-			continue
+			return
 		}
 		findPanicCalls(fd.Body, func(callPos token.Pos) {
 			violations = append(violations, errorFirstViolation{
@@ -882,7 +874,7 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 				Reason:   "function does not return error but contains panic()",
 			})
 		})
-	}
+	})
 	return violations
 }
 
@@ -918,10 +910,9 @@ func scanTypedNilGuardsInPackage(pkg *packages.Package, enforced map[string]stri
 
 func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.File, rel string) []errorFirstViolation {
 	var violations []errorFirstViolation
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil || !isErrorFirstConstructor(fd) {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Body == nil || !isErrorFirstConstructor(fd) {
+			return
 		}
 		for _, param := range nillableDependencyParams(info, fd) {
 			if hasNilGuard(fd.Body, param.name, param.kind) {
@@ -934,7 +925,7 @@ func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.F
 				Reason:   "nil-able dependency " + param.name + " is not guarded at construction time",
 			})
 		}
-	}
+	})
 	return violations
 }
 
@@ -1035,22 +1026,17 @@ func nillableDependencyParams(info *types.Info, fd *ast.FuncDecl) []paramRef {
 // constructor's outer fail-fast contract.
 func hasNilGuard(body *ast.BlockStmt, paramName string, kind paramKind) bool {
 	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
+	scanner.EachNode[ast.IfStmt](body, func(ifStmt *ast.IfStmt) {
 		if found {
-			return false
-		}
-		ifStmt, ok := n.(*ast.IfStmt)
-		if !ok {
-			return true
+			return
 		}
 		if !condMatchesNilCheck(ifStmt.Cond, paramName, kind) {
-			return true
+			return
 		}
 		if !thenReturnsOrAssigns(ifStmt.Body, paramName) {
-			return true
+			return
 		}
 		found = true
-		return false
 	})
 	return found
 }
@@ -1131,30 +1117,43 @@ func isValidationIsNilInterfaceCall(call *ast.CallExpr, paramName string) bool {
 
 // thenReturnsOrAssigns returns true if body contains a top-level (non-FuncLit)
 // ReturnStmt or an AssignStmt whose LHS includes paramName (defaulting). The
-// FuncLit stop-descend prevents `if cond { go func() { return }() }` from
+// FuncLit exclusion prevents `if cond { go func() { return }() }` from
 // satisfying the constructor's outer contract.
 func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
-			return false
-		}
-		switch s := n.(type) {
-		case *ast.ReturnStmt:
-			found = true
-			return false
-		case *ast.AssignStmt:
-			for _, lhs := range s.Lhs {
-				if isIdentNamed(lhs, paramName) {
-					found = true
-					return false
-				}
+	// Collect pos ranges of all FuncLit nodes so we can skip nodes inside them.
+	type posRange struct{ lo, hi token.Pos }
+	var funcLitRanges []posRange
+	scanner.EachNode[ast.FuncLit](body, func(fl *ast.FuncLit) {
+		funcLitRanges = append(funcLitRanges, posRange{fl.Pos(), fl.End()})
+	})
+	inFuncLit := func(pos token.Pos) bool {
+		for _, r := range funcLitRanges {
+			if pos >= r.lo && pos < r.hi {
+				return true
 			}
 		}
+		return false
+	}
+
+	found := false
+	scanner.EachNode[ast.ReturnStmt](body, func(s *ast.ReturnStmt) {
+		if !found && !inFuncLit(s.Pos()) {
+			found = true
+		}
+	})
+	if found {
 		return true
+	}
+	scanner.EachNode[ast.AssignStmt](body, func(s *ast.AssignStmt) {
+		if found || inFuncLit(s.Pos()) {
+			return
+		}
+		for _, lhs := range s.Lhs {
+			if isIdentNamed(lhs, paramName) {
+				found = true
+				return
+			}
+		}
 	})
 	return found
 }
@@ -1208,19 +1207,14 @@ func isErrorIdent(expr ast.Expr) bool {
 // would shadow the built-in; we treat them the same as the built-in to keep
 // the rule conservative — there is no production reason to shadow `panic`.
 func findPanicCalls(body *ast.BlockStmt, onPanic func(token.Pos)) {
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
 		ident, ok := call.Fun.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if ident.Name == "panic" {
 			onPanic(call.Pos())
 		}
-		return true
 	})
 }
 
@@ -1321,18 +1315,14 @@ func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []stri
 	}
 
 	var out []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "WithDetails" {
-			return true
+			return
 		}
 		x, ok := sel.X.(*ast.Ident)
 		if !ok || x.Name != local {
-			return true
+			return
 		}
 		for _, arg := range call.Args {
 			if argHasMapLiteral(arg) {
@@ -1352,7 +1342,6 @@ func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []stri
 					rel, line, name))
 			}
 		}
-		return true
 	})
 	return out
 }
@@ -1492,16 +1481,11 @@ func scanExportedErrorNewAST(
 	info *types.Info,
 ) []string {
 	var out []string
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.VAR {
-			continue
+	scanner.EachNode[ast.GenDecl](file, func(gen *ast.GenDecl) {
+		if gen.Tok != token.VAR {
+			return
 		}
-		for _, spec := range gen.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
 			// A ValueSpec with N names and 1 value is a multi-assign from a
 			// single function call; errors.New only returns one value, so
 			// such a form would not type-check. We still iterate Values
@@ -1521,8 +1505,8 @@ func scanExportedErrorNewAST(
 					"%s:%d: %s = errors.New(...) — migrate to errcode.New(code, message)",
 					rel, pos.Line, name.Name))
 			}
-		}
-	}
+		})
+	})
 	return out
 }
 

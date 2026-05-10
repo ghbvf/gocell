@@ -40,6 +40,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestIdempotency_LuaHashtag verifies the production code in
@@ -58,14 +60,13 @@ func TestIdempotency_LuaHashtag(t *testing.T) {
 	leaseOK := false
 	doneOK := false
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return true
+	scanner.EachNode[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return
 		}
 		ident, ok := assign.Lhs[0].(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		switch ident.Name {
 		case "leaseKey":
@@ -77,7 +78,6 @@ func TestIdempotency_LuaHashtag(t *testing.T) {
 				doneOK = true
 			}
 		}
-		return true
 	})
 
 	assert.True(t, leaseOK,
@@ -157,25 +157,21 @@ func TestIdempotency_MockDispatchSuffixMatch(t *testing.T) {
 	hasPrefixDone := false
 	hasPrefixLease := false
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		pkgIdent, ok := sel.X.(*ast.Ident)
 		if !ok || pkgIdent.Name != "strings" {
-			return true
+			return
 		}
 		if len(call.Args) != 2 {
-			return true
+			return
 		}
 		arg, ok := stringLit(call.Args[1])
 		if !ok {
-			return true
+			return
 		}
 		switch sel.Sel.Name {
 		case "HasSuffix":
@@ -193,7 +189,6 @@ func TestIdempotency_MockDispatchSuffixMatch(t *testing.T) {
 				hasPrefixLease = true
 			}
 		}
-		return true
 	})
 
 	assert.True(t, hasSuffixDone,

@@ -183,34 +183,29 @@ func findWithListenerNilAuthChain(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		// Must be a SelectorExpr "bootstrap.WithListener" or plain "WithListener".
 		switch fn := call.Fun.(type) {
 		case *ast.SelectorExpr:
 			if fn.Sel.Name != "WithListener" {
-				return true
+				return
 			}
 		case *ast.Ident:
 			if fn.Name != "WithListener" {
-				return true
+				return
 			}
 		default:
-			return true
+			return
 		}
 		// 3rd argument (index 2) must not be nil identifier.
 		if len(call.Args) < 3 {
-			return true
+			return
 		}
 		arg := call.Args[2]
 		ident, ok := arg.(*ast.Ident)
 		if ok && ident.Name == "nil" {
 			lines = append(lines, fset.Position(call.Lparen).Line)
 		}
-		return true
 	})
 	return lines, nil
 }
@@ -254,16 +249,14 @@ func findInternalListenerAuthNoneChain(path string) ([]int, error) {
 	}
 	var lines []int
 	facts := collectAuthNoneChainFacts(f)
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || !isWithListenerCall(call) || len(call.Args) < 3 {
-			return true
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+		if !isWithListenerCall(call) || len(call.Args) < 3 {
+			return
 		}
 		if !isInternalListenerRef(call.Args[0]) || !chainExprContainsAuthNone(call.Args[2], facts) {
-			return true
+			return
 		}
 		lines = append(lines, fset.Position(call.Lparen).Line)
-		return true
 	})
 	return lines, nil
 }
@@ -278,44 +271,35 @@ func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
 		vars:  make(map[string]bool),
 		funcs: make(map[string]bool),
 	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			return true
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
-		for _, stmt := range fn.Body.List {
-			ret, ok := stmt.(*ast.ReturnStmt)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
 			for _, result := range ret.Results {
 				if chainLiteralContainsAuthNone(result) {
 					facts.funcs[fn.Name.Name] = true
 				}
 			}
-		}
-		return true
+		})
 	})
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch stmt := n.(type) {
-		case *ast.ValueSpec:
-			for i, name := range stmt.Names {
-				if authNoneRHSAt(stmt.Values, i) {
-					facts.vars[name.Name] = true
-				}
-			}
-		case *ast.AssignStmt:
-			for i, lhs := range stmt.Lhs {
-				id, ok := lhs.(*ast.Ident)
-				if !ok {
-					continue
-				}
-				if authNoneRHSAt(stmt.Rhs, i) {
-					facts.vars[id.Name] = true
-				}
+	scanner.EachNode[ast.ValueSpec](f, func(stmt *ast.ValueSpec) {
+		for i, name := range stmt.Names {
+			if authNoneRHSAt(stmt.Values, i) {
+				facts.vars[name.Name] = true
 			}
 		}
-		return true
+	})
+	scanner.EachNode[ast.AssignStmt](f, func(stmt *ast.AssignStmt) {
+		for i := range stmt.Lhs {
+			id, ok := stmt.Lhs[i].(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if authNoneRHSAt(stmt.Rhs, i) {
+				facts.vars[id.Name] = true
+			}
+		}
 	})
 	return facts
 }
@@ -482,26 +466,21 @@ func secutilCallsValidateTLSEndpoint(src string) bool {
 		return false
 	}
 	found := false
-	ast.Inspect(f, func(n ast.Node) bool {
+	scanner.EachNode[ast.CallExpr](f, func(ce *ast.CallExpr) {
 		if found {
-			return false
-		}
-		ce, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		sel, ok := ce.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		x, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if x.Name == "secutil" && sel.Sel.Name == "ValidateTLSEndpoint" {
 			found = true
 		}
-		return true
 	})
 	return found
 }
@@ -569,25 +548,21 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
 		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return true
+			return
 		}
 		// LHS: opts.InsecureSkipVerify — SelectorExpr X=Ident("opts") Sel="InsecureSkipVerify"
 		sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		xIdent, ok := sel.X.(*ast.Ident)
 		if !ok || xIdent.Name != "opts" {
-			return true
+			return
 		}
 		if sel.Sel.Name != "InsecureSkipVerify" {
-			return true
+			return
 		}
 		// RHS: true — must be a pointer deref of AcceptOptions.InsecureSkipVerify via SelectorExpr
 		// or a direct BasicLit / Ident "true".
@@ -596,7 +571,6 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 				lines = append(lines, fset.Position(assign.Pos()).Line)
 			}
 		}
-		return true
 	})
 	return lines, nil
 }
@@ -853,19 +827,14 @@ func findUpgradeConfigWithoutAuthenticator(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		if !isUpgradeConfigType(cl.Type) {
-			return true
+			return
 		}
 		if hasKey(cl, "Authenticator") {
-			return true
+			return
 		}
 		lines = append(lines, fset.Position(cl.Pos()).Line)
-		return true
 	})
 	return lines, nil
 }
@@ -880,17 +849,18 @@ func isUpgradeConfigType(expr ast.Expr) bool {
 	return false
 }
 
+// hasKey reports whether cl has a TOP-LEVEL key field equal to key.
+// Direct-child paired-index iteration is intentional: scanner.EachNode would
+// recurse into nested composites (e.g. a `Other: Sub{Authenticator: ...}`
+// element), which would falsely report the outer literal as having the key.
 func hasKey(cl *ast.CompositeLit, key string) bool {
-	for _, el := range cl.Elts {
-		kv, ok := el.(*ast.KeyValueExpr)
+	for i := range cl.Elts {
+		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
 		ident, ok := kv.Key.(*ast.Ident)
-		if !ok {
-			continue
-		}
-		if ident.Name == key {
+		if ok && ident.Name == key {
 			return true
 		}
 	}
@@ -938,21 +908,16 @@ func findLegacyBroadcastCalls(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if sel.Sel == nil || sel.Sel.Name != "Broadcast" {
-			return true
+			return
 		}
 		// BroadcastFilter / BroadcastToSubject have different Sel.Name, so they pass.
 		lines = append(lines, fset.Position(call.Pos()).Line)
-		return true
 	})
 	return lines, nil
 }
@@ -986,38 +951,31 @@ func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
 	require.NoError(t, err)
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			return true
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
 		if allowedConnsMutationFuncs[fn.Name.Name] {
-			return true
+			return
 		}
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			call, ok := inner.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			ident, ok := call.Fun.(*ast.Ident)
 			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
-				return true
+				return
 			}
 			if len(call.Args) < 1 {
-				return true
+				return
 			}
 			sel, ok := call.Args[0].(*ast.SelectorExpr)
 			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
-				return true
+				return
 			}
 			line := fset.Position(call.Pos()).Line
 			violations = append(violations,
 				fmt.Sprintf("hub.go:%d: %s() must not call %s(h.conns,...) directly; "+
 					"use removeConnLocked() helper (or, for bulk drain, place inside shutdown). [%s]",
 					line, fn.Name.Name, ident.Name, secFailClosed09))
-			return true
 		})
-		return true
 	})
 
 	if len(violations) > 0 {
@@ -1060,34 +1018,27 @@ func (h *Hub) removeConnLocked(id string) {
 	require.NoError(t, err)
 
 	var found []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			return true
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
 		if allowedConnsMutationFuncs[fn.Name.Name] {
-			return true
+			return
 		}
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			call, ok := inner.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			ident, ok := call.Fun.(*ast.Ident)
 			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
-				return true
+				return
 			}
 			if len(call.Args) < 1 {
-				return true
+				return
 			}
 			sel, ok := call.Args[0].(*ast.SelectorExpr)
 			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
-				return true
+				return
 			}
 			found = append(found, fn.Name.Name)
-			return true
 		})
-		return true
 	})
 
 	require.Len(t, found, 1, "exactly one violation expected (badRemove)")
@@ -1122,34 +1073,27 @@ func (h *Hub) shutdown() {
 	require.NoError(t, err)
 
 	var found []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			return true
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
 		if allowedConnsMutationFuncs[fn.Name.Name] {
-			return true
+			return
 		}
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			call, ok := inner.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			ident, ok := call.Fun.(*ast.Ident)
 			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
-				return true
+				return
 			}
 			if len(call.Args) < 1 {
-				return true
+				return
 			}
 			sel, ok := call.Args[0].(*ast.SelectorExpr)
 			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
-				return true
+				return
 			}
 			found = append(found, fn.Name.Name)
-			return true
 		})
-		return true
 	})
 
 	assert.Empty(t, found, "removeConnLocked and shutdown should be allowed and produce no violations")

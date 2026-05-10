@@ -25,6 +25,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleNoTestServiceContextInProduction = "NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01"
@@ -103,27 +105,22 @@ func scanTestServiceContextCalls(path, rel string) ([]string, error) {
 	}
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if sel.Sel.Name != "TestServiceContext" {
-			return true
+			return
 		}
 		id, ok := sel.X.(*ast.Ident)
 		if !ok || id.Name != "auth" {
-			return true
+			return
 		}
 		pos := fset.Position(call.Pos())
 		violations = append(violations, fmt.Sprintf(
 			"%s:%d: auth.TestServiceContext called in non-test file — move to _test.go",
 			rel, pos.Line))
-		return true
 	})
 	return violations, nil
 }

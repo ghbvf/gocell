@@ -17,6 +17,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -147,58 +149,42 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 	ctxAliases := contextImportAliases(file)
 	var out []repoErrViolation
 
-	for _, decl := range file.Decls {
-		switch d := decl.(type) {
-		case *ast.GenDecl:
-			if d.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range d.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
+	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+		if bannedTypeNameRegex.MatchString(ts.Name.Name) {
+			out = append(out, repoErrViolation{
+				Rule:    ruleCtxCancelLocalImplBan,
+				File:    path,
+				Line:    fset.Position(ts.Pos()).Line,
+				Message: fmt.Sprintf("local ctx-cancel type %q (use pkg/ctxcancel.Wrap)", ts.Name.Name),
+			})
+		}
+	})
+	scanner.EachNode[ast.FuncDecl](file, func(d *ast.FuncDecl) {
+		if isThinCtxCancelWrapper(d) {
+			out = append(out, repoErrViolation{
+				Rule:    ruleCtxCancelLocalImplBan,
+				File:    path,
+				Line:    fset.Position(d.Pos()).Line,
+				Message: fmt.Sprintf("thin ctxcancel.Wrap forwarder %q (inline ctxcancel.Wrap at the callsite)", d.Name.Name),
+			})
+		}
+		if d.Body != nil {
+			scanner.EachNode[ast.CallExpr](d.Body, func(call *ast.CallExpr) {
+				if !isErrorsIsCall(call) || len(call.Args) < 2 {
+					return
 				}
-				if bannedTypeNameRegex.MatchString(ts.Name.Name) {
-					out = append(out, repoErrViolation{
-						Rule:    ruleCtxCancelLocalImplBan,
-						File:    path,
-						Line:    fset.Position(ts.Pos()).Line,
-						Message: fmt.Sprintf("local ctx-cancel type %q (use pkg/ctxcancel.Wrap)", ts.Name.Name),
-					})
+				if !isContextCancelSelector(call.Args[1], ctxAliases) {
+					return
 				}
-			}
-		case *ast.FuncDecl:
-			if isThinCtxCancelWrapper(d) {
 				out = append(out, repoErrViolation{
 					Rule:    ruleCtxCancelLocalImplBan,
 					File:    path,
-					Line:    fset.Position(d.Pos()).Line,
-					Message: fmt.Sprintf("thin ctxcancel.Wrap forwarder %q (inline ctxcancel.Wrap at the callsite)", d.Name.Name),
+					Line:    fset.Position(call.Pos()).Line,
+					Message: "errors.Is(err, context.Canceled|DeadlineExceeded) — call pkg/ctxcancel.Wrap (it detects internally)",
 				})
-			}
-			if d.Body != nil {
-				ast.Inspect(d.Body, func(n ast.Node) bool {
-					call, ok := n.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					if !isErrorsIsCall(call) || len(call.Args) < 2 {
-						return true
-					}
-					if !isContextCancelSelector(call.Args[1], ctxAliases) {
-						return true
-					}
-					out = append(out, repoErrViolation{
-						Rule:    ruleCtxCancelLocalImplBan,
-						File:    path,
-						Line:    fset.Position(call.Pos()).Line,
-						Message: "errors.Is(err, context.Canceled|DeadlineExceeded) — call pkg/ctxcancel.Wrap (it detects internally)",
-					})
-					return true
-				})
-			}
+			})
 		}
-	}
+	})
 	return out
 }
 
@@ -566,17 +552,12 @@ func scanRepoLogKeyIDRedact(path string) ([]repoErrViolation, error) {
 func scanRepoLogKeyIDRedactAST(fset *token.FileSet, file *ast.File, path string) []repoErrViolation {
 	consts := buildStringConstResolver(file)
 	var out []repoErrViolation
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 		keyStart, ok := logCallKeyStart(call)
 		if !ok {
-			return true
+			return
 		}
 		out = append(out, scanLogAttrKeys(fset, path, call, keyStart, consts)...)
-		return true
 	})
 	return out
 }
@@ -689,16 +670,11 @@ type stringConstResolver map[string]string
 
 func buildStringConstResolver(file *ast.File) stringConstResolver {
 	m := stringConstResolver{}
-	for _, decl := range file.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
+	scanner.EachNode[ast.GenDecl](file, func(gd *ast.GenDecl) {
+		if gd.Tok != token.CONST {
+			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for i, name := range vs.Names {
 				if i >= len(vs.Values) {
 					continue
@@ -711,8 +687,8 @@ func buildStringConstResolver(file *ast.File) stringConstResolver {
 					m[name.Name] = s
 				}
 			}
-		}
-	}
+		})
+	})
 	return m
 }
 

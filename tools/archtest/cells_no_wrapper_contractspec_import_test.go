@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // migrationAllowlistCells lists cell directory-name segments that are still
@@ -137,14 +139,10 @@ func scanForWrapperSpecUsage(fset *token.FileSet, path, rel string) []string {
 	}
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
 		ident, ok2 := sel.X.(*ast.Ident)
 		if !ok2 || ident.Name != alias {
-			return true
+			return
 		}
 		switch sel.Sel.Name {
 		case "ContractSpec", "EventSpec":
@@ -154,7 +152,6 @@ func scanForWrapperSpecUsage(fset *token.FileSet, path, rel string) []string {
 				rel, pos.Line, alias, sel.Sel.Name,
 			))
 		}
-		return true
 	})
 	// Deduplicate (same expression may appear twice in AST traversal at different node kinds).
 	seen := make(map[string]bool, len(violations))

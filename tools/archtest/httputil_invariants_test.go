@@ -57,24 +57,22 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 		"writeErrcodeError":    true,
 	}
 
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || !targetFuncs[fn.Name.Name] {
-			continue
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if !targetFuncs[fn.Name.Name] {
+			return
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) < 1 {
-				return true
+		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			if len(call.Args) < 1 {
+				return
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			// Match errcode.New(...) calls only.
 			ident, ok := sel.X.(*ast.Ident)
 			if !ok || ident.Name != "errcode" || sel.Sel.Name != "New" {
-				return true
+				return
 			}
 			// First argument must be an errcode.KindXxx selector expression,
 			// not ecErr.Kind or any .Kind field access.
@@ -83,7 +81,7 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 			if !ok {
 				// First arg is not a selector — could be a variable. Only
 				// flag the specific anti-pattern of `.Kind` field access.
-				return true
+				return
 			}
 			// Detect the anti-pattern: <anything>.Kind
 			if argSel.Sel.Name == "Kind" {
@@ -97,16 +95,16 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 					pos, fn.Name.Name,
 					argSel.X.(*ast.Ident).Name+"."+argSel.Sel.Name,
 				)
-				return true
+				return
 			}
 			// Verify positive form: must start with "errcode.Kind".
 			argPkgIdent, ok := argSel.X.(*ast.Ident)
 			if !ok {
-				return true
+				return
 			}
 			argText := argPkgIdent.Name + "." + argSel.Sel.Name
 			if argPkgIdent.Name == "errcode" && strings.HasPrefix(argSel.Sel.Name, "Kind") {
-				return true // OK, normalized constant
+				return // OK, normalized constant
 			}
 			pos := fset.Position(call.Pos())
 			t.Errorf(
@@ -115,9 +113,8 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 					"must use an errcode.KindXxx constant.",
 				pos, fn.Name.Name, argText,
 			)
-			return true
 		})
-	}
+	})
 }
 
 // INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
@@ -142,35 +139,28 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	}
 
 	var log5xxFn *ast.FuncDecl
-	for _, decl := range f.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "log5xx" {
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if log5xxFn == nil && fn.Name.Name == "log5xx" {
 			log5xxFn = fn
-			break
 		}
-	}
+	})
 	if log5xxFn == nil {
 		t.Fatal("HTTPUTIL-5XX-LOG-REDACT-01: log5xx function not found in pkg/httputil/response.go")
 	}
 
 	found := false
-	ast.Inspect(log5xxFn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](log5xxFn.Body, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		ident, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if ident.Name == "redaction" && sel.Sel.Name == "RedactSlogAttr" {
 			found = true
-			return false
 		}
-		return true
 	})
 
 	if !found {
@@ -243,20 +233,16 @@ func collectExportedFuncs(t *testing.T, root, dirRel string) map[string]bool {
 	)
 	result := make(map[string]bool)
 	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
-		for _, decl := range fc.File.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-			name := fn.Name.Name
+		scanner.EachNode[ast.FuncDecl](fc.File, func(fn *ast.FuncDecl) {
 			if fn.Recv != nil {
 				// skip methods — only top-level functions
-				continue
+				return
 			}
+			name := fn.Name.Name
 			if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
 				result[name] = true
 			}
-		}
+		})
 	})
 	return result
 }

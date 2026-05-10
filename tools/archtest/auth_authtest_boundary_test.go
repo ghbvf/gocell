@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	scannerPkg "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestAuthAuthtestBoundary enforces three rules related to the removal of
@@ -47,8 +47,8 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 	require.NotEmpty(t, allGoFiles, "no .go files found — module root may be wrong")
 
 	// AUTH-AUTHTEST-A: ban auth.Authenticated() *call expressions* in all .go
-	// files. Detection is AST-based (go/parser → ast.Walk → ast.CallExpr with
-	// SelectorExpr Fun X.auth, Sel.Authenticated) so that comments, doc strings,
+	// files. Detection is AST-based (go/parser → scanner.EachNode[ast.CallExpr]
+	// with SelectorExpr Fun X.auth, Sel.Authenticated) so that comments, doc strings,
 	// commit-message-style log messages, and unrelated identical strings inside
 	// string literals are not misclassified as violations. Exclude tools/archtest
 	// itself (this file references the symbol in test names and probe content)
@@ -160,7 +160,7 @@ func collectGoFiles(root string) ([]string, error) {
 	// codegen output (generated/contracts/**) must also obey the boundary;
 	// otherwise a regenerated handler reintroducing auth.Authenticated() or
 	// importing runtime/auth/authtest would silently bypass the rule.
-	scope := scanner.ModuleScope(root, scanner.IncludeTests(), scanner.IncludeGenerated())
+	scope := scannerPkg.ModuleScope(root, scannerPkg.IncludeTests(), scannerPkg.IncludeGenerated())
 	all, err := scope.Files()
 	if err != nil {
 		return nil, err
@@ -220,23 +220,18 @@ func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scannerPkg.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		ident, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
 		if ident.Name == pkgIdent && sel.Sel.Name == selName {
 			lines = append(lines, fset.Position(call.Lparen).Line)
 		}
-		return true
 	})
 	return lines, nil
 }

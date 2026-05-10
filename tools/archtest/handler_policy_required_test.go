@@ -140,24 +140,20 @@ func scanForNilPolicyNewHandler(path, rel string) []string {
 	}
 
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if sel.Sel.Name != "NewHandler" {
-			return true
+			return
 		}
 		if len(call.Args) != 2 {
-			return true
+			return
 		}
 		ident, ok := call.Args[1].(*ast.Ident)
 		if !ok || ident.Name != "nil" {
-			return true
+			return
 		}
 		pkgAlias := ""
 		if id, ok := sel.X.(*ast.Ident); ok {
@@ -171,7 +167,6 @@ func scanForNilPolicyNewHandler(path, rel string) []string {
 				"auth.public/auth.clientsOnly/auth.serviceOwned in contract.yaml",
 			rel, pos.Line, pkgAlias,
 		))
-		return true
 	})
 	return violations
 }

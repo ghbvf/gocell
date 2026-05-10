@@ -146,10 +146,9 @@ func TestAuthPlan_NoLegacyPolicyStringLiterals(t *testing.T) {
 		if err != nil {
 			continue // unparseable; other tools will catch syntax errors
 		}
-		ast.Inspect(af, func(n ast.Node) bool {
-			bl, ok := n.(*ast.BasicLit)
-			if !ok || bl.Kind != token.STRING {
-				return true
+		scanner.EachNode[ast.BasicLit](af, func(bl *ast.BasicLit) {
+			if bl.Kind != token.STRING {
+				return
 			}
 			for _, forbidden := range forbiddenPolicyStrings {
 				// bl.Value is the raw quoted string (e.g. `"jwt"`).
@@ -161,7 +160,6 @@ func TestAuthPlan_NoLegacyPolicyStringLiterals(t *testing.T) {
 					})
 				}
 			}
-			return true
 		})
 	}
 
@@ -208,17 +206,10 @@ func TestAuthPlan_NoLegacyPolicySelectorExpressions(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		ast.Inspect(af, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
 			id, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if id.Name != "bootstrap" {
-				return true
+			if !ok || id.Name != "bootstrap" {
+				return
 			}
 			for _, forbidden := range forbiddenPolicySelectors {
 				if sel.Sel.Name == forbidden {
@@ -229,7 +220,6 @@ func TestAuthPlan_NoLegacyPolicySelectorExpressions(t *testing.T) {
 					})
 				}
 			}
-			return true
 		})
 	}
 
@@ -272,31 +262,29 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		ast.Inspect(af, func(n ast.Node) bool {
-			// Composite literal: cell.Policy{...}
-			if lit, ok := n.(*ast.CompositeLit); ok {
-				if sel, ok := lit.Type.(*ast.SelectorExpr); ok {
-					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
-						hits = append(hits, hit{
-							file: rel,
-							line: fset.Position(lit.Pos()).Line,
-							kind: "composite literal",
-						})
-					}
-				}
-				return true
+		scanner.EachNode[ast.CompositeLit](af, func(lit *ast.CompositeLit) {
+			sel, ok := lit.Type.(*ast.SelectorExpr)
+			if !ok {
+				return
 			}
-			// Selector expression used as a type: cell.Policy (non-composite, e.g. in var decl or param)
-			if sel, ok := n.(*ast.SelectorExpr); ok {
-				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
-					hits = append(hits, hit{
-						file: rel,
-						line: fset.Position(sel.Pos()).Line,
-						kind: "type reference",
-					})
-				}
+			id, ok := sel.X.(*ast.Ident)
+			if ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
+				hits = append(hits, hit{
+					file: rel,
+					line: fset.Position(lit.Pos()).Line,
+					kind: "composite literal",
+				})
 			}
-			return true
+		})
+		scanner.EachNode[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
+			id, ok := sel.X.(*ast.Ident)
+			if ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
+				hits = append(hits, hit{
+					file: rel,
+					line: fset.Position(sel.Pos()).Line,
+					kind: "type reference",
+				})
+			}
 		})
 	}
 
@@ -378,54 +366,50 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		ast.Inspect(af, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.CompositeLit:
-				// Composite literal: cell.AuthJWT{} / AuthJWT{...}
-				typeName := ""
-				switch t := node.Type.(type) {
-				case *ast.SelectorExpr:
-					if id, ok := t.X.(*ast.Ident); ok && id.Name == "cell" {
-						typeName = t.Sel.Name
-					}
-				case *ast.Ident:
-					typeName = t.Name
+		scanner.EachNode[ast.CompositeLit](af, func(node *ast.CompositeLit) {
+			// Composite literal: cell.AuthJWT{} / AuthJWT{...}
+			typeName := ""
+			switch t := node.Type.(type) {
+			case *ast.SelectorExpr:
+				if id, ok := t.X.(*ast.Ident); ok && id.Name == "cell" {
+					typeName = t.Sel.Name
 				}
-				for _, forbidden := range authPlanConstructorNames {
-					if typeName == forbidden {
-						hits = append(hits, hit{
-							file: rel,
-							line: fset.Position(node.Pos()).Line,
-							name: typeName,
-							kind: "composite literal",
-						})
-					}
-				}
-
-			case *ast.CallExpr:
-				// Constructor calls: cell.NewAuthJWT(...) / cell.NewAuthJWTFromAssembly(...)
-				// etc. These are SelectorExpr call expressions where the package is "cell".
-				sel, ok := node.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				pkg, ok := sel.X.(*ast.Ident)
-				if !ok || pkg.Name != "cell" {
-					return true
-				}
-				// Constructor naming convention: New<TypeName> or <TypeName>{} literal.
-				// Check for NewAuth* constructors.
-				name := sel.Sel.Name
-				if strings.HasPrefix(name, "NewAuth") {
+			case *ast.Ident:
+				typeName = t.Name
+			}
+			for _, forbidden := range authPlanConstructorNames {
+				if typeName == forbidden {
 					hits = append(hits, hit{
 						file: rel,
 						line: fset.Position(node.Pos()).Line,
-						name: name,
-						kind: "constructor call",
+						name: typeName,
+						kind: "composite literal",
 					})
 				}
 			}
-			return true
+		})
+		scanner.EachNode[ast.CallExpr](af, func(node *ast.CallExpr) {
+			// Constructor calls: cell.NewAuthJWT(...) / cell.NewAuthJWTFromAssembly(...)
+			// etc. These are SelectorExpr call expressions where the package is "cell".
+			sel, ok := node.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "cell" {
+				return
+			}
+			// Constructor naming convention: New<TypeName> or <TypeName>{} literal.
+			// Check for NewAuth* constructors.
+			name := sel.Sel.Name
+			if strings.HasPrefix(name, "NewAuth") {
+				hits = append(hits, hit{
+					file: rel,
+					line: fset.Position(node.Pos()).Line,
+					name: name,
+					kind: "constructor call",
+				})
+			}
 		})
 	}
 
@@ -461,15 +445,10 @@ var x = "jwt"
 	require.NoError(t, err)
 
 	var found bool
-	ast.Inspect(af, func(n ast.Node) bool {
-		bl, ok := n.(*ast.BasicLit)
-		if !ok || bl.Kind != token.STRING {
-			return true
-		}
-		if bl.Value == `"jwt"` {
+	scanner.EachNode[ast.BasicLit](af, func(bl *ast.BasicLit) {
+		if bl.Kind == token.STRING && bl.Value == `"jwt"` {
 			found = true
 		}
-		return true
 	})
 	assert.True(t, found, "fixture scanner must detect the literal \"jwt\"")
 }
@@ -485,16 +464,11 @@ var _ = bootstrap.PolicyJWT(nil)
 	require.NoError(t, err)
 
 	var found bool
-	ast.Inspect(af, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
 		id, ok := sel.X.(*ast.Ident)
 		if ok && id.Name == "bootstrap" && sel.Sel.Name == "PolicyJWT" {
 			found = true
 		}
-		return true
 	})
 	assert.True(t, found, "fixture scanner must detect bootstrap.PolicyJWT")
 }
@@ -510,20 +484,15 @@ var _ = cell.Policy{}
 	require.NoError(t, err)
 
 	var found bool
-	ast.Inspect(af, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CompositeLit](af, func(lit *ast.CompositeLit) {
 		sel, ok := lit.Type.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		id, ok := sel.X.(*ast.Ident)
 		if ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
 			found = true
 		}
-		return true
 	})
 	assert.True(t, found, "fixture scanner must detect cell.Policy{} composite literal")
 }

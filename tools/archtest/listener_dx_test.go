@@ -195,17 +195,12 @@ func oldListenerAPIIdentViolations(t *testing.T, root, path string) []string {
 	require.NoError(t, err)
 
 	var violations []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.Ident](file, func(id *ast.Ident) {
 		if _, forbidden := oldListenerAPIIdents[id.Name]; !forbidden {
-			return true
+			return
 		}
 		violations = append(violations, listenerDXViolation(root, path, fset.Position(id.Pos()).Line,
 			fmt.Sprintf("deleted listener option identifier %q", id.Name)))
-		return true
 	})
 	return violations
 }
@@ -217,18 +212,13 @@ func delegatedRouteFieldViolations(t *testing.T, root, path string) []string {
 	require.NoError(t, err)
 
 	var violations []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		kv, ok := n.(*ast.KeyValueExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.KeyValueExpr](file, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != "Delegated" {
-			return true
+			return
 		}
 		violations = append(violations, listenerDXViolation(root, path, fset.Position(key.Pos()).Line,
 			"Delegated key in composite literal"))
-		return true
 	})
 	return violations
 }
@@ -240,18 +230,13 @@ func forbiddenProductionSurfaceViolations(t *testing.T, root, path string) []str
 	require.NoError(t, err)
 
 	var violations []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.Ident](file, func(id *ast.Ident) {
 		for _, term := range productionForbiddenSurfaceTerms {
 			if strings.Contains(id.Name, term) {
 				violations = append(violations, listenerDXViolation(root, path, fset.Position(id.Pos()).Line,
 					fmt.Sprintf("production identifier contains deleted surface %q", term)))
 			}
 		}
-		return true
 	})
 	for _, group := range file.Comments {
 		for _, comment := range group.List {
@@ -274,38 +259,40 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
+	var result []string
+	found := false
+	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+		if found || ts.Name.Name != "RouteGroup" {
+			return
 		}
-		for _, spec := range gen.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "RouteGroup" {
+		found = true
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			result = []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup is no longer a struct")}
+			return
+		}
+		for _, field := range st.Fields.List {
+			if len(field.Names) != 1 || field.Names[0].Name != "Register" {
 				continue
 			}
-			st, ok := ts.Type.(*ast.StructType)
+			fn, ok := field.Type.(*ast.FuncType)
 			if !ok {
-				return []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup is no longer a struct")}
+				result = []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line, "RouteGroup.Register is not a func")}
+				return
 			}
-			for _, field := range st.Fields.List {
-				if len(field.Names) != 1 || field.Names[0].Name != "Register" {
-					continue
-				}
-				fn, ok := field.Type.(*ast.FuncType)
-				if !ok {
-					return []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line, "RouteGroup.Register is not a func")}
-				}
-				if !listenerDXFuncHasOneParam(fn, "RouteMux") || !listenerDXFuncReturnsOnlyError(fn) {
-					return []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line,
-						"RouteGroup.Register must be func(mux RouteMux) error")}
-				}
-				return nil
+			if !listenerDXFuncHasOneParam(fn, "RouteMux") || !listenerDXFuncReturnsOnlyError(fn) {
+				result = []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line,
+					"RouteGroup.Register must be func(mux RouteMux) error")}
+				return
 			}
-			return []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup.Register field missing")}
+			return
 		}
+		result = []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup.Register field missing")}
+	})
+	if !found {
+		return []string{listenerDXViolation(root, path, 1, "RouteGroup type missing")}
 	}
-	return []string{listenerDXViolation(root, path, 1, "RouteGroup type missing")}
+	return result
 }
 
 func authMountSignatureViolations(t *testing.T, root string) []string {
@@ -315,21 +302,26 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "Mount" {
-			continue
+	var result []string
+	found := false
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if found || fn.Name.Name != "Mount" {
+			return
 		}
+		found = true
 		if !listenerDXFuncHasParams(fn.Type, "cell.RouteHandler", "Route") {
-			return []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line,
+			result = []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line,
 				"auth.Mount must be func(mux cell.RouteHandler, r Route) error")}
+			return
 		}
 		if !listenerDXFuncReturnsOnlyError(fn.Type) {
-			return []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
+			result = []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
 		}
-		return nil
+	})
+	if !found {
+		return []string{listenerDXViolation(root, path, 1, "auth.Mount function missing")}
 	}
-	return []string{listenerDXViolation(root, path, 1, "auth.Mount function missing")}
+	return result
 }
 
 func listenerDXFuncHasOneParam(fn *ast.FuncType, wantType string) bool {

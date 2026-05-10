@@ -14,9 +14,12 @@
 // wired (i.e. the spec appears in a reg.RouteGroup call), it is removed from
 // the allowlist — the gate itself enforces this anti-forget rule.
 //
-// Detection: AST walk of all non-_test.go, non-generated/ production .go
-// files under the module, scanning *ast.CompositeLit nodes whose type is
-// wrapper.ContractSpec (by structural heuristic: has fields Path + ID).
+// Detection: type-aware via go/types — for every *ast.CompositeLit, the
+// rule resolves cl.Type via pkg.TypesInfo and matches only when the named
+// type's import path equals kernel/wrapper and the type name equals
+// ContractSpec. Replaces the prior `hasID && hasPath` heuristic that
+// false-positived on any struct sharing those field names (closes
+// PR445-FU finding F1).
 package archtest
 
 import (
@@ -24,16 +27,27 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
+	"go/types"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const ruleInternalContractClients01 = "INTERNAL-CONTRACT-CLIENTS-REQUIRED-01"
+
+// wrapperContractSpecImportPath is the canonical import path of the package
+// declaring ContractSpec. Derived at package init via reflect.TypeOf on
+// wrapper.ContractSpec — the import statement above is the single source
+// of truth, so a hardcoded-path typo (which silently fail-opened this rule
+// from PR #445 commit 876cca5b until this commit) is no longer expressible.
+var wrapperContractSpecImportPath = reflect.TypeOf(wrapper.ContractSpec{}).PkgPath()
 
 // awaitingRealCallerAllowlist holds spec IDs that are in transition:
 // the Clients field has not yet been set because Wave 3 has not landed.
@@ -44,44 +58,46 @@ var awaitingRealCallerAllowlist = map[string]bool{}
 // wrapper.ContractSpec composite literal with an /internal/v1/* Path
 // declares a non-empty Clients field.
 //
-// Note: this test FAILS (RED) until Wave 2 adds Clients to ContractSpec
-// and Wave 3 wires Clients on all internal contract literals.
+// Type-aware via typeseval.SharedResolver: only literals whose static type
+// resolves to wrapper.ContractSpec are inspected; structurally similar
+// types in unrelated packages are ignored.
 func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
 
+	resolver, err := typeseval.SharedResolver(root, false, nil,
+		"./runtime/...", "./cells/...", "./cmd/...", "./kernel/...", "./adapters/...")
+	require.NoError(t, err, "typeseval.SharedResolver")
+
 	var violations []string
-	var files []string
-
-	// Collect all production .go files under the module (excluding generated/).
-	searchDirs := []string{
-		filepath.Join(root, "runtime"),
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "cmd"),
-		filepath.Join(root, "kernel"),
-		filepath.Join(root, "adapters"),
-	}
-
-	for _, dir := range searchDirs {
-		got, err := findProductionGoFilesInDir(dir)
-		if os.IsNotExist(err) {
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
 			continue
 		}
-		if err != nil {
-			t.Fatalf("walking %s: %v", dir, err)
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			scanner.EachNode[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+				if !isContractSpecLit(cl, pkg.TypesInfo) {
+					return
+				}
+				pathVal := contractSpecStringField(cl, "Path")
+				if pathVal == "" || !strings.HasPrefix(pathVal, "/internal/v1/") {
+					return
+				}
+				idVal := contractSpecStringField(cl, "ID")
+				if awaitingRealCallerAllowlist[idVal] {
+					return
+				}
+				if !hasNonEmptyClientsField(cl) {
+					pos := pkg.Fset.Position(cl.Pos())
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: ContractSpec{ID:%q, Path:%q} has no Clients — "+
+							"internal contracts must declare caller allowlist",
+						rel, pos.Line, idVal, pathVal))
+				}
+			})
 		}
-		files = append(files, got...)
-	}
-	sort.Strings(files)
-
-	for _, f := range files {
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-
-		hits, err := scanContractSpecMissingClients(f, rel)
-		require.NoError(t, err)
-		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)
@@ -96,85 +112,46 @@ func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 	}
 }
 
-// scanContractSpecMissingClients parses a single .go file and returns
-// violation strings for wrapper.ContractSpec composite literals that have
-// an /internal/v1/* Path but no Clients field.
+// isContractSpecLit reports whether cl is a wrapper.ContractSpec composite
+// literal. Type-aware via go/types: cl.Type is resolved through pkg.TypesInfo
+// and matched against the named ContractSpec type in kernel/wrapper.
 //
-// Heuristic: a composite literal is treated as a ContractSpec candidate
-// when it contains both "Path" and "ID" key fields.
-func scanContractSpecMissingClients(path, rel string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
+// Fail-safe: returns false when cl, cl.Type, or info is nil — callers using
+// inline parser.ParseFile (no TypesInfo) will see false, which is the
+// conservative answer for a rule that inspects production code via
+// typeseval-loaded packages.
+func isContractSpecLit(cl *ast.CompositeLit, info *types.Info) bool {
+	if cl == nil || cl.Type == nil || info == nil {
+		return false
 	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+	tv, ok := info.Types[cl]
+	if !ok || tv.Type == nil {
+		return false
 	}
-
-	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		// Check if this looks like a ContractSpec by field names.
-		if !isContractSpecLit(cl) {
-			return true
-		}
-		// Extract Path value.
-		pathVal := contractSpecStringField(cl, "Path")
-		if pathVal == "" || !strings.HasPrefix(pathVal, "/internal/v1/") {
-			return true
-		}
-		// Extract ID value for allowlist check.
-		idVal := contractSpecStringField(cl, "ID")
-		if awaitingRealCallerAllowlist[idVal] {
-			return true
-		}
-		// Check whether Clients field is present and non-empty.
-		if !hasNonEmptyClientsField(cl) {
-			pos := fset.Position(cl.Pos())
-			violations = append(violations, fmt.Sprintf(
-				"%s:%d: ContractSpec{ID:%q, Path:%q} has no Clients — "+
-					"internal contracts must declare caller allowlist",
-				rel, pos.Line, idVal, pathVal))
-		}
-		return true
-	})
-	return violations, nil
+	named, ok := tv.Type.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	return obj.Pkg().Path() == wrapperContractSpecImportPath && obj.Name() == "ContractSpec"
 }
 
-// isContractSpecLit heuristically identifies a composite literal as a
-// wrapper.ContractSpec by checking for both "ID" and "Path" key fields.
-func isContractSpecLit(cl *ast.CompositeLit) bool {
-	hasID := false
-	hasPath := false
-	for _, elt := range cl.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
-		key, ok := kv.Key.(*ast.Ident)
-		if !ok {
-			continue
-		}
-		switch key.Name {
-		case "ID":
-			hasID = true
-		case "Path":
-			hasPath = true
-		}
-	}
-	return hasID && hasPath
-}
-
-// contractSpecStringField returns the string literal value of the named field
-// in a composite literal, or "" if absent or not a string literal.
+// contractSpecStringField returns the string literal value of the named
+// top-level field in cl, or "" if absent or not a string literal. Iterates
+// cl.Elts directly (paired-index direct-child semantics, not subtree
+// recursion) so a same-named field nested inside a sub-struct does not
+// pollute the outer literal's reading.
 func contractSpecStringField(cl *ast.CompositeLit, fieldName string) string {
-	for _, elt := range cl.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
+	// Paired-index iteration intentional: SCANNER-FRAMEWORK-USAGE-01 path B
+	// rejects `for _, e := range cl.Elts { e.(*ast.KeyValueExpr) }` because
+	// that form is structurally identical to a subtree walk for any reader
+	// reusing the pattern. paired-index `for i := range Y { Y[i].(...) }`
+	// signals direct-child intent unambiguously and is exempt from path B.
+	for i := range cl.Elts {
+		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
@@ -184,9 +161,8 @@ func contractSpecStringField(cl *ast.CompositeLit, fieldName string) string {
 		}
 		lit, ok := kv.Value.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
-			return ""
+			continue
 		}
-		// Strip surrounding quotes.
 		s := lit.Value
 		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 			return s[1 : len(s)-1]
@@ -196,11 +172,12 @@ func contractSpecStringField(cl *ast.CompositeLit, fieldName string) string {
 	return ""
 }
 
-// hasNonEmptyClientsField returns true if the composite literal has a
-// Clients field that is a non-empty slice literal.
+// hasNonEmptyClientsField returns true if cl declares a top-level Clients
+// field whose value is a non-empty composite literal. Paired-index
+// direct-child iteration (see contractSpecStringField for rationale).
 func hasNonEmptyClientsField(cl *ast.CompositeLit) bool {
-	for _, elt := range cl.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
+	for i := range cl.Elts {
+		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
@@ -208,12 +185,70 @@ func hasNonEmptyClientsField(cl *ast.CompositeLit) bool {
 		if !ok || key.Name != "Clients" {
 			continue
 		}
-		// Clients field exists — check it's a non-empty slice literal.
 		compLit, ok := kv.Value.(*ast.CompositeLit)
-		if !ok {
-			return false
+		if ok && len(compLit.Elts) > 0 {
+			return true
 		}
-		return len(compLit.Elts) > 0
 	}
 	return false
+}
+
+// TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01_NotContractSpecFalsePositive_Wave2_RED
+// pins down the false-positives of the prior `hasID && hasPath` heuristic.
+//
+// After Wave 2 (type-aware via *types.Info): the inline parser.ParseFile
+// path has no TypesInfo, so isContractSpecLit(cl, nil) returns false for
+// every CompositeLit. The fail-safe nil-info contract guarantees no
+// false-positive on inline-parsed sources. SubItem (different type, same
+// field names) and Outer (subtree-leak from the prior EachNode walk) both
+// stay unmatched.
+//
+// Wave 1 (heuristic + EachNode subtree): matched [SubItem Outer ContractSpec].
+// Wave 2 (type-aware + nil info): matched [].
+func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01_NotContractSpecFalsePositive_Wave2_RED(t *testing.T) {
+	t.Parallel()
+
+	src := `package fake
+
+type SubItem struct {
+	ID      string
+	Path    string
+	Clients []string
+}
+
+type ContractSpec struct {
+	ID      string
+	Path    string
+	Clients []string
+}
+
+type Outer struct {
+	Inner ContractSpec
+}
+
+var subItem = SubItem{ID: "a", Path: "/internal/v1/x", Clients: []string{"y"}}
+
+var outer = Outer{
+	Inner: ContractSpec{ID: "b", Path: "/internal/v1/y"},
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fake.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err, "parse inline fixture")
+
+	var matched []string
+	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+		if !isContractSpecLit(cl, nil) {
+			return
+		}
+		switch t := cl.Type.(type) {
+		case *ast.Ident:
+			matched = append(matched, t.Name)
+		default:
+			matched = append(matched, fmt.Sprintf("%T", t))
+		}
+	})
+
+	require.Empty(t, matched,
+		"isContractSpecLit must not match non-ContractSpec types or outer wrappers; got %v", matched)
 }

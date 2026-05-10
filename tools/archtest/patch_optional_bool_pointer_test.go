@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const patchOptionalBoolRule = "PATCH-OPTIONAL-BOOL-POINTER-01"
@@ -82,14 +83,13 @@ func TestPatchOptionalBoolPointer01(t *testing.T) {
 			continue
 		}
 
-		ast.Inspect(f, func(n ast.Node) bool {
-			ts, ok := n.(*ast.TypeSpec)
-			if !ok || ts.Name == nil || ts.Name.Name != "Request" {
-				return true
+		scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+			if ts.Name == nil || ts.Name.Name != "Request" {
+				return
 			}
 			st, ok := ts.Type.(*ast.StructType)
 			if !ok || st.Fields == nil {
-				return false
+				return
 			}
 
 			for _, field := range st.Fields.List {
@@ -119,7 +119,6 @@ func TestPatchOptionalBoolPointer01(t *testing.T) {
 					))
 				}
 			}
-			return false
 		})
 	}
 
@@ -146,14 +145,13 @@ func TestPatchOptionalBoolPointer01_NegativeFixture(t *testing.T) {
 	}
 
 	foundBool := false
-	ast.Inspect(f, func(n ast.Node) bool {
-		ts, ok := n.(*ast.TypeSpec)
-		if !ok || ts.Name == nil || ts.Name.Name != "Request" {
-			return true
+	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Name == nil || ts.Name.Name != "Request" {
+			return
 		}
 		st, ok := ts.Type.(*ast.StructType)
 		if !ok || st.Fields == nil {
-			return false
+			return
 		}
 		for _, field := range st.Fields.List {
 			if len(field.Names) > 0 && field.Names[0].Name == "Flag" {
@@ -162,7 +160,6 @@ func TestPatchOptionalBoolPointer01_NegativeFixture(t *testing.T) {
 				}
 			}
 		}
-		return false
 	})
 
 	if !foundBool {

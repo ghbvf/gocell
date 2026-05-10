@@ -219,38 +219,32 @@ var adapterReadyProbeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-
 func adapterCheckerNameViolations(pkg *packages.Package, rel string) []string {
 	var violations []string
 	for _, file := range pkg.Syntax {
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 {
-				continue
+		scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			if fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 {
+				return
 			}
 			recv := scanner.ReceiverTypeName(fn.Recv.List[0].Type)
 			if recv == "" || !ast.IsExported(recv) {
-				continue
+				return
 			}
 			for _, name := range checkerNamesFromFunc(pkg.TypesInfo, fn) {
 				if !adapterReadyProbeNamePattern.MatchString(name) {
 					violations = append(violations, rel+"."+recv+" Checkers probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
 				}
 			}
-		}
+		})
 	}
 	return violations
 }
 
 func checkerNamesFromFunc(info *types.Info, fn *ast.FuncDecl) []string {
 	var names []string
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		kv, ok := n.(*ast.KeyValueExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.KeyValueExpr](fn.Body, func(kv *ast.KeyValueExpr) {
 		tv, ok := info.Types[kv.Key]
 		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
-			return true
+			return
 		}
 		names = append(names, constant.StringVal(tv.Value))
-		return true
 	})
 	return names
 }
@@ -258,19 +252,17 @@ func checkerNamesFromFunc(info *types.Info, fn *ast.FuncDecl) []string {
 func healthCheckerCallNameViolations(pkg *packages.Package, rel string) []string {
 	var violations []string
 	for _, file := range pkg.Syntax {
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok || selectorName(call.Fun) != "WithHealthChecker" || len(call.Args) == 0 {
-				return true
+		scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+			if selectorName(call.Fun) != "WithHealthChecker" || len(call.Args) == 0 {
+				return
 			}
 			name, ok := constStringValue(pkg.TypesInfo, call.Args[0])
 			if !ok {
-				return true
+				return
 			}
 			if !adapterReadyProbeNamePattern.MatchString(name) {
 				violations = append(violations, rel+" bootstrap.WithHealthChecker probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
 			}
-			return true
 		})
 	}
 	return violations

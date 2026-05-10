@@ -70,7 +70,7 @@
 
 | 条目 | 当前 backlog 优先级 | AI-rebust 评级 | 真正应做的 |
 |---|---|---|---|
-| `PR430-FU-USAGE-01-TYPE-AWARE`（receiver method bypass）| P2/触发型 | 当前 Hard 但有边界（receiver method 类型识别需 packages.Load）| **升 P1 但不立即做**——packages.Load 性价比仍要等 Pass 模式重写成本可摊销；当前用 docstring 显式 known-limitation 应急 |
+| ~~`PR430-FU-USAGE-01-TYPE-AWARE`（receiver method bypass）~~| ~~P2/触发型~~ | ~~当前 Hard 但有边界~~ | **CLOSED — merged into PR-Φ** (refactor/552-archtest-eachnode-funnel)：packages.Load 入口由 PR-Φ 路径 B 强制引入后成本已 sunk，SCANNER-FRAMEWORK-USAGE-01 整规则一次性升 type-aware 顺手清。`forbiddenWalkRefs` 现走 `*types.Info`（package-level + receiver method 同时拦截）。 |
 | `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES`（迁移等价性 fixture 框架）| P3/触发型 | **Soft**（fixture 也 AI 可造假）| **撤回**——fixture 框架不解决 AI 漂移；改靠 review checklist + AI-rebust 升级累积消除 |
 | `PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01`（scope.go Files/contentFiles 双轨 + 注释/行为不一致）| P2/Cx2 | Medium（refactor 提升整洁度）| 保留 |
 | `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01`（5 case 漂移）| P1/Cx2 | — bug 修复无 AI-rebust 维度 | 保留 |
@@ -94,6 +94,7 @@
 | Wave 2 项 | 工时 | 与原计划关系 |
 |---|---|---|
 | **节点遍历漏斗（原 PR-Φ）** | 14-18h dev / 5-7h review | 保留（typed callback per node kind 是 AI-hard 范本）|
+| **PR-Φ-HARD-EACHNODE-WALKDEPTH-01**（PR-Φ 补遗） | 12-16h dev / 4-5h review | **本 PR-Φ (PR #445) 合并后立即立项**。`scanner.EachNode[N](root, fn)` 拆为 `EachInSubtree[N]` + `EachInChildren[N]`，删 `EachNode`；让 walk depth 在编译期成为 typed choice（违反不可表达 = Hard）。范围：283 调用站点 / 54 文件 audit + bulk-rename；高风险站点（CompositeLit/SwitchStmt/SelectStmt 内嵌 KeyValueExpr/CaseClause/CommClause 类）逐个语义审计。完成后删除 `eachnode.go` godoc 的 transitional Trap 段（PR #445 Wave 2 加入）。**关闭 PR445-FU 中三处用 paired-index 内联绕过的 Soft 残留**：contract_spec_clients_test.go (F1)、rmq_invariants_test.go SelectStmt/容器 (F3)、4ad2b4a6 commit 已提取的 outbox/security helpers。 |
 | **panic 单源 typed marker（原 PR-D' 重审）** | 7-10h dev / 3h review | **方案改造**：放弃"就地注释 ADR-approved"（Soft），改成 `panicregister.Approved("reason")` typed function 包装 panic（Hard）；同 PR 加 archtest 强制所有 `panic(...)` 必须包装 + 4 处 re-throw + 30+ Must* 改造 |
 
 ### Wave 3：AI-rebust 升级批（与 Wave 2 并行或之后）
@@ -112,6 +113,8 @@
 | **SERVICEOWNED-OWNERSHIP-GUARD-01** | `auth.serviceOwned` endpoint > 1 |
 | **B-FLOOR-FOLLOWUP §2.5/§4** | contract.yaml status ↔ adapter typed return 漂移事故首现 |
 | **AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE**（PR432-FU）| `hasFMT27AuthModeConflict` 被重新 inline 化 / schema-oracle 漂移 |
+| **GENERATED-SKIP-CROSS-RULE-INVARIANT-01**（PR445-FU F4 后续）| PR #445 合并后立项。archtest cross-test invariant：保证未来新规则若用 `typeseval.SharedResolver(...).Packages()` 后迭代文件路径，必须显式调 `typeseval.IsGeneratedRelPath` 或 explicit allowlist。当前唯一调用点是 `outbox_invariants_test.go` 的 OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01；第 2 处规则需要扫 generated 时立项加守卫。 |
+| **TYPESEVAL-BUILDTAGS-LEGACY-DIRECTIVE-01**（PR445-FU F2 后续）| 仓库出现 `// +build` 旧式 directive 时立项。当前 `TestKnownNonDefaultTagsCoverage` 仅 grep `//go:build`；扩 coverage 自检覆盖旧式 directive，避免单一 lint pass 同时漏 helper 集合的双源漂移。 |
 
 ---
 

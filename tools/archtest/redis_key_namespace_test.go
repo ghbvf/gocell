@@ -39,6 +39,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // redisConstructorSpec describes one expected constructor. file is relative
@@ -83,20 +85,20 @@ func TestRedisConstructorsRequireKeyNamespace(t *testing.T) {
 }
 
 func findRedisConstructorDecl(file *ast.File, name string) *ast.FuncDecl {
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
+	var found *ast.FuncDecl
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if found != nil {
+			return // first-match wins; EachNode has no break
 		}
 		if fn.Recv != nil {
 			// Only top-level (non-method) functions are constructors.
-			continue
+			return
 		}
 		if fn.Name.Name == name {
-			return fn
+			found = fn
 		}
-	}
-	return nil
+	})
+	return found
 }
 
 // assertConstructorTakesKeyNamespace verifies the parameter list contains a
@@ -166,9 +168,14 @@ func assertConstructorValidatesNamespace(t *testing.T, spec redisConstructorSpec
 	leading := fn.Body.List[:limit]
 
 	found := false
-	for _, stmt := range leading {
-		ifStmt, ok := stmt.(*ast.IfStmt)
-		if !ok || ifStmt.Init == nil {
+	// Paired index iteration over a sub-slice (leading): EachNode[ast.IfStmt]
+	// would over-match IfStmts deeper in fn.Body beyond the leading window.
+	for i := range leading {
+		ifStmt, ok := leading[i].(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		if ifStmt.Init == nil {
 			continue
 		}
 		assign, ok := ifStmt.Init.(*ast.AssignStmt)

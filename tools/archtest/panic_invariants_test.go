@@ -45,26 +45,22 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "Any" {
-				return true
+				return
 			}
 			ident, ok := sel.X.(*ast.Ident)
 			if !ok || ident.Name != "slog" {
-				return true
+				return
 			}
 			if len(call.Args) < 2 {
-				return true
+				return
 			}
 			// First arg must be string literal "panic".
 			lit, ok := call.Args[0].(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING || lit.Value != `"panic"` {
-				return true
+				return
 			}
 			// Second arg must be a call to redaction.RedactAny(...).
 			arg := call.Args[1]
@@ -75,7 +71,7 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 					Line:    fc.Fset.Position(call.Pos()).Line,
 					Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
 				})
-				return true
+				return
 			}
 			argSel, ok := argCall.Fun.(*ast.SelectorExpr)
 			if !ok || argSel.Sel.Name != "RedactAny" {
@@ -85,7 +81,6 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 					Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
 				})
 			}
-			return true
 		})
 	})
 	scanner.Report(t, "PANIC-REDACT-01", diags)
@@ -290,6 +285,15 @@ func scanRootForPanicRegisteredViolations(
 	return violations, usedWhitelist
 }
 
+// panicScopeEntry records the source range and classification of a function
+// scope (FuncDecl or FuncLit) within the file. The range [start, end) is the
+// body Lbrace..Rbrace so that panic CallExpr positions inside the body can be
+// matched via containment.
+type panicScopeEntry struct {
+	start, end token.Pos
+	scope      panicRegisteredScope
+}
+
 func scanPanicRegisteredAST(
 	fset *token.FileSet,
 	file *ast.File,
@@ -297,47 +301,77 @@ func scanPanicRegisteredAST(
 	whitelist map[string]string,
 	usedWhitelist map[string]bool,
 ) []panicRegisteredViolation {
-	var violations []panicRegisteredViolation
-	var scopes []panicRegisteredScope
-	var pushedScopes []bool
+	// Phase 1: collect all function-scope entries in pre-order (Preorder matches
+	// ast.Inspect traversal order, preserving FuncLit numbering).
+	var entries []panicScopeEntry
 	funcLitCount := 0
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		if n == nil {
-			if len(pushedScopes) == 0 {
-				return true
+	// innermostScopeNameAt returns the FuncName of the innermost scope
+	// containing position p at the point of the call (entries built so far).
+	innermostScopeNameAt := func(p token.Pos) string {
+		name := "<package>"
+		bestStart := token.NoPos
+		for _, e := range entries {
+			if p > e.start && p < e.end {
+				if !bestStart.IsValid() || e.start > bestStart {
+					bestStart = e.start
+					name = e.scope.FuncName
+				}
 			}
-			didPush := pushedScopes[len(pushedScopes)-1]
-			pushedScopes = pushedScopes[:len(pushedScopes)-1]
-			if didPush {
-				scopes = scopes[:len(scopes)-1]
-			}
-			return true
 		}
+		return name
+	}
 
-		didPush := false
-		switch node := n.(type) {
-		case *ast.FuncDecl:
-			funcName := panicRegisteredFuncName(node)
-			scopes = append(scopes, panicRegisteredScope{
+	scanner.EachNode[ast.FuncDecl](file, func(node *ast.FuncDecl) {
+		if node.Body == nil {
+			return
+		}
+		funcName := panicRegisteredFuncName(node)
+		entries = append(entries, panicScopeEntry{
+			start: node.Body.Lbrace,
+			end:   node.Body.Rbrace,
+			scope: panicRegisteredScope{
 				FuncName:     funcName,
 				AllowMust:    strings.HasPrefix(node.Name.Name, "Must"),
 				WhitelistKey: rel + "::" + funcName,
-			})
-			didPush = true
-		case *ast.FuncLit:
-			funcLitCount++
-			scopes = append(scopes, panicRegisteredScope{
-				FuncName: panicRegisteredFuncLiteralName(scopes, funcLitCount),
-			})
-			didPush = true
-		case *ast.CallExpr:
-			if isPanicCallExpr(node) {
-				violations = appendPanicRegisteredViolation(violations, fset, rel, node.Pos(), scopes, whitelist, usedWhitelist)
+			},
+		})
+	})
+	scanner.EachNode[ast.FuncLit](file, func(node *ast.FuncLit) {
+		if node.Body == nil {
+			return
+		}
+		funcLitCount++
+		parent := innermostScopeNameAt(node.Body.Lbrace)
+		litName := parent + ".func" + strconv.Itoa(funcLitCount)
+		entries = append(entries, panicScopeEntry{
+			start: node.Body.Lbrace,
+			end:   node.Body.Rbrace,
+			scope: panicRegisteredScope{
+				FuncName: litName,
+			},
+		})
+	})
+
+	// Phase 2: for each panic() call, find the innermost enclosing scope.
+	var violations []panicRegisteredViolation
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isPanicCallExpr(call) {
+			return
+		}
+		// Find innermost scope containing this panic.
+		scope := panicRegisteredScope{FuncName: "<package initializer>"}
+		bestStart := token.NoPos
+		for _, e := range entries {
+			p := call.Pos()
+			if p > e.start && p < e.end {
+				if !bestStart.IsValid() || e.start > bestStart {
+					bestStart = e.start
+					scope = e.scope
+				}
 			}
 		}
-		pushedScopes = append(pushedScopes, didPush)
-		return true
+		violations = appendPanicRegisteredViolation(violations, fset, rel, call.Pos(), []panicRegisteredScope{scope}, whitelist, usedWhitelist)
 	})
 	return violations
 }
@@ -370,14 +404,6 @@ func appendPanicRegisteredViolation(
 		FuncName: scope.FuncName,
 		Reason:   "panic() is neither in a Must* function nor registered in the architectural panic ADR",
 	})
-}
-
-func panicRegisteredFuncLiteralName(scopes []panicRegisteredScope, index int) string {
-	parent := "<package>"
-	if len(scopes) > 0 {
-		parent = scopes[len(scopes)-1].FuncName
-	}
-	return parent + ".func" + strconv.Itoa(index)
 }
 
 func isPanicCallExpr(call *ast.CallExpr) bool {

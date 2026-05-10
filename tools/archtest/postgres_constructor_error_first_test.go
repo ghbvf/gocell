@@ -41,18 +41,14 @@ func TestPGConstructorMustFree01(t *testing.T) {
 		if strings.HasSuffix(fc.AbsPath, "_test.go") {
 			return
 		}
-		for _, decl := range fc.File.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 			name := fd.Name.Name
 			// exported MustNew* at package level (no receiver)
 			if fd.Recv != nil {
-				continue
+				return
 			}
 			if !strings.HasPrefix(name, "MustNew") {
-				continue
+				return
 			}
 			pos := fc.Fset.Position(fd.Pos())
 			violations = append(violations, violation{
@@ -60,7 +56,7 @@ func TestPGConstructorMustFree01(t *testing.T) {
 				line: pos.Line,
 				name: name,
 			})
-		}
+		})
 	})
 
 	if len(violations) > 0 {

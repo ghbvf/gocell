@@ -41,11 +41,7 @@ func TestProvisionStateAndUserSourceBootstrapRemoved(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			ident, ok := n.(*ast.Ident)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.Ident](fc.File, func(ident *ast.Ident) {
 			for _, banned := range bannedProvisionIdentifiers {
 				if ident.Name == banned {
 					diags = append(diags, scanner.Diagnostic{
@@ -55,7 +51,6 @@ func TestProvisionStateAndUserSourceBootstrapRemoved(t *testing.T) {
 					})
 				}
 			}
-			return true
 		})
 	})
 

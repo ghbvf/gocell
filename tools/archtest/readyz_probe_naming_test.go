@@ -33,6 +33,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const readyzProbeNaming01 = "READYZ-PROBE-NAMING-01"
@@ -98,23 +100,19 @@ func findHyphenatedHealthProbeNames(path string) ([]probeNameHit, error) {
 		return nil, err
 	}
 	var hits []probeNameHit
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
 		// Match any selector call ending in .Health(...)
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Health" {
-			return true
+			return
 		}
 		// First argument must be a string literal.
 		if len(call.Args) < 1 {
-			return true
+			return
 		}
 		lit, ok := call.Args[0].(*ast.BasicLit)
 		if !ok || lit.Kind.String() != "STRING" {
-			return true
+			return
 		}
 		// Unquote: remove surrounding double quotes.
 		name := strings.Trim(lit.Value, `"`)
@@ -124,7 +122,6 @@ func findHyphenatedHealthProbeNames(path string) ([]probeNameHit, error) {
 				line: fset.Position(call.Pos()).Line,
 			})
 		}
-		return true
 	})
 	return hits, nil
 }

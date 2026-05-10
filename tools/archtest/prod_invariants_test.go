@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
@@ -97,35 +98,81 @@ func TestProdDurationConst(t *testing.T) {
 // for each top-level declaration that is not a package-level const block, it
 // inspects every sub-expression. An expression that (a) has static type
 // time.Duration and (b) whose subtree contains a BasicLit is a violation.
+//
+// Implementation: scanner.EachNode is preorder-only (no proceed-bool), so
+// we collect candidate hits across every concrete Expr kind that
+// isLiteralDurationExpr can recognize standalone (BinaryExpr/CallExpr/
+// UnaryExpr/ParenExpr/BasicLit), sort by start position, and drop any hit
+// fully contained inside an outer hit (outer-wins range dedup). This
+// preserves the "report only the outermost match" semantics — without the
+// dedup, `time.Duration(30)*time.Second` would be reported twice (the outer
+// BinaryExpr and the inner CallExpr both match).
 func scanProdDurationAST(
 	fset *token.FileSet,
 	file *ast.File,
 	rel string,
 	info *types.Info,
 ) []string {
+	type hit struct {
+		expr ast.Expr
+		pos  token.Pos
+		end  token.Pos
+	}
 	var violations []string
 
-	for _, decl := range file.Decls {
-		// Package-level const blocks are the unique compliant position.
-		if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
-			continue
-		}
-
-		ast.Inspect(decl, func(n ast.Node) bool {
-			expr, ok := n.(ast.Expr)
-			if !ok {
-				return true
-			}
+	checkExpr := func(root ast.Node) {
+		var hits []hit
+		consider := func(expr ast.Expr) {
 			if !exprIsTimeDuration(expr, info) {
-				return true
+				return
 			}
 			if !isLiteralDurationExpr(expr) {
-				return true
+				return
 			}
-			pos := fset.Position(expr.Pos())
-			violations = append(violations, fmt.Sprintf("%s:%d: %s", rel, pos.Line, formatDurationExpr(expr)))
-			return false
+			hits = append(hits, hit{expr: expr, pos: expr.Pos(), end: expr.End()})
+		}
+		// Cover every concrete Expr node kind that isLiteralDurationExpr can
+		// recognize: BasicLit (var x time.Duration = 5), BinaryExpr
+		// (5*time.Second), CallExpr (time.Duration(5)), UnaryExpr
+		// (-5*time.Second), ParenExpr ((5*time.Second)).
+		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		scanner.EachNode[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
+
+		// Outer-wins dedup: sort by start ascending, then drop any hit fully
+		// contained inside the most recent retained hit's [pos,end] range.
+		sort.Slice(hits, func(i, j int) bool {
+			if hits[i].pos != hits[j].pos {
+				return hits[i].pos < hits[j].pos
+			}
+			return hits[i].end > hits[j].end // wider range first when starts tie
 		})
+		var lastEnd token.Pos
+		for _, h := range hits {
+			if h.pos < lastEnd {
+				continue // contained inside a previously retained outer hit
+			}
+			pos := fset.Position(h.pos)
+			violations = append(violations, fmt.Sprintf("%s:%d: %s", rel, pos.Line, formatDurationExpr(h.expr)))
+			lastEnd = h.end
+		}
+	}
+
+	// Paired-index iteration: only top-level Decls are scanned; nested decls
+	// inside a func body / spec value belong to other passes.
+	for i := range file.Decls {
+		decl := file.Decls[i]
+		if gd, ok := decl.(*ast.GenDecl); ok {
+			if gd.Tok == token.CONST {
+				// Package-level const blocks are the unique compliant position — skip.
+				continue
+			}
+			checkExpr(gd)
+			continue
+		}
+		checkExpr(decl)
 	}
 
 	return violations
@@ -481,22 +528,57 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	f, err := parser.ParseFile(fset, "f.go", src, 0)
 	require.NoError(t, err)
 
+	// Outer-wins dedup mirrors scanProdDurationAST: collect candidate hits over
+	// all expr shapes (BinaryExpr, CallExpr, UnaryExpr, ParenExpr, BasicLit),
+	// drop any hit fully contained inside another. This count test does NOT
+	// gate on exprIsTimeDuration (no types.Info here), so the BasicLit pass
+	// would over-count integer literals everywhere — restrict to outer kinds
+	// that isLiteralDurationExpr can recognize standalone.
+	countInRoot := func(root ast.Node) int {
+		type hit struct{ pos, end token.Pos }
+		var hits []hit
+		consider := func(expr ast.Expr) {
+			if isLiteralDurationExpr(expr) {
+				hits = append(hits, hit{pos: expr.Pos(), end: expr.End()})
+			}
+		}
+		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		sort.Slice(hits, func(i, j int) bool {
+			if hits[i].pos != hits[j].pos {
+				return hits[i].pos < hits[j].pos
+			}
+			return hits[i].end > hits[j].end
+		})
+		n := 0
+		var lastEnd token.Pos
+		for _, h := range hits {
+			if h.pos < lastEnd {
+				continue
+			}
+			n++
+			lastEnd = h.end
+		}
+		return n
+	}
+
 	count := 0
-	for _, decl := range f.Decls {
-		if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+	// Paired-index iteration over file.Decls: avoids path B's `for _, X :=`
+	// + type-dispatch pattern. Semantics unchanged — only top-level decls
+	// contribute to the count (nested decls inside func bodies do not).
+	for i := range f.Decls {
+		decl := f.Decls[i]
+		if gd, ok := decl.(*ast.GenDecl); ok {
+			if gd.Tok == token.CONST {
+				// Package-level const blocks are the unique compliant position — skip.
+				continue
+			}
+			count += countInRoot(gd)
 			continue
 		}
-		ast.Inspect(decl, func(n ast.Node) bool {
-			expr, ok := n.(ast.Expr)
-			if !ok {
-				return true
-			}
-			if !isLiteralDurationExpr(expr) {
-				return true
-			}
-			count++
-			return false
-		})
+		count += countInRoot(decl)
 	}
 	return count
 }

@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // SESSION-PROTOCOL-COMPOSITION-ROOT-01: session.NewProtocol /
@@ -76,18 +78,14 @@ func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		ast.Inspect(af, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](af, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			pkg, ok := sel.X.(*ast.Ident)
 			if !ok || pkg.Name != "session" {
-				return true
+				return
 			}
 			if forbidden[sel.Sel.Name] {
 				hits = append(hits, hit{
@@ -96,7 +94,6 @@ func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
 					name: sel.Sel.Name,
 				})
 			}
-			return true
 		})
 	}
 

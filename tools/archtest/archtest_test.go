@@ -383,9 +383,11 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 			continue
 		}
 		for _, file := range pkg.Syntax {
-			for _, decl := range file.Decls {
-				switch d := decl.(type) {
-				case *ast.FuncDecl:
+			// Paired-index over file.Decls: top-level decls only; avoids path B's
+			// `for _, X :=` + type-dispatch pattern.
+			for i := range file.Decls {
+				decl := file.Decls[i]
+				if d, ok := decl.(*ast.FuncDecl); ok {
 					if !d.Name.IsExported() {
 						continue
 					}
@@ -407,10 +409,13 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 							Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported API %s", pkg.PkgPath, p, symbol),
 						})
 					}
-				case *ast.GenDecl:
-					for _, spec := range d.Specs {
-						switch s := spec.(type) {
-						case *ast.TypeSpec:
+					continue
+				}
+				if d, ok := decl.(*ast.GenDecl); ok {
+					// Paired-index over Specs: top-level specs only.
+					for j := range d.Specs {
+						spec := d.Specs[j]
+						if s, ok := spec.(*ast.TypeSpec); ok {
 							if !s.Name.IsExported() {
 								continue
 							}
@@ -428,7 +433,9 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 									Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported type %s", pkg.PkgPath, p, s.Name.Name),
 								})
 							}
-						case *ast.ValueSpec:
+							continue
+						}
+						if s, ok := spec.(*ast.ValueSpec); ok {
 							for _, name := range s.Names {
 								if !name.IsExported() {
 									continue

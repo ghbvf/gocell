@@ -77,9 +77,11 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 		f := fc.File
 		rel := fc.Rel
 
-		for _, decl := range f.Decls {
-			switch d := decl.(type) {
-			case *ast.FuncDecl:
+		// Paired-index over f.Decls: top-level decls only; avoids path B's
+		// `for _, X :=` + type-dispatch pattern.
+		for i := range f.Decls {
+			decl := f.Decls[i]
+			if d, ok := decl.(*ast.FuncDecl); ok {
 				if kernelMetadataWireSymbols[d.Name.Name] {
 					violations = append(violations, wireViolation{
 						File:   rel,
@@ -87,26 +89,32 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 						Symbol: d.Name.Name,
 					})
 				}
-			case *ast.GenDecl:
-				for _, spec := range d.Specs {
-					switch s := spec.(type) {
-					case *ast.TypeSpec:
-						if kernelMetadataWireSymbols[s.Name.Name] {
+				continue
+			}
+			d, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for j := range d.Specs {
+				spec := d.Specs[j]
+				if s, ok := spec.(*ast.TypeSpec); ok {
+					if kernelMetadataWireSymbols[s.Name.Name] {
+						violations = append(violations, wireViolation{
+							File:   rel,
+							Line:   fc.Fset.Position(s.Pos()).Line,
+							Symbol: s.Name.Name,
+						})
+					}
+					continue
+				}
+				if s, ok := spec.(*ast.ValueSpec); ok {
+					for _, ident := range s.Names {
+						if kernelMetadataWireSymbols[ident.Name] {
 							violations = append(violations, wireViolation{
 								File:   rel,
-								Line:   fc.Fset.Position(s.Pos()).Line,
-								Symbol: s.Name.Name,
+								Line:   fc.Fset.Position(ident.Pos()).Line,
+								Symbol: ident.Name,
 							})
-						}
-					case *ast.ValueSpec:
-						for _, ident := range s.Names {
-							if kernelMetadataWireSymbols[ident.Name] {
-								violations = append(violations, wireViolation{
-									File:   rel,
-									Line:   fc.Fset.Position(ident.Pos()).Line,
-									Symbol: ident.Name,
-								})
-							}
 						}
 					}
 				}

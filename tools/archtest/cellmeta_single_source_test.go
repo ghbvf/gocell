@@ -54,26 +54,16 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 	}
 	scope := scanner.DirsScope(root, []string{"kernel/cell"})
 	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
-		for _, decl := range fc.File.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.TYPE {
-				continue
+		scanner.EachNode[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
+			if forbidden[ts.Name.Name] {
+				t.Errorf(
+					"CELLMETA-SINGLE-SOURCE-01: %s declares type %s — "+
+						"moved to kernel/metadata (CellMeta / OwnerMeta / SchemaMeta / "+
+						"CellVerifyMeta / L0DepMeta); remove duplicate type",
+					fc.Rel, ts.Name.Name,
+				)
 			}
-			for _, spec := range gd.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-				if forbidden[ts.Name.Name] {
-					t.Errorf(
-						"CELLMETA-SINGLE-SOURCE-01: %s declares type %s — "+
-							"moved to kernel/metadata (CellMeta / OwnerMeta / SchemaMeta / "+
-							"CellVerifyMeta / L0DepMeta); remove duplicate type",
-						fc.Rel, ts.Name.Name,
-					)
-				}
-			}
-		}
+		})
 	})
 }
 
@@ -89,16 +79,14 @@ func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 	var found *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv != nil || fd.Name == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if found != nil || fd.Recv != nil || fd.Name == nil {
+			return
 		}
 		if fd.Name.Name == "NewBaseCell" {
 			found = fd
-			break
 		}
-	}
+	})
 	if found == nil {
 		t.Fatal("CELLMETA-SINGLE-SOURCE-02: NewBaseCell not found in kernel/cell/base.go")
 	}
@@ -125,24 +113,16 @@ func TestCellmetaSingleSource03_MetadataInterfaceReturn(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 	var cellIface *ast.InterfaceType
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			continue
+	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if cellIface != nil || ts.Name.Name != "Cell" {
+			return
 		}
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "Cell" {
-				continue
-			}
-			iface, ok := ts.Type.(*ast.InterfaceType)
-			if !ok {
-				continue
-			}
-			cellIface = iface
-			break
+		iface, ok := ts.Type.(*ast.InterfaceType)
+		if !ok {
+			return
 		}
-	}
+		cellIface = iface
+	})
 	if cellIface == nil {
 		t.Fatal("CELLMETA-SINGLE-SOURCE-03: Cell interface not found in kernel/cell/interfaces.go")
 	}

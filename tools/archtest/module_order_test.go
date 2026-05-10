@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleModuleOrderConfigCoreFirst01 = "MODULE-ORDER-CONFIGCORE-FIRST-01"
@@ -52,20 +54,17 @@ func TestCorebundleGeneratedMainDoesNotInlineModules(t *testing.T) {
 
 	var buildAppCalls []token.Position
 	var runCorebundleCall *ast.CallExpr
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
+	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+		ident, ok := call.Fun.(*ast.Ident)
 		if !ok {
-			return true
+			return
 		}
-		if ident, ok := call.Fun.(*ast.Ident); ok {
-			switch ident.Name {
-			case "BuildApp":
-				buildAppCalls = append(buildAppCalls, fset.Position(call.Pos()))
-			case "runCorebundle":
-				runCorebundleCall = call
-			}
+		switch ident.Name {
+		case "BuildApp":
+			buildAppCalls = append(buildAppCalls, fset.Position(call.Pos()))
+		case "runCorebundle":
+			runCorebundleCall = call
 		}
-		return true
 	})
 
 	assert.Empty(t, buildAppCalls, "generated main.go must not inline BuildApp module literals")

@@ -81,22 +81,18 @@ func checkVisitBufferThenCommit(t *testing.T, path string) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || len(fn.Recv.List) == 0 {
-			continue
+			return
 		}
 		if !strings.HasPrefix(fn.Name.Name, "visit") {
-			continue
+			return
 		}
 		// Only check success body-bearing variants: receiver type ends in JSONResponse.
 		// Use scanner.ReceiverTypeName which accepts ast.Expr.
 		recvIdent := scanner.ReceiverTypeName(fn.Recv.List[0].Type)
 		if !strings.HasSuffix(recvIdent, "JSONResponse") {
-			continue
+			return
 		}
 		if !hasBufferThenCommit(fn.Body) {
 			pos := fset.Position(fn.Pos())
@@ -105,7 +101,7 @@ func checkVisitBufferThenCommit(t *testing.T, path string) {
 				"then WriteHeader, then buf.WriteTo(w)",
 				pos, recvIdent, fn.Name.Name)
 		}
-	}
+	})
 }
 
 // hasBufferThenCommit returns true iff the function body contains, in source
@@ -118,45 +114,40 @@ func hasBufferThenCommit(body *ast.BlockStmt) bool {
 	var encodePos, writeHeaderPos, writeToPos token.Pos
 	var hasBuffer bool
 
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.GenDecl:
-			// detect: var <name> bytes.Buffer
-			for _, spec := range x.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				if isBytesBufferType(vs.Type) {
-					hasBuffer = true
-				}
+	// detect: var <name> bytes.Buffer
+	scanner.EachNode[ast.GenDecl](body, func(x *ast.GenDecl) {
+		scanner.EachNode[ast.ValueSpec](x, func(vs *ast.ValueSpec) {
+			if isBytesBufferType(vs.Type) {
+				hasBuffer = true
 			}
-		case *ast.AssignStmt:
-			// detect: <name> := bytes.Buffer{}
-			for _, rhs := range x.Rhs {
-				if isBytesBufferLiteral(rhs) {
-					hasBuffer = true
-				}
-			}
-		case *ast.CallExpr:
-			sel, ok := x.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			switch sel.Sel.Name {
-			case "Encode":
-				// Track the latest Encode position (there should be only one,
-				// but take last to be safe).
-				if encodePos == 0 || x.Pos() > encodePos {
-					encodePos = x.Pos()
-				}
-			case "WriteHeader":
-				writeHeaderPos = x.Pos()
-			case "WriteTo":
-				writeToPos = x.Pos()
+		})
+	})
+	// detect: <name> := bytes.Buffer{}
+	scanner.EachNode[ast.AssignStmt](body, func(x *ast.AssignStmt) {
+		for _, rhs := range x.Rhs {
+			if isBytesBufferLiteral(rhs) {
+				hasBuffer = true
 			}
 		}
-		return true
+	})
+	// detect Encode / WriteHeader / WriteTo call positions.
+	scanner.EachNode[ast.CallExpr](body, func(x *ast.CallExpr) {
+		sel, ok := x.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		switch sel.Sel.Name {
+		case "Encode":
+			// Track the latest Encode position (there should be only one,
+			// but take last to be safe).
+			if encodePos == 0 || x.Pos() > encodePos {
+				encodePos = x.Pos()
+			}
+		case "WriteHeader":
+			writeHeaderPos = x.Pos()
+		case "WriteTo":
+			writeToPos = x.Pos()
+		}
 	})
 
 	if !hasBuffer {

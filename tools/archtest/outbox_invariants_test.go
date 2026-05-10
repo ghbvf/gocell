@@ -202,22 +202,18 @@ func checkCellOutboxOptionFile(root, path string) ([]outboxCellViolation, error)
 	rel = filepath.ToSlash(rel)
 
 	var violations []outboxCellViolation
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Recv != nil {
 			// Method on a receiver; the rule targets top-level Option
 			// factory functions only (no receiver).
-			continue
+			return
 		}
 		name := fn.Name.Name
 		if name != outboxCellForbiddenOptionPublisher && name != outboxCellForbiddenOptionWriter {
-			continue
+			return
 		}
 		if !fn.Name.IsExported() {
-			continue
+			return
 		}
 		violations = append(violations, outboxCellViolation{
 			Rule:    outboxCellRuleRawOption,
@@ -225,7 +221,7 @@ func checkCellOutboxOptionFile(root, path string) ([]outboxCellViolation, error)
 			Line:    fset.Position(fn.Pos()).Line,
 			Message: fmt.Sprintf("Cell must not export Option %q; use WithEmitter or WithOutboxDeps instead", name),
 		})
-	}
+	})
 	return violations, nil
 }
 
@@ -326,21 +322,20 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 		path := fc.AbsPath
 		_ = path
 		hits++
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			assign, ok := n.(*ast.AssignStmt)
-			if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
-				return true
+		scanner.EachNode[ast.AssignStmt](fc.File, func(assign *ast.AssignStmt) {
+			if len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
+				return
 			}
 			call, ok := assign.Rhs[0].(*ast.CallExpr)
 			if !ok {
-				return true
+				return
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel == nil {
-				return true
+				return
 			}
 			if !wantTargets[sel.Sel.Name] {
-				return true
+				return
 			}
 			if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name == "_" {
 				pos := fc.Fset.Position(assign.Pos())
@@ -349,7 +344,6 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 					"on false (B2-A-05 stale-lease guard)",
 					fc.Rel, pos.Line, sel.Sel.Name)
 			}
-			return true
 		})
 	})
 	if hits == 0 {
@@ -382,29 +376,23 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 	// the helper call.
 	chunkCallsEncoder := false
 
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil || fn.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if fn.Recv == nil || fn.Body == nil {
+			return
 		}
 		_, want := required[fn.Name.Name]
 		if !want && fn.Name.Name != "writeBatchChunk" {
-			continue
+			return
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			id, idOK := n.(*ast.Ident)
-			if !idOK {
-				return true
-			}
+		scanner.EachNode[ast.Ident](fn.Body, func(id *ast.Ident) {
 			if want && id.Name == "MaxMetadataBytes" {
 				required[fn.Name.Name] = true
 			}
 			if fn.Name.Name == "writeBatchChunk" && id.Name == "encodeBatchEntry" {
 				chunkCallsEncoder = true
 			}
-			return true
 		})
-	}
+	})
 	for name, ok := range required {
 		if !ok {
 			t.Errorf("OUTBOX-METADATA-MAX-BYTES-01: %s/outbox_writer.go: "+
@@ -431,16 +419,11 @@ func readSQLConstants(t *testing.T, path string) map[string]string {
 	}
 
 	consts := make(map[string]string)
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
+	scanner.EachNode[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if gd.Tok != token.CONST {
+			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for i, name := range vs.Names {
 				if i >= len(vs.Values) {
 					continue
@@ -455,8 +438,8 @@ func readSQLConstants(t *testing.T, path string) map[string]string {
 				}
 				consts[name.Name] = unquoted
 			}
-		}
-	}
+		})
+	})
 	return consts
 }
 
@@ -503,23 +486,18 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 
 	const constName = "MaxPayloadBytes"
 	var declared bool
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
+	scanner.EachNode[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if gd.Tok != token.CONST {
+			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		scanner.EachNode[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for _, name := range vs.Names {
 				if name.Name == constName {
 					declared = true
 				}
 			}
-		}
-	}
+		})
+	})
 	if !declared {
 		t.Errorf(
 			"OUTBOX-PAYLOAD-SIZE-01-A: kernel/outbox/outbox.go must declare const %s "+
@@ -530,22 +508,20 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 
 	// Walk Entry.Validate body for any reference to MaxPayloadBytes.
 	var validate *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if validate != nil {
+			return
 		}
 		if fd.Name.Name != "Validate" || fd.Recv == nil || len(fd.Recv.List) != 1 {
-			continue
+			return
 		}
 		// Recv must be `e Entry` (value receiver, type Entry).
 		ident, ok := fd.Recv.List[0].Type.(*ast.Ident)
 		if !ok || ident.Name != "Entry" {
-			continue
+			return
 		}
 		validate = fd
-		break
-	}
+	})
 	if validate == nil {
 		t.Fatalf("OUTBOX-PAYLOAD-SIZE-01-B: cannot locate (Entry).Validate in %s", src)
 	}
@@ -554,34 +530,32 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	// must drive an actual size check, otherwise the cap is decorative
 	// ("`_ = MaxPayloadBytes`" would have passed an ident-only scan).
 	var compared bool
-	ast.Inspect(validate.Body, func(n ast.Node) bool {
-		bin, ok := n.(*ast.BinaryExpr)
-		if !ok {
-			return true
+	scanner.EachNode[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) {
+		if compared {
+			return
 		}
 		if bin.Op != token.GTR && bin.Op != token.GEQ {
-			return true
+			return
 		}
 		// LHS must be `len(e.Payload)` (or `len(<recv>.Payload)`).
 		lenCall, ok := bin.X.(*ast.CallExpr)
 		if !ok || len(lenCall.Args) != 1 {
-			return true
+			return
 		}
 		lenIdent, ok := lenCall.Fun.(*ast.Ident)
 		if !ok || lenIdent.Name != "len" {
-			return true
+			return
 		}
 		sel, ok := lenCall.Args[0].(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Payload" {
-			return true
+			return
 		}
 		// RHS must reference MaxPayloadBytes by name.
 		rhs, ok := bin.Y.(*ast.Ident)
 		if !ok || rhs.Name != constName {
-			return true
+			return
 		}
 		compared = true
-		return false
 	})
 	if !compared {
 		t.Errorf(
@@ -630,14 +604,13 @@ func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 		receiptLine  int
 		receiptField string
 	)
-	ast.Inspect(f, func(n ast.Node) bool {
-		ts, ok := n.(*ast.TypeSpec)
-		if !ok || ts.Name == nil || ts.Name.Name != "HandleResult" {
-			return true
+	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Name == nil || ts.Name.Name != "HandleResult" {
+			return
 		}
 		st, ok := ts.Type.(*ast.StructType)
 		if !ok || st.Fields == nil {
-			return false
+			return
 		}
 		found = true
 		for _, field := range st.Fields.List {
@@ -648,7 +621,6 @@ func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 				}
 			}
 		}
-		return false
 	})
 
 	if !found {
@@ -692,16 +664,11 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	}
 
 	var handle *ast.FuncDecl
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "handleFailedEntry" && fd.Recv != nil {
 			handle = fd
-			break
 		}
-	}
+	})
 	if handle == nil {
 		t.Fatalf("OUTBOX-RELAY-LOST-METRIC-01-A: handleFailedEntry not found in %s", src)
 	}
@@ -710,32 +677,30 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	// MarkDead. The LHS first ident MUST NOT be `_` — discarding the updated
 	// bool collapses the lost-lease branch into an uncounted writeback.
 	var violations []token.Pos
-	ast.Inspect(handle.Body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Rhs) != 1 {
-			return true
+	scanner.EachNode[ast.AssignStmt](handle.Body, func(assign *ast.AssignStmt) {
+		if len(assign.Rhs) != 1 {
+			return
 		}
 		call, ok := assign.Rhs[0].(*ast.CallExpr)
 		if !ok {
-			return true
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		switch sel.Sel.Name {
 		case "MarkRetry", "MarkDead":
 		default:
-			return true
+			return
 		}
 		if len(assign.Lhs) < 1 {
-			return true
+			return
 		}
 		first, ok := assign.Lhs[0].(*ast.Ident)
 		if !ok || first.Name == "_" {
 			violations = append(violations, assign.Pos())
 		}
-		return true
 	})
 
 	for _, p := range violations {
@@ -766,29 +731,22 @@ func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	}
 
 	var hasLost bool
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			continue
+	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Name.Name != "PollCycleResult" {
+			return
 		}
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "PollCycleResult" {
-				continue
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			for _, field := range st.Fields.List {
-				for _, name := range field.Names {
-					if name.Name == "Lost" {
-						hasLost = true
-					}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			return
+		}
+		for _, field := range st.Fields.List {
+			for _, name := range field.Names {
+				if name.Name == "Lost" {
+					hasLost = true
 				}
 			}
 		}
-	}
+	})
 	if !hasLost {
 		t.Errorf(
 			"OUTBOX-RELAY-LOST-METRIC-01-B: PollCycleResult must declare a Lost int field " +
@@ -944,34 +902,34 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 		}
 	}
 
-	// Track the enclosing FuncDecl while walking so OUTBOX-SERVICE-01 can
-	// allow constructor-level fail-fast validation (NewService) while still
-	// rejecting runtime-method silent fallback. After 029 #03 ADR Decision 2
-	// removed persistence.RunnerOrNoop, constructors fail-fast on nil
-	// TxRunner (returning *Service, error) is the explicit replacement for
-	// the deleted helper; method-internal fallback remains forbidden.
-	var enclosing *ast.FuncDecl
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch expr := n.(type) {
-		case *ast.FuncDecl:
-			enclosing = expr
-			if isWithOutboxWriterFunc(expr) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRuleWriterAdapter,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not define WithOutboxWriter adapter option",
-				})
-			}
-			if isPublisherModeParsingFunc(expr) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRulePublisherMode,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not define direct-publisher mode helpers/options",
-				})
-			}
-		case *ast.BinaryExpr:
+	// OUTBOX-SERVICE-01 requires knowing the enclosing FuncDecl to distinguish
+	// constructor fail-fast (allowed) from runtime-method nil fallback (forbidden).
+	// We use EachNode[ast.FuncDecl] to iterate FuncDecls and check FuncDecl-level
+	// violations plus the BinaryExpr within each body. All other node types that
+	// appear anywhere in the file (including struct fields, top-level declarations)
+	// are scanned on the full file.
+
+	// FuncDecl-level checks and BinaryExpr within each function body.
+	scanner.EachNode[ast.FuncDecl](file, func(enclosing *ast.FuncDecl) {
+		if isWithOutboxWriterFunc(enclosing) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRuleWriterAdapter,
+				File:    rel,
+				Line:    fset.Position(enclosing.Pos()).Line,
+				Message: "service layer must not define WithOutboxWriter adapter option",
+			})
+		}
+		if isPublisherModeParsingFunc(enclosing) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRulePublisherMode,
+				File:    rel,
+				Line:    fset.Position(enclosing.Pos()).Line,
+				Message: "service layer must not define direct-publisher mode helpers/options",
+			})
+		}
+		// OUTBOX-SERVICE-01: BinaryExpr nil checks scoped within the function body
+		// so enclosing context is available for isConstructorFailFast.
+		scanner.EachNode[ast.BinaryExpr](enclosing, func(expr *ast.BinaryExpr) {
 			if isTxRunnerNilComparison(expr) && !isConstructorFailFast(enclosing) {
 				violations = append(violations, outboxServiceViolation{
 					Rule: outboxServiceRuleTxRunnerNil,
@@ -983,60 +941,65 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 						" if txRunner == nil { return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, ...) }",
 				})
 			}
-		case *ast.CallExpr:
-			if isDirectPublishCall(expr) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRuleDirectPublish,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not call Publisher.Publish directly",
-				})
-			}
-			if isDirectEmitterConstructor(expr) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRulePublisherMode,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not construct DirectEmitter",
-				})
-			}
-		case *ast.SelectorExpr:
-			if isOutboxPublisherSelector(expr) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRulePublisherMode,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not expose outbox.Publisher dependencies",
-				})
-			}
-			if isOutboxDirectPublishModeSelector(expr) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRulePublisherMode,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not reference outbox direct-publish mode types or constants",
-				})
-			}
-		case *ast.Field:
-			if hasPublisherModeState(expr.Names) || isPublishFailureModeExpr(expr.Type) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRulePublisherMode,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not store publisher mode state",
-				})
-			}
-		case *ast.Ident:
-			if isPublisherModeIdent(expr) {
-				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRulePublisherMode,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not define or use direct-publisher mode names",
-				})
-			}
+		})
+	})
+	// File-wide checks for node types that can appear both inside and outside
+	// function bodies (struct fields, top-level var/const, expressions).
+	scanner.EachNode[ast.CallExpr](file, func(expr *ast.CallExpr) {
+		if isDirectPublishCall(expr) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRuleDirectPublish,
+				File:    rel,
+				Line:    fset.Position(expr.Pos()).Line,
+				Message: "service layer must not call Publisher.Publish directly",
+			})
 		}
-		return true
+		if isDirectEmitterConstructor(expr) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRulePublisherMode,
+				File:    rel,
+				Line:    fset.Position(expr.Pos()).Line,
+				Message: "service layer must not construct DirectEmitter",
+			})
+		}
+	})
+	scanner.EachNode[ast.SelectorExpr](file, func(expr *ast.SelectorExpr) {
+		if isOutboxPublisherSelector(expr) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRulePublisherMode,
+				File:    rel,
+				Line:    fset.Position(expr.Pos()).Line,
+				Message: "service layer must not expose outbox.Publisher dependencies",
+			})
+		}
+		if isOutboxDirectPublishModeSelector(expr) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRulePublisherMode,
+				File:    rel,
+				Line:    fset.Position(expr.Pos()).Line,
+				Message: "service layer must not reference outbox direct-publish mode types or constants",
+			})
+		}
+	})
+	scanner.EachNode[ast.Field](file, func(expr *ast.Field) {
+		if hasPublisherModeState(expr.Names) || isPublishFailureModeExpr(expr.Type) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRulePublisherMode,
+				File:    rel,
+				Line:    fset.Position(expr.Pos()).Line,
+				Message: "service layer must not store publisher mode state",
+			})
+		}
+	})
+	scanner.EachNode[ast.Ident](file, func(expr *ast.Ident) {
+		if isPublisherModeIdent(expr) {
+			violations = append(violations, outboxServiceViolation{
+				Rule:    outboxServiceRulePublisherMode,
+				File:    rel,
+				Line:    fset.Position(expr.Pos()).Line,
+				Message: "service layer must not define or use direct-publisher mode names",
+			})
+		}
 	})
 
 	return violations, nil
@@ -1095,9 +1058,16 @@ func isConstructorFailFast(fn *ast.FuncDecl) bool {
 	if fn.Body == nil {
 		return false
 	}
-	for _, stmt := range fn.Body.List {
-		ifStmt, ok := stmt.(*ast.IfStmt)
-		if ok && isFailFastReturn(ifStmt) {
+	// Top-level Body.List ONLY (paired-index direct-child iteration). Nested
+	// IfStmts inside another IfStmt's body do NOT count — a constructor that
+	// quietly installs a noop fallback in a nested branch must not be
+	// whitelisted just because some inner block contains a fail-fast pattern.
+	for i := range fn.Body.List {
+		ifStmt, ok := fn.Body.List[i].(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		if isFailFastReturn(ifStmt) {
 			return true
 		}
 	}
@@ -1121,10 +1091,13 @@ func isFailFastReturn(stmt *ast.IfStmt) bool {
 		(!isNilIdent(binExpr.X) || !isTxRunnerExpr(binExpr.Y)) {
 		return false
 	}
-	// The body must contain at least one return statement whose first result
-	// is nil and whose second result is any non-nil expression.
-	for _, bodyStmt := range stmt.Body.List {
-		ret, ok := bodyStmt.(*ast.ReturnStmt)
+	// The body must contain at least one TOP-LEVEL return statement (Body.List
+	// directly) whose first result is nil and whose second result is any
+	// non-nil expression. Nested returns inside another for/if/switch inside
+	// stmt.Body are NOT recognized — a return buried inside `for { ... }` is
+	// not the unconditional fail-fast pattern we whitelist.
+	for i := range stmt.Body.List {
+		ret, ok := stmt.Body.List[i].(*ast.ReturnStmt)
 		if !ok || len(ret.Results) != 2 {
 			continue
 		}
@@ -1347,17 +1320,13 @@ func scanPackage(root string, p *packages.Package) ([]outboxTopicViolation, erro
 // covering BasicLit, same-package const Ident, and cross-package SelectorExpr.
 func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, pkg *packages.Package) []outboxTopicViolation {
 	var violations []outboxTopicViolation
-	ast.Inspect(file, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
+	scanner.EachNode[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
 		if !isOutboxEntryLiteral(pkg, lit) {
-			return true
+			return
 		}
 		policy := extractFailurePolicy(pkg, lit)
 		if policy.safe() {
-			return true
+			return
 		}
 		topic := extractStringField(pkg, lit, outboxTopicEntryField)
 		eventType := extractStringField(pkg, lit, outboxTopicEventTypeField)
@@ -1371,7 +1340,6 @@ func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel s
 				Line:    fset.Position(lit.Pos()).Line,
 				Message: outboxPolicyViolationMessage(policy, route.value),
 			})
-			return true
 		case route.unknown() || !route.present:
 			violations = append(violations, outboxTopicViolation{
 				Rule:    outboxTopicRuleFailOpen,
@@ -1379,9 +1347,6 @@ func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel s
 				Line:    fset.Position(lit.Pos()).Line,
 				Message: outboxUnknownRouteViolationMessage(policy),
 			})
-			return true
-		default:
-			return true
 		}
 	})
 	return violations
@@ -1425,9 +1390,15 @@ func effectiveOutboxRoute(topic, eventType outboxTopicFieldValue) outboxTopicFie
 // named field of a composite literal, evaluated via typeseval.EvaluateConstString.
 // Covers BasicLit, same-package const Ident, and cross-package SelectorExpr.
 // Returns ok=false when the field is missing or its value is not a constant string.
+//
+// Direct-child paired-index iteration is intentional: lit's top-level field
+// must be checked, NOT a same-named field that happens to appear in a nested
+// struct (e.g. `Spec: SubSpec{Topic:"a"}` should not pollute lit's Topic
+// reading when lit itself has no Topic).
 func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
+	var result outboxTopicFieldValue
+	for i := range lit.Elts {
+		kv, ok := lit.Elts[i].(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
@@ -1436,9 +1407,10 @@ func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName 
 			continue
 		}
 		value, ok := typeseval.EvaluateConstString(pkg.TypesInfo, kv.Value)
-		return outboxTopicFieldValue{present: true, ok: ok, value: value}
+		result = outboxTopicFieldValue{present: true, ok: ok, value: value}
+		return result
 	}
-	return outboxTopicFieldValue{}
+	return result
 }
 
 type outboxFailurePolicyStatus int
@@ -1552,9 +1524,14 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 // extractFailurePolicy classifies the FailurePolicy field. A dynamic policy is
 // treated as unknown, and callers fail closed when the route is security-like or
 // not statically known.
+//
+// Direct-child paired-index iteration is intentional: only lit's top-level
+// FailurePolicy field is examined; a FailurePolicy buried inside a nested
+// struct is unrelated and must not be hoisted to lit's level.
 func extractFailurePolicy(pkg *packages.Package, lit *ast.CompositeLit) outboxFailurePolicyStatus {
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
+	result := outboxPolicyAbsent
+	for i := range lit.Elts {
+		kv, ok := lit.Elts[i].(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
@@ -1570,7 +1547,7 @@ func extractFailurePolicy(pkg *packages.Package, lit *ast.CompositeLit) outboxFa
 		}
 		return outboxPolicyUnknown
 	}
-	return outboxPolicyAbsent
+	return result
 }
 
 func isOutboxFailOpenConst(info *types.Info, expr ast.Expr) bool {
@@ -1701,16 +1678,11 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 		if file == nil {
 			continue
 		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
+		scanner.EachNode[ast.GenDecl](file, func(gen *ast.GenDecl) {
+			if gen.Tok != token.CONST {
+				return
 			}
-			for _, spec := range gen.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			scanner.EachNode[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
 				for _, name := range vs.Names {
 					if _, bad := forbidden[name.Name]; !bad {
 						continue
@@ -1721,8 +1693,8 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 						Const: name.Name,
 					})
 				}
-			}
-		}
+			})
+		})
 	}
 
 	if len(hits) == 0 {
@@ -1807,14 +1779,13 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 		seen    = make(map[string]struct{})
 		unknown []string
 	)
-	ast.Inspect(f, func(n ast.Node) bool {
-		ts, ok := n.(*ast.TypeSpec)
-		if !ok || ts.Name == nil || ts.Name.Name != "HandleResult" {
-			return true
+	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Name == nil || ts.Name.Name != "HandleResult" {
+			return
 		}
 		st, ok := ts.Type.(*ast.StructType)
 		if !ok || st.Fields == nil {
-			return false
+			return
 		}
 		found = true
 		for _, field := range st.Fields.List {
@@ -1834,7 +1805,6 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 				}
 			}
 		}
-		return false
 	})
 
 	if !found {
@@ -1900,20 +1870,24 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // TestOutboxHandleResultFactoryPreferred enforces
 // OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: production code (non-_test.go)
 // must use kernel/outbox factories Ack/Requeue/Reject instead of constructing
-// outbox.HandleResult{...} composite literals, except for the three files in
+// outbox.HandleResult{...} composite literals, except for the files in
 // handleResultLiteralAllowlist (factories themselves, kernel internal
 // plumbing, shared conformance harness).
 //
-// Test files (_test.go) are excluded by default (scanner.ModuleScope skips
-// them unless IncludeTests is set); generated/, vendor/, testdata/, and
-// worktrees/ are also skipped by default.
+// Test files (_test.go) are excluded by tests=false in
+// typeseval.SharedResolver; vendor/, testdata/ are skipped by go list
+// module-load defaults; generated/ is skipped via
+// typeseval.IsGeneratedRelPath (NOT by go list — `go list ./...` does
+// include generated/contracts/.../v1 packages, so the rule must apply
+// the path filter explicitly. Closes PR445-FU finding F4).
 //
-// The scanner detects two literal forms:
-//  1. <alias>.HandleResult{...} where <alias> is the local name binding the
-//     kernel/outbox import (default: "outbox", but explicit aliases are
-//     honored via scanner.PackageAliases).
-//  2. Bare HandleResult{...} when the file's package is "outbox" itself
-//     (covers any future kernel/outbox/*.go file outside the allowlist).
+// Type-aware via go/types: the scanner detects two literal forms via
+// pkg.TypesInfo:
+//  1. `<alias>.HandleResult{...}` where the SelectorExpr.X resolves to a
+//     *types.PkgName whose Imported().Path() is kernel/outbox (renamed
+//     imports are handled authoritatively by the type checker).
+//  2. Bare `HandleResult{...}` when the file's package itself is the
+//     kernel/outbox package (covers any future kernel/outbox/*.go file).
 //
 // Cannot funnel: ProcessReason and SettlementObservers are runtime-determined
 // fields populated by handler code paths and middleware, with no schema /
@@ -1923,31 +1897,38 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // kernel-internal literal construction the allowlist exists to permit.
 // Archtest enforces the path discipline that no other layer can.
 //
-// t.Parallel: this rule walks the entire module (ModuleScope), unlike the
-// single-file FROZEN-01 sibling. Parallelism is intentional here and absent
-// there to keep the cheap test serial.
+// Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01 for this rule.
 func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	files, err := scanner.ModuleScope(root).Files()
+
+	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
 	if err != nil {
-		t.Fatalf("ModuleScope.Files: %v", err)
+		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}
 
 	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
 
 	var violations []string
-	for _, abs := range files {
-		rel, err := filepath.Rel(root, abs)
-		if err != nil {
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
 			continue
 		}
-		rel = filepath.ToSlash(rel)
-		if _, ok := handleResultLiteralAllowlist[rel]; ok {
-			continue
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			// Allowlist (explicit opt-in) is checked first so the kernel
+			// internal sites in handleResultLiteralAllowlist remain
+			// permitted; generated/ skip (implicit opt-out) is then
+			// applied for codegen output that must never be flagged.
+			if _, ok := handleResultLiteralAllowlist[rel]; ok {
+				continue
+			}
+			if typeseval.IsGeneratedRelPath(rel) {
+				continue
+			}
+			violations = append(violations,
+				scanForHandleResultLiterals(pkg, file, rel, outboxImportPath)...)
 		}
-		hits := scanForHandleResultLiterals(abs, rel, outboxImportPath)
-		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)
@@ -1959,51 +1940,82 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	}
 }
 
-// scanForHandleResultLiterals AST-scans the file at path for HandleResult
-// composite literals. Returns "<rel>:<line>" diagnostics. Files that neither
-// import kernel/outbox nor declare package outbox produce no hits.
-func scanForHandleResultLiterals(path, rel, outboxImportPath string) []string {
-	data, err := os.ReadFile(filepath.Clean(path))
+// TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3 anchors
+// the load-vs-skip decision contract for the HandleResult factory rule.
+//
+// Anchor (informational, not a TDD RED): documents that
+// `typeseval.SharedResolver(root, false, nil, "./...")` DOES include
+// generated/ packages, contradicting the comment block above
+// TestOutboxHandleResultFactoryPreferred which claims `go list ./...`
+// default-skips generated/. Wave 3 introduces typeseval.IsGeneratedRelPath
+// + applies it before scanForHandleResultLiterals so the rule no longer
+// scans generated/ paths even though they ARE loaded. The Wave 3 commit
+// also adds a fixture-driven sub-test that exercises the skip with a
+// synthetic generated/-rel path containing a HandleResult literal.
+//
+// This test pins the load behavior so a future packages.Load default
+// change (or a `cfg.BuildFlags=["-tags=nogen"]` style filter at the
+// loader layer) doesn't silently mask the need for IsGeneratedRelPath.
+func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
 	if err != nil {
-		return nil
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil
+		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}
 
-	aliases := scanner.PackageAliases(f, outboxImportPath)
-	inPackageOutbox := f.Name != nil && f.Name.Name == "outbox"
-	if len(aliases) == 0 && !inPackageOutbox {
-		return nil
-	}
-
-	var hits []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
+	var generatedFiles []string
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
+			continue
 		}
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			if typeseval.IsGeneratedRelPath(rel) {
+				generatedFiles = append(generatedFiles, rel)
+			}
+		}
+	}
+
+	if len(generatedFiles) == 0 {
+		t.Fatalf("anchor invalidated: SharedResolver(./...) loaded 0 generated/ files; " +
+			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
+			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
+			"before removing the IsGeneratedRelPath skip")
+	}
+	t.Logf("anchor: SharedResolver(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
+}
+
+// scanForHandleResultLiterals scans file for HandleResult composite literals.
+// Returns "<rel>:<line>" diagnostics. Files that neither import kernel/outbox
+// nor declare package outbox produce no hits. Type-aware via pkg.TypesInfo.
+func scanForHandleResultLiterals(pkg *packages.Package, file *ast.File, rel, outboxImportPath string) []string {
+	inPackageOutbox := pkg.PkgPath == outboxImportPath
+	var hits []string
+	scanner.EachNode[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		switch tn := cl.Type.(type) {
 		case *ast.SelectorExpr:
 			ident, ok := tn.X.(*ast.Ident)
 			if !ok || tn.Sel == nil || tn.Sel.Name != "HandleResult" {
-				return true
+				return
 			}
-			if _, ok := aliases[ident.Name]; !ok {
-				return true
+			pkgName, isPkg := pkg.TypesInfo.Uses[ident].(*types.PkgName)
+			if !isPkg {
+				return
 			}
-			pos := fset.Position(cl.Pos())
+			if pkgName.Imported().Path() != outboxImportPath {
+				return
+			}
+			pos := pkg.Fset.Position(cl.Pos())
 			hits = append(hits, fmt.Sprintf("%s:%d: %s.HandleResult{} literal", rel, pos.Line, ident.Name))
 		case *ast.Ident:
 			if !inPackageOutbox || tn.Name != "HandleResult" {
-				return true
+				return
 			}
-			pos := fset.Position(cl.Pos())
+			pos := pkg.Fset.Position(cl.Pos())
 			hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal in package outbox", rel, pos.Line))
 		}
-		return true
 	})
 	return hits
 }
