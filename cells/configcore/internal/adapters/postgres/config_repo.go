@@ -488,13 +488,13 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 				"config not found", scanErr,
-				errcode.WithInternal(fmt.Sprintf("config repo: Update miss key=%s", key)),
+				errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", opUpdate, key)),
 				errcode.WithCategory(errcode.CategoryDomain),
 			)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, scanErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: Update select-for-update error key=%s", key)),
+			errcode.WithInternal(fmt.Sprintf("config repo: %s select-for-update error key=%s", opUpdate, key)),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}

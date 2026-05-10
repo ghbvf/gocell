@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,13 @@ func adminSvcCtx() context.Context {
 	return auth.TestContext("test-admin", []string{"admin"})
 }
 
+// newTestService returns a Service wired with the default NoopEmitter
+// (NoopWriter under the hood — Write returns nil silently, no WARN emitted).
+// This implicitly covers the noop publisher CI path (PR320-FU): every
+// happy-path test in this file exercises noop wiring without panic or error.
+// The FailOpen WARN signal — a stricter property — is asserted separately
+// by Test{Service_Publish,Service_Rollback}_FailOpen_PublisherError using
+// FailingPublisher + DirectPublishFailOpen.
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	logger := slog.Default()
@@ -425,9 +433,10 @@ func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 }
 
 // TestService_Rollback_FailOpen_PublisherError verifies fail-open on the
-// Rollback path's direct-publisher fallback. Asserts the WARN signal is
-// emitted (Rollback emits two events: entry-upserted + rollback; Contains
-// is satisfied by either).
+// Rollback path's direct-publisher fallback. Rollback emits two events
+// (entry-upserted + rollback); under FailOpen both publisher failures must
+// produce WARN, so the assertion counts exactly 2 — a "first WARN then
+// silent" regression would surface here.
 func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -449,8 +458,8 @@ func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 	require.NoError(t, err, "FailOpen: publisher failure must be swallowed on rollback")
 	assert.Equal(t, "v1", rolled.Value)
 
-	assert.Contains(t, buf.String(), outbox.WarnDirectPublishFailOpen,
-		"FailOpen rollback path must emit observable WARN; missing → silent swallow regression")
+	assert.Equal(t, 2, strings.Count(buf.String(), outbox.WarnDirectPublishFailOpen),
+		"FailOpen rollback path emits two events; both must produce WARN to detect partial-silence regression")
 }
 
 // TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly asserts that the
