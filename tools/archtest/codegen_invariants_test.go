@@ -114,7 +114,8 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 	project := mustParseProject(t, root)
 
 	for _, cell := range project.Cells {
-		dir := filepath.Join(root, filepath.Dir(cell.File))
+		dirRel := filepath.ToSlash(filepath.Dir(cell.File))
+		dir := filepath.Join(root, dirRel)
 		genPath := filepath.Join(dir, "cell_gen.go")
 		if _, err := os.Stat(genPath); err != nil {
 			continue // only check cells that have a generated file
@@ -123,24 +124,20 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 			continue
 		}
 		structName := cell.GoStructName.String()
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("CODEGEN-USER-FILE-OVERLAP-01: read dir %s: %v", dir, err)
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") {
-				continue
-			}
-			if name == "cell_gen.go" || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			path := filepath.Join(dir, name)
-			if hasInitMethod(t, path, structName) {
+		scope := scanner.DirsScope(root, []string{dirRel},
+			scanner.MatchRels(func(rel string) bool {
+				if filepath.ToSlash(filepath.Dir(rel)) != dirRel {
+					return false
+				}
+				return filepath.Base(rel) != "cell_gen.go"
+			}),
+		)
+		scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+			if hasInitMethod(t, fc.AbsPath, structName) {
 				t.Errorf("CODEGEN-USER-FILE-OVERLAP-01: %s defines func (c *%s) Init — Init is owned by cell_gen.go; "+
-					"move business init logic into func (c *%s) initInternal", path, structName, structName)
+					"move business init logic into func (c *%s) initInternal", fc.Rel, structName, structName)
 			}
-		}
+		})
 	}
 }
 
@@ -1225,26 +1222,22 @@ func findAllCellInitFiles(t *testing.T, root string) []string {
 	project := mustProjectFromMetadata(t, root)
 	var files []string
 	for _, c := range project.Cells {
-		cellDir := filepath.Join(root, filepath.Dir(c.File))
-		entries, err := os.ReadDir(cellDir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			if name == "cell_gen.go" {
-				continue
-			}
-			if name == "cell.go" || strings.HasPrefix(name, "cell_") {
-				files = append(files, filepath.Join(cellDir, name))
-			}
-		}
+		cellDirRel := filepath.ToSlash(filepath.Dir(c.File))
+		scope := scanner.DirsScope(root, []string{cellDirRel},
+			scanner.MatchRels(func(rel string) bool {
+				if filepath.ToSlash(filepath.Dir(rel)) != cellDirRel {
+					return false
+				}
+				name := filepath.Base(rel)
+				if name == "cell_gen.go" {
+					return false
+				}
+				return name == "cell.go" || strings.HasPrefix(name, "cell_")
+			}),
+		)
+		scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+			files = append(files, fc.AbsPath)
+		})
 	}
 	sort.Strings(files)
 	return files

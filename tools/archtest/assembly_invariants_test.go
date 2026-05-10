@@ -95,22 +95,24 @@ func loadKnownCellIDs(t *testing.T) []string {
 func TestAssemblyModulesGen_HasGeneratedMarker(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
+	scope := archscanner.DirsScope(root, []string{"cmd"},
+		archscanner.MatchRels(func(rel string) bool {
+			rel = filepath.ToSlash(rel)
+			return filepath.Base(rel) == "modules_gen.go" && strings.Count(rel, "/") == 2
+		}),
+	)
 
-	matches, err := filepath.Glob(filepath.Join(root, "cmd", "*", "modules_gen.go"))
-	require.NoError(t, err, "%s: glob cmd/*/modules_gen.go", ruleAssemblyModulesGen01)
-
-	if len(matches) == 0 {
-		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyModulesGen01)
-		return
-	}
-
-	for _, path := range matches {
-		path := path
-		rel, _ := filepath.Rel(root, path)
+	hits := 0
+	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc archscanner.FileContext) {
+		hits++
+		path, rel := fc.AbsPath, fc.Rel
 		t.Run(rel, func(t *testing.T) {
 			t.Parallel()
 			checkModulesGenFile(t, path, rel)
 		})
+	})
+	if hits == 0 {
+		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyModulesGen01)
 	}
 }
 
@@ -373,23 +375,25 @@ func findStructDecl(af *ast.File, name string) *ast.StructType {
 func TestAssemblyCellModuleTypePresent(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
+	scope := archscanner.DirsScope(root, []string{"cmd"},
+		archscanner.MatchRels(func(rel string) bool {
+			rel = filepath.ToSlash(rel)
+			return filepath.Base(rel) == "modules_gen.go" && strings.Count(rel, "/") == 2
+		}),
+	)
 
-	matches, err := filepath.Glob(filepath.Join(root, "cmd", "*", "modules_gen.go"))
-	require.NoError(t, err, "%s: glob cmd/*/modules_gen.go", ruleAssemblyCellModuleType04)
-
-	if len(matches) == 0 {
-		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyCellModuleType04)
-		return
-	}
-
-	for _, modulesGen := range matches {
-		modulesGen := modulesGen
-		cmdDir := filepath.Dir(modulesGen)
-		rel, _ := filepath.Rel(root, cmdDir)
-		t.Run(rel, func(t *testing.T) {
+	hits := 0
+	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc archscanner.FileContext) {
+		hits++
+		cmdDir := filepath.Dir(fc.AbsPath)
+		cmdRel := filepath.ToSlash(filepath.Dir(fc.Rel))
+		t.Run(cmdRel, func(t *testing.T) {
 			t.Parallel()
 			checkCellModuleTypePresentInDir(t, root, cmdDir)
 		})
+	})
+	if hits == 0 {
+		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyCellModuleType04)
 	}
 }
 
