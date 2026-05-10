@@ -214,7 +214,9 @@ func TestCellRawInfraPublicOptionParam01_RealRepoClean(t *testing.T) {
 
 	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), true)
 	for _, v := range violations {
-		t.Errorf("CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01: %s:%d func %s(...) param[%d] type=%s — public Option must accept sealed marker (persistence.CellTxManager / outbox.Cell{Publisher,Writer}) instead of raw infra; composition roots wrap via persistence.WrapForCell / outbox.Wrap{Publisher,Writer}ForCell.",
+		t.Errorf("CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01: %s:%d func %s(...) param[%d] type=%s — "+
+			"public Option must accept sealed marker (persistence.CellTxManager / outbox.Cell{Publisher,Writer}) "+
+			"instead of raw infra; composition roots wrap via persistence.WrapForCell / outbox.Wrap{Publisher,Writer}ForCell.",
 			v.File, v.Line, v.FuncName, v.ParamIndex, v.ParamType)
 	}
 }
@@ -237,7 +239,9 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	require.NoError(t, err)
 
 	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), false)
-	require.Len(t, violations, 4, "fixture must yield 4 violations: WithBadTxRunner / WithBadPublisher / WithBadWriter / WithAliasedBadTxRunner")
+	require.Len(t, violations, 4,
+		"fixture must yield 4 violations: WithBadTxRunner / WithBadPublisher / "+
+			"WithBadWriter / WithAliasedBadTxRunner")
 
 	got := map[string]string{}
 	for _, v := range violations {

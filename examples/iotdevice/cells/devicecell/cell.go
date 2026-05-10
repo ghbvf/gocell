@@ -221,7 +221,9 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 	//   WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}))
 	if c.publisher == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			"devicecell requires publisher; use WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{})) from composition root for demo mode")
+			"devicecell requires publisher; use "+
+				"WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{})) "+
+				"from composition root for demo mode")
 	}
 
 	// Durable mode still rejects noop publishers, but direct publish remains

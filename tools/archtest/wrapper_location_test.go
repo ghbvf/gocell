@@ -151,7 +151,8 @@ func scanWrapperViolations(root string, resolver *typeseval.Resolver) []wrapperV
 // message — drift between code and message becomes structurally
 // impossible.
 func allowlistDescription() string {
-	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | *_test.go | kernel/{persistence,outbox}/cell_marker.go | kernel/cell/demo_tx_runner.go"
+	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | *_test.go | " +
+		"kernel/{persistence,outbox}/cell_marker.go | kernel/cell/demo_tx_runner.go"
 }
 
 // wrapperFunctionsList renders the allowed wrapper function set as a

@@ -643,7 +643,11 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 		},
 	}
 
-	c := NewConfigCore(WithClock(clock.Real()), WithInMemoryDefaults(), WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil))
+	c := NewConfigCore(
+		WithClock(clock.Real()),
+		WithInMemoryDefaults(),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+	)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runMode, publishMode := c.deriveModes(tt.durability)
