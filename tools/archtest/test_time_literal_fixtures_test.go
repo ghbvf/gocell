@@ -1,3 +1,5 @@
+// INVARIANT: TEST-TIME-LITERAL-01
+//
 // test_time_literal_fixtures_test.go — fixture-based regression tests for the
 // TEST-TIME-LITERAL-01 invariant. Each subpackage under
 // testdata/test_time_literal_fixtures/ exercises one test-specific AST shape

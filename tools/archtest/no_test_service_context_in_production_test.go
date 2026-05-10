@@ -1,3 +1,5 @@
+// INVARIANT: NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01
+//
 // NO-TEST-SERVICE-CONTEXT-IN-PRODUCTION-01
 //
 // Invariant: auth.TestServiceContext(...) must only appear in _test.go files

@@ -1,3 +1,5 @@
+// INVARIANT: WIRE-CODE-5XX-SINGLE-SOURCE-01
+//
 // WIRE-CODE-5XX-SINGLE-SOURCE-01: 5xx wire-code single-source authority.
 //
 // Authority: pkg/errcode/status.go::Kind.PublicCode() — every 5xx Kind

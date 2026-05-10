@@ -1,3 +1,7 @@
+// invariants:
+//   - INVARIANT: EVENT-PAYLOAD-CAMELCASE-01
+//   - INVARIANT: EVENT-DTO-CAMELCASE-01
+
 package archtest
 
 import (

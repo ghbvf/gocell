@@ -1,3 +1,5 @@
+// INVARIANT: SLOWGATE-ALLOWLIST-01
+//
 // SLOWGATE-ALLOWLIST-01 — drift guard for tools/slowgate/allowlist.txt.
 //
 // Invariant: every (Package, TestName) entry in tools/slowgate/allowlist.txt

@@ -1,5 +1,10 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: HTTPUTIL-5XX-KIND-NORMALIZE-01
+//   - INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
+//   - INVARIANT: HTTPUTIL-SURFACE-REGISTERED-01
+//
 // httputil_invariants_test.go — consolidated AST guards for pkg/httputil invariants.
 //
 // Invariants covered:

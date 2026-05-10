@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: HEALTH-AGG-01
+//
 // HEALTH-AGG-01: Any exported type in runtime/ or adapters/ that exposes a
 // Checkers() or HealthCheckers() method must implement the full
 // kernellifecycle.ManagedResource interface (i.e., also have Worker() and

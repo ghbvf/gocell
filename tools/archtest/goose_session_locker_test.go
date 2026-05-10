@@ -1,5 +1,9 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: GOOSE-SESSION-LOCKER-01
+//   - INVARIANT: POSTGRES-MIGRATOR-LOCK-ORDER-REGRESSION-01
+//
 // goose_session_locker_test.go enforces GOOSE-SESSION-LOCKER-01: every
 // goose.NewProvider call site under adapters/postgres/ MUST configure a
 // SessionLocker via goose.WithSessionLocker. Without it, concurrent Up() calls

@@ -1,3 +1,5 @@
+// INVARIANT: INTERNAL-CONTRACT-CLIENTS-REQUIRED-01
+//
 // INTERNAL-CONTRACT-CLIENTS-REQUIRED-01
 //
 // Invariant: every wrapper.ContractSpec{...} composite literal whose Path

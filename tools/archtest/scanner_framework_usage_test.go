@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: SCANNER-FRAMEWORK-USAGE-01
+//
 // scanner_framework_usage_test.go — guard archtest tools/archtest/*_test.go
 // from bypassing the shared scanner framework at tools/archtest/internal/scanner.
 //

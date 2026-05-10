@@ -1,3 +1,5 @@
+// INVARIANT: ADAPTER-RETURNS-DECLARED-TYPES-01
+//
 // ADAPTER-RETURNS-DECLARED-TYPES-01: adapter return status ⊆ contract declared.
 // Scope: Ceiling guard only (adapter zero typed return is legal — full framework
 // fallback is permitted). Floor guards land via roadmap GOCELL-INVARIANT-AUDIT-V1.

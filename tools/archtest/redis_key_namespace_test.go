@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: REDIS-KEY-NAMESPACE-01
+//
 // REDIS-KEY-NAMESPACE-01 — invariant-driven gate.
 //
 // Invariant: every public constructor in adapters/redis that produces a

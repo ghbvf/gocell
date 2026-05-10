@@ -1,3 +1,5 @@
+// INVARIANT: ARCHTEST-LAYERS-01
+
 package archtest
 
 import (

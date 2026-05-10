@@ -1,3 +1,5 @@
+// INVARIANT: TEST-SLEEP-DISCIPLINE-01
+//
 // TEST-SLEEP-DISCIPLINE-01 — invariant-driven gate for *test* code.
 //
 // Invariant: In every Go file whose role is "test code"

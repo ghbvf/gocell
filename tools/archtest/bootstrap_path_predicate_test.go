@@ -1,3 +1,5 @@
+// INVARIANT: BOOTSTRAP-PATH-PREDICATE-SOLE-01
+//
 // BOOTSTRAP-PATH-PREDICATE-SOLE-01
 //
 // Invariant: strings.Contains(_, "setup/admin") must not appear anywhere in

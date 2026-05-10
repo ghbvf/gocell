@@ -1,3 +1,5 @@
+// INVARIANT: PATCH-OPTIONAL-BOOL-POINTER-01
+//
 // PATCH-OPTIONAL-BOOL-POINTER-01 — archtest gate.
 //
 // Scans all generated/contracts/http/**/types_gen.go for Request structs that

@@ -1,3 +1,5 @@
+// INVARIANT: NO-MANUAL-CONTRACTSPEC-LITERAL-01
+//
 // NO-MANUAL-CONTRACTSPEC-LITERAL-01
 //
 // Invariant: wrapper.ContractSpec{…} composite literals and wrapper.EventSpec(…)

@@ -1,3 +1,5 @@
+// INVARIANT: TEST-TIME-LITERAL-01
+//
 // TEST-TIME-LITERAL-01 — invariant-driven gate for *test* code.
 //
 // Invariant: In every Go file whose role is "test code" (see

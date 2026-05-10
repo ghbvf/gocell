@@ -1,3 +1,5 @@
+// INVARIANT: NO-DELETED-AUTH-SYMBOLS-01
+//
 // NO-DELETED-AUTH-SYMBOLS-01
 //
 // Invariant: no production or test .go file (outside the canonical

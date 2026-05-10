@@ -1,3 +1,7 @@
+// invariants:
+//   - INVARIANT: SETUP-ADMIN-NOT-PUBLIC-01
+//   - INVARIANT: AUTH-BOOTSTRAP-PATH-RESTRICTED-01
+//
 // SETUP-ADMIN-NOT-PUBLIC-01
 //
 // Invariant: the setup/admin HTTP contract must not be declared as auth.public.

@@ -1,5 +1,12 @@
 package archtest
 
+// invariants:
+//   - INVARIANT: HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01
+//   - INVARIANT: HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01
+//   - INVARIANT: HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01
+//   - INVARIANT: HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01
+//   - INVARIANT: HTTP-METRICS-LABEL-ROUTER-ATTRIBUTION-01
+//
 // http_metrics_label_test.go enforces the HTTP-METRICS-LABEL-REALIGN
 // contract (D1, 2026-05-04): cell identity is a router-root request
 // attribution concern, not a metrics collector constructor field and not a

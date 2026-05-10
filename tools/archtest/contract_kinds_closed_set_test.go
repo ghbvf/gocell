@@ -1,3 +1,5 @@
+// INVARIANT: CONTRACT-KINDS-CLOSED-SET-01
+//
 // CONTRACT-KINDS-CLOSED-SET-01
 //
 // Invariant: all contract kinds in the project must be members of the closed
