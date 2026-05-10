@@ -24,10 +24,12 @@ package cellgen
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
@@ -70,7 +72,7 @@ func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 
 	realRoot, err := pathsafe.ResolveRoot(root)
 	if err != nil {
-		return fmt.Errorf("scaffold bundle: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold bundle: validation failed", err)
 	}
 
 	plan, err := planCellBundle(realRoot, spec)
@@ -79,7 +81,7 @@ func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 	}
 
 	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
-		return fmt.Errorf("scaffold bundle: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold bundle: write failed", err)
 	}
 	return nil
 }
@@ -139,17 +141,17 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
 	cellGoContent, err := renderTemplate(cellGoTemplate, spec, true)
 	if err != nil {
-		return nil, fmt.Errorf("scaffold cell: render cell.go: %w", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)
 	}
 	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
 	if err != nil {
-		return nil, fmt.Errorf("scaffold cell: render cell.yaml: %w", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.yaml failed", err)
 	}
 
 	targetDir := filepath.Join("cells", spec.CellID)
 	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
 	if err != nil {
-		return nil, fmt.Errorf("scaffold cell: %w", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: bundle plan failed", err)
 	}
 
 	return []pathsafe.PlannedFile{
@@ -245,7 +247,9 @@ func planBundleFiles(
 ) ([]pathsafe.PlannedFile, error) {
 	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
 	if err != nil {
-		return nil, fmt.Errorf("scaffold %s: %w", kindLabel, err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold contract: render failed", err,
+			errcode.WithDetails(slog.String("kind", kindLabel)))
 	}
 
 	rendered, err := renderBundleSections(tpl, files, data, kindLabel)
@@ -270,13 +274,23 @@ func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data a
 	for _, f := range files {
 		var buf bytes.Buffer
 		if err := tpl.ExecuteTemplate(&buf, f.Section, data); err != nil {
-			return nil, fmt.Errorf("scaffold %s: render %s: %w", kindLabel, f.Description, err)
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"scaffold contract: render artifact failed", err,
+				errcode.WithDetails(
+					slog.String("kind", kindLabel),
+					slog.String("artifact", f.Description),
+				))
 		}
 		out := buf.Bytes()
 		if f.IsGoSource {
 			formatted, err := codegen.FormatGoSource("", out)
 			if err != nil {
-				return nil, fmt.Errorf("scaffold %s: format %s: %w", kindLabel, f.Name, err)
+				return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+					"scaffold contract: format artifact failed", err,
+					errcode.WithDetails(
+						slog.String("kind", kindLabel),
+						slog.String("artifact", f.Name),
+					))
 			}
 			out = formatted
 		}
@@ -325,6 +339,8 @@ func contractBundleFiles(kind string) ([]bundleFileSpec, error) {
 			{Name: "headers.schema.json", Section: "headers-schema", Description: "headers schema"},
 		}, nil
 	default:
-		return nil, fmt.Errorf("scaffold contract: unsupported kind %q", kind)
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold contract: unsupported kind",
+			errcode.WithDetails(slog.String("kind", kind)))
 	}
 }
