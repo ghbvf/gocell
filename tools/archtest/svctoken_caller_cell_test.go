@@ -58,14 +58,37 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 
 	// tests=true loads the test variants of every package, so test helpers
 	// (e.g. examples/ssobff/walkthrough_test.go) that call
-	// GenerateServiceToken are also scanned.
-	resolver, err := typeseval.SharedResolver(root, true, nil,
-		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
+	// GenerateServiceToken are also scanned. Iterating
+	// typeseval.KnownNonDefaultTags() loads each //go:build-gated tag
+	// combination too — closing PR445-FU finding F2 (the prior nil-tags
+	// call silently skipped integration / e2e / examples_smoke files
+	// containing real GenerateServiceToken callsites).
+	seen := map[string]struct{}{}
 	var diags []scanner.Diagnostic
+	for _, tags := range typeseval.KnownNonDefaultTags() {
+		resolver, err := typeseval.SharedResolver(root, true, tags,
+			"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
+		if err != nil {
+			t.Fatalf("typeseval.SharedResolver(tags=%v): %v", tags, err)
+		}
+		collectGenerateServiceTokenDiags(resolver, root, knownCells, seen, &diags)
+	}
+	scanner.Report(t, ruleSvctokenCallerCellRequired01, diags)
+}
+
+// collectGenerateServiceTokenDiags walks resolver's packages and appends
+// any GenerateServiceToken-callsite diagnostics to *diags, deduplicating
+// by (rel, line, message) via the seen map. Extracted as a helper so the
+// per-tag-set loop in TestSVCTOKEN_CALLER_CELL_REQUIRED_01 stays terse.
+func collectGenerateServiceTokenDiags(resolver *typeseval.Resolver, root string, knownCells map[string]bool, seen map[string]struct{}, diags *[]scanner.Diagnostic) {
+	add := func(d scanner.Diagnostic) {
+		key := fmt.Sprintf("%s:%d:%s", d.Rel, d.Line, d.Message)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		*diags = append(*diags, d)
+	}
 	for _, pkg := range resolver.Packages() {
 		if pkg.TypesInfo == nil || pkg.Fset == nil {
 			continue
@@ -81,7 +104,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 				// The 4-part signature is GenerateServiceToken(ring, callerCell, method, path, query, ts).
 				// callerCell is argument index 1 (0-based).
 				if len(call.Args) < 2 {
-					diags = append(diags, scanner.Diagnostic{
+					add(scanner.Diagnostic{
 						Rel:     rel,
 						Line:    pos.Line,
 						Message: "auth.GenerateServiceToken called with fewer than 2 arguments — missing callerCell",
@@ -92,7 +115,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 				arg1 := call.Args[1]
 				lit, isLit := arg1.(*ast.BasicLit)
 				if !isLit {
-					diags = append(diags, scanner.Diagnostic{
+					add(scanner.Diagnostic{
 						Rel:     rel,
 						Line:    pos.Line,
 						Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
@@ -101,7 +124,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 				}
 				callerCell, ok := scanner.StringLitValue(lit)
 				if !ok {
-					diags = append(diags, scanner.Diagnostic{
+					add(scanner.Diagnostic{
 						Rel:     rel,
 						Line:    pos.Line,
 						Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
@@ -110,7 +133,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 				}
 
 				if callerCell == "" {
-					diags = append(diags, scanner.Diagnostic{
+					add(scanner.Diagnostic{
 						Rel:     rel,
 						Line:    pos.Line,
 						Message: "auth.GenerateServiceToken callerCell must not be empty",
@@ -119,7 +142,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 				}
 
 				if !cellIDRegex.MatchString(callerCell) {
-					diags = append(diags, scanner.Diagnostic{
+					add(scanner.Diagnostic{
 						Rel:     rel,
 						Line:    pos.Line,
 						Message: fmt.Sprintf("auth.GenerateServiceToken callerCell %q does not match ^[a-z][a-z0-9-]*$", callerCell),
@@ -128,7 +151,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 				}
 
 				if !knownCells[callerCell] {
-					diags = append(diags, scanner.Diagnostic{
+					add(scanner.Diagnostic{
 						Rel:  rel,
 						Line: pos.Line,
 						Message: fmt.Sprintf(
@@ -139,7 +162,6 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 			})
 		}
 	}
-	scanner.Report(t, ruleSvctokenCallerCellRequired01, diags)
 }
 
 // TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED is a
@@ -170,21 +192,22 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *t
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	// Mirror the production rule's loader call exactly.
-	resolver, err := typeseval.SharedResolver(root, true, nil,
-		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
+	// Mirror the production rule's loader call (multi-tag) exactly.
 	loadedFiles := map[string]bool{}
-	for _, pkg := range resolver.Packages() {
-		if pkg.Fset == nil {
-			continue
+	for _, tags := range typeseval.KnownNonDefaultTags() {
+		resolver, err := typeseval.SharedResolver(root, true, tags,
+			"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
+		if err != nil {
+			t.Fatalf("typeseval.SharedResolver(tags=%v): %v", tags, err)
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			loadedFiles[rel] = true
+		for _, pkg := range resolver.Packages() {
+			if pkg.Fset == nil {
+				continue
+			}
+			for _, file := range pkg.Syntax {
+				rel := pkgFileRel(root, pkg, file)
+				loadedFiles[rel] = true
+			}
 		}
 	}
 

@@ -293,7 +293,7 @@ func TestClockInjectionCallsite(t *testing.T) {
 	patterns := prodscan.PatternsExtended(root)
 
 	// Load with tests=true so *_test.go files are included in Syntax.
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -587,7 +587,7 @@ func TestKernelClockLeafFallback(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -812,7 +812,7 @@ func TestKernelClockResetRelativeProd(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, false, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
@@ -1125,7 +1125,7 @@ func TestProdClockInjection(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 

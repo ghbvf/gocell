@@ -76,14 +76,14 @@ func TestSlowgateAllowlist(t *testing.T) {
 	}
 	sort.Strings(patterns)
 
-	// We reuse testTimeLiteralBuildTags (the same build-tag set used by
+	// We reuse typeseval.FlatNonDefaultTags() (the same build-tag set used by
 	// TEST-TIME-LITERAL-01) because the slowgate allowlist contains
 	// integration- and pg-tagged tests (e.g. kernel/verify integration
 	// tests that exec subprocess go-toolchain) that would otherwise be
 	// invisible to packages.Load and falsely flagged as "orphan entries".
 	// Any new build tag introduced repo-wide must be added there; the two
 	// gates inherit the same scope by construction.
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 

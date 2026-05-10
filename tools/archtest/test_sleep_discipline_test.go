@@ -68,7 +68,7 @@ func TestTestSleepDiscipline(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, testTimeLiteralBuildTags, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
