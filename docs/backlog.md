@@ -41,6 +41,7 @@
 | C-06 | **L0-CELL-DECISION** — `l0Dependencies: []` 在 3 cell 全空，无任何 `type: l0` 实例，schema 字段是死代码路径；修复: 二选一 (a) 升 `pkg/query.CursorCodec` 等共享逻辑为示例 L0 cell；(b) 文档明确"L0 cell 是未来扩展点，当前无实例" | doc | P2/Cx1 | 🟡 | — | `cells/` + `kernel/metadata/` + docs | 030 §3 C-06 |
 | C-09 | **CELL-SPLIT-LAYOUT-NORMALIZE** — accesscore + configcore 三文件范式不一致：(a) `configDirectPublishMode`/`ensureCursorCodec` 是 pure helper 但放 `cell_init.go`；(b) `RegisterSubscriptions` 放 `cell_routes.go` 名不副实；修复: 引入 `cell_lifecycle.go`（订阅注册）+ `cell_helpers.go`（pure helper）命名惯例；反向迁移 + scaffold 模板同步 | refactor | P2/Cx2 | 🟡 | K-07 一并 | `cells/accesscore/` + `cells/configcore/` + scaffold | 030 §3 C-09 |
 | G-10 | **KERNEL-CELL-PACKAGE-DECOMPOSE** — kernel/cell 是 god-package：含 AuthPlan(JWT/MTLS) + Outbox EmitterFactory + Health alias；`Cell` 接口 11 方法混合生命周期与元数据自省；3 个 "registry" 命名混乱；修复: (1) `auth_plan.go` → `kernel/auth/`；(2) `mode_resolver.go` → `kernel/outbox/` + 改名 `emitter_resolver.go`；(3) `cell.Registry` → `cell.Registrar`；(4) `Cell` 拆 `CellLifecycle` + `CellDescriptor`；删 `health.go` 单行 alias | refactor | P1/Cx3 | 🟡 | 与 029 #13 PR-A22 协同 | `kernel/cell/` + `kernel/auth/` + `kernel/outbox/` + `kernel/registry/` | 030 §3 G-10 |
+| SWEEPER-OPAQUE-INTERFACE-HARD-UPGRADE-01 | **Sweeper Hard 升级** — 现状: Medium runtime fail-closed sentinel (built) 已建；修复: 改 NewSweeper 返回 opaque interface，零值不可表达 | arch-opt | P3/Cx3 | 🟢 | 出现第二个 zero-value `command.Sweeper{}` caller | `kernel/command/sweeper.go` | sweeper.go godoc + CHANGELOG PR441 |
 
 ---
 
