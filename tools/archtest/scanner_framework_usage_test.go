@@ -828,30 +828,3 @@ func _() string { return filepath.Join("a", "b") }
 		})
 	}
 }
-
-// TestScannerFrameworkUsage01_PackageAliasesExcludesDot pins the contract
-// that scanner.PackageAliases excludes dot-imports. The path-A scan no
-// longer depends on PackageAliases (it uses go/types Info), but
-// PackageAliases remains in use by 3 other archtest rules
-// (svctoken_caller_cell, role_admin_literal, outbox_invariants — pending
-// charter §6 全 archtest type-aware 升级, deferred to Wave N+ Pass-mode
-// rewrite). Drift in this helper would break those callers; this contract
-// test catches that early.
-func TestScannerFrameworkUsage01_PackageAliasesExcludesDot(t *testing.T) {
-	t.Parallel()
-	src := `package fake
-import . "path/filepath"
-`
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "fake.go", src, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	aliases := scanner.PackageAliases(file, "path/filepath")
-	if _, hasDot := aliases["."]; hasDot {
-		t.Fatal("PackageAliases must exclude dot-imports; got '.' in alias set")
-	}
-	if len(aliases) != 0 {
-		t.Fatalf("PackageAliases on dot-import-only file: expected 0 named aliases, got %d (%v)", len(aliases), aliases)
-	}
-}

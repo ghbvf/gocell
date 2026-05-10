@@ -12,27 +12,33 @@
 // unregistered cell name, which would defeat the purpose of 4-part service
 // token caller-cell propagation.
 //
-// Detection: AST walk of all production .go files, scanning call expressions
-// of the form auth.GenerateServiceToken(...). The second argument (index 1)
-// must be a string literal matching the cell-ID regex and appearing in the
-// known-cells set derived from cells/ subdirectories and actors.yaml.
+// Detection: type-aware — the SelectorExpr.X must resolve via go/types to
+// the runtime/auth PkgName (closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01:
+// the prior PackageAliases-based AST scan only matched syntactic alias
+// names; type-aware uses pkg.TypesInfo.Uses[id].(*types.PkgName).Imported()
+// to handle dot-import / blank-import / re-export cases via the type
+// checker authoritatively).
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
+	"go/types"
 	"regexp"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // ruleSvctokenCallerCellRequired01 is the archtest rule identifier; not a credential.
 //
 //nolint:gosec // G101 false positive: archtest rule identifier, not a credential
 const ruleSvctokenCallerCellRequired01 = "SVCTOKEN-CALLER-CELL-REQUIRED-01"
+
+// authRuntimeImportPath is the canonical import path for runtime/auth.
+const authRuntimeImportPath = "github.com/ghbvf/gocell/runtime/auth"
 
 // cellIDRegex is the canonical cell-ID pattern: lowercase letter + lowercase
 // alphanumeric/dash, at least 2 chars total.
@@ -50,88 +56,89 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	root := findModuleRoot(t)
 	knownCells := discoverKnownCells(t, root)
 
-	// Scan all production roots (cells/, runtime/, cmd/, examples/, tests/),
-	// including _test.go since test helpers also call GenerateServiceToken
-	// and must declare a known callerCell. Direct walk is correct here:
-	// the rule scope is wider than cell-managed code (e.g.,
-	// examples/ssobff/walkthrough_test.go is non-cell example code).
-	scope := scanner.DirsScope(root,
-		[]string{"runtime", "cells", "cmd", "examples", "tests"},
-		scanner.IncludeTests(),
-	)
+	// tests=true loads the test variants of every package, so test helpers
+	// (e.g. examples/ssobff/walkthrough_test.go) that call
+	// GenerateServiceToken are also scanned.
+	resolver, err := typeseval.SharedResolver(root, true, nil,
+		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
+	}
 
 	var diags []scanner.Diagnostic
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		authAliases := scanner.PackageAliases(fc.File, "github.com/ghbvf/gocell/runtime/auth")
-		if len(authAliases) == 0 {
-			return // file does not import runtime/auth
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
+			continue
 		}
-		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
-			if !isAuthGenerateServiceTokenCall(call, authAliases) {
-				return
-			}
-			pos := fc.Fset.Position(call.Pos())
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+				if !isAuthFuncCall(call, pkg.TypesInfo, "GenerateServiceToken") {
+					return
+				}
+				pos := pkg.Fset.Position(call.Pos())
 
-			// The 4-part signature is GenerateServiceToken(ring, callerCell, method, path, query, ts).
-			// callerCell is argument index 1 (0-based).
-			if len(call.Args) < 2 {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    pos.Line,
-					Message: "auth.GenerateServiceToken called with fewer than 2 arguments — missing callerCell",
-				})
-				return
-			}
+				// The 4-part signature is GenerateServiceToken(ring, callerCell, method, path, query, ts).
+				// callerCell is argument index 1 (0-based).
+				if len(call.Args) < 2 {
+					diags = append(diags, scanner.Diagnostic{
+						Rel:     rel,
+						Line:    pos.Line,
+						Message: "auth.GenerateServiceToken called with fewer than 2 arguments — missing callerCell",
+					})
+					return
+				}
 
-			arg1 := call.Args[1]
-			lit, isLit := arg1.(*ast.BasicLit)
-			if !isLit {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    pos.Line,
-					Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
-				})
-				return
-			}
-			callerCell, ok := scanner.StringLitValue(lit)
-			if !ok {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    pos.Line,
-					Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
-				})
-				return
-			}
+				arg1 := call.Args[1]
+				lit, isLit := arg1.(*ast.BasicLit)
+				if !isLit {
+					diags = append(diags, scanner.Diagnostic{
+						Rel:     rel,
+						Line:    pos.Line,
+						Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
+					})
+					return
+				}
+				callerCell, ok := scanner.StringLitValue(lit)
+				if !ok {
+					diags = append(diags, scanner.Diagnostic{
+						Rel:     rel,
+						Line:    pos.Line,
+						Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
+					})
+					return
+				}
 
-			if callerCell == "" {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    pos.Line,
-					Message: "auth.GenerateServiceToken callerCell must not be empty",
-				})
-				return
-			}
+				if callerCell == "" {
+					diags = append(diags, scanner.Diagnostic{
+						Rel:     rel,
+						Line:    pos.Line,
+						Message: "auth.GenerateServiceToken callerCell must not be empty",
+					})
+					return
+				}
 
-			if !cellIDRegex.MatchString(callerCell) {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    pos.Line,
-					Message: fmt.Sprintf("auth.GenerateServiceToken callerCell %q does not match ^[a-z][a-z0-9-]*$", callerCell),
-				})
-				return
-			}
+				if !cellIDRegex.MatchString(callerCell) {
+					diags = append(diags, scanner.Diagnostic{
+						Rel:     rel,
+						Line:    pos.Line,
+						Message: fmt.Sprintf("auth.GenerateServiceToken callerCell %q does not match ^[a-z][a-z0-9-]*$", callerCell),
+					})
+					return
+				}
 
-			if !knownCells[callerCell] {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:  fc.Rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						"auth.GenerateServiceToken callerCell %q is not a known cell ID"+
-							" — register it in cells/ or actors.yaml", callerCell),
-				})
-			}
-		})
-	})
+				if !knownCells[callerCell] {
+					diags = append(diags, scanner.Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"auth.GenerateServiceToken callerCell %q is not a known cell ID"+
+								" — register it in cells/ or actors.yaml", callerCell),
+					})
+				}
+			})
+		}
+	}
 	scanner.Report(t, ruleSvctokenCallerCellRequired01, diags)
 }
 
@@ -159,23 +166,27 @@ func discoverKnownCells(t *testing.T, root string) map[string]bool {
 	return known
 }
 
-// isAuthGenerateServiceTokenCall reports whether call is a call expression
-// of the form <alias>.GenerateServiceToken(...) where <alias> is one of the
-// resolved local names for runtime/auth in the current file. This is
-// import-aware so renamed imports (`import authpkg "…/runtime/auth"`) are
-// still detected.
-func isAuthGenerateServiceTokenCall(call *ast.CallExpr, authAliases map[string]struct{}) bool {
+// isAuthFuncCall reports whether call is a call expression of the form
+// `<auth-import-name>.<funcName>(...)` resolved via go/types — the receiver
+// of the SelectorExpr must be a *types.PkgName whose imported package path
+// equals authRuntimeImportPath. This is import-aware authoritatively (renamed
+// imports are handled because PkgName.Imported().Path() reports the resolved
+// import path, not the local name).
+func isAuthFuncCall(call *ast.CallExpr, info *types.Info, funcName string) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
-	if sel.Sel.Name != "GenerateServiceToken" {
+	if sel.Sel.Name != funcName {
 		return false
 	}
 	id, ok := sel.X.(*ast.Ident)
 	if !ok {
 		return false
 	}
-	_, hit := authAliases[id.Name]
-	return hit
+	pkgName, ok := info.Uses[id].(*types.PkgName)
+	if !ok {
+		return false
+	}
+	return pkgName.Imported().Path() == authRuntimeImportPath
 }

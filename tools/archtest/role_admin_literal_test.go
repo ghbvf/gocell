@@ -34,10 +34,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const (
@@ -150,47 +152,64 @@ var authCallSiteFuncNames = map[string]struct{}{
 // "admin" triggers a violation — callers must use the auth.RoleAdmin constant
 // so that role-string changes propagate atomically from the single definition
 // in runtime/auth/roles.go.
+//
+// Type-aware via typeseval.SharedResolver + go/types Info — closes the
+// PackageAliases-based detection limit (PR445-FU-PACKAGEALIASES-TYPE-AWARE-01
+// for this caller; the const-scan rule above remains AST-only because it
+// does not depend on import resolution).
 func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, searchDirsRoleAdmin)
+	// tests=false matches the original DirsScope(searchDirsRoleAdmin) which
+	// excluded *_test.go by default.
+	resolver, err := typeseval.SharedResolver(root, false, nil,
+		"./runtime/...", "./cells/...", "./adapters/...", "./cmd/...")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
+	}
 
 	var diags []scanner.Diagnostic
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		authAliases := scanner.PackageAliases(fc.File, "github.com/ghbvf/gocell/runtime/auth")
-		if len(authAliases) == 0 {
-			return // file does not import runtime/auth — selector cannot resolve to auth.*
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
+			continue
 		}
-		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return
-			}
-			if _, matched := authCallSiteFuncNames[sel.Sel.Name]; !matched {
-				return
-			}
-			id, isIdent := sel.X.(*ast.Ident)
-			if !isIdent {
-				return
-			}
-			if _, isAuthAlias := authAliases[id.Name]; !isAuthAlias {
-				return
-			}
-			scanner.EachNode[ast.BasicLit](call, func(lit *ast.BasicLit) {
-				value, ok := scanner.StringLitValue(lit)
-				if !ok || value != "admin" {
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
 					return
 				}
-				diags = append(diags, scanner.Diagnostic{
-					Rel:  fc.Rel,
-					Line: fc.Fset.Position(lit.Pos()).Line,
-					Message: `string literal "admin" passed to auth.` + sel.Sel.Name +
-						` violates ` + ruleRoleAdminLiteral02 +
-						`; use auth.RoleAdmin constant instead`,
+				if _, matched := authCallSiteFuncNames[sel.Sel.Name]; !matched {
+					return
+				}
+				id, isIdent := sel.X.(*ast.Ident)
+				if !isIdent {
+					return
+				}
+				pkgName, isPkg := pkg.TypesInfo.Uses[id].(*types.PkgName)
+				if !isPkg {
+					return
+				}
+				if pkgName.Imported().Path() != authRuntimeImportPath {
+					return
+				}
+				scanner.EachNode[ast.BasicLit](call, func(lit *ast.BasicLit) {
+					value, ok := scanner.StringLitValue(lit)
+					if !ok || value != "admin" {
+						return
+					}
+					diags = append(diags, scanner.Diagnostic{
+						Rel:  rel,
+						Line: pkg.Fset.Position(lit.Pos()).Line,
+						Message: `string literal "admin" passed to auth.` + sel.Sel.Name +
+							` violates ` + ruleRoleAdminLiteral02 +
+							`; use auth.RoleAdmin constant instead`,
+					})
 				})
 			})
-		})
-	})
+		}
+	}
 	scanner.Report(t, ruleRoleAdminLiteral02, diags)
 }

@@ -1870,20 +1870,21 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // TestOutboxHandleResultFactoryPreferred enforces
 // OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: production code (non-_test.go)
 // must use kernel/outbox factories Ack/Requeue/Reject instead of constructing
-// outbox.HandleResult{...} composite literals, except for the three files in
+// outbox.HandleResult{...} composite literals, except for the files in
 // handleResultLiteralAllowlist (factories themselves, kernel internal
 // plumbing, shared conformance harness).
 //
-// Test files (_test.go) are excluded by default (scanner.ModuleScope skips
-// them unless IncludeTests is set); generated/, vendor/, testdata/, and
-// worktrees/ are also skipped by default.
+// Test files (_test.go) are excluded by tests=false in
+// typeseval.SharedResolver; generated/, vendor/, testdata/ are skipped by
+// go list module-load defaults.
 //
-// The scanner detects two literal forms:
-//  1. <alias>.HandleResult{...} where <alias> is the local name binding the
-//     kernel/outbox import (default: "outbox", but explicit aliases are
-//     honored via scanner.PackageAliases).
-//  2. Bare HandleResult{...} when the file's package is "outbox" itself
-//     (covers any future kernel/outbox/*.go file outside the allowlist).
+// Type-aware via go/types: the scanner detects two literal forms via
+// pkg.TypesInfo:
+//  1. `<alias>.HandleResult{...}` where the SelectorExpr.X resolves to a
+//     *types.PkgName whose Imported().Path() is kernel/outbox (renamed
+//     imports are handled authoritatively by the type checker).
+//  2. Bare `HandleResult{...}` when the file's package itself is the
+//     kernel/outbox package (covers any future kernel/outbox/*.go file).
 //
 // Cannot funnel: ProcessReason and SettlementObservers are runtime-determined
 // fields populated by handler code paths and middleware, with no schema /
@@ -1893,31 +1894,31 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // kernel-internal literal construction the allowlist exists to permit.
 // Archtest enforces the path discipline that no other layer can.
 //
-// t.Parallel: this rule walks the entire module (ModuleScope), unlike the
-// single-file FROZEN-01 sibling. Parallelism is intentional here and absent
-// there to keep the cheap test serial.
+// Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01 for this rule.
 func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	files, err := scanner.ModuleScope(root).Files()
+
+	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
 	if err != nil {
-		t.Fatalf("ModuleScope.Files: %v", err)
+		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}
 
 	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
 
 	var violations []string
-	for _, abs := range files {
-		rel, err := filepath.Rel(root, abs)
-		if err != nil {
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
 			continue
 		}
-		rel = filepath.ToSlash(rel)
-		if _, ok := handleResultLiteralAllowlist[rel]; ok {
-			continue
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			if _, ok := handleResultLiteralAllowlist[rel]; ok {
+				continue
+			}
+			violations = append(violations,
+				scanForHandleResultLiterals(pkg, file, rel, outboxImportPath)...)
 		}
-		hits := scanForHandleResultLiterals(abs, rel, outboxImportPath)
-		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)
@@ -1929,44 +1930,33 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	}
 }
 
-// scanForHandleResultLiterals AST-scans the file at path for HandleResult
-// composite literals. Returns "<rel>:<line>" diagnostics. Files that neither
-// import kernel/outbox nor declare package outbox produce no hits.
-func scanForHandleResultLiterals(path, rel, outboxImportPath string) []string {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil
-	}
-
-	aliases := scanner.PackageAliases(f, outboxImportPath)
-	inPackageOutbox := f.Name != nil && f.Name.Name == "outbox"
-	if len(aliases) == 0 && !inPackageOutbox {
-		return nil
-	}
-
+// scanForHandleResultLiterals scans file for HandleResult composite literals.
+// Returns "<rel>:<line>" diagnostics. Files that neither import kernel/outbox
+// nor declare package outbox produce no hits. Type-aware via pkg.TypesInfo.
+func scanForHandleResultLiterals(pkg *packages.Package, file *ast.File, rel, outboxImportPath string) []string {
+	inPackageOutbox := pkg.PkgPath == outboxImportPath
 	var hits []string
-	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+	scanner.EachNode[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		switch tn := cl.Type.(type) {
 		case *ast.SelectorExpr:
 			ident, ok := tn.X.(*ast.Ident)
 			if !ok || tn.Sel == nil || tn.Sel.Name != "HandleResult" {
 				return
 			}
-			if _, ok := aliases[ident.Name]; !ok {
+			pkgName, isPkg := pkg.TypesInfo.Uses[ident].(*types.PkgName)
+			if !isPkg {
 				return
 			}
-			pos := fset.Position(cl.Pos())
+			if pkgName.Imported().Path() != outboxImportPath {
+				return
+			}
+			pos := pkg.Fset.Position(cl.Pos())
 			hits = append(hits, fmt.Sprintf("%s:%d: %s.HandleResult{} literal", rel, pos.Line, ident.Name))
 		case *ast.Ident:
 			if !inPackageOutbox || tn.Name != "HandleResult" {
 				return
 			}
-			pos := fset.Position(cl.Pos())
+			pos := pkg.Fset.Position(cl.Pos())
 			hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal in package outbox", rel, pos.Line))
 		}
 	})
