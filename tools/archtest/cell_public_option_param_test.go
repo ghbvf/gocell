@@ -143,6 +143,13 @@ func canonicalFromType(t types.Type, forbiddenIfaces map[string]*types.Interface
 		t = ptr.Elem()
 	}
 	t = types.Unalias(t)
+	// TypeParam: generic function parameter constrained to a forbidden type.
+	// e.g. func WithGenericTx[T persistence.TxRunner](tx T) — tv.Type is
+	// *types.TypeParam; Constraint() resolves to the bound interface/type.
+	// Without this case, a type-parameter-constrained bypass silently passes.
+	if tp, ok := t.(*types.TypeParam); ok {
+		return canonicalFromType(tp.Constraint(), forbiddenIfaces)
+	}
 	if named, ok := t.(*types.Named); ok {
 		obj := named.Obj()
 		var canon string
@@ -379,14 +386,15 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	require.NoError(t, err)
 
 	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), false)
-	require.Len(t, violations, 9,
-		"fixture must yield 9 violations: WithBadTxRunner / WithBadPublisher / "+
+	require.Len(t, violations, 10,
+		"fixture must yield 10 violations: WithBadTxRunner / WithBadPublisher / "+
 			"WithBadWriter / WithAliasedBadTxRunner (4 baseline) + "+
 			"WithBadEmbedPublisher / WithBadEmbedWriter / WithBadEmbedTxRunner "+
 			"(3 inline-interface-embed forms) + WithBadPureMethodIfaceTxRunner "+
 			"(1 pure-method anonymous interface) + "+
 			"WithBadNamedLocalEmbedPublisher (1 named local interface that embeds "+
-			"outbox.Publisher — recursive underlying inspection)")
+			"outbox.Publisher — recursive underlying inspection) + "+
+			"WithGenericTx (1 generic type param constrained to persistence.TxRunner)")
 
 	got := map[string]string{}
 	for _, v := range violations {
@@ -407,4 +415,6 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 		"pure-method anonymous interface must resolve via types.Implements fall-through")
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadNamedLocalEmbedPublisher"],
 		"named local interface that embeds outbox.Publisher must resolve via underlying recursion")
+	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithGenericTx"],
+		"generic type param constrained to TxRunner must resolve via TypeParam.Constraint()")
 }

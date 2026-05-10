@@ -97,3 +97,9 @@ type LocalRawPub interface {
 // named type's underlying *types.Interface to detect the embedded
 // forbidden type.
 func WithBadNamedLocalEmbedPublisher(p LocalRawPub) Option { return func(any) {} }
+
+// WithGenericTx is a generic function whose type parameter is constrained to
+// persistence.TxRunner. The scanner must walk *types.TypeParam.Constraint()
+// to detect this forbidden type. Without the TypeParam case in
+// canonicalFromType, this bypasses the guard.
+func WithGenericTx[T persistence.TxRunner](tx T) Option { return func(any) {} }
