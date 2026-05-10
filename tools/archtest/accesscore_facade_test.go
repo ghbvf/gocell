@@ -69,10 +69,3 @@ func scanResolveBootstrapCredentialPathCalls(t *testing.T, root, dir string) []s
 	})
 	return violations
 }
-
-func relPath(t *testing.T, root, path string) string {
-	t.Helper()
-	rel, err := filepath.Rel(root, path)
-	require.NoError(t, err)
-	return filepath.ToSlash(rel)
-}

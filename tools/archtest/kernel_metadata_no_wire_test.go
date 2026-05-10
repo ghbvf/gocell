@@ -19,8 +19,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleKernelMetadataNoWire = "KERNEL-METADATA-NO-WIRE-01"

@@ -48,6 +48,12 @@ func EachContentFile(t *testing.T, s Scope, suffixes []string, fn func(*testing.
 			t.Fatalf("scanner.EachContentFile: rel-failed: %v", relErr)
 		}
 		relSlash := filepath.ToSlash(rel)
+		// #nosec G304 -- absPath is derived from a checked-in module subtree
+		// already filtered through scope.collectFile (path-segment escape
+		// guard + selfProtect + ExcludeRels + MatchRels). archtest reads
+		// repo-resident files under module root; treating discovered paths as
+		// "user input" would force every archtest read through an arbitrary
+		// allowlist for no security gain.
 		bytes, readErr := os.ReadFile(absPath)
 		if readErr != nil {
 			t.Fatalf("scanner.EachContentFile: read %s: %v", relSlash, readErr)

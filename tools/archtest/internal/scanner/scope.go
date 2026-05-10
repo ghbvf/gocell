@@ -25,10 +25,10 @@ var defaultSkipDirs = map[string]struct{}{
 type option func(*scopeConfig)
 
 type scopeConfig struct {
-	includeTests     bool
-	excludeRels      []string
-	matchRel         func(rel string) bool
-	includeTestdata  bool
+	includeTests    bool
+	excludeRels     []string
+	matchRel        func(rel string) bool
+	includeTestdata bool
 }
 
 // IncludeTests returns an option that instructs [ModuleScope] and [DirsScope]
@@ -171,7 +171,8 @@ func newScope(modRoot string, roots []string, cfg scopeConfig) Scope {
 		valid:        true,
 	}
 	if cfg.includeTestdata && !rootsContainTestdataSegment(modRoot, roots) {
-		s.setupErr = errors.New(`scanner: IncludeTestdata requires DirsScope dirs to contain a "testdata" path segment; ModuleScope and dirs without testdata are rejected`)
+		s.setupErr = errors.New(`scanner: IncludeTestdata requires DirsScope dirs to contain a "testdata" path ` +
+			`segment; ModuleScope and dirs without testdata are rejected`)
 	}
 	return s
 }
