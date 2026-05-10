@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -90,15 +91,85 @@ func TestEachContentFile_HonorsDefaultSkipDirs(t *testing.T) {
 	}
 }
 
-// EachContentFile's t.Fatalf-on-bad-input branches (empty suffixes, missing
-// leading dot, zero-value scope) are not unit-tested. t.Fatalf calls
+// TestLoadContentFiles_Errors exercises every fail-loud branch in the pure
+// LoadContentFiles function. EachContentFile (the t.Fatalf-on-error wrapper)
+// cannot be unit-tested for the same failures because t.Fatalf calls
 // runtime.Goexit which cannot be intercepted via recover, and t.Run does not
-// isolate Goexit between parent and child tests (subtest failure auto-fails
-// parent). Adding a mock testing.T would require changing the signature from
-// *testing.T to testing.TB, expanding API surface for trivial validations
-// that are 4 lines of obvious code each. The fail-loud paths are covered by
-// the existing TestScope_ZeroValueIsRejected (zero scope errors propagate
-// through contentFiles) and code review of the suffix prefix check.
+// isolate Goexit between parent and child tests. The pure function makes
+// every error path testable via plain returns-error assertions.
+func TestLoadContentFiles_Errors(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	writeFile(t, tmp, "a.yaml", "k: v")
+	validScope := DirsScope(tmp, []string{"."})
+
+	cases := []struct {
+		name        string
+		scope       Scope
+		suffixes    []string
+		wantErr     bool
+		wantSubstr  string // non-empty means err.Error() must contain this
+		wantResults int    // expected len() when wantErr=false
+	}{
+		{
+			name:       "nil_suffixes",
+			scope:      validScope,
+			suffixes:   nil,
+			wantErr:    true,
+			wantSubstr: "suffixes must be non-empty",
+		},
+		{
+			name:       "suffix_without_leading_dot",
+			scope:      validScope,
+			suffixes:   []string{"yaml"},
+			wantErr:    true,
+			wantSubstr: `suffix "yaml" must start with '.'`,
+		},
+		{
+			name:       "zero_value_scope",
+			scope:      Scope{},
+			suffixes:   []string{".yaml"},
+			wantErr:    true,
+			wantSubstr: "Scope zero value is invalid",
+		},
+		{
+			name:       "module_scope_plus_include_testdata_propagates_setup_err",
+			scope:      ModuleScope(tmp, IncludeTestdata()),
+			suffixes:   []string{".yaml"},
+			wantErr:    true,
+			wantSubstr: "IncludeTestdata requires",
+		},
+		{
+			name:        "non_existent_root_returns_empty_no_error",
+			scope:       DirsScope(tmp, []string{"does/not/exist"}),
+			suffixes:    []string{".yaml"},
+			wantErr:     false,
+			wantResults: 0, // matches Files() silently-skip semantics for missing roots
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := LoadContentFiles(tc.scope, tc.suffixes)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (results=%v)", got)
+				}
+				if tc.wantSubstr != "" && !strings.Contains(err.Error(), tc.wantSubstr) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != tc.wantResults {
+				t.Errorf("got %d results, want %d", len(got), tc.wantResults)
+			}
+		})
+	}
+}
 
 func TestEachContentFile_HonorsExcludeRels(t *testing.T) {
 	t.Parallel()
