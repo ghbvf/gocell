@@ -32,12 +32,20 @@ import (
 // the only test in this file that fires concurrent in-flight requests during
 // cancel(). See testtime/testtime.go for the convention: per-site unique
 // deadlines should be declared file-local so the project-wide constants stay
-// semantic. testtime.SelectShutdown (5s) cannot be used here because the
-// shutdown budget itself is 5s — the outer select fallback must be strictly
-// greater than the inner shutCtx for the assertion path to win the race.
+// semantic. testtime.SelectShutdown (5s) cannot be used directly because the
+// outer select fallback must be strictly greater than the inner shutCtx for
+// the assertion path to win the race.
+//
+// Budget bumped D5s→D10s after PR #438 race CI flake at exactly 5.00s
+// (in-flight HTTP drain + dual-listener shutdown + LIFO teardown sharing
+// one shutCtx can blow past D5s under race-detector + GH runner contention).
+// The test asserts race-free shutdown — the budget value is incidental and
+// only needs to be wide enough to avoid an artificial timeout, so widen it
+// rather than introduce additional synchronization. Guard D10s→D15s
+// preserves the outer>inner invariant.
 const (
-	noCloseRaceShutdownBudget = testtime.D5s
-	noCloseRaceShutdownGuard  = testtime.D10s
+	noCloseRaceShutdownBudget = testtime.D10s
+	noCloseRaceShutdownGuard  = testtime.D15s
 )
 
 // dualListenerCell registers one /api/v1/* and one /internal/v1/* route so
