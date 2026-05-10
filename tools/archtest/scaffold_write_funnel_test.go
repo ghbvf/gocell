@@ -7,13 +7,17 @@
 //   - all-or-nothing conflict detection (no partial bundles)
 //   - atomic write with rollback (no half-written state)
 //
-// AI-rebust: Hard. Bypass requires (a) modifying this archtest's allowlist
-// AND (b) introducing a new os.* call in a scaffold path — both visible in
-// diff review. The funnel itself is the typed function call defense; the
-// archtest defense layer prevents accidental drift through new os imports.
+// AI-rebust: Medium (兜底防线).
 //
-// Cannot be Soft: this is real-source AST scan (scanner.EachFile) with
-// concrete-package allowlist, not string anchor or comment exemption.
+// Hard-level enforcement: .golangci.yml depguard rule scaffold-os-ban
+// statically forbids `import "os"` in scaffold paths at lint time (package
+// path level). This archtest covers depguard blind spots — method-level
+// bypass via reflect / unsafe / cgo, or side-effect import `_ "os"` not
+// caught by some depguard configurations.
+//
+// Two-layer defense:
+//   - depguard scaffold-os-ban → fails at golangci-lint (Hard, type-level)
+//   - this archtest → fails at go test (Medium, AST-level cross-check)
 //
 // Extension contract: when adding a new scaffold sub-package that writes
 // files, add it to the scope in TestScaffoldWriteFunnel_NoDirectOSWrites
