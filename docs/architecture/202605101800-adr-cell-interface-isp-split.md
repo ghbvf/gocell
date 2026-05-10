@@ -79,6 +79,8 @@ var (
 
 ### D6. CELL-RAW-DEPS-01 新增 + 全 cell.go 范围（吸收 PR245-F10 / 030 G-17）
 
+> **Amended by ADR `202605101900-adr-cell-raw-infra-sealed-marker.md` (2026-05-10, PR #441)**：D6 落地实体（archtest scanner + 三元组 allowlist + SHA-256 hash guard）已删除。原 archtest 仅是 Medium（按 ai-collab.md 严格定义），且仍可被 type alias / scan-范围 / interface embedding 等多类形态绕过。继任决议把 raw-infra 守护从 archtest scanner 升级为 `kernel/persistence.CellTxManager` + `kernel/outbox.Cell{Publisher,Writer}` sealed marker（type system 强制 / AI-HARD 违反不可表达），配 belt-and-suspenders 的 wrapper-location archtest（Medium，独立语义，守 `Wrap*ForCell` 调用站点）。下文保留作历史推演，**实施细节以新 ADR 为准**。
+
 新建 archtest `tools/archtest/cell_raw_deps_test.go` 守 `CELL-RAW-DEPS-01`：
 
 - **范围**：platform `cells/<x>/cell.go` + examples `examples/<demo>/cells/<x>/cell.go`（OUTBOX-CELL-01 当前 `isCellFile` 仅平台范围是 AI-HARD 漏洞——本 PR 同步修复 `ordercell` 与 `devicecell` 两处历史暴露）
