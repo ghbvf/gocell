@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -623,22 +624,51 @@ services:
 	assert.Contains(t, violations[0], "POSTGRES_PASSWORD")
 }
 
-// findExampleComposeCredentialViolations scans examples/<example>/docker-compose.yml
-// for committed credential literals. Uses scanner.DirsScope("examples") with
-// a MatchRels predicate restricting to docker-compose.yml at depth 2 to
-// preserve the original semantics (only the top-level compose file per
-// example, not nested compose.yml in sub-directories).
+// TestSEC05ExampleComposeCredentialsScansNestedDirs locks in the recursive
+// scan over examples/. Pre-Path-C the rule was 2-level (examples/<example>/
+// docker-compose.yml only), which silently failed open on
+// examples/<example>/<sub>/docker-compose.yml — a hardcoded credential in a
+// nested compose file leaks credentials just as surely as one at the top.
+// This fixture writes one top-level + one nested compose file with the same
+// fallback pattern and asserts both are flagged.
+func TestSEC05ExampleComposeCredentialsScansNestedDirs(t *testing.T) {
+	root := t.TempDir()
+	topDir := filepath.Join(root, "examples", "futuredevice")
+	nestedDir := filepath.Join(root, "examples", "futuredevice", "deploy")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+	body := []byte(`
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${FUTURE_POSTGRES_PASSWORD:-gocell}
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(topDir, "docker-compose.yml"), body, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(nestedDir, "docker-compose.yml"), body, 0o644))
+
+	violations := findExampleComposeCredentialViolations(t, root)
+	require.Len(t, violations, 2, "expected both top-level and nested compose violations: %v", violations)
+
+	rels := make([]string, 0, 2)
+	for _, v := range violations {
+		rels = append(rels, v)
+	}
+	sort.Strings(rels)
+	assert.Contains(t, rels[0], "examples/futuredevice/deploy/docker-compose.yml")
+	assert.Contains(t, rels[1], "examples/futuredevice/docker-compose.yml")
+}
+
+// findExampleComposeCredentialViolations scans every docker-compose.yml under
+// examples/ (recursive, any depth) for committed credential literals. Uses
+// scanner.DirsScope("examples") with a MatchRels predicate keyed only on
+// filename — depth is intentionally NOT constrained: a hardcoded password in
+// examples/<example>/deploy/docker-compose.yml leaks credentials just as
+// surely as one at the top level. Strict improvement over the pre-Path-C
+// two-level os.ReadDir loop, which failed open on nested compose files.
 func findExampleComposeCredentialViolations(t *testing.T, root string) []string {
 	t.Helper()
 	scope := scanner.DirsScope(root, []string{"examples"},
 		scanner.MatchRels(func(rel string) bool {
-			rel = filepath.ToSlash(rel)
-			if filepath.Base(rel) != "docker-compose.yml" {
-				return false
-			}
-			// Original 2-level walk: examples/<example>/docker-compose.yml.
-			// Reject nested compose files (examples/<a>/<b>/docker-compose.yml).
-			return strings.Count(rel, "/") == 2
+			return filepath.Base(rel) == "docker-compose.yml"
 		}),
 	)
 	var violations []string
