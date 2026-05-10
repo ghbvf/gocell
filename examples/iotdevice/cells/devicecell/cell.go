@@ -298,15 +298,15 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	// auth.clientsOnly:true → single-arg NewHandler; no policy needed, caller-cell allowlist is the guard.
 	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc)
-	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
-		Scanner:  cmdQueue,
-		Queue:    cmdQueue,
-		Filter:   kcommand.ScanFilter{},
-		Interval: 30 * time.Second,
-		OnError: func(err error) {
+	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue, c.clk,
+		kcommand.WithSweeperInterval(30*time.Second),
+		kcommand.WithSweeperOnError(func(err error) {
 			c.logger.Error("device-command sweeper error", slog.Any("error", err))
-		},
-	})
+		}))
+	if err != nil {
+		return fmt.Errorf("device-command sweeper: %w", err)
+	}
+	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper)
 	c.AddSlice(cell.NewBaseSlice("devicecommand", "devicecell", cell.L4))
 
 	// device-status slice

@@ -80,45 +80,98 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 //
 // Implements kernel/worker.Worker (Start blocks until ctx canceled; Stop idempotent).
 //
-// By default Sweeper scans all devices (Filter.DeviceID=""). Scoping to a
-// single device is a filter option, not a structural field — adapters decide
-// whether the ScanFilter is honored efficiently (e.g., indexed by device_id)
-// or scanned in memory.
+// All fields are unexported — callers MUST construct via NewSweeper, which
+// fail-fasts on missing required deps. AI-HARD per ai-collab.md
+// §"违反不可表达": &command.Sweeper{...} literal construction is impossible
+// from outside the kernel/command package, so a developer cannot accidentally
+// omit the required Clock dependency.
+//
+// Filter narrows the scan; zero value (default) means "all devices, all
+// non-terminal statuses". Adapters decide whether ScanFilter is honored
+// efficiently (e.g., indexed by device_id) or scanned in memory.
 //
 // ref: Temporal HistoryService timer scan loop — role-based periodic scan
 // over active timers; disposition (expire vs retry) is a separate decision.
 type Sweeper struct {
-	// Scanner is required. ScanActive is called on each tick with Filter.
-	Scanner ActiveScanner
-	// Queue is required. Ack(AckTimeout) finalizes expired entries to StatusExpired.
-	Queue Queue
-	// Filter narrows the scan; zero value means "all devices, all non-terminal statuses".
-	Filter ScanFilter
-	// Interval is how often to scan; defaults to 30s if zero.
-	Interval time.Duration
-	// Clk supplies the clock; use clock.Real() for production, clockmock.New() for tests.
-	// clock.MustHaveClock panics at Start time if nil.
-	Clk clock.Clock
-	// OnError is invoked on non-fatal errors during a sweep tick. nil = no-op.
-	OnError func(error)
+	scanner  ActiveScanner
+	queue    Queue
+	filter   ScanFilter
+	interval time.Duration
+	clk      clock.Clock
+	onError  func(error)
 }
 
-// Start begins the sweep loop, blocking until ctx is canceled.
-func (s *Sweeper) Start(ctx context.Context) error {
-	if s.Scanner == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: Sweeper.Scanner must be non-nil")
-	}
-	if s.Queue == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: Sweeper.Queue must be non-nil")
-	}
-	clock.MustHaveClock(s.Clk, "command.Sweeper.Start")
+// SweeperOption configures optional Sweeper fields. Pass into NewSweeper as
+// variadic args. The required positional dependencies (scanner, queue, clk)
+// are NOT exposed as options so the type system enforces their presence.
+type SweeperOption func(*Sweeper)
 
-	interval := s.Interval
+// WithSweeperFilter narrows the scan to a specific device or status set.
+// Default: zero-value ScanFilter (all devices, all non-terminal statuses).
+func WithSweeperFilter(f ScanFilter) SweeperOption {
+	return func(s *Sweeper) { s.filter = f }
+}
+
+// WithSweeperInterval sets the tick interval. Default 30s when not set or
+// when set to a non-positive value.
+func WithSweeperInterval(d time.Duration) SweeperOption {
+	return func(s *Sweeper) { s.interval = d }
+}
+
+// WithSweeperOnError registers a non-fatal error callback. nil is permitted
+// (semantically equivalent to no callback).
+func WithSweeperOnError(fn func(error)) SweeperOption {
+	return func(s *Sweeper) { s.onError = fn }
+}
+
+// NewSweeper constructs a Sweeper. The three positional parameters are all
+// required dependencies; nil triggers fail-fast per
+// runtime-api.md §"强依赖 wiring option" pattern (≈ OUTBOX-SERVICE-01).
+//
+// Example:
+//
+//	sweeper, err := command.NewSweeper(scanner, queue, clock.Real(),
+//	    command.WithSweeperInterval(30*time.Second),
+//	    command.WithSweeperOnError(func(err error) { logger.Error("sweeper", err) }),
+//	)
+//	if err != nil {
+//	    return fmt.Errorf("sweeper: %w", err)
+//	}
+func NewSweeper(scanner ActiveScanner, queue Queue, clk clock.Clock, opts ...SweeperOption) (*Sweeper, error) {
+	if scanner == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command: NewSweeper: scanner required")
+	}
+	if queue == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command: NewSweeper: queue required")
+	}
+	if clk == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command: NewSweeper: clock required")
+	}
+	s := &Sweeper{
+		scanner:  scanner,
+		queue:    queue,
+		clk:      clk,
+		interval: defaultCommandSweeperInterval,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
+}
+
+// Start begins the sweep loop, blocking until ctx is canceled. Required
+// dependencies are validated at NewSweeper construction time, so Start does
+// not re-check them.
+func (s *Sweeper) Start(ctx context.Context) error {
+	interval := s.interval
 	if interval <= 0 {
 		interval = defaultCommandSweeperInterval
 	}
 
-	ticker := s.Clk.NewTicker(interval)
+	ticker := s.clk.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -126,7 +179,7 @@ func (s *Sweeper) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C():
-			s.runTick(ctx, s.Clk.Now())
+			s.runTick(ctx, s.clk.Now())
 		}
 	}
 }
@@ -141,19 +194,19 @@ func (s *Sweeper) Stop(_ context.Context) error {
 // expirations, terminate each via Queue.Ack(AckTimeout). Non-fatal errors
 // are forwarded to OnError.
 func (s *Sweeper) runTick(ctx context.Context, now time.Time) {
-	entries, err := s.Scanner.ScanActive(ctx, s.Filter)
+	entries, err := s.scanner.ScanActive(ctx, s.filter)
 	if err != nil {
-		if s.OnError != nil {
-			s.OnError(err)
+		if s.onError != nil {
+			s.onError(err)
 		}
 		return
 	}
 
 	transitions := SweepOnce(entries, now)
 	for _, t := range transitions {
-		if err := s.Queue.Ack(ctx, t.CommandID, AckTimeout, now); err != nil {
-			if s.OnError != nil {
-				s.OnError(err)
+		if err := s.queue.Ack(ctx, t.CommandID, AckTimeout, now); err != nil {
+			if s.onError != nil {
+				s.onError(err)
 			}
 		}
 	}
