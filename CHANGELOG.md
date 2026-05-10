@@ -8,6 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **Cell `With*` Option sealed marker types** (`refactor/549-cell-iface-isp-split`, PR #441): `cells/<x>/cell.go` (platform + examples) public Options no longer accept raw infra types. Composition roots MUST wrap raw infra into sealed markers before injection.
+  - Signature changes:
+    - `accesscore/auditcore/configcore.WithTxManager(persistence.TxRunner)` → `WithTxManager(persistence.CellTxManager)`
+    - `accesscore/auditcore/configcore.WithOutboxDeps(outbox.Publisher, outbox.Writer)` → `WithOutboxDeps(outbox.CellPublisher, outbox.CellWriter)`
+    - `examples/todoorder/cells/ordercell.WithTxManager(persistence.TxRunner)` → `WithTxManager(persistence.CellTxManager)`
+    - `examples/todoorder/cells/ordercell.WithOutboxWriter(outbox.Writer)` → `WithOutboxWriter(outbox.CellWriter)`
+    - `examples/iotdevice/cells/devicecell.WithDirectPublisher(outbox.Publisher)` → `WithDirectPublisher(outbox.CellPublisher)`
+  - Migration: from composition root (`cmd/*` / `examples/<demo>/main.go` / `examples/<demo>/app.go` / `*_test.go`), wrap before calling cell `With*`:
+    - `persistence.WrapForCell(txRunner)`
+    - `outbox.WrapPublisherForCell(publisher)`
+    - `outbox.WrapWriterForCell(writer)`
+  - Cell-internal demo fallback: use `cell.DemoCellTxManager()` (returns sealed `persistence.CellTxManager`); do NOT use `cell.DemoTxRunner{}` directly inside cells (will not compile against the new field types).
+  - All 6 composition-root sites + 11 test files migrated atomically; no compatibility shim. AI-HARD per ai-collab.md §"违反不可表达" — type system rejects raw infra at compile time, no archtest scanner needed for the type-correctness layer.
+  - Surface guarded by archtest `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` (Option signature, Medium) + `CELL-RAW-INFRA-WRAPPER-LOCATION-01` (wrap call site allowlist, Medium).
+  - See ADR `docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md` (amends `202605101800` §D6).
+
+- **Sweeper construction API** (`refactor/549-cell-iface-isp-split`, PR #441): `kernel/command.Sweeper` fields are now unexported; `&kcommand.Sweeper{Scanner: ..., Queue: ..., Clk: ..., ...}` literal construction no longer compiles. Use `kcommand.NewSweeper(scanner, queue, clk, opts...) (*Sweeper, error)` factory with `kcommand.WithSweeperFilter / WithSweeperInterval / WithSweeperOnError`. Required deps fail-fast on nil at construction time (mirrors `OUTBOX-SERVICE-01` pattern). Resolves PR 441 review F2 (devicecell sweeper Clk literal panic).
+
 - **HTTP Service interface signature** (`refactor/533-typed-response-envelope`, PR #403): All 45 codegen-emitted HTTP contracts now use typed response envelope. `Service.Method(ctx, *Request) (*Response, error)` → `Service.Method(ctx, *Request) (XxxResponseObject, error)`. Business 4xx/5xx must be returned as typed structs (e.g. `Create404ErrorResponse{Body: *errcode.New(...)}`). The `error` return is reserved for undeclared framework 5xx (panic recover, infrastructure faults).
   - All 24 cell + example slice adapters migrated atomically (no compatibility shim).
   - See ADR `docs/architecture/202605061500-adr-typed-response-envelope.md`.
