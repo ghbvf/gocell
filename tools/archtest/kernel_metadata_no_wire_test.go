@@ -16,14 +16,12 @@ package archtest
 import (
 	"go/ast"
 	"go/parser"
-	"go/token"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleKernelMetadataNoWire = "KERNEL-METADATA-NO-WIRE-01"
@@ -63,28 +61,19 @@ type wireViolation struct {
 // forbidden wire-format top-level declaration names are found.
 func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 	root := findModuleRoot(t)
-	metadataDir := filepath.Join(root, "kernel", "metadata")
-
-	entries, err := os.ReadDir(metadataDir)
-	require.NoError(t, err, "cannot read kernel/metadata/")
+	scope := scanner.DirsScope(root, []string{"kernel/metadata"},
+		scanner.MatchRels(func(rel string) bool {
+			// Single-dir semantics: only files directly under kernel/metadata,
+			// no sub-packages.
+			return filepath.ToSlash(filepath.Dir(rel)) == "kernel/metadata"
+		}),
+	)
 
 	var violations []wireViolation
-	fset := token.NewFileSet()
 
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-
-		absPath := filepath.Join(metadataDir, name)
-		f, err := parser.ParseFile(fset, absPath, nil, parser.SkipObjectResolution)
-		require.NoError(t, err, "cannot parse %s", absPath)
-
-		rel, _ := filepath.Rel(root, absPath)
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+		f := fc.File
+		rel := fc.Rel
 
 		for _, decl := range f.Decls {
 			switch d := decl.(type) {
@@ -92,7 +81,7 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 				if kernelMetadataWireSymbols[d.Name.Name] {
 					violations = append(violations, wireViolation{
 						File:   rel,
-						Line:   fset.Position(d.Pos()).Line,
+						Line:   fc.Fset.Position(d.Pos()).Line,
 						Symbol: d.Name.Name,
 					})
 				}
@@ -103,7 +92,7 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 						if kernelMetadataWireSymbols[s.Name.Name] {
 							violations = append(violations, wireViolation{
 								File:   rel,
-								Line:   fset.Position(s.Pos()).Line,
+								Line:   fc.Fset.Position(s.Pos()).Line,
 								Symbol: s.Name.Name,
 							})
 						}
@@ -112,7 +101,7 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 							if kernelMetadataWireSymbols[ident.Name] {
 								violations = append(violations, wireViolation{
 									File:   rel,
-									Line:   fset.Position(ident.Pos()).Line,
+									Line:   fc.Fset.Position(ident.Pos()).Line,
 									Symbol: ident.Name,
 								})
 							}
@@ -121,7 +110,7 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 				}
 			}
 		}
-	}
+	})
 
 	if len(violations) > 0 {
 		t.Logf("%s: found %d wire-symbol declaration(s) in kernel/metadata/:",

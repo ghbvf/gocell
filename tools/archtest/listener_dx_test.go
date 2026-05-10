@@ -26,6 +26,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleListenerDXA52 = "LISTENER-DX-A52"
@@ -100,8 +102,7 @@ func TestListenerDXA52Guard(t *testing.T) {
 	})
 
 	t.Run("active_docs_do_not_show_deleted_listener_surface", func(t *testing.T) {
-		files, err := listenerDXActiveDocs(root)
-		require.NoError(t, err)
+		files := listenerDXActiveDocs(t, root)
 		var violations []string
 		for _, file := range files {
 			violations = append(violations, activeDocTermViolations(t, root, file)...)
@@ -117,56 +118,54 @@ func TestListenerDXA52Guard(t *testing.T) {
 }
 
 func listenerDXProductionGoFiles(root string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "testdata", "generated", "worktrees":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
+	scope := scanner.ModuleScope(root)
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	sort.Strings(files)
-	return files, err
+	return files, nil
 }
 
-func listenerDXActiveDocs(root string) ([]string, error) {
+// listenerDXActiveDocSkipDirs are directory base-names skipped when collecting
+// active doc files. Matches the scanner framework's defaultSkipDirs plus
+// the original walk's exclusions.
+// listenerDXActiveDocs collects absolute paths of "active" documentation
+// surfaces under root: every .md file plus every doc.go file, excluding
+// historical archives via listenerDXDocExcluded. .md is funneled through
+// scanner.EachContentFile (non-Go content), doc.go through scanner.EachFile
+// (Go AST scope; only the filename is needed but the file is still parsed,
+// which is fine — there's at most ~50 doc.go files repo-wide).
+//
+// Default scanner skipDirs (vendor / testdata / worktrees / generated /
+// .git / node_modules) supersede the previous custom set of {.git, vendor,
+// testdata, worktrees}; the additional generated/ + node_modules/ exclusions
+// are strict improvements (no doc.go or curated .md should live there).
+func listenerDXActiveDocs(t *testing.T, root string) []string {
+	t.Helper()
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+
+	mdScope := scanner.ModuleScope(root)
+	scanner.EachContentFile(t, mdScope, []string{".md"}, func(_ *testing.T, fc scanner.ContentContext) {
+		if listenerDXDocExcluded(fc.Rel) {
+			return
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "testdata", "worktrees":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if listenerDXDocExcluded(rel) {
-			return nil
-		}
-		if strings.HasSuffix(rel, ".md") || strings.HasSuffix(rel, "/doc.go") {
-			files = append(files, path)
-		}
-		return nil
+		files = append(files, fc.AbsPath)
 	})
+
+	goScope := scanner.ModuleScope(root)
+	scanner.EachFile(t, goScope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+		if filepath.Base(fc.AbsPath) != "doc.go" {
+			return
+		}
+		if listenerDXDocExcluded(fc.Rel) {
+			return
+		}
+		files = append(files, fc.AbsPath)
+	})
+
 	sort.Strings(files)
-	return files, err
+	return files
 }
 
 func listenerDXDocExcluded(rel string) bool {

@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -591,8 +593,7 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 func testSEC05ExampleComposeCredentialsFromEnv(t *testing.T, root string) {
 	t.Helper()
 
-	violations, err := findExampleComposeCredentialViolations(root)
-	require.NoError(t, err)
+	violations := findExampleComposeCredentialViolations(t, root)
 
 	if len(violations) > 0 {
 		for _, v := range violations {
@@ -617,47 +618,68 @@ services:
       RABBITMQ_DEFAULT_PASS: ${FUTURE_RABBITMQ_PASSWORD:?required}
 `), 0o644))
 
-	violations, err := findExampleComposeCredentialViolations(root)
-	require.NoError(t, err)
+	violations := findExampleComposeCredentialViolations(t, root)
 	require.Len(t, violations, 1)
 	assert.Contains(t, violations[0], "examples/futuredevice/docker-compose.yml:5")
 	assert.Contains(t, violations[0], "POSTGRES_PASSWORD")
 }
 
-func findExampleComposeCredentialViolations(root string) ([]string, error) {
-	var violations []string
-	examplesDir := filepath.Join(root, "examples")
-	err := filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if filepath.Base(path) != "docker-compose.yml" {
-			return nil
-		}
-		fileViolations, err := findComposeCredentialViolations(root, path)
-		if err != nil {
-			return err
-		}
-		violations = append(violations, fileViolations...)
-		return nil
-	})
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	return violations, err
+// TestSEC05ExampleComposeCredentialsScansNestedDirs locks in the recursive
+// scan over examples/. Pre-Path-C the rule was 2-level (examples/<example>/
+// docker-compose.yml only), which silently failed open on
+// examples/<example>/<sub>/docker-compose.yml — a hardcoded credential in a
+// nested compose file leaks credentials just as surely as one at the top.
+// This fixture writes one top-level + one nested compose file with the same
+// fallback pattern and asserts both are flagged.
+func TestSEC05ExampleComposeCredentialsScansNestedDirs(t *testing.T) {
+	root := t.TempDir()
+	topDir := filepath.Join(root, "examples", "futuredevice")
+	nestedDir := filepath.Join(root, "examples", "futuredevice", "deploy")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+	body := []byte(`
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${FUTURE_POSTGRES_PASSWORD:-gocell}
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(topDir, "docker-compose.yml"), body, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(nestedDir, "docker-compose.yml"), body, 0o644))
+
+	violations := findExampleComposeCredentialViolations(t, root)
+	require.Len(t, violations, 2, "expected both top-level and nested compose violations: %v", violations)
+
+	rels := append([]string(nil), violations...)
+	sort.Strings(rels)
+	assert.Contains(t, rels[0], "examples/futuredevice/deploy/docker-compose.yml")
+	assert.Contains(t, rels[1], "examples/futuredevice/docker-compose.yml")
 }
 
-func findComposeCredentialViolations(root, path string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	rel, _ := filepath.Rel(root, path)
-	rel = filepath.ToSlash(rel)
+// findExampleComposeCredentialViolations scans every docker-compose.yml under
+// examples/ (recursive, any depth) for committed credential literals. Uses
+// scanner.DirsScope("examples") with a MatchRels predicate keyed only on
+// filename — depth is intentionally NOT constrained: a hardcoded password in
+// examples/<example>/deploy/docker-compose.yml leaks credentials just as
+// surely as one at the top level. Strict improvement over the pre-Path-C
+// two-level os.ReadDir loop, which failed open on nested compose files.
+func findExampleComposeCredentialViolations(t *testing.T, root string) []string {
+	t.Helper()
+	scope := scanner.DirsScope(root, []string{"examples"},
+		scanner.MatchRels(func(rel string) bool {
+			return filepath.Base(rel) == "docker-compose.yml"
+		}),
+	)
+	var violations []string
+	scanner.EachContentFile(t, scope, []string{".yml"}, func(_ *testing.T, fc scanner.ContentContext) {
+		violations = append(violations, scanComposeCredentialViolations(fc.Rel, fc.Bytes)...)
+	})
+	return violations
+}
 
+// scanComposeCredentialViolations inspects compose YAML bytes for committed
+// credential literals (any line whose key matches isComposeCredentialKey
+// must use ${VAR:?required} env interpolation). Decoupled from file reading
+// so callers funneled through scanner.EachContentFile can pass bytes directly.
+func scanComposeCredentialViolations(rel string, data []byte) []string {
 	var violations []string
 	for i, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -671,7 +693,7 @@ func findComposeCredentialViolations(root, path string) ([]string, error) {
 					rel, i+1, key, secFailClosed05))
 		}
 	}
-	return violations, nil
+	return violations
 }
 
 func isComposeCredentialKey(key string) bool {
@@ -1131,33 +1153,27 @@ func (h *Hub) shutdown() {
 // Parse errors fail-visible (callers receive an error) so a syntactically
 // broken entry point cannot silently bypass the SEC scans.
 func findAllProductionMainPackageFiles(root string) ([]string, error) {
+	// ModuleScope's default skip set already excludes vendor/testdata/
+	// worktrees/generated/.git/node_modules — sufficient for the
+	// production-main scan. (ExcludeRels only matches exact file rels, not
+	// directories; the previous ExcludeRels("bak") call was a no-op and
+	// has been removed. If a future "bak/" directory needs skipping, use
+	// MatchRels with a path-segment predicate.)
+	scope := scanner.ModuleScope(root)
+	candidates, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", ".git", "generated", "testdata", "node_modules", "worktrees", "bak":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+	for _, path := range candidates {
 		fset := token.NewFileSet()
 		af, perr := parser.ParseFile(fset, path, nil, parser.PackageClauseOnly)
 		if perr != nil {
-			return fmt.Errorf("parse %s: %w", path, perr)
+			return nil, fmt.Errorf("parse %s: %w", path, perr)
 		}
 		if af.Name != nil && af.Name.Name == "main" {
 			files = append(files, path)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return files, nil
 }

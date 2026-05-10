@@ -11,20 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
 
-// skipDirs lists directory names that are always skipped during the walk.
-// worktrees is included because each worktree is an independent checkout of
-// the same repository; scanning sibling worktrees would produce false positives
-// for files that have not yet been fixed in those branches.
-var skipDirs = map[string]bool{
-	"vendor":       true,
-	".git":         true,
-	"worktrees":    true,
-	"generated":    true,
-	"node_modules": true,
-	"testdata":     true,
-}
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+)
 
 // findIntegrationTagViolations walks rootDir and returns the relative paths (from
 // rootDir) of every *_integration_test.go file that does NOT carry a //go:build
@@ -33,37 +22,25 @@ var skipDirs = map[string]bool{
 //
 // Parse failures are treated as violations (conservative / fail-closed strategy).
 func findIntegrationTagViolations(rootDir string) ([]string, error) {
+	scope := scanner.ModuleScope(rootDir, scanner.IncludeTests())
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
+
 	var violations []string
-
-	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, path := range files {
+		if !strings.HasSuffix(path, "_integration_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Only care about *_integration_test.go files.
-		if !strings.HasSuffix(d.Name(), "_integration_test.go") {
-			return nil
-		}
-
 		rel, relErr := filepath.Rel(rootDir, path)
 		if relErr != nil {
 			rel = path
 		}
-
 		ok, checkErr := fileHasIntegrationTag(path)
 		if checkErr != nil || !ok {
 			violations = append(violations, rel)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return violations, nil
 }
@@ -82,35 +59,25 @@ func findIntegrationTagViolations(rootDir string) ([]string, error) {
 // alone — otherwise the file is just an integration test by another name
 // and would be better off as *_integration_test.go.
 func findRealTagViolations(rootDir string) ([]string, error) {
+	scope := scanner.ModuleScope(rootDir, scanner.IncludeTests())
+	files, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
+
 	var violations []string
-
-	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, path := range files {
+		if !strings.HasSuffix(path, "_real_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), "_real_test.go") {
-			return nil
-		}
-
 		rel, relErr := filepath.Rel(rootDir, path)
 		if relErr != nil {
 			rel = path
 		}
-
 		ok, checkErr := fileHasStricterThanIntegrationTag(path)
 		if checkErr != nil || !ok {
 			violations = append(violations, rel)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return violations, nil
 }

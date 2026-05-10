@@ -29,10 +29,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestCellmetaSingleSource01_NoForbiddenTypes verifies CELLMETA-SINGLE-SOURCE-01.
@@ -40,7 +40,6 @@ import (
 func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	cellDir := filepath.Join(root, "kernel", "cell")
 	forbidden := map[string]bool{
 		"CellMetadata": true,
 		"Owner":        true,
@@ -48,22 +47,9 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 		"CellVerify":   true,
 		"L0Dep":        true,
 	}
-	entries, err := os.ReadDir(cellDir)
-	if err != nil {
-		t.Fatalf("read kernel/cell: %v", err)
-	}
-	fset := token.NewFileSet()
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		path := filepath.Join(cellDir, name)
-		f, perr := parser.ParseFile(fset, path, nil, 0)
-		if perr != nil {
-			t.Fatalf("parse %s: %v", path, perr)
-		}
-		for _, decl := range f.Decls {
+	scope := scanner.DirsScope(root, []string{"kernel/cell"})
+	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
+		for _, decl := range fc.File.Decls {
 			gd, ok := decl.(*ast.GenDecl)
 			if !ok || gd.Tok != token.TYPE {
 				continue
@@ -78,12 +64,12 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 						"CELLMETA-SINGLE-SOURCE-01: %s declares type %s — "+
 							"moved to kernel/metadata (CellMeta / OwnerMeta / SchemaMeta / "+
 							"CellVerifyMeta / L0DepMeta); remove duplicate type",
-						path, ts.Name.Name,
+						fc.Rel, ts.Name.Name,
 					)
 				}
 			}
 		}
-	}
+	})
 }
 
 // TestCellmetaSingleSource02_NewBaseCellSignature verifies CELLMETA-SINGLE-SOURCE-02.

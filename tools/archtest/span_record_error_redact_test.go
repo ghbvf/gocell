@@ -27,7 +27,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,6 +34,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const redactionImportPath = `"github.com/ghbvf/gocell/pkg/redaction"`
@@ -186,36 +187,15 @@ func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []
 	return out
 }
 
-// scanSpanRecordErrorDir walks every non-test .go file under root/dir and
+// scanSpanRecordErrorDir scans every non-test .go file under root/dir and
 // returns SPAN-RECORD-ERROR-REDACT-01 violations.
 func scanSpanRecordErrorDir(t *testing.T, root, dir string) []string {
 	t.Helper()
-	abs := filepath.Join(root, dir)
+	scope := scanner.DirsScope(root, []string{dir})
 	var out []string
-
-	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
-		out = append(out, scanSpanRecordErrorFile(fset, file, rel)...)
-		return nil
+	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		out = append(out, scanSpanRecordErrorFile(fc.Fset, fc.File, fc.Rel)...)
 	})
-	require.NoError(t, err, "walk %s", abs)
 	return out
 }
 
@@ -255,47 +235,21 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 	}
 
 	var unenrolled []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	scope := scanner.ModuleScope(root)
+	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		if !fileHasNonImplRecordError(fc.File) {
+			return
 		}
-		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "vendor" || name == "node_modules" ||
-				name == "testdata" || name == "worktrees" || name == "bak" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			// fail-visible: silent skip would let a future syntactically
-			// broken file silently bypass the gate.
-			rel, _ := filepath.Rel(root, path)
-			return fmt.Errorf("%s: parse failed (must be syntactically valid): %w", rel, parseErr)
-		}
-		if !fileHasNonImplRecordError(file) {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
+		rel := filepath.ToSlash(fc.Rel)
 		dir := filepath.Dir(rel)
 		// Walk up looking for any enrolled prefix.
 		for d := dir; d != "." && d != "/"; d = filepath.Dir(d) {
-			if _, ok := enrolled[d]; ok {
-				return nil
+			if _, ok := enrolled[filepath.Clean(d)]; ok {
+				return
 			}
 		}
 		unenrolled = append(unenrolled, rel)
-		return nil
 	})
-	require.NoError(t, err)
 	sort.Strings(unenrolled)
 	assert.Empty(t, unenrolled,
 		"SPAN-RECORD-ERROR-REDACT-01 coverage: production files calling "+
@@ -304,34 +258,23 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 			"the directory to the enrollment list or relocate the call.")
 }
 
-// runSpanRecordErrorFixtureScan parses fixture .go files (non-test, no module
-// load) and reports violations relative to fixtureDir.
-func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {
+// runSpanRecordErrorFixtureScan parses fixture .go files (non-test) and reports
+// violations relative to fixtureDir. Uses scanner.DirsScope+IncludeTestdata to
+// funnel through the framework even though fixtures live under testdata/
+// (the default skip set excludes testdata; IncludeTestdata is the authorized
+// opt-in).
+//
+// fixtureDirRel is the module-relative slash path to the fixture directory.
+func runSpanRecordErrorFixtureScan(t *testing.T, root, fixtureDirRel string) []string {
 	t.Helper()
+	scope := scanner.DirsScope(root, []string{fixtureDirRel}, scanner.IncludeTestdata())
 	var out []string
-	err := filepath.WalkDir(fixtureDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	scanner.EachFile(t, scope, parser.ParseComments, func(_ *testing.T, fc scanner.FileContext) {
+		if strings.HasSuffix(fc.AbsPath, "_test.go") {
+			return
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-		rel, relErr := filepath.Rel(fixtureDir, path)
-		if relErr != nil {
-			rel = path
-		}
-		out = append(out, scanSpanRecordErrorFile(fset, file, rel)...)
-		return nil
+		out = append(out, scanSpanRecordErrorFile(fc.Fset, fc.File, filepath.Base(fc.AbsPath))...)
 	})
-	require.NoError(t, err, "walk fixture %s", fixtureDir)
 	sort.Strings(out)
 	return out
 }
@@ -341,7 +284,7 @@ func runSpanRecordErrorFixtureScan(t *testing.T, fixtureDir string) []string {
 func TestSpanRecordErrorRedactedFixtures(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	base := filepath.Join(root, "tools", "archtest", "testdata", "span_record_error_fixtures")
+	baseRel := "tools/archtest/testdata/span_record_error_fixtures"
 
 	cases := []struct {
 		pkg           string
@@ -355,7 +298,7 @@ func TestSpanRecordErrorRedactedFixtures(t *testing.T) {
 		tc := tc
 		t.Run(tc.pkg, func(t *testing.T) {
 			t.Parallel()
-			got := runSpanRecordErrorFixtureScan(t, filepath.Join(base, tc.pkg))
+			got := runSpanRecordErrorFixtureScan(t, root, baseRel+"/"+tc.pkg)
 			assert.Equal(t, tc.wantViolCount, len(got),
 				"fixture %s: expected %d violation(s), got %d: %v",
 				tc.pkg, tc.wantViolCount, len(got), got)

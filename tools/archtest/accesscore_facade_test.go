@@ -4,8 +4,6 @@ package archtest
 import (
 	"go/ast"
 	"go/parser"
-	"go/token"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestAccessCoreFacadePolishA61Guard locks A61's no-shim decision: the
@@ -20,85 +20,52 @@ import (
 // and accesscore must not grow a thin top-level forwarding API again.
 func TestAccessCoreFacadePolishA61Guard(t *testing.T) {
 	root := findModuleRoot(t)
-	fset := token.NewFileSet()
 
 	t.Run("R9_no_bootstrap_credential_path_facade", func(t *testing.T) {
 		var violations []string
 
-		violations = append(violations, scanAccesscoreFacadeDeclarations(t, fset, root)...)
+		violations = append(violations, scanAccesscoreFacadeDeclarations(t, root)...)
 
 		for _, dir := range []string{"cmd", "examples"} {
-			violations = append(violations, scanResolveBootstrapCredentialPathCalls(t, fset, root, filepath.Join(root, dir))...)
+			violations = append(violations, scanResolveBootstrapCredentialPathCalls(t, root, filepath.Join(root, dir))...)
 		}
 
 		assert.Empty(t, violations, strings.Join(violations, "\n"))
 	})
 }
 
-func scanAccesscoreFacadeDeclarations(t *testing.T, fset *token.FileSet, root string) []string {
+func scanAccesscoreFacadeDeclarations(t *testing.T, root string) []string {
 	t.Helper()
 	var violations []string
-	accesscoreDir := filepath.Join(root, "cells", "accesscore")
-	entries, err := os.ReadDir(accesscoreDir)
-	require.NoError(t, err)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-		path := filepath.Join(accesscoreDir, entry.Name())
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		require.NoError(t, parseErr)
-		for _, decl := range file.Decls {
+	scope := scanner.DirsScope(root, []string{"cells/accesscore"})
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+		for _, decl := range fc.File.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if ok && fn.Recv == nil && fn.Name.Name == "ResolveBootstrapCredentialPath" {
-				violations = append(violations, relPath(t, root, path)+": exported facade ResolveBootstrapCredentialPath must be deleted")
+				violations = append(violations, fc.Rel+": exported facade ResolveBootstrapCredentialPath must be deleted")
 			}
 		}
-	}
+	})
 	return violations
 }
 
-func scanResolveBootstrapCredentialPathCalls(t *testing.T, fset *token.FileSet, root, dir string) []string {
+func scanResolveBootstrapCredentialPathCalls(t *testing.T, root, dir string) []string {
 	t.Helper()
+	rel, err := filepath.Rel(root, dir)
+	require.NoError(t, err)
+	scope := scanner.DirsScope(root, []string{filepath.ToSlash(rel)})
 	var violations []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "generated", "testdata", "vendor", "worktrees":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			return parseErr
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		ast.Inspect(fc.File, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "ResolveBootstrapCredentialPath" {
 				return true
 			}
-			pos := fset.Position(sel.Sel.Pos())
+			pos := fc.Fset.Position(sel.Sel.Pos())
 			violations = append(violations,
-				relPath(t, root, path)+":"+strconv.Itoa(pos.Line)+": call initialadmin.ResolveCredentialPath directly")
+				fc.Rel+":"+strconv.Itoa(pos.Line)+": call initialadmin.ResolveCredentialPath directly")
 			return true
 		})
-		return nil
 	})
-	require.NoError(t, err)
 	return violations
-}
-
-func relPath(t *testing.T, root, path string) string {
-	t.Helper()
-	rel, err := filepath.Rel(root, path)
-	require.NoError(t, err)
-	return filepath.ToSlash(rel)
 }

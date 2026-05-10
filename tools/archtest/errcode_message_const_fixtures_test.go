@@ -7,18 +7,16 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // runErrcodeMessageConstFixtureScan parses every non-test .go file under
@@ -28,34 +26,15 @@ import (
 // `errcode` package (see testdata/errcode_message_const/*).
 func runErrcodeMessageConstFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
+	scope := scanner.DirsScope(fixtureDir, []string{"."})
 	var out []string
-	err := filepath.WalkDir(fixtureDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		// Skip the local stub errcode pkg; only scan the usage file in the parent.
+		if filepath.Base(filepath.Dir(fc.AbsPath)) == "errcode" {
+			return
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		if filepath.Base(filepath.Dir(path)) == "errcode" {
-			// Skip the local stub pkg; only scan the usage file in the parent.
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-		rel, relErr := filepath.Rel(fixtureDir, path)
-		if relErr != nil {
-			rel = path
-		}
-		out = append(out, scanErrcodeMessageASTNoTypes(fset, file, rel)...)
-		return nil
+		out = append(out, scanErrcodeMessageASTNoTypes(fc.Fset, fc.File, fc.Rel)...)
 	})
-	require.NoError(t, err, "walk fixture %s", fixtureDir)
 	sort.Strings(out)
 	return out
 }

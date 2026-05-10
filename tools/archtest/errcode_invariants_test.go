@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
@@ -1389,39 +1390,16 @@ func unsafeSlogAttrConstructor(expr ast.Expr) (string, bool) {
 // returns DETAILS-SLOG-ATTR-01 violations.
 func scanWithDetailsDir(t *testing.T, root, dir string) []string {
 	t.Helper()
-	abs := filepath.Join(root, dir)
-	if _, err := os.Stat(abs); os.IsNotExist(err) {
-		return nil
-	}
+	scope := scanner.DirsScope(root, []string{dir})
 	var out []string
-	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
+	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
 		for _, prefix := range detailsSlogAttrAllowlist {
-			if strings.HasPrefix(rel, prefix) {
-				return nil
+			if strings.HasPrefix(fc.Rel, prefix) {
+				return
 			}
 		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-		out = append(out, scanWithDetailsFile(fset, file, rel)...)
-		return nil
+		out = append(out, scanWithDetailsFile(fc.Fset, fc.File, fc.Rel)...)
 	})
-	require.NoError(t, err, "walk %s", abs)
 	return out
 }
 
@@ -1429,30 +1407,11 @@ func scanWithDetailsDir(t *testing.T, root, dir string) []string {
 // module load) and reports violations relative to fixtureDir.
 func runDetailsSlogAttrFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
+	scope := scanner.DirsScope(fixtureDir, []string{"."})
 	var out []string
-	err := filepath.WalkDir(fixtureDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
-		}
-		rel, relErr := filepath.Rel(fixtureDir, path)
-		if relErr != nil {
-			rel = path
-		}
-		out = append(out, scanWithDetailsFile(fset, file, rel)...)
-		return nil
+	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
+		out = append(out, scanWithDetailsFile(fc.Fset, fc.File, fc.Rel)...)
 	})
-	require.NoError(t, err, "walk fixture %s", fixtureDir)
 	sort.Strings(out)
 	return out
 }

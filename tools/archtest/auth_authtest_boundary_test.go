@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestAuthAuthtestBoundary enforces three rules related to the removal of
@@ -147,35 +149,36 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 	})
 }
 
-// collectGoFiles walks the module root and returns absolute paths to all *.go
-// files, skipping vendor, hidden directories, and the tools/archtest directory
-// itself (to avoid archtest scanning its own source for rule violations that
-// reference forbidden strings in comments/test names).
+// collectGoFiles returns absolute paths to all *.go files in the module,
+// including _test.go files, skipping vendor, hidden directories, generated,
+// testdata, worktrees, and node_modules. tools/archtest is excluded to avoid
+// archtest scanning its own source for rule violations that reference forbidden
+// strings in comments/test names (AUTH-AUTHTEST-A applies its own exclusion
+// inline; B/C use path-prefix filters that naturally skip tools/archtest).
 func collectGoFiles(root string) ([]string, error) {
+	// IncludeGenerated honors the rule's "anywhere in the module" docstring:
+	// codegen output (generated/contracts/**) must also obey the boundary;
+	// otherwise a regenerated handler reintroducing auth.Authenticated() or
+	// importing runtime/auth/authtest would silently bypass the rule.
+	scope := scanner.ModuleScope(root, scanner.IncludeTests(), scanner.IncludeGenerated())
+	all, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
+	archtestRel := filepath.Join("tools", "archtest") + string(filepath.Separator)
+	archtestRelExact := filepath.Join("tools", "archtest")
 	var files []string
-	archtestDir := filepath.Join(root, "tools", "archtest")
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	for _, f := range all {
+		rel, relErr := filepath.Rel(root, f)
+		if relErr != nil {
+			continue
 		}
-		if info.IsDir() {
-			name := info.Name()
-			if name == "vendor" || (len(name) > 0 && name[0] == '.') {
-				return filepath.SkipDir
-			}
-			// Exclude archtest itself from file collection used by AUTH-AUTHTEST-B/C
-			// (AUTH-AUTHTEST-A uses grepInDir with its own exclude list).
-			if path == archtestDir {
-				return filepath.SkipDir
-			}
-			return nil
+		if rel == archtestRelExact || strings.HasPrefix(rel, archtestRel) {
+			continue
 		}
-		if strings.HasSuffix(path, ".go") {
-			files = append(files, path)
-		}
-		return nil
-	})
-	return files, err
+		files = append(files, f)
+	}
+	return files, nil
 }
 
 // parseImports parses a single Go source file and returns the list of import

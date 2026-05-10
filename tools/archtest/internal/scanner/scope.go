@@ -25,8 +25,11 @@ var defaultSkipDirs = map[string]struct{}{
 type option func(*scopeConfig)
 
 type scopeConfig struct {
-	includeTests bool
-	excludeRels  []string
+	includeTests     bool
+	excludeRels      []string
+	matchRel         func(rel string) bool
+	includeTestdata  bool
+	includeGenerated bool
 }
 
 // IncludeTests returns an option that instructs [ModuleScope] and [DirsScope]
@@ -48,6 +51,56 @@ func ExcludeRels(rels ...string) option {
 	}
 }
 
+// MatchRels returns an option that retains only files whose module-relative
+// slash path satisfies pred. Applied AFTER default skip + ExcludeRels (composes
+// AND with both — file must satisfy MatchRels AND not be in ExcludeRels).
+//
+// Use for glob-style patterns that filename-suffix alone cannot express:
+//
+//	MatchRels(func(rel string) bool { return filepath.Base(rel) == "cell.yaml" })
+//	MatchRels(func(rel string) bool { return strings.HasPrefix(filepath.Base(rel), "relay") })
+//
+// rel is in slash form on all platforms. Multiple MatchRels options are
+// chained (all predicates must return true). A nil predicate is silently
+// ignored.
+func MatchRels(pred func(rel string) bool) option {
+	return func(c *scopeConfig) {
+		if pred == nil {
+			return
+		}
+		if c.matchRel == nil {
+			c.matchRel = pred
+			return
+		}
+		prev := c.matchRel
+		c.matchRel = func(rel string) bool { return prev(rel) && pred(rel) }
+	}
+}
+
+// IncludeTestdata returns an option that allows the walk to descend into
+// directories named "testdata" (which are otherwise excluded by the default
+// skip set). Legal only when the scope's roots include at least one path
+// with a "testdata" segment relative to the module root; otherwise
+// [Scope.Files] returns an error. ModuleScope + IncludeTestdata always
+// errors — there is no legitimate use case for module-wide testdata
+// scanning, and that is precisely the regression the default skip prevents.
+func IncludeTestdata() option {
+	return func(c *scopeConfig) { c.includeTestdata = true }
+}
+
+// IncludeGenerated returns an option that allows the walk to descend into
+// directories named "generated" (which are otherwise excluded by the default
+// skip set). Use for "anywhere in the module" semantics where generated code
+// must also be subject to the rule — e.g. anti-regression rules whose
+// invariant would be defeated if codegen reintroduced the forbidden symbol.
+//
+// Unlike IncludeTestdata, no path-segment validation is required: any rule
+// that legitimately wants module-wide coverage including codegen output is
+// the use case. Combine with [ModuleScope] for repo-wide "anywhere" rules.
+func IncludeGenerated() option {
+	return func(c *scopeConfig) { c.includeGenerated = true }
+}
+
 // Scope is an opaque file-set descriptor. Obtain a value via [ModuleScope] or
 // [DirsScope]; the zero value is invalid and [Scope.Files] will return an error.
 type Scope struct {
@@ -59,12 +112,15 @@ type Scope struct {
 	skipDirs map[string]struct{}
 	// excludeRels contains relative paths (from modRoot) to exclude.
 	excludeRels map[string]struct{}
+	// matchRel, when non-nil, filters files to those for which it returns true.
+	matchRel func(rel string) bool
 	// includeTests controls whether _test.go files are included.
 	includeTests bool
 	// valid is true only when the scope was created by a constructor.
 	valid bool
-	// escapeErr is set when DirsScope detects dirs that escape modRoot.
-	escapeErr error
+	// setupErr is set when scope construction violates a contract
+	// (DirsScope dirs escape modRoot, ModuleScope+IncludeTestdata, etc.).
+	setupErr error
 }
 
 // ModuleScope creates a Scope rooted at modRoot that walks the entire module,
@@ -100,7 +156,7 @@ func DirsScope(modRoot string, dirs []string, opts ...option) Scope {
 	}
 	s := newScope(modRoot, roots, cfg)
 	if len(invalidRoots) > 0 {
-		s.escapeErr = fmt.Errorf("DirsScope: dir %q escapes module root", invalidRoots[0])
+		s.setupErr = fmt.Errorf("DirsScope: dir %q escapes module root", invalidRoots[0])
 	}
 	return s
 }
@@ -119,14 +175,59 @@ func newScope(modRoot string, roots []string, cfg scopeConfig) Scope {
 		// Normalise to OS-native separators for reliable comparison.
 		excludeRels[filepath.Clean(r)] = struct{}{}
 	}
-	return Scope{
+	s := Scope{
 		modRoot:      modRoot,
 		roots:        roots,
-		skipDirs:     defaultSkipDirs,
+		skipDirs:     buildSkipDirs(cfg),
 		excludeRels:  excludeRels,
+		matchRel:     cfg.matchRel,
 		includeTests: cfg.includeTests,
 		valid:        true,
 	}
+	if cfg.includeTestdata && !rootsContainTestdataSegment(modRoot, roots) {
+		s.setupErr = errors.New(`scanner: IncludeTestdata requires DirsScope dirs to contain a "testdata" path ` +
+			`segment; ModuleScope and dirs without testdata are rejected`)
+	}
+	return s
+}
+
+// buildSkipDirs returns the directory-name skip set for this scope. When
+// IncludeTestdata is set, "testdata" is removed from the default set; when
+// IncludeGenerated is set, "generated" is removed. Other entries
+// (vendor / worktrees / .git / node_modules) are never opt-in-able.
+func buildSkipDirs(cfg scopeConfig) map[string]struct{} {
+	if !cfg.includeTestdata && !cfg.includeGenerated {
+		return defaultSkipDirs
+	}
+	out := make(map[string]struct{}, len(defaultSkipDirs))
+	for k := range defaultSkipDirs {
+		if cfg.includeTestdata && k == "testdata" {
+			continue
+		}
+		if cfg.includeGenerated && k == "generated" {
+			continue
+		}
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+// rootsContainTestdataSegment reports whether at least one root, after being
+// expressed module-relative, contains a "testdata" path segment. Used to
+// validate that IncludeTestdata is not used to scan modRoot wholesale.
+func rootsContainTestdataSegment(modRoot string, roots []string) bool {
+	for _, root := range roots {
+		rel, err := filepath.Rel(modRoot, root)
+		if err != nil {
+			continue
+		}
+		for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+			if seg == "testdata" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // selfProtectRel is the rel-path prefix of the scanner package itself.
@@ -140,13 +241,42 @@ func (s Scope) Files() ([]string, error) {
 	if !s.valid {
 		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
 	}
-	if s.escapeErr != nil {
-		return nil, s.escapeErr
+	if s.setupErr != nil {
+		return nil, s.setupErr
 	}
 	seen := make(map[string]struct{})
 	var files []string
 	for _, root := range s.roots {
 		walked, err := walkGoFiles(s.modRoot, root, s.skipDirs, s.includeTests)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range walked {
+			if err := s.collectFile(f, seen, &files); err != nil {
+				return nil, err
+			}
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// contentFiles returns the sorted, deduplicated list of absolute file paths
+// in the scope whose path ends in any of suffixes. It mirrors [Scope.Files]
+// but with a content-suffix predicate instead of the .go filter, and is the
+// internal primitive backing [EachContentFile].
+func (s Scope) contentFiles(suffixes []string) ([]string, error) {
+	if !s.valid {
+		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
+	}
+	if s.setupErr != nil {
+		return nil, s.setupErr
+	}
+	accept := func(p string) bool { return matchesSuffix(p, suffixes) }
+	seen := make(map[string]struct{})
+	var files []string
+	for _, root := range s.roots {
+		walked, err := walkFiles(s.modRoot, root, s.skipDirs, accept)
 		if err != nil {
 			return nil, err
 		}
@@ -179,6 +309,9 @@ func (s Scope) collectFile(f string, seen map[string]struct{}, files *[]string) 
 	// ref: golangci-lint pkg/golinters/depguard — segment-boundary path match
 	if rel == selfProtectRel ||
 		strings.HasPrefix(rel, selfProtectRel+string(filepath.Separator)) {
+		return nil
+	}
+	if s.matchRel != nil && !s.matchRel(filepath.ToSlash(rel)) {
 		return nil
 	}
 	if _, dup := seen[f]; !dup {

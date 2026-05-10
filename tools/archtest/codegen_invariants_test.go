@@ -114,7 +114,8 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 	project := mustParseProject(t, root)
 
 	for _, cell := range project.Cells {
-		dir := filepath.Join(root, filepath.Dir(cell.File))
+		dirRel := filepath.ToSlash(filepath.Dir(cell.File))
+		dir := filepath.Join(root, dirRel)
 		genPath := filepath.Join(dir, "cell_gen.go")
 		if _, err := os.Stat(genPath); err != nil {
 			continue // only check cells that have a generated file
@@ -123,24 +124,20 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 			continue
 		}
 		structName := cell.GoStructName.String()
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("CODEGEN-USER-FILE-OVERLAP-01: read dir %s: %v", dir, err)
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") {
-				continue
-			}
-			if name == "cell_gen.go" || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			path := filepath.Join(dir, name)
-			if hasInitMethod(t, path, structName) {
+		scope := scanner.DirsScope(root, []string{dirRel},
+			scanner.MatchRels(func(rel string) bool {
+				if filepath.ToSlash(filepath.Dir(rel)) != dirRel {
+					return false
+				}
+				return filepath.Base(rel) != "cell_gen.go"
+			}),
+		)
+		scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+			if hasInitMethod(t, fc.AbsPath, structName) {
 				t.Errorf("CODEGEN-USER-FILE-OVERLAP-01: %s defines func (c *%s) Init — Init is owned by cell_gen.go; "+
-					"move business init logic into func (c *%s) initInternal", path, structName, structName)
+					"move business init logic into func (c *%s) initInternal", fc.Rel, structName, structName)
 			}
-		}
+		})
 	}
 }
 
@@ -158,12 +155,13 @@ func TestCodegenInitInternal01(t *testing.T) {
 		if cell.GoStructName.IsZero() {
 			continue
 		}
-		dir := filepath.Join(root, filepath.Dir(cell.File))
+		dirRel := filepath.ToSlash(filepath.Dir(cell.File))
+		dir := filepath.Join(root, dirRel)
 		genPath := filepath.Join(dir, "cell_gen.go")
 		if _, err := os.Stat(genPath); err != nil {
 			continue // CODEGEN-CELL-GEN-01 already catches missing cell_gen.go
 		}
-		violations := checkInitInternalHook(t, dir, cell.GoStructName.String())
+		violations := checkInitInternalHook(t, root, dirRel, cell.GoStructName.String())
 		for _, v := range violations {
 			t.Errorf("CODEGEN-INIT-INTERNAL-01: %s", v)
 		}
@@ -207,29 +205,22 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 
 	t.Run("marker_present", func(t *testing.T) {
 		t.Parallel()
-		dir := filepath.Join(fixtureBase, "marker_present")
+		root := findModuleRoot(t)
+		scope := scanner.DirsScope(root,
+			[]string{"tools/archtest/testdata/codegen_cell_gen_fixtures/marker_present"},
+			scanner.IncludeTestdata(),
+		)
+
 		var hits []string
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("read fixture dir %s: %v", dir, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-				continue
-			}
-			path := filepath.Join(dir, e.Name())
-			content, err := os.ReadFile(path) //nolint:gosec // test reads fixture paths it discovered itself
-			if err != nil {
-				continue
-			}
-			for i, line := range strings.Split(string(content), "\n") {
+		scanner.EachContentFile(t, scope, []string{".go"}, func(_ *testing.T, fc scanner.ContentContext) {
+			for i, line := range strings.Split(string(fc.Bytes), "\n") {
 				trim := strings.TrimSpace(line)
 				if strings.HasPrefix(trim, codegenMarkerCellPrefix) ||
 					strings.HasPrefix(trim, codegenMarkerSlicePrefix) {
-					hits = append(hits, filepath.ToSlash(path)+":"+strconv.Itoa(i+1))
+					hits = append(hits, fc.Rel+":"+strconv.Itoa(i+1))
 				}
 			}
-		}
+		})
 		if len(hits) == 0 {
 			t.Error("marker_present fixture: no marker comments detected — fixture is broken")
 		}
@@ -237,8 +228,10 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 
 	t.Run("missing_init_internal", func(t *testing.T) {
 		t.Parallel()
-		dir := filepath.Join(fixtureBase, "missing_init_internal")
-		violations := checkInitInternalHook(t, dir, "Demo")
+		root := findModuleRoot(t)
+		violations := checkInitInternalHook(t, root,
+			"tools/archtest/testdata/codegen_cell_gen_fixtures/missing_init_internal",
+			"Demo")
 		if len(violations) == 0 {
 			t.Error("missing_init_internal fixture: no violation detected — fixture is broken")
 		}
@@ -317,26 +310,14 @@ func TestCodegenContractGen02_GeneratedHeader(t *testing.T) {
 func TestCodegenContractUserOverlap01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	genContractsDir := filepath.Join(root, generatedContractsSubdir)
-
-	walkErr := filepath.WalkDir(genContractsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("walk %s: %w", path, err)
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_gen.go") {
-			return nil
+	scope := scanner.DirsScope(root, []string{generatedContractsSubdir})
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
+		if strings.HasSuffix(fc.AbsPath, "_gen.go") {
+			return
 		}
 		t.Errorf("CODEGEN-CONTRACT-USER-OVERLAP-01: %s is a hand-written .go file under generated/contracts/"+
-			" — only _gen.go files are permitted; move helpers to the consuming package", path)
-		return nil
+			" — only _gen.go files are permitted; move helpers to the consuming package", fc.AbsPath)
 	})
-	require.NoError(t, walkErr, "TestCodegenContractUserOverlap01: walk %s", genContractsDir)
 }
 
 // TestCodegenContractGates_NegativeFixtures runs the gate scanners against
@@ -382,20 +363,16 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 		dir := filepath.Join(fixtureBase, "user_file_overlap")
 		genDir := filepath.Join(dir, "generated", "contracts")
 
+		scope := scanner.DirsScope(genDir, []string{"."})
+		allFiles, filesErr := scope.Files()
+		require.NoError(t, filesErr, "user_file_overlap fixture: scan %s", genDir)
 		foundUserFile := false
-		walkErr := filepath.WalkDir(genDir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("walk %s: %w", path, err)
-			}
-			if d.IsDir() || !strings.HasSuffix(path, ".go") {
-				return nil
-			}
+		for _, path := range allFiles {
 			if !strings.HasSuffix(path, "_gen.go") {
 				foundUserFile = true
+				break
 			}
-			return nil
-		})
-		require.NoError(t, walkErr, "user_file_overlap fixture: walk %s", genDir)
+		}
 		if !foundUserFile {
 			t.Error("user_file_overlap fixture: no hand-written .go file found under generated/contracts — fixture is broken")
 		}
@@ -849,50 +826,48 @@ func findGeneratedCellFilesIn(t *testing.T, roots []string) []string {
 	t.Helper()
 	var found []string
 	for _, scanRoot := range roots {
-		walkErr := filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("walk %s: %w", path, err)
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if d.Name() == "cell_gen.go" {
+		scope := scanner.DirsScope(scanRoot, []string{"."})
+		allFiles, err := scope.Files()
+		require.NoError(t, err, "findGeneratedCellFilesIn: scanning %s", scanRoot)
+		for _, path := range allFiles {
+			if filepath.Base(path) == "cell_gen.go" {
 				found = append(found, path)
 			}
-			return nil
-		})
-		require.NoError(t, walkErr, "findGeneratedCellFilesIn: walking %s", scanRoot)
+		}
 	}
 	sort.Strings(found)
 	return found
 }
 
-// checkInitInternalHook AST-scans the .go files in dir and returns violation
-// messages when no file declares func (c *<structName>) initInternal(...).
-func checkInitInternalHook(t *testing.T, dir string, structName string) []string {
+// checkInitInternalHook AST-scans the .go files in root/dirRel and returns
+// violation messages when no file declares func (c *<structName>) initInternal(...).
+// Single-dir semantics (no sub-package recursion) preserved via MatchRels.
+// When dirRel includes a "testdata" segment (e.g. fixture-driven tests),
+// IncludeTestdata is added automatically so the default skip set does not
+// hide the fixture.
+func checkInitInternalHook(t *testing.T, root, dirRel, structName string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil // unreadable dir is surfaced by CODEGEN-CELL-GEN-01
+	dirRelSlash := filepath.ToSlash(dirRel)
+	matchRel := scanner.MatchRels(func(rel string) bool {
+		if filepath.ToSlash(filepath.Dir(rel)) != dirRelSlash {
+			return false
+		}
+		return filepath.Base(rel) != "cell_gen.go"
+	})
+	var scope scanner.Scope
+	if pathContainsSegment(dirRelSlash, "testdata") {
+		scope = scanner.DirsScope(root, []string{dirRel}, matchRel, scanner.IncludeTestdata())
+	} else {
+		scope = scanner.DirsScope(root, []string{dirRel}, matchRel)
 	}
 
 	found := false
 	var violations []string
 
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") {
-			continue
-		}
-		if name == "cell_gen.go" || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		fset := token.NewFileSet()
-		f, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			continue
-		}
+	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
+		f := fc.File
+		path := fc.Rel
+		_ = path
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
 			if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
@@ -909,16 +884,27 @@ func checkInitInternalHook(t *testing.T, dir string, structName string) []string
 				violations = append(violations, sig)
 			}
 		}
-	}
+	})
 
 	if !found && len(violations) == 0 {
 		violations = append(violations, fmt.Sprintf(
 			"cell %q (struct *%s) is missing required initInternal hook; "+
 				"implement func (c *%s) initInternal(ctx context.Context, reg cell.Registry) error in cell.go",
-			filepath.Base(dir), structName, structName,
+			filepath.Base(dirRel), structName, structName,
 		))
 	}
 	return violations
+}
+
+// pathContainsSegment reports whether slashPath has seg as a path component.
+// Avoids false positives like "abc/testdata-foo/" matching "testdata".
+func pathContainsSegment(slashPath, seg string) bool {
+	for _, p := range strings.Split(slashPath, "/") {
+		if p == seg {
+			return true
+		}
+	}
+	return false
 }
 
 // initInternalSignatureViolation returns a non-empty string when fd's
@@ -1027,23 +1013,14 @@ func findGeneratedContractFilesIn(t *testing.T, roots []string) []string {
 	t.Helper()
 	var found []string
 	for _, scanRoot := range roots {
-		walkErr := filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("walk %s: %w", path, err)
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
+		scope := scanner.DirsScope(scanRoot, []string{"."})
+		allFiles, err := scope.Files()
+		require.NoError(t, err, "findGeneratedContractFilesIn: scanning %s", scanRoot)
+		for _, path := range allFiles {
 			if strings.HasSuffix(path, "_gen.go") {
 				found = append(found, path)
 			}
-			return nil
-		})
-		require.NoError(t, walkErr, "findGeneratedContractFilesIn: walking %s", scanRoot)
+		}
 	}
 	sort.Strings(found)
 	return found
@@ -1112,19 +1089,35 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 // Helpers — spec gen topic equals contract id
 // ============================================================
 
+// Note on fixture-local DirsScope usage in this file
+// ----------------------------------------------------
+// Several rules below scan generated/contract fixture subtrees where the
+// scanned root is *not* the module root (e.g. user_file_overlap fixture root,
+// or a per-test scanRoot). For those sites we pass the fixture dir as
+// DirsScope's modRoot and use []string{"."} as dirs. This is intentional:
+//   - selfProtectRel filtering ("tools/archtest/internal/scanner") is harmless
+//     here because fixture trees never contain the scanner package
+//   - error-message rel paths are computed relative to the fixture root,
+//     which is the correct frame of reference for fixture diagnostics
+// New rules scanning module-rooted subtrees should still pass findModuleRoot(t)
+// as modRoot and a relative dir like "generated/contracts" — see line 320.
+
 // findSpecGenFiles walks dir recursively and returns all spec_gen.go paths.
+// dir is a fixture root (not module root); see "Note on fixture-local DirsScope
+// usage" above.
 func findSpecGenFiles(dir string) ([]string, error) {
+	scope := scanner.DirsScope(dir, []string{"."})
+	allFiles, err := scope.Files()
+	if err != nil {
+		return nil, err
+	}
 	var files []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && d.Name() == "spec_gen.go" {
+	for _, path := range allFiles {
+		if filepath.Base(path) == "spec_gen.go" {
 			files = append(files, path)
 		}
-		return nil
-	})
-	return files, err
+	}
+	return files, nil
 }
 
 // parseContractSpecFields parses a spec_gen.go file and extracts the ID and
@@ -1229,26 +1222,22 @@ func findAllCellInitFiles(t *testing.T, root string) []string {
 	project := mustProjectFromMetadata(t, root)
 	var files []string
 	for _, c := range project.Cells {
-		cellDir := filepath.Join(root, filepath.Dir(c.File))
-		entries, err := os.ReadDir(cellDir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			if name == "cell_gen.go" {
-				continue
-			}
-			if name == "cell.go" || strings.HasPrefix(name, "cell_") {
-				files = append(files, filepath.Join(cellDir, name))
-			}
-		}
+		cellDirRel := filepath.ToSlash(filepath.Dir(c.File))
+		scope := scanner.DirsScope(root, []string{cellDirRel},
+			scanner.MatchRels(func(rel string) bool {
+				if filepath.ToSlash(filepath.Dir(rel)) != cellDirRel {
+					return false
+				}
+				name := filepath.Base(rel)
+				if name == "cell_gen.go" {
+					return false
+				}
+				return name == "cell.go" || strings.HasPrefix(name, "cell_")
+			}),
+		)
+		scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+			files = append(files, fc.AbsPath)
+		})
 	}
 	sort.Strings(files)
 	return files

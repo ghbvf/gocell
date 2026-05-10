@@ -11,12 +11,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // INVARIANT: HTTPUTIL-5XX-KIND-NORMALIZE-01
@@ -196,12 +196,11 @@ func TestHttputilExportedRegistry(t *testing.T) {
 	t.Helper()
 
 	root := findModuleRoot(t)
-	httputil := filepath.Join(root, "pkg", "httputil")
-	docGoPath := filepath.Join(httputil, "doc.go")
+	docGoPath := filepath.Join(root, "pkg", "httputil", "doc.go")
 	governancePath := filepath.Join(root, "kernel", "governance", "rules_http.go")
 
 	// 1. Collect all exported functions from pkg/httputil (excluding test files).
-	exported := collectExportedFuncs(t, httputil)
+	exported := collectExportedFuncs(t, root, "pkg/httputil")
 
 	// 2. Collect names registered in doc.go Stable Surface comment.
 	docRegistered := collectDocRegistered(t, docGoPath)
@@ -227,25 +226,19 @@ func TestHttputilExportedRegistry(t *testing.T) {
 }
 
 // collectExportedFuncs returns a set of top-level exported function names
-// declared in non-test .go files under dir.
-func collectExportedFuncs(t *testing.T, dir string) map[string]bool {
+// declared in non-test .go files under root/dirRel (single dir, not recursive
+// into sub-packages — same shape as the original os.ReadDir loop).
+func collectExportedFuncs(t *testing.T, root, dirRel string) map[string]bool {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("readdir %s: %v", dir, err)
-	}
+	scope := scanner.DirsScope(root, []string{dirRel},
+		scanner.MatchRels(func(rel string) bool {
+			// Single-dir semantics: only files directly under dirRel, no sub-pkgs.
+			return filepath.ToSlash(filepath.Dir(rel)) == filepath.ToSlash(dirRel)
+		}),
+	)
 	result := make(map[string]bool)
-	fset := token.NewFileSet()
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
-		}
-		for _, decl := range f.Decls {
+	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
+		for _, decl := range fc.File.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok {
 				continue
@@ -259,7 +252,7 @@ func collectExportedFuncs(t *testing.T, dir string) map[string]bool {
 				result[name] = true
 			}
 		}
-	}
+	})
 	return result
 }
 
