@@ -16,7 +16,7 @@ func TestWrapSubscriber_ClaimDoneSpanEndsAfterSettlement(t *testing.T) {
 			if got := wrapper.ContractIDFromContext(ctx); got != eventSpec().ID {
 				t.Fatalf("contract id missing from handler context: %q", got)
 			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			return outbox.Ack(), nil
 		})
 
 	entry := outbox.Entry{ID: "evt-done", Topic: eventSpec().Topic}
@@ -44,7 +44,7 @@ func TestWrapSubscriber_ClaimBusySpanRecordsRequeueSettlement(t *testing.T) {
 	tr := &spyTracer{}
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}, nil
+			return outbox.Requeue(nil), nil
 		})
 
 	entry := outbox.Entry{ID: "evt-busy", Topic: eventSpec().Topic}
@@ -139,7 +139,7 @@ func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
 	t.Parallel()
 
 	ackHandler := func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		return outbox.Ack(), nil
 	}
 
 	// Structural assertions WrapSubscriber still owns: nil fn and non-event Kind
@@ -189,7 +189,7 @@ func TestWrapSubscriber_NilTracerFallsBackToNoop(t *testing.T) {
 
 	wrapped := mustWrapSubscriberForTest(t, nil, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			return outbox.Ack(), nil
 		})
 	res, settlement := wrapped(context.Background(), outbox.Entry{ID: "evt-noop", Topic: eventSpec().Topic})
 	if settlement != nil {
@@ -260,7 +260,7 @@ func TestWrapSubscriber_SettlementStatusBranches(t *testing.T) {
 			tr := &spyTracer{}
 			wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 				func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-					return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+					return outbox.Ack(), nil
 				})
 
 			entry := outbox.Entry{ID: "evt-" + tt.name, Topic: eventSpec().Topic}
@@ -285,7 +285,7 @@ func TestWrapSubscriber_SettlementObserverEndsSpanOnce(t *testing.T) {
 	tr := &spyTracer{}
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			return outbox.Ack(), nil
 		})
 
 	entry := outbox.Entry{ID: "evt-once", Topic: eventSpec().Topic}

@@ -100,7 +100,7 @@ func (c *consumerSpyCell) Init(ctx context.Context, reg cell.Registry) error {
 	}
 	handler := outbox.EntryHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 		c.calls <- entry
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 	return reg.Subscribe(c.spec, handler, "consumer-spy")
 }

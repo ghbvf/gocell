@@ -174,7 +174,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	go func() {
 		_ = eb.Subscribe(ctx, accessSub, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			accessCalls.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	}()
 
@@ -183,7 +183,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	go func() {
 		_ = eb.Subscribe(ctx, auditSub, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			auditCalls.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	}()
 

@@ -51,7 +51,7 @@ func TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels(t *testing.T) {
 			Topic:         topic,
 			ConsumerGroup: "cg-test",
 		}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	}()
 

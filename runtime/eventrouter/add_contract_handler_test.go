@@ -87,7 +87,7 @@ func configEntryUpsertedSpec() wrapper.ContractSpec {
 
 func okHandler() outbox.EntryHandler {
 	return func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 }
 

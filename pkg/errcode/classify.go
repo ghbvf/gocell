@@ -100,9 +100,9 @@ func IsDomainNotFound(err error, codes ...Code) bool {
 // KeyProvider failures in EventBus handlers:
 //
 //	if errcode.IsTransient(err) {
-//	    return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
+//	    return outbox.Requeue(err)
 //	}
-//	return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: err}
+//	return outbox.Reject(err)
 //
 // Transient conditions map to Vault HTTP 503 / 429 / 408 / 499 (sealed,
 // rate-limited, request timeout). All other KeyProvider errors are permanent

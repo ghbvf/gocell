@@ -36,7 +36,7 @@ func TestConfigEventConsumerMiddlewareUsesSubscriptionOwnerMetadata(t *testing.T
 	}
 	entry := outbox.Entry{ID: "evt-target"}
 	wrapped := mw(sub, func(context.Context, outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	result := wrapped(context.Background(), entry)
@@ -87,7 +87,7 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			attempts++
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+			return outbox.Requeue(errors.New("transient"))
 		}))
 	require.NotNil(t, capturedHandler)
 
@@ -125,10 +125,7 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 	require.NoError(t, err)
 	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionReject,
-				Err:         outbox.NewPermanentError(errors.New("bad payload")),
-			}
+			return outbox.Reject(outbox.NewPermanentError(errors.New("bad payload")))
 		}))
 	require.NotNil(t, capturedHandler)
 

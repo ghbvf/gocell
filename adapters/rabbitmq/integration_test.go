@@ -188,7 +188,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	go func() {
 		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test"}, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		}))
 	}()
 
@@ -320,7 +320,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 
 	wrappedHandler := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
+		return outbox.Requeue(assert.AnError)
 	})
 
 	subErrCh := make(chan error, 1)

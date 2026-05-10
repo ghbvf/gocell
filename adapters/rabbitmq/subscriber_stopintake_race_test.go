@@ -55,7 +55,7 @@ func TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival(t *testing.T) {
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-released
 		handlerCount.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -179,7 +179,7 @@ func runPostCancelArrivalScenario(t *testing.T) {
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-released
 		handlerCount.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{

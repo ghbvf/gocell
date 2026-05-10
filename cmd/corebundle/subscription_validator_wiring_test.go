@@ -51,7 +51,7 @@ func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Regist
 	// Intentionally omit cell.WithSubscriptionSliceID to trigger validator.
 	return reg.Subscribe(spec,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		},
 		"testcellnoowner", // consumerGroup == cell ID
 	)

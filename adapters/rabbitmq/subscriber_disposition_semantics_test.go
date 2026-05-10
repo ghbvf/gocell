@@ -81,7 +81,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 				case handlerFired <- struct{}{}:
 				default:
 				}
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 		}()
 
@@ -183,10 +183,10 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 				n := callCount.Add(1)
 				if n == 1 {
 					// First call: return Requeue so broker redelivers.
-					return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
+					return outbox.Requeue(assert.AnError)
 				}
 				// Second (and subsequent) calls: Ack.
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 		}()
 
@@ -301,10 +301,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 				default:
 				}
 				// Permanent rejection — broker should route to DLX.
-				return outbox.HandleResult{
-					Disposition: outbox.DispositionReject,
-					Err:         outbox.NewPermanentError(assert.AnError),
-				}
+				return outbox.Reject(outbox.NewPermanentError(assert.AnError))
 			}))
 		}()
 

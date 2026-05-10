@@ -408,7 +408,7 @@ func TestSubscribeOnce_SetupFailure_ReleasesInUseChannel(t *testing.T) {
 	// Subscribe returns error immediately (permanent setup failure).
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "setup.fail.topic"}, entryToSubHandler(
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			return outbox.Ack()
 		},
 	))
 	require.Error(t, err, "Subscribe must return error on permanent setup failure")
@@ -444,7 +444,7 @@ func TestSubscriptionRun_WaitAndClose_ReleasesInUseChannel(t *testing.T) {
 	go func() {
 		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "waitandclose.topic"}, entryToSubHandler(
 			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			},
 		))
 	}()

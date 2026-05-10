@@ -73,7 +73,7 @@ func TestIntegration_StopIntakeDrainsPrefetchedMessages(t *testing.T) {
 		// Slow handler — keeps multiple deliveries inflight when StopIntake fires.
 		time.Sleep(stopIntakeIntegrationHandlerDelay) //archtest:allow:test-sleep handler pacing for inflight overlap; no broker-side sync hook
 		handlerCompletes.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	subCtx, subCancel := context.WithTimeout(context.Background(), testtime.D15s)

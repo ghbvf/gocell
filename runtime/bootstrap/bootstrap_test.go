@@ -525,7 +525,7 @@ func (c *contextCaptureCell) Init(ctx context.Context, reg cell.Registry) error 
 			"correlation_id": correlationID,
 			"trace_id":       traceID,
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}, "capture-cell")
 }
 
@@ -569,7 +569,7 @@ func (c *eventCell) Init(ctx context.Context, reg cell.Registry) error {
 		return c.subErr
 	}
 	return reg.Subscribe(testEventSpec("test.topic"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}, "test")
 }
 

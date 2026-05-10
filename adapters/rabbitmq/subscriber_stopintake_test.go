@@ -57,7 +57,7 @@ func TestStopIntake_DrainSurvivesParentCtxCancel(t *testing.T) {
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-released
 		handlerCount.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -166,7 +166,7 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 		inflight.Add(1)
 		defer inflight.Add(-1)
 		<-released
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -267,7 +267,7 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-neverRelease
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -353,7 +353,7 @@ func TestStopIntake_OuterCtxCancel_DoesNotAbortDrain(t *testing.T) {
 		handlerRunning.Add(1)
 		defer handlerRunning.Add(-1)
 		<-released
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{

@@ -21,7 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func noopHandler(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	return outbox.Ack()
 }
 
 func testRegistrySpec(topic string) wrapper.ContractSpec {

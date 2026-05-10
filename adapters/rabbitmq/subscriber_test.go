@@ -59,7 +59,7 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 	handlerCalled := false
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -119,7 +119,7 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	handlerCalled := false
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -179,7 +179,7 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 	receipt := &mockReceipt{commitErr: errors.New("lease expired: token mismatch")}
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,7 +240,7 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 	receipt := &mockReceipt{} // commitErr = nil → success
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -315,7 +315,7 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		barrier.Done() // signal arrival
 		<-blockCh      // wait until all have arrived
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -382,7 +382,7 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		receipt := &countingReceipt{counter: &commitCount}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -457,7 +457,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 
 	// Handler returns immediately so processDelivery goroutines finish quickly.
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -542,7 +542,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-neverClose
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	// Inject a delivery so the handler goroutine starts (localWg.Add(1)).
@@ -623,7 +623,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	// Handler finishes quickly (50 ms) so the 30 s ceiling is never hit.
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	body := makeDeliveryBody(t, outbox.Entry{
@@ -698,7 +698,7 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 	handled := make(chan string, 1)
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handled <- e.ID
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -761,7 +761,7 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 	receipt := &mockReceipt{commitErr: commitErr}
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -829,7 +829,7 @@ func TestDispatchAck_CommitFailed_ReleasesBeforeNack(t *testing.T) {
 		recorder:  rec,
 	}
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -898,7 +898,7 @@ func TestDispatchAck_AckFail(t *testing.T) {
 
 	receipt := &mockReceipt{} // commitErr nil → Commit succeeds
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+		return outbox.Ack(), receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -958,7 +958,7 @@ func TestProcessDelivery_InvalidEntry_ValidateFailure_NacksPermanent(t *testing.
 	handlerCalled := false
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1021,7 +1021,7 @@ func TestDispatchDisposition_RejectNackFail_LogsError(t *testing.T) {
 
 	// Handler returns DispositionReject. nackErr makes Nack(requeue=false) fail.
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionReject}
+		return outbox.Reject(nil)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1137,9 +1137,7 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 	receipt := &mockReceipt{releaseErr: errors.New("release store unavailable")}
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-		}, receipt
+		return outbox.Reject(nil), receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

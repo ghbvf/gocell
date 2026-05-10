@@ -60,7 +60,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 		wgHandlers.Done() // signal arrival
 		<-released        // wait for test to release
 		handlerCount.Add(1)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -178,7 +178,7 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 	go func() {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: longTopic},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 	}()
 
@@ -241,7 +241,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -315,7 +315,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-neverClose // block until test cleanup
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.Ack()
 	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -406,7 +406,7 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	go func() {
 		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "ctx.topic"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 	}()
 
@@ -479,7 +479,7 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	go func() {
 		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "per-call.topic"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 	}()
 
@@ -554,7 +554,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	go func() {
 		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "lock.topic"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				return outbox.Ack()
 			}))
 	}()
 
