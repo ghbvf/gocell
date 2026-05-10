@@ -2,6 +2,7 @@ package outboxtest_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -154,5 +155,99 @@ func TestFakeStore_SeedOverwrite(t *testing.T) {
 	}
 	if snap[0].Attempts != 3 {
 		t.Errorf("Attempts: got %d, want 3", snap[0].Attempts)
+	}
+}
+
+// TestFakeStore_WaitFor_ImmediateSatisfaction verifies that WaitFor returns
+// nil immediately when cond is already true on the initial snapshot, without
+// blocking on any state change.
+func TestFakeStore_WaitFor_ImmediateSatisfaction(t *testing.T) {
+	s := outboxtest.NewFakeStore()
+	s.Seed(outbox.ClaimedEntry{
+		Entry: kout.Entry{
+			ID: "wf-immediate", EventType: "ev", Topic: "ev",
+			Payload: []byte(`{}`), CreatedAt: time.Now(),
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+
+	start := time.Now()
+	err := s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
+		return len(snap) == 1 && snap[0].Entry.ID == "wf-immediate"
+	})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("WaitFor returned err = %v, want nil", err)
+	}
+	if elapsed > testtime.D50ms {
+		t.Errorf("WaitFor took %v, expected near-immediate return (no polling)", elapsed)
+	}
+}
+
+// TestFakeStore_WaitFor_WakesOnMutation verifies that WaitFor blocks while
+// cond is false and wakes up immediately when a state-mutating method
+// (MarkPublished here) is called from another goroutine.
+func TestFakeStore_WaitFor_WakesOnMutation(t *testing.T) {
+	s := outboxtest.NewFakeStore()
+	s.Seed(outbox.ClaimedEntry{
+		Entry: kout.Entry{
+			ID: "wf-wake", EventType: "ev", Topic: "ev",
+			Payload: []byte(`{}`), CreatedAt: time.Now(),
+		},
+	})
+
+	// Claim so MarkPublished can transition claiming → published.
+	claimed, err := s.ClaimPending(context.Background(), 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending failed: %v, len=%d", err, len(claimed))
+	}
+	leaseID := claimed[0].LeaseID
+
+	// Trigger publish in another goroutine after a short delay so we can
+	// observe that WaitFor was actually blocked (not polling).
+	go func() {
+		time.Sleep(testtime.D20ms)
+		_, _ = s.MarkPublished(context.Background(), "wf-wake", leaseID)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+
+	start := time.Now()
+	err = s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
+		return len(snap) == 1 && snap[0].Status == "published"
+	})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("WaitFor returned err = %v, want nil", err)
+	}
+	if elapsed < testtime.D20ms {
+		t.Errorf("WaitFor returned in %v, expected to block until mutation (>= 20ms)", elapsed)
+	}
+	if elapsed > testtime.D200ms {
+		t.Errorf("WaitFor took %v, expected to wake within tens of ms after mutation", elapsed)
+	}
+}
+
+// TestFakeStore_WaitFor_CtxCancelled verifies that WaitFor returns ctx.Err()
+// when ctx is cancelled while cond is still false (no false positives).
+func TestFakeStore_WaitFor_CtxCancelled(t *testing.T) {
+	s := outboxtest.NewFakeStore()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
+	defer cancel()
+
+	err := s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
+		return len(snap) > 0 // unsatisfiable: store is empty and never seeded
+	})
+	if err == nil {
+		t.Fatal("WaitFor returned nil, want ctx deadline error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("WaitFor err = %v, want context.DeadlineExceeded", err)
 	}
 }
