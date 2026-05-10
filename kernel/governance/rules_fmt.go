@@ -1036,24 +1036,12 @@ func (v *Validator) validateFMT27() []ValidationResult {
 	return results
 }
 
+// hasFMT27AuthModeConflict delegates to metadata.AuthComboLegal so the schema
+// (contract.schema.json if/then) and governance share a single oracle. Adding
+// a new auth bool field requires updating only AuthComboLegal +
+// IterateAuthBoolCombos; no FMT-27 changes needed.
 func hasFMT27AuthModeConflict(auth metadata.HTTPAuthMeta) bool {
-	coreModes := 0
-	if auth.Public {
-		coreModes++
-	}
-	if auth.Bootstrap {
-		coreModes++
-	}
-	if auth.PasswordResetExempt {
-		coreModes++
-	}
-	if auth.ClientsOnly {
-		coreModes++
-	}
-	if coreModes > 1 {
-		return true
-	}
-	return auth.ServiceOwned && (auth.Public || auth.Bootstrap || auth.ClientsOnly)
+	return !metadata.AuthComboLegal(auth)
 }
 
 // validateFMT30 enforces that every assembly's build.deployTemplate is one of
