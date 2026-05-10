@@ -2,6 +2,7 @@ package cell
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -27,11 +28,16 @@ func (m idMock) ConsistencyLevel() Level { return m.level }
 var _ CellIdentity = (*idMock)(nil)
 
 // lifecycleMock 仅实现 CellLifecycle 三方法。
-type lifecycleMock struct{}
+// errLifecycle is injected to verify error propagation through the sub-interface.
+type lifecycleMock struct {
+	initErr  error
+	startErr error
+	stopErr  error
+}
 
-func (lifecycleMock) Init(_ context.Context, _ Registry) error { return nil }
-func (lifecycleMock) Start(_ context.Context) error            { return nil }
-func (lifecycleMock) Stop(_ context.Context) error             { return nil }
+func (m lifecycleMock) Init(_ context.Context, _ Registry) error { return m.initErr }
+func (m lifecycleMock) Start(_ context.Context) error            { return m.startErr }
+func (m lifecycleMock) Stop(_ context.Context) error             { return m.stopErr }
 
 var _ CellLifecycle = (*lifecycleMock)(nil)
 
@@ -66,8 +72,7 @@ var _ CellInventory = (*inventoryMock)(nil)
 
 // TestCellSubInterfaces_IndependentMockability documents that each sub-interface
 // can be mocked without implementing the others, satisfying ISP.
-// Both sub-cases hit cell.ResolveCellEmitter::resolveDemoEmitter pairing invariant
-// (writer XOR txRunner = error).
+// Negative paths cover lifecycle error and unhealthy/unready status mock.
 func TestCellSubInterfaces_IndependentMockability(t *testing.T) {
 	t.Parallel()
 	var ci CellIdentity = idMock{id: "x", ctype: "core", level: 1}
@@ -78,6 +83,14 @@ func TestCellSubInterfaces_IndependentMockability(t *testing.T) {
 	var cl CellLifecycle = lifecycleMock{}
 	if err := cl.Start(context.Background()); err != nil {
 		t.Errorf("CellLifecycle Start unexpected error: %v", err)
+	}
+
+	// Negative path: CellLifecycle sub-interface can independently return errors.
+	wantErr := errors.New("lifecycle-start-failed")
+	errMock := lifecycleMock{startErr: wantErr}
+	var clErr CellLifecycle = errMock
+	if err := clErr.Start(context.Background()); !errors.Is(err, wantErr) {
+		t.Errorf("CellLifecycle Start with error mock = %v, want %v", err, wantErr)
 	}
 
 	var cs CellStatus = statusMock{healthy: true, ready: true}
@@ -106,6 +119,7 @@ func TestCellSubInterfaces_IndependentMockability(t *testing.T) {
 // satisfied by *BaseCell — the canonical witness that satisfying all four
 // sub-interfaces (each pinned at base.go via independent compile-time checks)
 // is equivalent to satisfying the composite.
+// Compile-time guarded by 4-segment `var _` check in base.go; this test serves as documentation of the equivalence invariant.
 func TestCell_CompositeEquivalence(t *testing.T) {
 	t.Parallel()
 	var c Cell = (*BaseCell)(nil) // composite satisfied via 4-segment checks
