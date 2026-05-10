@@ -120,27 +120,22 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 	var violations []string
 
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			ident, ok := sel.X.(*ast.Ident)
 			if !ok {
-				return true
+				return
 			}
 			if ident.Name != "os" {
-				return true
+				return
 			}
 			if bannedSelectors[sel.Sel.Name] {
 				pos := fc.Fset.Position(call.Lparen)
 				violations = append(violations, fc.Rel+":"+strconv.Itoa(pos.Line)+": os."+sel.Sel.Name+"(...)")
 			}
-			return true
 		})
 	})
 
