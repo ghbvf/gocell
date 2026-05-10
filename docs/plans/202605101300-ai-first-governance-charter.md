@@ -115,20 +115,6 @@
 
 ---
 
-## 5. 废弃叙事
-
-废弃以下原叙事（沿用历史 ✅ commit 不动，仅丢弃未来路线图叙事）：
-- ❌ "5-PR 主线（PR-Φ / PR-A' / PR-B / PR-C / PR-D'）" 形式叙事 —— 改 Wave 制
-- ❌ "Batch 1 / Batch 2 / Batch 3" 切片叙事
-- ❌ "PR-G frozen allowlist + ratchet" 思路（Path C 已证实是反模式）
-- ❌ "USAGE-02 substring + 自由 category 锚点" 思路（已删）
-- ❌ "迁移等价性 fixture 框架"（PR-Ε 提案）—— Soft 档，AI 可造假
-- ❌ "panic 就地注释 `// PANIC-REGISTERED-01: ADR-approved:`" —— Soft 档，AI 可写任意 reason
-
-替代叙事：**Wave 1/2/3/4 + AI-rebust 等级分类**。
-
----
-
 ## 6. 设计原则（替代原 5-PR plan §2 决策段）
 
 1. **不建 Registry / 中心化注册表**（保留）

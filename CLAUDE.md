@@ -70,23 +70,9 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 2. 改完 `go build ./...`，涉及逻辑 `go test ./...`
 3. 只改需要改的
 
-## 新增 invariant 决策原则
+## AI 协作章程
 
-新增任何"约束"（archtest / governance rule / godoc 强约定）前，按以下优先级决策载体：
-
-1. **funnel + codegen**：能否用 schema/marker 单源 → codegen 派生执行体？能 → 走这条
-2. **type system 自然拦**：能否用 Go interface / typed struct 让违反不可表达？能 → 走这条（注：type system 与 archtest 可并存——凡涉及 PII / 安全语义的约束，即使已有类型拦截，仍须评估是否需要 archtest 双重防线，例如 `MESSAGE-CONST-LITERAL-01` / `DETAILS-SLOG-ATTR-01`）
-3. **archtest 平铺兜底**：上面两条都不行 → 一个 `tools/archtest/{theme}_invariants_test.go` 主题文件，每个规则函数前 godoc 加 `// INVARIANT: {ID}` 锚点 + 不能 funnel 的理由
-
-**文件命名分支**：同主题规则数 ≥ 3 → 新建或扩展 `{theme}_invariants_test.go` 主题文件；单条独立规则 → 保留 `{rule}_test.go` 单文件命名。已有 `{rule}_test.go` 单文件且新增同主题第 3 条规则时，重命名为 `{theme}_invariants_test.go` 并补完 anchor。
-
-**不准建 Registry / 中心化注册表**。多份文档用 grep 锚点串联（grep `INVARIANT: {ID}` 跳全套）。
-
-主流对照（K8s / CockroachDB / Linux / Rust / Go 工具链）都接受 funnel 不到的残留，平铺管理。详见 `docs/plans/202605070431-pr403-funnel-fix-roadmap.md`。
-
-## 依赖选择原则
-
-实现外部协议/标准（密码学、签名、OIDC、migration、可观测性导出等）必须优先使用官方或成熟开源库，禁止自建；实现 GoCell 领域逻辑（Cell/Slice 模型、治理规则、outbox 接口等）保留自建。详见 `docs/reviews/202604061630-dependency-replacement-plan.md`。
+主要实施者是 AI。新增/修改约束 enforcement 机制（archtest / governance rule / codegen funnel / type marker / godoc 强约定）按 AI-rebust 三档（Hard / Medium / Soft）评级；Soft 严禁立项。载体决策原则、archtest 文件命名、review checklist 详见 `.claude/rules/gocell/ai-collab.md`。
 
 ## 参考框架
 
