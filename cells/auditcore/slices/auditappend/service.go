@@ -140,26 +140,26 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 
 	// Extract actor identity from payload.
 	// Priority: actorId (admin-write events) > userId (session.* events).
-	// Producer-side schemas declare actorId/userId as required; reaching the
-	// missing-actor branch indicates upstream contract violation and routes
+	// Producer-side schemas declare actorId/userId as required; payloads that
+	// fail to decode into the actor struct (non-object JSON) or that resolve
+	// to an empty actor both indicate upstream contract violation and route
 	// to DLX (PermanentError) rather than polluting the audit chain.
-	var actorID string
-	{
-		var payload struct {
-			ActorID string `json:"actorId"`
-			UserID  string `json:"userId"`
-		}
-		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
-			s.logger.Warn("audit-append: failed to extract actor from payload",
-				slog.Any("error", err),
-				slog.String("event_id", entry.ID),
-				slog.String("event_type", entry.EventType))
-		} else {
-			actorID = payload.ActorID
-			if actorID == "" {
-				actorID = payload.UserID
-			}
-		}
+	var payload struct {
+		ActorID string `json:"actorId"`
+		UserID  string `json:"userId"`
+	}
+	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+		s.logger.Warn("audit-append: actor missing — rejecting event",
+			slog.Any("error", err),
+			slog.String("event_id", entry.ID),
+			slog.String("event_type", entry.EventType))
+		return outbox.Reject(outbox.NewPermanentError(
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"audit-append: event payload missing required actor identity")))
+	}
+	actorID := payload.ActorID
+	if actorID == "" {
+		actorID = payload.UserID
 	}
 	if actorID == "" {
 		s.logger.Warn("audit-append: actor missing — rejecting event",

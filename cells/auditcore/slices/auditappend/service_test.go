@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -107,10 +108,9 @@ func TestNewService_HMACKeyTooShort(t *testing.T) {
 
 func TestService_HandleEvent(t *testing.T) {
 	tests := []struct {
-		name       string
-		entry      outbox.Entry
-		wantReject bool
-		wantChain  int
+		name      string
+		entry     outbox.Entry
+		wantChain int
 	}{
 		{
 			name: "user created event",
@@ -145,14 +145,9 @@ func TestService_HandleEvent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, repo := newTestService(t)
 
-			result := svc.HandleEvent(context.Background(), tt.entry)
-			if tt.wantReject {
-				assertReject(t, result)
-			} else {
-				assertAck(t, result)
-				assert.Equal(t, tt.wantChain, svc.ChainLen())
-				assert.Equal(t, tt.wantChain, repo.Len())
-			}
+			assertAck(t, svc.HandleEvent(context.Background(), tt.entry))
+			assert.Equal(t, tt.wantChain, svc.ChainLen())
+			assert.Equal(t, tt.wantChain, repo.Len())
 		})
 	}
 }
@@ -287,36 +282,48 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 }
 
 // TestService_HandleEvent_ActorMissing_Reject locks the fail-closed contract:
-// when both actorId and userId are absent or empty, HandleEvent must return
-// DispositionReject (DLX path) wrapping a PermanentError, and the audit chain
-// must remain untouched. Producer-side schemas already declare these fields
-// as required; reaching this branch indicates upstream contract violation
-// and routing the event to DLX preserves audit traceability.
+// when the payload cannot resolve to a non-empty actor (object missing the
+// fields, explicit empty values, JSON that is not a struct-shaped object),
+// HandleEvent must return DispositionReject (DLX path) wrapping a
+// PermanentError, and the audit chain must remain untouched. Producer-side
+// schemas already declare actorId/userId as required; reaching this branch
+// indicates upstream contract violation and routing the event to DLX
+// preserves audit traceability.
 func TestService_HandleEvent_ActorMissing_Reject(t *testing.T) {
 	tests := []struct {
 		name      string
 		eventType string
-		payload   map[string]any
+		payload   []byte
 	}{
 		{
 			name:      "config event missing actorId (no userId fallback)",
 			eventType: "event.config.entry-upserted.v1",
-			payload:   map[string]any{"key": "k", "version": 1},
+			payload:   mustJSON(t, map[string]any{"key": "k", "version": 1}),
 		},
 		{
 			name:      "user event missing both actorId and userId",
 			eventType: "event.user.created.v1",
-			payload:   map[string]any{"username": "bob"},
+			payload:   mustJSON(t, map[string]any{"username": "bob"}),
 		},
 		{
 			name:      "explicit empty strings for actorId and userId",
 			eventType: "event.user.locked.v1",
-			payload:   map[string]any{"actorId": "", "userId": ""},
+			payload:   mustJSON(t, map[string]any{"actorId": "", "userId": ""}),
 		},
 		{
 			name:      "snake_case user_id is not a recognized field",
 			eventType: "event.user.created.v1",
-			payload:   map[string]any{"user_id": "usr-2", "username": "bob"},
+			payload:   mustJSON(t, map[string]any{"user_id": "usr-2", "username": "bob"}),
+		},
+		{
+			name:      "valid JSON array is not an object",
+			eventType: "event.user.created.v1",
+			payload:   []byte(`[]`),
+		},
+		{
+			name:      "valid JSON null is not an object",
+			eventType: "event.user.created.v1",
+			payload:   []byte(`null`),
 		},
 	}
 	for _, tt := range tests {
@@ -331,7 +338,7 @@ func TestService_HandleEvent_ActorMissing_Reject(t *testing.T) {
 			entry := outbox.Entry{
 				ID:        "evt-actor-missing",
 				EventType: tt.eventType,
-				Payload:   mustJSON(t, tt.payload),
+				Payload:   tt.payload,
 			}
 
 			result := svc.HandleEvent(context.Background(), entry)
@@ -346,12 +353,16 @@ func TestService_HandleEvent_ActorMissing_Reject(t *testing.T) {
 			assert.Equal(t, 0, repo.Len(), "rejected event must not be persisted")
 
 			// Log line carries event_id / event_type as structured fields and
-			// must NOT contain the literal "system" fallback marker.
+			// must NOT contain the literal "system" fallback marker. Exactly
+			// one Warn line is emitted for the entire reject path (single-Warn
+			// invariant — see service.go HandleEvent actor-extraction block).
 			logEntry := sloghelper.FindLogEntry(logBuf.String(), "audit-append: actor missing")
 			require.NotNil(t, logEntry, "expected Warn log line for missing actor")
 			assert.Equal(t, "WARN", logEntry["level"], "missing actor must emit at WARN level")
 			assert.Equal(t, "evt-actor-missing", logEntry["event_id"], "log line must carry event_id")
 			assert.Equal(t, tt.eventType, logEntry["event_type"], "log line must carry event_type")
+			assert.Equal(t, 1, strings.Count(logBuf.String(), `"audit-append: actor missing`),
+				"reject path must emit exactly one Warn log line, not one per check")
 			assert.NotContains(t, logBuf.String(), `"system"`,
 				`fail-closed reject must not log the legacy "system" fallback marker`)
 		})
