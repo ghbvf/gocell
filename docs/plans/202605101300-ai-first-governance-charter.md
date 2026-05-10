@@ -70,7 +70,7 @@
 
 | 条目 | 当前 backlog 优先级 | AI-rebust 评级 | 真正应做的 |
 |---|---|---|---|
-| `PR430-FU-USAGE-01-TYPE-AWARE`（receiver method bypass）| P2/触发型 | 当前 Hard 但有边界（receiver method 类型识别需 packages.Load）| **升 P1 但不立即做**——packages.Load 性价比仍要等 Pass 模式重写成本可摊销；当前用 docstring 显式 known-limitation 应急 |
+| ~~`PR430-FU-USAGE-01-TYPE-AWARE`（receiver method bypass）~~| ~~P2/触发型~~ | ~~当前 Hard 但有边界~~ | **CLOSED — merged into PR-Φ** (refactor/552-archtest-eachnode-funnel)：packages.Load 入口由 PR-Φ 路径 B 强制引入后成本已 sunk，SCANNER-FRAMEWORK-USAGE-01 整规则一次性升 type-aware 顺手清。`forbiddenWalkRefs` 现走 `*types.Info`（package-level + receiver method 同时拦截）。 |
 | `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES`（迁移等价性 fixture 框架）| P3/触发型 | **Soft**（fixture 也 AI 可造假）| **撤回**——fixture 框架不解决 AI 漂移；改靠 review checklist + AI-rebust 升级累积消除 |
 | `PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01`（scope.go Files/contentFiles 双轨 + 注释/行为不一致）| P2/Cx2 | Medium（refactor 提升整洁度）| 保留 |
 | `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01`（5 case 漂移）| P1/Cx2 | — bug 修复无 AI-rebust 维度 | 保留 |
