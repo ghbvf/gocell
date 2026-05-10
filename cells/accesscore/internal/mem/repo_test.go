@@ -307,6 +307,29 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 	assert.Equal(t, 1, count, "exactly one admin holder must survive concurrent revokes")
 }
 
+// TestRoleRepository_RemoveFromUserIfNotLast_NonAdminScopeNotProtected verifies
+// that the last-holder guard is admin-scoped (ADR-admin-invariant §3.2). For
+// non-admin roles, RemoveFromUserIfNotLast must allow revocation down to zero
+// holders — otherwise transient high-privilege roles cannot be reclaimed and
+// leak forever.
+func TestRoleRepository_RemoveFromUserIfNotLast_NonAdminScopeNotProtected(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+	repo.SeedRole(&domain.Role{ID: "editor", Name: "editor"})
+
+	_, err := repo.AssignToUser(ctx, "u1", "editor")
+	require.NoError(t, err)
+
+	// Sole holder of a non-admin role MUST be removable (count drops to 0).
+	changed, err := repo.RemoveFromUserIfNotLast(ctx, "u1", "editor")
+	require.NoError(t, err, "non-admin sole holder must be revocable")
+	assert.True(t, changed, "non-admin removal must report state change")
+
+	count, err := repo.CountByRole(ctx, "editor")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "non-admin role must drop to zero holders")
+}
+
 // TestRoleRepository_GetByUserID_NoRoles verifies that a user with no role
 // assignments returns a non-nil empty slice, not nil. This is a hygiene guard
 // against future callers that serialize the result directly (nil → JSON null).

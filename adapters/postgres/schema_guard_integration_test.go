@@ -4,10 +4,14 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestVerifyExpectedVersion_Integration verifies that after applying all
@@ -304,4 +308,248 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 	require.Error(t, err, "should return error when DB is lagged")
 	assert.Contains(t, err.Error(), "schema version mismatch",
 		"error message should mention schema version mismatch")
+}
+
+// ---------------------------------------------------------------------------
+// VerifyExpectedShape tests
+// ---------------------------------------------------------------------------
+
+// attrsContainKV is a helper that checks if any slog.Attr in attrs has the
+// given key and string value.
+func attrsContainKV(attrs []slog.Attr, key, value string) bool {
+	for _, a := range attrs {
+		if a.Key == key && a.Value.String() == value {
+			return true
+		}
+	}
+	return false
+}
+
+// TestVerifyExpectedShape_AllColumnsPresent verifies that after all migrations
+// are applied, VerifyExpectedShape returns nil (no shape drift).
+func TestVerifyExpectedShape_AllColumnsPresent(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_happy")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	err = VerifyExpectedShape(ctx, pool)
+	assert.NoError(t, err, "VerifyExpectedShape should return nil after full Up()")
+}
+
+// TestVerifyExpectedShape_MissingRequiredColumn verifies that dropping a
+// required column causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with details naming the missing table and column.
+func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_missing")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Drop a required column so VerifyExpectedShape detects the drift.
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE users DROP COLUMN authz_epoch`)
+	require.NoError(t, execErr, "DROP COLUMN must succeed (superuser in testcontainer)")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must return error when required column is missing")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code,
+		"error code must be ErrAdapterPGSchemaShape")
+	assert.Contains(t, ec.Message, "required column missing",
+		"message must describe the fault")
+	assert.True(t, attrsContainKV(ec.Details, "table", "users"),
+		"details must contain table=users; got %v", ec.Details)
+	assert.True(t, attrsContainKV(ec.Details, "column", "authz_epoch"),
+		"details must contain column=authz_epoch; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_ForbiddenColumnPresent verifies that adding a
+// forbidden legacy column causes VerifyExpectedShape to return
+// ErrAdapterPGSchemaShape with details naming the offending table and column.
+func TestVerifyExpectedShape_ForbiddenColumnPresent(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_forbidden")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Re-introduce the legacy column to simulate a partial migration.
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE sessions ADD COLUMN access_token TEXT`)
+	require.NoError(t, execErr, "ADD COLUMN must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must return error when forbidden column exists")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code,
+		"error code must be ErrAdapterPGSchemaShape")
+	assert.Contains(t, ec.Message, "forbidden legacy column present",
+		"message must describe the fault")
+	assert.True(t, attrsContainKV(ec.Details, "table", "sessions"),
+		"details must contain table=sessions; got %v", ec.Details)
+	assert.True(t, attrsContainKV(ec.Details, "column", "access_token"),
+		"details must contain column=access_token; got %v", ec.Details)
+}
+
+// ---------------------------------------------------------------------------
+// VerifyNoInvalidIndexes tests
+// ---------------------------------------------------------------------------
+
+// TestVerifyNoInvalidIndexes_NoneInvalid verifies that after applying all
+// migrations, VerifyNoInvalidIndexes returns nil (no invalid indexes).
+func TestVerifyNoInvalidIndexes_NoneInvalid(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_valid_idx")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	err = VerifyNoInvalidIndexes(ctx, pool)
+	assert.NoError(t, err, "VerifyNoInvalidIndexes should return nil when no invalid indexes exist")
+}
+
+// TestVerifyNoInvalidIndexes_DetectInvalid verifies that VerifyNoInvalidIndexes
+// returns ErrAdapterPGInvalidIndex when at least one index is marked invalid.
+func TestVerifyNoInvalidIndexes_DetectInvalid(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_invalidcheck")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Mark an existing index as invalid via pg_index (requires superuser).
+	_, execErr := pool.DB().Exec(ctx,
+		`UPDATE pg_index SET indisvalid = false
+		 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+	require.NoError(t, execErr, "injecting invalid index must succeed (requires superuser)")
+
+	// Restore after test.
+	defer func() {
+		_, _ = pool.DB().Exec(ctx,
+			`UPDATE pg_index SET indisvalid = true
+			 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+	}()
+
+	err = VerifyNoInvalidIndexes(ctx, pool)
+	require.Error(t, err, "VerifyNoInvalidIndexes must return error when invalid indexes exist")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGInvalidIndex, ec.Code,
+		"error code must be ErrAdapterPGInvalidIndex")
+	assert.Contains(t, ec.Message, "invalid indexes",
+		"message must describe the fault")
+	// details should carry count >= 1
+	var foundCount bool
+	for _, a := range ec.Details {
+		if a.Key == "count" && a.Value.Int64() >= 1 {
+			foundCount = true
+			break
+		}
+	}
+	assert.True(t, foundCount, "details must contain count >= 1; got %v", ec.Details)
+}
+
+// ---------------------------------------------------------------------------
+// DetectInvalidIndexes tests
+// ---------------------------------------------------------------------------
+
+// TestDetectInvalidIndexes_Empty verifies that after applying all migrations,
+// DetectInvalidIndexes returns an empty slice.
+func TestDetectInvalidIndexes_Empty(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_detect_empty")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	indexes, err := DetectInvalidIndexes(ctx, pool)
+	require.NoError(t, err)
+	assert.Empty(t, indexes, "DetectInvalidIndexes should return empty slice after clean migration")
+}
+
+// TestDetectInvalidIndexes_WithInvalidIndex verifies that DetectInvalidIndexes
+// returns the schema-qualified name when an index is marked invalid via
+// pg_index. Requires superuser (testcontainers default postgres image).
+func TestDetectInvalidIndexes_WithInvalidIndex(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_detect_invalid")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Mark idx_outbox_pending_v2 as invalid.
+	_, execErr := pool.DB().Exec(ctx,
+		`UPDATE pg_index SET indisvalid = false
+		 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+	require.NoError(t, execErr, "injecting invalid index must succeed (requires superuser)")
+
+	// Always restore so container cleanup is clean.
+	defer func() {
+		_, _ = pool.DB().Exec(ctx,
+			`UPDATE pg_index SET indisvalid = true
+			 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+	}()
+
+	indexes, err := DetectInvalidIndexes(ctx, pool)
+	require.NoError(t, err)
+	require.NotEmpty(t, indexes, "DetectInvalidIndexes must return the injected invalid index")
+
+	var found bool
+	for _, idx := range indexes {
+		if idx.Index == "public.idx_outbox_pending_v2" {
+			found = true
+			assert.Equal(t, "public.outbox_entries", idx.Table,
+				"Table field must be schema-qualified")
+			break
+		}
+	}
+	assert.True(t, found,
+		"result must contain public.idx_outbox_pending_v2; got %v", indexes)
+}
+
+// ---------------------------------------------------------------------------
+// InvalidIndexCheck (readyz probe) happy-path test
+// ---------------------------------------------------------------------------
+
+// TestInvalidIndexCheck_NoInvalidIndexes verifies that InvalidIndexCheck (the
+// /readyz probe wrapper) returns nil when no invalid indexes are present.
+func TestInvalidIndexCheck_NoInvalidIndexes(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_probe_happy")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	err = InvalidIndexCheck(ctx, pool)
+	assert.NoError(t, err, "InvalidIndexCheck should return nil when no invalid indexes exist")
 }

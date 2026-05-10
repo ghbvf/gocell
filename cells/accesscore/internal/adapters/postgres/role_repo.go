@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Compile-time assertion: PGRoleRepo implements ports.RoleRepository.
@@ -246,18 +247,33 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 	return nil
 }
 
-// RemoveFromUserIfNotLast atomically removes the role assignment only if at
-// least one other holder will remain after the removal. The FOR UPDATE on the
-// holders CTE serializes concurrent calls so only one caller can remove a role
-// when exactly two holders exist (TOCTOU-safe under READ COMMITTED). Returns:
+// RemoveFromUserIfNotLast removes a role assignment with admin-scoped
+// last-holder protection (ADR-admin-invariant §3.2). For roleID == auth.RoleAdmin
+// the FOR UPDATE CTE atomically serializes concurrent revocations so only one
+// caller can remove an admin when exactly two admins exist (TOCTOU-safe under
+// READ COMMITTED), and refuses removal of the sole admin. For any other roleID
+// the operation is a plain idempotent DELETE (matches DB trigger scope:
+// migration 019:50 `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
+//
+// Returns:
 //   - (true, nil)  — role was held and successfully removed.
 //   - (false, nil) — role was not held (idempotent no-op).
-//   - (false, ErrAuthLastAdminProtected) — user is the sole holder; both the
-//     app-level CTE detect path and the DB trigger safety-net path return the
-//     same errcode so client handlers match a single business invariant
-//     (S3+S5 PR #449 round-3 unification — was split between ErrAuthForbidden
-//     for app-level and ErrAuthLastAdminProtected for trigger).
+//   - (false, ErrAuthLastAdminProtected) — admin path only; user is the sole
+//     admin holder. Both the app-level CTE detect path and the DB trigger
+//     safety-net path return the same errcode so client handlers match a
+//     single business invariant.
 func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
+	if roleID != auth.RoleAdmin {
+		// Non-admin role: plain DELETE, no last-holder check. Trigger
+		// (migration 019) also short-circuits on `role_id <> 'admin'`.
+		tag, err := r.execCtx(ctx, deleteAssignmentSQL, userID, roleID)
+		if err != nil {
+			return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"role_repo: remove-if-not-last (non-admin)", err)
+		}
+		return tag.RowsAffected() == 1, nil
+	}
+
 	var userHeldRole, wasDeleted bool
 	row := r.queryRowCtx(ctx, removeIfNotLastSQL, userID, roleID)
 	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
@@ -279,10 +295,10 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 		// Role held and removed successfully.
 		return true, nil
 	default:
-		// Role held but not removed: user is the sole holder. Same errcode as
-		// the DB trigger path (line 263) — single business invariant.
+		// Admin held but not removed: user is the sole admin. Same errcode as
+		// the DB trigger path — single business invariant.
 		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
-			"cannot revoke role: this is the only holder; assign the role to another user first",
+			"cannot revoke admin: this is the only admin; assign the admin role to another user first",
 			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
 	}
 }

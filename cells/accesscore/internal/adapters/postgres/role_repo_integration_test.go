@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -273,24 +274,44 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		assert.Equal(t, 1, count)
 	})
 
-	t.Run("RemoveFromUserIfNotLast_sole_holder_returns_ErrAuthLastAdminProtected", func(t *testing.T) {
-		roleID := "sole_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "SOLE")))
+	t.Run("RemoveFromUserIfNotLast_sole_admin_returns_ErrAuthLastAdminProtected", func(t *testing.T) {
+		// Last-holder protection is admin-scoped (ADR-admin-invariant §3.2 +
+		// migration 019:50 trigger). Use auth.RoleAdmin to exercise the
+		// CTE/trigger guard.
+		require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
 
-		user := createTestUserInDB(t, userRepo, "sole")
+		user := createTestUserInDB(t, userRepo, "soleAdmin")
+		_, err := roleRepo.AssignToUser(ctx, user.ID, auth.RoleAdmin)
+		require.NoError(t, err)
+
+		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, user.ID, auth.RoleAdmin)
+		require.Error(t, err, "sole admin must not be removed")
+		assert.False(t, changed)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code)
+		assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+		assert.Contains(t, ec.Message, "only admin")
+	})
+
+	t.Run("RemoveFromUserIfNotLast_non_admin_sole_holder_revoked_cleanly", func(t *testing.T) {
+		// Non-admin roles are NOT protected by the last-holder guard — they
+		// can be revoked down to zero holders. This exercises the plain
+		// DELETE path that bypasses the CTE serialization.
+		roleID := "editor_" + uuid.NewString()[:8]
+		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "EDITOR")))
+
+		user := createTestUserInDB(t, userRepo, "editorSole")
 		_, err := roleRepo.AssignToUser(ctx, user.ID, roleID)
 		require.NoError(t, err)
 
 		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, user.ID, roleID)
-		require.Error(t, err, "sole holder must not be removed")
-		assert.False(t, changed)
-		var ec *errcode.Error
-		require.True(t, errors.As(err, &ec))
-		// Both app-level CTE detect path and DB-trigger safety-net path return
-		// the same errcode for the "sole holder" invariant (round-3 unification).
-		assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code)
-		assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
-		assert.Contains(t, ec.Message, "only holder")
+		require.NoError(t, err, "non-admin sole holder must be removable")
+		assert.True(t, changed)
+
+		count, err := roleRepo.CountByRole(ctx, roleID)
+		require.NoError(t, err)
+		assert.Equal(t, 0, count, "non-admin role allowed to drop to zero holders")
 	})
 
 	t.Run("CountByRole_returns_correct_count", func(t *testing.T) {
@@ -357,22 +378,22 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestRemoveFromUserIfNotLast_ConcurrentRace verifies that the FOR UPDATE CTE
-// in removeIfNotLastSQL serializes two concurrent callers correctly when exactly
-// two holders exist for a role. Only one removal may succeed; the other must
-// return ErrAuthLastAdminProtected (last-holder error).
+// in removeIfNotLastSQL serializes two concurrent admin revocations correctly
+// when exactly two admins exist. Only one removal may succeed; the other must
+// return ErrAuthLastAdminProtected (last-admin error). Last-holder protection
+// is admin-scoped (ADR-admin-invariant §3.2 — non-admin roles bypass the CTE).
 func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	roleID := "race_" + uuid.NewString()[:8]
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "RACE")))
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
 
 	u1 := createTestUserInDB(t, userRepo, "race1")
 	u2 := createTestUserInDB(t, userRepo, "race2")
-	_, err := roleRepo.AssignToUser(ctx, u1.ID, roleID)
+	_, err := roleRepo.AssignToUser(ctx, u1.ID, auth.RoleAdmin)
 	require.NoError(t, err)
-	_, err = roleRepo.AssignToUser(ctx, u2.ID, roleID)
+	_, err = roleRepo.AssignToUser(ctx, u2.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Both goroutines attempt to remove u1 concurrently.
@@ -388,7 +409,7 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, u1.ID, roleID)
+			changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, u1.ID, auth.RoleAdmin)
 			results[i] = result{changed: changed, err: err}
 		}()
 	}

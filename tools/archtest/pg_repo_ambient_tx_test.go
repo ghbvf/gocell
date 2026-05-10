@@ -35,6 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -162,37 +163,31 @@ func scanPGRepoFileTyped(
 	info *types.Info,
 ) []string {
 	var out []string
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil || fn.Body == nil {
-			continue
+	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Recv == nil || fn.Body == nil {
+			return
 		}
 		if !isPGWriteMethod(fn.Name.Name) {
-			continue
+			return
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			if _, isBypass := pgPoolBypassCalls[sel.Sel.Name]; !isBypass {
-				return true
+				return
 			}
 			if !isPgxPoolReceiver(sel.X, info) {
-				return true
+				return
 			}
 			pos := fset.Position(sel.Sel.Pos())
 			out = append(out, fmt.Sprintf(
 				"%s:%d: write-method %s.%s calls *pgxpool.Pool.%s directly; "+
 					"route via execCtx/queryRowCtx (ambient-tx aware) or txRunner.RunInTx",
 				rel, pos.Line, receiverTypeName(fn), fn.Name.Name, sel.Sel.Name))
-			return true
 		})
-	}
+	})
 	return out
 }
 

@@ -19,6 +19,7 @@ endpoints:
       bootstrap: true
       responses:
         - 401
+        - 413
         - 429
     responses:
       400:
@@ -29,9 +30,6 @@ endpoints:
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       410:
         description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details carry nextAction=\"login\" only; clients resolve the login endpoint via OpenAPI / contract registry. See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md."
-        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
-      413:
-        description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
