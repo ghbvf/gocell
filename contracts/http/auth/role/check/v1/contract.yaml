@@ -3,7 +3,6 @@ kind: http
 ownerCell: accesscore
 consistencyLevel: L0
 lifecycle: active
-codegen: true
 endpoints:
   server: accesscore
   clients:

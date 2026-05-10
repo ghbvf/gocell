@@ -3,7 +3,6 @@ kind: http
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
-codegen: true
 endpoints:
   server: devicecell
   clients:
