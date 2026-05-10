@@ -174,7 +174,6 @@ type SharedDeps struct {
 // adapter mode "real" — production deployments must mint their own
 // high-entropy token. Exposed (capitalised) so example/test code and the
 // regression test in shared_deps_test.go reference one source of truth.
-// production deployments must mint their own high-entropy token.
 const SampleVerbosePlaceholder = "dev-readyz-verbose-token-change-me"
 
 // LoadSharedDepsFromEnv reads all environment variables and builds a fully
@@ -233,10 +232,6 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
 	metricsHandler := buildMetricsHandler(metricsToken, metricsDeps.PromStack.registry)
 
-	slog.Info("adapter mode",
-		slog.String("requested", adapterMode),
-		slog.String("effective", topo.AdapterInfo()["mode"]))
-
 	// PR-A14a: surface the pre-PR-A14a env var rename so operators upgrading
 	// from a single-listener binary see a clear signal if they have only the
 	// old var set. Without this warn the addrs would silently fall through
@@ -275,6 +270,9 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	if err := deps.Validate(); err != nil {
 		return nil, err
 	}
+	slog.Info("adapter mode",
+		slog.String("requested", adapterMode),
+		slog.String("effective", topo.AdapterInfo()["mode"]))
 	loaded = true
 	return deps, nil
 }

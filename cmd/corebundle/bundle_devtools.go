@@ -56,6 +56,9 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 	}
 	pm, err := parseProjectWithTimeout(absRoot, defaultDevtoolsParseTimeout, shared.Clock)
 	if err != nil {
+		// parseProjectWithTimeout already logs the failure (timeout or parse
+		// error) at Warn level with the absolute root and timeout duration;
+		// the outer fallback is intentionally silent to avoid double-logging.
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
 

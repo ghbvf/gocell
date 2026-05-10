@@ -74,12 +74,15 @@ func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) out
 }
 
 // newBootstrapFromOptions creates a bootstrap.Bootstrap from a pre-built option
-// slice. Test code must use this function instead of calling bootstrap.New(opts...)
-// directly so that CLOCK-INJECTION-TEST-CALLSITE-01 is not triggered (the
-// archtest only flags bootstrap.New calls in test files; this wrapper is in
-// production code, not a test file).
-// NOTE: runtimeBaseOptions always includes bootstrap.WithClock so the clock is
-// never missing — this wrapper does not impose an additional contract.
+// slice. CLOCK-INJECTION-TEST-CALLSITE-01 archtest flags any bootstrap.New
+// call inside _test.go files; tests that need a bootstrap instance must route
+// through this wrapper (it is a production file, not a test file, so the
+// archtest does not match it). run.go also calls bootstrap.New directly with
+// an //archtest:allow:clock-injection:via-slice trailer because runtime
+// startup intentionally lives in run.go for grep-locality.
+//
+// runtimeBaseOptions always includes bootstrap.WithClock so the clock is
+// never missing — this wrapper does not impose any additional contract.
 func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
 	return bootstrap.New(opts...) //archtest:allow:clock-injection:via-slice opts assembled by defaultRuntimeOptions includes WithClock
 }

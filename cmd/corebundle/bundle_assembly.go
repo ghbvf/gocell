@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -46,10 +47,12 @@ func durabilityModeForTopology(topo bootstrap.Topology) cell.DurabilityMode {
 // idempotency claimer built in LoadSharedDepsFromEnv.
 func buildConsumerBase(deps *SharedDeps) (*outbox.ConsumerBase, error) {
 	if deps == nil {
-		return nil, fmt.Errorf("construct ConsumerBase: SharedDeps is nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"construct ConsumerBase: SharedDeps is nil")
 	}
 	if deps.ConsumerClaimer == nil {
-		return nil, fmt.Errorf("construct ConsumerBase: SharedDeps.ConsumerClaimer must be set")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"construct ConsumerBase: SharedDeps.ConsumerClaimer must be set")
 	}
 	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{}, deps.Clock)
 	if err != nil {
