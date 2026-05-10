@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,33 +21,31 @@ type ContentContext struct {
 	Bytes []byte
 }
 
-// EachContentFile iterates over every file in scope whose path ends in any
-// of suffixes (case-sensitive, must include the dot — e.g. ".yaml"). Read
-// errors fail-loud via t.Fatalf. fn is invoked for each successfully read
-// file with the file's bytes; calling t.Errorf inside fn does not stop
-// iteration (collect-all-violations semantics, mirroring [EachFile]).
+// LoadContentFiles is the pure (testing-free) side of [EachContentFile]:
+// validates suffixes, walks the scope, reads bytes, returns ContentContexts.
+// Returns an error on any of: empty suffixes, suffix without leading dot,
+// invalid scope (zero value, setup error, walk error), or per-file read error.
 //
-// Suffixes must be non-empty and each must start with ".". This is the only
-// way archtest tests should iterate non-Go files; raw os.ReadDir / fs.WalkDir
-// in tools/archtest/*_test.go is forbidden by SCANNER-FRAMEWORK-USAGE-01.
-func EachContentFile(t *testing.T, s Scope, suffixes []string, fn func(*testing.T, ContentContext)) {
-	t.Helper()
+// Exposed for fixture testing — direct callers should prefer [EachContentFile]
+// which fail-loud t.Fatalf's on error and invokes fn per file.
+func LoadContentFiles(s Scope, suffixes []string) ([]ContentContext, error) {
 	if len(suffixes) == 0 {
-		t.Fatalf("scanner.EachContentFile: suffixes must be non-empty")
+		return nil, errors.New("scanner.LoadContentFiles: suffixes must be non-empty")
 	}
 	for _, suffix := range suffixes {
 		if !strings.HasPrefix(suffix, ".") {
-			t.Fatalf("scanner.EachContentFile: suffix %q must start with '.'", suffix)
+			return nil, fmt.Errorf("scanner.LoadContentFiles: suffix %q must start with '.'", suffix)
 		}
 	}
 	files, err := s.contentFiles(suffixes)
 	if err != nil {
-		t.Fatalf("scanner.EachContentFile: %v", err)
+		return nil, err
 	}
+	out := make([]ContentContext, 0, len(files))
 	for _, absPath := range files {
 		rel, relErr := filepath.Rel(s.modRoot, absPath)
 		if relErr != nil {
-			t.Fatalf("scanner.EachContentFile: rel-failed: %v", relErr)
+			return nil, fmt.Errorf("scanner.LoadContentFiles: rel-failed: %w", relErr)
 		}
 		relSlash := filepath.ToSlash(rel)
 		// #nosec G304 -- absPath is derived from a checked-in module subtree
@@ -56,12 +56,37 @@ func EachContentFile(t *testing.T, s Scope, suffixes []string, fn func(*testing.
 		// allowlist for no security gain.
 		bytes, readErr := os.ReadFile(absPath)
 		if readErr != nil {
-			t.Fatalf("scanner.EachContentFile: read %s: %v", relSlash, readErr)
+			return nil, fmt.Errorf("scanner.LoadContentFiles: read %s: %w", relSlash, readErr)
 		}
-		fn(t, ContentContext{
+		out = append(out, ContentContext{
 			AbsPath: absPath,
 			Rel:     relSlash,
 			Bytes:   bytes,
 		})
+	}
+	return out, nil
+}
+
+// EachContentFile iterates over every file in scope whose path ends in any
+// of suffixes (case-sensitive, must include the dot — e.g. ".yaml"). Validation
+// failures, walk errors, and per-file read errors fail-loud via t.Fatalf.
+// fn is invoked for each successfully read file with the file's bytes; calling
+// t.Errorf inside fn does not stop iteration (collect-all-violations semantics,
+// mirroring [EachFile]).
+//
+// Suffixes must be non-empty and each must start with ".". This is the only
+// way archtest tests should iterate non-Go files; raw os.ReadDir / fs.WalkDir
+// in tools/archtest/*_test.go is forbidden by SCANNER-FRAMEWORK-USAGE-01.
+//
+// Implementation: thin wrapper over [LoadContentFiles] (the pure testing-free
+// counterpart). Failure-mode coverage lives in TestLoadContentFiles_Errors.
+func EachContentFile(t *testing.T, s Scope, suffixes []string, fn func(*testing.T, ContentContext)) {
+	t.Helper()
+	files, err := LoadContentFiles(s, suffixes)
+	if err != nil {
+		t.Fatalf("scanner.EachContentFile: %v", err)
+	}
+	for _, fc := range files {
+		fn(t, fc)
 	}
 }
