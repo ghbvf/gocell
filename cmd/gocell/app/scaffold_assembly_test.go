@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,107 @@ func TestRunScaffoldAssembly_SkipGenerate(t *testing.T) {
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
 			t.Errorf("expected %s to be absent (--skip-generate), but it exists", rel)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B：round-6 新增 CLI 测试（RED — scaffoldAssembly 尚未使用 PlanAssemblyScaffold）
+// ---------------------------------------------------------------------------
+
+// sixFileRels 是 round-6 完整 plan 的 6 个相对路径（forward-slash）。
+func sixFileRels(id string) []string {
+	return []string{
+		fmt.Sprintf("assemblies/%s/assembly.yaml", id),
+		fmt.Sprintf("cmd/%s/run.go", id),
+		fmt.Sprintf("cmd/%s/app.go", id),
+		fmt.Sprintf("cmd/%s/modules_gen.go", id),
+		fmt.Sprintf("cmd/%s/main.go", id),
+		fmt.Sprintf("assemblies/%s/generated/boundary.yaml", id),
+	}
+}
+
+// TestRunScaffoldAssembly_DryRun_PrintsAllSixPaths 验证 dry-run 输出 6 行
+// "(dry-run) Would create ..." 并且 0 文件落盘。
+// RED：scaffoldAssembly 尚未调用 PlanAssemblyScaffold，dry-run 只打 3 行。
+func TestRunScaffoldAssembly_DryRun_PrintsAllSixPaths(t *testing.T) {
+	t.Parallel()
+
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	args := []string{
+		"--id=dryrunasm",
+		"--cells=examplecell",
+		"--team=platform",
+		"--role=maintainer",
+		"--dry-run",
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = scaffoldAssembly(root, args)
+	})
+	if runErr != nil {
+		t.Fatalf("scaffoldAssembly dry-run: %v", runErr)
+	}
+
+	wantRels := sixFileRels("dryrunasm")
+	for _, rel := range wantRels {
+		wantLine := fmt.Sprintf("(dry-run) Would create %s", rel)
+		if !strings.Contains(out, wantLine) {
+			t.Errorf("dry-run output missing %q\nfull output:\n%s", wantLine, out)
+		}
+	}
+
+	// 确认 0 文件落盘
+	for _, rel := range wantRels {
+		if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); statErr == nil {
+			t.Errorf("dry-run: file must not exist on disk: %s", rel)
+		}
+	}
+}
+
+// TestRunScaffoldAssembly_LiveRollback_OnSecondStageConflict pre-place
+// cmd/<id>/main.go → 跑 live 模式 → 断言 err 含 conflict + assembly.yaml /
+// run.go / app.go 全部不存在（跨阶段 rollback）。
+// RED：scaffoldAssembly 尚未使用单 plan，无法做跨阶段 rollback。
+func TestRunScaffoldAssembly_LiveRollback_OnSecondStageConflict(t *testing.T) {
+	t.Parallel()
+
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	// 预置 cmd/<id>/main.go 制造第 5 个槽冲突
+	cmdDir := filepath.Join(root, "cmd", "liverollback")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cmdDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{
+		"--id=liverollback",
+		"--cells=examplecell",
+		"--team=platform",
+		"--role=maintainer",
+	}
+	err := scaffoldAssembly(root, args)
+	if err == nil {
+		t.Fatal("expected conflict error, got nil")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "conflict") &&
+		!strings.Contains(strings.ToLower(err.Error()), "exist") {
+		t.Errorf("error must indicate conflict; got: %v", err)
+	}
+
+	// skeleton 文件（前三）不应存在 — all-or-nothing rollback
+	for _, rel := range []string{
+		filepath.Join("assemblies", "liverollback", "assembly.yaml"),
+		filepath.Join("cmd", "liverollback", "run.go"),
+		filepath.Join("cmd", "liverollback", "app.go"),
+	} {
+		if _, statErr := os.Stat(filepath.Join(root, rel)); statErr == nil {
+			t.Errorf("rollback: file must not exist: %s", rel)
 		}
 	}
 }
