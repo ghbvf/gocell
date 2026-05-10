@@ -16,11 +16,27 @@
 // examples/<demo>/app.go + *_test.go + the wrapper definitions).
 package violation
 
-import "github.com/ghbvf/gocell/kernel/persistence"
+import (
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+)
 
 // CallWrapForCell deliberately calls persistence.WrapForCell from a
 // non-allowlisted location. The CELL-RAW-INFRA-WRAPPER-LOCATION-01
 // scanner must catch this call.
 func CallWrapForCell(tr persistence.TxRunner) persistence.CellTxManager {
 	return persistence.WrapForCell(tr)
+}
+
+// CallWrapPublisherForCell mirrors CallWrapForCell for the publisher
+// wrapper — gives the scanner-detection test a negative case for the
+// outbox.WrapPublisherForCell function leg of the wrapper-location
+// invariant.
+func CallWrapPublisherForCell(p outbox.Publisher) outbox.CellPublisher {
+	return outbox.WrapPublisherForCell(p)
+}
+
+// CallWrapWriterForCell mirrors CallWrapForCell for the writer wrapper.
+func CallWrapWriterForCell(w outbox.Writer) outbox.CellWriter {
+	return outbox.WrapWriterForCell(w)
 }

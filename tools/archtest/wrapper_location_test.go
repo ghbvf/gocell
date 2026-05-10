@@ -26,6 +26,7 @@ import (
 	"go/ast"
 	"go/types"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -144,6 +145,27 @@ func scanWrapperViolations(root string, resolver *typeseval.Resolver) []wrapperV
 	return out
 }
 
+// allowlistDescription renders the allowlist as a single human-readable
+// line for error messages. Single-source: every wrapper-location error
+// references this same string instead of hand-copying the rule into each
+// message — drift between code and message becomes structurally
+// impossible.
+func allowlistDescription() string {
+	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | *_test.go | kernel/{persistence,outbox}/cell_marker.go | kernel/cell/demo_tx_runner.go"
+}
+
+// wrapperFunctionsList renders the allowed wrapper function set as a
+// sorted comma-joined list, derived from wrapperFunctionsCanonical so the
+// rule definition and the error-message description never drift.
+func wrapperFunctionsList() string {
+	names := make([]string, 0, len(wrapperFunctionsCanonical))
+	for fn := range wrapperFunctionsCanonical {
+		names = append(names, fn)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
 // INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01
 //
 // TestCellRawInfraWrapperLocation01_RealRepoClean verifies that no
@@ -158,8 +180,8 @@ func TestCellRawInfraWrapperLocation01_RealRepoClean(t *testing.T) {
 
 	violations := scanWrapperViolations(root, resolver)
 	for _, v := range violations {
-		t.Errorf("CELL-RAW-INFRA-WRAPPER-LOCATION-01: %s:%d calls %s — caller not in composition-root allowlist (cmd/* | examples/*/main.go | examples/*/app.go | *_test.go | kernel/{persistence,outbox}/cell_marker.go).",
-			v.File, v.Line, v.FuncName)
+		t.Errorf("CELL-RAW-INFRA-WRAPPER-LOCATION-01: %s:%d calls %s — caller not in composition-root allowlist (%s). Allowed wrappers: %s.",
+			v.File, v.Line, v.FuncName, allowlistDescription(), wrapperFunctionsList())
 	}
 }
 
@@ -181,14 +203,22 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	require.NoError(t, err)
 
 	violations := scanWrapperViolations(root, resolver)
-	require.NotEmpty(t, violations, "scanner must detect at least one wrap call from non-allowlisted fixture path")
-	var seenWrapForCell bool
+	require.NotEmpty(t, violations, "scanner must detect wrap calls from non-allowlisted fixture path")
+
+	got := map[string]string{}
 	for _, v := range violations {
-		if v.FuncName == "github.com/ghbvf/gocell/kernel/persistence.WrapForCell" {
-			seenWrapForCell = true
-			assert.True(t, strings.Contains(v.File, "wrapfixture"),
-				"violation expected in wrapfixture path, got %s", v.File)
-		}
+		got[v.FuncName] = v.File
+		assert.True(t, strings.Contains(v.File, "wrapfixture"),
+			"violation expected in wrapfixture path, got %s", v.File)
 	}
-	assert.True(t, seenWrapForCell, "fixture should call persistence.WrapForCell from non-allowlisted path")
+
+	// The fixture covers all three wrapper functions; the scanner must
+	// report each one. A pre-fix gap (only WrapForCell case in fixture)
+	// silently masked detection regressions on the publisher/writer legs.
+	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/persistence.WrapForCell"],
+		"fixture must trigger persistence.WrapForCell detection")
+	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell"],
+		"fixture must trigger outbox.WrapPublisherForCell detection")
+	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"],
+		"fixture must trigger outbox.WrapWriterForCell detection")
 }

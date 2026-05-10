@@ -66,7 +66,8 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 // of truth. There is no transactional outbox writer at L4.
 //
 // Accumulative: a nil pub leaves the previously-set value in place.
-// Demo mode: pass &outbox.DiscardPublisher{} to swallow events.
+// Demo mode: from the composition root, pass
+// outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}) to swallow events.
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
 func WithDirectPublisher(pub outbox.CellPublisher) Option {
@@ -215,10 +216,12 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 		c.logger.Info("devicecell: using in-memory device repository (demo mode)")
 	}
 
-	// Publisher is required (NIL-PUB-P1). Use &DiscardPublisher{} for demo mode.
+	// Publisher is required (NIL-PUB-P1). For demo mode, the composition
+	// root must wrap a publisher via outbox.WrapPublisherForCell, e.g.
+	//   WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}))
 	if c.publisher == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			"devicecell requires publisher; use WithDirectPublisher(&outbox.DiscardPublisher{}) for demo mode")
+			"devicecell requires publisher; use WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{})) from composition root for demo mode")
 	}
 
 	// Durable mode still rejects noop publishers, but direct publish remains
