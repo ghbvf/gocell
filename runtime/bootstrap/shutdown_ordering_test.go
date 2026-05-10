@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // orderingRecorder captures the order in which phase10 stages execute.
@@ -242,4 +243,80 @@ func TestPhase10ShutdownStageOrder(t *testing.T) {
 			)
 		})
 	}
+}
+
+// TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx pins the budget-isolation
+// invariant: HTTP drain (stage 2) and LIFO teardown (stage 3) own independent
+// timeout budgets. A blocked HTTP drain that exhausts its own ctx must NOT
+// starve LIFO teardown.
+//
+// Pre-decouple (the regression this test catches): both stages share a single
+// shutCtx = context.WithTimeout(Background, b.shutdownTimeout). When HTTP
+// drain blocks until ctx.Done, every subsequent LIFO teardown receives an
+// already-expired ctx and short-circuits — workers/event-router/assembly
+// never run their cleanup hooks.
+//
+// Post-decouple: HTTP drain holds drainCtx (b.shutdownTimeout), LIFO teardown
+// holds an independent tearCtx (b.shutdownTimeout). Drain-budget exhaustion
+// is contained to stage 2.
+//
+// Choice of D1s: smallest testtime constant. The test waits a full
+// b.shutdownTimeout for HTTP drain to elapse; D1s keeps the loop tight while
+// still leaving enough wall clock for the assertion to be meaningful.
+//
+// AI-rebust: Medium — this is a runtime invariant guard. Not a string-anchor
+// archtest; the assertion observes ctx.Done() state, which a future single-ctx
+// regression cannot bypass without explicit budget plumbing changes that
+// would also break sibling phase10 tests.
+//
+// ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md
+func TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx(t *testing.T) {
+	t.Parallel()
+
+	b := New(WithClock(clock.Real()), WithShutdownTimeout(testtime.D1s))
+	_, s := newPhaseState()
+
+	// Drain holds its full budget until ctx.Done — simulating the worst-case
+	// in-flight HTTP request that consumes the maximum graceful window.
+	s.httpDrain = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	// Two LIFO teardowns; both must receive a NOT-DONE ctx after drain finishes.
+	var teardownCtxDone [2]bool
+	s.addTeardown(func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			teardownCtxDone[0] = true
+		default:
+		}
+		return nil
+	})
+	s.addTeardown(func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			teardownCtxDone[1] = true
+		default:
+		}
+		return nil
+	})
+
+	err := b.phase10OrchestrateShutdown(s, shutdownSignal{reason: reasonCtxCancel})
+
+	// Drain timeout must propagate as a teardown_http_drain error wrapping
+	// context.DeadlineExceeded — the sibling TestPhase10_HTTPDrainError_*
+	// tests cover the wrapping invariant; here we only assert that the drain
+	// error surfaced.
+	require.Error(t, err, "drain timeout must surface as a phase10 error")
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"drain returned ctx.Err; must propagate as DeadlineExceeded")
+
+	// Budget isolation: LIFO teardown ctx must NOT already be expired.
+	// Pre-decouple this fails because both teardowns share drainCtx and see
+	// ctx.Err immediately.
+	assert.False(t, teardownCtxDone[0],
+		"first LIFO teardown received expired ctx; HTTP drain budget bled into LIFO teardown")
+	assert.False(t, teardownCtxDone[1],
+		"second LIFO teardown received expired ctx; HTTP drain budget bled into LIFO teardown")
 }
