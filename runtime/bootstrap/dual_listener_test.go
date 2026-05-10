@@ -43,7 +43,7 @@ import (
 // transport idle pool could hold the server-side connection across multiple
 // poll cycles and push HTTP drain past shutCtx. The keep-alive root cause is
 // addressed by noCloseRaceHTTPClient below (DisableKeepAlives=true), so the
-// budget is now a defence-in-depth ceiling rather than a load-bearing window.
+// budget is now a defense-in-depth ceiling rather than a load-bearing window.
 // Guard D15s preserves the outer>inner invariant for the select race in the
 // test body.
 //
@@ -897,7 +897,7 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
-		// noCloseRaceShutdownBudget is now a defence-in-depth ceiling: with
+		// noCloseRaceShutdownBudget is now a defense-in-depth ceiling: with
 		// noCloseRaceHTTPClient disabling keep-alive and phase10 stage 3
 		// owning an independent tearCtx, HTTP drain in this test exits in
 		// well under D10s on real hardware. Budget retained as a guard
