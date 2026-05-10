@@ -110,10 +110,11 @@ func (s *phaseState) registerHealthChecker(name string, fn func(context.Context)
 }
 
 // addCloser registers a resource for teardown, preferring kernellifecycle.ContextCloser
-// over io.Closer so that the shared shutCtx budget flows through to the resource.
+// over io.Closer so that the tearCtx (stage 3 budget; see WithShutdownTimeout
+// godoc) flows through to the resource.
 //
 // Priority:
-//  1. kernellifecycle.ContextCloser: Close(ctx) — budget propagated directly.
+//  1. kernellifecycle.ContextCloser: Close(ctx) — tearCtx propagated directly.
 //  2. io.Closer: wrapped via kernellifecycle.IgnoreCtx (ctx discarded at boundary).
 //  3. Neither: silently skipped.
 //
@@ -128,8 +129,8 @@ func (s *phaseState) addCloser(res any) {
 		return
 	}
 	if ic, ok := res.(io.Closer); ok {
-		// F20: io.Closer fallback — the shared shutCtx budget is NOT propagated
-		// to this resource. All GoCell adapters implement ContextCloser; this
+		// F20: io.Closer fallback — the tearCtx budget is NOT propagated to
+		// this resource. All GoCell adapters implement ContextCloser; this
 		// path is only reached by external or legacy resources.
 		slog.Warn("bootstrap: resource registered as io.Closer only; shutdown budget will NOT apply",
 			slog.String("type", name))

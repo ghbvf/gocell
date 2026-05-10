@@ -36,17 +36,39 @@ import (
 // outer select fallback must be strictly greater than the inner shutCtx for
 // the assertion path to win the race.
 //
-// Budget bumped D5s→D10s after PR #438 race CI flake at exactly 5.00s
-// (in-flight HTTP drain + dual-listener shutdown + LIFO teardown sharing
-// one shutCtx can blow past D5s under race-detector + GH runner contention).
-// The test asserts race-free shutdown — the budget value is incidental and
-// only needs to be wide enough to avoid an artificial timeout, so widen it
-// rather than introduce additional synchronization. Guard D10s→D15s
-// preserves the outer>inner invariant.
+// History: budget D2s→D5s (PR #405) → D5s→D10s (PR #438 race CI flake at
+// exactly 5.00s) was the symptom of a deeper issue: stdlib
+// http.Server.Shutdown polls close idle connections at up to 500ms intervals;
+// under -race + GH runner contention, keep-alive sockets sitting in the
+// transport idle pool could hold the server-side connection across multiple
+// poll cycles and push HTTP drain past shutCtx. The keep-alive root cause is
+// addressed by noCloseRaceHTTPClient below (DisableKeepAlives=true), so the
+// budget is now a defense-in-depth ceiling rather than a load-bearing window.
+// Guard D15s preserves the outer>inner invariant for the select race in the
+// test body.
+//
+// ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md.
 const (
 	noCloseRaceShutdownBudget = testtime.D10s
 	noCloseRaceShutdownGuard  = testtime.D15s
 )
+
+// noCloseRaceHTTPClient mirrors testHTTPClient (bootstrap_test.go) but with
+// keep-alive disabled. stdlib http.Server.Shutdown polls close idle
+// connections at up to 500ms intervals; under -race + GH runner contention,
+// a stale keep-alive socket in the transport pool can hold the server-side
+// connection in idle state across multiple poll cycles, pushing HTTP drain
+// past shutdownTimeout. Disabling keep-alive removes the polling sensitivity
+// at the cost of one extra TCP dial per request — negligible in this
+// race-coverage test.
+//
+// Intentionally file-local so the global testHTTPClient keeps keep-alive on
+// for the rest of the suite. Transport is not shared with testHTTPClient
+// because the rest of the suite has no reason to opt out of connection reuse.
+var noCloseRaceHTTPClient = &http.Client{
+	Timeout:   testtime.D2s,
+	Transport: &http.Transport{DisableKeepAlives: true},
+}
 
 // dualListenerCell registers one /api/v1/* and one /internal/v1/* route so
 // tests can verify dual-listener dispatch end-to-end.
@@ -875,13 +897,12 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
-		// noCloseRaceShutdownBudget matches TestBootstrap_ShutdownDrainsInflightReload
-		// (the other dual-listener test that drains real in-flight work). 4 in-flight
-		// requests drain in parallel with dual-listener http.Server.Shutdown + LIFO
-		// teardown sharing a single shutCtx; -race scheduling on slow CI runners can
-		// push the tail past testtime.D2s. The test asserts race-free shutdown —
-		// the budget value is incidental and only needs to be wide enough to avoid
-		// an artificial timeout.
+		// noCloseRaceShutdownBudget is now a defense-in-depth ceiling: with
+		// noCloseRaceHTTPClient disabling keep-alive and phase10 stage 3
+		// owning an independent tearCtx, HTTP drain in this test exits in
+		// well under D10s on real hardware. Budget retained as a guard
+		// rather than load-bearing window — see file-header comment and ADR
+		// 202605101730-adr-shutdown-budget-decouple.
 		WithShutdownTimeout(noCloseRaceShutdownBudget),
 	)
 
@@ -891,7 +912,7 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := noCloseRaceHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
 		}
@@ -908,7 +929,7 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		wg.Go(func() {
 			inFlight.Add(1)
 			defer inFlight.Add(-1)
-			httpResp, _ := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
+			httpResp, _ := noCloseRaceHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
 			if httpResp != nil {
 				_ = httpResp.Body.Close()
 			}

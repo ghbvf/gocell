@@ -45,13 +45,15 @@ func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
 
 // WithManagedCloser registers an adapter or resource that implements
 // lifecycle.ContextCloser for LIFO teardown during graceful shutdown.
-// The shared shutCtx budget propagates directly to c.Close(ctx), so the
-// resource participates in the same shutdown deadline as all other components.
+// The tearCtx budget (stage 3 — independent from drainCtx, see
+// WithShutdownTimeout godoc) propagates directly to c.Close(ctx), so the
+// resource participates in the same teardown deadline as all other LIFO
+// components.
 //
 // Use this instead of a bare defer c.Close() so that:
 //
 //   - The resource is closed in LIFO order after HTTP and worker shutdown.
-//   - The shared shutdownTimeout ctx is honored (not an arbitrary timeout).
+//   - The tearCtx (stage 3 budget) is honored (not an arbitrary timeout).
 //   - Startup rollback also triggers the teardown on phase failures.
 //
 // Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
@@ -73,6 +75,17 @@ func WithManagedCloser(c kernellifecycle.ContextCloser) Option {
 }
 
 // WithShutdownTimeout overrides the default graceful shutdown timeout.
+//
+// Semantics: each phase10 stage bucket — drainCtx (readiness flip + HTTP
+// drain) and tearCtx (LIFO teardown) — is allotted this duration
+// independently. Worst-case wall clock for the entire shutdown is therefore
+// approximately 2 × shutdownTimeout + finalize overhead.
+//
+// K8s deployments must set terminationGracePeriodSeconds >=
+// 2 × shutdownTimeout + 10s (safety margin). See
+// warnTerminationGracePeriodInsufficient,
+// docs/ops/graceful-shutdown-k8s.md, and ADR
+// docs/architecture/202605101730-adr-shutdown-budget-decouple.md.
 func WithShutdownTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.shutdownTimeout = d
@@ -85,7 +98,10 @@ func WithShutdownTimeout(d time.Duration) Option {
 // and stop routing new traffic before the server closes connections.
 //
 // Default is 0 (no delay). Typical Kubernetes deployments use 3-5 seconds.
-// The delay counts toward the total shutdownTimeout budget (not additive).
+// The delay is consumed INSIDE drainCtx (stage 1+2 budget), not on top of
+// shutdownTimeout — a long preShutdownDelay narrows the remaining budget
+// available to HTTP drain. LIFO teardown (stage 3) is unaffected because
+// it owns an independent tearCtx.
 //
 // ref: Kubernetes pod shutdown — preStop counts toward terminationGracePeriodSeconds
 func WithPreShutdownDelay(d time.Duration) Option {
@@ -100,11 +116,13 @@ func WithPreShutdownDelay(d time.Duration) Option {
 // in the Kubernetes pod spec.
 //
 // When the declared value is positive but smaller than
-// shutdownTimeout + 10s, phase0 emits a slog.Warn so operators can spot a
-// misalignment between the bootstrap budget and the pod-spec grace window
-// before SIGKILL truncates a real shutdown. preShutdownDelay does not
-// appear in the formula because it is consumed inside shutdownTimeout (see
-// WithPreShutdownDelay godoc).
+// 2 × shutdownTimeout + 10s, phase0 emits a slog.Warn so operators can spot
+// a misalignment between the bootstrap budget and the pod-spec grace window
+// before SIGKILL truncates a real shutdown. The 2× multiplier reflects the
+// budget-isolation contract: phase10 drainCtx + tearCtx each own a
+// shutdownTimeout-sized bucket. preShutdownDelay does not appear in the
+// formula because it is consumed inside drainCtx (see WithPreShutdownDelay
+// godoc and ADR 202605101730-adr-shutdown-budget-decouple).
 //
 // Zero value (default) skips the sanity check entirely. Callers that do not
 // run on Kubernetes can omit this option without consequence.

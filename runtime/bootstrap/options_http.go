@@ -94,8 +94,8 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // router.WithCircuitBreaker. Also registers the resource for LIFO teardown via b.closers.
 // If the breaker implements lifecycle.ContextCloser
 // or io.Closer, Bootstrap registers it for teardown on shutdown and startup
-// rollback. ContextCloser is preferred so the shared shutCtx budget flows
-// through to the resource.
+// rollback. ContextCloser is preferred so the tearCtx (stage 3 budget; see
+// WithShutdownTimeout godoc) flows through to the resource.
 //
 // Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
 // rejected at phase0 with a fatal error so operators are not silently left

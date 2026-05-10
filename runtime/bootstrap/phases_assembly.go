@@ -77,16 +77,29 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 // 10s is the empirical floor — see docs/ops/graceful-shutdown-k8s.md.
 const terminationGraceSafetyMargin = 10 * time.Second
 
+// phase10ShutdownBudgetBuckets is the number of independent timeout buckets
+// allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx
+// (stage 3) — each owning b.shutdownTimeout. The K8s grace-period formula
+// multiplies shutdownTimeout by this count plus the safety margin.
+//
+// ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md.
+const phase10ShutdownBudgetBuckets = 2
+
 // warnTerminationGracePeriodInsufficient emits a slog.Warn when the operator
 // declared (via WithTerminationGracePeriod) a K8s terminationGracePeriodSeconds
-// that is smaller than the framework's own shutdownTimeout +
-// terminationGraceSafetyMargin.
+// that is smaller than the framework's own shutdown budget plus the SIGTERM
+// safety margin.
 //
-// preShutdownDelay does NOT appear in the formula because phase10's shutCtx
-// (phases_shutdown.go) bounds the entire four-stage shutdown — readiness
-// flip + preShutdownDelay + HTTP drain + LIFO teardown — by shutdownTimeout.
-// preShutdownDelay is consumed inside shutdownTimeout, not on top of it
-// (see WithPreShutdownDelay godoc and roadmap N3 deviation note).
+// Formula: minRequired = 2 × shutdownTimeout + terminationGraceSafetyMargin.
+//
+// The 2× multiplier reflects the budget-isolation contract introduced by
+// ADR 202605101730-adr-shutdown-budget-decouple: phase10 stages 1+2
+// (readiness flip + HTTP drain) own drainCtx with budget = shutdownTimeout,
+// stage 3 (LIFO teardown) owns an independent tearCtx with budget =
+// shutdownTimeout. Worst-case wall clock is the sum.
+//
+// preShutdownDelay does NOT appear in the formula because it is consumed
+// inside drainCtx, not added on top of it (see WithPreShutdownDelay godoc).
 //
 // Behavior is advisory: the helper never returns or panics; misalignment is a
 // deployment-config defect that we surface but do not block on. A zero
@@ -95,16 +108,17 @@ const terminationGraceSafetyMargin = 10 * time.Second
 // (production code paths via New() always populate shutdownTimeout).
 //
 // ref: docs/ops/graceful-shutdown-k8s.md — formula and pod-spec example.
+// ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md.
 func (b *Bootstrap) warnTerminationGracePeriodInsufficient() {
 	if b.terminationGracePeriod <= 0 || b.shutdownTimeout <= 0 {
 		return
 	}
-	minRequired := b.shutdownTimeout + terminationGraceSafetyMargin
+	minRequired := phase10ShutdownBudgetBuckets*b.shutdownTimeout + terminationGraceSafetyMargin
 	if b.terminationGracePeriod >= minRequired {
 		return
 	}
 	const hint = "increase Kubernetes pod terminationGracePeriodSeconds to " +
-		">= shutdownTimeout + 10s, or reduce the bootstrap shutdown budget"
+		">= 2*shutdownTimeout + 10s, or reduce the bootstrap shutdown budget"
 	slog.Warn("bootstrap: terminationGracePeriodSeconds insufficient for graceful shutdown",
 		slog.Duration("termination_grace_period", b.terminationGracePeriod),
 		slog.Duration("shutdown_timeout", b.shutdownTimeout),
@@ -177,8 +191,9 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 			return fmt.Errorf("bootstrap: config watcher: %w", err)
 		}
 		s.cfgWatcher = w
-		// Watcher.CloseCtx propagates the shared shutCtx budget to the
-		// in-flight callback drain phase (replaces the fixed drainTimeout).
+		// Watcher.CloseCtx propagates the tearCtx (stage 3 budget; see
+		// WithShutdownTimeout godoc) to the in-flight callback drain phase
+		// (replaces the fixed drainTimeout).
 		s.addCloser(s.cfgWatcher)
 	}
 
@@ -215,7 +230,7 @@ func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 	s.sub = sub
 
 	// outbox.Subscriber.Close now accepts ctx — use it directly so the teardown
-	// passes the shared shutCtx budget through to the implementation.
+	// passes the tearCtx (stage 3 budget) through to the implementation.
 	if sub != nil {
 		s.addTeardown(sub.Close)
 	}
