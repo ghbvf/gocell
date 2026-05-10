@@ -13,6 +13,7 @@
 package redaction
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -249,6 +250,41 @@ func redactSlogValue(v slog.Value) slog.Value {
 	default:
 		return v
 	}
+}
+
+// RedactPayload scrubs sensitive JSON field values from a raw JSON payload
+// before it is returned to API consumers (B2-C-09). It parses the JSON,
+// removes any key whose name matches the sensitiveKeyPattern regex, and
+// re-marshals the result.
+//
+// Non-JSON input is returned as-is (fail-closed: don't mask → return raw bytes
+// so callers can log the failure and decide on redaction policy themselves;
+// the callers in auditquery handler already gate on valid JSON).
+//
+// Known limitation: only top-level keys are scrubbed. Nested sensitive keys
+// require recursive traversal — acceptable given audit payloads are event
+// metadata and rarely carry deeply nested secrets. A follow-up can add depth
+// if the field set grows.
+func RedactPayload(payload []byte) []byte {
+	if len(payload) == 0 {
+		return payload
+	}
+	var m map[string]any
+	if err := json.Unmarshal(payload, &m); err != nil {
+		// Not a JSON object — return as-is.
+		return payload
+	}
+	re := regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern + `)$`)
+	for k := range m {
+		if re.MatchString(k) {
+			m[k] = Mask
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return payload
+	}
+	return out
 }
 
 // RedactAny scrubs sensitive substrings from arbitrary panic-style payloads

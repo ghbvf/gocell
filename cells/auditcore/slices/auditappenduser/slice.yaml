@@ -1,0 +1,29 @@
+id: auditappenduser
+belongsToCell: auditcore
+contractUsages:
+  - contract: event.audit.appended.v1
+    role: publish
+  - contract: event.user.created.v1
+    role: subscribe
+  - contract: event.user.locked.v1
+    role: subscribe
+  - contract: event.user.unlocked.v1
+    role: subscribe
+  - contract: event.user.updated.v1
+    role: subscribe
+  - contract: event.user.deleted.v1
+    role: subscribe
+verify:
+  unit:
+    - unit.auditappenduser.service
+  contract:
+    - contract.event.audit.appended.v1.publish
+    - contract.event.user.created.v1.subscribe
+    - contract.event.user.locked.v1.subscribe
+    - contract.event.user.unlocked.v1.subscribe
+    - contract.event.user.updated.v1.subscribe
+    - contract.event.user.deleted.v1.subscribe
+  waivers: []
+
+allowedFiles:
+  - cells/auditcore/slices/auditappenduser/**

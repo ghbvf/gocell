@@ -1,5 +1,6 @@
 // Package auditcore implements the auditcore Cell: tamper-evident audit log
-// with hash chain, event consumption, integrity verification, and query.
+// with hash chain (via runtime/audit/ledger framework), event consumption,
+// integrity verification, and query.
 package auditcore
 
 import (
@@ -7,10 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
-	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappend"
-	"github.com/ghbvf/gocell/cells/auditcore/slices/auditarchive"
+	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendsession"
+	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappenduser"
+	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendconfig"
+	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendrole"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditquery"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditverify"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -20,6 +21,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
@@ -27,14 +30,33 @@ import (
 // Option configures an AuditCore Cell.
 type Option func(*AuditCore)
 
-// WithAuditRepository sets the AuditRepository.
-func WithAuditRepository(r ports.AuditRepository) Option {
-	return func(c *AuditCore) { c.auditRepo = r }
+// WithLedgerProtocol injects the *ledger.Protocol into the Cell.
+//
+// Both bare-nil and typed-nil are rejected at Init() time (ledgerProtocolNil
+// sentinel sticky). Pattern mirrors runtime/auth/session WithFingerprint
+// (strong-dependency wiring option — runtime-api.md §Option 范式分层).
+func WithLedgerProtocol(p *ledger.Protocol) Option {
+	return func(c *AuditCore) {
+		if p == nil {
+			c.ledgerProtocolNil = true
+			return
+		}
+		c.ledgerProtocol = p
+	}
 }
 
-// WithArchiveStore sets the ArchiveStore.
-func WithArchiveStore(s ports.ArchiveStore) Option {
-	return func(c *AuditCore) { c.archiveStore = s }
+// WithLedgerStore injects the ledger.Store into the Cell.
+//
+// Both bare-nil and typed-nil are rejected at Init() time (ledgerStoreNil
+// sentinel sticky). Pattern mirrors WithLedgerProtocol above.
+func WithLedgerStore(s ledger.Store) Option {
+	return func(c *AuditCore) {
+		if validation.IsNilInterface(s) {
+			c.ledgerStoreNil = true
+			return
+		}
+		c.ledgerStore = s
+	}
 }
 
 // WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
@@ -87,11 +109,6 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(c *AuditCore) { c.txRunner = tx }
 }
 
-// WithHMACKey sets the HMAC key for hash chain operations.
-func WithHMACKey(key []byte) Option {
-	return func(c *AuditCore) { c.hmacKey = key }
-}
-
 // WithMetricsProvider sets the metrics provider used by the DirectEmitter in
 // demo mode. Required when WithOutboxDeps sets a publisher without a real
 // outboxWriter. Pass metrics.NopProvider{} explicitly in tests.
@@ -111,21 +128,16 @@ func WithClock(clk clock.Clock) Option {
 	return func(c *AuditCore) { c.clk = clk }
 }
 
-// WithInMemoryDefaults configures in-memory repositories for development
-// and testing. Not suitable for production use.
-func WithInMemoryDefaults() Option {
-	return func(c *AuditCore) {
-		c.auditRepo = mem.NewAuditRepository()
-		c.archiveStore = mem.NewArchiveStore()
-	}
-}
-
 // AuditCore is the auditcore Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1/audit
 type AuditCore struct {
 	*cell.BaseCell
-	auditRepo    ports.AuditRepository
-	archiveStore ports.ArchiveStore
+
+	// ledger framework dependencies (injected by composition root).
+	ledgerProtocol    *ledger.Protocol
+	ledgerStore       ledger.Store
+	ledgerProtocolNil bool // sentinel: WithLedgerProtocol received nil
+	ledgerStoreNil    bool // sentinel: WithLedgerStore received typed-nil/bare-nil
 
 	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc). Sealed marker
 	// types prevent any cell.go public Option from accepting raw
@@ -138,27 +150,31 @@ type AuditCore struct {
 	txRunner        persistence.CellTxManager
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
-	hmacKey         []byte
 	metricsProvider metrics.Provider
 	clk             clock.Clock
 
-	// +slice:subscribe:slice=auditappend,topic=event.user.created.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.user.locked.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.user.updated.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.user.deleted.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.user.unlocked.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.session.created.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.session.revoked.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.config.entry-upserted.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.config.entry-deleted.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.config.version-published.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.config.rollback.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.role.assigned.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappend,topic=event.role.revoked.v1,handler=HandleEvent,group=auditcore
-	appendSvc *auditappend.Service
+	// +slice:subscribe:slice=auditappendsession,topic=event.session.created.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappendsession,topic=event.session.revoked.v1,handler=HandleEvent,group=auditcore
+	appendSessionSvc *auditappendsession.Service
 
-	verifySvc  *auditverify.Service
-	archiveSvc *auditarchive.Service
+	// +slice:subscribe:slice=auditappenduser,topic=event.user.created.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappenduser,topic=event.user.locked.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappenduser,topic=event.user.unlocked.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappenduser,topic=event.user.updated.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappenduser,topic=event.user.deleted.v1,handler=HandleEvent,group=auditcore
+	appendUserSvc *auditappenduser.Service
+
+	// +slice:subscribe:slice=auditappendconfig,topic=event.config.entry-upserted.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappendconfig,topic=event.config.entry-deleted.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappendconfig,topic=event.config.version-published.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappendconfig,topic=event.config.rollback.v1,handler=HandleEvent,group=auditcore
+	appendConfigSvc *auditappendconfig.Service
+
+	// +slice:subscribe:slice=auditappendrole,topic=event.role.assigned.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappendrole,topic=event.role.revoked.v1,handler=HandleEvent,group=auditcore
+	appendRoleSvc *auditappendrole.Service
+
+	verifySvc *auditverify.Service
 
 	// +slice:route:slice=auditquery,subPath=
 	queryHandler *auditquery.Handler
@@ -185,8 +201,15 @@ func NewAuditCore(opts ...Option) *AuditCore {
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	clock.MustHaveClock(c.clk, "auditcore.initInternal")
-	if err := c.resolveHMACKey(reg.Config()); err != nil {
-		return err
+
+	// Validate injected ledger deps (strong-dependency wiring options).
+	if c.ledgerProtocolNil || c.ledgerProtocol == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"auditcore: LedgerProtocol required; use WithLedgerProtocol (composition root must construct via MustNewProtocol)")
+	}
+	if c.ledgerStoreNil || validation.IsNilInterface(c.ledgerStore) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"auditcore: LedgerStore required; use WithLedgerStore")
 	}
 
 	durabilityMode := reg.DurabilityMode()
@@ -221,8 +244,6 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	if err := c.initQuerySlice(durabilityMode); err != nil {
 		return err
 	}
-
-	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
 
 	// Register health probes (emitter fail-open rate checker).
 	if hc, ok := c.emitter.(cell.HealthProber); ok {
@@ -269,39 +290,64 @@ func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 	return nil
 }
 
-// resolveHMACKey populates c.hmacKey from config if not set via option.
-func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
-	if len(c.hmacKey) == 0 {
-		if raw, ok := cfg["audit.hmac_key"]; ok {
-			if s, ok := raw.(string); ok && s != "" {
-				c.hmacKey = []byte(s)
-			}
-		}
-	}
-	if len(c.hmacKey) == 0 {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"auditcore: HMAC key is required (set via WithHMACKey or config audit.hmac_key)")
-	}
-	return nil
-}
-
-// initSlices constructs and registers the audit-append, audit-verify, and
-// audit-archive slices. audit-query is initialized separately in initQuerySlice
-// because it requires the cursor codec to be resolved first.
+// initSlices constructs the 4 auditappend sub-slices and the auditverify slice.
+// auditquery is initialized separately in initQuerySlice after cursor codec resolve.
 func (c *AuditCore) initSlices() error {
-	// audit-append
-	appendOpts := []auditappend.Option{auditappend.WithEmitter(c.emitter), auditappend.WithTxManager(c.txRunner)}
-	appendSvc, err := auditappend.NewService(c.auditRepo, c.hmacKey, c.logger, c.clk, appendOpts...)
+	// auditappend-session
+	sessionSvc, err := auditappendsession.NewService(
+		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
+		auditappendsession.WithEmitter(c.emitter),
+		auditappendsession.WithTxManager(c.txRunner),
+	)
 	if err != nil {
-		return fmt.Errorf("auditappend: %w", err)
+		return fmt.Errorf("auditappend-session: %w", err)
 	}
-	c.appendSvc = appendSvc
-	// L3: 订阅 accesscore/configcore 跨 cell 事件，slice 级别可高于 cell 级别。
-	c.AddSlice(cell.NewBaseSlice("auditappend", "auditcore", cell.L3))
+	c.appendSessionSvc = sessionSvc
+	// L3: consumes cross-cell session events.
+	c.AddSlice(cell.NewBaseSlice("auditappendsession", "auditcore", cell.L3))
 
-	// audit-verify
-	verifyOpts := []auditverify.Option{auditverify.WithEmitter(c.emitter), auditverify.WithTxManager(c.txRunner)}
-	verifySvc, err := auditverify.NewService(c.auditRepo, c.hmacKey, c.logger, verifyOpts...)
+	// auditappend-user
+	userSvc, err := auditappenduser.NewService(
+		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
+		auditappenduser.WithEmitter(c.emitter),
+		auditappenduser.WithTxManager(c.txRunner),
+	)
+	if err != nil {
+		return fmt.Errorf("auditappend-user: %w", err)
+	}
+	c.appendUserSvc = userSvc
+	c.AddSlice(cell.NewBaseSlice("auditappenduser", "auditcore", cell.L3))
+
+	// auditappend-config
+	configSvc, err := auditappendconfig.NewService(
+		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
+		auditappendconfig.WithEmitter(c.emitter),
+		auditappendconfig.WithTxManager(c.txRunner),
+	)
+	if err != nil {
+		return fmt.Errorf("auditappend-config: %w", err)
+	}
+	c.appendConfigSvc = configSvc
+	c.AddSlice(cell.NewBaseSlice("auditappendconfig", "auditcore", cell.L3))
+
+	// auditappend-role
+	roleSvc, err := auditappendrole.NewService(
+		c.ledgerStore, c.ledgerProtocol, c.logger, c.clk,
+		auditappendrole.WithEmitter(c.emitter),
+		auditappendrole.WithTxManager(c.txRunner),
+	)
+	if err != nil {
+		return fmt.Errorf("auditappend-role: %w", err)
+	}
+	c.appendRoleSvc = roleSvc
+	c.AddSlice(cell.NewBaseSlice("auditappendrole", "auditcore", cell.L3))
+
+	// auditverify
+	verifySvc, err := auditverify.NewService(
+		c.ledgerStore, c.logger,
+		auditverify.WithEmitter(c.emitter),
+		auditverify.WithTxManager(c.txRunner),
+	)
 	if err != nil {
 		return fmt.Errorf("auditverify: %w", err)
 	}
@@ -309,16 +355,13 @@ func (c *AuditCore) initSlices() error {
 	// L2: publishes event.audit.integrity-verified.v1 via transactional outbox.
 	c.AddSlice(cell.NewBaseSlice("auditverify", "auditcore", cell.L2))
 
-	// audit-archive (stub)
-	c.archiveSvc = auditarchive.NewService()
-	c.AddSlice(cell.NewBaseSlice("auditarchive", "auditcore", cell.L1))
 	return nil
 }
 
 // initQuerySlice constructs the audit-query handler slice. Must be called after
 // initCursorCodec so that c.cursorCodec is set.
 func (c *AuditCore) initQuerySlice(mode cell.DurabilityMode) error {
-	querySvc, err := auditquery.NewService(c.auditRepo, c.cursorCodec, c.logger,
+	querySvc, err := auditquery.NewService(c.ledgerStore, c.cursorCodec, c.logger,
 		query.RunModeForDemo(mode == cell.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)

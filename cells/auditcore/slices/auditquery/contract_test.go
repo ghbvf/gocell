@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -23,12 +23,18 @@ import (
 // prefix off Contract.Path exactly as chi does — no alias magic required.
 // RegisterRoutes calls auth.Mount to install the auditQueryPolicy, so the
 // contract test exercises the same guard the production mux uses.
-func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
-	repo := mem.NewAuditRepository()
-	for _, e := range entries {
-		_ = repo.Append(context.Background(), e)
+func newContractQueryHandler(entries ...*ledger.Entry) http.Handler {
+	p := testProtocol()
+	store, err := ledger.NewMemStore(p, clock.Real())
+	if err != nil {
+		panic("newContractQueryHandler: NewMemStore: " + err.Error())
 	}
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	for _, e := range entries {
+		if err := store.Append(context.Background(), e); err != nil {
+			panic("newContractQueryHandler: Append: " + err.Error())
+		}
+	}
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}
@@ -42,11 +48,29 @@ func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 	return mux
 }
 
+// testProtocol builds a ledger.Protocol for contract tests.
+func testProtocol() *ledger.Protocol {
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	if err != nil {
+		panic("testProtocol: " + err.Error())
+	}
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
+		ledger.WithNamespace(ns),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	if err != nil {
+		panic("testProtocol: NewProtocol: " + err.Error())
+	}
+	return p
+}
+
 func TestHttpAuditListV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
 
-	h := newContractQueryHandler(&domain.AuditEntry{
+	h := newContractQueryHandler(&ledger.Entry{
 		ID: "ae-1", EventID: "evt-1", EventType: "event.test.v1",
 		ActorID: "usr-1", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Payload: []byte(`{"key":"value"}`),

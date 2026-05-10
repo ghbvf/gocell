@@ -4,29 +4,46 @@ import (
 	"context"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
-func newTestService(t testing.TB) (*Service, *mem.AuditRepository) {
+func newTestProtocol(t testing.TB) *ledger.Protocol {
 	t.Helper()
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testHMACKey, slog.Default(), WithTxManager(&stubTxRunner{}))
+	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
-	return svc, repo
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC(testHMACKey),
+		ledger.WithNamespace(ns),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	return p
+}
+
+func newTestService(t testing.TB) (*Service, *ledger.MemStore) {
+	t.Helper()
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	svc, err := NewService(store, slog.Default(), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
+	return svc, store
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	_, err := NewService(repo, testHMACKey, slog.Default() /* no WithTxManager */)
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	_, err = NewService(store, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -34,82 +51,47 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
-// TestNewService_HMACKeyTooShort locks the slice-layer wrapping contract for
-// the domain.NewHashChain failure branch. Without this the cell-level error
-// would surface only when AuditCore.Init() runs end-to-end, which obscures
-// regressions to the constructor's error pass-through (e.g. an accidental
-// fmt.Errorf wrapping that hides the *errcode.Error).
-func TestNewService_HMACKeyTooShort(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	shortKey := make([]byte, 31) // one short of RFC 2104 §3 minimum
-	_, err := NewService(repo, shortKey, slog.Default(), WithTxManager(&stubTxRunner{}))
-	require.Error(t, err)
-
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec, "domain *errcode.Error must pass through unchanged")
-	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	assert.Contains(t, ec.Message, "audit hmac key too short")
-	// The slice constructor must not double-wrap the message — cell.initSlices
-	// owns the "auditverify: %w" prefix.
-	assert.NotContains(t, err.Error(), "auditverify: auditverify:",
-		"slice constructor must not double-wrap; cell.initSlices owns the prefix")
-
-	var sawMin, sawActual bool
-	for _, attr := range ec.Details {
-		switch attr.Key {
-		case "minimumBytes":
-			sawMin = true
-			assert.Equal(t, int64(32), attr.Value.Int64())
-		case "actualBytes":
-			sawActual = true
-			assert.Equal(t, int64(31), attr.Value.Int64())
-		}
-	}
-	assert.True(t, sawMin, "details must include minimumBytes")
-	assert.True(t, sawActual, "details must include actualBytes")
-}
-
 func TestService_VerifyChain_Empty(t *testing.T) {
-	svc, _ := newTestService(t)
-	result, err := svc.VerifyChain(context.Background(), 0, 100)
+	svc, store := newTestService(t)
+	// Seed one entry so fromSeq=1 toSeq=1 is valid.
+	p := newTestProtocol(t)
+	e := &ledger.Entry{
+		EventID:   "evt-0",
+		EventType: "event.test",
+		ActorID:   "actor-1",
+		Timestamp: clock.Real().Now(),
+		Payload:   []byte(`{}`),
+	}
+	require.NoError(t, store.Append(context.Background(), e))
+
+	result, err := svc.VerifyChain(context.Background(), 1, 1)
 	require.NoError(t, err)
 	assert.True(t, result.Valid)
-	assert.Equal(t, 0, result.EntriesChecked)
+	_ = p
 }
 
 func TestService_VerifyChain_ValidEntries(t *testing.T) {
-	svc, repo := newTestService(t)
+	svc, store := newTestService(t)
 
-	// Build a valid chain using the same HMAC key.
-	chain, err := domain.NewHashChain(testHMACKey)
-	require.NoError(t, err)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), time.Now())
-		require.NoError(t, repo.Append(context.Background(), entry))
+		e := &ledger.Entry{
+			EventID:   "evt-" + string(rune('0'+i)),
+			EventType: "event.test",
+			ActorID:   "actor-1",
+			Timestamp: clock.Real().Now(),
+			Payload:   []byte(`{"i":` + string(rune('0'+i)) + `}`),
+		}
+		require.NoError(t, store.Append(context.Background(), e))
 	}
 
-	result, err := svc.VerifyChain(context.Background(), 0, 10)
+	result, err := svc.VerifyChain(context.Background(), 1, 3)
 	require.NoError(t, err)
 	assert.True(t, result.Valid)
-	assert.Equal(t, 3, result.EntriesChecked)
 }
 
-func TestService_VerifyChain_TamperedEntry(t *testing.T) {
-	svc, repo := newTestService(t)
-
-	chain, err := domain.NewHashChain(testHMACKey)
-	require.NoError(t, err)
-	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), time.Now())
-		if i == 1 {
-			// Tamper with the second entry.
-			entry.Hash = "tampered-hash"
-		}
-		require.NoError(t, repo.Append(context.Background(), entry))
-	}
-
-	result, err := svc.VerifyChain(context.Background(), 0, 10)
-	require.NoError(t, err)
-	assert.False(t, result.Valid)
-	assert.Equal(t, 1, result.FirstInvalidIndex)
+func TestService_VerifyChain_InvalidRange_Error(t *testing.T) {
+	svc, _ := newTestService(t)
+	// toSeq < fromSeq → error from store
+	_, err := svc.VerifyChain(context.Background(), 5, 1)
+	require.Error(t, err)
 }

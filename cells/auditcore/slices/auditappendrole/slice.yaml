@@ -1,0 +1,20 @@
+id: auditappendrole
+belongsToCell: auditcore
+contractUsages:
+  - contract: event.audit.appended.v1
+    role: publish
+  - contract: event.role.assigned.v1
+    role: subscribe
+  - contract: event.role.revoked.v1
+    role: subscribe
+verify:
+  unit:
+    - unit.auditappendrole.service
+  contract:
+    - contract.event.audit.appended.v1.publish
+    - contract.event.role.assigned.v1.subscribe
+    - contract.event.role.revoked.v1.subscribe
+  waivers: []
+
+allowedFiles:
+  - cells/auditcore/slices/auditappendrole/**

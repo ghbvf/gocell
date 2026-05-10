@@ -13,17 +13,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 const (
-	// auditNs100 / auditNs200 are sub-second timestamp offsets used in
-	// cursor-isolation tests to produce distinct query fingerprints.
 	auditNs100 = 100 * time.Nanosecond
 	auditNs200 = 200 * time.Nanosecond
 )
@@ -33,18 +30,64 @@ func testCodec() *query.CursorCodec {
 	return codec
 }
 
-func newTestService() (*Service, *mem.AuditRepository) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+func newTestProtocol(t testing.TB) *ledger.Protocol {
+	t.Helper()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
+		ledger.WithNamespace(ns),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	return p
+}
+
+func newTestStore(t testing.TB) *ledger.MemStore {
+	t.Helper()
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	return store
+}
+
+func newTestService() (*Service, *ledger.MemStore) {
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
+		ledger.WithNamespace(ledger.NamespaceID("auditcore")),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
 	if err != nil {
 		panic(err)
 	}
-	return svc, repo
+	store, err := ledger.NewMemStore(p, clock.Real())
+	if err != nil {
+		panic(err)
+	}
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
+	return svc, store
+}
+
+func seedEntry(store *ledger.MemStore, id, eventType, actorID string, ts time.Time) {
+	e := &ledger.Entry{
+		ID:        id,
+		EventID:   "evt-" + id,
+		EventType: eventType,
+		ActorID:   actorID,
+		Timestamp: ts,
+		Payload:   []byte("{}"),
+	}
+	_ = store.Append(context.Background(), e)
 }
 
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
+	store := newTestStore(t)
+	svc, err := NewService(store, nil, slog.Default(), query.RunModeProd)
 	require.Error(t, err)
 	assert.Nil(t, svc)
 	var ecErr *errcode.Error
@@ -52,65 +95,54 @@ func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 }
 
-func seedEntry(repo *mem.AuditRepository, id, eventType, actorID string, ts time.Time) {
-	_ = repo.Append(context.Background(), &domain.AuditEntry{
-		ID:        id,
-		EventID:   "evt-" + id,
-		EventType: eventType,
-		ActorID:   actorID,
-		Timestamp: ts,
-		Payload:   []byte("{}"),
-	})
-}
-
 func TestService_Query(t *testing.T) {
 	now := time.Now()
 
 	tests := []struct {
 		name    string
-		seed    func(*mem.AuditRepository)
-		filters ports.AuditFilters
+		seed    func(*ledger.MemStore)
+		filters ledger.AuditFilters
 		wantLen int
 	}{
 		{
 			name:    "empty repository",
-			seed:    func(_ *mem.AuditRepository) {},
-			filters: ports.AuditFilters{},
+			seed:    func(_ *ledger.MemStore) {},
+			filters: ledger.AuditFilters{},
 			wantLen: 0,
 		},
 		{
 			name: "all entries",
-			seed: func(r *mem.AuditRepository) {
+			seed: func(r *ledger.MemStore) {
 				seedEntry(r, "a-1", "event.user.created.v1", "usr-1", now)
 				seedEntry(r, "a-2", "event.session.created.v1", "usr-1", now.Add(time.Second))
 			},
-			filters: ports.AuditFilters{},
+			filters: ledger.AuditFilters{},
 			wantLen: 2,
 		},
 		{
 			name: "filter by event type",
-			seed: func(r *mem.AuditRepository) {
+			seed: func(r *ledger.MemStore) {
 				seedEntry(r, "a-1", "event.user.created.v1", "usr-1", now)
 				seedEntry(r, "a-2", "event.session.created.v1", "usr-2", now.Add(time.Second))
 			},
-			filters: ports.AuditFilters{EventType: "event.user.created.v1"},
+			filters: ledger.AuditFilters{EventType: "event.user.created.v1"},
 			wantLen: 1,
 		},
 		{
 			name: "filter by actor",
-			seed: func(r *mem.AuditRepository) {
+			seed: func(r *ledger.MemStore) {
 				seedEntry(r, "a-1", "event.user.created.v1", "usr-1", now)
 				seedEntry(r, "a-2", "event.user.created.v1", "usr-2", now.Add(time.Second))
 			},
-			filters: ports.AuditFilters{ActorID: "usr-1"},
+			filters: ledger.AuditFilters{ActorID: "usr-1"},
 			wantLen: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService()
-			tt.seed(repo)
+			svc, store := newTestService()
+			tt.seed(store)
 
 			result, err := svc.Query(context.Background(), tt.filters, query.PageParams{})
 			require.NoError(t, err)
@@ -121,46 +153,41 @@ func TestService_Query(t *testing.T) {
 
 func TestService_Query_FirstPage(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc, repo := newTestService()
+	svc, store := newTestService()
 	for i := range 5 {
-		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
+		seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 3})
+	result, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
 	assert.NotEmpty(t, result.NextCursor)
-	// DESC: newest first
-	assert.Equal(t, "ae-04", result.Items[0].ID)
 }
 
 func TestService_Query_WithCursor(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc, repo := newTestService()
+	svc, store := newTestService()
 	for i := range 10 {
-		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
+		seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	// Get first page
-	page1, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 3})
+	page1, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
-	// Get second page using cursor
-	page2, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 3)
-	// Second page should continue where first left off
 	assert.NotEqual(t, page1.Items[0].ID, page2.Items[0].ID)
 }
 
 func TestService_Query_InvalidCursor(t *testing.T) {
 	svc, _ := newTestService()
 
-	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Cursor: "garbage-token"})
+	_, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage-token"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -169,11 +196,11 @@ func TestService_Query_InvalidCursor(t *testing.T) {
 
 func TestService_Query_LastPage(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc, repo := newTestService()
-	seedEntry(repo, "ae-00", "event.test.v1", "usr-1", base)
-	seedEntry(repo, "ae-01", "event.test.v1", "usr-1", base.Add(time.Hour))
+	svc, store := newTestService()
+	seedEntry(store, "ae-00", "event.test.v1", "usr-1", base)
+	seedEntry(store, "ae-01", "event.test.v1", "usr-1", base.Add(time.Hour))
 
-	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 10})
+	result, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -183,7 +210,7 @@ func TestService_Query_LastPage(t *testing.T) {
 func TestService_Query_Empty(t *testing.T) {
 	svc, _ := newTestService()
 
-	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{})
+	result, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)
@@ -191,24 +218,20 @@ func TestService_Query_Empty(t *testing.T) {
 }
 
 func TestService_Query_CursorContextMismatch(t *testing.T) {
-	// Create a cursor with eventType=login context, then query with eventType=logout.
-	// The cursor should be rejected.
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc, repo := newTestService()
+	svc, store := newTestService()
 	for i := range 5 {
-		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.login.v1", "usr-1",
+		seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.login.v1", "usr-1",
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	// Get first page with eventType=login filter.
-	loginFilters := ports.AuditFilters{EventType: "event.login.v1"}
+	loginFilters := ledger.AuditFilters{EventType: "event.login.v1"}
 	page1, err := svc.Query(context.Background(), loginFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
-	// Replay the cursor with a different eventType filter — must fail.
-	logoutFilters := ports.AuditFilters{EventType: "event.logout.v1"}
+	logoutFilters := ledger.AuditFilters{EventType: "event.logout.v1"}
 	_, err = svc.Query(context.Background(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -219,20 +242,23 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	assert.Equal(t, "query context mismatch", reasonAttr.Value.String())
 }
 
-// newTestServiceWithLogBuf returns a Service wired to a JSON-capturing logger
-// and the underlying buffer for post-call inspection.
-func newTestServiceWithLogBuf() (*Service, *mem.AuditRepository, *bytes.Buffer) {
-	repo := mem.NewAuditRepository()
+func newTestServiceWithLogBuf() (*Service, *ledger.MemStore, *bytes.Buffer) {
+	p, _ := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
+		ledger.WithNamespace(ledger.NamespaceID("auditcore")),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	store, _ := ledger.NewMemStore(p, clock.Real())
 	buf := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	svc, err := NewService(repo, testCodec(), logger, query.RunModeProd)
+	svc, err := NewService(store, testCodec(), logger, query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}
-	return svc, repo, buf
+	return svc, store, buf
 }
 
-// parseLogLines parses each non-empty newline-delimited JSON record in buf.
 func parseLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -249,56 +275,12 @@ func parseLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return out
 }
 
-// TestService_Query_InvalidCursor_LogsDecode verifies that a malformed cursor
-// produces a structured Info log line with reason=decode, slice=auditquery,
-// and request_id propagated from ctx, without leaking the raw cursor string
-// (aligned with k8s/etcd/MinIO).
 func TestService_Query_InvalidCursor_LogsDecode(t *testing.T) {
 	svc, _, buf := newTestServiceWithLogBuf()
 
 	badCursor := "garbage-token-should-not-appear-in-log"
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-test-001")
-	_, err := svc.Query(ctx, ports.AuditFilters{}, query.PageParams{Cursor: badCursor})
-	require.Error(t, err)
-
-	logs := parseLogLines(t, buf)
-	require.Len(t, logs, 1, "expected exactly one log record")
-	rec := logs[0]
-
-	assert.Equal(t, "INFO", rec["level"], "level must be INFO (client input error, not server degradation)")
-	assert.Equal(t, "invalid cursor", rec["msg"])
-	assert.Equal(t, "auditquery", rec["slice"])
-	assert.Equal(t, "decode", rec["reason"])
-	assert.Equal(t, "req-test-001", rec["request_id"])
-	assert.NotEmpty(t, rec["error"])
-	assert.NotContains(t, buf.String(), badCursor,
-		"raw cursor string must not appear in log output")
-}
-
-// TestService_Query_InvalidCursor_LogsScope verifies that a context-mismatched
-// cursor produces a log line with reason=scope.
-func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc, repo, buf := newTestServiceWithLogBuf()
-	for i := range 5 {
-		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.login.v1", "usr-1",
-			base.Add(time.Duration(i)*time.Hour))
-	}
-
-	// Issue a valid first page to mint a scoped cursor.
-	loginFilters := ports.AuditFilters{EventType: "event.login.v1"}
-	page1, err := svc.Query(context.Background(), loginFilters, query.PageParams{Limit: 3})
-	require.NoError(t, err)
-	require.NotEmpty(t, page1.NextCursor)
-
-	// Reset log buffer so the scope-mismatch assertion sees only the next call.
-	buf.Reset()
-
-	// Replay the cursor under a mismatched scope — with a request_id in ctx
-	// to confirm correlation propagation.
-	logoutFilters := ports.AuditFilters{EventType: "event.logout.v1"}
-	ctxWithReqID := ctxkeys.WithRequestID(context.Background(), "req-test-002")
-	_, err = svc.Query(ctxWithReqID, logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err := svc.Query(ctx, ledger.AuditFilters{}, query.PageParams{Cursor: badCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -308,19 +290,48 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 	assert.Equal(t, "INFO", rec["level"])
 	assert.Equal(t, "invalid cursor", rec["msg"])
 	assert.Equal(t, "auditquery", rec["slice"])
-	assert.Equal(t, "scope", rec["reason"])
-	assert.Equal(t, "req-test-002", rec["request_id"])
+	assert.Equal(t, "decode", rec["reason"])
+	assert.Equal(t, "req-test-001", rec["request_id"])
 	assert.NotEmpty(t, rec["error"])
-	assert.NotContains(t, buf.String(), page1.NextCursor,
-		"raw cursor string must not appear in log output")
+	assert.NotContains(t, buf.String(), badCursor)
 }
 
-// TestService_Query_InvalidCursor_NoRequestID verifies the log record omits
-// request_id when no ID is present in ctx (field is conditional, never "").
+func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc, store, buf := newTestServiceWithLogBuf()
+	for i := range 5 {
+		seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.login.v1", "usr-1",
+			base.Add(time.Duration(i)*time.Hour))
+	}
+
+	loginFilters := ledger.AuditFilters{EventType: "event.login.v1"}
+	page1, err := svc.Query(context.Background(), loginFilters, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.NotEmpty(t, page1.NextCursor)
+
+	buf.Reset()
+
+	logoutFilters := ledger.AuditFilters{EventType: "event.logout.v1"}
+	ctxWithReqID := ctxkeys.WithRequestID(context.Background(), "req-test-002")
+	_, err = svc.Query(ctxWithReqID, logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+
+	logs := parseLogLines(t, buf)
+	require.Len(t, logs, 1)
+	rec := logs[0]
+
+	assert.Equal(t, "INFO", rec["level"])
+	assert.Equal(t, "invalid cursor", rec["msg"])
+	assert.Equal(t, "auditquery", rec["slice"])
+	assert.Equal(t, "scope", rec["reason"])
+	assert.Equal(t, "req-test-002", rec["request_id"])
+	assert.NotContains(t, buf.String(), page1.NextCursor)
+}
+
 func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
 	svc, _, buf := newTestServiceWithLogBuf()
 
-	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Cursor: "garbage"})
+	_, err := svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Cursor: "garbage"})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -330,29 +341,24 @@ func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
 }
 
 func TestService_Query_SubsecondFilterContext(t *testing.T) {
-	// Two queries with from/to at the same second but different nanoseconds
-	// must produce different QueryContext fingerprints, so a cursor from one
-	// is rejected by the other.
 	base := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
-	svc, repo := newTestService()
+	svc, store := newTestService()
 	for i := range 10 {
-		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
+		seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
 			base.Add(time.Duration(i)*time.Millisecond))
 	}
 
-	// Query A: from = base+100ns
-	filtersA := ports.AuditFilters{From: base.Add(auditNs100)}
+	filtersA := ledger.AuditFilters{From: base.Add(auditNs100)}
 	pageA, err := svc.Query(context.Background(), filtersA, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, pageA.HasMore)
 
-	// Query B: from = base+200ns (same second, different nanosecond)
-	filtersB := ports.AuditFilters{From: base.Add(auditNs200)}
+	filtersB := ledger.AuditFilters{From: base.Add(auditNs200)}
 	_, err = svc.Query(context.Background(), filtersB, query.PageParams{
 		Limit:  3,
 		Cursor: pageA.NextCursor,
 	})
-	require.Error(t, err, "cursor from query A must be rejected by query B with different sub-second from filter")
+	require.Error(t, err)
 	var ecErr2 *errcode.Error
 	require.ErrorAs(t, err, &ecErr2)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr2.Code)

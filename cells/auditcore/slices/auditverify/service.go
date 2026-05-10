@@ -1,5 +1,5 @@
 // Package auditverify implements the audit-verify slice: verifies hash chain
-// integrity and publishes verification results.
+// integrity via ledger.Store and publishes verification results.
 package auditverify
 
 import (
@@ -7,19 +7,18 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
 // VerifyResult holds the outcome of a chain verification.
 type VerifyResult struct {
-	Valid             bool `json:"valid"`
-	FirstInvalidIndex int  `json:"firstInvalidIndex"`
-	EntriesChecked    int  `json:"entriesChecked"`
+	Valid            bool  `json:"valid"`
+	FirstInvalidSeq  int64 `json:"firstInvalidSeq"`
+	EntriesChecked   int64 `json:"entriesChecked"`
 }
 
 // Option configures an audit-verify Service.
@@ -43,10 +42,9 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	}
 }
 
-// Service verifies hash chain integrity.
+// Service verifies ledger hash chain integrity.
 type Service struct {
-	repo     ports.AuditRepository
-	chain    *domain.HashChain
+	store    ledger.Store
 	txRunner persistence.TxRunner
 	emitter  outbox.Emitter
 	logger   *slog.Logger
@@ -56,21 +54,12 @@ type Service struct {
 // TxRunner must be provided via WithTxManager; nil txRunner is rejected to
 // prevent silent loss of L2 atomicity guarantees.
 func NewService(
-	repo ports.AuditRepository,
-	hmacKey []byte,
+	store ledger.Store,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	// Pass the domain error through unchanged — cell.initSlices owns the
-	// "auditverify: %w" wrapping for slice ownership; double-wrapping here
-	// would render "auditverify: auditverify: …".
-	chain, err := domain.NewHashChain(hmacKey)
-	if err != nil {
-		return nil, err
-	}
 	s := &Service{
-		repo:    repo,
-		chain:   chain,
+		store:   store,
 		emitter: outbox.NewNoopEmitter(),
 		logger:  logger,
 	}
@@ -84,49 +73,40 @@ func NewService(
 	return s, nil
 }
 
-// VerifyChain verifies the integrity of all entries in the given range.
-func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult, error) {
-	entries, err := s.repo.GetRange(ctx, from, to)
+// VerifyChain verifies the integrity of entries in the range [fromSeq, toSeq].
+func (s *Service) VerifyChain(ctx context.Context, fromSeq, toSeq int64) (*VerifyResult, error) {
+	valid, firstInvalidSeq, err := s.store.Verify(ctx, fromSeq, toSeq)
 	if err != nil {
-		return nil, fmt.Errorf("audit-verify: get range: %w", err)
+		return nil, fmt.Errorf("audit-verify: verify: %w", err)
 	}
 
-	valid, firstInvalid := s.chain.Verify(entries)
+	entriesChecked := toSeq - fromSeq + 1
+	if !valid && firstInvalidSeq >= 0 {
+		entriesChecked = firstInvalidSeq - fromSeq
+	}
 
 	result := &VerifyResult{
-		Valid:             valid,
-		FirstInvalidIndex: firstInvalid,
-		EntriesChecked:    len(entries),
+		Valid:           valid,
+		FirstInvalidSeq: firstInvalidSeq,
+		EntriesChecked:  entriesChecked,
 	}
 
-	// Publish the verification result through the injected emitter. Cell wiring
-	// decides whether that emitter is backed by durable outbox delivery or demo
-	// direct delivery.
 	event := dto.AuditIntegrityVerifiedEvent{
 		Valid:             valid,
-		FirstInvalidIndex: firstInvalid,
-		EntriesChecked:    len(entries),
+		FirstInvalidIndex: int(firstInvalidSeq),
+		EntriesChecked:    int(entriesChecked),
 	}
 
 	// Persist + outbox write in a transaction for L2 atomicity.
-	persistFn := s.buildPersistFn(event)
-	if persistErr := s.runPersist(ctx, persistFn); persistErr != nil {
+	if persistErr := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		return outbox.Emit(txCtx, s.emitter, dto.TopicAuditIntegrityVerified, event)
+	}); persistErr != nil {
 		return result, fmt.Errorf("audit-verify: persist: %w", persistErr)
 	}
 
 	s.logger.Info("hash chain verification completed",
-		slog.Bool("valid", valid), slog.Int("entries_checked", len(entries)))
+		slog.Bool("valid", valid),
+		slog.Int64("entries_checked", entriesChecked))
 
 	return result, nil
-}
-
-// buildPersistFn returns a transaction function that writes the outbox event.
-func (s *Service) buildPersistFn(event dto.AuditIntegrityVerifiedEvent) func(context.Context) error {
-	return func(txCtx context.Context) error {
-		return outbox.Emit(txCtx, s.emitter, dto.TopicAuditIntegrityVerified, event)
-	}
-}
-
-func (s *Service) runPersist(ctx context.Context, fn func(context.Context) error) error {
-	return s.txRunner.RunInTx(ctx, fn)
 }

@@ -13,11 +13,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -40,9 +40,18 @@ func newHandlerMux(svc *Service) http.Handler {
 	return mux
 }
 
+// newHandlerStore creates a fresh MemStore for handler tests.
+func newHandlerStore(t testing.TB) *ledger.MemStore {
+	t.Helper()
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	return store
+}
+
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -99,8 +108,8 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 }
 
 func TestHandleQuery_InvalidLimit(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -114,8 +123,8 @@ func TestHandleQuery_InvalidLimit(t *testing.T) {
 }
 
 func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
@@ -123,9 +132,7 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 	// The generated handler routes cursor/limit through httputil.ParsePageParams
 	// (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE F4 absorb): exceeding the 500
 	// limit ceiling now produces the canonical ERR_PAGE_SIZE_EXCEEDED envelope
-	// shared with every other paginated endpoint (formerly the inline
-	// per-param parse emitted ERR_VALIDATION_FAILED — diverging from the rest
-	// of the HTTP surface).
+	// shared with every other paginated endpoint.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=501", nil)
 	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 	mux.ServeHTTP(w, req)
@@ -135,14 +142,14 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 }
 
 func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 	mux := newHandlerMux(svc)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 7 {
-		require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+		require.NoError(t, store.Append(context.Background(), &ledger.Entry{
 			ID:        fmt.Sprintf("ae-%02d", i),
 			EventID:   fmt.Sprintf("evt-%02d", i),
 			EventType: "event.test.v1",
@@ -216,8 +223,8 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := mem.NewAuditRepository()
-			svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+			store := newHandlerStore(t)
+			svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 			require.NoError(t, err)
 			mux := newHandlerMux(svc)
 
@@ -233,7 +240,9 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 }
 
 func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
-	resp := toAuditEntryResponse(&domain.AuditEntry{
+	// Use a ledger.Entry to validate that internal hash-chain fields (PrevHash,
+	// Hash) are excluded from the API response (B2-C-09 boundary enforcement).
+	resp := toAuditEntryResponse(&ledger.Entry{
 		ID: "ae-1", EventID: "evt-1", EventType: "test.event.v1",
 		ActorID: "usr-1", Timestamp: time.Now(),
 		Payload:  []byte(`{"secret":"data"}`),
@@ -248,7 +257,6 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 	assert.Contains(t, body, `"eventType"`)
 	assert.Contains(t, body, `"actorId"`)
 	assert.Contains(t, body, `"timestamp"`)
-
 	assert.Contains(t, body, `"payload"`)
 
 	assert.NotContains(t, body, `"prevHash"`)
@@ -257,20 +265,20 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 
 // TestHandler_RegisterRoutes_AuthzNegative validates that RegisterRoutes installs
 // the auditQueryPolicy so unauthenticated and cross-user requests are rejected at
-// the route layer, not inside the business handler. This mirrors the production guard path.
+// the route layer, not inside the business handler.
 func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
 	// Seed one entry for usr-1 and one for usr-2.
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
 		ID: "rr-1", EventID: "evt-rr-1", EventType: "event.test.v1",
 		ActorID: "usr-1", Timestamp: base, Payload: []byte("{}"),
 	}))
-	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
 		ID: "rr-2", EventID: "evt-rr-2", EventType: "event.test.v1",
 		ActorID: "usr-2", Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
 	}))
@@ -334,8 +342,8 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 
 // Trust boundary tests (#27q).
 func TestHandleQuery_ActorBinding(t *testing.T) {
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
@@ -344,13 +352,13 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	securedMux := http.NewServeMux()
 	require.NoError(t, h.RegisterRoutes(securedMux))
 
-	// Seed entries for two actors
+	// Seed entries for two actors.
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
 		ID: "ae-1", EventID: "evt-1", EventType: "event.test.v1",
 		ActorID: "usr-1", Timestamp: base, Payload: []byte("{}"),
 	}))
-	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
 		ID: "ae-2", EventID: "evt-2", EventType: "event.test.v1",
 		ActorID: "usr-2", Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
 	}))
