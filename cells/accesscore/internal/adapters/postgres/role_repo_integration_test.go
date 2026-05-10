@@ -291,92 +291,9 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 	})
 
 	t.Run("LastAdminProtected_trigger_fires_on_raw_DELETE", func(t *testing.T) {
-		// Set up: ensure 'admin' role exists with a single admin user.
-		adminRoleID := "admin"
-		// Upsert admin role (may already exist from previous subtest).
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(adminRoleID, "Administrator")))
-
-		adminUser := createTestUserInDB(t, userRepo, "lapadmin_"+uuid.NewString()[:6])
-		_, err := roleRepo.AssignToUser(ctx, adminUser.ID, adminRoleID)
-		require.NoError(t, err)
-
-		// Verify exactly one admin exists for this user (count may be higher from
-		// other subtests). We test the trigger by ensuring this user is the only holder
-		// by removing all other admins first using RemoveFromUser (bypasses the trigger
-		// since RemoveFromUser uses plain DELETE). Actually, the safest approach is to
-		// use a fresh role specific to this subtest and ensure only one holder.
-		//
-		// Use a fresh unique "single-admin" role to avoid interference.
-		soloAdminRole := "solo_admin_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(soloAdminRole, "Solo Admin")))
-
-		soloUser := createTestUserInDB(t, userRepo, "solo_"+uuid.NewString()[:6])
-		_, err = roleRepo.AssignToUser(ctx, soloUser.ID, soloAdminRole)
-		require.NoError(t, err)
-
-		// Mimic the trigger name in the role ID so the trigger fires.
-		// Actually the trigger only fires for role_id='admin'. Let's use 'admin' role
-		// but ensure our user is the only holder by counting.
-		//
-		// Simpler approach: directly DELETE via raw SQL on role_assignments WHERE
-		// role_id='admin' when there's only one admin. We need raw pool access.
-		// Since we're in the same package, we can use roleRepo.pool directly.
-
-		// Ensure there's exactly one 'admin' assignment by setting up fresh state.
-		// Create a fresh 'admin' role holder.
-		singleAdminUser := createTestUserInDB(t, userRepo, "singadm_"+uuid.NewString()[:6])
-
-		// Clear any existing admin assignments by assigning and verifying count.
-		// NOTE: We cannot easily "clear" existing admins without triggering the
-		// last-admin guard. Instead, we add our user to 'admin' and use a
-		// raw DELETE to test the trigger when this user is the only admin.
-		//
-		// Strategy: assign our singleAdminUser to 'admin', then remove all others
-		// via RemoveFromUser (which doesn't check count), then issue a raw DELETE.
-		// But RemoveFromUser on the remaining last one would trigger the guard too.
-		//
-		// Best approach: create a dedicated test-specific role_id that matches the
-		// trigger's IF OLD.role_id <> 'admin' guard. The trigger only fires for
-		// role_id = 'admin' specifically. So we test it with the actual 'admin' role.
-		//
-		// To have exactly one holder, we need a clean DB state. Since subtests share
-		// the same DB, we'll COUNT current holders and only proceed if safe.
-		currentCount, err := roleRepo.CountByRole(ctx, "admin")
-		require.NoError(t, err)
-		if currentCount == 0 {
-			// No admins — assign our user so they're the sole holder.
-			_, err = roleRepo.AssignToUser(ctx, singleAdminUser.ID, "admin")
-			require.NoError(t, err)
-		} else {
-			// Admins exist — assign our user (so they join the pool), then remove
-			// all others via RemoveFromUser, leaving singleAdminUser as sole holder.
-			_, err = roleRepo.AssignToUser(ctx, singleAdminUser.ID, "admin")
-			require.NoError(t, err)
-
-			// Get all other admin holders and remove them via RemoveFromUser.
-			// RemoveFromUser is idempotent and bypasses the last-admin guard.
-			allAdmins, err := roleRepo.GetByUserID(ctx, singleAdminUser.ID)
-			require.NoError(t, err)
-			_ = allAdmins
-			// We can't easily list all users with 'admin' role. Skip the cleanup
-			// and just verify the trigger fires when there's at least one admin.
-			// The trigger fires when count-after-delete == 0. Our singleAdminUser
-			// may not be the sole holder. This subtest is best-effort.
-			t.Skip("cannot reliably isolate sole-admin state across shared subtests; trigger test requires isolation")
-		}
-
-		// Now singleAdminUser is the sole admin. Issue a raw DELETE — the trigger
-		// must fire and return P0001 / "last_admin_protected".
-		_, rawErr := roleRepo.pool.Exec(ctx,
-			"DELETE FROM role_assignments WHERE user_id = $1 AND role_id = 'admin'",
-			singleAdminUser.ID,
-		)
-		require.Error(t, rawErr, "trigger must fire for sole admin delete")
-
-		var pgErr *pgconn.PgError
-		require.True(t, errors.As(rawErr, &pgErr), "error must be a PgError")
-		assert.Equal(t, "P0001", pgErr.Code, "SQLSTATE must be P0001")
-		assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
+		// This sub-test is superseded by TestLastAdminTrigger_RawDelete, which
+		// uses a fresh isolated container. Nothing to do here.
+		t.Skip("superseded by TestLastAdminTrigger_RawDelete (isolated container)")
 	})
 
 	t.Run("CountByRole_returns_correct_count", func(t *testing.T) {
@@ -436,4 +353,47 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		assert.Equal(t, "Apple", roles[0].Name)
 		assert.Equal(t, "Zebra", roles[1].Name)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Isolated last_admin_protected trigger test
+// ---------------------------------------------------------------------------
+
+// TestLastAdminTrigger_RawDelete verifies that the DB-level last_admin_protected
+// trigger (migration 019) fires when a raw DELETE would remove the sole holder of
+// the 'admin' role.
+//
+// This test spins its own isolated testcontainer so it does not depend on the
+// shared subtest state inside TestPGRoleRepo_Integration.
+func TestLastAdminTrigger_RawDelete(t *testing.T) {
+	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create the 'admin' role.
+	require.NoError(t, roleRepo.Create(ctx, newTestRole("admin", "Administrator")))
+
+	// Insert a single user and assign them to 'admin'. This user will be the
+	// sole holder.
+	soloUser := createTestUserInDB(t, userRepo, "trigger_"+uuid.NewString()[:6])
+	_, err := roleRepo.AssignToUser(ctx, soloUser.ID, "admin")
+	require.NoError(t, err)
+
+	// Verify we have exactly one admin so the trigger condition is met.
+	count, err := roleRepo.CountByRole(ctx, "admin")
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "test setup: exactly one admin required before raw DELETE")
+
+	// Issue a raw DELETE directly to the pool — bypasses the application-level
+	// last-admin guard. The DB trigger must intercept this and raise P0001.
+	_, rawErr := roleRepo.pool.Exec(ctx,
+		"DELETE FROM role_assignments WHERE user_id = $1 AND role_id = 'admin'",
+		soloUser.ID,
+	)
+	require.Error(t, rawErr, "DB trigger must reject raw DELETE of sole admin")
+
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(rawErr, &pgErr), "error must be *pgconn.PgError")
+	assert.Equal(t, "P0001", pgErr.Code, "SQLSTATE must be P0001 (PL/pgSQL RAISE EXCEPTION)")
+	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
 }

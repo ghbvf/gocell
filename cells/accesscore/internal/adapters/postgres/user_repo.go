@@ -94,6 +94,11 @@ SELECT id, username, email, password_hash, password_reset_required, status, crea
 FROM users
 WHERE username = $1`
 
+	// updateUserSQL intentionally does NOT include authz_epoch in the SET list.
+	// Bumping the epoch is a separate, distinct operation per ADR-credential D2
+	// (S4 wires the per-event bump path). Calling Update() after a credential
+	// state change (role revoke, password reset, lock, delete) does NOT bump
+	// authz_epoch. Use UpdateAuthzEpoch for that purpose.
 	updateUserSQL = `
 UPDATE users
 SET username = $2, email = $3, password_hash = $4, password_reset_required = $5,
@@ -194,6 +199,25 @@ func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
 	return nil
+}
+
+// UpdateAuthzEpoch atomically sets authz_epoch for the given user to newEpoch.
+//
+// This method is a stub that will be wired in S4 when the credential-event
+// bump path is introduced. Its presence here makes the gap visible at compile
+// time: any S4 call site that needs to bump the epoch can import this method
+// directly rather than discovering the gap at review time.
+//
+// ADR-credential D2: authz_epoch must be bumped on every credential state
+// change (role revoke, password reset, lock, delete). The bump is a distinct
+// SQL operation, separate from Update(), and must happen inside the same
+// transaction as the credential event.
+//
+// Returns errcode.ErrInternal until S4 lands the real implementation.
+func (r *PGUserRepo) UpdateAuthzEpoch(_ context.Context, _ string, _ int64) error {
+	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		"PGUserRepo.UpdateAuthzEpoch: S4 wiring not yet landed",
+		errcode.WithInternal("call site reached the bump stub before S4 cell rewiring"))
 }
 
 // scanUser scans a single Row into a domain.User.

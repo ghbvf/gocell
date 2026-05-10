@@ -238,8 +238,9 @@ func (s *PGSessionStore) RevokeForSubject(ctx context.Context, subjectID string,
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: RevokeForSubject requires non-empty subjectID")
 	}
-	if err := s.validateCredentialEvent(event); err != nil {
-		return err
+	if !session.ValidateCredentialEvent(event) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session: RevokeForSubject received unknown CredentialEvent")
 	}
 
 	now := s.clock.Now().UTC()
@@ -248,21 +249,4 @@ func (s *PGSessionStore) RevokeForSubject(ctx context.Context, subjectID string,
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: revoke for subject", err)
 	}
 	return nil
-}
-
-// validateCredentialEvent rejects CredentialEvent values not in the declared
-// enum. Mirrors mem_store.go's use of credentialEventValid (which is
-// unexported to the session package). The switch is duplicated here because
-// session.credentialEventValid is package-private.
-func (s *PGSessionStore) validateCredentialEvent(event session.CredentialEvent) error {
-	switch event {
-	case session.CredentialEventPasswordReset,
-		session.CredentialEventLock,
-		session.CredentialEventDelete,
-		session.CredentialEventRoleRevoke:
-		return nil
-	default:
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"session: RevokeForSubject received unknown CredentialEvent")
-	}
 }
