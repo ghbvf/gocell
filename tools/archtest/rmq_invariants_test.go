@@ -734,13 +734,23 @@ func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 		}
 		body := ifStmt.Body.List
 
-		// Does this if-block contain a non-nil return?
+		// Does THIS if-block (top-level Body.List only) contain a non-nil
+		// return? Nested returns inside an inner for/if/select are this
+		// block's child statements' concern — checkStmt will recurse and
+		// reach them via the inner if/select being its own checkIfBlock /
+		// SelectStmt handler. Counting them here would double-attribute the
+		// violation to two ancestor blocks.
 		hasNonNilReturn := false
-		scanner.EachNode[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
+		for i := range body {
+			ret, ok := body[i].(*ast.ReturnStmt)
+			if !ok {
+				continue
+			}
 			if !isNilReturn(ret) {
 				hasNonNilReturn = true
+				break
 			}
-		})
+		}
 
 		// Exempt: if-block guarding the "publisher is closed" early exit.
 		// This is not a wire-level failure, so no metric is required.
@@ -751,17 +761,17 @@ func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 			// Does this block contain a RecordPublishFailure call?
 			hasRecord := blockContainsRecordPublishFailure(body)
 			if !hasRecord {
-				// Find the first non-nil return for error reporting.
-				var reported bool
-				scanner.EachNode[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
-					if reported || isNilReturn(ret) {
-						return
+				// Report the first top-level non-nil return.
+				for i := range body {
+					ret, ok := body[i].(*ast.ReturnStmt)
+					if !ok || isNilReturn(ret) {
+						continue
 					}
-					reported = true
 					pos := fset.Position(ret.Pos())
 					violations = append(violations,
 						fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
-				})
+					break
+				}
 			}
 		}
 

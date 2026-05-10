@@ -1058,13 +1058,20 @@ func isConstructorFailFast(fn *ast.FuncDecl) bool {
 	if fn.Body == nil {
 		return false
 	}
-	var hasFailFast bool
-	scanner.EachNode[ast.IfStmt](fn.Body, func(ifStmt *ast.IfStmt) {
-		if isFailFastReturn(ifStmt) {
-			hasFailFast = true
+	// Top-level Body.List ONLY (paired-index direct-child iteration). Nested
+	// IfStmts inside another IfStmt's body do NOT count — a constructor that
+	// quietly installs a noop fallback in a nested branch must not be
+	// whitelisted just because some inner block contains a fail-fast pattern.
+	for i := range fn.Body.List {
+		ifStmt, ok := fn.Body.List[i].(*ast.IfStmt)
+		if !ok {
+			continue
 		}
-	})
-	return hasFailFast
+		if isFailFastReturn(ifStmt) {
+			return true
+		}
+	}
+	return false
 }
 
 // isFailFastReturn reports whether stmt is an if-statement of the form:
@@ -1084,20 +1091,23 @@ func isFailFastReturn(stmt *ast.IfStmt) bool {
 		(!isNilIdent(binExpr.X) || !isTxRunnerExpr(binExpr.Y)) {
 		return false
 	}
-	// The body must contain at least one return statement whose first result
-	// is nil and whose second result is any non-nil expression.
-	var hasFailFastReturn bool
-	scanner.EachNode[ast.ReturnStmt](stmt.Body, func(ret *ast.ReturnStmt) {
-		if len(ret.Results) != 2 {
-			return
+	// The body must contain at least one TOP-LEVEL return statement (Body.List
+	// directly) whose first result is nil and whose second result is any
+	// non-nil expression. Nested returns inside another for/if/switch inside
+	// stmt.Body are NOT recognized — a return buried inside `for { ... }` is
+	// not the unconditional fail-fast pattern we whitelist.
+	for i := range stmt.Body.List {
+		ret, ok := stmt.Body.List[i].(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 2 {
+			continue
 		}
 		firstIsNil := isNilIdent(ret.Results[0])
 		secondIsNonNil := !isNilIdent(ret.Results[1])
 		if firstIsNil && secondIsNonNil {
-			hasFailFastReturn = true
+			return true
 		}
-	})
-	return hasFailFastReturn
+	}
+	return false
 }
 
 func isTxRunnerExpr(expr ast.Expr) bool {
@@ -1380,21 +1390,26 @@ func effectiveOutboxRoute(topic, eventType outboxTopicFieldValue) outboxTopicFie
 // named field of a composite literal, evaluated via typeseval.EvaluateConstString.
 // Covers BasicLit, same-package const Ident, and cross-package SelectorExpr.
 // Returns ok=false when the field is missing or its value is not a constant string.
+//
+// Direct-child paired-index iteration is intentional: lit's top-level field
+// must be checked, NOT a same-named field that happens to appear in a nested
+// struct (e.g. `Spec: SubSpec{Topic:"a"}` should not pollute lit's Topic
+// reading when lit itself has no Topic).
 func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
 	var result outboxTopicFieldValue
-	var found bool
-	scanner.EachNode[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
-		if found {
-			return
+	for i := range lit.Elts {
+		kv, ok := lit.Elts[i].(*ast.KeyValueExpr)
+		if !ok {
+			continue
 		}
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != fieldName {
-			return
+			continue
 		}
 		value, ok := typeseval.EvaluateConstString(pkg.TypesInfo, kv.Value)
 		result = outboxTopicFieldValue{present: true, ok: ok, value: value}
-		found = true
-	})
+		return result
+	}
 	return result
 }
 
@@ -1509,26 +1524,29 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 // extractFailurePolicy classifies the FailurePolicy field. A dynamic policy is
 // treated as unknown, and callers fail closed when the route is security-like or
 // not statically known.
+//
+// Direct-child paired-index iteration is intentional: only lit's top-level
+// FailurePolicy field is examined; a FailurePolicy buried inside a nested
+// struct is unrelated and must not be hoisted to lit's level.
 func extractFailurePolicy(pkg *packages.Package, lit *ast.CompositeLit) outboxFailurePolicyStatus {
 	result := outboxPolicyAbsent
-	scanner.EachNode[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
-		if result != outboxPolicyAbsent {
-			return
+	for i := range lit.Elts {
+		kv, ok := lit.Elts[i].(*ast.KeyValueExpr)
+		if !ok {
+			continue
 		}
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != outboxTopicForbiddenPolicyField {
-			return
+			continue
 		}
 		if isOutboxFailOpenConst(pkg.TypesInfo, kv.Value) {
-			result = outboxPolicyKnownFailOpen
-			return
+			return outboxPolicyKnownFailOpen
 		}
 		if isKnownOutboxFailurePolicyConst(pkg.TypesInfo, kv.Value) {
-			result = outboxPolicyKnownOther
-			return
+			return outboxPolicyKnownOther
 		}
-		result = outboxPolicyUnknown
-	})
+		return outboxPolicyUnknown
+	}
 	return result
 }
 

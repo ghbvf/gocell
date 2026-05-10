@@ -851,8 +851,12 @@ func asnCloneLocks(locks asnLockState) asnLockState {
 // statement in the body has executed).
 func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, locks asnLockState, label string) []string {
 	var violations []string
-	for _, stmt := range stmts {
-		switch s := stmt.(type) {
+	// Paired-index iteration over the direct statements of stmts. Avoids
+	// path B's `for _, X :=` + type-switch pattern; a top-level statement
+	// list is intentionally NOT recursed into nested for/if/switch bodies
+	// here (caller passes those sub-bodies separately).
+	for i := range stmts {
+		switch s := stmts[i].(type) {
 		case *ast.ExprStmt:
 			if recv, ok := asnMuMethodReceiver(s.X, "Lock"); ok {
 				locks[recv]++

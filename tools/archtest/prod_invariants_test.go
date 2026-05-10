@@ -160,17 +160,19 @@ func scanProdDurationAST(
 		}
 	}
 
-	for _, decl := range file.Decls {
-		// Package-level const blocks are the unique compliant position — skip them.
-		switch d := decl.(type) {
-		case *ast.GenDecl:
-			if d.Tok == token.CONST {
+	// Paired-index iteration: only top-level Decls are scanned; nested decls
+	// inside a func body / spec value belong to other passes.
+	for i := range file.Decls {
+		decl := file.Decls[i]
+		if gd, ok := decl.(*ast.GenDecl); ok {
+			if gd.Tok == token.CONST {
+				// Package-level const blocks are the unique compliant position — skip.
 				continue
 			}
-			checkExpr(d)
-		default:
-			checkExpr(decl)
+			checkExpr(gd)
+			continue
 		}
+		checkExpr(decl)
 	}
 
 	return violations
@@ -563,17 +565,20 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	}
 
 	count := 0
-	for _, decl := range f.Decls {
-		// Package-level const blocks are the unique compliant position — skip them.
-		switch d := decl.(type) {
-		case *ast.GenDecl:
-			if d.Tok == token.CONST {
+	// Paired-index iteration over file.Decls: avoids path B's `for _, X :=`
+	// + type-dispatch pattern. Semantics unchanged — only top-level decls
+	// contribute to the count (nested decls inside func bodies do not).
+	for i := range f.Decls {
+		decl := f.Decls[i]
+		if gd, ok := decl.(*ast.GenDecl); ok {
+			if gd.Tok == token.CONST {
+				// Package-level const blocks are the unique compliant position — skip.
 				continue
 			}
-			count += countInRoot(d)
-		default:
-			count += countInRoot(decl)
+			count += countInRoot(gd)
+			continue
 		}
+		count += countInRoot(decl)
 	}
 	return count
 }

@@ -116,17 +116,22 @@ func scanLegacyQuerySymbolDecls(root, path string) ([]pgQueryBoundaryViolation, 
 	}
 
 	var violations []pgQueryBoundaryViolation
-	for _, decl := range file.Decls {
-		switch d := decl.(type) {
-		case *ast.FuncDecl:
-			if slices.Contains(legacyQuerySymbols, d.Name.Name) {
+	// Paired-index iteration: only top-level decls scanned (nested function-
+	// local types are not legacy symbols). Avoids path B's `for _, X :=` +
+	// type-switch pattern.
+	for i := range file.Decls {
+		decl := file.Decls[i]
+		if fd, ok := decl.(*ast.FuncDecl); ok {
+			if slices.Contains(legacyQuerySymbols, fd.Name.Name) {
 				violations = append(violations, pgQueryBoundaryViolation{
 					File:    relSlash(root, path),
-					Line:    fset.Position(d.Pos()).Line,
-					Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", d.Name.Name),
+					Line:    fset.Position(fd.Pos()).Line,
+					Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", fd.Name.Name),
 				})
 			}
-		case *ast.GenDecl:
+			continue
+		}
+		if d, ok := decl.(*ast.GenDecl); ok {
 			scanner.EachNode[ast.TypeSpec](d, func(typeSpec *ast.TypeSpec) {
 				if !slices.Contains(legacyQuerySymbols, typeSpec.Name.Name) {
 					return

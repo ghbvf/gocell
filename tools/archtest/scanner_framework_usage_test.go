@@ -231,10 +231,21 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 //   - Outer: scanner.EachNode[ast.RangeStmt] over file
 //   - rs.X must have static type []ast.{Decl|Spec|Stmt|Expr} via info.Types
 //   - rs.Value must be a plain *ast.Ident (binding name)
-//   - Body: scanner.EachNode[ast.TypeAssertExpr] within rs.Body
-//   - ta.X must be the same binding name (rs.Value)
-//   - ta.Type must resolve to *ast.<Kind> via info.Types (excludes
-//     non-ast type assertions like .(string) or .(*MyType))
+//   - Inner forms (both flagged):
+//     a) Body: scanner.EachNode[ast.TypeAssertExpr] within rs.Body —
+//     catches `x.(*ast.Kind)` form (`if y, ok := x.(*ast.X); ok` or
+//     `_ = x.(*ast.X)`)
+//     b) Body: scanner.EachNode[ast.TypeSwitchStmt] within rs.Body —
+//     catches `switch x := x.(type) { case *ast.X: ... }` form, which is
+//     the same runtime kind-dispatch as TypeAssertExpr. The TypeSwitchStmt
+//     must be assigning from the binding name; at least one case clause
+//     must list a *ast.<Kind> type.
+//   - For (a): ta.X must be the same binding name (rs.Value) AND ta.Type
+//     must resolve to *ast.<Kind> via info.Types (excludes non-ast
+//     assertions like .(string) or .(*MyType))
+//   - For (b): switch.Init must be empty; switch.Assign's RHS (or sole
+//     X.(type) operand) must reference bindingName; at least one case
+//     clause's type list must contain a *ast.<Kind>.
 func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var diags []scanner.Diagnostic
 	scanner.EachNode[ast.RangeStmt](file, func(rs *ast.RangeStmt) {
@@ -249,6 +260,7 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 		if bindingName == "" {
 			return
 		}
+		// Form (a): TypeAssertExpr.
 		scanner.EachNode[ast.TypeAssertExpr](rs.Body, func(ta *ast.TypeAssertExpr) {
 			if ta.Type == nil {
 				return
@@ -266,8 +278,69 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 					"instead of for-range over []ast.%s + type assertion", elemKind),
 			})
 		})
+		// Form (b): TypeSwitchStmt — `switch x := X.(type) { case *ast.W: }`.
+		scanner.EachNode[ast.TypeSwitchStmt](rs.Body, func(ts *ast.TypeSwitchStmt) {
+			if ts.Assign == nil {
+				return
+			}
+			operand := typeSwitchOperand(ts.Assign)
+			if operand == nil || identNameOf(operand) != bindingName {
+				return
+			}
+			// At least one case clause must list *ast.<Kind>.
+			caseHits := false
+			if ts.Body != nil {
+				for i := range ts.Body.List {
+					cc, ok := ts.Body.List[i].(*ast.CaseClause)
+					if !ok {
+						continue
+					}
+					for j := range cc.List {
+						if isStarAstNodeType(info, cc.List[j]) {
+							caseHits = true
+							break
+						}
+					}
+					if caseHits {
+						break
+					}
+				}
+			}
+			if !caseHits {
+				return
+			}
+			diags = append(diags, scanner.Diagnostic{
+				Rel:  rel,
+				Line: fset.Position(ts.Pos()).Line,
+				Message: fmt.Sprintf("use scanner.EachNode[ast.X](root, func(*ast.X){...}) "+
+					"instead of for-range over []ast.%s + type switch", elemKind),
+			})
+		})
 	})
 	return diags
+}
+
+// typeSwitchOperand returns the operand X of a type-switch's `x := X.(type)`
+// or `X.(type)` assign-stmt. Returns nil if the assign-stmt shape is unexpected.
+func typeSwitchOperand(stmt ast.Stmt) ast.Expr {
+	switch s := stmt.(type) {
+	case *ast.AssignStmt:
+		if len(s.Rhs) != 1 {
+			return nil
+		}
+		ta, ok := s.Rhs[0].(*ast.TypeAssertExpr)
+		if !ok {
+			return nil
+		}
+		return ta.X
+	case *ast.ExprStmt:
+		ta, ok := s.X.(*ast.TypeAssertExpr)
+		if !ok {
+			return nil
+		}
+		return ta.X
+	}
+	return nil
 }
 
 // helpers — pure go/types operations, shared between production and fixture.
@@ -689,6 +762,43 @@ func _(file *ast.File) {
 	for i := range file.Decls {
 		if _, ok := file.Decls[i].(*ast.FuncDecl); ok {
 			_ = i
+		}
+	}
+}
+`,
+			wantHits: 0,
+		},
+		{
+			// Form (b): TypeSwitchStmt is the same kind-dispatch semantically
+			// as TypeAssertExpr — must also be flagged so AI cannot bypass
+			// path B by writing `switch decl := decl.(type) { case *ast.X }`.
+			name: "for_range_decls_type_switch_func_decl",
+			src: `package fake
+import "go/ast"
+func _(file *ast.File) {
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			_ = d
+		}
+	}
+}
+`,
+			wantHits: 1,
+		},
+		{
+			// Negative: same TypeSwitch shape but no *ast.<Kind> case clause —
+			// the runtime dispatch is on a non-ast type, path B should not
+			// flag it.
+			name: "for_range_decls_type_switch_no_ast_case",
+			src: `package fake
+import "go/ast"
+type MyDecl struct{ ast.Decl }
+func _(file *ast.File) {
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *MyDecl:
+			_ = d
 		}
 	}
 }

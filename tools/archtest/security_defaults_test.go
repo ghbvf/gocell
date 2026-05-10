@@ -849,18 +849,22 @@ func isUpgradeConfigType(expr ast.Expr) bool {
 	return false
 }
 
+// hasKey reports whether cl has a TOP-LEVEL key field equal to key.
+// Direct-child paired-index iteration is intentional: scanner.EachNode would
+// recurse into nested composites (e.g. a `Other: Sub{Authenticator: ...}`
+// element), which would falsely report the outer literal as having the key.
 func hasKey(cl *ast.CompositeLit, key string) bool {
-	found := false
-	scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-		if found {
-			return
+	for i := range cl.Elts {
+		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
+		if !ok {
+			continue
 		}
 		ident, ok := kv.Key.(*ast.Ident)
 		if ok && ident.Name == key {
-			found = true
+			return true
 		}
-	})
-	return found
+	}
+	return false
 }
 
 func testSEC08NoLegacyBroadcastCall(t *testing.T, root string) {
