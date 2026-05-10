@@ -396,34 +396,38 @@ func TestAssemblyCellModuleTypePresent(t *testing.T) {
 // checkCellModuleTypePresentInDir scans all non-test *.go files in cmdDir for
 // a top-level type declaration named "CellModule". It reports an
 // ASSEMBLY-CELLMODULE-TYPE-04 violation when no such declaration is found.
+// cmdDir is an absolute path; cmdDirRel is its module-relative slash form.
 func checkCellModuleTypePresentInDir(t *testing.T, root, cmdDir string) {
 	t.Helper()
+	cmdDirRel, err := filepath.Rel(root, cmdDir)
+	require.NoError(t, err, "%s: rel %s", ruleAssemblyCellModuleType04, cmdDir)
+	cmdDirRel = filepath.ToSlash(cmdDirRel)
 
-	goFiles, err := filepath.Glob(filepath.Join(cmdDir, "*.go"))
-	require.NoError(t, err, "%s: glob %s/*.go", ruleAssemblyCellModuleType04, cmdDir)
+	scope := archscanner.DirsScope(root, []string{cmdDirRel},
+		archscanner.MatchRels(func(rel string) bool {
+			return filepath.ToSlash(filepath.Dir(rel)) == cmdDirRel
+		}),
+	)
 
-	fset := token.NewFileSet()
-	for _, path := range goFiles {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
+	found := false
+	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc archscanner.FileContext) {
+		if found {
+			return
 		}
-		af, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			t.Logf("%s: parse %s: %v", ruleAssemblyCellModuleType04, path, parseErr)
-			continue
+		if hasTopLevelTypeDecl(fc.File, "CellModule") {
+			found = true
 		}
-		if hasTopLevelTypeDecl(af, "CellModule") {
-			return // found — rule satisfied
-		}
+	})
+	if found {
+		return
 	}
 
-	rel, _ := filepath.Rel(root, cmdDir)
 	t.Errorf(
 		"%s: cmd/%s/modules_gen.go references CellModule but cmd/%s/ has no "+
 			"top-level CellModule type declaration. "+
 			"Define `type CellModule interface { ID() string; ... }` (or compatible) "+
 			"in the same package.",
-		ruleAssemblyCellModuleType04, filepath.Base(cmdDir), filepath.Base(rel),
+		ruleAssemblyCellModuleType04, filepath.Base(cmdDirRel), filepath.Base(cmdDirRel),
 	)
 }
 

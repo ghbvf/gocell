@@ -158,12 +158,13 @@ func TestCodegenInitInternal01(t *testing.T) {
 		if cell.GoStructName.IsZero() {
 			continue
 		}
-		dir := filepath.Join(root, filepath.Dir(cell.File))
+		dirRel := filepath.ToSlash(filepath.Dir(cell.File))
+		dir := filepath.Join(root, dirRel)
 		genPath := filepath.Join(dir, "cell_gen.go")
 		if _, err := os.Stat(genPath); err != nil {
 			continue // CODEGEN-CELL-GEN-01 already catches missing cell_gen.go
 		}
-		violations := checkInitInternalHook(t, dir, cell.GoStructName.String())
+		violations := checkInitInternalHook(t, root, dirRel, cell.GoStructName.String())
 		for _, v := range violations {
 			t.Errorf("CODEGEN-INIT-INTERNAL-01: %s", v)
 		}
@@ -230,8 +231,10 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 
 	t.Run("missing_init_internal", func(t *testing.T) {
 		t.Parallel()
-		dir := filepath.Join(fixtureBase, "missing_init_internal")
-		violations := checkInitInternalHook(t, dir, "Demo")
+		root := findModuleRoot(t)
+		violations := checkInitInternalHook(t, root,
+			"tools/archtest/testdata/codegen_cell_gen_fixtures/missing_init_internal",
+			"Demo")
 		if len(violations) == 0 {
 			t.Error("missing_init_internal fixture: no violation detected — fixture is broken")
 		}
@@ -839,32 +842,35 @@ func findGeneratedCellFilesIn(t *testing.T, roots []string) []string {
 	return found
 }
 
-// checkInitInternalHook AST-scans the .go files in dir and returns violation
-// messages when no file declares func (c *<structName>) initInternal(...).
-func checkInitInternalHook(t *testing.T, dir string, structName string) []string {
+// checkInitInternalHook AST-scans the .go files in root/dirRel and returns
+// violation messages when no file declares func (c *<structName>) initInternal(...).
+// Single-dir semantics (no sub-package recursion) preserved via MatchRels.
+// When dirRel includes a "testdata" segment (e.g. fixture-driven tests),
+// IncludeTestdata is added automatically so the default skip set does not
+// hide the fixture.
+func checkInitInternalHook(t *testing.T, root, dirRel, structName string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil // unreadable dir is surfaced by CODEGEN-CELL-GEN-01
+	dirRelSlash := filepath.ToSlash(dirRel)
+	matchRel := scanner.MatchRels(func(rel string) bool {
+		if filepath.ToSlash(filepath.Dir(rel)) != dirRelSlash {
+			return false
+		}
+		return filepath.Base(rel) != "cell_gen.go"
+	})
+	var scope scanner.Scope
+	if pathContainsSegment(dirRelSlash, "testdata") {
+		scope = scanner.DirsScope(root, []string{dirRel}, matchRel, scanner.IncludeTestdata())
+	} else {
+		scope = scanner.DirsScope(root, []string{dirRel}, matchRel)
 	}
 
 	found := false
 	var violations []string
 
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") {
-			continue
-		}
-		if name == "cell_gen.go" || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		fset := token.NewFileSet()
-		f, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			continue
-		}
+	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
+		f := fc.File
+		path := fc.Rel
+		_ = path
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
 			if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
@@ -881,16 +887,27 @@ func checkInitInternalHook(t *testing.T, dir string, structName string) []string
 				violations = append(violations, sig)
 			}
 		}
-	}
+	})
 
 	if !found && len(violations) == 0 {
 		violations = append(violations, fmt.Sprintf(
 			"cell %q (struct *%s) is missing required initInternal hook; "+
 				"implement func (c *%s) initInternal(ctx context.Context, reg cell.Registry) error in cell.go",
-			filepath.Base(dir), structName, structName,
+			filepath.Base(dirRel), structName, structName,
 		))
 	}
 	return violations
+}
+
+// pathContainsSegment reports whether slashPath has seg as a path component.
+// Avoids false positives like "abc/testdata-foo/" matching "testdata".
+func pathContainsSegment(slashPath, seg string) bool {
+	for _, p := range strings.Split(slashPath, "/") {
+		if p == seg {
+			return true
+		}
+	}
+	return false
 }
 
 // initInternalSignatureViolation returns a non-empty string when fd's

@@ -292,13 +292,12 @@ func TestOutboxLeaseIDCAS01(t *testing.T) {
 // relay_writeback.go) cannot escape this gate by file rename.
 func TestOutboxMarkReturnsBool01(t *testing.T) {
 	root := findModuleRoot(t)
-	matches, err := filepath.Glob(filepath.Join(root, "runtime", "outbox", "relay*.go"))
-	if err != nil {
-		t.Fatalf("glob relay*.go: %v", err)
-	}
-	if len(matches) == 0 {
-		t.Fatal("OUTBOX-MARK-RETURNS-BOOL-01: no runtime/outbox/relay*.go files found")
-	}
+	scope := scanner.DirsScope(root, []string{"runtime/outbox"},
+		scanner.MatchRels(func(rel string) bool {
+			return strings.HasPrefix(filepath.Base(rel), "relay") &&
+				filepath.ToSlash(filepath.Dir(rel)) == "runtime/outbox"
+		}),
+	)
 
 	wantTargets := map[string]bool{
 		"MarkPublished": true,
@@ -306,18 +305,12 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 		"MarkDead":      true,
 	}
 
-	for _, path := range matches {
-		// Skip _test.go — they may legitimately mock the interface and
-		// the bool is checked elsewhere.
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		fset := token.NewFileSet()
-		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if perr != nil {
-			t.Fatalf("parse %s: %v", path, perr)
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
+	hits := 0
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+		path := fc.AbsPath
+		_ = path
+		hits++
+		ast.Inspect(fc.File, func(n ast.Node) bool {
 			assign, ok := n.(*ast.AssignStmt)
 			if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
 				return true
@@ -334,14 +327,17 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 				return true
 			}
 			if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name == "_" {
-				pos := fset.Position(assign.Pos())
+				pos := fc.Fset.Position(assign.Pos())
 				t.Errorf("OUTBOX-MARK-RETURNS-BOOL-01: %s:%d: %s call discards "+
 					"the updated-bool return; bind it and skip stats counting "+
 					"on false (B2-A-05 stale-lease guard)",
-					pos.Filename, pos.Line, sel.Sel.Name)
+					fc.Rel, pos.Line, sel.Sel.Name)
 			}
 			return true
 		})
+	})
+	if hits == 0 {
+		t.Fatal("OUTBOX-MARK-RETURNS-BOOL-01: no runtime/outbox/relay*.go files found")
 	}
 }
 
