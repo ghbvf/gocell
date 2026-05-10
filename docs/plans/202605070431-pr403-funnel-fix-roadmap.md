@@ -13,25 +13,31 @@
 
 段 1（typed envelope 闭环 + ADR D6/D7）/ 段 3'（CLAUDE.md funnel-first 原则）/ PR-FUNNEL-01（archtest 文件 104→70）/ PR-FUNNEL-02（handler invariants funnel）/ PR-FUNNEL-03（governance rules 15→8）/ Batch 0 SCANNER-FRAMEWORK（PR #419 framework 文件遍历层）全部 ✅。
 
-### 实测基线（重对齐 vs roadmap 历史数据）
+### 实测基线（重对齐 vs roadmap 历史数据，2026-05-10 c21ed4de 更新）
 
-| 维度 | 旧 roadmap 估值 | 实测 |
-|---|---|---|
-| 顶层 archtest `_test.go` | 72 | **73**（顶层）+ 17（internal/scanner/）|
-| INVARIANT 锚点（Go 源） | 89 | **89** ✓ |
-| 缺锚点 `_test.go` | 39 / 46 | **46**（grep -L 直数）|
-| 旧 scanner 待迁移（filepath.WalkDir/Walk）| "70+" | **25** |
-| 手写 AST `for ... Decls/List/Specs` | 未提 | **65 处跨 29 文件** |
-| `ast.Inspect` 已用 | 未提 | **131 处跨 43 文件** |
-| 两种混用文件 | 未提 | **22 个** |
+| 维度 | 旧 roadmap 估值 | 实测 | PR-A'/Path C 后 |
+|---|---|---|---|
+| 顶层 archtest `_test.go` | 72 | 73 + 17（internal/scanner/）| 同 |
+| INVARIANT 锚点（Go 源） | 89 | 89 | **全 55 文件回填，0 缺锚点**（PR #435）|
+| 缺锚点 `_test.go` | 39 / 46 | 46 | **0**（PR #435 INVENTORY-ANCHOR-REQUIRED-01 强制）|
+| 旧 scanner 待迁移（filepath.WalkDir/Walk）| "70+" | 25 | **0**（Path C #430 一锅迁完）|
+| 手写 AST `for ... Decls/List/Specs` | 未提 | 65 处跨 29 文件 | 同（PR-Φ 待启动）|
+| `ast.Inspect` 已用 | 未提 | 131 处跨 43 文件 | 同（PR-Φ 待启动）|
+| 两种混用文件 | 未提 | 22 个 | 同（PR-Φ 待启动）|
+| `archtest-inventory.md` 持久产物 | 存在 | 存在 | **删除**（PR #435 单源接替）|
+| `verify-archtest-inventory.sh` drift gate | 存在 | 存在 | **删除**（PR #435 archtest 单源接替）|
 
 ### 与 Path C（PR #424 跟进）的边界
 
 PR #424 已 ship `SCANNER-FRAMEWORK-USAGE-01`（拦 `path/filepath.WalkDir/Walk`）+ 一锅迁移 24 文件 / 39 walk site；后续追加的 `SCANNER-FRAMEWORK-USAGE-02`（substring + 自由 category 锚点）经 review 暴露 6 条反模式漏洞，Path C 单独处理：USAGE-01 升级 traversal symbol table（path/filepath/os/io/fs 全 traversal）+ scanner 加 EachContentFile + MatchRels + IncludeTestdata + 19 bypass 站点全部迁 framework + USAGE-02 整规则删除。**Path C 由他人独立推进，本路线图不重叠**。
 
-### 剩余主线
+### 剩余主线（更新于 2026-05-10 c21ed4de）
 
-Path C ship 后启动彻底版 5-PR：PR-Φ（节点遍历漏斗，彻底解决 65 手写 + 131 裸 ast.Inspect）+ PR-A'（46 锚点回填 + grep fallback / hardcode 黑名单一并删）+ PR-B（governance reachability 静态 BFS）+ PR-C（auth schema 布尔语义）+ PR-D'（panic 守卫就地注释单源）。Batch 3 触发型项不变。
+5 主线进展：✅ Path C (#430) / ✅ PR-A' (#435) / ✅ PR-B (#431) / ✅ PR-C (#432)；剩余 **2 条未启动**：
+- **PR-Φ**（节点遍历漏斗）：framework typed callback per node kind + 一锅替换 65 手写 for-loop + 131 裸 ast.Inspect；可立即启动，14-18h dev / 5-7h review
+- **PR-D'**（panic 守卫就地注释单源）：可立即启动，5-7h dev / 2h review；与 PR-Φ 在 panic_invariants_test.go 函数体冲突 → 必须等 PR-Φ merge 后启动
+
+Batch 3 触发型项不变（HANDLER-POLICY-TYPEAWARE-SCANNER / SERVICEOWNED-OWNERSHIP-GUARD / B-FLOOR-FOLLOWUP §2.5+§4 + 5 条 PR430/431/432-FU 触发型）。
 
 ---
 
@@ -62,11 +68,11 @@ Path C ship 后启动彻底版 5-PR：PR-Φ（节点遍历漏斗，彻底解决 
 | Audit step A 清单化 | — | ✅ shipped (彻底版 by PR-A') | — | `list-archtests.sh` 改 stdout-only；`inventory.md` + `verify-archtest-inventory.sh` 漂移闸已被 PR-A' 删除（INVENTORY-ANCHOR-REQUIRED-01 archtest 单源接替） |
 | `PR408-FU-SCANNER-SHARED-FRAMEWORK-01` | 0 | ✅ | — | PR #419（996784cf）；framework **文件遍历层** + 4 demo 迁移 |
 | `PR-FUNNEL-03` governance 聚并 | 1 | ✅ | — | PR #418（e8cdf3c9）；source 15→8 文件 + `rule_inventory_test.go` golden 锁 81 条 |
-| **Path C** scanner 文件扫描漏斗收编 | 0' | ⏳ 他人推进 | ~12h | PR #424 衍生：USAGE-01 traversal symbol table 升级 + scanner 加 EachContentFile / MatchRels / IncludeTestdata + 19 bypass 站点全 framework + USAGE-02 删除 |
+| **Path C** scanner 文件扫描漏斗收编 | 0' | ✅ PR #430 (2026-05-10) | — | PR #424 衍生：USAGE-01 traversal symbol table 升级 + scanner 加 EachContentFile / MatchRels / IncludeTestdata + 19 bypass 站点全 framework + USAGE-02 删除 |
 | **PR-Φ** `SCANNER-FRAMEWORK-NODE-API-COMPLETE` | 1 | ⏳ Path C ship 后 | 14-18h+5-7h | framework **节点遍历层** API（EachFuncDecl / EachCallExpr / EachImportSpec / EachGenDecl）+ USAGE-02 archtest（**复用 Path C 删空的 ID**，无条件，与 USAGE-01 同样原子）+ 一锅替换 65 手写 for-loop + 131 裸 ast.Inspect → 全 typed callback；保留出口走严格 category 就地注释 |
 | **PR-A'** `INVENTORY-ANCHOR-SINGLE-SOURCE`（彻底版）| 1 | ✅ shipped | — | 55 个 `tools/archtest/*_test.go` 加 `// INVARIANT:` 锚点 + INVENTORY-ANCHOR-REQUIRED-01 archtest 单源 + 删 `docs/audit/archtest-inventory.md` 持久产物 + 删 `hack/verify-archtest-inventory.sh` drift gate（make verify glob discovery 自动出 CI）+ 删 `kernel/governance/rule_inventory_test.go::TestArchtestInventoryNoIDTruncation`（底层 .md 没了，truncation 场景消失）+ `list-archtests.sh` 改 stdout-only（删 fallback / hardcode 黑名单 / governance section）+ doc.go / backlog.md / 033-pg-plan 同步。**OWNER-AST-EXTRACTION 砍掉** |
-| **PR-B** `GOVERNANCE-RULE-REACHABILITY-TEST-01` | 1 | ⏳ | 6h+2h | `rule_inventory_test.go` 加静态 BFS：从 `rules()` / `strictRules()` / `DependencyChecker.Check()` / 公开 `Check*` 4 注册根扩闭包，覆盖 const-ident emission / 双 receiver type / 闭包包装注册，断言 reachable rule IDs ⊇ golden 81 条；替代 PR-FUNNEL-03 zero-diff 临时硬化 |
-| **PR-C** `AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01` | 1 | ⏳ | 4h+1h | schema/governance 显式 `false` 语义统一（6 个 auth 布尔字段：public/passwordResetExempt/serviceOwned/bootstrap/clientsOnly/responses 全组合覆盖）+ 回归测试 |
+| **PR-B** `GOVERNANCE-RULE-REACHABILITY-TEST-01` | 1 | ✅ PR #431 (2026-05-10) | — | BFS 从 4 注册根扩闭包；emitter 用 convention（newResult/newScopedResult）+ 防漂移 `assertEmitterMethodsRestrictedToLocator`；reviewer P2 finding（按名字非按 receiver type）→ architect 决策不升级，trigger 登记 backlog `PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01` |
+| **PR-C** `AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01` | 1 | ✅ PR #432 (2026-05-10) | — | single oracle (`metadata.AuthComboLegal`) + 5 层 mirror（type system / reflect 字段数 / governance 委托 / schema if-then mirror / 双侧 32-combo matrix）；reviewer finding #1（archtest 双重防线）→ architect 决策不立，trigger 登记 backlog `PR432-FU-AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE-01` |
 | **PR-D'** `PANIC-WHITELIST-INLINE-COMMENT-SINGLE-SOURCE-01` | 1 | ⏳ | 5-7h+2h | 删 architecturalPanicWhitelist Go map + 删 AllowMust 全局豁免 + 删 assertPanicWhitelistMatchesADR reconciliation → 改就地注释 `// PANIC-REGISTERED-01: ADR-approved: <reason>`；4 处 re-throw + 30+ Must* 站点逐个加注释；ADR markdown 改写为元规则文档（删函数名清单表格）。ref: cockroachdb/cockroach pkg/testutils/lint/passes/forbiddenmethod |
 | **PR-F** `PR-FUNNEL-04` 候选评估 | 2 | ⏳ | 2h | 单 worktree 扫 73 archtest 找可 type-system 化（typed `XxxResponseObject` 替代 `(*Response, error)`）/ 冗余 / 重复，发现 ≥3 条候选才启动小 PR 系列；否则保留为长期残留 |
 | ~~`PR-G` SCANNER-USAGE-01-GATE~~ | — | ❌ 取消 | — | 被 Path C（USAGE-01 升级）+ PR-Φ（USAGE-02 节点层）共同吸收。frozen allowlist + ratchet 渐进锁反模式不立 |
