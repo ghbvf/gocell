@@ -14,4 +14,10 @@
 // ref: Apache Kafka message.max.bytes default 1 MiB (used by callers as
 // MaxPayloadBytes upper bound — payload caps live with the owning
 // transport, not with metautil).
+//
+// # Boundary (KERNEL-INTERNAL-DAG-01)
+//
+// kernel/metautil is a leaf — it has zero kernel→kernel dependencies.
+// kernel/outbox and kernel/command import kernel/metautil for the
+// shared Max* constants; nothing in the reverse direction.
 package metautil
