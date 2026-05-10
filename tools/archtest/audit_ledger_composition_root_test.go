@@ -4,13 +4,13 @@ package archtest
 import (
 	"go/ast"
 	"go/parser"
-	"go/token"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: ledger.NewProtocol /
@@ -32,28 +32,32 @@ import (
 // that is set when a nil interface value is received and is never cleared by a
 // subsequent valid call — misconfiguration must not be silently masked.
 func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
-	root := findModuleRoot(t)
-
 	// Scan cells/, runtime/ (excluding runtime/audit/ledger/), adapters/.
 	// cmd/ is not scanned — it is the composition root and is naturally allowed
 	// to call ledger.NewProtocol / ledger.MustNewProtocol.
 	// examples/ is also excluded: it owns its own composition root.
-	scanDirs := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "runtime"),
-		filepath.Join(root, "adapters"),
-	}
+	root := findModuleRoot(t)
+	ledgerPrefix := "runtime/audit/ledger/"
 
-	var files []string
-	for _, dir := range scanDirs {
-		ff, err := findProductionGoFilesInDir(dir)
-		require.NoError(t, err)
-		files = append(files, ff...)
-	}
+	scope := scanner.DirsScope(root, []string{"cells", "runtime", "adapters"},
+		scanner.MatchRels(func(rel string) bool {
+			rel = filepath.ToSlash(rel)
+			if !strings.HasSuffix(rel, ".go") {
+				return false
+			}
+			if strings.HasSuffix(rel, "_test.go") {
+				return false
+			}
+			// Allowlist: runtime/audit/ledger/ owns the package itself
+			// (protocol.go, mem_store.go, storetest sub-package).
+			return !strings.HasPrefix(rel, ledgerPrefix)
+		}),
+	)
 
-	// Allowlist: runtime/audit/ledger/ owns the package itself (protocol.go,
-	// mem_store.go, storetest sub-package).
-	ledgerPrefix := filepath.ToSlash(filepath.Join(root, "runtime", "audit", "ledger")) + "/"
+	forbidden := map[string]bool{
+		"NewProtocol":     true,
+		"MustNewProtocol": true,
+	}
 
 	type hit struct {
 		file string
@@ -62,52 +66,29 @@ func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
 	}
 	var hits []hit
 
-	forbidden := map[string]bool{
-		"NewProtocol":     true,
-		"MustNewProtocol": true,
-	}
-
-	for _, f := range files {
-		if strings.HasPrefix(filepath.ToSlash(f), ledgerPrefix) {
-			continue
-		}
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-
-		fset := token.NewFileSet()
-		af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
-		if err != nil {
-			continue
-		}
-		ast.Inspect(af, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
+		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			pkg, ok := sel.X.(*ast.Ident)
 			if !ok || pkg.Name != "ledger" {
-				return true
+				return
 			}
 			if forbidden[sel.Sel.Name] {
 				hits = append(hits, hit{
-					file: rel,
-					line: fset.Position(call.Pos()).Line,
+					file: fc.Rel,
+					line: fc.Fset.Position(call.Pos()).Line,
 					name: sel.Sel.Name,
 				})
 			}
-			return true
 		})
-	}
+	})
 
-	if len(hits) > 0 {
-		for _, h := range hits {
-			t.Logf("AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: %s:%d calls ledger.%s outside cmd/ + runtime/audit/ledger/",
-				h.file, h.line, h.name)
-		}
+	for _, h := range hits {
+		t.Logf("AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: %s:%d calls ledger.%s outside cmd/ + runtime/audit/ledger/",
+			h.file, h.line, h.name)
 	}
 	assert.Empty(t, hits,
 		"AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: ledger.NewProtocol / ledger.MustNewProtocol "+

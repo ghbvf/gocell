@@ -26,16 +26,9 @@ var auditcoreAppenderSlicePackages = []string{
 	"cells/auditcore/slices/auditappendrole",
 }
 
-// allowedAuditcoreAppenderSliceDecls enumerates the only top-level
-// declaration shapes permitted in slice packages' non-generated, non-test
-// .go files. Anything else (including a struct declaration of `Service`,
-// methods receiving *Service, NewService, or With*-style Option helpers)
-// is a violation. This is intentionally narrow — the slice packages are
-// metadata holders, not behavior implementations.
-const (
-	allowedTypeAlias = "type Service = appender.Service" // exact required shape
-	allowedSpecVar   = "var Spec"                        // var Spec = appender.MustNewSpec(...)
-)
+// allowedTypeAlias is the exact required shape of slice packages' Service
+// declaration (the only typed surface they may carry).
+const allowedTypeAlias = "type Service = appender.Service"
 
 // TestAuditcoreAppenderSliceFacadesAreThin asserts that the four
 // auditappend{user,config,session,role} slice packages remain pure facades
@@ -84,7 +77,7 @@ func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 	)
 
 	var violations []string
-	scanner.EachFile(t, scope, parser.ParseComments, func(_ *testing.T, fc scanner.FileContext) {
+	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
 		violations = append(violations, scanAuditcoreAppenderSliceFile(fc)...)
 	})
 
@@ -104,43 +97,33 @@ func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 
 func scanAuditcoreAppenderSliceFile(fc scanner.FileContext) []string {
 	var violations []string
-	for _, decl := range fc.File.Decls {
-		switch d := decl.(type) {
-		case *ast.GenDecl:
-			violations = append(violations, scanGenDeclAppender(fc, d)...)
-		case *ast.FuncDecl:
-			violations = append(violations, scanFuncDeclAppender(fc, d)...)
+
+	// type Service must be a type alias (Assign valid), never a fresh struct
+	// or interface. ImportSpec / ValueSpec (var Spec = ...) are allowed and
+	// not inspected here (Spec's whitelist enforcement lives in
+	// appender.MustNewSpec).
+	scanner.EachNode[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
+		if ts.Name.Name == "Service" && !ts.Assign.IsValid() {
+			violations = append(violations, fmt.Sprintf(
+				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
+					"forbidden `type Service` definition (must be `%s`)",
+				fc.Rel, fc.Fset.Position(ts.Pos()).Line, allowedTypeAlias))
 		}
-	}
+	})
+
+	// Function declarations: methods on Service are forbidden (slice must
+	// not extend the appender.Service alias) and top-level helpers like
+	// NewService / With* / extractActorID re-fork behavior the appender
+	// package owns. EachNode walks the whole file; slice packages have no
+	// nested function literals so every FuncDecl returned is top-level.
+	scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
+		violations = append(violations, scanAppenderFuncDecl(fc, fd)...)
+	})
+
 	return violations
 }
 
-func scanGenDeclAppender(fc scanner.FileContext, d *ast.GenDecl) []string {
-	var violations []string
-	for _, spec := range d.Specs {
-		switch s := spec.(type) {
-		case *ast.ImportSpec:
-			// imports always allowed
-		case *ast.TypeSpec:
-			if s.Name.Name == "Service" {
-				if !s.Assign.IsValid() {
-					// `type Service struct {...}` or `type Service interface {...}` —
-					// only `type Service = ...` (alias, Assign valid) is allowed.
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: forbidden `type Service` definition (must be `%s`)",
-						fc.Rel, fc.Fset.Position(s.Pos()).Line, allowedTypeAlias))
-				}
-			}
-		case *ast.ValueSpec:
-			// `var Spec = appender.MustNewSpec(...)` and `const ...` are allowed.
-			// We deliberately do not enforce the RHS shape — appender.MustNewSpec's
-			// own whitelist gives the Hard defense at runtime/test-time.
-		}
-	}
-	return violations
-}
-
-func scanFuncDeclAppender(fc scanner.FileContext, d *ast.FuncDecl) []string {
+func scanAppenderFuncDecl(fc scanner.FileContext, d *ast.FuncDecl) []string {
 	pos := fc.Fset.Position(d.Pos()).Line
 
 	// Methods: any receiver named *Service or Service is forbidden — slice
@@ -152,10 +135,13 @@ func scanFuncDeclAppender(fc scanner.FileContext, d *ast.FuncDecl) []string {
 		recvType := receiverTypeName(d.Recv.List[0].Type)
 		if recvType == "Service" {
 			return []string{fmt.Sprintf(
-				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: forbidden method on Service (slice must not extend the appender.Service alias)",
+				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
+					"forbidden method on Service "+
+					"(slice must not extend the appender.Service alias)",
 				fc.Rel, pos)}
 		}
-		// Methods on other types are allowed (none expected today, but not banned).
+		// Methods on other types are allowed (none expected today, but
+		// not banned).
 		return nil
 	}
 
@@ -163,11 +149,15 @@ func scanFuncDeclAppender(fc scanner.FileContext, d *ast.FuncDecl) []string {
 	switch {
 	case d.Name.Name == "NewService":
 		return []string{fmt.Sprintf(
-			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: forbidden `func NewService` (call appender.NewService directly from cell.go)",
+			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
+				"forbidden `func NewService` "+
+				"(call appender.NewService directly from cell.go)",
 			fc.Rel, pos)}
 	case strings.HasPrefix(d.Name.Name, "With"):
 		return []string{fmt.Sprintf(
-			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: forbidden `func %s` (call appender.%s directly from cell.go)",
+			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
+				"forbidden `func %s` "+
+				"(call appender.%s directly from cell.go)",
 			fc.Rel, pos, d.Name.Name, d.Name.Name)}
 	}
 	// Other top-level functions are flagged so the next reviewer notices —
@@ -179,6 +169,10 @@ func scanFuncDeclAppender(fc scanner.FileContext, d *ast.FuncDecl) []string {
 		fc.Rel, pos, d.Name.Name)}
 }
 
+// receiverTypeName extracts the named receiver type, unwrapping pointer
+// receivers (*Service → Service). The type switch here inspects a single
+// ast.Expr, not a range over []ast.X, so SCANNER-FRAMEWORK-USAGE-01 path B
+// does not apply.
 func receiverTypeName(expr ast.Expr) string {
 	switch t := expr.(type) {
 	case *ast.StarExpr:
