@@ -43,14 +43,6 @@ func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(p
 	return files, nil
 }
 
-// walkGoFiles is walkFiles specialized for Go source files. The includeTests
-// flag controls whether *_test.go files are included.
-func walkGoFiles(modRoot, root string, skipDirs map[string]struct{}, includeTests bool) ([]string, error) {
-	return walkFiles(modRoot, root, skipDirs, func(p string) bool {
-		return isGoFile(p, includeTests)
-	})
-}
-
 // moduleRelDisplay returns a module-relative display string for path.
 // If the relative computation fails, it returns the original absolute path
 // with a "rel-failed:" prefix so callers know the value may be absolute.

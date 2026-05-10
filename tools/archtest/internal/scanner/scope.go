@@ -156,7 +156,7 @@ func DirsScope(modRoot string, dirs []string, opts ...option) Scope {
 	}
 	s := newScope(modRoot, roots, cfg)
 	if len(invalidRoots) > 0 {
-		s.setupErr = fmt.Errorf("DirsScope: dir %q escapes module root", invalidRoots[0])
+		s.setupErr = fmt.Errorf("DirsScope: dirs escape module root: %s", strings.Join(invalidRoots, ", "))
 	}
 	return s
 }
@@ -238,27 +238,7 @@ var selfProtectRel = filepath.Join("tools", "archtest", "internal", "scanner")
 // scope. It returns an error if the scope was not constructed via a constructor
 // or if any walk operation fails.
 func (s Scope) Files() ([]string, error) {
-	if !s.valid {
-		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
-	}
-	if s.setupErr != nil {
-		return nil, s.setupErr
-	}
-	seen := make(map[string]struct{})
-	var files []string
-	for _, root := range s.roots {
-		walked, err := walkGoFiles(s.modRoot, root, s.skipDirs, s.includeTests)
-		if err != nil {
-			return nil, err
-		}
-		for _, f := range walked {
-			if err := s.collectFile(f, seen, &files); err != nil {
-				return nil, err
-			}
-		}
-	}
-	sort.Strings(files)
-	return files, nil
+	return s.collect(func(p string) bool { return isGoFile(p, s.includeTests) })
 }
 
 // contentFiles returns the sorted, deduplicated list of absolute file paths
@@ -266,13 +246,19 @@ func (s Scope) Files() ([]string, error) {
 // but with a content-suffix predicate instead of the .go filter, and is the
 // internal primitive backing [EachContentFile].
 func (s Scope) contentFiles(suffixes []string) ([]string, error) {
+	return s.collect(func(p string) bool { return matchesSuffix(p, suffixes) })
+}
+
+// collect is the shared backbone of [Scope.Files] and [Scope.contentFiles]:
+// validates the scope, walks every root with accept as the per-file predicate,
+// applies the exclusion chain via collectFile, deduplicates and sorts.
+func (s Scope) collect(accept func(string) bool) ([]string, error) {
 	if !s.valid {
 		return nil, errors.New("scanner: Scope zero value is invalid; use ModuleScope or DirsScope")
 	}
 	if s.setupErr != nil {
 		return nil, s.setupErr
 	}
-	accept := func(p string) bool { return matchesSuffix(p, suffixes) }
 	seen := make(map[string]struct{})
 	var files []string
 	for _, root := range s.roots {
