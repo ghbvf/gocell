@@ -23,15 +23,22 @@ import (
 //
 // archtest *_test.go files at tools/archtest/<file>_test.go must use the
 // tools/archtest/internal/scanner framework instead of any directory-traversal
-// primitive. Forbidden:
+// primitive. Forbidden (package-level functions only):
 //
 //	path/filepath: WalkDir, Walk, Glob
 //	os:            ReadDir
+//	io/ioutil:     ReadDir   (deprecated but still callable)
 //	io/fs:         WalkDir, Walk, Glob, ReadDir
 //
 // Use scanner.DirsScope/ModuleScope + EachFile (.go), EachContentFile
-// (YAML/JSON/MD/SQL/...), MatchRels (glob-style filter), IncludeTestdata
-// (fixtures under testdata/) instead.
+// (YAML/JSON/MD/SQL/...), MatchRels (glob-style filter), IncludeTestdata /
+// IncludeGenerated (default-skipped dirs) instead.
+//
+// Known limit (tracked as backlog PR430-FU-USAGE-01-TYPE-AWARE):
+// method calls on values whose type is *os.File / fs.FS / etc. are NOT
+// detected — e.g. `f := os.Open("dir"); f.ReadDir(-1)` bypasses this rule
+// because AST cannot determine the receiver type without go/types info.
+// Type-aware upgrade is registered for trigger-on-incident.
 //
 // Coverage (all funneled through forbiddenWalkRefs):
 //   - SelectorExpr scan walks every selector node, not just CallExpr.Fun, so
@@ -73,14 +80,18 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 // forbiddenWalkImports lists the import paths whose directory-traversal
 // symbols are banned in archtest tests. Order is fixed so diagnostics are
 // emitted deterministically.
-var forbiddenWalkImports = []string{"path/filepath", "os", "io/fs"}
+var forbiddenWalkImports = []string{"path/filepath", "os", "io/ioutil", "io/fs"}
 
 // forbiddenWalkSymbols maps each banned import path to the directory-traversal
 // symbols that must not be used in archtest tests. Adding a new primitive
 // (e.g. "embed.FS.ReadDir" via fs.ReadDirFS) means extending this table.
+//
+// Method calls (e.g. *os.File.ReadDir) are NOT in this table because AST
+// cannot resolve receiver types — see PR430-FU-USAGE-01-TYPE-AWARE backlog.
 var forbiddenWalkSymbols = map[string][]string{
 	"path/filepath": {"WalkDir", "Walk", "Glob"},
 	"os":            {"ReadDir"},
+	"io/ioutil":     {"ReadDir"},
 	"io/fs":         {"WalkDir", "Walk", "Glob", "ReadDir"},
 }
 
@@ -240,6 +251,17 @@ var _ = []any{filepath.WalkDir}
 `,
 			importPath: "path/filepath",
 			wantHits:   1, // SelectorExpr inside composite literal
+		},
+
+		// --- ioutil.ReadDir (deprecated package, still callable) ---
+		{
+			name: "ioutil_readdir_call",
+			src: `package fake
+import "io/ioutil"
+func _() error { _, err := ioutil.ReadDir("/tmp"); return err }
+`,
+			importPath: "io/ioutil",
+			wantHits:   1,
 		},
 
 		// --- Alias propagation positive (the bypass concern from review) ---

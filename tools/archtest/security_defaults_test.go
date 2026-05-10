@@ -648,10 +648,7 @@ services:
 	violations := findExampleComposeCredentialViolations(t, root)
 	require.Len(t, violations, 2, "expected both top-level and nested compose violations: %v", violations)
 
-	rels := make([]string, 0, 2)
-	for _, v := range violations {
-		rels = append(rels, v)
-	}
+	rels := append([]string(nil), violations...)
 	sort.Strings(rels)
 	assert.Contains(t, rels[0], "examples/futuredevice/deploy/docker-compose.yml")
 	assert.Contains(t, rels[1], "examples/futuredevice/docker-compose.yml")
