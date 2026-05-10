@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
@@ -76,7 +76,7 @@ func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 
 	factory := storetest.Factory(func(t *testing.T) (ledger.Store, *clockmock.FakeClock, func()) {
 		t.Helper()
-		fc := clockmock.NewFakeClock(storetest.EpochAnchor())
+		fc := clockmock.New(storetest.EpochAnchor())
 
 		p := isolatedSchemaPool(t, ctx, base)
 		migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_suite_"+t.Name())
@@ -119,7 +119,7 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migratorA.Up(ctx))
 
-	fcA := clockmock.NewFakeClock(storetest.EpochAnchor())
+	fcA := clockmock.New(storetest.EpochAnchor())
 	txmA := NewTxManager(pA)
 	storeA, err := NewLedgerStore(pA.DB(), txmA, protocol, fcA)
 	require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	const nFirst = 5
 	for i := 1; i <= nFirst; i++ {
 		e := storetest.NewEntryFixture(t,
-			"restart-evt-a-"+string(rune('0'+i)),
+			fmt.Sprintf("restart-evt-a-%d", i),
 			"restart.test", "actor", fcA.Now())
 		require.NoError(t, storeA.Append(ctx, e), "storeA Append %d", i)
 	}
@@ -141,7 +141,7 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	// we open a second pgxpool against the same schema by reusing pA's config.
 
 	// Simulate restart: construct storeB from the same pool (same DB state)
-	fcB := clockmock.NewFakeClock(storetest.EpochAnchor())
+	fcB := clockmock.New(storetest.EpochAnchor())
 	txmB := NewTxManager(pA) // same pool, different TxManager instance
 	storeB, err := NewLedgerStore(pA.DB(), txmB, protocol, fcB)
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	const nSecond = 5
 	for i := 1; i <= nSecond; i++ {
 		e := storetest.NewEntryFixture(t,
-			"restart-evt-b-"+string(rune('0'+i)),
+			fmt.Sprintf("restart-evt-b-%d", i),
 			"restart.test", "actor", fcB.Now())
 		require.NoError(t, storeB.Append(ctx, e), "storeB Append %d", i)
 	}
@@ -191,7 +191,7 @@ func TestAuditLedgerStore_AdvisoryLockSerializesAppend(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
-	fc := clockmock.NewFakeClock(storetest.EpochAnchor())
+	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(p)
 	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
 	require.NoError(t, err)
@@ -205,10 +205,8 @@ func TestAuditLedgerStore_AdvisoryLockSerializesAppend(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			e := storetest.NewEntryFixture(t,
-				"advisory-lock-evt-"+string(rune('A'+i%26))+string(rune('a'+i/26)),
+				fmt.Sprintf("advisory-lock-evt-%03d", i),
 				"lock.test", "actor", fc.Now())
-			// Make event IDs unique per goroutine.
-			e.EventID = e.EventID + "-" + t.Name() + "-" + string(rune(i+1))
 			if err := store.Append(ctx, e); err != nil {
 				errCh <- err
 			}
@@ -259,7 +257,7 @@ func TestAuditLedgerStore_OutboxAtomicityFailureProof(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
-	fc := clockmock.NewFakeClock(storetest.EpochAnchor())
+	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(p)
 	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
 	require.NoError(t, err)
@@ -319,7 +317,7 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 	protoA := newTestLedgerProtocol(t, nsA)
 	protoB := newTestLedgerProtocol(t, nsB)
 
-	fc := clockmock.NewFakeClock(storetest.EpochAnchor())
+	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(p)
 
 	storeA, err := NewLedgerStore(p.DB(), txm, protoA, fc)
@@ -330,13 +328,13 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 	// Write 3 entries to storeA and 2 to storeB.
 	for i := 1; i <= 3; i++ {
 		e := storetest.NewEntryFixture(t,
-			"ns-iso-a-evt-"+string(rune('0'+i)),
+			fmt.Sprintf("ns-iso-a-evt-%d", i),
 			"iso.test", "actor-a", fc.Now())
 		require.NoError(t, storeA.Append(ctx, e), "storeA Append %d", i)
 	}
 	for i := 1; i <= 2; i++ {
 		e := storetest.NewEntryFixture(t,
-			"ns-iso-b-evt-"+string(rune('0'+i)),
+			fmt.Sprintf("ns-iso-b-evt-%d", i),
 			"iso.test", "actor-b", fc.Now())
 		require.NoError(t, storeB.Append(ctx, e), "storeB Append %d", i)
 	}
