@@ -247,3 +247,35 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"]), 2,
 		"WrapWriterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
 }
+
+// INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01
+//
+// TestCellRawInfraWrapperLocation01_RejectsKernelCellSibling verifies that
+// a wrap call from a kernel/cell sibling file (any file except the single
+// allowlisted kernel/cell/demo_tx_runner.go) is caught as a violation.
+//
+// This exercises the allowlist boundary: demo_tx_runner.go is the ONLY
+// kernel/cell file allowed to call WrapForCell. A hypothetical sibling file
+// (e.g. kernel/cell/sibling_helper.go) must be rejected, ensuring the
+// allowlist stays a closed set — not an "entire directory" exemption.
+func TestCellRawInfraWrapperLocation01_RejectsKernelCellSibling(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
+		"./tools/archtest/internal/wrapfixture/kernelcellsibling")
+	require.NoError(t, err)
+
+	violations := scanWrapperViolations(root, resolver)
+	require.NotEmpty(t, violations,
+		"scanner must detect WrapForCell call from non-allowlisted kernel/cell sibling fixture")
+
+	found := false
+	for _, v := range violations {
+		if strings.Contains(v.FuncName, "WrapForCell") {
+			found = true
+			assert.True(t, strings.Contains(v.File, "kernelcellsibling"),
+				"violation must originate from kernelcellsibling fixture, got %s", v.File)
+		}
+	}
+	assert.True(t, found, "WrapForCell violation must be reported for kernelcellsibling fixture")
+}
