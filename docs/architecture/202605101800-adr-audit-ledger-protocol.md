@@ -71,16 +71,29 @@ ref: google/trillian log/sequencer.go@master
 
 ref: google/trillian log/sequencer.go — `IntegrateBatch` 在接受新叶前验证 tree head 完整性。
 
-### D3 Idempotency = Content Fingerprint
+### D3 Idempotency = Content Fingerprint（EventID-only，F-CR-2）
 
-`IdempotencyContentFingerprint` 是唯一支持的幂等模式（sealed interface 关闭枚举）。内容指纹 = SHA-256（eventID + `\x00` + eventType + `\x00` + actorID + `\x00` + UnixNano + `\x00` + payload）。
+`IdempotencyContentFingerprint` 是唯一支持的幂等模式（sealed interface 关闭枚举）。
 
-字段分隔符使用 NUL（`\x00`）防止前缀碰撞（e.g. eventID="ab" + actorID="c" ≠ eventID="a" + actorID="bc"）。
+**指纹 = SHA-256(EventID)**（仅 EventID，UUID 全局唯一稳定身份）。
 
-重复内容的 `Append` 返回 `ErrAuditLedgerAlreadyExists`（idempotent — 调用方将第二次视为成功，不重试）。
+**修订说明（F-CR-2）**：原设计指纹为 SHA-256(eventID + `\x00` + eventType + `\x00` + actorID + `\x00` + UnixNano + `\x00` + payload)，包含 Timestamp（`UnixNano`）。at-least-once outbox redelivery 时 `clk.Now()` 不同 → 每次重投产生不同指纹 → 同事件被多次写入 hash chain，破坏"一事件一记录"审计语义。
 
-**PG store（S8）**：idempotency 指纹存 `audit_ledger_fingerprints` 表，带 UNIQUE 约束；`INSERT ... ON CONFLICT DO NOTHING` + 检查影响行数实现等价语义。
+EventID 对应 outbox Entry UUID，在所有重投中保持不变，是唯一稳定的事件身份标识：
 
+- EventType / ActorID：稳定但与 EventID 冗余；不影响碰撞抵抗性。
+- Timestamp：每次重投不同 → 不得纳入指纹。
+- Payload：可能因 schema 演化略有变化 → 不得纳入指纹。
+
+**DB 第二防线**：`adapters/postgres/migrations/018_audit_entries_event_id_unique.sql` 在
+`audit_entries(namespace, event_id)` 加 UNIQUE INDEX，防止并发 Append 绕过应用层检查。
+
+重复 EventID 的 `Append` 返回 `ErrAuditLedgerAlreadyExists`（idempotent — 调用方将第二次视为成功，不重试）。
+
+**PG store 实现**：`selectFingerprintSQL` 仅对 `(namespace, event_id)` 做 SELECT 1 检查；UNIQUE INDEX 是 DB 层 second-line guard。
+
+ref: Watermill router.go — message.UUID 作为 consumer group 去重键。
+ref: NServiceBus MessageDeduplicationBehavior — message ID 幂等键（与 Timestamp/Payload 无关）。
 ref: google/trillian types/logroot.go — `LeafIdentityHash` 内容寻址去重。
 
 ### D4 并发控制
