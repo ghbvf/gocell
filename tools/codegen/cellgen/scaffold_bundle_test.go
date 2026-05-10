@@ -61,7 +61,8 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 	// Verify contract.yaml does NOT carry an explicit `codegen:` line —
 	// K#09 funnel: parser defaults Codegen to true so the field is redundant.
 	// INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL
-	contractYAML, err := os.ReadFile(filepath.Join(dir, "contracts/http/myhttpcell/example/v1/contract.yaml"))
+	cYAMLPath := filepath.Join(dir, "contracts", "http", "myhttpcell", "example", "v1", "contract.yaml")
+	contractYAML, err := os.ReadFile(cYAMLPath) //nolint:gosec // tempdir test fixture
 	if err != nil {
 		t.Fatalf("read contract.yaml: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestScaffoldCellBundle_BundleDefaultIsHTTP(t *testing.T) {
 	if err := ScaffoldCellBundle(dir, spec); err != nil {
 		t.Fatalf("ScaffoldCellBundle: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "contracts/http/defcell/example/v1/contract.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "contracts", "http", "defcell", "example", "v1", "contract.yaml")); err != nil {
 		t.Errorf("default bundle should produce HTTP contract; got: %v", err)
 	}
 }

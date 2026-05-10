@@ -19,16 +19,16 @@ import (
 // Contract/Journey/Assembly; also makes it safe to rename in one place if
 // the CLI convention evolves.
 const (
-	dryRunFlag         = "dry-run"
-	dryRunUsage        = "validate inputs and path conflict; do not write files"
-	skipGenerateFlag   = "skip-generate"
-	skipGenerateUsage  = "skip auto-invocation of cell + contract codegen after scaffold"
-	withHTTPFlag       = "with-http"
-	withHTTPUsage      = "include an HTTP example contract in the bundle (default if neither --with-events nor --with-both is set)"
-	withEventsFlag     = "with-events"
-	withEventsUsage    = "include an event example contract in the bundle"
-	withBothFlag       = "with-both"
-	withBothUsage      = "include both HTTP and event example contracts in the bundle"
+	dryRunFlag        = "dry-run"
+	dryRunUsage       = "validate inputs and path conflict; do not write files"
+	skipGenerateFlag  = "skip-generate"
+	skipGenerateUsage = "skip auto-invocation of cell + contract codegen after scaffold"
+	withHTTPFlag      = "with-http"
+	withHTTPUsage     = "include an HTTP example contract in the bundle (default if neither --with-events nor --with-both is set)"
+	withEventsFlag    = "with-events"
+	withEventsUsage   = "include an event example contract in the bundle"
+	withBothFlag      = "with-both"
+	withBothUsage     = "include both HTTP and event example contracts in the bundle"
 )
 
 // runScaffold implements:

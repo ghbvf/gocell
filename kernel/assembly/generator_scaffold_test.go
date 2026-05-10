@@ -79,7 +79,8 @@ l0Dependencies: []
 	}
 
 	// assembly.yaml minimal form: --deploy=k8s (default) → omit deployTemplate.
-	asmYAML, err := os.ReadFile(filepath.Join(root, "assemblies/myassembly/assembly.yaml"))
+	asmPath := filepath.Join(root, "assemblies", "myassembly", "assembly.yaml")
+	asmYAML, err := os.ReadFile(asmPath) //nolint:gosec // tempdir test fixture
 	if err != nil {
 		t.Fatalf("read assembly.yaml: %v", err)
 	}
@@ -142,7 +143,8 @@ l0Dependencies: []
 		t.Fatalf("Scaffold: %v", err)
 	}
 
-	asmYAML, _ := os.ReadFile(filepath.Join(root, "assemblies/myassembly/assembly.yaml"))
+	asmPath := filepath.Join(root, "assemblies", "myassembly", "assembly.yaml")
+	asmYAML, _ := os.ReadFile(asmPath) //nolint:gosec // tempdir test fixture
 	got := string(asmYAML)
 	if !strings.Contains(got, "deployTemplate: compose") {
 		t.Errorf("--deploy=compose should write deployTemplate; got:\n%s", got)

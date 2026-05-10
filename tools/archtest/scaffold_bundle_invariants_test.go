@@ -24,6 +24,11 @@ import (
 	"testing"
 )
 
+const (
+	scaffoldCellTplRel     = "tools/codegen/cellgen/templates/scaffold-cell.tmpl"
+	scaffoldContractTplRel = "tools/codegen/cellgen/templates/scaffold-contract.tmpl"
+)
+
 // findRepoRoot walks upward from cwd looking for go.mod (the project root).
 func scaffoldFindRepoRoot(t *testing.T) string {
 	t.Helper()
@@ -48,17 +53,20 @@ func scaffoldFindRepoRoot(t *testing.T) string {
 // extends to scaffold output.
 //
 // INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
+// AI-rebust archtest gate; see file-level godoc for the rationale.
 func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldFindRepoRoot(t)
-	tmpl := filepath.Join(root, "tools/codegen/cellgen/templates/scaffold-cell.tmpl")
-	content, err := os.ReadFile(tmpl)
+	tmpl := filepath.Join(root, scaffoldCellTplRel)
+	content, err := os.ReadFile(tmpl) //nolint:gosec // archtest reads in-repo template files
 	if err != nil {
 		t.Fatalf("read scaffold-cell.tmpl: %v", err)
 	}
 	if !strings.Contains(string(content), "// +cell:listener:") {
-		t.Errorf("INVARIANT SCAFFOLD-BUNDLE-MARKER-01 violated: scaffold-cell.tmpl must embed `// +cell:listener:` const literal so K#05 MARKERGEN-DRIFT-VERIFY-01 covers scaffold output;\ngot template:\n%s", content)
+		t.Errorf("INVARIANT SCAFFOLD-BUNDLE-MARKER-01 violated: scaffold-cell.tmpl must embed "+
+			"`// +cell:listener:` const literal so K#05 MARKERGEN-DRIFT-VERIFY-01 covers scaffold output;\ngot template:\n%s",
+			content)
 	}
 }
 
@@ -68,16 +76,19 @@ func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 // in scaffold output contradicts the funnel.
 //
 // INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01
+// AI-rebust archtest gate; see file-level godoc for the rationale.
 func TestScaffoldBundle_ContractTemplateNoCodegenLiteral(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldFindRepoRoot(t)
-	tmpl := filepath.Join(root, "tools/codegen/cellgen/templates/scaffold-contract.tmpl")
-	content, err := os.ReadFile(tmpl)
+	tmpl := filepath.Join(root, scaffoldContractTplRel)
+	content, err := os.ReadFile(tmpl) //nolint:gosec // archtest reads in-repo template files
 	if err != nil {
 		t.Fatalf("read scaffold-contract.tmpl: %v", err)
 	}
 	if strings.Contains(string(content), "codegen:") {
-		t.Errorf("INVARIANT SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 violated: scaffold-contract.tmpl must NOT emit `codegen:` (parser default true is the K#09 funnel);\ngot template:\n%s", content)
+		t.Errorf("INVARIANT SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 violated: scaffold-contract.tmpl "+
+			"must NOT emit `codegen:` (parser default true is the K#09 funnel);\ngot template:\n%s",
+			content)
 	}
 }

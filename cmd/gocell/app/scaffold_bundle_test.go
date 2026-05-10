@@ -46,7 +46,8 @@ func TestRunScaffoldCell_BundleProducesSliceAndContract(t *testing.T) {
 	}
 
 	// contract.yaml must NOT carry an explicit `codegen:` line (K#09 funnel default).
-	c, _ := os.ReadFile(filepath.Join(root, "contracts/http/mybundlecell/example/v1/contract.yaml"))
+	cYAMLPath := filepath.Join(root, "contracts", "http", "mybundlecell", "example", "v1", "contract.yaml")
+	c, _ := os.ReadFile(cYAMLPath) //nolint:gosec // tempdir test fixture
 	if strings.Contains(string(c), "codegen:") {
 		t.Errorf("scaffold contract.yaml must not declare codegen: (parser default true);\n got:\n%s", c)
 	}

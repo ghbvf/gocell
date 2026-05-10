@@ -80,3 +80,16 @@ func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []CellModule
 type CellModule interface {
 	ID() string
 }
+
+// Stub *Module types per cell — declared so modules_gen.go compiles. Each
+// concrete CellModule receiver returns the cell ID; replace each with a
+// real composition root struct (see cmd/corebundle/access_module.go for a
+// production example) carrying construction + Provide() once the assembly
+// is wired to real dependencies.
+{{range .CellModules}}
+// {{.Name}} is the K#09 scaffold stub; replace with the real composition root.
+type {{.Name}} struct{}
+
+// ID is the stub identifier — derived from the matching cell.yaml id.
+func ({{.Name}}) ID() string { return {{printf "%q" .ID}} }
+{{end}}

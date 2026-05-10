@@ -63,16 +63,10 @@ type bundleData struct {
 //
 // On any rendering or write failure the function returns immediately —
 // callers should treat partial output as failed and rerun after resolving.
-//
-//nolint:gocognit,cyclop // sequential bundle composition; complexity intrinsic
 func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 	if err := validateScaffoldSpec(spec); err != nil {
 		return err
 	}
-
-	// Resolve bundle defaults: if no variant chosen, default to HTTP.
-	withHTTP := spec.WithHTTP || spec.WithBoth || (!spec.WithHTTP && !spec.WithEvents && !spec.WithBoth)
-	withEvents := spec.WithEvents || spec.WithBoth
 
 	// Step 1 — cell skeleton (cell.go + cell.yaml). Reuse existing ScaffoldCell.
 	cellTarget := filepath.Join("cells", spec.CellID)
@@ -80,50 +74,75 @@ func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 		return err
 	}
 
-	// Step 2 — example slice (slice.yaml + service.go + service_test.go).
-	// Slice ID convention: {cellID-no-dash}example. Cell IDs may contain
-	// dashes (e.g. "test-cell") but Go package names and slice IDs cannot,
-	// so the dash-stripped form is used for both.
+	withHTTP, withEvents := resolveBundleVariants(spec)
 	cellNoDash := strings.ReplaceAll(spec.CellID, "-", "")
-	sliceID := cellNoDash + "example"
-	slicePackage := sliceID // Go package = slice ID
+	sliceID := cellNoDash + "example" // Go package + slice ID, dash-stripped
 
 	if withHTTP {
-		bd := bundleData{
-			CellID:       spec.CellID,
-			SlicePackage: slicePackage,
-			SliceID:      sliceID,
-			SliceRole:    "serve",
-			ContractID:   fmt.Sprintf("http.%s.example.v1", cellNoDash),
-		}
-		if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
-			return err
-		}
-		if err := scaffoldExampleContract(root, bd, "http", cellNoDash, spec.DryRun); err != nil {
+		if err := scaffoldHTTPExampleArtifacts(root, spec, cellNoDash, sliceID); err != nil {
 			return err
 		}
 	}
 	if withEvents {
-		// For event-only or both, slice & contract use event role.
-		bd := bundleData{
-			CellID:       spec.CellID,
-			SlicePackage: slicePackage,
-			SliceID:      sliceID,
-			SliceRole:    "publish",
-			ContractID:   fmt.Sprintf("event.%s.example.v1", cellNoDash),
-		}
-		// In WithBoth, slice already exists from HTTP step; re-render would
-		// fail conflict detection. Skip slice in event branch when both set.
-		if !spec.WithBoth {
-			if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
-				return err
-			}
-		}
-		if err := scaffoldExampleContract(root, bd, "event", cellNoDash, spec.DryRun); err != nil {
+		if err := scaffoldEventExampleArtifacts(root, spec, cellNoDash, sliceID); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// resolveBundleVariants picks the contract variants to scaffold from the
+// spec's WithHTTP / WithEvents / WithBoth flags. When all three are unset
+// (default) the bundle includes HTTP only.
+func resolveBundleVariants(spec ScaffoldSpec) (withHTTP, withEvents bool) {
+	withHTTP = spec.WithHTTP || spec.WithBoth || (!spec.WithHTTP && !spec.WithEvents && !spec.WithBoth)
+	withEvents = spec.WithEvents || spec.WithBoth
+	return withHTTP, withEvents
+}
+
+// scaffoldHTTPExampleArtifacts produces the HTTP slice + contract pair.
+func scaffoldHTTPExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, sliceID string) error {
+	bd := bundleData{
+		CellID:       spec.CellID,
+		SlicePackage: sliceID,
+		SliceID:      sliceID,
+		SliceRole:    "serve",
+		ContractID:   fmt.Sprintf("http.%s.example.v1", cellNoDash),
+	}
+	if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
+		return err
+	}
+	return scaffoldExampleContract(root, bd, "http", cellNoDash, spec.DryRun)
+}
+
+// scaffoldEventExampleArtifacts produces the event slice + contract pair.
+// When the spec also requested HTTP (WithBoth), the slice already exists
+// from the HTTP path; only the event contract is added.
+func scaffoldEventExampleArtifacts(root string, spec ScaffoldSpec, cellNoDash, sliceID string) error {
+	bd := bundleData{
+		CellID:       spec.CellID,
+		SlicePackage: sliceID,
+		SliceID:      sliceID,
+		SliceRole:    "publish",
+		ContractID:   fmt.Sprintf("event.%s.example.v1", cellNoDash),
+	}
+	if !spec.WithBoth {
+		if err := scaffoldExampleSlice(root, bd, spec.DryRun); err != nil {
+			return err
+		}
+	}
+	return scaffoldExampleContract(root, bd, "event", cellNoDash, spec.DryRun)
+}
+
+// sliceBundleFiles returns the canonical set of files emitted under each
+// example slice; section names match {{define ...}} blocks in
+// scaffold-slice.tmpl.
+func sliceBundleFiles() []bundleFileSpec {
+	return []bundleFileSpec{
+		{Name: "slice.yaml", Section: "slice-yaml", IsGoSource: false, Description: "slice metadata"},
+		{Name: "service.go", Section: "service-go", IsGoSource: true, Description: "slice business logic"},
+		{Name: "service_test.go", Section: "service-test-go", IsGoSource: true, Description: "slice business logic test"},
+	}
 }
 
 // scaffoldExampleSlice renders the slice triple (slice.yaml + service.go +
@@ -131,40 +150,24 @@ func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 // matches ScaffoldCell's all-or-nothing semantics.
 func scaffoldExampleSlice(root string, bd bundleData, dryRun bool) error {
 	dir := filepath.Join(root, "cells", bd.CellID, "slices", bd.SliceID)
-	files := []struct {
-		name        string
-		section     string
-		isGoSource  bool
-		description string
-	}{
-		{"slice.yaml", "slice-yaml", false, "slice metadata"},
-		{"service.go", "service-go", true, "slice business logic"},
-		{"service_test.go", "service-test-go", true, "slice business logic test"},
-	}
+	files := sliceBundleFiles()
+	return renderBundleFiles(dir, files, sliceBundleTemplate, bd, dryRun, "slice")
+}
 
-	// Conflict detection — any pre-existing file aborts the whole step.
+// renderBundleFiles is the shared render→conflict-check→format→write pipeline
+// for slice and contract bundle outputs. The kindLabel ("slice" / "contract")
+// is used in error messages so callers can identify the failing step.
+func renderBundleFiles(dir string, files []bundleFileSpec, tpl *template.Template, data any, dryRun bool, kindLabel string) error {
 	for _, f := range files {
-		path := filepath.Join(dir, f.name)
+		path := filepath.Join(dir, f.Name)
 		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("scaffold slice: file already exists: %s", path)
+			return fmt.Errorf("scaffold %s: file already exists: %s", kindLabel, path)
 		}
 	}
 
-	rendered := make(map[string][]byte, len(files))
-	for _, f := range files {
-		var buf bytes.Buffer
-		if err := sliceBundleTemplate.ExecuteTemplate(&buf, f.section, bd); err != nil {
-			return fmt.Errorf("scaffold slice: render %s: %w", f.description, err)
-		}
-		out := buf.Bytes()
-		if f.isGoSource {
-			formatted, err := codegen.FormatGoSource("", out)
-			if err != nil {
-				return fmt.Errorf("scaffold slice: format %s: %w", f.name, err)
-			}
-			out = formatted
-		}
-		rendered[f.name] = out
+	rendered, err := renderBundleSections(tpl, files, data, kindLabel)
+	if err != nil {
+		return err
 	}
 
 	if dryRun {
@@ -172,14 +175,46 @@ func scaffoldExampleSlice(root string, bd bundleData, dryRun bool) error {
 	}
 
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("scaffold slice: mkdir %s: %w", dir, err)
+		return fmt.Errorf("scaffold %s: mkdir %s: %w", kindLabel, dir, err)
 	}
 	for name, content := range rendered {
 		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
-			return fmt.Errorf("scaffold slice: write %s: %w", name, err)
+			return fmt.Errorf("scaffold %s: write %s: %w", kindLabel, name, err)
 		}
 	}
 	return nil
+}
+
+// renderBundleSections runs each file spec's template section through
+// (Execute → optional FormatGoSource) and returns a map keyed by file name.
+func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data any, kindLabel string) (map[string][]byte, error) {
+	rendered := make(map[string][]byte, len(files))
+	for _, f := range files {
+		var buf bytes.Buffer
+		if err := tpl.ExecuteTemplate(&buf, f.Section, data); err != nil {
+			return nil, fmt.Errorf("scaffold %s: render %s: %w", kindLabel, f.Description, err)
+		}
+		out := buf.Bytes()
+		if f.IsGoSource {
+			formatted, err := codegen.FormatGoSource("", out)
+			if err != nil {
+				return nil, fmt.Errorf("scaffold %s: format %s: %w", kindLabel, f.Name, err)
+			}
+			out = formatted
+		}
+		rendered[f.Name] = out
+	}
+	return rendered, nil
+}
+
+// bundleFileSpec parameterizes a single output file in a multi-section
+// scaffold bundle: which template section to invoke, where to write, and
+// whether the rendered bytes go through FormatGoSource.
+type bundleFileSpec struct {
+	Name        string
+	Section     string
+	IsGoSource  bool
+	Description string
 }
 
 // scaffoldExampleContract renders the contract.yaml + 2 JSON schemas under
@@ -189,56 +224,31 @@ func scaffoldExampleSlice(root string, bd bundleData, dryRun bool) error {
 // metadata parser defaults it to true when absent.
 func scaffoldExampleContract(root string, bd bundleData, kind, cellPathSegment string, dryRun bool) error {
 	dir := filepath.Join(root, "contracts", kind, cellPathSegment, "example", "v1")
-
-	type fileSpec struct {
-		name    string
-		section string
+	files, err := contractBundleFiles(kind)
+	if err != nil {
+		return err
 	}
-	var files []fileSpec
+	return renderBundleFiles(dir, files, contractBundleTemplate, bd, dryRun, "contract")
+}
+
+// contractBundleFiles returns the canonical files emitted for an example
+// contract — split per kind (http vs event) since the schema artifact set
+// differs.
+func contractBundleFiles(kind string) ([]bundleFileSpec, error) {
 	switch kind {
 	case "http":
-		files = []fileSpec{
-			{"contract.yaml", "contract-yaml-http"},
-			{"request.schema.json", "request-schema"},
-			{"response.schema.json", "response-schema"},
-		}
+		return []bundleFileSpec{
+			{Name: "contract.yaml", Section: "contract-yaml-http", Description: "contract metadata"},
+			{Name: "request.schema.json", Section: "request-schema", Description: "request schema"},
+			{Name: "response.schema.json", Section: "response-schema", Description: "response schema"},
+		}, nil
 	case "event":
-		files = []fileSpec{
-			{"contract.yaml", "contract-yaml-event"},
-			{"payload.schema.json", "payload-schema"},
-			{"headers.schema.json", "headers-schema"},
-		}
+		return []bundleFileSpec{
+			{Name: "contract.yaml", Section: "contract-yaml-event", Description: "contract metadata"},
+			{Name: "payload.schema.json", Section: "payload-schema", Description: "payload schema"},
+			{Name: "headers.schema.json", Section: "headers-schema", Description: "headers schema"},
+		}, nil
 	default:
-		return fmt.Errorf("scaffold contract: unsupported kind %q", kind)
+		return nil, fmt.Errorf("scaffold contract: unsupported kind %q", kind)
 	}
-
-	for _, f := range files {
-		path := filepath.Join(dir, f.name)
-		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("scaffold contract: file already exists: %s", path)
-		}
-	}
-
-	rendered := make(map[string][]byte, len(files))
-	for _, f := range files {
-		var buf bytes.Buffer
-		if err := contractBundleTemplate.ExecuteTemplate(&buf, f.section, bd); err != nil {
-			return fmt.Errorf("scaffold contract: render %s: %w", f.name, err)
-		}
-		rendered[f.name] = buf.Bytes()
-	}
-
-	if dryRun {
-		return nil
-	}
-
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("scaffold contract: mkdir %s: %w", dir, err)
-	}
-	for name, content := range rendered {
-		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
-			return fmt.Errorf("scaffold contract: write %s: %w", name, err)
-		}
-	}
-	return nil
 }

@@ -36,7 +36,7 @@ func TestRunScaffoldAssembly_Basic(t *testing.T) {
 		}
 	}
 
-	asmYAML, _ := os.ReadFile(filepath.Join(root, "assemblies/myassembly/assembly.yaml"))
+	asmYAML, _ := os.ReadFile(filepath.Join(root, "assemblies", "myassembly", "assembly.yaml")) //nolint:gosec // tempdir test fixture
 	if strings.Contains(string(asmYAML), "deployTemplate") {
 		t.Errorf("--deploy default (k8s) must not write deployTemplate; got:\n%s", asmYAML)
 	}
@@ -79,7 +79,7 @@ func TestRunScaffoldAssembly_DryRun(t *testing.T) {
 	if err := scaffoldAssembly(root, args); err != nil {
 		t.Fatalf("scaffoldAssembly dry-run: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "assemblies/dryasm")); err == nil {
+	if _, err := os.Stat(filepath.Join(root, "assemblies", "dryasm")); err == nil {
 		t.Errorf("dry-run wrote files to disk")
 	}
 }

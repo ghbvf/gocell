@@ -15,6 +15,7 @@ import (
 // is the only opt-out.
 //
 // INVARIANT: SCAFFOLD-CONTRACT-CODEGEN-DEFAULT-TRUE
+// Parser-side test for the K#09 funnel.
 func TestParseContract_CodegenDefaultsTrue(t *testing.T) {
 	t.Parallel()
 

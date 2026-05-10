@@ -137,8 +137,17 @@ type scaffoldAssemblyContext struct {
 	Cells          []string
 	OwnerTeam      string
 	OwnerRole      string
-	DeployTemplate string // empty when --deploy=k8s (default — omitted from yaml)
-	HelperName     string // run{ID-PascalCase} for runXxx() in run.go
+	DeployTemplate string                      // empty when --deploy=k8s (default — omitted from yaml)
+	HelperName     string                      // run{ID-PascalCase} for runXxx() in run.go
+	CellModules    []scaffoldAssemblyCellEntry // {StructName + Module suffix, cellID} pairs for run.go stubs
+}
+
+// scaffoldAssemblyCellEntry pairs a generated *Module struct name with the
+// cell ID it identifies. Used inside scaffold-run-go.tpl to declare a stub
+// Module per cell so modules_gen.go references compile immediately.
+type scaffoldAssemblyCellEntry struct {
+	Name string // {GoStructName}Module — same convention as K#10 modules_gen.go
+	ID   string // cell ID (cell.yaml `id:`)
 }
 
 // GenerateBoundary generates the boundary.yaml content for an assembly.
@@ -233,8 +242,6 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 // written verbatim. Callers may run GenerateModulesGen / GenerateEntrypoint
 // / GenerateBoundary after Scaffold to materialize cmd/{id}/main.go +
 // modules_gen.go + assemblies/{id}/generated/boundary.yaml.
-//
-//nolint:gocognit,cyclop // sequential scaffold steps; complexity intrinsic
 func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
 	if g.projectRoot == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -244,9 +251,45 @@ func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
 		return err
 	}
 
+	ctx, err := g.buildScaffoldContext(spec)
+	if err != nil {
+		return err
+	}
+
+	asmDir := filepath.Join(g.projectRoot, "assemblies", spec.ID)
+	cmdDir := filepath.Join(g.projectRoot, "cmd", spec.ID)
+
+	files := []scaffoldAssemblyFile{
+		{Path: filepath.Join(asmDir, "assembly.yaml"), Template: "scaffold-assembly-yaml.tpl"},
+		{Path: filepath.Join(cmdDir, "run.go"), Template: "scaffold-run-go.tpl"},
+		{Path: filepath.Join(cmdDir, "app.go"), Template: "scaffold-app-go.tpl"},
+	}
+
+	rendered, err := g.renderAssemblyScaffoldFiles(files, ctx)
+	if err != nil {
+		return err
+	}
+
+	if spec.DryRun {
+		return nil
+	}
+	return writeAssemblyScaffoldFiles([]string{asmDir, cmdDir}, rendered)
+}
+
+// scaffoldAssemblyFile pairs an output path with the template used to render
+// it; lifted out of Scaffold for readability and to keep funlen happy.
+type scaffoldAssemblyFile struct {
+	Path     string
+	Template string
+}
+
+// buildScaffoldContext builds the scaffoldAssemblyContext for a spec by
+// resolving the helper name, normalizing the deploy template, and collecting
+// per-cell Module stub entries.
+func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAssemblyContext, error) {
 	helperName, err := assemblyRunHelperName(spec.ID)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+		return scaffoldAssemblyContext{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"assembly id has no identifier characters", err,
 			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID)))
 	}
@@ -257,51 +300,59 @@ func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
 		deployTemplate = ""
 	}
 
-	ctx := scaffoldAssemblyContext{
+	cellModuleEntries := make([]scaffoldAssemblyCellEntry, 0, len(spec.Cells))
+	for _, cellID := range spec.Cells {
+		cellMeta := g.cells.Get(cellID)
+		// Cell existence already validated; fall back to cellID when
+		// GoStructName is unset so legacy cells still produce a compilable stub.
+		structName := cellID
+		if cellMeta != nil && !cellMeta.GoStructName.IsZero() {
+			structName = cellMeta.GoStructName.String()
+		}
+		cellModuleEntries = append(cellModuleEntries, scaffoldAssemblyCellEntry{
+			Name: structName + "Module",
+			ID:   cellID,
+		})
+	}
+
+	return scaffoldAssemblyContext{
 		ID:             spec.ID,
 		Cells:          append([]string(nil), spec.Cells...),
 		OwnerTeam:      spec.OwnerTeam,
 		OwnerRole:      spec.OwnerRole,
 		DeployTemplate: deployTemplate,
 		HelperName:     helperName,
-	}
+		CellModules:    cellModuleEntries,
+	}, nil
+}
 
-	asmDir := filepath.Join(g.projectRoot, "assemblies", spec.ID)
-	cmdDir := filepath.Join(g.projectRoot, "cmd", spec.ID)
-
-	files := []struct {
-		path     string
-		template string
-		isGo     bool
-	}{
-		{filepath.Join(asmDir, "assembly.yaml"), "scaffold-assembly-yaml.tpl", false},
-		{filepath.Join(cmdDir, "run.go"), "scaffold-run-go.tpl", true},
-		{filepath.Join(cmdDir, "app.go"), "scaffold-app-go.tpl", true},
-	}
-
-	// Conflict detection — any pre-existing file aborts before any write.
+// renderAssemblyScaffoldFiles runs conflict detection then renders each
+// template; the returned map is keyed by output path so the writer step
+// stays trivial.
+func (g *Generator) renderAssemblyScaffoldFiles(files []scaffoldAssemblyFile, ctx scaffoldAssemblyContext) (map[string][]byte, error) {
 	for _, f := range files {
-		if _, err := os.Stat(f.path); err == nil {
-			return errcode.New(errcode.KindConflict, errcode.ErrValidationFailed,
+		if _, err := os.Stat(f.Path); err == nil {
+			return nil, errcode.New(errcode.KindConflict, errcode.ErrValidationFailed,
 				"scaffold assembly: file already exists",
-				errcode.WithInternal(fmt.Sprintf("path=%s", f.path)))
+				errcode.WithInternal(fmt.Sprintf("path=%s", f.Path)))
 		}
 	}
-
 	rendered := make(map[string][]byte, len(files))
 	for _, f := range files {
-		out, err := g.executeTemplate(f.template, ctx)
+		out, err := g.executeTemplate(f.Template, ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		rendered[f.path] = out
+		rendered[f.Path] = out
 	}
+	return rendered, nil
+}
 
-	if spec.DryRun {
-		return nil
-	}
-
-	for _, dir := range []string{asmDir, cmdDir} {
+// writeAssemblyScaffoldFiles materializes rendered bytes — directories first,
+// then files — wrapping every error with errcode so callers see the failing
+// path.
+func writeAssemblyScaffoldFiles(dirs []string, rendered map[string][]byte) error {
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold assembly: mkdir failed", err,
