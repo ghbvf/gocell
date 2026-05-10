@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -76,8 +77,8 @@ func TestDeviceCell_Lifecycle(t *testing.T) {
 func TestDeviceCell_Metadata(t *testing.T) {
 	c := newTestCell()
 	assert.Equal(t, "devicecell", c.ID())
-	assert.Equal(t, cell.CellTypeEdge, c.Type())
-	assert.Equal(t, cell.L4, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.CellTypeEdge, c.Type())
+	assert.Equal(t, cellvocab.L4, c.ConsistencyLevel())
 }
 
 func TestDeviceCell_Startup(t *testing.T) {

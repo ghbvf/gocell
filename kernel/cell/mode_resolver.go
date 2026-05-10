@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -42,7 +43,7 @@ type EmitterConfig struct {
 
 // EmitterOutcome reports the resolved emitter and whether it is durable
 // (backed by a real writer+txRunner). Cells use Durable to upgrade optional
-// slices from L0 to L2 (e.g., rbacassign).
+// slices from cellvocab.L0 to cellvocab.L2 (e.g., rbacassign).
 type EmitterOutcome struct {
 	Emitter outbox.Emitter
 	Durable bool
@@ -156,7 +157,7 @@ func isNooperDep(dep any) bool {
 // CellEmitterInputs bundles the Cell-side inputs for ResolveCellEmitter.
 // Embeds EmitterConfig and adds the two knobs shared by every Cell's
 // Init-time emitter resolution: the pre-resolved emitter (WithEmitter) and
-// the Cell's consistency level (for the L2 non-durable Warn).
+// the Cell's consistency level (for the cellvocab.L2 non-durable Warn).
 type CellEmitterInputs struct {
 	EmitterConfig
 	// PreResolved is the emitter set directly via Cell.WithEmitter(e).
@@ -164,8 +165,8 @@ type CellEmitterInputs struct {
 	// durable mode requires a durable PreResolved (ReportDurable==true).
 	PreResolved outbox.Emitter
 	// ConsistencyLevel is the owning Cell's consistency level; used to decide
-	// whether the L2 non-durable Warn log fires.
-	ConsistencyLevel Level
+	// whether the cellvocab.L2 non-durable Warn log fires.
+	ConsistencyLevel cellvocab.Level
 }
 
 // ResolveCellEmitter is the Cell-side wrapper around ResolveEmitter that
@@ -177,7 +178,7 @@ type CellEmitterInputs struct {
 //     ErrCellMissingOutbox.
 //  3. Otherwise delegate to ResolveEmitter.
 //  4. When the resolved emitter is non-durable and the Cell's consistency
-//     level is L2 or higher, emit a Warn explaining the degraded atomicity
+//     level is cellvocab.L2 or higher, emit a Warn explaining the degraded atomicity
 //     guarantee. The log carries cell, consistency_level, durability_mode.
 //
 // Per-cell side-effects (e.g. AccessCore.rbacEmitterMode) remain at the call
@@ -210,12 +211,12 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 		outcome = resolved
 	}
 
-	if !outcome.Durable && in.ConsistencyLevel >= L2 {
+	if !outcome.Durable && in.ConsistencyLevel >= cellvocab.L2 {
 		logger := in.Logger
 		if logger == nil {
 			logger = slog.Default()
 		}
-		logger.Warn(in.CellID+": running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+		logger.Warn(in.CellID+": running without outboxWriter+txRunner, cellvocab.L2 transactional atomicity not guaranteed (demo mode)",
 			slog.String("cell", in.CellID),
 			slog.Int("consistency_level", int(in.ConsistencyLevel)),
 			slog.String("durability_mode", in.Mode.String()))

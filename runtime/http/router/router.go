@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -481,9 +482,9 @@ func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler
 }
 
 // internalPathPrefix marks URL paths that belong on the internal listener.
-// This is an alias for kcell.InternalPathPrefix, kept as a local const
+// This is an alias for cellvocab.InternalPathPrefix, kept as a local const
 // to avoid changing call-site references throughout this file.
-const internalPathPrefix = kcell.InternalPathPrefix
+const internalPathPrefix = cellvocab.InternalPathPrefix
 
 // New creates a Router with default middleware and optional configuration.
 // It returns an error when configuration is invalid.
@@ -1069,7 +1070,7 @@ func (r *Router) verifyInternalRouteAffinity() error {
 		if !m.IsInternal() && isInternal {
 			return fmt.Errorf(
 				"router %q: route %s %s mounted on internal listener but path lacks %s prefix",
-				r.ref, m.Method, m.Path, kcell.InternalPathPrefix)
+				r.ref, m.Method, m.Path, cellvocab.InternalPathPrefix)
 		}
 	}
 	return nil

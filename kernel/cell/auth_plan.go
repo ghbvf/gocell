@@ -169,7 +169,7 @@ type AssemblyRef interface {
 //
 // AuthJWTFromAssembly implements only ListenerAuth (same rationale as AuthJWT).
 //
-// Lifecycle constraint: the Assembly value must be the same instance later
+// cellvocab.Lifecycle constraint: the Assembly value must be the same instance later
 // passed to bootstrap.WithAssembly. Bootstrap phase0
 // (validateAuthJWTFromAssemblyPlans in runtime/bootstrap/auth_plan_validate.go)
 // rejects direct struct literals, nil assemblies, wrappers, copies, or fakes

@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappenduser"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditquery"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -387,7 +388,7 @@ func (c *AuditCore) initSlices() error {
 			return fmt.Errorf("%s: %w", a.spec.Name(), err)
 		}
 		*a.target = svc
-		c.AddSlice(cell.NewBaseSlice(a.spec.Name(), "auditcore", cell.L2))
+		c.AddSlice(cell.NewBaseSlice(a.spec.Name(), "auditcore", cellvocab.L2))
 	}
 
 	return nil
@@ -402,7 +403,7 @@ func (c *AuditCore) initQuerySlice(mode cell.DurabilityMode) error {
 		return fmt.Errorf("audit-query: %w", err)
 	}
 	c.queryHandler = auditquery.NewHandler(querySvc)
-	c.AddSlice(cell.NewBaseSlice("auditquery", "auditcore", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("auditquery", "auditcore", cellvocab.L0))
 	return nil
 }
 

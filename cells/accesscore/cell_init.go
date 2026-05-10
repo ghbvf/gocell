@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -176,7 +177,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
-	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cellvocab.L2))
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
 	identityOpts := []identitymanage.Option{
@@ -190,11 +191,11 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
-	c.AddSlice(cell.NewBaseSlice("identitymanage", "accesscore", cell.L1))
+	c.AddSlice(cell.NewBaseSlice("identitymanage", "accesscore", cellvocab.L1))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
 	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger, c.clk)
-	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cellvocab.L0))
 
 	// session-refresh uses refresh.Store for token state validation and
 	// rotation. No JWT verifier is needed — the opaque wire format is
@@ -210,7 +211,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
-	c.AddSlice(cell.NewBaseSlice("sessionrefresh", "accesscore", cell.L1))
+	c.AddSlice(cell.NewBaseSlice("sessionrefresh", "accesscore", cellvocab.L1))
 
 	// session-logout — cascades revocation to refresh.Store so logout
 	// invalidates the full refresh chain, not just the access session.
@@ -220,11 +221,11 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
-	c.AddSlice(cell.NewBaseSlice("sessionlogout", "accesscore", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("sessionlogout", "accesscore", cellvocab.L2))
 
 	// authorization-decide
 	c.authzSvc = authorizationdecide.NewService(c.roleRepo, c.logger)
-	c.AddSlice(cell.NewBaseSlice("authorizationdecide", "accesscore", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("authorizationdecide", "accesscore", cellvocab.L0))
 
 	// rbac-check
 	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode)
@@ -232,7 +233,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
-	c.AddSlice(cell.NewBaseSlice("rbaccheck", "accesscore", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("rbaccheck", "accesscore", cellvocab.L0))
 
 	// rbac-assign — durable mode (outboxWriter + txRunner) upgrades to L2 OutboxFact;
 	// demo mode (both nil) stays at L0 (in-memory repos, synchronous dual-write).
@@ -249,7 +250,7 @@ func (c *AccessCore) initSlices() error {
 		configreceive.WithConfigGetter(c.configGetter),
 		configreceive.WithConfigEventCollector(c.configEventCollector),
 	)
-	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cell.L3))
+	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cellvocab.L3))
 
 	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
@@ -273,7 +274,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.setupHandler = setup.NewHandler(setupSvc, c.bootstrapAuth)
-	c.AddSlice(cell.NewBaseSlice("setup", "accesscore", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("setup", "accesscore", cellvocab.L2))
 	return nil
 }
 
@@ -289,9 +290,9 @@ func (c *AccessCore) initRbacAssign() error {
 		return err
 	}
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
-	rbacAssignLevel := cell.L0
+	rbacAssignLevel := cellvocab.L0
 	if c.rbacEmitterMode {
-		rbacAssignLevel = cell.L2
+		rbacAssignLevel = cellvocab.L2
 	}
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
 	return nil

@@ -1,14 +1,16 @@
-// Package cell defines the core types and interfaces for the GoCell Cell model.
-package cell
+package cellvocab
 
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/cell/levelrank"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 const internalValueQuotedFmt = "value=%q"
+
+// InternalPathPrefix is the URL prefix that designates an internal-listener route.
+// Shared by kernel/cell.AuthRouteMeta.IsInternal and kernel/contractspec.Validate.
+const InternalPathPrefix = "/internal/v1/"
 
 // CellType classifies a Cell's architectural role.
 type CellType string
@@ -18,44 +20,6 @@ const (
 	CellTypeEdge    CellType = "edge"
 	CellTypeSupport CellType = "support"
 )
-
-// Level represents the consistency level (L0-L4) of a Cell or Contract.
-type Level int
-
-const (
-	L0 Level = iota // LocalOnly
-	L1              // LocalTx
-	L2              // OutboxFact
-	L3              // WorkflowEventual
-	L4              // DeviceLatent
-)
-
-// String returns the string representation of a Level (e.g. "L0", "L2").
-// Backed by levelrank.Levels — single source of truth shared with
-// kernel/metadata derivation.
-func (l Level) String() string {
-	if s := levelrank.At(int(l)); s != "" {
-		return s
-	}
-	return fmt.Sprintf("Level(%d)", int(l))
-}
-
-// ParseLevel parses a string like "L0" or "L3" into a Level.
-// Returns errcode.ErrValidationFailed for unrecognized input.
-func ParseLevel(s string) (Level, error) {
-	if r := levelrank.Rank(s); r >= 0 {
-		return Level(r), nil
-	}
-	return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"invalid consistency level",
-		errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
-}
-
-// HealthStatus reports the health of a Cell.
-type HealthStatus struct {
-	Status  string // "healthy" | "degraded" | "unhealthy"
-	Details map[string]string
-}
 
 // ContractKind classifies the communication pattern of a Contract.
 type ContractKind string

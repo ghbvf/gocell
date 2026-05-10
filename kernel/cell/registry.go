@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -35,7 +36,7 @@ import (
 // accumulates declarations and returns them as a RegistrySnapshot once
 // Snapshot() is called by the bootstrap layer.
 //
-// ref: uber-go/fx lifecycle.go@master:L33-L116 — Lifecycle.Append builder
+// ref: uber-go/fx lifecycle.go@master:L33-L116 — cellvocab.Lifecycle.Append builder
 // ref: kubernetes-sigs/controller-runtime pkg/manager/manager.go@main:L70-L78 — AddHealthzCheck independent method
 // ref: go-kratos/kratos transport/http/server.go@main:L143-L224 — route spec accumulation
 // ---------------------------------------------------------------------------
@@ -86,7 +87,7 @@ type Registry interface {
 	// invocation — they are called on every /readyz request.
 	Health(name string, check func(context.Context) error)
 
-	// Lifecycle appends a lifecycle hook. Name must be non-empty; passing an
+	// cellvocab.Lifecycle appends a lifecycle hook. Name must be non-empty; passing an
 	// empty Name panics (programming error). Hooks run in declaration order
 	// on startup and in reverse order on shutdown.
 	Lifecycle(h LifecycleHook)
@@ -157,12 +158,9 @@ type AuthRouteMeta struct {
 	Bootstrap bool
 }
 
-// InternalPathPrefix is the URL prefix that designates an internal-listener route.
-const InternalPathPrefix = "/internal/v1/"
-
 // IsInternal reports whether this route lives on the internal listener.
 func (m AuthRouteMeta) IsInternal() bool {
-	return strings.HasPrefix(m.Path, InternalPathPrefix)
+	return strings.HasPrefix(m.Path, cellvocab.InternalPathPrefix)
 }
 
 // AuthRouteDeclarer is implemented by aggregators that want to receive the
@@ -417,7 +415,7 @@ func MustHaveNonEmptyHealthName(name string) {
 	}
 }
 
-// Lifecycle appends a lifecycle hook. Panics when Name is empty (programming error).
+// cellvocab.Lifecycle appends a lifecycle hook. Panics when Name is empty (programming error).
 func (r *RegistryRecorder) Lifecycle(h LifecycleHook) {
 	r.mustNotBeFinalized("Lifecycle")
 	MustHaveLifecycleHookName(h)
@@ -427,7 +425,7 @@ func (r *RegistryRecorder) Lifecycle(h LifecycleHook) {
 // MustHaveLifecycleHookName panics when the hook Name is empty (programming error).
 func MustHaveLifecycleHookName(h LifecycleHook) {
 	if h.Name == "" {
-		panic(errcode.Assertion("registry Lifecycle: hook Name must not be empty"))
+		panic(errcode.Assertion("registry cellvocab.Lifecycle: hook Name must not be empty"))
 	}
 }
 

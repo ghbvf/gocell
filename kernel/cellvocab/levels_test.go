@@ -1,9 +1,9 @@
-package levelrank_test
+package cellvocab_test
 
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/cell/levelrank"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 )
 
 func TestRank(t *testing.T) {
@@ -27,7 +27,7 @@ func TestRank(t *testing.T) {
 		tc := tc
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
-			if got := levelrank.Rank(tc.in); got != tc.want {
+			if got := cellvocab.Rank(tc.in); got != tc.want {
 				t.Fatalf("Rank(%q) = %d, want %d", tc.in, got, tc.want)
 			}
 		})
@@ -53,7 +53,7 @@ func TestAt(t *testing.T) {
 		tc := tc
 		t.Run("", func(t *testing.T) {
 			t.Parallel()
-			if got := levelrank.At(tc.in); got != tc.want {
+			if got := cellvocab.At(tc.in); got != tc.want {
 				t.Fatalf("At(%d) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
@@ -64,12 +64,12 @@ func TestAt(t *testing.T) {
 // every valid index in the L0..L4 taxonomy.
 func TestRankAtRoundTrip(t *testing.T) {
 	t.Parallel()
-	for i := 0; i < len(levelrank.Levels); i++ {
-		s := levelrank.At(i)
+	for i := 0; i < len(cellvocab.Levels); i++ {
+		s := cellvocab.At(i)
 		if s == "" {
 			t.Fatalf("At(%d) returned empty", i)
 		}
-		if got := levelrank.Rank(s); got != i {
+		if got := cellvocab.Rank(s); got != i {
 			t.Fatalf("Rank(At(%d)=%q) = %d, want %d", i, s, got, i)
 		}
 	}

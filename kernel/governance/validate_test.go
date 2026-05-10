@@ -2638,7 +2638,7 @@ func TestREF17(t *testing.T) {
 			wantCount: 2, // both fail-closed: wildcard + external actor
 		},
 		{
-			name: "non-v1 internal-looking path is not flagged (uses cell.InternalPathPrefix SoR)",
+			name: "non-v1 internal-looking path is not flagged (uses cellvocab.InternalPathPrefix SoR)",
 			setup: func(pm *metadata.ProjectMeta) {
 				// /internal/foo (no /v1/) is NOT routed to InternalListener by
 				// runtime — REF-17 must align with the runtime SoR and not

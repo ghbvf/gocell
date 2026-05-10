@@ -17,6 +17,7 @@ import (
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -163,7 +164,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 		return fmt.Errorf("ordercreate: %w", err)
 	}
 	c.createHandler = createv1.NewHandler(createSvc, auth.AnyRole(dto.RoleCustomer))
-	c.AddSlice(cell.NewBaseSlice("ordercreate", "ordercell", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("ordercreate", "ordercell", cellvocab.L2))
 
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
@@ -194,7 +195,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	}
 	c.getHandler = getv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
 	c.listHandler = listv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
-	c.AddSlice(cell.NewBaseSlice("orderquery", "ordercell", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("orderquery", "ordercell", cellvocab.L0))
 
 	return nil
 }

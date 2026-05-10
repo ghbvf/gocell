@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"github.com/ghbvf/gocell/kernel/cell/levelrank"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 )
 
 // applyAssemblyDerivations fills derived AssemblyMeta fields after parsing.
@@ -84,7 +84,7 @@ func computeMaxConsistencyLevel(pm *ProjectMeta, asm *AssemblyMeta) (string, boo
 		if !ok {
 			return "", false
 		}
-		rank := levelrank.Rank(c.ConsistencyLevel)
+		rank := cellvocab.Rank(c.ConsistencyLevel)
 		if rank < 0 {
 			return "", false
 		}

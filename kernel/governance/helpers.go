@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -21,14 +21,14 @@ func contractProvider(c *metadata.ContractMeta) string {
 // consumerFieldName returns the YAML field name for the consumer endpoint
 // based on contract kind (clients, subscribers, invokers, readers).
 func consumerFieldName(kind string) string {
-	switch cell.ContractKind(kind) {
-	case cell.ContractHTTP:
+	switch cellvocab.ContractKind(kind) {
+	case cellvocab.ContractHTTP:
 		return "clients"
-	case cell.ContractEvent:
+	case cellvocab.ContractEvent:
 		return "subscribers"
-	case cell.ContractCommand:
+	case cellvocab.ContractCommand:
 		return "invokers"
-	case cell.ContractProjection:
+	case cellvocab.ContractProjection:
 		return "readers"
 	default:
 		return "consumers"
@@ -51,14 +51,14 @@ func actorFieldPath(actors []metadata.ActorMeta, actorID, field string) string {
 
 // contractConsumers returns the consumer cell/actor list for a contract based on its kind.
 func contractConsumers(c *metadata.ContractMeta) []string {
-	switch cell.ContractKind(c.Kind) {
-	case cell.ContractHTTP:
+	switch cellvocab.ContractKind(c.Kind) {
+	case cellvocab.ContractHTTP:
 		return c.Endpoints.Clients
-	case cell.ContractEvent:
+	case cellvocab.ContractEvent:
 		return c.Endpoints.Subscribers
-	case cell.ContractCommand:
+	case cellvocab.ContractCommand:
 		return c.Endpoints.Invokers
-	case cell.ContractProjection:
+	case cellvocab.ContractProjection:
 		return c.Endpoints.Readers
 	default:
 		return nil
@@ -138,7 +138,7 @@ func contractDirFromID(id string) string {
 
 // --- collection helpers ---
 
-func containsRole(roles []cell.ContractRole, target cell.ContractRole) bool {
+func containsRole(roles []cellvocab.ContractRole, target cellvocab.ContractRole) bool {
 	return slices.Contains(roles, target)
 }
 

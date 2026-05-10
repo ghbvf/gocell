@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -58,8 +59,8 @@ const (
 type BaseCell struct {
 	mu       sync.RWMutex
 	meta     *metadata.CellMeta
-	cellType CellType
-	level    Level
+	cellType cellvocab.CellType
+	level    cellvocab.Level
 	slices   []Slice
 	produced []Contract
 	consumed []Contract
@@ -77,7 +78,7 @@ type BaseCell struct {
 // meta is the canonical source — its Type / ConsistencyLevel string fields
 // are parsed into typed enums at construction so per-call accessors stay
 // allocation-free. Empty Type / ConsistencyLevel are accepted (zero-value
-// CellType / L0) — callers needing strict validation must feed metadata
+// cellvocab.CellType / cellvocab.L0) — callers needing strict validation must feed metadata
 // already validated by gocell governance. A non-empty but unrecognized
 // value returns ErrValidationFailed (caller decides: fall back, surface to
 // readyz, etc.). The provided pointer is not retained — meta is deep-copied
@@ -93,17 +94,17 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 	if meta.ID == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cell.NewBaseCell: meta.ID is empty")
 	}
-	var cellType CellType
+	var cellType cellvocab.CellType
 	if meta.Type != "" {
-		ct, err := ParseCellType(meta.Type)
+		ct, err := cellvocab.ParseCellType(meta.Type)
 		if err != nil {
 			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
 		}
 		cellType = ct
 	}
-	level := Level(0)
+	level := cellvocab.Level(0)
 	if meta.ConsistencyLevel != "" {
-		lv, err := ParseLevel(meta.ConsistencyLevel)
+		lv, err := cellvocab.ParseLevel(meta.ConsistencyLevel)
 		if err != nil {
 			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
 		}
@@ -130,9 +131,9 @@ func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
 	return c
 }
 
-func (b *BaseCell) ID() string              { return b.meta.ID }
-func (b *BaseCell) Type() CellType          { return b.cellType }
-func (b *BaseCell) ConsistencyLevel() Level { return b.level }
+func (b *BaseCell) ID() string                        { return b.meta.ID }
+func (b *BaseCell) Type() cellvocab.CellType          { return b.cellType }
+func (b *BaseCell) ConsistencyLevel() cellvocab.Level { return b.level }
 
 // Metadata returns an independent deep copy of the cell's declarative
 // metadata. Callers may freely mutate the returned value without
@@ -283,14 +284,14 @@ func (b *BaseCell) AddConsumedContract(c Contract) {
 type BaseSlice struct {
 	id       string
 	cellID   string
-	level    Level
+	level    cellvocab.Level
 	verify   VerifySpec
 	allowed  []string
 	journeys []string
 }
 
 // NewBaseSlice creates a BaseSlice with the given identity and consistency level.
-func NewBaseSlice(id, cellID string, level Level) *BaseSlice {
+func NewBaseSlice(id, cellID string, level cellvocab.Level) *BaseSlice {
 	return &BaseSlice{
 		id:     id,
 		cellID: cellID,
@@ -298,9 +299,9 @@ func NewBaseSlice(id, cellID string, level Level) *BaseSlice {
 	}
 }
 
-func (s *BaseSlice) ID() string              { return s.id }
-func (s *BaseSlice) BelongsToCell() string   { return s.cellID }
-func (s *BaseSlice) ConsistencyLevel() Level { return s.level }
+func (s *BaseSlice) ID() string                        { return s.id }
+func (s *BaseSlice) BelongsToCell() string             { return s.cellID }
+func (s *BaseSlice) ConsistencyLevel() cellvocab.Level { return s.level }
 
 // Init is a no-op for BaseSlice.
 func (s *BaseSlice) Init(_ context.Context) error { return nil }
@@ -347,28 +348,28 @@ func (s *BaseSlice) SetAffectedJourneys(ids []string) {
 // BaseContract is the default implementation of the Contract interface.
 type BaseContract struct {
 	id    string
-	kind  ContractKind
+	kind  cellvocab.ContractKind
 	owner string
-	level Level
-	lc    Lifecycle
+	level cellvocab.Level
+	lc    cellvocab.Lifecycle
 }
 
-// NewBaseContract creates a BaseContract with Lifecycle defaulting to LifecycleActive.
-func NewBaseContract(id string, kind ContractKind, owner string, level Level) *BaseContract {
+// NewBaseContract creates a BaseContract with cellvocab.Lifecycle defaulting to cellvocab.LifecycleActive.
+func NewBaseContract(id string, kind cellvocab.ContractKind, owner string, level cellvocab.Level) *BaseContract {
 	return &BaseContract{
 		id:    id,
 		kind:  kind,
 		owner: owner,
 		level: level,
-		lc:    LifecycleActive,
+		lc:    cellvocab.LifecycleActive,
 	}
 }
 
-func (c *BaseContract) ID() string              { return c.id }
-func (c *BaseContract) Kind() ContractKind      { return c.kind }
-func (c *BaseContract) OwnerCell() string       { return c.owner }
-func (c *BaseContract) ConsistencyLevel() Level { return c.level }
-func (c *BaseContract) Lifecycle() Lifecycle    { return c.lc }
+func (c *BaseContract) ID() string                        { return c.id }
+func (c *BaseContract) Kind() cellvocab.ContractKind      { return c.kind }
+func (c *BaseContract) OwnerCell() string                 { return c.owner }
+func (c *BaseContract) ConsistencyLevel() cellvocab.Level { return c.level }
+func (c *BaseContract) Lifecycle() cellvocab.Lifecycle    { return c.lc }
 
 // SetLifecycle updates the governance lifecycle state of the contract.
-func (c *BaseContract) SetLifecycle(lc Lifecycle) { c.lc = lc }
+func (c *BaseContract) SetLifecycle(lc cellvocab.Lifecycle) { c.lc = lc }
