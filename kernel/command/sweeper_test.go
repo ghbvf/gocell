@@ -491,6 +491,53 @@ func TestSweeper_StartZeroValueLiteralRejected(t *testing.T) {
 	require.Error(t, err, "zero-value Sweeper.Start must fail-closed instead of panicking on nil clock")
 }
 
+// TestSweeper_StartNilReceiverRejected pins the nil-receiver branch:
+// `var s *command.Sweeper; s.Start(ctx)` would otherwise panic on the
+// s.built read inside Start. The `if s == nil` guard returns a typed error
+// instead, completing the runtime fail-closed defense around the unexported
+// `built` sentinel (the literal `&Sweeper{}` and pointer-zero forms now
+// both surface as errors rather than panics).
+func TestSweeper_StartNilReceiverRejected(t *testing.T) {
+	t.Parallel()
+	var s *command.Sweeper
+	err := s.Start(context.Background())
+	require.Error(t, err, "nil-receiver Sweeper.Start must fail-closed instead of panicking on s.built")
+}
+
+// negativeIntervalSentinel is a single-source non-positive duration used
+// by TestNewSweeper_NegativeIntervalDefaulted; extracted as a const to
+// satisfy TEST-TIME-LITERAL-01 (test-time durations must come from a
+// package-level const, not inline literals).
+const negativeIntervalSentinel = -1 * time.Second
+
+// TestNewSweeper_NegativeIntervalDefaulted pins the non-positive-interval
+// branch of Start: WithSweeperInterval(<= 0) is silently overridden by
+// defaultCommandSweeperInterval (30s) so the loop ticker is well-defined.
+// Without this test, a future refactor dropping the `if interval <= 0`
+// guard could regress to clock.NewTicker(-1) panics.
+func TestNewSweeper_NegativeIntervalDefaulted(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		interval time.Duration
+	}{
+		{"zero", 0},
+		{"negative", negativeIntervalSentinel},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clock.Real(),
+				command.WithSweeperInterval(tc.interval))
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // cancel immediately — no ticks fire
+			err = s.Start(ctx)
+			require.NoError(t, err, "non-positive interval must default; Start must not panic")
+		})
+	}
+}
+
 func TestSweeper_DefaultInterval(t *testing.T) {
 	t.Parallel()
 	// Verify that omitting WithSweeperInterval defaults the tick to 30s and

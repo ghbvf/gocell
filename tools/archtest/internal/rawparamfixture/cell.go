@@ -20,6 +20,8 @@
 package rawparamfixture
 
 import (
+	"context"
+
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
@@ -63,3 +65,35 @@ func WithBadEmbedWriter(w interface{ outbox.Writer }) Option { return func(any) 
 
 // WithBadEmbedTxRunner mirrors the embed pattern for the TxRunner leg.
 func WithBadEmbedTxRunner(tx interface{ persistence.TxRunner }) Option { return func(any) {} }
+
+// WithBadPureMethodIfaceTxRunner is the structurally-equivalent anonymous
+// interface bypass: no named embed, only the methods that
+// persistence.TxRunner declares. NumEmbeddeds()==0 so the embed-walk
+// heuristic returns ""; without the types.Implements fall-through the
+// scanner misses this form even though the parameter is assignable from
+// any persistence.TxRunner implementer (Go's structural typing).
+//
+// Method set must match persistence.TxRunner (RunInTx) — the scanner uses
+// types.Implements(tv.Type, forbiddenIface) for anonymous interfaces with
+// no embedded named types.
+func WithBadPureMethodIfaceTxRunner(tx interface {
+	RunInTx(ctx context.Context, fn func(context.Context) error) error
+},
+) Option {
+	return func(any) {}
+}
+
+// LocalRawPub is a named local interface that embeds outbox.Publisher.
+// Without recursive underlying inspection in canonicalFromType, the
+// scanner sees `*types.Named` (LocalRawPub) → returns the local canonical
+// (`<fixture>.LocalRawPub`) which is not in the forbidden set → violation
+// missed.
+type LocalRawPub interface {
+	outbox.Publisher
+}
+
+// WithBadNamedLocalEmbedPublisher exposes outbox.Publisher via a named
+// local interface that embeds it. The scanner must recurse into the
+// named type's underlying *types.Interface to detect the embedded
+// forbidden type.
+func WithBadNamedLocalEmbedPublisher(p LocalRawPub) Option { return func(any) {} }

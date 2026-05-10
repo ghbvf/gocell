@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -134,24 +135,19 @@ func scanWrapperViolations(root string, resolver *typeseval.Resolver) []wrapperV
 				continue
 			}
 			relSlash := filepath.ToSlash(rel)
-			ast.Inspect(file, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
+			scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
 				canon := canonicalCalledFunc(pkg.TypesInfo, call)
 				if !wrapperFunctionsCanonical[canon] {
-					return true
+					return
 				}
 				if isWrapperCallerAllowed(relSlash) {
-					return true
+					return
 				}
 				out = append(out, wrapperViolation{
 					File:     relSlash,
 					Line:     pkg.Fset.Position(call.Pos()).Line,
 					FuncName: canon,
 				})
-				return true
 			})
 		}
 	}

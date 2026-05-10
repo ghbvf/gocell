@@ -89,9 +89,21 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 // fail-closed turns that panic into a clean error: only NewSweeper sets
 // `built=true`, so any literal-zero Sweeper short-circuits at Start.
 //
-// AI-HARD per ai-collab.md §"违反不可表达": zero-value `&command.Sweeper{}`
-// literal Start is unreachable (built=false → typed error); typed-nil
-// dependencies are rejected at construction via validation.IsNilInterface.
+// AI-rebust 评级：**Medium (runtime fail-closed sentinel)**. The unexported
+// `built` field cannot be written from outside this package, but
+// `var s command.Sweeper` / `&command.Sweeper{}` zero-value construction
+// remains expressible from any caller — the violation manifests as a typed
+// error at Start() rather than a compile-time rejection, so this is a
+// runtime guard, not a Hard "违反不可表达" defense. typed-nil dependencies
+// (passed to NewSweeper) are rejected at construction via
+// validation.IsNilInterface — those ARE Hard for the path that goes
+// through NewSweeper, but cannot guard the zero-value bypass.
+//
+// Hard upgrade path (backlog): make Sweeper an opaque interface returned
+// only by NewSweeper, so the zero value is unspeakable at the type level.
+// Out of scope for the current hardening pass; the runtime guard is
+// sufficient for the existing attack surface (single Start call site per
+// cell, surfaced as error in cell.Init).
 //
 // Filter narrows the scan; zero value (default) means "all devices, all
 // non-terminal statuses". Adapters decide whether ScanFilter is honored
@@ -177,11 +189,18 @@ func NewSweeper(scanner ActiveScanner, queue Queue, clk clock.Clock, opts ...Swe
 }
 
 // Start begins the sweep loop, blocking until ctx is canceled. Required
-// dependencies are validated at NewSweeper construction time. The
-// `if !s.built` guard fail-closes any zero-value `&command.Sweeper{}`
-// literal that bypassed NewSweeper — it returns a typed error rather than
-// panicking on the nil clk method call below.
+// dependencies are validated at NewSweeper construction time. Two head
+// guards close the literal-construction attack surface:
+//
+//  1. `if s == nil` — `var s *Sweeper; s.Start(ctx)` would otherwise
+//     panic on the s.built read below; the guard returns a typed error.
+//  2. `if !s.built` — closes the zero-value `&command.Sweeper{}` literal
+//     bypass (only NewSweeper sets built=true).
 func (s *Sweeper) Start(ctx context.Context) error {
+	if s == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper: nil receiver; use NewSweeper to construct")
+	}
 	if !s.built {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command.Sweeper must be constructed via NewSweeper")

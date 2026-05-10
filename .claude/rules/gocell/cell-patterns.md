@@ -84,7 +84,12 @@ type MyCell struct {
 }
 
 func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
-    if c.pendingPublisher == nil && c.pendingWriter == nil {
+    // validation.IsNilInterface is fail-safe vs bare `== nil`: sealed wrappers
+    // collapse typed-nil at WrapPublisherForCell (PR 441 F1), so `== nil`
+    // suffices today, but using IsNilInterface here matches the kernel/runtime
+    // single-source typed-nil convention and protects against future direct
+    // interface assignment outside the wrap path.
+    if validation.IsNilInterface(c.pendingPublisher) && validation.IsNilInterface(c.pendingWriter) {
         return errcode.New(errcode.ErrCellMissingOutbox,
             "requires publisher or outbox writer; from composition root, "+
                 "wrap with outbox.WrapPublisherForCell(outbox.DiscardPublisher{}) for demo mode")

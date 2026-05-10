@@ -37,9 +37,11 @@ func WithTxManager(tx persistence.CellTxManager) Option { ... }
 func WithOutboxDeps(pub outbox.CellPublisher, w outbox.CellWriter) Option { ... }
 ```
 
-AI 写 `WithFoo(tx persistence.TxRunner) Option` 在 cell.go 编译期被拒：composition root 调用 `accesscore.WithFoo(rawTxRunner)` 时 type 系统拒绝 `TxRunner → CellTxManager` 直接赋值（缺 sealed marker method），强迫调用方走 `WrapForCell`，而 wrap call site 又被 archtest 限定到 composition root（详见 D2）。整个链条上 cells/* 不可能"持有 raw TxRunner 然后调 service.NewXxx"——cells/* 只持有 sealed CellTxManager（embed TxRunner，可直接传给 service）。
+AI 写 `WithFoo(tx persistence.TxRunner) Option` 在 cell.go 中**函数声明本身合法编译**——type system 仅在 `WithFoo` 实现把 `tx` 写入 cell 的 sealed 字段（如 `c.txMgr = tx`）时才拒绝赋值（缺 sealed marker method）。声明形态本身的拦截由 D2 archtest `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 完成（这正是 D2 是**必需**的 Medium 双重防线、不是 belt-and-suspenders 的根因——type system 单独无法穷尽所有"暴露 raw infra"的签名形态）。
 
-**违反不可表达 → AI-HARD 达成。**
+D1 的 Hard 部分（type system 编译期不可达）覆盖：cell 字段类型 + composition root `accesscore.WithFoo(rawTxRunner)` 把 raw → CellTxManager 的赋值表达式。整个链条上 cells/* 不可能"持有 raw TxRunner 然后调 service.NewXxx"——cells/* 只持有 sealed CellTxManager（embed TxRunner，可直接传给 service）。wrap call site 进一步被 archtest D2 第二条规则 `CELL-RAW-INFRA-WRAPPER-LOCATION-01` 限定到 composition root。
+
+**Hard（type system 字段+赋值）+ Medium（archtest 签名形态）合并构成完整防线。**
 
 CellTxManager embed TxRunner、CellPublisher embed Publisher、CellWriter embed Writer，让 sealed wrapper 同时满足 raw 接口，cells 内部把 sealed 字段直接传给 service.NewXxx（service 接收 raw 类型，是 cell 内部、不在 sealed 约束面），service 签名零变化。
 

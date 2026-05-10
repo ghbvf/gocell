@@ -123,36 +123,29 @@ func TestCellIfaceISP03_BaseCellFourSegmentCheck(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 
-	// Collect all `var _ Iface = (*BaseCell)(nil)` checks across file's GenDecl(VAR) blocks.
+	// Collect all `var _ Iface = (*BaseCell)(nil)` checks across file's
+	// ValueSpec nodes. Walks via scanner.EachNode[ast.ValueSpec] (the funnel
+	// SCANNER-FRAMEWORK-USAGE-01 mandates) instead of for-range over
+	// f.Decls + nested type assertions.
 	subSeen := make(map[string]bool)
 	plainCellSeen := false
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
+	scanner.EachNode[ast.ValueSpec](f, func(vs *ast.ValueSpec) {
+		if !isBlankIdentList(vs.Names) {
+			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			if !isBlankIdentList(vs.Names) {
-				continue
-			}
-			ifaceName := exprString(vs.Type)
-			if ifaceName == "" {
-				continue
-			}
-			if !targetsBaseCellNilPtr(vs.Values) {
-				continue
-			}
-			if ifaceName == "Cell" {
-				plainCellSeen = true
-				continue
-			}
-			subSeen[ifaceName] = true
+		ifaceName := exprString(vs.Type)
+		if ifaceName == "" {
+			return
 		}
-	}
+		if !targetsBaseCellNilPtr(vs.Values) {
+			return
+		}
+		if ifaceName == "Cell" {
+			plainCellSeen = true
+			return
+		}
+		subSeen[ifaceName] = true
+	})
 
 	if plainCellSeen {
 		t.Errorf("CELL-IFACE-ISP-BASECELL-CHECK-01: kernel/cell/base.go must not retain " +
@@ -189,22 +182,24 @@ func loadInterfaceType(t *testing.T, root, name string) *ast.InterfaceType {
 		if perr != nil {
 			t.Fatalf("parse %s: %v", filepath.Base(path), perr)
 		}
-		for _, decl := range f.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.TYPE {
-				continue
+		var found *ast.InterfaceType
+		var bail bool
+		scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+			if found != nil || bail || ts.Name.Name != name {
+				return
 			}
-			for _, spec := range gd.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok || ts.Name.Name != name {
-					continue
-				}
-				iface, ok := ts.Type.(*ast.InterfaceType)
-				if !ok {
-					return nil
-				}
-				return iface
+			iface, ok := ts.Type.(*ast.InterfaceType)
+			if !ok {
+				bail = true
+				return
 			}
+			found = iface
+		})
+		if found != nil {
+			return found
+		}
+		if bail {
+			return nil
 		}
 	}
 	return nil

@@ -98,13 +98,16 @@ func (v outboxCellViolation) String() string {
 // Scope: scans every cells/**/cell.go declared in the repo (production
 // cells only — tests and example cells are skipped; see isCellFile).
 //
-// Relationship to CELL-RAW-DEPS-01 (PR-A22, ADR 202605101800 §D6):
+// Relationship to sealed marker double defense (ADR 202605101900):
 // OUTBOX-CELL-01 catches the historical raw-Option *names* (WithPublisher /
-// WithOutboxWriter); CELL-RAW-DEPS-01 catches the raw-infra *types* in any
-// With* function across both platform cells/ AND examples/*/cells/. The two
-// rules overlap on platform cells/ but cover orthogonal axes. Removing
-// OUTBOX-CELL-01 is OUT_OF_SCOPE for PR-A22 — kept as a name-based defense
-// in depth; future deprecation requires a new ADR.
+// WithOutboxWriter). The historical scanner CELL-RAW-DEPS-01 has been
+// removed; its role is now split into Hard (sealed marker type system at
+// kernel/{persistence,outbox}/cell_marker.go) for the field-and-assignment
+// layer + Medium archtest at CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 +
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01 for the signature-form layer (inline
+// interface embed, dot-import). OUTBOX-CELL-01 stays as the name-based axis
+// for the two historical Option spellings; the type/wrap axes are the new
+// archtest pair. Removing OUTBOX-CELL-01 still requires a new ADR.
 func TestCellsDoNotExposeRawOutboxOptions(t *testing.T) {
 	root := findModuleRoot(t)
 

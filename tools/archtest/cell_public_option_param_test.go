@@ -41,6 +41,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -106,16 +107,20 @@ func isCellPackageRootFile(rel string) bool {
 //  4. *types.Interface inline-embed walk — anonymous interface params
 //     `func WithBad(p interface{ outbox.Publisher })` resolve to
 //     *types.Interface (not *types.Named); the embedded named types are
-//     walked recursively and the first forbidden hit (or any embedded
-//     canonical) is returned. Without this branch the anonymous interface
-//     hides the raw infra dependency from the *types.Named-only matcher.
+//     walked and the first forbidden hit (or any embedded canonical) is
+//     returned.
+//  5. *types.Interface method-set fall-through — pure-method anonymous
+//     interface params `func WithBad(tx interface{ RunInTx(...) error })`
+//     have NumEmbeddeds()==0 but still implement a forbidden interface by
+//     structural typing. forbiddenIfaces (lazy-loaded once per scan) lets
+//     types.Implements detect the assignability bypass. nil forbiddenIfaces
+//     skips fall-through (caller-supplied; tests may pass nil to exercise
+//     only the embed path).
 //
-// Returns "" for non-Named, non-Interface types (struct literals, etc.).
-// When the parameter is an anonymous interface with no embedded forbidden
-// type, returns the canonical of the first embedded *types.Named (or "" if
-// the interface has no embedded named types) — callers compare against
+// Returns "" for non-matching types (struct literals, plain interfaces with
+// no forbidden relation, etc.). Callers compare against
 // rawPublicOptionForbidden to decide whether to record a violation.
-func publicOptionParamCanonical(info *types.Info, expr ast.Expr) string {
+func publicOptionParamCanonical(info *types.Info, expr ast.Expr, forbiddenIfaces map[string]*types.Interface) string {
 	if info == nil {
 		return ""
 	}
@@ -123,13 +128,13 @@ func publicOptionParamCanonical(info *types.Info, expr ast.Expr) string {
 	if !ok || tv.Type == nil {
 		return ""
 	}
-	return canonicalFromType(tv.Type)
+	return canonicalFromType(tv.Type, forbiddenIfaces)
 }
 
 // canonicalFromType is the recursive core of publicOptionParamCanonical
 // — separated so it can be called both with the parameter's tv.Type and
 // with each embedded type of an anonymous interface.
-func canonicalFromType(t types.Type) string {
+func canonicalFromType(t types.Type, forbiddenIfaces map[string]*types.Interface) string {
 	for {
 		ptr, ok := t.(*types.Pointer)
 		if !ok {
@@ -140,18 +145,45 @@ func canonicalFromType(t types.Type) string {
 	t = types.Unalias(t)
 	if named, ok := t.(*types.Named); ok {
 		obj := named.Obj()
+		var canon string
 		if obj.Pkg() == nil {
-			return obj.Name()
+			canon = obj.Name()
+		} else {
+			canon = obj.Pkg().Path() + "." + obj.Name()
 		}
-		return obj.Pkg().Path() + "." + obj.Name()
+		if rawPublicOptionForbidden[canon] {
+			return canon
+		}
+		// Named, but not in the forbidden set — it might be a local
+		// interface that embeds a forbidden one (`type LocalRawPub
+		// interface { outbox.Publisher }`). Recurse into the underlying
+		// to detect that wrapping; for non-interface named types the
+		// recursion returns "" via the no-match tail and we fall back to
+		// the local canonical name (which is harmless — the caller only
+		// triggers a violation when the canonical hits the forbidden
+		// set, so a non-forbidden local name stays non-forbidden).
+		//
+		// Skip the recursion for sealed-marker patterns: a named
+		// interface that declares its own unexported explicit method
+		// (e.g. `sealedCellTxManager()`) is the wrapper itself, not a
+		// forbidden bypass. CellTxManager / CellPublisher / CellWriter
+		// embed the raw forbidden type but are the legitimate transport
+		// across the cell boundary — recursing would falsely flag every
+		// well-behaved sealed-marker With* signature.
+		if iface, ok := named.Underlying().(*types.Interface); ok && !hasUnexportedExplicitMethod(iface) {
+			if inner := canonicalFromType(iface, forbiddenIfaces); inner != "" {
+				return inner
+			}
+		}
+		return canon
 	}
-	// Anonymous interface walk: prefer a forbidden embed when present so
-	// `interface{ outbox.Publisher; otherIface }` is caught regardless of
-	// declaration order.
 	if iface, ok := t.(*types.Interface); ok {
+		// 1. Embed walk — prefer a forbidden embed when present so
+		// `interface{ outbox.Publisher; otherIface }` is caught regardless of
+		// declaration order.
 		var firstNonForbidden string
 		for i := 0; i < iface.NumEmbeddeds(); i++ {
-			canon := canonicalFromType(iface.EmbeddedType(i))
+			canon := canonicalFromType(iface.EmbeddedType(i), forbiddenIfaces)
 			if canon == "" {
 				continue
 			}
@@ -162,9 +194,81 @@ func canonicalFromType(t types.Type) string {
 				firstNonForbidden = canon
 			}
 		}
-		return firstNonForbidden
+		if firstNonForbidden != "" {
+			return firstNonForbidden
+		}
+		// 2. Method-set fall-through — for anonymous interfaces with no
+		// embedded named types (NumEmbeddeds()==0), check whether the
+		// parameter type implements any forbidden interface. Catches the
+		// pure-method bypass `interface{ RunInTx(...) error }` whose method
+		// set matches persistence.TxRunner exactly.
+		for canon, fIface := range forbiddenIfaces {
+			if fIface == nil || fIface == iface {
+				continue
+			}
+			if types.Implements(t, fIface) {
+				return canon
+			}
+		}
 	}
 	return ""
+}
+
+// hasUnexportedExplicitMethod reports whether the interface declares at
+// least one unexported method on itself (not via embedding). This is the
+// sealed-marker discriminator: `interface { Publisher; sealedCellPublisher() }`
+// has an unexported explicit method and is the legitimate wrapper; a
+// plain `interface { Publisher }` does not and is a bypass attempt.
+func hasUnexportedExplicitMethod(iface *types.Interface) bool {
+	for i := 0; i < iface.NumExplicitMethods(); i++ {
+		if !iface.ExplicitMethod(i).Exported() {
+			return true
+		}
+	}
+	return false
+}
+
+// loadForbiddenIfaces resolves rawPublicOptionForbidden canonicals into
+// *types.Interface values from the loaded packages — needed by
+// canonicalFromType's method-set fall-through (types.Implements). Performed
+// once per scan; uses packages.Visit so transitively-imported packages
+// (e.g. kernel/persistence loaded as a dep when the resolver only points
+// at fixture packages) are visible. Missing entries are silently skipped
+// — the embed-walk path still covers them by canonical name.
+func loadForbiddenIfaces(pkgs []*packages.Package) map[string]*types.Interface {
+	out := make(map[string]*types.Interface, len(rawPublicOptionForbidden))
+	wantByPath := make(map[string][]string, len(rawPublicOptionForbidden))
+	for canonical := range rawPublicOptionForbidden {
+		dot := strings.LastIndex(canonical, ".")
+		if dot < 0 {
+			continue
+		}
+		wantByPath[canonical[:dot]] = append(wantByPath[canonical[:dot]], canonical)
+	}
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		if pkg.Types == nil {
+			return
+		}
+		canonicals, ok := wantByPath[pkg.PkgPath]
+		if !ok {
+			return
+		}
+		for _, canonical := range canonicals {
+			if _, already := out[canonical]; already {
+				continue
+			}
+			dot := strings.LastIndex(canonical, ".")
+			typeName := canonical[dot+1:]
+			obj := pkg.Types.Scope().Lookup(typeName)
+			if obj == nil {
+				continue
+			}
+			if iface, ok := obj.Type().Underlying().(*types.Interface); ok {
+				out[canonical] = iface
+			}
+		}
+	})
+	return out
 }
 
 // scanPackagesForRawPublicOption is the inner walker used by both the
@@ -175,6 +279,10 @@ func canonicalFromType(t types.Type) string {
 // real cell paths).
 func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restrictToCellRoots bool) []rawPublicOptionViolation {
 	var out []rawPublicOptionViolation
+	// Lazy-load the forbidden interface types once per scan so the
+	// method-set fall-through (types.Implements) and named-underlying
+	// recursion can detect anonymous and named local-interface bypasses.
+	forbiddenIfaces := loadForbiddenIfaces(pkgs)
 	for _, pkg := range pkgs {
 		if pkg.TypesInfo == nil {
 			continue
@@ -189,18 +297,17 @@ func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restr
 			if restrictToCellRoots && !isCellPackageRootFile(relSlash) {
 				continue
 			}
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil || !fn.Name.IsExported() ||
+			scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Recv != nil || !fn.Name.IsExported() ||
 					!strings.HasPrefix(fn.Name.Name, "With") {
-					continue
+					return
 				}
 				if fn.Type.Params == nil {
-					continue
+					return
 				}
 				idx := 0
 				for _, field := range fn.Type.Params.List {
-					canonical := publicOptionParamCanonical(pkg.TypesInfo, field.Type)
+					canonical := publicOptionParamCanonical(pkg.TypesInfo, field.Type, forbiddenIfaces)
 					count := len(field.Names)
 					if count == 0 {
 						count = 1
@@ -218,7 +325,7 @@ func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restr
 						idx++
 					}
 				}
-			}
+			})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -272,11 +379,14 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	require.NoError(t, err)
 
 	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), false)
-	require.Len(t, violations, 7,
-		"fixture must yield 7 violations: WithBadTxRunner / WithBadPublisher / "+
+	require.Len(t, violations, 9,
+		"fixture must yield 9 violations: WithBadTxRunner / WithBadPublisher / "+
 			"WithBadWriter / WithAliasedBadTxRunner (4 baseline) + "+
 			"WithBadEmbedPublisher / WithBadEmbedWriter / WithBadEmbedTxRunner "+
-			"(3 inline-interface-embed forms)")
+			"(3 inline-interface-embed forms) + WithBadPureMethodIfaceTxRunner "+
+			"(1 pure-method anonymous interface) + "+
+			"WithBadNamedLocalEmbedPublisher (1 named local interface that embeds "+
+			"outbox.Publisher — recursive underlying inspection)")
 
 	got := map[string]string{}
 	for _, v := range violations {
@@ -293,4 +403,8 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 		"inline interface embed must resolve to embedded raw type")
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithBadEmbedTxRunner"],
 		"inline interface embed must resolve to embedded raw type")
+	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithBadPureMethodIfaceTxRunner"],
+		"pure-method anonymous interface must resolve via types.Implements fall-through")
+	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadNamedLocalEmbedPublisher"],
+		"named local interface that embeds outbox.Publisher must resolve via underlying recursion")
 }
