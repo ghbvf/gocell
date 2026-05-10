@@ -1153,9 +1153,13 @@ func (h *Hub) shutdown() {
 // Parse errors fail-visible (callers receive an error) so a syntactically
 // broken entry point cannot silently bypass the SEC scans.
 func findAllProductionMainPackageFiles(root string) ([]string, error) {
-	scope := scanner.ModuleScope(root,
-		scanner.ExcludeRels("bak"),
-	)
+	// ModuleScope's default skip set already excludes vendor/testdata/
+	// worktrees/generated/.git/node_modules — sufficient for the
+	// production-main scan. (ExcludeRels only matches exact file rels, not
+	// directories; the previous ExcludeRels("bak") call was a no-op and
+	// has been removed. If a future "bak/" directory needs skipping, use
+	// MatchRels with a path-segment predicate.)
+	scope := scanner.ModuleScope(root)
 	candidates, err := scope.Files()
 	if err != nil {
 		return nil, err

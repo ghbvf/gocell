@@ -1,6 +1,7 @@
 package archtest
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -36,7 +37,16 @@ import (
 // already-applied migration is idempotent and harmless on existing DBs.
 func TestMigrationNoTransactionRerunSafe01(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
+	// MatchRels limits to single-level scan matching the docstring's
+	// "migrations/*.sql" promise. The migrations/ directory is flat by
+	// convention (NNN_xxx.sql files); a future sub-directory would carry
+	// non-migration files (e.g. sql utilities) that this rule shouldn't
+	// touch. Without this predicate DirsScope would walk recursively.
+	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"},
+		scanner.MatchRels(func(rel string) bool {
+			return filepath.ToSlash(filepath.Dir(rel)) == "adapters/postgres/migrations"
+		}),
+	)
 
 	noTxMarker := regexp.MustCompile(`(?m)^\s*--\s*\+goose\s+NO\s+TRANSACTION\b`)
 	scanned := 0
