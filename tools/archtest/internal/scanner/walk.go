@@ -30,14 +30,14 @@ func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(p
 			return fmt.Errorf("walk %s: %w", display, walkErr)
 		}
 		// fail-closed: archtest scans the static repository structure, so symlinks
-		// are never a legitimate input. filepath.WalkDir already does not descend
-		// into symlink directories, but it still surfaces symlink files via the
-		// callback. Skip both kinds explicitly so a malicious or accidental symlink
-		// committed under modRoot cannot redirect a scan to arbitrary host content.
+		// are never a legitimate input. filepath.WalkDir does not descend into
+		// symlink directories on its own, but it still surfaces symlink files via
+		// the callback. Reject every entry whose Type bit is ModeSymlink so a
+		// malicious or accidental symlink under modRoot cannot redirect a scan to
+		// arbitrary host content. d.IsDir() is always false here (a symlink's
+		// Type does not carry ModeDir even when the target is a directory), so a
+		// single return nil suffices.
 		if d.Type()&fs.ModeSymlink != 0 {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 		if d.IsDir() {

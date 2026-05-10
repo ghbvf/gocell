@@ -244,7 +244,8 @@ func (s Scope) Files() ([]string, error) {
 // contentFiles returns the sorted, deduplicated list of absolute file paths
 // in the scope whose path ends in any of suffixes. It mirrors [Scope.Files]
 // but with a content-suffix predicate instead of the .go filter, and is the
-// internal primitive backing [EachContentFile].
+// internal primitive backing [LoadContentFiles] (which in turn backs
+// [EachContentFile]).
 func (s Scope) contentFiles(suffixes []string) ([]string, error) {
 	return s.collect(func(p string) bool { return matchesSuffix(p, suffixes) })
 }
