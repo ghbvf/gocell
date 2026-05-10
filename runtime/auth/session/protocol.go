@@ -21,6 +21,10 @@ type FingerprintMode interface {
 // token plaintext or HMAC fingerprint is stored.
 type FingerprintJTIRef struct{}
 
+// fingerprintModeOK is the empty seal marker — its mere presence makes
+// FingerprintJTIRef satisfy FingerprintMode at compile time. The unexported
+// method prevents external packages from implementing FingerprintMode,
+// closing the enumeration. Pattern mirrors kernel/cell/auth_plan.go.
 func (FingerprintJTIRef) fingerprintModeOK() {}
 
 // CredentialEvent enumerates credential state changes that revoke active
@@ -72,6 +76,10 @@ type OrderingModel interface {
 // at issuance; validate rejects when claim.epoch < user.authz_epoch.
 type OrderingAuthzEpoch struct{}
 
+// orderingModelOK is the empty seal marker — its mere presence makes
+// OrderingAuthzEpoch satisfy OrderingModel at compile time. The unexported
+// method prevents external packages from implementing OrderingModel, closing
+// the enumeration. Pattern mirrors kernel/cell/auth_plan.go.
 func (OrderingAuthzEpoch) orderingModelOK() {}
 
 // Protocol bundles the protocol decisions that govern a session subsystem.
