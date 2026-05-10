@@ -6,8 +6,8 @@
 
 ## 概览
 
-- archtest 文件总数：74
-- archtest INVARIANT 锚点数：176
+- archtest 文件总数：75
+- archtest INVARIANT 锚点数：177
 - governance `rules_*.go` 文件数：8
 
 ## archtest 规则清单
@@ -39,6 +39,7 @@
 | `CELLMETA-SINGLE-SOURCE-03` | `cellmeta_single_source_test.go` | 13 | cellmeta |
 | `CELLS-NO-ROUTEMUX-WRAPPER-01` | `setup_admin_bootstrap_closure_test.go` | 12 | cells |
 | `CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01` | `cells_no_wrapper_contractspec_import_test.go` | 1 | cells |
+| `CI-INTEGRATION-DISCOVERY-01` | `ci_integration_discovery_invariants_test.go` | 1 | ci |
 | `CI-PINNING-WORKFLOW-DIGEST-01` | `ci_pinning_test.go` | 1 | ci |
 | `CLOCK-INJECTION-PROD-CALLSITE-01` | `clock_invariants_test.go` | 446 | clock |
 | `CLOCK-INJECTION-TEST-CALLSITE-01` | `clock_invariants_test.go` | 261 | clock |
