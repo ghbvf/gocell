@@ -43,6 +43,104 @@ func TestWalk_BubblesError(t *testing.T) {
 	}
 }
 
+// TestWalk_SkipsSymlinkFile asserts that symlink files inside the walked tree
+// are silently skipped (fail-closed). archtest scans static repo structure;
+// following symlinks is an attack surface (a malicious PR could add a symlink
+// pointing outside the module to make scanners read arbitrary host files).
+func TestWalk_SkipsSymlinkFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Symlink requires admin/Developer Mode on Windows")
+	}
+
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	realFile := filepath.Join(srcDir, "real.go")
+	if err := os.WriteFile(realFile, []byte("package src\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	linkFile := filepath.Join(srcDir, "link.go")
+	if err := os.Symlink(realFile, linkFile); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	files, err := scanner.ModuleScope(tmp).Files()
+	if err != nil {
+		t.Fatalf("Files() error: %v", err)
+	}
+
+	var rels []string
+	for _, f := range files {
+		rel, _ := filepath.Rel(tmp, f)
+		rels = append(rels, rel)
+	}
+	wantReal := filepath.Join("src", "real.go")
+	wantLink := filepath.Join("src", "link.go")
+	hasReal, hasLink := false, false
+	for _, r := range rels {
+		if r == wantReal {
+			hasReal = true
+		}
+		if r == wantLink {
+			hasLink = true
+		}
+	}
+	if !hasReal {
+		t.Errorf("expected real.go in result, got %v", rels)
+	}
+	if hasLink {
+		t.Errorf("symlink %s must be skipped, but it appeared in %v", wantLink, rels)
+	}
+}
+
+// TestWalk_SkipsSymlinkDir asserts that symlink directories are not descended
+// into. Without this the walk could re-enter content via the symlink and emit
+// duplicate paths or escape the module root.
+func TestWalk_SkipsSymlinkDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Symlink requires admin/Developer Mode on Windows")
+	}
+
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "a.go"), []byte("package src\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile a.go: %v", err)
+	}
+	mirrorDir := filepath.Join(tmp, "mirror")
+	if err := os.Symlink(srcDir, mirrorDir); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	files, err := scanner.ModuleScope(tmp).Files()
+	if err != nil {
+		t.Fatalf("Files() error: %v", err)
+	}
+	var rels []string
+	for _, f := range files {
+		rel, _ := filepath.Rel(tmp, f)
+		rels = append(rels, rel)
+	}
+
+	wantReal := filepath.Join("src", "a.go")
+	hasReal := false
+	for _, r := range rels {
+		if r == wantReal {
+			hasReal = true
+		}
+		if strings.HasPrefix(r, "mirror"+string(filepath.Separator)) {
+			t.Errorf("walked into symlink dir mirror/, got entry %s in %v", r, rels)
+		}
+	}
+	if !hasReal {
+		t.Errorf("expected real src/a.go in result, got %v", rels)
+	}
+}
+
 func TestWalk_LstatNonExistError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 0000 not reliable on Windows")

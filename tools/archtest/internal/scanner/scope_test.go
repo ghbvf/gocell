@@ -296,3 +296,23 @@ func containsAny(s string, subs ...string) bool {
 	}
 	return false
 }
+
+// TestDirsScope_EscapeErrorListsAllOutOfBoundPaths verifies the docstring
+// promise on DirsScope ("returns an error listing every out-of-bound path"):
+// when multiple dirs escape modRoot, the error message must enumerate ALL of
+// them, not just the first.
+func TestDirsScope_EscapeErrorListsAllOutOfBoundPaths(t *testing.T) {
+	tmp := t.TempDir()
+	s := scanner.DirsScope(tmp, []string{"../sibling-a", "../sibling-b", "valid"})
+	_, err := s.Files()
+	if err == nil {
+		t.Fatal("expected error for dirs escaping module root, got nil")
+	}
+	msg := err.Error()
+	if !containsAny(msg, "../sibling-a", "sibling-a") {
+		t.Errorf("error must mention sibling-a, got: %v", err)
+	}
+	if !containsAny(msg, "../sibling-b", "sibling-b") {
+		t.Errorf("error must mention sibling-b (the second offender), got: %v", err)
+	}
+}
