@@ -117,7 +117,7 @@ func TestService_HandleEvent(t *testing.T) {
 			entry: outbox.Entry{
 				ID:        "evt-1",
 				EventType: "event.user.created.v1",
-				Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
+				Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "adm-1"}),
 			},
 			wantChain: 1,
 		},
@@ -126,25 +126,16 @@ func TestService_HandleEvent(t *testing.T) {
 			entry: outbox.Entry{
 				ID:        "evt-2",
 				EventType: "event.session.created.v1",
-				Payload:   mustJSON(map[string]any{"sessionId": "sess-1", "userId": "usr-1"}),
+				Payload:   mustJSON(t, map[string]any{"sessionId": "sess-1", "userId": "usr-1"}),
 			},
 			wantChain: 1,
 		},
 		{
-			name: "config entry-upserted event (no userId → system actor)",
+			name: "config entry-upserted event with actorId",
 			entry: outbox.Entry{
 				ID:        "evt-3",
 				EventType: "event.config.entry-upserted.v1",
-				Payload:   mustJSON(map[string]any{"key": "app.name", "value": "v", "version": 1}),
-			},
-			wantChain: 1,
-		},
-		{
-			name: "user created event with snake_case user_id (transitional)",
-			entry: outbox.Entry{
-				ID:        "evt-4",
-				EventType: "event.user.created.v1",
-				Payload:   mustJSON(map[string]any{"user_id": "usr-2", "username": "bob"}),
+				Payload:   mustJSON(t, map[string]any{"key": "app.name", "version": 1, "actorId": "adm-1"}),
 			},
 			wantChain: 1,
 		},
@@ -173,7 +164,7 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 		entry := outbox.Entry{
 			ID:        "evt-" + string(rune('0'+i)),
 			EventType: "event.user.created.v1",
-			Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
+			Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "adm-1"}),
 		}
 		assertAck(t, svc.HandleEvent(context.Background(), entry))
 	}
@@ -240,7 +231,7 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	entry := outbox.Entry{
 		ID:        "evt-pub-err",
 		EventType: "event.user.created.v1",
-		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
+		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "adm-1"}),
 	}
 	result := svc.HandleEvent(context.Background(), entry)
 	assertAck(t, result)
@@ -248,9 +239,9 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 }
 
 // TestService_HandleEvent_ActorExtraction covers the actor-id extractor's
-// priority: actorId (preferred) > userId (fallback) > "system" (default).
-// G.6 migrated user events from snake_case user_id to camelCase userId; G.2
-// added required actorId to all admin-write events.
+// priority on the success path: actorId (admin-write events) > userId
+// (session.* events). Missing-actor handling is covered separately in
+// TestService_HandleEvent_ActorMissing_Reject.
 func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -276,12 +267,6 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			payload:     map[string]any{"key": "k", "version": 1, "actorId": "adm-99"},
 			wantActorID: "adm-99",
 		},
-		{
-			name:        "no actor field (legacy config event) → system fallback",
-			eventType:   "event.config.entry-upserted.v1",
-			payload:     map[string]any{"key": "k", "version": 1},
-			wantActorID: "system",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -289,7 +274,7 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			entry := outbox.Entry{
 				ID:        "evt-" + tt.name,
 				EventType: tt.eventType,
-				Payload:   mustJSON(tt.payload),
+				Payload:   mustJSON(t, tt.payload),
 			}
 			assertAck(t, svc.HandleEvent(context.Background(), entry))
 
@@ -297,6 +282,78 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, entries, 1)
 			assert.Equal(t, tt.wantActorID, entries[0].ActorID)
+		})
+	}
+}
+
+// TestService_HandleEvent_ActorMissing_Reject locks the fail-closed contract:
+// when both actorId and userId are absent or empty, HandleEvent must return
+// DispositionReject (DLX path) wrapping a PermanentError, and the audit chain
+// must remain untouched. Producer-side schemas already declare these fields
+// as required; reaching this branch indicates upstream contract violation
+// and routing the event to DLX preserves audit traceability.
+func TestService_HandleEvent_ActorMissing_Reject(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		payload   map[string]any
+	}{
+		{
+			name:      "config event missing actorId (no userId fallback)",
+			eventType: "event.config.entry-upserted.v1",
+			payload:   map[string]any{"key": "k", "version": 1},
+		},
+		{
+			name:      "user event missing both actorId and userId",
+			eventType: "event.user.created.v1",
+			payload:   map[string]any{"username": "bob"},
+		},
+		{
+			name:      "explicit empty strings for actorId and userId",
+			eventType: "event.user.locked.v1",
+			payload:   map[string]any{"actorId": "", "userId": ""},
+		},
+		{
+			name:      "snake_case user_id is not a recognized field",
+			eventType: "event.user.created.v1",
+			payload:   map[string]any{"user_id": "usr-2", "username": "bob"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := mem.NewAuditRepository()
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			svc, err := NewService(repo, testHMACKey, logger, clock.Real(),
+				WithClock(clock.Real()), WithTxManager(directRunner{}))
+			require.NoError(t, err)
+
+			entry := outbox.Entry{
+				ID:        "evt-actor-missing",
+				EventType: tt.eventType,
+				Payload:   mustJSON(t, tt.payload),
+			}
+
+			result := svc.HandleEvent(context.Background(), entry)
+			assertReject(t, result)
+
+			var permErr *outbox.PermanentError
+			require.ErrorAs(t, result.Err, &permErr,
+				"Err must wrap a PermanentError so ConsumerBase routes to DLX")
+
+			// Audit chain must NOT be polluted by rejected event.
+			assert.Equal(t, 0, svc.ChainLen(), "rejected event must not be appended to chain")
+			assert.Equal(t, 0, repo.Len(), "rejected event must not be persisted")
+
+			// Log line carries event_id / event_type as structured fields and
+			// must NOT contain the literal "system" fallback marker.
+			logEntry := sloghelper.FindLogEntry(logBuf.String(), "audit-append: actor missing")
+			require.NotNil(t, logEntry, "expected Warn log line for missing actor")
+			assert.Equal(t, "WARN", logEntry["level"], "missing actor must emit at WARN level")
+			assert.Equal(t, "evt-actor-missing", logEntry["event_id"], "log line must carry event_id")
+			assert.Equal(t, tt.eventType, logEntry["event_type"], "log line must carry event_type")
+			assert.NotContains(t, logBuf.String(), `"system"`,
+				`fail-closed reject must not log the legacy "system" fallback marker`)
 		})
 	}
 }
@@ -311,9 +368,9 @@ func (f *failingAppendRepo) Append(_ context.Context, _ *domain.AuditEntry) erro
 	return f.err
 }
 
-// TestService_HandleEvent_RepoAppendFails_Requeue covers the persistFn→repo.Append
-// failure branch (service.go:180-187): a transient persistence error must produce
-// DispositionRequeue so ConsumerBase can back off and retry.
+// TestService_HandleEvent_RepoAppendFails_Requeue covers the persistFn → repo.Append
+// failure branch: a transient persistence error must produce DispositionRequeue
+// so ConsumerBase can back off and retry.
 func TestService_HandleEvent_RepoAppendFails_Requeue(t *testing.T) {
 	sentinel := fmt.Errorf("db unavailable")
 	repo := &failingAppendRepo{AuditRepository: mem.NewAuditRepository(), err: sentinel}
@@ -325,7 +382,7 @@ func TestService_HandleEvent_RepoAppendFails_Requeue(t *testing.T) {
 	entry := outbox.Entry{
 		ID:        "evt-repo-fail",
 		EventType: "event.user.created.v1",
-		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
+		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "adm-1"}),
 	}
 
 	result := svc.HandleEvent(context.Background(), entry)
@@ -338,7 +395,9 @@ func TestService_HandleEvent_RepoAppendFails_Requeue(t *testing.T) {
 	assert.False(t, errors.As(result.Err, &permErr), "transient persist error must NOT be PermanentError")
 }
 
-func mustJSON(v any) []byte {
-	b, _ := json.Marshal(v)
+func mustJSON(t testing.TB, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
 	return b
 }

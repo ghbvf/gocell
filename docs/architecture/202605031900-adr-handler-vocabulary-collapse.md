@@ -119,20 +119,6 @@ handler-author vocabulary. The `adapters/rabbitmq` dependency on
 `outbox.Settlement` interface). This closes the time-bounded compromise
 that was explicitly accepted in K#03.
 
-## Trade-off Q5 — actorID system fallback in auditappend
-
-`auditappend.HandleEvent` falls back to `actorID = "system"` when the event
-payload contains neither `actorId` nor `userId`. This is an explicit trade-off:
-
-- **At-least-once audit semantics take priority** — dropping an audit entry
-  because of missing actor metadata is worse than recording it under a sentinel
-- **Producer-side validation already enforces actorId** for admin-write events
-  (PR-CFG-G1 G.2: configcore + accesscore decoders reject empty actorId)
-- **Reaching the fallback path means producer regression** — the handler logs
-  at Error level so data-quality dashboards surface the regression
-
-The fallback is fail-safe, not a routine path; do not rely on it.
-
 ## Consequences
 
 - Public API surface area in `kernel/outbox` + `kernel/persistence`
