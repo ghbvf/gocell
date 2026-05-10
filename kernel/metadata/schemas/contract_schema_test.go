@@ -318,12 +318,12 @@ func TestContractSchemaAuthBoolMatrix(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(doc), &contractDoc))
 
 			err := schema.Validate(contractDoc)
-			expectedLegal := metadata.AuthComboLegal(auth)
+			_, expectedLegal := metadata.LegalAuthComboNames[name]
 			if expectedLegal && err != nil {
 				t.Errorf("schema rejected legal combo %s: %v", name, err)
 			}
 			if !expectedLegal && err == nil {
-				t.Errorf("schema accepted illegal combo %s; expected reject per AuthComboLegal", name)
+				t.Errorf("schema accepted illegal combo %s; expected reject per LegalAuthComboNames", name)
 			}
 		})
 	})

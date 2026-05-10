@@ -13,6 +13,41 @@ const HTTPAuthMetaBoolFields = 5
 // (2 ** HTTPAuthMetaBoolFields). Tests iterate from 0 to this value.
 const AuthComboMatrixSize = 1 << HTTPAuthMetaBoolFields
 
+// LegalAuthComboNames is the hand-maintained extensional statement of FMT-27
+// auth bool mutex semantics (encoded by encodeAuthCombo). AuthComboLegal is
+// the algorithmic (intensional) statement; the two must agree on all 32 combos
+// — TestAuthComboLegal_AgainstWhitelist enforces parity between them.
+//
+// Matrix tests at the schema and governance layers consume this whitelist
+// (rather than calling AuthComboLegal) so they detect implementation
+// divergence instead of colluding with the oracle. Single-source by design,
+// dual-form by intent: the algorithm runs in production, the whitelist
+// audits the algorithm.
+//
+// 7 legal combinations (out of 32):
+//
+//	"p-r-s-b-c"  default authenticated route (all flags off)
+//	"P-r-s-b-c"  public only
+//	"p-R-s-b-c"  passwordResetExempt only
+//	"p-r-S-b-c"  serviceOwned only
+//	"p-r-s-B-c"  bootstrap only
+//	"p-r-s-b-C"  clientsOnly only
+//	"p-R-S-b-c"  serviceOwned + passwordResetExempt
+//
+// When a rule evolves (e.g. allowing a new pair to coexist), update both this
+// whitelist AND AuthComboLegal in the same change; CI fails otherwise.
+//
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
+var LegalAuthComboNames = map[string]struct{}{
+	"p-r-s-b-c": {},
+	"P-r-s-b-c": {},
+	"p-R-s-b-c": {},
+	"p-r-S-b-c": {},
+	"p-r-s-B-c": {},
+	"p-r-s-b-C": {},
+	"p-R-S-b-c": {},
+}
+
 // AuthComboLegal returns true iff the bool combination on auth is permitted by
 // FMT-27 semantics. This function is the single source of truth shared by:
 //
