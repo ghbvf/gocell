@@ -156,7 +156,11 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 // strings in comments/test names (AUTH-AUTHTEST-A applies its own exclusion
 // inline; B/C use path-prefix filters that naturally skip tools/archtest).
 func collectGoFiles(root string) ([]string, error) {
-	scope := scanner.ModuleScope(root, scanner.IncludeTests())
+	// IncludeGenerated honors the rule's "anywhere in the module" docstring:
+	// codegen output (generated/contracts/**) must also obey the boundary;
+	// otherwise a regenerated handler reintroducing auth.Authenticated() or
+	// importing runtime/auth/authtest would silently bypass the rule.
+	scope := scanner.ModuleScope(root, scanner.IncludeTests(), scanner.IncludeGenerated())
 	all, err := scope.Files()
 	if err != nil {
 		return nil, err

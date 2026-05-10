@@ -29,6 +29,11 @@ func TestBootstrapPathPredicateSole(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.ModuleScope(root,
 		scanner.IncludeTests(),
+		// IncludeGenerated honors the rule's "anywhere in the codebase except
+		// kernel/metadata/bootstrap_path.go" docstring: a regenerated file
+		// containing strings.Contains(_, "setup/admin") under generated/
+		// would silently bypass without this opt-in.
+		scanner.IncludeGenerated(),
 		scanner.ExcludeRels(
 			"kernel/metadata/bootstrap_path.go",
 			"kernel/metadata/bootstrap_path_test.go",

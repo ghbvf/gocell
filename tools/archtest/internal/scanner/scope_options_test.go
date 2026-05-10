@@ -161,3 +161,54 @@ func TestIncludeTestdata_DefaultBehaviorStillSkipsTestdata(t *testing.T) {
 		t.Errorf("default: got %v, want %v (testdata must be skipped without IncludeTestdata)", got, want)
 	}
 }
+
+func TestIncludeGenerated_AllowsGeneratedDescent(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	writeRel(t, tmp, "real/data.yaml", "real")
+	writeRel(t, tmp, "generated/contracts/payload.yaml", "gen")
+
+	scope := scanner.ModuleScope(tmp, scanner.IncludeGenerated())
+	got := collectRels(t, scope, []string{".yaml"})
+	want := []string{"generated/contracts/payload.yaml", "real/data.yaml"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestIncludeGenerated_DefaultStillSkipsGenerated(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	writeRel(t, tmp, "real/data.yaml", "real")
+	writeRel(t, tmp, "generated/contracts/payload.yaml", "skip")
+
+	scope := scanner.ModuleScope(tmp)
+	got := collectRels(t, scope, []string{".yaml"})
+	want := []string{"real/data.yaml"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("default: got %v, want %v (generated must be skipped without IncludeGenerated)", got, want)
+	}
+}
+
+func TestIncludeGenerated_ComposesWithIncludeTestdata(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	writeRel(t, tmp, "tools/archtest/testdata/case.yaml", "case")
+	writeRel(t, tmp, "tools/archtest/testdata/generated/x.yaml", "case-gen")
+
+	// IncludeTestdata + IncludeGenerated together: testdata segment + nested
+	// generated/ are both walked. ModuleScope+IncludeTestdata still errors
+	// because no root has testdata segment, so use DirsScope here.
+	scope := scanner.DirsScope(tmp, []string{"tools/archtest/testdata"},
+		scanner.IncludeTestdata(),
+		scanner.IncludeGenerated(),
+	)
+	got := collectRels(t, scope, []string{".yaml"})
+	want := []string{
+		"tools/archtest/testdata/case.yaml",
+		"tools/archtest/testdata/generated/x.yaml",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("compose: got %v, want %v", got, want)
+	}
+}

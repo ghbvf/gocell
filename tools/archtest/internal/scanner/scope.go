@@ -25,10 +25,11 @@ var defaultSkipDirs = map[string]struct{}{
 type option func(*scopeConfig)
 
 type scopeConfig struct {
-	includeTests    bool
-	excludeRels     []string
-	matchRel        func(rel string) bool
-	includeTestdata bool
+	includeTests     bool
+	excludeRels      []string
+	matchRel         func(rel string) bool
+	includeTestdata  bool
+	includeGenerated bool
 }
 
 // IncludeTests returns an option that instructs [ModuleScope] and [DirsScope]
@@ -85,6 +86,19 @@ func MatchRels(pred func(rel string) bool) option {
 // scanning, and that is precisely the regression the default skip prevents.
 func IncludeTestdata() option {
 	return func(c *scopeConfig) { c.includeTestdata = true }
+}
+
+// IncludeGenerated returns an option that allows the walk to descend into
+// directories named "generated" (which are otherwise excluded by the default
+// skip set). Use for "anywhere in the module" semantics where generated code
+// must also be subject to the rule — e.g. anti-regression rules whose
+// invariant would be defeated if codegen reintroduced the forbidden symbol.
+//
+// Unlike IncludeTestdata, no path-segment validation is required: any rule
+// that legitimately wants module-wide coverage including codegen output is
+// the use case. Combine with [ModuleScope] for repo-wide "anywhere" rules.
+func IncludeGenerated() option {
+	return func(c *scopeConfig) { c.includeGenerated = true }
 }
 
 // Scope is an opaque file-set descriptor. Obtain a value via [ModuleScope] or
@@ -178,14 +192,19 @@ func newScope(modRoot string, roots []string, cfg scopeConfig) Scope {
 }
 
 // buildSkipDirs returns the directory-name skip set for this scope. When
-// IncludeTestdata is set, "testdata" is removed from the default set.
+// IncludeTestdata is set, "testdata" is removed from the default set; when
+// IncludeGenerated is set, "generated" is removed. Other entries
+// (vendor / worktrees / .git / node_modules) are never opt-in-able.
 func buildSkipDirs(cfg scopeConfig) map[string]struct{} {
-	if !cfg.includeTestdata {
+	if !cfg.includeTestdata && !cfg.includeGenerated {
 		return defaultSkipDirs
 	}
 	out := make(map[string]struct{}, len(defaultSkipDirs))
 	for k := range defaultSkipDirs {
-		if k == "testdata" {
+		if cfg.includeTestdata && k == "testdata" {
+			continue
+		}
+		if cfg.includeGenerated && k == "generated" {
 			continue
 		}
 		out[k] = struct{}{}
