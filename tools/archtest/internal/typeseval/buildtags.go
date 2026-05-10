@@ -29,11 +29,12 @@ func KnownNonDefaultTags() [][]string {
 		{"examples_smoke"},
 		{"integration", "otelcollector"},
 		{"integration_cluster"},
-		// archtest_fixture gates negative-source fixtures loaded only by
-		// CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 +
-		// CELL-RAW-INFRA-WRAPPER-LOCATION-01 detection tests. Excluded from
-		// `go build ./...` and `go test ./...` so they never pollute
-		// real-repo scans (ai-collab.md §"real source AST capture").
+		// archtest_fixture — 守护本 tag 的 archtest 测试函数：
+		//   - TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation
+		//   - TestCellRawInfraWrapperLocation01_ScannerDetectsViolation
+		// 修改本条目前请确认对应 detection-test 仍能加载 fixture 包。
+		// Excluded from `go build ./...` and `go test ./...` so fixtures never
+		// pollute real-repo scans (ai-collab.md §"real source AST capture").
 		{"archtest_fixture"},
 	}
 }
