@@ -36,6 +36,24 @@ on:
 permissions:
   contents: read
 
+# Workflow-level env: deterministic GOPROXY fallback chain to harden the
+# module download path on GitHub-hosted runners. Default `GOPROXY` on
+# `ubuntu-latest` is `https://proxy.golang.org,direct`; we observed
+# multiple PR runs (2026-05-10) where the proxy fetch hung silently for
+# 3-4 minutes until the runner received SIGTERM (exit 143), with no
+# corresponding incident on githubstatus.com — i.e., a transient runner
+# egress / proxy edge issue rather than a sumdb or repo problem.
+#
+# Mitigation: prepend goproxy.cn (broader CDN footprint, separate ASN
+# from proxy.golang.org). go cmd falls through to the next entry on 4xx,
+# but NOT on a hung connection — so this alone does not cure the SIGTERM
+# class. The companion `Pre-download modules` step inserted after every
+# setup-go adds an explicit 3-minute step-level timeout so a stalled
+# fetch surfaces as step failure (with full module-context log) instead
+# of runner reaper.
+env:
+  GOPROXY: https://proxy.golang.org,https://goproxy.cn,direct
+
 jobs:
   # build-test is a matrix of 5 package shards run in parallel. Sharding splits
   # GoCell's package layout (kernel/tools/runtime/cells/adapters+others) so each
@@ -56,23 +74,35 @@ jobs:
           - shard: kernel
             pkgs: ./kernel/...
             static_checks: true
+            timeout: 5m
           - shard: tools
             # archtest / metricschema / generatedverify use go/packages to load
-            # the full module type graph; the whole ./tools/... shard runs
-            # ~130s on CI (archtest alone is ~30s; metricschema + generatedverify
-            # contribute the rest). Isolated here so it runs in parallel with
-            # the kernel shard.
+            # the full module type graph. CI cost reality (2026-05, post-PR-Φ
+            # #445 EachNode funnel migration + R2 packages.Visit additions):
+            # archtest alone is ~100-200s on CI (was ~30s when this comment
+            # was first written), and the whole ./tools/... shard runs
+            # ~300-500s. Per the test-step header: packages.Load-bound tests
+            # run 5-15× slower on GHA ubuntu-latest 2-CPU runners than on
+            # developer laptops. The 10m timeout below gives this shard
+            # headroom to absorb that variance without triggering go test's
+            # own -timeout (which surfaces as a panic stack, not the
+            # ambiguous runner SIGTERM seen on the 5m-bound runs of
+            # 2026-05-10). Other shards keep 5m.
             pkgs: ./tools/...
             static_checks: false
+            timeout: 10m
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
             static_checks: false
+            timeout: 5m
           - shard: cells
             pkgs: ./cells/...
             static_checks: false
+            timeout: 5m
           - shard: others
             pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/...
             static_checks: false
+            timeout: 5m
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -86,6 +116,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Explicit module pre-download with a step-level timeout. Failure mode
+      # we are guarding against: GHA runner egress to proxy.golang.org
+      # silently stalls for 3-4 minutes and the runner reaper SIGTERMs the
+      # whole job (exit 143) before `go test`'s own -timeout 5m can fire,
+      # losing diagnostic context. With a dedicated 3-minute step the
+      # download phase fails fast as a discrete step (with the full
+      # `go mod download -x` HTTP trail in the log) instead of evaporating
+      # into a generic runner-shutdown error. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
 
       # Static checks (Build, Vet, golangci-lint, validate/check commands, layering
       # guard, kernel coverage gate) run only on the kernel shard. Running them on
@@ -182,7 +224,7 @@ jobs:
             -coverprofile=coverage-shard-${{ matrix.shard }}.out \
             -json \
             ${{ matrix.pkgs }} \
-            -count=1 -timeout 5m \
+            -count=1 -timeout ${{ matrix.timeout }} \
             | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
             | "$RUNNER_TEMP/slowgate" --threshold=15s --allowlist=tools/slowgate/allowlist.txt
 
@@ -273,6 +315,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Explicit module pre-download with a step-level timeout. Failure mode
+      # we are guarding against: GHA runner egress to proxy.golang.org
+      # silently stalls for 3-4 minutes and the runner reaper SIGTERMs the
+      # whole job (exit 143) before `go test`'s own -timeout 5m can fire,
+      # losing diagnostic context. With a dedicated 3-minute step the
+      # download phase fails fast as a discrete step (with the full
+      # `go mod download -x` HTTP trail in the log) instead of evaporating
+      # into a generic runner-shutdown error. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
 
       - name: Integration tests (testcontainers)
         env:
@@ -529,6 +583,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Explicit module pre-download with a step-level timeout. Failure mode
+      # we are guarding against: GHA runner egress to proxy.golang.org
+      # silently stalls for 3-4 minutes and the runner reaper SIGTERMs the
+      # whole job (exit 143) before `go test`'s own -timeout 5m can fire,
+      # losing diagnostic context. With a dedicated 3-minute step the
+      # download phase fails fast as a discrete step (with the full
+      # `go mod download -x` HTTP trail in the log) instead of evaporating
+      # into a generic runner-shutdown error. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
       - name: Build e2egate
         run: go build -o "$RUNNER_TEMP/e2egate" ./tools/e2egate/cmd/e2egate
       - name: Start dependencies (postgres + redis)
@@ -609,6 +675,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Explicit module pre-download with a step-level timeout. Failure mode
+      # we are guarding against: GHA runner egress to proxy.golang.org
+      # silently stalls for 3-4 minutes and the runner reaper SIGTERMs the
+      # whole job (exit 143) before `go test`'s own -timeout 5m can fire,
+      # losing diagnostic context. With a dedicated 3-minute step the
+      # download phase fails fast as a discrete step (with the full
+      # `go mod download -x` HTTP trail in the log) instead of evaporating
+      # into a generic runner-shutdown error. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
       - name: Vet (cross-platform unit subset)
         run: go vet ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/...
         shell: bash
@@ -646,6 +724,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Explicit module pre-download with a step-level timeout. Failure mode
+      # we are guarding against: GHA runner egress to proxy.golang.org
+      # silently stalls for 3-4 minutes and the runner reaper SIGTERMs the
+      # whole job (exit 143) before `go test`'s own -timeout 5m can fire,
+      # losing diagnostic context. With a dedicated 3-minute step the
+      # download phase fails fast as a discrete step (with the full
+      # `go mod download -x` HTTP trail in the log) instead of evaporating
+      # into a generic runner-shutdown error. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
       - name: ssobff startup smoke
         # `examples_smoke` build tag isolates this from the `integration` tag
         # (whose tests assume DB/RMQ testcontainers and run in the slow
@@ -748,6 +838,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Explicit module pre-download with a step-level timeout. Failure mode
+      # we are guarding against: GHA runner egress to proxy.golang.org
+      # silently stalls for 3-4 minutes and the runner reaper SIGTERMs the
+      # whole job (exit 143) before `go test`'s own -timeout 5m can fire,
+      # losing diagnostic context. With a dedicated 3-minute step the
+      # download phase fails fast as a discrete step (with the full
+      # `go mod download -x` HTTP trail in the log) instead of evaporating
+      # into a generic runner-shutdown error. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
 
       # Generated-artifact gate (PR-CFG-M follow-up):
       # assembly.yaml is the source-of-truth for runtime cell order, generated
