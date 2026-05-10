@@ -96,6 +96,15 @@ const cellID = "configcore"
 
 const configRepoQueryFailedMessage = "config repo query failed"
 
+// op label constants distinguish doUpdate caller paths in InternalMessage.
+// Single-source: doUpdate caller and tests both reference these constants —
+// AI-rebust Medium. Hardcode regression in caller would surface via op-label
+// assertion in TestConfigRepository_Update{,ForRollback}_NotFound.
+const (
+	opUpdate            = "Update"
+	opUpdateForRollback = "UpdateForRollback"
+)
+
 type encryptedPayload struct {
 	Ciphertext []byte
 	KeyID      string
@@ -479,18 +488,18 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 				"config not found", scanErr,
-				errcode.WithInternal(fmt.Sprintf("config repo: Update miss key=%s", key)),
+				errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", opUpdate, key)),
 				errcode.WithCategory(errcode.CategoryDomain),
 			)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, scanErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: Update select-for-update error key=%s", key)),
+			errcode.WithInternal(fmt.Sprintf("config repo: %s select-for-update error key=%s", opUpdate, key)),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
 
-	return r.doUpdate(ctx, db, "Update", key, value, sensitive)
+	return r.doUpdate(ctx, db, opUpdate, key, value, sensitive)
 }
 
 // UpdateForRollback atomically sets value AND sensitive, increments version.
@@ -501,7 +510,7 @@ func (r *ConfigRepository) UpdateForRollback(ctx context.Context, key string, va
 	if err != nil {
 		return nil, err
 	}
-	return r.doUpdate(ctx, db, "UpdateForRollback", key, value, sensitive)
+	return r.doUpdate(ctx, db, opUpdateForRollback, key, value, sensitive)
 }
 
 // doUpdate performs the actual UPDATE...RETURNING for both Update and
