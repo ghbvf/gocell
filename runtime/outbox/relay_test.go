@@ -106,6 +106,7 @@ func (p *fakePublisher) Publish(_ context.Context, topic string, payload []byte)
 // WaitForCaptured blocks until at least want successful Publish calls have
 // been recorded or ctx is canceled. Re-evaluated synchronously after every
 // successful publish via the notify channel — no polling, no timing coupling.
+// Passing want <= 0 returns nil immediately on the first cond evaluation.
 func (p *fakePublisher) WaitForCaptured(ctx context.Context, want int) error {
 	for {
 		p.mu.Lock()
@@ -829,6 +830,10 @@ func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 		_ = relay.Stop(stopCtx)
 	}()
 
+	// Polls the testCollector metrics state, not FakeStore/fakePublisher,
+	// so the deterministic waitStore/waitPub helpers don't apply. Budget is
+	// testtime.D1s (already conventional, not the D500ms-flake class) and
+	// state convergence here is a single int counter assignment.
 	require.Eventually(t, func() bool {
 		mc.mu.Lock()
 		defer mc.mu.Unlock()

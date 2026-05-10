@@ -108,6 +108,9 @@ func (s *FakeStore) notifyLocked() {
 // Rows with status "" default to "pending". Existing rows with the same ID
 // are overwritten.
 func (s *FakeStore) Seed(entries ...outbox.ClaimedEntry) {
+	if len(entries) == 0 {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ce := range entries {
@@ -166,7 +169,8 @@ func (s *FakeStore) snapshotLocked() []FakeRow {
 }
 
 // WaitFor blocks until cond evaluates true on a current FakeStore snapshot
-// or ctx is canceled, returning ctx.Err() in the latter case.
+// or ctx is canceled, returning ctx.Err() in the latter case. For use in
+// tests only.
 //
 // cond is re-evaluated synchronously after every state mutation (Seed,
 // ClaimPending, MarkPublished, MarkRetry, MarkDead, ReclaimStale,

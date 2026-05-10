@@ -228,8 +228,11 @@ func TestFakeStore_WaitFor_WakesOnMutation(t *testing.T) {
 	if elapsed < testtime.D20ms {
 		t.Errorf("WaitFor returned in %v, expected to block until mutation (>= 20ms)", elapsed)
 	}
-	if elapsed > testtime.D200ms {
-		t.Errorf("WaitFor took %v, expected to wake within tens of ms after mutation", elapsed)
+	// Upper bound is generous (race-detector + GitHub runner contention can
+	// stretch wake latency well past tens of ms); the lower bound above is
+	// what proves wake-on-mutation rather than spurious early return.
+	if elapsed > testtime.EventuallyShort {
+		t.Errorf("WaitFor took %v, expected to wake within EventuallyShort after mutation", elapsed)
 	}
 }
 
