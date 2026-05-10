@@ -15,12 +15,10 @@ import (
 
 func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 	q := commandtest.NewInMemQueue()
-	lc := NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
-		Scanner:  q,
-		Queue:    q,
-		Interval: time.Hour,
-		Clk:      clock.Real(),
-	})
+	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
+		kcommand.WithSweeperInterval(time.Hour))
+	require.NoError(t, err)
+	lc := NewSweeperLifecycle("devicecommand.sweeper", sw)
 
 	hook := lc.Hook()
 	assert.Equal(t, "devicecommand.sweeper", hook.Name)
@@ -30,12 +28,10 @@ func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 
 func TestSweeperLifecycle_StartStop(t *testing.T) {
 	q := commandtest.NewInMemQueue()
-	lc := NewSweeperLifecycle("", &kcommand.Sweeper{
-		Scanner:  q,
-		Queue:    q,
-		Interval: time.Hour,
-		Clk:      clock.Real(),
-	})
+	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
+		kcommand.WithSweeperInterval(time.Hour))
+	require.NoError(t, err)
+	lc := NewSweeperLifecycle("", sw)
 
 	require.NoError(t, lc.Start(context.Background()))
 	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)

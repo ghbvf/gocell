@@ -108,12 +108,12 @@ func newTestCell(t testing.TB) *AccessCore {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -126,13 +126,13 @@ func newDurableTestCell(t testing.TB) *AccessCore {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithCursorCodec(testCursorCodec),
-		WithOutboxDeps(nil, durableOutboxWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(durableOutboxWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 }
@@ -143,10 +143,10 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTVerifier(testVerifier), // issuer missing
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -161,10 +161,10 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer), // verifier missing
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -176,7 +176,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -198,10 +198,10 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		// txRunner intentionally omitted
 		withTestBootstrapAuth(),
 	)
@@ -221,11 +221,11 @@ func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithTxManager(durableTxRunner{}),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		// outboxWriter intentionally omitted — publisher-only mode
 		withTestBootstrapAuth(),
@@ -260,10 +260,10 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithTxManager(durableTxRunner{}),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -277,8 +277,8 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -358,7 +358,7 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithEmitter(emitter),
-		WithTxManager(durableTxRunner{}),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
@@ -377,7 +377,7 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithEmitter(outbox.NewNoopEmitter()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -399,7 +399,7 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(durableTxRunner{}),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -791,12 +791,12 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithUserRepository(userRepo),
 		WithSessionRepository(sessionRepo),
 		WithRoleRepository(roleRepo),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -878,12 +878,12 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithUserRepository(userRepo),
 		WithSessionRepository(sessionRepo),
 		WithRoleRepository(roleRepo),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -1011,12 +1011,12 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		WithUserRepository(userRepo),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -1058,11 +1058,11 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)

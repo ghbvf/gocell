@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -30,8 +31,8 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	// userRepo and roleRepo are set eagerly; sessionRepo is deferred to Init()
@@ -50,8 +51,8 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -69,8 +70,8 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -113,7 +114,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithTxManager(durableTxRunner{}),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -129,8 +130,8 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -144,8 +145,8 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -163,8 +164,8 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestBootstrapAuth(),
 	)
@@ -192,8 +193,8 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)

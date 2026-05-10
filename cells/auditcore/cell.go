@@ -52,15 +52,20 @@ func WithEmitter(e outbox.Emitter) Option {
 	return func(c *AuditCore) { c.emitter = e }
 }
 
-// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer). The
-// framework composes them into an outbox.Emitter at Init() time via
-// cell.ResolveEmitter.
+// WithOutboxDeps wires sealed outbox dependencies (CellPublisher +
+// CellWriter). Composition roots construct each via
+// outbox.WrapPublisherForCell / outbox.WrapWriterForCell. The framework
+// composes them into an outbox.Emitter at Init() time via
+// cell.ResolveCellEmitter.
 //
 // Accumulative: a nil argument leaves the previously-set value in place;
 // multiple calls combine their non-nil arguments. Does NOT clear previous
 // state — `WithOutboxDeps(nil, nil)` is a no-op, not a reset. Mutually
 // exclusive with WithEmitter; Init() fails fast if both are set.
-func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+//
+// AI-HARD per ADR cell-raw-infra-sealed-marker: the option signature
+// rejects raw outbox.Publisher / outbox.Writer at compile time.
+func WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter) Option {
 	return func(c *AuditCore) {
 		if pub != nil {
 			c.pendingOutboxPub = pub
@@ -76,8 +81,9 @@ func WithLogger(l *slog.Logger) Option {
 	return func(c *AuditCore) { c.logger = l }
 }
 
-// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for transactional guarantees (L2
+// atomicity). Composition roots construct via persistence.WrapForCell.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(c *AuditCore) { c.txRunner = tx }
 }
 
@@ -121,13 +127,15 @@ type AuditCore struct {
 	auditRepo    ports.AuditRepository
 	archiveStore ports.ArchiveStore
 
-	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc). Private;
-	// archtest OUTBOX-CELL-01 forbids exported raw outbox options.
+	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc). Sealed marker
+	// types prevent any cell.go public Option from accepting raw
+	// outbox.Publisher / outbox.Writer at compile time (ADR
+	// cell-raw-infra-sealed-marker §D1).
 	emitter             outbox.Emitter
-	pendingOutboxPub    outbox.Publisher
-	pendingOutboxWriter outbox.Writer
+	pendingOutboxPub    outbox.CellPublisher
+	pendingOutboxWriter outbox.CellWriter
 
-	txRunner        persistence.TxRunner
+	txRunner        persistence.CellTxManager
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
 	hmacKey         []byte
@@ -190,9 +198,9 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	// using the original c.txRunner; only after it succeeds do we install the
 	// demoTxRunner fallback so slice constructors see a non-nil TxRunner.
 	if c.txRunner == nil {
-		c.logger.Warn("auditcore: using cell.DemoTxRunner (demo mode)",
+		c.logger.Warn("auditcore: using cell.DemoCellTxManager (demo mode)",
 			slog.String("durability_mode", durabilityMode.String()))
-		c.txRunner = cell.DemoTxRunner{}
+		c.txRunner = cell.DemoCellTxManager()
 	}
 	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
 	// so that assemblies that forget to wire a real TxRunner fail at Init() time.

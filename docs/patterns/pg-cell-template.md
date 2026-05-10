@@ -107,6 +107,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/outbox" // outbox.WrapPublisherForCell — composition root only
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -124,12 +125,18 @@ func (m FooCoreModule) Provide(ctx context.Context, shared *SharedDeps) (
 	[]kernellifecycle.ManagedResource,
 	error,
 ) {
-	// 1. Cursor codec.
+	// 1. Cursor codec — struct-config form (cursorCodecConfig). Mirrors
+	// cmd/corebundle/access_module.go to keep new modules consistent.
 	pri, prev := LoadCursorKeys("FOOCORE")
-	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
-		"GOCELL_FOOCORE_CURSOR_KEY", "GOCELL_FOOCORE_CURSOR_PREVIOUS_KEY",
-		pri, prev,
-		"foocore-cursor-key-32-byte-def!", "foo")
+	cursorCodec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode: shared.Topology.AdapterMode,
+		EnvName:     "GOCELL_FOOCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_FOOCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     pri,
+		Previous:    prev,
+		DevDefault:  "foocore-cursor-key-32-byte-def!",
+		Label:       "foo",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("foocore cursor codec: %w", err)
 	}
@@ -141,13 +148,17 @@ func (m FooCoreModule) Provide(ctx context.Context, shared *SharedDeps) (
 	}
 
 	// 3. Storage-backend branching via Topology.
-	pgRes, relayOpts, cellOpts, err := buildFooCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus)
+	pgRes, relayOpts, cellOpts, err := buildFooCoreOpts(ctx, shared.Topology, pgCfg, shared.Clock, shared.EventBus)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	c := foocore.NewFooCore(append([]foocore.Option{
-		foocore.WithPublisher(shared.EventBus),
+		// L2 platform cell: pub for relay fan-out; writer injected via cellOpts
+		// (postgres path). Composition root wraps raw outbox.Publisher into
+		// outbox.CellPublisher (sealed marker, ADR 202605101900); cell.go's
+		// public WithOutboxDeps signature rejects raw types at compile time.
+		foocore.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
 		foocore.WithCursorCodec(cursorCodec),
 	}, cellOpts...)...)
 
@@ -186,6 +197,7 @@ func buildFooCoreOpts(
 	ctx context.Context,
 	topo bootstrap.Topology,
 	pgCfg adapterpg.Config,
+	clk clock.Clock, // ← required by NewOutboxWriter / NewOutboxStore
 	pub outbox.Publisher,
 ) (kernellifecycle.ManagedResource, []bootstrap.Option, []foocore.Option, error) {
 	switch topo.StorageBackend {
@@ -201,9 +213,9 @@ func buildFooCoreOpts(
 			_ = pool.Close(ctx)
 			return nil, nil, nil, fmt.Errorf("foocore PG schema guard: %w", schemaErr)
 		}
-		outboxWriter := adapterpg.NewOutboxWriter()
+		outboxWriter := adapterpg.NewOutboxWriter(clk)
 		txMgr := adapterpg.NewTxManager(pool)
-		relayWorker := outboxruntime.NewRelay(adapterpg.NewOutboxStore(pool.DB()), pub,
+		relayWorker := outboxruntime.NewRelay(adapterpg.NewOutboxStore(pool.DB(), clk), pub,
 			outboxruntime.DefaultRelayConfig())
 		pgRes, resErr := adapterpg.NewPGResource(pool)
 		if resErr != nil {
@@ -212,7 +224,13 @@ func buildFooCoreOpts(
 		}
 		opts := []foocore.Option{
 			foocore.WithPostgresDefaults(pool.DB(), outboxWriter),
-			foocore.WithTxManager(txMgr),
+			// Composition root wraps raw outbox.Writer + persistence.TxRunner
+			// into sealed marker types. cell.go public Options reject raw
+			// types at compile time (ADR 202605101900-adr-cell-raw-infra-
+			// sealed-marker §D1). For pure writer-side cells use
+			// foocore.WithOutboxWriter(outbox.WrapWriterForCell(outboxWriter))
+			// instead of merging into WithPostgresDefaults.
+			foocore.WithTxManager(persistence.WrapForCell(txMgr)),
 		}
 		relayOpts := []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)}
 		return pgRes, relayOpts, opts, nil

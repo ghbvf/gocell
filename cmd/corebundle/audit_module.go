@@ -8,6 +8,8 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -63,7 +65,7 @@ func (AuditCoreModule) Provide(
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
 		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
-		auditcore.WithOutboxDeps(shared.EventBus, nil),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(cursorCodec),
 		auditcore.WithMetricsProvider(shared.PromStack.metricProvider),
@@ -78,8 +80,8 @@ func (AuditCoreModule) Provide(
 		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
 		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
 		auditOpts = append(auditOpts,
-			auditcore.WithOutboxDeps(nil, writer),
-			auditcore.WithTxManager(txMgr),
+			auditcore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
+			auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		)
 	}
 	c := auditcore.NewAuditCore(auditOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to auditOpts above

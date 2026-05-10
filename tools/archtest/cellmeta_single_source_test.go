@@ -13,21 +13,25 @@
 // Gate IDs:
 //
 //	CELLMETA-SINGLE-SOURCE-01    kernel/cell 不得定义 CellMetadata / Owner /
-//	                              SchemaConfig / CellVerify / L0Dep 5 类型
+//	                              SchemaConfig / CellVerify / L0Dep 5 类型（旧 struct
+//	                              名；PR-A22 ISP 拆分使用 CellInventory 不冲突）
 //	CELLMETA-SINGLE-SOURCE-02    kernel/cell.NewBaseCell 接收单一 *metadata.CellMeta
-//	CELLMETA-SINGLE-SOURCE-03    Cell interface 的 Metadata() 返回 *metadata.CellMeta
+//	CELLMETA-SINGLE-SOURCE-03    CellInventory sub-interface 的 Metadata() 返回 *metadata.CellMeta
 //
 // Known limits (documented for future maintainers, not blocking current contract):
 //
 //   - Gate-01 forbidden list is a closed set of historical type names; a
 //     "rename and re-introduce" pattern (e.g. type LegacyCellMeta = metadata.CellMeta)
 //     in kernel/cell would not be caught. Reviewers must catch such aliases.
-//   - Gate-03 walks Cell interface methods by direct declaration only; if
-//     Metadata() is moved to an embedded sub-interface (type Cell interface { MetadataReader; ... }),
-//     this gate would falsely report "method not found". Refactor with care.
+//   - Gate-03 / CellInventory.Metadata():
+//     PR-A22 (ADR 202605101800 §D5) moved Metadata() from top-level Cell to the
+//     CellInventory sub-interface; the previous limit ("Metadata() on embedded
+//     sub-interface false-fails") is now resolved — this gate explicitly scans
+//     the CellInventory type. Keep this note as a regression marker.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#05 PR-A1
 // ref: docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D5（PR-A22 SOURCE-03 升级目标接口至 CellInventory）
 package archtest
 
 import (
@@ -102,7 +106,9 @@ func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 }
 
 // TestCellmetaSingleSource03_MetadataInterfaceReturn verifies CELLMETA-SINGLE-SOURCE-03.
-// Cell interface.Metadata() 必须返回 *metadata.CellMeta（pointer，零拷贝）。
+// CellInventory sub-interface.Metadata() 必须返回 *metadata.CellMeta（pointer，零拷贝）。
+// PR-A22 ISP 拆分把 Metadata() 从顶层 Cell 接口下放到 CellInventory 子接口，本 gate
+// 同步升级以扫子接口而非顶层（D5）。
 func TestCellmetaSingleSource03_MetadataInterfaceReturn(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -112,40 +118,41 @@ func TestCellmetaSingleSource03_MetadataInterfaceReturn(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
-	var cellIface *ast.InterfaceType
+	var inventoryIface *ast.InterfaceType
 	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-		if cellIface != nil || ts.Name.Name != "Cell" {
+		if inventoryIface != nil || ts.Name.Name != "CellInventory" {
 			return
 		}
 		iface, ok := ts.Type.(*ast.InterfaceType)
 		if !ok {
 			return
 		}
-		cellIface = iface
+		inventoryIface = iface
 	})
-	if cellIface == nil {
-		t.Fatal("CELLMETA-SINGLE-SOURCE-03: Cell interface not found in kernel/cell/interfaces.go")
+	if inventoryIface == nil {
+		t.Fatal("CELLMETA-SINGLE-SOURCE-03: CellInventory sub-interface not found in kernel/cell/interfaces.go " +
+			"(PR-A22 places Metadata() on CellInventory, not top-level Cell)")
 	}
 	var metaMethod *ast.Field
-	for _, m := range cellIface.Methods.List {
+	for _, m := range inventoryIface.Methods.List {
 		if len(m.Names) > 0 && m.Names[0].Name == "Metadata" {
 			metaMethod = m
 			break
 		}
 	}
 	if metaMethod == nil {
-		t.Fatal("CELLMETA-SINGLE-SOURCE-03: Cell.Metadata() method not found")
+		t.Fatal("CELLMETA-SINGLE-SOURCE-03: CellInventory.Metadata() method not found")
 	}
 	fn, ok := metaMethod.Type.(*ast.FuncType)
 	if !ok {
-		t.Fatal("CELLMETA-SINGLE-SOURCE-03: Cell.Metadata is not a function type")
+		t.Fatal("CELLMETA-SINGLE-SOURCE-03: CellInventory.Metadata is not a function type")
 	}
 	if fn.Results == nil || len(fn.Results.List) != 1 {
-		t.Fatal("CELLMETA-SINGLE-SOURCE-03: Cell.Metadata must return exactly one value")
+		t.Fatal("CELLMETA-SINGLE-SOURCE-03: CellInventory.Metadata must return exactly one value")
 	}
 	got := exprString(fn.Results.List[0].Type)
 	if got != "*metadata.CellMeta" {
-		t.Errorf("CELLMETA-SINGLE-SOURCE-03: Cell.Metadata return type = %q, want %q",
+		t.Errorf("CELLMETA-SINGLE-SOURCE-03: CellInventory.Metadata return type = %q, want %q",
 			got, "*metadata.CellMeta")
 	}
 }

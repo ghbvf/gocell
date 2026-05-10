@@ -13,6 +13,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
@@ -116,8 +117,8 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			storageOpt,
 			// PG adapter path: publisher + real outbox.Writer compose a
 			// WriterEmitter at Cell boundary; L2 transactional atomicity applies.
-			configcore.WithOutboxDeps(cfg.Publisher, outboxWriter),
-			configcore.WithTxManager(txMgr),
+			configcore.WithOutboxDeps(outbox.WrapPublisherForCell(cfg.Publisher), outbox.WrapWriterForCell(outboxWriter)),
+			configcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		}
 		// Relay is registered independently via bootstrap so its Worker()/Close()
 		// lifecycle is managed separately from the pool (PGResource.Worker() == nil).
@@ -134,7 +135,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			CellOptions: []configcore.Option{
 				configcore.WithInMemoryDefaults(),
 				// Memory adapter path: publisher only, writer=nil → DirectEmitter.
-				configcore.WithOutboxDeps(cfg.Publisher, nil),
+				configcore.WithOutboxDeps(outbox.WrapPublisherForCell(cfg.Publisher), nil),
 			},
 		}, nil
 

@@ -50,6 +50,22 @@ func (l *SweeperLifecycle) Hook() cell.LifecycleHook {
 }
 
 // Start launches the sweeper loop and returns after the goroutine is running.
+//
+// The OnStart ctx parameter is intentionally ignored — per
+// docs/architecture/202605102000-adr-lifecycle-hook-ctx-semantics.md, the
+// LifecycleHook.OnStart ctx carries startup-deadline semantics (paired
+// with cell.LifecycleHook.StartTimeout). The worker goroutine derives its
+// runCtx from context.Background() so that OnStart returning (= startup
+// budget exhausted) does not cancel the long-running sweeper. The sole
+// worker-cancel path is OnStop, which bootstrap LIFO rollback guarantees
+// to invoke on already-started hooks (contract pinned by
+// runtime/command/lifecycle_rollback_test.go::TestSweeperLifecycle_
+// StartupFailRollback).
+//
+// Backlog LIFECYCLE-OWNER-CTX-PROPAGATION-01 tracks the controller-runtime
+// owner-ctx propagation alternative (worker derived from a shared main
+// lifecycle ctx) — gated behind explicit trigger conditions; do not
+// silently relax the current contract.
 func (l *SweeperLifecycle) Start(_ context.Context) error {
 	if l == nil || l.Sweeper == nil {
 		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil Sweeper")

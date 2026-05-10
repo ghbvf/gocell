@@ -51,15 +51,20 @@ func WithEmitter(e outbox.Emitter) Option {
 	return func(c *ConfigCore) { c.emitter = e }
 }
 
-// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer). The
-// framework composes them into an outbox.Emitter at Init() time via
-// cell.ResolveEmitter.
+// WithOutboxDeps wires sealed outbox dependencies (CellPublisher +
+// CellWriter). Composition roots construct each via
+// outbox.WrapPublisherForCell / outbox.WrapWriterForCell. The framework
+// composes them into an outbox.Emitter at Init() time via
+// cell.ResolveCellEmitter.
 //
 // Accumulative: a nil argument leaves the previously-set value in place;
 // multiple calls combine their non-nil arguments. Does NOT clear previous
 // state — `WithOutboxDeps(nil, nil)` is a no-op, not a reset. Mutually
 // exclusive with WithEmitter; Init() fails fast if both are set.
-func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+//
+// AI-HARD per ADR cell-raw-infra-sealed-marker: the option signature
+// rejects raw outbox.Publisher / outbox.Writer at compile time.
+func WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter) Option {
 	return func(c *ConfigCore) {
 		if pub != nil {
 			c.pendingOutboxPub = pub
@@ -75,8 +80,9 @@ func WithLogger(l *slog.Logger) Option {
 	return func(c *ConfigCore) { c.logger = l }
 }
 
-// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for transactional guarantees
+// (L2 atomicity). Composition roots construct via persistence.WrapForCell.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(c *ConfigCore) { c.txRunner = tx }
 }
 
@@ -126,13 +132,14 @@ type ConfigCore struct {
 	useInMemoryDefaults bool
 
 	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc for the two
-	// mutually exclusive paths). Private by construction; no exported Option
-	// takes raw outbox.Publisher/Writer arguments (archtest OUTBOX-CELL-01).
+	// mutually exclusive paths). Sealed marker types prevent any cell.go
+	// public Option from accepting raw outbox.Publisher / outbox.Writer at
+	// compile time (ADR cell-raw-infra-sealed-marker §D1).
 	emitter             outbox.Emitter
-	pendingOutboxPub    outbox.Publisher
-	pendingOutboxWriter outbox.Writer
+	pendingOutboxPub    outbox.CellPublisher
+	pendingOutboxWriter outbox.CellWriter
 
-	txRunner             persistence.TxRunner
+	txRunner             persistence.CellTxManager
 	cursorCodec          *query.CursorCodec
 	logger               *slog.Logger
 	metricsProvider      metrics.Provider

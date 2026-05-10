@@ -15,6 +15,8 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -78,7 +80,7 @@ func (m AccessCoreModule) Provide(
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
 		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
-		accesscore.WithOutboxDeps(shared.EventBus, nil),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
 		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
 		accesscore.WithCursorCodec(cursorCodec),
@@ -96,8 +98,8 @@ func (m AccessCoreModule) Provide(
 		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
 		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
 		accessOpts = append(accessOpts,
-			accesscore.WithOutboxDeps(nil, writer),
-			accesscore.WithTxManager(txMgr),
+			accesscore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
+			accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
 		)
 		// Wire the ConfigGetter for the configreceive slice to fetch entry values
 		// from configcore's internal GET /internal/v1/config/{key} endpoint after

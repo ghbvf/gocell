@@ -26,24 +26,37 @@ type Waiver struct {
 
 // --- Core Interfaces ---
 
-// Cell is the fundamental building block of a GoCell application: a vertically
-// integrated unit of capability that owns its data, slices, and contracts.
-// Cells are registered in an Assembly which drives the Init → Start → Stop
-// lifecycle. Implementations should embed BaseCell for the common metadata
-// fields and add the behavioral methods (Init/Start/Stop) themselves.
-type Cell interface {
+// CellIdentity exposes the cell's stable architectural identity. Returned
+// values are immutable for the lifetime of the cell.
+//
+// Consumers: registry lookup (kernel/cell.Assembly), metrics labels
+// (runtime/http/middleware.Metrics), log correlation (slog), route
+// attribution (runtime/http/router.Router).
+//
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D1
+type CellIdentity interface {
 	// ID returns the cell's stable identifier (matches cell.yaml id).
 	ID() string
 	// Type classifies the cell's architectural role (core / edge / support).
 	Type() CellType
 	// ConsistencyLevel reports the cell's declared consistency tier (L0–L4).
 	ConsistencyLevel() Level
+}
+
+// CellLifecycle drives the cell through Init → Start → Stop transitions. All
+// methods accept a context and must honor cancellation.
+//
+// Resource acquisition rule: Init must NOT acquire resources requiring explicit
+// release (open connections, spawn goroutines, lease distributed locks); defer
+// such acquisition to Start so Start/Stop remain symmetric. Stop must release
+// every resource Start acquired and must be idempotent against repeated invocation.
+//
+// Consumers: Assembly orchestrator (kernel/cell.Assembly), bootstrap phases,
+// lifecycle test harnesses.
+type CellLifecycle interface {
 	// Init registers cell capabilities via the provided Registry; called once
-	// before Start. Init failure aborts assembly start without invoking Stop,
-	// so implementations must NOT acquire resources that require explicit release
-	// (open connections, spawn goroutines, lease distributed locks). Defer such
-	// acquisition to Start so Start/Stop remain symmetric. Init may validate
-	// config, build in-memory state, and register slices.
+	// before Start. Init failure aborts assembly start without invoking Stop.
+	// Init may validate config, build in-memory state, and register slices.
 	Init(ctx context.Context, reg Registry) error
 	// Start brings the cell to a running state. Returns nil only when the cell
 	// is fully ready to serve traffic. Canceling ctx must abort startup.
@@ -52,14 +65,32 @@ type Cell interface {
 	// Stop performs graceful shutdown. The assembly invokes Stop with the
 	// caller-supplied ctx; no per-cell stop timeout is enforced by the kernel,
 	// so implementations are solely responsible for honoring ctx deadlines
-	// and returning promptly when ctx is canceled. Stop must release every
-	// resource Start acquired (connections drained, goroutines joined, leases
-	// surrendered) and must be idempotent against repeated invocation.
+	// and returning promptly when ctx is canceled.
 	Stop(ctx context.Context) error
+}
+
+// CellStatus reports runtime probe state. Both methods are safe for concurrent
+// calls and reflect derived state from the cell's lifecycle state machine
+// (not declared metadata).
+//
+// Consumers: /healthz and /readyz HTTP handlers
+// (runtime/http/health.Handler), runtime supervision (kernel/cell.Assembly).
+type CellStatus interface {
 	// Health returns the current health snapshot for diagnostic surfaces.
 	Health() HealthStatus
 	// Ready reports whether the cell is currently serving (post-Start, pre-Stop).
 	Ready() bool
+}
+
+// CellInventory exposes the cell's declarative metadata + slice/contract
+// inventories as defensive copies (callers may freely mutate returned values).
+// The single source of truth is *metadata.CellMeta in kernel/metadata; this
+// interface is the read path. CELLMETA-SINGLE-SOURCE-03 archtest pins
+// Metadata() here.
+//
+// Consumers: contract validators (kernel/governance), metadata inspectors
+// (cmd/gocell validate), codegen (tools/codegen/contractgen).
+type CellInventory interface {
 	// Metadata returns an independent deep copy of the cell's declarative
 	// metadata; callers may freely read and modify the returned value.
 	Metadata() *metadata.CellMeta
@@ -69,6 +100,25 @@ type Cell interface {
 	ProducedContracts() []Contract
 	// ConsumedContracts returns contracts this cell calls or subscribes to.
 	ConsumedContracts() []Contract
+}
+
+// Cell is the fundamental building block of a GoCell application: a vertically
+// integrated unit of capability that owns its data, slices, and contracts.
+// Cells are registered in an Assembly which drives the Init → Start → Stop
+// lifecycle.
+//
+// Cell is the composite of the four sub-interfaces above; any type satisfying
+// CellIdentity, CellLifecycle, CellStatus, and CellInventory is a Cell.
+// Implementations should embed BaseCell rather than implement these from scratch.
+// Prefer the narrower sub-interfaces when the caller only needs a subset.
+//
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D2
+// ref: io.ReadWriter / kubernetes/apimachinery meta/v1.Object composition
+type Cell interface {
+	CellIdentity
+	CellLifecycle
+	CellStatus
+	CellInventory
 }
 
 // Slice is a cohesive sub-unit within a Cell — typically a single feature

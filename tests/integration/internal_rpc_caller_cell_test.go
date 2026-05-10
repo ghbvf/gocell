@@ -138,10 +138,10 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(callerCellNoopTxRunner{}),
+		accesscore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithBootstrapAuth(bootstrapMW),
@@ -149,17 +149,17 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nw),
-		configcore.WithTxManager(callerCellNoopTxRunner{}),
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		configcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithHMACKey([]byte("callercell-hmac-key-32-bytes!!!!!")),
-		auditcore.WithTxManager(callerCellNoopTxRunner{}),
+		auditcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)

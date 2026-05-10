@@ -46,13 +46,36 @@ func WithRepository(r domain.OrderRepository) Option {
 	return func(c *OrderCell) { c.repo = r }
 }
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(c *OrderCell) { c.outboxWriter = w }
+// WithOutboxWriter wires the sealed outbox CellWriter for transactional
+// event publishing. ordercell is L2 OutboxFact — the (writer, txRunner)
+// pair is composed into an outbox.Emitter at Init() time via
+// cell.ResolveCellEmitter. Composition roots construct via
+// outbox.WrapWriterForCell.
+//
+// ordercell deliberately omits the publisher-only path: it has no
+// MetricsProvider/Clock wiring for a DirectEmitter. The writer+txRunner
+// sink is the only supported configuration.
+//
+// Accumulative: a nil writer leaves the previously-set value in place.
+// Demo mode: wrap outbox.NoopWriter{} with outbox.WrapWriterForCell, paired
+// with WithTxManager(persistence.WrapForCell(demoTxRunner{})) or
+// cell.DemoCellTxManager().
+//
+// AI-HARD per ADR cell-raw-infra-sealed-marker: the option signature
+// rejects raw outbox.Writer at compile time.
+//
+// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md
+func WithOutboxWriter(writer outbox.CellWriter) Option {
+	return func(c *OrderCell) {
+		if writer != nil {
+			c.pendingOutboxWriter = writer
+		}
+	}
 }
 
-// WithTxManager sets the TxRunner for transactional guarantees.
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for transactional guarantees.
+// Composition roots construct via persistence.WrapForCell.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(c *OrderCell) { c.txRunner = tx }
 }
 
@@ -65,12 +88,17 @@ func WithLogger(l *slog.Logger) Option {
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type OrderCell struct {
 	*cell.BaseCell
-	repo         domain.OrderRepository
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	emitter      outbox.Emitter
-	cursorCodec  *query.CursorCodec
-	logger       *slog.Logger
+	repo     domain.OrderRepository
+	txRunner persistence.CellTxManager
+	emitter  outbox.Emitter
+	// Outbox wiring — writer accumulated via WithOutboxWriter and composed into
+	// emitter at Init() via cell.ResolveCellEmitter. ordercell is L2 OutboxFact:
+	// writer+txRunner is the only supported sink. Sealed marker types prevent
+	// any cell.go public Option from accepting raw outbox.Writer at compile
+	// time (ADR cell-raw-infra-sealed-marker §D1).
+	pendingOutboxWriter outbox.CellWriter
+	cursorCodec         *query.CursorCodec
+	logger              *slog.Logger
 
 	// +slice:route:slice=ordercreate,subPath=/orders
 	createHandler *createv1.Handler
@@ -110,6 +138,14 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 
 	if err := c.resolveOutboxDeps(durabilityMode); err != nil {
 		return err
+	}
+
+	// Register emitter health probes (fail-open rate checker), aligning with
+	// platform cell pattern (auditcore/cell.go:220-224, configcore/cell.go).
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
+		for k, v := range hc.Probes() {
+			reg.Health(k, v)
+		}
 	}
 
 	// Default to in-memory repository if none injected.
@@ -163,30 +199,27 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	return nil
 }
 
+// resolveOutboxDeps delegates to cell.ResolveCellEmitter — the same path
+// platform cells (accesscore/auditcore/configcore) use. ordercell only
+// supports the writer+txRunner sink (L2 OutboxFact).
+// After this call, pendingOutboxWriter is cleared and c.emitter is the
+// composed sink.
 func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
-	if err := cell.CheckNotNoop(mode, "ordercell", c.outboxWriter, c.txRunner); err != nil {
-		return err
-	}
-	if mode == cell.DurabilityDurable {
-		if c.outboxWriter == nil || c.txRunner == nil {
-			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-				"ordercell durable mode requires real outboxWriter and txRunner")
-		}
-		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
-		if err != nil {
-			return err
-		}
-		c.emitter = emitter
-		return nil
-	}
-	if c.outboxWriter == nil || c.txRunner == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			"ordercell demo mode requires outboxWriter and txRunner together; inject both explicitly")
-	}
-	emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
+			CellID:       "ordercell",
+			Mode:         mode,
+			OutboxWriter: c.pendingOutboxWriter,
+			TxRunner:     c.txRunner,
+			Logger:       c.logger,
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
 	if err != nil {
 		return err
 	}
-	c.emitter = emitter
+	c.emitter = outcome.Emitter
+	c.pendingOutboxWriter = nil
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
@@ -60,7 +61,7 @@ func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithLogger(logger),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)

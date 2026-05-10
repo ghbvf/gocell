@@ -1,7 +1,11 @@
 // Package cell provides the Cell/Slice runtime and governance primitives.
 package cell
 
-import "context"
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/kernel/persistence"
+)
 
 // DemoTxRunner is the cell-boundary pass-through TxRunner installed at Cell
 // Init() when the composition root has not provided a real persistence.TxRunner
@@ -24,4 +28,21 @@ func (DemoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 		return nil
 	}
 	return fn(ctx)
+}
+
+// DemoCellTxManager returns a sealed persistence.CellTxManager backed by
+// DemoTxRunner. Cell.Init uses this when the composition root has not
+// provided a real CellTxManager (publisher-only demo assemblies).
+//
+// The returned value still implements Nooper (via the wrapper's transparent
+// Noop pass-through), so cell.CheckNotNoop rejects it under
+// DurabilityDurable — demo fallbacks can never silently slip into a durable
+// assembly.
+//
+// This factory is the kernel-internal demo entry point; it pairs with
+// composition-root wraps (persistence.WrapForCell) for production wiring.
+// The wrap call is restricted to this file by archtest
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01.
+func DemoCellTxManager() persistence.CellTxManager {
+	return persistence.WrapForCell(DemoTxRunner{})
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -56,7 +57,7 @@ func main() {
 	// Create the device cell with in-memory defaults.
 	dc := devicecell.NewDeviceCell(
 		devicecell.WithClock(clk),
-		devicecell.WithPublisher(eb),
+		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(eb)),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithLogger(logger),
 	)

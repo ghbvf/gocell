@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -28,7 +29,7 @@ import (
 func newTestCell() *DeviceCell {
 	return NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
 		WithClock(clock.Real()),
 	)
 }
@@ -92,7 +93,7 @@ func TestDeviceCell_Startup(t *testing.T) {
 func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 	// No repos injected; Init should use in-memory defaults.
 	c := NewDeviceCell(
-		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
 		WithClock(clock.Real()),
 	)
 	ctx := context.Background()
@@ -350,7 +351,7 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
 		WithClock(clock.Real()),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
@@ -368,7 +369,7 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 func TestDeviceCell_DurableMode_RejectsInMemCommandQueue(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
 		WithClock(clock.Real()),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
@@ -383,7 +384,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 	// The publish-fail-open behavior under test applies in both modes.
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(failingPublisher{}),
+		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
 		WithClock(clock.Real()),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
@@ -401,7 +402,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(failingPublisher{}),
+		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
 		WithClock(clock.Real()),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))

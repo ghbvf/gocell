@@ -29,6 +29,12 @@ func KnownNonDefaultTags() [][]string {
 		{"examples_smoke"},
 		{"integration", "otelcollector"},
 		{"integration_cluster"},
+		// archtest_fixture gates negative-source fixtures loaded only by
+		// CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 +
+		// CELL-RAW-INFRA-WRAPPER-LOCATION-01 detection tests. Excluded from
+		// `go build ./...` and `go test ./...` so they never pollute
+		// real-repo scans (ai-collab.md §"real source AST capture").
+		{"archtest_fixture"},
 	}
 }
 

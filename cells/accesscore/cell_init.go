@@ -122,9 +122,9 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	// succeeds do we install the demoTxRunner fallback so slice constructors
 	// see a non-nil TxRunner.
 	if c.txRunner == nil {
-		c.logger.Warn("accesscore: using cell.DemoTxRunner (demo mode)",
+		c.logger.Warn("accesscore: using cell.DemoCellTxManager (demo mode)",
 			slog.String("durability_mode", durabilityMode.String()))
-		c.txRunner = cell.DemoTxRunner{}
+		c.txRunner = cell.DemoCellTxManager()
 	}
 	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
 	// so that assemblies that forget to wire a real TxRunner fail at Init() time.

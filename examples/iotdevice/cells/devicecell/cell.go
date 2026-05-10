@@ -61,9 +61,21 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 	return func(c *DeviceCell) { c.deviceRepo = r }
 }
 
-// WithPublisher sets the outbox Publisher for event publishing.
-func WithPublisher(p outbox.Publisher) Option {
-	return func(c *DeviceCell) { c.publisher = p }
+// WithDirectPublisher wires the sealed outbox CellPublisher for event publishing.
+// devicecell is L4 DeviceLatent — the direct-publish path is the source
+// of truth. There is no transactional outbox writer at L4.
+//
+// Accumulative: a nil pub leaves the previously-set value in place.
+// Demo mode: from the composition root, pass
+// outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}) to swallow events.
+//
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
+func WithDirectPublisher(pub outbox.CellPublisher) Option {
+	return func(c *DeviceCell) {
+		if pub != nil {
+			c.publisher = pub
+		}
+	}
 }
 
 // WithCursorCodec sets the cursor codec for pagination.
@@ -94,7 +106,7 @@ func WithClock(clk clock.Clock) Option {
 type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo      domain.DeviceRepository
-	publisher       outbox.Publisher
+	publisher       outbox.CellPublisher
 	emitter         outbox.Emitter // set during initInternal; retained for Probes
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
@@ -153,6 +165,11 @@ func NewDeviceCell(opts ...Option) *DeviceCell {
 // buildEmitter creates a DirectEmitter using the cell's publisher and metrics
 // provider. Falls back to metrics.NopProvider{} when no provider is injected.
 // Extracted from Init to keep Init's cognitive complexity within the ≤15 limit.
+//
+// L4 DeviceLatent: DirectPublishFailOpen is intentional — command persistence
+// succeeds independently of event publish; missed events are operational
+// follow-up, not request failures. Platform L1/L2 cells use FailClosed for
+// audit/compliance integrity. ref: ADR 202605101800 §D6 + KG-07 decision.
 func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 	mp := c.metricsProvider
 	if mp == nil {
@@ -199,10 +216,14 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 		c.logger.Info("devicecell: using in-memory device repository (demo mode)")
 	}
 
-	// Publisher is required (NIL-PUB-P1). Use &DiscardPublisher{} for demo mode.
+	// Publisher is required (NIL-PUB-P1). For demo mode, the composition
+	// root must wrap a publisher via outbox.WrapPublisherForCell, e.g.
+	//   WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}))
 	if c.publisher == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			"devicecell requires publisher; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
+			"devicecell requires publisher; use "+
+				"WithDirectPublisher(outbox.WrapPublisherForCell(&outbox.DiscardPublisher{})) "+
+				"from composition root for demo mode")
 	}
 
 	// Durable mode still rejects noop publishers, but direct publish remains
@@ -282,15 +303,15 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	// auth.clientsOnly:true → single-arg NewHandler; no policy needed, caller-cell allowlist is the guard.
 	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc)
-	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
-		Scanner:  cmdQueue,
-		Queue:    cmdQueue,
-		Filter:   kcommand.ScanFilter{},
-		Interval: 30 * time.Second,
-		OnError: func(err error) {
+	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue, c.clk,
+		kcommand.WithSweeperInterval(30*time.Second),
+		kcommand.WithSweeperOnError(func(err error) {
 			c.logger.Error("device-command sweeper error", slog.Any("error", err))
-		},
-	})
+		}))
+	if err != nil {
+		return fmt.Errorf("device-command sweeper: %w", err)
+	}
+	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper)
 	c.AddSlice(cell.NewBaseSlice("devicecommand", "devicecell", cell.L4))
 
 	// device-status slice
