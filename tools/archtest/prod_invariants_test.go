@@ -98,34 +98,64 @@ func TestProdDurationConst(t *testing.T) {
 // for each top-level declaration that is not a package-level const block, it
 // inspects every sub-expression. An expression that (a) has static type
 // time.Duration and (b) whose subtree contains a BasicLit is a violation.
+//
+// Migration note (PR-Φ): the original ast.Inspect+return-false-prune walked
+// every ast.Node, casting each to ast.Expr, and skipped descending into a
+// matched sub-tree to avoid double-counting. EachNode has no proceed-bool;
+// we collect candidate hits across BinaryExpr/CallExpr/UnaryExpr/ParenExpr/
+// BasicLit, then drop any hit fully contained inside another (range-based
+// outer-wins dedup, equivalent to the original prune semantics).
 func scanProdDurationAST(
 	fset *token.FileSet,
 	file *ast.File,
 	rel string,
 	info *types.Info,
 ) []string {
+	type hit struct {
+		expr ast.Expr
+		pos  token.Pos
+		end  token.Pos
+	}
 	var violations []string
 
 	checkExpr := func(root ast.Node) {
-		// Only scan concrete Expr node kinds that are the outermost duration
-		// literal shape: BinaryExpr (5*time.Second), CallExpr (time.Duration(5)),
-		// UnaryExpr (-5*time.Second), ParenExpr ((5*time.Second)). Bare BasicLit
-		// integers are not time.Duration in the types.Info map, so
-		// exprIsTimeDuration rejects them, avoiding double-counting sub-nodes.
-		scan := func(expr ast.Expr) {
+		var hits []hit
+		consider := func(expr ast.Expr) {
 			if !exprIsTimeDuration(expr, info) {
 				return
 			}
 			if !isLiteralDurationExpr(expr) {
 				return
 			}
-			pos := fset.Position(expr.Pos())
-			violations = append(violations, fmt.Sprintf("%s:%d: %s", rel, pos.Line, formatDurationExpr(expr)))
+			hits = append(hits, hit{expr: expr, pos: expr.Pos(), end: expr.End()})
 		}
-		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { scan(e) })
-		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { scan(e) })
-		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { scan(e) })
-		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { scan(e) })
+		// Cover every concrete Expr node kind that isLiteralDurationExpr can
+		// recognise: BasicLit (var x time.Duration = 5), BinaryExpr
+		// (5*time.Second), CallExpr (time.Duration(5)), UnaryExpr
+		// (-5*time.Second), ParenExpr ((5*time.Second)).
+		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		scanner.EachNode[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
+
+		// Outer-wins dedup: sort by start ascending, then drop any hit fully
+		// contained inside the most recent retained hit's [pos,end] range.
+		sort.Slice(hits, func(i, j int) bool {
+			if hits[i].pos != hits[j].pos {
+				return hits[i].pos < hits[j].pos
+			}
+			return hits[i].end > hits[j].end // wider range first when starts tie
+		})
+		var lastEnd token.Pos
+		for _, h := range hits {
+			if h.pos < lastEnd {
+				continue // contained inside a previously retained outer hit
+			}
+			pos := fset.Position(h.pos)
+			violations = append(violations, fmt.Sprintf("%s:%d: %s", rel, pos.Line, formatDurationExpr(h.expr)))
+			lastEnd = h.end
+		}
 	}
 
 	for _, decl := range file.Decls {
@@ -494,21 +524,39 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	f, err := parser.ParseFile(fset, "f.go", src, 0)
 	require.NoError(t, err)
 
-	// Scan outermost duration literal shapes: BinaryExpr (5*time.Second),
-	// CallExpr (time.Duration(5)), UnaryExpr, ParenExpr. Bare BasicLit integers
-	// are not the outermost form — they are only duration literals as part of a
-	// BinaryExpr (already counted there), so skip them to avoid double-counting.
+	// Outer-wins dedup mirrors scanProdDurationAST: collect candidate hits over
+	// all expr shapes (BinaryExpr, CallExpr, UnaryExpr, ParenExpr, BasicLit),
+	// drop any hit fully contained inside another. This count test does NOT
+	// gate on exprIsTimeDuration (no types.Info here), so the BasicLit pass
+	// would over-count integer literals everywhere — restrict to outer kinds
+	// that isLiteralDurationExpr can recognise standalone.
 	countInRoot := func(root ast.Node) int {
-		n := 0
-		check := func(expr ast.Expr) {
+		type hit struct{ pos, end token.Pos }
+		var hits []hit
+		consider := func(expr ast.Expr) {
 			if isLiteralDurationExpr(expr) {
-				n++
+				hits = append(hits, hit{pos: expr.Pos(), end: expr.End()})
 			}
 		}
-		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { check(e) })
-		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { check(e) })
-		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { check(e) })
-		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { check(e) })
+		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		sort.Slice(hits, func(i, j int) bool {
+			if hits[i].pos != hits[j].pos {
+				return hits[i].pos < hits[j].pos
+			}
+			return hits[i].end > hits[j].end
+		})
+		n := 0
+		var lastEnd token.Pos
+		for _, h := range hits {
+			if h.pos < lastEnd {
+				continue
+			}
+			n++
+			lastEnd = h.end
+		}
 		return n
 	}
 
