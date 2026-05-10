@@ -30,6 +30,13 @@ const (
 	DirectPublishFailOpen
 )
 
+// WarnDirectPublishFailOpen is the slog.Warn message emitted when a
+// DirectEmitter in DirectPublishFailOpen mode swallows a publisher failure.
+// Tests assert on this constant to lock the observable signal — AI-rebust
+// Medium (single-source literal, typed reference). Counter equivalent:
+// outbox_emit_failopen_dropped_total (registered in NewDirectEmitter).
+const WarnDirectPublishFailOpen = "outbox: direct publish failed (fail-open) — event dropped"
+
 // WriterEmitter emits by writing entries to the transactional outbox.
 type WriterEmitter struct {
 	writer Writer
@@ -198,7 +205,7 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 		// ref: k8s apiserver/pkg/audit Backend.FailurePolicy model.
 		mode := entry.FailurePolicy.Resolve(e.mode)
 		if mode == DirectPublishFailOpen {
-			e.logger.Warn("outbox: direct publish failed (fail-open) — event dropped",
+			e.logger.Warn(WarnDirectPublishFailOpen,
 				slog.String("topic", topic),
 				slog.String("entry_id", entry.ID),
 				slog.String("event_type", entry.EventType),
