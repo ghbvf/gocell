@@ -1,10 +1,10 @@
 // scaffold_assembly.go implements `gocell scaffold assembly` (K#09).
 //
-// Produces an assembly skeleton: assemblies/{id}/assembly.yaml +
-// cmd/{id}/run.go + cmd/{id}/app.go via kernel/assembly.Generator.Scaffold.
-// Unless --skip-generate is set, also auto-invokes the K#10 codegen path
-// (modules_gen.go + main.go + boundary.yaml) so `go build ./cmd/{id}/...`
-// succeeds immediately after scaffold.
+// Produces an assembly bundle via kernel/assembly.Generator.PlanAssemblyScaffold:
+// 3 skeleton files (assembly.yaml, run.go, app.go) + 3 K#10 derived files
+// (modules_gen.go, main.go, boundary.yaml), written through a single
+// pathsafe.WritePlannedFiles call (SCAFFOLD-WRITE-FUNNEL-01).
+// --skip-generate limits the plan to the 3 skeleton files only.
 package app
 
 import (
@@ -15,7 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
 // scaffoldAssembly is the subcommand entry for `gocell scaffold assembly`.
@@ -27,7 +27,7 @@ import (
 //	--role=<role>               required
 //	--deploy=<k8s|compose|binary> default k8s — k8s is omitted from yaml
 //	--dry-run                   render only, no writes
-//	--skip-generate             skip auto-invocation of assembly codegen
+//	--skip-generate             skip K#10 derived files (modules_gen.go / main.go / boundary.yaml)
 func scaffoldAssembly(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold assembly", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
@@ -51,32 +51,40 @@ func scaffoldAssembly(root string, args []string) error {
 		return fmt.Errorf("scaffold assembly: read module path: %w", err)
 	}
 
-	// Parse the project metadata so the generator can validate cell
-	// existence (and so auto-generate has the parsed registries).
 	project, err := metadata.NewParser(root).Parse()
 	if err != nil {
 		return fmt.Errorf("scaffold assembly: parse project: %w", err)
 	}
 
+	spec := assembly.AssemblyScaffoldSpec{
+		ID:           *id,
+		Cells:        cellList,
+		OwnerTeam:    *team,
+		OwnerRole:    *role,
+		Deploy:       *deploy,
+		SkipGenerate: *skipGenerate,
+	}
+
 	gen := assembly.NewGenerator(project, mod, root)
-	if err := gen.Scaffold(assembly.AssemblyScaffoldSpec{
-		ID:        *id,
-		Cells:     cellList,
-		OwnerTeam: *team,
-		OwnerRole: *role,
-		Deploy:    *deploy,
-		DryRun:    *dryRun,
-	}); err != nil {
+	plan, err := gen.PlanAssemblyScaffold(spec)
+	if err != nil {
 		return err
 	}
 
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold assembly: resolve project root: %w", err)
+	}
+
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+		return fmt.Errorf("scaffold assembly: write files: %w", err)
+	}
+
 	if *dryRun {
-		yamlRel := filepath.Join("assemblies", *id, "assembly.yaml")
-		runRel := filepath.Join("cmd", *id, "run.go")
-		appRel := filepath.Join("cmd", *id, "app.go")
-		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(yamlRel))
-		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(runRel))
-		fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(appRel))
+		for _, p := range pathsafe.PlannedPaths(plan) {
+			rel, _ := filepath.Rel(realRoot, p)
+			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
+		}
 		return nil
 	}
 
@@ -88,64 +96,8 @@ func scaffoldAssembly(root string, args []string) error {
 
 	if *skipGenerate {
 		fmt.Printf("scaffold assembly: skipped auto-generate (--skip-generate). "+
-			"Run `gocell generate assembly --id=%s` to materialize modules_gen.go / main.go / boundary.yaml.\n",
-			*id)
-		return nil
-	}
-
-	// Auto-generate K#10 derived artifacts. The just-written assembly.yaml
-	// must be re-parsed because the in-memory project does not include it.
-	freshProject, err := metadata.NewParser(root).Parse()
-	if err != nil {
-		return fmt.Errorf("scaffold assembly: re-parse project for codegen: %w", err)
-	}
-	if err := autoGenerateAssemblyArtifacts(root, mod, freshProject, *id); err != nil {
-		return fmt.Errorf("scaffold assembly: auto-generate: %w", err)
-	}
-	return nil
-}
-
-// autoGenerateAssemblyArtifacts runs the K#10 derived-file generators for
-// a single assembly: modules_gen.go, main.go, boundary.yaml.
-func autoGenerateAssemblyArtifacts(root, mod string, project *metadata.ProjectMeta, assemblyID string) error {
-	gen := assembly.NewGenerator(project, mod, root)
-	asm := project.Assemblies[assemblyID]
-	if asm == nil {
-		return fmt.Errorf("assembly %q not found in re-parsed project", assemblyID)
-	}
-
-	// modules_gen.go under cmd/{id}/.
-	modulesContent, err := gen.GenerateModulesGen(assemblyID)
-	if err != nil {
-		return fmt.Errorf("generate modules_gen: %w", err)
-	}
-	modulesPath := filepath.Join(root, "cmd", assemblyID, "modules_gen.go")
-	if _, err := codegen.Write(codegen.WriteOptions{Path: modulesPath, Content: modulesContent, RepoRoot: root}); err != nil {
-		return fmt.Errorf("write modules_gen: %w", err)
-	}
-
-	// main.go entrypoint under cmd/{id}/.
-	mainContent, err := gen.GenerateEntrypoint(assemblyID)
-	if err != nil {
-		return fmt.Errorf("generate main.go: %w", err)
-	}
-	entrypointRel := asm.Build.Entrypoint
-	if entrypointRel == "" {
-		entrypointRel = filepath.Join("cmd", assemblyID, "main.go")
-	}
-	mainPath := filepath.Join(root, entrypointRel)
-	if _, err := codegen.Write(codegen.WriteOptions{Path: mainPath, Content: mainContent, RepoRoot: root}); err != nil {
-		return fmt.Errorf("write main.go: %w", err)
-	}
-
-	// boundary.yaml under assemblies/{id}/generated/.
-	boundaryContent, err := gen.GenerateBoundary(assemblyID)
-	if err != nil {
-		return fmt.Errorf("generate boundary.yaml: %w", err)
-	}
-	boundaryPath := filepath.Join(root, "assemblies", assemblyID, "generated", "boundary.yaml")
-	if _, err := codegen.Write(codegen.WriteOptions{Path: boundaryPath, Content: boundaryContent, RepoRoot: root}); err != nil {
-		return fmt.Errorf("write boundary.yaml: %w", err)
+			"Run `gocell generate assembly --id=%s` to materialize "+
+			"modules_gen.go / main.go / boundary.yaml.\n", *id)
 	}
 	return nil
 }
