@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/shutdown"
@@ -65,8 +66,8 @@ func main() {
 	// a real outbox.Writer (e.g., postgres.OutboxWriter) + persistence.TxRunner
 	// (e.g., postgres.TxManager) for durable event delivery via relay.
 	oc := ordercell.NewOrderCell(
-		ordercell.WithOutboxWriter(outbox.NoopWriter{}),
-		ordercell.WithTxManager(demoTxRunner{}),
+		ordercell.WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		ordercell.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 		ordercell.WithCursorCodec(cursorCodec),
 		ordercell.WithLogger(logger),
 	)

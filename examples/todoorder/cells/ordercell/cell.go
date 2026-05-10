@@ -46,19 +46,26 @@ func WithRepository(r domain.OrderRepository) Option {
 	return func(c *OrderCell) { c.repo = r }
 }
 
-// WithOutboxWriter wires the outbox Writer for transactional event publishing.
-// ordercell is L2 OutboxFact — the (writer, txRunner) pair is composed into
-// an outbox.Emitter at Init() time via cell.ResolveCellEmitter.
+// WithOutboxWriter wires the sealed outbox CellWriter for transactional
+// event publishing. ordercell is L2 OutboxFact — the (writer, txRunner)
+// pair is composed into an outbox.Emitter at Init() time via
+// cell.ResolveCellEmitter. Composition roots construct via
+// outbox.WrapWriterForCell.
 //
 // ordercell deliberately omits the publisher-only path: it has no
 // MetricsProvider/Clock wiring for a DirectEmitter. The writer+txRunner
 // sink is the only supported configuration.
 //
 // Accumulative: a nil writer leaves the previously-set value in place.
-// Demo mode: pass outbox.NoopWriter{} paired with WithTxManager(demoTxRunner{}).
+// Demo mode: wrap outbox.NoopWriter{} with outbox.WrapWriterForCell, paired
+// with WithTxManager(persistence.WrapForCell(demoTxRunner{})) or
+// cell.DemoCellTxManager().
 //
-// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
-func WithOutboxWriter(writer outbox.Writer) Option {
+// AI-HARD per ADR cell-raw-infra-sealed-marker: the option signature
+// rejects raw outbox.Writer at compile time.
+//
+// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md
+func WithOutboxWriter(writer outbox.CellWriter) Option {
 	return func(c *OrderCell) {
 		if writer != nil {
 			c.pendingOutboxWriter = writer
@@ -66,8 +73,9 @@ func WithOutboxWriter(writer outbox.Writer) Option {
 	}
 }
 
-// WithTxManager sets the TxRunner for transactional guarantees.
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for transactional guarantees.
+// Composition roots construct via persistence.WrapForCell.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(c *OrderCell) { c.txRunner = tx }
 }
 
@@ -81,12 +89,14 @@ func WithLogger(l *slog.Logger) Option {
 type OrderCell struct {
 	*cell.BaseCell
 	repo     domain.OrderRepository
-	txRunner persistence.TxRunner
+	txRunner persistence.CellTxManager
 	emitter  outbox.Emitter
 	// Outbox wiring — writer accumulated via WithOutboxWriter and composed into
 	// emitter at Init() via cell.ResolveCellEmitter. ordercell is L2 OutboxFact:
-	// writer+txRunner is the only supported sink.
-	pendingOutboxWriter outbox.Writer
+	// writer+txRunner is the only supported sink. Sealed marker types prevent
+	// any cell.go public Option from accepting raw outbox.Writer at compile
+	// time (ADR cell-raw-infra-sealed-marker §D1).
+	pendingOutboxWriter outbox.CellWriter
 	cursorCodec         *query.CursorCodec
 	logger              *slog.Logger
 

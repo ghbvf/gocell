@@ -84,27 +84,27 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(authBootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nw),
-		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!!")),
-		auditcore.WithTxManager(noopTxRunner{}),
+		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
@@ -308,27 +308,27 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(guardBootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nw),
-		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithHMACKey([]byte("guard-test-hmac-key-32-bytes!!!!!")),
-		auditcore.WithTxManager(noopTxRunner{}),
+		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
@@ -543,27 +543,27 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(healthBootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nw),
-		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithHMACKey([]byte("health-test-hmac-key-32-bytes!!!")),
-		auditcore.WithTxManager(noopTxRunner{}),
+		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)

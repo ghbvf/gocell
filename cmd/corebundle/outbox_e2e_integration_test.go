@@ -215,7 +215,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nil),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
@@ -224,7 +224,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nil),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
@@ -535,7 +535,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nil),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
@@ -545,7 +545,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nil),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),

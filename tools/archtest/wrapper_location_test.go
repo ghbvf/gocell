@@ -60,6 +60,9 @@ type wrapperViolation struct {
 //   - examples/<demo>/main.go and examples/<demo>/app.go (composition root)
 //   - kernel/persistence/cell_marker.go and kernel/outbox/cell_marker.go
 //     (the wrapper definitions themselves)
+//   - kernel/cell/demo_tx_runner.go (DemoCellTxManager factory; the only
+//     kernel-internal helper that wraps a known noop fallback for cells —
+//     keeps cells/* free of any wrap call site)
 func isWrapperCallerAllowed(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	if strings.HasSuffix(rel, "_test.go") {
@@ -68,7 +71,10 @@ func isWrapperCallerAllowed(rel string) bool {
 	if strings.HasPrefix(rel, "cmd/") {
 		return true
 	}
-	if rel == "kernel/persistence/cell_marker.go" || rel == "kernel/outbox/cell_marker.go" {
+	switch rel {
+	case "kernel/persistence/cell_marker.go",
+		"kernel/outbox/cell_marker.go",
+		"kernel/cell/demo_tx_runner.go":
 		return true
 	}
 	parts := strings.Split(rel, "/")

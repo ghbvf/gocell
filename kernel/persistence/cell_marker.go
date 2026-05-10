@@ -36,6 +36,21 @@ type internalCellTxManager struct {
 
 func (internalCellTxManager) sealedCellTxManager() {}
 
+// Noop transparently delegates to the wrapped TxRunner's Nooper interface
+// when present (kernel/cell.Nooper). Without this method the sealed wrapper
+// would hide cell.DemoTxRunner's noop signal from cell.CheckNotNoop, letting
+// durable assemblies silently accept demo runners.
+//
+// The interface is matched structurally — kernel/persistence does not import
+// kernel/cell, so we redeclare the single-method shape locally.
+func (i internalCellTxManager) Noop() bool {
+	type nooper interface{ Noop() bool }
+	if n, ok := i.TxRunner.(nooper); ok {
+		return n.Noop()
+	}
+	return false
+}
+
 // WrapForCell is the sole authorized path for handing a TxRunner to a
 // cell's With* Option. Returns nil when tr is nil so caller-side
 // typed-nil detection (e.g. validation.IsNilInterface in builder options)

@@ -37,11 +37,35 @@ type internalCellPublisher struct {
 
 func (internalCellPublisher) sealedCellPublisher() {}
 
+// Noop transparently delegates to the wrapped Publisher's Nooper interface
+// when present (kernel/cell.Nooper). Without this, the sealed wrapper would
+// hide outbox.DiscardPublisher's noop signal from cell.CheckNotNoop and
+// kernel/cell/mode_resolver.go's isNooperDep, letting durable assemblies
+// silently accept demo publishers.
+func (i internalCellPublisher) Noop() bool {
+	type nooper interface{ Noop() bool }
+	if n, ok := i.Publisher.(nooper); ok {
+		return n.Noop()
+	}
+	return false
+}
+
 type internalCellWriter struct {
 	Writer
 }
 
 func (internalCellWriter) sealedCellWriter() {}
+
+// Noop transparently delegates to the wrapped Writer's Nooper interface
+// when present. Mirror of internalCellPublisher.Noop — see that godoc for
+// the rationale (preserve cell.CheckNotNoop and isNooperDep detection).
+func (i internalCellWriter) Noop() bool {
+	type nooper interface{ Noop() bool }
+	if n, ok := i.Writer.(nooper); ok {
+		return n.Noop()
+	}
+	return false
+}
 
 // WrapPublisherForCell is the sole authorized path for handing a Publisher
 // to a cell's With* Option. Returns nil when p is nil so caller-side

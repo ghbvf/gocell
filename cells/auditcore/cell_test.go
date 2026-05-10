@@ -50,10 +50,10 @@ func newTestCell() *AuditCore {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithHMACKey(testHMACKey),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(cell.DemoTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -105,7 +105,7 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		// No HMAC key.
 	)
 	ctx := context.Background()
@@ -127,10 +127,10 @@ func TestAuditCore_HMACKeyTooShort(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithHMACKey(shortKey),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(cell.DemoTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
@@ -163,9 +163,9 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(cell.DemoTxRunner{}),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
@@ -183,9 +183,9 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithHMACKey(testHMACKey),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		// txRunner intentionally omitted
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
@@ -200,9 +200,9 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithHMACKey(testHMACKey),
-		WithTxManager(cell.DemoTxRunner{}),
+		WithTxManager(cell.DemoCellTxManager()),
 		// outboxWriter intentionally omitted
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
@@ -232,8 +232,8 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(cell.DemoTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
@@ -248,7 +248,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithHMACKey(testHMACKey),
 		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
@@ -263,8 +263,8 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(cell.DemoTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
 		WithEmitter(outbox.NewNoopEmitter()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
@@ -319,7 +319,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithHMACKey(testHMACKey),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(cell.DemoTxRunner{}),
+		WithTxManager(cell.DemoCellTxManager()),
 	)
 	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
@@ -433,10 +433,10 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithHMACKey(testHMACKey),
-		WithOutboxDeps(nil, &recordingWriter{}), // non-Nooper; durable-gated CheckNotNoop passes
-		WithTxManager(durableTxRunner{}),        // non-Nooper; durable-gated CheckNotNoop passes
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingWriter{})), // non-Nooper; durable-gated CheckNotNoop passes
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),        // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
@@ -487,10 +487,10 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 				WithClock(clock.Real()),
 				WithAuditRepository(mem.NewAuditRepository()),
 				WithArchiveStore(mem.NewArchiveStore()),
-				WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+				WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 				WithHMACKey(testHMACKey),
-				WithOutboxDeps(nil, tc.outbox),
-				WithTxManager(tc.tx),
+				WithOutboxDeps(nil, outbox.WrapWriterForCell(tc.outbox)),
+				WithTxManager(persistence.WrapForCell(tc.tx)),
 				WithCursorCodec(mustNewCodec(t, productionKey)),
 				WithMetricsProvider(metrics.NopProvider{}),
 			)

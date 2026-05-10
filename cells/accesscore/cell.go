@@ -100,7 +100,7 @@ func WithEmitter(e outbox.Emitter) Option {
 // (WithOutboxDeps) paths, construct a fresh Cell instead of trying to toggle.
 //
 // Mutually exclusive with WithEmitter — Init() fails fast if both are set.
-func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+func WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter) Option {
 	return func(c *AccessCore) {
 		if pub != nil {
 			c.pendingOutboxPub = pub
@@ -131,8 +131,9 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *AccessCore) { c.cursorCodec = codec }
 }
 
-// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for transactional guarantees (L2
+// atomicity). Composition roots construct via persistence.WrapForCell.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(c *AccessCore) { c.txRunner = tx }
 }
 
@@ -233,13 +234,14 @@ type AccessCore struct {
 	//   (b) WithOutboxDeps(pub, w)  — pendingOutboxPub/Writer are set and
 	//       Init() composes an Emitter via cell.ResolveEmitter.
 	// After Init, pendingOutboxPub/Writer are cleared; only `emitter` is live.
-	// These fields are private — no exported Option is allowed to take raw
-	// outbox.Publisher/Writer arguments (enforced by archtest OUTBOX-CELL-01).
+	// Sealed marker types prevent any cell.go public Option from accepting
+	// raw outbox.Publisher / outbox.Writer at compile time (ADR
+	// cell-raw-infra-sealed-marker §D1).
 	emitter             outbox.Emitter
-	pendingOutboxPub    outbox.Publisher
-	pendingOutboxWriter outbox.Writer
+	pendingOutboxPub    outbox.CellPublisher
+	pendingOutboxWriter outbox.CellWriter
 
-	txRunner    persistence.TxRunner
+	txRunner    persistence.CellTxManager
 	logger      *slog.Logger
 	jwtIssuer   *auth.JWTIssuer
 	jwtVerifier *auth.JWTVerifier

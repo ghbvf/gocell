@@ -61,7 +61,7 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 	return func(c *DeviceCell) { c.deviceRepo = r }
 }
 
-// WithDirectPublisher wires the outbox Publisher for event publishing.
+// WithDirectPublisher wires the sealed outbox CellPublisher for event publishing.
 // devicecell is L4 DeviceLatent — the direct-publish path is the source
 // of truth. There is no transactional outbox writer at L4.
 //
@@ -69,7 +69,7 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 // Demo mode: pass &outbox.DiscardPublisher{} to swallow events.
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
-func WithDirectPublisher(pub outbox.Publisher) Option {
+func WithDirectPublisher(pub outbox.CellPublisher) Option {
 	return func(c *DeviceCell) {
 		if pub != nil {
 			c.publisher = pub
@@ -105,7 +105,7 @@ func WithClock(clk clock.Clock) Option {
 type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo      domain.DeviceRepository
-	publisher       outbox.Publisher
+	publisher       outbox.CellPublisher
 	emitter         outbox.Emitter // set during initInternal; retained for Probes
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger

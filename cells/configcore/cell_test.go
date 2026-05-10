@@ -33,9 +33,9 @@ func newTestCell() *ConfigCore {
 		WithClock(clock.Real()),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -98,8 +98,8 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 		c := NewConfigCore(
 			WithClock(clock.Real()),
 			WithInMemoryDefaults(),
-			WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-			WithOutboxDeps(nil, outbox.NoopWriter{}),
+			WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+			WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		)
 		checkHalfConfigured(t, c)
 	})
@@ -108,8 +108,8 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 		c := NewConfigCore(
 			WithClock(clock.Real()),
 			WithInMemoryDefaults(),
-			WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-			WithTxManager(durableTxRunner{}),
+			WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+			WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		)
 		checkHalfConfigured(t, c)
 	})
@@ -119,9 +119,9 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -144,7 +144,7 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -155,8 +155,8 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(durableTxRunner{}),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T)
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
@@ -204,7 +204,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 		WithInMemoryDefaults(),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(durableTxRunner{}),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 	)
 	err = c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -549,9 +549,9 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 		WithClock(clock.Real()),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-		WithOutboxDeps(nil, &recordingConfigWriter{}),
-		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingConfigWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})), // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
@@ -602,8 +602,8 @@ func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 		WithClock(clock.Real()),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
-		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
-		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), writer),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})), // non-Nooper; durable-gated CheckNotNoop passes
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), outbox.WrapWriterForCell(writer)),
 		WithCursorCodec(mustNewCfgCodec(t, []byte("wiring-test-cfg-cursor-key-32b!!"))),
 	)
 	// Writer is accumulated into pendingOutboxWriter pre-Init.
@@ -643,7 +643,7 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 		},
 	}
 
-	c := NewConfigCore(WithClock(clock.Real()), WithInMemoryDefaults(), WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil))
+	c := NewConfigCore(WithClock(clock.Real()), WithInMemoryDefaults(), WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil))
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runMode, publishMode := c.deriveModes(tt.durability)

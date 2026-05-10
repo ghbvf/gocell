@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -214,10 +215,10 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithBootstrapAuth(bootstrapMW),
-		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(demoTxRunner{}),
+		accesscore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 		accesscore.WithLogger(cfg.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
@@ -231,9 +232,9 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithHMACKey([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
-		auditcore.WithTxManager(demoTxRunner{}),
+		auditcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(cfg.logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
@@ -246,8 +247,8 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nw),
-		configcore.WithTxManager(demoTxRunner{}),
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		configcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(cfg.logger),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
