@@ -183,8 +183,9 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 			return fmt.Errorf("bootstrap: config watcher: %w", err)
 		}
 		s.cfgWatcher = w
-		// Watcher.CloseCtx propagates the shared shutCtx budget to the
-		// in-flight callback drain phase (replaces the fixed drainTimeout).
+		// Watcher.CloseCtx propagates the tearCtx (stage 3 budget; see
+		// WithShutdownTimeout godoc) to the in-flight callback drain phase
+		// (replaces the fixed drainTimeout).
 		s.addCloser(s.cfgWatcher)
 	}
 
@@ -221,7 +222,7 @@ func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 	s.sub = sub
 
 	// outbox.Subscriber.Close now accepts ctx — use it directly so the teardown
-	// passes the shared shutCtx budget through to the implementation.
+	// passes the tearCtx (stage 3 budget) through to the implementation.
 	if sub != nil {
 		s.addTeardown(sub.Close)
 	}

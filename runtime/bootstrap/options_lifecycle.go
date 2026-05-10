@@ -45,13 +45,15 @@ func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
 
 // WithManagedCloser registers an adapter or resource that implements
 // lifecycle.ContextCloser for LIFO teardown during graceful shutdown.
-// The shared shutCtx budget propagates directly to c.Close(ctx), so the
-// resource participates in the same shutdown deadline as all other components.
+// The tearCtx budget (stage 3 — independent from drainCtx, see
+// WithShutdownTimeout godoc) propagates directly to c.Close(ctx), so the
+// resource participates in the same teardown deadline as all other LIFO
+// components.
 //
 // Use this instead of a bare defer c.Close() so that:
 //
 //   - The resource is closed in LIFO order after HTTP and worker shutdown.
-//   - The shared shutdownTimeout ctx is honored (not an arbitrary timeout).
+//   - The tearCtx (stage 3 budget) is honored (not an arbitrary timeout).
 //   - Startup rollback also triggers the teardown on phase failures.
 //
 // Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are

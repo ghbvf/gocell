@@ -1,8 +1,10 @@
 # ADR — kernel/assembly rollback ctx decoupling (PR-V1-030-G02)
 
 - **Date**: 2026-05-05
-- **Status**: Accepted
+- **Status**: Accepted (grace formula portion superseded by [202605101730-adr-shutdown-budget-decouple.md](202605101730-adr-shutdown-budget-decouple.md))
 - **Refs**: `kernel/assembly/assembly.go`, `runtime/bootstrap/phases_assembly.go`, `docs/ops/graceful-shutdown-k8s.md`
+
+> **Note**: 本 ADR 的"部署配套"章节中给出的 grace 公式 `>= shutdownTimeout + 10s`（行 52）已被 [`202605101730-adr-shutdown-budget-decouple.md`](202605101730-adr-shutdown-budget-decouple.md) supersede——phase10 拆双 budget 后正确公式为 `>= 2 × shutdownTimeout + 10s`。本 ADR 的 rollback ctx 解耦决策本身仍生效。
 
 ## 问题
 
