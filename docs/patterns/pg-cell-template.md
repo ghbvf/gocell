@@ -147,7 +147,7 @@ func (m FooCoreModule) Provide(ctx context.Context, shared *SharedDeps) (
 	}
 
 	c := foocore.NewFooCore(append([]foocore.Option{
-		foocore.WithPublisher(shared.EventBus),
+		foocore.WithOutboxDeps(shared.EventBus, nil), // L2 platform cell: pub for relay fan-out; writer injected via cellOpts (postgres path)
 		foocore.WithCursorCodec(cursorCodec),
 	}, cellOpts...)...)
 

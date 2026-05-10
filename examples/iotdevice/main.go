@@ -56,7 +56,7 @@ func main() {
 	// Create the device cell with in-memory defaults.
 	dc := devicecell.NewDeviceCell(
 		devicecell.WithClock(clk),
-		devicecell.WithOutboxDeps(eb, nil),
+		devicecell.WithDirectPublisher(eb),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithLogger(logger),
 	)

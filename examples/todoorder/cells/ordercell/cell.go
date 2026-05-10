@@ -46,27 +46,20 @@ func WithRepository(r domain.OrderRepository) Option {
 	return func(c *OrderCell) { c.repo = r }
 }
 
-// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer). The
-// framework composes them into an outbox.Emitter at Init() time via
-// cell.ResolveCellEmitter — the same path platform cells use.
+// WithOutboxWriter wires the outbox Writer for transactional event publishing.
+// ordercell is L2 OutboxFact — the (writer, txRunner) pair is composed into
+// an outbox.Emitter at Init() time via cell.ResolveCellEmitter.
 //
-// Accumulative: a nil argument leaves the previously-set value in place;
-// multiple calls combine their non-nil arguments. Does NOT clear previous
-// state — `WithOutboxDeps(nil, nil)` is a no-op, not a reset.
+// ordercell deliberately omits the publisher-only path: it has no
+// MetricsProvider/Clock wiring for a DirectEmitter. The writer+txRunner
+// sink is the only supported configuration.
 //
-// Tests typically pass `(nil, outbox.NoopWriter{})` for a sink that swallows
-// events without producing real fan-out.
-//
-// Demo mode: pass (nil, outbox.NoopWriter{}) — Publisher is unused when relay is absent;
-// the writer is a non-fan-out sink that swallows events for local testing.
+// Accumulative: a nil writer leaves the previously-set value in place.
+// Demo mode: pass outbox.NoopWriter{} paired with WithTxManager(demoTxRunner{}).
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
-// ref: cells/auditcore/cell.go::WithOutboxDeps (platform-cell pattern)
-func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+func WithOutboxWriter(writer outbox.Writer) Option {
 	return func(c *OrderCell) {
-		if pub != nil {
-			c.pendingOutboxPub = pub
-		}
 		if writer != nil {
 			c.pendingOutboxWriter = writer
 		}
@@ -90,10 +83,9 @@ type OrderCell struct {
 	repo     domain.OrderRepository
 	txRunner persistence.TxRunner
 	emitter  outbox.Emitter
-	// Outbox wiring — raw deps are accumulated via WithOutboxDeps and
-	// composed into emitter at Init() via cell.ResolveCellEmitter; archtest
-	// CELL-RAW-DEPS-01 forbids exporting raw outbox.Publisher/Writer Options.
-	pendingOutboxPub    outbox.Publisher
+	// Outbox wiring — writer accumulated via WithOutboxWriter and composed into
+	// emitter at Init() via cell.ResolveCellEmitter. ordercell is L2 OutboxFact:
+	// writer+txRunner is the only supported sink.
 	pendingOutboxWriter outbox.Writer
 	cursorCodec         *query.CursorCodec
 	logger              *slog.Logger
@@ -198,20 +190,15 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 }
 
 // resolveOutboxDeps delegates to cell.ResolveCellEmitter — the same path
-// platform cells (accesscore/auditcore/configcore) use. After this call,
-// pendingOutboxPub/pendingOutboxWriter are cleared and c.emitter is the
+// platform cells (accesscore/auditcore/configcore) use. ordercell only
+// supports the writer+txRunner sink (L2 OutboxFact).
+// After this call, pendingOutboxWriter is cleared and c.emitter is the
 // composed sink.
-//
-// ordercell uses the framework default (DirectPublishMode = zero value;
-// publisher path requires MetricsProvider which ordercell does not wire,
-// so pendingOutboxPub == nil in current usage). The (pub, writer) pair
-// keeps the door open without committing ordercell to publisher semantics.
 func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
 		EmitterConfig: cell.EmitterConfig{
 			CellID:       "ordercell",
 			Mode:         mode,
-			Publisher:    c.pendingOutboxPub,
 			OutboxWriter: c.pendingOutboxWriter,
 			TxRunner:     c.txRunner,
 			Logger:       c.logger,
@@ -223,7 +210,6 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 		return err
 	}
 	c.emitter = outcome.Emitter
-	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
 	return nil
 }

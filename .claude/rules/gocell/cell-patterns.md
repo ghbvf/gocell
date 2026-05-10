@@ -72,14 +72,22 @@ CLAUDE.md "Cell 之间只通过 contract 通信"——**contract = `payload.sche
 
 ## Init() fail-fast
 
-依赖缺失在 Init() 报错，不降级运行。`DiscardPublisher{}` 是 demo 信号。
+依赖缺失在 Init() 报错，不降级运行。`outbox.NoopWriter{}` / `outbox.DiscardPublisher{}` 是 demo 信号。
 
 ```go
-if c.publisher == nil && c.outboxWriter == nil {
+if c.pendingOutboxPub == nil && c.pendingOutboxWriter == nil {
     return errcode.New(errcode.ErrCellMissingOutbox,
-        "requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
+        "requires publisher or outbox writer; use WithOutboxDeps(&outbox.DiscardPublisher{}, nil) for demo mode")
 }
 ```
+
+**约束**：cells/* 公开 With* Option 不得直接接受 raw infra 类型（`outbox.Publisher` / `outbox.Writer` / `persistence.TxRunner`）。按 cell 真实能力声明 cell-specific Option：
+
+- Platform cell L1/L2（`cells/*`）：`WithOutboxDeps(pub, writer)` + `WithTxManager(tx)`
+- Example ordercell L2（无 publisher 路径）：`WithOutboxWriter(w)` + `WithTxManager(tx)`
+- Example devicecell L4（无 writer，无 txRunner）：`WithDirectPublisher(p)`
+
+archtest `CELL-RAW-DEPS-01` 以 type-aware（typeseval.SharedResolver + canonical type）三元组 allowlist 静态守卫（AI-rebust Hard 级）；详见 ADR `docs/architecture/202605101800-adr-cell-interface-isp-split.md` §D6。
 
 ## Contract test
 

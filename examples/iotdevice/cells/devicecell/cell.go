@@ -61,33 +61,15 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 	return func(c *DeviceCell) { c.deviceRepo = r }
 }
 
-// MustHaveNilDeviceCellWriter panics when writer is non-nil (programming error).
-// L4 DeviceLatent cells use direct-publish only; passing a writer indicates a
-// misconfiguration (probably copied from an L1/L2 platform cell). Fail-fast
-// at the option site rather than silently dropping.
-// Panic class: B (parameter contract violation). ref: ADR 202604270030 §5.
-func MustHaveNilDeviceCellWriter(writer outbox.Writer) {
-	if writer != nil {
-		panic(errcode.Assertion(
-			"devicecell.WithOutboxDeps: writer arg must be nil; L4 cell uses direct-publish path only"))
-	}
-}
-
-// WithOutboxDeps wires the outbox Publisher for event publishing. devicecell
-// is L4 (DeviceLatent) — the direct-publish path is the source of truth and
-// there is no transactional outbox writer. The writer parameter must be nil;
-// passing a non-nil writer is a misconfiguration (probably copied from an L1/L2
-// platform cell) — MustHaveNilDeviceCellWriter panics at the option site rather
-// than silently dropping.
+// WithDirectPublisher wires the outbox Publisher for event publishing.
+// devicecell is L4 DeviceLatent — the direct-publish path is the source
+// of truth. There is no transactional outbox writer at L4.
 //
-// Accumulative: a nil pub leaves the previously-set value in place; multiple
-// calls combine non-nil arguments. `WithOutboxDeps(nil, nil)` is a no-op,
-// not a reset.
+// Accumulative: a nil pub leaves the previously-set value in place.
+// Demo mode: pass &outbox.DiscardPublisher{} to swallow events.
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
-// ref: cells/auditcore/cell.go::WithOutboxDeps (platform-cell pattern)
-func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
-	MustHaveNilDeviceCellWriter(writer)
+func WithDirectPublisher(pub outbox.Publisher) Option {
 	return func(c *DeviceCell) {
 		if pub != nil {
 			c.publisher = pub
@@ -236,7 +218,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 	// Publisher is required (NIL-PUB-P1). Use &DiscardPublisher{} for demo mode.
 	if c.publisher == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			"devicecell requires publisher; use WithOutboxDeps(&outbox.DiscardPublisher{}, nil) for demo mode")
+			"devicecell requires publisher; use WithDirectPublisher(&outbox.DiscardPublisher{}) for demo mode")
 	}
 
 	// Durable mode still rejects noop publishers, but direct publish remains

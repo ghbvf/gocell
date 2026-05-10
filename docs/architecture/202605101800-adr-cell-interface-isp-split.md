@@ -81,21 +81,44 @@ var (
 
 新建 archtest `tools/archtest/cell_raw_deps_test.go` 守 `CELL-RAW-DEPS-01`：
 
-- **范围**：platform `cells/<x>/cell.go` + examples `examples/<demo>/cells/<x>/cell.go`（OUTBOX-CELL-01 当前 `isCellFile` 仅平台范围是 AI-HARD 漏洞——本 PR 同步修复 `ordercell.WithOutboxWriter` 与 `devicecell.WithPublisher` 两处历史暴露）
-- **forbidden type set（5 类，闭集）**：`persistence.TxRunner` / `outbox.Publisher` / `outbox.Writer` / `eventbus.Bus` / `kvstore.Store`
+- **范围**：platform `cells/<x>/cell.go` + examples `examples/<demo>/cells/<x>/cell.go`（OUTBOX-CELL-01 当前 `isCellFile` 仅平台范围是 AI-HARD 漏洞——本 PR 同步修复 `ordercell` 与 `devicecell` 两处历史暴露）
+- **forbidden type set（canonical package path，闭集）**：
+  - `github.com/ghbvf/gocell/kernel/persistence.TxRunner`
+  - `github.com/ghbvf/gocell/kernel/outbox.Publisher`
+  - `github.com/ghbvf/gocell/kernel/outbox.Writer`
 
-**为何 vault / crypto 类型不进 forbidden set**：`adapters/vault.VaultClient` 等密钥
-基础设施仅在 `adapters/` 层暴露，通过 `kernel/crypto` 接口向上层提供能力，cell.go
-通过 `cmd/corebundle` 注入路径访问，不接受 With* Option 直接传入 raw vault 类型。
-若未来 cell.go 需要直接接受 `vault.KeyProvider` 类的 Option，应先评估纳入 forbidden
-set 并写新 ADR 修订本节。
-- **allowlist（2 条结构必要）**：
-  - `(WithTxManager → persistence.TxRunner)`：`OUTBOX-SERVICE-01` fail-fast on nil TxRunner 的事务边界注入唯一路径——删除会破坏 service 构造期 nil 检查的单源约束
-  - `(WithOutboxDeps → outbox.Publisher, outbox.Writer)`：PR-A5c 决定的合法 pre-composed emitter 替代 raw `Publisher`/`Writer` 暴露——两参一同被 `cell.ResolveCellEmitter` 在 Init 时组装
+**为何 vault / crypto / eventbus / kvstore 类型不进 forbidden set**：`adapters/vault.VaultClient` 等密钥基础设施仅在 `adapters/` 层暴露；`runtime/eventbus` 的 Bus 类型位于 runtime 层，cell.go 通过 Publisher 接口间接使用；kvstore 无 kernel 层公共接口。若未来出现直接暴露这类类型的需求，应先评估纳入 forbidden set 并写新 ADR 修订本节。
 
-**这两条 allowlist 是结构必要而非软兼容**——区别在于：软兼容是为旧调用方留旧接口同时引入新接口（双路径并存），而本 allowlist 是「框架仅认这两条单一注入路径，新增 raw infra 类型必须先评估是否纳入 forbidden set」的单源约定。
+- **allowlist — (file glob, funcName, canonicalType) 三元组，按 cell 真实能力建模（6 条）**：
 
-allowlist 由静态 SHA-256 hash guard 锁定（`cellRawDepsAllowlistSHA256` 常量 + `TestCellRawDeps01_AllowlistHashGuard`）：修改 allowlist 编译期不可静默——hash 漂移触发测试失败，强制评审注意到决议变更。新增 raw infra 类型（如 `audit.Sink` / `refresh.Store`）触发时需评估是否纳入 forbidden set 并写新 ADR 修订本节。
+| PathPattern | FuncName | CanonicalType | 理由 |
+|---|---|---|---|
+| `cells/*/cell.go` | `WithTxManager` | `kernel/persistence.TxRunner` | platform cell L1/L2：OUTBOX-SERVICE-01 fail-fast 唯一事务注入路径 |
+| `cells/*/cell.go` | `WithOutboxDeps` | `kernel/outbox.Publisher` | platform cell L1/L2：PR-A5c (pub, writer) 预组合 emitter |
+| `cells/*/cell.go` | `WithOutboxDeps` | `kernel/outbox.Writer` | platform cell L1/L2：同上，writer 与 pub 一同注入 |
+| `examples/todoorder/cells/ordercell/cell.go` | `WithTxManager` | `kernel/persistence.TxRunner` | ordercell L2：事务边界注入 |
+| `examples/todoorder/cells/ordercell/cell.go` | `WithOutboxWriter` | `kernel/outbox.Writer` | ordercell L2 OutboxFact：writer+tx 是唯一 sink，无 publisher 路径（无 MetricsProvider/Clock wiring） |
+| `examples/iotdevice/cells/devicecell/cell.go` | `WithDirectPublisher` | `kernel/outbox.Publisher` | devicecell L4 DeviceLatent：直接发布，无 writer，无 txRunner |
+
+**三元组 vs 二元组升级理由（R1 round-2）**：原二元组 allowlist `(funcName → type)` 对全路径生效，
+允许任意 cell 声明同名 With* 函数。三元组精确绑定到具体文件 glob + 函数名 + 类型，
+ordercell 的 `WithOutboxWriter` 不会意外允许其他 cell 也叫 `WithOutboxWriter`。
+
+**Scanner 升级（R1 round-2）**：从 string-based AST（`exprString` + `stripPointer`）
+升级到 type-aware via `typeseval.SharedResolver` + `types.Info.Types[expr].Type`，
+canonical type 由 go/types 解析——import alias / type alias / hand-crafted AST
+均无法绕过 canonical package path 比对。AI-rebust 评级从 Medium（实测 Soft，
+hand-crafted fixture 可绕过）升级至 **Hard**（real source packages.Load，
+canonical type 不依赖字符串约定）。
+
+**Negative fixture 升级（R1 round-2）**：删除 hand-crafted AST fixture（ai-collab.md
+§L5 Soft，严禁），新建 `tools/archtest/internal/rawdepfixture/cell.go` 真实可编译的
+Go package，via `typeseval.SharedResolver` 加载——AI 难造假（real source AST capture，
+ai-collab.md §L4 规范）。
+
+**这些 allowlist 条目是结构必要而非软兼容**——软兼容是为旧调用方留旧接口同时引入新接口（双路径并存），而本 allowlist 是「每 cell 仅认其真实能力的单一注入路径」的单源约定。新增或修改条目需评估 cell 真实能力并写新 ADR 修订本节。
+
+allowlist 由静态 SHA-256 hash guard 锁定（`cellRawDepsAllowlistSHA256` 常量 + `TestCellRawDeps01_AllowlistHashGuard`）：修改 allowlist 不可静默——hash 漂移触发测试失败，强制评审注意到决议变更。
 
 ### D7. CellInventory 接口名命名约定
 
@@ -117,10 +140,26 @@ grep -n "forbidden" tools/archtest/cellmeta_single_source_test.go
 
 ### 正向
 - ✅ ISP 严格满足，AI 实施按消费者声明子接口依赖
-- ✅ 调用方零代码变更（破坏面 = 0，BaseCell 实现完全保留）
+- ✅ `kernel/cell.Cell` 接口的 consumers 零代码变更（复合接口形态保留，BaseCell 实现 12 方法不动；`kernel/assembly` 9 处 `cell.Cell` 引用 / `runtime/bootstrap/*_test.go` / `cells/*/cell_gen.go` 全部继续工作）
 - ✅ examples raw infra 漏洞堵住（AI-HARD ↑：AI 抄 example 路径锁住）
 - ✅ `ordercell.resolveOutboxDeps` 私有逻辑（~30 行）删除，统一走 `cell.ResolveCellEmitter`，与 platform 三 cell 的 emitter 解析路径完全对齐
 - ✅ `CELLMETA-SINGLE-SOURCE-03` 升级使 SOURCE-01..03 三 gate 共同守 metadata 单源化的接口形态层
+
+### 范围澄清
+
+「调用方零代码变更」**仅适用于 `kernel/cell.Cell` 接口的 consumers**（kernel/assembly / runtime/bootstrap / cells/*/cell_gen.go 等）。本 PR 同步改造 example cell 的注入接口，所有调用点（`examples/{todoorder,iotdevice}/main.go` + 各 cell `*_test.go`）在本 PR 内已更新：
+
+- `ordercell`：`WithOutboxDeps(nil, w)` → `WithOutboxWriter(w)`（删除无用 pub 参数）
+- `devicecell`：`WithOutboxDeps(eb, nil)` → `WithDirectPublisher(eb)`（删除无用 writer 参数）
+
+项目无外部消费方（CLAUDE.md 「Review 和重构时不考虑向后兼容」），无 source-compat 责任。
+
+**R1 round-2 升级（type-aware + cell-specific Options）**：删除了 `MustHaveNilOrderCellPublisher` 和 `MustHaveNilDeviceCellWriter` 两个运行时 panic guard——这些 guard 是在 `WithOutboxDeps` 统一签名下的补丁，archtest `CELL-RAW-DEPS-01` 升级为 type-aware 后通过三元组 allowlist 静态强制，运行时 panic guard 不再需要：
+
+- ordercell 的 `WithOutboxWriter(w outbox.Writer)` 签名在类型层面不接受 Publisher，消除了「接受 pub 参数但 panic 掉」的矛盾
+- devicecell 的 `WithDirectPublisher(p outbox.Publisher)` 签名不接受 Writer，同上
+
+CELL-RAW-DEPS-01 archtest 从字符串比对（ai-collab.md §L5，实测 Soft）升级到 canonical type path（§L4，Hard 级）。
 
 ### 负向 / 风险
 - ⚠️ 测试桩需声明四子接口而非单 `Cell`——探索阶段确认无现存子接口 mock，本 PR 无此类破坏
@@ -128,11 +167,11 @@ grep -n "forbidden" tools/archtest/cellmeta_single_source_test.go
 - ⚠️ Slice 接口 D4 决议「默认不拆」与 review 可能的「对称切分」诉求存在张力——以单事实源驱动而非形态对称为准，触发条件清晰可追
 
 ### AI-HARD 三档分级一览
-- **Hard**：四段式 compile-time check（缺方法编译失败 = 违反不可表达）；allowlist SHA-256 hash guard（修改不可静默）
-- **Medium**：`CELL-RAW-DEPS-01`（AST type-aware 识别函数参数 type expression）；`CELLMETA-SINGLE-SOURCE-03` 升级（AST 扫子接口）；`CELL-IFACE-ISP-COMPOSITE-01` / `METHODSETS-01` / `BASECELL-CHECK-01`（AST 扫接口形态）
+- **Hard**：四段式 compile-time check（缺方法编译失败 = 违反不可表达）；allowlist SHA-256 hash guard（修改不可静默）；**CELL-RAW-DEPS-01**（R1 round-2 升级：typeseval.SharedResolver + types.Info canonical type，import alias / type alias bypass 不可表达；三元组 allowlist path-precise；real source fixture 替换 hand-crafted AST）
+- **Medium**：`CELLMETA-SINGLE-SOURCE-03` 升级（AST 扫子接口）；`CELL-IFACE-ISP-COMPOSITE-01` / `METHODSETS-01` / `BASECELL-CHECK-01`（AST 扫接口形态）
 - **Soft**（非 mandatory，仅作引导）：godoc `Consumers: <谁>` 段；本 ADR §D4 Slice 默认不拆决议（文本决策 + backlog 触发条件）
 
-满足 CLAUDE.md `.claude/rules/gocell/ai-collab.md` 「新增约束 ≥ Medium 立项硬门槛」——所有新增 mandatory 约束均 ≥ Medium。
+满足 CLAUDE.md `.claude/rules/gocell/ai-collab.md` 「新增约束 ≥ Medium 立项硬门槛」——所有新增 mandatory 约束均 ≥ Medium。CELL-RAW-DEPS-01 自 R1 round-2 升至 Hard。
 
 ## References
 
