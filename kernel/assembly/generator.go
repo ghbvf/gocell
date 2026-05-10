@@ -107,10 +107,10 @@ type modulesContext struct {
 	Modules    []string // CellModule struct names, in cells.yaml order
 }
 
-// AssemblyScaffoldSpec drives Generator.Scaffold (K#09 SCAFFOLD-ONE-CMD).
+// AssemblyScaffoldSpec drives Generator.PlanAssemblyScaffold (K#09 SCAFFOLD-ONE-CMD).
 // The Generator already owns the assembly.yaml / run.go / app.go renderers
 // and downstream codegen (modules_gen.go, main.go, boundary.yaml) so a
-// single Scaffold method composes the full assembly bundle without a new
+// single PlanAssemblyScaffold method composes the full assembly bundle without a new
 // subpackage.
 type AssemblyScaffoldSpec struct {
 	// ID is the assembly identifier (e.g. "myassembly"). Required.
@@ -127,8 +127,10 @@ type AssemblyScaffoldSpec struct {
 	// k8s value is omitted from assembly.yaml — the parser inherits the
 	// default. compose/binary are written verbatim.
 	Deploy string
-	// DryRun renders templates and runs conflict detection without writing.
-	DryRun bool
+	// SkipGenerate when true causes PlanAssemblyScaffold to return only the
+	// 3 skeleton PlannedFiles (assembly.yaml + cmd/{id}/run.go + cmd/{id}/app.go),
+	// skipping in-memory codegen for the 3 K#10 derived files.
+	SkipGenerate bool
 }
 
 // scaffoldAssemblyContext is the template context for the K#09 scaffold
@@ -231,38 +233,42 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
 }
 
-// Scaffold produces an assembly skeleton: assembly.yaml + cmd/{id}/run.go +
-// cmd/{id}/app.go. K#09 SCAFFOLD-ONE-CMD.
+// PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new
+// assembly: 3 skeleton files (assembly.yaml + cmd/{id}/run.go + cmd/{id}/app.go)
+// plus 3 K#10 derived files (cmd/{id}/modules_gen.go + cmd/{id}/main.go +
+// assemblies/{id}/generated/boundary.yaml) when SkipGenerate=false.
 //
-// Note: Scaffold writes to the filesystem under projectRoot. The Generator
-// must have been constructed with a non-empty projectRoot. Each cell in
-// spec.Cells must exist in g.project.Cells; unknown cell IDs fail-fast.
+// PURE RENDER: no filesystem mutation, no re-parse. Caller (typically cmd/
+// CLI) feeds the returned plan into pathsafe.WritePlannedFiles, which is the
+// single funnel for both dry-run and live writes (SCAFFOLD-WRITE-FUNNEL-01).
 //
-// On --deploy=k8s (the K#10 minimal default) the scaffolded assembly.yaml
-// omits the deployTemplate field per ADR 202605061800. compose/binary are
-// written verbatim. Callers may run GenerateModulesGen / GenerateEntrypoint
-// / GenerateBoundary after Scaffold to materialize cmd/{id}/main.go +
-// modules_gen.go + assemblies/{id}/generated/boundary.yaml.
+// The Generator must have been constructed with a non-empty projectRoot.
+// Each cell in spec.Cells must exist in g.project.Cells.
 //
-// All filesystem writes go through pathsafe.WritePlannedFiles (SCAFFOLD-WRITE-FUNNEL-01).
-func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
+// K#10 derived files are produced by in-memory injection of a synthesized
+// metadata.AssemblyMeta into g.project.Assemblies[spec.ID] before calling
+// GenerateModulesGen / GenerateEntrypoint / GenerateBoundary; injection is
+// reverted before return so the Generator stays idempotent across calls.
+//
+// Returns the plan or an error; the plan is empty on error.
+func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.PlannedFile, error) {
 	if g.projectRoot == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"assembly.Generator.Scaffold requires non-empty projectRoot")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly.Generator.PlanAssemblyScaffold requires non-empty projectRoot")
 	}
 	if err := validateAssemblyScaffoldSpec(g, spec); err != nil {
-		return err
+		return nil, err
 	}
 
 	ctx, err := g.buildScaffoldContext(spec)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	realRoot, err := pathsafe.ResolveRoot(g.projectRoot)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"assembly.Generator.Scaffold: resolve project root", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"assembly.Generator.PlanAssemblyScaffold: resolve project root", err)
 	}
 
 	asmDir := filepath.Join("assemblies", spec.ID)
@@ -276,17 +282,85 @@ func (g *Generator) Scaffold(spec AssemblyScaffoldSpec) error {
 
 	plan, err := g.renderAssemblyScaffoldFiles(realRoot, templateFiles, ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
-		// Transparent wrap (fmt.Errorf %w) preserves pathsafe's typed
-		// errcode.Error — its KindConflict + ErrConflict + WithDetails(path)
-		// stay reachable via errors.As. Re-wrapping with errcode.Wrap would
-		// fabricate an outer *errcode.Error and bury conflict semantics.
-		return fmt.Errorf("assembly.Generator.Scaffold: write files: %w", err)
+	if spec.SkipGenerate {
+		return plan, nil
 	}
-	return nil
+
+	return g.appendGeneratedFiles(plan, spec, realRoot, asmDir, cmdDir)
+}
+
+// appendGeneratedFiles injects a synthesized AssemblyMeta, calls the three
+// Generate* methods, appends their output to plan, and reverts the injection
+// before returning. Kept separate from PlanAssemblyScaffold to stay under the
+// cognitive-complexity limit.
+func (g *Generator) appendGeneratedFiles(
+	plan []pathsafe.PlannedFile,
+	spec AssemblyScaffoldSpec,
+	realRoot, asmDir, cmdDir string,
+) ([]pathsafe.PlannedFile, error) {
+	// In-memory inject synthesized AssemblyMeta so Generate* see the new assembly.
+	synth := synthesizeAssemblyMeta(spec)
+	prior, hadPrior := g.project.Assemblies[spec.ID]
+	g.project.Assemblies[spec.ID] = synth
+	defer func() {
+		if hadPrior {
+			g.project.Assemblies[spec.ID] = prior
+		} else {
+			delete(g.project.Assemblies, spec.ID)
+		}
+	}()
+
+	type derivedFile struct {
+		relPath string
+		gen     func(string) ([]byte, error)
+	}
+	derived := []derivedFile{
+		{filepath.Join(cmdDir, "modules_gen.go"), g.GenerateModulesGen},
+		{filepath.Join(cmdDir, "main.go"), g.GenerateEntrypoint},
+		{filepath.Join(asmDir, "generated", "boundary.yaml"), g.GenerateBoundary},
+	}
+
+	for _, d := range derived {
+		content, gerr := d.gen(spec.ID)
+		if gerr != nil {
+			return nil, gerr
+		}
+		absPath, cerr := pathsafe.ContainPath(realRoot, d.relPath)
+		if cerr != nil {
+			return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold assembly: derived path containment failed", cerr,
+				errcode.WithInternal(fmt.Sprintf("path=%s", d.relPath)))
+		}
+		plan = append(plan, pathsafe.PlannedFile{
+			AbsPath: absPath,
+			Content: content,
+		})
+	}
+	return plan, nil
+}
+
+// synthesizeAssemblyMeta builds an in-memory AssemblyMeta for spec so that
+// GenerateModulesGen / GenerateEntrypoint / GenerateBoundary can produce K#10
+// derived files before the assembly exists on disk.
+//
+// In-memory only; reverted by PlanAssemblyScaffold after Generate* completes.
+// Field set must stay in sync with what GenerateModulesGen/Entrypoint/Boundary
+// read — see backlog ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
+func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
+	return &metadata.AssemblyMeta{
+		ID:    spec.ID,
+		Cells: append([]string(nil), spec.Cells...),
+		Owner: metadata.OwnerMeta{
+			Team: spec.OwnerTeam,
+			Role: spec.OwnerRole,
+		},
+		Build: metadata.BuildMeta{
+			Entrypoint: filepath.Join("cmd", spec.ID, "main.go"),
+		},
+	}
 }
 
 // scaffoldAssemblyFile pairs an output path with the template used to render

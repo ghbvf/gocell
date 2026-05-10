@@ -727,11 +727,3 @@ func TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots(t *testing.T) {
 		})
 	}
 }
-
-// min 是 Go 1.21 前的 int 版本，保留兼容。
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
