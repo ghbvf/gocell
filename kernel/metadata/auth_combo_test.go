@@ -20,7 +20,7 @@ import "testing"
 //
 // All other 25 combinations must be rejected.
 //
-// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
 func TestAuthComboLegal_AgainstWhitelist(t *testing.T) {
 	legalNames := map[string]struct{}{
 		"p-r-s-b-c": {},
