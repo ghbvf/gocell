@@ -159,6 +159,86 @@ The accurate statement at the time was: **scaffold skeleton writes** funnel thro
 - `SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01` (round-5 R6): cross-package typed `ScaffoldID` value type + shared validator covering `cellgen.ScaffoldSpec` + `assembly.AssemblyScaffoldSpec` + `cmd/gocell/app` flag wiring. Cx3-4 refactor; minimal slice of `T1` already landed (`ScaffoldCellBundle` reject kebab).
 - `SCAFFOLD-INLINE-TEMPLATE-ARCHTEST` (F15) and `ASSEMBLY-RUN-RUNTIME-SMOKE` (F17) remain from round-4.
 
+## Round-6 amendment (2026-05-11): cross-stage plan merge — render/execute split
+
+PR #442 round-6 introduces a kernel render-only API and collapses the previous
+two-stage assembly scaffold pipeline. This amendment updates the previously
+stated "six scaffold writers" list and clarifies the funnel inventory.
+
+### Symbol rename
+
+Round-4 amendment §"Round-4 amendment" listed six scaffold writers:
+`ScaffoldCell` / `ScaffoldCellBundle` / **`Generator.Scaffold`** / `scaffoldSlice` /
+`scaffoldContract` / `scaffoldJourney`. Round-6 deletes `Generator.Scaffold` and
+introduces `Generator.PlanAssemblyScaffold(spec) ([]pathsafe.PlannedFile, error)`
+as a pure-render function. The CLI then drives a single `pathsafe.WritePlannedFiles`
+call, so the **execute** side of the funnel is now owned by CLI, not by kernel.
+
+Resulting funnel inventory after round-6:
+
+- **5 scaffold-write entry points** to `pathsafe.WritePlannedFiles`:
+  `ScaffoldCell` / `ScaffoldCellBundle` / `scaffoldSlice` / `scaffoldContract` /
+  `scaffoldJourney`. Plus the `cmd/gocell/app/scaffold_assembly.go` CLI call
+  site (which feeds `PlanAssemblyScaffold`'s output into the funnel).
+- `Generator.Scaffold` (executor) is gone; its responsibility (rendering 3
+  skeleton files) is folded into `PlanAssemblyScaffold` together with the
+  former K#10 auto-generate stage (3 derived files), yielding a single 6-file
+  plan per `gocell scaffold assembly` invocation.
+
+### AI-Hard archtest scope (unchanged)
+
+`SCAFFOLD-WRITE-FUNNEL-01` still rejects bare `os.MkdirAll` / `os.WriteFile`
+inside `tools/codegen/cellgen/...`, `kernel/assembly/...`, and
+`cmd/gocell/app/scaffold*.go`. Round-6 strictly reduces the surface area —
+removing the second-stage `tools/codegen.Write` call in
+`autoGenerateAssemblyArtifacts` collapses one independent write path into the
+existing pathsafe funnel — so the archtest's allowlist remains correct.
+
+`tools/codegen.Write` is itself a pathsafe consumer (calls
+`pathsafe.WriteFileForce` for generated-file overwrite), so any claim that
+"codegen.Write bypasses pathsafe" is incorrect. The two paths
+(`WritePlannedFiles` for first-time creation, `WriteFileForce` for regenerate)
+are both inside the pathsafe funnel; the round-6 round trip removes the
+mixed-mode use in scaffold assembly.
+
+### BUNDLE archtest AI-rebust rating (clarification)
+
+Round-2 reflection in earlier PR description claimed "Zero Medium/Soft" for
+the K#09 archtest set. This is imprecise:
+
+- `SCAFFOLD-WRITE-FUNNEL-01` — Hard (typed function call + AST allowlist)
+- `SCAFFOLD-CONTRACT-CODEGEN-DEFAULT-TRUE` — Hard (parser AST funnel)
+- `SCAFFOLD-BUNDLE-MARKER-01` — **Medium** (real-source AST capture; marker
+  is a hand-written string in `text/template`, no type-system enforcement
+  available; see archtest file-level godoc "Cannot be Hard")
+- `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01` — **Medium** (same rationale)
+
+Hard upgrade for the BUNDLE pair is tracked under
+`SCAFFOLD-BUNDLE-ARCHTEST-HARDEN` (backlog). The two Medium archtests are
+acceptable per `ai-collab.md` §"立项硬门槛: ≥ Medium"; Hard is the goal but
+not the current state.
+
+### `synthesizeAssemblyMeta` field-sync risk (new Medium)
+
+`PlanAssemblyScaffold` synthesizes an in-memory `metadata.AssemblyMeta` so the
+three `Generate*` methods can run without a re-parse. The synthesis is
+field-by-field; future additions to `AssemblyMeta` consumed by `Generate*`
+must extend `synthesizeAssemblyMeta` (verified by grep at round-6 time).
+Tracked as `ASSEMBLY-META-SYNTHESIS-FIELD-GUARD` for Hard upgrade via reflect
+field-count guard.
+
+### Round-6 carryover (independent themes)
+
+- `ASSEMBLY-META-SYNTHESIS-FIELD-GUARD` — see above (Medium → Hard candidate).
+- `SCAFFOLD-CELL-BUNDLE-CROSS-STAGE-PLAN-MERGE-01` — symmetric problem for
+  `scaffold cell`. Solution requires extending `pathsafe.PlannedFile` with a
+  `ForceOverwrite bool` field so contractgen/cellgen regenerate writes can
+  join the single funnel (Cx3-4 independent PR).
+- `PATHSAFE-COLLECT-MISSING-DIRS-EACCES-01` — `collectMissingDirs` silently
+  breaks on EACCES (treats as "exists"), leaving orphan dirs when rollback
+  is triggered. Trigger surface is narrow (mid-tree dir without read
+  permission), so deferred to follow-up PR.
+
 ## References
 
 - Roadmap: `docs/plans/202605011500-029-master-roadmap.md` #09

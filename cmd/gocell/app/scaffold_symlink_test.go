@@ -118,3 +118,79 @@ func TestScaffoldJourney_SymlinkEscape(t *testing.T) {
 	msg := err.Error()
 	_ = strings.ContainsAny(msg, "outside root,escapes,containment") // 宽松，RED 阶段不强求具体文字
 }
+
+// TestScaffoldCell_SymlinkEscape 验证 scaffold cell 拒绝 cells/<id> 目录是 root
+// 外 symlink 的情况。Round-7：填补 scaffold cell symlink 覆盖缺口（kernel 层
+// 已有 TestGeneratorScaffold_SymlinkEscape_Asm，但 CLI 层 cell 路径未覆盖）。
+func TestScaffoldCell_SymlinkEscape(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root := setupAssemblyTestProject(t, "existing")
+	outside := t.TempDir()
+
+	// cells/symcell → outside symlink
+	cellsDir := filepath.Join(root, "cells")
+	if err := os.MkdirAll(cellsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cellsDir, "symcell")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	err := runScaffoldWithRoot(root, []string{
+		"cell",
+		"--id=symcell",
+		"--team=platform",
+		"--role=cell-owner",
+	})
+	if err == nil {
+		t.Fatal("scaffold cell (symlink escape): want error, got nil")
+	}
+
+	entries, _ := os.ReadDir(outside)
+	if len(entries) > 0 {
+		t.Errorf("cell symlink escape: outside must be clean, got %v", entries)
+	}
+}
+
+// TestScaffoldAssembly_SymlinkEscape 验证 CLI 入口 scaffoldAssembly 拒绝
+// assemblies/<id> 目录是 root 外 symlink 的情况。Round-7：填补 CLI 层覆盖
+// 缺口（kernel 层 TestGeneratorScaffold_SymlinkEscape_Asm 已有，但走 CLI
+// 入口的回归测试缺失）。
+func TestScaffoldAssembly_SymlinkEscape(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root := setupAssemblyTestProject(t, "examplecell")
+	outside := t.TempDir()
+
+	// assemblies/symasm → outside symlink
+	assembliesDir := filepath.Join(root, "assemblies")
+	if err := os.MkdirAll(assembliesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(assembliesDir, "symasm")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	err := runScaffoldWithRoot(root, []string{
+		"assembly",
+		"--id=symasm",
+		"--cells=examplecell",
+		"--team=platform",
+		"--role=maintainer",
+	})
+	if err == nil {
+		t.Fatal("scaffold assembly (symlink escape): want error, got nil")
+	}
+
+	entries, _ := os.ReadDir(outside)
+	if len(entries) > 0 {
+		t.Errorf("assembly symlink escape: outside must be clean, got %v", entries)
+	}
+}

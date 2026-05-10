@@ -338,6 +338,19 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("--role is required")
 	}
 
+	// Round-7: control-char + path-traversal guard. Round-2 added these guards
+	// to scaffoldSlice/Contract/Journey/Assembly but missed scaffold cell;
+	// closing the chain so `--id="evil\nextra: pwned"` cannot inject YAML keys.
+	if err := validateScaffoldID(*id, "--id"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(*team, "--team"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(*role, "--role"); err != nil {
+		return err
+	}
+
 	// F11: reject kebab-case cell IDs (aligned with scaffoldSlice behavior).
 	if strings.Contains(*id, "-") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,

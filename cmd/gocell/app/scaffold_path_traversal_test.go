@@ -77,6 +77,12 @@ func TestRunScaffold_ControlCharInjection(t *testing.T) {
 		{"journey_cells_newline", []string{"journey", "--id=mj", "--goal=g", "--team=t", "--cells=evil\nextra: pwned"}},
 		{"assembly_id_newline", []string{"assembly", "--cells=examplecell", "--team=t", "--role=r", "--id=evil\nextra: pwned"}},
 		{"assembly_cells_newline", []string{"assembly", "--id=as", "--team=t", "--role=r", "--cells=evil\nextra: pwned"}},
+		// Round-7: close the scaffold-cell newline-injection gap (P0).
+		// scaffoldCell was the only sub-command missing the validateScaffoldID /
+		// validateScaffoldText guard at round-2; these cases lock it in.
+		{"cell_id_newline", []string{"cell", "--team=t", "--role=r", "--id=evil\nextra: pwned"}},
+		{"cell_team_newline", []string{"cell", "--id=ok", "--role=r", "--team=evil\nextra: pwned"}},
+		{"cell_role_newline", []string{"cell", "--id=ok", "--team=t", "--role=evil\nextra: pwned"}},
 	}
 
 	for _, tc := range cases {

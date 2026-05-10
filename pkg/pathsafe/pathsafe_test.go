@@ -105,43 +105,40 @@ func setupSymlinkOutOfRoot(t *testing.T) (root, relTarget string) {
 	return root, filepath.Join("cells", "escape", "cell.yaml")
 }
 
-func TestContainPath(t *testing.T) {
-	t.Parallel()
+// containPathCase describes a single TestContainPath sub-test. Lifted out of
+// the test function (round-7) so the cases table + assertion logic + test
+// driver split into three small functions, dropping cognitive complexity
+// below the project budget (15).
+type containPathCase struct {
+	name      string
+	setup     func(t *testing.T) (root, relTarget string)
+	wantErr   bool
+	wantPath  func(root string) string // used only when wantErr=false and non-nil
+	skipOnWin bool
+}
 
-	type tc struct {
-		name      string
-		setup     func(t *testing.T) (root, relTarget string)
-		wantErr   bool
-		wantPath  func(root string) string // used only when wantErr=false and non-nil
-		skipOnWin bool
-	}
-
-	cases := []tc{
+// containPathCases returns the table of sub-test inputs for TestContainPath.
+// Kept as a function (not a package-level var) so each call gets fresh closure
+// bindings and the table reads top-down at the call site.
+func containPathCases() []containPathCase {
+	resolved := func(t *testing.T) string { t.Helper(); return resolveRealRoot(t) }
+	return []containPathCase{
 		{
-			name: "normal_nested",
-			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				return resolveRealRoot(t), filepath.Join("cells", "mycell", "cell.yaml")
-			},
+			name:    "normal_nested",
+			setup:   func(t *testing.T) (string, string) { return resolved(t), filepath.Join("cells", "mycell", "cell.yaml") },
 			wantErr: false,
 			wantPath: func(root string) string {
 				return filepath.Join(root, "cells", "mycell", "cell.yaml")
 			},
 		},
 		{
-			name: "dotdot_traversal",
-			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				return resolveRealRoot(t), filepath.Join("..", "escape")
-			},
+			name:    "dotdot_traversal",
+			setup:   func(t *testing.T) (string, string) { return resolved(t), filepath.Join("..", "escape") },
 			wantErr: true,
 		},
 		{
-			name: "abs_path",
-			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				return resolveRealRoot(t), "/etc/passwd"
-			},
+			name:    "abs_path",
+			setup:   func(t *testing.T) (string, string) { return resolved(t), "/etc/passwd" },
 			wantErr: true,
 		},
 		{
@@ -159,8 +156,7 @@ func TestContainPath(t *testing.T) {
 		{
 			name: "non_existent_parent",
 			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				return resolveRealRoot(t), filepath.Join("cells", "newcell", "cell.yaml")
+				return resolved(t), filepath.Join("cells", "newcell", "cell.yaml")
 			},
 			wantErr: false,
 			wantPath: func(root string) string {
@@ -170,8 +166,7 @@ func TestContainPath(t *testing.T) {
 		{
 			name: "cleaned_redundant",
 			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				return resolveRealRoot(t), filepath.Join("cells", ".", "mycell", "cell.yaml")
+				return resolved(t), filepath.Join("cells", ".", "mycell", "cell.yaml")
 			},
 			wantErr: false,
 			wantPath: func(root string) string {
@@ -179,33 +174,46 @@ func TestContainPath(t *testing.T) {
 			},
 		},
 	}
+}
 
-	for _, c := range cases {
+// runContainPathCase executes one TestContainPath sub-test: setup → call →
+// assertion. Extracted from the original loop body so cyclomatic + cognitive
+// complexity stay bounded.
+func runContainPathCase(t *testing.T, c containPathCase) {
+	t.Helper()
+	if c.skipOnWin && runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	root, relTarget := c.setup(t)
+	got, err := pathsafe.ContainPath(root, relTarget)
+	if c.wantErr {
+		if err == nil {
+			t.Fatalf("ContainPath(%s): want error, got nil", c.name)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("ContainPath(%s): unexpected error: %v", c.name, err)
+	}
+	if got == "" {
+		t.Fatalf("ContainPath(%s): returned empty string", c.name)
+	}
+	if c.wantPath == nil {
+		return
+	}
+	if want := c.wantPath(root); got != want {
+		t.Errorf("ContainPath(%s) = %q, want %q", c.name, got, want)
+	}
+}
+
+func TestContainPath(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range containPathCases() {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if c.skipOnWin && runtime.GOOS == "windows" {
-				t.Skip("symlink semantics differ on windows")
-			}
-			root, relTarget := c.setup(t)
-			got, err := pathsafe.ContainPath(root, relTarget)
-			if c.wantErr {
-				if err == nil {
-					t.Fatalf("ContainPath(%s): want error, got nil", c.name)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ContainPath(%s): unexpected error: %v", c.name, err)
-			}
-			if c.wantPath != nil {
-				if want := c.wantPath(root); got != want {
-					t.Errorf("ContainPath(%s) = %q, want %q", c.name, got, want)
-				}
-			}
-			if got == "" {
-				t.Fatalf("ContainPath(%s): returned empty string", c.name)
-			}
+			runContainPathCase(t, c)
 		})
 	}
 }
