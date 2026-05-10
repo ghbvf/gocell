@@ -151,6 +151,7 @@ func TestCellIfaceISP03_BaseCellFourSegmentCheck(t *testing.T) {
 		t.Errorf("CELL-IFACE-ISP-BASECELL-CHECK-01: kernel/cell/base.go must not retain " +
 			"`var _ Cell = (*BaseCell)(nil)` after ISP split; replace with the four sub-interface checks")
 	}
+	t.Logf("found checks: %v", subSeen)
 	for _, name := range expectedSubInterfaces {
 		if !subSeen[name] {
 			t.Errorf("CELL-IFACE-ISP-BASECELL-CHECK-01: kernel/cell/base.go missing "+
@@ -290,31 +291,59 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
-// expectedMethodSetsSHA256 freezes the (sub-interface → method-set) contract.
-// Modifying expectedSubInterfaceMethods or expectedSubInterfaces requires:
+// expectedMethodSetsSHA256 freezes the (sub-interface → method-set) contract
+// derived from kernel/cell/interfaces.go source AST. The hash is computed by
+// TestCellIfaceISP00_MethodSetsHashGuard at test time by loading the actual
+// interface declarations — not from hand-written expected data.
+//
+// Modifying any sub-interface method set in kernel/cell/interfaces.go requires:
 //  1. New ADR amending 202605101800 §D1 with rationale
-//  2. Re-running this test once and copying the new "got" value into this constant
+//  2. Re-running `go test ./tools/archtest/... -run TestCellIfaceISP00` once;
+//     copy the "got" value printed by the failure into this constant.
+//
+// AI-rebust rating upgrade: Hard (source-driven hash — silent modification of
+// kernel/cell/interfaces.go is impossible without triggering a hash mismatch;
+// prior hand-crafted-data hash only caught drift in the expected tables, not
+// in the source).
 const expectedMethodSetsSHA256 = "a2cf7188a2b0744897b672580bfc4df6e2e37f0ebc904a2428a4a38f829c90c7"
 
 // INVARIANT: CELL-IFACE-ISP-METHODSETS-01 (hash guard companion)
 //
 // TestCellIfaceISP00_MethodSetsHashGuard pins the (sub-interface → method-set)
-// contract to a SHA-256 digest. Any modification to expectedSubInterfaces or
-// expectedSubInterfaceMethods triggers a test failure until the constant is
-// updated, forcing an ADR amendment and reviewer attention.
+// contract to a SHA-256 digest derived from the actual kernel/cell/interfaces.go
+// source AST. Any modification to the 4 sub-interface declarations triggers a
+// test failure until the constant is updated, forcing an ADR amendment and
+// reviewer attention.
 //
-// AI-rebust rating: Hard (SHA-256 hash guard — silent modification impossible).
+// The hash is computed from real source — not from hand-crafted expected data —
+// so AI cannot bypass this test by only modifying the expected tables while
+// leaving kernel/cell/interfaces.go untouched.
+//
+// AI-rebust rating: Hard (source-driven hash — silent modification impossible).
 func TestCellIfaceISP00_MethodSetsHashGuard(t *testing.T) {
 	t.Parallel()
-	got := computeMethodSetsHash(expectedSubInterfaces, expectedSubInterfaceMethods)
+	root := findModuleRoot(t)
+
+	// Build the (sub-interface → method-set) map by reading the actual AST.
+	liveMethodSets := make(map[string][]string, len(expectedSubInterfaces))
+	for _, name := range expectedSubInterfaces {
+		iface := loadInterfaceType(t, root, name)
+		if iface == nil {
+			t.Fatalf("CELL-IFACE-ISP-METHODSETS-01: sub-interface %s not found in kernel/cell/interfaces.go — "+
+				"cannot compute source-driven hash", name)
+		}
+		liveMethodSets[name] = directMethodNames(iface)
+	}
+
+	got := computeMethodSetsHash(expectedSubInterfaces, liveMethodSets)
 	if got != expectedMethodSetsSHA256 {
-		t.Errorf("CELL-IFACE-ISP-METHODSETS-01: expected method sets hash drift.\n"+
+		t.Errorf("CELL-IFACE-ISP-METHODSETS-01: kernel/cell/interfaces.go sub-interface method sets changed.\n"+
 			"  got      = %s\n"+
 			"  expected = %s\n"+
-			"Modifying expectedSubInterfaces or expectedSubInterfaceMethods requires "+
-			"a new ADR amending docs/architecture/202605101800-adr-cell-interface-isp-split.md §D1 "+
-			"and updating the expectedMethodSetsSHA256 constant at tools/archtest/cell_iface_isp_test.go.",
-			got, expectedMethodSetsSHA256)
+			"Modifying the 4 sub-interface method sets requires:\n"+
+			"  1. New ADR amending docs/architecture/202605101800-adr-cell-interface-isp-split.md §D1\n"+
+			"  2. Update expectedMethodSetsSHA256 in tools/archtest/cell_iface_isp_test.go to: %s",
+			got, expectedMethodSetsSHA256, got)
 	}
 }
 
