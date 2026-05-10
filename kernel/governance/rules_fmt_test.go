@@ -489,6 +489,28 @@ func fmt27ProjectWithAuth(auth metadata.HTTPAuthMeta) *metadata.ProjectMeta {
 	}
 }
 
+// TestFMT27AuthBoolMatrix enumerates all 32 combinations of the 5 auth bool
+// fields and asserts that validateFMT27 returns an error iff
+// metadata.AuthComboLegal returns false. Governance-side mirror of
+// TestContractSchemaAuthBoolMatrix; both layers share the AuthComboLegal oracle.
+//
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01
+func TestFMT27AuthBoolMatrix(t *testing.T) {
+	metadata.IterateAuthBoolCombos(func(auth metadata.HTTPAuthMeta, name string) {
+		t.Run(name, func(t *testing.T) {
+			v := NewValidator(fmt27ProjectWithAuth(auth), "", clock.Real())
+			matches := findByCode(v.validateFMT27(), codeFMT27)
+			expectedLegal := metadata.AuthComboLegal(auth)
+			if expectedLegal && len(matches) != 0 {
+				t.Errorf("FMT-27 rejected legal combo %s: %v", name, matches)
+			}
+			if !expectedLegal && len(matches) == 0 {
+				t.Errorf("FMT-27 accepted illegal combo %s; expected reject per AuthComboLegal", name)
+			}
+		})
+	})
+}
+
 // --- FMT-28 (HTTP auth mode placement/shape constraints) ---
 
 // TestFMT28_BootstrapOnNonSetupAdminPath verifies that auth.bootstrap:true on a

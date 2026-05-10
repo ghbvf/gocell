@@ -8,6 +8,8 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 func TestContractSchemaAllowsParamConstraintFacets(t *testing.T) {
@@ -474,4 +476,59 @@ func TestContractSchemaRejectsAuthClientsOnlyAndPublicBoth(t *testing.T) {
 		schema.Validate(contractDoc),
 		"contract with both auth.clientsOnly:true and auth.public:true "+
 			"must fail schema validation (mutually exclusive)")
+}
+
+// TestContractSchemaAuthBoolMatrix enumerates all 32 combinations of the
+// 5 auth bool fields and asserts schema validation matches metadata.AuthComboLegal
+// (the single oracle shared with kernel/governance/rules_fmt.go validateFMT27).
+//
+// Every contract document explicitly declares every bool field (true or false)
+// to guard the "explicit false vs omission" semantic: under the original
+// not/required mutex implementation, declaring 5 keys would trigger the
+// key-presence rules and reject all 32 cases. Under the if/then const:true
+// implementation, only the value-true conflicts are rejected.
+//
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01
+func TestContractSchemaAuthBoolMatrix(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	metadata.IterateAuthBoolCombos(func(auth metadata.HTTPAuthMeta, name string) {
+		t.Run(name, func(t *testing.T) {
+			doc := fmt.Sprintf(`{
+				"id": "http.matrix.test.v1",
+				"kind": "http",
+				"consistencyLevel": "L1",
+				"lifecycle": "active",
+				"endpoints": {
+					"server": "testcell",
+					"clients": ["testcell"],
+					"http": {
+						"method": "POST",
+						"path": "/internal/v1/matrix/test",
+						"successStatus": 200,
+						"noContent": false,
+						"auth": {
+							"public": %t,
+							"passwordResetExempt": %t,
+							"serviceOwned": %t,
+							"bootstrap": %t,
+							"clientsOnly": %t
+						}
+					}
+				}
+			}`, auth.Public, auth.PasswordResetExempt, auth.ServiceOwned, auth.Bootstrap, auth.ClientsOnly)
+
+			var contractDoc any
+			require.NoError(t, json.Unmarshal([]byte(doc), &contractDoc))
+
+			err := schema.Validate(contractDoc)
+			expectedLegal := metadata.AuthComboLegal(auth)
+			if expectedLegal && err != nil {
+				t.Errorf("schema rejected legal combo %s: %v", name, err)
+			}
+			if !expectedLegal && err == nil {
+				t.Errorf("schema accepted illegal combo %s; expected reject per AuthComboLegal", name)
+			}
+		})
+	})
 }
