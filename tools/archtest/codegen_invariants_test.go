@@ -327,7 +327,10 @@ func TestCodegenContractGen02_GeneratedHeader(t *testing.T) {
 func TestCodegenContractUserOverlap01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{generatedContractsSubdir})
+	// IncludeTests: the rule forbids any hand-written .go under
+	// generated/contracts/ regardless of suffix; without IncludeTests a
+	// hand-written *_test.go would silently slip past.
+	scope := scanner.DirsScope(root, []string{generatedContractsSubdir}, scanner.IncludeTests())
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
 		if strings.HasSuffix(fc.AbsPath, "_gen.go") {
 			return

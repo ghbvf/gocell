@@ -144,7 +144,10 @@ func scanLegacyQuerySymbolDecls(root, path string) ([]pgQueryBoundaryViolation, 
 }
 
 func findLegacyQueryBuilderUses(root, module string) ([]pgQueryBoundaryViolation, error) {
-	files, err := scanner.ModuleScope(root, scanner.IncludeTests()).Files()
+	// IncludeGenerated: the legacy pkg/query symbol ban is module-wide, so
+	// codegen output under generated/ must also be subject to the rule —
+	// otherwise codegen could silently reintroduce a forbidden import.
+	files, err := scanner.ModuleScope(root, scanner.IncludeTests(), scanner.IncludeGenerated()).Files()
 	if err != nil {
 		return nil, err
 	}

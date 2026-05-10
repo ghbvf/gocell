@@ -239,7 +239,11 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 	}
 
 	var unenrolled []string
-	scope := scanner.ModuleScope(root)
+	// IncludeGenerated: SPAN-RECORD-ERROR-REDACT-01 covers every production
+	// .go file in the repo, including codegen output (handler_gen.go and
+	// similar may emit span.RecordError). Without this option ModuleScope's
+	// default skip set would silently shrink the coverage gate.
+	scope := scanner.ModuleScope(root, scanner.IncludeGenerated())
 	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
 		if !fileHasNonImplRecordError(fc.File) {
 			return
