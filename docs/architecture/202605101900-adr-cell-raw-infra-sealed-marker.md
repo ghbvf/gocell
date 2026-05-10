@@ -43,19 +43,28 @@ AI 写 `WithFoo(tx persistence.TxRunner) Option` 在 cell.go 编译期被拒：c
 
 CellTxManager embed TxRunner、CellPublisher embed Publisher、CellWriter embed Writer，让 sealed wrapper 同时满足 raw 接口，cells 内部把 sealed 字段直接传给 service.NewXxx（service 接收 raw 类型，是 cell 内部、不在 sealed 约束面），service 签名零变化。
 
-### D2. Wrap*ForCell 调用站点由 wrapper-location archtest 限定（belt-and-suspenders）
+### D2. archtest 双重防线治公开 API 签名形态（必需的 Medium 守卫，非 belt-and-suspenders）
 
-新建 `tools/archtest/wrapper_location_test.go` (`CELL-RAW-INFRA-WRAPPER-LOCATION-01`) 守三个 wrap 函数 `persistence.WrapForCell` / `outbox.WrapPublisherForCell` / `outbox.WrapWriterForCell` 的调用方所在文件路径，仅允许：
+sealed marker 是字段类型与 raw→sealed 赋值层的 Hard 防线，但 type system 单独**不能根除全部签名形态**——以下两类形态在 type system 下合法编译，绕过 D1 的拦截：
 
-- `cmd/*` 任意文件（composition root）
-- `examples/<demo>/main.go` / `examples/<demo>/app.go`（example composition root）
-- `*_test.go` 任意路径（测试构造 fake）
-- `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）
-- `kernel/cell/demo_tx_runner.go`（`DemoCellTxManager()` 工厂；cells/* demo fallback 收敛到此处，cells/* 内部不持 wrap call）
+1. **Inline interface embedding**：`func WithBad(p interface{ outbox.Publisher }) Option` 的参数类型在 `go/types` 下是 `*types.Interface`（匿名接口），其 `EmbeddedTypes()` 含 `outbox.Publisher`。`*types.Named`-only 匹配会落空。
+2. **Dot-import wrapper call**：`import . "github.com/ghbvf/gocell/kernel/persistence"; WrapForCell(p)` 的 AST 调用形态是 `*ast.Ident`（无 SelectorExpr）。`*ast.SelectorExpr`-only 匹配会落空。
 
-**AI-rebust 评级**：Medium（archtest type-aware，via `typeseval.SharedResolver` + `go/types` Uses 解析 caller package）。这是 sealed marker (Hard 主防线) 之外的独立语义守卫——防止 cells/* 偷偷 import kernel/persistence 然后自己 wrap raw infra（cells/ 不依赖 adapters/ 的现有分层 archtest 已切断大部分获取 raw 类型的路径，本规则补足"即使 cells 拿到 raw type 也不能 wrap"）。
+为此 PR 441 落地两条 archtest，构成 sealed marker 之外**必需的双重防线**（不是 dead weight）：
 
-scanner 检测能力由 `tools/archtest/internal/wrapfixture/violation/violation.go`（build tag `archtest_fixture`，不污染 `./...` 真实 repo 扫描）的 negative fixture 验证：fixture 故意从非 allowlist 路径调 `persistence.WrapForCell`，测试断言 scanner 报告 ≥1 violation。Per ai-collab.md §"real source AST capture (AI 难造假)"，fixture 是真实 Go 包载入（非手 craft AST）。
+- **`tools/archtest/cell_public_option_param_test.go` (`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01`)** — 扫 `cells/<x>/*.go` + `examples/<demo>/cells/<x>/*.go` 公开 With\* Option 参数 canonical type 不在 forbidden 集合（`persistence.TxRunner` / `outbox.Publisher` / `outbox.Writer`）。canonical 提取递归处理：pointer unwrap → `types.Unalias` → `*types.Named` 直取，或 `*types.Interface` 走 `NumEmbeddeds()`/`EmbeddedType(i)` 提取每个 embedded canonical（命中 forbidden 优先），覆盖 inline-embed 形态。
+- **`tools/archtest/wrapper_location_test.go` (`CELL-RAW-INFRA-WRAPPER-LOCATION-01`)** — 守三个 wrap 函数（`persistence.WrapForCell` / `outbox.WrapPublisherForCell` / `outbox.WrapWriterForCell`）的调用方所在文件路径，仅允许：
+  - `cmd/*` 任意文件（composition root）
+  - `examples/<demo>/main.go` / `examples/<demo>/app.go`（example composition root）
+  - `*_test.go` 任意路径（测试构造 fake）
+  - `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）
+  - `kernel/cell/demo_tx_runner.go`（`DemoCellTxManager()` 工厂；cells/* demo fallback 收敛到此处，cells/* 内部不持 wrap call）
+  
+  调用形态识别覆盖 `*ast.SelectorExpr`（`pkg.Func()` 形态）+ `*ast.Ident`（dot-import `Func()` 形态），`info.Uses` 解析为相同 `*types.Func` 后做 canonical name 比对。
+
+**AI-rebust 评级**：Medium（archtest type-aware via `typeseval.SharedResolver` + `go/types` Uses 解析）。type system 单独不可达签名形态空间是该问题域的客观特性，不是 archtest 实现不足；因此双重防线是该层级的 Medium 天花板，与 PII redaction / 安全语义双重防线同质（都是 type system 不可表达的横向空间）。
+
+scanner 检测能力由 `tools/archtest/internal/{rawparamfixture,wrapfixture/violation}/`（build tag `archtest_fixture`，不污染 `./...` 真实 repo 扫描）的 negative fixture 验证：fixture 故意写出每种攻击形态（raw param + alias bypass + inline-embed + dot-import），测试断言 scanner 报告每条 violation。Per ai-collab.md §"real source AST capture (AI 难造假)"，fixture 是真实 Go 包载入（非手 craft AST）。
 
 ### D3. internalCellXxx 透传 Nooper 接口
 
@@ -78,9 +87,9 @@ func (i internalCellTxManager) Noop() bool {
 
 `tools/archtest/cell_raw_deps_test.go` (~470 行) + `tools/archtest/internal/rawdepfixture/cell.go` 整体删除：
 
-- scanner 的角色（"cells/<x>/cell.go With* Option 不得暴露 raw infra 类型"）已被 sealed marker 在 type system 完整覆盖
-- 保留 scanner 等于把 Hard 已拦的违反再 Medium 检测一遍，是 dead weight 而非"双重防线"——双重防线适用于 PII / 安全等"漏一次代价极大"的语义；此处违反在 compile 期就出错，不需要 build-time scanner 兜底
-- ai-collab.md §Soft → Hard 改造方向"hand-crafted fixture → real source AST capture (AI 难造假)" 已在 wrapper_location_test.go 落实
+- scanner 的旧形态（path-glob + funcName + canonicalType 三元组 allowlist + SHA-256 hash guard）治理范围已被 D2 的两条 type-aware archtest（`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` + `CELL-RAW-INFRA-WRAPPER-LOCATION-01`）替代——后者更彻底：直接 canonical type 比对（含 `types.Unalias` + `*types.Interface` embedded walk）+ `*ast.Ident`/`*ast.SelectorExpr` 双形态识别，无需手维护 hash allowlist
+- type-correctness 的 Hard 主防线由 sealed marker 提供（D1）；signature-form 的 Medium 双重防线由 D2 两条 archtest 提供（type system 单独不可达签名形态空间，参 D2）
+- ai-collab.md §Soft → Hard 改造方向"hand-crafted fixture → real source AST capture (AI 难造假)" 已在 D2 两条 archtest fixture 中落实
 
 ### D5. cell-internal demo fallback 收敛到 kernel/cell.DemoCellTxManager()
 
@@ -100,15 +109,15 @@ B. **kernel/cell** 暴露 `DemoCellTxManager() persistence.CellTxManager` 工厂
 ## Consequences
 
 正面：
-- AI 提交 cell.go 公开 With* Option 接收 raw infra 类型在 compile 期被拒，违反"不可表达"
-- archtest 文件减少 ~470 行（cell_raw_deps_test.go 整体删），新增 ~150 行 (cell_marker.go × 2 + wrapper_location_test.go)，净减少
-- type alias / interface embedding / wrapper struct / variadic / functional closure 等所有 bypass 形态在 type system 层一次性根除
-- ai-collab.md §载体决策原则首选项（type system）落地范本，可作 Hard 转化模板
+- **Hard 主防线（type system）**：AI 提交 cell.go 公开 With\* Option 字段类型为 raw infra（`persistence.TxRunner` / `outbox.{Publisher,Writer}`）在 compile 期被拒；composition root 把 raw infra 直接传给接 sealed type 的 Option 也在 compile 期被拒。type alias 命中 `types.Unalias` 由 archtest 拦（D2），不在 type system 主防线内。
+- **Medium 双重防线（archtest type-aware）**：inline interface embedding（`func WithBad(p interface{ outbox.Publisher })`）与 dot-import wrap call（`import . "kernel/persistence"; WrapForCell(p)`）这两类签名形态 type system 单独无法根除，由 D2 两条 archtest（`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` + `CELL-RAW-INFRA-WRAPPER-LOCATION-01`）补足，构成必需的 Medium 双重防线（不是 dead weight）。
+- archtest 文件总行数减少：`cell_raw_deps_test.go` (~470 行) + `rawdepfixture` 删除，新增 sealed marker 实现 (`cell_marker.go` × 2) + 两条新 archtest (~250 行) + 两个 fixture 包 (~100 行)，净减少 ~120 行；语义覆盖反而更宽（type alias / inline-embed / dot-import / wrapper struct 形态）
+- ai-collab.md §载体决策原则"funnel + codegen → type system → archtest 平铺"分层落地范本：D1 走 type system Hard，D2 走 archtest Medium，分工清晰
 
 负面 / 取舍：
 - composition root 与测试每处 raw infra 注入多写一行 wrap（`outbox.WrapPublisherForCell(eb)` 比 `eb` 多 33 字符）。语义清晰度（"我在跨边界注入"）大于字面冗长
 - internalCellXxx 的 Noop() 透传是隐式契约（inner Nooper interface 通过 anonymous local interface 反射断言），不是显式接口实现。文件级 godoc 已说明意图
-- wrapper-location archtest 是 Medium 而非 Hard——若未来出现 cells 内部强需要 wrap 的场景（极不可能，因为 cells 拿不到 raw infra），需要扩 allowlist 而非更深层 type system 护栏
+- D2 archtest 是 Medium 而非 Hard——签名形态空间由 Go AST/types 模型决定，type system 不可达。Hard 化路径需要语言级 sealed-by-position 等特性，超出当前 GoCell 范围
 
 ## ref
 

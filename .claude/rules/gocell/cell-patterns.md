@@ -72,22 +72,56 @@ CLAUDE.md "Cell 之间只通过 contract 通信"——**contract = `payload.sche
 
 ## Init() fail-fast
 
-依赖缺失在 Init() 报错，不降级运行。`outbox.NoopWriter{}` / `outbox.DiscardPublisher{}` 是 demo 信号。
+依赖缺失在 Init() 报错，不降级运行。Cells 持有 sealed marker 字段（`outbox.CellPublisher` / `outbox.CellWriter` / `persistence.CellTxManager`），demo 信号通过包装的 `outbox.DiscardPublisher{}` / `outbox.NoopWriter{}` 透传 `Noop()` 进入 fail-fast 检查。
 
 ```go
-if c.pendingOutboxPub == nil && c.pendingOutboxWriter == nil {
-    return errcode.New(errcode.ErrCellMissingOutbox,
-        "requires publisher or outbox writer; use WithOutboxDeps(&outbox.DiscardPublisher{}, nil) for demo mode")
+// cells/<x>/cell.go
+type MyCell struct {
+    cell.BaseCell
+    pendingPublisher outbox.CellPublisher  // sealed marker，非 raw outbox.Publisher
+    pendingWriter    outbox.CellWriter
+    txMgr            persistence.CellTxManager
+}
+
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if c.pendingPublisher == nil && c.pendingWriter == nil {
+        return errcode.New(errcode.ErrCellMissingOutbox,
+            "requires publisher or outbox writer; from composition root, "+
+                "wrap with outbox.WrapPublisherForCell(outbox.DiscardPublisher{}) for demo mode")
+    }
+    // ...
 }
 ```
 
-**约束**：cells/* 公开 With* Option 不得直接接受 raw infra 类型（`outbox.Publisher` / `outbox.Writer` / `persistence.TxRunner`）。按 cell 真实能力声明 cell-specific Option：
+## Sealed Marker Wrap Pattern
 
-- Platform cell L1/L2（`cells/*`）：`WithOutboxDeps(pub, writer)` + `WithTxManager(tx)`
-- Example ordercell L2（无 publisher 路径）：`WithOutboxWriter(w)` + `WithTxManager(tx)`
-- Example devicecell L4（无 writer，无 txRunner）：`WithDirectPublisher(p)`
+**约束**：cells/* 公开 With* Option 不得直接接受 raw infra 类型；只接 sealed marker，由 composition root 调 wrap 函数转换。
 
-archtest `CELL-RAW-DEPS-01` 以 type-aware（typeseval.SharedResolver + canonical type）三元组 allowlist 静态守卫（AI-rebust Hard 级）；详见 ADR `docs/architecture/202605101800-adr-cell-interface-isp-split.md` §D6。
+| Raw infra（cells 不可见） | Sealed marker（cells 字段类型 + With\* 参数） | Wrapper（composition root 调用） |
+|---|---|---|
+| `persistence.TxRunner` | `persistence.CellTxManager` | `persistence.WrapForCell` |
+| `outbox.Publisher` | `outbox.CellPublisher` | `outbox.WrapPublisherForCell` |
+| `outbox.Writer` | `outbox.CellWriter` | `outbox.WrapWriterForCell` |
+
+按 cell 真实能力声明 cell-specific Option：
+
+- Platform cell L1/L2（`cells/*`）：`WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`
+- Example ordercell L2（无 publisher 路径）：`WithOutboxWriter(w outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`
+- Example devicecell L4（无 writer，无 txRunner）：`WithDirectPublisher(p outbox.CellPublisher)`
+
+Wrapper 函数**仅允许**在以下位置调用（archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01` 守卫）：
+
+- `cmd/*` 任意文件（composition root）
+- `examples/<demo>/main.go` / `examples/<demo>/app.go`（example composition root）
+- `*_test.go` 任意路径（测试构造 fake）
+- `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）
+- `kernel/cell/demo_tx_runner.go`（`DemoCellTxManager()` 工厂）
+
+**Hard 防线（type system）**：cells/* 持 sealed 字段 + With\* 接 sealed 参数，raw infra 在 compile 期不可入 cell。`Wrap*ForCell` 用 `validation.IsNilInterface` 拒 typed-nil，避免 typed-nil 包成非 nil sealed 值绕过 `Init()` 与 `cell.CheckNotNoop`（PR 441 F1 修复）。
+
+**Medium 双重防线（archtest type-aware）**：type system 单独不可达签名形态空间——`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 拦 inline interface embed (`func WithBad(p interface{ outbox.Publisher })`)；`CELL-RAW-INFRA-WRAPPER-LOCATION-01` 拦 dot-import wrap call (`import . "kernel/persistence"; WrapForCell(p)`)。
+
+详见 ADR `docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md`（amends `202605101800` §D6；旧 `CELL-RAW-DEPS-01` archtest scanner 已删除，由 sealed marker 双重防线替代）。
 
 ## Contract test
 

@@ -107,6 +107,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/outbox" // outbox.WrapPublisherForCell — composition root only
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
