@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS users (
     -- change (role assignment, password reset, lock, delete). JWTs include
     -- this snapshot in the epoch claim; validate rejects when claim.epoch <
     -- users.authz_epoch.
+    --
+    -- **Note**: this column is read by S4 via cell rewiring; in S3+S5 the
+    -- column is set on INSERT and never updated. JWT issuer/validate paths
+    -- do NOT consume authz_epoch yet — closed loop lands in S4 (backlog
+    -- JWT-AUTHZEPOCH-CLOSED-LOOP-S4-01).
     authz_epoch              BIGINT      NOT NULL DEFAULT 0,
     created_at               TIMESTAMPTZ NOT NULL,
     updated_at               TIMESTAMPTZ NOT NULL

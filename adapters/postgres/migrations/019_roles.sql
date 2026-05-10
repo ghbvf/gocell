@@ -67,7 +67,9 @@ $$ LANGUAGE plpgsql;
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger WHERE tgname = 'last_admin_protected'
+        SELECT 1 FROM pg_trigger
+         WHERE tgname = 'last_admin_protected'
+           AND tgrelid = 'role_assignments'::regclass
     ) THEN
         CREATE TRIGGER last_admin_protected
             BEFORE DELETE ON role_assignments

@@ -70,9 +70,11 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	pgUserRepo, err := accesscore.NewPGUserRepository(pool.DB(), txMgr, clock.Real())
+	pgDeps, err := accesscore.NewPGDeps(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
-	pgRoleRepo, err := accesscore.NewPGRoleRepository(pool.DB(), txMgr, clock.Real())
+	pgUserRepo, err := accesscore.NewPGUserRepository(pgDeps)
+	require.NoError(t, err)
+	pgRoleRepo, err := accesscore.NewPGRoleRepository(pgDeps)
 	require.NoError(t, err)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

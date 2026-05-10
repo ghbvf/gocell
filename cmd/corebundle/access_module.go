@@ -99,22 +99,38 @@ func (m AccessCoreModule) Provide(
 			accesscore.WithOutboxDeps(nil, writer),
 			accesscore.WithTxManager(txMgr),
 		)
+		// Build PGDeps once and share across all PG-backed repo factories so the
+		// underlying pool/txRunner/clock are not repeated at each call site.
+		// LAYER-10: PGDeps hides pgxpool.Pool behind the accesscore boundary.
+		deps, err := accesscore.NewPGDeps(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGDeps: %w", err)
+		}
 		// Cell-private PG repos override the in-memory defaults installed by
 		// WithInMemoryDefaults above (S3+S5: users/roles persisted in PG).
-		// Session repository stays mem until S4 wires the runtime
-		// session.Store (PG implementation lives in adapters/postgres but is
-		// not consumed by the cell yet).
-		pgUserRepo, err := accesscore.NewPGUserRepository(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+		//
+		// HAZARD: session repository stays mem in S3+S5 even when PG storage backend
+		// is selected. accesscore's PG-mode TxRunner writes user/role/outbox to PG
+		// but session/refresh to mem — sessionlogin.persistSessionWithRefresh runs
+		// mem writes inside a real PG tx. PG rollback does NOT unwind mem
+		// session/refresh state. S4 wires the runtime session.Store + PG refresh
+		// store and removes this hazard. Backlog: S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01.
+		pgUserRepo, err := accesscore.NewPGUserRepository(deps)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGUserRepository: %w", err)
 		}
-		pgRoleRepo, err := accesscore.NewPGRoleRepository(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+		pgRoleRepo, err := accesscore.NewPGRoleRepository(deps)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGRoleRepository: %w", err)
+		}
+		pgSetupLock, err := accesscore.NewPGSetupLock(deps)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGSetupLock: %w", err)
 		}
 		accessOpts = append(accessOpts,
 			accesscore.WithUserRepository(pgUserRepo),
 			accesscore.WithRoleRepository(pgRoleRepo),
+			accesscore.WithSetupLock(pgSetupLock),
 		)
 		// Wire the ConfigGetter for the configreceive slice to fetch entry values
 		// from configcore's internal GET /internal/v1/config/{key} endpoint after

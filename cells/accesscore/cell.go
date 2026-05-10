@@ -196,6 +196,19 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(ac *AccessCore) { ac.configGetter = c }
 }
 
+// WithSetupLock injects a cross-process advisory lock for the admin-provisioning
+// path (multi-pod PG deployments). When set, CreateAdmin acquires the lock at
+// the start of the RunInTx body before calling adminprovision.Ensure — the lock,
+// user write, and outbox emit share one transaction. Nil is a no-op (mem mode
+// keeps the intra-process sync.Mutex). Closes backlog ADMINPROVISION-DIST-LOCK-01.
+func WithSetupLock(lock ports.SetupLock) Option {
+	return func(c *AccessCore) {
+		if lock != nil {
+			c.setupLock = lock
+		}
+	}
+}
+
 // WithBootstrapAuth injects the per-route replacement authentication
 // middleware for the admin setup endpoint (POST /api/v1/access/setup/admin).
 //
@@ -263,6 +276,12 @@ type AccessCore struct {
 	// because the closed contract (auth.Route.BootstrapAuth) requires it.
 	// Persistent operator authenticator on the single setup-driven admin path (ADR §D2).
 	bootstrapAuth func(http.Handler) http.Handler
+
+	// setupLock is an optional cross-process advisory lock injected by the PG
+	// composition root (accesscore.NewPGSetupLock). Nil in mem mode — the
+	// intra-process sync.Mutex in adminprovision.Provisioner is sufficient.
+	// Closes backlog ADMINPROVISION-DIST-LOCK-01.
+	setupLock ports.SetupLock
 
 	// Slice handlers.
 	// +slice:route:slice=identitymanage,subPath=/users

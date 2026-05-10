@@ -267,6 +267,7 @@ func (c *AccessCore) initSlices() error {
 	setupSvc, err := setup.NewService(setupProv, c.logger,
 		setup.WithEmitter(c.emitter),
 		setup.WithTxManager(c.txRunner),
+		setup.WithSetupLock(c.setupLock),
 	)
 	if err != nil {
 		return err
@@ -308,6 +309,13 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error 
 
 	// WithInMemoryDefaults defers sessionRepo and refreshStore construction
 	// to here so that c.clk is available.
+	//
+	// HAZARD: session repository stays mem in S3+S5 even when PG storage backend
+	// is selected. accesscore's PG-mode TxRunner writes user/role/outbox to PG
+	// but session/refresh to mem — sessionlogin.persistSessionWithRefresh runs
+	// mem writes inside a real PG tx. PG rollback does NOT unwind mem
+	// session/refresh state. S4 wires the runtime session.Store + PG refresh
+	// store and removes this hazard. Backlog: S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01.
 	if c.useInMemoryDefaults && c.sessionRepo == nil {
 		c.sessionRepo = mem.NewSessionRepository(c.clk)
 	}

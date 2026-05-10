@@ -60,6 +60,14 @@ ON CONFLICT (id) DO NOTHING`,
 // stores subject_id as UUID FK into users; storetest uses string identifiers
 // like "subject-A". The wrapper upserts user rows on first Create and maps
 // IDs transparently.
+//
+// This translation is not a contract violation: PGSessionStore enforces
+// UUID-format SubjectID because the sessions.subject_id column is a UUID FK to
+// users.id. The storetest conformance suite uses opaque strings; the wrapper
+// bridges the gap by mapping opaque IDs to deterministic UUIDs at the
+// integration-test layer. Mem store accepts any non-empty string and does not
+// need this translation. The production path always supplies real UUID subject
+// IDs (user.ID is always a UUID).
 type pgSessionStoreWrapper struct {
 	inner *PGSessionStore
 	pool  *Pool

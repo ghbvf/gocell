@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- jti is the JWT jti claim reference (ADR-credential D1). UNIQUE so the
     -- protocol invariant "one server-side row per issued jti" is enforced
     -- by the DB and not just the application layer.
+    --
+    -- **Note**: JWT issuer does not set `jti` claim and validate does not
+    -- read it in S3+S5. The schema is the precursor; closed loop lands in
+    -- S4 (backlog JWT-AUTHZEPOCH-CLOSED-LOOP-S4-01).
     jti                   TEXT        NOT NULL,
     authz_epoch_at_issue  BIGINT      NOT NULL,
     created_at            TIMESTAMPTZ NOT NULL,

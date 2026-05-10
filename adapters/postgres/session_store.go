@@ -5,19 +5,25 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
-// Compile-time assertion: PGSessionStore implements session.Store.
-var _ session.Store = (*PGSessionStore)(nil)
+// Compile-time assertions.
+var (
+	_ session.Store             = (*PGSessionStore)(nil)
+	_ lifecycle.ManagedResource = (*PGSessionStore)(nil)
+)
 
 // Session SQL statements.
 //
@@ -156,11 +162,20 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: Session.SubjectID required")
 	}
+	// PG store requires SubjectID to be a valid UUID string because sessions.subject_id
+	// is a UUID FK to users.id. Backends may enforce additional shape constraints
+	// beyond what the generic session.Store contract mandates.
+	if _, err := uuid.Parse(sess.SubjectID); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"PG session store requires UUID-formatted SubjectID",
+			errcode.WithDetails(slog.String("subjectID", sess.SubjectID)))
+	}
 	if err := s.validateFingerprintShape(sess); err != nil {
 		return err
 	}
 
-	_, err := s.execCtx(ctx, insertSessionSQL,
+	_, err := s.execCtx(
+		ctx, insertSessionSQL,
 		sess.ID,
 		sess.SubjectID,
 		sess.JTI,
@@ -226,6 +241,31 @@ func (s *PGSessionStore) Revoke(ctx context.Context, id string) error {
 	// silent no-ops per Store contract (防枚举).
 	return nil
 }
+
+// ─── lifecycle.ManagedResource ───────────────────────────────────────────────
+//
+// PGSessionStore is stateless with respect to lifecycle: it does not own its
+// connection pool (that is *postgres.Pool's responsibility), has no background
+// worker, and has no independent readiness probe. The three methods below are
+// no-ops satisfying the A54 archtest contract
+// (TestAdaptersExportedTypesManagedResourceOrOptOut). Pool health is surfaced
+// by the *Pool ManagedResource that the composition root registers separately.
+
+// Checkers returns an empty map: PGSessionStore has no independent readiness
+// surface — the underlying pool's _ready probe (registered by *Pool) covers it.
+func (s *PGSessionStore) Checkers() map[string]func(context.Context) error {
+	return nil
+}
+
+// Worker returns nil: PGSessionStore has no background goroutine.
+func (s *PGSessionStore) Worker() worker.Worker { return nil }
+
+// Close is a no-op: PGSessionStore does not own its pool.
+// Pool teardown is handled by the *Pool ManagedResource registered at the
+// composition root; closing the store a second time would double-close.
+func (s *PGSessionStore) Close(_ context.Context) error { return nil }
+
+// ─── session.Store: RevokeForSubject ─────────────────────────────────────────
 
 // RevokeForSubject marks every active session for subjectID dead. Empty
 // subjectID returns ErrValidationFailed. Unknown CredentialEvent values return

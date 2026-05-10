@@ -19,7 +19,14 @@ type Session struct {
 	// the format (UUID, ULID, etc.); the protocol does not interpret it.
 	ID string
 
-	// SubjectID is the user identifier that owns this session.
+	// SubjectID is the user identifier that owns this session. The protocol
+	// treats this as an opaque string; callers may use any non-empty format
+	// (UUID, ULID, etc.).
+	//
+	// Backends MAY enforce additional shape constraints. For example, the
+	// PG-backed store (adapters/postgres.PGSessionStore) requires SubjectID
+	// to be a UUID string for FK relationships to the users.id column.
+	// Mem store accepts any non-empty string.
 	SubjectID string
 
 	// JTI is the JWT jti claim reference (RFC 9068 §2.2.4) — the canonical

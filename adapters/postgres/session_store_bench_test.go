@@ -23,6 +23,7 @@ import (
 // The returned cleanup func terminates the container and closes the pool.
 func setupPostgresForBench(b *testing.B) (*Pool, func()) {
 	b.Helper()
+	testutil.RequireDocker(b)
 
 	ctx := context.Background()
 
@@ -33,7 +34,7 @@ func setupPostgresForBench(b *testing.B) (*Pool, func()) {
 		tcpostgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		b.Skipf("setupPostgresForBench: Docker unavailable, skipping: %v", err)
+		b.Fatalf("setupPostgresForBench: failed to start postgres container: %v", err)
 	}
 
 	connStr, err := container.ConnectionString(ctx, "sslmode=disable")

@@ -109,11 +109,18 @@ DELETE FROM role_assignments
 WHERE user_id = $1 AND role_id = $2`
 
 	// removeIfNotLastSQL atomically checks and removes the assignment only if
-	// another holder remains. The CTE returns two booleans to distinguish
-	// between the three outcome branches without multiple round-trips.
+	// another holder remains. The FOR UPDATE on the holders CTE locks all rows
+	// for role_id for the duration of the transaction, preventing TOCTOU races
+	// under READ COMMITTED: two concurrent callers with 2 admins serialize, and
+	// only the first to commit passes the COUNT > 1 condition.
+	//
+	// The DB last_admin_protected trigger (migration 019) remains the safety net
+	// for any direct DELETE that bypasses this CTE path.
 	removeIfNotLastSQL = `
 WITH holders AS (
-    SELECT user_id FROM role_assignments WHERE role_id = $2
+    SELECT user_id FROM role_assignments
+    WHERE role_id = $2
+    FOR UPDATE
 ),
 deleted AS (
     DELETE FROM role_assignments
@@ -122,8 +129,8 @@ deleted AS (
     RETURNING user_id
 )
 SELECT
-    (SELECT COUNT(*) FROM holders WHERE user_id = $1) > 0 AS user_held_role,
-    (SELECT COUNT(*) FROM deleted) > 0 AS did_delete`
+    EXISTS(SELECT 1 FROM holders WHERE user_id = $1) AS user_held_role,
+    EXISTS(SELECT 1 FROM deleted)                    AS was_deleted`
 
 	countByRoleSQL = `
 SELECT COUNT(*)::INT FROM role_assignments WHERE role_id = $1`
@@ -185,9 +192,19 @@ func (r *PGRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.
 	return result, nil
 }
 
+// fkConstraintName extracts the ConstraintName from a PG FK violation error.
+func fkConstraintName(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
 // AssignToUser assigns a role to a user. Idempotent: returns changed=false when
 // the assignment already existed. Returns ErrAuthRoleNotFound when the role does
-// not exist (FK violation).
+// not exist (FK on role_id). Returns ErrAuthUserNotFound when the user does not
+// exist (FK on user_id). Fallback for unknown FK violations returns ErrAuthRoleNotFound.
 func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
 	tag, err := r.execCtx(ctx, insertAssignmentSQL,
 		userID,
@@ -196,9 +213,17 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 	)
 	if err != nil {
 		if isForeignKeyViolation(err) {
-			return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
-				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("role_id=%s", roleID)))
+			switch fkConstraintName(err) {
+			case "role_assignments_user_id_fkey":
+				return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+					errcode.WithCategory(errcode.CategoryDomain),
+					errcode.WithInternal(fmt.Sprintf("user_id=%s", userID)))
+			default:
+				// role_assignments_role_id_fkey or unknown — treat as role not found.
+				return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
+					errcode.WithCategory(errcode.CategoryDomain),
+					errcode.WithInternal(fmt.Sprintf("role_id=%s", roleID)))
+			}
 		}
 		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: assign-to-user", err)
 	}
@@ -222,16 +247,19 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 }
 
 // RemoveFromUserIfNotLast atomically removes the role assignment only if at
-// least one other holder will remain after the removal. Returns:
+// least one other holder will remain after the removal. The FOR UPDATE on the
+// holders CTE serializes concurrent calls so only one caller can remove a role
+// when exactly two holders exist (TOCTOU-safe under READ COMMITTED). Returns:
 //   - (true, nil)  — role was held and successfully removed.
 //   - (false, nil) — role was not held (idempotent no-op).
 //   - (false, ErrAuthForbidden) — user is the sole holder; removal refused.
+//   - (false, ErrAuthLastAdminProtected) — DB trigger safety net fired (direct DELETE path).
 func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
-	var userHeldRole, didDelete bool
+	var userHeldRole, wasDeleted bool
 	row := r.queryRowCtx(ctx, removeIfNotLastSQL, userID, roleID)
-	if err := row.Scan(&userHeldRole, &didDelete); err != nil {
+	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
 		if isLastAdminProtected(err) {
-			// DB trigger fired — should not happen with the CTE but handle as safety net.
+			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
 			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",
 				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
@@ -244,7 +272,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 	case !userHeldRole:
 		// User did not hold the role — idempotent no-op.
 		return false, nil
-	case didDelete:
+	case wasDeleted:
 		// Role held and removed successfully.
 		return true, nil
 	default:

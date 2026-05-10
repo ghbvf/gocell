@@ -164,7 +164,8 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 }
 
 // Update overwrites the mutable fields of an existing user. Returns
-// ErrAuthUserNotFound when no row matched.
+// ErrAuthUserNotFound when no row matched. Returns ErrAuthUserDuplicate (409)
+// when the updated username or email collides with an existing row.
 func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 	tag, err := r.execCtx(ctx, updateUserSQL,
 		user.ID,
@@ -177,6 +178,11 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		user.UpdatedAt,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
+				"username or email already exists",
+				errcode.WithInternal(fmt.Sprintf("id=%s username=%q email=%q", user.ID, user.Username, user.Email)))
+		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update", err)
 	}
 	if tag.RowsAffected() == 0 {
@@ -188,9 +194,17 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 }
 
 // Delete removes a user row. Returns ErrAuthUserNotFound when no row matched.
+// Returns ErrAuthLastAdminProtected (403) when the DB trigger rejects the
+// delete because the user is the sole admin holder.
 func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 	tag, err := r.execCtx(ctx, deleteUserSQL, id)
 	if err != nil {
+		if isLastAdminProtected(err) {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
+				"delete blocked: last admin",
+				errcode.WithCategory(errcode.CategoryAuth),
+				errcode.WithInternal(fmt.Sprintf("user_id=%s", id)))
+		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: delete", err)
 	}
 	if tag.RowsAffected() == 0 {

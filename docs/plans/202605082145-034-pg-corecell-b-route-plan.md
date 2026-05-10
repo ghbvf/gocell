@@ -254,7 +254,12 @@ runtime/auth/session/
 - `cells/accesscore/cell_init.go`：Redis session cache adapter 注入
 - `cells/accesscore/internal/{ports,domain,mem}/`：5 联动激活
 
-**收口 backlog**：
+**收口 backlog**（PR #449 review carry-over entries）：
+- LASTADMINGUARD-SERVICE-WIRING-S4 🟠 P1（PR #449 review carry-over）：本 PR (S3+S5) 仅落 LastAdminGuard struct + 单测 + DB trigger 兜底；service-level wiring 在 S4 — identitymanage.DeleteUser / ChangeUserStatus(Locked) / rbacassign.RevokeRole 三个入口调用 LastAdminGuard.CheckRemove，把 DB trigger 触发的 P0001 raw exception 转成 ErrAuthLastAdminProtected 精准 errcode（ADR-admin §4 migration table 锁定）
+- S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01 🟠 P0（PR #449 review carry-over）：S3+S5 仅 wiring user/role/outbox PG，session/refresh repo 仍是 mem；当前 PG 模式下 sessionlogin.persistSessionWithRefresh 在真 PG tx 里写 mem session/refresh，rollback 不回滚 mem 状态（pre-existing hazard，S3+S5 PG TxManager wiring 让区域更显眼）。S4 必须同 PR：(a) cell consume runtime session.Store + adapters/postgres PG session store；(b) PG refresh store 接入；(c) 删除 cell-private SessionRepository + cell-internal mem session 路径；(d) 启动期 forced re-login 全员 session
+- JWT-AUTHZEPOCH-CLOSED-LOOP-S4-01 🟠 P0（PR #449 review carry-over）：S3+S5 仅落 schema (users.authz_epoch + sessions.authz_epoch_at_issue + sessions.jti) + Protocol primitive；JWT issue/validate 闭环在 S4：(a) runtime/auth/jwt issuer 写 jti + epoch claim；(b) verifier 读 epoch；(c) sessionvalidate 加 user.authz_epoch lookup + 比对；(d) 4 个 CredentialEvent 撤销路径在每个 slice 接入；(e) ADR-credential D2 在 S4 闭环前不真实生效，旧 access JWT 仍只靠 session revoke + 自然过期失效
+
+**收口 backlog**（原有）：
 - ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 🔴 P1（session 状态机一并）
 - CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 🔴 Cx1（ACCESS-LEVEL-AUDIT 同主题）
 - B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 🟠 P1

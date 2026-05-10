@@ -28,10 +28,13 @@ var (
 // Integration tests that use testcontainers must call this at the top of the
 // test (or setup helper) so local runs self-skip when Docker is unavailable.
 //
+// Accepts both *testing.T and *testing.B so setup helpers shared between unit
+// tests and benchmarks can use the same guard without a wrapper.
+//
 // Set GOCELL_TEST_DOCKER_REQUIRED=1 in CI jobs where Docker-backed integration
 // tests are mandatory. In that mode an unavailable provider is a test failure,
 // not a skip, so CI cannot go green without executing the integration path.
-func RequireDocker(t *testing.T) {
+func RequireDocker(t testing.TB) {
 	t.Helper()
 	if dockerRequired() {
 		ctx, cancel := context.WithTimeout(context.Background(), dockerProviderHealthTimeout)
@@ -42,7 +45,20 @@ func RequireDocker(t *testing.T) {
 		return
 	}
 
-	skipIfDockerProviderUnhealthy(t)
+	// skipIfDockerProviderUnhealthy requires *testing.T; assert it holds.
+	// *testing.B is accepted by the outer signature for guard-only callers but
+	// the testcontainers skip helper is T-specific. Benchmarks that reach here
+	// without Docker available will hit b.Skip via the fallback path below.
+	if tt, ok := t.(*testing.T); ok {
+		skipIfDockerProviderUnhealthy(tt)
+		return
+	}
+	// *testing.B path: probe directly and skip if unhealthy.
+	ctx, cancel := context.WithTimeout(context.Background(), dockerProviderHealthTimeout)
+	defer cancel()
+	if err := dockerProviderHealth(ctx); err != nil {
+		t.Skipf("Docker unavailable, skipping benchmark: %v", err)
+	}
 }
 
 func dockerRequired() bool {
