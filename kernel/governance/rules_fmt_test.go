@@ -401,22 +401,31 @@ func TestFMT27ErrorDiagnostics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			v := NewValidator(fmt27ProjectWithAuth(tc.auth), "", clock.Real())
 			matches := findByCode(v.validateFMT27(), codeFMT27)
-			if len(matches) != 1 {
-				t.Fatalf("FMT-27: expected exactly 1 violation, got %d: %v", len(matches), matches)
-			}
-			msg := matches[0].Message
-			for _, field := range tc.mustName {
-				if !strings.Contains(msg, field) {
-					t.Errorf("FMT-27 diagnostic missing %q in message: %s", field, msg)
-				}
-			}
-			if !strings.Contains(msg, "incompatible") {
-				t.Errorf("FMT-27 diagnostic missing 'incompatible' keyword in message: %s", msg)
-			}
-			if !strings.Contains(msg, "Set at most one") {
-				t.Errorf("FMT-27 diagnostic missing 'Set at most one' fix hint in message: %s", msg)
-			}
+			assertFMT27Diagnostic(t, matches, tc.mustName)
 		})
+	}
+}
+
+// assertFMT27Diagnostic asserts that a single FMT-27 violation was produced
+// and that its message names every field in mustName plus the conflict
+// keyword and fix hint. Extracted from TestFMT27ErrorDiagnostics to keep the
+// table-driven loop body within cognitive-complexity bounds.
+func assertFMT27Diagnostic(t *testing.T, matches []ValidationResult, mustName []string) {
+	t.Helper()
+	if len(matches) != 1 {
+		t.Fatalf("FMT-27: expected exactly 1 violation, got %d: %v", len(matches), matches)
+	}
+	msg := matches[0].Message
+	for _, field := range mustName {
+		if !strings.Contains(msg, field) {
+			t.Errorf("FMT-27 diagnostic missing %q in message: %s", field, msg)
+		}
+	}
+	if !strings.Contains(msg, "incompatible") {
+		t.Errorf("FMT-27 diagnostic missing 'incompatible' keyword in message: %s", msg)
+	}
+	if !strings.Contains(msg, "Set at most one") {
+		t.Errorf("FMT-27 diagnostic missing 'Set at most one' fix hint in message: %s", msg)
 	}
 }
 
