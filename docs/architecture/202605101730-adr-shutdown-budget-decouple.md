@@ -73,7 +73,7 @@ case drainCtx.Err() != nil || tearCtx.Err() != nil:
 - 本 ADR **supersede** `docs/architecture/202605051800-adr-rollback-ctx-decoupling.md` 行 52 中的 grace 公式 `>= shutdownTimeout + 10s`（仅公式部分；rollback ctx 解耦决策本身仍生效）
 - `docs/ops/graceful-shutdown-k8s.md` 公式同步更新为 `>= 2 × shutdownTimeout + 10s`
 - 不留 deprecation 别名 / 旧路径 / 双 ctx fallback；旧公式已在文档中删除，新公式为唯一表达
-- `cmd/*` / pod manifest 默认值不需要立即改动（默认 `shutdownTimeout = 5s`，新最低门槛 `2*5 + 10 = 20s`，多数现有 manifest 都已超过）
+- `cmd/*` / pod manifest 默认值需要按新公式 review：默认 `shutdownTimeout = 30s`（`runtime/shutdown.DefaultTimeout`），新最低门槛 `2*30 + 10 = 70s`。`bootstrap.WithTerminationGracePeriod` 在不达标时 emit `slog.Warn`（advisory only，不阻断启动）— 现有 < 70s 的 manifest 启动时会触发 warn 但仍能跑，需要在下次部署窗口对齐
 
 ## 测试与验证
 

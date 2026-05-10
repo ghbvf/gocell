@@ -77,6 +77,14 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 // 10s is the empirical floor — see docs/ops/graceful-shutdown-k8s.md.
 const terminationGraceSafetyMargin = 10 * time.Second
 
+// phase10ShutdownBudgetBuckets is the number of independent timeout buckets
+// allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx
+// (stage 3) — each owning b.shutdownTimeout. The K8s grace-period formula
+// multiplies shutdownTimeout by this count plus the safety margin.
+//
+// ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md.
+const phase10ShutdownBudgetBuckets = 2
+
 // warnTerminationGracePeriodInsufficient emits a slog.Warn when the operator
 // declared (via WithTerminationGracePeriod) a K8s terminationGracePeriodSeconds
 // that is smaller than the framework's own shutdown budget plus the SIGTERM
@@ -105,7 +113,7 @@ func (b *Bootstrap) warnTerminationGracePeriodInsufficient() {
 	if b.terminationGracePeriod <= 0 || b.shutdownTimeout <= 0 {
 		return
 	}
-	minRequired := 2*b.shutdownTimeout + terminationGraceSafetyMargin
+	minRequired := phase10ShutdownBudgetBuckets*b.shutdownTimeout + terminationGraceSafetyMargin
 	if b.terminationGracePeriod >= minRequired {
 		return
 	}

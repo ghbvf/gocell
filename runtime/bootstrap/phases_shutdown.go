@@ -173,9 +173,10 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	//                     teardown itself was clean.
 	//   - success       : user-initiated shutdown with clean teardown.
 	teardownErr := errors.Join(allTeardownErrs...)
+	timedOut := drainCtx.Err() != nil || tearCtx.Err() != nil
 	outcome := "success"
 	switch {
-	case drainCtx.Err() != nil || tearCtx.Err() != nil:
+	case timedOut:
 		outcome = "timeout"
 	case teardownErr != nil:
 		outcome = "teardown_error"
@@ -190,6 +191,19 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 
 	if teardownErr != nil {
 		return teardownErr
+	}
+	// Fail-safe: even when both teardown and signal are clean, if either
+	// budget bucket expired we surface the ctx error so callers (Run() →
+	// orchestrators / restart-policy gates) cannot misread "outcome=timeout"
+	// as a success exit. errors.Join drops nil operands so the caller sees
+	// only the bucket(s) that actually expired.
+	//
+	// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go — manager
+	// stop returns context.DeadlineExceeded to Start caller on grace timeout.
+	// ref: uber-go/fx app.go — Stop() surfaces ctx.DeadlineExceeded; the Run
+	// path maps it to a non-zero exit code.
+	if timedOut {
+		return errors.Join(drainCtx.Err(), tearCtx.Err())
 	}
 	// Surface the triggering signal error when teardown itself was clean.
 	return sig.err

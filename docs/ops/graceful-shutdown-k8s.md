@@ -8,7 +8,7 @@ GoCell 的 graceful shutdown 由 phase10 的两个独立 budget bucket 承载（
 terminationGracePeriodSeconds  >=  2 × shutdownTimeout + 10s
 ```
 
-- `shutdownTimeout` — `bootstrap.WithShutdownTimeout(d)`，默认 5s。**每个 stage bucket 独立分配** 这个时长：
+- `shutdownTimeout` — `bootstrap.WithShutdownTimeout(d)`，默认 30s（`runtime/shutdown.DefaultTimeout`）。**每个 stage bucket 独立分配** 这个时长：
   - **drainCtx**（stage 1+2）— readiness flip + `preShutdownDelay` + HTTP drain
   - **tearCtx**（stage 3）— LIFO teardown（workers / event router / assembly / kernel lifecycle / closers / managed resources）
   
@@ -21,30 +21,32 @@ terminationGracePeriodSeconds  >=  2 × shutdownTimeout + 10s
 
 ## 进程侧声明（advisory）
 
-`bootstrap.WithTerminationGracePeriod(d)` 让 composition root 把 K8s manifest 的预期值告诉框架；phase0 用此值做一致性校验：
+`bootstrap.WithTerminationGracePeriod(d)` 让 composition root 把 K8s manifest 的预期值告诉框架；phase0 用此值做一致性校验。下例使用 `shutdownTimeout = DefaultTimeout = 30s`：
 
 ```go
 bootstrap.New(
-    bootstrap.WithShutdownTimeout(10*time.Second),
-    bootstrap.WithPreShutdownDelay(3*time.Second),    // 嵌在 drainCtx 内（10s）
-    bootstrap.WithTerminationGracePeriod(30*time.Second), // >= 2*10 + 10 = 30
+    // bootstrap.WithShutdownTimeout(...) omitted — DefaultTimeout (30s) applies.
+    bootstrap.WithPreShutdownDelay(5*time.Second),         // 嵌在 drainCtx (30s) 内
+    bootstrap.WithTerminationGracePeriod(70*time.Second),  // >= 2*30 + 10 = 70
     // ...
 )
 ```
 
-不一致时 phase0 emit `slog.Warn`：
+不一致时 phase0 emit `slog.Warn`（**advisory only — 不阻断启动**）：
 
 ```
 WARN bootstrap: terminationGracePeriodSeconds insufficient for graceful shutdown
-  termination_grace_period=25s shutdown_timeout=10s pre_shutdown_delay=3s minimum_required=30s
+  termination_grace_period=60s shutdown_timeout=30s pre_shutdown_delay=5s minimum_required=70s
   hint=increase Kubernetes pod terminationGracePeriodSeconds to >= 2*shutdownTimeout + 10s, ...
 ```
 
 `pre_shutdown_delay` 字段仅作信息记录（运维排查用）；不参与 `minimum_required` 计算。
 
-**`WithTerminationGracePeriod` 不改变运行时行为**——真实的 K8s grace window 仍然在 pod spec 里。这个 option 只是把"应当配多少"声明给 phase0，让 misalignment 在启动期 fail-loud 而不是在某次 SIGTERM 才暴露。
+**`WithTerminationGracePeriod` 不改变运行时行为**——真实的 K8s grace window 仍然在 pod spec 里。这个 option 只是把"应当配多少"声明给 phase0：misalignment 在启动期作为 `slog.Warn` 大声告知（warn-loud, non-blocking），而不是等到某次 SIGTERM 被 SIGKILL 截断才暴露。需要"启动期硬阻断"语义请追踪 backlog 升级条目（暂未提供 strict 开关）。
 
 ## Pod spec 示例
+
+`shutdownTimeout` 取默认 30s 时，K8s grace 最低 70s：
 
 ```yaml
 apiVersion: apps/v1
@@ -52,7 +54,7 @@ kind: Deployment
 spec:
   template:
     spec:
-      terminationGracePeriodSeconds: 30   # >= 2*10 + 10
+      terminationGracePeriodSeconds: 70   # >= 2*30 + 10  (DefaultTimeout)
       containers:
         - name: gocell
           # …

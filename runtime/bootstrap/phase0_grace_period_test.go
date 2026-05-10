@@ -26,13 +26,13 @@ import (
 // own a shutdownTimeout-sized budget; preShutdownDelay is consumed inside
 // drainCtx, not added on top of either).
 //
-// graceMinThreshold derives from terminationGraceSafetyMargin (same package
-// const) so the formula stays single-sourced; bumping the safety margin
-// updates the threshold here automatically.
+// graceMinThreshold derives from same-package consts (phase10ShutdownBudgetBuckets,
+// terminationGraceSafetyMargin) so the formula stays single-sourced; bumping
+// either updates the threshold here automatically.
 const (
 	graceShutdownTimeout   = testtime.D20s
 	gracePreShutdownDelay  = testtime.D5s // recorded in warn payload but does not affect threshold
-	graceMinThreshold      = 2*graceShutdownTimeout + terminationGraceSafetyMargin
+	graceMinThreshold      = phase10ShutdownBudgetBuckets*graceShutdownTimeout + terminationGraceSafetyMargin
 	graceBelowThreshold    = graceMinThreshold - testtime.D5s  // 45s < 50s → must warn
 	graceAboveThreshold    = graceMinThreshold + testtime.D10s // 60s > 50s → no warn
 	graceFarBelowThreshold = testtime.D10s                     // for advisory-only assertion
