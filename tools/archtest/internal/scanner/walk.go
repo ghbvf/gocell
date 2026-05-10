@@ -14,43 +14,33 @@ import (
 // returned immediately (fail-closed). Non-existent root returns nil slice +
 // nil error. modRoot is used to compute module-relative paths in error
 // messages so that absolute paths do not appear in CI logs unexpectedly.
+//
+// Symlinks are rejected fail-loud: archtest scans the static repository
+// structure, so any symlink under modRoot (the root itself or an entry
+// surfaced by the walk) signals either a misconfigured caller or an attempt
+// to redirect the scan to arbitrary host content. Silently skipping a symlink
+// would let an evil_gen.go → /etc/passwd entry be compiled by Go tooling
+// (which follows the link) while bypassing every archtest gate. Returning an
+// error makes the misconfiguration visible in CI immediately.
 func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(path string) bool) ([]string, error) {
 	info, err := os.Lstat(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		display := moduleRelDisplay(modRoot, root)
-		return nil, fmt.Errorf("lstat: %s: %w", display, err)
+		return nil, fmt.Errorf("lstat: %s: %w", moduleRelDisplay(modRoot, root), err)
 	}
-	// fail-closed: refuse to walk a root that is itself a symlink.
-	// filepath.WalkDir does not descend into a symlink root anyway (it emits a
-	// single Type==Symlink callback and stops), so silently returning zero
-	// files would hide a misconfigured caller. A real directory is the only
-	// legitimate input — the macOS /var → /private/var system symlink is on
-	// path segments above the temp root, never at the root itself, so this
-	// check does not affect t.TempDir-based fixtures.
 	if info.Mode()&os.ModeSymlink != 0 {
-		display := moduleRelDisplay(modRoot, root)
-		return nil, fmt.Errorf("walk: root %s is a symlink (refused; scanner requires a real directory)", display)
+		return nil, errSymlink(modRoot, root)
 	}
 
 	var files []string
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			display := moduleRelDisplay(modRoot, path)
-			return fmt.Errorf("walk %s: %w", display, walkErr)
+			return fmt.Errorf("walk %s: %w", moduleRelDisplay(modRoot, path), walkErr)
 		}
-		// fail-closed: archtest scans the static repository structure, so symlinks
-		// inside the tree are never a legitimate input. Reject every entry whose
-		// Type bit is ModeSymlink so a malicious or accidental symlink under
-		// modRoot cannot redirect a scan to arbitrary host content. The root
-		// path is screened separately above, so this branch only fires for
-		// entries discovered during the walk. d.IsDir() is always false here
-		// (a symlink's Type carries ModeSymlink, not ModeDir, even when the
-		// target is a directory), so a bare return nil suffices.
 		if d.Type()&fs.ModeSymlink != 0 {
-			return nil
+			return errSymlink(modRoot, path)
 		}
 		if d.IsDir() {
 			return skipDirCheck(d.Name(), skipDirs)
@@ -64,6 +54,15 @@ func walkFiles(modRoot, root string, skipDirs map[string]struct{}, accept func(p
 		return nil, err
 	}
 	return files, nil
+}
+
+// errSymlink is the single error returned by walkFiles whenever a symlink is
+// encountered (root or entry, file or directory). The message carries a
+// module-relative path so it stays useful in CI logs without leaking absolute
+// host paths, and the wording is unambiguous about the fail-loud intent.
+func errSymlink(modRoot, path string) error {
+	return fmt.Errorf("walk: %s is a symlink (refused; archtest scans the static repository structure, real files only)",
+		moduleRelDisplay(modRoot, path))
 }
 
 // moduleRelDisplay returns a module-relative display string for path.

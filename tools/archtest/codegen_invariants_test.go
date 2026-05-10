@@ -283,25 +283,32 @@ func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 		}
 		pkgDir := filepath.Join(root, contractIDToExpectedPkgPath(contract.ID))
 
-		typesPath := filepath.Join(pkgDir, "types_gen.go")
-		if _, err := os.Stat(typesPath); err != nil {
-			t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q has codegen=true but missing %s; run `gocell generate contract %s`",
-				contract.ID, typesPath, contract.ID)
-		}
-
-		ifacePath := filepath.Join(pkgDir, "iface_gen.go")
-		if _, err := os.Stat(ifacePath); err != nil {
-			t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q has codegen=true but missing %s; run `gocell generate contract %s`",
-				contract.ID, ifacePath, contract.ID)
-		}
-
+		requireRealGeneratedFile(t, filepath.Join(pkgDir, "types_gen.go"), contract.ID)
+		requireRealGeneratedFile(t, filepath.Join(pkgDir, "iface_gen.go"), contract.ID)
 		if contract.Kind == "http" {
-			handlerPath := filepath.Join(pkgDir, "handler_gen.go")
-			if _, err := os.Stat(handlerPath); err != nil {
-				t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q (kind=http) has codegen=true but missing %s; run `gocell generate contract %s`",
-					contract.ID, handlerPath, contract.ID)
-			}
+			requireRealGeneratedFile(t, filepath.Join(pkgDir, "handler_gen.go"), contract.ID)
 		}
+	}
+}
+
+// requireRealGeneratedFile asserts that path exists and is a real file
+// (regular file, not a symlink). os.Stat would silently follow a symlink and
+// accept a hostile artifact, e.g. handler_gen.go → /etc/passwd: Go tooling
+// would compile the target while every archtest gate that relies on
+// scanning generated/ would skip the entry. os.Lstat avoids that whole class.
+func requireRealGeneratedFile(t *testing.T, path, contractID string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	switch {
+	case err != nil && os.IsNotExist(err):
+		t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q has codegen=true but missing %s; run `gocell generate contract %s`",
+			contractID, path, contractID)
+	case err != nil:
+		t.Errorf("CODEGEN-CONTRACT-GEN-01: lstat %s: %v", path, err)
+	case info.Mode()&os.ModeSymlink != 0:
+		t.Errorf("CODEGEN-CONTRACT-GEN-01: %s is a symlink "+
+			"(generated/ must contain real files only; remove the link "+
+			"and re-run `gocell generate contract %s`)", path, contractID)
 	}
 }
 
@@ -383,18 +390,37 @@ func TestCodegenContractGates_NegativeFixtures(t *testing.T) {
 		dir := filepath.Join(fixtureBase, "user_file_overlap")
 		genDir := filepath.Join(dir, "generated", "contracts")
 
-		scope := scanner.DirsScope(genDir, []string{"."})
+		// IncludeTests mirrors the option the production rule uses
+		// (TestCodegenContractUserOverlap01) so that the fixture exercises the
+		// exact scope contract — including hand-written *_test.go files. The
+		// fixture deliberately ships both helper.go and helper_test.go;
+		// removing IncludeTests() in production must turn this fixture red.
+		scope := scanner.DirsScope(genDir, []string{"."}, scanner.IncludeTests())
 		allFiles, filesErr := scope.Files()
 		require.NoError(t, filesErr, "user_file_overlap fixture: scan %s", genDir)
-		foundUserFile := false
+		var userFiles []string
 		for _, path := range allFiles {
 			if !strings.HasSuffix(path, "_gen.go") {
-				foundUserFile = true
-				break
+				userFiles = append(userFiles, filepath.Base(path))
 			}
 		}
-		if !foundUserFile {
-			t.Error("user_file_overlap fixture: no hand-written .go file found under generated/contracts — fixture is broken")
+		require.NotEmpty(t, userFiles,
+			"user_file_overlap fixture: no hand-written .go file found under generated/contracts — fixture is broken")
+		var hasNonTest, hasTest bool
+		for _, name := range userFiles {
+			if strings.HasSuffix(name, "_test.go") {
+				hasTest = true
+			} else {
+				hasNonTest = true
+			}
+		}
+		if !hasNonTest {
+			t.Error("user_file_overlap fixture: missing hand-written non-test .go (helper.go) — fixture is broken")
+		}
+		if !hasTest {
+			t.Error("user_file_overlap fixture: missing hand-written *_test.go " +
+				"(helper_test.go) — IncludeTests() ratchet would not catch its " +
+				"removal in production")
 		}
 	})
 }

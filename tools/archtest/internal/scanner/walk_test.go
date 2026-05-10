@@ -43,11 +43,13 @@ func TestWalk_BubblesError(t *testing.T) {
 	}
 }
 
-// TestWalk_SkipsSymlinkFile asserts that symlink files inside the walked tree
-// are silently skipped (fail-closed). archtest scans static repo structure;
-// following symlinks is an attack surface (a malicious PR could add a symlink
-// pointing outside the module to make scanners read arbitrary host files).
-func TestWalk_SkipsSymlinkFile(t *testing.T) {
+// TestWalk_RejectsSymlinkFile asserts that symlink files inside the walked
+// tree cause Files() to fail-loud with an explicit error. archtest scans the
+// static repository structure; an evil_gen.go → /etc/passwd symlink would
+// otherwise be compiled by Go tooling (which follows the link) while
+// bypassing every archtest gate. The error must mention "symlink" and carry
+// the module-relative offending path so CI logs surface the misconfiguration.
+func TestWalk_RejectsSymlinkFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("os.Symlink requires admin/Developer Mode on Windows")
 	}
@@ -66,39 +68,24 @@ func TestWalk_SkipsSymlinkFile(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	files, err := scanner.ModuleScope(tmp).Files()
-	if err != nil {
-		t.Fatalf("Files() error: %v", err)
+	_, err := scanner.ModuleScope(tmp).Files()
+	if err == nil {
+		t.Fatal("expected error for symlink file under module root, got nil")
 	}
-
-	var rels []string
-	for _, f := range files {
-		rel, _ := filepath.Rel(tmp, f)
-		rels = append(rels, rel)
+	msg := err.Error()
+	if !strings.Contains(msg, "symlink") {
+		t.Errorf("error message must mention 'symlink', got: %v", err)
 	}
-	wantReal := filepath.Join("src", "real.go")
-	wantLink := filepath.Join("src", "link.go")
-	hasReal, hasLink := false, false
-	for _, r := range rels {
-		if r == wantReal {
-			hasReal = true
-		}
-		if r == wantLink {
-			hasLink = true
-		}
-	}
-	if !hasReal {
-		t.Errorf("expected real.go in result, got %v", rels)
-	}
-	if hasLink {
-		t.Errorf("symlink %s must be skipped, but it appeared in %v", wantLink, rels)
+	if !strings.Contains(msg, "src/link.go") && !strings.Contains(msg, filepath.Join("src", "link.go")) {
+		t.Errorf("error must carry module-relative path src/link.go, got: %v", err)
 	}
 }
 
-// TestWalk_SkipsSymlinkDir asserts that symlink directories are not descended
-// into. Without this the walk could re-enter content via the symlink and emit
-// duplicate paths or escape the module root.
-func TestWalk_SkipsSymlinkDir(t *testing.T) {
+// TestWalk_RejectsSymlinkDir asserts that symlink directories also cause
+// Files() to fail-loud. filepath.WalkDir already declines to descend into a
+// symlink dir, but a silent skip would let a misconfigured fixture or a
+// malicious "mirror" directory pass through unnoticed.
+func TestWalk_RejectsSymlinkDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("os.Symlink requires admin/Developer Mode on Windows")
 	}
@@ -116,28 +103,15 @@ func TestWalk_SkipsSymlinkDir(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	files, err := scanner.ModuleScope(tmp).Files()
-	if err != nil {
-		t.Fatalf("Files() error: %v", err)
+	_, err := scanner.ModuleScope(tmp).Files()
+	if err == nil {
+		t.Fatal("expected error for symlink dir under module root, got nil")
 	}
-	var rels []string
-	for _, f := range files {
-		rel, _ := filepath.Rel(tmp, f)
-		rels = append(rels, rel)
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("error message must mention 'symlink', got: %v", err)
 	}
-
-	wantReal := filepath.Join("src", "a.go")
-	hasReal := false
-	for _, r := range rels {
-		if r == wantReal {
-			hasReal = true
-		}
-		if strings.HasPrefix(r, "mirror"+string(filepath.Separator)) {
-			t.Errorf("walked into symlink dir mirror/, got entry %s in %v", r, rels)
-		}
-	}
-	if !hasReal {
-		t.Errorf("expected real src/a.go in result, got %v", rels)
+	if !strings.Contains(err.Error(), "mirror") {
+		t.Errorf("error must carry module-relative path 'mirror', got: %v", err)
 	}
 }
 

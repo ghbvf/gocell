@@ -193,9 +193,14 @@ func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []
 
 // scanSpanRecordErrorDir scans every non-test .go file under root/dir and
 // returns SPAN-RECORD-ERROR-REDACT-01 violations.
+//
+// IncludeGenerated mirrors the option used by TestSpanRecordErrorScanDirsCoverage
+// so that a generated/ directory enrolled in spanRecordErrorScanDirs (for
+// instance generated/contracts emitting span.RecordError from handler_gen.go)
+// is actually enforced, not just covered.
 func scanSpanRecordErrorDir(t *testing.T, root, dir string) []string {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{dir})
+	scope := scanner.DirsScope(root, []string{dir}, scanner.IncludeGenerated())
 	var out []string
 	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
 		out = append(out, scanSpanRecordErrorFile(fc.Fset, fc.File, fc.Rel)...)
