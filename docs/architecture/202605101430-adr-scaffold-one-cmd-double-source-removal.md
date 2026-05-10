@@ -113,11 +113,60 @@ Round-2 silently rewrote `--id=test-cell` to package `testcell` via `strings.Rep
 
 Carryover: `SCAFFOLD-INLINE-TEMPLATE-ARCHTEST` (F15, independent archtest theme) and `ASSEMBLY-RUN-RUNTIME-SMOKE` (F17, stub-content theme) remain backlog follow-ups.
 
+## Round-5 amendment (2026-05-10): funnel completeness + leaf-symlink + YAML safety
+
+PR #442 round-4 funnel claimed coverage was scaffold *skeleton* writes only — auto-generate paths (`tools/codegen/contractgen` derived `.gen.go` writes via `tools/codegen/writer.go Write`, `tools/codegen/cellgen` derived `cell_gen.go`) still ran bare `os.MkdirAll` + `os.WriteFile`. Round-5 closes that gap and addresses three additional safety findings.
+
+### What round-4 ADR overstated
+
+Round-4 §"Round-4 amendment" claimed:
+
+> All filesystem writes funnel through `pkg/pathsafe.WritePlannedFiles`.
+
+The accurate statement at the time was: **scaffold skeleton writes** funnel through pathsafe; **derived codegen writes** still went through `codegen.Write` which used direct `os.MkdirAll` / `os.WriteFile`. Round-5 makes the round-4 sentence true by routing `codegen.Write` through `pathsafe.WriteFileForce`, expanding archtest scope, and forbidding bare `os.*` writes across the entire codegen subtree.
+
+### Closed by round-5
+
+| Round-5 finding | Outcome |
+|-----------------|---------|
+| P1-1 leaf symlink (dangling + race) | `conflictPass` uses `os.Lstat`; `writePass` uses `OpenFile O_WRONLY\|O_CREATE\|O_EXCL\|O_NOFOLLOW` (Unix). Windows fallback documented in `pkg/pathsafe/nofollow_windows.go`. |
+| P1-2 funnel scope | `tools/codegen/writer.go` Write delegates to new `pathsafe.WriteFileForce` (overwrite-allowed variant for codegen artifacts: explicit `os.Remove` + `writeFileNoFollow`). Archtest `SCAFFOLD-WRITE-FUNNEL-01` extended to span `tools/codegen/contractgen/...`, `tools/codegen/cellgen/generate_*.go`, and `tools/codegen/writer.go`. |
+| P1-2 auto-generate scope | `contractgen.Options.Scope` sealed interface (`ScopeAll{}` / `ScopeContracts(ids)` / `ScopeCell(id)`). Zero-value `Options.Scope == nil` rejected at `Generate` entry; scaffold cell uses `ScopeCell(cellID)` so auto-generate only processes the new cell's contracts (no whole-project scan). `OnlyContract` field deleted (no back-compat shim). |
+| P1-3 YAML safety | `pkg/yamlsafe.Scalar` typed marker + `Quote(raw) Scalar` single funnel for user input flowing into scaffold templates. All inline + scaffold-* template data structs use `yamlsafe.Scalar` for user-input fields so raw `string` to template flow is visible in types. Journey template emits `lifecycle: experimental` (schema-required default). |
+| P1-4 verify scripts | `hack/verify-scaffold-bundle.sh` + `hack/verify-scaffold-assembly.sh` default `MODE=sandbox` (was `local`). `make verify` / CI no longer mutate the working tree. `--local` opt-in remains for dev fast-path. |
+| P1-5 test fixes | dry-run conflict assertion uses nodash id + `errors.As(err, &ec)` + `errcode.ErrConflict` structured check. `pathsafe` rollback test rewritten so the failure happens during `writePass` (mkdir failure under read-only parent), not during `conflictPass`. |
+
+### AI-Hard tightenings (T1-T4)
+
+- **T1 (kebab reject in exported API)**: `cellgen.ScaffoldCellBundle` rejects kebab `CellID` at `validateScaffoldSpec` (matches the CLI's `scaffoldCell` rejection). Silent `strings.ReplaceAll("-", "")` removed across cellgen.
+- **T2 (archtest scope expansion)**: see P1-2 above. Allowlist remains `pkg/pathsafe/pathsafe.go` (and `nofollow_*.go`) only.
+- **T3 (Scope sealed interface)**: `contractgen.Scope` interface has unexported `contractScope()` marker method; only `ScopeAll{}`, `ScopeContracts(ids)`, `ScopeCell(id)` implement it. New caller cannot construct an unintended scope by accident — must pick one of the three explicit sentinels.
+- **T4 (typed safeYAMLScalar)**: `yamlsafe.Scalar` is a string-based newtype. Template `data` structs accept `Scalar`, not `string`; raw user input must transit `Quote` to compile. Reverting back to plain `string` requires changing every template data type — visible in diff review.
+
+### AI-rebust evaluation
+
+| Defense | Rating | Rationale |
+|---------|--------|-----------|
+| `SCAFFOLD-WRITE-FUNNEL-01` (round-4 + round-5) | Hard | Real-source AST scan via `scanner.EachFile` with concrete-package allowlist + `pkg/pathsafe` is the only allowed implementer. Documented exemption for `cmd/gocell/app/generate_catalog.go` + `cmd/gocell/app/export.go writeOut` (user `--out` paths). |
+| `pathsafe.WritePlannedFiles` + `WriteFileForce` (typed function) | Hard | Single typed entry; bypass requires both archtest allowlist edit AND a new `os.*` call. |
+| `O_NOFOLLOW \| O_EXCL` write | Hard (Unix) | Syscall-level guarantee; race-window symlink swap fails open. Documented Windows fallback. |
+| `contractgen.Options.Scope` sealed interface | Hard | Zero-value rejected at entry; sealed interface with unexported marker method. |
+| `yamlsafe.Scalar` typed newtype | Hard | Type system rejects raw string in template data; reverting requires diff-visible type change. |
+| `cellgen.ScaffoldCellBundle` reject kebab | Hard | `validateScaffoldSpec` is the funnel; export API and CLI now share the same rejection rule. |
+
+### Carryover (independent themes)
+
+- `SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01` (round-5 R6): cross-package typed `ScaffoldID` value type + shared validator covering `cellgen.ScaffoldSpec` + `assembly.AssemblyScaffoldSpec` + `cmd/gocell/app` flag wiring. Cx3-4 refactor; minimal slice of `T1` already landed (`ScaffoldCellBundle` reject kebab).
+- `SCAFFOLD-INLINE-TEMPLATE-ARCHTEST` (F15) and `ASSEMBLY-RUN-RUNTIME-SMOKE` (F17) remain from round-4.
+
 ## References
 
 - Roadmap: `docs/plans/202605011500-029-master-roadmap.md` #09
 - Plan: `/Users/shengming/.claude-ming/plans/docs-plans-202605011500-029-master-road-atomic-emerson.md`
-- Round-4 plan: `/Users/shengming/.claude-ming/plans/1-p1-scaffold-virtual-waffle.md`
+- Round-4/5 plan: `/Users/shengming/.claude-ming/plans/1-p1-scaffold-virtual-waffle.md`
+- ref: `kubernetes-sigs/kubernetes` `pkg/volume/util/subpath/subpath_linux.go` (`O_NOFOLLOW` for symlink-safe open)
+- ref: `cyphar/filepath-securejoin` (handle-based root containment patterns)
+- ref: `kubernetes-sigs/kubebuilder` `pkg/machinery/scaffold.go` (file-model + write strategy)
 - ref: `zeromicro/go-zero` `tools/goctl/api/gogen/gen.go` (multi-file scaffold orchestrator pattern)
 - ref: `kubernetes-sigs/kubebuilder` `pkg/plugins/golang/v4/scaffolds/api.go` (scaffold flag conventions, path validation)
 - ref: `helm/helm` `pkg/chartutil/create.go` (0o644/0o755 file/dir mode default)
