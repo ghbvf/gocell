@@ -33,11 +33,12 @@ func TestMustNewSpec_Whitelist(t *testing.T) {
 }
 
 func TestMustNewSpec_RejectsUnknownName(t *testing.T) {
-	require.PanicsWithValue(t,
-		"appender.MustNewSpec: unknown slice name \"auditappendmystery\"; whitelist: auditappenduser, auditappendconfig, auditappendsession, auditappendrole",
-		func() {
-			appender.MustNewSpec("auditappendmystery", appender.ActorAcceptUserFallback)
-		})
+	const want = "appender.MustNewSpec: unknown slice name \"auditappendmystery\"" +
+		"; whitelist: auditappenduser, auditappendconfig," +
+		" auditappendsession, auditappendrole"
+	require.PanicsWithValue(t, want, func() {
+		appender.MustNewSpec("auditappendmystery", appender.ActorAcceptUserFallback)
+	})
 }
 
 // TestActorMode_ZeroValueRejected guards the sealed ActorMode contract.

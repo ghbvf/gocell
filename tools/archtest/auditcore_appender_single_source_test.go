@@ -92,8 +92,14 @@ func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 	for _, v := range violations {
 		t.Logf("%s", v)
 	}
-	assert.Empty(t, violations,
-		"rule AUDITCORE-APPENDER-SINGLE-SOURCE-01: slice packages under cells/auditcore/slices/auditappend* must be thin facades over cells/auditcore/internal/appender — only `type Service = appender.Service` and `var Spec = appender.MustNewSpec(...)` are permitted; reintroducing local Service struct, methods, NewService, or With*-style options re-forks behavior the appender package was extracted to single-source")
+	const failMsg = "rule AUDITCORE-APPENDER-SINGLE-SOURCE-01: slice packages " +
+		"under cells/auditcore/slices/auditappend* must be thin facades over " +
+		"cells/auditcore/internal/appender — only `type Service = appender." +
+		"Service` and `var Spec = appender.MustNewSpec(...)` are permitted; " +
+		"reintroducing local Service struct, methods, NewService, or " +
+		"With*-style options re-forks behavior the appender package was " +
+		"extracted to single-source"
+	assert.Empty(t, violations, failMsg)
 }
 
 func scanAuditcoreAppenderSliceFile(fc scanner.FileContext) []string {
@@ -167,7 +173,9 @@ func scanFuncDeclAppender(fc scanner.FileContext, d *ast.FuncDecl) []string {
 	// Other top-level functions are flagged so the next reviewer notices —
 	// slice packages are metadata holders only.
 	return []string{fmt.Sprintf(
-		"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: unexpected top-level func %s; slice packages should hold only `type Service = appender.Service` + `var Spec = ...`",
+		"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: unexpected top-level "+
+			"func %s; slice packages should hold only `type Service = "+
+			"appender.Service` + `var Spec = ...`",
 		fc.Rel, pos, d.Name.Name)}
 }
 
