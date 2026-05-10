@@ -38,6 +38,13 @@ on:
 permissions:
   contents: read
 
+# Mirrors the workflow-level GOPROXY mitigation in _build-lint.yml
+# (reusable workflow env: does not propagate across files, so each
+# workflow that runs Go module downloads must declare its own).
+# See _build-lint.yml header comment for the 2026-05-10 stall context.
+env:
+  GOPROXY: https://proxy.golang.org,https://goproxy.cn,direct
+
 jobs:
   race-unit:
     name: go test -race (unit)
@@ -52,6 +59,13 @@ jobs:
           # stable across runs even if a 1.25.x patch lands at run time.
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Mirrors _build-lint.yml Pre-download modules: surface stalled
+      # fetch as a discrete step failure with full HTTP trail instead of
+      # runner SIGTERM. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
 
       - name: go test -race
         # Concurrency-sensitive packages only:
@@ -79,6 +93,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      # Mirrors _build-lint.yml Pre-download modules: surface stalled
+      # fetch as a discrete step failure with full HTTP trail instead of
+      # runner SIGTERM. Cache hit makes this near-zero.
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
 
       # PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE: race detection for the PG
       # adapter integration tests. Closes the gap where startup-hardening

@@ -36,21 +36,36 @@ on:
 permissions:
   contents: read
 
-# Workflow-level env: deterministic GOPROXY fallback chain to harden the
-# module download path on GitHub-hosted runners. Default `GOPROXY` on
-# `ubuntu-latest` is `https://proxy.golang.org,direct`; we observed
-# multiple PR runs (2026-05-10) where the proxy fetch hung silently for
-# 3-4 minutes until the runner received SIGTERM (exit 143), with no
-# corresponding incident on githubstatus.com — i.e., a transient runner
-# egress / proxy edge issue rather than a sumdb or repo problem.
+# Workflow-level env: deterministic GOPROXY fallback chain. Default
+# `GOPROXY` on `ubuntu-latest` is `https://proxy.golang.org,direct`;
+# this prepends `goproxy.cn` as an additional fallback.
 #
-# Mitigation: prepend goproxy.cn (broader CDN footprint, separate ASN
-# from proxy.golang.org). go cmd falls through to the next entry on 4xx,
-# but NOT on a hung connection — so this alone does not cure the SIGTERM
-# class. The companion `Pre-download modules` step inserted after every
-# setup-go adds an explicit 3-minute step-level timeout so a stalled
-# fetch surfaces as step failure (with full module-context log) instead
-# of runner reaper.
+# Two distinct failure classes — the GOPROXY chain only covers one:
+#
+#   (a) Proxy returns 4xx (404 module-not-found, 410 gone, etc.):
+#       go cmd falls through to the next GOPROXY entry. `goproxy.cn`
+#       (separate operator + ASN) covers the case where one proxy edge
+#       has stale/missing module metadata.
+#
+#   (b) Proxy connection hangs silently (TCP open but no response):
+#       go cmd has NO connection-level timeout for module fetch; it
+#       does NOT fall through. This was the 2026-05-10 failure mode
+#       (multiple PR runs hung 3-4 min on `go: downloading ...` then
+#       runner SIGTERM exit 143; githubstatus.com showed no incident).
+#       The companion `Pre-download modules` step (timeout-minutes: 3)
+#       inserted after every setup-go is the actual mitigation for (b)
+#       — stalled fetch surfaces as discrete step failure with full
+#       `go mod download -x` HTTP trail.
+#
+# The GOPROXY change and the Pre-download step are independent: each
+# defends a different failure class, neither subsumes the other.
+#
+# Audited 2026-05-10: go.mod has 127 require entries, all from public
+# hosts (github.com / golang.org / google.golang.org / go.uber.org /
+# cloud.google.com / etc.). No private modules → goproxy.cn observes
+# only public module names/versions, no info-leak surface. If private
+# modules are added later, set `GOPRIVATE` to bypass the public proxy
+# chain for those paths.
 env:
   GOPROXY: https://proxy.golang.org,https://goproxy.cn,direct
 
@@ -219,6 +234,15 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # Format-guard matrix.timeout. `go test -timeout` accepts a bare
+          # number (interpreted as nanoseconds), so a typo like
+          # `timeout: 5` would silently produce sub-second timeouts and
+          # nuke every test. Require explicit `<N>m` / `<N>s` / `<N>h` form
+          # so a missing unit fails the step instead of the suite.
+          [[ "${{ matrix.timeout }}" =~ ^[0-9]+(s|m|h)$ ]] || {
+            echo "FAIL: matrix.timeout must be <N>s/<N>m/<N>h, got: ${{ matrix.timeout }}"
+            exit 1
+          }
           go test \
             -covermode=atomic \
             -coverprofile=coverage-shard-${{ matrix.shard }}.out \
@@ -714,6 +738,11 @@ jobs:
     # under 1 min, so this guard adds zero wall-time to PR check fan-out.
     if: ${{ inputs.run-examples-smoke }}
     runs-on: ubuntu-latest
+    # Job budget = Pre-download (≤ 3m) + go build + ~5s probe + cleanup.
+    # 10m bound prevents an unrelated runner stall (cf. 2026-05-10) from
+    # eating the default 6h job budget while still leaving comfortable
+    # headroom over the ~1m happy path documented above.
+    timeout-minutes: 10
     steps:
       # No fetch-depth: 0 — this job does not run golangci-lint, so the
       # default shallow checkout is sufficient and faster. (build-test sets
@@ -831,6 +860,10 @@ jobs:
   # ref: kubernetes-sigs/kubebuilder .github/workflows/verify.yml
   verify-codegen:
     runs-on: ubuntu-latest
+    # Job budget = Pre-download (≤ 3m) + codegen verify steps. 15m bound
+    # prevents an unrelated runner stall from eating the default 6h job
+    # budget while leaving headroom for tool-build cold paths.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
