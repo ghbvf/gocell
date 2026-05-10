@@ -87,6 +87,7 @@ Conflict errors use `errcode.ErrConflict` (HTTP 409) and put the failing path in
 - **Hard** under ai-collab.md `载体决策原则` #2 (typed function call as the violation defense). The funnel itself is the type-system contract; the archtest is the static defense layer that prevents accidental drift through new `os` imports.
 - Real-source AST scan via `scanner.EachFile` with concrete-package allowlist; not string-anchor or comment-exemption — meets the `Cannot be Soft` bar.
 - Residual escape: the archtest's package allowlist is a string list; adding a new scaffold subpackage requires updating that list. Documented in the archtest godoc as a known extension contract; mitigation tracked under `SCAFFOLD-WRITE-FUNNEL-HARD-UPGRADE` for future typed-Writer abstraction.
+- **Documented exemption**: `cmd/gocell/app/generate_catalog.go` 与 `cmd/gocell/app/export.go writeOut` 接收用户 `--out` 路径，输出位置不在 root containment 语义范围内，由 archtest 的 `scaffoldOnlyPred` 显式排除并在 archtest 文件级 godoc 中记录扩展约束。
 
 ### File permission alignment
 
@@ -107,7 +108,7 @@ Round-2 silently rewrote `--id=test-cell` to package `testcell` via `strings.Rep
 | F13 SCAFFOLD-FAILURE-CLEANUP-RECOVERY | `WritePlannedFiles` rollback on failure |
 | F14 SCAFFOLD-GENERATOR-PURE-BYTES | `Generator.Scaffold` returns plan; `WritePlannedFiles` is the writer |
 | F16 SCAFFOLD-CONFLICT-ERRCODE-SEMANTICS | `ErrConflict` + `WithDetails(path)` |
-| F7 SCAFFOLD-AUTOGENERATE-TEST-COVERAGE | `TestRunScaffoldCell_Bundle_WithAutoGenerate` |
+| F7 SCAFFOLD-AUTOGENERATE-TEST-COVERAGE | `TestRunScaffoldCell_BundleWithAutoGenerate` |
 | (new) SCAFFOLD-WRITE-FUNNEL-01 | Hard archtest |
 
 Carryover: `SCAFFOLD-INLINE-TEMPLATE-ARCHTEST` (F15, independent archtest theme) and `ASSEMBLY-RUN-RUNTIME-SMOKE` (F17, stub-content theme) remain backlog follow-ups.

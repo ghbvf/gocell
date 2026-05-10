@@ -217,8 +217,7 @@ func conflictPass(plan []PlannedFile) error {
 		if _, err := os.Stat(f.AbsPath); err == nil {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"pathsafe: file already exists",
-				errcode.WithDetails(slog.String("path", f.AbsPath)),
-				errcode.WithInternal(fmt.Sprintf("already exists: path=%s", f.AbsPath)))
+				errcode.WithDetails(slog.String("path", f.AbsPath)))
 		}
 	}
 	return nil

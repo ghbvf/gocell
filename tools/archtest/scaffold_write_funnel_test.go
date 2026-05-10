@@ -18,6 +18,21 @@
 // Extension contract: when adding a new scaffold sub-package that writes
 // files, add it to the scope in TestScaffoldWriteFunnel_NoDirectOSWrites
 // and update this comment.
+//
+// # Out-of-scope (documented exemption)
+//
+// The following call sites legitimately use os.MkdirAll / os.WriteFile
+// outside the funnel because the output path is supplied by the user
+// via --out flag (no root-containment guarantee can be made):
+//
+//	cmd/gocell/app/generate_catalog.go (gocell generate catalog --out=<path>)
+//	cmd/gocell/app/export.go writeOut  (gocell export {catalog|metadata} --out=<path>)
+//
+// Adding any NEW file under cmd/gocell/app/ must either:
+//  1. Match the scaffold*.go prefix → mandatory funnel through pathsafe.
+//  2. Justify exemption in this comment block before merging.
+//
+// The scaffoldOnlyPred predicate enforces #1; #2 is the human-review gate.
 package archtest
 
 import (
@@ -47,7 +62,7 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 
 	repoRoot := repoRootFromTestPath(t)
 
-	// bannedSelectors は os パッケージ内の書き込み系関数名
+	// bannedSelectors 是 os 包内的写入类函数名。
 	bannedSelectors := map[string]bool{
 		"MkdirAll":  true,
 		"WriteFile": true,
@@ -56,14 +71,14 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 		"OpenFile":  true,
 	}
 
-	// cmd/gocell/app 内では scaffold*.go だけを対象にする
+	// scaffoldOnlyPred 限定 cmd/gocell/app/ 下只扫描 scaffold*.go 文件；
+	// generate_catalog.go 和 export.go 因接收用户 --out 路径而豁免，
+	// 详见文件级 Out-of-scope 说明。
 	scaffoldOnlyPred := scanner.MatchRels(func(rel string) bool {
 		base := filepath.Base(rel)
-		// cmd/gocell/app/ 下のファイルは scaffold プレフィックスのものだけ
 		if strings.HasPrefix(rel, "cmd/gocell/app/") {
 			return strings.HasPrefix(base, "scaffold") && !strings.HasSuffix(base, "_test.go")
 		}
-		// 他のディレクトリは _test.go 以外全ファイル対象
 		return !strings.HasSuffix(base, "_test.go")
 	})
 
