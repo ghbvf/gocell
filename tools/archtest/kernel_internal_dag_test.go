@@ -1,0 +1,288 @@
+// INVARIANT: KERNEL-INTERNAL-DAG-01
+//
+// KERNEL-INTERNAL-DAG-01 — invariant-driven gate.
+//
+// Invariant: kernel-internal cross-owner imports must match the canonical
+// adjacency declared in `allowedKernelEdges`. Every edge in the actual
+// production import graph must be explicitly allowed; every declared edge
+// must still exist in the code; the set of kernel sub-module owners must
+// be exactly the set of allowlist keys.
+//
+// Owner is the first path segment under "kernel/" (so kernel/cell,
+// kernel/cell/celltest, and kernel/cell/levelrank all resolve to owner
+// "cell"). Self-edges within an owner are not asserted. Test-only nodes
+// (depgraph.Node.TestOnly == true) are skipped to keep parity with
+// LAYER-05/06 production-only semantics.
+//
+// This rule pairs with the package-level boundary statements in
+// kernel/<owner>/doc.go (the K-03 doc.go side of the double guard) — see
+// `docs/plans/archive/202605011500-029-master-roadmap.md` line 282 for
+// the original framing.
+//
+// AI-rebust: Medium. Uses kernel/depgraph (typed import graph) plus a
+// typed Go map allowlist; no string anchors, comment exemptions, or name
+// conventions. The Go language has no Hard mechanism for "package A may
+// not import package B" (internal/ inverts direction; //go:build does not
+// constrain imports; type system cannot constrain import lists), so this
+// is the language ceiling for this problem domain — see ai-collab.md.
+//
+// Rule: KERNEL-INTERNAL-DAG-01
+package archtest
+
+import (
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+)
+
+const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
+
+// allowedKernelEdges is the canonical kernel-internal cross-owner adjacency
+// table. Keys are the kernel sub-modules; values are sorted owner names
+// that the key may import. nil means leaf (no kernel→kernel out-edges).
+//
+// Two new leaves were added in this PR — `contractspec` (extracted from
+// kernel/wrapper) and `cellvocab` (extracted from kernel/cell, absorbing
+// the existing kernel/cell/levelrank sub-package) — to break the
+// cell→wrapper, governance→cell, and metadata→cell (via levelrank)
+// reverse edges. After this PR the roadmap claim that wrapper is top-tier
+// and governance/metadata do not reach into runtime cell becomes literally
+// true; cellvocab becomes the single source of truth for the consistency
+// level / contract kind / role / lifecycle / cell type vocabulary.
+//
+// observability is a leaf imported by the upper-tier sub-modules
+// (assembly/cell/outbox) for their metrics provider; this is a structural
+// metrics dependency akin to wrapper→outbox and stays as-is.
+var allowedKernelEdges = map[string][]string{
+	"assembly":      {"cell", "clock", "metadata", "observability", "registry"},
+	"cell":          {"clock", "contractspec", "metadata", "observability", "outbox", "persistence"},
+	"cellvocab":     nil,
+	"clock":         nil,
+	"command":       {"clock", "metautil"},
+	"contractspec":  nil,
+	"crypto":        nil,
+	"ctxkeys":       nil,
+	"depgraph":      nil,
+	"governance":    {"cellvocab", "clock", "metadata", "registry", "verify"},
+	"idempotency":   {"clock"},
+	"journey":       {"metadata"},
+	"lifecycle":     {"worker"},
+	"metadata":      {"cellvocab"},
+	"metautil":      nil,
+	"observability": nil,
+	"outbox":        {"clock", "idempotency", "metautil", "observability"},
+	"persistence":   nil,
+	"registry":      {"metadata"},
+	"scaffold":      nil,
+	"verify":        {"metadata"},
+	"worker":        nil,
+	"wrapper":       {"contractspec", "ctxkeys", "outbox"},
+}
+
+// kernelEdgeViolation describes a single DAG breach.
+type kernelEdgeViolation struct {
+	Kind    string // "forward" | "reverse" | "coverage-extra" | "coverage-missing"
+	From    string
+	To      string
+	Message string
+}
+
+// kernelOwnerOf returns the kernel sub-module owner for pkgID — the first
+// path segment after "kernel/" — or "" if pkgID is not under <module>/kernel/.
+// modulePrefix must include the trailing slash (e.g. "github.com/ghbvf/gocell/").
+func kernelOwnerOf(modulePrefix, pkgID string) string {
+	const kernelSeg = "kernel/"
+	want := modulePrefix + kernelSeg
+	if !strings.HasPrefix(pkgID, want) {
+		return ""
+	}
+	rel := strings.TrimPrefix(pkgID, want)
+	if rel == "" {
+		return ""
+	}
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		return rel[:i]
+	}
+	return rel
+}
+
+// TestKernelInternalDAG enforces KERNEL-INTERNAL-DAG-01.
+func TestKernelInternalDAG(t *testing.T) {
+	root := findModuleRoot(t)
+	module := readModulePath(t, root)
+	modPrefix := module + "/"
+
+	g, _ := loadModule(t, root)
+	require.NotEmpty(t, g.Packages, "depgraph returned no packages")
+
+	// Build owner -> actual cross-owner out-edges set, restricted to
+	// production (non-test-only) packages.
+	actual := map[string]map[string]bool{}
+	owners := map[string]bool{}
+	for _, node := range g.Packages {
+		if node.TestOnly {
+			continue
+		}
+		fromOwner := kernelOwnerOf(modPrefix, node.ID)
+		if fromOwner == "" {
+			continue
+		}
+		owners[fromOwner] = true
+		if actual[fromOwner] == nil {
+			actual[fromOwner] = map[string]bool{}
+		}
+		for _, imp := range node.Imports {
+			toOwner := kernelOwnerOf(modPrefix, imp)
+			if toOwner == "" || toOwner == fromOwner {
+				continue
+			}
+			actual[fromOwner][toOwner] = true
+		}
+	}
+
+	var violations []kernelEdgeViolation
+
+	// Forward check: every actual cross-owner edge must be in allowlist.
+	for _, from := range sortedKeys(actual) {
+		allowSet := map[string]bool{}
+		for _, to := range allowedKernelEdges[from] {
+			allowSet[to] = true
+		}
+		for _, to := range sortedSet(actual[from]) {
+			if !allowSet[to] {
+				violations = append(violations, kernelEdgeViolation{
+					Kind: "forward",
+					From: from,
+					To:   to,
+					Message: ruleKernelInternalDAG + ": kernel/" + from +
+						" imports kernel/" + to + " (not in DAG allowlist)",
+				})
+			}
+		}
+	}
+
+	// Reverse check: every allowlist edge must still exist in actual.
+	for _, from := range sortedAllowKeys() {
+		actualSet := actual[from]
+		for _, to := range allowedKernelEdges[from] {
+			if !actualSet[to] {
+				violations = append(violations, kernelEdgeViolation{
+					Kind: "reverse",
+					From: from,
+					To:   to,
+					Message: ruleKernelInternalDAG + ": declared edge kernel/" + from +
+						" → kernel/" + to + " no longer present in code; remove from allowlist",
+				})
+			}
+		}
+	}
+
+	// Coverage check: actual owner set must equal allowlist key set.
+	for _, owner := range sortedSet(owners) {
+		if _, ok := allowedKernelEdges[owner]; !ok {
+			violations = append(violations, kernelEdgeViolation{
+				Kind: "coverage-extra",
+				From: owner,
+				Message: ruleKernelInternalDAG + ": kernel sub-module kernel/" + owner +
+					" exists but is not in allowedKernelEdges; add it",
+			})
+		}
+	}
+	for _, owner := range sortedAllowKeys() {
+		if !owners[owner] {
+			violations = append(violations, kernelEdgeViolation{
+				Kind: "coverage-missing",
+				From: owner,
+				Message: ruleKernelInternalDAG + ": kernel sub-module kernel/" + owner +
+					" is in allowedKernelEdges but not present in code; remove it",
+			})
+		}
+	}
+
+	if len(violations) > 0 {
+		// Deterministic order for stable failure output.
+		sort.SliceStable(violations, func(i, j int) bool {
+			if violations[i].Kind != violations[j].Kind {
+				return violations[i].Kind < violations[j].Kind
+			}
+			if violations[i].From != violations[j].From {
+				return violations[i].From < violations[j].From
+			}
+			return violations[i].To < violations[j].To
+		})
+
+		t.Logf("%s: %d violation(s) found:", ruleKernelInternalDAG, len(violations))
+		for _, v := range violations {
+			t.Logf("  [%s] %s", v.Kind, v.Message)
+		}
+	}
+
+	assert.Empty(t, violations,
+		"%s: kernel-internal DAG must match allowedKernelEdges exactly. "+
+			"See kernel/<owner>/doc.go for the boundary statements forming the double guard.",
+		ruleKernelInternalDAG)
+
+	// Sub-test 1: kernelOwnerOf folds sub-packages to first segment.
+	t.Run("kernelOwnerOf_folds_subpackages", func(t *testing.T) {
+		cases := []struct {
+			id, want string
+		}{
+			{module + "/kernel/cell", "cell"},
+			{module + "/kernel/cell/celltest", "cell"},
+			{module + "/kernel/cell/levelrank", "cell"},
+			{module + "/kernel/outbox/outboxtest", "outbox"},
+			{module + "/runtime/auth", ""},
+			{module + "/kernel", ""},
+			{"", ""},
+		}
+		for _, c := range cases {
+			got := kernelOwnerOf(modPrefix, c.id)
+			assert.Equal(t, c.want, got, "kernelOwnerOf(%q)", c.id)
+		}
+	})
+
+	// Sub-test 2: depgraph LayerOf labels every owner under kernel/ as LayerKernel.
+	t.Run("owners_classified_as_kernel_layer", func(t *testing.T) {
+		for owner := range owners {
+			pkg := module + "/kernel/" + owner
+			assert.Equal(t, kerneldepgraph.LayerKernel,
+				kerneldepgraph.LayerOf(module, pkg),
+				"kernel/%s must classify as LayerKernel", owner)
+		}
+	})
+}
+
+// sortedKeys returns the keys of m in deterministic order.
+func sortedKeys(m map[string]map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedSet returns the keys of m in deterministic order.
+func sortedSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedAllowKeys returns allowedKernelEdges keys in deterministic order.
+func sortedAllowKeys() []string {
+	out := make([]string, 0, len(allowedKernelEdges))
+	for k := range allowedKernelEdges {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
