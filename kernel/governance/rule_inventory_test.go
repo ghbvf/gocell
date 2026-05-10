@@ -141,7 +141,8 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 // Total: 81 IDs across 11 series.
 func goldenRuleIDs() []string {
 	return []string{
-		// ADV — advisory warnings (rules_misc_advisory.go)
+		// ADV — advisory warnings (rules_misc_advisory.go).
+		// ADV-02 was retired before PR-FUNNEL-03; the gap is intentional.
 		"ADV-01", "ADV-03", "ADV-04", "ADV-05", "ADV-06",
 
 		// CH — contract-health (contracthealth.go + rules_http.go)
@@ -164,6 +165,8 @@ func goldenRuleIDs() []string {
 		"FMT-01", "FMT-02", "FMT-03", "FMT-04", "FMT-05",
 		"FMT-06", "FMT-07", "FMT-08", "FMT-09", "FMT-10",
 		"FMT-11", "FMT-12", "FMT-13", "FMT-14", "FMT-15",
+		// FMT-18 deleted in PR-V1-CODEGEN-FULL-MIGRATION W4 (replaced by
+		// archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01); gap intentional.
 		"FMT-16", "FMT-17", "FMT-19",
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
 		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30",
@@ -409,6 +412,14 @@ func walkRule(
 				if _, exists := funcIdx[funcKey{recv: "", name: id.Name}]; exists {
 					*queue = append(*queue, funcKey{recv: "", name: id.Name})
 				}
+				// Free-function callsites do not carry rule IDs as
+				// positional args by convention — IDs are only emitted via
+				// newResult / newScopedResult or ValidationResult{Code:...}
+				// composite literals. The queued function will be walked
+				// in a subsequent BFS step, where its body's emissions are
+				// collected. If a future helper takes a rule ID as a
+				// positional arg (e.g. `emitFinding("FMT-99", ...)`), this
+				// branch must be extended to extract from x.Args[0].
 				return true
 			}
 			sel, ok := x.Fun.(*ast.SelectorExpr)
@@ -463,6 +474,14 @@ func isResultEmitter(name string) bool {
 // Composite literals of unrelated named types (e.g. errcode.Error) return
 // false and are skipped, preventing accidental capture of foreign Code
 // fields.
+//
+// INVARIANT: ValidationResult is the only struct in this package that
+// carries a Code string field; the nil-Type fallback is safe under that
+// assumption. If a sibling struct with a Code field is added, this guard
+// must be tightened (e.g. by checking that the sibling KeyValueExprs match
+// ValidationResult's exact field set), or it will silently capture foreign
+// Code values into reachable and surface them as `+ <foreign>` in the
+// symmetric diff output.
 func looksLikeValidationResult(c *ast.CompositeLit) bool {
 	switch typ := c.Type.(type) {
 	case nil:
@@ -488,6 +507,12 @@ func looksLikeValidationResult(c *ast.CompositeLit) bool {
 // Anything else triggers t.Fatalf, forcing any new emission shape through
 // PR review (the alternative — silently skipping — would let new misshapen
 // emissions slip past governance).
+//
+// t.Fatalf terminates the current goroutine via runtime.Goexit; do not
+// downgrade to t.Errorf "to collect more errors" — partial reachability
+// data is unreliable, and subsequent ID extractions would still feed into
+// the comparison set, producing misleading diff output. Fail-fast here is
+// the only correct semantics.
 func resolveIDArg(
 	t *testing.T,
 	fset *token.FileSet,
