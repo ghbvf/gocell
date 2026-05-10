@@ -79,14 +79,19 @@ const terminationGraceSafetyMargin = 10 * time.Second
 
 // warnTerminationGracePeriodInsufficient emits a slog.Warn when the operator
 // declared (via WithTerminationGracePeriod) a K8s terminationGracePeriodSeconds
-// that is smaller than the framework's own shutdownTimeout +
-// terminationGraceSafetyMargin.
+// that is smaller than the framework's own shutdown budget plus the SIGTERM
+// safety margin.
 //
-// preShutdownDelay does NOT appear in the formula because phase10's shutCtx
-// (phases_shutdown.go) bounds the entire four-stage shutdown — readiness
-// flip + preShutdownDelay + HTTP drain + LIFO teardown — by shutdownTimeout.
-// preShutdownDelay is consumed inside shutdownTimeout, not on top of it
-// (see WithPreShutdownDelay godoc and roadmap N3 deviation note).
+// Formula: minRequired = 2 × shutdownTimeout + terminationGraceSafetyMargin.
+//
+// The 2× multiplier reflects the budget-isolation contract introduced by
+// ADR 202605101730-adr-shutdown-budget-decouple: phase10 stages 1+2
+// (readiness flip + HTTP drain) own drainCtx with budget = shutdownTimeout,
+// stage 3 (LIFO teardown) owns an independent tearCtx with budget =
+// shutdownTimeout. Worst-case wall clock is the sum.
+//
+// preShutdownDelay does NOT appear in the formula because it is consumed
+// inside drainCtx, not added on top of it (see WithPreShutdownDelay godoc).
 //
 // Behavior is advisory: the helper never returns or panics; misalignment is a
 // deployment-config defect that we surface but do not block on. A zero
@@ -95,16 +100,17 @@ const terminationGraceSafetyMargin = 10 * time.Second
 // (production code paths via New() always populate shutdownTimeout).
 //
 // ref: docs/ops/graceful-shutdown-k8s.md — formula and pod-spec example.
+// ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md.
 func (b *Bootstrap) warnTerminationGracePeriodInsufficient() {
 	if b.terminationGracePeriod <= 0 || b.shutdownTimeout <= 0 {
 		return
 	}
-	minRequired := b.shutdownTimeout + terminationGraceSafetyMargin
+	minRequired := 2*b.shutdownTimeout + terminationGraceSafetyMargin
 	if b.terminationGracePeriod >= minRequired {
 		return
 	}
 	const hint = "increase Kubernetes pod terminationGracePeriodSeconds to " +
-		">= shutdownTimeout + 10s, or reduce the bootstrap shutdown budget"
+		">= 2*shutdownTimeout + 10s, or reduce the bootstrap shutdown budget"
 	slog.Warn("bootstrap: terminationGracePeriodSeconds insufficient for graceful shutdown",
 		slog.Duration("termination_grace_period", b.terminationGracePeriod),
 		slog.Duration("shutdown_timeout", b.shutdownTimeout),

@@ -21,17 +21,22 @@ import (
 // TEST-TIME-LITERAL-01 archtest; site-specific deadlines stay close to the
 // test that owns them).
 //
-// Threshold = shutdownTimeout + 10s safety margin (see
-// warnTerminationGracePeriodInsufficient godoc — preShutdownDelay is consumed
-// inside shutdownTimeout, not added on top of it).
+// Threshold = 2 × shutdownTimeout + 10s safety margin (see
+// warnTerminationGracePeriodInsufficient godoc — drainCtx and tearCtx each
+// own a shutdownTimeout-sized budget; preShutdownDelay is consumed inside
+// drainCtx, not added on top of either).
+//
+// graceMinThreshold derives from terminationGraceSafetyMargin (same package
+// const) so the formula stays single-sourced; bumping the safety margin
+// updates the threshold here automatically.
 const (
 	graceShutdownTimeout   = testtime.D20s
-	gracePreShutdownDelay  = testtime.D5s     // recorded in warn payload but does not affect threshold
-	graceMinThreshold      = testtime.D30s    // = shutdownTimeout (20s) + safety margin (10s)
-	graceBelowThreshold    = 25 * time.Second // 25 < 30 → must warn
-	graceAboveThreshold    = testtime.D60s    // 60 > 30 → no warn
-	graceFarBelowThreshold = testtime.D10s    // for advisory-only assertion
-	gracePersistPositive   = 45 * time.Second // setter round-trip
+	gracePreShutdownDelay  = testtime.D5s // recorded in warn payload but does not affect threshold
+	graceMinThreshold      = 2*graceShutdownTimeout + terminationGraceSafetyMargin
+	graceBelowThreshold    = graceMinThreshold - testtime.D5s  // 45s < 50s → must warn
+	graceAboveThreshold    = graceMinThreshold + testtime.D10s // 60s > 50s → no warn
+	graceFarBelowThreshold = testtime.D10s                     // for advisory-only assertion
+	gracePersistPositive   = 45 * time.Second                  // setter round-trip
 	gracePersistNegative   = -1 * time.Nanosecond
 	graceLifecycleShutdown = testtime.D30s
 	graceLifecyclePreDelay = testtime.D5s

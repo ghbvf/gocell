@@ -86,6 +86,14 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 //     assembly, kernel lifecycle, closers, managed resources).
 //  4. Finalize (cancel runCtx + emit outcome metric).
 //
+// Budget isolation: stages 1+2 share drainCtx; stage 3 uses an independent
+// tearCtx. Each ctx is allotted the full b.shutdownTimeout, so a blocked
+// HTTP drain that exhausts drainCtx does NOT starve LIFO teardown of its
+// budget. Worst-case total wall clock ≈ 2 × shutdownTimeout + finalize
+// overhead; K8s terminationGracePeriodSeconds must be sized accordingly —
+// see warnTerminationGracePeriodInsufficient and
+// docs/ops/graceful-shutdown-k8s.md.
+//
 // HTTP drain is intentionally NOT registered into the LIFO teardown chain
 // (phase7 sets s.httpDrain instead of calling s.addTeardown). Encoding the
 // HTTP/worker stop ordering as an explicit stage rather than as an artifact
@@ -104,9 +112,12 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 // ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go
 //
 //	engageStopProcedure — LIFO + StopAndWait.
+//
+// ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md
 func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal) error {
-	shutCtx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
-	defer cancel()
+	// stages 1+2: drainCtx — readiness flip + HTTP drain share one budget.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
+	defer drainCancel()
 
 	m := b.shutdownMet
 	totalStart := b.clock.Now()
@@ -114,7 +125,7 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	// --- stage 1: readiness flip ---
 	m.recordPhaseEntry(shutdownPhaseReadinessFlip)
 	flipStart := b.clock.Now()
-	b.phase10ReadinessFlip(shutCtx, s)
+	b.phase10ReadinessFlip(drainCtx, s)
 	m.observePhaseDuration(shutdownPhaseReadinessFlip, b.clock.Since(flipStart))
 
 	// --- stage 2: HTTP drain (explicit; runs BEFORE LIFO teardown) ---
@@ -122,14 +133,19 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	drainStart := b.clock.Now()
 	var httpDrainErr error
 	if s.httpDrain != nil {
-		httpDrainErr = s.httpDrain(shutCtx)
+		httpDrainErr = s.httpDrain(drainCtx)
 	}
 	m.observePhaseDuration(shutdownPhaseHTTPDrain, b.clock.Since(drainStart))
 
-	// --- stage 3: LIFO teardown ---
+	// --- stage 3: LIFO teardown — fresh tearCtx, independent of drainCtx ---
+	// A blocked HTTP drain cannot starve LIFO teardown of its budget; this
+	// is the budget-isolation invariant pinned by
+	// TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx.
+	tearCtx, tearCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
+	defer tearCancel()
 	m.recordPhaseEntry(shutdownPhaseLIFOTeardown)
 	tearStart := b.clock.Now()
-	teardownErrs := b.phase10LIFOTeardown(shutCtx, s)
+	teardownErrs := b.phase10LIFOTeardown(tearCtx, s)
 	m.observePhaseDuration(shutdownPhaseLIFOTeardown, b.clock.Since(tearStart))
 
 	// --- stage 4: finalize ---
@@ -148,7 +164,9 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 
 	// F3: outcome reflects the final return semantics, not just ctx state.
 	// Precedence: timeout > teardown_error > signal_error > success.
-	//   - timeout       : shutCtx expired during any stage; worst case for SREs.
+	//   - timeout       : drainCtx OR tearCtx expired; worst case for SREs.
+	//                     Either bucket starves its own stage; both surface
+	//                     under one outcome label so dashboards stay simple.
 	//   - teardown_error: at least one teardown (HTTP drain or LIFO) returned
 	//                     non-nil without a ctx timeout.
 	//   - signal_error  : shutdown was triggered by an HTTP/worker/router error,
@@ -157,7 +175,7 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	teardownErr := errors.Join(allTeardownErrs...)
 	outcome := "success"
 	switch {
-	case shutCtx.Err() != nil:
+	case drainCtx.Err() != nil || tearCtx.Err() != nil:
 		outcome = "timeout"
 	case teardownErr != nil:
 		outcome = "teardown_error"
@@ -178,7 +196,9 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 }
 
 // phase10ReadinessFlip marks the health handler as shutting down (503) and
-// waits for the preShutdownDelay, sharing the shutCtx budget.
+// waits for the preShutdownDelay, sharing the drainCtx budget with stage 2
+// (HTTP drain). LIFO teardown owns an independent tearCtx — a long
+// preShutdownDelay or HTTP drain cannot starve teardown of its budget.
 func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState) {
 	slog.Info("bootstrap: initiating graceful shutdown")
 	if s.reloads != nil {
