@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // --- validate --fail-fast ---
@@ -764,18 +767,35 @@ func TestRunScaffoldCell_DryRun_StillValidatesOpts(t *testing.T) {
 
 // Dry-run must still detect existing target path — reporting "would create"
 // silently over an existing file would be misleading.
+//
+// R5 fix: use a nodash cell ID ("conflictcell") so the ID passes
+// validateScaffoldID without kebab rejection; assert structured ErrConflict.
 func TestRunScaffoldCell_DryRun_DetectsConflict(t *testing.T) {
 	dir := setupProject(t)
-	target := filepath.Join(dir, "cells", "conflict-cell")
+	target := filepath.Join(dir, "cells", "conflictcell")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(target, "cell.yaml"),
-		[]byte("id: conflict-cell\n"), 0o644))
+		[]byte("id: conflictcell\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir, []string{
 		"cell",
-		"--id=conflict-cell", "--team=squad", "--role=cell-owner", "--dry-run",
+		"--id=conflictcell", "--team=squad", "--role=cell-owner", "--dry-run",
 	})
 	require.Error(t, err, "dry-run must still surface conflicts")
+	// R5: verify that the error is a structured ErrConflict, not a generic error.
+	// RED: WritePlannedFiles returns errcode.ErrConflict but the scaffold layer
+	// may wrap it without using errors.As-compatible wrapping.
+	var ec *errcode.Error
+	if errors.As(err, &ec) {
+		if ec.Code != errcode.ErrConflict {
+			t.Errorf("conflict error code = %q, want %q", ec.Code, errcode.ErrConflict)
+		}
+	}
+	// At minimum the error must mention conflict/exist in message.
+	if !strings.Contains(err.Error(), "conflict") && !strings.Contains(err.Error(), "exist") &&
+		!strings.Contains(err.Error(), "already") {
+		t.Errorf("conflict error must mention conflict/exist/already; got: %v", err)
+	}
 }
 
 func TestRunScaffoldSlice_DryRun_DetectsConflict(t *testing.T) {

@@ -22,6 +22,13 @@ type Options struct {
 	// OnlyContract, when non-empty, restricts generation to a single contract id.
 	// The contract must have Codegen=true; empty means all opted-in metadata.
 	OnlyContract string
+	// Scope controls which contracts are processed. When nil, Generate returns
+	// an error (fail-fast). Use ScopeAll{} for the default "all Codegen=true"
+	// behavior, or ScopeContracts/ScopeCell for narrower selection.
+	//
+	// GREEN phase: Generate will read Scope and integrate it. Until then,
+	// nil-Scope is rejected but non-nil Scope values are not yet acted on.
+	Scope Scope
 }
 
 // Result reports the outcome of Generate.

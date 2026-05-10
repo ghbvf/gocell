@@ -820,3 +820,56 @@ func TestGenerate_BuildSpecError_OneOf(t *testing.T) {
 		t.Errorf("error should mention 'oneOf', got: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Scope sealed interface tests (RED — Generate does not yet read Options.Scope)
+// ---------------------------------------------------------------------------
+
+// TestGenerate_Options_ScopeNilFailFast verifies that passing Scope: nil to
+// Generate returns an error mentioning "Scope is required".
+// RED: Generate currently ignores Options.Scope entirely.
+func TestGenerate_Options_ScopeNilFailFast(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPMinimalRoot(t)
+	_, err := Generate(root, p, Options{Scope: nil})
+	if err == nil {
+		t.Fatal("expected error for nil Scope, got nil")
+	}
+	if !strings.Contains(err.Error(), "Scope") && !strings.Contains(err.Error(), "required") {
+		t.Errorf("error should mention Scope/required, got: %v", err)
+	}
+}
+
+// TestGenerate_Options_ScopeContractsLimitsToList verifies that ScopeContracts
+// restricts generation to only the listed contract IDs.
+// RED: Generate currently ignores Options.Scope; it will process all contracts.
+func TestGenerate_Options_ScopeContractsLimitsToList(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPMinimalRoot(t)
+	// http.order.ping.v1 → 3 files.
+	res, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"})})
+	if err != nil {
+		t.Fatalf("Generate with ScopeContracts: %v", err)
+	}
+	if len(res.Generated) != 3 {
+		t.Errorf("ScopeContracts([http.order.ping.v1]): expected 3 files, got %d: %v", len(res.Generated), res.Generated)
+	}
+}
+
+// TestGenerate_Options_ScopeAllProcessesAll verifies that ScopeAll maintains
+// the existing "all Codegen=true contracts" behavior.
+// RED: Generate currently ignores Options.Scope, so this might coincidentally
+// pass once Scope is nil-guarded above — but it documents the intent.
+func TestGenerate_Options_ScopeAllProcessesAll(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPMinimalRoot(t)
+	// ScopeAll should produce same result as default (all opted-in contracts).
+	res, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	if err != nil {
+		t.Fatalf("Generate with ScopeAll: %v", err)
+	}
+	// synth_http_minimal has one HTTP contract → 3 files.
+	if len(res.Generated) != 3 {
+		t.Errorf("ScopeAll: expected 3 files for synth_http_minimal, got %d: %v", len(res.Generated), res.Generated)
+	}
+}

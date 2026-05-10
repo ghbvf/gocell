@@ -452,3 +452,150 @@ func TestWritePlannedFiles_WriteFailureRollback(t *testing.T) {
 		t.Error("write failure rollback: contract.yaml must have been removed")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Leaf symlink tests (RED — pathsafe does not yet check the leaf file symlink)
+// ---------------------------------------------------------------------------
+
+// TestWritePlannedFiles_RejectLeafSymlinkDangling verifies that WritePlannedFiles
+// rejects a plan when the target AbsPath itself is a dangling symlink pointing
+// outside root. The outside destination must NOT be written.
+//
+// RED: conflictPass uses os.Stat which follows symlinks; a dangling symlink
+// returns "not found" → conflict pass succeeds → write creates target at symlink
+// destination. pathsafe does not yet call O_NOFOLLOW / Lstat on the leaf.
+func TestWritePlannedFiles_RejectLeafSymlinkDangling(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root := resolveRealRoot(t)
+	outside := t.TempDir()
+	outsideTarget := filepath.Join(outside, "evil.yaml")
+
+	// Place a dangling symlink at the plan AbsPath location.
+	targetDir := filepath.Join(root, "cells", "leafsymcell")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leafLink := filepath.Join(targetDir, "cell.yaml")
+	if err := os.Symlink(outsideTarget, leafLink); err != nil {
+		t.Fatalf("Symlink dangling: %v", err)
+	}
+
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: leafLink, Content: []byte("id: leafsymcell\n")},
+	}
+	err := pathsafe.WritePlannedFiles(root, plan, false)
+	if err == nil {
+		t.Fatal("WritePlannedFiles(dangling leaf symlink): want error, got nil")
+	}
+	// outside target must NOT have been written
+	if _, statErr := os.Stat(outsideTarget); statErr == nil {
+		t.Error("leaf symlink escape: outside target was written — must not follow leaf symlink")
+	}
+}
+
+// TestWritePlannedFiles_RejectLeafSymlinkNonDangling verifies that WritePlannedFiles
+// rejects a plan when the target AbsPath is a symlink that points to an existing
+// file inside root. The symlink-destination file must NOT be overwritten.
+//
+// RED: conflictPass sees the resolved file exists → returns ErrConflict, which
+// coincidentally rejects. However the rejection reason is "file already exists"
+// not "leaf is a symlink"; and the check relies on os.Stat following the link.
+// This test documents the INTENDED behavior: leaf symlinks must be rejected
+// regardless of whether the destination exists — using Lstat not Stat.
+func TestWritePlannedFiles_RejectLeafSymlinkNonDangling(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+
+	root := resolveRealRoot(t)
+
+	// Create a real file inside root that the leaf symlink will point to.
+	realFile := filepath.Join(root, "cells", "realcell", "real.yaml")
+	if err := os.MkdirAll(filepath.Dir(realFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realFile, []byte("id: realcell\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a symlink at a different AbsPath that points to realFile.
+	leafDir := filepath.Join(root, "cells", "symlinkcell")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leafLink := filepath.Join(leafDir, "cell.yaml")
+	if err := os.Symlink(realFile, leafLink); err != nil {
+		t.Fatalf("Symlink non-dangling: %v", err)
+	}
+
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: leafLink, Content: []byte("id: symlinkcell\n")},
+	}
+	err := pathsafe.WritePlannedFiles(root, plan, false)
+	if err == nil {
+		t.Fatal("WritePlannedFiles(non-dangling leaf symlink): want error, got nil")
+	}
+	// realFile content must be unchanged.
+	data, _ := os.ReadFile(realFile) //nolint:gosec // test reads its own fixture
+	if string(data) != "id: realcell\n" {
+		t.Errorf("leaf symlink escape: realFile was overwritten; got %q", data)
+	}
+}
+
+// TestWritePlannedFiles_RollbackOnPartialWriteFailure_WriteStageFail verifies
+// that rollback occurs when the WRITE STAGE fails (not the conflict stage).
+//
+// Setup: plan[0] can be written normally; plan[1].AbsPath parent dir is
+// pre-created as an unwritable file (not a directory), so os.MkdirAll fails.
+// After rollback, plan[0]'s written file must be removed.
+//
+// This replaces/supplements the existing TestWritePlannedFiles_MkdirFailureRollback
+// to ensure the failure happens during writePass, not conflictPass.
+func TestWritePlannedFiles_RollbackOnPartialWriteFailure_WriteStageFail(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod not reliable on windows")
+	}
+
+	root := resolveRealRoot(t)
+
+	// Plan[0]: normal file under cells/goodcell/ — succeeds.
+	goodFile := filepath.Join(root, "cells", "goodcell", "cell.yaml")
+
+	// containmentPass will reject badFile because /dev/null is outside root.
+	// Use a path that passes containment but fails mkdir: create a non-dir file
+	// at the expected parent location inside root.
+	blockedParentDir := filepath.Join(root, "cells", "badcell", "subdir")
+	// Create the path component as a regular file instead of a directory.
+	if err := os.MkdirAll(filepath.Dir(blockedParentDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write a regular file at "subdir" so MkdirAll("subdir/deepdir") fails.
+	if err := os.WriteFile(blockedParentDir, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	blockedFile := filepath.Join(blockedParentDir, "deepdir", "cell.yaml")
+	plan2 := []pathsafe.PlannedFile{
+		{AbsPath: goodFile, Content: []byte("id: goodcell\n")},
+		{AbsPath: blockedFile, Content: []byte("id: badcell\n")},
+	}
+
+	if err := pathsafe.WritePlannedFiles(root, plan2, false); err == nil {
+		t.Fatal("WritePlannedFiles(write-stage failure): want error, got nil")
+	}
+
+	// Rollback: the first file (goodFile) must have been removed.
+	if _, statErr := os.Stat(goodFile); statErr == nil {
+		t.Error("rollback: goodFile must have been removed after write-stage failure")
+	}
+	// Rollback: the cells/goodcell directory created by mkdirAllTracked must be removed.
+	if _, statErr := os.Stat(filepath.Join(root, "cells", "goodcell")); statErr == nil {
+		t.Error("rollback: cells/goodcell dir must have been cleaned up after write-stage failure")
+	}
+}

@@ -407,6 +407,48 @@ func TestScaffoldCellBundle_AtomicRollback_OnContainmentFail(t *testing.T) {
 	}
 }
 
+// TestScaffoldCellBundle_RejectKebabCellID verifies that ScaffoldCellBundle
+// rejects a kebab-case CellID ("test-cell") with an error mentioning "kebab"
+// or "dash" rather than silently stripping the dash and writing "testcell".
+//
+// RED: current implementation silently strips dashes via strings.ReplaceAll in
+// planCellBundle, so ScaffoldCellBundle("test-cell") writes cells/test-cell/
+// but uses "testcell" as the Go package name — an inconsistency. The exported
+// API should reject kebab up-front with a clear error.
+func TestScaffoldCellBundle_RejectKebabCellID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:           "test-cell", // kebab: must be rejected
+		StructName:       "TestCell",
+		Package:          "testcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L1",
+		WithHTTP:         true,
+	}
+	err := ScaffoldCellBundle(dir, spec)
+	if err == nil {
+		t.Fatal("ScaffoldCellBundle(kebab CellID): want error, got nil")
+	}
+	// Error must mention kebab or dash so the message is actionable.
+	msg := err.Error()
+	if !strings.Contains(msg, "kebab") && !strings.Contains(msg, "dash") &&
+		!strings.Contains(msg, "-") {
+		t.Errorf("error must mention kebab/dash; got: %v", err)
+	}
+	// No files must be written.
+	if _, statErr := os.Stat(filepath.Join(dir, "cells", "test-cell")); statErr == nil {
+		t.Error("cells/test-cell must not exist after rejection")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "cells", "testcell")); statErr == nil {
+		t.Error("cells/testcell (silently stripped) must not exist after rejection")
+	}
+}
+
 // TestScaffoldCellBundle_BundleDefaultIsHTTP verifies that when neither
 // WithHTTP nor WithEvents is set, default is HTTP.
 func TestScaffoldCellBundle_BundleDefaultIsHTTP(t *testing.T) {
