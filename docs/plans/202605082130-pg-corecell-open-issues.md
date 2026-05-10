@@ -10,7 +10,7 @@
 
 | ID | 优先级 | 一句话 |
 |---|---|---|
-| B2-C-02 SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT | ✅ RESOLVED | 决议见 ADR-Admin §3.3：留 Primary + 409 + bootstrap-only lifecycle（替代"移 internal" 提议） |
+| B2-C-02 SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT | 🔴 P0 | 产品决议已锁（ADR-Admin §3.3：留 Primary + 409 + bootstrap-only lifecycle）；代码落地待 S3+S5 PR |
 | ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 | 🔴 P1 | sessionlogin 无失败累计 + 阈值 + auto-lock |
 | CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 | 🔴 Cx1 | 标 L0 实为 L1 |
 | B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 | 🟠 P1 | corebundle 仍 `WithInMemoryDefaults` + archtest 类型化 |
@@ -76,25 +76,3 @@
 | C-04 CELLS-INIT-TEMPLATE-CONVERGE（含 C-07） | 🟡 P2 | 3 cell Init 切分各异 + emitter health probe helper |
 | C-09 CELL-SPLIT-LAYOUT-NORMALIZE | 🟡 P2 | accesscore + configcore 三文件范式不一致 |
 | M1-OBSERVED HEALTHZ-INTERFACE-PACKAGE-01 | 🟡 P2 | 38 处 Health 实现分散 |
-
-## G. S1 PR carve-outs
-
-S1 PR（refactor/547 typed Protocol primitive 骨架）范围外的小条目，触发条件均为后续 S2-S7 PR。来源：`docs/plans/202605082145-034-pg-corecell-b-route-plan.md` S1 计划。
-
-### S1-CO-01 SESSION-PROTOCOL-COMPOSITION-ROOT-01 archtest
-
-- **状态**：✅ RESOLVED（S1 PR 内已落最小守卫）
-- **位置**：`tools/archtest/session_protocol_composition_root_test.go`
-- **AI-rebust 等级**：Medium（type-aware AST 扫描调用点 + 包路径 allowlist；Hard 不可达——Go 缺包级访问控制机制）
-- **allowlist**：`cmd/*` (composition root) + `runtime/auth/session/*`（含 protocol_test.go 与未来 storetest 子包）
-- **S4 PR 时确认**：cell 接入按设计是注入 `*Protocol` 不是构造，allowlist 不需扩展
-
-### S1-CO-02 runtime-api.md §Option 范式分层 — sentinel sticky 通用契约明示
-
-- **类型**：carve-out（非 S1 阻塞）
-- **触发条件**：下一次 wiring option 章程级修订
-- **内容**：`.claude/rules/gocell/runtime-api.md` § Option 范式分层 章节明示「sentinel 一旦置位即粘滞失败（subsequent valid call 不清 sentinel）」是强依赖 wiring option 的通用语义。当前多处 wiring option 共享此行为：
-  - `runtime/http/router.WithRateLimiter` / `WithCircuitBreaker` / `WithAuthMiddleware`
-  - `runtime/auth/session.WithFingerprint` / `WithOrdering`（S1 PR 加入，已加 sticky test 锁定）
-- **理由**：当前各 wiring option 实现行为已收敛到 sentinel sticky，但 runtime-api.md 章程未明示此为通用契约。S1 PR 内已通过 sticky unit test 锁定 session 包内行为（升 Medium AI-rebust）；章程层面的明示是单源治理优化，跨多 option 加 archtest 检测注释一致性可选升级
-- **AI-rebust 等级**：当前 Medium（per-option sticky test）；章程明示后可选 Soft → Medium 升级（archtest 跨 wiring option 检测注释一致性）
