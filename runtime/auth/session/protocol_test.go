@@ -80,7 +80,7 @@ func TestNewProtocol_WithFingerprintNil_Rejected(t *testing.T) {
 	_, err := session.NewProtocol(
 		session.WithFingerprint(fp),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOn(session.CredentialEventPasswordReset),
+		session.WithRevokeOnAll(),
 	)
 	if err == nil {
 		t.Fatal("expected error for nil FingerprintMode")
@@ -98,7 +98,7 @@ func TestNewProtocol_WithOrderingNil_Rejected(t *testing.T) {
 	_, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(om),
-		session.WithRevokeOn(session.CredentialEventPasswordReset),
+		session.WithRevokeOnAll(),
 	)
 	if err == nil {
 		t.Fatal("expected error for nil OrderingModel")
@@ -139,54 +139,49 @@ func TestNewProtocol_NoRevokeOn_Error(t *testing.T) {
 }
 
 // TestNewProtocol_WithRevokeOn_Dedup: duplicate events deduplicated; order
-// preserves first occurrence.
+// preserves first occurrence. Declares all 4 events via WithRevokeOnAll, then
+// adds each event again via a second WithRevokeOn call to verify cross-call dedup.
 func TestNewProtocol_WithRevokeOn_Dedup(t *testing.T) {
 	t.Parallel()
+	// WithRevokeOnAll provides the required complete set; the second call re-adds
+	// all 4 events as duplicates to verify the dedup-across-accumulated-calls path.
+	extra := session.WithRevokeOn(
+		session.CredentialEventPasswordReset,
+		session.CredentialEventLock,
+		session.CredentialEventDelete,
+		session.CredentialEventRoleRevoke,
+	)
 	p, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOn(
-			session.CredentialEventPasswordReset,
-			session.CredentialEventLock,
-			session.CredentialEventPasswordReset, // duplicate
-			session.CredentialEventDelete,
-			session.CredentialEventLock, // duplicate
-		),
+		session.WithRevokeOnAll(),
+		extra, // all 4 are duplicates — dedup must keep length at 4
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := p.RevokeOn()
-	want := []session.CredentialEvent{
-		session.CredentialEventPasswordReset,
-		session.CredentialEventLock,
-		session.CredentialEventDelete,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("dedup length mismatch: got %d, want %d (events=%v)", len(got), len(want), got)
-	}
-	for i, ev := range want {
-		if got[i] != ev {
-			t.Errorf("dedup order mismatch at %d: got %v, want %v", i, got[i], ev)
-		}
+	if len(got) != 4 {
+		t.Fatalf("dedup length mismatch: got %d, want 4 (events=%v)", len(got), got)
 	}
 }
 
 // TestNewProtocol_WithRevokeOn_Accumulates: multiple WithRevokeOn calls
 // accumulate (builder semantics — runtime-api.md §Option 范式分层 builder type).
+// Uses split WithRevokeOn calls covering all 4 events to satisfy the complete-set check.
 func TestNewProtocol_WithRevokeOn_Accumulates(t *testing.T) {
 	t.Parallel()
 	p, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOn(session.CredentialEventPasswordReset),
-		session.WithRevokeOn(session.CredentialEventLock),
+		session.WithRevokeOn(session.CredentialEventPasswordReset, session.CredentialEventLock),
+		session.WithRevokeOn(session.CredentialEventDelete, session.CredentialEventRoleRevoke),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := p.RevokeOn(); len(got) != 2 {
-		t.Errorf("accumulate: got %d events, want 2 (events=%v)", len(got), got)
+	if got := p.RevokeOn(); len(got) != 4 {
+		t.Errorf("accumulate: got %d events, want 4 (events=%v)", len(got), got)
 	}
 }
 
@@ -197,7 +192,7 @@ func TestMustNewProtocol_OK(t *testing.T) {
 	p := session.MustNewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOn(session.CredentialEventPasswordReset),
+		session.WithRevokeOnAll(),
 	)
 	if p == nil {
 		t.Fatal("expected non-nil protocol from MustNewProtocol")
@@ -223,7 +218,7 @@ func TestMustNewProtocol_Panic_OnError(t *testing.T) {
 	}()
 	_ = session.MustNewProtocol(
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOn(session.CredentialEventPasswordReset),
+		session.WithRevokeOnAll(),
 	)
 }
 
@@ -234,10 +229,7 @@ func TestProtocol_AccessorsImmutable(t *testing.T) {
 	p := session.MustNewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOn(
-			session.CredentialEventPasswordReset,
-			session.CredentialEventLock,
-		),
+		session.WithRevokeOnAll(),
 	)
 	got := p.RevokeOn()
 	if len(got) == 0 {
@@ -247,6 +239,76 @@ func TestProtocol_AccessorsImmutable(t *testing.T) {
 	again := p.RevokeOn()
 	if again[0] == session.CredentialEventDelete {
 		t.Error("RevokeOn() must return a defensive copy; caller mutation leaked")
+	}
+}
+
+// TestNewProtocol_WithRevokeOn_UnknownEvent_Rejected: CredentialEvent(99) is
+// not a declared constant and must be rejected at option evaluation time.
+func TestNewProtocol_WithRevokeOn_UnknownEvent_Rejected(t *testing.T) {
+	t.Parallel()
+	_, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOn(session.CredentialEvent(99)),
+	)
+	if err == nil {
+		t.Fatal("expected error for unknown CredentialEvent(99)")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("expected error to mention unknown, got %q", err.Error())
+	}
+}
+
+// TestNewProtocol_WithRevokeOn_PartialSet_Rejected: declaring only a subset of
+// the 4 required CredentialEvent values must be rejected by NewProtocol.
+func TestNewProtocol_WithRevokeOn_PartialSet_Rejected(t *testing.T) {
+	t.Parallel()
+	_, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOn(session.CredentialEventPasswordReset),
+	)
+	if err == nil {
+		t.Fatal("expected error for partial CredentialEvent set")
+	}
+	if !strings.Contains(err.Error(), "all 4") && !strings.Contains(err.Error(), "complete set") {
+		t.Errorf("expected error to mention complete set requirement, got %q", err.Error())
+	}
+}
+
+// TestNewProtocol_WithRevokeOnAll_OK: WithRevokeOnAll() declares all 4 events
+// and must produce a valid protocol with RevokeOn returning 4 events.
+func TestNewProtocol_WithRevokeOnAll_OK(t *testing.T) {
+	t.Parallel()
+	p, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error with WithRevokeOnAll: %v", err)
+	}
+	got := p.RevokeOn()
+	if len(got) != 4 {
+		t.Errorf("WithRevokeOnAll: expected 4 events, got %d (events=%v)", len(got), got)
+	}
+}
+
+// TestWithRevokeOn_MixedValid_Invalid: a call mixing valid and invalid
+// CredentialEvent values must be rejected (the invalid value is detected before
+// any accumulation occurs).
+func TestWithRevokeOn_MixedValid_Invalid(t *testing.T) {
+	t.Parallel()
+	_, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOn(session.CredentialEventPasswordReset, session.CredentialEvent(99)),
+	)
+	if err == nil {
+		t.Fatal("expected error when mixing valid and invalid CredentialEvent values")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("expected error to mention unknown, got %q", err.Error())
 	}
 }
 

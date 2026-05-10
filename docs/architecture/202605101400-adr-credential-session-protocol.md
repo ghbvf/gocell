@@ -247,6 +247,31 @@ JWT 签名密钥泄露 / key rotation 由 `runtime/auth/jwt.go` issuer key manag
 | **S3+S5** | `adapters/postgres/session_store.go` PG conform；migration 加 `jti`、`authz_epoch_at_issue` 列；users 表加 `authz_epoch` 列；migration 删除 `sessions.access_token` 列 | TBD |
 | **S4** | accesscore composition root 显式 `MustNewProtocol(...)`；cell 注入 `*session.Protocol` + `session.Store`；4 个 CredentialEvent 撤销路径在各 slice 接入；存量 session 启动期 `revoked_at = NOW()` invalidate | TBD |
 
+### 5.1 Deployment Playbook
+
+CLAUDE.md "Review 和重构时不考虑向后兼容" 原则适用于代码层；运维操作层仍需护栏避免发布事故。
+
+**部署顺序（S3+S5 → S4 PR 落地时）**：
+
+1. **预部署校验**：staging 环境跑完整 e2e（覆盖 fresh state + 升级路径），smoke test PASS
+2. **Migration（独立步骤）**：执行 SQL migration（添加 `users.authz_epoch` 列 + `sessions.jti` / `sessions.authz_epoch_at_issue` 列；删除 `sessions.access_token` 列）。Migration 必须 `BEGIN; ... ; COMMIT;` 单事务幂等
+3. **Binary swap**：替换为新版本 binary。新 binary 启动期 phase0 校验：(a) `users.authz_epoch` 列存在；(b) `sessions.jti` 列存在；(c) `sessions.access_token` 列**不存在**（防止 partial migration）。任一缺失 → fail-fast，不启动
+4. **Forced re-login（启动期）**：新 binary 在 lifecycle phase 内执行 `UPDATE sessions SET revoked_at = NOW() WHERE revoked_at IS NULL`。所有用户被强制 re-login（B 路线决议；预期一次性运维成本）
+
+**回滚触发条件**（任一）：
+
+- Migration 步骤失败：保留 migration（已部分应用则 SQL 自动 rollback by `BEGIN ... COMMIT;`），不替换 binary，问题排查后重新走步骤 2
+- Binary phase0 fail-fast：保留旧 binary 运行（migration 已成功，老 binary 无法读 `sessions.jti` 列但 `sessions.access_token` 已删 → 服务降级；此时**不能仅 revert binary**，必须 revert migration + revert binary 双步）
+- 启动后 smoke test fail / production error spike（5 分钟窗口）：执行 revert 双步（reapply 历史 schema + downgrade binary）。Forced re-login 不可逆，但用户体感等同密码改动后再登录
+
+**窗口期校验项**（部署完成后 24h 内）：
+
+- jti lookup 命中率：`session validate` 路径的 jti SELECT 命中率应稳定 ≥ 99%（缺失通常是过期/revoke，不是 store 错位）
+- authz_epoch reject rate：role revoke 后旧 token validate reject 比例应 > 0（证明 epoch 机制有效），且与 role-change 频率成比例
+- error rate baseline：`ERR_AUTH_TOKEN_INVALID` 计数有一次性激增（forced re-login 副作用），24h 后应回归基线
+
+**与 e2e regression 的关系**：S2-S5 PR 内已落 storetest conformance（mem + PG 共享套件，Protocol-driven case 派生）。S4 PR 必须新增 e2e：覆盖 (a) fresh deployment 路径；(b) `sessions.access_token` 列存在的"未升级"DB 启动 phase0 fail-fast 验证；(c) forced re-login 后所有用户 401 → re-login 后正常的完整 user journey。
+
 **不向后兼容**（CLAUDE.md `## 工作方式` "Review 和重构时不考虑向后兼容"）：
 
 - S3+S5 migration 直接删除 `sessions.access_token` 列；任何依赖该列的代码必须同 PR 删除

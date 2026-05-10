@@ -138,8 +138,36 @@ func WithOrdering(om OrderingModel) Option {
 	}
 }
 
+// credentialEventValid reports whether e is a declared CredentialEvent.
+// Used to reject open-int values like CredentialEvent(99) at construction.
+func credentialEventValid(e CredentialEvent) bool {
+	switch e {
+	case CredentialEventPasswordReset,
+		CredentialEventLock,
+		CredentialEventDelete,
+		CredentialEventRoleRevoke:
+		return true
+	default:
+		return false
+	}
+}
+
+// allCredentialEvents is the canonical complete set per ADR D3
+// (fail-closed by default — every credential state change must revoke).
+var allCredentialEvents = []CredentialEvent{
+	CredentialEventPasswordReset,
+	CredentialEventLock,
+	CredentialEventDelete,
+	CredentialEventRoleRevoke,
+}
+
 // WithRevokeOn declares a set of credential events that revoke active
 // sessions and refresh chains for the affected subject (ADR D3).
+//
+// Each event must be a declared CredentialEvent constant; unknown values are
+// rejected. NewProtocol additionally requires the complete set of 4 events to
+// be declared (ADR D3 fail-closed) — prefer WithRevokeOnAll() over manual
+// enumeration.
 //
 // This is a builder-style option: multiple WithRevokeOn calls accumulate;
 // duplicates are deduplicated, preserving the order of first occurrence.
@@ -150,6 +178,12 @@ func WithRevokeOn(events ...CredentialEvent) Option {
 		if len(events) == 0 {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"session protocol: WithRevokeOn requires at least one event")
+		}
+		for _, e := range events {
+			if !credentialEventValid(e) {
+				return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+					"session protocol: WithRevokeOn received unknown CredentialEvent")
+			}
 		}
 		seen := make(map[CredentialEvent]struct{}, len(p.revokeOn)+len(events))
 		for _, e := range p.revokeOn {
@@ -164,6 +198,13 @@ func WithRevokeOn(events ...CredentialEvent) Option {
 		}
 		return nil
 	}
+}
+
+// WithRevokeOnAll declares all 4 CredentialEvent values at once (ADR D3
+// fail-closed by default). Recommended path for composition roots — the
+// typed enum + complete-set check make "forgot one event" unrepresentable.
+func WithRevokeOnAll() Option {
+	return WithRevokeOn(allCredentialEvents...)
 }
 
 // NewProtocol assembles a Protocol from the supplied options and fail-fasts
@@ -190,6 +231,16 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 	if len(p.revokeOn) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session protocol: WithRevokeOn must declare at least one event")
+	}
+	declared := make(map[CredentialEvent]struct{}, len(p.revokeOn))
+	for _, e := range p.revokeOn {
+		declared[e] = struct{}{}
+	}
+	for _, e := range allCredentialEvents {
+		if _, ok := declared[e]; !ok {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"session protocol: WithRevokeOn must declare all 4 CredentialEvent values per ADR D3 fail-closed (use WithRevokeOnAll)")
+		}
 	}
 	return p, nil
 }
