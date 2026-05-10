@@ -311,23 +311,6 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 	})
 }
 
-// TestConfigRepository_GetByKey_NotFound is a legacy name kept for backward
-// reference. It tests the other-error path (assert.AnError != pgx.ErrNoRows).
-func TestConfigRepository_GetByKey_NotFound(t *testing.T) {
-	// assert.AnError is not pgx.ErrNoRows → classified as ErrConfigRepoQuery
-	db := &mockDB{
-		queryRowResult: &mockRow{scanErr: assert.AnError},
-	}
-	repo := newConfigRepositoryFromDBTX(db)
-
-	_, err := repo.GetByKey(context.Background(), "missing")
-	require.Error(t, err)
-
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
-}
-
 // TestConfigRepository_Update tests the new 3-arg Update (SELECT FOR UPDATE + UPDATE RETURNING).
 // The mock returns the SELECT FOR UPDATE row first (sensitive=false), then the UPDATE RETURNING row.
 func TestConfigRepository_Update(t *testing.T) {
@@ -658,23 +641,6 @@ func TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery(t *testing.T) {
 	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 	require.True(t, errcode.IsInfraError(err),
 		"generic scan error must be CategoryInfra (not Domain)")
-}
-
-// TestConfigRepository_GetVersion_NotFound is a legacy name kept for backward
-// reference. It tests the other-error path (assert.AnError != pgx.ErrNoRows).
-func TestConfigRepository_GetVersion_NotFound(t *testing.T) {
-	// assert.AnError is not pgx.ErrNoRows → classified as ErrConfigRepoQuery
-	db := &mockDB{
-		queryRowResult: &mockRow{scanErr: assert.AnError},
-	}
-	repo := newConfigRepositoryFromDBTX(db)
-
-	_, err := repo.GetVersion(context.Background(), "missing", 1)
-	require.Error(t, err)
-
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 }
 
 // --- F-S-1: resolveWrite enforcement tests ---
