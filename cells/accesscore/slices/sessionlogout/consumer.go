@@ -65,7 +65,10 @@ func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) ou
 	}
 
 	if err := c.sessionRepo.RevokeByUserID(ctx, payload.UserID); err != nil {
-		return outbox.Requeue(fmt.Errorf("sessionlogout: revoke sessions for user %s: %w", payload.UserID, err))
+		c.logger.Warn("sessionlogout: revoke sessions failed",
+			slog.String("user_id", payload.UserID),
+			slog.Any("error", err))
+		return outbox.Requeue(fmt.Errorf("sessionlogout: revoke sessions: %w", err))
 	}
 
 	c.logger.Info("sessions invalidated on role change",
