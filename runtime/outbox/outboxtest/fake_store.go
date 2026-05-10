@@ -68,16 +68,18 @@ type FakeRow struct {
 // ClaimPending ordering: next_retry_at ASC (nil first) + created_at ASC,
 // consistent with idx_outbox_pending_v2 in the PG adapter.
 type FakeStore struct {
-	mu   sync.Mutex
-	rows map[string]*fakeRow
-	now  func() time.Time
+	mu     sync.Mutex
+	rows   map[string]*fakeRow
+	now    func() time.Time
+	notify chan struct{} // closed-and-recreated on every state mutation; powers WaitFor
 }
 
 // NewFakeStore creates an empty FakeStore using time.Now as clock.
 func NewFakeStore() *FakeStore {
 	return &FakeStore{
-		rows: make(map[string]*fakeRow),
-		now:  time.Now,
+		rows:   make(map[string]*fakeRow),
+		now:    time.Now,
+		notify: make(chan struct{}),
 	}
 }
 
@@ -89,10 +91,27 @@ func (s *FakeStore) WithClock(now func() time.Time) *FakeStore {
 	return s
 }
 
+// notifyLocked closes the current notify channel (waking every goroutine
+// blocked in WaitFor that captured it) and installs a fresh channel for the
+// next wait cycle. Caller must hold s.mu so mutators serialize against
+// notify-channel rotation.
+//
+// Channel-as-condvar (close + recreate) is the canonical Go alternative to
+// sync.Cond when waits must be ctx-cancellable; sync.Cond has no native ctx
+// integration. ref: golang.org/x/sync/singleflight, net/http h2_bundle.go.
+func (s *FakeStore) notifyLocked() {
+	close(s.notify)
+	s.notify = make(chan struct{})
+}
+
 // Seed inserts rows directly (bypasses normal Writer). Used by test setup.
-// Rows with status "" default to "pending". Existing rows with the same ID
-// are overwritten.
+// Each row starts in "pending" status with the supplied Attempts; LeaseID,
+// claimed_at / published_at / dead_at / next_retry_at, and last_error are
+// reset to zero. Existing rows with the same ID are overwritten.
 func (s *FakeStore) Seed(entries ...outbox.ClaimedEntry) {
+	if len(entries) == 0 {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ce := range entries {
@@ -103,13 +122,20 @@ func (s *FakeStore) Seed(entries ...outbox.ClaimedEntry) {
 		}
 		s.rows[ce.ID] = row
 	}
+	s.notifyLocked()
 }
 
 // Snapshot returns a sorted (by ID) copy of all rows for test assertions.
 func (s *FakeStore) Snapshot() []FakeRow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.snapshotLocked()
+}
 
+// snapshotLocked is the unsynchronized core of Snapshot, also used by
+// WaitFor to evaluate cond against a consistent view captured under s.mu.
+// Caller must hold s.mu.
+func (s *FakeStore) snapshotLocked() []FakeRow {
 	out := make([]FakeRow, 0, len(s.rows))
 	for _, r := range s.rows {
 		fr := FakeRow{
@@ -141,6 +167,40 @@ func (s *FakeStore) Snapshot() []FakeRow {
 		return out[i].Entry.ID < out[j].Entry.ID
 	})
 	return out
+}
+
+// WaitFor blocks until cond evaluates true on a current FakeStore snapshot
+// or ctx is canceled, returning ctx.Err() in the latter case. For use in
+// tests only.
+//
+// cond is re-evaluated synchronously after every state mutation (Seed,
+// ClaimPending, MarkPublished, MarkRetry, MarkDead, ReclaimStale,
+// CleanupPublished, CleanupDead) — there is no polling and no timing
+// coupling. Tests should pass a generous ctx deadline (typically
+// testtime.EventuallyDefault) only as a deadlock backstop, never as the
+// expected wait time.
+//
+// The notify channel is captured under s.mu before cond runs, so any
+// mutation that races between the unlock and the select{} closes the
+// captured channel and triggers immediate re-evaluation — race-free
+// without sync.Cond (which lacks ctx integration).
+func (s *FakeStore) WaitFor(ctx context.Context, cond func([]FakeRow) bool) error {
+	for {
+		s.mu.Lock()
+		snap := s.snapshotLocked()
+		notify := s.notify
+		s.mu.Unlock()
+
+		if cond(snap) {
+			return nil
+		}
+		select {
+		case <-notify:
+			// state changed; re-evaluate
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +265,9 @@ func (s *FakeStore) ClaimPending(_ context.Context, batchSize int) ([]outbox.Cla
 			LeaseID:  leaseID,
 		})
 	}
+	if len(result) > 0 {
+		s.notifyLocked()
+	}
 	return result, nil
 }
 
@@ -222,6 +285,7 @@ func (s *FakeStore) MarkPublished(_ context.Context, id, leaseID string) (update
 	r.status = statusPublished
 	r.publishedAt = &now
 	r.claimedAt = nil
+	s.notifyLocked()
 	return true, nil
 }
 
@@ -243,6 +307,7 @@ func (s *FakeStore) MarkRetry(
 	r.lastError = lastError
 	r.claimedAt = nil
 	r.leaseID = ""
+	s.notifyLocked()
 	return true, nil
 }
 
@@ -262,14 +327,16 @@ func (s *FakeStore) MarkDead(_ context.Context, id, leaseID string, attempts int
 	r.lastError = lastError
 	r.deadAt = &now
 	r.claimedAt = nil
+	s.notifyLocked()
 	return true, nil
 }
 
 // ReclaimStale transitions up to batchSize claiming rows whose claimed_at is
 // older than claimTTL back to pending or to dead (when attempts+1 >= maxAttempts).
-// Returns count of rows recovered across both destinations. Rows are visited
-// in stable map iteration order capped at batchSize so a backlog larger than
-// the cap is split across loop iterations on the caller side.
+// Returns count of rows recovered across both destinations. Eligible rows are
+// visited in claimed_at ASC order with id ASC tiebreaker, mirroring the PG
+// adapter's ORDER BY claimed_at LIMIT N semantics so a backlog larger than the
+// cap is split across loop iterations deterministically.
 func (s *FakeStore) ReclaimStale(
 	_ context.Context,
 	claimTTL time.Duration,
@@ -283,16 +350,16 @@ func (s *FakeStore) ReclaimStale(
 	now := s.now()
 	cutoff := now.Add(-claimTTL)
 
-	for _, r := range s.rows {
+	// Reuse the cleanup-path stable ordering helper so reclaim and cleanup
+	// share a single source of "eligible rows in deterministic order".
+	ids := s.eligibleIDsByTimeAsc(statusClaiming, cutoff,
+		func(r *fakeRow) *time.Time { return r.claimedAt })
+
+	for _, id := range ids {
 		if count >= batchSize {
 			break
 		}
-		if r.status != statusClaiming {
-			continue
-		}
-		if r.claimedAt == nil || !r.claimedAt.Before(cutoff) {
-			continue
-		}
+		r := s.rows[id]
 		newAttempts := r.attempts + 1
 		if newAttempts >= maxAttempts {
 			r.status = statusDead
@@ -310,6 +377,9 @@ func (s *FakeStore) ReclaimStale(
 			r.leaseID = ""
 		}
 		count++
+	}
+	if count > 0 {
+		s.notifyLocked()
 	}
 	return count, nil
 }
@@ -329,6 +399,9 @@ func (s *FakeStore) CleanupPublished(_ context.Context, cutoff time.Time, batchS
 		delete(s.rows, id)
 		deleted++
 	}
+	if deleted > 0 {
+		s.notifyLocked()
+	}
 	return deleted, nil
 }
 
@@ -345,6 +418,9 @@ func (s *FakeStore) CleanupDead(_ context.Context, cutoff time.Time, batchSize i
 		}
 		delete(s.rows, id)
 		deleted++
+	}
+	if deleted > 0 {
+		s.notifyLocked()
 	}
 	return deleted, nil
 }

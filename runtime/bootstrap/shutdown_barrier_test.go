@@ -35,8 +35,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// barrierPreDelay is used in HTTPAcceptsDuringPreShutdownDelay to set the pre-shutdown delay.
-const barrierPreDelay = testtime.D300ms
+// barrierPreDelay is used in HTTPAcceptsDuringPreShutdownDelay to set the
+// pre-shutdown delay. Sized at 1s so the require.Eventually that observes
+// the /readyz 503 flip plus the immediate follow-up HTTP assertion both fit
+// comfortably inside the window even under race-detector + CI scheduling
+// jitter; in normal execution the flip is observed within microseconds.
+const barrierPreDelay = testtime.D1s
 
 // barrierAssertionDelay is used in RunCtxIndependentOfExternalCtx as the
 // pre-shutdown delay to create a reliable assertion window.

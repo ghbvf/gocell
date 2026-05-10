@@ -2,6 +2,8 @@ package outboxtest_test
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -154,5 +156,172 @@ func TestFakeStore_SeedOverwrite(t *testing.T) {
 	}
 	if snap[0].Attempts != 3 {
 		t.Errorf("Attempts: got %d, want 3", snap[0].Attempts)
+	}
+}
+
+// TestFakeStore_WaitFor_ImmediateSatisfaction verifies that WaitFor returns
+// nil immediately when cond is already true on the initial snapshot, without
+// blocking on any state change.
+func TestFakeStore_WaitFor_ImmediateSatisfaction(t *testing.T) {
+	s := outboxtest.NewFakeStore()
+	s.Seed(outbox.ClaimedEntry{
+		Entry: kout.Entry{
+			ID: "wf-immediate", EventType: "ev", Topic: "ev",
+			Payload: []byte(`{}`), CreatedAt: time.Now(),
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+
+	start := time.Now()
+	err := s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
+		return len(snap) == 1 && snap[0].Entry.ID == "wf-immediate"
+	})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("WaitFor returned err = %v, want nil", err)
+	}
+	if elapsed > testtime.D50ms {
+		t.Errorf("WaitFor took %v, expected near-immediate return (no polling)", elapsed)
+	}
+}
+
+// TestFakeStore_WaitFor_WakesOnMutation verifies that WaitFor blocks while
+// cond is false and wakes up immediately when a state-mutating method
+// (MarkPublished here) is called from another goroutine.
+func TestFakeStore_WaitFor_WakesOnMutation(t *testing.T) {
+	s := outboxtest.NewFakeStore()
+	s.Seed(outbox.ClaimedEntry{
+		Entry: kout.Entry{
+			ID: "wf-wake", EventType: "ev", Topic: "ev",
+			Payload: []byte(`{}`), CreatedAt: time.Now(),
+		},
+	})
+
+	// Claim so MarkPublished can transition claiming → published.
+	claimed, err := s.ClaimPending(context.Background(), 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending failed: %v, len=%d", err, len(claimed))
+	}
+	leaseID := claimed[0].LeaseID
+
+	// Trigger publish in another goroutine after a short delay so we can
+	// observe that WaitFor was actually blocked (not polling).
+	go func() {
+		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep deliberate delay to prove WaitFor is blocked, not polling
+		_, _ = s.MarkPublished(context.Background(), "wf-wake", leaseID)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+
+	start := time.Now()
+	err = s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
+		return len(snap) == 1 && snap[0].Status == "published"
+	})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("WaitFor returned err = %v, want nil", err)
+	}
+	if elapsed < testtime.D20ms {
+		t.Errorf("WaitFor returned in %v, expected to block until mutation (>= 20ms)", elapsed)
+	}
+	// Upper bound is generous (race-detector + GitHub runner contention can
+	// stretch wake latency well past tens of ms); the lower bound above is
+	// what proves wake-on-mutation rather than spurious early return.
+	if elapsed > testtime.EventuallyShort {
+		t.Errorf("WaitFor took %v, expected to wake within EventuallyShort after mutation", elapsed)
+	}
+}
+
+// TestFakeStore_WaitFor_CtxCancelled verifies that WaitFor returns ctx.Err()
+// when ctx is canceled while cond is still false (no false positives).
+func TestFakeStore_WaitFor_CtxCancelled(t *testing.T) {
+	s := outboxtest.NewFakeStore()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
+	defer cancel()
+
+	err := s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
+		return len(snap) > 0 // unsatisfiable: store is empty and never seeded
+	})
+	if err == nil {
+		t.Fatal("WaitFor returned nil, want ctx deadline error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("WaitFor err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestFakeStore_ReclaimStale_DeterministicBatchSelection verifies that when
+// stale claiming rows exceed batchSize, the reclaimed subset is deterministic
+// (oldest claimedAt first, id ASC tiebreaker) — mirroring the PG adapter's
+// ORDER BY claimed_at LIMIT N semantics. Without sorting, map iteration
+// would pick a random subset across runs.
+func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nowVal := base
+	s := outboxtest.NewFakeStore().WithClock(func() time.Time { return nowVal })
+
+	// Seed 5 rows with ascending CreatedAt so ClaimPending visits them in known order.
+	ids := []string{"e-1", "e-2", "e-3", "e-4", "e-5"}
+	for i, id := range ids {
+		s.Seed(outbox.ClaimedEntry{
+			Entry: kout.Entry{
+				ID:        id,
+				EventType: "test",
+				Topic:     "test",
+				Payload:   []byte(`{}`),
+				CreatedAt: base.Add(time.Duration(i) * time.Second),
+			},
+		})
+	}
+
+	// Claim each one at a time, advancing the clock between calls so each
+	// row gets a distinct claimedAt aligned with claim order.
+	for _, id := range ids {
+		claimed, err := s.ClaimPending(context.Background(), 1)
+		if err != nil {
+			t.Fatalf("ClaimPending: %v", err)
+		}
+		if len(claimed) != 1 || claimed[0].ID != id {
+			t.Fatalf("ClaimPending got %v, want single %s", claimed, id)
+		}
+		nowVal = nowVal.Add(time.Second)
+	}
+
+	// Advance the clock so all five claims are stale (claimTTL=5s; oldest is
+	// base+0s, youngest is base+4s, current time is base+15s, cutoff base+10s).
+	nowVal = nowVal.Add(testtime.D10s)
+
+	// batchSize=2 — must pick the two oldest claimedAt rows: e-1 and e-2.
+	count, err := s.ReclaimStale(context.Background(),
+		testtime.D5s, 99, testtime.D1ms, testtime.D1ms, 2)
+	if err != nil {
+		t.Fatalf("ReclaimStale: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("ReclaimStale count = %d, want 2", count)
+	}
+
+	var reclaimed, stillClaiming []string
+	for _, row := range s.Snapshot() {
+		switch row.Status {
+		case "pending":
+			reclaimed = append(reclaimed, row.Entry.ID)
+		case "claiming":
+			stillClaiming = append(stillClaiming, row.Entry.ID)
+		}
+	}
+	wantReclaimed := []string{"e-1", "e-2"}
+	wantStill := []string{"e-3", "e-4", "e-5"}
+	if !slices.Equal(reclaimed, wantReclaimed) {
+		t.Errorf("reclaimed = %v, want %v (oldest claimedAt first, deterministic)", reclaimed, wantReclaimed)
+	}
+	if !slices.Equal(stillClaiming, wantStill) {
+		t.Errorf("stillClaiming = %v, want %v", stillClaiming, wantStill)
 	}
 }

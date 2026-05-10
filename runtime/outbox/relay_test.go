@@ -42,9 +42,20 @@ type fakePublisher struct {
 	errOnce error // returned once then cleared
 	failN   int   // fail next N publishes
 	errFn   func(string) error
+	notify  chan struct{} // close-and-recreate on every successful Publish; powers WaitForCaptured
 }
 
-func newFakePublisher() *fakePublisher { return &fakePublisher{} }
+func newFakePublisher() *fakePublisher {
+	return &fakePublisher{notify: make(chan struct{})}
+}
+
+// notifyLocked closes the current notify channel (waking any WaitForCaptured
+// goroutine) and installs a fresh one. Caller must hold p.mu. Mirrors the
+// channel-as-condvar pattern in outboxtest.FakeStore.notifyLocked.
+func (p *fakePublisher) notifyLocked() {
+	close(p.notify)
+	p.notify = make(chan struct{})
+}
 
 // WithError sets an error to be returned once on the next Publish call.
 func (p *fakePublisher) WithError(err error) *fakePublisher {
@@ -88,7 +99,29 @@ func (p *fakePublisher) Publish(_ context.Context, topic string, payload []byte)
 		return errors.New("transient broker failure")
 	}
 	p.calls = append(p.calls, publishCall{topic: topic, payload: payload})
+	p.notifyLocked()
 	return nil
+}
+
+// WaitForCaptured blocks until at least want successful Publish calls have
+// been recorded or ctx is canceled. Re-evaluated synchronously after every
+// successful publish via the notify channel — no polling, no timing coupling.
+// Passing want <= 0 returns nil immediately on the first cond evaluation.
+func (p *fakePublisher) WaitForCaptured(ctx context.Context, want int) error {
+	for {
+		p.mu.Lock()
+		cur := len(p.calls)
+		notify := p.notify
+		p.mu.Unlock()
+		if cur >= want {
+			return nil
+		}
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // Close satisfies outbox.Publisher.
@@ -150,10 +183,26 @@ func startRelay(t *testing.T, relay *outbox.Relay) (stop func()) {
 	}
 }
 
-// waitUntil polls cond until it returns true or 500ms is exceeded.
-func waitUntil(t *testing.T, cond func() bool) {
+// waitStore blocks until cond evaluates true on a current FakeStore snapshot
+// or testtime.EventuallyDefault is exceeded as a deadlock backstop. Backed by
+// store.WaitFor — wakes synchronously on every state mutation, no polling.
+func waitStore(t *testing.T, store *outboxtest.FakeStore, cond func([]outboxtest.FakeRow) bool) {
 	t.Helper()
-	require.Eventually(t, cond, testtime.D500ms, testtime.D2ms, "condition not met within 500ms")
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
+	defer cancel()
+	require.NoError(t, store.WaitFor(ctx, cond),
+		"outbox state did not converge within EventuallyDefault (deadlock backstop)")
+}
+
+// waitPub blocks until pub has captured at least want successful publishes
+// or testtime.EventuallyDefault is exceeded as a deadlock backstop. Backed
+// by pub.WaitForCaptured — wakes synchronously on every successful publish.
+func waitPub(t *testing.T, pub *fakePublisher, want int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
+	defer cancel()
+	require.NoError(t, pub.WaitForCaptured(ctx, want),
+		"publisher captured fewer than %d entries within EventuallyDefault (deadlock backstop)", want)
 }
 
 // ---------------------------------------------------------------------------
@@ -189,9 +238,7 @@ func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {
 	defer stop()
 
 	// Wait until all 3 entries are published.
-	waitUntil(t, func() bool {
-		return len(pub.Captured()) >= 3
-	})
+	waitPub(t, pub, 3)
 	stop()
 
 	// All store rows must be published.
@@ -223,8 +270,7 @@ func TestRelay_TransientFailure_MarkRetryWithBackoff(t *testing.T) {
 	defer stop()
 
 	// Wait until the entry is retried (status=pending with attempts>0).
-	waitUntil(t, func() bool {
-		snap := store.Snapshot()
+	waitStore(t, store, func(snap []outboxtest.FakeRow) bool {
 		if len(snap) == 0 {
 			return false
 		}
@@ -264,8 +310,7 @@ func TestRelay_PermanentFailure_ExceedsMaxAttempts_MarkDead(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, func() bool {
-		snap := store.Snapshot()
+	waitStore(t, store, func(snap []outboxtest.FakeRow) bool {
 		return len(snap) > 0 && snap[0].Status == "dead"
 	})
 	stop()
@@ -440,8 +485,7 @@ func TestRelay_ReclaimStale_RecoveryLoop(t *testing.T) {
 	defer stop()
 
 	// Wait until the entry is reclaimed (back to pending with attempts > 0).
-	waitUntil(t, func() bool {
-		snap := store.Snapshot()
+	waitStore(t, store, func(snap []outboxtest.FakeRow) bool {
 		if len(snap) == 0 {
 			return false
 		}
@@ -516,8 +560,8 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, func() bool {
-		return len(store.Snapshot()) == 0
+	waitStore(t, store, func(snap []outboxtest.FakeRow) bool {
+		return len(snap) == 0
 	})
 
 	assert.Empty(t, store.Snapshot(), "cleanupLoop must drain the published entry on its first pass")
@@ -545,9 +589,7 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, func() bool {
-		return len(pub.Captured()) >= 1
-	})
+	waitPub(t, pub, 1)
 	stop()
 
 	captured := pub.Captured()
@@ -576,9 +618,7 @@ func TestRelay_Metrics_RecordedOnPollCycle(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, func() bool {
-		return len(pub.Captured()) >= 2
-	})
+	waitPub(t, pub, 2)
 	stop()
 
 	// At least one RecordBatchSize call with size > 0 must have occurred.
@@ -614,9 +654,7 @@ func TestRelay_NilMetrics_DoesNotPanic(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, func() bool {
-		return len(pub.Captured()) >= 1
-	})
+	waitPub(t, pub, 1)
 	stop()
 
 	snap := store.Snapshot()
@@ -636,8 +674,7 @@ func TestRelay_SanitizesError_InLastError(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, func() bool {
-		snap := store.Snapshot()
+	waitStore(t, store, func(snap []outboxtest.FakeRow) bool {
 		return len(snap) > 0 && (snap[0].Status == "pending" || snap[0].Status == "dead") && snap[0].LastError != ""
 	})
 	stop()
@@ -793,6 +830,10 @@ func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 		_ = relay.Stop(stopCtx)
 	}()
 
+	// Polls the testCollector metrics state, not FakeStore/fakePublisher,
+	// so the deterministic waitStore/waitPub helpers don't apply. Budget is
+	// testtime.D1s (already conventional, not the D500ms-flake class) and
+	// state convergence here is a single int counter assignment.
 	require.Eventually(t, func() bool {
 		mc.mu.Lock()
 		defer mc.mu.Unlock()
