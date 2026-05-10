@@ -148,10 +148,11 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 		{AbsPath: filepath.Join(absDir, "cell.yaml"), Content: cellYAMLContent},
 	}
 
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: write planned files", err)
-	}
-	return nil
+	// Return WritePlannedFiles error directly: pathsafe already returns a
+	// structured *errcode.Error (ErrConflict for file-exists, ErrInternal for
+	// OS errors) so re-wrapping would clobber the Code and lose the caller's
+	// ability to errors.As to ErrConflict.
+	return pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun)
 }
 
 // validateScaffoldSpec returns an error if any required field is missing or

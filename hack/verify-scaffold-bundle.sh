@@ -67,7 +67,6 @@ case "$MODE" in
     ;;
   sandbox)
     SANDBOX_DIR="$(mktemp -d)"
-    trap 'rm -rf "$SANDBOX_DIR"' EXIT
     git worktree add --quiet --detach "$SANDBOX_DIR" HEAD
     trap 'git worktree remove --force "$SANDBOX_DIR" >/dev/null 2>&1 || true; rm -rf "$SANDBOX_DIR"' EXIT
     run_smoke "$SANDBOX_DIR"

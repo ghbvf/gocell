@@ -195,7 +195,7 @@ func printScaffoldHelp() error {
 		{"assembly", []string{
 			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
 			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
-			"[--deploy=k8s|compose|binary] [--skip-generate] [--dry-run]",
+			"[--deploy=k8s|compose|binary]（默认 k8s） [--skip-generate] [--dry-run]",
 		}},
 	},
 		"--dry-run validates inputs and path conflicts without writing.",

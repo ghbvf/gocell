@@ -80,10 +80,10 @@ func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 		return err
 	}
 
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold bundle: write failed", err)
-	}
-	return nil
+	// Return WritePlannedFiles error directly: pathsafe already returns a
+	// structured *errcode.Error (ErrConflict for file-exists, ErrInternal for
+	// OS errors) so re-wrapping would clobber the Code.
+	return pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun)
 }
 
 // PlanCellBundleForDryRun is the exported equivalent of planCellBundle,
