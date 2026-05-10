@@ -49,15 +49,23 @@ type Session struct {
 // of which CredentialEvent triggered it (D3 fail-closed by default).
 //
 // Method semantics (ADR-Session §4.2):
-//   - Create: persist a new session. Duplicate ID returns ErrSessionConflict;
-//     the protocol does not mandate uniqueness on (SubjectID, JTI) — that is
-//     a backend decision (PG schema layer in S3+S5).
+//   - Create: persist a new session. Nil session, empty Session.ID, or empty
+//     Session.SubjectID return ErrValidationFailed. Records violating the
+//     protocol-configured FingerprintMode (e.g. empty JTI under
+//     FingerprintJTIRef) return ErrValidationFailed. Duplicate Session.ID
+//     returns ErrSessionConflict; the protocol does not mandate uniqueness
+//     on (SubjectID, JTI) — that is a backend decision (PG schema in S3+S5).
 //   - Get: fetch by Session.ID. Missing → ErrSessionNotFound; revoked /
 //     expired sessions are still returned (caller decides via fields).
 //   - Revoke: mark a single session dead. Idempotent: already-revoked or
 //     missing IDs are no-ops returning nil (防枚举 — must not leak existence).
-//   - RevokeForSubject: mark every active session for SubjectID dead. Always
-//     returns nil even when the subject has no sessions.
+//     RevokedAt is set exactly once; subsequent Revoke calls do not re-stamp.
+//   - RevokeForSubject: mark every active session for SubjectID dead. Empty
+//     subjectID returns ErrValidationFailed; an event value not declared in
+//     the CredentialEvent enum returns ErrValidationFailed. With valid
+//     arguments, returns nil even when the subject has no sessions; pre-
+//     revoked sessions for the subject preserve their original RevokedAt
+//     timestamp (append-only revoke per ADR-Session D3).
 type Store interface {
 	Create(ctx context.Context, s *Session) error
 	Get(ctx context.Context, id string) (*Session, error)

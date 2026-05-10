@@ -31,6 +31,12 @@ import (
 // Factory constructs a fresh Store with a deterministic clock. Backends with
 // per-test setup (e.g. PG schema reset) do it inside Factory; cleanup is the
 // returned func and must be safe to call exactly once.
+//
+// The fakeClock return type is the concrete *clockmock.FakeClock rather than
+// the clock.Clock interface — suite cases call fc.Advance() and fc.Now()
+// directly, methods that only the concrete type carries. PG store factories
+// in S3+S5 must therefore also construct and return *clockmock.FakeClock,
+// even when wiring it through the store as a clock.Clock at construction.
 type Factory func(t *testing.T) (store session.Store, fakeClock *clockmock.FakeClock, cleanup func())
 
 // epochAnchor is the deterministic start time used by NewTestProtocol-driven
@@ -105,6 +111,12 @@ func Run(t *testing.T, factory Factory, protocol *session.Protocol) {
 	t.Run("Revoke_Idempotent", func(t *testing.T) { runRevokeIdempotent(t, factory) })
 	t.Run("Revoke_NotFound_Noop", func(t *testing.T) { runRevokeNotFoundNoop(t, factory) })
 	t.Run("Expired_StillReturned", func(t *testing.T) { runExpiredStillReturned(t, factory) })
+	t.Run("RevokeForSubject_EmptySubject_Rejected", func(t *testing.T) {
+		runRevokeForSubjectEmptySubject(t, factory)
+	})
+	t.Run("RevokeForSubject_UnknownEvent_Rejected", func(t *testing.T) {
+		runRevokeForSubjectUnknownEvent(t, factory)
+	})
 
 	for _, event := range protocol.RevokeOn() {
 		event := event
@@ -285,6 +297,29 @@ func runExpiredStillReturned(t *testing.T, factory Factory) {
 	}
 }
 
+// runRevokeForSubjectEmptySubject — Store contract: empty subjectID is
+// rejected with ErrValidationFailed (Store interface godoc). PG store
+// (S3+S5) must conform.
+func runRevokeForSubjectEmptySubject(t *testing.T, factory Factory) {
+	store, _, cleanup := factory(t)
+	defer cleanup()
+
+	err := store.RevokeForSubject(context.Background(), "", session.CredentialEventPasswordReset)
+	assertErrCode(t, err, errcode.ErrValidationFailed)
+}
+
+// runRevokeForSubjectUnknownEvent — Store contract: a CredentialEvent value
+// outside the declared enum is rejected with ErrValidationFailed even when
+// the Protocol-level WithRevokeOnAll covers the canonical 4 (defense in
+// depth — Store callers may obtain CredentialEvent from external sources).
+func runRevokeForSubjectUnknownEvent(t *testing.T, factory Factory) {
+	store, _, cleanup := factory(t)
+	defer cleanup()
+
+	err := store.RevokeForSubject(context.Background(), subjectA, session.CredentialEvent(99))
+	assertErrCode(t, err, errcode.ErrValidationFailed)
+}
+
 // revokeForSubjectFixtures bundles the four session fixtures used by the
 // per-event RevokeForSubject case so they can be threaded through helpers
 // without exploding the parent function's signature.
@@ -393,6 +428,14 @@ func runRevokeForSubject(t *testing.T, factory Factory, event session.Credential
 // FingerprintJTIRef the Session struct must NOT carry any plaintext-token
 // shaped field. The check is a reflective field-name audit so backends
 // adding their own Session decorations cannot regress D1.
+//
+// Match semantics: strings.EqualFold case-insensitive whole-name match
+// against the forbidden list. We do NOT match on substring (e.g. a future
+// "TokenID" field naming an opaque server-side identifier would not
+// trip this guard) — D1 cares about token-shaped *plaintext storage*, not
+// about any field whose name happens to contain "token". If a future field
+// must collide with a forbidden name, it is the field author's burden to
+// rename or to extend the forbidden list intentionally with a comment.
 func runFingerprintJTINoPlaintext(t *testing.T) {
 	st := reflect.TypeOf(session.Session{})
 	forbidden := []string{"AccessToken", "Token", "Plaintext", "Secret", "Password"}

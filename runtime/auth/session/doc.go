@@ -2,10 +2,11 @@
 // session-related protocol decisions for accesscore (and any future cell that
 // owns server-side session state).
 //
-// This package is the protocol vocabulary; it does not implement persistence.
-// A Store interface, mem implementation, and storetest conformance suite live
-// alongside this Protocol in subsequent PRs (see plan
-// docs/plans/202605082145-034-pg-corecell-b-route-plan.md S2 onward).
+// This package is the protocol vocabulary plus a Store interface, an in-
+// memory implementation (MemStore), and the Protocol-driven storetest
+// conformance suite. The PG-backed Store implementation and the cell-side
+// composition root wiring land in later phases of the same plan
+// (docs/plans/202605082145-034-pg-corecell-b-route-plan.md, S3+S5 / S4).
 //
 // The protocol decisions encoded here are governed by:
 //
@@ -35,9 +36,10 @@
 //
 //	proto := session.MustNewProtocol(...)
 //
-// session.NewProtocol / MustNewProtocol must only be called from cmd/* — cells
-// must consume an injected *Protocol, never construct their own. This boundary
-// is enforced by archtest SESSION-PROTOCOL-COMPOSITION-ROOT-01 (added in S4 PR
-// when the first cell consumer lands; see backlog S1-CO-01 in
-// docs/plans/202605082130-pg-corecell-open-issues.md).
+// session.NewProtocol / MustNewProtocol must only be called from cmd/* (or
+// from this package's own storetest sub-package, which constructs the
+// canonical test Protocol) — cells must consume an injected *Protocol, never
+// construct their own. This boundary is enforced by archtest
+// SESSION-PROTOCOL-COMPOSITION-ROOT-01 (active; cell consumers begin
+// arriving in S4 of the plan above).
 package session

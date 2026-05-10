@@ -30,7 +30,11 @@ type MemStore struct {
 // passed positionally; Option pattern only becomes warranted at ≥ 3 deps or
 // when an accumulator (e.g. WithRevokeOn) appears.
 func NewMemStore(protocol *Protocol, clk clock.Clock) (*MemStore, error) {
-	if validation.IsNilInterface(protocol) {
+	// protocol is *Protocol (concrete pointer): bare-nil check suffices, no
+	// typed-nil interface risk. clk is the clock.Clock interface: typed-nil
+	// is possible (var c clock.Clock; c is nil but rv.Type() != nil), so
+	// validation.IsNilInterface is required there.
+	if protocol == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: NewMemStore requires non-nil Protocol")
 	}

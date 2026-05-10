@@ -58,6 +58,27 @@ func TestNewMemStore_NilProtocol_Rejected(t *testing.T) {
 	}
 }
 
+// TestNewMemStore_TypedNilProtocol_Rejected — pins the (*Protocol)(nil)
+// branch alongside bare-nil. *Protocol is a concrete pointer type, so this
+// case is functionally identical to bare-nil; the test guards against a
+// future refactor that swaps the bare-nil check for an interface check on
+// a typed-nil-incompatible helper, which would silently regress this path.
+func TestNewMemStore_TypedNilProtocol_Rejected(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(storetest.EpochAnchor())
+	var p *session.Protocol // typed-nil pointer
+	store, err := session.NewMemStore(p, fc)
+	if err == nil {
+		t.Fatal("expected error for typed-nil *Protocol, got nil")
+	}
+	if store != nil {
+		t.Fatalf("expected nil store on error, got %+v", store)
+	}
+	if !strings.Contains(err.Error(), "Protocol") {
+		t.Errorf("expected error to mention Protocol, got %q", err.Error())
+	}
+}
+
 // TestNewMemStore_NilClock_Rejected — body fail-fast on nil Clock.
 func TestNewMemStore_NilClock_Rejected(t *testing.T) {
 	t.Parallel()
