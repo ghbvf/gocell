@@ -267,6 +267,7 @@ runtime/auth/session/
 - PR267-FU-AUTHTEST-INTERNAL 🟡
 - PR250-F3 Event wire byte pinning 🟡
 - B2-C-13 L2 跨层 e2e 回归不足 🟡 P2（accesscore 接入完成后顺路）
+- **PR449-FU-SETUP-PG-E2E-REAL-WRITER-01** 🟡 P2（PR #449 review F6 carry-over）：S3+S5 落地的 `cmd/corebundle/setup_pg_integration_test.go` 用 `outbox.NoopWriter{}`，未实测 L2 outbox 原子性；S4 cell 切到 runtime Store 时同 PR 落 `TestSetupEndpoints_FirstRunFlow_PG_WithRealWriter`，使用 `adapterpg.NewOutboxWriter` + outbox migrations + relay worker，端到端验证 setup user 写入 + `user.created` 事件原子提交（同 tx 失败回滚）
 
 **联动激活**（033 B2.A 4 项重新组织）：
 - RBAC-ASSIGN-LEVEL-UPGRADE-01：rbacassign L0 → L1
@@ -307,6 +308,8 @@ runtime/state/cas/
 - PR280-FU1 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01 🟡 P2
 
 **为什么三件一起**：CAS Protocol 不能只抽不接入（违反"不留半成品"），两个消费点同时接入证明 typed Protocol 接口可用。
+
+**S3+S5 PR449-F7 维护责任**：S6 落 `runtime/state/cas` PG migration 时（如新增 `version` 列、CAS conflict 索引等），必须同步更新 `adapters/postgres/schema_guard.go::VerifyExpectedShape` 的 `required` / `forbidden` 列清单，让 phase0 fail-fast 同步覆盖新 schema 形态。该清单是 hardcode 列表（非声明式派生），是 ADR-credential §5.1.3 部署 playbook 的契约一部分。
 
 ---
 
@@ -351,6 +354,8 @@ adapters/postgres/
 - PR392-FU-AUDIT-CHAIN-WIRING 🟠 P2（auditcore framework 化后 onAuthFail 接入自然）
 
 **为什么单 cell 框架抽与接入合并**：auditcore 是 ledger 唯一消费者，拆"先框架后接入"两 PR 没收益（mem store 已是 storetest 实现），合并 PR 边界更清。
+
+**S3+S5 PR449-F7 维护责任**：S7 落 `adapters/postgres/migrations/02x_audit_entries.sql` 时，必须同步在 `adapters/postgres/schema_guard.go::VerifyExpectedShape` 的 `required` 列加入 `audit_entries.{prev_hash, idempotency_key, ...}` 等关键列，让 binary 启动期 fail-fast 拒绝缺列的 partial migration。
 
 ---
 
