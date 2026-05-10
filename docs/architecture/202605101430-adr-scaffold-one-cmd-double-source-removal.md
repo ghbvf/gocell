@@ -70,10 +70,54 @@ The following carve-outs are explicit and tracked in `docs/backlog.md`:
 - **`Codegen *bool` instead of yaml AST inspection.** Rejected. `*bool` would force every reader (`tools/codegen/contractgen`, `kernel/governance/rules_http`, `tools/generatedverify`) to handle nil — invasive churn for an internal default. AST inspection is local to the parser and zero-API-change.
 - **Leave the deferred 5 `kind=command` contracts as-is and tolerate archtest failures.** Rejected. Failures cascade into other governance rules; the explicit `codegen: false` line documents the K#06 → K#09 transition cleanly.
 
+## Round-4 amendment (2026-05-10): scaffold write funnel
+
+PR #442 round-4 closes the remaining safety + reliability gaps via a single funnel: `pkg/pathsafe.WritePlannedFiles` is now the only filesystem write entry for scaffold/codegen. All six scaffold writers (`ScaffoldCell` / `ScaffoldCellBundle` / `Generator.Scaffold` / `scaffoldSlice` / `scaffoldContract` / `scaffoldJourney`) collect a `[]pathsafe.PlannedFile` and delegate writing to `WritePlannedFiles`, which performs:
+
+1. **Containment** — `ContainPath` resolves every parent component through `filepath.EvalSymlinks` and rejects any path whose ancestors resolve outside `realRoot`. Symlink escape (`contracts/http/foo → /tmp/outside`) becomes unrepresentable; the previous round only protected `cell.go`/`cell.yaml`.
+2. **All-or-nothing conflict detection** — every `AbsPath` is `os.Stat`-checked before any write. A conflict on `contract.yaml` no longer leaves `cells/<id>/cell.go` half-written.
+3. **Atomic write with rollback** — on the first write/mkdir failure, every file written and every directory created during the call is removed; the original error is wrapped with the rollback outcome.
+
+Conflict errors use `errcode.ErrConflict` (HTTP 409) and put the failing path in `WithDetails(slog.String("path", …))` so 4xx CLI output and the public envelope both surface it (round-2 used `ErrValidationFailed` + `WithInternal`, hiding the path from CLI users).
+
+### AI-Hard archtest funnel
+
+`tools/archtest/scaffold_write_funnel_test.go` (`INVARIANT: SCAFFOLD-WRITE-FUNNEL-01`) statically forbids any direct `os.MkdirAll` / `os.WriteFile` / `os.Mkdir` / `os.Create` / `os.OpenFile` call inside `tools/codegen/cellgen/...`, `kernel/assembly/...`, and `cmd/gocell/app/scaffold*.go`. The only allowed implementer is `pkg/pathsafe/pathsafe.go`. Bypass requires (a) adding to the archtest's package allowlist **and** (b) re-introducing an `os.*` call — both visible in diff review. AI-rebust evaluation:
+
+- **Hard** under ai-collab.md `载体决策原则` #2 (typed function call as the violation defense). The funnel itself is the type-system contract; the archtest is the static defense layer that prevents accidental drift through new `os` imports.
+- Real-source AST scan via `scanner.EachFile` with concrete-package allowlist; not string-anchor or comment-exemption — meets the `Cannot be Soft` bar.
+- Residual escape: the archtest's package allowlist is a string list; adding a new scaffold subpackage requires updating that list. Documented in the archtest godoc as a known extension contract; mitigation tracked under `SCAFFOLD-WRITE-FUNNEL-HARD-UPGRADE` for future typed-Writer abstraction.
+
+### File permission alignment
+
+`pathsafe.PlannedFile.DirMode` defaults `0o755`, `FileMode` defaults `0o644` (helm/helm `pkg/chartutil/create.go` convention). Round-2 used `0o750`/`0o600`; the looser default unblocks multi-user CI environments. Secrets-bearing scaffolds (none currently) can still pass explicit `0o600` per file.
+
+### Kebab cell ID rejection
+
+Round-2 silently rewrote `--id=test-cell` to package `testcell` via `strings.ReplaceAll`. Round-4 rejects kebab on the `gocell scaffold cell` path (matching the existing `gocell scaffold slice` behavior at line 403). No silent-rewrite migration debt.
+
+### Closed by round-4
+
+| Round-2 ID | Round-4 outcome |
+|------------|-----------------|
+| F8/F9 SCAFFOLD-DRY-RUN-COMPLETE-INVENTORY | dry-run prints the full plan via `pathsafe.PlannedPaths` |
+| F10 SCAFFOLD-HELP-COMPLETE | help.go synced for `--with-{http,events,both,skip-generate}` + `scaffold assembly` |
+| F11 SCAFFOLD-KEBAB-MIGRATION-DOC | resolved by rejection at validation; no migration-doc needed |
+| F12 SCAFFOLD-FILE-PERMISSION-ALIGN | `PlannedFile` defaults `0o644`/`0o755` |
+| F13 SCAFFOLD-FAILURE-CLEANUP-RECOVERY | `WritePlannedFiles` rollback on failure |
+| F14 SCAFFOLD-GENERATOR-PURE-BYTES | `Generator.Scaffold` returns plan; `WritePlannedFiles` is the writer |
+| F16 SCAFFOLD-CONFLICT-ERRCODE-SEMANTICS | `ErrConflict` + `WithDetails(path)` |
+| F7 SCAFFOLD-AUTOGENERATE-TEST-COVERAGE | `TestRunScaffoldCell_Bundle_WithAutoGenerate` |
+| (new) SCAFFOLD-WRITE-FUNNEL-01 | Hard archtest |
+
+Carryover: `SCAFFOLD-INLINE-TEMPLATE-ARCHTEST` (F15, independent archtest theme) and `ASSEMBLY-RUN-RUNTIME-SMOKE` (F17, stub-content theme) remain backlog follow-ups.
+
 ## References
 
 - Roadmap: `docs/plans/202605011500-029-master-roadmap.md` #09
 - Plan: `/Users/shengming/.claude-ming/plans/docs-plans-202605011500-029-master-road-atomic-emerson.md`
+- Round-4 plan: `/Users/shengming/.claude-ming/plans/1-p1-scaffold-virtual-waffle.md`
 - ref: `zeromicro/go-zero` `tools/goctl/api/gogen/gen.go` (multi-file scaffold orchestrator pattern)
-- ref: `kubernetes-sigs/kubebuilder` `pkg/plugins/golang/v4/scaffolds/api.go` (scaffold flag conventions)
+- ref: `kubernetes-sigs/kubebuilder` `pkg/plugins/golang/v4/scaffolds/api.go` (scaffold flag conventions, path validation)
+- ref: `helm/helm` `pkg/chartutil/create.go` (0o644/0o755 file/dir mode default)
 - ref: `cmd/corebundle/run.go` (canonical three-layer composition root mirrored by the run.go template)
