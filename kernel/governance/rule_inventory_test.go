@@ -91,7 +91,6 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 	fset := token.NewFileSet()
 	files := loadGovernancePackageFiles(t, fset, ".")
 
-	constMap := scanPackageConstStrings(files)
 	funcIdx := buildFuncIndex(files)
 	roots := collectBFSRoots(funcIdx)
 
@@ -101,26 +100,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 			"public methods on Validator")
 	}
 
-	reachable := map[string]struct{}{}
-	visited := map[funcKey]struct{}{}
-	queue := append([]funcKey(nil), roots...)
-
-	for len(queue) > 0 {
-		key := queue[0]
-		queue = queue[1:]
-		if _, seen := visited[key]; seen {
-			continue
-		}
-		visited[key] = struct{}{}
-		fd, ok := funcIdx[key]
-		if !ok || fd.Body == nil {
-			continue
-		}
-		_, recvName := extractReceiverInfo(fd)
-		walkRule(t, fset, fd, recvName, key.recv, funcIdx, constMap, reachable, &queue)
-	}
-
-	actual := sortedStringKeys(reachable)
+	actual := runReachabilityBFS(t, fset, files, funcIdx, roots)
 	golden := goldenRuleIDs()
 
 	if diff := symmetricDiff(golden, actual); len(diff) > 0 {
@@ -389,6 +369,7 @@ func walkRule(
 	recvName, recvType string,
 	funcIdx map[funcKey]*ast.FuncDecl,
 	constMap map[string]string,
+	inferred map[*ast.CompositeLit]struct{},
 	reachable map[string]struct{},
 	queue *[]funcKey,
 ) {
@@ -396,6 +377,18 @@ func walkRule(
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
+			// Method-value enqueue: <recvName>.<methodName>. The receiver
+			// name check stays — guards against accidental enqueue of
+			// methods on unrelated types that happen to share a name.
+			// Free functions (recvName == "") cannot enqueue same-receiver
+			// methods, so they short-circuit here.
+			//
+			// INVARIANT: BFS does not currently follow `<param>.<method>`
+			// inside a free function (would require type-checking the
+			// param to resolve the method's receiver type). governance
+			// has no free function that takes *Validator/*DependencyChecker
+			// and chains into another method; if added, this branch must
+			// be extended via go/types or a structural fallback.
 			if recvName == "" {
 				return true
 			}
@@ -426,10 +419,22 @@ func walkRule(
 			if !ok {
 				return true
 			}
-			recvIdent, ok := sel.X.(*ast.Ident)
-			if !ok || recvName == "" || recvIdent.Name != recvName {
-				return true
-			}
+			// Emission detection: any selector whose method name is
+			// newResult / newScopedResult is treated as a rule emission
+			// site, regardless of the receiver expression. Within the
+			// governance package these names are uniquely defined on
+			// *locator (embedded into Validator and DependencyChecker),
+			// so any reachable .newResult / .newScopedResult call is a
+			// legitimate emission. Relaxing the receiver check here is
+			// what lets BFS see emissions inside free functions that take
+			// a *Validator parameter (where the enclosing recvName is "").
+			//
+			// INVARIANT: production code must keep newResult/newScopedResult
+			// method names unique to *locator. Adding a same-named method
+			// to an unrelated type would cause BFS to capture foreign
+			// emissions; static checking that constraint is impractical
+			// here, so rely on PR review when introducing new types in
+			// this package.
 			if !isResultEmitter(sel.Sel.Name) || len(x.Args) == 0 {
 				return true
 			}
@@ -438,7 +443,7 @@ func walkRule(
 				reachable[id] = struct{}{}
 			}
 		case *ast.CompositeLit:
-			if !looksLikeValidationResult(x) {
+			if !looksLikeValidationResult(x, inferred) {
 				return true
 			}
 			for _, el := range x.Elts {
@@ -467,25 +472,26 @@ func isResultEmitter(name string) bool {
 }
 
 // looksLikeValidationResult returns true when the composite literal is
-// either explicitly typed as ValidationResult / []ValidationResult or has
-// no Type at all (inferred from an outer slice/array context — covers the
-// nested literal in `[]ValidationResult{{Code: "X"}}`).
+// either explicitly typed as ValidationResult / []ValidationResult or its
+// Type is nil but a parent-context pre-pass (collectInferredVRLits) has
+// confirmed the literal is the inner element of a []ValidationResult /
+// [N]ValidationResult outer literal.
 //
-// Composite literals of unrelated named types (e.g. errcode.Error) return
-// false and are skipped, preventing accidental capture of foreign Code
-// fields.
+// Composite literals of unrelated named types (e.g. errcode.Error or a
+// future sibling struct with a Code field nested in []Other{{Code:"X"}})
+// return false and are skipped, preventing accidental capture of foreign
+// Code values into reachable.
 //
-// INVARIANT: ValidationResult is the only struct in this package that
-// carries a Code string field; the nil-Type fallback is safe under that
-// assumption. If a sibling struct with a Code field is added, this guard
-// must be tightened (e.g. by checking that the sibling KeyValueExprs match
-// ValidationResult's exact field set), or it will silently capture foreign
-// Code values into reachable and surface them as `+ <foreign>` in the
-// symmetric diff output.
-func looksLikeValidationResult(c *ast.CompositeLit) bool {
+// INVARIANT: only direct slice / array nesting is recognized by the
+// parent-context pre-pass. Map literals (`map[K]ValidationResult{}`),
+// pointer-to-slice, or doubly-nested containers are not covered;
+// governance currently never uses these patterns. If added, extend
+// collectInferredVRLits accordingly.
+func looksLikeValidationResult(c *ast.CompositeLit, inferred map[*ast.CompositeLit]struct{}) bool {
 	switch typ := c.Type.(type) {
 	case nil:
-		return true
+		_, ok := inferred[c]
+		return ok
 	case *ast.Ident:
 		return typ.Name == "ValidationResult"
 	case *ast.ArrayType:
@@ -496,6 +502,81 @@ func looksLikeValidationResult(c *ast.CompositeLit) bool {
 	default:
 		return false
 	}
+}
+
+// collectInferredVRLits identifies composite literals whose Type is nil
+// but which are the direct element of a []ValidationResult /
+// [N]ValidationResult outer literal — Go's type inference fills the
+// element type from the outer slice/array, but ast.Inspect cannot see
+// that parent context after the fact. This pre-pass records those inner
+// literals so looksLikeValidationResult can accept them precisely without
+// the previous over-permissive "any nil-Type literal" fallback.
+//
+// See the INVARIANT note on looksLikeValidationResult for unsupported
+// container shapes.
+func collectInferredVRLits(files []*ast.File) map[*ast.CompositeLit]struct{} {
+	inferred := map[*ast.CompositeLit]struct{}{}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			outer, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			arr, ok := outer.Type.(*ast.ArrayType)
+			if !ok {
+				return true
+			}
+			id, ok := arr.Elt.(*ast.Ident)
+			if !ok || id.Name != "ValidationResult" {
+				return true
+			}
+			for _, el := range outer.Elts {
+				if inner, ok := el.(*ast.CompositeLit); ok && inner.Type == nil {
+					inferred[inner] = struct{}{}
+				}
+			}
+			return true
+		})
+	}
+	return inferred
+}
+
+// runReachabilityBFS walks files starting from roots and returns the
+// sorted set of rule IDs found reachable. Both the production reachability
+// test and the fixture-driven negative tests share this routine — the
+// production test parses the real kernel/governance package, while
+// fixture tests (rule_inventory_bfs_test.go) synthesize source strings
+// to exercise BFS edge resolution at boundary cases.
+func runReachabilityBFS(
+	t *testing.T,
+	fset *token.FileSet,
+	files []*ast.File,
+	funcIdx map[funcKey]*ast.FuncDecl,
+	roots []funcKey,
+) []string {
+	t.Helper()
+
+	constMap := scanPackageConstStrings(files)
+	inferred := collectInferredVRLits(files)
+
+	reachable := map[string]struct{}{}
+	visited := map[funcKey]struct{}{}
+	queue := append([]funcKey(nil), roots...)
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+		if _, seen := visited[key]; seen {
+			continue
+		}
+		visited[key] = struct{}{}
+		fd, ok := funcIdx[key]
+		if !ok || fd.Body == nil {
+			continue
+		}
+		_, recvName := extractReceiverInfo(fd)
+		walkRule(t, fset, fd, recvName, key.recv, funcIdx, constMap, inferred, reachable, &queue)
+	}
+	return sortedStringKeys(reachable)
 }
 
 // resolveIDArg returns the rule-ID string from a newResult / newScopedResult
