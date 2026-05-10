@@ -286,7 +286,7 @@
 | B2-R-07 | **OTel tracer shutdown 无 deadline** — 现状: shutdown 无超时上限；修复: 加 ctx deadline | bug | P1/Cx1 | 🟡 | — | `adapters/otel/tracer.go:63,65` | backlog2 §3 B2-R-07 |
 | B2-R-08 | **OTel callback 需手工 unregister** — 现状: callback 注册后无自动 unregister；修复: 接 lifecycle hook | bug | P1/Cx3 | 🟡 | — | `adapters/otel/pool_collector.go:43,110` | backlog2 §3 B2-R-08 |
 | B2-R-09 | **OTel attr cache key 碰撞无上界** — 现状: attr cache 无 LRU/eviction；修复: 加 LRU + max size | bug | P1/Cx3 | 🟡 | — | `adapters/otel/metric_provider.go:84,96,101` | backlog2 §3 B2-R-09 |
-| B2-C-05 | **Auditappend actor 缺失降级不安全** — 现状: actor 缺失时静默降级；修复: fail-closed | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditappend/service.go:133` | backlog2 §4 B2-C-05 |
+| B2-C-05 | **Auditappend actor 缺失降级不安全** — 现状: actor 缺失时静默降级；修复: fail-closed | bug | P1/Cx2 | ✅ closed by fix/302 | 发布前安全收口 | `cells/auditcore/slices/auditappend/service.go` | backlog2 §4 B2-C-05 |
 | B2-C-09 | **Auditquery raw payload 直接回传** — 现状: handler 直接回传 raw payload 含敏感字段；修复: redact + slog level 区分 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditquery/handler.go:35,42` | backlog2 §4 B2-C-09 |
 | B2-C-14 | **Hash-chain 跨重启连续性测试缺** — 现状: 缺重启场景验证；修复: 加 testcontainer 重启回归 | test | P2/Cx2 | 🟡 | — | `cells/auditcore/slices/auditappend/service_test.go:110` | backlog2 §4 B2-C-14 |
 | B2-A-20 | **OTel simple tracer propagation 不对称** — 现状: 解析 vs 注入实现不对称；修复: 统一 propagator | bug | P2/Cx2 | 🟡 | — | `runtime/observability/tracing/tracer.go:77` | backlog2 §5.3 B2-A-20 |
