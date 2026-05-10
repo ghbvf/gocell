@@ -25,8 +25,10 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// sealedMarkerFiles lists the files that define the internalCell* types.
-// Extending a sealed marker requires adding the new file here.
+// sealedMarkerFiles 列出所有需扫的 sealed marker 实施文件。
+// **维护约定**：新增 sealed marker 包（如 PR-A23 引入的 kernel/outbox CellEmitter）
+// 必须同步追加到此列表，否则 archtest 静默跳过新文件。
+// Hard 升级路径见 backlog SEALED-MARKER-FILE-LIST-AUTODISCOVER-01。
 var sealedMarkerFiles = []struct {
 	rel    string // path relative to module root
 	prefix string // unexported type name prefix to scan
