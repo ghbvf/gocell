@@ -277,34 +277,58 @@ jobs:
       - name: Integration tests (testcontainers)
         env:
           GOCELL_TEST_DOCKER_REQUIRED: "1"
-        # cmd/corebundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
-        # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
-        # examples/ssobff carries the end-to-end walkthrough test (AUTH-SETUP-01
-        # regression guard — bootstrap credential flow, password-reset gate,
-        # change-password / refresh / logout contract shape). Without this job
-        # including it, the "integration" build tag was never compiled in CI.
-        # cells/accesscore/slices/identitymanage also has an integration test
-        # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
-        # runtime/bootstrap carries lifecycle_integration_test.go (HookStartStop
-        # ordering + LIFO rollback precision probes); without this path the
-        # //go:build integration file silently never compiles in CI.
-        # -coverpkg removed to match per-shard unit test profile semantics —
-        # each run only reports coverage for the packages it tested, avoiding
-        # per-file dilution in the merged Sonar view.
-        # tests/e2e/internal/... covers the require+clients helpers (pure
-        # unit tests); the smoke and encryption sub-packages are owned by
-        # the dedicated `e2e` job which runs the docker-compose harness.
-        # Earlier this scope used the broader ./tests/e2e/... — but
-        # require.Docker only skips when no docker socket is reachable, and
-        # GitHub runners always expose one for testcontainers, so smoke
-        # tests under ./tests/e2e ran here and blocked on a corebundle
-        # that never started in this job. Compile-time tag regressions
-        # for the smoke / encryption packages remain covered by the e2e
-        # job's `go test -tags=e2e ./tests/e2e/...`.
-        # tests/testutil owns shared testcontainer startup helpers; include it
-        # so new non-test helper code is covered by its own integration
-        # contract tests instead of relying on downstream packages.
-        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/testutil/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        # Auto-discover packages by build tag rather than maintaining a
+        # hardcoded list. Each prior addition to the explicit list (examples/
+        # ssobff, runtime/bootstrap, cells/accesscore/slices/identitymanage,
+        # tests/testutil) was a documented incident where new integration
+        # tests silently never ran in CI because nobody updated this step.
+        # archtest CI-INTEGRATION-DISCOVERY-01 prevents regression to a
+        # hardcoded list.
+        #
+        # Discovery: set-diff (comm -13) between the bare `go list` and
+        # `go list -tags=integration` outputs. A package appears in the diff
+        # iff enabling the tag changed its TestGoFiles / XTestGoFiles set —
+        # i.e., the package has at least one //go:build integration file.
+        # This precisely matches the integration coverage surface and avoids
+        # the over-broad `./...` (which would re-run every unit test under
+        # integration tags) and the under-broad single-tag listing (which
+        # lists all test-bearing packages, integration or not).
+        # comm requires sorted input (both files are sorted) and returns
+        # exit 0 even when files differ — unlike `diff`, which returns 1 on
+        # differences and would abort under `set -e -o pipefail`.
+        #
+        # Carve-outs (intentionally excluded):
+        #   - Compound-tag packages (`integration && otelcollector`,
+        #     `integration_cluster`) — covered by dedicated OTel smoke / vet
+        #     steps below; their constraints evaluate false under
+        #     {integration} alone.
+        #   - `e2e`-tagged files (tests/e2e/...) — owned by the dedicated
+        #     `e2e` job which runs the docker-compose harness. Pure-helper
+        #     unit tests under tests/e2e/internal/clients also run there.
+        #   - `examples_smoke` — covered by the dedicated examples-smoke job.
+        #
+        # Empty-set guard fails fast if discovery returns nothing —
+        # build-context misconfiguration could otherwise silently zero out
+        # the integration job into a no-op pass.
+        #
+        # -coverpkg remains omitted to match per-shard unit test profile
+        # semantics; each run reports coverage only for tested packages.
+        #
+        # ref: kubernetes/kubernetes hack/make-rules/test-integration.sh
+        # (kube::test::find_integration_test_pkgs uses go list -find for discovery)
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          fmt='{{.ImportPath}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}'
+          go list -find -f "$fmt" ./... | sort >"$tmp/bare.txt"
+          go list -tags=integration -find -f "$fmt" ./... | sort >"$tmp/tagged.txt"
+          pkgs=$(comm -13 "$tmp/bare.txt" "$tmp/tagged.txt" | awk -F'|' '{print $1}' | sort -u | tr '\n' ' ')
+          test -n "$pkgs" || { echo "FAIL: no integration packages discovered (build context or tag misconfiguration?)" >&2; exit 1; }
+          echo "Integration packages:"
+          echo "$pkgs" | tr ' ' '\n'
+          # shellcheck disable=SC2086
+          go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out $pkgs -count=1 -timeout 15m
 
       - name: OTel collector smoke
         env:
