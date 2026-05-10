@@ -320,15 +320,19 @@ jobs:
           set -euo pipefail
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
-          fmt='{{.ImportPath}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}'
-          go list -find -f "$fmt" ./... | sort >"$tmp/bare.txt"
-          go list -tags=integration -find -f "$fmt" ./... | sort >"$tmp/tagged.txt"
-          pkgs=$(comm -13 "$tmp/bare.txt" "$tmp/tagged.txt" | awk -F'|' '{print $1}' | sort -u | tr '\n' ' ')
-          test -n "$pkgs" || { echo "FAIL: no integration packages discovered (build context or tag misconfiguration?)" >&2; exit 1; }
-          echo "Integration packages:"
-          echo "$pkgs" | tr ' ' '\n'
-          # shellcheck disable=SC2086
-          go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out $pkgs -count=1 -timeout 15m
+          # Include .GoFiles alongside .TestGoFiles / .XTestGoFiles so that
+          # packages whose non-test //go:build integration files (e.g.,
+          # tests/testutil/rabbitmq_integration.go) gain visibility under the
+          # tag are also detected — defending against the comm -13 false-
+          # identity case where TestGoFiles alone happens to be unchanged.
+          list_fmt='{{.ImportPath}}|{{join .GoFiles ","}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}'
+          go list -find -f "$list_fmt" ./... | sort >"$tmp/bare.txt"
+          go list -tags=integration -find -f "$list_fmt" ./... | sort >"$tmp/tagged.txt"
+          mapfile -t pkgs < <(comm -13 "$tmp/bare.txt" "$tmp/tagged.txt" | awk -F'|' '{print $1}' | sort -u)
+          test "${#pkgs[@]}" -gt 0 || { echo "FAIL: no integration packages discovered (no //go:build integration files visible, or tag misconfiguration)" >&2; exit 1; }
+          printf 'Integration packages (%d):\n' "${#pkgs[@]}"
+          printf '  %s\n' "${pkgs[@]}"
+          go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out "${pkgs[@]}" -count=1 -timeout 15m
 
       - name: OTel collector smoke
         env:

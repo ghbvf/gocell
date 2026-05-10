@@ -78,6 +78,12 @@ func discoverPackagesUnderTag(rootDir, tag string) ([]string, error) {
 // returned for tag="integration". They belong to dedicated CI steps
 // (OTel smoke, integration_cluster vet, etc.) and must not be confused
 // with the main integration-test gate.
+//
+// Pre-Go-1.17 `// +build integration` files (without a paired `//go:build`
+// line) are out of scope: `constraint.IsGoBuild` recognizes only the
+// `//go:build` form, and the repo's Go floor (1.25, declared in go.mod)
+// makes the dual-line form unnecessary. The fixture meta-test documents
+// this exclusion explicitly.
 func fileHasExclusivelyTag(path, tag string) (bool, error) {
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
@@ -132,15 +138,15 @@ func readIntegrationTestStep(t *testing.T) workflowStep {
 
 // TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages asserts
 // the static walker finds a non-trivial number of packages with files gated
-// under -tags=integration. The lower bound (10) is a sanity check: the live
-// count is ~17 in develop. A bump-down here without coordinated CI surgery
-// signals the regression class CI-INTEGRATION-DISCOVERY-01 protects against.
+// under -tags=integration. The lower bound (15) is calibrated to the live
+// count (~17 in develop after the S0 orphan-package backfill); a count
+// below 15 signals regression past the pre-S0 hardcoded-list state.
 func TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages(t *testing.T) {
 	root := findModuleRoot(t)
 	pkgs, err := discoverPackagesUnderTag(root, "integration")
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(pkgs), 10,
-		"expected ≥10 integration packages discovered, got %d: %v", len(pkgs), pkgs)
+	assert.GreaterOrEqual(t, len(pkgs), 15,
+		"expected ≥15 integration packages discovered, got %d: %v", len(pkgs), pkgs)
 	t.Logf("discovered %d integration packages", len(pkgs))
 }
 
@@ -159,9 +165,10 @@ func TestArchtest_CIIntegrationDiscovery_DiscoversE2EPackages(t *testing.T) {
 
 // TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList asserts that the
 // integration-test job's main step uses `go list -tags=integration` for
-// package discovery, not a hardcoded glob list. The forbidden snippet is
-// the exact pre-S0 invocation header — its presence indicates a literal
-// revert of the discovery change.
+// package discovery and contains no deeper-than-root package globs (e.g.,
+// `./adapters/...`, `./cells/configcore/...`). The whole-module probe
+// `./...` (used inside the `go list` call itself) is allowed — it's the
+// deeper-segment globs that signal hardcoded-list regression.
 func TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList(t *testing.T) {
 	step := readIntegrationTestStep(t)
 	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
@@ -170,39 +177,50 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList(t *testing.T) {
 		"integration-test step must auto-discover via `go list -tags=integration ...`; "+
 			"see CI-INTEGRATION-DISCOVERY-01")
 
-	forbidden := "go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/..."
-	assert.NotContains(t, step.Run, forbidden,
-		"integration-test step must not hardcode package globs after `go test`; "+
-			"use $pkgs from `go list` discovery instead")
+	hardcodedGlobRE := regexp.MustCompile(`\./[a-z][a-zA-Z0-9_-]*/\.\.\.`)
+	matches := hardcodedGlobRE.FindAllString(step.Run, -1)
+	assert.Empty(t, matches,
+		"integration-test step must not hardcode package globs (found %v); "+
+			"use the discovered package set from `go list` instead", matches)
 }
 
 // TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery asserts that the
 // step fails fast if discovery returns zero packages. Without this guard, a
 // misconfigured build context (e.g., a tag typo) could silently zero out
 // the integration job and turn it into a no-op pass.
+//
+// Accepted forms (string scalar OR bash array):
+//   - test -n "$pkgs" || ...          (string discovery)
+//   - [ -z "$pkgs" ] && ...
+//   - test "${#pkgs[@]}" -gt 0 || ... (bash array discovery — current form)
+//   - [ "${#pkgs[@]}" -eq 0 ] && ...
 func TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery(t *testing.T) {
 	step := readIntegrationTestStep(t)
 	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
 
-	// Either `test -n "$pkgs"` or `[ -z "$pkgs" ]` form is acceptable.
-	guardRE := regexp.MustCompile(`(test\s+-n\s+["']?\$\{?pkgs\}?["']?|\[\s+-z\s+["']?\$\{?pkgs\}?["']?\s+\])`)
+	guardRE := regexp.MustCompile(
+		`(test\s+-n\s+["']?\$\{?pkgs\}?["']?` +
+			`|\[\s+-z\s+["']?\$\{?pkgs\}?["']?\s+\]` +
+			`|test\s+"\$\{#pkgs\[@\]\}"\s+-gt\s+0` +
+			`|\[\s+"\$\{#pkgs\[@\]\}"\s+-eq\s+0\s+\])`)
 	assert.True(t, guardRE.MatchString(step.Run),
-		"integration-test step must fail fast on empty discovery (e.g., `test -n \"$pkgs\" || exit 1`)")
+		"integration-test step must fail fast on empty discovery (e.g., `test -n \"$pkgs\"` "+
+			"or `test \"${#pkgs[@]}\" -gt 0`)")
 }
 
 // TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs
-// asserts the `go test` invocation passes $pkgs (or ${pkgs}) as the package
-// argument, not a literal glob. This is the symmetric positive check to
-// WorkflowUsesGoList: the discovery output must actually flow into the
-// test invocation.
+// asserts the `go test` invocation passes the discovered package set as
+// arguments — either `$pkgs` (string scalar) or `"${pkgs[@]}"` (bash array,
+// current form). This is the symmetric positive check to WorkflowUsesGoList:
+// discovery output must actually flow into the test invocation.
 func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs(t *testing.T) {
 	step := readIntegrationTestStep(t)
 	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
 
-	invokeRE := regexp.MustCompile(`go test\s+[^\n]*\$\{?pkgs\}?`)
+	invokeRE := regexp.MustCompile(`go test\s+[^\n]*(\$\{?pkgs\}?|"\$\{pkgs\[@\]\}")`)
 	assert.True(t, invokeRE.MatchString(step.Run),
-		"integration-test step's `go test` must run on $pkgs from discovery; "+
-			"got run block:\n%s", step.Run)
+		"integration-test step's `go test` must run on the discovered package set "+
+			"($pkgs or \"${pkgs[@]}\"); got run block:\n%s", step.Run)
 }
 
 // TestArchtest_CIIntegrationDiscovery_FixtureMetaTest verifies the
@@ -216,6 +234,8 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs(t
 //   - `//go:build integration_cluster`      → NOT discovered under "integration"
 //     (different tag name; covered by separate vet step)
 //   - `//go:build integration || e2e`       → discovered under both tags
+//   - pre-Go-1.17 `// +build integration` (no `//go:build` line) → NOT
+//     discovered (intentional; repo Go floor is 1.25)
 //
 // Each fixture lives in its own subdirectory so the directory-level
 // dedup logic in discoverPackagesUnderTag does not collapse multiple
@@ -235,6 +255,8 @@ func TestArchtest_CIIntegrationDiscovery_FixtureMetaTest(t *testing.T) {
 		{"no_tag", "package f\n", false, false},
 		{"cluster", "//go:build integration_cluster\n\npackage f\n", false, false},
 		{"or_form", "//go:build integration || e2e\n\npackage f\n", true, true},
+		// Pre-1.17 `// +build` form is silently undetected — documents the limitation.
+		{"old_plus_build", "// +build integration\n\npackage f\n", false, false},
 	}
 
 	root := t.TempDir()
