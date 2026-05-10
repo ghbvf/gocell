@@ -77,6 +77,8 @@ func TestWrapSubscriber_CommitFailedUsesFinalSettlementAndPreservesObservers(t *
 
 	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			// Literal: factory Ack() does not carry SettlementObservers; needed
+			// here to verify observer propagation through commit-failure path.
 			return outbox.HandleResult{
 				Disposition:         outbox.DispositionAck,
 				SettlementObservers: []outbox.SettlementObserver{existingObserver},
