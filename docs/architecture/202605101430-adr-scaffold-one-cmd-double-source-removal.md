@@ -60,7 +60,8 @@ The following carve-outs are explicit and tracked in `docs/backlog.md`:
 
 - `kernel/scaffold` removal is **not back-compat**. Any external caller (none in-tree) would break; project rule "不向后兼容" applies — no deprecation shim.
 - The 5 `kind=command` contracts now carry an explicit `codegen: false` line documenting the deferred status. When command-kind codegen is implemented, those lines become the migration switch.
-- archtest `SCAFFOLD-BUNDLE-MARKER-01` and `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01` lock the two K#09 invariants. Both archtests are AI-rebust **Soft** (string anchor on template content); the **Hard** enforcement is the parser funnel in `kernel/metadata.parseContract` via `contractYAMLHasKey` AST inspection — the archtests serve as belt-and-suspenders against template regression. Upgrade path tracked in `docs/backlog.md` as `SCAFFOLD-BUNDLE-ARCHTEST-HARDEN`.
+- `gocell scaffold contract` 的 inline draft skeleton 显式 emit `codegen: false`，与 5 个 deferred `kind=command` 合约对称：funnel 默认 true 适用于 ScaffoldCellBundle 产出的完整 contract（含 schemaRefs），standalone draft 写入显式 opt-out 直到 schemas 填充后再翻转。
+- archtest `SCAFFOLD-BUNDLE-MARKER-01` 与 `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01` 通过 `ScaffoldCellBundle` 产出的实际 cell.go / contract.yaml 做 AST 断言（real-source capture），AI-rebust **Medium**。Hard 防线（parser AST funnel `contractYAMLHasKey`）已在 `kernel/metadata.parseContract` 落实；archtest 是产出层冗余守。
 
 ## Alternatives considered
 

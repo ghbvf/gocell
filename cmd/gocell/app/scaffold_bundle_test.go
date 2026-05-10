@@ -53,6 +53,39 @@ func TestRunScaffoldCell_BundleProducesSliceAndContract(t *testing.T) {
 	}
 }
 
+// TestRunScaffoldCell_BundleWithAutoGenerate covers the autoGenerateCellBundleArtifacts
+// path: scaffold cell without --skip-generate must produce both cellgen and
+// contractgen output (cell_gen.go + types_gen.go) so the bundle is buildable
+// + testable end-to-end.
+func TestRunScaffoldCell_BundleWithAutoGenerate(t *testing.T) {
+	t.Parallel()
+
+	root := setupBundleTestProject(t)
+
+	args := []string{
+		"--id=autogencell",
+		"--type=core",
+		"--level=L2",
+		"--team=platform",
+		"--role=cell-owner",
+		"--with-http",
+	}
+	if err := scaffoldCell(root, args); err != nil {
+		t.Fatalf("scaffoldCell auto-generate: %v", err)
+	}
+
+	wants := []string{
+		"cells/autogencell/cell_gen.go",
+		"generated/contracts/http/autogencell/example/v1/types_gen.go",
+		"generated/contracts/http/autogencell/example/v1/iface_gen.go",
+	}
+	for _, rel := range wants {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("auto-generate missing %s: %v", rel, err)
+		}
+	}
+}
+
 func setupBundleTestProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

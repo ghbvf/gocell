@@ -53,10 +53,24 @@ func scaffoldAssembly(root string, args []string) error {
 	if *role == "" {
 		return fmt.Errorf("--role is required")
 	}
+	if err := validateScaffoldID(*id, "--id"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(*team, "--team"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(*role, "--role"); err != nil {
+		return err
+	}
 
 	cellList := splitAndTrim(*cells, ",")
 	if len(cellList) == 0 {
 		return fmt.Errorf("--cells must list at least one cell")
+	}
+	for _, c := range cellList {
+		if err := validateScaffoldID(c, "--cells[]"); err != nil {
+			return err
+		}
 	}
 
 	mod, err := readModule(root)

@@ -20,6 +20,35 @@ import (
 // by hack/verify-scaffold-reject.sh CI gate.
 const ErrScaffoldInvalidOpts errcode.Code = "ERR_SCAFFOLD_INVALID_OPTS"
 
+// validateScaffoldID rejects empty / "." / ".." / path separators in identifier
+// flags. Mirrors cellgen.validateScaffoldSpec for parity across all scaffold
+// CLI paths after kernel/scaffold removal in K#09.
+func validateScaffoldID(value, field string) error {
+	if value == "" {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold field is required",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+	}
+	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold field contains path traversal or separator",
+			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
+	}
+	return nil
+}
+
+// validateScaffoldText rejects newline / carriage-return / NUL in free-text
+// inputs (goal, team, role) so user values cannot inject extra YAML fields
+// or break scalar quoting in the inline templates.
+func validateScaffoldText(value, field string) error {
+	if strings.ContainsAny(value, "\n\r\x00") {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold field contains forbidden control characters",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+	}
+	return nil
+}
+
 // Shared flag name + usage for scaffold sub-commands. Constants avoid the
 // "magic string" duplication SonarCloud flags across scaffoldCell/Slice/
 // Contract/Journey/Assembly; also makes it safe to rename in one place if
@@ -269,6 +298,12 @@ func scaffoldSlice(root string, args []string) error {
 	if *cellID == "" {
 		return fmt.Errorf("--cell is required")
 	}
+	if err := validateScaffoldID(*id, "--id"); err != nil {
+		return err
+	}
+	if err := validateScaffoldID(*cellID, "--cell"); err != nil {
+		return err
+	}
 	if strings.Contains(*id, "-") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold slice: --id must not contain '-'; use no-dash identifier",
@@ -333,6 +368,15 @@ func scaffoldContract(root string, args []string) error {
 	}
 	if *owner == "" {
 		return fmt.Errorf("--owner is required")
+	}
+	if err := validateScaffoldID(*id, "--id"); err != nil {
+		return err
+	}
+	if err := validateScaffoldID(*kind, "--kind"); err != nil {
+		return err
+	}
+	if err := validateScaffoldID(*owner, "--owner"); err != nil {
+		return err
 	}
 
 	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
@@ -410,6 +454,20 @@ func scaffoldJourney(root string, args []string) error {
 	if len(cellList) == 0 {
 		return fmt.Errorf("scaffold journey: --cells must list at least one cell")
 	}
+	if err := validateScaffoldID(*id, "--id"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(*goal, "--goal"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(*team, "--team"); err != nil {
+		return err
+	}
+	for _, c := range cellList {
+		if err := validateScaffoldID(c, "--cells[]"); err != nil {
+			return err
+		}
+	}
 
 	// Normalize: ensure ID carries the J- prefix for both filename and yaml,
 	// then strip secondary dashes after the prefix (FMT-16 no-dash convention).
@@ -469,12 +527,17 @@ func renderInlineSliceYAML(id, cellID string) ([]byte, error) {
 }
 
 // renderInlineContractYAML returns contract.yaml content for an empty contract.
-// K#09 funnel: codegen field is omitted (parser defaults to true).
+// K#09 standalone contract scaffold: emits explicit codegen: false because
+// this draft has no schemaRefs yet; flip to true (or remove) once schemas are
+// filled in. Mirrors the 5 deferred kind=command contracts.
 var inlineContractYAMLTpl = template.Must(template.New("contract-yaml").Parse(`id: {{.ID}}
 kind: {{.Kind}}
 ownerCell: {{.OwnerCell}}
 consistencyLevel: L1
 lifecycle: draft
+# K#09 funnel: standalone scaffold draft has no schemaRefs yet, so opt out
+# of codegen explicitly. Flip to true (or remove) once schemas are filled in.
+codegen: false
 endpoints:
 {{- if eq .Kind "http"}}
   server: {{.OwnerCell}}

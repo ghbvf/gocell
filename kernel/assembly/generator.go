@@ -369,6 +369,34 @@ func writeAssemblyScaffoldFiles(dirs []string, rendered map[string][]byte) error
 	return nil
 }
 
+// validateAssemblyPathComponent rejects path traversal sequences and path
+// separators in identifier fields. It does NOT reject empty values; the
+// caller is responsible for empty-string guards so that error messages can
+// carry field-specific wording (e.g. "ID is required"). This is a kernel-side
+// mirror of cmd/gocell/app.validateScaffoldID — duplicated rather than shared
+// because kernel/ may not import cmd/. Rule must stay synchronized.
+func validateAssemblyPathComponent(value, field string) error {
+	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: field contains path traversal or separator",
+			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
+	}
+	return nil
+}
+
+// validateAssemblyTextComponent rejects newline / carriage-return / NUL in
+// free-text fields (OwnerTeam, OwnerRole) so user values cannot inject extra
+// YAML fields or break scalar quoting in the inline templates.
+// Kernel-side mirror of cmd/gocell/app.validateScaffoldText.
+func validateAssemblyTextComponent(value, field string) error {
+	if strings.ContainsAny(value, "\n\r\x00") {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: field contains forbidden control characters",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
+	}
+	return nil
+}
+
 // validateAssemblyScaffoldSpec checks required fields and verifies that every
 // cell in spec.Cells exists in the parsed project. Unknown cell IDs are
 // rejected with KindInvalid so `gocell scaffold assembly --cells=...` cannot
@@ -378,6 +406,9 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: ID is required")
 	}
+	if err := validateAssemblyPathComponent(spec.ID, "ID"); err != nil {
+		return err
+	}
 	if len(spec.Cells) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: at least one cell is required")
@@ -386,9 +417,15 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerTeam is required")
 	}
+	if err := validateAssemblyTextComponent(spec.OwnerTeam, "OwnerTeam"); err != nil {
+		return err
+	}
 	if spec.OwnerRole == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerRole is required")
+	}
+	if err := validateAssemblyTextComponent(spec.OwnerRole, "OwnerRole"); err != nil {
+		return err
 	}
 	switch spec.Deploy {
 	case "", "k8s", "compose", "binary":
@@ -399,6 +436,9 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 			errcode.WithInternal(fmt.Sprintf("deploy=%q", spec.Deploy)))
 	}
 	for _, cellID := range spec.Cells {
+		if err := validateAssemblyPathComponent(cellID, "Cells[]"); err != nil {
+			return err
+		}
 		if g.cells.Get(cellID) == nil {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"assembly scaffold: --cells references unknown cell",
