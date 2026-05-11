@@ -892,6 +892,18 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 			contractDir: "contracts/event/config/entry-deleted/v1",
 			wantCount:   0,
 		},
+		{
+			// Pins the defensive skip in FMT-21 (rules_misc_strict.go:569-571).
+			// Removing the `if c.Dir == "" { continue }` guard would cause an
+			// empty Dir to derive "contracts/" and fire on every contract — this
+			// test catches that regression. Empty Dir is unreachable in
+			// production parser loads, but the defensive skip is part of the
+			// rule's documented contract.
+			name:        "empty dir is skipped (defensive guard)",
+			contractID:  "http.x.y.v1",
+			contractDir: "",
+			wantCount:   0,
+		},
 	}
 
 	for _, tc := range tests {
