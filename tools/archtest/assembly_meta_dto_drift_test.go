@@ -46,8 +46,8 @@ func TestAssemblyMetaDTOCoverage(t *testing.T) {
 		if catalogExcludedAssemblyFields[fname] != "" {
 			continue
 		}
-		// Match on lowercase field name; AssemblySpec uses camelCase JSON tags
-		// while AssemblyMeta uses camelCase YAML tags — same wire-name.
+		// Match on yaml/json tag first segment value (both are camelCase; assume
+		// tag names are byte-equal across yaml and json declarations).
 		if _, ok := specFields[fname]; !ok {
 			t.Errorf("metadata.AssemblyMeta field %q has no AssemblySpec mapping; "+
 				"add it to AssemblySpec, update buildAssemblyEntity, or list it in "+

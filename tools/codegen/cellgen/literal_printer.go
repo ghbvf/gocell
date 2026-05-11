@@ -144,9 +144,8 @@ func renderFieldValue(fv reflect.Value, field reflect.StructField, indent string
 // for structs where all field values fit on one line (OwnerMeta, SchemaMeta).
 // For CellVerifyMeta (contains a slice), it renders multi-line.
 func renderInlineStruct(v reflect.Value, t reflect.Type, indent string) string {
-	typeName := t.Name()
-	// CellVerifyMeta has a Smoke []string — render multi-line.
-	if typeName == "CellVerifyMeta" {
+	// Use reflect.Type identity (not string name) to avoid silent breakage on rename.
+	if t == reflect.TypeOf(metadata.CellVerifyMeta{}) {
 		return renderCellVerifyMeta(v, indent)
 	}
 	// Single-line struct: OwnerMeta, SchemaMeta, L0DepMeta
@@ -155,6 +154,12 @@ func renderInlineStruct(v reflect.Value, t reflect.Type, indent string) string {
 
 // renderSingleLineStruct renders a struct as `metadata.TypeName{Field: "val", ...}`
 // on a single line. Used for OwnerMeta, SchemaMeta, L0DepMeta.
+//
+// Only reflect.String fields (including typed-string newtypes such as
+// GoIdentifier) are supported. Any other Kind panics via
+// panicregister.Approved to ensure future CellMeta field additions with
+// non-string types surface immediately at development time rather than
+// silently generating broken Go literals.
 func renderSingleLineStruct(v reflect.Value, t reflect.Type) string {
 	var parts []string
 	for i := 0; i < t.NumField(); i++ {
@@ -166,30 +171,93 @@ func renderSingleLineStruct(v reflect.Value, t reflect.Type) string {
 		if isZeroValue(fv) {
 			continue
 		}
+		if fv.Kind() != reflect.String {
+			panic(panicregister.Approved(
+				"cellgen-unsupported-singleline-field-type",
+				errcode.Assertion(
+					"cellgen literal printer: renderSingleLineStruct: unsupported field kind %s for field %s in %s;"+
+						" add a case in renderFieldValue and extend renderSingleLineStruct",
+					fv.Kind(), field.Name, t.Name()),
+			))
+		}
 		parts = append(parts, fmt.Sprintf("%s: %q", field.Name, fv.String()))
 	}
 	return fmt.Sprintf("metadata.%s{%s}", t.Name(), strings.Join(parts, ", "))
 }
 
-// renderCellVerifyMeta renders a CellVerifyMeta as a multi-line block:
+// renderCellVerifyMeta renders a CellVerifyMeta as a multi-line block.
+// It iterates all exported fields of CellVerifyMeta generically so that adding
+// a new field to the struct is automatically covered without updating this
+// function. Zero-value / empty-slice fields are omitted.
+//
+// Output format for a single leading []string field (e.g. Smoke):
 //
 //	metadata.CellVerifyMeta{Smoke: []string{
 //		"smoke.x.startup",
 //	}}
+//
+// Output format when multiple non-zero fields are present (expanded per field):
+//
+//	metadata.CellVerifyMeta{
+//		FieldA: []string{...},
+//		FieldB: "...",
+//	}
+//
+// The single-field compact style matches the existing cell_gen.go golden so that
+// regeneration produces 0 diff for the current CellVerifyMeta definition.
+// Unknown field types panic via panicregister.Approved (fail-loud).
 func renderCellVerifyMeta(v reflect.Value, indent string) string {
-	// CellVerifyMeta has only one field: Smoke []string.
-	smokeField := v.FieldByName("Smoke")
-	if smokeField.IsNil() || smokeField.Len() == 0 {
+	t := v.Type()
+
+	// Collect non-zero fields first.
+	type fieldEntry struct {
+		sf reflect.StructField
+		fv reflect.Value
+	}
+	var nonZero []fieldEntry
+	for i := 0; i < t.NumField(); i++ {
+		sf := t.Field(i)
+		if !sf.IsExported() {
+			continue
+		}
+		fv := v.Field(i)
+		if isZeroValue(fv) {
+			continue
+		}
+		nonZero = append(nonZero, fieldEntry{sf, fv})
+	}
+
+	if len(nonZero) == 0 {
 		return "metadata.CellVerifyMeta{}"
 	}
+
 	inner := indent + "\t"
+
+	// Compact single-field []string form: keeps backward-compatible output
+	// so regenerating cell_gen.go produces 0 diff for the current struct.
+	if len(nonZero) == 1 && nonZero[0].fv.Kind() == reflect.Slice &&
+		nonZero[0].fv.Type().Elem().Kind() == reflect.String {
+		sf := nonZero[0].sf
+		fv := nonZero[0].fv
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "metadata.CellVerifyMeta{%s: ", sf.Name)
+		sb.WriteString(renderStringSlice(fv, inner))
+		sb.WriteString("}")
+		return sb.String()
+	}
+
+	// General expanded form for multiple fields or non-[]string first field.
 	var sb strings.Builder
-	sb.WriteString("metadata.CellVerifyMeta{Smoke: []string{\n")
-	for i := 0; i < smokeField.Len(); i++ {
-		fmt.Fprintf(&sb, "%s%q,\n", inner, smokeField.Index(i).String())
+	sb.WriteString("metadata.CellVerifyMeta{\n")
+	for _, e := range nonZero {
+		sb.WriteString(inner)
+		sb.WriteString(e.sf.Name)
+		sb.WriteString(": ")
+		sb.WriteString(renderFieldValue(e.fv, e.sf, inner))
+		sb.WriteString(",\n")
 	}
 	sb.WriteString(indent)
-	sb.WriteString("}}")
+	sb.WriteString("}")
 	return sb.String()
 }
 

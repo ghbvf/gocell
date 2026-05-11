@@ -2,10 +2,12 @@ package cellgen
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -39,9 +41,14 @@ var _ = %s
 	return strings.TrimSuffix(rest, "\n")
 }
 
-// accesscoreGolden is the gofmt-normalized literal for the accesscore cell.
+// accesscoreGolden is the gofumpt-aligned literal for the accesscore cell.
 // It must match the `&metadata.CellMeta{...}` block in
-// cells/accesscore/cell_gen.go lines 24-35 after normalization.
+// cells/accesscore/cell_gen.go after normalization via fmtLiteral.
+//
+// NOTE: this string is compared through fmtLiteral (see TestRenderCellMetaLiteral_AccesscoreGreenBaseline),
+// so alignment here only needs to be valid Go, not exactly gofumpt-canonical.
+// If the renderer or gofumpt alignment changes, update this golden and the
+// corresponding cell_gen.go block in sync.
 var accesscoreGolden = strings.TrimSpace(`&metadata.CellMeta{
 	ID:               "accesscore",
 	Type:             "core",
@@ -71,10 +78,13 @@ func TestRenderCellMetaLiteral_AccesscoreGreenBaseline(t *testing.T) {
 
 	raw := RenderCellMetaLiteral(cell)
 	got := fmtLiteral(t, raw)
-	if got != accesscoreGolden {
+	// Normalize the golden through fmtLiteral as well so test expectations
+	// do not depend on hand-crafted gofumpt alignment.
+	want := fmtLiteral(t, accesscoreGolden)
+	if got != want {
 		t.Errorf("RenderCellMetaLiteral() GREEN baseline mismatch")
 		gotLines := strings.Split(got, "\n")
-		wantLines := strings.Split(accesscoreGolden, "\n")
+		wantLines := strings.Split(want, "\n")
 		for i := 0; i < len(gotLines) || i < len(wantLines); i++ {
 			g, w := "", ""
 			if i < len(gotLines) {
@@ -257,5 +267,80 @@ func TestRenderCellMetaLiteral_TableDriven(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// testStructWithBoolField is a local struct used only in
+// TestRenderSingleLineStruct_UnsupportedKindPanics to exercise the
+// unsupported-kind guard added in P1-①. It must not be a real metadata
+// type — we deliberately introduce a bool field so the kind-check fires.
+type testStructWithBoolField struct {
+	Name    string
+	Enabled bool
+}
+
+// TestRenderSingleLineStruct_UnsupportedKindPanics verifies that
+// renderSingleLineStruct panics with a panicregister.Approved payload
+// (carrying an *errcode.Error of kind Internal/Assertion) when a struct
+// field has a non-String reflect.Kind. This covers the fail-loud guard
+// added by P1-① so that future CellMeta field additions with non-string
+// types surface immediately at development time rather than silently
+// generating broken Go literals.
+func TestRenderSingleLineStruct_UnsupportedKindPanics(t *testing.T) {
+	v := reflect.ValueOf(testStructWithBoolField{Name: "x", Enabled: true})
+	tt := v.Type()
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		renderSingleLineStruct(v, tt)
+	}()
+
+	if recovered == nil {
+		t.Fatal("expected renderSingleLineStruct to panic for bool field, but it did not")
+	}
+
+	// The panic value must be an *errcode.Error (Assertion class).
+	asErr, ok := recovered.(*errcode.Error)
+	if !ok {
+		t.Fatalf("panic value is %T (%v), want *errcode.Error", recovered, recovered)
+	}
+	if asErr == nil {
+		t.Fatal("panic value is nil *errcode.Error")
+	}
+	// Assertion errors have Kind = KindInternal (zero value of the iota).
+	if asErr.Kind != errcode.KindInternal {
+		t.Errorf("panic error Kind = %v, want KindInternal", asErr.Kind)
+	}
+}
+
+// TestRenderFieldValue_UnsupportedKindPanics verifies that renderFieldValue
+// panics with a panicregister.Approved payload when given a reflect.Value
+// whose Kind is not handled (e.g. reflect.Bool). This confirms the
+// default-branch fail-loud path in renderFieldValue.
+func TestRenderFieldValue_UnsupportedKindPanics(t *testing.T) {
+	boolVal := reflect.ValueOf(true)
+	// Use a StructField with a recognizable name for the error message.
+	field := reflect.StructField{Name: "Enabled"}
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		renderFieldValue(boolVal, field, "\t")
+	}()
+
+	if recovered == nil {
+		t.Fatal("expected renderFieldValue to panic for bool kind, but it did not")
+	}
+
+	asErr, ok := recovered.(*errcode.Error)
+	if !ok {
+		t.Fatalf("panic value is %T (%v), want *errcode.Error", recovered, recovered)
+	}
+	if asErr == nil {
+		t.Fatal("panic value is nil *errcode.Error")
+	}
+	if asErr.Kind != errcode.KindInternal {
+		t.Errorf("panic error Kind = %v, want KindInternal", asErr.Kind)
 	}
 }
