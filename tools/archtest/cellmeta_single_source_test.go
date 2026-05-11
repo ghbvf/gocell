@@ -58,7 +58,7 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 	}
 	scope := scanner.DirsScope(root, []string{"kernel/cell"})
 	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
+		scanner.EachInSubtree[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
 			if forbidden[ts.Name.Name] {
 				t.Errorf(
 					"CELLMETA-SINGLE-SOURCE-01: %s declares type %s — "+
@@ -83,7 +83,7 @@ func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 	var found *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if found != nil || fd.Recv != nil || fd.Name == nil {
 			return
 		}
@@ -119,7 +119,7 @@ func TestCellmetaSingleSource03_MetadataInterfaceReturn(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 	var inventoryIface *ast.InterfaceType
-	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if inventoryIface != nil || ts.Name.Name != "CellInventory" {
 			return
 		}

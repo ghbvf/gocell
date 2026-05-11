@@ -113,7 +113,7 @@ func scanTestSleepDiscipline(fset *token.FileSet, file *ast.File, rel string) []
 	allowedLines := allowMarkerLines(fset, file)
 
 	var violations []string
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isTimeSleepCall(call) {
 			return
 		}

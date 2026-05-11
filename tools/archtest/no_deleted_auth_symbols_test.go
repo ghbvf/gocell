@@ -127,7 +127,7 @@ func scanDeletedAuthSymbols(path, rel string) ([]string, error) {
 	}
 
 	var violations []string
-	scanner.EachNode[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
 		if !deletedAuthSymbols[sel.Sel.Name] {
 			return
 		}
@@ -149,7 +149,7 @@ func scanDeletedAuthSymbols(path, rel string) ([]string, error) {
 	//
 	// For the runtime/auth package tests, check Ident nodes too.
 	if strings.Contains(rel, "runtime/auth/") {
-		scanner.EachNode[ast.Ident](f, func(ident *ast.Ident) {
+		scanner.EachInSubtree[ast.Ident](f, func(ident *ast.Ident) {
 			if !deletedAuthSymbols[ident.Name] {
 				return
 			}

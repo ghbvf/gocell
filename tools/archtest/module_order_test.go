@@ -54,7 +54,7 @@ func TestCorebundleGeneratedMainDoesNotInlineModules(t *testing.T) {
 
 	var buildAppCalls []token.Position
 	var runCorebundleCall *ast.CallExpr
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		ident, ok := call.Fun.(*ast.Ident)
 		if !ok {
 			return

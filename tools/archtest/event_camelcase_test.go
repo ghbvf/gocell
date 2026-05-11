@@ -141,7 +141,7 @@ func scanDTOJSONTagsCamelCase(root, path string) ([]string, error) {
 	rel = filepath.ToSlash(rel)
 
 	var violations []string
-	scanner.EachNode[ast.Field](f, func(field *ast.Field) {
+	scanner.EachInSubtree[ast.Field](f, func(field *ast.Field) {
 		if field.Tag == nil {
 			return
 		}

@@ -47,7 +47,7 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 	require.NotEmpty(t, allGoFiles, "no .go files found — module root may be wrong")
 
 	// AUTH-AUTHTEST-A: ban auth.Authenticated() *call expressions* in all .go
-	// files. Detection is AST-based (go/parser → scanner.EachNode[ast.CallExpr]
+	// files. Detection is AST-based (go/parser → scanner.EachInSubtree[ast.CallExpr]
 	// with SelectorExpr Fun X.auth, Sel.Authenticated) so that comments, doc strings,
 	// commit-message-style log messages, and unrelated identical strings inside
 	// string literals are not misclassified as violations. Exclude tools/archtest
@@ -220,7 +220,7 @@ func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	scannerPkg.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scannerPkg.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return

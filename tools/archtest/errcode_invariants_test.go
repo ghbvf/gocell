@@ -242,7 +242,7 @@ func findErrcodeErrorLiterals(path string) ([]int, error) {
 	}
 
 	var lines []int
-	scanner.EachNode[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
 		if !isErrcodeErrorType(lit.Type, errcodeNames) {
 			return
 		}
@@ -359,7 +359,7 @@ func scanErrcodeMessageAST(
 	info *types.Info,
 ) []string {
 	var out []string
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		callee, ok := resolveGatedCallee(call, info)
 		if !ok {
 			return
@@ -849,7 +849,7 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	var violations []errorFirstViolation
-	scanner.EachNode[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
 			return
 		}
@@ -910,7 +910,7 @@ func scanTypedNilGuardsInPackage(pkg *packages.Package, enforced map[string]stri
 
 func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.File, rel string) []errorFirstViolation {
 	var violations []errorFirstViolation
-	scanner.EachNode[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Body == nil || !isErrorFirstConstructor(fd) {
 			return
 		}
@@ -1026,7 +1026,7 @@ func nillableDependencyParams(info *types.Info, fd *ast.FuncDecl) []paramRef {
 // constructor's outer fail-fast contract.
 func hasNilGuard(body *ast.BlockStmt, paramName string, kind paramKind) bool {
 	found := false
-	scanner.EachNode[ast.IfStmt](body, func(ifStmt *ast.IfStmt) {
+	scanner.EachInSubtree[ast.IfStmt](body, func(ifStmt *ast.IfStmt) {
 		if found {
 			return
 		}
@@ -1123,7 +1123,7 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 	// Collect pos ranges of all FuncLit nodes so we can skip nodes inside them.
 	type posRange struct{ lo, hi token.Pos }
 	var funcLitRanges []posRange
-	scanner.EachNode[ast.FuncLit](body, func(fl *ast.FuncLit) {
+	scanner.EachInSubtree[ast.FuncLit](body, func(fl *ast.FuncLit) {
 		funcLitRanges = append(funcLitRanges, posRange{fl.Pos(), fl.End()})
 	})
 	inFuncLit := func(pos token.Pos) bool {
@@ -1136,7 +1136,7 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 	}
 
 	found := false
-	scanner.EachNode[ast.ReturnStmt](body, func(s *ast.ReturnStmt) {
+	scanner.EachInSubtree[ast.ReturnStmt](body, func(s *ast.ReturnStmt) {
 		if !found && !inFuncLit(s.Pos()) {
 			found = true
 		}
@@ -1144,7 +1144,7 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 	if found {
 		return true
 	}
-	scanner.EachNode[ast.AssignStmt](body, func(s *ast.AssignStmt) {
+	scanner.EachInSubtree[ast.AssignStmt](body, func(s *ast.AssignStmt) {
 		if found || inFuncLit(s.Pos()) {
 			return
 		}
@@ -1207,7 +1207,7 @@ func isErrorIdent(expr ast.Expr) bool {
 // would shadow the built-in; we treat them the same as the built-in to keep
 // the rule conservative — there is no production reason to shadow `panic`.
 func findPanicCalls(body *ast.BlockStmt, onPanic func(token.Pos)) {
-	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
 		ident, ok := call.Fun.(*ast.Ident)
 		if !ok {
 			return
@@ -1315,7 +1315,7 @@ func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []stri
 	}
 
 	var out []string
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "WithDetails" {
 			return
@@ -1481,11 +1481,11 @@ func scanExportedErrorNewAST(
 	info *types.Info,
 ) []string {
 	var out []string
-	scanner.EachNode[ast.GenDecl](file, func(gen *ast.GenDecl) {
+	scanner.EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
 		if gen.Tok != token.VAR {
 			return
 		}
-		scanner.EachNode[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
+		scanner.EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
 			// A ValueSpec with N names and 1 value is a multi-assign from a
 			// single function call; errors.New only returns one value, so
 			// such a form would not type-check. We still iterate Values

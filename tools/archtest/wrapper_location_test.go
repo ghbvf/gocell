@@ -135,7 +135,7 @@ func scanWrapperViolations(root string, resolver *typeseval.Resolver) []wrapperV
 				continue
 			}
 			relSlash := filepath.ToSlash(rel)
-			scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				canon := canonicalCalledFunc(pkg.TypesInfo, call)
 				if !wrapperFunctionsCanonical[canon] {
 					return

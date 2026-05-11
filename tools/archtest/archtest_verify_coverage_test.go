@@ -98,6 +98,15 @@ func TestArchtestVerifyCoverage01(t *testing.T) {
 //
 // Both go through the script's shard_assignment() bash function — the same
 // function run_shard() uses — so this is single-source algorithm verification.
+//
+// K choice: K=4 is sufficient because the modulo partition (NR % SHARD_COUNT
+// == s) is K-independent — exactly-once cover-and-disjoint follows from the
+// pigeonhole property of modular arithmetic, not from any specific shard
+// count. Using K=4 keeps this test under 4×bash-invocation overhead while
+// still proving the algorithm holds at every K. The CI K=16 path is a
+// separate concern (per-shard RSS budget under the GHA 2-core 7GB runner,
+// see ADR 202605120000) and is exercised by verify-archtest.sh at runtime,
+// not by this conformance test.
 func assertShardPartitionExactlyOnce(t *testing.T, repoRoot string, scriptSet map[string]struct{}, k int) {
 	t.Helper()
 	assignmentOf := map[string]int{} // test name -> shard index (-1 = duplicate)
@@ -225,7 +234,7 @@ func scanArchtestTopLevelTestNames(t *testing.T, repoRoot string) map[string]str
 		if !strings.HasSuffix(fc.Rel, "_test.go") {
 			return
 		}
-		scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
+		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 			if fd.Recv != nil { // method — not a Test* function
 				return
 			}

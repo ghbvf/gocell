@@ -187,11 +187,11 @@ func TestScanQueryParamFile_ParseErrorFailsClosed(t *testing.T) {
 
 func collectContractSpecIDs(file *ast.File) map[string]string {
 	specs := map[string]string{}
-	scanner.EachNode[ast.GenDecl](file, func(gen *ast.GenDecl) {
+	scanner.EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
 		if gen.Tok != token.VAR {
 			return
 		}
-		scanner.EachNode[ast.ValueSpec](gen, func(valueSpec *ast.ValueSpec) {
+		scanner.EachInSubtree[ast.ValueSpec](gen, func(valueSpec *ast.ValueSpec) {
 			collectValueSpecContractIDs(specs, valueSpec)
 		})
 	})
@@ -211,7 +211,7 @@ func collectValueSpecContractIDs(out map[string]string, spec *ast.ValueSpec) {
 
 func collectRouteBindings(fset *token.FileSet, file *ast.File, rel string, specIDs map[string]string) []routeQueryBinding {
 	var bindings []routeQueryBinding
-	scanner.EachNode[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
 		if !isAuthRouteLiteral(lit) {
 			return
 		}
@@ -226,7 +226,7 @@ func collectRouteBindings(fset *token.FileSet, file *ast.File, rel string, specI
 func routeBindingFromLiteral(fset *token.FileSet, lit *ast.CompositeLit, rel string, specIDs map[string]string) (routeQueryBinding, bool) {
 	var contractID string
 	var funcs []string
-	scanner.EachNode[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
+	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok {
 			return
@@ -251,7 +251,7 @@ func routeBindingFromLiteral(fset *token.FileSet, lit *ast.CompositeLit, rel str
 
 func collectQueryParamUses(file *ast.File, rel string) map[string]map[string]struct{} {
 	out := map[string]map[string]struct{}{}
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -265,7 +265,7 @@ func collectQueryParamUses(file *ast.File, rel string) map[string]map[string]str
 
 func collectFuncQueryParams(body *ast.BlockStmt) map[string]struct{} {
 	params := map[string]struct{}{}
-	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
 		if queryParam, ok := queryGetParam(call); ok {
 			params[queryParam] = struct{}{}
 		}
@@ -364,7 +364,7 @@ func contractSpecIDFromExpr(expr ast.Expr) (string, bool) {
 	}
 	var result string
 	var found bool
-	scanner.EachNode[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
+	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 		if found {
 			return
 		}

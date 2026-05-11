@@ -182,7 +182,7 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 			if !scaffoldFunnelPred(rel) {
 				continue
 			}
-			scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				name := canonicalOSWriteCall(pkg.TypesInfo, call)
 				if name == "" {
 					return

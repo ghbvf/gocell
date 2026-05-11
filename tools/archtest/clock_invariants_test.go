@@ -170,7 +170,7 @@ func collectClockRequiredCtors(pkgs []*packages.Package) map[string]clockRequire
 func callsWithClock(parent *ast.CallExpr, info *types.Info, withClockFullName string) bool {
 	found := false
 	for _, arg := range parent.Args {
-		scanner.EachNode[ast.CallExpr](arg, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](arg, func(call *ast.CallExpr) {
 			if found {
 				return
 			}
@@ -223,7 +223,7 @@ func scanClockCallsiteAST(
 	var out []string
 	seen := map[string]bool{}
 
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		callee := resolvedFunc(call.Fun, info)
 		if callee == nil {
 			return
@@ -666,13 +666,13 @@ func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info 
 				"parameter and validate via clock.MustHaveClock", rel, line))
 	}
 
-	scanner.EachNode[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
 		// Standard form: clock.Real / c.Real (alias).
 		if matchedKernelClockReal(info, e.Sel) {
 			record(e)
 		}
 	})
-	scanner.EachNode[ast.Ident](file, func(e *ast.Ident) {
+	scanner.EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
 		// Dot-import form: `import . "…/kernel/clock"; Real()`.
 		if matchedKernelClockReal(info, e) {
 			record(e)
@@ -871,7 +871,7 @@ func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, 
 	var out []string
 	seen := map[string]bool{}
 
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Reset" {
 			return
@@ -1204,7 +1204,7 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 			rel, line, name, forbiddenTimeFns[name]))
 	}
 
-	scanner.EachNode[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
 		// Standard form: time.Now, t.Now (alias), pkg.Now (any pkg).
 		// Type info on .Sel resolves the actual function regardless of
 		// the receiver identifier name.
@@ -1212,7 +1212,7 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 			record(e, name)
 		}
 	})
-	scanner.EachNode[ast.Ident](file, func(e *ast.Ident) {
+	scanner.EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
 		// Dot-import form: `import . "time"; Now()`. The Ident is the
 		// call function reference itself — no SelectorExpr surrounds it.
 		if name, ok := matchedTimeFn(info, e); ok {

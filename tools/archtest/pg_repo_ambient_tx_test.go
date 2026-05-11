@@ -163,14 +163,14 @@ func scanPGRepoFileTyped(
 	info *types.Info,
 ) []string {
 	var out []string
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || fn.Body == nil {
 			return
 		}
 		if !isPGWriteMethod(fn.Name.Name) {
 			return
 		}
-		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return

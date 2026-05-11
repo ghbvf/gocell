@@ -43,6 +43,11 @@
 - 名字 convention → sealed interface / receiver type 识别
 - hand-crafted fixture → real source AST capture
 
+
+**Hard 范本（已 ship 案例）**：
+
+- **typed function choice for walk depth** — 当一个 API 同时承担多种语义（深度选择 / 早返模式 / 容器范围等）时，拆成多个 typed function 让"选错语义 = 选错 API 名"成为可检测层级。范例：`scanner.EachInSubtree[N]`（recursive，遍历以该节点为根的全树）vs `scanner.EachInChildren[N]`（depth=1，仅直接子节点）拆分——两个函数名语义不重叠。**保障层次分两级**：(1) **fixture-level**：`eachnode_test.go` 中 T1+T2 RED fixture 确保选错深度在测试中暴露；SCANNER-FRAMEWORK-USAGE-01 的 companion-index 精度测试也拦截；(2) **compile-level**：N 类型选错（接口而非 `*S`，例如 `EachInSubtree[ast.Expr]`）直接编译失败。注意：两个函数名都能 build，深度选错是 fixture-level 保障，不是 compile error；N 类型选错才是真正的 compile error。（PR #553/460，charter `docs/plans/202605101300-ai-first-governance-charter.md` §4 Wave 2 PR-Φ-HARD-EACHNODE-WALKDEPTH-01）
+
 ## archtest 文件命名
 
 - 单条独立规则 → `{rule}_test.go`

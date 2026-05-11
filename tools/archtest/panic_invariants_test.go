@@ -45,7 +45,7 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "Any" {
 				return
@@ -322,7 +322,7 @@ func scanPanicRegisteredAST(
 		return name
 	}
 
-	scanner.EachNode[ast.FuncDecl](file, func(node *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(node *ast.FuncDecl) {
 		if node.Body == nil {
 			return
 		}
@@ -337,7 +337,7 @@ func scanPanicRegisteredAST(
 			},
 		})
 	})
-	scanner.EachNode[ast.FuncLit](file, func(node *ast.FuncLit) {
+	scanner.EachInSubtree[ast.FuncLit](file, func(node *ast.FuncLit) {
 		if node.Body == nil {
 			return
 		}
@@ -355,7 +355,7 @@ func scanPanicRegisteredAST(
 
 	// Phase 2: for each panic() call, find the innermost enclosing scope.
 	var violations []panicRegisteredViolation
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isPanicCallExpr(call) {
 			return
 		}

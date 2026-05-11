@@ -113,7 +113,7 @@ func isRedactErrorCall(expr ast.Expr, redactionLocal string) bool {
 func fileHasNonImplRecordError(file *ast.File) bool {
 	implRanges := collectRecordErrorImplRanges(file)
 	found := false
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
 			return
@@ -131,7 +131,7 @@ func fileHasNonImplRecordError(file *ast.File) bool {
 // are start positions, odd indices are end positions.
 func collectRecordErrorImplRanges(file *ast.File) []token.Pos {
 	var ranges []token.Pos
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil || fn.Recv == nil || fn.Name == nil {
 			return
 		}
@@ -158,7 +158,7 @@ func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []
 	redactionLocal := redactionLocalName(file)
 
 	var out []string
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
 			return

@@ -99,7 +99,7 @@ func TestProdDurationConst(t *testing.T) {
 // inspects every sub-expression. An expression that (a) has static type
 // time.Duration and (b) whose subtree contains a BasicLit is a violation.
 //
-// Implementation: scanner.EachNode is preorder-only (no proceed-bool), so
+// Implementation: scanner.EachInSubtree is preorder-only (no proceed-bool), so
 // we collect candidate hits across every concrete Expr kind that
 // isLiteralDurationExpr can recognize standalone (BinaryExpr/CallExpr/
 // UnaryExpr/ParenExpr/BasicLit), sort by start position, and drop any hit
@@ -135,11 +135,11 @@ func scanProdDurationAST(
 		// recognize: BasicLit (var x time.Duration = 5), BinaryExpr
 		// (5*time.Second), CallExpr (time.Duration(5)), UnaryExpr
 		// (-5*time.Second), ParenExpr ((5*time.Second)).
-		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
-		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
-		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
-		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
-		scanner.EachNode[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
+		scanner.EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		scanner.EachInSubtree[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
 
 		// Outer-wins dedup: sort by start ascending, then drop any hit fully
 		// contained inside the most recent retained hit's [pos,end] range.
@@ -160,20 +160,18 @@ func scanProdDurationAST(
 		}
 	}
 
-	// Paired-index iteration: only top-level Decls are scanned; nested decls
-	// inside a func body / spec value belong to other passes.
-	for i := range file.Decls {
-		decl := file.Decls[i]
-		if gd, ok := decl.(*ast.GenDecl); ok {
-			if gd.Tok == token.CONST {
-				// Package-level const blocks are the unique compliant position — skip.
-				continue
-			}
-			checkExpr(gd)
-			continue
+	// Only top-level Decls are scanned; nested decls inside a func body /
+	// spec value belong to other passes.
+	scanner.EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
+		if gd.Tok == token.CONST {
+			// Package-level const blocks are the unique compliant position — skip.
+			return
 		}
-		checkExpr(decl)
-	}
+		checkExpr(gd)
+	})
+	scanner.EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		checkExpr(fd)
+	})
 
 	return violations
 }
@@ -542,10 +540,10 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 				hits = append(hits, hit{pos: expr.Pos(), end: expr.End()})
 			}
 		}
-		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
-		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
-		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
-		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		scanner.EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
 		sort.Slice(hits, func(i, j int) bool {
 			if hits[i].pos != hits[j].pos {
 				return hits[i].pos < hits[j].pos
@@ -565,21 +563,18 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	}
 
 	count := 0
-	// Paired-index iteration over file.Decls: avoids path B's `for _, X :=`
-	// + type-dispatch pattern. Semantics unchanged — only top-level decls
-	// contribute to the count (nested decls inside func bodies do not).
-	for i := range f.Decls {
-		decl := f.Decls[i]
-		if gd, ok := decl.(*ast.GenDecl); ok {
-			if gd.Tok == token.CONST {
-				// Package-level const blocks are the unique compliant position — skip.
-				continue
-			}
-			count += countInRoot(gd)
-			continue
+	// Only top-level decls contribute to the count (nested decls inside func
+	// bodies do not).
+	scanner.EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if gd.Tok == token.CONST {
+			// Package-level const blocks are the unique compliant position — skip.
+			return
 		}
-		count += countInRoot(decl)
-	}
+		count += countInRoot(gd)
+	})
+	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		count += countInRoot(fd)
+	})
 	return count
 }
 

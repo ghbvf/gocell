@@ -86,9 +86,9 @@ func TestRedisConstructorsRequireKeyNamespace(t *testing.T) {
 
 func findRedisConstructorDecl(file *ast.File, name string) *ast.FuncDecl {
 	var found *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if found != nil {
-			return // first-match wins; EachNode has no break
+			return // first-match wins; EachInSubtree has no break
 		}
 		if fn.Recv != nil {
 			// Only top-level (non-method) functions are constructors.
@@ -167,36 +167,36 @@ func assertConstructorValidatesNamespace(t *testing.T, spec redisConstructorSpec
 	}
 	leading := fn.Body.List[:limit]
 
+	// Synthetic BlockStmt wrapping the leading window: EachInChildren[ast.IfStmt]
+	// iterates only direct IfStmt children, scoped to the leading slice so
+	// Validate calls beyond the limit window are not matched.
+	syntheticLeading := &ast.BlockStmt{List: leading}
 	found := false
-	// Paired index iteration over a sub-slice (leading): EachNode[ast.IfStmt]
-	// would over-match IfStmts deeper in fn.Body beyond the leading window.
-	for i := range leading {
-		ifStmt, ok := leading[i].(*ast.IfStmt)
-		if !ok {
-			continue
+	scanner.EachInChildren[ast.IfStmt](syntheticLeading, func(ifStmt *ast.IfStmt) {
+		if found {
+			return
 		}
 		if ifStmt.Init == nil {
-			continue
+			return
 		}
 		assign, ok := ifStmt.Init.(*ast.AssignStmt)
 		if !ok || len(assign.Rhs) != 1 {
-			continue
+			return
 		}
 		call, ok := assign.Rhs[0].(*ast.CallExpr)
 		if !ok {
-			continue
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Validate" {
-			continue
+			return
 		}
 		recv, ok := sel.X.(*ast.Ident)
 		if !ok || recv.Name != "ns" {
-			continue
+			return
 		}
 		found = true
-		break
-	}
+	})
 	require.True(t, found,
 		"%s.%s: must call `ns.Validate()` within the first %d body statements "+
 			"so invalid namespaces fail-fast before any field assignment "+

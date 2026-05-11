@@ -384,7 +384,7 @@ func extractAdapterReturnStatuses(filePath string) ([]adapterReturn, error) {
 	}
 
 	var results []adapterReturn
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if !isAdapterMethod(fn) {
 			return
 		}
@@ -422,25 +422,20 @@ func returnTypeEndsInResponseObject(expr ast.Expr) bool {
 	return false
 }
 
-// walkReturns walks all ReturnStmt in fn and for each CompositeLit whose type
-// name matches responseStructPattern, calls emit with the extracted return info.
+// walkReturns walks all ReturnStmt in fn and for each top-level CompositeLit
+// whose type name matches responseStructPattern, calls emit with the extracted
+// return info. EachInChildren visits only direct children of ret so nested
+// composites (e.g. `return Foo{X: Bar{}}`) are not over-matched.
 func walkReturns(fn *ast.FuncDecl, fset *token.FileSet, emit func(adapterReturn)) {
-	scanner.EachNode[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
-		// Paired index iteration: only top-level CompositeLit return values
-		// are adapter Response struct candidates. EachNode[ast.CompositeLit]
-		// would over-match nested composites (e.g. `return Foo{X: Bar{}}`).
-		for i := range ret.Results {
-			cl, ok := ret.Results[i].(*ast.CompositeLit)
-			if !ok {
-				continue
-			}
+	scanner.EachInSubtree[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
+		scanner.EachInChildren[ast.CompositeLit](ret, func(cl *ast.CompositeLit) {
 			typeName := compositeLitTypeName(cl)
 			if typeName == "" {
-				continue
+				return
 			}
 			m := responseStructPattern.FindStringSubmatch(typeName)
 			if m == nil {
-				continue
+				return
 			}
 			status, _ := strconv.Atoi(m[1])
 			pos := fset.Position(cl.Pos())
@@ -450,7 +445,7 @@ func walkReturns(fn *ast.FuncDecl, fset *token.FileSet, emit func(adapterReturn)
 				Status:   status,
 				TypeName: typeName,
 			})
-		}
+		})
 	})
 }
 

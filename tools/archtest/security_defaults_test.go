@@ -183,7 +183,7 @@ func findWithListenerNilAuthChain(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		// Must be a SelectorExpr "bootstrap.WithListener" or plain "WithListener".
 		switch fn := call.Fun.(type) {
 		case *ast.SelectorExpr:
@@ -249,7 +249,7 @@ func findInternalListenerAuthNoneChain(path string) ([]int, error) {
 	}
 	var lines []int
 	facts := collectAuthNoneChainFacts(f)
-	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		if !isWithListenerCall(call) || len(call.Args) < 3 {
 			return
 		}
@@ -271,11 +271,11 @@ func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
 		vars:  make(map[string]bool),
 		funcs: make(map[string]bool),
 	}
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
-		scanner.EachNode[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
+		scanner.EachInSubtree[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
 			for _, result := range ret.Results {
 				if chainLiteralContainsAuthNone(result) {
 					facts.funcs[fn.Name.Name] = true
@@ -283,17 +283,17 @@ func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
 			}
 		})
 	})
-	scanner.EachNode[ast.ValueSpec](f, func(stmt *ast.ValueSpec) {
+	scanner.EachInSubtree[ast.ValueSpec](f, func(stmt *ast.ValueSpec) {
 		for i, name := range stmt.Names {
 			if authNoneRHSAt(stmt.Values, i) {
 				facts.vars[name.Name] = true
 			}
 		}
 	})
-	scanner.EachNode[ast.AssignStmt](f, func(stmt *ast.AssignStmt) {
-		for i := range stmt.Lhs {
-			id, ok := stmt.Lhs[i].(*ast.Ident)
-			if !ok {
+	scanner.EachInSubtree[ast.AssignStmt](f, func(stmt *ast.AssignStmt) {
+		for i, lhsExpr := range stmt.Lhs {
+			id := exprToIdent(lhsExpr)
+			if id == nil {
 				continue
 			}
 			if authNoneRHSAt(stmt.Rhs, i) {
@@ -315,6 +315,12 @@ func authNoneRHSAt(rhs []ast.Expr, idx int) bool {
 		return false
 	}
 	return chainLiteralContainsAuthNone(rhs[idx])
+}
+
+// exprToIdent casts e to *ast.Ident, returning nil if not an identifier.
+func exprToIdent(e ast.Expr) *ast.Ident {
+	id, _ := e.(*ast.Ident)
+	return id
 }
 
 func chainExprContainsAuthNone(expr ast.Expr, facts authNoneChainFacts) bool {
@@ -466,7 +472,7 @@ func secutilCallsValidateTLSEndpoint(src string) bool {
 		return false
 	}
 	found := false
-	scanner.EachNode[ast.CallExpr](f, func(ce *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(ce *ast.CallExpr) {
 		if found {
 			return
 		}
@@ -548,7 +554,7 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	scanner.EachNode[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
+	scanner.EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
 		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
 			return
 		}
@@ -827,7 +833,7 @@ func findUpgradeConfigWithoutAuthenticator(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		if !isUpgradeConfigType(cl.Type) {
 			return
 		}
@@ -850,21 +856,23 @@ func isUpgradeConfigType(expr ast.Expr) bool {
 }
 
 // hasKey reports whether cl has a TOP-LEVEL key field equal to key.
-// Direct-child paired-index iteration is intentional: scanner.EachNode would
-// recurse into nested composites (e.g. a `Other: Sub{Authenticator: ...}`
-// element), which would falsely report the outer literal as having the key.
+// EachInChildren visits only direct children of cl, so nested composites
+// (e.g. `Other: Sub{Authenticator: ...}`) are not reached.
 func hasKey(cl *ast.CompositeLit, key string) bool {
-	for i := range cl.Elts {
-		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
-		if !ok {
-			continue
+	// done/found sentinel: EachInChildren has no early-exit return value;
+	// the found flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
+	found := false
+	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+		if found {
+			return
 		}
 		ident, ok := kv.Key.(*ast.Ident)
 		if ok && ident.Name == key {
-			return true
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 func testSEC08NoLegacyBroadcastCall(t *testing.T, root string) {
@@ -908,7 +916,7 @@ func findLegacyBroadcastCalls(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
-	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return
@@ -951,14 +959,14 @@ func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
 	require.NoError(t, err)
 
 	var violations []string
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
 		if allowedConnsMutationFuncs[fn.Name.Name] {
 			return
 		}
-		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			ident, ok := call.Fun.(*ast.Ident)
 			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
 				return
@@ -1018,14 +1026,14 @@ func (h *Hub) removeConnLocked(id string) {
 	require.NoError(t, err)
 
 	var found []string
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
 		if allowedConnsMutationFuncs[fn.Name.Name] {
 			return
 		}
-		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			ident, ok := call.Fun.(*ast.Ident)
 			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
 				return
@@ -1073,14 +1081,14 @@ func (h *Hub) shutdown() {
 	require.NoError(t, err)
 
 	var found []string
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
 		if allowedConnsMutationFuncs[fn.Name.Name] {
 			return
 		}
-		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			ident, ok := call.Fun.(*ast.Ident)
 			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
 				return

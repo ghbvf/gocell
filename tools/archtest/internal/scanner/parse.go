@@ -11,10 +11,11 @@ import (
 
 // FileContext holds the parsed AST and metadata for a single Go source file.
 //
-// Pair with [EachNode] for typed AST iteration: callers commonly write
+// Pair with [EachInSubtree] or [EachInChildren] for typed AST iteration:
+// callers commonly write
 //
 //	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-//	    scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) { ... })
+//	    scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) { ... })
 //	})
 type FileContext struct {
 	// AbsPath is the absolute path to the file.

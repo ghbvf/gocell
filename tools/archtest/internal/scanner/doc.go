@@ -6,24 +6,36 @@
 //   - [Scope.Files] returns an error on any walk failure.
 //   - [Report] deduplicates and sorts diagnostics before emitting t.Errorf calls.
 //
-// # Choosing between ImportBan, EachFile, and EachNode
+// # Choosing between ImportBan, EachFile, EachInSubtree, and EachInChildren
 //
 // Use [ImportBan] when the entire invariant is "file must not import package X".
 //
 // Use [EachFile] with [Report] for custom AST patterns: combine with
-// [EachNode] for typed node iteration so the per-node-kind handler is
-// statically constrained to the right *ast.<NodeKind> type.
+// [EachInSubtree] or [EachInChildren] for typed node iteration so the
+// per-node-kind handler is statically constrained to the right
+// *ast.<NodeKind> type.
 //
-// Use [EachNode] inside any rule that iterates AST sub-trees. Bare
-// [go/ast.Inspect], [go/ast.Walk], [go/ast.Preorder], and
+// Use [EachInSubtree] / [EachInChildren] inside any rule that iterates AST
+// nodes. Bare [go/ast.Inspect], [go/ast.Walk], [go/ast.Preorder], and
 // [golang.org/x/tools/go/ast/inspector] APIs are forbidden in
 // tools/archtest/*_test.go (enforced by SCANNER-FRAMEWORK-USAGE-01); the
-// generic [EachNode] funnel makes "wrong node kind" a compile error rather
-// than a silent runtime miss — critical for AI-rebust archtest authoring
+// generic typed funnels make "wrong node kind" a compile error rather than
+// a silent runtime miss — critical for AI-rebust archtest authoring
 // (see .claude/rules/gocell/ai-collab.md AI-rebust 三档分级).
 //
-// [EachNode] silently no-ops on a nil root; callers need not guard against
-// nil before calling.
+// # Choosing walk depth: EachInSubtree vs EachInChildren
+//
+// Walk depth is a compile-time choice — picking the wrong API shows at the
+// call site, not in runtime AST drift:
+//
+//   - [EachInSubtree]: recursive over the full sub-tree (root + every
+//     descendant). For "any FuncDecl in the file" / "any IfStmt anywhere in
+//     fn.Body" style rules.
+//   - [EachInChildren]: depth-1 only. For "container's direct elements" —
+//     KeyValueExpr of CompositeLit, CaseClause of SwitchStmt.Body,
+//     CommClause of SelectStmt.Body, top-level Decl of *ast.File.
+//
+// Both silently no-op on nil root; callers need not guard.
 //
 // # Subpackage scan exemption
 //
@@ -49,12 +61,13 @@
 //	}.Run(t, scanner.ModuleScope(root))
 //
 //	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-//	    scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
+//	    scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 //	        // call is *ast.CallExpr — typed by Go's generic constraint
 //	    })
 //	})
 //
-// ref: go/ast.Preorder@go1.23 — stdlib typed iteration for [EachNode]
+// ref: go/ast.Preorder@go1.23 — stdlib typed iteration for [EachInSubtree]
+// ref: go/ast.Walk — stdlib Visitor pattern for [EachInChildren]
 // ref: golang.org/x/tools/go/analysis analysis.go — Analyzer.RunDespiteErrors=false default (fail-closed)
 // ref: kubernetes/kubernetes test/typecheck/main.go ignoredPaths — driver-level skip set
 // ref: golangci-lint pkg/golinters/depguard — high-level import-ban encapsulation

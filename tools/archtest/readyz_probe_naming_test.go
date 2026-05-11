@@ -100,7 +100,7 @@ func findHyphenatedHealthProbeNames(path string) ([]probeNameHit, error) {
 		return nil, err
 	}
 	var hits []probeNameHit
-	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		// Match any selector call ending in .Health(...)
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Health" {

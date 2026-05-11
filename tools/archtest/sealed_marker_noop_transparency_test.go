@@ -69,11 +69,11 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 				t.Fatalf("SEALED-MARKER-NOOP-TRANSPARENCY-01: parse %s: %v", entry.rel, err)
 			}
 
-			// Collect all internalCell* struct type names via scanner.EachNode[ast.TypeSpec].
-			// scanner.EachNode uses ast.Preorder; TypeSpec nodes only appear under GenDecl
+			// Collect all internalCell* struct type names via scanner.EachInSubtree[ast.TypeSpec].
+			// scanner.EachInSubtree uses ast.Preorder; TypeSpec nodes only appear under GenDecl
 			// at file scope, so preorder yields the same set as a manual Decls/Specs walk.
 			internalTypes := map[string]bool{}
-			scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+			scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 				if strings.HasPrefix(ts.Name.Name, entry.prefix) {
 					if _, isStruct := ts.Type.(*ast.StructType); isStruct {
 						internalTypes[ts.Name.Name] = false // false = Noop not yet found
@@ -91,11 +91,11 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 			// pg_repo_ambient_tx_test.go (package-level helper shared across
 			// tests in this package).
 			//
-			// scanner.EachNode[ast.FuncDecl] is used per SCANNER-FRAMEWORK-USAGE-01.
+			// scanner.EachInSubtree[ast.FuncDecl] is used per SCANNER-FRAMEWORK-USAGE-01.
 			// FuncDecl only appears at file-scope in Go AST (function literals are
 			// ast.FuncLit, not ast.FuncDecl), so preorder yields the same set as
 			// a manual Decls walk.
-			scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 				if fd.Recv == nil || fd.Name.Name != "Noop" {
 					return
 				}

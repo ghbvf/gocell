@@ -169,16 +169,16 @@ func analyzeStorageBackendFile(file *ast.File) storageBackendFileInfo {
 	// Walk function declarations so we can build per-function localVarValues.
 	// Strategy: for each FuncDecl, collect variable assignments from the body,
 	// then scan IfStmts within that function.
-	scanner.EachNode[ast.FuncDecl](file, func(funcDecl *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(funcDecl *ast.FuncDecl) {
 		if funcDecl.Body == nil {
 			return
 		}
 		localVars := buildLocalVarValues(funcDecl.Body)
 
-		scanner.EachNode[ast.IfStmt](funcDecl.Body, func(ifStmt *ast.IfStmt) {
+		scanner.EachInSubtree[ast.IfStmt](funcDecl.Body, func(ifStmt *ast.IfStmt) {
 			isPGBranch := conditionMentionsPostgres(ifStmt.Cond, localVars)
 			// Scan the if-body for the required calls.
-			scanner.EachNode[ast.CallExpr](ifStmt.Body, func(call *ast.CallExpr) {
+			scanner.EachInSubtree[ast.CallExpr](ifStmt.Body, func(call *ast.CallExpr) {
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
 					return
@@ -224,7 +224,7 @@ const storageBackendSentinel = "\x00storageBackend"
 
 func buildLocalVarValues(body *ast.BlockStmt) map[string]string {
 	result := map[string]string{}
-	scanner.EachNode[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
+	scanner.EachInSubtree[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
 		// Handle := and = assignments with equal number of LHS/RHS.
 		if len(assign.Lhs) != len(assign.Rhs) {
 			return
@@ -387,7 +387,7 @@ func isStringLiteral(expr ast.Expr) bool {
 func hasUnconditionalPGCall(file *ast.File, pgAliases map[string]bool, funcName string) bool {
 	found := false
 	// Walk the entire file; when we encounter a CallExpr matching <pgAlias>.<funcName>,
-	// verify it is inside a postgres-guarded if-body. EachNode does not expose
+	// verify it is inside a postgres-guarded if-body. EachInSubtree does not expose
 	// parent context (no proceed-bool, no stack), so we run two independent
 	// scans: one collects all CallExpr sites, the other collects only those
 	// inside postgres-guarded IfStmt bodies. Sites in (all - conditional) are
@@ -397,7 +397,7 @@ func hasUnconditionalPGCall(file *ast.File, pgAliases map[string]bool, funcName 
 	var allSites []callSite
 
 	// Collect all calls to <pgAlias>.<funcName> anywhere in the file.
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return
@@ -420,17 +420,17 @@ func hasUnconditionalPGCall(file *ast.File, pgAliases map[string]bool, funcName 
 
 	// Collect calls to <pgAlias>.<funcName> that ARE inside a postgres if-body.
 	// Iterate per function declaration so localVarValues is function-scoped.
-	scanner.EachNode[ast.FuncDecl](file, func(funcDecl *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(funcDecl *ast.FuncDecl) {
 		if funcDecl.Body == nil {
 			return
 		}
 		localVars := buildLocalVarValues(funcDecl.Body)
 
-		scanner.EachNode[ast.IfStmt](funcDecl.Body, func(ifStmt *ast.IfStmt) {
+		scanner.EachInSubtree[ast.IfStmt](funcDecl.Body, func(ifStmt *ast.IfStmt) {
 			if !conditionMentionsPostgres(ifStmt.Cond, localVars) {
 				return
 			}
-			scanner.EachNode[ast.CallExpr](ifStmt.Body, func(call *ast.CallExpr) {
+			scanner.EachInSubtree[ast.CallExpr](ifStmt.Body, func(call *ast.CallExpr) {
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
 					return

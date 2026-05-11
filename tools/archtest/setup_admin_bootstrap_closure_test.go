@@ -64,7 +64,7 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
 		// Cheap filter: skip files that don't reference the symbol literally.
 		// We re-read is not needed; the AST is already parsed — just inspect.
-		scanner.EachNode[ast.StructType](fc.File, func(st *ast.StructType) {
+		scanner.EachInSubtree[ast.StructType](fc.File, func(st *ast.StructType) {
 			if st.Fields == nil {
 				return
 			}
@@ -126,7 +126,7 @@ func TestAuthRouteBootstrapFlagRemoved(t *testing.T) {
 		hasBootstrapAuth bool
 	)
 
-	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "Route" {
 			return
 		}
@@ -184,7 +184,7 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 		mountCallHasBootstrapAuthField  bool
 	)
 
-	scanner.EachNode[ast.FuncDecl](file, func(node *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(node *ast.FuncDecl) {
 		if node.Name == nil || node.Name.Name != "NewHandler" || node.Recv != nil {
 			return
 		}
@@ -198,29 +198,26 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 			}
 		}
 	})
-	scanner.EachNode[ast.CompositeLit](file, func(node *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](file, func(node *ast.CompositeLit) {
 		sel, ok := node.Type.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "Route" {
 			return
 		}
-		// Paired index iteration: only direct KeyValueExpr children of node.Elts
-		// are checked, not nested KeyValueExprs from inner composite literals.
-		for i := range node.Elts {
-			kv, ok := node.Elts[i].(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
+		// EachInChildren visits only direct KeyValueExpr children of node (not
+		// nested KeyValueExprs from inner composite literals), equivalent to the
+		// prior paired-index loop over node.Elts.
+		scanner.EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
 			keyIdent, ok := kv.Key.(*ast.Ident)
 			if !ok || keyIdent.Name != "BootstrapAuth" {
-				continue
+				return
 			}
 			// Any non-nil expression as the value satisfies the wiring requirement;
 			// the codegen template cannot produce a literal nil because the param is
 			// a func value passed straight through.
-			if _, isNil := kv.Value.(*ast.Ident); !isNil || kv.Value.(*ast.Ident).Name != "nil" {
+			if id, isIdent := kv.Value.(*ast.Ident); !isIdent || id.Name != "nil" {
 				mountCallHasBootstrapAuthField = true
 			}
-		}
+		})
 	})
 
 	assert.True(t, newHandlerHasBootstrapAuthParam,

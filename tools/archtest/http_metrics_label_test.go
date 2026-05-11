@@ -50,7 +50,7 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 
 	oldStateHelper := "with" + "Cell" + "IDState"
 	var callsOldState bool
-	scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == oldStateHelper {
 			callsOldState = true
 		}
@@ -64,7 +64,7 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		runtimeSentinelPos  token.Pos
 		recordRequestPos    token.Pos
 	)
-	scanner.EachNode[ast.CallExpr](metricsPath.Body, func(v *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](metricsPath.Body, func(v *ast.CallExpr) {
 		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
 			readsCtxCellID = true
 			rememberFirstPos(&ctxCellIDPos, v.Pos())
@@ -78,7 +78,7 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 			}
 		}
 	})
-	scanner.EachNode[ast.Ident](metricsPath.Body, func(v *ast.Ident) {
+	scanner.EachInSubtree[ast.Ident](metricsPath.Body, func(v *ast.Ident) {
 		if v.Name == "RuntimeCellIDSentinel" {
 			usesRuntimeSentinel = true
 			rememberFirstPos(&runtimeSentinelPos, v.Pos())
@@ -129,7 +129,7 @@ func TestHTTPMetricsLabelRouterAttribution01(t *testing.T) {
 		authPos            token.Pos
 		bodyLimitPos       token.Pos
 	)
-	scanner.EachNode[ast.CallExpr](buildMux.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](buildMux.Body, func(call *ast.CallExpr) {
 		switch {
 		case isSelectorCall(call, "middleware", "CellAttribution"):
 			rememberFirstPos(&cellAttributionPos, call.Pos())
@@ -181,7 +181,7 @@ func TestHTTPMetricsLabelNoAssemblyDerive01(t *testing.T) {
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	var fn *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](file, func(f *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(f *ast.FuncDecl) {
 		if fn == nil && f.Name.Name == "autoWireHTTPMetricsCollector" {
 			fn = f
 		}
@@ -189,7 +189,7 @@ func TestHTTPMetricsLabelNoAssemblyDerive01(t *testing.T) {
 	require.NotNilf(t, fn, "%s: autoWireHTTPMetricsCollector func not found", rel)
 
 	var referencesAssemblyID, referencesAssemblyCoreID, referencesDefaultLiteral, referencesProviderCellKey bool
-	scanner.EachNode[ast.SelectorExpr](fn.Body, func(v *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](fn.Body, func(v *ast.SelectorExpr) {
 		if id, ok := v.X.(*ast.Ident); ok && id.Name == "b" && v.Sel.Name == "assemblyID" {
 			referencesAssemblyID = true
 		}
@@ -199,12 +199,12 @@ func TestHTTPMetricsLabelNoAssemblyDerive01(t *testing.T) {
 			}
 		}
 	})
-	scanner.EachNode[ast.BasicLit](fn.Body, func(v *ast.BasicLit) {
+	scanner.EachInSubtree[ast.BasicLit](fn.Body, func(v *ast.BasicLit) {
 		if v.Kind == token.STRING && v.Value == `"default"` {
 			referencesDefaultLiteral = true
 		}
 	})
-	scanner.EachNode[ast.KeyValueExpr](fn.Body, func(v *ast.KeyValueExpr) {
+	scanner.EachInSubtree[ast.KeyValueExpr](fn.Body, func(v *ast.KeyValueExpr) {
 		if id, ok := v.Key.(*ast.Ident); ok && id.Name == "CellID" {
 			referencesProviderCellKey = true
 		}
@@ -234,7 +234,7 @@ func TestHTTPMetricsLabelNoConfigCellID01(t *testing.T) {
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	hasCellIDField := false
-	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 		if ts.Name.Name != "ProviderCollectorConfig" {
 			return
 		}
@@ -265,7 +265,7 @@ func slashRel(t *testing.T, root, target string) string {
 func findHTTPMetricsFuncDecl(t *testing.T, file *ast.File, name string) *ast.FuncDecl {
 	t.Helper()
 	var result *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if result == nil && fn.Name.Name == name {
 			result = fn
 		}
@@ -279,7 +279,7 @@ func findHTTPMetricsFuncDecl(t *testing.T, file *ast.File, name string) *ast.Fun
 
 func narrowestFuncLitWithCollectorRecordRequest(root ast.Node) *ast.FuncLit {
 	var best *ast.FuncLit
-	scanner.EachNode[ast.FuncLit](root, func(fn *ast.FuncLit) {
+	scanner.EachInSubtree[ast.FuncLit](root, func(fn *ast.FuncLit) {
 		if !containsCollectorRecordRequest(fn.Body) {
 			return
 		}
@@ -292,7 +292,7 @@ func narrowestFuncLitWithCollectorRecordRequest(root ast.Node) *ast.FuncLit {
 
 func containsCollectorRecordRequest(root ast.Node) bool {
 	found := false
-	scanner.EachNode[ast.CallExpr](root, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](root, func(call *ast.CallExpr) {
 		if !found && isSelectorCall(call, "collector", "RecordRequest") {
 			found = true
 		}

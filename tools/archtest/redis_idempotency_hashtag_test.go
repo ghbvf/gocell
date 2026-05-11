@@ -60,7 +60,7 @@ func TestIdempotency_LuaHashtag(t *testing.T) {
 	leaseOK := false
 	doneOK := false
 
-	scanner.EachNode[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+	scanner.EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
 		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
 			return
 		}
@@ -157,7 +157,7 @@ func TestIdempotency_MockDispatchSuffixMatch(t *testing.T) {
 	hasPrefixDone := false
 	hasPrefixLease := false
 
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return
