@@ -29,6 +29,22 @@ type ContractGenSpec struct {
 	// validator at construction time — no runtime file I/O, no embed.FS.
 	// Empty string means no schema validation is emitted.
 	RequestSchemaJSON string
+
+	// PanicReasonPolicyNil is the kebab-case reason literal passed to
+	// panicregister.Approved for the "policy must not be nil" panic site.
+	// Pre-computed from ContractID (dots replaced by dashes) + "-policy-nil".
+	// Example: "http-order-create-v1-policy-nil".
+	PanicReasonPolicyNil string
+	// PanicReasonSchemaCompileFailed is the kebab-case reason literal passed
+	// to panicregister.Approved for the "schema compile failed" panic site.
+	// Pre-computed from ContractID + "-schema-compile-failed".
+	// Example: "http-order-create-v1-schema-compile-failed".
+	PanicReasonSchemaCompileFailed string
+	// PanicReasonBootstrapAuthNil is the kebab-case reason literal passed to
+	// panicregister.Approved for the "bootstrapAuth must not be nil" panic site.
+	// Pre-computed from ContractID + "-bootstrap-auth-nil".
+	// Example: "http-sample-bootstrap-v1-bootstrap-auth-nil".
+	PanicReasonBootstrapAuthNil string
 }
 
 // DTOSpec is one Go struct definition.

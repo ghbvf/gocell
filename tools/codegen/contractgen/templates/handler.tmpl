@@ -140,6 +140,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
 {{- if .RequestSchemaJSON}}
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
@@ -187,7 +188,7 @@ func NewHandler(svc Service) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -212,13 +213,13 @@ func NewHandler(svc Service, bootstrapAuth func(http.Handler) http.Handler) *Han
 		// runtime/auth.NewBootstrapMiddleware). errcode.Assertion routes through the
 		// kernel recover middleware (500 + structured log) instead of a bare panic so
 		// PANIC-REGISTERED-01 archtest stays clean across the entire generator surface.
-		panic(errcode.Assertion("generated handler {{.ContractID}}: bootstrapAuth must not be nil (auth.bootstrap:true contracts require a per-route replacement authenticator; composition root must inject runtime/auth.NewBootstrapMiddleware)"))
+		panic(panicregister.Approved("{{.PanicReasonBootstrapAuthNil}}", errcode.Assertion("generated handler {{.ContractID}}: bootstrapAuth must not be nil (auth.bootstrap:true contracts require a per-route replacement authenticator; composition root must inject runtime/auth.NewBootstrapMiddleware)")))
 	}
 	h := &Handler{svc: svc, bootstrapAuth: bootstrapAuth}
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -235,7 +236,7 @@ func NewHandler(svc Service) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -250,7 +251,7 @@ func NewHandler(svc Service) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -266,13 +267,13 @@ func NewHandler(svc Service, policy auth.Policy) *Handler {
 		// service-owned endpoints declare auth.serviceOwned:true.
 		// errcode.Assertion routes through kernel recover middleware (500 + log)
 		// instead of bare panic so PANIC-REGISTERED-01 archtest stays clean.
-		panic(errcode.Assertion("generated handler {{.ContractID}}: policy must not be nil (non-public, non-bootstrap, non-clientsOnly, non-serviceOwned endpoints require a real auth.Policy; for public/clients-only/service-owned endpoints update contract.yaml auth flag and regenerate)"))
+		panic(panicregister.Approved("{{.PanicReasonPolicyNil}}", errcode.Assertion("generated handler {{.ContractID}}: policy must not be nil (non-public, non-bootstrap, non-clientsOnly, non-serviceOwned endpoints require a real auth.Policy; for public/clients-only/service-owned endpoints update contract.yaml auth flag and regenerate)")))
 	}
 	h := &Handler{svc: svc, policy: policy}
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}

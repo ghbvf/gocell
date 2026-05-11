@@ -37,12 +37,16 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 	pkgPath := contractIDToPackagePath(contractID)
 	pkgName := pkgNameFromContractID(contractID)
 
+	kebab := contractIDToKebab(contractID)
 	spec := &ContractGenSpec{
-		PackageName: pkgName,
-		PackagePath: pkgPath,
-		ContractID:  contractID,
-		Kind:        contract.Kind,
-		SourceFile:  contract.File,
+		PackageName:                    pkgName,
+		PackagePath:                    pkgPath,
+		ContractID:                     contractID,
+		Kind:                           contract.Kind,
+		SourceFile:                     contract.File,
+		PanicReasonPolicyNil:           kebab + "-policy-nil",
+		PanicReasonSchemaCompileFailed: kebab + "-schema-compile-failed",
+		PanicReasonBootstrapAuthNil:    kebab + "-bootstrap-auth-nil",
 	}
 
 	contractDir := filepath.Dir(contract.File)
@@ -788,6 +792,14 @@ func isRequired(name string, required []string) bool {
 // with cellgen and archtest.
 func contractIDToPackagePath(id string) string {
 	return pathx.ContractIDToPackagePath(id)
+}
+
+// contractIDToKebab converts a contract id to a kebab-case string by replacing
+// all dots with dashes. Used to pre-compute panicregister.Approved reason literals
+// at codegen time so the emitted Go source contains only const string literals.
+// Example: "http.order.create.v1" → "http-order-create-v1".
+func contractIDToKebab(id string) string {
+	return strings.ReplaceAll(id, ".", "-")
 }
 
 // pkgNameFromContractID derives the Go package name from a contract id.
