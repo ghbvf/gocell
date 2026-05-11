@@ -47,6 +47,8 @@
 
 **不准建 Registry / 中心化注册表**。多份文档用 grep 锚点串联（grep `INVARIANT: {ID}` 跳全套）。主流对照（K8s / CockroachDB / Linux / Rust / Go 工具链）都接受 funnel 不到的残留，平铺管理。
 
+archtest CI 入口是 `hack/verify-archtest.sh`（process-isolated 16-shard 矩阵；`make verify` 自动发现）。`ARCHTEST-VERIFY-COVERAGE-01` 守卫 script 的 discovery 与 *_test.go AST 集合一致，防止 shard 漏 test。
+
 ## Review checklist
 
 涉及"新增/修改约束 enforcement 机制"的 finding 必须显式给 AI-rebust 评级：

@@ -16,11 +16,21 @@ jobs:
   verify:
     name: make verify
     runs-on: ubuntu-latest
-    # `make verify` runs ~9 gates including a small Go test set; real wall
-    # time is ~1 min on a warm runner. 5 min matches the smallest project
-    # timeout (security-vuln.yml's govulncheck) and gives ~5x cushion for
-    # cold Go module cache or runner contention.
-    timeout-minutes: 5
+    # `make verify` discovers and runs every hack/verify-*.sh gate. archtest
+    # is delegated to _build-lint.yml::verify-archtest (matrix of 16 shards,
+    # process-isolated per ADR 202605120000) — that job is the **single
+    # authoritative owner** of archtest enforcement on push / pull_request.
+    # Running archtest here too would (a) duplicate CI cost; (b) create a
+    # divergent contract (this serial path has no SLOWGATE_BIN injection),
+    # so the same script would behave differently depending on which
+    # workflow invoked it. The single-owner rule mirrors Kubernetes's
+    # per-verify-*.sh Prow job model and Watermill's reusable-workflow
+    # split (one owner per gate; aggregators delegate).
+    #
+    # 15 min covers cold module cache plus other ~9 verify-*.sh gates
+    # running continue-on-failure (hack/make-rules/verify.sh accumulates
+    # failures across gates).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -30,20 +40,18 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: make verify
-        # VERIFY_SKIP=archtest: archtest is executed by _build-lint.yml's
-        # build-test (tools) shard on the same PR/push (`go test ./tools/...`
-        # without -race; archtest itself runs without -race in both entry
-        # points — see hack/verify-archtest.sh). Running it here as well is
-        # pure duplicate work. Local `make verify` (no env) keeps the full
-        # gate set so developers still get one-command coverage.
+        # VERIFY_SKIP=archtest: delegate archtest to the matrix verify-
+        # archtest job (single-owner principle, see comment above).
+        # gofumpt is NOT in the skip list — hack/verify-gofumpt.sh
+        # bootstraps golangci-lint at the pinned version via
+        # hack/lib/golangci-lint.sh (one-time go install on a cold setup-go
+        # cache). The CI lint shard in _build-lint.yml uses golangci-lint-
+        # action for its build cache and `config verify`; both consumers
+        # share GOLANGCI_LINT_VERSION = v2.11.4.
         #
-        # gofumpt is NOT skipped: hack/verify-gofumpt.sh bootstraps
-        # golangci-lint at the pinned version via hack/lib/golangci-lint.sh
-        # (one-time go install on a cold setup-go cache), so this job does
-        # not need a separate golangci-lint install step. The CI lint shard
-        # in _build-lint.yml uses golangci-lint-action for its build cache
-        # and `config verify`; both consumers share the version literal
-        # GOLANGCI_LINT_VERSION = v2.11.4.
+        # Local `make verify` (no env) still runs verify-archtest.sh — this
+        # is the only path for developers and is by-design slowgate-less
+        # (the budget gate is a CI concern; local dev focuses on correctness).
         env:
           VERIFY_SKIP: archtest
         run: make verify

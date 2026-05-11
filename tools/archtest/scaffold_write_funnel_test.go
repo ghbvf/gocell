@@ -71,9 +71,9 @@ import (
 //	cmd/gocell/app/export.go writeOut  (gocell export {catalog|metadata} --out=<path>)
 //
 // tools/codegen/writer.go (codegen.Write) and tools/codegen/contractgen/generator.go
-// are expected to violate this rule in RED state — they use bare os.MkdirAll /
-// os.WriteFile today. GREEN phase will route them through pathsafe or add their
-// own exemption with justification.
+// were the RED-state targets at R5 inception. As of develop tip they both
+// route through pkg/pathsafe (GREEN state); this rule now enforces
+// no-regression on the funnel rather than tracking remaining offenders.
 func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 	t.Parallel()
 
@@ -120,27 +120,22 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 	var violations []string
 
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		ast.Inspect(fc.File, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
+		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
-				return true
+				return
 			}
 			ident, ok := sel.X.(*ast.Ident)
 			if !ok {
-				return true
+				return
 			}
 			if ident.Name != "os" {
-				return true
+				return
 			}
 			if bannedSelectors[sel.Sel.Name] {
 				pos := fc.Fset.Position(call.Lparen)
 				violations = append(violations, fc.Rel+":"+strconv.Itoa(pos.Line)+": os."+sel.Sel.Name+"(...)")
 			}
-			return true
 		})
 	})
 
