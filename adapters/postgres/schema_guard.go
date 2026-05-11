@@ -171,6 +171,28 @@ func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
 		errcode.WithDetails(slog.Int("invalidCount", len(indexes))))
 }
 
+// shapeRequiredColumns is the authoritative list of columns that must be
+// present after all migrations are applied. Exposed as a package-level var
+// so unit tests can assert membership without a live database connection.
+//
+// Append here when a new migration introduces a column that VerifyExpectedShape
+// must guard (do NOT remove entries; shrinking the list silently weakens the
+// deployment gate).
+var shapeRequiredColumns = []requiredColumn{
+	{table: "users", column: "authz_epoch"},
+	{table: "sessions", column: "jti"},
+	{table: "sessions", column: "subject_id"},
+	{table: "sessions", column: "authz_epoch_at_issue"},
+	{table: "role_assignments", column: "user_id"},
+	// S6 — narrow-scope CAS for ChangePassword (migration 022).
+	{table: "users", column: "password_version"},
+	// S3+S5 PR449-F7 maintenance: config_entries.version and
+	// feature_flags.version were introduced in migrations 004 and 008
+	// respectively but were not previously declared as required.
+	{table: "config_entries", column: "version"},
+	{table: "feature_flags", column: "version"},
+}
+
 // VerifyExpectedShape checks that the post-migration column / table shape
 // matches the binary's expectation. Run **after** VerifyExpectedVersion
 // (which gates migration version) — VerifyExpectedShape catches
@@ -183,13 +205,7 @@ func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
 // NOT exist). Each fault returns ErrAdapterPGSchemaShape so operators see
 // the precise column at fault.
 func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
-	required := []requiredColumn{
-		{table: "users", column: "authz_epoch"},
-		{table: "sessions", column: "jti"},
-		{table: "sessions", column: "subject_id"},
-		{table: "sessions", column: "authz_epoch_at_issue"},
-		{table: "role_assignments", column: "user_id"},
-	}
+	required := shapeRequiredColumns
 	for _, r := range required {
 		ok, err := columnExists(ctx, pool, r.table, r.column)
 		if err != nil {
