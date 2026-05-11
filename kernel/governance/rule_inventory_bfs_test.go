@@ -141,15 +141,20 @@ func (v *Validator) newResultf(fmtStr string, args ...interface{}) ValidationRes
 			expected: nil,
 		},
 		{
-			name: "foreign_package_named_validationresult_ignored_RED",
-			// A method that returns a *types.Named called ValidationResult
-			// from a *different package* than the receiver must NOT be
-			// treated as an emitter. The fixture cannot easily synthesize
-			// two packages, but the cross-package guard
-			// (recvNamed.Obj().Pkg() == r0.Obj().Pkg()) is exercised here
-			// by having the receiver in a different file/package shape:
-			// we use an interface-typed argument whose concrete dispatch
-			// StaticCallee cannot resolve, ensuring no spurious emit.
+			name: "interface_dispatch_emitter_ignored_RED",
+			// Interface-dispatched calls return nil from typeutil.StaticCallee,
+			// so handleCall early-returns via ResolveCallee's ok=false branch
+			// before any signature predicates run. This fixture pins that
+			// safety boundary: even if an interface method's signature shape
+			// matches an emitter, dynamic dispatch is not statically
+			// resolvable and therefore not picked up.
+			//
+			// Cross-package emitter rejection (recv/result Pkg().Path() mismatch)
+			// is covered directly via go/types synthesis in
+			// TestSignatureMatchesValidationResultEmitter_CrossPackageRejected
+			// — the fixture path cannot reach that branch because
+			// types.Config.Check on a single in-memory file produces only
+			// one *types.Package.
 			source: `package fixture
 type ValidationResult struct{ Code string }
 type Emitter interface{ newResult(s string) ValidationResult }
@@ -157,7 +162,7 @@ type Validator struct{ e Emitter }
 func (v *Validator) rules() { v.e.newResult("IFACE-07") }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
-			expected: nil, // interface dispatch — StaticCallee returns nil
+			expected: nil,
 		},
 	}
 
