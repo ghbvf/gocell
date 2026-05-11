@@ -221,14 +221,12 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(e2eBootstrapMW),
 	)
-	auditCell := auditcore.NewAuditCore(
+	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
-		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	)
+	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
 	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))
@@ -542,14 +540,12 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithBootstrapAuth(refetchBootstrapMW),
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 	)
-	auditCell := auditcore.NewAuditCore(
+	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
-		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	)
+	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
 	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))

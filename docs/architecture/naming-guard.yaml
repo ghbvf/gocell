@@ -71,8 +71,6 @@ replacements:
     replacement: auditappend
   - literal: audit-append
     replacement: auditappend
-  - literal: audit-verify
-    replacement: auditverify
   - literal: audit-archive
     replacement: auditarchive
   - literal: audit-query

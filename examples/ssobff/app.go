@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -225,20 +226,10 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	// Demo only: HMAC and cursor keys are public source constants. Production
 	// deployments must inject fresh secrets from a secret manager.
-	auditCursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
+	auc, err := buildSSOBFFAuditCore(cfg.logger, eb, nw)
 	if err != nil {
-		return nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
+		return nil, err
 	}
-	auc := auditcore.NewAuditCore(
-		auditcore.WithClock(clock.Real()),
-		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithHMACKey([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
-		auditcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
-		auditcore.WithCursorCodec(auditCursorCodec),
-		auditcore.WithLogger(cfg.logger),
-		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	)
 
 	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
 	if err != nil {
@@ -287,6 +278,46 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		internalListenAddr: cfg.internal.addr,
 		healthListenAddr:   cfg.health.addr,
 	}, nil
+}
+
+// buildSSOBFFAuditCore wires the demo auditcore Cell — ledger.Protocol +
+// MemStore + cursor codec are owned by the composition root; cells never
+// hold the raw HMAC key. Mirrors cmd/corebundle/audit_module.go but uses
+// in-source demo keys (production ssobff deployments must inject from a
+// secret manager).
+func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, nw outbox.Writer) (*auditcore.AuditCore, error) {
+	cursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
+	}
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: parse audit namespace: %w", err)
+	}
+	// WARNING: demo key only. Production deployments must inject from a secret manager.
+	protocol, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
+		ledger.WithNamespace(ns),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
+	}
+	store, err := ledger.NewMemStore(protocol, clock.Real())
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: build audit store: %w", err)
+	}
+	return auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
+		auditcore.WithLedgerProtocol(protocol),
+		auditcore.WithLedgerStore(store),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		auditcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
+		auditcore.WithCursorCodec(cursorCodec),
+		auditcore.WithLogger(logger),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}),
+	), nil
 }
 
 func defaultSSOBFFAppConfig() *ssobffAppConfig {

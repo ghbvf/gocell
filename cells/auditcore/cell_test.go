@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -18,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -45,13 +45,38 @@ func mustNewCodec(t *testing.T, key []byte) *query.CursorCodec {
 	return codec
 }
 
-func newTestCell() *AuditCore {
+// newTestProtocol constructs a ledger.Protocol for testing.
+func newTestProtocol(t testing.TB) *ledger.Protocol {
+	t.Helper()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC(testHMACKey),
+		ledger.WithNamespace(ns),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	return p
+}
+
+// newTestMemStore constructs a ledger.MemStore for testing.
+func newTestMemStore(t testing.TB, p *ledger.Protocol) *ledger.MemStore {
+	t.Helper()
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	return store
+}
+
+func newTestCell(t testing.TB) *AuditCore {
+	t.Helper()
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	return NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -64,13 +89,16 @@ func newTestRecorder() *cell.RegistryRecorder {
 }
 
 func TestAuditCore_Lifecycle(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	recorder := newTestRecorder()
 
 	// Init
 	require.NoError(t, c.Init(ctx, recorder))
-	assert.Equal(t, 4, len(c.OwnedSlices()), "should have 4 slices")
+	// auditappendsession, auditappenduser, auditappendconfig, auditappendrole,
+	// auditquery = 5 slices (auditverify removed in Wave 2 Batch D).
+	// A-02 RED: current cell.go still constructs 6 slices (auditverify present).
+	assert.Equal(t, 5, len(c.OwnedSlices()), "should have 5 slices after auditverify removal")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -84,14 +112,14 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 }
 
 func TestAuditCore_Metadata(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	assert.Equal(t, "auditcore", c.ID())
 	assert.Equal(t, cell.CellTypeCore, c.Type())
 	assert.Equal(t, cell.L2, c.ConsistencyLevel())
 }
 
 func TestAuditCore_Startup(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(ctx, recorder))
@@ -100,91 +128,70 @@ func TestAuditCore_Startup(t *testing.T) {
 	require.NoError(t, c.Stop(ctx))
 }
 
-func TestAuditCore_MissingHMACKey(t *testing.T) {
+func TestAuditCore_MissingLedgerProtocol(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
+		WithLedgerStore(store),
+		// No WithLedgerProtocol.
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		// No HMAC key.
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
 	err := c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
-	assert.Error(t, err, "should fail without HMAC key")
-}
-
-func TestAuditCore_HMACKeyTooShort(t *testing.T) {
-	// 31-byte key — one short of the RFC 2104 §3 / NIST SP 800-107 minimum.
-	// The error must surface with errcode.ErrValidationFailed all the way
-	// through the slice wrapper (auditappend: %w / auditverify: %w), and
-	// the minimumBytes/actualBytes details must survive propagation so
-	// operators see the same diagnostics the domain layer emitted.
-	shortKey := make([]byte, 31)
-	for i := range shortKey {
-		shortKey[i] = 'x'
-	}
-	c := NewAuditCore(
-		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithHMACKey(shortKey),
-		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
-		WithMetricsProvider(metrics.NopProvider{}),
-	)
-	ctx := context.Background()
-	err := c.Init(ctx, newTestRecorder())
-	require.Error(t, err, "must reject HMAC key shorter than 32 bytes")
-
+	require.Error(t, err, "should fail without LedgerProtocol")
 	var ec *errcode.Error
-	require.True(t, errors.As(err, &ec), "error must propagate as *errcode.Error")
+	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	assert.Contains(t, ec.Message, "audit hmac key too short")
-
-	// Details survive the slice/cell wrapping path (auditappend: %w).
-	var sawMin, sawActual bool
-	for _, attr := range ec.Details {
-		switch attr.Key {
-		case "minimumBytes":
-			sawMin = true
-			assert.Equal(t, int64(32), attr.Value.Int64())
-		case "actualBytes":
-			sawActual = true
-			assert.Equal(t, int64(31), attr.Value.Int64())
-		}
-	}
-	assert.True(t, sawMin, "details must include minimumBytes after propagation")
-	assert.True(t, sawActual, "details must include actualBytes after propagation")
 }
 
-func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
+func TestAuditCore_NilLedgerProtocol_SentinelRejected(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
+		WithLedgerProtocol(nil), // bare nil — sentinel sticky
+		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	ctx := context.Background()
-	err := c.Init(ctx, cell.NewRegistryRecorder(
-		map[string]any{"audit.hmac_key": "config-provided-key-32bytes!!!!!"},
-		cell.DurabilityDemo,
-	))
-	require.NoError(t, err)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err, "nil LedgerProtocol must be rejected")
+}
+
+func TestAuditCore_MissingLedgerStore(t *testing.T) {
+	p := newTestProtocol(t)
+	c := NewAuditCore(
+		WithClock(clock.Real()),
+		WithLedgerProtocol(p),
+		// No WithLedgerStore.
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
+		WithMetricsProvider(metrics.NopProvider{}),
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err, "should fail without LedgerStore")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }
 
 // --- L2 Hard Gate: durable-mode dependency checks ---
 
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		// txRunner intentionally omitted
 	)
@@ -196,12 +203,13 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 }
 
 func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithHMACKey(testHMACKey),
 		WithTxManager(cell.DemoCellTxManager()),
 		// outboxWriter intentionally omitted
 	)
@@ -213,11 +221,12 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 }
 
 func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
@@ -227,11 +236,12 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 }
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(cell.DemoCellTxManager()),
 	)
@@ -244,12 +254,13 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 }
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithHMACKey(testHMACKey),
 		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
@@ -258,11 +269,12 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 }
 
 func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(cell.DemoCellTxManager()),
 	)
@@ -275,11 +287,12 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 // the injection in demo mode.
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
@@ -291,11 +304,12 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 // TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive guards against
 // setting both provisioning paths at once.
 func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 	)
@@ -310,13 +324,14 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 // durable-mode safety invariant: directly-injected non-durable emitter must
 // be rejected in DurabilityDurable mode.
 func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	cursorCodec, err := query.NewCursorCodec([]byte("audit-wrapper-durable-test-key!!"))
 	require.NoError(t, err)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(cell.DemoCellTxManager()),
@@ -329,7 +344,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 }
 
 func TestAuditCore_RouteGroups(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(ctx, recorder))
@@ -346,14 +361,13 @@ func TestAuditCore_RouteGroups(t *testing.T) {
 }
 
 func TestAuditCore_RegisterSubscriptions(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	// Codegen pattern: Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU.
-	// All 13 topics are listed explicitly here (T-7: replace magic number with topic set).
+	// All 13 topics registered across 4 sub-slices.
 	expectedTopics := []string{
 		// 4 config events
 		"event.config.entry-deleted.v1",
@@ -400,7 +414,7 @@ func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.h
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
 func TestAuditCore_RouteQueryEntries(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(ctx, recorder))
@@ -423,18 +437,15 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 }
 
 // TestInit_DurableMode_RejectsMissingCursorCodec locks the fail-fast
-// behavior introduced with RunMode wiring: a durable assembly that forgets
-// to inject a production cursor codec must not silently fall back to the
-// public demo key baked into the source tree. Paired with
-// TestAuditCore_Wiring_StaleCursor_DemoVsDurable below which exercises the
-// same wiring when a codec *is* provided.
+// behavior: a durable assembly that forgets to inject a production cursor codec
+// must not silently fall back to the public demo key baked into the source tree.
 func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingWriter{})), // non-Nooper; durable-gated CheckNotNoop passes
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),         // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
@@ -447,11 +458,8 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	assert.Contains(t, err.Error(), "cursor codec")
 }
 
-// TestAuditCore_Wiring_StaleCursor_DemoVsDurable is a wiring-level
-// regression: it exercises DurabilityMode → cell.Init → service →
-// ExecutePagedQuery with a garbage cursor and asserts that demo silently
-// returns the first page while durable returns ErrCursorInvalid. This
-// branch was previously only covered at the pkg/query helper level.
+// TestAuditCore_Wiring_StaleCursor_DemoVsDurable exercises DurabilityMode →
+// cell.Init → service → ExecutePagedQuery with a garbage cursor.
 // An admin identity is injected via auth.TestContext because the
 // audit-query handler calls auth.RequireSelfOrRole.
 func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
@@ -483,12 +491,12 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			p := newTestProtocol(t)
+			store := newTestMemStore(t, p)
 			c := NewAuditCore(
 				WithClock(clock.Real()),
-				WithAuditRepository(mem.NewAuditRepository()),
-				WithArchiveStore(mem.NewArchiveStore()),
-				WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-				WithHMACKey(testHMACKey),
+				WithLedgerProtocol(p),
+				WithLedgerStore(store),
 				WithOutboxDeps(nil, outbox.WrapWriterForCell(tc.outbox)),
 				WithTxManager(persistence.WrapForCell(tc.tx)),
 				WithCursorCodec(mustNewCodec(t, productionKey)),
@@ -529,7 +537,7 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 // a DirectEmitter-backed publisher, the registry snapshot contains the
 // outbox-failopen-rate checker scoped to "auditcore".
 func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))
 
@@ -539,14 +547,77 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
 
+// deadlineProbeStore is a ledger.Store whose Verify asserts that the caller
+// supplied a context with a deadline (strictTailVerifyOnStartup must wrap ctx
+// with WithTimeout). It does NOT actually wait for the deadline to fire —
+// it returns ctx.DeadlineExceeded immediately so the test runs in milliseconds
+// rather than paying 30 s of wall-clock cost (slowgate cap 15 s).
+type deadlineProbeStore struct {
+	ledger.Store
+	gotDeadline bool
+	verifyCalls int
+}
+
+func newDeadlineProbeStore(t *testing.T, inner ledger.Store) *deadlineProbeStore {
+	t.Helper()
+	return &deadlineProbeStore{Store: inner}
+}
+
+func (b *deadlineProbeStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
+	// Return a non-empty tail so strictTailVerifyOnStartup proceeds to Verify.
+	return ledger.TailSnapshot{SeqNo: 1, EntryCount: 1}, nil
+}
+
+func (b *deadlineProbeStore) Verify(ctx context.Context, from, to int64) (bool, int64, error) {
+	b.verifyCalls++
+	_, b.gotDeadline = ctx.Deadline()
+	// Synthesize the same error a real timed-out store would return so the
+	// caller error path is exercised end-to-end.
+	return false, 0, context.DeadlineExceeded
+}
+
+// TestStrictTailVerifyOnStartup_TimeoutCapped asserts that strictTailVerifyOnStartup
+// wraps the caller context with a deadline before calling ledger.Store.Verify,
+// so a hung store cannot stall k8s readiness indefinitely.
+//
+// F-04: rather than block on the production 30 s timeout (slowgate cap 15 s),
+// the probe store inspects ctx.Deadline() at call time and returns
+// DeadlineExceeded immediately — testing the deadline-injection contract
+// without paying wall-clock cost.
+func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
+	p := newTestProtocol(t)
+	inner := newTestMemStore(t, p)
+	probe := newDeadlineProbeStore(t, inner)
+
+	c := NewAuditCore(
+		WithClock(clock.Real()),
+		WithLedgerProtocol(p),
+		WithLedgerStore(probe),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
+		WithMetricsProvider(metrics.NopProvider{}),
+	)
+
+	err := c.Init(context.Background(), newTestRecorder())
+	require.Error(t, err, "Init should fail when Verify returns DeadlineExceeded")
+
+	assert.Equal(t, 1, probe.verifyCalls,
+		"strictTailVerifyOnStartup should call Verify exactly once")
+	assert.True(t, probe.gotDeadline,
+		"strictTailVerifyOnStartup must wrap ctx with a deadline before calling Verify; "+
+			"caller-supplied context.Background has none")
+}
+
 // TestAuditCore_HealthCheckers_NilEmitter verifies that when the emitter does
 // not implement the health-checker interface, no health checkers are registered.
 func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
 	c := NewAuditCore(
 		WithClock(clock.Real()),
-		WithAuditRepository(mem.NewAuditRepository()),
-		WithArchiveStore(mem.NewArchiveStore()),
-		WithHMACKey(testHMACKey),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
 		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
 	)
 	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)

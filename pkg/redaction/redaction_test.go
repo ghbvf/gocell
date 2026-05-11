@@ -683,3 +683,76 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// F-CR-3: RedactPayload recursive + fail-closed tests
+// ---------------------------------------------------------------------------
+
+func TestRedactPayload_NestedObject(t *testing.T) {
+	in := []byte(`{"user":{"password":"secret","name":"alice"}}`)
+	out := redaction.RedactPayload(in)
+
+	// password inside nested object must be masked.
+	if strings.Contains(string(out), "secret") {
+		t.Errorf("nested password leaked in output: %s", out)
+	}
+	// name must survive.
+	if !strings.Contains(string(out), "alice") {
+		t.Errorf("non-sensitive field 'name' was incorrectly masked: %s", out)
+	}
+	// Output must start with valid JSON object character.
+	if len(out) == 0 || out[0] != '{' {
+		t.Errorf("RedactPayload nested object must return JSON object: got %s", out)
+	}
+}
+
+func TestRedactPayload_NestedArray(t *testing.T) {
+	in := []byte(`{"items":[{"token":"abc"},{"token":"xyz"}]}`)
+	out := redaction.RedactPayload(in)
+
+	if strings.Contains(string(out), "abc") || strings.Contains(string(out), "xyz") {
+		t.Errorf("token inside array was not masked: %s", out)
+	}
+	if len(out) == 0 || out[0] != '{' {
+		t.Errorf("output must be JSON object: got %s", out)
+	}
+}
+
+func TestRedactPayload_NonJSON_FailClosed(t *testing.T) {
+	out := redaction.RedactPayload([]byte("not-json"))
+	// Must be a valid JSON string token: starts with '"', ends with '"'.
+	s := string(out)
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		t.Errorf("fail-closed output must be a JSON string token, got: %s", s)
+	}
+	// The unquoted value must be the mask.
+	inner := s[1 : len(s)-1]
+	if inner != redaction.Mask {
+		t.Errorf("fail-closed inner value: got %q, want %q", inner, redaction.Mask)
+	}
+}
+
+func TestRedactPayload_TopLevelArray(t *testing.T) {
+	in := []byte(`[{"password":"x"},{"safe":"y"}]`)
+	out := redaction.RedactPayload(in)
+
+	if strings.Contains(string(out), `"x"`) {
+		t.Errorf("top-level array password was not masked: %s", out)
+	}
+	if !strings.Contains(string(out), "y") {
+		t.Errorf("non-sensitive field 'safe' was incorrectly masked: %s", out)
+	}
+	if len(out) == 0 || out[0] != '[' {
+		t.Errorf("top-level array output must be JSON array: got %s", out)
+	}
+}
+
+func TestRedactPayload_Scalar_Unchanged(t *testing.T) {
+	// A scalar JSON value (e.g. a number) has no key structure — it is valid
+	// JSON and carries no sensitive keys; it must be returned unchanged.
+	in := []byte(`42`)
+	out := redaction.RedactPayload(in)
+	if string(out) != "42" {
+		t.Errorf("scalar JSON must pass through unchanged: got %s", out)
+	}
+}

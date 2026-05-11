@@ -7,36 +7,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	auditlist "github.com/ghbvf/gocell/generated/contracts/http/audit/list/v1"
 	cell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
-
-// AuditEntryResponse is the public DTO for AuditEntry, excluding internal
-// hash-chain integrity fields (PrevHash, Hash) that are implementation details.
-// Payload is preserved as it contains the audited operation content.
-type AuditEntryResponse struct {
-	ID        string          `json:"id"`
-	EventID   string          `json:"eventId"`
-	EventType string          `json:"eventType"`
-	ActorID   string          `json:"actorId"`
-	Timestamp time.Time       `json:"timestamp"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-}
-
-func toAuditEntryResponse(e *domain.AuditEntry) AuditEntryResponse {
-	if e == nil {
-		return AuditEntryResponse{}
-	}
-	return AuditEntryResponse{
-		ID: e.ID, EventID: e.EventID, EventType: e.EventType,
-		ActorID: e.ActorID, Timestamp: e.Timestamp, Payload: e.Payload,
-	}
-}
 
 // auditQueryPolicy permits the request when:
 //   - actorId query param is empty or equals authenticated subject (self-access)
@@ -67,6 +45,7 @@ type ListAdapter struct {
 
 // List implements auditlist.Service. The request fields (actorId, from, to, limit,
 // cursor, eventType) are already decoded and basic-validated by handler_gen.
+// B2-C-09: Payload is redacted of sensitive fields before returning to client.
 func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlist.ListResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
@@ -85,7 +64,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		)
 	}
 
-	filters := ports.AuditFilters{
+	filters := ledger.AuditFilters{
 		EventType: req.EventType,
 		ActorID:   actorID,
 	}
@@ -145,14 +124,16 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return h.listH.RegisterRoutes(mux)
 }
 
-// toListResponseDataItem converts a domain.AuditEntry to auditlist.ResponseDataItem.
-func toListResponseDataItem(e *domain.AuditEntry) *auditlist.ResponseDataItem {
+// toListResponseDataItem converts a ledger.Entry to auditlist.ResponseDataItem.
+// B2-C-09: Payload is scrubbed of sensitive fields via pkg/redaction.RedactPayload
+// before being returned to API consumers.
+func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	return &auditlist.ResponseDataItem{
 		ID:        e.ID,
 		EventId:   e.EventID,
 		EventType: e.EventType,
 		ActorId:   e.ActorID,
 		Timestamp: e.Timestamp.Format(time.RFC3339),
-		Payload:   json.RawMessage(e.Payload),
+		Payload:   json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
 }

@@ -70,55 +70,55 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	if err := sub0.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub0.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.entry-deleted.v1: %w", err)
 	}
 
-	if err := sub1.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub1.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.entry-upserted.v1: %w", err)
 	}
 
-	if err := sub2.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub2.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.rollback.v1: %w", err)
 	}
 
-	if err := sub3.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub3.NewSubscription(c.appendConfigSvc.HandleEvent, "auditcore", "auditappendconfig").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.config.version-published.v1: %w", err)
 	}
 
-	if err := sub4.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub4.NewSubscription(c.appendRoleSvc.HandleEvent, "auditcore", "auditappendrole").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.role.assigned.v1: %w", err)
 	}
 
-	if err := sub5.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub5.NewSubscription(c.appendRoleSvc.HandleEvent, "auditcore", "auditappendrole").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.role.revoked.v1: %w", err)
 	}
 
-	if err := sub6.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub6.NewSubscription(c.appendSessionSvc.HandleEvent, "auditcore", "auditappendsession").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.session.created.v1: %w", err)
 	}
 
-	if err := sub7.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub7.NewSubscription(c.appendSessionSvc.HandleEvent, "auditcore", "auditappendsession").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.session.revoked.v1: %w", err)
 	}
 
-	if err := sub8.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub8.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.created.v1: %w", err)
 	}
 
-	if err := sub9.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub9.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.deleted.v1: %w", err)
 	}
 
-	if err := sub10.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub10.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.locked.v1: %w", err)
 	}
 
-	if err := sub11.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub11.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.unlocked.v1: %w", err)
 	}
 
-	if err := sub12.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+	if err := sub12.NewSubscription(c.appendUserSvc.HandleEvent, "auditcore", "auditappenduser").Mount(reg); err != nil {
 		return fmt.Errorf("auditcore: subscribe event.user.updated.v1: %w", err)
 	}
 

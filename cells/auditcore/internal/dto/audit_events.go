@@ -8,8 +8,7 @@ package dto
 
 // Topic constants for auditcore events (L2 OutboxFact).
 const (
-	TopicAuditAppended          = "event.audit.appended.v1"
-	TopicAuditIntegrityVerified = "event.audit.integrity-verified.v1"
+	TopicAuditAppended = "event.audit.appended.v1"
 )
 
 // AuditAppendedEvent is the payload for event.audit.appended.v1.
@@ -17,13 +16,4 @@ const (
 type AuditAppendedEvent struct {
 	AuditEntryID string `json:"auditEntryId"`
 	EventType    string `json:"eventType"`
-}
-
-// AuditIntegrityVerifiedEvent is the payload for
-// event.audit.integrity-verified.v1. Emitted by auditverify after a chain
-// range is verified.
-type AuditIntegrityVerifiedEvent struct {
-	Valid             bool `json:"valid"`
-	FirstInvalidIndex int  `json:"firstInvalidIndex"`
-	EntriesChecked    int  `json:"entriesChecked"`
 }

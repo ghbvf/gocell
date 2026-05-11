@@ -1,0 +1,26 @@
+id: auditappendconfig
+belongsToCell: auditcore
+contractUsages:
+  - contract: event.audit.appended.v1
+    role: publish
+  - contract: event.config.entry-upserted.v1
+    role: subscribe
+  - contract: event.config.entry-deleted.v1
+    role: subscribe
+  - contract: event.config.version-published.v1
+    role: subscribe
+  - contract: event.config.rollback.v1
+    role: subscribe
+verify:
+  unit:
+    - unit.auditappendconfig.service
+  contract:
+    - contract.event.audit.appended.v1.publish
+    - contract.event.config.entry-upserted.v1.subscribe
+    - contract.event.config.entry-deleted.v1.subscribe
+    - contract.event.config.version-published.v1.subscribe
+    - contract.event.config.rollback.v1.subscribe
+  waivers: []
+
+allowedFiles:
+  - cells/auditcore/slices/auditappendconfig/**

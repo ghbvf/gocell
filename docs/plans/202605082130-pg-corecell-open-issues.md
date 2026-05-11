@@ -15,7 +15,7 @@
 | CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 | 🔴 Cx1 | 标 L0 实为 L1 |
 | B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 | 🟠 P1 | corebundle 仍 `WithInMemoryDefaults` + archtest 类型化 |
 | PR338-FU-LOGIN-DURABLE-TX-ATOMICITY-TEST | 🟠 | 卡 PG session repo |
-| PR392-FU-AUDIT-CHAIN-WIRING | 🟠 P2 | onAuthFail 用 slog 未接 audit chain |
+| PR392-FU-AUDIT-CHAIN-WIRING | 🟠 P2 待合同（event.session.auth-failed.v1 schema 未发布；S7 sub-slice 留接入 stub）|
 | P3-TD-10 TOCTOU 竞态修复 | 🟠 P2 | 卡 PG session repo + Redis distlock |
 | B2-PROVISIONER-MUTEX-REVIEW | 🟠 P2 | PG adapter 落地后审视 mutex 是否仍需 |
 | B2-T-02 RBACASSIGN event contract waiver expiry | 🟠 P1 | waiver 到期前补真实 contract |
@@ -27,19 +27,20 @@
 | X5 P3-TD-11 accesscore domain 拆分 | 🟡 P3 | User/Session/Role 拆分（卡 X1） |
 | X13 REFRESH-PARTITION-01 | 🟠 P3 | `expires_at` range 分区，触发条件未达 |
 
-## D. auditcore
+## D. auditcore — S7 大部分 closed by PR #450（refactor/554-pg-s7-audit-ledger）
 
-| ID | 优先级 | 一句话 |
+| ID | 状态 | 落地点 |
 |---|---|---|
-| B2-C-01 Audit hashchain 重启未恢复尾节点 | 🔴 P0 | NewHashChain 启动从空链开始；多实例/重启后尾哈希不连续 |
-| AUDITAPPEND-L2-FAILURE-PROOF-01 | 🟡 P1 | testcontainer fail outbox writer 验证事务真回滚 |
-| B2-C-05 Auditappend actor 缺失降级不安全 | 🟡 P1 | actor 缺失静默降级，需 fail-closed |
-| B2-C-09 Auditquery raw payload 直接回传 | 🟡 P1 | handler 含敏感字段，需 redact |
-| B2-C-10 Auditappend 全局 mutex 串行化 13 topic | 🟡 P1 | 容量/吞吐压力出现时 |
-| B2-C-14 Hash-chain 跨重启连续性测试缺 | 🟡 P2 | testcontainer 重启回归 |
-| C-DC9 auditarchive 死代码靶子打通 | 🟡 P2 | S3 adapter 已就绪但中间业务层漏接 |
-| PR266-AUDITAPPEND-STRICT | 🟡 P2 | strict 模式 toggle 待第一个 strict-audit 客户 |
-| CELLS-SLICE-MULTI-VERB-DECOMPOSE-01（auditappend） | 🟡 P1 | auditappend 14 contractUsages 拆分 |
+| ~~B2-C-01 Audit hashchain 重启未恢复尾节点~~ | ✅ closed S7 | runtime/audit/ledger.Store.Tail() + cell.Init 启动期 strict-tail-verify-on-startup |
+| ~~AUDITAPPEND-L2-FAILURE-PROOF-01~~ | ✅ closed S7 | adapters/postgres/audit_ledger_store_test.go testcontainer outbox-writer fail injection |
+| ~~B2-C-05 Auditappend actor 缺失降级不安全~~ | ✅ closed S7 | sub-slice service.go：actor 缺失 → outbox.Reject(NewPermanentError) fail-closed |
+| ~~B2-C-09 Auditquery raw payload 直接回传~~ | ✅ closed S7 | auditquery/handler.go 走 pkg/redaction.RedactPayload 过滤敏感字段 |
+| ~~B2-C-10 Auditappend 全局 mutex 串行化~~ | ✅ closed S7 | mutex 上提到 ledger.Store；PG 用 pg_advisory_xact_lock + SELECT FOR UPDATE |
+| ~~B2-C-14 Hash-chain 跨重启连续性测试缺~~ | ✅ closed S7 | testcontainer cross-pool restart test in audit_ledger_store_test.go |
+| ~~C-DC9 auditarchive 死代码~~ | ✅ closed S7 | 整 slice + s3archive adapter + ports/mem 全部删除（不留 stub） |
+| ~~PR266-AUDITAPPEND-STRICT~~ | ✅ closed S7 | Protocol 默认 strict（json.Decoder.DisallowUnknownFields），删除 toggle 设计 |
+| ~~CELLS-SLICE-MULTI-VERB-DECOMPOSE-01（auditappend）~~ | ✅ closed S7 | 13 topic → 4 sub-slice（auditappend-session/user/config/role），无共享 dispatch |
+| PR392-FU-AUDIT-CHAIN-WIRING | 🟠 P2 待合同 | event.session.auth-failed.v1 schema 未发布；S7 auditappendsession sub-slice 留接入 stub，待合同发布后补充订阅 |
 
 ## E. configcore
 

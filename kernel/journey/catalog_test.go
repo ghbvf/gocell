@@ -46,10 +46,10 @@ func buildTestProject() *metadata.ProjectMeta {
 				Goal:      "login events propagate to audit hash chain",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
 				Cells:     []string{"accesscore", "auditcore"},
-				Contracts: []string{"event.session.created.v1", "event.audit.integrity-verified.v1"},
+				Contracts: []string{"event.session.created.v1"},
 				PassCriteria: []metadata.PassCriterion{
 					{Text: "event consumed by auditcore", Mode: "auto"},
-					{Text: "hash chain integrity verified", Mode: "auto"},
+					{Text: "audit entry written to hash chain", Mode: "auto"},
 				},
 			},
 		},
@@ -404,10 +404,9 @@ func TestValidate(t *testing.T) {
 		"configcore": {},
 	}
 	allContracts := map[string]struct{}{
-		"event.user.created.v1":             {},
-		"http.auth.login.v1":                {},
-		"event.session.created.v1":          {},
-		"event.audit.integrity-verified.v1": {},
+		"event.user.created.v1":    {},
+		"http.auth.login.v1":       {},
+		"event.session.created.v1": {},
 	}
 
 	tests := []struct {
@@ -445,13 +444,12 @@ func TestValidate(t *testing.T) {
 			cellIDs: allCells,
 			contractIDs: map[string]struct{}{
 				"event.user.created.v1":    {},
-				"http.auth.login.v1":       {},
 				"event.session.created.v1": {},
-				// event.audit.integrity-verified.v1 missing
+				// http.auth.login.v1 missing
 			},
 			wantErr:     true,
 			wantCode:    ecErr.ErrReferenceBroken,
-			wantContain: []string{"event.audit.integrity-verified.v1", "unknown contract"},
+			wantContain: []string{"http.auth.login.v1", "unknown contract"},
 		},
 		{
 			name:        "empty catalog validates successfully",

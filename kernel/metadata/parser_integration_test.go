@@ -34,8 +34,8 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Cells, id, "missing cell %s", id)
 	}
 
-	// --- Slices: at least the 19 slices after R1e rename (upper bound catches over-parse) ---
-	assert.GreaterOrEqual(t, len(pm.Slices), 19, "expected at least 19 slices")
+	// --- Slices: at least the 18 slices after auditverify removal (upper bound catches over-parse) ---
+	assert.GreaterOrEqual(t, len(pm.Slices), 18, "expected at least 18 slices")
 	assert.LessOrEqual(t, len(pm.Slices), 30, "unexpected extra slices parsed — update this bound if new slices were added intentionally")
 	expectedSlices := []string{
 		"accesscore/sessionlogin",
@@ -47,10 +47,11 @@ func TestParseRealProject(t *testing.T) {
 		"accesscore/authorizationdecide",
 		"accesscore/rbacassign",
 		"accesscore/configreceive",
-		"auditcore/auditappend",
+		"auditcore/auditappendsession",
+		"auditcore/auditappenduser",
+		"auditcore/auditappendconfig",
+		"auditcore/auditappendrole",
 		"auditcore/auditquery",
-		"auditcore/auditverify",
-		"auditcore/auditarchive",
 		"configcore/configread",
 		"configcore/configwrite",
 		"configcore/configpublish",
@@ -62,8 +63,8 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)
 	}
 
-	// --- Contracts: at least the 27 contracts after config state-sync split (upper bound catches over-parse) ---
-	assert.GreaterOrEqual(t, len(pm.Contracts), 27, "expected at least 27 contracts after config state-sync split")
+	// --- Contracts: at least the 26 contracts after integrity-verified removal (upper bound catches over-parse) ---
+	assert.GreaterOrEqual(t, len(pm.Contracts), 26, "expected at least 26 contracts after integrity-verified removal")
 	assert.LessOrEqual(t, len(pm.Contracts), 80, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
 	expectedContracts := []string{
 		"http.auth.login.v1",
@@ -90,7 +91,6 @@ func TestParseRealProject(t *testing.T) {
 		"event.session.revoked.v1",
 		"event.user.created.v1",
 		"event.user.locked.v1",
-		"event.audit.integrity-verified.v1",
 		"event.config.rollback.v1",
 	}
 	for _, id := range expectedContracts {

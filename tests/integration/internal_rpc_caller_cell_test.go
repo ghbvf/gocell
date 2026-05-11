@@ -44,6 +44,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -154,11 +155,22 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
+	callerCellAuditNS, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	callerCellAuditProto, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("callercell-hmac-key-32-bytes!!!!!")),
+		ledger.WithNamespace(callerCellAuditNS),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	callerCellAuditStore, err := ledger.NewMemStore(callerCellAuditProto, clock.Real())
+	require.NoError(t, err)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithInMemoryDefaults(),
+		auditcore.WithLedgerProtocol(callerCellAuditProto),
+		auditcore.WithLedgerStore(callerCellAuditStore),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithHMACKey([]byte("callercell-hmac-key-32-bytes!!!!!")),
 		auditcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),

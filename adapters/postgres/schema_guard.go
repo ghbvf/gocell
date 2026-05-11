@@ -15,6 +15,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// Tables owned by the adapters/postgres migration set (in migration order).
+// Append here when a new table is introduced by a migration file so that
+// schema_guard documentation stays in sync with the embedded SQL.
+//
+//   - outbox_entries   (001)  transactional outbox for event relay
+//   - config_entries   (004)  cell configuration key-value store
+//   - config_versions  (004)  immutable configuration version history
+//   - refresh_tokens   (007)  append-only refresh token lineage
+//   - feature_flags    (008)  flag definitions
+//   - audit_entries    (020)  tamper-evident audit ledger (per-namespace hash chain)
+
 // migrationVersionRe matches migration file names like "006_add_something.sql"
 // and captures the numeric prefix.
 var migrationVersionRe = regexp.MustCompile(`^(\d+)_`)
