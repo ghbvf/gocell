@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // MinRSAKeyBits is the minimum RSA key size accepted by the auth package.
@@ -254,7 +255,7 @@ func (ks *KeySet) PruneExpired() {
 func MustGenerateTestKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		panic(errcode.Assertion("auth: failed to generate test RSA key pair: %v", err))
+		panic(panicregister.Approved("auth-test-rsa-keypair", errcode.Assertion("auth: failed to generate test RSA key pair: %v", err)))
 	}
 	return priv, &priv.PublicKey
 }
@@ -267,7 +268,7 @@ func MustNewTestKeySet(clk clock.Clock) (*KeySet, *rsa.PrivateKey, *rsa.PublicKe
 	priv, pub := MustGenerateTestKeyPair()
 	ks, err := NewKeySet(priv, pub, clk)
 	if err != nil {
-		panic(errcode.Assertion("auth: failed to create test key set: %v", err))
+		panic(panicregister.Approved("auth-test-keyset", errcode.Assertion("auth: failed to create test key set: %v", err)))
 	}
 	return ks, priv, pub
 }

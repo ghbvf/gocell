@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
@@ -88,7 +89,7 @@ func MustNewService(
 ) *Service {
 	s, err := NewService(sessionRepo, refreshStore, logger, opts...)
 	if err != nil {
-		panic(errcode.Assertion("sessionlogout: invariant violated: %v", err))
+		panic(panicregister.Approved("sessionlogout-invariant", errcode.Assertion("sessionlogout: invariant violated: %v", err)))
 	}
 	return s
 }

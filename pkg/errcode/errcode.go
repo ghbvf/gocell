@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // Code is a typed error code string.
@@ -739,16 +741,16 @@ func WithDetails(attrs ...slog.Attr) Option {
 func MustValidateDetailsKinds(attrs []slog.Attr) {
 	for _, attr := range attrs {
 		if !isWireSafeAttrKind(attr.Value.Kind()) {
-			panic(Assertion(
+			panic(panicregister.Approved("errcode-redact-attr-self", Assertion(
 				"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
 					"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
-				attr.Key, attr.Value.Kind()))
+				attr.Key, attr.Value.Kind())))
 		}
 		if !isWireSafeAttrValue(attr) {
-			panic(Assertion(
+			panic(panicregister.Approved("errcode-redact-message-self", Assertion(
 				"errcode.WithDetails: attr %q has non-finite float64 value; "+
 					"use a finite number or string sentinel",
-				attr.Key))
+				attr.Key)))
 		}
 	}
 }

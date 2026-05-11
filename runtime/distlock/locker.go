@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -124,7 +125,7 @@ func New(driver Driver, clk clock.Clock, opts ...Option) (Locker, error) {
 func MustNew(driver Driver, clk clock.Clock, opts ...Option) Locker {
 	l, err := New(driver, clk, opts...)
 	if err != nil {
-		panic(errcode.Assertion("distlock: %v", err))
+		panic(panicregister.Approved("distlock-init", errcode.Assertion("distlock: %v", err)))
 	}
 	return l
 }

@@ -1,6 +1,9 @@
 package appender
 
-import "fmt"
+import (
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+)
 
 // ActorMode is a sealed enum selecting an actor-extraction strategy. The
 // unexported field forbids zero-value or ad-hoc construction by external
@@ -53,16 +56,18 @@ var auditcoreAppenderSliceNames = []string{
 //   - name is not in the auditcoreAppenderSliceNames whitelist
 func MustNewSpec(name string, mode ActorMode) Spec {
 	if mode.v == 0 {
-		panic("appender.MustNewSpec: invalid ActorMode (zero value); use appender.ActorAcceptUserFallback or appender.ActorRequireExplicit")
+		panic(panicregister.Approved("appender-actor-mode-zero", errcode.Assertion(
+			"appender.MustNewSpec: invalid ActorMode (zero value); "+
+				"use appender.ActorAcceptUserFallback or appender.ActorRequireExplicit")))
 	}
 	for _, allowed := range auditcoreAppenderSliceNames {
 		if name == allowed {
 			return Spec{name: name, mode: mode}
 		}
 	}
-	panic(fmt.Sprintf(
+	panic(panicregister.Approved("appender-actor-mode-unknown", errcode.Assertion(
 		"appender.MustNewSpec: unknown slice name %q; whitelist: %s",
-		name, joinNames(auditcoreAppenderSliceNames)))
+		name, joinNames(auditcoreAppenderSliceNames))))
 }
 
 func joinNames(names []string) string {

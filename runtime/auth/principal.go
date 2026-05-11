@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 type PrincipalKind int
@@ -114,7 +115,7 @@ func FromContext(ctx context.Context) (*Principal, bool) {
 func MustFromContext(ctx context.Context) *Principal {
 	p, ok := FromContext(ctx)
 	if !ok {
-		panic(errcode.Assertion("auth: principal not in context"))
+		panic(panicregister.Approved("auth-principal-context-missing", errcode.Assertion("auth: principal not in context")))
 	}
 	return p
 }
