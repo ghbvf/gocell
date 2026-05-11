@@ -32,6 +32,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
+// PasswordVersionField is the DB column name used as the CAS version field
+// for ChangePassword optimistic-concurrency control. Composition root uses
+// this constant when wiring cas.Protocol for the user table:
+//
+//	cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
+const PasswordVersionField = "password_version"
+
 const (
 	// defaultAccessCoreRefreshReuseInterval is the token reuse window for the
 	// in-memory refresh policy (demo/testing only).

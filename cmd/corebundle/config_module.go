@@ -138,7 +138,7 @@ func (m ConfigCoreModule) Provide(
 	// all 6 CAS write paths in configcore (config Update/Delete/Rollback +
 	// flag Update/Toggle/Delete). MustNewProtocol is the composition-root-only
 	// constructor (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this).
-	casProto := cas.MustNewProtocol(cas.WithVersionField("version"))
+	casProto := cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))
 
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes

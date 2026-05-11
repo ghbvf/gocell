@@ -79,7 +79,7 @@ func (m AccessCoreModule) Provide(
 	// CAS Protocol for the ChangePassword narrow-scope concurrent-write guard
 	// (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01). Constructed here (composition
 	// root) per CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest.
-	casProto := cas.MustNewProtocol(cas.WithVersionField("password_version"))
+	casProto := cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
 
 	accessOpts := []accesscore.Option{
 		accesscore.WithClock(shared.Clock),

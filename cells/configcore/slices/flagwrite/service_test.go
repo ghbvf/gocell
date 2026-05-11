@@ -256,3 +256,93 @@ func TestConcurrentToggle_ExactlyOneSucceeds(t *testing.T) {
 	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Toggle must succeed")
 	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Toggle must yield ErrVersionConflict")
 }
+
+// TestConcurrentUpdate_ExactlyOneSucceeds verifies that when two goroutines race
+// to update the same feature flag with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	seedFlag(t, repo, "cas-update-flag")
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		desc := "desc-A"
+		if i == 1 {
+			desc = "desc-B"
+		}
+		go func(desc string) {
+			defer wg.Done()
+			_, upErr := svc.Update(context.Background(), UpdateInput{
+				Key:             "cas-update-flag",
+				ExpectedVersion: 1,
+				Description:     desc,
+			})
+			if upErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(upErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Update: %v", upErr)
+				}
+			}
+		}(desc)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Update must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Update must yield ErrVersionConflict")
+}
+
+// TestConcurrentDelete_ExactlyOneSucceeds verifies that when two goroutines race
+// to delete the same feature flag with the same expectedVersion, exactly one
+// succeeds. The loser receives either ErrVersionConflict or ErrFlagNotFound
+// (when the winner committed the delete before the loser's CAS check).
+func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	seedFlag(t, repo, "cas-delete-flag")
+
+	var (
+		successes atomic.Int32
+		losers    atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			delErr := svc.Delete(context.Background(), "cas-delete-flag", 1)
+			if delErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(delErr, &ce) &&
+					(ce.Code == errcode.ErrVersionConflict || ce.Code == errcode.ErrFlagNotFound) {
+					losers.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Delete: %v", delErr)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Delete must succeed")
+	assert.Equal(t, int32(1), losers.Load(), "exactly one concurrent Delete must yield ErrVersionConflict or ErrFlagNotFound")
+}

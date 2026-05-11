@@ -23,6 +23,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
+// VersionField is the DB column name used as the CAS version field for
+// optimistic-concurrency control on config entries and feature flags.
+// Composition root uses this constant when wiring cas.Protocol:
+//
+//	cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))
+const VersionField = "version"
+
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
 // Option configures a ConfigCore Cell.
