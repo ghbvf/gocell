@@ -99,7 +99,7 @@ func TestProdDurationConst(t *testing.T) {
 // inspects every sub-expression. An expression that (a) has static type
 // time.Duration and (b) whose subtree contains a BasicLit is a violation.
 //
-// Implementation: scanner.EachNode is preorder-only (no proceed-bool), so
+// Implementation: scanner.EachInSubtree is preorder-only (no proceed-bool), so
 // we collect candidate hits across every concrete Expr kind that
 // isLiteralDurationExpr can recognize standalone (BinaryExpr/CallExpr/
 // UnaryExpr/ParenExpr/BasicLit), sort by start position, and drop any hit

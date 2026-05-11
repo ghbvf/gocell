@@ -114,7 +114,7 @@ func scanAuditcoreAppenderSliceFile(fc scanner.FileContext) []string {
 	// Function declarations: methods on Service are forbidden (slice must
 	// not extend the appender.Service alias) and top-level helpers like
 	// NewService / With* / extractActorID re-fork behavior the appender
-	// package owns. EachNode walks the whole file; slice packages have no
+	// package owns. EachInSubtree walks the whole file; slice packages have no
 	// nested function literals so every FuncDecl returned is top-level.
 	scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 		violations = append(violations, scanAppenderFuncDecl(fc, fd)...)

@@ -387,7 +387,7 @@ func isStringLiteral(expr ast.Expr) bool {
 func hasUnconditionalPGCall(file *ast.File, pgAliases map[string]bool, funcName string) bool {
 	found := false
 	// Walk the entire file; when we encounter a CallExpr matching <pgAlias>.<funcName>,
-	// verify it is inside a postgres-guarded if-body. EachNode does not expose
+	// verify it is inside a postgres-guarded if-body. EachInSubtree does not expose
 	// parent context (no proceed-bool, no stack), so we run two independent
 	// scans: one collects all CallExpr sites, the other collects only those
 	// inside postgres-guarded IfStmt bodies. Sites in (all - conditional) are

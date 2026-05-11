@@ -219,7 +219,7 @@ func collectSwitchCases(t *testing.T, f *ast.File, funcName string) map[int]stri
 // identifier name of the first return value if it is a simple selector or
 // identifier (e.g. `return ErrServiceUnavailable` or `return errcode.ErrXxx`).
 func extractReturnIdent(stmts []ast.Stmt) string {
-	// Wrap into a synthetic BlockStmt so EachNode can traverse the stmt list.
+	// Wrap into a synthetic BlockStmt so EachInSubtree can traverse the stmt list.
 	block := &ast.BlockStmt{List: stmts}
 	var result string
 	scanner.EachInSubtree[ast.ReturnStmt](block, func(ret *ast.ReturnStmt) {
