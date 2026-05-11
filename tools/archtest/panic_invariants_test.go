@@ -116,6 +116,51 @@ const panicregisterApprovedFunc = "Approved"
 // single-char, and leading-hyphen strings all fail.
 var panicRegisteredReasonFormat = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
 
+// panicRegisteredReasonPlaceholder matches reason literals that are
+// placeholder identifiers (todo / fixme / tbd / xxx / placeholder / wip)
+// optionally followed by a hyphen and more text. These are rejected because
+// they provide no descriptive information about the panic site.
+var panicRegisteredReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|placeholder|wip)(-|$)`)
+
+// errcodePkgPath is the canonical import path of the errcode package,
+// used by payloadTypeAllowed to verify the payload is *errcode.Error.
+const errcodePkgPath = "github.com/ghbvf/gocell/pkg/errcode"
+
+// payloadTypeAllowed returns true when the static type of arg satisfies the
+// PANIC-REGISTERED-01 payload constraint:
+//
+//   - *errcode.Error — produced by errcode.Assertion or upstream constructors
+//     returning *errcode.Error (A/B-class panics)
+//   - empty interface / any — produced by recover() for C-class re-throws
+//
+// Any other type (bare error, string, fmt.Errorf return value, etc.) is
+// rejected. When info is nil the check is skipped (fixtures without full type
+// resolution fall back to AST-only mode and this guard is inactive).
+func payloadTypeAllowed(info *types.Info, arg ast.Expr) bool {
+	if info == nil {
+		return true // can't verify; don't false-flag
+	}
+	t := info.TypeOf(arg)
+	if t == nil {
+		return true
+	}
+	// Allow *pkg/errcode.Error
+	if ptr, ok := t.(*types.Pointer); ok {
+		if named, ok := ptr.Elem().(*types.Named); ok {
+			obj := named.Obj()
+			if obj != nil && obj.Pkg() != nil &&
+				obj.Pkg().Path() == errcodePkgPath && obj.Name() == "Error" {
+				return true
+			}
+		}
+	}
+	// Allow empty interface (interface{} / any) — recover() return type
+	if iface, ok := t.Underlying().(*types.Interface); ok && iface.NumMethods() == 0 {
+		return true
+	}
+	return false
+}
+
 type panicRegisteredViolation struct {
 	File   string
 	Line   int
@@ -202,6 +247,32 @@ func scanFileForPanicViolations(
 				Line:   fset.Position(call.Pos()).Line,
 				Reason: fmt.Sprintf("panicregister.Approved reason must be kebab-case identifier (got: %s)", reasonLit.Value),
 			})
+			return
+		}
+
+		// Rule 6: reason must not be a placeholder identifier.
+		if panicRegisteredReasonPlaceholder.MatchString(reasonVal) {
+			violations = append(violations, panicRegisteredViolation{
+				File: rel,
+				Line: fset.Position(call.Pos()).Line,
+				Reason: fmt.Sprintf(
+					"reason %q is a placeholder identifier (todo/fixme/tbd/xxx/placeholder/wip);"+
+						" replace with descriptive kebab-case",
+					reasonVal,
+				),
+			})
+			return
+		}
+
+		// Rule 7: payload (Args[1]) must be *errcode.Error or interface{}.
+		payloadArg := argCall.Args[1]
+		if !payloadTypeAllowed(info, payloadArg) {
+			violations = append(violations, panicRegisteredViolation{
+				File:   rel,
+				Line:   fset.Position(call.Pos()).Line,
+				Reason: fmt.Sprintf("panicregister.Approved payload must be *errcode.Error or interface{} (got: %s)", info.TypeOf(payloadArg)),
+			})
+			return
 		}
 	})
 
@@ -286,41 +357,44 @@ func shouldSkipForPanicRegistered(rel string) bool {
 // NOTE: All call-site migrations complete as of PR #467; this test must pass.
 func TestPanicRegistered(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode " +
-			"(loads production packages module-wide, ~5-10s)")
-	}
 
 	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
-	require.NoError(t, err, "SharedResolver failed")
-
-	pkgs := resolver.Packages()
+	seen := make(map[string]struct{}) // dedup violations by "rel:line:msg"
 	var violations []panicRegisteredViolation
 
-	visited := map[string]bool{}
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsProductionCode(rel) {
-				continue
-			}
-			if shouldSkipForPanicRegistered(rel) {
-				continue
-			}
-			violations = append(violations, scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel)...)
+	for _, tagGroup := range typeseval.KnownNonDefaultTags() {
+		// skip archtest_fixture — fixtures intentionally violate rules
+		if containsTag(tagGroup, "archtest_fixture") {
+			continue
 		}
-	})
+		resolver, err := typeseval.SharedResolver(root, false, tagGroup, "./...")
+		require.NoError(t, err, "SharedResolver failed for tags %v", tagGroup)
+
+		pkgs := resolver.Packages()
+		packages.Visit(pkgs, nil, func(p *packages.Package) {
+			for i, file := range p.Syntax {
+				if i >= len(p.GoFiles) {
+					continue
+				}
+				abs := p.GoFiles[i]
+				rel, ok := fileroles.Rel(root, abs)
+				if !ok || !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				if shouldSkipForPanicRegistered(rel) {
+					continue
+				}
+				for _, v := range scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel) {
+					key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Reason)
+					if _, dup := seen[key]; dup {
+						continue
+					}
+					seen[key] = struct{}{}
+					violations = append(violations, v)
+				}
+			}
+		})
+	}
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -330,7 +404,7 @@ func TestPanicRegistered(t *testing.T) {
 	})
 
 	if len(violations) > 0 {
-		t.Logf("%s: %d violation(s) (expected until Batch 3 migrations land):", rulePanicRegistered01, len(violations))
+		t.Logf("%s: %d violation(s):", rulePanicRegistered01, len(violations))
 		for _, v := range violations {
 			t.Logf("  %s:%d — %s", v.File, v.Line, v.Reason)
 		}
@@ -341,14 +415,21 @@ func TestPanicRegistered(t *testing.T) {
 		rulePanicRegistered01)
 }
 
+// containsTag reports whether tag appears in the given build tag group.
+func containsTag(group []string, tag string) bool {
+	for _, t := range group {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // TestPanicRegisteredScannerFixtures verifies the PANIC-REGISTERED-01 rule
 // logic against static fixture packages under
 // tools/archtest/testdata/panic_registered_fixtures/.
 func TestPanicRegisteredScannerFixtures(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based fixture test in -short mode")
-	}
 
 	root := findModuleRoot(t)
 	fixtureBase := filepath.Join(root, "tools", "archtest", "testdata", "panic_registered_fixtures")
@@ -372,6 +453,13 @@ func TestPanicRegisteredScannerFixtures(t *testing.T) {
 		// RED cases for reason argument shape.
 		{"reason_const_ident_red", []int{15}},
 		{"reason_format_invalid_red", []int{12, 16}},
+
+		// RED/GREEN cases for payload type guard (RC-C1).
+		{"payload_type_invalid_red", []int{14, 19, 23}}, // 3 violations: fmt.Errorf, string var, string literal
+		{"payload_type_valid_green", nil},               // *errcode.Error and interface{} are allowed (no violations)
+
+		// RED cases for reason placeholder denylist (RC-B1).
+		{"reason_placeholder_red", []int{12, 16, 20}}, // todo / fixme / wip all rejected
 	}
 
 	for _, tc := range cases {

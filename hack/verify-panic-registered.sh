@@ -6,4 +6,4 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-go test ./tools/archtest/... -run 'TestPanicRegistered' -count=1
+GOFLAGS='' go test ./tools/archtest -count=1 -run '^TestPanicRegistered($|ScannerFixtures$)'
