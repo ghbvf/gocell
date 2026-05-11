@@ -1247,6 +1247,8 @@ func assertNewHubPanicsWithErrcodeMessage(t *testing.T, wantMessage string, fn f
 		err, ok := r.(*errcode.Error)
 		require.True(t, ok, "expected *errcode.Error, got %T (%v)", r, r)
 		assert.Equal(t, wantMessage, err.Message)
+		assert.Equal(t, errcode.KindInternal, err.Kind, "Assertion uses KindInternal")
+		assert.Equal(t, errcode.CategoryInfra, err.Category, "Assertion uses CategoryInfra")
 	}()
 	fn()
 }
