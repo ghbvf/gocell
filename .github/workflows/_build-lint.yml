@@ -57,12 +57,14 @@ jobs:
             pkgs: ./kernel/...
             static_checks: true
           - shard: tools
-            # archtest / metricschema / generatedverify use go/packages to load
-            # the full module type graph; the whole ./tools/... shard runs
-            # ~130s on CI (archtest alone is ~30s; metricschema + generatedverify
-            # contribute the rest). Isolated here so it runs in parallel with
-            # the kernel shard.
-            pkgs: ./tools/...
+            # archtest is split out to the verify-archtest job below (process
+            # isolation — see hack/verify-archtest.sh + ADR
+            # 202605120000-adr-archtest-process-isolation.md). The remaining
+            # tools/ subpackages (codegen / depgraph / generatedverify /
+            # metricschema / slowgate / etc.) are discovered at runtime by the
+            # Test step via `go list ./tools/...`; any new tools/<sub> package
+            # joins coverage automatically with zero yml maintenance.
+            pkgs: _dynamic_archtest_excluded
             static_checks: false
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
@@ -177,11 +179,20 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          PKGS='${{ matrix.pkgs }}'
+          if [ "$PKGS" = "_dynamic_archtest_excluded" ]; then
+            # tools shard runtime discovery: every ./tools/<sub> package
+            # except archtest (which runs in the dedicated verify-archtest
+            # job — see ADR 202605120000). Using `go list` as the ground
+            # truth makes "new tools subpackage not covered" violation
+            # unrepresentable.
+            PKGS=$(go list ./tools/... | grep -v '^github.com/ghbvf/gocell/tools/archtest$' | tr '\n' ' ')
+          fi
           go test \
             -covermode=atomic \
             -coverprofile=coverage-shard-${{ matrix.shard }}.out \
             -json \
-            ${{ matrix.pkgs }} \
+            $PKGS \
             -count=1 -timeout 5m \
             | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
             | "$RUNNER_TEMP/slowgate" --threshold=15s --allowlist=tools/slowgate/allowlist.txt
@@ -254,6 +265,50 @@ jobs:
           name: coverage-shard-${{ matrix.shard }}
           path: coverage-shard-${{ matrix.shard }}.out
           retention-days: 1
+
+  # verify-archtest runs the tools/archtest top-level package across 16
+  # process-isolated shards. Splits out of the build-test (tools) shard
+  # because typeseval.SharedResolver accumulates *types.Info per cacheKey;
+  # running all ~300 top-level Test* funcs in one process accumulated 20+
+  # GB peak RSS on GHA 2-core 7GB runners (OOM SIGTERM after PR #445).
+  # Each matrix shard is an independent Go process — process exit releases
+  # the cached type graphs, so per-shard peak RSS stays under 5 GB.
+  # Phase 0 measurement justification: phase0-baseline.txt produced during
+  # the PR landing this job. See ADR
+  # docs/architecture/202605120000-adr-archtest-process-isolation.md.
+  verify-archtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Pre-download modules
+        timeout-minutes: 3
+        run: go mod download -x
+
+      - name: Build slowgate
+        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
+
+      - name: Verify archtest shard ${{ matrix.shard }}
+        env:
+          SHARD_COUNT: 16
+          SHARD_TARGET: ${{ matrix.shard }}
+          TIMEOUT: 5m
+          SLOWGATE_BIN: ${{ runner.temp }}/slowgate
+          SLOWGATE_THRESHOLD: 15s
+          SLOWGATE_ALLOWLIST: tools/slowgate/allowlist.txt
+        run: bash hack/verify-archtest.sh
 
   integration-test:
     if: ${{ inputs.run-integration }}

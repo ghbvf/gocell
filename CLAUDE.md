@@ -74,6 +74,8 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 主要实施者是 AI。新增/修改约束 enforcement 机制（archtest / governance rule / codegen funnel / type marker / godoc 强约定）按 AI-rebust 三档（Hard / Medium / Soft）评级；Soft 严禁立项。载体决策原则、archtest 文件命名、review checklist 详见 `.claude/rules/gocell/ai-collab.md`。
 
+archtest CI 入口是 `hack/verify-archtest.sh`（process-isolated shards，K=16）；本地 `go test ./tools/archtest/...` 行为不变。详见 ADR `docs/architecture/202605120000-adr-archtest-process-isolation.md`。
+
 ## 参考框架
 
 新建或重构层内模块时，先用 `WebFetch` 读对标源码，commit message 注明 `ref: {framework} {file}`。详见 `docs/references/framework-comparison.md`。

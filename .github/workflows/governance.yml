@@ -16,11 +16,12 @@ jobs:
   verify:
     name: make verify
     runs-on: ubuntu-latest
-    # `make verify` runs ~9 gates including a small Go test set; real wall
-    # time is ~1 min on a warm runner. 5 min matches the smallest project
-    # timeout (security-vuln.yml's govulncheck) and gives ~5x cushion for
-    # cold Go module cache or runner contention.
-    timeout-minutes: 5
+    # `make verify` discovers and runs every hack/verify-*.sh gate. After the
+    # archtest sharding rewrite (ADR 202605120000), verify-archtest.sh runs
+    # 16 process-isolated Go test invocations serially within this job;
+    # observed wall ~45s on macOS/local, expected ~2-3m on GHA cold cache.
+    # 15 min covers worst-case cold module cache + runner contention.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -30,20 +31,17 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: make verify
-        # VERIFY_SKIP=archtest: archtest is executed by _build-lint.yml's
-        # build-test (tools) shard on the same PR/push (`go test ./tools/...`
-        # without -race; archtest itself runs without -race in both entry
-        # points — see hack/verify-archtest.sh). Running it here as well is
-        # pure duplicate work. Local `make verify` (no env) keeps the full
-        # gate set so developers still get one-command coverage.
+        # No VERIFY_SKIP: hack/verify-archtest.sh is now process-isolated
+        # (16 serial shards, each its own Go process — heap freed between
+        # shards). It is no longer the source of OOM that justified skipping
+        # it here pre-ADR 202605120000. Running it via make verify on every
+        # push/PR is the unified governance entry; the parallel
+        # verify-archtest matrix in _build-lint.yml is the fast-feedback
+        # entry on PRs (~2 min wall via 16-way parallelism).
         #
-        # gofumpt is NOT skipped: hack/verify-gofumpt.sh bootstraps
-        # golangci-lint at the pinned version via hack/lib/golangci-lint.sh
-        # (one-time go install on a cold setup-go cache), so this job does
-        # not need a separate golangci-lint install step. The CI lint shard
-        # in _build-lint.yml uses golangci-lint-action for its build cache
-        # and `config verify`; both consumers share the version literal
-        # GOLANGCI_LINT_VERSION = v2.11.4.
-        env:
-          VERIFY_SKIP: archtest
+        # gofumpt: hack/verify-gofumpt.sh bootstraps golangci-lint at the
+        # pinned version via hack/lib/golangci-lint.sh (one-time go install
+        # on a cold setup-go cache). The CI lint shard in _build-lint.yml
+        # uses golangci-lint-action for its build cache and `config verify`;
+        # both consumers share GOLANGCI_LINT_VERSION = v2.11.4.
         run: make verify
