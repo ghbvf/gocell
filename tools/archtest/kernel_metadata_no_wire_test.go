@@ -77,49 +77,37 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 		f := fc.File
 		rel := fc.Rel
 
-		// Paired-index over f.Decls: top-level decls only; avoids path B's
-		// `for _, X :=` + type-dispatch pattern.
-		for i := range f.Decls {
-			decl := f.Decls[i]
-			if d, ok := decl.(*ast.FuncDecl); ok {
-				if kernelMetadataWireSymbols[d.Name.Name] {
+		scanner.EachInChildren[ast.FuncDecl](f, func(d *ast.FuncDecl) {
+			if kernelMetadataWireSymbols[d.Name.Name] {
+				violations = append(violations, wireViolation{
+					File:   rel,
+					Line:   fc.Fset.Position(d.Pos()).Line,
+					Symbol: d.Name.Name,
+				})
+			}
+		})
+		scanner.EachInChildren[ast.GenDecl](f, func(d *ast.GenDecl) {
+			scanner.EachInChildren[ast.TypeSpec](d, func(s *ast.TypeSpec) {
+				if kernelMetadataWireSymbols[s.Name.Name] {
 					violations = append(violations, wireViolation{
 						File:   rel,
-						Line:   fc.Fset.Position(d.Pos()).Line,
-						Symbol: d.Name.Name,
+						Line:   fc.Fset.Position(s.Pos()).Line,
+						Symbol: s.Name.Name,
 					})
 				}
-				continue
-			}
-			d, ok := decl.(*ast.GenDecl)
-			if !ok {
-				continue
-			}
-			for j := range d.Specs {
-				spec := d.Specs[j]
-				if s, ok := spec.(*ast.TypeSpec); ok {
-					if kernelMetadataWireSymbols[s.Name.Name] {
+			})
+			scanner.EachInChildren[ast.ValueSpec](d, func(s *ast.ValueSpec) {
+				for _, ident := range s.Names {
+					if kernelMetadataWireSymbols[ident.Name] {
 						violations = append(violations, wireViolation{
 							File:   rel,
-							Line:   fc.Fset.Position(s.Pos()).Line,
-							Symbol: s.Name.Name,
+							Line:   fc.Fset.Position(ident.Pos()).Line,
+							Symbol: ident.Name,
 						})
 					}
-					continue
 				}
-				if s, ok := spec.(*ast.ValueSpec); ok {
-					for _, ident := range s.Names {
-						if kernelMetadataWireSymbols[ident.Name] {
-							violations = append(violations, wireViolation{
-								File:   rel,
-								Line:   fc.Fset.Position(ident.Pos()).Line,
-								Symbol: ident.Name,
-							})
-						}
-					}
-				}
-			}
-		}
+			})
+		})
 	})
 
 	if len(violations) > 0 {

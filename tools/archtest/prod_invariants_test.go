@@ -160,20 +160,18 @@ func scanProdDurationAST(
 		}
 	}
 
-	// Paired-index iteration: only top-level Decls are scanned; nested decls
-	// inside a func body / spec value belong to other passes.
-	for i := range file.Decls {
-		decl := file.Decls[i]
-		if gd, ok := decl.(*ast.GenDecl); ok {
-			if gd.Tok == token.CONST {
-				// Package-level const blocks are the unique compliant position — skip.
-				continue
-			}
-			checkExpr(gd)
-			continue
+	// Only top-level Decls are scanned; nested decls inside a func body /
+	// spec value belong to other passes.
+	scanner.EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
+		if gd.Tok == token.CONST {
+			// Package-level const blocks are the unique compliant position — skip.
+			return
 		}
-		checkExpr(decl)
-	}
+		checkExpr(gd)
+	})
+	scanner.EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		checkExpr(fd)
+	})
 
 	return violations
 }
@@ -565,21 +563,18 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	}
 
 	count := 0
-	// Paired-index iteration over file.Decls: avoids path B's `for _, X :=`
-	// + type-dispatch pattern. Semantics unchanged — only top-level decls
-	// contribute to the count (nested decls inside func bodies do not).
-	for i := range f.Decls {
-		decl := f.Decls[i]
-		if gd, ok := decl.(*ast.GenDecl); ok {
-			if gd.Tok == token.CONST {
-				// Package-level const blocks are the unique compliant position — skip.
-				continue
-			}
-			count += countInRoot(gd)
-			continue
+	// Only top-level decls contribute to the count (nested decls inside func
+	// bodies do not).
+	scanner.EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if gd.Tok == token.CONST {
+			// Package-level const blocks are the unique compliant position — skip.
+			return
 		}
-		count += countInRoot(decl)
-	}
+		count += countInRoot(gd)
+	})
+	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		count += countInRoot(fd)
+	})
 	return count
 }
 

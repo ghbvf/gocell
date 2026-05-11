@@ -116,34 +116,27 @@ func scanLegacyQuerySymbolDecls(root, path string) ([]pgQueryBoundaryViolation, 
 	}
 
 	var violations []pgQueryBoundaryViolation
-	// Paired-index iteration: only top-level decls scanned (nested function-
-	// local types are not legacy symbols). Avoids path B's `for _, X :=` +
-	// type-switch pattern.
-	for i := range file.Decls {
-		decl := file.Decls[i]
-		if fd, ok := decl.(*ast.FuncDecl); ok {
-			if slices.Contains(legacyQuerySymbols, fd.Name.Name) {
-				violations = append(violations, pgQueryBoundaryViolation{
-					File:    relSlash(root, path),
-					Line:    fset.Position(fd.Pos()).Line,
-					Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", fd.Name.Name),
-				})
-			}
-			continue
-		}
-		if d, ok := decl.(*ast.GenDecl); ok {
-			scanner.EachInChildren[ast.TypeSpec](d, func(typeSpec *ast.TypeSpec) {
-				if !slices.Contains(legacyQuerySymbols, typeSpec.Name.Name) {
-					return
-				}
-				violations = append(violations, pgQueryBoundaryViolation{
-					File:    relSlash(root, path),
-					Line:    fset.Position(typeSpec.Pos()).Line,
-					Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", typeSpec.Name.Name),
-				})
+	scanner.EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if slices.Contains(legacyQuerySymbols, fd.Name.Name) {
+			violations = append(violations, pgQueryBoundaryViolation{
+				File:    relSlash(root, path),
+				Line:    fset.Position(fd.Pos()).Line,
+				Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", fd.Name.Name),
 			})
 		}
-	}
+	})
+	scanner.EachInChildren[ast.GenDecl](file, func(d *ast.GenDecl) {
+		scanner.EachInChildren[ast.TypeSpec](d, func(typeSpec *ast.TypeSpec) {
+			if !slices.Contains(legacyQuerySymbols, typeSpec.Name.Name) {
+				return
+			}
+			violations = append(violations, pgQueryBoundaryViolation{
+				File:    relSlash(root, path),
+				Line:    fset.Position(typeSpec.Pos()).Line,
+				Message: fmt.Sprintf("legacy pkg/query symbol %s must live in pkg/pgquery", typeSpec.Name.Name),
+			})
+		})
+	})
 	return violations, nil
 }
 

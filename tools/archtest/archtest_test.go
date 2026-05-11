@@ -30,6 +30,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
@@ -383,82 +384,71 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 			continue
 		}
 		for _, file := range pkg.Syntax {
-			// Paired-index over file.Decls: top-level decls only; avoids path B's
-			// `for _, X :=` + type-dispatch pattern.
-			for i := range file.Decls {
-				decl := file.Decls[i]
-				if d, ok := decl.(*ast.FuncDecl); ok {
-					if !d.Name.IsExported() {
-						continue
+			scanner.EachInChildren[ast.FuncDecl](file, func(d *ast.FuncDecl) {
+				if !d.Name.IsExported() {
+					return
+				}
+				symbol := d.Name.Name
+				if d.Recv != nil {
+					symbol = "method " + symbol
+				}
+				obj := pkg.TypesInfo.Defs[d.Name]
+				if obj == nil {
+					out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
+						fmt.Sprintf("missing type info for exported API %s", symbol)))
+					return
+				}
+				if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
+					out = append(out, violation{
+						Rule:    "LAYER-10",
+						Pkg:     pkg.PkgPath,
+						Import:  p,
+						Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported API %s", pkg.PkgPath, p, symbol),
+					})
+				}
+			})
+			scanner.EachInChildren[ast.GenDecl](file, func(d *ast.GenDecl) {
+				scanner.EachInChildren[ast.TypeSpec](d, func(s *ast.TypeSpec) {
+					if !s.Name.IsExported() {
+						return
 					}
-					symbol := d.Name.Name
-					if d.Recv != nil {
-						symbol = "method " + symbol
-					}
-					obj := pkg.TypesInfo.Defs[d.Name]
-					if obj == nil {
+					typ := pkg.TypesInfo.TypeOf(s.Type)
+					if typ == nil {
 						out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
-							fmt.Sprintf("missing type info for exported API %s", symbol)))
-						continue
+							fmt.Sprintf("missing type info for exported type %s", s.Name.Name)))
+						return
 					}
-					if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
+					if p := findDisallowedTypePath(modPrefix, typ); p != "" {
 						out = append(out, violation{
 							Rule:    "LAYER-10",
 							Pkg:     pkg.PkgPath,
 							Import:  p,
-							Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported API %s", pkg.PkgPath, p, symbol),
+							Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported type %s", pkg.PkgPath, p, s.Name.Name),
 						})
 					}
-					continue
-				}
-				if d, ok := decl.(*ast.GenDecl); ok {
-					// Paired-index over Specs: top-level specs only.
-					for j := range d.Specs {
-						spec := d.Specs[j]
-						if s, ok := spec.(*ast.TypeSpec); ok {
-							if !s.Name.IsExported() {
-								continue
-							}
-							typ := pkg.TypesInfo.TypeOf(s.Type)
-							if typ == nil {
-								out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
-									fmt.Sprintf("missing type info for exported type %s", s.Name.Name)))
-								continue
-							}
-							if p := findDisallowedTypePath(modPrefix, typ); p != "" {
-								out = append(out, violation{
-									Rule:    "LAYER-10",
-									Pkg:     pkg.PkgPath,
-									Import:  p,
-									Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported type %s", pkg.PkgPath, p, s.Name.Name),
-								})
-							}
+				})
+				scanner.EachInChildren[ast.ValueSpec](d, func(s *ast.ValueSpec) {
+					for _, name := range s.Names {
+						if !name.IsExported() {
 							continue
 						}
-						if s, ok := spec.(*ast.ValueSpec); ok {
-							for _, name := range s.Names {
-								if !name.IsExported() {
-									continue
-								}
-								obj := pkg.TypesInfo.Defs[name]
-								if obj == nil {
-									out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
-										fmt.Sprintf("missing type info for exported var/const %s", name.Name)))
-									continue
-								}
-								if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
-									out = append(out, violation{
-										Rule:    "LAYER-10",
-										Pkg:     pkg.PkgPath,
-										Import:  p,
-										Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported var/const %s", pkg.PkgPath, p, name.Name),
-									})
-								}
-							}
+						obj := pkg.TypesInfo.Defs[name]
+						if obj == nil {
+							out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
+								fmt.Sprintf("missing type info for exported var/const %s", name.Name)))
+							continue
+						}
+						if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
+							out = append(out, violation{
+								Rule:    "LAYER-10",
+								Pkg:     pkg.PkgPath,
+								Import:  p,
+								Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported var/const %s", pkg.PkgPath, p, name.Name),
+							})
 						}
 					}
-				}
-			}
+				})
+			})
 		}
 	}
 	return out
