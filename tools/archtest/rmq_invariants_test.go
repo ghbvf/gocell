@@ -737,36 +737,18 @@ func scanPublishMissingFailureRecord(publish *ast.FuncDecl, fset *token.FileSet)
 // RecordPublishFailure call. The switch covers every Go statement container
 // that may legally contain an *ast.IfStmt: BlockStmt and the explicit
 // container forms (For, Range, Switch, TypeSwitch, Select).
-//
-// SelectStmt iterates Body.List directly (paired-index direct-child) rather
-// than via scanner.EachNode[ast.CommClause]. The EachNode form walks the
-// subtree, so a nested SelectStmt's CommClause is reached BOTH via the
-// outer EachNode walk AND via the recursive descent into the outer's
-// CommClause.Body — double-attributing the same violation. Direct-child
-// iteration confines the SelectStmt handler to its own arms; nested
-// SelectStmts are reached exclusively via the recursive descent. Closes
-// PR445-FU finding F3.
 func checkPublishStmtViolations(stmt ast.Stmt, fset *token.FileSet, inCtxDone bool, violations *[]string) {
 	switch s := stmt.(type) {
 	case *ast.IfStmt:
 		checkPublishIfBlockViolations(s, fset, inCtxDone, violations)
 	case *ast.SelectStmt:
-		// Paired-index iteration intentional: SCANNER-FRAMEWORK-USAGE-01
-		// path B rejects `for _, cs := range s.Body.List { cs.(*ast.CommClause) }`
-		// because that form is structurally identical to a subtree walk
-		// for any reader reusing the pattern. paired-index signals
-		// direct-child intent unambiguously and is exempt from path B.
 		if s.Body != nil {
-			for i := range s.Body.List {
-				comm, ok := s.Body.List[i].(*ast.CommClause)
-				if !ok {
-					continue
-				}
+			scanner.EachInChildren[ast.CommClause](s.Body, func(comm *ast.CommClause) {
 				isCtxDone := inCtxDone || isCtxDoneCase(comm)
 				for _, inner := range comm.Body {
 					checkPublishStmtViolations(inner, fset, isCtxDone, violations)
 				}
-			}
+			})
 		}
 	case *ast.BlockStmt:
 		for _, inner := range s.List {
@@ -785,30 +767,20 @@ func checkPublishStmtViolations(stmt ast.Stmt, fset *token.FileSet, inCtxDone bo
 			}
 		}
 	case *ast.SwitchStmt:
-		// Paired-index iteration: same reasoning as SelectStmt above.
 		if s.Body != nil {
-			for i := range s.Body.List {
-				cc, ok := s.Body.List[i].(*ast.CaseClause)
-				if !ok {
-					continue
-				}
+			scanner.EachInChildren[ast.CaseClause](s.Body, func(cc *ast.CaseClause) {
 				for _, inner := range cc.Body {
 					checkPublishStmtViolations(inner, fset, inCtxDone, violations)
 				}
-			}
+			})
 		}
 	case *ast.TypeSwitchStmt:
-		// Paired-index iteration: same reasoning as SelectStmt above.
 		if s.Body != nil {
-			for i := range s.Body.List {
-				cc, ok := s.Body.List[i].(*ast.CaseClause)
-				if !ok {
-					continue
-				}
+			scanner.EachInChildren[ast.CaseClause](s.Body, func(cc *ast.CaseClause) {
 				for _, inner := range cc.Body {
 					checkPublishStmtViolations(inner, fset, inCtxDone, violations)
 				}
-			}
+			})
 		}
 	}
 }
@@ -826,18 +798,17 @@ func checkPublishIfBlockViolations(ifStmt *ast.IfStmt, fset *token.FileSet, inCt
 	// block's child statements' concern — checkStmt will recurse and
 	// reach them via the inner if/select being its own checkIfBlock /
 	// SelectStmt handler. Counting them here would double-attribute the
-	// violation to two ancestor blocks.
+	// violation to two ancestor blocks. EachInChildren visits only direct
+	// children of ifStmt.Body.
 	hasNonNilReturn := false
-	for i := range body {
-		ret, ok := body[i].(*ast.ReturnStmt)
-		if !ok {
-			continue
+	scanner.EachInChildren[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
+		if hasNonNilReturn {
+			return
 		}
 		if !isNilReturn(ret) {
 			hasNonNilReturn = true
-			break
 		}
-	}
+	})
 
 	// Exempt: if-block guarding the "publisher is closed" early exit.
 	// This is not a wire-level failure, so no metric is required.
@@ -849,16 +820,16 @@ func checkPublishIfBlockViolations(ifStmt *ast.IfStmt, fset *token.FileSet, inCt
 		hasRecord := blockContainsRecordPublishFailure(body)
 		if !hasRecord {
 			// Report the first top-level non-nil return.
-			for i := range body {
-				ret, ok := body[i].(*ast.ReturnStmt)
-				if !ok || isNilReturn(ret) {
-					continue
+			reported := false
+			scanner.EachInChildren[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
+				if reported || isNilReturn(ret) {
+					return
 				}
 				pos := fset.Position(ret.Pos())
 				*violations = append(*violations,
 					fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
-				break
-			}
+				reported = true
+			})
 		}
 	}
 

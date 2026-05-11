@@ -141,56 +141,53 @@ func isContractSpecLit(cl *ast.CompositeLit, info *types.Info) bool {
 
 // contractSpecStringField returns the string literal value of the named
 // top-level field in cl, or "" if absent or not a string literal. Iterates
-// cl.Elts directly (paired-index direct-child semantics, not subtree
-// recursion) so a same-named field nested inside a sub-struct does not
-// pollute the outer literal's reading.
+// cl's direct children only so a same-named field nested inside a sub-struct
+// does not pollute the outer literal's reading.
 func contractSpecStringField(cl *ast.CompositeLit, fieldName string) string {
-	// Paired-index iteration intentional: SCANNER-FRAMEWORK-USAGE-01 path B
-	// rejects `for _, e := range cl.Elts { e.(*ast.KeyValueExpr) }` because
-	// that form is structurally identical to a subtree walk for any reader
-	// reusing the pattern. paired-index `for i := range Y { Y[i].(...) }`
-	// signals direct-child intent unambiguously and is exempt from path B.
-	for i := range cl.Elts {
-		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
-		if !ok {
-			continue
+	var result string
+	done := false
+	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+		if done {
+			return
 		}
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != fieldName {
-			continue
+			return
 		}
 		lit, ok := kv.Value.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
-			continue
+			return
 		}
 		s := lit.Value
 		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-			return s[1 : len(s)-1]
+			result = s[1 : len(s)-1]
+		} else {
+			result = s
 		}
-		return s
-	}
-	return ""
+		done = true
+	})
+	return result
 }
 
 // hasNonEmptyClientsField returns true if cl declares a top-level Clients
-// field whose value is a non-empty composite literal. Paired-index
-// direct-child iteration (see contractSpecStringField for rationale).
+// field whose value is a non-empty composite literal. EachInChildren visits
+// only direct children of cl, so nested composites are not reached.
 func hasNonEmptyClientsField(cl *ast.CompositeLit) bool {
-	for i := range cl.Elts {
-		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
-		if !ok {
-			continue
+	found := false
+	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+		if found {
+			return
 		}
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != "Clients" {
-			continue
+			return
 		}
 		compLit, ok := kv.Value.(*ast.CompositeLit)
 		if ok && len(compLit.Elts) > 0 {
-			return true
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 // TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01_NotContractSpecFalsePositive_Wave2_RED

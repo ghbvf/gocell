@@ -291,9 +291,9 @@ func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
 		}
 	})
 	scanner.EachInSubtree[ast.AssignStmt](f, func(stmt *ast.AssignStmt) {
-		for i := range stmt.Lhs {
-			id, ok := stmt.Lhs[i].(*ast.Ident)
-			if !ok {
+		for i, lhsExpr := range stmt.Lhs {
+			id := exprToIdent(lhsExpr)
+			if id == nil {
 				continue
 			}
 			if authNoneRHSAt(stmt.Rhs, i) {
@@ -315,6 +315,12 @@ func authNoneRHSAt(rhs []ast.Expr, idx int) bool {
 		return false
 	}
 	return chainLiteralContainsAuthNone(rhs[idx])
+}
+
+// exprToIdent casts e to *ast.Ident, returning nil if not an identifier.
+func exprToIdent(e ast.Expr) *ast.Ident {
+	id, _ := e.(*ast.Ident)
+	return id
 }
 
 func chainExprContainsAuthNone(expr ast.Expr, facts authNoneChainFacts) bool {
@@ -850,21 +856,20 @@ func isUpgradeConfigType(expr ast.Expr) bool {
 }
 
 // hasKey reports whether cl has a TOP-LEVEL key field equal to key.
-// Direct-child paired-index iteration is intentional: scanner.EachInSubtree would
-// recurse into nested composites (e.g. a `Other: Sub{Authenticator: ...}`
-// element), which would falsely report the outer literal as having the key.
+// EachInChildren visits only direct children of cl, so nested composites
+// (e.g. `Other: Sub{Authenticator: ...}`) are not reached.
 func hasKey(cl *ast.CompositeLit, key string) bool {
-	for i := range cl.Elts {
-		kv, ok := cl.Elts[i].(*ast.KeyValueExpr)
-		if !ok {
-			continue
+	found := false
+	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+		if found {
+			return
 		}
 		ident, ok := kv.Key.(*ast.Ident)
 		if ok && ident.Name == key {
-			return true
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }
 
 func testSEC08NoLegacyBroadcastCall(t *testing.T, root string) {

@@ -875,20 +875,20 @@ func isConstructorFailFast(fn *ast.FuncDecl) bool {
 	if fn.Body == nil {
 		return false
 	}
-	// Top-level Body.List ONLY (paired-index direct-child iteration). Nested
-	// IfStmts inside another IfStmt's body do NOT count — a constructor that
-	// quietly installs a noop fallback in a nested branch must not be
-	// whitelisted just because some inner block contains a fail-fast pattern.
-	for i := range fn.Body.List {
-		ifStmt, ok := fn.Body.List[i].(*ast.IfStmt)
-		if !ok {
-			continue
+	// Top-level Body.List ONLY. Nested IfStmts inside another IfStmt's body do
+	// NOT count — a constructor that quietly installs a noop fallback in a nested
+	// branch must not be whitelisted just because some inner block contains a
+	// fail-fast pattern. EachInChildren visits only direct children of fn.Body.
+	matched := false
+	scanner.EachInChildren[ast.IfStmt](fn.Body, func(ifStmt *ast.IfStmt) {
+		if matched {
+			return
 		}
 		if isFailFastReturn(ifStmt) {
-			return true
+			matched = true
 		}
-	}
-	return false
+	})
+	return matched
 }
 
 // isFailFastReturn reports whether stmt is an if-statement of the form:
@@ -908,23 +908,25 @@ func isFailFastReturn(stmt *ast.IfStmt) bool {
 		(!isNilIdent(binExpr.X) || !isTxRunnerExpr(binExpr.Y)) {
 		return false
 	}
-	// The body must contain at least one TOP-LEVEL return statement (Body.List
-	// directly) whose first result is nil and whose second result is any
-	// non-nil expression. Nested returns inside another for/if/switch inside
-	// stmt.Body are NOT recognized — a return buried inside `for { ... }` is
-	// not the unconditional fail-fast pattern we whitelist.
-	for i := range stmt.Body.List {
-		ret, ok := stmt.Body.List[i].(*ast.ReturnStmt)
-		if !ok || len(ret.Results) != 2 {
-			continue
+	// The body must contain at least one TOP-LEVEL return statement (direct
+	// children of stmt.Body only) whose first result is nil and whose second
+	// result is any non-nil expression. Nested returns inside another for/if/switch
+	// inside stmt.Body are NOT recognized — a return buried inside `for { ... }`
+	// is not the unconditional fail-fast pattern we whitelist.
+	// EachInChildren visits only direct children of stmt.Body.
+	found := false
+	scanner.EachInChildren[ast.ReturnStmt](stmt.Body, func(ret *ast.ReturnStmt) {
+		if found {
+			return
 		}
-		firstIsNil := isNilIdent(ret.Results[0])
-		secondIsNonNil := !isNilIdent(ret.Results[1])
-		if firstIsNil && secondIsNonNil {
-			return true
+		if len(ret.Results) != 2 {
+			return
 		}
-	}
-	return false
+		if isNilIdent(ret.Results[0]) && !isNilIdent(ret.Results[1]) {
+			found = true
+		}
+	})
+	return found
 }
 
 func isTxRunnerExpr(expr ast.Expr) bool {
@@ -1208,25 +1210,24 @@ func effectiveOutboxRoute(topic, eventType outboxTopicFieldValue) outboxTopicFie
 // Covers BasicLit, same-package const Ident, and cross-package SelectorExpr.
 // Returns ok=false when the field is missing or its value is not a constant string.
 //
-// Direct-child paired-index iteration is intentional: lit's top-level field
-// must be checked, NOT a same-named field that happens to appear in a nested
-// struct (e.g. `Spec: SubSpec{Topic:"a"}` should not pollute lit's Topic
-// reading when lit itself has no Topic).
+// EachInChildren visits only lit's direct children, so a same-named field
+// nested inside a sub-struct (e.g. `Spec: SubSpec{Topic:"a"}`) does not
+// pollute lit's reading.
 func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
 	var result outboxTopicFieldValue
-	for i := range lit.Elts {
-		kv, ok := lit.Elts[i].(*ast.KeyValueExpr)
-		if !ok {
-			continue
+	done := false
+	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
+		if done {
+			return
 		}
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != fieldName {
-			continue
+			return
 		}
 		value, ok := typeseval.EvaluateConstString(pkg.TypesInfo, kv.Value)
 		result = outboxTopicFieldValue{present: true, ok: ok, value: value}
-		return result
-	}
+		done = true
+	})
 	return result
 }
 
@@ -1342,28 +1343,28 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 // treated as unknown, and callers fail closed when the route is security-like or
 // not statically known.
 //
-// Direct-child paired-index iteration is intentional: only lit's top-level
-// FailurePolicy field is examined; a FailurePolicy buried inside a nested
-// struct is unrelated and must not be hoisted to lit's level.
+// EachInChildren visits only lit's direct children, so a FailurePolicy buried
+// inside a nested struct is not hoisted to lit's level.
 func extractFailurePolicy(pkg *packages.Package, lit *ast.CompositeLit) outboxFailurePolicyStatus {
 	result := outboxPolicyAbsent
-	for i := range lit.Elts {
-		kv, ok := lit.Elts[i].(*ast.KeyValueExpr)
-		if !ok {
-			continue
+	done := false
+	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
+		if done {
+			return
 		}
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != outboxTopicForbiddenPolicyField {
-			continue
+			return
 		}
 		if isOutboxFailOpenConst(pkg.TypesInfo, kv.Value) {
-			return outboxPolicyKnownFailOpen
+			result = outboxPolicyKnownFailOpen
+		} else if isKnownOutboxFailurePolicyConst(pkg.TypesInfo, kv.Value) {
+			result = outboxPolicyKnownOther
+		} else {
+			result = outboxPolicyUnknown
 		}
-		if isKnownOutboxFailurePolicyConst(pkg.TypesInfo, kv.Value) {
-			return outboxPolicyKnownOther
-		}
-		return outboxPolicyUnknown
-	}
+		done = true
+	})
 	return result
 }
 

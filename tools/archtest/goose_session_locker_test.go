@@ -186,6 +186,9 @@ func scanGooseSessionLockerFile(
 // isGooseFuncCall reports whether call is an invocation of the package-level
 // function gooseImportPath.funcName, regardless of import alias / dot-import.
 func isGooseFuncCall(info *types.Info, call *ast.CallExpr, gooseImportPath, funcName string) bool {
+	if call == nil {
+		return false
+	}
 	ident := callFuncIdent(call.Fun)
 	if ident == nil {
 		return false
@@ -194,20 +197,21 @@ func isGooseFuncCall(info *types.Info, call *ast.CallExpr, gooseImportPath, func
 }
 
 // hasGooseFuncArg reports whether any direct arg in args is a call to
-// gooseImportPath.funcName.
+// gooseImportPath.funcName. Only immediate elements of args are checked,
+// not arbitrarily nested CallExprs inside an arg's subtree.
 func hasGooseFuncArg(info *types.Info, args []ast.Expr, gooseImportPath, funcName string) bool {
-	// Paired index iteration: only direct args (immediate children of args)
-	// are checked, not arbitrarily nested CallExprs inside an arg's subtree.
-	for i := range args {
-		argCall, ok := args[i].(*ast.CallExpr)
-		if !ok {
-			continue
-		}
-		if isGooseFuncCall(info, argCall, gooseImportPath, funcName) {
+	for _, arg := range args {
+		if isGooseFuncCall(info, exprToCallExpr(arg), gooseImportPath, funcName) {
 			return true
 		}
 	}
 	return false
+}
+
+// exprToCallExpr casts e to *ast.CallExpr, returning nil if not a call expression.
+func exprToCallExpr(e ast.Expr) *ast.CallExpr {
+	c, _ := e.(*ast.CallExpr)
+	return c
 }
 
 // callFuncIdent returns the identifier that names the function in a
