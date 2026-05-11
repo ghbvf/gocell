@@ -27,6 +27,12 @@ import (
 //   - Nodes       — push/pop visitor
 //   - WithStack   — stack-aware visitor
 //   - PreorderSeq — iter.Seq variant (Go 1.23+)
+//
+// Lockstep invariant: TestScannerFrameworkUsage01_InspectorMethodBanLive
+// asserts exactly len(diags) == 4 — one per method call here. Adding a new
+// banned method to forbiddenMethodSymbols[inspector] in
+// scanner_framework_usage_test.go requires adding a matching call site here
+// AND bumping wantHits in the live test.
 func callBannedMethods(insp *inspector.Inspector) {
 	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(ast.Node) {})
 	insp.Nodes([]ast.Node{(*ast.FuncDecl)(nil)}, func(ast.Node, bool) bool { return true })
@@ -36,4 +42,8 @@ func callBannedMethods(insp *inspector.Inspector) {
 	}
 }
 
+// var _ = callBannedMethods anchors the function so the Go compiler does
+// not report it as unused; the function must NEVER be invoked at runtime
+// (it would dereference a nil *Inspector and panic) — its sole purpose is
+// to make go/types populate info.Selections for archtest detection.
 var _ = callBannedMethods

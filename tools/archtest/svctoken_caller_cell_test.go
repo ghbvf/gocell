@@ -24,7 +24,6 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -40,6 +39,8 @@ import (
 const ruleSvctokenCallerCellRequired01 = "SVCTOKEN-CALLER-CELL-REQUIRED-01"
 
 // authRuntimeImportPath is the canonical import path for runtime/auth.
+// Shared with role_admin_literal_test.go in the same archtest package; do
+// not duplicate.
 const authRuntimeImportPath = "github.com/ghbvf/gocell/runtime/auth"
 
 // cellIDRegex is the canonical cell-ID pattern: lowercase letter + lowercase
@@ -109,17 +110,20 @@ func collectGenerateServiceTokenDiags(
 		if pkg.TypesInfo == nil || pkg.Fset == nil {
 			continue
 		}
+		// Test files inside runtime/auth itself (notably servicetoken_test.go's
+		// negative-path tests asserting GenerateServiceToken returns "" for bad
+		// input) are not cross-package consumers and are exempt. The exemption
+		// is scoped narrowly: only _test.go files whose owning package is
+		// runtime/auth proper (PkgPath equality, not file-rel prefix — so a
+		// future runtime/auth/internal/* sub-package would NOT be exempt; a
+		// non-test production file under runtime/auth/ would NOT be exempt).
+		// Pre-PR-SH1 these escaped the SelectorExpr-only matcher silently
+		// (bare-Ident in same package); the migration to ResolvePackageRef
+		// surfaces them so the exemption must be explicit.
+		authOwningPackage := pkg.PkgPath == authRuntimeImportPath
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
-			// Internal callers within the runtime/auth package itself
-			// (notably servicetoken_test.go's negative-path tests
-			// asserting GenerateServiceToken returns "" for bad input)
-			// are not cross-package consumers and are exempt from caller-
-			// cell validation. Pre-PR-SH1 these escaped the SelectorExpr-
-			// only matcher silently (bare-Ident in same package); the
-			// migration to typeseval.ResolvePackageRef surfaces them so
-			// the exemption must be explicit.
-			if strings.HasPrefix(filepath.ToSlash(rel), "runtime/auth/") {
+			if authOwningPackage && strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
 			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {

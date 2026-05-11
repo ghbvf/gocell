@@ -253,7 +253,7 @@ Phase 1.x (panic 单源)               ✅ PR #467
 Phase 2.1 (ResolveReceiverType)      ✅ PR #468
 Phase 2.2 (ResolvePackageRef)        ✅ PR #469
 Phase 3.1 (build-tag failclosed)     ✅ PR #472
-Phase 3.2 (scanner hardening)        pending — 最小化 scope（3-5h，inspector + svctoken/role_admin A.3）
+Phase 3.2 (scanner hardening)        ✅ PR #474（最小化 scope：inspector method ban + svctoken/role_admin A.3 closure + outbox dot-import gap closure）
 Phase 3.3 (generated-skip)           ✅ PR #471
 Phase 3.4 (internal-contract)        ✅ PR #470
 Phase 3.5 (eval predicate central)   pending — 依赖 3.1 ✅

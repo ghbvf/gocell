@@ -147,6 +147,9 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 // do not pollute the production rule.
 func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
 	root := findModuleRoot(t)
+	// includeTests=false: the inspectorredfixture package has no _test.go files
+	// so loading tests would only add no-op work; nil tags is sufficient because
+	// the fixture has no build-tag-gated files.
 	resolver, err := typeseval.SharedResolver(root, false, nil, "./tools/archtest/internal/inspectorredfixture")
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)
@@ -165,7 +168,10 @@ func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
 
 	const wantHits = 4
 	if len(diags) != wantHits {
-		t.Fatalf("forbiddenMethodSymbols[inspector] coverage: got %d diags, want %d\n%v", len(diags), wantHits, diags)
+		for i, d := range diags {
+			t.Logf("diag[%d]: %s:%d: %s", i, d.Rel, d.Line, d.Message)
+		}
+		t.Fatalf("forbiddenMethodSymbols[inspector] coverage: got %d diags, want %d", len(diags), wantHits)
 	}
 	bannedMethods := map[string]bool{"Preorder": true, "Nodes": true, "WithStack": true, "PreorderSeq": true}
 	for _, d := range diags {
@@ -734,10 +740,13 @@ func runFixture(t *testing.T, src string) []scanner.Diagnostic {
 
 // TestScannerFrameworkUsage01_Fixture exercises forbiddenWalkRefs and
 // forbiddenAstListTypeAssertions directly via parsed-from-string fixtures.
-// 32 cases cover every AST shape the live rule must catch (path A: 12, path
-// A': 4, path B: 10, form-(c) including paired-index direct + intermediate-
-// alias rewrite: 5, companion-index escape hatches: 2) plus 6 negative shapes
-// scattered within path B, plus 1 standalone negative.
+// 39 cases cover every AST shape the live rule must catch (path A
+// qualified/dot-import declarations + bare-Ident, path A' method calls on
+// banned receiver types, path B for-range over []ast.X with type assertions
+// including paired-index + intermediate-alias rewrite + companion-index
+// escape hatches, plus negative shapes proving the precision guards).
+// Because both the live rule and this fixture call the same pure functions,
+// they cannot drift.
 //
 // Inspector method-call coverage (forbiddenMethodSymbols
 // `golang.org/x/tools/go/ast/inspector` entry) is locked separately by

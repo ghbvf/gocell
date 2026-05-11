@@ -1822,32 +1822,41 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 // scanForHandleResultLiterals scans file for HandleResult composite literals.
 // Returns "<rel>:<line>" diagnostics. Files that neither import kernel/outbox
 // nor declare package outbox produce no hits. Type-aware via pkg.TypesInfo.
+//
+// Coverage:
+//   - qualified literal `outbox.HandleResult{}` — *ast.SelectorExpr resolved
+//     via info.Uses[tn.Sel].(*types.TypeName); covers renamed imports
+//     authoritatively (the type's owning package is reported regardless of
+//     local alias).
+//   - bare-Ident literal `HandleResult{}` — *ast.Ident resolved via
+//     info.Uses[tn].(*types.TypeName); covers BOTH same-package use (file is
+//     in package outbox) AND dot-imported use (`import . "outbox"`). The
+//     latter closes the prior path A.3 bypass — symmetric with the PR-SH1
+//     caller-side migration to typeseval.ResolvePackageRef for function refs.
 func scanForHandleResultLiterals(pkg *packages.Package, file *ast.File, rel, outboxImportPath string) []string {
-	inPackageOutbox := pkg.PkgPath == outboxImportPath
 	var hits []string
 	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+		var id *ast.Ident
 		switch tn := cl.Type.(type) {
 		case *ast.SelectorExpr:
-			ident, ok := tn.X.(*ast.Ident)
-			if !ok || tn.Sel == nil || tn.Sel.Name != "HandleResult" {
+			if tn.Sel == nil || tn.Sel.Name != "HandleResult" {
 				return
 			}
-			pkgName, isPkg := pkg.TypesInfo.Uses[ident].(*types.PkgName)
-			if !isPkg {
-				return
-			}
-			if pkgName.Imported().Path() != outboxImportPath {
-				return
-			}
-			pos := pkg.Fset.Position(cl.Pos())
-			hits = append(hits, fmt.Sprintf("%s:%d: %s.HandleResult{} literal", rel, pos.Line, ident.Name))
+			id = tn.Sel
 		case *ast.Ident:
-			if !inPackageOutbox || tn.Name != "HandleResult" {
+			if tn.Name != "HandleResult" {
 				return
 			}
-			pos := pkg.Fset.Position(cl.Pos())
-			hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal in package outbox", rel, pos.Line))
+			id = tn
+		default:
+			return
 		}
+		obj, ok := pkg.TypesInfo.Uses[id].(*types.TypeName)
+		if !ok || obj.Pkg() == nil || obj.Pkg().Path() != outboxImportPath {
+			return
+		}
+		pos := pkg.Fset.Position(cl.Pos())
+		hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal (resolved to %s)", rel, pos.Line, outboxImportPath))
 	})
 	return hits
 }
