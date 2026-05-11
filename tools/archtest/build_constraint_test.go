@@ -2,8 +2,6 @@
 package archtest
 
 import (
-	"bufio"
-	"go/build/constraint"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // findIntegrationTagViolations walks rootDir and returns the relative paths (from
@@ -137,35 +136,17 @@ var defaultBuildContextTags = map[string]bool{
 // such as `integration_cluster`. Files matching `_real_test.go` that pass
 // under any of those scopes are violations.
 func fileHasStricterThanIntegrationTag(path string) (bool, error) {
-	f, err := os.Open(filepath.Clean(path))
+	expr, err := typeseval.ParseBuildConstraint(path)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
-			if !constraint.IsGoBuild(line) {
-				continue
-			}
-			expr, parseErr := constraint.Parse(line)
-			if parseErr != nil {
-				return false, parseErr
-			}
-			withIntegrationOnly := expr.Eval(func(tag string) bool { return tag == "integration" })
-			withoutAny := expr.Eval(func(_ string) bool { return false })
-			withDefaultCtx := expr.Eval(func(tag string) bool { return defaultBuildContextTags[tag] })
-			return !withIntegrationOnly && !withoutAny && !withDefaultCtx, nil
-		}
-		break
+	if expr == nil {
+		return false, nil
 	}
-	if err := scanner.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
+	withIntegrationOnly := expr.Eval(func(tag string) bool { return tag == "integration" })
+	withoutAny := expr.Eval(func(_ string) bool { return false })
+	withDefaultCtx := expr.Eval(func(tag string) bool { return defaultBuildContextTags[tag] })
+	return !withIntegrationOnly && !withoutAny && !withDefaultCtx, nil
 }
 
 // fileHasIntegrationTag returns true iff the file carries, in its header
@@ -183,42 +164,16 @@ func fileHasStricterThanIntegrationTag(path string) (bool, error) {
 // Returns (false, nil) when the file lacks a //go:build line in the header.
 // Returns (false, err) when the line cannot be parsed.
 func fileHasIntegrationTag(path string) (bool, error) {
-	f, err := os.Open(filepath.Clean(path))
+	expr, err := typeseval.ParseBuildConstraint(path)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-
-		// Header zone ends at the first non-blank, non-comment line. The Go
-		// toolchain (see go/build/read.go readGoInfo) stops parsing build
-		// constraints once it sees the package clause, so any //go:build below
-		// that point would be ignored at compile time and must not be accepted
-		// by this gate either.
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
-			if !constraint.IsGoBuild(line) {
-				continue
-			}
-			expr, parseErr := constraint.Parse(line)
-			if parseErr != nil {
-				return false, parseErr
-			}
-			withIntegration := expr.Eval(func(tag string) bool { return tag == "integration" })
-			withoutAny := expr.Eval(func(_ string) bool { return false })
-			return withIntegration && !withoutAny, nil
-		}
-		// First substantive line (typically `package …`) — stop scanning.
-		break
+	if expr == nil {
+		return false, nil
 	}
-	if err := scanner.Err(); err != nil {
-		return false, err
-	}
-	// No //go:build line found in the header zone.
-	return false, nil
+	withIntegration := expr.Eval(func(tag string) bool { return tag == "integration" })
+	withoutAny := expr.Eval(func(_ string) bool { return false })
+	return withIntegration && !withoutAny, nil
 }
 
 // TestArchtest_AllIntegrationTestFiles_HaveIntegrationBuildTag walks the entire

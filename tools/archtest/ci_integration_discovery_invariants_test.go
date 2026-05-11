@@ -2,15 +2,12 @@
 package archtest
 
 import (
-	"bufio"
 	"bytes"
-	"go/build/constraint"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // discoverPackagesUnderTag walks rootDir via the scanner framework and
@@ -74,40 +72,18 @@ func discoverPackagesUnderTag(rootDir, tag string) ([]string, error) {
 // (OTel smoke, integration_cluster vet, etc.) and must not be confused
 // with the main integration-test gate.
 //
-// Pre-Go-1.17 `// +build integration` files (without a paired `//go:build`
-// line) are out of scope: `constraint.IsGoBuild` recognizes only the
-// `//go:build` form, and the repo's Go floor (1.25, declared in go.mod)
-// makes the dual-line form unnecessary. The fixture meta-test documents
-// this exclusion explicitly.
+// Legacy `// +build` form is honoured via typeseval.ParseBuildConstraint.
 func fileHasExclusivelyTag(path, tag string) (bool, error) {
-	f, err := os.Open(filepath.Clean(path))
+	expr, err := typeseval.ParseBuildConstraint(path)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
-			if !constraint.IsGoBuild(line) {
-				continue
-			}
-			expr, parseErr := constraint.Parse(line)
-			if parseErr != nil {
-				return false, parseErr
-			}
-			withTag := expr.Eval(func(t string) bool { return t == tag })
-			withoutAny := expr.Eval(func(_ string) bool { return false })
-			return withTag && !withoutAny, nil
-		}
-		break
+	if expr == nil {
+		return false, nil
 	}
-	if err := scanner.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
+	withTag := expr.Eval(func(t string) bool { return t == tag })
+	withoutAny := expr.Eval(func(_ string) bool { return false })
+	return withTag && !withoutAny, nil
 }
 
 // readIntegrationTestStep reads _build-lint.yml and returns the
@@ -267,8 +243,8 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesExactlyOneGoTest(t *test
 //   - `//go:build integration_cluster`      → NOT discovered under "integration"
 //     (different tag name; covered by separate vet step)
 //   - `//go:build integration || e2e`       → discovered under both tags
-//   - pre-Go-1.17 `// +build integration` (no `//go:build` line) → NOT
-//     discovered (intentional; repo Go floor is 1.25)
+//   - pre-Go-1.17 `// +build integration` (no `//go:build` line) → discovered;
+//     typeseval.ParseBuildConstraint honours the legacy directive form
 //   - production .go (filename != _test.go) with the tag → discovered;
 //     mirrors the workflow set-diff's .GoFiles coverage
 //   - `_test.go` filename with the tag → discovered; mirrors the workflow
@@ -294,8 +270,8 @@ func TestArchtest_CIIntegrationDiscovery_FixtureMetaTest(t *testing.T) {
 		{name: "no_tag", content: "package f\n"},
 		{name: "cluster", content: "//go:build integration_cluster\n\npackage f\n"},
 		{name: "or_form", content: "//go:build integration || e2e\n\npackage f\n", wantInt: true, wantE2E: true},
-		// Pre-1.17 `// +build` form is silently undetected — documents the limitation.
-		{name: "old_plus_build", content: "// +build integration\n\npackage f\n"},
+		// Legacy `// +build` form is honoured via typeseval.ParseBuildConstraint.
+		{name: "old_plus_build", content: "// +build integration\n\npackage f\n", wantInt: true},
 		// Filename-typed cases: explicit production .go vs _test.go to mirror
 		// workflow set-diff symmetry across .GoFiles / .TestGoFiles axes.
 		{
