@@ -140,6 +140,20 @@ type errorFirstViolation struct {
 	Reason   string
 }
 
+// errorFirstPanicWhitelist exempts ADR-approved C-class re-throw functions
+// from ERROR-FIRST-API-01. These are error-less functions that contain a
+// panic() as a deliberate re-throw of a recovered value; they are exempt from
+// the "error-less function must not panic" rule but still require
+// panicregister.Approved wrap (enforced by PANIC-REGISTERED-01).
+//
+// Key format: "<rel-path>::<funcName>".
+var errorFirstPanicWhitelist = map[string]struct{}{
+	"kernel/wrapper/lifecycle.go::recoverAndFinish":                          {},
+	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": {},
+	"adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback":        {},
+	"adapters/postgres/tx_manager.go::repanicAfterSavepointRollback":         {},
+}
+
 // ─── details_slog_attr constants ─────────────────────────────────────────────
 
 const ruleDetailsSlogAttr01 = "DETAILS-SLOG-ATTR-01"
@@ -863,7 +877,7 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 			return
 		}
 		whitelistKey := rel + "::" + fd.Name.Name
-		if _, whitelisted := architecturalPanicWhitelist[whitelistKey]; whitelisted {
+		if _, whitelisted := errorFirstPanicWhitelist[whitelistKey]; whitelisted {
 			return
 		}
 		findPanicCalls(fd.Body, func(callPos token.Pos) {

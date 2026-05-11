@@ -7,24 +7,31 @@ package archtest
 // panic_invariants_test.go — consolidated AST guards for panic-related invariants.
 //
 // Invariants covered:
-//   PANIC-REDACT-01        slog.Any("panic", X) must wrap X with redaction.RedactAny(...)
-//   PANIC-REGISTERED-01    production panic() calls must be in Must* functions or ADR-registered whitelist
+//
+//	PANIC-REDACT-01     slog.Any("panic", X) must wrap X with redaction.RedactAny(...)
+//	PANIC-REGISTERED-01 every production panic() call must wrap its argument with
+//	                    panicregister.Approved(reason, value), where reason is a
+//	                    const string literal. See pkg/panicregister and
+//	                    docs/architecture/202604270030-architectural-panic-whitelist.md.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"go/types"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 // INVARIANT: PANIC-REDACT-01
@@ -89,409 +96,305 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 // INVARIANT: PANIC-REGISTERED-01
 //
 // TestPanicRegistered enforces PANIC-REGISTERED-01: every production panic()
-// call must be either inside a Must* function or registered in the
-// architecturalPanicWhitelist (which must exactly match
-// docs/architecture/202604270030-architectural-panic-whitelist.md).
+// call must wrap its argument with panicregister.Approved(reason, value),
+// where reason is a const string literal. See pkg/panicregister and
+// docs/architecture/202604270030-architectural-panic-whitelist.md.
 
 const rulePanicRegistered01 = "PANIC-REGISTERED-01"
 
-// architecturalPanicWhitelist maps "<rel-path>::<funcName>" or
-// "<rel-path>::<Receiver>.<methodName>" to an ADR-pinned justification. Keep
-// this map exactly aligned with docs/architecture/202604270030-architectural-panic-whitelist.md.
-var architecturalPanicWhitelist = map[string]string{
-	"kernel/wrapper/lifecycle.go::recoverAndFinish": "re-panics from defer recover" +
-		" so outer Recovery middleware can serialize the panic",
-	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover" +
-		" after reporting circuit-breaker failure",
-	"adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback": "re-panics after" +
-		" top-level transaction rollback so caller panic semantics are preserved",
-	"adapters/postgres/tx_manager.go::repanicAfterSavepointRollback": "re-panics after" +
-		" savepoint rollback so nested transaction panic semantics are preserved",
-}
+// panicregisterPkgPath is the canonical import path of the panicregister package.
+const panicregisterPkgPath = "github.com/ghbvf/gocell/pkg/panicregister"
+
+// panicregisterApprovedFunc is the name of the only approved funnel function.
+const panicregisterApprovedFunc = "Approved"
 
 type panicRegisteredViolation struct {
-	File     string
-	Line     int
-	FuncName string
-	Reason   string
+	File   string
+	Line   int
+	Reason string
 }
 
-type panicRegisteredScope struct {
-	FuncName     string
-	AllowMust    bool
-	WhitelistKey string
-}
-
-func TestPanicRegistered(t *testing.T) {
-	root := findModuleRoot(t)
-
-	violations, usedWhitelist := scanRootForPanicRegisteredViolations(t, root, architecturalPanicWhitelist)
-	assertPanicWhitelistMatchesADR(t, root, usedWhitelist)
-
-	if len(violations) > 0 {
-		t.Logf("%s: %d violation(s):", rulePanicRegistered01, len(violations))
-		for _, v := range violations {
-			t.Logf("  %s:%d  %s — %s", v.File, v.Line, v.FuncName, v.Reason)
-		}
-	}
-	assert.Empty(t, violations,
-		"%s: production panic() calls must be either inside Must* functions or ADR-registered permanent exceptions",
-		rulePanicRegistered01)
-}
-
-func TestPanicRegisteredScannerFixtures(t *testing.T) {
-	tests := []struct {
-		name      string
-		src       string
-		rel       string
-		whitelist map[string]string
-		wantLines []int
-		wantUsed  []string
-	}{
-		{
-			name: "ordinary function panic fails",
-			src: `package p
-func New() {
-	panic("boom")
-}`,
-			wantLines: []int{3},
-		},
-		{
-			name: "nested function literal panic fails under non Must function",
-			src: `package p
-func New() {
-	fn := func() { panic("boom") }
-	fn()
-}`,
-			wantLines: []int{3},
-		},
-		{
-			name: "Must function panic passes",
-			src: `package p
-func MustNew() {
-	panic("boom")
-}`,
-		},
-		{
-			name: "Must method panic passes",
-			src: `package p
-type T struct{}
-func (*T) MustNew() {
-	panic("boom")
-}`,
-		},
-		{
-			name: "package initializer panic fails",
-			src: `package p
-var _ = func() string {
-	panic("boom")
-}()`,
-			wantLines: []int{3},
-		},
-		{
-			name: "nested function literal panic under Must function fails",
-			src: `package p
-func MustNew() func() {
-	return func() {
-		panic("boom")
-	}
-}`,
-			wantLines: []int{4},
-		},
-		{
-			name: "init panic is not auto exempt",
-			src: `package p
-func init() {
-	panic("boom")
-}`,
-			wantLines: []int{3},
-		},
-		{
-			name: "recover re panic is not auto exempt",
-			src: `package p
-func Run() {
-	defer func() {
-		if r := recover(); r != nil {
-			panic(r)
-		}
-	}()
-}`,
-			wantLines: []int{5},
-		},
-		{
-			name: "ADR whitelisted function passes and marks whitelist used",
-			src: `package p
-func registered() {
-	panic("boom")
-}`,
-			rel: "runtime/example.go",
-			whitelist: map[string]string{
-				"runtime/example.go::registered": "fixture",
-			},
-			wantUsed: []string{"runtime/example.go::registered"},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			rel := tc.rel
-			if rel == "" {
-				rel = "p/p.go"
-			}
-			whitelist := tc.whitelist
-			if whitelist == nil {
-				whitelist = map[string]string{}
-			}
-			violations, used := scanSourceForPanicRegisteredViolations(t, tc.src, rel, whitelist)
-			var gotLines []int
-			for _, v := range violations {
-				gotLines = append(gotLines, v.Line)
-			}
-			assert.Equal(t, tc.wantLines, gotLines)
-			assert.Equal(t, sortedStrings(tc.wantUsed), sortedStrings(mapKeys(used)))
-		})
-	}
-}
-
-func scanSourceForPanicRegisteredViolations(
-	t *testing.T, src, rel string, whitelist map[string]string,
-) ([]panicRegisteredViolation, map[string]bool) {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, rel, src, parser.SkipObjectResolution|parser.ParseComments)
-	require.NoError(t, err)
-	used := map[string]bool{}
-	return scanPanicRegisteredAST(fset, file, rel, whitelist, used), used
-}
-
-func scanRootForPanicRegisteredViolations(
-	t *testing.T, root string, whitelist map[string]string,
-) ([]panicRegisteredViolation, map[string]bool) {
-	t.Helper()
-	usedWhitelist := map[string]bool{}
-	var violations []panicRegisteredViolation
-
-	// Exclude tools/archtest/doc.go — scanner self-protects internal/scanner;
-	// the archtest package itself only has *_test.go (excluded by default) plus
-	// doc.go which contains no production panic calls.
-	scope := scanner.ModuleScope(root,
-		scanner.ExcludeRels("tools/archtest/doc.go"),
-	)
-	// EachFile is fail-loud: any parse error calls t.Fatalf immediately,
-	// replacing the previous manual loop + error return pattern (PANIC-REGISTERED-01 dogfooding).
-	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		violations = append(violations, scanPanicRegisteredAST(fc.Fset, fc.File, fc.Rel, whitelist, usedWhitelist)...)
-	})
-	return violations, usedWhitelist
-}
-
-// panicScopeEntry records the source range and classification of a function
-// scope (FuncDecl or FuncLit) within the file. The range [start, end) is the
-// body Lbrace..Rbrace so that panic CallExpr positions inside the body can be
-// matched via containment.
-type panicScopeEntry struct {
-	start, end token.Pos
-	scope      panicRegisteredScope
-}
-
-func scanPanicRegisteredAST(
+// scanFileForPanicViolations walks a single AST file and returns violations
+// of PANIC-REGISTERED-01. info is required for callee resolution; if nil,
+// the scan falls back to pure-AST selector matching (used in fixture mode
+// where full type resolution is provided separately).
+func scanFileForPanicViolations(
 	fset *token.FileSet,
 	file *ast.File,
+	info *types.Info,
 	rel string,
-	whitelist map[string]string,
-	usedWhitelist map[string]bool,
 ) []panicRegisteredViolation {
-	// Phase 1: collect all function-scope entries in pre-order (Preorder matches
-	// ast.Inspect traversal order, preserving FuncLit numbering).
-	var entries []panicScopeEntry
-	funcLitCount := 0
-
-	// innermostScopeNameAt returns the FuncName of the innermost scope
-	// containing position p at the point of the call (entries built so far).
-	innermostScopeNameAt := func(p token.Pos) string {
-		name := "<package>"
-		bestStart := token.NoPos
-		for _, e := range entries {
-			if p > e.start && p < e.end {
-				if !bestStart.IsValid() || e.start > bestStart {
-					bestStart = e.start
-					name = e.scope.FuncName
-				}
-			}
-		}
-		return name
-	}
-
-	scanner.EachInSubtree[ast.FuncDecl](file, func(node *ast.FuncDecl) {
-		if node.Body == nil {
-			return
-		}
-		funcName := panicRegisteredFuncName(node)
-		entries = append(entries, panicScopeEntry{
-			start: node.Body.Lbrace,
-			end:   node.Body.Rbrace,
-			scope: panicRegisteredScope{
-				FuncName:     funcName,
-				AllowMust:    strings.HasPrefix(node.Name.Name, "Must"),
-				WhitelistKey: rel + "::" + funcName,
-			},
-		})
-	})
-	scanner.EachInSubtree[ast.FuncLit](file, func(node *ast.FuncLit) {
-		if node.Body == nil {
-			return
-		}
-		funcLitCount++
-		parent := innermostScopeNameAt(node.Body.Lbrace)
-		litName := parent + ".func" + strconv.Itoa(funcLitCount)
-		entries = append(entries, panicScopeEntry{
-			start: node.Body.Lbrace,
-			end:   node.Body.Rbrace,
-			scope: panicRegisteredScope{
-				FuncName: litName,
-			},
-		})
-	})
-
-	// Phase 2: for each panic() call, find the innermost enclosing scope.
 	var violations []panicRegisteredViolation
+
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isPanicCallExpr(call) {
 			return
 		}
-		// Find innermost scope containing this panic.
-		scope := panicRegisteredScope{FuncName: "<package initializer>"}
-		bestStart := token.NoPos
-		for _, e := range entries {
-			p := call.Pos()
-			if p > e.start && p < e.end {
-				if !bestStart.IsValid() || e.start > bestStart {
-					bestStart = e.start
-					scope = e.scope
-				}
-			}
+		if len(call.Args) == 0 {
+			// panic() with no args is a compile error, but guard anyway.
+			violations = append(violations, panicRegisteredViolation{
+				File:   rel,
+				Line:   fset.Position(call.Pos()).Line,
+				Reason: "panic argument must be a call to panicregister.Approved(literal, value)",
+			})
+			return
 		}
-		violations = appendPanicRegisteredViolation(violations, fset, rel, call.Pos(), []panicRegisteredScope{scope}, whitelist, usedWhitelist)
+
+		arg := call.Args[0]
+
+		// Rule 1: arg must be a CallExpr.
+		argCall, ok := arg.(*ast.CallExpr)
+		if !ok {
+			violations = append(violations, panicRegisteredViolation{
+				File:   rel,
+				Line:   fset.Position(call.Pos()).Line,
+				Reason: "panic argument must be a call to panicregister.Approved(literal, value)",
+			})
+			return
+		}
+
+		// Rule 2: the callee of argCall must resolve to panicregister.Approved.
+		if !isApprovedCallee(argCall.Fun, info) {
+			calleeName := formatCallee(argCall.Fun)
+			violations = append(violations, panicRegisteredViolation{
+				File:   rel,
+				Line:   fset.Position(call.Pos()).Line,
+				Reason: fmt.Sprintf("panic argument must call panicregister.Approved (got: %s)", calleeName),
+			})
+			return
+		}
+
+		// Rule 3: Approved must have at least 2 args.
+		if len(argCall.Args) < 2 {
+			violations = append(violations, panicRegisteredViolation{
+				File:   rel,
+				Line:   fset.Position(call.Pos()).Line,
+				Reason: "panicregister.Approved requires two arguments",
+			})
+			return
+		}
+
+		// Rule 4: first arg (reason) must be a *ast.BasicLit with Kind == token.STRING.
+		reasonArg := argCall.Args[0]
+		reasonLit, ok := reasonArg.(*ast.BasicLit)
+		if !ok || reasonLit.Kind != token.STRING {
+			violations = append(violations, panicRegisteredViolation{
+				File:   rel,
+				Line:   fset.Position(call.Pos()).Line,
+				Reason: "panicregister.Approved reason must be a const string literal (no fmt.Sprintf / concat / variable)",
+			})
+		}
 	})
+
 	return violations
 }
 
-func appendPanicRegisteredViolation(
-	violations []panicRegisteredViolation,
-	fset *token.FileSet,
-	rel string,
-	pos token.Pos,
-	scopes []panicRegisteredScope,
-	whitelist map[string]string,
-	usedWhitelist map[string]bool,
-) []panicRegisteredViolation {
-	scope := panicRegisteredScope{FuncName: "<package initializer>"}
-	if len(scopes) > 0 {
-		scope = scopes[len(scopes)-1]
+// isApprovedCallee reports whether funExpr refers to panicregister.Approved.
+// When info is non-nil, resolution is via types.Info.Uses for correctness
+// under import aliasing. When info is nil, falls back to pure-AST selector
+// name matching.
+func isApprovedCallee(funExpr ast.Expr, info *types.Info) bool {
+	sel, ok := funExpr.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil {
+		return false
 	}
-	if scope.AllowMust {
-		return violations
+	if sel.Sel.Name != panicregisterApprovedFunc {
+		return false
 	}
-	if scope.WhitelistKey != "" {
-		if _, ok := whitelist[scope.WhitelistKey]; ok {
-			usedWhitelist[scope.WhitelistKey] = true
-			return violations
+	if info != nil {
+		obj := info.Uses[sel.Sel]
+		if obj == nil {
+			return false
 		}
+		fn, ok := obj.(*types.Func)
+		if !ok || fn.Pkg() == nil {
+			return false
+		}
+		return fn.Pkg().Path() == panicregisterPkgPath && fn.Name() == panicregisterApprovedFunc
 	}
-	return append(violations, panicRegisteredViolation{
-		File:     rel,
-		Line:     fset.Position(pos).Line,
-		FuncName: scope.FuncName,
-		Reason:   "panic() is neither in a Must* function nor registered in the architectural panic ADR",
-	})
+	// AST-only fallback: match "panicregister.Approved".
+	xIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return xIdent.Name == "panicregister"
 }
 
+// formatCallee returns a short human-readable description of the callee
+// for use in violation messages.
+func formatCallee(funExpr ast.Expr) string {
+	sel, ok := funExpr.(*ast.SelectorExpr)
+	if !ok {
+		return "<unknown>"
+	}
+	xIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return "?." + sel.Sel.Name
+	}
+	return xIdent.Name + "." + sel.Sel.Name
+}
+
+// isPanicCallExpr reports whether call is a call to the built-in panic function.
 func isPanicCallExpr(call *ast.CallExpr) bool {
 	ident, ok := call.Fun.(*ast.Ident)
 	return ok && ident.Name == "panic"
 }
 
-func panicRegisteredFuncName(fd *ast.FuncDecl) string {
-	if fd.Recv == nil || len(fd.Recv.List) == 0 {
-		return fd.Name.Name
+// shouldSkipForPanicRegistered returns true for paths that must not be
+// scanned by TestPanicRegistered (test files, generated code, testdata, etc.).
+func shouldSkipForPanicRegistered(rel string) bool {
+	switch {
+	case strings.HasSuffix(rel, "_test.go"):
+		return true
+	case strings.HasPrefix(rel, "vendor/"):
+		return true
+	case strings.HasPrefix(rel, "generated/"):
+		return true
+	case strings.HasPrefix(rel, "worktrees/"):
+		return true
+	case strings.HasPrefix(rel, ".git/"):
+		return true
+	case strings.HasPrefix(rel, "node_modules/"):
+		return true
+	case strings.Contains(rel, "/testdata/") || strings.HasPrefix(rel, "testdata/"):
+		return true
+	case rel == "tools/archtest/doc.go":
+		return true
 	}
-	if recv := scanner.ReceiverTypeName(fd.Recv.List[0].Type); recv != "" {
-		return recv + "." + fd.Name.Name
-	}
-	return fd.Name.Name
+	return false
 }
 
-func assertPanicWhitelistMatchesADR(t *testing.T, root string, usedWhitelist map[string]bool) {
-	t.Helper()
-	goKeys := sortedStrings(mapKeys(architecturalPanicWhitelist))
-	adrKeys := sortedStrings(readPanicWhitelistKeysFromADR(t, root))
+// TestPanicRegistered enforces PANIC-REGISTERED-01 module-wide.
+//
+// NOTE: This test is expected to FAIL on the current codebase until Batch 3
+// call-site migrations land. The fixture suite (TestPanicRegisteredScannerFixtures)
+// covers the rule logic and must pass.
+func TestPanicRegistered(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode " +
+			"(loads production packages module-wide, ~5-10s)")
+	}
 
-	assert.Equal(t, adrKeys, goKeys,
-		"%s: ADR whitelist table must exactly match architecturalPanicWhitelist", rulePanicRegistered01)
-	// CLAUDE.md error-handling.md lists 6 C-class panic exemptions. Only 4
-	// require explicit whitelist entries here; the other 2 (websocket handler
-	// protocol error, kernel/cell bootstrap fatal) are auto-exempted via the
-	// `Must*` function-name prefix gate inside scanRootForPanicRegistered…
-	// (so they never reach this whitelist). Adjust both numbers in lock-step
-	// if the auto-exemption rule ever changes.
-	assert.Equal(t, 4, len(goKeys),
-		"%s: architectural panic whitelist must contain exactly the ADR-approved permanent entries", rulePanicRegistered01)
+	root := findModuleRoot(t)
 
-	var unused []string
-	for _, key := range goKeys {
-		if !usedWhitelist[key] {
-			unused = append(unused, key)
+	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
+	require.NoError(t, err, "SharedResolver failed")
+
+	pkgs := resolver.Packages()
+	var violations []panicRegisteredViolation
+
+	visited := map[string]bool{}
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		for i, file := range p.Syntax {
+			if i >= len(p.GoFiles) {
+				continue
+			}
+			abs := p.GoFiles[i]
+			if visited[abs] {
+				continue
+			}
+			visited[abs] = true
+
+			rel, ok := fileroles.Rel(root, abs)
+			if !ok || !fileroles.IsProductionCode(rel) {
+				continue
+			}
+			if shouldSkipForPanicRegistered(rel) {
+				continue
+			}
+			violations = append(violations, scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel)...)
+		}
+	})
+
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].File != violations[j].File {
+			return violations[i].File < violations[j].File
+		}
+		return violations[i].Line < violations[j].Line
+	})
+
+	if len(violations) > 0 {
+		t.Logf("%s: %d violation(s) (expected until Batch 3 migrations land):", rulePanicRegistered01, len(violations))
+		for _, v := range violations {
+			t.Logf("  %s:%d — %s", v.File, v.Line, v.Reason)
 		}
 	}
-	assert.Empty(t, unused,
-		"%s: stale architectural panic whitelist entries must be removed from code and ADR", rulePanicRegistered01)
+	assert.Empty(t, violations,
+		"%s: every production panic() call must use panic(panicregister.Approved(literal, value)). "+
+			"See pkg/panicregister and docs/architecture/202604270030-architectural-panic-whitelist.md.",
+		rulePanicRegistered01)
 }
 
-func readPanicWhitelistKeysFromADR(t *testing.T, root string) []string {
-	t.Helper()
-	path := filepath.Join(root, "docs", "architecture", "202604270030-architectural-panic-whitelist.md")
-	data, err := os.ReadFile(filepath.Clean(path))
-	require.NoError(t, err)
-
-	var keys []string
-	inSection := false
-	for line := range strings.SplitSeq(string(data), "\n") {
-		switch {
-		case strings.HasPrefix(line, "### 4. Hardcoded ADR-pinned whitelist"):
-			inSection = true
-			continue
-		case inSection && strings.HasPrefix(line, "### "):
-			return keys
-		case !inSection:
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "|") || strings.Contains(trimmed, "---") || strings.Contains(trimmed, "Function") {
-			continue
-		}
-		cols := strings.Split(strings.Trim(trimmed, "|"), "|")
-		if len(cols) < 2 {
-			continue
-		}
-		key := strings.TrimSpace(cols[1])
-		key = strings.Trim(key, "`")
-		if key != "" {
-			keys = append(keys, key)
-		}
+// TestPanicRegisteredScannerFixtures verifies the PANIC-REGISTERED-01 rule
+// logic against static fixture packages under
+// tools/archtest/testdata/panic_registered_fixtures/.
+func TestPanicRegisteredScannerFixtures(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
 	}
-	return keys
-}
 
-func mapKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	root := findModuleRoot(t)
+	fixtureBase := filepath.Join(root, "tools", "archtest", "testdata", "panic_registered_fixtures")
+
+	cases := []struct {
+		dir       string
+		wantLines []int // empty = GREEN (0 violations); non-empty = RED with these line numbers
+	}{
+		// RED cases — expect violations.
+		{"bare_string_red", []int{6}},
+		{"non_funnel_err_red", []int{6}},
+		{"non_literal_reason_red", []int{13}},
+		{"old_errcode_form_red", []int{8}},
+		{"must_prefix_bare_red", []int{7}},
+
+		// GREEN cases — expect 0 violations.
+		{"assertion_wrapped_green", nil},
+		{"recovered_value_green", nil},
+		{"must_prefix_wrapped_green", nil},
 	}
-	return keys
-}
 
-func sortedStrings(in []string) []string {
-	out := append([]string(nil), in...)
-	sort.Strings(out)
-	return out
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.dir, func(t *testing.T) {
+			t.Parallel()
+
+			fixtureDir := filepath.Join(fixtureBase, tc.dir)
+			// Load using module root so imports of panicregister/errcode resolve.
+			pkgs, errs, err := typeseval.LoadPackages(root, false, nil,
+				"./tools/archtest/testdata/panic_registered_fixtures/"+tc.dir)
+			require.NoError(t, err, "LoadPackages failed for fixture %s", tc.dir)
+			require.Empty(t, errs, "package load errors for fixture %s: %v", tc.dir, errs)
+			require.NotEmpty(t, pkgs, "no packages loaded for fixture %s", tc.dir)
+
+			var violations []panicRegisteredViolation
+			for _, p := range pkgs {
+				for i, file := range p.Syntax {
+					if i >= len(p.GoFiles) {
+						continue
+					}
+					abs := p.GoFiles[i]
+					rel, ok := fileroles.Rel(fixtureDir, abs)
+					if !ok {
+						// File is outside the fixture dir (e.g. an imported dep); skip.
+						continue
+					}
+					violations = append(violations, scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel)...)
+				}
+			}
+
+			var gotLines []int
+			for _, v := range violations {
+				gotLines = append(gotLines, v.Line)
+			}
+			sort.Ints(gotLines)
+
+			wantLines := append([]int(nil), tc.wantLines...)
+			sort.Ints(wantLines)
+
+			assert.Equal(t, wantLines, gotLines,
+				"fixture %s: violation lines mismatch (got violations: %+v)", tc.dir, violations)
+		})
+	}
 }
