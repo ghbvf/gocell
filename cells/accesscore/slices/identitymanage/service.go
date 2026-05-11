@@ -349,7 +349,16 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+	if err := s.deleteUserAndRevokeTokens(ctx, id, actor); err != nil {
+		return err
+	}
+
+	s.logger.Info("user deleted", slog.String("user_id", id))
+	return nil
+}
+
+func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor string) error {
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.checkLastAdminRemoval(txCtx, id); err != nil {
 			return err
 		}
@@ -366,12 +375,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		return nil
-	}); err != nil {
-		return err
-	}
-
-	s.logger.Info("user deleted", slog.String("user_id", id))
-	return nil
+	})
 }
 
 // Lock locks a user account and publishes an event.

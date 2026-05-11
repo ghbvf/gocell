@@ -81,7 +81,9 @@ func AllowDestructiveDown(reason string) (DestructiveDownPermit, error) {
 	return destructiveDownPermit{reason: reason}, nil
 }
 
-func (destructiveDownPermit) destructiveDownPermit() {}
+func (destructiveDownPermit) destructiveDownPermit() {
+	// Marker method only seals DestructiveDownPermit to this package.
+}
 
 // Reason returns the operator-supplied reason for the destructive rollback.
 func (p destructiveDownPermit) Reason() string {
