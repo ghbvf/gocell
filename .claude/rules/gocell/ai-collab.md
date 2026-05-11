@@ -16,36 +16,38 @@
 
 ## AI-rebust 三档分级
 
-| 档 | 定义 | 典型载体 | AI 可绕过性 | 例 |
-|---|---|---|---|---|
-| **Hard** | 违反不可表达 | codegen funnel / type system / sealed interface / reflect 字段数 | 0 | typed response envelope；`AuthComboLegal` single oracle + 5 层 mirror；scanner fail-closed by construction |
-| **Medium** | 违反需 runtime guard / 跨多约束 cross-validate 才能识别 | archtest type-aware / runtime invariant guard | 低 | BFS reachability + `assertEmitterMethodsRestrictedToLocator` |
-| **Soft** | 字符串约定 / 注释豁免 / 名字 convention / hand-crafted fixture | archtest by string anchor / 注释 allowlist / method name | **高** | `// INVARIANT: ID` 锚点；`// PANIC-REGISTERED-01: ADR-approved:` 注释；按方法名识别 emitter |
+| 档 | 定义 | 典型载体 | AI 可绕过性 |
+|---|---|---|---|
+| **Hard** | 违反不可表达 | codegen funnel / type system / sealed interface / reflect 字段数 | 0 |
+| **Medium** | 违反需 runtime guard / 跨多约束 cross-validate 才能识别 | archtest type-aware / runtime invariant guard | 低 |
+| **Soft** | 字符串约定 / 注释豁免 / 名字 convention / hand-crafted fixture | archtest by string anchor / 注释 allowlist / method name | **高** |
 
 ## 载体决策原则
 
-新增约束时按优先级选载体（同时决定 AI-rebust 等级）：
+新增 enforcement 机制按下列优先级选载体：
 
-1. **funnel + codegen**：能否用 schema/marker 单源 → codegen 派生执行体？能 → 走这条（Hard）
-2. **type system 自然拦**：能否用 Go interface / typed struct 让违反不可表达？能 → 走这条（Hard）
-   - 注：type system 与 archtest 可并存——涉及 PII / 安全语义的约束，即使已有类型拦截，仍须评估 archtest 双重防线（例 `MESSAGE-CONST-LITERAL-01` / `DETAILS-SLOG-ATTR-01`）
-3. **archtest 平铺兜底**：上两条都不行 → `tools/archtest/{theme}_invariants_test.go`（Medium 或 Soft，看是否 type-aware）
+1. **codegen funnel + golden**——schema / marker 单源 → 派生执行体（Hard）
+2. **type system**——Go interface / typed struct 让违反不可表达（Hard）；PII / 安全语义并存 archtest 双重防线
+3. **archtest 平铺兜底**，按规则真值类型选工具：
+   - 路径级 import ban → `.golangci.yml` `depguard`
+   - 跨包归属 / 传递闭包 → `kernel/depgraph`，复用 `tools/archtest/internal/typeseval.SharedResolver`
+   - 需要类型信息（receiver type / interface 实现 / const 值 / exported API 类型）→ 在 `tools/archtest/internal/typeseval` 加 helper
+   - 纯 AST 模式 → `tools/archtest/internal/scanner`
+   - 元数据 / YAML 派生 → `scanner.EachContentFile` + 解析
 
-**立项硬门槛**：≥ Medium。Soft 档严禁立项；既有 Soft 按"实际事故密度 × AI 暴露面"排队升级，不强制一次清零。
+**立项硬门槛**：≥ Medium。Soft 形态严禁立项。
 
 **Soft → Hard 改造方向**：
-- 字符串锚点 → typed function call（`archtest.Invariant("ID")`）
-- 注释豁免 → typed marker（`panicregister.Approved("reason")`）
+- 字符串锚点 → typed function call
+- 注释豁免 → typed marker
 - 名字 convention → sealed interface / receiver type 识别
-- hand-crafted fixture → real source AST capture（AI 难造假）
+- hand-crafted fixture → real source AST capture
 
 ## archtest 文件命名
 
-- 同主题规则数 ≥ 3 → 新建或扩展 `{theme}_invariants_test.go` 主题文件；每个规则函数前 godoc 加 `// INVARIANT: {ID}` 锚点 + 不能 funnel 的理由
-- 单条独立规则 → 保留 `{rule}_test.go` 单文件命名
-- 已有 `{rule}_test.go` 单文件且新增同主题第 3 条规则 → 重命名为 `{theme}_invariants_test.go` 并补完 anchor
-
-**不准建 Registry / 中心化注册表**。多份文档用 grep 锚点串联（grep `INVARIANT: {ID}` 跳全套）。主流对照（K8s / CockroachDB / Linux / Rust / Go 工具链）都接受 funnel 不到的残留，平铺管理。
+- 单条独立规则 → `{rule}_test.go`
+- 同主题规则 ≥ 3 → `{theme}_invariants_test.go` 主题文件；已有单文件升到第 3 条时，重命名为 `{theme}_invariants_test.go`
+- 每个 `*_test.go` 在文件头 CommentGroup 写 `// INVARIANT: <ID>`；多规则文件用 `//   - INVARIANT: <ID>` 列表续行
 
 archtest CI 入口是 `hack/verify-archtest.sh`（process-isolated 16-shard 矩阵；`make verify` 自动发现）。`ARCHTEST-VERIFY-COVERAGE-01` 守卫 script 的 discovery 与 *_test.go AST 集合一致，防止 shard 漏 test。
 
