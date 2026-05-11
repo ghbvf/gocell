@@ -2,30 +2,38 @@ package archtest
 
 // INVARIANT: ARCHTEST-VERIFY-COVERAGE-01
 //
-// archtest_verify_coverage_test.go — guard hack/verify-archtest.sh discovery
-// from drifting away from the actual top-level Test* functions in
-// tools/archtest/*_test.go.
+//   - discovery: script's discovered Test* set == top-level *_test.go AST scan
+//   - partition: shard_assignment is an exactly-once cover of the discovered
+//     set (no test runs in two shards, no test runs in zero shards)
 //
-// AI-rebust: Medium. Discovery in the script is `go test -list '^Test'`
-// piped through `grep -E '^Test' | sort`. A maintainer adding a `grep -v
-// TestFoo` filter (forgotten debug breadcrumb) or narrowing the regex
-// pattern would silently skip tests in CI while the local developer-side
-// `go test ./tools/archtest/...` keeps catching them. Cross-checking the
-// script's DRY_RUN output against an AST scan of the archtest *_test.go
-// files closes that gap.
+// archtest_verify_coverage_test.go — guard hack/verify-archtest.sh from
+// two failure modes:
 //
-// This rule is the only meta-rule the K=16 sharded verify-archtest pipeline
-// needs (a sibling pkg-coverage rule was eliminated by computing the
-// _build-lint.yml tools-shard pkgs via `go list ./tools/...` at runtime —
-// no human-edited yml list to drift).
+//  1. Discovery drift — `go test -list '^Test' | grep '^Test' | sort` could
+//     silently shrink if a maintainer adds `| grep -v TestFoo` (debug
+//     breadcrumb not removed) or narrows the regex. Discovery-vs-AST cross-
+//     check catches this in CI before the loss reaches develop.
 //
-// Cannot funnel: the script is a shell entry point; the funnel candidate
-// would be codegen-ing the discovery list into the script body, which adds
-// more drift risk (codegen vs runtime go-list output) than it prevents.
+//  2. Dispatch drift — the modulo partition that routes tests to shards
+//     could be broken (off-by-one in `NR % n == s + 1`, or replaced with
+//     something that double-counts) without changing discovery. The
+//     partition exactly-once check loops every shard via the script's own
+//     LIST_SHARD_TESTS mode, asserts the union equals discovery and that
+//     no name appears in two shards — independent of K (test uses K=4 to
+//     run fast; correctness of the algorithm is K-independent).
+//
+// AI-rebust: Medium (runtime cross-check against AST + algorithm
+// conformance test going through the same shard_assignment shell function
+// that real execution uses — single algorithm source).
+//
+// Cannot funnel: the script is a shell entry point; codegen-ing the
+// discovery list into the script body would replace runtime ground truth
+// with a build-time snapshot — more drift risk, not less.
 
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"os"
@@ -39,16 +47,15 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// TestArchtestVerifyCoverage01 cross-checks that
-// `DRY_RUN=1 bash hack/verify-archtest.sh` discovers the same set of
-// top-level Test* functions that the archtest AST scan finds under
-// tools/archtest/ (excluding internal/ subpackages, which run via their
-// own `go test ./tools/archtest/internal/...` paths).
+// TestArchtestVerifyCoverage01 runs both arms of the invariant:
 //
-// Symmetric diff is fatal: either the script under-discovers (silent
-// unenforce — the high-risk direction the rule was authored for) or the
-// AST over-counts (e.g. a TestXxx helper added that go test legitimately
-// can't run — must be renamed or excluded explicitly).
+//   - Discovery cross-check (script DRY_RUN set == AST scan set)
+//   - Dispatch partition exactly-once (union of shard assignments == discovery
+//     set; no name appears in two shards)
+//
+// Either failure mode would be silent under the legacy script (single bash
+// pipeline, no Go-side verification) and would erode CI coverage without
+// any developer-visible signal.
 func TestArchtestVerifyCoverage01(t *testing.T) {
 	t.Parallel()
 	repoRoot := findModuleRoot(t)
@@ -61,25 +68,78 @@ func TestArchtestVerifyCoverage01(t *testing.T) {
 
 	missingFromScript := setDifference(astSet, scriptSet)
 	missingFromAST := setDifference(scriptSet, astSet)
-	if len(missingFromScript) == 0 && len(missingFromAST) == 0 {
-		return
+	if len(missingFromScript) > 0 || len(missingFromAST) > 0 {
+		var msg []string
+		if len(missingFromScript) > 0 {
+			msg = append(msg,
+				"verify-archtest.sh discovery is MISSING tests that exist in tools/archtest/*_test.go:",
+				"  "+strings.Join(missingFromScript, "\n  "),
+			)
+		}
+		if len(missingFromAST) > 0 {
+			msg = append(msg,
+				"verify-archtest.sh discovery reports tests that AST scan cannot find under tools/archtest/ (excluding internal/):",
+				"  "+strings.Join(missingFromAST, "\n  "),
+			)
+		}
+		t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01 (discovery): script discovery diverges from AST scan.\n%s",
+			strings.Join(msg, "\n"))
 	}
 
-	var msg []string
-	if len(missingFromScript) > 0 {
-		msg = append(msg,
-			"verify-archtest.sh discovery is MISSING tests that exist in tools/archtest/*_test.go:",
-			"  "+strings.Join(missingFromScript, "\n  "),
-		)
+	// Partition exactly-once. K=4 is arbitrary; the modulo algorithm's
+	// correctness is independent of K, so a small K runs faster.
+	assertShardPartitionExactlyOnce(t, repoRoot, scriptSet, 4)
+}
+
+// assertShardPartitionExactlyOnce loops SHARD_TARGET=0..k-1, captures each
+// shard's assignment via `LIST_SHARD_TESTS=1`, and verifies:
+//   - every name in scriptSet appears in at least one shard (union == cover)
+//   - no name appears in two or more shards (disjoint)
+//
+// Both go through the script's shard_assignment() bash function — the same
+// function run_shard() uses — so this is single-source algorithm verification.
+func assertShardPartitionExactlyOnce(t *testing.T, repoRoot string, scriptSet map[string]struct{}, k int) {
+	t.Helper()
+	assignmentOf := map[string]int{} // test name -> shard index (-1 = duplicate)
+	for s := 0; s < k; s++ {
+		shardSet, err := runVerifyArchtestListShard(repoRoot, k, s)
+		if err != nil {
+			t.Fatalf("verify-archtest.sh LIST_SHARD_TESTS SHARD_TARGET=%d SHARD_COUNT=%d failed: %v", s, k, err)
+		}
+		for name := range shardSet {
+			if prev, dup := assignmentOf[name]; dup {
+				t.Errorf("ARCHTEST-VERIFY-COVERAGE-01 (partition): %q assigned to both shard %d and shard %d (K=%d) — modulo algorithm broken",
+					name, prev, s, k)
+				continue
+			}
+			assignmentOf[name] = s
+		}
 	}
-	if len(missingFromAST) > 0 {
-		msg = append(msg,
-			"verify-archtest.sh discovery reports tests that AST scan cannot find under tools/archtest/ (excluding internal/):",
-			"  "+strings.Join(missingFromAST, "\n  "),
-		)
+	// Cover check: every discovered name in some shard.
+	var missing []string
+	for name := range scriptSet {
+		if _, ok := assignmentOf[name]; !ok {
+			missing = append(missing, name)
+		}
 	}
-	t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01: script discovery diverges from AST scan.\n%s",
-		strings.Join(msg, "\n"))
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01 (partition): %d discovered tests unassigned across K=%d shards — partition not covering full set:\n  %s",
+			len(missing), k, strings.Join(missing, "\n  "))
+	}
+	// Reverse check: every assigned name is in scriptSet (catches script
+	// inventing names — would be a regression of the discovery filter).
+	var extra []string
+	for name := range assignmentOf {
+		if _, ok := scriptSet[name]; !ok {
+			extra = append(extra, name)
+		}
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01 (partition): K=%d shards reported names not in discovery set:\n  %s",
+			k, strings.Join(extra, "\n  "))
+	}
 }
 
 // runVerifyArchtestDryRun invokes the script with DRY_RUN=1 and returns
@@ -93,11 +153,25 @@ func TestArchtestVerifyCoverage01(t *testing.T) {
 // toolchain or build error — the surrounding archtest's own 5m -timeout
 // also catches it, but this gives a more targeted error message.
 func runVerifyArchtestDryRun(repoRoot string) (map[string]struct{}, error) {
+	return runVerifyArchtestForNames(repoRoot, []string{"DRY_RUN=1"})
+}
+
+// runVerifyArchtestListShard invokes the script in LIST_SHARD_TESTS mode
+// for one (shardCount, shardTarget) tuple and returns the assigned set.
+func runVerifyArchtestListShard(repoRoot string, shardCount, shardTarget int) (map[string]struct{}, error) {
+	return runVerifyArchtestForNames(repoRoot, []string{
+		"LIST_SHARD_TESTS=1",
+		fmt.Sprintf("SHARD_COUNT=%d", shardCount),
+		fmt.Sprintf("SHARD_TARGET=%d", shardTarget),
+	})
+}
+
+func runVerifyArchtestForNames(repoRoot string, extraEnv []string) (map[string]struct{}, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	//nolint:gosec // G204: repoRoot is the discovered go.mod ancestor (test-time, no user input)
 	cmd := exec.CommandContext(ctx, "bash", filepath.Join(repoRoot, "hack", "verify-archtest.sh"))
-	cmd.Env = append(os.Environ(), "DRY_RUN=1")
+	cmd.Env = append(os.Environ(), extraEnv...)
 	cmd.Dir = repoRoot
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

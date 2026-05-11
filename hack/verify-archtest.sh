@@ -16,17 +16,27 @@
 #   Race detector adds 2.5-3.3x runtime for zero signal on this surface.
 #
 # Env vars:
-#   SHARD_COUNT    Number of shards to partition Test* functions across.
-#                  Default 16 (Phase 0 measured max peak RSS 4.22 GB / shard
-#                  on macOS for K=16; safe under Linux 7 GB GHA limit).
-#   SHARD_TARGET   If set, run only that shard index [0, SHARD_COUNT). Used
-#                  by CI matrix. If empty, all shards run serially in this
-#                  process invocation (governance.yml entrypoint).
-#   TIMEOUT        Go test timeout per shard. Default 5m.
-#   SLOWGATE_BIN   Path to slowgate binary. If executable, each shard's
-#                  `go test -json` stream is piped through it (post-test
-#                  duration budget gate). If unset/missing, slowgate is
-#                  skipped (local dev). CI builds it in the runner.
+#   SHARD_COUNT       Number of shards to partition Test* functions across.
+#                     Default 16 (Phase 0 measured max peak RSS 4.22 GB /
+#                     shard on macOS for K=16; safe under Linux 7 GB GHA).
+#   SHARD_TARGET      If set, run only that shard index [0, SHARD_COUNT).
+#                     Used by CI matrix. If empty, all shards run serially
+#                     in this process invocation.
+#   TIMEOUT           Go test timeout per shard. Default 5m.
+#   SLOWGATE_BIN      Path to slowgate binary. If executable, each shard's
+#                     `go test -json` stream is piped through it. If unset/
+#                     missing, slowgate is skipped (local dev).
+#   DRY_RUN=1         Emit the discovered Test* names (one per line) and
+#                     exit. Used by ARCHTEST-VERIFY-COVERAGE-01 to cross-
+#                     check discovery against AST scan.
+#   LIST_SHARD_TESTS=1
+#                     With SHARD_TARGET set, emit only that shard's
+#                     assigned Test* names (one per line) and exit. Used
+#                     by ARCHTEST-VERIFY-COVERAGE-01 to validate the
+#                     partition algorithm (exactly-once across shards).
+#                     Goes through the same shard_pattern() function that
+#                     run_shard() uses — single source of truth for the
+#                     modulo assignment algorithm.
 
 set -euo pipefail
 
@@ -57,15 +67,8 @@ if [ "$TOTAL" -lt 1 ]; then
   exit 1
 fi
 
-# DRY_RUN=1: print discovered Test* names (one per line) and exit. Used by
-# ARCHTEST-VERIFY-COVERAGE-01 archtest as ground-truth for cross-checking
-# the live script's discovery against the actual *_test.go AST.
-if [ "${DRY_RUN:-}" = "1" ]; then
-  printf '%s\n' "$TESTS"
-  exit 0
-fi
-
-# Validate SHARD_TARGET if provided.
+# Validate SHARD_TARGET if provided (relevant for SHARD_TARGET-aware modes
+# below: LIST_SHARD_TESTS=1 and the actual shard execution path).
 if [ -n "${SHARD_TARGET:-}" ]; then
   if ! [[ "$SHARD_TARGET" =~ ^[0-9]+$ ]] || [ "$SHARD_TARGET" -ge "$SHARD_COUNT" ]; then
     echo "ERROR: SHARD_TARGET must be in [0, $SHARD_COUNT), got '$SHARD_TARGET'" >&2
@@ -73,15 +76,43 @@ if [ -n "${SHARD_TARGET:-}" ]; then
   fi
 fi
 
+# shard_assignment emits the modulo subset of $TESTS assigned to shard $1
+# (one name per line). Single source of the partition algorithm — both
+# run_shard (real test execution) and LIST_SHARD_TESTS (test introspection
+# by ARCHTEST-VERIFY-COVERAGE-01) go through here. Changing the algorithm
+# requires editing this function only; the partition exactly-once
+# conformance test catches breaks in either direction.
+shard_assignment() {
+  local shard=$1
+  printf '%s\n' "$TESTS" \
+    | awk -v s="$shard" -v n="$SHARD_COUNT" 'NR % n == s'
+}
+
+# DRY_RUN=1: emit discovered Test* names (one per line) and exit. Used by
+# ARCHTEST-VERIFY-COVERAGE-01 for cross-check against AST scan.
+if [ "${DRY_RUN:-}" = "1" ]; then
+  printf '%s\n' "$TESTS"
+  exit 0
+fi
+
+# LIST_SHARD_TESTS=1 (requires SHARD_TARGET): emit the assignment for that
+# shard and exit. Used by ARCHTEST-VERIFY-COVERAGE-01 to verify
+# exactly-once partition across all shards.
+if [ "${LIST_SHARD_TESTS:-}" = "1" ]; then
+  if [ -z "${SHARD_TARGET:-}" ]; then
+    echo "ERROR: LIST_SHARD_TESTS=1 requires SHARD_TARGET to be set" >&2
+    exit 2
+  fi
+  shard_assignment "$SHARD_TARGET"
+  exit 0
+fi
+
 echo "verify-archtest: discovered $TOTAL Test* functions, SHARD_COUNT=$SHARD_COUNT"
 
 run_shard() {
   local shard=$1
   local pattern
-  pattern=$(printf '%s\n' "$TESTS" \
-    | awk -v s="$shard" -v n="$SHARD_COUNT" 'NR % n == s' \
-    | tr '\n' '|' \
-    | sed 's/|$//')
+  pattern=$(shard_assignment "$shard" | tr '\n' '|' | sed 's/|$//')
   if [ -z "$pattern" ]; then
     echo "[shard $shard/$SHARD_COUNT] no tests assigned (TOTAL=$TOTAL)"
     return 0
