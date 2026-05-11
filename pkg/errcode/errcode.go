@@ -731,9 +731,8 @@ func WithDetails(attrs ...slog.Attr) Option {
 }
 
 // MustValidateDetailsKinds panics with errcode.Assertion when any attr in
-// attrs has a wire-unsafe kind. The Must* prefix marks this as a
-// programmer-error fail-fast site (PANIC-REGISTERED-01 auto-exempt under
-// the project's "Must* may panic" convention).
+// attrs has a wire-unsafe kind. This is a programmer-error fail-fast site
+// (panic wrapped with panicregister.Approved per PANIC-REGISTERED-01).
 //
 // Exposed so callers that build *Error values directly (test fixtures,
 // future builders) can validate at construction time the same way

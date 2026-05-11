@@ -187,9 +187,8 @@ type Hub struct {
 }
 
 // MustValidateHubConfig panics if cfg contains values that would cause
-// runtime panics or zero-budget shutdown later. Called by NewHub. Exposed as
-// a Must* function to satisfy archtest PANIC-REGISTERED-01 (panic() must
-// live inside Must* functions or ADR-registered exceptions).
+// runtime panics or zero-budget shutdown later. Called by NewHub. Every panic
+// in this function is wrapped with panicregister.Approved per PANIC-REGISTERED-01.
 //
 // Validates:
 //   - ShutdownTimeout < 0 → would collapse external-cancel context to

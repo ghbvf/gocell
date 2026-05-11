@@ -856,6 +856,7 @@ type Service struct{}`,
 // scanFileForErrorFirstViolations parses a single Go source file and returns
 // any panic() call inside an error-less function (excluding Must*-prefixed
 // functions and init).
+// Note: PANIC-REGISTERED-01 (panic_invariants_test.go) no longer exempts Must*; that exemption is specific to ERROR-FIRST-API-01.
 func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirstViolation {
 	t.Helper()
 	fset := token.NewFileSet()

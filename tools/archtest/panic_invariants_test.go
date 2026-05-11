@@ -266,9 +266,7 @@ func shouldSkipForPanicRegistered(rel string) bool {
 
 // TestPanicRegistered enforces PANIC-REGISTERED-01 module-wide.
 //
-// NOTE: This test is expected to FAIL on the current codebase until Batch 3
-// call-site migrations land. The fixture suite (TestPanicRegisteredScannerFixtures)
-// covers the rule logic and must pass.
+// NOTE: All call-site migrations complete as of PR #467; this test must pass.
 func TestPanicRegistered(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {

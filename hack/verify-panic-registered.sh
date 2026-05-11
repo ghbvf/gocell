@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # verify-panic-registered enforces PANIC-REGISTERED-01: production panic()
-# calls must be either inside Must* functions or ADR-registered permanent
-# exceptions.
+# calls must wrap their payload with panicregister.Approved(literal, value).
 
 set -euo pipefail
 

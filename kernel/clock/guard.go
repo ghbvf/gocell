@@ -10,17 +10,16 @@ import (
 
 // MustHaveClock panics when c is nil or when c is an interface value wrapping
 // a nil pointer (typed-nil). Use at construction boundaries to fail fast on
-// missing Clock wiring; the Must prefix marks this as a programmer-error-only
-// API exempt from PANIC-REGISTERED-01.
+// missing Clock wiring; the panic is wrapped with panicregister.Approved per
+// PANIC-REGISTERED-01.
 //
 // ctx names the call site (e.g. "assembly.New") so the panic message identifies
 // which constructor is missing wiring.
 //
-// ref: docs/architecture/202604270030-architectural-panic-whitelist.md §5
-// — Must* prefix is the canonical "panic-on-misuse" twin of error-returning
-// constructors. We share a single helper across kernel/assembly,
+// ref: docs/architecture/202604270030-architectural-panic-whitelist.md §4
+// We share a single helper across kernel/assembly,
 // runtime/bootstrap, runtime/http/health, etc. so the panic message stays
-// uniform and the gate's exempt-list auditing has exactly one location.
+// uniform and the gate's auditing has exactly one location.
 func MustHaveClock(c Clock, ctx string) {
 	const (
 		nilMsg = "%s: clock.Clock is required (nil rejected); " +

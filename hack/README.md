@@ -39,7 +39,7 @@ itself enforces.
 | `verify-gofumpt.sh` | formatter-only gate: every `.go` file is gofumpt-canonical. Uses `mvdan.cc/gofumpt v0.9.2` (must equal the version vendored by the pinned `golangci-lint v2.11.4` — see `hack/lib/golangci-lint.sh`). Mirrors the formatter verdict the lint shard's `formatters.enable: gofumpt` would emit, runnable in isolation. |
 | `verify-govalidate.sh` | `gocell validate --strict` (FMT, ADV, REF, LAYER, VERIFY, CONTRACT-CONSISTENCY) |
 | `verify-journey.sh` | `gocell verify journey --active` (active journeys carry executable auto checks) |
-| `verify-panic-registered.sh` | `PANIC-REGISTERED-01`: production `panic()` calls must be `Must*` or ADR-registered |
+| `verify-panic-registered.sh` | `PANIC-REGISTERED-01`: production `panic()` calls must be wrapped with `panicregister.Approved(literal, value)` |
 | `verify-prod-clock-injection.sh` | `PROD-CLOCK-INJECTION-01` + `KERNEL-CLOCK-LEAF-FALLBACK-01` + `TestProdClockInjectionFixtures`: production code must inject `kernel/clock.Clock`; stdlib `time.Now / Since / Until / NewTimer / NewTicker / After / AfterFunc / Tick / Sleep` are forbidden outside leaf adapters |
 | `verify-prod-duration.sh` | `PROD-DURATION-01`: production code must use named duration constants instead of inline time literals |
 | `verify-scaffold-reject.sh` | `gocell scaffold slice` rejects kebab-case names |

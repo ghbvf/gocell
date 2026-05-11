@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
@@ -106,4 +107,18 @@ func TestApproved_ReasonDoesNotAffectReturn(t *testing.T) {
 			assert.Equal(t, gotA, gotB)
 		})
 	}
+}
+
+// TestApproved_PanicRecoverPreservesType verifies that panic(Approved(...))
+// preserves the identity of the wrapped value: recover() returns the exact
+// pointer that Approved received. Documents the funnel's runtime transparency.
+func TestApproved_PanicRecoverPreservesType(t *testing.T) {
+	want := errcode.Assertion("test message")
+	var got any
+	func() {
+		defer func() { got = recover() }()
+		panic(panicregister.Approved("panicregister-recover-passthrough", want))
+	}()
+	require.NotNil(t, got, "expected panic")
+	require.Same(t, want, got.(*errcode.Error))
 }

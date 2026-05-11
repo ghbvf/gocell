@@ -71,7 +71,7 @@ NewBaseCell 在三种情况返回 `errcode.ErrValidationFailed`：
 
 空字符串接受为 zero value（保持现有测试构造惯例）。
 
-所有 27 个 caller（5 production cells + 22 test files）使用 `MustNewBaseCell`——每处都是静态字面量，构造失败 = programmer bug。该模式遵循 ADR `202604270030-architectural-panic-whitelist.md` §1（error-first + Must wrapper）+ §5（Must* 前缀自动豁免 PANIC-REGISTERED-01）。
+所有 27 个 caller（5 production cells + 22 test files）使用 `MustNewBaseCell`——每处都是静态字面量，构造失败 = programmer bug。该模式遵循 ADR `202604270030-architectural-panic-whitelist.md` §1（error-first + Must wrapper）+ Wave 2 typed marker（panicregister.Approved，PR #467）。
 
 由 `CELLMETA-SINGLE-SOURCE-02` 静态守卫 NewBaseCell 接收单一 `*metadata.CellMeta` 参数。
 
