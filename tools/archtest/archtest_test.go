@@ -386,10 +386,13 @@ func checkCellPublicAPIAdapterTypes(modPrefix, root string, pkgs []*packages.Pac
 		for _, file := range pkg.Syntax {
 			// GENERATED-SKIP-CROSS-RULE-INVARIANT-01: loadModule loads ./... via
 			// typeseval.SharedResolver, which includes generated/ packages.
-			// filterCellPackages already constrains pkgs to module/cells/... at
-			// the call site, so this skip is defensive — but it ensures any
-			// future LAYER-10 caller that omits the cells/ filter still excludes
-			// codegen output.
+			// The production LAYER-10 call site (line ~610) pre-filters via
+			// filterCellPackages so this skip is a no-op there. For the two
+			// synthetic-package tests (root=""), pkgFileRel returns "" because
+			// Fset positions have no Filename, and IsGeneratedRelPath("") is
+			// false — also a no-op. The skip becomes meaningful only if a future
+			// LAYER-10 caller omits the cells/ pre-filter while passing a real
+			// module root; in that case the codegen exclusion still holds.
 			if typeseval.IsGeneratedRelPath(pkgFileRel(root, pkg, file)) {
 				continue
 			}
