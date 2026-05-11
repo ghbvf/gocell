@@ -51,7 +51,7 @@ import (
 //	  []ast.{Decl,Spec,Stmt,Expr}. Equivalent to bare ast.Inspect: the type
 //	  assertion in the loop body dispatches by node kind at runtime; AI may
 //	  write/omit the wrong assertion silently. Use
-//	  scanner.EachNode[ast.W](root, func(*ast.W){...}) instead.
+//	  scanner.EachInSubtree[ast.W](root, func(*ast.W){...}) instead.
 //
 // All three paths share a single typeseval.SharedResolver entry: one
 // packages.Load for the entire archtest tree, reused across paths via the
@@ -60,26 +60,26 @@ import (
 //
 // Use scanner.DirsScope/ModuleScope + EachFile (.go), EachContentFile
 // (YAML/JSON/MD/SQL/...), MatchRels (glob-style filter), IncludeTestdata /
-// IncludeGenerated (default-skipped dirs), and scanner.EachNode[N] for
-// typed AST iteration.
+// IncludeGenerated (default-skipped dirs), and scanner.EachInSubtree[N] /
+// scanner.EachInChildren[N] for typed AST iteration.
 //
 // Coverage:
-//   - SelectorExpr scan via scanner.EachNode[ast.SelectorExpr] (dogfood —
+//   - SelectorExpr scan via scanner.EachInSubtree[ast.SelectorExpr] (dogfood —
 //     the framework's first consumer is the rule that enforces it).
 //   - Path A: dot-import scan flags `import . "<pkg>"` directly; SelectorExpr
 //     scan resolves package-level calls via info.Uses[id].(*types.PkgName).
 //   - Path A': SelectorExpr scan resolves receiver types via info.Types[X];
 //     covers pointer types (*os.File) and interface types (fs.FS / fs.ReadDirFS).
-//   - Path B: scanner.EachNode[ast.RangeStmt] then
-//     scanner.EachNode[ast.TypeAssertExpr] with binding-name + ast-list
+//   - Path B: scanner.EachInSubtree[ast.RangeStmt] then
+//     scanner.EachInSubtree[ast.TypeAssertExpr] with binding-name + ast-list
 //     element-kind verification.
 //
 // Cannot funnel: the rule itself enforces consumer use of the funnel; the
 // type system cannot tell apart "framework-internal walk" (legitimate) from
-// "consumer raw walk" (forbidden). framework-internal scanner.EachNode is
+// "consumer raw walk" (forbidden). framework-internal scanner.EachInSubtree is
 // in tools/archtest/internal/scanner, which is not in this scan's scope.
 //
-// New rules MUST go through the scanner framework + EachNode.
+// New rules MUST go through the scanner framework + EachInSubtree/EachInChildren.
 func TestScannerFrameworkUsage01(t *testing.T) {
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
@@ -168,7 +168,7 @@ var forbiddenMethodSymbols = map[string][]string{
 // pkgFileRel(...)); fixture callers pass (minimalCheck.Info, fset, file,
 // "fake.go"). Same pure function for both — fixture/prod cannot drift.
 //
-// SelectorExpr iteration uses scanner.EachNode (dogfood — the rule that
+// SelectorExpr iteration uses scanner.EachInSubtree (dogfood — the rule that
 // enforces the framework is itself implemented in the framework).
 func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var out []scanner.Diagnostic
@@ -190,7 +190,7 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 	}
 
 	// (2) Type-aware SelectorExpr scan.
-	scanner.EachNode[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		// (2a) Package-level call: sel.X is *ast.Ident bound to imported pkg.
 		if id, ok := sel.X.(*ast.Ident); ok {
 			if pkgName, isPkg := info.Uses[id].(*types.PkgName); isPkg {
@@ -225,17 +225,17 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 // when Y's static type is []ast.{Decl,Spec,Stmt,Expr}. Equivalent to bare
 // ast.Inspect: the type assertion in the loop body dispatches by node kind
 // at runtime; AI may write/omit the wrong assertion silently. Use
-// scanner.EachNode[ast.W](root, func(*ast.W){...}) instead.
+// scanner.EachInSubtree[ast.W](root, func(*ast.W){...}) instead.
 //
 // Detection precision:
-//   - Outer: scanner.EachNode[ast.RangeStmt] over file
+//   - Outer: scanner.EachInSubtree[ast.RangeStmt] over file
 //   - rs.X must have static type []ast.{Decl|Spec|Stmt|Expr} via info.Types
 //   - rs.Value must be a plain *ast.Ident (binding name)
 //   - Inner forms (both flagged):
-//     a) Body: scanner.EachNode[ast.TypeAssertExpr] within rs.Body —
+//     a) Body: scanner.EachInSubtree[ast.TypeAssertExpr] within rs.Body —
 //     catches `x.(*ast.Kind)` form (`if y, ok := x.(*ast.X); ok` or
 //     `_ = x.(*ast.X)`)
-//     b) Body: scanner.EachNode[ast.TypeSwitchStmt] within rs.Body —
+//     b) Body: scanner.EachInSubtree[ast.TypeSwitchStmt] within rs.Body —
 //     catches `switch x := x.(type) { case *ast.X: ... }` form, which is
 //     the same runtime kind-dispatch as TypeAssertExpr. The TypeSwitchStmt
 //     must be assigning from the binding name; at least one case clause
@@ -248,7 +248,7 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 //     clause's type list must contain a *ast.<Kind>.
 func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var diags []scanner.Diagnostic
-	scanner.EachNode[ast.RangeStmt](file, func(rs *ast.RangeStmt) {
+	scanner.EachInSubtree[ast.RangeStmt](file, func(rs *ast.RangeStmt) {
 		if rs.Value == nil || rs.Body == nil {
 			return
 		}
@@ -261,7 +261,7 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 			return
 		}
 		// Form (a): TypeAssertExpr.
-		scanner.EachNode[ast.TypeAssertExpr](rs.Body, func(ta *ast.TypeAssertExpr) {
+		scanner.EachInSubtree[ast.TypeAssertExpr](rs.Body, func(ta *ast.TypeAssertExpr) {
 			if ta.Type == nil {
 				return
 			}
@@ -274,12 +274,12 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 			diags = append(diags, scanner.Diagnostic{
 				Rel:  rel,
 				Line: fset.Position(ta.Pos()).Line,
-				Message: fmt.Sprintf("use scanner.EachNode[ast.X](root, func(*ast.X){...}) "+
+				Message: fmt.Sprintf("use scanner.EachInSubtree[ast.X](root, func(*ast.X){...}) "+
 					"instead of for-range over []ast.%s + type assertion", elemKind),
 			})
 		})
 		// Form (b): TypeSwitchStmt — `switch x := X.(type) { case *ast.W: }`.
-		scanner.EachNode[ast.TypeSwitchStmt](rs.Body, func(ts *ast.TypeSwitchStmt) {
+		scanner.EachInSubtree[ast.TypeSwitchStmt](rs.Body, func(ts *ast.TypeSwitchStmt) {
 			if ts.Assign == nil {
 				return
 			}
@@ -312,7 +312,7 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 			diags = append(diags, scanner.Diagnostic{
 				Rel:  rel,
 				Line: fset.Position(ts.Pos()).Line,
-				Message: fmt.Sprintf("use scanner.EachNode[ast.X](root, func(*ast.X){...}) "+
+				Message: fmt.Sprintf("use scanner.EachInSubtree[ast.X](root, func(*ast.X){...}) "+
 					"instead of for-range over []ast.%s + type switch", elemKind),
 			})
 		})

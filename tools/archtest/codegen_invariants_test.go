@@ -620,7 +620,7 @@ func TestNoMetadataLiteralInCellGo01(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		scanner.EachNode[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+		scanner.EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
 			if lit.Type == nil {
 				return
 			}
@@ -878,7 +878,7 @@ func hasInitMethod(t *testing.T, path string, structName string) bool {
 		return false
 	}
 	found := false
-	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if found || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
 			return
 		}
@@ -939,7 +939,7 @@ func checkInitInternalHook(t *testing.T, root, dirRel, structName string) []stri
 		f := fc.File
 		path := fc.Rel
 		_ = path
-		scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 			if fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
 				return
 			}
@@ -1110,7 +1110,7 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 	}
 	var foundID, foundTopic string
 	found := false
-	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		if found {
 			return
 		}
@@ -1118,7 +1118,7 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 		if !isSel || sel.Sel.Name != "ContractSpec" {
 			return
 		}
-		scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 			key, isIdent := kv.Key.(*ast.Ident)
 			if !isIdent {
 				return
@@ -1193,12 +1193,12 @@ func parseContractSpecFields(t *testing.T, path string) (id, topic string, ok bo
 	}
 
 	var foundID, foundTopic string
-	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		sel, ok := cl.Type.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "ContractSpec" {
 			return
 		}
-		scanner.EachNode[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 			key, ok := kv.Key.(*ast.Ident)
 			if !ok {
 				return
@@ -1341,7 +1341,7 @@ func forbiddenWireCall(path string) (found string, line int, err error) {
 	if err != nil {
 		return "", 0, err
 	}
-	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		if found != "" {
 			return
 		}
@@ -1371,7 +1371,7 @@ func cellGenHasRouteGroup(genPath string) bool {
 	}
 	_ = fset
 	found := false
-	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		if found {
 			return
 		}

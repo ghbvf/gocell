@@ -225,7 +225,7 @@ func scanArchtestTopLevelTestNames(t *testing.T, repoRoot string) map[string]str
 		if !strings.HasSuffix(fc.Rel, "_test.go") {
 			return
 		}
-		scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
+		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 			if fd.Recv != nil { // method — not a Test* function
 				return
 			}

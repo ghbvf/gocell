@@ -28,7 +28,7 @@ func TestVaultIntegrationContainerFailuresFailFast(t *testing.T) {
 
 	var hasDockerPrecheck bool
 	var skipCalls []string
-	scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 		if selectorName(call.Fun) == "RequireDocker" {
 			hasDockerPrecheck = true
 		}
@@ -53,7 +53,7 @@ func TestPostgresUnreachableHostIsNotEnvGated(t *testing.T) {
 	require.NotNil(t, fn, "TestNewPool_UnreachableHost must exist")
 
 	var findings []string
-	scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 		switch selectorName(call.Fun) {
 		case "Skip", "Skipf", "SkipNow":
 			findings = append(findings, fset.Position(call.Pos()).String()+": unreachable-host test must not skip")
@@ -73,7 +73,7 @@ func TestCorebundleOutboxWiringDoesNotUseExternalDSNGate(t *testing.T) {
 	require.NoError(t, err)
 
 	var findings []string
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		switch selectorName(call.Fun) {
 		case "Skip", "Skipf", "SkipNow":
 			findings = append(findings, fset.Position(call.Pos()).String()+": corebundle wiring test must self-provision dependencies")
@@ -122,7 +122,7 @@ func testcontainerDockerGuardFindingsForFile(path string) ([]string, error) {
 	}
 
 	var findings []string
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -190,7 +190,7 @@ func importSelectorName(imp *ast.ImportSpec, defaultName string) string {
 
 func findFuncDecl(file *ast.File, name string) *ast.FuncDecl {
 	var found *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if found == nil && fn.Name.Name == name {
 			found = fn
 		}
@@ -200,7 +200,7 @@ func findFuncDecl(file *ast.File, name string) *ast.FuncDecl {
 
 func firstTestcontainerRunPos(body *ast.BlockStmt, aliases testcontainerAliases) token.Pos {
 	var out token.Pos
-	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
 		if out.IsValid() {
 			return
 		}
@@ -233,7 +233,7 @@ func isTestcontainerRun(expr ast.Expr, aliases testcontainerAliases) bool {
 
 func firstSelectorCallPos(body *ast.BlockStmt, name string) token.Pos {
 	var out token.Pos
-	scanner.EachNode[ast.CallExpr](body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
 		if out.IsValid() {
 			return
 		}
