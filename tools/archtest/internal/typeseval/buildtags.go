@@ -36,6 +36,13 @@ func KnownNonDefaultTags() [][]string {
 		// Excluded from `go build ./...` and `go test ./...` so fixtures never
 		// pollute real-repo scans (ai-collab.md §"real source AST capture").
 		{"archtest_fixture"},
+		// catalog_gen — cmd/corebundle/catalog_gen_stub.go 使用 //go:build !catalog_gen
+		// (negated: stub is active when catalog_gen is NOT set; generated catalog_gen.go
+		// is .gitignore'd and built only when -tags=catalog_gen is passed).
+		// Discovered by AST-based ParseBuildConstraint (COMMENTGROUP-COVERAGE-01); was
+		// silently missed by the old bufio.Scanner path which stopped at the blank line
+		// separating the file doc comment from the build directive.
+		{"catalog_gen"},
 	}
 }
 
