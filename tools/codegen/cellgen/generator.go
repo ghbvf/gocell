@@ -10,6 +10,7 @@ import (
 	"text/template"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
@@ -71,15 +72,19 @@ func (r Result) DriftedFiles() []string { return r.Drifted }
 func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result, error) {
 	var res Result
 	if root == "" {
-		return res, fmt.Errorf("cellgen generate: root is empty")
+		return res, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen generate: root is empty")
 	}
 	if project == nil {
-		return res, fmt.Errorf("cellgen generate: project is nil")
+		return res, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen generate: project is nil")
 	}
 
 	cellIDs := selectCellIDs(project, opts.OnlyCell)
 	if opts.OnlyCell != "" && len(cellIDs) == 0 {
-		return res, fmt.Errorf("cellgen generate: cell %q not found", opts.OnlyCell)
+		return res, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
+			"cellgen generate: cell not found",
+			errcode.WithDetails(slog.String("cellID", opts.OnlyCell)))
 	}
 
 	// K#05 W2: read wire declarations directly from cell.go marker comments
@@ -93,7 +98,8 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 	}
 	bundles, err := markergen.Merge(root, mergeProject)
 	if err != nil {
-		return res, fmt.Errorf("cellgen generate: markergen merge: %w", err)
+		return res, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"cellgen generate: markergen merge", err)
 	}
 
 	for _, id := range cellIDs {
@@ -135,7 +141,7 @@ func generateOneCell(
 	if len(spec.Subscriptions) > 0 {
 		modulePath, modErr := readModulePath(root)
 		if modErr != nil {
-			return fmt.Errorf("cellgen generate: %w", modErr)
+			return modErr
 		}
 		EnrichSubscriptionsWithModulePath(spec, modulePath)
 	}
@@ -182,14 +188,17 @@ type CellArtifact struct {
 // because the cell template's imports are inferred from per-slice subscribes;
 // extracting per-slice render into a helper duplicates the import accumulator.
 //
-//nolint:gocognit // see comment above
+//nolint:gocognit,funlen // render+slices in one pass; splitting duplicates import accumulator (see comment above)
 func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID string) ([]CellArtifact, error) {
 	if project == nil {
-		return nil, fmt.Errorf("cellgen render artifacts: project is nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen render artifacts: project is nil")
 	}
 	cell, ok := project.Cells[cellID]
 	if !ok {
-		return nil, fmt.Errorf("cellgen render artifacts: cell %q not found", cellID)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
+			"cellgen render artifacts: cell not found",
+			errcode.WithDetails(slog.String("cellID", cellID)))
 	}
 	if cell.GoStructName.IsZero() {
 		return nil, nil
@@ -197,7 +206,8 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 
 	bundles, err := markergen.Merge(root, project)
 	if err != nil {
-		return nil, fmt.Errorf("cellgen render artifacts: markergen merge: %w", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"cellgen render artifacts: markergen merge", err)
 	}
 	bundle := bundles[cellID]
 
@@ -211,7 +221,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	if len(cellSpec.Subscriptions) > 0 {
 		modulePath, modErr := readModulePath(root)
 		if modErr != nil {
-			return nil, fmt.Errorf("cellgen render artifacts: %w", modErr)
+			return nil, modErr
 		}
 		EnrichSubscriptionsWithModulePath(cellSpec, modulePath)
 	}
@@ -223,7 +233,10 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		Filename:     cellAbs,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cellgen render artifacts: cell %q: %w", cellID, err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"cellgen render artifacts: cell render failed",
+			err,
+			errcode.WithDetails(slog.String("cellID", cellID)))
 	}
 	cellRel, err := relFromRoot(root, cellAbs)
 	if err != nil {
@@ -248,7 +261,13 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 			Filename:     sliceAbs,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("cellgen render artifacts: slice %s/%s: %w", cellID, sid, err)
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"cellgen render artifacts: slice render failed",
+				err,
+				errcode.WithDetails(
+					slog.String("cellID", cellID),
+					slog.String("sliceID", sid),
+				))
 		}
 		sliceRel, err := relFromRoot(root, sliceAbs)
 		if err != nil {
@@ -264,7 +283,10 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 func relFromRoot(root, abs string) (string, error) {
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
-		return "", fmt.Errorf("relpath %s vs %s: %w", abs, root, err)
+		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"cellgen: compute relative path failed",
+			err,
+			errcode.WithInternal(fmt.Sprintf("abs=%s root=%s", abs, root)))
 	}
 	return filepath.ToSlash(rel), nil
 }
@@ -279,7 +301,10 @@ func renderAndWrite(root, tmpl string, data any, path string, opts Options, res 
 		Filename:     path,
 	})
 	if err != nil {
-		return fmt.Errorf("%s: %w", errPrefix, err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"cellgen: render failed",
+			err,
+			errcode.WithInternal(errPrefix))
 	}
 	writeRes, err := codegen.Write(codegen.WriteOptions{
 		Path:     path,

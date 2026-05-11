@@ -67,8 +67,12 @@ case "$MODE" in
     ;;
   sandbox)
     SANDBOX_DIR="$(mktemp -d)"
+    # Stage 1 trap: cover the window between mktemp success and worktree add.
+    # If `git worktree add` fails, this trap reaps the temp dir; without it
+    # mktemp leftovers accumulate on CI/local retries.
     trap 'rm -rf "$SANDBOX_DIR"' EXIT
     git worktree add --quiet --detach "$SANDBOX_DIR" HEAD
+    # Stage 2 trap: once the worktree is registered, also detach it on exit.
     trap 'git worktree remove --force "$SANDBOX_DIR" >/dev/null 2>&1 || true; rm -rf "$SANDBOX_DIR"' EXIT
     run_smoke "$SANDBOX_DIR"
     ;;

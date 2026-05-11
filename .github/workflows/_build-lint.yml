@@ -842,3 +842,10 @@ jobs:
 
       - name: Verify assembly codegen (K#10)
         run: ./hack/verify-codegen-assembly.sh
+
+      - name: Verify scaffold bundle (sandbox)
+        run: ./hack/verify-scaffold-bundle.sh
+      - name: Verify scaffold assembly (sandbox)
+        run: ./hack/verify-scaffold-assembly.sh
+      - name: Verify scaffold rejection (kebab guard)
+        run: ./hack/verify-scaffold-reject.sh

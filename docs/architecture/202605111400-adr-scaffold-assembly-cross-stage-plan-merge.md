@@ -1,7 +1,7 @@
 # ADR: SCAFFOLD-ONE-CMD round-6 — Cross-stage plan merge + render/execute split
 
 - **Status**: Accepted (2026-05-11)
-- **Roadmap reference**: `docs/plans/202605011500-029-master-roadmap.md` #09 SCAFFOLD-ONE-CMD
+- **Roadmap reference**: `docs/plans/archive/202605011500-029-master-roadmap.md` #09 SCAFFOLD-ONE-CMD
 - **Related ADRs**:
   - `202605101430-adr-scaffold-one-cmd-double-source-removal.md` — K#09 round-4/5（funnel + Hard 加固）
   - `202605061800-adr-assembly-yaml-minimal-derivation.md` — K#10 minimal `assembly.yaml`
@@ -97,3 +97,9 @@ scaffold cell 的"dry-run 不完整 + 跨阶段无 rollback"对称问题登记 b
 ref: `helm/helm pkg/chartutil/create.go` — first-time creation funnel pattern
 ref: `kubernetes-sigs/kubebuilder pkg/machinery/scaffold.go` — file-model + single write strategy
 ref: `zeromicro/go-zero tools/goctl/api/gogen/gen.go` — render-then-write separation in scaffold orchestrator
+
+## Related ADRs
+
+- `docs/architecture/202605101430-adr-scaffold-one-cmd-double-source-removal.md` — K#09 round-4/5（funnel + Hard 加固）
+- `docs/architecture/202605061800-adr-assembly-yaml-minimal-derivation.md` — K#10 minimal `assembly.yaml`
+- `docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md` — K#04 单源化 ADR（synthesizeAssemblyMeta 浅复制方案的架构前提）

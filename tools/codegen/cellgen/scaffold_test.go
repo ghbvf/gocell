@@ -1,11 +1,14 @@
 package cellgen
 
 import (
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
@@ -291,8 +294,12 @@ func TestScaffoldCell_TypeWhitelistRejected(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for type %q, got nil", tc.cellType)
 			}
-			if !strings.Contains(err.Error(), "must be one of") {
-				t.Errorf("expected 'must be one of' in error, got: %v", err)
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != errcode.ErrValidationFailed {
+				t.Errorf("expected errcode.ErrValidationFailed, got %q", ec.Code)
 			}
 		})
 	}
@@ -327,8 +334,12 @@ func TestScaffoldCell_LevelWhitelistRejected(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for level %q, got nil", tc.level)
 			}
-			if !strings.Contains(err.Error(), "must be one of") {
-				t.Errorf("expected 'must be one of' in error, got: %v", err)
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != errcode.ErrValidationFailed {
+				t.Errorf("expected errcode.ErrValidationFailed, got %q", ec.Code)
 			}
 		})
 	}
@@ -477,12 +488,40 @@ func TestScaffoldCell_RejectsSymlinkBreakout(t *testing.T) {
 }
 
 // TestScaffoldCell_ValidationErrors verifies that missing required fields
-// are rejected before any filesystem operation.
+// are rejected before any filesystem operation. Errors are checked via
+// errcode structured assertions (errcode.As + Code/Details) per the
+// MESSAGE-CONST-LITERAL-01 constraint: runtime field names are in Details,
+// not in the const-literal message.
 func TestScaffoldCell_ValidationErrors(t *testing.T) {
+	// hasDetail reports whether the errcode.Error's Details contain an attr
+	// with the given key and value.
+	hasDetail := func(ec *errcode.Error, key, value string) bool {
+		for _, attr := range ec.Details {
+			if attr.Key == key && attr.Value.String() == value {
+				return true
+			}
+		}
+		return false
+	}
+
+	// hasDetailKey reports whether any detail attr matches the given key.
+	hasDetailKey := func(ec *errcode.Error, key string) bool {
+		for _, attr := range ec.Details {
+			if attr.Key == key {
+				return true
+			}
+		}
+		return false
+	}
+
 	tests := []struct {
-		name    string
-		spec    ScaffoldSpec
-		wantErr string
+		name     string
+		spec     ScaffoldSpec
+		wantCode errcode.Code
+		checkErr func(t *testing.T, ec *errcode.Error)
+		// wantErrStr is a fallback string check for errors that pass through from
+		// pathsafe (not directly errcode.New) — kept for symlink/containment cases.
+		wantErrStr string
 	}{
 		{
 			name: "missing CellID",
@@ -493,7 +532,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "CellID is required",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetail(ec, "field", "CellID") {
+					t.Errorf("expected detail field=CellID, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "missing StructName",
@@ -504,7 +549,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "StructName is required",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetail(ec, "field", "StructName") {
+					t.Errorf("expected detail field=StructName, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "missing Package",
@@ -515,7 +566,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "Package is required",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetail(ec, "field", "Package") {
+					t.Errorf("expected detail field=Package, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "missing ModulePath",
@@ -526,7 +583,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "ModulePath is required",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !strings.Contains(ec.Message, "ModulePath") {
+					t.Errorf("expected message to contain 'ModulePath', got: %s", ec.Message)
+				}
+			},
 		},
 		{
 			name: "missing OwnerTeam",
@@ -537,7 +600,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				ModulePath: "github.com/example/app",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "OwnerTeam is required",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !strings.Contains(ec.Message, "OwnerTeam") {
+					t.Errorf("expected message to contain 'OwnerTeam', got: %s", ec.Message)
+				}
+			},
 		},
 		{
 			name: "missing OwnerRole",
@@ -548,7 +617,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				ModulePath: "github.com/example/app",
 				OwnerTeam:  "platform",
 			},
-			wantErr: "OwnerRole is required",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !strings.Contains(ec.Message, "OwnerRole") {
+					t.Errorf("expected message to contain 'OwnerRole', got: %s", ec.Message)
+				}
+			},
 		},
 		{
 			name: "OwnerTeam with newline (YAML injection)",
@@ -560,7 +635,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform\ninjected: true",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "OwnerTeam",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetailKey(ec, "ownerTeam") {
+					t.Errorf("expected detail key ownerTeam, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "OwnerTeam with colon-space (YAML injection)",
@@ -572,7 +653,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform: injected",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "OwnerTeam",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetailKey(ec, "ownerTeam") {
+					t.Errorf("expected detail key ownerTeam, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "OwnerTeam with braces (YAML flow mapping injection)",
@@ -584,7 +671,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "{injected: true}",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "OwnerTeam",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetailKey(ec, "ownerTeam") {
+					t.Errorf("expected detail key ownerTeam, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "OwnerTeam with path traversal",
@@ -596,7 +689,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "../etc/passwd",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "OwnerTeam",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetailKey(ec, "ownerTeam") {
+					t.Errorf("expected detail key ownerTeam, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "OwnerRole with YAML injection",
@@ -608,7 +707,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform",
 				OwnerRole:  "cell-owner\ninjected: true",
 			},
-			wantErr: "OwnerRole",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !hasDetailKey(ec, "ownerRole") {
+					t.Errorf("expected detail key ownerRole, got details: %v", ec.Details)
+				}
+			},
 		},
 		{
 			name: "invalid ModulePath with backslash",
@@ -620,7 +725,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "ModulePath",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !strings.Contains(ec.Message, "ModulePath") {
+					t.Errorf("expected message to contain 'ModulePath', got: %s", ec.Message)
+				}
+			},
 		},
 		{
 			name: "invalid ModulePath with dotdot",
@@ -632,7 +743,13 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				OwnerTeam:  "platform",
 				OwnerRole:  "cell-owner",
 			},
-			wantErr: "ModulePath",
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !strings.Contains(ec.Message, "ModulePath") {
+					t.Errorf("expected message to contain 'ModulePath', got: %s", ec.Message)
+				}
+			},
 		},
 	}
 
@@ -643,9 +760,20 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != tc.wantCode {
+				t.Errorf("error code = %q, want %q", ec.Code, tc.wantCode)
+			}
+			if tc.checkErr != nil {
+				tc.checkErr(t, ec)
 			}
 		})
 	}
 }
+
+// detailAttrValue is a helper for accessing slog.Attr values in tests.
+// Unused in production; used by TestScaffoldCell_ValidationErrors closures.
+var _ = slog.String

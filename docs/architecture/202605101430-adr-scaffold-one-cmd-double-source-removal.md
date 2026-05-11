@@ -1,7 +1,7 @@
 # ADR: SCAFFOLD-ONE-CMD double-source removal + Codegen default flip
 
 - **Status**: Accepted (2026-05-10)
-- **Roadmap reference**: `docs/plans/202605011500-029-master-roadmap.md` #09 SCAFFOLD-ONE-CMD
+- **Roadmap reference**: `docs/plans/archive/202605011500-029-master-roadmap.md` #09 SCAFFOLD-ONE-CMD
 - **Related ADRs**:
   - `202605061800-adr-assembly-yaml-minimal-derivation.md` — K#10 minimal `assembly.yaml`
   - `202605041700-adr-contractgen-errors-defer-to-c5.md` — K#06 contract codegen opt-in temporary state
@@ -241,7 +241,7 @@ field-count guard.
 
 ## References
 
-- Roadmap: `docs/plans/202605011500-029-master-roadmap.md` #09
+- Roadmap: `docs/plans/archive/202605011500-029-master-roadmap.md` #09
 - Plan: `/Users/shengming/.claude-ming/plans/docs-plans-202605011500-029-master-road-atomic-emerson.md`
 - Round-4/5 plan: `/Users/shengming/.claude-ming/plans/1-p1-scaffold-virtual-waffle.md`
 - ref: `kubernetes-sigs/kubernetes` `pkg/volume/util/subpath/subpath_linux.go` (`O_NOFOLLOW` for symlink-safe open)

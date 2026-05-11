@@ -3,11 +3,13 @@ package cellgen
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
@@ -124,21 +126,21 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	// Always render templates to catch template/input errors early (even on dry-run).
 	cellGoContent, err := renderTemplate(cellGoTemplate, spec, true)
 	if err != nil {
-		return fmt.Errorf("scaffold cell: render cell.go: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)
 	}
 	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
 	if err != nil {
-		return fmt.Errorf("scaffold cell: render cell.yaml: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.yaml failed", err)
 	}
 
 	realRoot, err := pathsafe.ResolveRoot(root)
 	if err != nil {
-		return fmt.Errorf("scaffold cell: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: resolve root", err)
 	}
 
 	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
 	if err != nil {
-		return fmt.Errorf("scaffold cell: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: contain path", err)
 	}
 
 	plan := []pathsafe.PlannedFile{
@@ -146,10 +148,11 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 		{AbsPath: filepath.Join(absDir, "cell.yaml"), Content: cellYAMLContent},
 	}
 
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun); err != nil {
-		return fmt.Errorf("scaffold cell: %w", err)
-	}
-	return nil
+	// Return WritePlannedFiles error directly: pathsafe already returns a
+	// structured *errcode.Error (ErrConflict for file-exists, ErrInternal for
+	// OS errors) so re-wrapping would clobber the Code and lose the caller's
+	// ability to errors.As to ErrConflict.
+	return pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun)
 }
 
 // validateScaffoldSpec returns an error if any required field is missing or
@@ -162,9 +165,21 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 // ConsistencyLevel must be one of validConsistencyLevels (schema-authoritative enum).
 // Empty Type and ConsistencyLevel are allowed here; defaults are applied by ScaffoldCell.
 // OwnerTeam and OwnerRole are required and must match their respective patterns.
-//
-//nolint:gocognit,cyclop // sequential per-field validation; complexity intrinsic
 func validateScaffoldSpec(spec ScaffoldSpec) error {
+	if err := validateIdentifierFields(spec); err != nil {
+		return err
+	}
+	if err := validateModulePath(spec); err != nil {
+		return err
+	}
+	if err := validateOwnerFields(spec); err != nil {
+		return err
+	}
+	return validateEnumFields(spec)
+}
+
+// validateIdentifierFields validates CellID, StructName, and Package fields.
+func validateIdentifierFields(spec ScaffoldSpec) error {
 	idents := []struct {
 		name  string
 		value string
@@ -175,46 +190,87 @@ func validateScaffoldSpec(spec ScaffoldSpec) error {
 	}
 	for _, f := range idents {
 		if f.value == "" {
-			return fmt.Errorf("scaffold cell: %s is required", f.name)
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold cell: required field missing",
+				errcode.WithDetails(slog.String("field", f.name)))
 		}
 		if strings.ContainsAny(f.value, `/\`) || strings.Contains(f.value, "..") {
-			return fmt.Errorf("scaffold cell: %s contains path traversal or separator", f.name)
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold cell: field contains path traversal or separator",
+				errcode.WithDetails(slog.String("field", f.name)))
 		}
 	}
 	// CellID must not contain '-' (kebab-case). Silent dash-stripping is
 	// removed; callers must provide a no-dash identifier up front.
 	if strings.Contains(spec.CellID, "-") {
-		return fmt.Errorf("scaffold cell: CellID must not contain '-'; use no-dash identifier (got %q)", spec.CellID)
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: CellID must not contain '-' (use no-dash identifier)",
+			errcode.WithDetails(slog.String("cellID", spec.CellID)))
 	}
+	return nil
+}
+
+// validateModulePath validates the ModulePath field.
+func validateModulePath(spec ScaffoldSpec) error {
 	if spec.ModulePath == "" {
-		return fmt.Errorf("scaffold cell: ModulePath is required")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: ModulePath is required")
 	}
 	if strings.Contains(spec.ModulePath, "..") || strings.Contains(spec.ModulePath, `\`) {
-		return fmt.Errorf("scaffold cell: ModulePath contains path traversal or backslash")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: ModulePath contains path traversal or backslash")
 	}
 	if len(spec.ModulePath) > 1 && !modulePathPattern.MatchString(spec.ModulePath) {
-		return fmt.Errorf("scaffold cell: ModulePath %q is not a valid Go module path", spec.ModulePath)
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: ModulePath is not a valid Go module path",
+			errcode.WithDetails(slog.String("modulePath", spec.ModulePath)))
 	}
+	return nil
+}
+
+// validateOwnerFields validates OwnerTeam and OwnerRole fields.
+func validateOwnerFields(spec ScaffoldSpec) error {
 	if spec.OwnerTeam == "" {
-		return fmt.Errorf("scaffold cell: OwnerTeam is required")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: OwnerTeam is required")
 	}
 	if !ownerTeamPattern.MatchString(spec.OwnerTeam) {
-		return fmt.Errorf("scaffold cell: OwnerTeam %q contains invalid characters (allowed: [a-zA-Z0-9_-])", spec.OwnerTeam)
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: OwnerTeam contains invalid characters (allowed: [a-zA-Z0-9_-])",
+			errcode.WithDetails(slog.String("ownerTeam", spec.OwnerTeam)))
 	}
 	if spec.OwnerRole == "" {
-		return fmt.Errorf("scaffold cell: OwnerRole is required")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: OwnerRole is required")
 	}
 	if !ownerRolePattern.MatchString(spec.OwnerRole) {
-		return fmt.Errorf("scaffold cell: OwnerRole %q contains invalid characters (allowed: [a-zA-Z0-9_-])", spec.OwnerRole)
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: OwnerRole contains invalid characters (allowed: [a-zA-Z0-9_-])",
+			errcode.WithDetails(slog.String("ownerRole", spec.OwnerRole)))
 	}
+	return nil
+}
+
+// validateEnumFields validates Type and ConsistencyLevel enum fields.
+func validateEnumFields(spec ScaffoldSpec) error {
 	if spec.Type != "" {
 		if !containsString(validCellTypes, spec.Type) {
-			return fmt.Errorf("scaffold cell: --type must be one of %v, got %q", validCellTypes, spec.Type)
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold cell: --type must be one of validCellTypes",
+				errcode.WithDetails(
+					slog.String("type", spec.Type),
+					slog.String("allowed", fmt.Sprintf("%v", validCellTypes)),
+				))
 		}
 	}
 	if spec.ConsistencyLevel != "" {
 		if !containsString(validConsistencyLevels, spec.ConsistencyLevel) {
-			return fmt.Errorf("scaffold cell: --level must be one of %v, got %q", validConsistencyLevels, spec.ConsistencyLevel)
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"scaffold cell: --level must be one of validConsistencyLevels",
+				errcode.WithDetails(
+					slog.String("level", spec.ConsistencyLevel),
+					slog.String("allowed", fmt.Sprintf("%v", validConsistencyLevels)),
+				))
 		}
 	}
 	return nil
@@ -243,7 +299,7 @@ func renderTemplate(tmpl *template.Template, data any, isGoSource bool) ([]byte,
 	if isGoSource {
 		formatted, err := codegen.FormatGoSource("", buf.Bytes())
 		if err != nil {
-			return nil, fmt.Errorf("rendered Go source is not valid: %w", err)
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "rendered Go source is not valid", err)
 		}
 		return formatted, nil
 	}

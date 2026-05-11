@@ -293,6 +293,26 @@ curl http://localhost:8080/api/v1/hello
 # {"message":"hello from mycell"}
 ```
 
+## Scaffold（K#09）
+
+一键创建完整 cell bundle：
+
+```bash
+gocell scaffold cell --id=foo --team=platform --role=cell-owner
+```
+
+生成 `cells/foo/` 含 cell.go + cell.yaml + slice + contract + JSON schemas，并自动 codegen 让 `go test ./cells/foo/...` 立即通过。
+
+一键创建 assembly：
+
+```bash
+gocell scaffold assembly --id=bar --cells=foo --team=platform --role=admin --deploy=k8s
+```
+
+生成 `assemblies/bar/assembly.yaml` + `cmd/bar/{run,app,modules_gen,main}.go` + `boundary.yaml`。
+
+详见 ADR `docs/architecture/202605101430-adr-scaffold-one-cmd-double-source-removal.md`。
+
 ## Example Projects
 
 | Example | Complexity | What it demonstrates |
