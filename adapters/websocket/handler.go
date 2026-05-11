@@ -219,7 +219,8 @@ func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.
 func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 	handler, err := UpgradeHandler(hub, cfg)
 	if err != nil {
-		panic(panicregister.Approved("websocket-upgrade-handler-init", err))
+		panic(panicregister.Approved("websocket-upgrade-handler-init",
+			errcode.Assertion("websocket: upgrade handler construction failed: %v", err)))
 	}
 	return handler
 }

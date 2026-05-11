@@ -180,7 +180,7 @@ func ValidateLabels(expected []string, got Labels) error {
 // a programmer bug surfaces immediately with a precise message.
 func MustValidateLabels(expected []string, got Labels) {
 	if err := ValidateLabels(expected, got); err != nil {
-		panic(panicregister.Approved("metrics-validate-labels-mismatch", err))
+		panic(panicregister.Approved("metrics-validate-labels-mismatch", errcode.Assertion("metrics: invalid labels: %v", err)))
 	}
 }
 

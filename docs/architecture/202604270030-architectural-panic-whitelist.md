@@ -53,7 +53,7 @@ panic on error):
 
 Internal envelope construction with caller-controlled invariants. Marshalling
 failure indicates a writer-side programmer error; the rename makes the
-panic semantics explicit (auto-exempted by the `Must*` rule).
+panic semantics explicit (panic now wrapped with panicregister.Approved per Wave 2 single funnel).
 
 ### 3. Map worker nil-exit to `ErrWorkerExitedEarly` sentinel
 

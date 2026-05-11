@@ -266,7 +266,7 @@ func MustNewProtocol(opts ...Option) *Protocol {
 	p, err := NewProtocol(opts...)
 	if err != nil {
 		// B 类 panic（参数约定违反，编程错误）：composition-root 静态字面量配错；Must* 是 fail-fast 包装。
-		panic(panicregister.Approved("auth-session-protocol-init", err))
+		panic(panicregister.Approved("auth-session-protocol-init", errcode.Assertion("auth-session: protocol construction failed: %v", err)))
 	}
 	return p
 }

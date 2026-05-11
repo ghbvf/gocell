@@ -46,7 +46,7 @@ func NewGoIdentifier(s string) (GoIdentifier, error) {
 func MustNewGoIdentifier(s string) GoIdentifier {
 	g, err := NewGoIdentifier(s)
 	if err != nil {
-		panic(panicregister.Approved("metadata-go-identifier-codegen-invalid", err))
+		panic(panicregister.Approved("metadata-go-identifier-codegen-invalid", errcode.Assertion("metadata.MustNewGoIdentifier: %v", err)))
 	}
 	return g
 }

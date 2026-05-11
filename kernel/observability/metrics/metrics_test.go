@@ -2,9 +2,11 @@ package metrics_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestValidateLabels(t *testing.T) {
@@ -130,9 +132,14 @@ func TestNopProvider_PanicsOnLabelMismatch(t *testing.T) {
 		if r == nil {
 			t.Fatal("expected panic on label mismatch, got nothing")
 		}
-		err, ok := r.(error)
-		if !ok || !errors.Is(err, metrics.ErrLabelMismatch) {
-			t.Fatalf("panic must wrap ErrLabelMismatch, got %v", r)
+		// A/B class panic wraps errcode.Assertion → *errcode.Error with ErrInternal.
+		// The message embeds the original ValidateLabels description.
+		var ec *errcode.Error
+		if !errors.As(r.(error), &ec) {
+			t.Fatalf("panic must be *errcode.Error, got %T: %v", r, r)
+		}
+		if !strings.Contains(ec.Message, "metrics: invalid labels") {
+			t.Fatalf("panic message must contain 'metrics: invalid labels', got %q", ec.Message)
 		}
 	}()
 	cv.With(metrics.Labels{"a": "x"}) // missing "b"

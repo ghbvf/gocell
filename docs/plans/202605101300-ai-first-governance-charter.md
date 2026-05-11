@@ -35,7 +35,7 @@
 2. 既有 Soft 档项目按"实际事故密度 × AI 暴露面"排队升级
 3. 改造方向规范化：
    - 字符串锚点 → typed function call（`archtest.Invariant("ID")`）
-   - 注释豁免 → typed marker（`panicregister.Approved("reason")`）
+   - 注释豁免 → typed marker（`panicregister.Approved("reason", value)`）
    - 名字 convention → sealed interface / receiver type
    - hand-crafted fixture → real source AST capture（AI 难造假）
 

@@ -453,8 +453,8 @@ func TestUpgradeHandler_RejectsNilHub(t *testing.T) {
 
 // TestMustUpgradeHandler_PanicsOnNilHub locks the static-wiring twin: a nil
 // hub must surface as a panic at composition root, not at request time, and
-// the panic value must be a typed *errcode.Error carrying ErrWebsocketHubMissing
-// so a recovery-based composition root can report the precise misconfiguration.
+// the panic value must be a typed *errcode.Error (A/B class: ErrInternal via
+// errcode.Assertion) whose message describes the construction failure.
 func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
 	defer func() {
 		r := recover()
@@ -463,7 +463,8 @@ func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
 		require.True(t, ok, "panic value must be an error, got %T", r)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code)
+		assert.Equal(t, errcode.ErrInternal, ec.Code)
+		assert.Contains(t, ec.Message, "websocket: upgrade handler construction failed")
 	}()
 	_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},

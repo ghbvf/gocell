@@ -313,7 +313,7 @@ func MustNewProtocol(opts ...Option) *Protocol {
 	if err != nil {
 		// B 类 panic（参数约定违反，编程错误）：composition-root 静态字面量配错；
 		// Must* 是 fail-fast 包装，在进程启动时立刻暴露配置错误。
-		panic(panicregister.Approved("audit-ledger-protocol-init", err))
+		panic(panicregister.Approved("audit-ledger-protocol-init", errcode.Assertion("audit-ledger: protocol construction failed: %v", err)))
 	}
 	return p
 }
