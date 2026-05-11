@@ -72,6 +72,7 @@ type CreateInput struct {
 // UpdateInput holds parameters for updating a feature flag.
 type UpdateInput struct {
 	Key               string
+	ExpectedVersion   int
 	Enabled           bool
 	RolloutPercentage int
 	Description       string
@@ -124,7 +125,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.repo.Update(txCtx, input.Key, input.Enabled, input.RolloutPercentage, input.Description)
+		updated, err = s.repo.Update(txCtx, input.Key, input.ExpectedVersion, input.Enabled, input.RolloutPercentage, input.Description)
 		if err != nil {
 			return fmt.Errorf("flag-write: update: %w", err)
 		}
@@ -141,7 +142,8 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 
 // Toggle toggles the enabled state of a feature flag (L1 LocalTx).
 // Toggle does not overwrite rollout_percentage or description.
-func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
+// Returns ErrVersionConflict (409) if expectedVersion does not match.
+func (s *Service) Toggle(ctx context.Context, key string, expectedVersion int, enabled bool) (*domain.FeatureFlag, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 	); err != nil {
@@ -152,7 +154,7 @@ func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.repo.Toggle(txCtx, key, enabled)
+		updated, err = s.repo.Toggle(txCtx, key, expectedVersion, enabled)
 		if err != nil {
 			return fmt.Errorf("flag-write: toggle: %w", err)
 		}
@@ -171,7 +173,8 @@ func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain
 // The repo DELETE uses RETURNING to obtain the deleted entity atomically, eliminating
 // the read-before-delete TOCTOU race where a concurrent Update could change the
 // flag between GetByKey and DELETE.
-func (s *Service) Delete(ctx context.Context, key string) error {
+// Returns ErrVersionConflict (409) if expectedVersion does not match.
+func (s *Service) Delete(ctx context.Context, key string, expectedVersion int) error {
 	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 	); err != nil {
@@ -179,7 +182,7 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if _, err := s.repo.Delete(txCtx, key); err != nil {
+		if _, err := s.repo.Delete(txCtx, key, expectedVersion); err != nil {
 			return fmt.Errorf("flag-write: delete: %w", err)
 		}
 		return nil

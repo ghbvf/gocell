@@ -47,7 +47,7 @@ func setup(t testing.TB) (http.Handler, string) {
 
 	// F1 fail-closed requires the session's user to be resolvable; seed a user
 	// so rotateAndIssue does not abort.
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	u, _ := domain.NewUser("usr-1", "usr-1@test.local", "hash", time.Now())
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
@@ -203,7 +203,7 @@ func TestHandleRefresh(t *testing.T) {
 
 func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
 	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))

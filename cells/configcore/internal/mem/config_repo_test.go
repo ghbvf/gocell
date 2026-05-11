@@ -2,6 +2,7 @@ package mem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -108,7 +109,7 @@ func TestConfigRepository_Update(t *testing.T) {
 	}))
 
 	t.Run("success preserves sensitive flag", func(t *testing.T) {
-		updated, err := repo.Update(ctx, "app.name", "new")
+		updated, err := repo.Update(ctx, "app.name", 1, "new")
 		require.NoError(t, err)
 		require.NotNil(t, updated)
 		assert.Equal(t, "new", updated.Value)
@@ -120,11 +121,19 @@ func TestConfigRepository_Update(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := repo.Update(ctx, "missing", "v")
+		_, err := repo.Update(ctx, "missing", 1, "v")
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
 		assert.Equal(t, errcode.ErrConfigNotFound, ecErr.Code)
+	})
+
+	t.Run("version mismatch returns ErrVersionConflict", func(t *testing.T) {
+		_, err := repo.Update(ctx, "app.name", 999, "v")
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrVersionConflict, ecErr.Code)
 	})
 }
 
@@ -139,7 +148,7 @@ func TestConfigRepository_UpdateForRollback(t *testing.T) {
 	}))
 
 	t.Run("changes sensitive flag", func(t *testing.T) {
-		updated, err := repo.UpdateForRollback(ctx, "app.name", "secret", true)
+		updated, err := repo.UpdateForRollback(ctx, "app.name", 1, "secret", true)
 		require.NoError(t, err)
 		require.NotNil(t, updated)
 		assert.Equal(t, "secret", updated.Value)
@@ -148,24 +157,31 @@ func TestConfigRepository_UpdateForRollback(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := repo.UpdateForRollback(ctx, "missing", "v", false)
+		_, err := repo.UpdateForRollback(ctx, "missing", 1, "v", false)
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
 		assert.Equal(t, errcode.ErrConfigNotFound, ecErr.Code)
 	})
+
+	t.Run("version mismatch returns ErrVersionConflict", func(t *testing.T) {
+		_, err := repo.UpdateForRollback(ctx, "app.name", 999, "v", false)
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrVersionConflict, ecErr.Code)
+	})
 }
 
 func TestConfigRepository_Delete(t *testing.T) {
-	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
-	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
-		ID: "cfg-1", Key: "app.name", Value: "v",
-	}))
-
 	t.Run("success", func(t *testing.T) {
-		deleted, err := repo.Delete(ctx, "app.name")
+		repo := NewConfigRepository(clock.Real())
+		require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
+			ID: "cfg-1", Key: "app.name", Value: "v", Version: 1,
+		}))
+		deleted, err := repo.Delete(ctx, "app.name", 1)
 		require.NoError(t, err)
 		require.NotNil(t, deleted)
 		assert.Equal(t, "app.name", deleted.Key)
@@ -175,8 +191,21 @@ func TestConfigRepository_Delete(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := repo.Delete(ctx, "missing")
+		repo := NewConfigRepository(clock.Real())
+		_, err := repo.Delete(ctx, "missing", 1)
 		require.Error(t, err)
+	})
+
+	t.Run("version mismatch returns ErrVersionConflict", func(t *testing.T) {
+		repo := NewConfigRepository(clock.Real())
+		require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
+			ID: "cfg-1", Key: "app.name", Value: "v", Version: 1,
+		}))
+		_, err := repo.Delete(ctx, "app.name", 999)
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrVersionConflict, ecErr.Code)
 	})
 }
 
@@ -647,9 +676,37 @@ func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }
 
-// TestConcurrentUpdate_NoLostWrite verifies that concurrent Update calls on the
-// same key each increment the version exactly once — no lost writes under race.
-func TestConcurrentUpdate_NoLostWrite(t *testing.T) {
+// casUpdateRetryWorker performs a read-then-CAS Update retry loop against the
+// shared repo for a single concurrent writer. Extracted from
+// TestConcurrentUpdate_CAS so each branch (success / unexpected error /
+// retry-on-conflict) stays linear, reducing the parent test's cognitive
+// complexity below the lint cap.
+func casUpdateRetryWorker(ctx context.Context, repo *ConfigRepository, key, value string) {
+	for {
+		cur, err := repo.GetByKey(ctx, key)
+		if err != nil {
+			return
+		}
+		if _, updateErr := repo.Update(ctx, key, cur.Version, value); updateErr == nil {
+			return
+		} else if !isVersionConflict(updateErr) {
+			return // unexpected error — abandon this worker
+		}
+		// ErrVersionConflict: yield and retry until our CAS wins.
+	}
+}
+
+// isVersionConflict reports whether err is the standard CAS conflict signal.
+// Centralized so concurrent-test loops do not duplicate the errors.As pattern.
+func isVersionConflict(err error) bool {
+	var ecErr *errcode.Error
+	return errors.As(err, &ecErr) && ecErr.Code == errcode.ErrVersionConflict
+}
+
+// TestConcurrentUpdate_CAS verifies that concurrent Update calls on the same key
+// with read-then-CAS retry each succeed exactly once: each goroutine retries on
+// ErrVersionConflict until it wins, resulting in exactly N increments total.
+func TestConcurrentUpdate_CAS(t *testing.T) {
 	repo := NewConfigRepository(clock.Real())
 	now := time.Now()
 	_ = repo.Create(context.Background(), &domain.ConfigEntry{
@@ -657,18 +714,18 @@ func TestConcurrentUpdate_NoLostWrite(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	})
 
-	const goroutines = 10
+	const updates = 10
 	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := range goroutines {
+	wg.Add(updates)
+	for i := range updates {
 		go func(i int) {
 			defer wg.Done()
-			_, _ = repo.Update(context.Background(), "k", fmt.Sprintf("v%d", i))
+			casUpdateRetryWorker(context.Background(), repo, "k", fmt.Sprintf("v%d", i))
 		}(i)
 	}
 	wg.Wait()
 
 	entry, err := repo.GetByKey(context.Background(), "k")
 	require.NoError(t, err)
-	assert.Equal(t, goroutines+1, entry.Version, "each Update must increment version exactly once")
+	assert.Equal(t, updates+1, entry.Version, "each CAS Update retry must eventually succeed; version must reach initial+N")
 }

@@ -96,7 +96,7 @@ func TestFlagRepository_Update(t *testing.T) {
 	}))
 
 	t.Run("success", func(t *testing.T) {
-		got, err := repo.Update(ctx, "dark-mode", true, 0, "")
+		got, err := repo.Update(ctx, "dark-mode", 1, true, 0, "")
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.True(t, got.Enabled)
@@ -104,11 +104,19 @@ func TestFlagRepository_Update(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := repo.Update(ctx, "missing", false, 0, "")
+		_, err := repo.Update(ctx, "missing", 1, false, 0, "")
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
 		assert.Equal(t, errcode.ErrFlagNotFound, ecErr.Code)
+	})
+
+	t.Run("version mismatch returns ErrVersionConflict", func(t *testing.T) {
+		_, err := repo.Update(ctx, "dark-mode", 999, false, 0, "")
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrVersionConflict, ecErr.Code)
 	})
 }
 
@@ -335,8 +343,8 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 					writeErrors.Add(1)
 					continue
 				}
-				// Update the flag we just created.
-				if _, err := repo.Update(ctx, key, true, 0, ""); err != nil {
+				// Update the flag we just created (version starts at 0 for Create).
+				if _, err := repo.Update(ctx, key, 0, true, 0, ""); err != nil {
 					writeErrors.Add(1)
 				}
 			}

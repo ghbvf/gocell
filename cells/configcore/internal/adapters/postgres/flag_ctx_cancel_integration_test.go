@@ -99,7 +99,7 @@ func TestFlagWrite_UpdateCtxCancel_PGTxRollback(t *testing.T) {
 	cancel()
 
 	err := txMgr.RunInTx(cancelledCtx, func(txCtx context.Context) error {
-		_, err := repo.Update(txCtx, key, true, 50, "should not apply")
+		_, err := repo.Update(txCtx, key, 1, true, 50, "should not apply")
 		return err
 	})
 	require.Error(t, err)
@@ -147,7 +147,7 @@ func TestFlagWrite_DeleteCtxCancel_PGTxRollback(t *testing.T) {
 	cancel()
 
 	err := txMgr.RunInTx(cancelledCtx, func(txCtx context.Context) error {
-		_, err := repo.Delete(txCtx, key)
+		_, err := repo.Delete(txCtx, key, 1)
 		return err
 	})
 	require.Error(t, err)
@@ -188,7 +188,7 @@ func TestFlagWrite_TxRollback_OnRepoError(t *testing.T) {
 	// Simulate an error after the update (e.g. outbox write failure).
 	simulatedErr := context.DeadlineExceeded
 	err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		if _, err := repo.Update(txCtx, key, true, 75, "should rollback"); err != nil {
+		if _, err := repo.Update(txCtx, key, 1, true, 75, "should rollback"); err != nil {
 			return err
 		}
 		return simulatedErr

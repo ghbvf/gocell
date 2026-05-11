@@ -54,6 +54,7 @@ type User struct {
 	Username              string
 	Email                 string
 	PasswordHash          string
+	PasswordVersion       int64
 	PasswordResetRequired bool
 	Status                UserStatus
 	CreationSource        UserSource
@@ -119,4 +120,13 @@ func (u *User) UnlockAccount(now time.Time) {
 // IsLocked returns true if the user account is locked.
 func (u *User) IsLocked() bool {
 	return u.Status == StatusLocked
+}
+
+// BumpPasswordVersion advances the CAS counter that guards ChangePassword
+// from concurrent overwrites. Call after writing a new PasswordHash; the
+// repo's UpdatePassword SQL bumps the column via password_version+1, so this
+// in-memory bump keeps the domain object in sync after a successful CAS write.
+func (u *User) BumpPasswordVersion(now time.Time) {
+	u.PasswordVersion++
+	u.UpdatedAt = now
 }

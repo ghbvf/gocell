@@ -2,6 +2,7 @@ package configpublish
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -9,6 +10,7 @@ import (
 	configpublishgen "github.com/ghbvf/gocell/generated/contracts/http/config/publish/v1"
 	rollbackgen "github.com/ghbvf/gocell/generated/contracts/http/config/rollback/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -52,10 +54,20 @@ func (a PublishAdapter) Publish(ctx context.Context, req *configpublishgen.Reque
 // RollbackAdapter wraps Service to implement rollbackgen.Service for http.config.rollback.v1.
 type RollbackAdapter struct{ S *Service }
 
-// Rollback implements rollbackgen.Service. Key comes from path param; Version from body.
+// Rollback implements rollbackgen.Service. Key comes from path param; Version from body;
+// ExpectedVersion is the CAS guard for the current entry.
 func (a RollbackAdapter) Rollback(ctx context.Context, req *rollbackgen.Request) (rollbackgen.RollbackResponseObject, error) {
-	entry, err := a.S.Rollback(ctx, req.Key, int(req.Version))
+	entry, err := a.S.Rollback(ctx, req.Key, int(req.Version), int(req.ExpectedVersion))
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			switch ce.Code {
+			case errcode.ErrConfigRepoNotFound, errcode.ErrConfigNotFound:
+				return rollbackgen.Rollback404ErrorResponse{Body: *ce}, nil
+			case errcode.ErrVersionConflict:
+				return rollbackgen.Rollback409ErrorResponse{Body: *ce}, nil
+			}
+		}
 		return nil, err
 	}
 	return rollbackgen.Rollback200JSONResponse{Data: toRollbackResponseData(entry)}, nil

@@ -174,3 +174,52 @@ func TestUser_ClearPasswordResetRequiredUnsets(t *testing.T) {
 	assert.False(t, user.PasswordResetRequired, "ClearPasswordResetRequired must set flag to false")
 	assert.True(t, !user.UpdatedAt.Before(before), "ClearPasswordResetRequired must advance UpdatedAt")
 }
+
+func TestBumpPasswordVersion_AdvancesVersion(t *testing.T) {
+	tests := []struct {
+		name        string
+		bumps       int
+		wantVersion int64
+	}{
+		{
+			name:        "single bump advances 0 to 1",
+			bumps:       1,
+			wantVersion: 1,
+		},
+		{
+			name:        "two bumps advance 0 to 2",
+			bumps:       2,
+			wantVersion: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			user, err := NewUser("grace", "grace@example.com", "$2a$10$hash", time.Now())
+			require.NoError(t, err)
+			require.Equal(t, int64(0), user.PasswordVersion)
+
+			for range tt.bumps {
+				user.BumpPasswordVersion(time.Now())
+			}
+
+			assert.Equal(t, tt.wantVersion, user.PasswordVersion)
+		})
+	}
+}
+
+func TestBumpPasswordVersion_UpdatesUpdatedAt(t *testing.T) {
+	user, err := NewUser("heidi", "heidi@example.com", "$2a$10$hash", time.Now())
+	require.NoError(t, err)
+
+	now := time.Now().Add(time.Minute)
+	user.BumpPasswordVersion(now)
+
+	assert.Equal(t, now, user.UpdatedAt, "BumpPasswordVersion must set UpdatedAt to the provided now")
+}
+
+func TestNewUser_InitializesPasswordVersionZero(t *testing.T) {
+	user, err := NewUser("ivan", "ivan@example.com", "$2a$10$hash", time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), user.PasswordVersion, "NewUser must initialize PasswordVersion to zero")
+}

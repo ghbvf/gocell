@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // ssobffBootstrapRateLimitPerSec / Burst mirror cmd/corebundle defaults
@@ -220,6 +221,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 		accesscore.WithLogger(cfg.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
@@ -240,6 +242,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
+		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(cfg.logger),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),

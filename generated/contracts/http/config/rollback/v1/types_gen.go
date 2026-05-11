@@ -16,8 +16,9 @@ import (
 
 // Request — http.config.rollback.v1.request
 type Request struct {
-	Key     string `json:"key"`
-	Version int64  `json:"version"`
+	Key             string `json:"key"`
+	Version         int64  `json:"version"`
+	ExpectedVersion int64  `json:"expectedVersion"`
 }
 
 // Response — http.config.rollback.v1.response
@@ -106,6 +107,32 @@ type Rollback403ErrorResponse struct {
 
 func (r Rollback403ErrorResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
 	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Rollback404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Rollback404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Rollback404ErrorResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}
+
+// Rollback409ErrorResponse renders an HTTP 409 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Rollback409ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Rollback409ErrorResponse) visitRollbackResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 409, &r.Body)
 	return nil
 }
 

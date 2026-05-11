@@ -59,19 +59,19 @@ func TestFlagRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		t.Run("Update/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.Update(context.Background(), "dark-mode", true, 100, "desc")
+			_, err := repo.Update(context.Background(), "dark-mode", 1, true, 100, "desc")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Delete/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.Delete(context.Background(), "dark-mode")
+			_, err := repo.Delete(context.Background(), "dark-mode", 1)
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Toggle/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.Toggle(context.Background(), "dark-mode", true)
+			_, err := repo.Toggle(context.Background(), "dark-mode", 1, true)
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Create/"+tc.name, func(t *testing.T) {

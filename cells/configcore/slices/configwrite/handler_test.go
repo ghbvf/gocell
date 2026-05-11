@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -165,7 +166,7 @@ func TestHandler_HandleUpdate_UnknownField(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	body := `{"value":"new","extra":"y"}`
+	body := `{"value":"new","expectedVersion":1,"extra":"y"}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/k", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -183,7 +184,7 @@ func TestHandler_HandleUpdate_OK(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	body := `{"value":"new"}`
+	body := `{"value":"new","expectedVersion":1}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/app.name", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -197,7 +198,7 @@ func TestHandler_HandleUpdate_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	body := `{"value":"v"}`
+	body := `{"value":"v","expectedVersion":1}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/missing", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -227,7 +228,7 @@ func TestHandler_HandleDelete_OK(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/app.name", nil)
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/app.name?expectedVersion=1", nil)
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
@@ -238,7 +239,7 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/missing", nil)
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/missing?expectedVersion=1", nil)
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
@@ -276,7 +277,7 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	body := `{"value":"new-secret"}`
+	body := `{"value":"new-secret","expectedVersion":1}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/api.key", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -357,11 +358,11 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update
-	_, err = svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{Key: "k1", Value: "v2"})
+	_, err = svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{Key: "k1", Value: "v2", ExpectedVersion: 1})
 	require.NoError(t, err)
 
 	// Delete
-	err = svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "k1")
+	err = svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "k1", 2)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, tx.calls, "each op should use tx")
@@ -435,7 +436,7 @@ func TestHandler_Authz_Update(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
-			body := `{"value":"new"}`
+			body := `{"value":"new","expectedVersion":1}`
 			req := httptest.NewRequest(http.MethodPut, configPrefix+tc.path, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.injectAuth {
@@ -468,15 +469,15 @@ func TestHandler_Authz_Delete(t *testing.T) {
 		wantStatus  int
 		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
+		{"no_auth", "", nil, false, nil, "/nonexistent?expectedVersion=1", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent?expectedVersion=1", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent?expectedVersion=1", http.StatusNotFound, ""},
 		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), &domain.ConfigEntry{
 				ID: "ad-1", Key: "test.delete", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
 			})
-		}, "/test.delete", http.StatusNoContent, ""},
+		}, "/test.delete?expectedVersion=1", http.StatusNoContent, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -502,4 +503,84 @@ func TestHandler_Authz_Delete(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// PR464 P2.2: typed 404 / 409 envelope adapter regression coverage.
+// fakeConfigRepoErr wraps mem.ConfigRepository and overrides Update/Delete
+// to inject controlled errcode.Error responses, asserting the adapter's
+// errors.As + ce.Code switch returns the typed envelope (not framework
+// fallback) so codegen-declared status codes stay locked.
+// ---------------------------------------------------------------------------
+
+type fakeConfigRepoErr struct {
+	*mem.ConfigRepository
+	updateErr error
+	deleteErr error
+}
+
+func (f *fakeConfigRepoErr) Update(_ context.Context, _ string, _ int, _ string) (*domain.ConfigEntry, error) {
+	return nil, f.updateErr
+}
+
+func (f *fakeConfigRepoErr) Delete(_ context.Context, _ string, _ int) (*domain.ConfigEntry, error) {
+	return nil, f.deleteErr
+}
+
+func newConfigwriteAdapterUnderTest(t *testing.T, updateErr, deleteErr error) (UpdateAdapter, DeleteAdapter) {
+	t.Helper()
+	repo := &fakeConfigRepoErr{
+		ConfigRepository: mem.NewConfigRepository(clock.Real()),
+		updateErr:        updateErr,
+		deleteErr:        deleteErr,
+	}
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
+	return UpdateAdapter{S: svc}, DeleteAdapter{S: svc}
+}
+
+func TestUpdateAdapter_NotFound_Returns404Typed(t *testing.T) {
+	updateAd, _ := newConfigwriteAdapterUnderTest(t,
+		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"),
+		nil)
+	resp, err := updateAd.Update(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&update.Request{Key: "missing.key", Value: "v", ExpectedVersion: 1})
+	require.NoError(t, err, "adapter must map ErrConfigRepoNotFound to typed 404 (not framework fallback)")
+	typed, ok := resp.(update.Update404ErrorResponse)
+	require.True(t, ok, "expected Update404ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, typed.Body.Code)
+}
+
+func TestUpdateAdapter_VersionConflict_Returns409Typed(t *testing.T) {
+	updateAd, _ := newConfigwriteAdapterUnderTest(t,
+		errcode.New(errcode.KindConflict, errcode.ErrVersionConflict, "concurrent update detected; reload and retry"),
+		nil)
+	resp, err := updateAd.Update(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&update.Request{Key: "stale.key", Value: "v", ExpectedVersion: 1})
+	require.NoError(t, err, "adapter must map ErrVersionConflict to typed 409")
+	typed, ok := resp.(update.Update409ErrorResponse)
+	require.True(t, ok, "expected Update409ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
+}
+
+func TestDeleteAdapter_NotFound_Returns404Typed(t *testing.T) {
+	_, deleteAd := newConfigwriteAdapterUnderTest(t, nil,
+		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"))
+	resp, err := deleteAd.Delete(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&configdelete.Request{Key: "missing.key", ExpectedVersion: 1})
+	require.NoError(t, err)
+	typed, ok := resp.(configdelete.Delete404ErrorResponse)
+	require.True(t, ok, "expected Delete404ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, typed.Body.Code)
+}
+
+func TestDeleteAdapter_VersionConflict_Returns409Typed(t *testing.T) {
+	_, deleteAd := newConfigwriteAdapterUnderTest(t, nil,
+		errcode.New(errcode.KindConflict, errcode.ErrVersionConflict, "concurrent update detected; reload and retry"))
+	resp, err := deleteAd.Delete(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&configdelete.Request{Key: "stale.key", ExpectedVersion: 1})
+	require.NoError(t, err)
+	typed, ok := resp.(configdelete.Delete409ErrorResponse)
+	require.True(t, ok, "expected Delete409ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
 }

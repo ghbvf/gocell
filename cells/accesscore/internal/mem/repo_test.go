@@ -20,7 +20,7 @@ import (
 // TestUserRepository_ConcurrentCreateAndGet verifies that concurrent
 // Create and Get calls do not race. Run with -race to verify.
 func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
-	repo := NewUserRepository()
+	repo := NewUserRepository(clock.Real())
 	ctx := context.Background()
 
 	const writers = 5
@@ -63,7 +63,7 @@ func TestSessionRepository_Health(t *testing.T) {
 }
 
 func TestUserRepository_NotFoundErrors(t *testing.T) {
-	repo := NewUserRepository()
+	repo := NewUserRepository(clock.Real())
 	ctx := context.Background()
 
 	tests := []struct {

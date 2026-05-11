@@ -2,6 +2,7 @@ package identitymanage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -203,6 +204,10 @@ func (a ChangePasswordAdapter) ChangePassword(
 		NewPassword: req.NewPassword,
 	})
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) && ce.Code == errcode.ErrVersionConflict {
+			return changepassgen.ChangePassword409ErrorResponse{Body: *ce}, nil
+		}
 		return nil, err
 	}
 	return changepassgen.ChangePassword200JSONResponse{Data: toTokenPairResponseData(pair)}, nil

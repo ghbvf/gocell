@@ -42,12 +42,13 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 21 migrations (001-021). 017/018/019 land users/sessions/
+	// Currently 22 migrations (001-022). 017/018/019 land users/sessions/
 	// roles schema for accesscore PG repos (S3+S5); 020 adds audit_entries
 	// table for the ledger.Store PG backend; 021 adds the
-	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard.
-	assert.Equal(t, int64(21), v,
-		"expected version should be exactly 21 (current migration count)")
+	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
+	// 022 adds users.password_version for S6 narrow-scope CAS.
+	assert.Equal(t, int64(22), v,
+		"expected version should be exactly 22 (current migration count)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -219,4 +220,41 @@ func TestVerifyExpectedVersion_ExpectedVersionError(t *testing.T) {
 	assert.Contains(t, err.Error(), "schema_guard: compute expected version",
 		"error must include context prefix")
 	assert.ErrorIs(t, err, sentinel, "original error must be wrapped")
+}
+
+// ---------------------------------------------------------------------------
+// TestVerifyExpectedShape_Required* — static membership checks on
+// shapeRequiredColumns (no DB required).
+// ---------------------------------------------------------------------------
+
+// containsColumn returns true when shapeRequiredColumns contains an entry
+// with the given table and column.
+func containsColumn(table, column string) bool {
+	for _, r := range shapeRequiredColumns {
+		if r.table == table && r.column == column {
+			return true
+		}
+	}
+	return false
+}
+
+// TestVerifyExpectedShape_RequiresUsersPasswordVersion verifies that the S6
+// narrow-scope CAS column is declared in the required-column list.
+func TestVerifyExpectedShape_RequiresUsersPasswordVersion(t *testing.T) {
+	assert.True(t, containsColumn("users", "password_version"),
+		"shapeRequiredColumns must include users.password_version (S6 migration 022)")
+}
+
+// TestVerifyExpectedShape_RequiresConfigEntriesVersion verifies that the
+// PR449-F7 maintenance entry for config_entries.version is declared.
+func TestVerifyExpectedShape_RequiresConfigEntriesVersion(t *testing.T) {
+	assert.True(t, containsColumn("config_entries", "version"),
+		"shapeRequiredColumns must include config_entries.version (migration 004 carry-over)")
+}
+
+// TestVerifyExpectedShape_RequiresFeatureFlagsVersion verifies that the
+// PR449-F7 maintenance entry for feature_flags.version is declared.
+func TestVerifyExpectedShape_RequiresFeatureFlagsVersion(t *testing.T) {
+	assert.True(t, containsColumn("feature_flags", "version"),
+		"shapeRequiredColumns must include feature_flags.version (migration 008 carry-over)")
 }

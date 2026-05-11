@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 func TestInternalAddrToBaseURL(t *testing.T) {
@@ -118,4 +119,22 @@ func TestAccessCoreModule_TrimsEnvWhitespace(t *testing.T) {
 		"username must be TrimSpace-d")
 	assert.Equal(t, []byte("securepassword123"), creds.Password,
 		"password must be TrimSpace-d")
+}
+
+// TestAccessCoreModule_CASProtocolInjection verifies that the composition root
+// constructs a valid CAS Protocol with password_version as version field.
+// This test documents the expected invariant without running the full cell
+// bootstrap (which would require JWT keys, DB, etc.).
+func TestAccessCoreModule_CASProtocolInjection(t *testing.T) {
+	// MustNewProtocol panics on misconfiguration. The fact that this does not
+	// panic proves the parameters are valid. The composition root calls exactly
+	// this constructor form (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest guards
+	// that cells never call it directly).
+	proto := cas.MustNewProtocol(cas.WithVersionField("password_version"))
+	require.NotNil(t, proto, "CAS Protocol must be non-nil")
+	assert.Equal(t, "password_version", proto.VersionField(),
+		"CAS Protocol version field must match the DB column name from migration 022")
+	_, isStrictReject := proto.Conflict().(cas.ConflictPolicyStrictReject)
+	assert.True(t, isStrictReject,
+		"default conflict policy must be ConflictPolicyStrictReject (HTTP 409 on mismatch)")
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // Compile-time check.
@@ -68,7 +69,7 @@ func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.Conf
 	return &clone, nil
 }
 
-func (r *ConfigRepository) Update(_ context.Context, key string, value string) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) Update(_ context.Context, key string, expectedVersion int, value string) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -76,6 +77,9 @@ func (r *ConfigRepository) Update(_ context.Context, key string, value string) (
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
 			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, key)))
+	}
+	if existing.Version != expectedVersion {
+		return nil, cas.CheckVersionMatch(0, "config_entry", key)
 	}
 	existing.Value = value
 	// Preserve existing Sensitive — do NOT change it.
@@ -85,7 +89,9 @@ func (r *ConfigRepository) Update(_ context.Context, key string, value string) (
 	return &clone, nil
 }
 
-func (r *ConfigRepository) UpdateForRollback(_ context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) UpdateForRollback(
+	_ context.Context, key string, expectedVersion int, value string, sensitive bool,
+) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -93,6 +99,9 @@ func (r *ConfigRepository) UpdateForRollback(_ context.Context, key string, valu
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
 			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, key)))
+	}
+	if existing.Version != expectedVersion {
+		return nil, cas.CheckVersionMatch(0, "config_entry", key)
 	}
 	existing.Value = value
 	existing.Sensitive = sensitive
@@ -102,7 +111,7 @@ func (r *ConfigRepository) UpdateForRollback(_ context.Context, key string, valu
 	return &clone, nil
 }
 
-func (r *ConfigRepository) Delete(_ context.Context, key string) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) Delete(_ context.Context, key string, expectedVersion int) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -110,6 +119,9 @@ func (r *ConfigRepository) Delete(_ context.Context, key string) (*domain.Config
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
 			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, key)))
+	}
+	if existing.Version != expectedVersion {
+		return nil, cas.CheckVersionMatch(0, "config_entry", key)
 	}
 	clone := *existing
 	delete(r.entries, key)

@@ -66,7 +66,8 @@ func TestE2E_ConfigEncryption_UpdateAndReadRoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusCreated, createResp.StatusCode)
 
 	updateResp := clients.DoJSON(t, http.MethodPut, "/api/v1/config/"+key, map[string]any{
-		"value": "updated-secret",
+		"value":           "updated-secret",
+		"expectedVersion": 1, // S6 CAS: entry just created above, version=1.
 	}, token)
 	defer updateResp.Body.Close()
 	require.Equal(t, http.StatusOK, updateResp.StatusCode)

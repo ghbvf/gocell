@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 func newTestCell() *ConfigCore {
@@ -123,6 +124,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("version"))),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -553,6 +555,7 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingConfigWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})), // non-Nooper; durable-gated CheckNotNoop passes
+		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("version"))),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
@@ -606,6 +609,7 @@ func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})), // non-Nooper; durable-gated CheckNotNoop passes
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), outbox.WrapWriterForCell(writer)),
 		WithCursorCodec(mustNewCfgCodec(t, []byte("wiring-test-cfg-cursor-key-32b!!"))),
+		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("version"))),
 	)
 	// Writer is accumulated into pendingOutboxWriter pre-Init.
 	assert.NotNil(t, c.pendingOutboxWriter, "WithOutboxDeps must populate pendingOutboxWriter")
@@ -684,4 +688,46 @@ func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), recorder))
 	snap := recorder.Snapshot()
 	assert.Empty(t, snap.HealthCheckers, "WriterEmitter must produce empty health checkers map")
+}
+
+// ---------------------------------------------------------------------------
+// PR464 P2.1 follow-up: cover phase0 CAS-protocol rejection paths so
+// regression catches a composition root that wires typed-nil or omits CAS in
+// durable mode.
+// ---------------------------------------------------------------------------
+
+// TestConfigCore_WithCASProtocol_TypedNil_RejectedAtInit verifies that passing
+// a typed-nil *cas.Protocol via WithCASProtocol sets the sticky sentinel and
+// phase0 rejects with ErrCellInvalidConfig.
+func TestConfigCore_WithCASProtocol_TypedNil_RejectedAtInit(t *testing.T) {
+	var typedNil *cas.Protocol // typed-nil
+	c := NewConfigCore(
+		WithClock(clock.Real()),
+		WithInMemoryDefaults(),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		WithCASProtocol(typedNil),
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err, "typed-nil *cas.Protocol must be rejected at phase0 sentinel")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "typed-nil *cas.Protocol rejected",
+		"phase0 diagnostic must name the typed-nil sentinel branch")
+}
+
+// TestConfigCore_DurableMode_MissingCASProtocol_FailsFast verifies that durable
+// mode requires WithCASProtocol; omitting it causes phase0 to fail at the
+// early CAS check (before other dependency validations).
+func TestConfigCore_DurableMode_MissingCASProtocol_FailsFast(t *testing.T) {
+	c := NewConfigCore(WithClock(clock.Real()))
+	// DurabilityDurable + no WithCASProtocol must fail at phase0 CAS check.
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "durable mode requires a CAS protocol",
+		"diagnostic must point operators at the missing CAS wiring")
 }

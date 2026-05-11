@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // cryptoOpError constructs a uniform *errcode.Error for encrypt/decrypt
@@ -103,6 +104,15 @@ const configRepoQueryFailedMessage = "config repo query failed"
 const (
 	opUpdate            = "Update"
 	opUpdateForRollback = "UpdateForRollback"
+)
+
+// Diagnostic message + format constants reused across Update / UpdateForRollback /
+// Delete / resolveUpdateConflict 404 paths. Centralized per SonarCloud
+// design.duplicate-literal: a single-source message keeps client-visible text
+// uniform and Internal format consistent for ops log correlation.
+const (
+	msgConfigNotFound        = "config not found"
+	internalFmtConfigMissKey = "config repo: %s miss key=%s"
 )
 
 type encryptedPayload struct {
@@ -376,8 +386,8 @@ func (r *ConfigRepository) scanConfigOrMapError(
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
-			"config not found", err,
-			errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
+			msgConfigNotFound, err,
+			errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, op, key)),
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
@@ -467,11 +477,12 @@ func (r *ConfigRepository) currentKeyID(ctx context.Context) string {
 	return ""
 }
 
-// Update atomically sets value and increments version. Preserves the existing
-// sensitive flag — reads it internally via SELECT...FOR UPDATE to eliminate
-// any TOCTOU race on the sensitive flag. Callers do not need to pre-read the
-// entry. Returns ErrConfigRepoNotFound if the key does not exist.
-func (r *ConfigRepository) Update(ctx context.Context, key string, value string) (*domain.ConfigEntry, error) {
+// Update atomically sets value and increments version if expectedVersion matches
+// the current version (CAS guard). Preserves the existing sensitive flag — reads
+// it internally via SELECT...FOR UPDATE to eliminate any TOCTOU race on the
+// sensitive flag. Returns ErrConfigRepoNotFound if the key does not exist, or
+// ErrVersionConflict if expectedVersion does not match the stored version.
+func (r *ConfigRepository) Update(ctx context.Context, key string, expectedVersion int, value string) (*domain.ConfigEntry, error) {
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
@@ -487,8 +498,8 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
-				"config not found", scanErr,
-				errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", opUpdate, key)),
+				msgConfigNotFound, scanErr,
+				errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, opUpdate, key)),
 				errcode.WithCategory(errcode.CategoryDomain),
 			)
 		}
@@ -499,28 +510,41 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 		)
 	}
 
-	return r.doUpdate(ctx, db, opUpdate, key, value, sensitive)
+	return r.doUpdate(ctx, db, opUpdate, key, expectedVersion, value, sensitive)
 }
 
-// UpdateForRollback atomically sets value AND sensitive, increments version.
+// UpdateForRollback atomically sets value AND sensitive, increments version if
+// expectedVersion matches the current version (CAS guard).
 // Used exclusively by configpublish.Rollback to restore a snapshot's sensitivity
-// alongside its value. Returns ErrConfigRepoNotFound if the key does not exist.
-func (r *ConfigRepository) UpdateForRollback(ctx context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
+// alongside its value. Returns ErrConfigRepoNotFound if the key does not exist,
+// or ErrVersionConflict if expectedVersion does not match.
+func (r *ConfigRepository) UpdateForRollback(
+	ctx context.Context, key string, expectedVersion int, value string, sensitive bool,
+) (*domain.ConfigEntry, error) {
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.doUpdate(ctx, db, opUpdateForRollback, key, value, sensitive)
+	return r.doUpdate(ctx, db, opUpdateForRollback, key, expectedVersion, value, sensitive)
 }
 
 // doUpdate performs the actual UPDATE...RETURNING for both Update and
 // UpdateForRollback. op identifies the calling method for InternalMessage context.
+// expectedVersion is the CAS guard: the UPDATE WHERE clause includes
+// AND version=$expectedVersion so that a stale caller gets rowsAffected=0.
 // sensitive is the resolved flag (read by caller or provided directly).
 // For sensitive=true: re-encrypts value and writes cipher columns.
+//
+// CAS flow: rowsAffected==0 → probe GetByKey:
+//   - exists → ErrVersionConflict (409)
+//   - not found → ErrConfigRepoNotFound (404)
 func (r *ConfigRepository) doUpdate(
-	ctx context.Context, db DBTX, op, key string, value string, sensitive bool,
+	ctx context.Context, db DBTX, op, key string, expectedVersion int, value string, sensitive bool,
 ) (*domain.ConfigEntry, error) {
-	var row Row
+	var (
+		rowsAffected int64
+		row          Row
+	)
 	if sensitive {
 		payload, encErr := r.encryptValue(ctx, key, value)
 		if encErr != nil {
@@ -529,42 +553,95 @@ func (r *ConfigRepository) doUpdate(
 		const q = `UPDATE config_entries
 			SET value = '', sensitive = true, version = version+1, updated_at = now(),
 			    value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4
-			WHERE key = $5
+			WHERE key = $5 AND version = $6
 			RETURNING ` + configEntryColumns
-		row = db.QueryRow(ctx, q, payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce, key)
+		row = db.QueryRow(ctx, q, payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce, key, expectedVersion)
 	} else {
 		const q = `UPDATE config_entries
 			SET value = $1, sensitive = false, version = version+1, updated_at = now(),
 			    value_cipher = NULL, value_key_id = NULL, value_edk = NULL, value_nonce = NULL
-			WHERE key = $2
+			WHERE key = $2 AND version = $3
 			RETURNING ` + configEntryColumns
-		row = db.QueryRow(ctx, q, value, key)
+		row = db.QueryRow(ctx, q, value, key, expectedVersion)
 	}
 
-	e, ct, keyID, edk, nonce, scanErr := r.scanConfigOrMapError(ctx, row, op, key)
+	e, ct, keyID, edk, nonce, scanErr := scanConfigRow(row)
 	if scanErr != nil {
-		return nil, scanErr
+		if cancelErr := ctxcancel.Wrap(scanErr, op, "key="+key); cancelErr != nil {
+			return nil, cancelErr
+		}
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			// rowsAffected==0: distinguish version mismatch from not-found.
+			return nil, r.resolveUpdateConflict(ctx, op, key)
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+			configRepoQueryFailedMessage, scanErr,
+			errcode.WithInternal(fmt.Sprintf("config repo: %s scan error key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
+	_ = rowsAffected // row scan succeeded → rowsAffected implicitly 1
+
 	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
 		return nil, err
 	}
 	return e, nil
 }
 
-// Delete atomically removes a config entry by key and returns the deleted row
-// via DELETE...RETURNING, enabling callers to publish a tombstone event without
-// a separate pre-read.
-func (r *ConfigRepository) Delete(ctx context.Context, key string) (*domain.ConfigEntry, error) {
-	const q = `DELETE FROM config_entries WHERE key = $1 RETURNING ` + configEntryColumns
+// resolveUpdateConflict probes whether a key exists after an UPDATE...WHERE version=$N
+// returned no rows. Three-way classification (PR464 P1.2 fix):
+//
+//   - Probe returns ErrConfigRepoNotFound → key absent → 404
+//   - Probe returns any other error (timeout, tx aborted, scan failure) → infra
+//     fault — transparent passthrough as internal (do NOT masquerade as 404)
+//   - Probe succeeds → key exists but version mismatch → 409 ErrVersionConflict
+//
+// ref: docs/reviews/PR-464 round-2 P1.2 (Kratos/Watermill/etcd: probe failure
+// must not collapse into business not-found).
+func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, op, key string) error {
+	probe, probeErr := r.GetByKey(ctx, key)
+	if probeErr != nil {
+		notFound, infraErr := classifyProbeFailure(probeErr, errcode.ErrConfigRepoNotFound, op, key, "config_entry")
+		if !notFound {
+			return infraErr
+		}
+		// Confirmed key absent → 404.
+		return errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+			msgConfigNotFound, probeErr,
+			errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, op, key)),
+			errcode.WithCategory(errcode.CategoryDomain),
+		)
+	}
+	// Key exists but version did not match → 409.
+	return cas.CheckVersionMatch(0, "config_entry", probe.Key)
+}
+
+// Delete atomically removes a config entry by key if expectedVersion matches the
+// stored version (CAS guard). Returns the deleted row via DELETE...RETURNING,
+// enabling callers to publish a tombstone event without a separate pre-read.
+// Returns ErrConfigRepoNotFound if the key does not exist, or ErrVersionConflict
+// if expectedVersion does not match.
+func (r *ConfigRepository) Delete(ctx context.Context, key string, expectedVersion int) (*domain.ConfigEntry, error) {
+	const q = `DELETE FROM config_entries WHERE key = $1 AND version = $2 RETURNING ` + configEntryColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	row := db.QueryRow(ctx, q, key)
-	e, ct, keyID, edk, nonce, scanErr := r.scanConfigOrMapError(ctx, row, "Delete", key)
+	row := db.QueryRow(ctx, q, key, expectedVersion)
+	e, ct, keyID, edk, nonce, scanErr := scanConfigRow(row)
 	if scanErr != nil {
-		return nil, scanErr
+		if cancelErr := ctxcancel.Wrap(scanErr, "Delete", "key="+key); cancelErr != nil {
+			return nil, cancelErr
+		}
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return nil, r.resolveUpdateConflict(ctx, "Delete", key)
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+			configRepoQueryFailedMessage, scanErr,
+			errcode.WithInternal(fmt.Sprintf("config repo: Delete scan error key=%s", key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
 		return nil, err
