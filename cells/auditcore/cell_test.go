@@ -18,11 +18,16 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
+
+// tailVerifyTestSlack is the upper-bound window used by
+// TestStrictTailVerifyOnStartup_TimeoutCapped: 30s cap + 5s scheduling slack.
+const tailVerifyTestSlack = 35 * time.Second
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
@@ -549,7 +554,7 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 }
 
 // blockingStore is a ledger.Store where Verify blocks until the context is
-// cancelled. Used to test that strictTailVerifyOnStartup respects a deadline.
+// canceled. Used to test that strictTailVerifyOnStartup respects a deadline.
 type blockingStore struct {
 	ledger.Store
 	verifyStarted chan struct{} // closed when Verify is entered
@@ -613,7 +618,7 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 	select {
 	case <-blocking.verifyStarted:
 		// good
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.EventuallyLong):
 		t.Fatal("timed out waiting for blockingStore.Verify to be entered; Init may not have reached strictTailVerifyOnStartup")
 	}
 
@@ -634,7 +639,7 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 		if err == nil {
 			t.Fatal("Init should have returned an error after strictTailVerify timeout")
 		}
-		// Verify the error is context-related (deadline exceeded or cancelled)
+		// Verify the error is context-related (deadline exceeded or canceled)
 		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			// Might be wrapped — check string
 			errStr := err.Error()
@@ -644,7 +649,7 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 			// Accept any error that includes context/deadline/timeout semantics
 			t.Logf("strictTailVerifyOnStartup returned (acceptable): %v", err)
 		}
-	case <-time.After(35 * time.Second):
+	case <-time.After(tailVerifyTestSlack):
 		t.Error("A-02 RED: Init blocked indefinitely; strictTailVerifyOnStartup must cap with ≤30s timeout")
 	}
 }

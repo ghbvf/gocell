@@ -1,12 +1,13 @@
 // Package auditcore implements the auditcore Cell: tamper-evident audit log
 // with hash chain (via runtime/audit/ledger framework), event consumption,
-// integrity verification, and query.
+// and query.
 package auditcore
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendconfig"
@@ -14,7 +15,6 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendsession"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappenduser"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditquery"
-	"github.com/ghbvf/gocell/cells/auditcore/slices/auditverify"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -27,6 +27,10 @@ import (
 )
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
+
+// tailVerifyStartupTimeout caps strictTailVerifyOnStartup so that a slow or
+// hung store cannot stall k8s readiness indefinitely (F-04).
+const tailVerifyStartupTimeout = 30 * time.Second
 
 // Option configures an AuditCore Cell.
 type Option func(*AuditCore)
@@ -175,8 +179,6 @@ type AuditCore struct {
 	// +slice:subscribe:slice=auditappendrole,topic=event.role.revoked.v1,handler=HandleEvent,group=auditcore
 	appendRoleSvc *auditappendrole.Service
 
-	verifySvc *auditverify.Service
-
 	// +slice:route:slice=auditquery,subPath=
 	queryHandler *auditquery.Handler
 }
@@ -286,9 +288,16 @@ func (c *AuditCore) registerHealthProbes(reg cell.Registry) {
 // new entries. Returns ErrAuditChainBroken if any entry is tampered or
 // the chain linkage is invalid.
 //
+// A 30 s timeout (tailVerifyStartupTimeout) is imposed so that a slow or
+// hung store cannot stall k8s readiness indefinitely (F-04). The timeout
+// applies to the entire Tail + Verify sequence.
+//
 // Called from initInternal before initSlices; a failure prevents the cell
 // from ever serving traffic, surfacing corruption at process startup.
 func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, tailVerifyStartupTimeout)
+	defer cancel()
+
 	tail, err := c.ledgerStore.Tail(ctx)
 	if err != nil {
 		return fmt.Errorf("auditcore: tail recovery failed: %w", err)
@@ -315,12 +324,11 @@ func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
 // WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
 // warn) and clears the pending outbox dep fields.
 //
-// auditcore uses DirectPublishFailClosed: audit-chain events (audit.appended,
-// integrity-verified) are the source of truth for compliance; publisher
-// failure must surface to the caller so ops notices outages instead of
-// silently losing events. Opt-in fail-open is per-entry via
-// outbox.Entry.FailurePolicy, and archtest OUTBOX-TOPIC-FAILOPEN-01 bans it
-// for audit.* topics.
+// auditcore uses DirectPublishFailClosed: audit.appended events are the source
+// of truth for compliance; publisher failure must surface to the caller so ops
+// notices outages instead of silently losing events. Opt-in fail-open is
+// per-entry via outbox.Entry.FailurePolicy, and archtest
+// OUTBOX-TOPIC-FAILOPEN-01 bans it for audit.* topics.
 func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
 		EmitterConfig: cell.EmitterConfig{
@@ -346,7 +354,7 @@ func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 	return nil
 }
 
-// initSlices constructs the 4 auditappend sub-slices and the auditverify slice.
+// initSlices constructs the 4 auditappend sub-slices.
 // auditquery is initialized separately in initQuerySlice after cursor codec resolve.
 //
 // All 4 auditappend* slices share the same appender.Service implementation;
@@ -381,19 +389,6 @@ func (c *AuditCore) initSlices() error {
 		*a.target = svc
 		c.AddSlice(cell.NewBaseSlice(a.spec.Name(), "auditcore", cell.L2))
 	}
-
-	// auditverify
-	verifySvc, err := auditverify.NewService(
-		c.ledgerStore, c.logger,
-		auditverify.WithEmitter(c.emitter),
-		auditverify.WithTxManager(c.txRunner),
-	)
-	if err != nil {
-		return fmt.Errorf("auditverify: %w", err)
-	}
-	c.verifySvc = verifySvc
-	// L2: publishes event.audit.integrity-verified.v1 via transactional outbox.
-	c.AddSlice(cell.NewBaseSlice("auditverify", "auditcore", cell.L2))
 
 	return nil
 }

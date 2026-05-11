@@ -31,6 +31,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -599,10 +600,10 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 		id    string
 		delta time.Duration
 	}{
-		{"ord-c", 3 * time.Second}, // timestamp T3 — latest
-		{"ord-a", 1 * time.Second}, // timestamp T1 — oldest
-		{"ord-d", 2 * time.Second}, // timestamp T2 — tie with ord-b, id "d" > "b"
-		{"ord-b", 2 * time.Second}, // timestamp T2 — tie with ord-d, id "b" < "d"
+		{"ord-c", testtime.D3s}, // timestamp T3 — latest
+		{"ord-a", testtime.D1s}, // timestamp T1 — oldest
+		{"ord-d", testtime.D2s}, // timestamp T2 — tie with ord-b, id "d" > "b"
+		{"ord-b", testtime.D2s}, // timestamp T2 — tie with ord-d, id "b" < "d"
 	}
 	for _, en := range entries {
 		e := &ledger.Entry{

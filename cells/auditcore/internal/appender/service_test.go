@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -310,7 +311,7 @@ func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
 	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
 	// Advance the fake clock so clk.Now() ≠ entry.CreatedAt
-	fc.Advance(10 * time.Minute)
+	fc.Advance(testtime.D10min)
 
 	t1 := epoch // original event creation time, before clock advance
 	entry := outbox.Entry{
