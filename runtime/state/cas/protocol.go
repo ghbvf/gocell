@@ -1,7 +1,7 @@
 package cas
 
 import (
-	"log/slog"
+	"fmt"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -122,8 +122,11 @@ func MustNewProtocol(opts ...Option) *Protocol {
 //   - rowsAffected > 1: also returns ErrVersionConflict — the WHERE clause
 //     matched more rows than expected, indicating a schema or query error.
 //
-// entityDesc and entityKey populate Details (slog.String). Pass non-PII
-// identifiers — keys, IDs, but NOT user-supplied content.
+// entityDesc and entityKey are persisted in the Internal field (server-side
+// slog only) — they are NOT emitted to the HTTP wire as Details. This avoids
+// leaking entity type / record identifiers (userID, config key, etc.) to
+// clients via the standard error envelope. Operators retrieve them from the
+// service log when correlating retries.
 //
 // Callers MUST distinguish key-absent vs version-mismatch by probing existence
 // first (e.g. via SELECT FOR UPDATE before UPDATE, or a GetByKey probe after
@@ -137,8 +140,6 @@ func CheckVersionMatch(rowsAffected int64, entityDesc, entityKey string) error {
 	}
 	return errcode.New(errcode.KindConflict, errcode.ErrVersionConflict,
 		"concurrent update detected; reload and retry",
-		errcode.WithDetails(
-			slog.String("entity", entityDesc),
-			slog.String("key", entityKey),
-		))
+		errcode.WithInternal(fmt.Sprintf("cas conflict: entity=%s key=%s rowsAffected=%d",
+			entityDesc, entityKey, rowsAffected)))
 }

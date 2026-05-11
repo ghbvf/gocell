@@ -580,16 +580,32 @@ func (r *ConfigRepository) doUpdate(
 }
 
 // resolveUpdateConflict probes whether a key exists after an UPDATE...WHERE version=$N
-// returned no rows. If the key exists, returns ErrVersionConflict (409); if not,
-// returns ErrConfigRepoNotFound (404). Uses the pool (no write tx needed for probe).
+// returned no rows. Three-way classification (PR464 P1.2 fix):
+//
+//   - Probe returns ErrConfigRepoNotFound → key absent → 404
+//   - Probe returns any other error (timeout, tx aborted, scan failure) → infra
+//     fault — transparent passthrough as internal (do NOT masquerade as 404)
+//   - Probe succeeds → key exists but version mismatch → 409 ErrVersionConflict
+//
+// ref: docs/reviews/PR-464 round-2 P1.2 (Kratos/Watermill/etcd: probe failure
+// must not collapse into business not-found).
 func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, op, key string) error {
 	probe, probeErr := r.GetByKey(ctx, key)
 	if probeErr != nil {
-		// Key not found at all → 404.
-		return errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
-			"config not found", probeErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
-			errcode.WithCategory(errcode.CategoryDomain),
+		var ce *errcode.Error
+		if errors.As(probeErr, &ce) && ce.Code == errcode.ErrConfigRepoNotFound {
+			// Confirmed key absent → 404.
+			return errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+				"config not found", probeErr,
+				errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
+				errcode.WithCategory(errcode.CategoryDomain),
+			)
+		}
+		// Infra failure during CAS probe — surface as internal, not 404.
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"config repo: probe failed during CAS conflict resolution", probeErr,
+			errcode.WithInternal(fmt.Sprintf("config repo: %s probe failed key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
 	// Key exists but version did not match → 409.

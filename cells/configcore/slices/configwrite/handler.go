@@ -2,6 +2,7 @@ package configwrite
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -10,6 +11,7 @@ import (
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/update/v1"
 	write "github.com/ghbvf/gocell/generated/contracts/http/config/write/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -46,6 +48,15 @@ func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (update.
 		ExpectedVersion: int(req.ExpectedVersion),
 	})
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			switch ce.Code {
+			case errcode.ErrConfigRepoNotFound:
+				return update.Update404ErrorResponse{Body: *ce}, nil
+			case errcode.ErrVersionConflict:
+				return update.Update409ErrorResponse{Body: *ce}, nil
+			}
+		}
 		return nil, err
 	}
 	return update.Update200JSONResponse{Data: toUpdateResponseData(entry)}, nil
@@ -57,6 +68,15 @@ type DeleteAdapter struct{ S *Service }
 // Delete implements configdelete.Service.
 func (a DeleteAdapter) Delete(ctx context.Context, req *configdelete.Request) (configdelete.DeleteResponseObject, error) {
 	if err := a.S.Delete(ctx, req.Key, int(req.ExpectedVersion)); err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			switch ce.Code {
+			case errcode.ErrConfigRepoNotFound:
+				return configdelete.Delete404ErrorResponse{Body: *ce}, nil
+			case errcode.ErrVersionConflict:
+				return configdelete.Delete409ErrorResponse{Body: *ce}, nil
+			}
+		}
 		return nil, err
 	}
 	return configdelete.Delete204NoContentResponse{}, nil

@@ -178,7 +178,9 @@ func TestCheckVersionMatch_OneRowSucceeds(t *testing.T) {
 }
 
 // TestCheckVersionMatch_ZeroRowsReturnsVersionConflict: rowsAffected=0 →
-// ErrVersionConflict with entity and key in Details.
+// ErrVersionConflict with entity and key stored in Internal only (NOT
+// Details) per PR464 P2 — wire-level response must not leak entity type or
+// record key to clients.
 func TestCheckVersionMatch_ZeroRowsReturnsVersionConflict(t *testing.T) {
 	t.Parallel()
 	err := cas.CheckVersionMatch(0, "user", "usr-001")
@@ -192,18 +194,21 @@ func TestCheckVersionMatch_ZeroRowsReturnsVersionConflict(t *testing.T) {
 	if coded.Code != errcode.ErrVersionConflict {
 		t.Errorf("expected ErrVersionConflict, got %s", coded.Code)
 	}
-	// Verify Details carry entity and key.
-	entityAttr, ok := coded.FindAttr("entity")
-	if !ok {
-		t.Error("expected 'entity' detail to be present")
-	} else if got := entityAttr.Value.String(); got != "user" {
-		t.Errorf("entity detail = %q, want %q", got, "user")
+	// entity / key must NOT appear in client-visible Details (wire-exposed).
+	if _, ok := coded.FindAttr("entity"); ok {
+		t.Error("entity must not leak via Details (PR464 P2)")
 	}
-	keyAttr, ok := coded.FindAttr("key")
-	if !ok {
-		t.Error("expected 'key' detail to be present")
-	} else if got := keyAttr.Value.String(); got != "usr-001" {
-		t.Errorf("key detail = %q, want %q", got, "usr-001")
+	if _, ok := coded.FindAttr("key"); ok {
+		t.Error("key must not leak via Details (PR464 P2)")
+	}
+	// entity / key must be in Internal (server-side only).
+	if coded.InternalMessage == "" {
+		t.Error("expected Internal to carry entity/key for ops correlation")
+	}
+	for _, want := range []string{"user", "usr-001"} {
+		if !strings.Contains(coded.InternalMessage, want) {
+			t.Errorf("Internal=%q missing %q", coded.InternalMessage, want)
+		}
 	}
 }
 

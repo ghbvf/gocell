@@ -33,6 +33,9 @@ endpoints:
       403:
         description: "Forbidden — authenticated but lacks admin role"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — flag key does not exist (ERR_FLAG_NOT_FOUND)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       409:
         description: "Conflict — expectedVersion does not match current version (ERR_VERSION_CONFLICT)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"

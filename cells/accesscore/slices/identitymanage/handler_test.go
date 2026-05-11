@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	changepassgen "github.com/ghbvf/gocell/generated/contracts/http/auth/user/change-password/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -554,6 +555,44 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// fakeRepoVersionConflict wraps mem.UserRepository and forces UpdatePassword
+// to return ErrVersionConflict so ChangePasswordAdapter's typed-409 envelope
+// branch can be exercised deterministically (PR464 P1.3).
+type fakeRepoVersionConflict struct{ *mem.UserRepository }
+
+func (*fakeRepoVersionConflict) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+	return 0, errcode.New(errcode.KindConflict, errcode.ErrVersionConflict,
+		"concurrent update detected; reload and retry")
+}
+
+func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
+	repo := &fakeRepoVersionConflict{UserRepository: mem.NewUserRepository(clock.Real())}
+	userID := testutil.TestID("usr-409")
+	oldHash, hashErr := bcrypt.GenerateFromPassword([]byte("oldpass12"), domain.BcryptCost)
+	require.NoError(t, hashErr)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, repo.Create(context.Background(), &domain.User{
+		ID: userID, Username: "user-409", Email: "u409@example.com",
+		PasswordHash: string(oldHash), Status: domain.StatusActive,
+		CreationSource: domain.UserSourceIdentity, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(),
+		slog.Default(), WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()),
+		WithTxManager(contractTxRunner{}))
+	require.NoError(t, err)
+
+	resp, err := ChangePasswordAdapter{S: svc}.ChangePassword(
+		context.Background(),
+		&changepassgen.Request{ID: userID, OldPassword: "oldpass12", NewPassword: "newpass12"},
+	)
+	require.NoError(t, err, "adapter must convert ErrVersionConflict to typed 409, not passthrough")
+	typed, ok := resp.(changepassgen.ChangePassword409ErrorResponse)
+	require.True(t, ok, "expected ChangePassword409ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
+	assert.Equal(t, errcode.KindConflict, typed.Body.Kind)
 }
 
 func TestHandler_ChangePassword_BadJSON(t *testing.T) {
