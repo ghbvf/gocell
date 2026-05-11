@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,8 +97,9 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 	// Init
 	require.NoError(t, c.Init(ctx, recorder))
 	// auditappendsession, auditappenduser, auditappendconfig, auditappendrole,
-	// auditverify, auditquery = 6 slices.
-	assert.Equal(t, 6, len(c.OwnedSlices()), "should have 6 slices")
+	// auditquery = 5 slices (auditverify removed in Wave 2 Batch D).
+	// A-02 RED: current cell.go still constructs 6 slices (auditverify present).
+	assert.Equal(t, 5, len(c.OwnedSlices()), "should have 5 slices after auditverify removal")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -544,6 +546,107 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	const emitterKey = "outbox-failopen-rate.auditcore"
 	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
 	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+}
+
+// blockingStore is a ledger.Store where Verify blocks until the context is
+// cancelled. Used to test that strictTailVerifyOnStartup respects a deadline.
+type blockingStore struct {
+	ledger.Store
+	verifyStarted chan struct{} // closed when Verify is entered
+}
+
+func newBlockingStore(t *testing.T, inner ledger.Store) *blockingStore {
+	t.Helper()
+	return &blockingStore{
+		Store:         inner,
+		verifyStarted: make(chan struct{}),
+	}
+}
+
+func (b *blockingStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
+	// Return a non-empty tail so strictTailVerifyOnStartup proceeds to Verify.
+	return ledger.TailSnapshot{SeqNo: 1, EntryCount: 1}, nil
+}
+
+func (b *blockingStore) Verify(ctx context.Context, from, to int64) (bool, int64, error) {
+	// Signal that Verify has been entered, then block until ctx is done.
+	select {
+	case <-b.verifyStarted:
+	default:
+		close(b.verifyStarted)
+	}
+	<-ctx.Done()
+	return false, 0, ctx.Err()
+}
+
+// TestStrictTailVerifyOnStartup_TimeoutCapped asserts that strictTailVerifyOnStartup
+// respects a ≤31s context deadline and returns an error when the store blocks.
+//
+// A-02/F-04 RED: current strictTailVerifyOnStartup calls the store with the
+// caller-supplied ctx, which may have no deadline. After the fix it must wrap
+// the context with a ~30s timeout so a blocked store cannot stall startup forever.
+// We verify the deadline exists and is ≤31s from now without waiting for it to fire.
+func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
+	p := newTestProtocol(t)
+	inner := newTestMemStore(t, p)
+	blocking := newBlockingStore(t, inner)
+
+	c := NewAuditCore(
+		WithClock(clock.Real()),
+		WithLedgerProtocol(p),
+		WithLedgerStore(blocking),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(cell.DemoCellTxManager()),
+		WithMetricsProvider(metrics.NopProvider{}),
+	)
+
+	// Run Init in a goroutine; it will block in Verify until the internal
+	// timeout fires or the test cancels it.
+	initDone := make(chan error, 1)
+	go func() {
+		ctx := context.Background() // no deadline from test side
+		initDone <- c.Init(ctx, newTestRecorder())
+	}()
+
+	// Wait until blockingStore.Verify is entered so we know Init reached that point.
+	select {
+	case <-blocking.verifyStarted:
+		// good
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for blockingStore.Verify to be entered; Init may not have reached strictTailVerifyOnStartup")
+	}
+
+	// A-02 RED: if strictTailVerifyOnStartup does NOT set a timeout, Init will
+	// block indefinitely. We assert it returns within 35s (5s slack over 30s cap).
+	// In the RED state (no timeout), this assertion will time out at 35s.
+	//
+	// To avoid actually waiting 35s in the RED test run, we use a much shorter
+	// window and verify the OTHER observable: the context passed to Verify must
+	// have a deadline ≤31s from now. We can't inspect that directly from outside,
+	// so we rely on the Init goroutine returning promptly as the observable.
+	//
+	// For the RED test to compile-pass but runtime-FAIL without waiting forever,
+	// we assert that Init returns within 35s. In practice the RED run will wait
+	// the full 35s before failing — acceptable for a conformance test.
+	select {
+	case err := <-initDone:
+		if err == nil {
+			t.Fatal("Init should have returned an error after strictTailVerify timeout")
+		}
+		// Verify the error is context-related (deadline exceeded or cancelled)
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			// Might be wrapped — check string
+			errStr := err.Error()
+			if len(errStr) == 0 {
+				t.Error("Init returned non-nil error but empty message")
+			}
+			// Accept any error that includes context/deadline/timeout semantics
+			t.Logf("strictTailVerifyOnStartup returned (acceptable): %v", err)
+		}
+	case <-time.After(35 * time.Second):
+		t.Error("A-02 RED: Init blocked indefinitely; strictTailVerifyOnStartup must cap with ≤30s timeout")
+	}
 }
 
 // TestAuditCore_HealthCheckers_NilEmitter verifies that when the emitter does

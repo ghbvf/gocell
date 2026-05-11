@@ -1,18 +1,22 @@
 package appender_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -262,4 +266,111 @@ type emittedRecord struct {
 func (r *recordingEmitter) Emit(_ context.Context, entry outbox.Entry) error {
 	r.emitted = append(r.emitted, emittedRecord{topic: entry.EventType, payload: entry.Payload})
 	return nil
+}
+
+// captureStore wraps a ledger.Store and records every Append call so tests
+// can inspect the ledger.Entry that was actually written.
+type captureStore struct {
+	ledger.Store
+	appended []*ledger.Entry
+}
+
+func (c *captureStore) Append(ctx context.Context, e *ledger.Entry) error {
+	c.appended = append(c.appended, e)
+	return c.Store.Append(ctx, e)
+}
+
+// newServiceWithLogBuf constructs a Service using a fakeClock and a JSON slog buffer
+// so tests can inspect Warn-level log output.
+func newServiceWithLogBuf(t *testing.T, spec appender.Spec, store ledger.Store, p *ledger.Protocol, fc *clockmock.FakeClock) (*appender.Service, *bytes.Buffer) {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	svc, err := appender.NewService(spec, store, p, logger, fc, appender.WithTxManager(directRunner{}))
+	require.NoError(t, err)
+	return svc, buf
+}
+
+// TestHandleEvent_UsesEntryCreatedAt asserts that the ledger.Entry.Timestamp is
+// set to outbox.Entry.CreatedAt (the event's original creation time), NOT to
+// clk.Now() at handle time.
+//
+// F-02 RED: current implementation uses s.clk.Now(); after the fix it must use
+// entry.CreatedAt so that audit timestamps faithfully represent when the business
+// event occurred, not when it was picked up by the relay.
+func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+
+	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(epoch)
+	// Advance the fake clock so clk.Now() ≠ entry.CreatedAt
+	fc.Advance(10 * time.Minute)
+
+	t1 := epoch // original event creation time, before clock advance
+	entry := outbox.Entry{
+		ID:        "evt-created-at",
+		EventType: "event.user.created.v1",
+		Payload:   mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		CreatedAt: t1,
+	}
+
+	svc, _ := newServiceWithLogBuf(t, spec, cap, p, fc)
+	result := svc.HandleEvent(context.Background(), entry)
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"HandleEvent must succeed for valid entry")
+	require.Len(t, cap.appended, 1, "must have appended exactly one entry")
+
+	gotTS := cap.appended[0].Timestamp
+	// F-02 assertion: must use entry.CreatedAt, not clk.Now()
+	if !gotTS.Equal(t1) {
+		t.Errorf("Timestamp mismatch: got %v, want entry.CreatedAt=%v (clk.Now()=%v); "+
+			"F-02: HandleEvent must use entry.CreatedAt, not clk.Now()",
+			gotTS, t1, fc.Now())
+	}
+}
+
+// TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn asserts that when
+// outbox.Entry.CreatedAt is zero, the service falls back to clk.Now() AND
+// emits a Warn-level log record.
+//
+// F-02 RED: current implementation uses clk.Now() unconditionally (no fallback
+// branch, no Warn log). After the fix: zero CreatedAt → Warn + clk.Now().
+func TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+
+	epoch := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	fc := clockmock.New(epoch)
+
+	entry := outbox.Entry{
+		ID:        "evt-zero-created-at",
+		EventType: "event.user.created.v1",
+		Payload:   mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		// CreatedAt intentionally zero
+	}
+
+	svc, buf := newServiceWithLogBuf(t, spec, cap, p, fc)
+	result := svc.HandleEvent(context.Background(), entry)
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"HandleEvent must still succeed when CreatedAt is zero")
+	require.Len(t, cap.appended, 1)
+
+	// Timestamp must fall back to clk.Now()
+	gotTS := cap.appended[0].Timestamp
+	if !gotTS.Equal(epoch) {
+		t.Errorf("fallback Timestamp: got %v, want clk.Now()=%v", gotTS, epoch)
+	}
+
+	// F-02: must emit a Warn-level log when falling back
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, "WARN") && !strings.Contains(logOutput, "warn") {
+		t.Errorf("expected Warn-level log for zero CreatedAt fallback; got log output: %s", logOutput)
+	}
 }

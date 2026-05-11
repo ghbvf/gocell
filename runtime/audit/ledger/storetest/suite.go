@@ -21,6 +21,7 @@
 package storetest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -130,6 +131,8 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Verify_TamperedPrevHash", func(t *testing.T) { runVerifyTamperedPrevHash(t, factory, protocol) })
 	t.Run("GetBySeq_NotFound", func(t *testing.T) { runGetBySeqNotFound(t, factory) })
 	t.Run("Query_ByFilters", func(t *testing.T) { runQueryByFilters(t, factory) })
+	t.Run("Append_MultiKey_Payload_RoundTrip", func(t *testing.T) { runAppendMultiKeyPayloadRoundTrip(t, factory) })
+	t.Run("Query_Ordering_TimestampDesc_IDAsc", func(t *testing.T) { runQueryOrderingTimestampDescIDAsc(t, factory) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -531,6 +534,109 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 	}
 	if len(results) != 3 {
 		t.Errorf("Query(type.X): got %d, want 3", len(results))
+	}
+}
+
+// runAppendMultiKeyPayloadRoundTrip verifies that Append → GetBySeq → Verify
+// returns the payload bytes byte-for-byte identical to what was supplied.
+//
+// A-01 regression guard: PG JSONB normalizes key order and strips whitespace,
+// so a multi-key payload with non-alphabetical key order and embedded whitespace
+// is stored differently from the original bytes, breaking the HMAC hash chain.
+// MemStore passes this test (no normalization); PG store FAILS until BYTEA fix.
+func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	// Payload with non-alphabetical key order + embedded whitespace.
+	// PG JSONB normalizes this to {"a":2,"b":1,"c":"x"}, breaking byte equality.
+	payload := []byte(`{"b": 1,"a":2 , "c": "x"}`)
+	e := &ledger.Entry{
+		EventID:   "multi-key-evt",
+		EventType: "multi.key.test",
+		ActorID:   "actor",
+		Timestamp: fc.Now(),
+		Payload:   payload,
+	}
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	got, err := store.GetBySeq(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetBySeq(1): %v", err)
+	}
+	// A-01: payload bytes must be preserved exactly as supplied — no JSONB normalization.
+	if !bytes.Equal(got.Payload, payload) {
+		t.Errorf("Payload byte mismatch:\n  got:  %q\n  want: %q\n  (A-01: JSONB normalization breaks hash chain)",
+			got.Payload, payload)
+	}
+
+	// Verify must succeed: the hash was computed over the original payload bytes.
+	valid, firstInvalid, err := store.Verify(context.Background(), 1, 1)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !valid {
+		t.Errorf("Verify: chain invalid at seq %d after multi-key payload round-trip", firstInvalid)
+	}
+}
+
+// runQueryOrderingTimestampDescIDAsc verifies that Query returns entries sorted
+// by timestamp DESC as the primary key and id ASC as the tie-breaker.
+//
+// F-05 regression guard: MemStore.Query does not sort — it returns entries in
+// SeqNo ascending order, which differs from the expected timestamp DESC + id ASC
+// order. PG already uses ORDER BY timestamp DESC, id ASC.
+func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	base := fc.Now()
+	// Seed 4 entries: 3 distinct timestamps + 2 entries sharing the tie timestamp.
+	// Entry IDs are chosen so that ASC order differs from insertion order.
+	entries := []struct {
+		id    string
+		delta time.Duration
+	}{
+		{"ord-c", 3 * time.Second}, // timestamp T3 — latest
+		{"ord-a", 1 * time.Second}, // timestamp T1 — oldest
+		{"ord-d", 2 * time.Second}, // timestamp T2 — tie with ord-b, id "d" > "b"
+		{"ord-b", 2 * time.Second}, // timestamp T2 — tie with ord-d, id "b" < "d"
+	}
+	for _, en := range entries {
+		e := &ledger.Entry{
+			EventID:   "evt-" + en.id,
+			EventType: "order.test",
+			ActorID:   "actor",
+			Timestamp: base.Add(en.delta),
+			Payload:   []byte(`{}`),
+		}
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append %s: %v", en.id, err)
+		}
+	}
+
+	results, err := store.Query(context.Background(), ledger.AuditFilters{}, ledger.QueryListParams{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(results) != 4 {
+		t.Fatalf("Query: got %d results, want 4", len(results))
+	}
+
+	// Expected order: T3(ord-c), T2(ord-b), T2(ord-d), T1(ord-a)
+	// i.e. timestamp DESC; within same timestamp, id ASC.
+	wantOrder := []string{"ord-c", "ord-b", "ord-d", "ord-a"}
+	for i, want := range wantOrder {
+		// Match by EventID (entries were seeded as "evt-<id>")
+		gotEventID := results[i].EventID
+		wantEventID := "evt-" + want
+		if gotEventID != wantEventID {
+			t.Errorf("Query order[%d]: got EventID=%q, want EventID=%q "+
+				"(F-05: MemStore must sort timestamp DESC + id ASC; PG already does)",
+				i, gotEventID, wantEventID)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -362,6 +363,159 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	var ecErr2 *errcode.Error
 	require.ErrorAs(t, err, &ecErr2)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr2.Code)
+}
+
+// TestQuery_FetchCap_500 asserts that auditQueryFetchCap equals 500.
+//
+// A-07/F-07 RED: current value is 5000. After the fix it must be 500 to
+// prevent unbounded in-memory loads before keyset pagination lands (S8).
+// This test verifies the constant value directly via a mock store that
+// returns exactly 501 entries and checks that the Warn log fires at that threshold.
+//
+// Note: auditQueryFetchCap is package-private; we probe it indirectly by
+// seeding 501 entries and checking the Warn fires. When the cap is 5000 (current)
+// no Warn is emitted → RED. When the cap is 500 (target) the Warn fires → GREEN.
+func TestQuery_FetchCap_500(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
+		ledger.WithNamespace(ledger.NamespaceID("auditcore")),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+
+	svc, err := NewService(store, testCodec(), logger, query.RunModeProd)
+	require.NoError(t, err)
+
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Seed 501 entries — above the target cap of 500, below the current cap of 5000.
+	// When cap == 500: Warn fires → GREEN; when cap == 5000: no Warn → RED.
+	const seedCount = 501
+	for i := range seedCount {
+		e := &ledger.Entry{
+			EventID:   fmt.Sprintf("cap500-evt-%d", i),
+			EventType: "cap.test",
+			ActorID:   "actor",
+			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+			Payload:   []byte("{}"),
+		}
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	buf.Reset()
+	_, err = svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
+	require.NoError(t, err)
+
+	// Cap warning must appear — only fires when cap ≤ 501.
+	// RED: current cap is 5000, so 501 entries does NOT trigger the warning.
+	if !strings.Contains(buf.String(), "fetch cap reached") {
+		t.Errorf("expected 'fetch cap reached' warning for 501 entries with cap=500; "+
+			"current cap is 5000 so this FAILS as expected (F-07 RED); log output: %q",
+			buf.String())
+	}
+}
+
+// TestQuery_ZeroTime_SkipsFromToFormat asserts that when filters.From and filters.To
+// are zero, the QueryContext attrs slice does NOT contain "from" or "to" keys.
+//
+// A-07 RED: current implementation always calls filters.From.Format(time.RFC3339Nano)
+// which formats zero time as "0001-01-01T00:00:00Z" and includes it as a "from" key
+// in the cursor scope fingerprint.
+//
+// Observable: if zero time is formatted and embedded in cursor scope, then a cursor
+// obtained with zero-UTC From and a cursor obtained with zero-non-UTC From would have
+// different scope fingerprints (different Format output for different timezones),
+// causing a cursor-context mismatch error on page 2.
+// In GREEN state (zero time omitted), both produce identical scopes → no mismatch.
+//
+// We simulate this by obtaining page1 cursor using zero UTC time (time.Time{})
+// and then using the same cursor with an equivalent zero time in a fixed timezone
+// (time.Time{}.In(time.UTC) is same, so we use the second query with explicit
+// non-UTC zero). Actually both format to the same if zone is same — so instead we
+// directly confirm that page1→page2 succeeds, then assert that changing From to a
+// non-zero value causes scope mismatch (proving "from" IS in scope in RED state).
+//
+// RED observable: in current code, query scope includes "from=0001-01-01T00:00:00Z".
+// A non-zero From on page2 will cause scope mismatch → cursor invalid error.
+// GREEN: "from" is not in scope → changing From to non-zero still mismatches because
+// actorId/eventType are checked, but From absent means the scope is identical regardless.
+// We assert: page2 with From=non-zero returns scope-mismatch error in RED state,
+// and page2 with From=non-zero returns NO error in GREEN state (from not in scope).
+func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
+		ledger.WithNamespace(ledger.NamespaceID("auditcore")),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	store, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 5 {
+		seedEntry(store, fmt.Sprintf("zt-%d", i), "event.test.v1", "usr-1",
+			base.Add(time.Duration(i)*time.Hour))
+	}
+
+	// Page 1: zero From/To (no time filter).
+	zeroFilters := ledger.AuditFilters{} // From and To are zero value
+	page1, err := svc.Query(context.Background(), zeroFilters, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+
+	// Page 2 attempt: same cursor, but now pass a non-zero From.
+	// If zero time is embedded in cursor scope (RED state), "from" changes from
+	// "0001-01-01T00:00:00Z" to a real timestamp → scope mismatch → error.
+	// If zero time is NOT embedded (GREEN state), "from" was absent → non-zero
+	// From IS a scope change → still mismatch. Hmm, same result.
+	//
+	// Better approach: page1 with zero From, page2 with same cursor and ALSO zero From.
+	// Must succeed. Then assert the query context for page1 does NOT include
+	// "0001-01-01" anywhere in the cursor token (cursor is base64/encrypted, can't check directly).
+	//
+	// Simplest reliable RED observable: count the scope keys by comparing what
+	// cursor from (zeroFrom, nonzeroActorId) page vs (zeroFrom, sameActorId) page.
+	// Alternatively: verify page1 cursor is reusable with page2 zero-From (passes now)
+	// AND that the service's QueryContext does not embed "0001-01-01" by checking
+	// the invalid-cursor log when we deliberately break the scope.
+	//
+	// Final approach: page1 zero-From, then page2 zero-From with mismatched eventType.
+	// In both RED and GREEN, this causes scope mismatch. Not useful.
+	//
+	// Correct RED-only observable: a page1 obtained with zero From/To, then a page2
+	// obtained with From=base (non-zero). If "from" IS in scope (RED), page2 gets
+	// a scope-mismatch error. If "from" is NOT in scope (GREEN), From can change
+	// freely without breaking the cursor → page2 succeeds normally.
+	nonZeroFromFilters := ledger.AuditFilters{From: base}
+	_, err2 := svc.Query(context.Background(), nonZeroFromFilters, query.PageParams{
+		Limit:  3,
+		Cursor: page1.NextCursor,
+	})
+	// A-07 RED: err2 is non-nil (scope mismatch) because "from" IS embedded in
+	// cursor scope with value "0001-01-01T00:00:00Z" ≠ base.Format(RFC3339Nano).
+	// A-07 GREEN: err2 is nil because "from" is NOT in cursor scope, so changing
+	// From from zero to non-zero does not break the cursor.
+	if err2 == nil {
+		// GREEN: "from" not in scope, changing From didn't break cursor → PASS
+		t.Logf("TestQuery_ZeroTime_SkipsFromToFormat: GREEN — 'from' not in scope (cursor reusable across From change)")
+	} else {
+		// RED: scope mismatch because "from=0001-01-01T00:00:00Z" was embedded
+		var ecErr *errcode.Error
+		if errors.As(err2, &ecErr) && ecErr.Code == errcode.ErrCursorInvalid {
+			t.Errorf("A-07 RED: cursor scope mismatch when changing From zero→nonzero; "+
+				"'from' is embedded in QueryContext for zero time. Fix: skip From/To when zero.")
+		} else {
+			t.Errorf("unexpected error on page2 with non-zero From: %v", err2)
+		}
+	}
 }
 
 // TestAuditQuery_FetchCapEnforced verifies that when the store returns
