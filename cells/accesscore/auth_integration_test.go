@@ -112,7 +112,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		o(&cfg)
 	}
 
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	ctx := context.Background()
 

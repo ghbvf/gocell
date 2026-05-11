@@ -181,7 +181,7 @@ func WithClock(clk clock.Clock) Option {
 // c.clk is available.
 func WithInMemoryDefaults() Option {
 	return func(c *AccessCore) {
-		c.userRepo = mem.NewUserRepository()
+		c.userRepo = mem.NewUserRepository(c.clk)
 		// sessionRepo construction is deferred to Init() so that c.clk is
 		// available for mem.NewSessionRepository.
 		c.roleRepo = mem.NewRoleRepository()

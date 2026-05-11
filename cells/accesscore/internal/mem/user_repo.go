@@ -26,17 +26,10 @@ type UserRepository struct {
 }
 
 // NewUserRepository creates an empty in-memory UserRepository.
-func NewUserRepository() *UserRepository {
-	return &UserRepository{
-		byID:   make(map[string]*domain.User),
-		byName: make(map[string]*domain.User),
-		clock:  clock.Real(),
-	}
-}
-
-// NewUserRepositoryWithClock creates a UserRepository that uses the given clock.
-// Use this in tests to control time.
-func NewUserRepositoryWithClock(clk clock.Clock) *UserRepository {
+// clk is the clock used for timestamping password updates; callers must
+// provide a non-nil clock (clock.Real() for production, a fake for tests).
+func NewUserRepository(clk clock.Clock) *UserRepository {
+	clock.MustHaveClock(clk, "mem.NewUserRepository")
 	return &UserRepository{
 		byID:   make(map[string]*domain.User),
 		byName: make(map[string]*domain.User),

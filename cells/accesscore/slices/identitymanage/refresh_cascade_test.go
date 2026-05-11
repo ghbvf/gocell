@@ -43,7 +43,7 @@ func newCascadeStore(t *testing.T) refresh.Store {
 
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
@@ -76,7 +76,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	ctx := context.Background()
 	sessionRepo := testutil.RealSessionRepo(t)
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
@@ -113,7 +113,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 
 func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 

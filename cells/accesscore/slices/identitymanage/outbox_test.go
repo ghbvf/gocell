@@ -174,7 +174,7 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 
 func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
@@ -189,7 +189,7 @@ func TestService_WithEmitter(t *testing.T) {
 
 func TestService_WithTxManager(t *testing.T) {
 	tx := &stubTxRunner{}
-	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTxManager(tx), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
@@ -202,7 +202,7 @@ func TestService_WithTxManager(t *testing.T) {
 
 func TestService_Lock_WithOutbox(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
@@ -247,7 +247,7 @@ func TestService_Update_EmptyID(t *testing.T) {
 
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	ow := &stubOutboxWriter{err: errors.New("outbox unavailable")}
-	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
@@ -259,7 +259,7 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 }
 
 func TestService_Lock_OutboxWriteError(t *testing.T) {
-	repo := mem.NewUserRepository()
+	repo := mem.NewUserRepository(clock.Real())
 	// Create user with working outbox
 	svcCreate, err := NewService(repo, testutil.RealSessionRepo(t),
 		newIdentityRefreshStore(), slog.Default(),

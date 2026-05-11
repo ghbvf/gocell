@@ -96,7 +96,7 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 }
 
 func TestService_WithEmitter(t *testing.T) {
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(),
@@ -115,7 +115,7 @@ func TestService_WithEmitter(t *testing.T) {
 }
 
 func TestService_WithTxManager(t *testing.T) {
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	tx := &stubTxRunner{}
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx), WithClock(clock.Real()))
@@ -149,7 +149,7 @@ func (r *trackingOutboxSessionRepo) Delete(ctx context.Context, id string) error
 // no explicit cleanupIssuedSession call is made. The tx rollback handles
 // atomicity; explicit cleanup would double-delete in a real durable setup.
 func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *testing.T) {
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 
@@ -178,7 +178,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 // cleanupIssuedSession IS called to compensate the already-written session.
 // This is the mirror case of the durable-tx test above.
 func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 

@@ -72,7 +72,7 @@ var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setupContractHandler(t testing.TB) http.Handler {
 	t.Helper()
-	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
@@ -83,7 +83,7 @@ func setupContractHandler(t testing.TB) http.Handler {
 func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecordingWriter) {
 	t.Helper()
 	writer := &contractRecordingWriter{}
-	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t),
+	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t),
 		newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(contractTxRunner{}),
 		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
@@ -110,7 +110,7 @@ func buildMux(svc *Service) *celltest.TestMux {
 
 func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	t.Helper()
-	repo := mem.NewUserRepository()
+	repo := mem.NewUserRepository(clock.Real())
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(issuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	if err != nil {
