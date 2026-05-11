@@ -359,6 +359,7 @@ func TestPanicRegistered(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
+	modulePath := readModulePath(t, root)
 	seen := make(map[string]struct{}) // dedup violations by "rel:line:msg"
 	var violations []panicRegisteredViolation
 
@@ -367,10 +368,14 @@ func TestPanicRegistered(t *testing.T) {
 		if containsTag(tagGroup, "archtest_fixture") {
 			continue
 		}
-		resolver, err := typeseval.SharedResolver(root, false, tagGroup, "./...")
-		require.NoError(t, err, "SharedResolver failed for tags %v", tagGroup)
+		// LoadProductionPackages is the PRODUCTION-LOADER-FUNNEL-01-approved
+		// entry point; .All() explicitly returns generated/ packages since
+		// PANIC-REGISTERED-01 covers both hand-written and codegen-emitted
+		// panic sites (Wave 2 — single funnel, no generated/ exemption).
+		resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, tagGroup)
+		require.NoError(t, err, "LoadProductionPackages failed for tags %v", tagGroup)
 
-		pkgs := resolver.Packages()
+		pkgs := resolver.All()
 		packages.Visit(pkgs, nil, func(p *packages.Package) {
 			for i, file := range p.Syntax {
 				if i >= len(p.GoFiles) {
