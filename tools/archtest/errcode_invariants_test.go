@@ -140,6 +140,11 @@ type errorFirstViolation struct {
 	Reason   string
 }
 
+// This list is functionally a subset of ADR 202604270030 §4.1 C-class re-throw sites.
+// ERROR-FIRST-API-01 needs it because those four sites are inside error-less functions
+// (recover defers) and must be permitted to panic; PANIC-REGISTERED-01 handles the
+// panic-shape concern orthogonally via panicregister.Approved wrap.
+//
 // errorFirstPanicWhitelist exempts ADR-approved C-class re-throw functions
 // from ERROR-FIRST-API-01. These are error-less functions that contain a
 // panic() as a deliberate re-throw of a recovered value; they are exempt from
@@ -856,7 +861,14 @@ type Service struct{}`,
 // scanFileForErrorFirstViolations parses a single Go source file and returns
 // any panic() call inside an error-less function (excluding Must*-prefixed
 // functions and init).
-// Note: PANIC-REGISTERED-01 (panic_invariants_test.go) no longer exempts Must*; that exemption is specific to ERROR-FIRST-API-01.
+//
+// Note: PANIC-REGISTERED-01 (panic_invariants_test.go) no longer exempts
+// Must*-prefixed functions — every production panic must wrap its payload
+// with panicregister.Approved(literal, value). The Must* exemption below
+// is specific to ERROR-FIRST-API-01: it permits Must* functions to call
+// panic at all (vs. the rule's "no panic in error-less functions" default),
+// without dictating the panic shape. The two rules compose: a panic in a
+// Must* function must still be panicregister.Approved-wrapped.
 func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirstViolation {
 	t.Helper()
 	fset := token.NewFileSet()

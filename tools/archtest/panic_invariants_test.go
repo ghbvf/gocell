@@ -21,7 +21,9 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -108,6 +110,12 @@ const panicregisterPkgPath = "github.com/ghbvf/gocell/pkg/panicregister"
 // panicregisterApprovedFunc is the name of the only approved funnel function.
 const panicregisterApprovedFunc = "Approved"
 
+// panicRegisteredReasonFormat is the required format for the reason argument
+// to panicregister.Approved: kebab-case identifier (lowercase letters, digits,
+// and hyphens, starting with a lowercase letter). Snake_case, PascalCase,
+// single-char, and leading-hyphen strings all fail.
+var panicRegisteredReasonFormat = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
+
 type panicRegisteredViolation struct {
 	File   string
 	Line   int
@@ -183,6 +191,17 @@ func scanFileForPanicViolations(
 				Line:   fset.Position(call.Pos()).Line,
 				Reason: "panicregister.Approved reason must be a const string literal (no fmt.Sprintf / concat / variable)",
 			})
+			return
+		}
+
+		// Rule 5: reason literal must match kebab-case identifier format.
+		reasonVal, err := strconv.Unquote(reasonLit.Value)
+		if err != nil || !panicRegisteredReasonFormat.MatchString(reasonVal) {
+			violations = append(violations, panicRegisteredViolation{
+				File:   rel,
+				Line:   fset.Position(call.Pos()).Line,
+				Reason: fmt.Sprintf("panicregister.Approved reason must be kebab-case identifier (got: %s)", reasonLit.Value),
+			})
 		}
 	})
 
@@ -247,8 +266,6 @@ func shouldSkipForPanicRegistered(rel string) bool {
 	case strings.HasSuffix(rel, "_test.go"):
 		return true
 	case strings.HasPrefix(rel, "vendor/"):
-		return true
-	case strings.HasPrefix(rel, "generated/"):
 		return true
 	case strings.HasPrefix(rel, "worktrees/"):
 		return true
@@ -351,6 +368,10 @@ func TestPanicRegisteredScannerFixtures(t *testing.T) {
 		{"assertion_wrapped_green", nil},
 		{"recovered_value_green", nil},
 		{"must_prefix_wrapped_green", nil},
+
+		// RED cases for reason argument shape.
+		{"reason_const_ident_red", []int{15}},
+		{"reason_format_invalid_red", []int{12, 16}},
 	}
 
 	for _, tc := range cases {
