@@ -126,7 +126,7 @@ func TestFlagRepo_Toggle_Persistence(t *testing.T) {
 	var toggled *domain.FeatureFlag
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		toggled, err = repo.Toggle(txCtx, "toggle.persist.flag", true)
+		toggled, err = repo.Toggle(txCtx, "toggle.persist.flag", 1, true)
 		return err
 	}))
 	assert.Equal(t, 2, toggled.Version)

@@ -112,7 +112,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		o(&cfg)
 	}
 
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	ctx := context.Background()
 
@@ -166,6 +166,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		WithRefreshStore(intRefreshStore),
 		WithMetricsProvider(metrics.NopProvider{}),
 		// Demo mode: no tx+outbox required.
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)

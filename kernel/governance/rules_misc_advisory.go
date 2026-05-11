@@ -406,10 +406,12 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 // cross-file; impl lives here.
 //
 // Historical sibling FMT-18 (SPEC-CONTRACT-SYNC) was removed in
-// PR-V1-CODEGEN-FULL-MIGRATION (W4); enforcement migrated to import-
-// graph-level archtest gates (CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
-// NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-CONTRACTGEN-
-// COVERAGE-01).
+// PR-V1-CODEGEN-FULL-MIGRATION (W4); the literal-presence half migrated
+// to import-graph-level archtest gates (CELLS-NO-WRAPPER-CONTRACTSPEC-
+// IMPORT-01 / NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-
+// CONTRACTGEN-COVERAGE-01), and the /internal/v1 caller-clients half
+// was later reclaimed at the YAML governance layer by FMT-31
+// (rules_fmt.go).
 
 const (
 	codeFMT19 = "FMT-19"

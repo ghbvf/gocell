@@ -76,7 +76,7 @@
 | `PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01`（scope.go Files/contentFiles 双轨 + 注释/行为不一致）| P2/Cx2 | Medium（refactor 提升整洁度）| 保留 |
 | `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01`（5 case 漂移）| P1/Cx2 | — bug 修复无 AI-rebust 维度 | 保留 |
 | `PR430-FU-SCANNER-SYMLINK-FAIL-CLOSED-01`（symlink fail-closed）| P2/Cx2 | Hard（lstat + skip 是 type-system 拦不住但 fail-closed by construction）| **升 P1**（symlink 是 AI 攻击面：恶意 PR 加 symlink 让 scanner 读模块外文件，发布前必修）|
-| `PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01`（BFS emitter 按 receiver type）| P3/触发型 | Soft → Hard 升级路径（receiver type identity）| **升 P1 必做**——convention-by-name 在 AI 项目里就是真问题，`assertEmitterMethodsRestrictedToLocator` runtime guard 仅是缓解；走 Wave 3 §5 typeseval helper（receiver type / interface impl）；同根的 USAGE-01 已由 PR #445 提前闭环，本条独立触发 |
+| `PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01`（BFS emitter 按 receiver type）| ✅ done by PR-TS1（2026-05-11）| Soft → Medium-偏-Hard（signature-based 三谓词识别）| **已完成**——helper 落地 `tools/typesutil/`（非 `tools/archtest/internal/typeseval/`，避开 internal/ visibility 限制），BFS 改 signature-based（return ValidationResult + arg0 string + receiver/result 同包），删名字 allowlist 和 runtime guard；真 Hard 需 sealed interface emitter 留作未来工作 |
 | `PR432-FU-AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE-01`（auth combo archtest 双重防线）| P3/触发型 | — 5 层 mirror 已 Hard | 保留触发型 |
 | `PR438-FU-TEST-POLLING-DETERMINISM-01`（D500ms+Eventually flake-class，339 站点）| P2/触发型 | Soft → Hard 升级路径（对标 panic 单源 typed marker）| **挂 Wave 4 触发型**——事故密度驱动；PR #438 已是首例（race CI D500ms 踩穿），第二次事故 / 进入下一治理批时启动一锅替换 |
 
@@ -103,11 +103,11 @@
 
 | Wave 3 项 | 工时 | 当前 backlog |
 |---|---|---|
-| **typeseval helper（receiver type / interface impl）建立**（archtest 分层 §5 新层）| 20-30h dev / 5-7h review | 在 `tools/archtest/internal/typeseval` 加 `ResolveReceiverType(typesInfo, callExpr) (*types.Named, bool)` + `ImplementsInterface(typesInfo, expr, ifaceObj) bool`；复用既有 `SharedResolver`（已存在，18 个 archtest 在用）；不动 Pass 模式（那是 80-150h，与本项是两件事）|
+| **typesutil helper（receiver type / interface impl）建立**（archtest 分层 §5 新层）| ResolveReceiverType ✅ done by PR-TS1（2026-05-11）；ImplementsInterface 待 PR-TS2 | helper 落地 `tools/typesutil/`（非 internal——kernel/governance 测试需要 import，internal/ 不通），保留 SharedResolver 在 `tools/archtest/internal/typeseval/`（archtest-specific 工具）。ResolveReceiverType 单测 10 cases 覆盖指针/值/包级/builtin/interface/方法值/嵌入/泛型/nil 边界；后续 ImplementsInterface 走同模式 |
 | **TYPESEVAL-BUILDTAGS-FAILCLOSED-01**（PR #445 round-2） | 8-12h dev / 3-4h review | build-tag scope 统一收口：修 comment-group 漏扫、`FlatNonDefaultTags` 对 `!tag` / OR / 互斥 tag-set 的非等价问题、`tags=nil` 规则作用域收窄，以及 `KnownNonDefaultTags` godoc 鼓励 per-tag `SharedResolver` OOM 模式。单源 backlog：`TYPESEVAL-BUILDTAGS-COMMENTGROUP-COVERAGE-01`、`TYPESEVAL-BUILDTAGS-SCOPE-FAILCLOSED-01`、`TYPESEVAL-BUILDTAGS-LEGACY-DIRECTIVE-01`。 |
 | **SCANNER-FRAMEWORK-USAGE-01-HARDENING**（PR #445 round-2） | 8-11h dev / 3-4h review | 补 scanner guard 与 type-aware matcher 的 fail-open 缺口：inspector instance methods、internal subpackage exact allowlist、auth dot-import/unqualified call matcher、generated/ skip cross-rule invariant。单源 backlog：`PR445-FU-SCANNER-FRAMEWORK-HARDENING-01`、`PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01`、`GENERATED-SKIP-CROSS-RULE-INVARIANT-01`。 |
 | **INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01**（PR #445 round-2） | 5-7h dev / 2-3h review | 把 `/internal/v1/*` 必须声明 caller clients 的 enforcement 从手写 `wrapper.ContractSpec{}` AST 扫描上移到 contract YAML/governance 源头，与 FMT-28 互补。单源 backlog：`INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01`。 |
-| **BFS emitter receiver-type 升级**（PR431-FU）| 8-12h dev / 2-3h review | BFS 按 receiver 类型识别 emitter，替代 convention-by-name；依赖上一项 typeseval helper（receiver type / interface impl）已建。同根的 USAGE-01 receiver method bypass 已由 PR #445 提前闭环，无需双升。 |
+| **BFS emitter receiver-type 升级**（PR431-FU）| ✅ done by PR-TS1（2026-05-11）| BFS 改 signature-based 三谓词（return ValidationResult + arg0 string + receiver/result 同包），删 `isResultEmitter` 名字 allowlist 和 `assertEmitterMethodsRestrictedToLocator` runtime guard。同根的 USAGE-01 receiver method bypass 已由 PR #445 提前闭环。 |
 | **PR-A' 锚点升级 typed function call**（PR #435 已 ship）| 4-5h dev / 1-2h review | 字符串 `// INVARIANT: ID` → `archtest.Invariant("ID")` 函数调用 + 同步 archtest 改 |
 
 ### Wave 4：触发型保留

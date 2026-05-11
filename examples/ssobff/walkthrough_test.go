@@ -558,10 +558,12 @@ func TestWalkthrough(t *testing.T) {
 	// recon surface. Authenticated non-admin callers (e.g. alice) receive 403.
 
 	t.Run("admin can update a config entry (PUT /api/v1/config/site.title)", func(t *testing.T) {
+		// S6 CAS: PUT must declare expectedVersion. site.title was created
+		// in an earlier subtest with version=1.
 		req, err := http.NewRequestWithContext(context.Background(),
 			http.MethodPut,
 			base+"/api/v1/config/site.title",
-			strings.NewReader(`{"value":"GoCell Updated"}`))
+			strings.NewReader(`{"value":"GoCell Updated","expectedVersion":1}`))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+adminToken)

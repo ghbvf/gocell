@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,7 +167,7 @@ func TestService_Rollback(t *testing.T) {
 				tt.setup(svc, repo)
 			}
 
-			entry, err := svc.Rollback(adminSvcCtx(), tt.key, tt.version)
+			entry, err := svc.Rollback(adminSvcCtx(), tt.key, tt.version, 1)
 			if tt.wantErr {
 				assert.Error(t, err)
 				var ec *errcode.Error
@@ -232,7 +234,7 @@ func TestService_Rollback_OutboxWriteError(t *testing.T) {
 	_, err = svcGood.Publish(adminSvcCtx(), "app.name")
 	require.NoError(t, err)
 
-	_, err = svc.Rollback(adminSvcCtx(), "app.name", 1)
+	_, err = svc.Rollback(adminSvcCtx(), "app.name", 1, 1)
 	require.Error(t, err, "Rollback must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -288,7 +290,7 @@ func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
 // Asserts the typed error code so handler→HTTP status mapping cannot drift.
 func TestService_Rollback_KeyNotFound(t *testing.T) {
 	svc, _ := newTestService()
-	_, err := svc.Rollback(adminSvcCtx(), "missing-key", 1)
+	_, err := svc.Rollback(adminSvcCtx(), "missing-key", 1, 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -301,7 +303,7 @@ func TestService_Rollback_VersionNotFound(t *testing.T) {
 	svc, repo := newTestService()
 	mustSeedEntry(repo, "app.name", "v1") // entry exists; no version published
 
-	_, err := svc.Rollback(adminSvcCtx(), "app.name", 99)
+	_, err := svc.Rollback(adminSvcCtx(), "app.name", 99, 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -355,11 +357,15 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 			if tt.flipToSensitiveAt > 0 {
 				live, err := repo.GetByKey(context.Background(), "app.x")
 				require.NoError(t, err)
-				_, err = repo.UpdateForRollback(context.Background(), live.Key, "v-live", !tt.seedSensitive)
+				_, err = repo.UpdateForRollback(context.Background(), live.Key, live.Version, "v-live", !tt.seedSensitive)
 				require.NoError(t, err)
 			}
 
-			rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1)
+			// Read the live version just before rollback to supply the correct expectedVersion.
+			live, err := repo.GetByKey(context.Background(), "app.x")
+			require.NoError(t, err)
+
+			rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1, live.Version)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantSensitive, rolled.Sensitive,
 				"rollback must inherit the snapshot's Sensitive flag, not the live entry's")
@@ -427,7 +433,7 @@ func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 	_, err = svcOK.Publish(adminSvcCtx(), "app.x")
 	require.NoError(t, err)
 
-	_, err = svc.Rollback(adminSvcCtx(), "app.x", 1)
+	_, err = svc.Rollback(adminSvcCtx(), "app.x", 1, 1)
 	require.Error(t, err, "FailClosed: publisher failure must propagate on rollback")
 	assert.Contains(t, err.Error(), "broker down")
 }
@@ -454,7 +460,7 @@ func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 	_, err = svcOK.Publish(adminSvcCtx(), "app.x")
 	require.NoError(t, err)
 
-	rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1)
+	rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1, 1)
 	require.NoError(t, err, "FailOpen: publisher failure must be swallowed on rollback")
 	assert.Equal(t, "v1", rolled.Value)
 
@@ -476,7 +482,7 @@ func TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly(t *testing.T) {
 	writer.Entries = writer.Entries[:0] // reset writer after publish
 
 	// Rollback to version 1.
-	_, err = svc.Rollback(adminSvcCtx(), "app.name", 1)
+	_, err = svc.Rollback(adminSvcCtx(), "app.name", 1, 1)
 	require.NoError(t, err)
 
 	// Rollback emits two entries: [0]=entry-upserted, [1]=config-rollback.
@@ -502,4 +508,54 @@ func TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal(upsertedPayload, &raw))
 	_, hasValue := raw["value"]
 	assert.False(t, hasValue, "entry-upserted payload must NOT contain 'value' field (metadata-only)")
+}
+
+// concurrentSafeTxRunner is a stateless pass-through TxRunner safe for concurrent use.
+// Unlike testutil.NoopTxRunner it has no mutable Calls field, avoiding data races.
+type concurrentSafeTxRunner struct{}
+
+func (concurrentSafeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestConcurrentRollback_ExactlyOneSucceeds verifies that when two goroutines race
+// to rollback the same config entry with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentRollback_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewConfigRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	mustSeedEntry(repo, "cas-rollback-key", "v1")
+	_, err = svc.Publish(adminSvcCtx(), "cas-rollback-key")
+	require.NoError(t, err)
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			_, rbErr := svc.Rollback(adminSvcCtx(), "cas-rollback-key", 1, 1)
+			if rbErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(rbErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Rollback: %v", rbErr)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Rollback must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Rollback must yield ErrVersionConflict")
 }

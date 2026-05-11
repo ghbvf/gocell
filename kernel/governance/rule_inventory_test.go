@@ -2,14 +2,17 @@ package governance
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
+	"go/types"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // TestRuleReachabilityFromRegistrationRoots proves that every rule ID in
@@ -47,10 +50,9 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 	t.Parallel()
 
 	fset := token.NewFileSet()
-	files := loadGovernancePackageFiles(t, fset, ".")
+	files, typesInfo := loadGovernancePackageWithTypes(t, fset, ".")
 
 	funcIdx := buildFuncIndex(files)
-	assertEmitterMethodsRestrictedToLocator(t, funcIdx)
 
 	roots := collectBFSRoots(funcIdx)
 	if len(roots) == 0 {
@@ -59,7 +61,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 			"public methods on Validator")
 	}
 
-	actual := runReachabilityBFS(t, fset, files, funcIdx, roots)
+	actual := runReachabilityBFS(t, fset, files, typesInfo, funcIdx, roots)
 	golden := goldenRuleIDs()
 
 	if diff := symmetricDiff(golden, actual); len(diff) > 0 {
@@ -77,7 +79,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 // kernel/governance/*.go. Update this list whenever a rule is added /
 // renamed / removed.
 //
-// Total: 81 IDs across 11 series.
+// Total: 82 IDs across 11 series.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).
@@ -98,7 +100,7 @@ func goldenRuleIDs() []string {
 		// strict-mode orchestrator is in rules_misc_strict.go)
 		"DOC-NAME-01",
 
-		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..30
+		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..31
 		// + strict-mode FMT-16/17/19/A1/C1 + FMT-20..23/25 in
 		// rules_misc_strict.go; FMT-19 implementation in rules_misc_advisory.go).
 		"FMT-01", "FMT-02", "FMT-03", "FMT-04", "FMT-05",
@@ -106,9 +108,12 @@ func goldenRuleIDs() []string {
 		"FMT-11", "FMT-12", "FMT-13", "FMT-14", "FMT-15",
 		// FMT-18 deleted in PR-V1-CODEGEN-FULL-MIGRATION W4 (replaced by
 		// archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01); gap intentional.
+		// FMT-31 (rules_fmt.go) reclaimed the /internal/v1 caller-clients
+		// invariant at the YAML governance layer (charter §5.1 L5→L6 carrier
+		// migration, replaces tools/archtest/contract_spec_clients_test.go).
 		"FMT-16", "FMT-17", "FMT-19",
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
-		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30",
+		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30", "FMT-31",
 		"FMT-A1", "FMT-C1",
 
 		// OUTGUARD — outbox durability (rules_misc_advisory.go)
@@ -172,31 +177,72 @@ type funcKey struct {
 	name string
 }
 
-// loadGovernancePackageFiles parses every non-test .go file directly under
-// dir into ast.Files sharing fset.
-func loadGovernancePackageFiles(t *testing.T, fset *token.FileSet, dir string) []*ast.File {
+// loadGovernancePackageWithTypes loads the governance package using
+// packages.Load (module-aware), returning the AST files (sharing fset)
+// and the full *types.Info needed for signature-based BFS emission
+// detection.
+//
+// packages.Load is used over types.Config.Check + importer.Default()
+// because the latter relies on GOPATH-style $GOROOT/src lookup and fails
+// to resolve module-internal imports (kernel/metadata, etc.) in this
+// project. packages.Load consults go/build + module-aware resolvers.
+//
+// dir must contain the governance package (the test's CWD when called
+// with "."). The cost (~1-2s first call) is paid once; subsequent test
+// runs share Go build cache.
+func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir string) ([]*ast.File, *types.Info) {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
+	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		t.Fatalf("read governance dir %q: %v", dir, err)
+		t.Fatalf("resolve abs governance dir: %v", err)
+	}
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps |
+			packages.NeedImports,
+		Dir:  absDir,
+		Fset: fset,
+	}
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		t.Fatalf("load governance package: %v", err)
+	}
+	if packages.PrintErrors(pkgs) > 0 {
+		t.Fatalf("governance package load reported errors")
+	}
+	if len(pkgs) != 1 {
+		t.Fatalf("expected 1 governance package, got %d", len(pkgs))
+	}
+	pkg := pkgs[0]
+	if pkg.TypesInfo == nil {
+		t.Fatalf("governance package has nil TypesInfo")
+	}
+
+	// Filter test files: rule_inventory_test.go and rule_inventory_bfs_test.go
+	// must not appear in the BFS sweep (they would self-reference the helpers).
+	// packages.Load with no test build tag returns non-test files only, but
+	// keep an explicit filter to harden against future flag changes.
+	//
+	// pkg.Syntax and pkg.GoFiles share a 1:1 index correspondence by
+	// packages.Load contract (parsed AST <-> file path); assert it explicitly
+	// so a future loader regression that breaks the alignment fails fast
+	// rather than silently picking the wrong path for each AST file.
+	if len(pkg.Syntax) != len(pkg.GoFiles) {
+		t.Fatalf("packages.Load returned Syntax/GoFiles of unequal length (%d vs %d)",
+			len(pkg.Syntax), len(pkg.GoFiles))
 	}
 	var files []*ast.File
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+	for i, f := range pkg.Syntax {
+		path := pkg.GoFiles[i]
+		if strings.HasSuffix(path, "_test.go") {
 			continue
-		}
-		path := filepath.Join(dir, name)
-		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
 		}
 		files = append(files, f)
 	}
 	if len(files) == 0 {
-		t.Fatalf("no governance .go files parsed in %q", dir)
+		t.Fatalf("no governance .go files parsed via packages.Load in %q", absDir)
 	}
-	return files
+	return files, pkg.TypesInfo
 }
 
 // scanPackageConstStrings collects package-level `const NAME = "literal"`
@@ -331,11 +377,12 @@ func collectBFSRoots(funcIdx map[funcKey]*ast.FuncDecl) []funcKey {
 // parameters through every call. runReachabilityBFS owns the lifecycle:
 // build context → call run(roots) → return sorted reachable IDs.
 type bfsContext struct {
-	t        *testing.T
-	fset     *token.FileSet
-	funcIdx  map[funcKey]*ast.FuncDecl
-	constMap map[string]string
-	inferred map[*ast.CompositeLit]struct{}
+	t         *testing.T
+	fset      *token.FileSet
+	typesInfo *types.Info
+	funcIdx   map[funcKey]*ast.FuncDecl
+	constMap  map[string]string
+	inferred  map[*ast.CompositeLit]struct{}
 
 	reachable map[string]struct{}
 	queue     []funcKey
@@ -413,15 +460,21 @@ func (c *bfsContext) enqueueMethodValue(x *ast.SelectorExpr, recvName, recvType 
 }
 
 // handleCall enqueues free-function callees and captures rule IDs from
-// emission selectors (newResult / newScopedResult).
+// emission method calls.
 //
-// Emission detection accepts any selector with the matching method name
-// regardless of receiver expression. Within the governance package these
-// names are uniquely defined on *locator (verified at test setup by
-// assertEmitterMethodsRestrictedToLocator), so any reachable
-// .newResult / .newScopedResult call is a legitimate emission. Relaxing
-// the receiver check here is what lets BFS see emissions inside free
-// functions that take a *Validator parameter.
+// Emission detection is signature-based (not name-based): any reachable
+// method whose signature matches isValidationResultEmitter — returns
+// ValidationResult, takes string at parameter 0, and has a receiver in
+// the same package as ValidationResult — is treated as an emitter and
+// has x.Args[0] resolved as a rule ID.
+//
+// This replaces the pre-2026-05-11 design where handleCall matched
+// methods by name (`newResult`/`newScopedResult`) and relied on the
+// runtime guard assertEmitterMethodsRestrictedToLocator to constrain the
+// receiver. Signature-based matching is genuinely type-aware: renaming
+// the emitter, defining a same-named method on a foreign receiver, or
+// adding a new emitter shape on *locator with the matching signature all
+// flow correctly without further changes.
 func (c *bfsContext) handleCall(x *ast.CallExpr) {
 	if id, ok := x.Fun.(*ast.Ident); ok {
 		// Free-function callsite. Enqueue the callee; rule IDs are not
@@ -431,13 +484,51 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 		}
 		return
 	}
-	sel, ok := x.Fun.(*ast.SelectorExpr)
-	if !ok || !isResultEmitter(sel.Sel.Name) || len(x.Args) == 0 {
+	if len(x.Args) == 0 {
+		return
+	}
+	fn, recvNamed, _, ok := typesutil.ResolveCallee(c.typesInfo, x)
+	if !ok {
+		return
+	}
+	sig := fn.Type().(*types.Signature)
+	if !signatureMatchesValidationResultEmitter(sig, recvNamed) {
 		return
 	}
 	if id := c.resolveID(x.Args[0]); id != "" {
 		c.reachable[id] = struct{}{}
 	}
+}
+
+// signatureMatchesValidationResultEmitter reports whether sig is a method
+// with the canonical emitter shape:
+//
+//	(receiver recvNamed) (ruleID string, ...) ValidationResult
+//
+// where recvNamed and ValidationResult belong to the same package. This is
+// the type-system definition of "ValidationResult emitter", independent of
+// any method-name convention.
+func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *types.Named) bool {
+	// Variadic emitters are not a canonical shape — a format-string
+	// emitter like `newResultf(fmt string, args ...any) ValidationResult`
+	// has a string at param 0 but x.Args[0] is the format template, not a
+	// rule ID. Reject variadic outright; if a future emitter genuinely
+	// needs variadic args, extend handleCall's ID-resolution accordingly.
+	if sig.Variadic() {
+		return false
+	}
+	if sig.Params().Len() < 1 || sig.Results().Len() != 1 {
+		return false
+	}
+	p0, ok := sig.Params().At(0).Type().(*types.Basic)
+	if !ok || p0.Kind() != types.String {
+		return false
+	}
+	r0, ok := sig.Results().At(0).Type().(*types.Named)
+	if !ok || r0.Obj().Name() != "ValidationResult" {
+		return false
+	}
+	return recvNamed.Obj().Pkg().Path() == r0.Obj().Pkg().Path()
 }
 
 // captureCodeFields walks one CompositeLit and records the rule ID from
@@ -466,12 +557,6 @@ func (c *bfsContext) captureCodeFields(x *ast.CompositeLit) {
 // fset / constMap.
 func (c *bfsContext) resolveID(expr ast.Expr) string {
 	return resolveIDArg(c.t, c.fset, expr, c.constMap)
-}
-
-// isResultEmitter reports whether the named locator method emits a
-// ValidationResult whose first positional argument is the rule code.
-func isResultEmitter(name string) bool {
-	return name == "newResult" || name == "newScopedResult"
 }
 
 // looksLikeValidationResult returns true when the composite literal is
@@ -558,46 +643,20 @@ func runReachabilityBFS(
 	t *testing.T,
 	fset *token.FileSet,
 	files []*ast.File,
+	typesInfo *types.Info,
 	funcIdx map[funcKey]*ast.FuncDecl,
 	roots []funcKey,
 ) []string {
 	t.Helper()
 	ctx := &bfsContext{
-		t:        t,
-		fset:     fset,
-		funcIdx:  funcIdx,
-		constMap: scanPackageConstStrings(files),
-		inferred: collectInferredVRLits(files),
+		t:         t,
+		fset:      fset,
+		typesInfo: typesInfo,
+		funcIdx:   funcIdx,
+		constMap:  scanPackageConstStrings(files),
+		inferred:  collectInferredVRLits(files),
 	}
 	return ctx.run(roots)
-}
-
-// assertEmitterMethodsRestrictedToLocator fails the test if the package
-// declares any newResult / newScopedResult method on a receiver other
-// than *locator. BFS emission detection (handleCall) accepts any
-// reachable .newResult / .newScopedResult call regardless of receiver
-// expression — that simplification is safe only while the names stay
-// uniquely defined on locator. This guard turns the convention into a
-// runtime invariant: introduce a same-named method on an unrelated
-// receiver and the production test fails immediately with a precise
-// fix path.
-func assertEmitterMethodsRestrictedToLocator(t *testing.T, funcIdx map[funcKey]*ast.FuncDecl) {
-	t.Helper()
-	allowed := map[string]bool{"locator": true}
-	for k := range funcIdx {
-		if !isResultEmitter(k.name) {
-			continue
-		}
-		if !allowed[k.recv] {
-			t.Fatalf("BFS invariant breach: method %q is defined on receiver "+
-				"%q (only *locator is allowed). BFS emission detection assumes "+
-				"newResult / newScopedResult are uniquely named within this "+
-				"package; rename the new method, OR extend the allowed set in "+
-				"assertEmitterMethodsRestrictedToLocator AND review whether "+
-				"BFS still produces the expected reachable set.",
-				k.name, k.recv)
-		}
-	}
 }
 
 // resolveIDArg returns the rule-ID string from a newResult / newScopedResult

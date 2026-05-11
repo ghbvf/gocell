@@ -48,6 +48,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // callerCellHTTPClient is a shared HTTP client for caller-cell integration tests.
@@ -146,6 +147,8 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithBootstrapAuth(bootstrapMW),
+
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -154,6 +157,8 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		configcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
+
+		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
 	callerCellAuditNS, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // failingTxRunner simulates a tx that wraps fn but fails after fn returns nil,
@@ -120,7 +123,7 @@ func TestFlagWrite_Toggle_TogglesFlag(t *testing.T) {
 	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feature-x")
 
-	flag, err := svc.Toggle(context.Background(), "feature-x", true)
+	flag, err := svc.Toggle(context.Background(), "feature-x", 1, true)
 	require.NoError(t, err)
 	assert.True(t, flag.Enabled)
 	assert.Equal(t, "feature-x", flag.Key)
@@ -135,6 +138,7 @@ func TestFlagWrite_Update_UpdatesFlag(t *testing.T) {
 
 	flag, err := svc.Update(context.Background(), UpdateInput{
 		Key:               "feat-update",
+		ExpectedVersion:   1,
 		Enabled:           true,
 		RolloutPercentage: 50,
 		Description:       "updated desc",
@@ -153,7 +157,7 @@ func TestFlagWrite_Delete_RemovesFlag(t *testing.T) {
 	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feat-delete")
 
-	err := svc.Delete(context.Background(), "feat-delete")
+	err := svc.Delete(context.Background(), "feat-delete", 1)
 	require.NoError(t, err)
 
 	_, getErr := repo.GetByKey(context.Background(), "feat-delete")
@@ -194,12 +198,151 @@ func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 	_, createErr := svc.Create(context.Background(), CreateInput{Key: "flag-no-emit", Description: "test"})
 	require.NoError(t, createErr, "Create must succeed without emitter (L1 only)")
 
-	_, updateErr := svc.Update(context.Background(), UpdateInput{Key: "flag-no-emit", Description: "updated"})
+	_, updateErr := svc.Update(context.Background(), UpdateInput{Key: "flag-no-emit", ExpectedVersion: 1, Description: "updated"})
 	require.NoError(t, updateErr, "Update must succeed without emitter (L1 only)")
 
-	_, toggleErr := svc.Toggle(context.Background(), "flag-no-emit", true)
+	_, toggleErr := svc.Toggle(context.Background(), "flag-no-emit", 2, true)
 	require.NoError(t, toggleErr, "Toggle must succeed without emitter (L1 only)")
 
-	deleteErr := svc.Delete(context.Background(), "flag-no-emit")
+	deleteErr := svc.Delete(context.Background(), "flag-no-emit", 3)
 	require.NoError(t, deleteErr, "Delete must succeed without emitter (L1 only)")
+}
+
+// concurrentSafeTxRunner is a stateless pass-through TxRunner safe for concurrent use.
+// Unlike testutil.NoopTxRunner it has no mutable Calls field, avoiding data races.
+type concurrentSafeTxRunner struct{}
+
+func (concurrentSafeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestConcurrentToggle_ExactlyOneSucceeds verifies that when two goroutines race
+// to toggle the same feature flag with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentToggle_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	seedFlag(t, repo, "cas-toggle-flag")
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		enabled := i == 0
+		go func(enabled bool) {
+			defer wg.Done()
+			_, togErr := svc.Toggle(context.Background(), "cas-toggle-flag", 1, enabled)
+			if togErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(togErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Toggle: %v", togErr)
+				}
+			}
+		}(enabled)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Toggle must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Toggle must yield ErrVersionConflict")
+}
+
+// TestConcurrentUpdate_ExactlyOneSucceeds verifies that when two goroutines race
+// to update the same feature flag with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	seedFlag(t, repo, "cas-update-flag")
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		desc := "desc-A"
+		if i == 1 {
+			desc = "desc-B"
+		}
+		go func(desc string) {
+			defer wg.Done()
+			_, upErr := svc.Update(context.Background(), UpdateInput{
+				Key:             "cas-update-flag",
+				ExpectedVersion: 1,
+				Description:     desc,
+			})
+			if upErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(upErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Update: %v", upErr)
+				}
+			}
+		}(desc)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Update must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Update must yield ErrVersionConflict")
+}
+
+// TestConcurrentDelete_ExactlyOneSucceeds verifies that when two goroutines race
+// to delete the same feature flag with the same expectedVersion, exactly one
+// succeeds. The loser receives either ErrVersionConflict or ErrFlagNotFound
+// (when the winner committed the delete before the loser's CAS check).
+func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	seedFlag(t, repo, "cas-delete-flag")
+
+	var (
+		successes atomic.Int32
+		losers    atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			delErr := svc.Delete(context.Background(), "cas-delete-flag", 1)
+			if delErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(delErr, &ce) &&
+					(ce.Code == errcode.ErrVersionConflict || ce.Code == errcode.ErrFlagNotFound) {
+					losers.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Delete: %v", delErr)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Delete must succeed")
+	assert.Equal(t, int32(1), losers.Load(), "exactly one concurrent Delete must yield ErrVersionConflict or ErrFlagNotFound")
 }

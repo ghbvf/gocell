@@ -94,7 +94,7 @@ type e2eFixture struct {
 }
 
 func newE2EFixture() *e2eFixture {
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	refreshStore, err := refreshmem.New(

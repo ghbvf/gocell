@@ -2,6 +2,7 @@ package flagwrite
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -10,6 +11,7 @@ import (
 	toggle "github.com/ghbvf/gocell/generated/contracts/http/config/flags/toggle/v1"
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/flags/update/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -42,11 +44,21 @@ type UpdateAdapter struct{ S *Service }
 func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (update.UpdateResponseObject, error) {
 	flag, err := a.S.Update(ctx, UpdateInput{
 		Key:               req.Key,
+		ExpectedVersion:   int(req.ExpectedVersion),
 		Enabled:           req.Enabled,
 		RolloutPercentage: int(req.RolloutPercentage),
 		Description:       req.Description,
 	})
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			switch ce.Code {
+			case errcode.ErrFlagNotFound:
+				return update.Update404ErrorResponse{Body: *ce}, nil
+			case errcode.ErrVersionConflict:
+				return update.Update409ErrorResponse{Body: *ce}, nil
+			}
+		}
 		return nil, err
 	}
 	return update.Update200JSONResponse{Data: toUpdateResponseData(flag)}, nil
@@ -57,8 +69,17 @@ type ToggleAdapter struct{ S *Service }
 
 // Toggle implements toggle.Service. Key from path param; Enabled from body, decoded by handler_gen.
 func (a ToggleAdapter) Toggle(ctx context.Context, req *toggle.Request) (toggle.ToggleResponseObject, error) {
-	flag, err := a.S.Toggle(ctx, req.Key, req.Enabled)
+	flag, err := a.S.Toggle(ctx, req.Key, int(req.ExpectedVersion), req.Enabled)
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			switch ce.Code {
+			case errcode.ErrFlagNotFound:
+				return toggle.Toggle404ErrorResponse{Body: *ce}, nil
+			case errcode.ErrVersionConflict:
+				return toggle.Toggle409ErrorResponse{Body: *ce}, nil
+			}
+		}
 		return nil, err
 	}
 	return toggle.Toggle200JSONResponse{Data: toToggleResponseData(flag)}, nil
@@ -69,7 +90,16 @@ type FlagDeleteAdapter struct{ S *Service }
 
 // Delete implements flagsdelete.Service. Key from path param, decoded by handler_gen.
 func (a FlagDeleteAdapter) Delete(ctx context.Context, req *flagsdelete.Request) (flagsdelete.DeleteResponseObject, error) {
-	if err := a.S.Delete(ctx, req.Key); err != nil {
+	if err := a.S.Delete(ctx, req.Key, int(req.ExpectedVersion)); err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			switch ce.Code {
+			case errcode.ErrFlagNotFound:
+				return flagsdelete.Delete404ErrorResponse{Body: *ce}, nil
+			case errcode.ErrVersionConflict:
+				return flagsdelete.Delete409ErrorResponse{Body: *ce}, nil
+			}
+		}
 		return nil, err
 	}
 	return flagsdelete.Delete204NoContentResponse{}, nil

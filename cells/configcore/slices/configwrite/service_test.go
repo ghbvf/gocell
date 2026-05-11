@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
@@ -120,7 +122,7 @@ func TestService_Update(t *testing.T) {
 			setup: func(svc *Service) {
 				_, _ = svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 			},
-			input:   UpdateInput{Key: "k", Value: "v2"},
+			input:   UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1},
 			wantErr: false,
 			wantVer: 2,
 		},
@@ -187,7 +189,7 @@ func TestService_Delete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newTestService()
 			tt.setup(svc)
-			err := svc.Delete(adminSvcCtx(), tt.key)
+			err := svc.Delete(adminSvcCtx(), tt.key, 1)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -225,7 +227,7 @@ func TestService_Update_OutboxWriteError(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
-	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2"})
+	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
 	require.Error(t, err, "Update must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -244,7 +246,7 @@ func TestService_Delete_OutboxWriteError(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
-	err = svc.Delete(adminSvcCtx(), "k")
+	err = svc.Delete(adminSvcCtx(), "k", 1)
 	require.Error(t, err, "Delete must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -301,7 +303,7 @@ func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	_, _ = seedSvc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
-	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2"})
+	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Update must call RunInTx exactly once")
 }
@@ -323,7 +325,7 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	_, _ = seedSvc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
-	err = svc.Delete(adminSvcCtx(), "k")
+	err = svc.Delete(adminSvcCtx(), "k", 1)
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Delete must call RunInTx exactly once")
 }
@@ -346,4 +348,104 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	entry, err := svc.Create(adminSvcCtx(), CreateInput{Key: "pub-err", Value: "v"})
 	require.NoError(t, err, "publish failure in demo mode must not fail Create")
 	assert.Equal(t, "pub-err", entry.Key)
+}
+
+// concurrentSafeTxRunner is a stateless pass-through TxRunner safe for concurrent use.
+// Unlike testutil.NoopTxRunner it has no mutable Calls field, avoiding data races.
+type concurrentSafeTxRunner struct{}
+
+func (concurrentSafeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestConcurrentUpdate_ExactlyOneSucceeds verifies that when two goroutines race
+// to update the same config entry with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewConfigRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "cas-race-key", Value: "initial"})
+	require.NoError(t, err)
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		newVal := "value-A"
+		if i == 1 {
+			newVal = "value-B"
+		}
+		go func(newVal string) {
+			defer wg.Done()
+			_, upErr := svc.Update(adminSvcCtx(), UpdateInput{
+				Key:             "cas-race-key",
+				Value:           newVal,
+				ExpectedVersion: 1,
+			})
+			if upErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(upErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Update: %v", upErr)
+				}
+			}
+		}(newVal)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Update must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Update must yield ErrVersionConflict")
+}
+
+// TestConcurrentDelete_ExactlyOneSucceeds verifies that when two goroutines race
+// to delete the same config entry with the same expectedVersion, exactly one
+// succeeds. The loser receives either ErrVersionConflict or ErrConfigNotFound
+// (when the winner committed the delete before the loser's CAS check).
+func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewConfigRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "cas-delete-race-key", Value: "initial"})
+	require.NoError(t, err)
+
+	var (
+		successes atomic.Int32
+		losers    atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			delErr := svc.Delete(adminSvcCtx(), "cas-delete-race-key", 1)
+			if delErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(delErr, &ce) &&
+					(ce.Code == errcode.ErrVersionConflict || ce.Code == errcode.ErrConfigNotFound) {
+					losers.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Delete: %v", delErr)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Delete must succeed")
+	assert.Equal(t, int32(1), losers.Load(), "exactly one concurrent Delete must yield ErrVersionConflict or ErrConfigNotFound")
 }

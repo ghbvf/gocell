@@ -221,7 +221,6 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
     // wrapper.EventSpec(id, transport) 已删除（PR #376）；直接用生成的适配器：
     //   import mytopicv1 "github.com/ghbvf/gocell/generated/contracts/event/my/topic/v1"
     //   if err := mytopicv1.NewSubscription(c.svc.HandleEvent, "mycell", "myslice").Mount(reg); err != nil { ... }
-    // FMT-18 校验 spec_gen.go 内的 ContractSpec 与 contracts/**/contract.yaml 一致性。
     import mytopicv1 "github.com/ghbvf/gocell/generated/contracts/event/my/topic/v1"
     if err := mytopicv1.NewSubscription(c.svc.HandleEvent, c.ID(), "myslice").Mount(reg); err != nil {
         return fmt.Errorf("mycell: subscribe event.my.topic.v1: %w", err)

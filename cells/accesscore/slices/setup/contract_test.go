@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -34,7 +35,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 
 	// Also exercise the real handler and feed its recorded output through the
 	// contract validator so serialization bugs would surface.
-	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), nil)
+	svc := newService(t, mem.NewUserRepository(clock.Real()), mem.NewRoleRepository(), nil)
 	h := setup.NewHandler(svc, testPassthroughAuth)
 	req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
 	rec := httptest.NewRecorder()
@@ -90,7 +91,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"username":"root","email":"root@local","password":"`+strings.Repeat("界", 8)+`"}`))
 
 	// Real-handler produced 201 payload must satisfy the response schema.
-	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+	svc := newService(t, mem.NewUserRepository(clock.Real()), mem.NewRoleRepository(), &stubWriter{})
 	h := setup.NewHandler(svc, testPassthroughAuth)
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
@@ -108,7 +109,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		`{"username":"root","email":"root@local","password":"` + strings.Repeat("p", 73) + `"}`,
 		`{"username":"root","email":"root@local","password":"` + strings.Repeat("界", 8) + `"}`,
 	} {
-		svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+		svc := newService(t, mem.NewUserRepository(clock.Real()), mem.NewRoleRepository(), &stubWriter{})
 		h := setup.NewHandler(svc, testPassthroughAuth)
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(badBody))
 		req.Header.Set("Content-Type", "application/json")
@@ -118,7 +119,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	}
 
 	t.Run("409 duplicate identity user response satisfies contract", func(t *testing.T) {
-		userRepo := mem.NewUserRepository()
+		userRepo := mem.NewUserRepository(clock.Real())
 		roleRepo := mem.NewRoleRepository()
 		seedContractIdentityUser(t, userRepo, "root", "root@local")
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
@@ -135,7 +136,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	})
 
 	t.Run("409 duplicate username response satisfies contract", func(t *testing.T) {
-		userRepo := mem.NewUserRepository()
+		userRepo := mem.NewUserRepository(clock.Real())
 		roleRepo := mem.NewRoleRepository()
 		existing, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 		require.NoError(t, err)
@@ -158,7 +159,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		// PR-A42 N5 / N4: pin the retired-endpoint envelope through the contract
 		// validator and assert the wire shape carries semantic next-action only —
 		// no HTTP path literal (clients resolve via OpenAPI).
-		userRepo := mem.NewUserRepository()
+		userRepo := mem.NewUserRepository(clock.Real())
 		roleRepo := mem.NewRoleRepository()
 		seedAdmin(t, userRepo, roleRepo)
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
@@ -190,7 +191,7 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
 
 	w := &stubWriter{}
-	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), w)
+	svc := newService(t, mem.NewUserRepository(clock.Real()), mem.NewRoleRepository(), w)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
 		Username: "root",

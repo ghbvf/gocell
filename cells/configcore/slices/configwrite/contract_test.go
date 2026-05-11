@@ -152,7 +152,7 @@ func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	_, err = svc.Update(auth.TestContext("contract-admin", []string{"admin"}), UpdateInput{Key: "k", Value: "v2"})
+	_, err = svc.Update(auth.TestContext("contract-admin", []string{"admin"}), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Update must emit one outbox entry")
@@ -171,7 +171,7 @@ func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	err = svc.Delete(auth.TestContext("contract-admin", []string{"admin"}), "k")
+	err = svc.Delete(auth.TestContext("contract-admin", []string{"admin"}), "k", 1)
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Delete must emit one outbox entry")

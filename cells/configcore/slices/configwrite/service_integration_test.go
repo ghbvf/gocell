@@ -140,8 +140,9 @@ func TestUpdate_AtomicWithOutbox(t *testing.T) {
 	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
 
 	updated, err := bundle.svc.Update(adminIntegCtx(), UpdateInput{
-		Key:   "integration.atomic.update",
-		Value: "updated-value",
+		Key:             "integration.atomic.update",
+		Value:           "updated-value",
+		ExpectedVersion: 1,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "integration.atomic.update", updated.Key)
@@ -169,7 +170,7 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 	// Baseline: 1 outbox row from Create above.
 	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryDeleted)
 
-	err = bundle.svc.Delete(adminIntegCtx(), "integration.atomic.delete")
+	err = bundle.svc.Delete(adminIntegCtx(), "integration.atomic.delete", 1)
 	require.NoError(t, err)
 
 	// Outbox-side: Delete's L2 co-commit must have added exactly one outbox row.

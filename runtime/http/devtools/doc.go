@@ -5,9 +5,9 @@
 //
 // The catalog endpoint is wired by bootstrap during phase5 alongside the
 // health probes; it is NOT a Cell-owned route and intentionally has no
-// contract.yaml — same precedent as runtime/http/health (framework
-// introspection routes, FMT-18 exempt because the spec ID prefix
-// "http.framework.devtools." identifies it as runtime-internal).
+// contract.yaml — same precedent as runtime/http/health. The
+// "http.framework.devtools." spec ID prefix marks it as runtime-internal,
+// distinguishing it from cell-owned routes.
 //
 // Wire format note: catalog responses use the Backstage Catalog Entity
 // envelope at top level (apiVersion/kind/metadata/spec). They do NOT wrap

@@ -227,8 +227,12 @@ rather than role-based policies:
 
 - Service tokens carry a 4-part format `ts:nonce:callerCell:mac`; the `callerCell`
   segment identifies the originating cell.
-- `ContractSpec.Clients` declares the allowlist of permitted callerCell values,
-  mirroring `contract.yaml endpoints.clients`. FMT-18 validates the two are in sync.
+- `ContractSpec.Clients` declares the allowlist of permitted callerCell values
+  and is copied from `contract.yaml endpoints.clients` by
+  `tools/codegen/contractgen`. Governance rule **FMT-31** enforces non-empty
+  `endpoints.clients` on `/internal/v1/*` paths at the YAML source layer;
+  `kernel/contractspec.ContractSpec.validateHTTP` provides bidirectional
+  runtime defense.
 - When `Clients` is non-empty, `auth.Mount` automatically injects `RequireCallerCell`;
   callers not in the allowlist receive 403 — no explicit `Policy` field is needed.
 - In tests, inject a service principal with `auth.TestServiceContext(callerCell)`.

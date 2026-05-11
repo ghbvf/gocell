@@ -18,8 +18,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/validation"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
+
+// VersionField is the DB column name used as the CAS version field for
+// optimistic-concurrency control on config entries and feature flags.
+// Composition root uses this constant when wiring cas.Protocol:
+//
+//	cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))
+const VersionField = "version"
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
@@ -110,6 +119,24 @@ func WithClock(clk clock.Clock) Option {
 	return func(c *ConfigCore) { c.clk = clk }
 }
 
+// WithCASProtocol sets the CAS protocol declaration for this Cell. Required in
+// durable mode — initInternal() fails fast if nil. Both bare-nil and typed-nil
+// *cas.Protocol values are rejected via sticky sentinel. Composition root
+// constructs via cas.MustNewProtocol (CAS-PROTOCOL-COMPOSITION-ROOT-01);
+// tests may inject a test-scoped *cas.Protocol.
+//
+// ref: runtime/http/router WithRateLimiter — same strong-dependency wiring
+// option pattern (option body sets sticky nil sentinel; phase0 validates).
+func WithCASProtocol(p *cas.Protocol) Option {
+	return func(c *ConfigCore) {
+		if validation.IsNilInterface(p) {
+			c.casProtocolNil = true
+			return
+		}
+		c.casProtocol = p
+	}
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 // Repository construction is deferred to Init() so that c.clk is available
@@ -130,6 +157,13 @@ type ConfigCore struct {
 	// useInMemoryDefaults tracks whether WithInMemoryDefaults was applied so
 	// Init() can construct mem repos after c.clk is set from deps.Clock.
 	useInMemoryDefaults bool
+
+	// casProtocol is the CAS protocol declaration for this Cell.
+	// Set by WithCASProtocol; validated non-nil in initInternal.
+	// casProtocolNil is a sticky sentinel: set when WithCASProtocol receives a
+	// typed-nil *cas.Protocol (both bare-nil and typed-nil are rejected).
+	casProtocol    *cas.Protocol
+	casProtocolNil bool
 
 	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc for the two
 	// mutually exclusive paths). Sealed marker types prevent any cell.go

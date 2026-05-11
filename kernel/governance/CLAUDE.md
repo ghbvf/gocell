@@ -22,7 +22,7 @@ v.newResult(
 | REF | REF-01 ~ REF-17 | 引用完整性（slice → cell/contract/journey） |
 | TOPO | TOPO-01 ~ TOPO-08 | 拓扑合法性（assembly、journey 结构） |
 | VERIFY | VERIFY-01 ~ VERIFY-06 | 验证闭包（verify.smoke/unit/contract 命令存在） |
-| FMT | FMT-01 ~ FMT-26 | 格式合规（YAML 结构、HTTP 契约、路径参数） |
+| FMT | FMT-01 ~ FMT-31 | 格式合规（YAML 结构、HTTP 契约、路径参数） |
 | ADV | ADV-01 ~ ADV-06 | 建议警告（dead event、journey 覆盖等） |
 | OUTGARD | OUTGARD-01 | Outbox 约束 |
 

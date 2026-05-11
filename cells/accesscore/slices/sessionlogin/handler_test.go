@@ -51,7 +51,7 @@ func newHandlerRefreshStore() refresh.Store {
 // RegisterRoutes wiring.
 func setup(t *testing.T) http.Handler {
 	t.Helper()
-	userRepo := mem.NewUserRepository()
+	userRepo := mem.NewUserRepository(clock.Real())
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
 	user := &domain.User{
 		ID: "usr-1", Username: "alice", Email: "a@b.com",

@@ -19,8 +19,9 @@ import (
 )
 
 // specCatalog is the framework-internal ContractSpec for the devtools catalog
-// endpoint. The "http.framework.devtools." prefix exempts it from FMT-18
-// contract-yaml presence validation because it lives in runtime/, not cells/.
+// endpoint. The "http.framework.devtools." prefix identifies it as
+// runtime-internal (no contract.yaml source), distinguishing it from
+// cell-owned routes.
 //
 // Note: catalog responses use the Backstage Catalog Entity envelope at top
 // level (apiVersion/kind/metadata/spec). They do NOT wrap in {"data": ...}

@@ -148,7 +148,7 @@ func TestPGUserRepo_Constructor_FailFast(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPGUserRepo_Integration(t *testing.T) {
-	repo, _, cleanup := setupUserRepoPG(t)
+	repo, txMgr, cleanup := setupUserRepoPG(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -268,5 +268,76 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
 		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
+	})
+
+	// -----------------------------------------------------------------------
+	// PR464 P1.3: UpdatePassword CAS path (PG) — three-way classification:
+	// version match → bumps version; version mismatch → 409; user absent → 404.
+	// -----------------------------------------------------------------------
+
+	t.Run("UpdatePassword_VersionMatch_BumpsVersion", func(t *testing.T) {
+		user := newTestUser("pwd_match_" + uuid.NewString())
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.Create(txCtx, user)
+		}))
+
+		var newVersion int64
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			v, err := repo.UpdatePassword(txCtx, user.ID, "$2a$12$newhash_match", false, 0)
+			if err != nil {
+				return err
+			}
+			newVersion = v
+			return nil
+		}))
+		assert.Equal(t, int64(1), newVersion, "expected password_version to bump 0→1")
+
+		got, err := repo.GetByID(ctx, user.ID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), got.PasswordVersion)
+		assert.Equal(t, "$2a$12$newhash_match", got.PasswordHash)
+	})
+
+	t.Run("UpdatePassword_VersionMismatch_Returns409", func(t *testing.T) {
+		user := newTestUser("pwd_mismatch_" + uuid.NewString())
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.Create(txCtx, user)
+		}))
+
+		// First update succeeds (expected=0, bump→1)
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.UpdatePassword(txCtx, user.ID, "$2a$12$first", false, 0)
+			return err
+		}))
+
+		// Second update with stale expected=0 must fail with ErrVersionConflict (409)
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.UpdatePassword(txCtx, user.ID, "$2a$12$stale", false, 0)
+			return err
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		assert.Equal(t, errcode.ErrVersionConflict, ec.Code,
+			"stale expectedVersion must return ErrVersionConflict (409), got %s", ec.Code)
+
+		// Confirm hash was NOT overwritten by the stale attempt.
+		got, err := repo.GetByID(ctx, user.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "$2a$12$first", got.PasswordHash,
+			"stale CAS must not overwrite first-writer's hash")
+		assert.Equal(t, int64(1), got.PasswordVersion)
+	})
+
+	t.Run("UpdatePassword_UserAbsent_Returns404", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.UpdatePassword(txCtx, uuid.NewString(), "$2a$12$any", false, 0)
+			return err
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code,
+			"absent user must return ErrAuthUserNotFound (404), got %s", ec.Code)
 	})
 }

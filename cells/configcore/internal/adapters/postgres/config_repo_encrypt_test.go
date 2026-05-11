@@ -308,7 +308,7 @@ func TestEncrypt_UpdateForRollback_SensitiveWritesCipherColumns(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.UpdateForRollback(context.Background(), "api_key", "new-secret", true)
+	entry, err := repo.UpdateForRollback(context.Background(), "api_key", 1, "new-secret", true)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 
@@ -984,7 +984,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 		tr := &fakeValueTransformer{currentKeyID: "local-aes-v1", failEncrypt: true}
 		repo := newEncryptedRepoFromDBTX(db, tr)
 
-		_, err := repo.UpdateForRollback(ctx, "api_key", "new-secret", true)
+		_, err := repo.UpdateForRollback(ctx, "api_key", 1, "new-secret", true)
 		require.Error(t, err)
 
 		var ec *errcode.Error

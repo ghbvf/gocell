@@ -31,7 +31,13 @@ const (
 	// ErrConflict signals that an operation was rejected because the target
 	// resource already exists or is in a conflicting state. Maps to HTTP 409.
 	// Used by scaffold/codegen paths to signal file-already-exists conflicts.
-	ErrConflict           Code = "ERR_CONFLICT"
+	ErrConflict Code = "ERR_CONFLICT"
+	// ErrVersionConflict signals a compare-and-swap (optimistic lock) version
+	// mismatch — caller's expectedVersion does not match the current row
+	// version. Maps to KindConflict / HTTP 409. Used by runtime/state/cas and
+	// every cell repo that implements CAS writes (UpdatePassword,
+	// UpdateForRollback, etc).
+	ErrVersionConflict    Code = "ERR_VERSION_CONFLICT"
 	ErrReferenceBroken    Code = "ERR_REFERENCE_BROKEN"
 	ErrInternal           Code = "ERR_INTERNAL"
 	ErrServiceUnavailable Code = "ERR_SERVICE_UNAVAILABLE"

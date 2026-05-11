@@ -3,9 +3,8 @@ package governance
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
-	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // validateREF01 checks that slice.belongsToCell references an existing cell.
@@ -329,14 +328,19 @@ func (v *Validator) validateREF16() []ValidationResult {
 }
 
 // validateREF17 checks that HTTP contracts on the internal audience
-// (cellvocab.InternalPathPrefix) do not list any external actor as a client.
+// (metadata.IsInternalHTTPPath) do not list any external actor as a client.
 // Internal endpoints are reserved for cell-to-cell traffic and admin/ops
 // callers reached through trusted internal listeners; routing a registered
 // external actor through them bypasses the public-API contract surface and
 // the auth posture that comes with it.
 //
-// Audience comes from the runtime path-prefix SoR (kernel/cell), not a
-// governance-local string, so router/registrar/admission stay aligned.
+// Audience comes from metadata.IsInternalHTTPPath — the single source of
+// truth that also drives FMT-28 (auth.clientsOnly placement), FMT-31
+// (caller-clients required on internal paths), and runtime listener
+// attribution. Using the canonical predicate (rather than inlining
+// strings.HasPrefix on cellvocab.InternalPathPrefix) keeps the bare
+// "/internal/v1" root in scope: a contract declared at the root would
+// otherwise slip past REF-17 with an external actor client.
 //
 // External-actor membership comes from actors.yaml: every entry is external
 // by construction (see ActorMeta godoc). The wildcard "*" client is also
@@ -353,7 +357,7 @@ func (v *Validator) validateREF17() []ValidationResult {
 			continue
 		}
 		path := c.Endpoints.HTTP.Path
-		if !strings.HasPrefix(path, cellvocab.InternalPathPrefix) {
+		if !metadata.IsInternalHTTPPath(path) {
 			continue
 		}
 		for i, client := range c.Endpoints.Clients {
