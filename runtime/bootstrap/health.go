@@ -24,9 +24,10 @@ import (
 )
 
 // Framework-internal ContractSpecs for health probe endpoints. These are not
-// business contracts and are exempt from FMT-18 cross-validation because they
-// live in runtime/ (not cells/ or contracts/) and are registered by bootstrap
-// itself rather than by a Cell RouteGroups implementation.
+// business contracts; they live in runtime/ (not cells/ or contracts/) and
+// are registered by bootstrap itself rather than by a Cell RouteGroups
+// implementation. The "http.framework.health." spec ID prefix marks them as
+// runtime-internal, distinguishing them from cell-owned routes.
 var (
 	specHealthLivez = contractspec.ContractSpec{
 		ID: "http.framework.health.livez.v1", Kind: cellvocab.ContractHTTP, Transport: "http",

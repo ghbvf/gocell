@@ -236,7 +236,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 
 Service token 采用 4-part 格式 `ts:nonce:callerCell:mac`，`callerCell` 段携带调用方 cell ID。
 
-- `ContractSpec.Clients` 声明允许的 callerCell 列表，对应 `contract.yaml endpoints.clients`；FMT-18 双向校验两者一致性。
+- `ContractSpec.Clients` 由 codegen 从 `contract.yaml endpoints.clients` 复制（`tools/codegen/contractgen/builder.go`）。L6 governance 规则 **FMT-31** 在 YAML 源头强制 `/internal/v1/*` 路径声明非空 `endpoints.clients`；运行时 `kernel/contractspec.ContractSpec.validateHTTP()` 双向兜底（含 inverse 方向：非 internal 路径必须无 Clients）。
 - 当 `Clients` 非空时，`auth.Mount` 自动注入 `RequireCallerCell` 守卫；不在 allowlist 的 caller 返回 403，handler 无需显式 `Policy`。
 - 测试用 `auth.TestServiceContext(callerCell)` 注入 service principal。
 
