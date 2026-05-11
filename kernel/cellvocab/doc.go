@@ -25,8 +25,4 @@
 //     ordered string list and the typed enum live next to each other.
 //   - kernel/cell.InternalPathPrefix const moved here (referenced by both
 //     cell.AuthRouteMeta.IsInternal and contractspec.Validate).
-//
-// Boundary: cellvocab depends only on stdlib + pkg/errcode. It must not
-// import any other kernel sub-module. Adding such an import would re-create
-// the dependency cycle that this package was extracted to break.
 package cellvocab

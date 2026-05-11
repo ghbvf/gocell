@@ -64,11 +64,4 @@
 //   - Close must be idempotent, must honor ctx for network/drain operations,
 //     and should log structured diagnostics before discarding state that helps
 //     explain shutdown or reconnect behavior.
-//
-// # Boundary (KERNEL-INTERNAL-DAG-01)
-//
-// kernel/lifecycle imports only kernel/worker. It is consumed by
-// runtime/bootstrap (phase10 shutdown), runtime/auth (managed resources),
-// and adapters/* (for lifecycle interface compliance); nothing in kernel/
-// imports back into kernel/lifecycle.
 package lifecycle

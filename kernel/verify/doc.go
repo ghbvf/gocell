@@ -6,12 +6,6 @@
 // declarations from a parsed ProjectMeta and reports completeness,
 // uniqueness, and reachability.
 //
-// Boundary (kernel-internal DAG, see KERNEL-INTERNAL-DAG-01 archtest):
-//
-// kernel/verify imports only kernel/metadata. It is consumed by
-// kernel/governance and by `gocell verify`; nothing in kernel/ imports
-// back into kernel/verify.
-//
 // verify does NOT execute commands — it only inspects the declared
 // strings. Actual execution is `gocell run-journey` and CI's
 // `hack/make-rules/verify.sh`.
