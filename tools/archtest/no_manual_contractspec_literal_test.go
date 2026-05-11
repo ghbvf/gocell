@@ -1,26 +1,34 @@
 // INVARIANT: NO-MANUAL-CONTRACTSPEC-LITERAL-01
+//   - INVARIANT: CONTRACTSPEC-FRAMEWORK-BUILDERS-EXIST-01
 //
 // # NO-MANUAL-CONTRACTSPEC-LITERAL-01
 //
 // Invariant: contractspec.ContractSpec{…} composite literals and
-// contractspec.EventSpec(…) call expressions must only appear in
-// generated/contracts/**/*_gen.go files. Hand-written production code under
-// cells/, examples/**/cells/, runtime/, kernel/cell/, adapters/ etc. must not
-// define ContractSpec or EventSpec literals once the codegen migration (W3)
-// is complete.
+// contractspec.EventSpec(…) call expressions must only appear in:
+//   - generated/contracts/**/*_gen.go — business contract specs (codegen output)
+//   - kernel/contractspec/** itself  — type definition + typed funnels
+//     (NewFrameworkHTTP / NewEventDerivation, see framework.go)
 //
-// Migration allowlist: the four cells still migrating in W3.2–W3.5 are
-// listed in migrationAllowlistNoLiteral. Each sub-wave removes the
-// corresponding entry. After W3.5 the list must be empty.
+// Hand-written production code under cells/, examples/**/cells/, and runtime/
+// must NOT define ContractSpec literals. Framework-owned HTTP infra (health
+// probes, devtools catalog) and event-tracing derivations use the typed
+// funnels in kernel/contractspec/framework.go — these are the only legitimate
+// runtime-side construction paths and have no allowlist exception.
 //
 // Exclusions:
-//   - generated/contracts/**/*_gen.go  — the authoritative home after migration
+//   - generated/contracts/**/*_gen.go  — the authoritative home for business contracts
 //   - tools/codegen/**/testdata/**     — codegen fixture files
 //   - **/fixtures/**                   — test fixture trees
-//   - kernel/contractspec/** itself    — defines ContractSpec (not instantiates it)
+//   - kernel/contractspec/** itself    — defines ContractSpec and the typed funnels
 //   - *_test.go                        — test helpers may reference specs for assertions
 //
+// AI-rebust: Hard — composite literal under cells/ + examples/ + runtime/
+// is unrepresentable (archtest fails CI); the typed funnels are the only
+// form that survives. Aligns with the "typed function call as Hard funnel
+// for unbounded operations" charter pattern (PANIC-REGISTERED-01 same path).
+//
 // ref: docs/plans/202605011500-029-master-roadmap.md K#PR4 W3 + G-04
+// ref: kernel/contractspec/spec.go construction-site catalog
 package archtest
 
 import (
@@ -34,25 +42,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// migrationAllowlistNoLiteral parallels migrationAllowlistCells. Must be empty
-// after W3.5.
-var migrationAllowlistNoLiteral = []string{}
-
-// permanentPathExceptionsLiteral lists file paths (relative to repo root, forward-slash)
-// that are permanently exempt from NO-MANUAL-CONTRACTSPEC-LITERAL-01.
-// W3.5 complete: all accesscore slices use generated NewHandler; auth flags
-// (Public/PasswordResetExempt) are declared in contract.yaml endpoints.http.auth
-// and emitted by contractgen handler.tmpl — no cells/ file needs a manual
-// contractspec.ContractSpec{} composite literal.
-var permanentPathExceptionsLiteral = []string{}
-
-// TestNO_MANUAL_CONTRACTSPEC_LITERAL_01 scans production .go files (excluding
-// generated/, testdata, fixtures, kernel/contractspec) for contractspec.ContractSpec{…}
-// composite literals and contractspec.EventSpec(…) call expressions, failing on any
-// found outside the migration allowlist.
+// TestNO_MANUAL_CONTRACTSPEC_LITERAL_01 scans production .go files under
+// cells/, examples/*/cells/, and runtime/ for contractspec.ContractSpec{…}
+// composite literals and contractspec.EventSpec(…) call expressions,
+// failing on any found. The typed funnels in kernel/contractspec/framework.go
+// are the only legitimate runtime-side construction paths.
 func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -62,12 +61,6 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 	for _, f := range files {
 		rel, _ := filepath.Rel(root, f)
 		rel = filepath.ToSlash(rel)
-		if isLiteralMigratingCell(rel) {
-			continue
-		}
-		if isPermanentExceptionLiteral(rel) {
-			continue
-		}
 		hits := scanForContractSpecLiterals(token.NewFileSet(), f, rel)
 		violations = append(violations, hits...)
 	}
@@ -78,46 +71,48 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 	}
 }
 
-// isLiteralMigratingCell returns true when rel belongs to an allowlisted cell.
-func isLiteralMigratingCell(rel string) bool {
-	for _, cell := range migrationAllowlistNoLiteral {
-		if strings.Contains(rel, "/"+cell+"/") || strings.HasSuffix(rel, "/"+cell) {
-			return true
-		}
-	}
-	return false
-}
-
-// isPermanentExceptionLiteral returns true when rel is in permanentPathExceptionsLiteral.
-// W3.5 complete: this list is empty; all cells/ files use generated contract packages.
-func isPermanentExceptionLiteral(rel string) bool {
-	for _, exception := range permanentPathExceptionsLiteral {
-		if rel == exception {
-			return true
-		}
-	}
-	return false
+// TestCONTRACTSPEC_FRAMEWORK_BUILDERS_EXIST_01 locks the typed funnel API.
+// If kernel/contractspec.NewFrameworkHTTP or NewEventDerivation are renamed
+// or removed, this test fails to compile — signaling that the Hard gate has
+// lost its only legitimate runtime-side construction path and must be
+// revisited (either redirect callers to a new funnel or update this archtest).
+func TestCONTRACTSPEC_FRAMEWORK_BUILDERS_EXIST_01(t *testing.T) {
+	t.Parallel()
+	_ = contractspec.NewFrameworkHTTP("http.framework.test.v1", "GET", "/test")
+	_ = contractspec.NewEventDerivation("event.test.v1", cellvocab.ContractEvent, "amqp", "test.topic")
 }
 
 // collectContractSpecScanFiles returns production .go files to scan.
-// Scope: cells (top-level cells/ + examples/*/cells/) only — runtime/ and
-// kernel/ own framework-internal ContractSpec usages that are intentional
-// and not subject to this migration gate. Cells discovered via
-// findCellProductionGoFiles (metadata-driven). *_gen.go files are excluded
-// here (gate is about hand-written cell code).
+// Scope: cells (top-level cells/ + examples/*/cells/) discovered via
+// findCellProductionGoFiles (metadata-driven), plus runtime/ via DirsScope
+// directory walk. kernel/contractspec itself owns the ContractSpec type
+// definition and the typed funnels (NewFrameworkHTTP / NewEventDerivation),
+// so it is intentionally outside this scope. *_gen.go files are excluded
+// from the unioned set.
 func collectContractSpecScanFiles(t *testing.T, root string) []string {
 	t.Helper()
-	files, err := findCellProductionGoFiles(root)
+	cellFiles, err := findCellProductionGoFiles(root)
 	if err != nil {
 		t.Fatalf("metadata.NewParser: %v", err)
 	}
-	filtered := files[:0]
-	for _, f := range files {
-		if !strings.HasSuffix(f, "_gen.go") {
-			filtered = append(filtered, f)
-		}
+	runtimeFiles, err := scanner.DirsScope(root, []string{"runtime"}).Files()
+	if err != nil {
+		t.Fatalf("scanner.DirsScope(runtime): %v", err)
 	}
-	return filtered
+	seen := make(map[string]struct{}, len(cellFiles)+len(runtimeFiles))
+	out := make([]string, 0, len(cellFiles)+len(runtimeFiles))
+	for _, f := range append(append([]string{}, cellFiles...), runtimeFiles...) {
+		if strings.HasSuffix(f, "_gen.go") {
+			continue
+		}
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture verifies that the

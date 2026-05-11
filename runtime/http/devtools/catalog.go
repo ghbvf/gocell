@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
@@ -21,19 +20,18 @@ import (
 // specCatalog is the framework-internal ContractSpec for the devtools catalog
 // endpoint. The "http.framework.devtools." prefix identifies it as
 // runtime-internal (no contract.yaml source), distinguishing it from
-// cell-owned routes.
+// cell-owned routes. Built via contractspec.NewFrameworkHTTP — the only
+// legitimate ContractSpec construction path under runtime/ per
+// NO-MANUAL-CONTRACTSPEC-LITERAL-01.
 //
 // Note: catalog responses use the Backstage Catalog Entity envelope at top
 // level (apiVersion/kind/metadata/spec). They do NOT wrap in {"data": ...}
 // per api-versioning.md — that envelope rule applies to cell-owned business
 // routes; framework-internal routes follow their own wire formats.
-var specCatalog = contractspec.ContractSpec{
-	ID:        "http.framework.devtools.catalog.v1",
-	Kind:      cellvocab.ContractHTTP,
-	Transport: "http",
-	Method:    "GET",
-	Path:      "/api/v1/devtools/catalog",
-}
+var specCatalog = contractspec.NewFrameworkHTTP(
+	"http.framework.devtools.catalog.v1",
+	"GET", "/api/v1/devtools/catalog",
+)
 
 // Handler serves the devtools catalog HTTP endpoint.
 type Handler struct {

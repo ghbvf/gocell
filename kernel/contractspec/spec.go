@@ -13,10 +13,18 @@ import (
 //   - runtime/eventbus / kernel/cell.Registry.Subscribe (event subscription)
 //   - tracing span attributes (gocell.contract.id / kind / transport)
 //
-// Cells MUST NOT construct ContractSpec literals. The only valid construction
-// site is generated/contracts/**/spec_gen.go (private `var spec`).
-// Subscription/route mounting goes through the generated NewSubscription /
-// NewHandler adapters in generated/contracts/**.
+// Cells MUST NOT construct ContractSpec literals. The valid construction
+// sites are:
+//   - generated/contracts/**/spec_gen.go (private `var spec`) — business contracts
+//   - kernel/contractspec.NewFrameworkHTTP — runtime-owned HTTP infra
+//     (health probes, devtools catalog); see framework.go
+//   - kernel/contractspec.NewEventDerivation — tracing/observability
+//     projections of already-validated event metadata; see framework.go
+//
+// Subscription / route mounting for business contracts goes through the
+// generated NewSubscription / NewHandler adapters in generated/contracts/**.
+// Composite literal under cells/, examples/*/cells/, and runtime/ is
+// forbidden by archtest NO-MANUAL-CONTRACTSPEC-LITERAL-01.
 //
 // Three archtest gates enforce this invariant:
 //   - CELLS-NO-CONTRACTSPEC-IMPORT-01
