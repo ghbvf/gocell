@@ -25,6 +25,7 @@ package archtest
 
 import (
 	"bytes"
+	"context"
 	"go/ast"
 	"go/parser"
 	"os"
@@ -33,6 +34,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
@@ -86,9 +88,15 @@ func TestArchtestVerifyCoverage01(t *testing.T) {
 // gosec G204 is suppressed: repoRoot is the go.mod-bearing ancestor of the
 // archtest test binary's working directory (findModuleRoot), not user
 // input. The path is fully controlled by the test runner.
+//
+// A 2-minute deadline guards against `go test -list` hanging on a broken
+// toolchain or build error — the surrounding archtest's own 5m -timeout
+// also catches it, but this gives a more targeted error message.
 func runVerifyArchtestDryRun(repoRoot string) (map[string]struct{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	//nolint:gosec // G204: repoRoot is the discovered go.mod ancestor (test-time, no user input)
-	cmd := exec.Command("bash", filepath.Join(repoRoot, "hack", "verify-archtest.sh"))
+	cmd := exec.CommandContext(ctx, "bash", filepath.Join(repoRoot, "hack", "verify-archtest.sh"))
 	cmd.Env = append(os.Environ(), "DRY_RUN=1")
 	cmd.Dir = repoRoot
 	var stdout, stderr bytes.Buffer

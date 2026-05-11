@@ -71,9 +71,9 @@ import (
 //	cmd/gocell/app/export.go writeOut  (gocell export {catalog|metadata} --out=<path>)
 //
 // tools/codegen/writer.go (codegen.Write) and tools/codegen/contractgen/generator.go
-// are expected to violate this rule in RED state — they use bare os.MkdirAll /
-// os.WriteFile today. GREEN phase will route them through pathsafe or add their
-// own exemption with justification.
+// were the RED-state targets at R5 inception. As of develop tip they both
+// route through pkg/pathsafe (GREEN state); this rule now enforces
+// no-regression on the funnel rather than tracking remaining offenders.
 func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 	t.Parallel()
 

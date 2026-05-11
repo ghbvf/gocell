@@ -91,9 +91,16 @@ run_shard() {
   echo "=== shard $shard/$SHARD_COUNT ($count tests) ==="
 
   if [ -n "$SLOWGATE_BIN" ] && [ -x "$SLOWGATE_BIN" ]; then
-    # CI path: pipe -json stream through slowgate for post-test budget gate.
+    # CI path: tee the -json stream to a per-shard file before piping
+    # through slowgate, mirroring _build-lint.yml's build-test pattern.
+    # Without tee, slowgate consumes the event stream and only its own
+    # threshold-summary survives in stderr — insufficient for arbitrary
+    # test panics / build errors / sub-test stack traces. The CI job's
+    # `if: failure()` artifact upload step exposes these files on failure.
     # set -o pipefail catches a go test failure even when slowgate exits 0.
+    local artifact_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
     go test -count=1 -timeout "$TIMEOUT" -json -run "^($pattern)$" "$ARCHTEST_PKG" \
+      | tee "${artifact_dir}/archtest-shard-${shard}.json" \
       | "$SLOWGATE_BIN" --threshold="$SLOWGATE_THRESHOLD" --allowlist="$SLOWGATE_ALLOWLIST"
   else
     # Local path: no slowgate binary, run plain.

@@ -310,6 +310,20 @@ jobs:
           SLOWGATE_ALLOWLIST: tools/slowgate/allowlist.txt
         run: bash hack/verify-archtest.sh
 
+      # Mirror the build-test failure-only artifact pattern: the script
+      # tees `go test -json` into $RUNNER_TEMP/archtest-shard-N.json before
+      # piping through slowgate, so this artifact captures full event
+      # stream (test panics, build errors, sub-test traces) for diagnosis
+      # without paying upload cost on the success path.
+      - name: Upload archtest-json artifact (failure only)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archtest-shard-${{ matrix.shard }}-json
+          path: ${{ runner.temp }}/archtest-shard-${{ matrix.shard }}.json
+          retention-days: 3
+          if-no-files-found: ignore
+
   integration-test:
     if: ${{ inputs.run-integration }}
     runs-on: ubuntu-latest

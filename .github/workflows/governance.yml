@@ -19,9 +19,11 @@ jobs:
     # `make verify` discovers and runs every hack/verify-*.sh gate. After the
     # archtest sharding rewrite (ADR 202605120000), verify-archtest.sh runs
     # 16 process-isolated Go test invocations serially within this job;
-    # observed wall ~45s on macOS/local, expected ~2-3m on GHA cold cache.
-    # 15 min covers worst-case cold module cache + runner contention.
-    timeout-minutes: 15
+    # observed wall ~45s on macOS/local, expected ~2-3m on GHA warm cache.
+    # 20 min covers worst-case cold module cache (no Pre-download step in
+    # this serial path), plus the other ~9 verify-*.sh gates running
+    # continue-on-failure (hack/make-rules/verify.sh accumulates failures).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
