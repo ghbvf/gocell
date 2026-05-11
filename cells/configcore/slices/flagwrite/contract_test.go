@@ -90,11 +90,14 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	// PUT is full replacement: schema must reject bodies missing any of the
 	// required fields. Catches any future drift that relaxes required
 	// constraints in request.schema.json.
-	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50}`))                               // missing description + expectedVersion
-	c.MustRejectRequest(t, []byte(`{"enabled":true,"description":"x"}`))                                    // missing rolloutPercentage + expectedVersion
-	c.MustRejectRequest(t, []byte(`{"rolloutPercentage":50,"description":"x","expectedVersion":1}`))        // missing enabled
-	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"x"}`))             // missing expectedVersion
-	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"x","expectedVersion":0}`)) // expectedVersion < 1
+	// missing description + expectedVersion
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50}`))
+	// missing rolloutPercentage + expectedVersion
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"description":"x"}`))
+	c.MustRejectRequest(t, []byte(`{"rolloutPercentage":50,"description":"x","expectedVersion":1}`)) // missing enabled
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"x"}`))      // missing expectedVersion
+	// expectedVersion < 1
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"x","expectedVersion":0}`))
 
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "upd-flag")
 	rec := httptest.NewRecorder()
@@ -137,7 +140,7 @@ func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 
 	c.ValidateRequest(t, []byte(`{"enabled":true,"expectedVersion":1}`))
 	c.MustRejectRequest(t, []byte(`{"enabled":true,"extra":"bad"}`))
-	c.MustRejectRequest(t, []byte(`{"enabled":true}`))                 // missing expectedVersion
+	c.MustRejectRequest(t, []byte(`{"enabled":true}`))                     // missing expectedVersion
 	c.MustRejectRequest(t, []byte(`{"enabled":true,"expectedVersion":0}`)) // expectedVersion < 1
 
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "tgl-flag")

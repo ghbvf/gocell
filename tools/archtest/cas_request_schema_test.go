@@ -10,20 +10,21 @@
 //
 // Two carrier shapes are recognized:
 //
-//   1. Body schema (POST/PUT/PATCH) — `request.schema.json`:
-//      properties.expectedVersion.type=integer, minimum=1, in required[].
+//  1. Body schema (POST/PUT/PATCH) — `request.schema.json`:
+//     properties.expectedVersion.type=integer, minimum=1, in required[].
 //
-//   2. Query param (DELETE — no body) — `contract.yaml`:
-//      endpoints.http.queryParams.expectedVersion.type=integer, required=true,
-//      minimum=1.
+//  2. Query param (DELETE — no body) — `contract.yaml`:
+//     endpoints.http.queryParams.expectedVersion.type=integer, required=true,
+//     minimum=1.
 //
 // Each contract MUST also declare a 409 response referencing the shared error
 // envelope (`contracts/shared/errors/error-response-v1.schema.json` via
 // schemaRef relative path) so client SDKs surface the conflict cleanly.
 //
 // ref: docs/plans/202605082145-034-pg-corecell-b-route-plan.md §4 S6 (archtest
-//      cross-validate, AI-Medium); backlog CONTRACT-SHARED-MIXIN-FUNNEL-01
-//      tracks the Hard upgrade to a shared schema mixin via JSON Schema $ref.
+//
+//	cross-validate, AI-Medium); backlog CONTRACT-SHARED-MIXIN-FUNNEL-01
+//	tracks the Hard upgrade to a shared schema mixin via JSON Schema $ref.
 package archtest
 
 import (
@@ -83,7 +84,7 @@ func TestCASContractExpectedVersionSchema(t *testing.T) {
 func assertExpectedVersionInBodySchema(t *testing.T, root, contractDir string) {
 	t.Helper()
 	path := filepath.Join(root, contractDir, "request.schema.json")
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: archtest reads fixed contract paths
 	require.NoError(t, err, "CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: missing %s", path)
 
 	var schema struct {
@@ -121,7 +122,7 @@ func assertExpectedVersionInBodySchema(t *testing.T, root, contractDir string) {
 func assertExpectedVersionInQueryParams(t *testing.T, root, contractDir string) {
 	t.Helper()
 	path := filepath.Join(root, contractDir, "contract.yaml")
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: archtest reads fixed contract paths
 	require.NoError(t, err, "CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: missing %s", path)
 
 	var doc struct {
@@ -157,7 +158,7 @@ func assertExpectedVersionInQueryParams(t *testing.T, root, contractDir string) 
 func assert409ResponseDeclared(t *testing.T, root, contractDir string) {
 	t.Helper()
 	path := filepath.Join(root, contractDir, "contract.yaml")
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: archtest reads fixed contract paths
 	require.NoError(t, err, "CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: missing %s", path)
 
 	// Status codes live as mapping keys under endpoints.http.responses (the
