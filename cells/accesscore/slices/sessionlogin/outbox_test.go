@@ -96,9 +96,9 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 }
 
 func TestService_WithEmitter(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	ow := &stubOutboxWriter{}
-	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
+	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(&stubTxRunner{}),
@@ -115,9 +115,9 @@ func TestService_WithEmitter(t *testing.T) {
 }
 
 func TestService_WithTxManager(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	tx := &stubTxRunner{}
-	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
+	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -149,9 +149,9 @@ func (r *trackingOutboxSessionRepo) Delete(ctx context.Context, id string) error
 // no explicit cleanupIssuedSession call is made. The tx rollback handles
 // atomicity; explicit cleanup would double-delete in a real durable setup.
 func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
 	// stubTxRunner is NOT a Nooper — isNoopTx(tx) returns false.
@@ -178,9 +178,9 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 // cleanupIssuedSession IS called to compensate the already-written session.
 // This is the mirror case of the durable-tx test above.
 func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
 	// noopTxRunner implements cell.Nooper (Noop()==true) → isNoopTx returns true,

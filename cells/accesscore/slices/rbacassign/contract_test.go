@@ -17,21 +17,32 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func newContractHandler(t *testing.T) http.Handler {
 	t.Helper()
-	roleRepo := mem.NewRoleRepository()
-	roleRepo.SeedRole(&domain.Role{
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(&domain.Role{
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	})
-	_, _ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
-	_, _ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
+	// Seed two effective admins so the contract revoke test passes the
+	// effective-admin guard.
+	for _, uid := range []string{"usr-seed", "usr-other-admin"} {
+		require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
+			ID:       uid,
+			Username: uid,
+			Email:    uid + "@test.local",
+			Status:   domain.StatusActive,
+		}))
+		_, err := store.RoleRepository().AssignToUser(context.Background(), uid, "admin")
+		require.NoError(t, err)
+	}
 
-	svc := mustNewService(t, roleRepo, testutil.RealSessionRepo(t), slog.Default())
+	svc := mustNewService(t, store.RoleRepository(), testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {

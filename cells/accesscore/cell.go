@@ -186,12 +186,18 @@ func WithClock(clk clock.Clock) Option {
 // and testing. Not suitable for production use.
 // sessionRepo and refreshStore construction are deferred to Init() so that
 // c.clk is available.
+//
+// S4.0: userRepo and roleRepo are vended from a single mem.Store so the
+// effective-admin invariant (cross-repo: user.Status + role_assignments)
+// can be checked atomically under the shared mutex. Two independent Stores
+// would silently lose this property.
 func WithInMemoryDefaults() Option {
 	return func(c *AccessCore) {
-		c.userRepo = mem.NewUserRepository(c.clk)
+		store := mem.NewStore(c.clk)
+		c.userRepo = store.UserRepository()
 		// sessionRepo construction is deferred to Init() so that c.clk is
 		// available for mem.NewSessionRepository.
-		c.roleRepo = mem.NewRoleRepository()
+		c.roleRepo = store.RoleRepository()
 		c.useInMemoryDefaults = true
 	}
 }

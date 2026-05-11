@@ -15,7 +15,7 @@ import (
 
 func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	ctx := context.Background()
-	repo := NewUserRepository(clock.Real())
+	repo := NewStore(clock.Real()).UserRepository()
 
 	user, err := domain.NewUser("testuser", "test@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 
 func TestUserRepo_UpdatePassword_Match(t *testing.T) {
 	ctx := context.Background()
-	repo := NewUserRepository(clock.Real())
+	repo := NewStore(clock.Real()).UserRepository()
 
 	user, err := domain.NewUser("alice", "alice@example.com", "$2a$12$oldhash", time.Now())
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func TestUserRepo_UpdatePassword_Match(t *testing.T) {
 
 func TestUserRepo_UpdatePassword_VersionMismatch(t *testing.T) {
 	ctx := context.Background()
-	repo := NewUserRepository(clock.Real())
+	repo := NewStore(clock.Real()).UserRepository()
 
 	user, err := domain.NewUser("bob", "bob@example.com", "$2a$12$oldhash", time.Now())
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestUserRepo_UpdatePassword_VersionMismatch(t *testing.T) {
 
 func TestUserRepo_UpdatePassword_NotFound(t *testing.T) {
 	ctx := context.Background()
-	repo := NewUserRepository(clock.Real())
+	repo := NewStore(clock.Real()).UserRepository()
 
 	_, err := repo.UpdatePassword(ctx, "usr-nonexistent", "$2a$12$newhash", false, 0)
 	require.Error(t, err)
@@ -106,7 +106,7 @@ func TestUserRepo_UpdatePassword_NotFound(t *testing.T) {
 
 func TestUserRepo_UpdatePassword_ResetRequiredFlag(t *testing.T) {
 	ctx := context.Background()
-	repo := NewUserRepository(clock.Real())
+	repo := NewStore(clock.Real()).UserRepository()
 
 	user, err := domain.NewUser("carol", "carol@example.com", "$2a$12$oldhash", time.Now())
 	require.NoError(t, err)

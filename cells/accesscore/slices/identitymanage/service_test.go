@@ -51,7 +51,8 @@ var _ persistence.TxRunner = simpleTxRunner{}
 
 func newTestService(t testing.TB) *Service {
 	t.Helper()
-	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 	if err != nil {
 		panic("newTestService: " + err.Error())
@@ -63,7 +64,8 @@ func newTestService(t testing.TB) *Service {
 // errcode.ErrValidationFailed when WithTxManager is omitted (nil TxRunner).
 // Symmetric with the other 10 outbox-bound services per OUTBOX-SERVICE-01.
 func TestNewService_TxRunnerRequired(t *testing.T) {
-	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()) /* no WithTxManager */)
 	require.Error(t, err)
 	assert.Nil(t, svc)
@@ -77,7 +79,8 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 // error when WithTokenIssuer is omitted or nil, enforcing fail-fast wiring.
 func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	t.Run("no WithTokenIssuer option", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		userRepo := mem.NewStore(clock.Real()).UserRepository()
+		svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 			WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 		require.Error(t, err, "NewService without WithTokenIssuer must fail")
 		assert.Nil(t, svc)
@@ -87,7 +90,8 @@ func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	})
 
 	t.Run("WithTokenIssuer(nil)", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		userRepo := mem.NewStore(clock.Real()).UserRepository()
+		svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 			WithTokenIssuer(nil), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 		require.Error(t, err, "NewService with nil tokenIssuer must fail")
 		assert.Nil(t, svc)
@@ -143,7 +147,8 @@ func TestService_LockUnlock(t *testing.T) {
 
 func TestService_Lock_RevokesSession(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
-	svc, err := NewService(mem.NewUserRepository(clock.Real()), sessionRepo, newIdentityRefreshStore(), slog.Default(),
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	svc, err := NewService(userRepo, sessionRepo, newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 	require.NoError(t, err)
 
@@ -184,8 +189,13 @@ func TestService_Delete(t *testing.T) {
 
 func newLastAdminProtectedService(t testing.TB) (*Service, *mem.UserRepository, *mem.RoleRepository) {
 	t.Helper()
-	userRepo := mem.NewUserRepository(clock.Real())
-	roleRepo := mem.NewRoleRepository()
+	// Shared store so user.Status and role assignments are atomically visible
+	// to the effective-admin counter (S4.0). Two separate Stores would silently
+	// break the invariant: CountEffectiveAdmins would see role rows but no
+	// user records and always return 0.
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{
 		ID:   auth.RoleAdmin,
 		Name: auth.RoleAdmin,
@@ -333,7 +343,7 @@ func TestService_Update_PatchSemantics(t *testing.T) {
 
 func newServiceWithIssuer(t testing.TB, issuer TokenIssuer) (*Service, *mem.UserRepository) {
 	t.Helper()
-	repo := mem.NewUserRepository(clock.Real())
+	repo := mem.NewStore(clock.Real()).UserRepository()
 	effectiveIssuer := issuer
 	if effectiveIssuer == nil {
 		effectiveIssuer = minimalStubIssuer
@@ -458,7 +468,7 @@ func TestService_ChangePassword_IssuerError(t *testing.T) {
 // are revoked so a stolen refresh token cannot keep minting new access tokens.
 // The freshly issued replacement pair is not itself revoked.
 func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
 	svc, err := NewService(userRepo, sessionRepo, newIdentityRefreshStore(), slog.Default(),
@@ -537,7 +547,7 @@ func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Cont
 // and leave the password mutated even after fn error — which is the exact
 // PG-mode failure mode this test exists to forbid.
 func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionRepo := &revokeFailingSessionRepo{
 		SessionRepository: testutil.RealSessionRepo(t),
 		err:               errors.New("transient DB error"),
@@ -619,7 +629,7 @@ func TestChangePassword_OldPasswordCorrect_BumpsVersion(t *testing.T) {
 // password_version is rejected with ErrVersionConflict (HTTP 409).
 func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
-	repo := mem.NewUserRepository(clock.Real())
+	repo := mem.NewStore(clock.Real()).UserRepository()
 
 	// Create the user with a known bcrypt hash.
 	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
@@ -663,7 +673,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
 	require.NoError(t, err)
 
-	repo := mem.NewUserRepository(clock.Real())
+	repo := mem.NewStore(clock.Real()).UserRepository()
 	user, err := domain.NewUser("cas-race", "cas-race@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-cas-race"
@@ -817,7 +827,7 @@ func (f failingPublisher) Close(_ context.Context) error                       {
 // error — covering the else-branch warn log introduced when the direct publish
 // path was wrapped in a v1 envelope (P1-14 follow-up).
 func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
 	fp := failingPublisher{err: errors.New("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
@@ -901,7 +911,7 @@ func (r *failingUpdateRepo) Update(_ context.Context, _ *domain.User) error {
 func newAtomicitySvc(t *testing.T) (*Service, *observingUserRepo, *recordingTxRunner) {
 	t.Helper()
 	runner := &recordingTxRunner{}
-	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(clock.Real()), runner: runner}
+	repo := &observingUserRepo{UserRepository: mem.NewStore(clock.Real()).UserRepository(), runner: runner}
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
@@ -993,7 +1003,7 @@ func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 // success log line from running. The error must wrap "identity-manage:
 // unlock:" so the call site is identifiable.
 func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
-	innerRepo := mem.NewUserRepository(clock.Real())
+	innerRepo := mem.NewStore(clock.Real()).UserRepository()
 	user, err := domain.NewUser("rb", "rb@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-rb"
@@ -1022,7 +1032,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 // (audit S-4).
 func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 	runner := &recordingTxRunner{}
-	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(clock.Real()), runner: runner}
+	repo := &observingUserRepo{UserRepository: mem.NewStore(clock.Real()).UserRepository(), runner: runner}
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
@@ -1054,7 +1064,7 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 // twin of TestService_Create_BlankUsername_RejectsBeforeRepoCreate.
 func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 	runner := &recordingTxRunner{}
-	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(clock.Real()), runner: runner}
+	repo := &observingUserRepo{UserRepository: mem.NewStore(clock.Real()).UserRepository(), runner: runner}
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
@@ -1089,7 +1099,7 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 // ErrAuthInvalidInput.
 func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.T) {
 	runner := &recordingTxRunner{}
-	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(clock.Real()), runner: runner}
+	repo := &observingUserRepo{UserRepository: mem.NewStore(clock.Real()).UserRepository(), runner: runner}
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
@@ -1181,7 +1191,7 @@ func (s *failingRefreshStore) RevokeUser(_ context.Context, _ string) error {
 // "user.locked" event for a still-unrevoked refresh chain), and the success
 // log line does not fire (would mislead operators).
 func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	domainUser, err := domain.NewUser("rf-fail", "rf@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	domainUser.ID = "usr-rf-fail"
@@ -1235,7 +1245,8 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 	require.NoError(t, err)
 
 	cap := &capturingEmitter{}
-	svc2, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	emitUserRepo := mem.NewStore(clock.Real()).UserRepository()
+	svc2, err := NewService(emitUserRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 	require.NoError(t, err)
 	// Create user in svc2's own repo.
@@ -1260,7 +1271,7 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Update_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 	require.NoError(t, err)
 
@@ -1285,7 +1296,7 @@ func TestService_Update_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 	require.NoError(t, err)
 
@@ -1308,7 +1319,7 @@ func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
 	require.NoError(t, err)
 
@@ -1350,7 +1361,7 @@ func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
 // the last step inside the tx, so a missing log line is the operator-visible
 // signal that the lock was not durably announced.
 func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	domainUser, err := domain.NewUser("pub-fail", "pub@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	domainUser.ID = "usr-pub-fail"

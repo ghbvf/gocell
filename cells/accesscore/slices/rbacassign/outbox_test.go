@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -56,10 +57,12 @@ func (r *trackingSessionRepo) RevokeByUserID(ctx context.Context, userID string)
 }
 
 // newDurableTestService creates a Service with emitter + txRunner injected (durable mode).
-func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *mem.RoleRepository, *trackingSessionRepo) {
+// Returns the shared mem.Store so callers can seed active users for effective-admin
+// invariant tests (S4.0).
+func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *mem.Store, *trackingSessionRepo) {
 	t.Helper()
-	roleRepo := mem.NewRoleRepository()
-	roleRepo.SeedRole(&domain.Role{
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(&domain.Role{
 		ID:   "admin",
 		Name: "admin",
 		Permissions: []domain.Permission{
@@ -67,11 +70,11 @@ func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner)
 		},
 	})
 	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	svc := mustNewService(t, roleRepo, sessionRepo, slog.Default(),
+	svc := mustNewService(t, store.RoleRepository(), sessionRepo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(tx),
 	)
-	return svc, roleRepo, sessionRepo
+	return svc, store, sessionRepo
 }
 
 // TestService_Assign_Durable_WritesOutboxAtomically asserts that Assign in durable
@@ -109,11 +112,11 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, store, sessionRepo := newDurableTestService(t, ow, tx)
 
-	// Need two admins so last-admin guard passes.
-	_, _ = roleRepo.AssignToUser(context.Background(), "alice", "admin")
-	_, _ = roleRepo.AssignToUser(context.Background(), "bob", "admin")
+	// Need two effective (active) admins so the effective-admin guard passes.
+	assignActiveAdmin(t, store, "alice")
+	assignActiveAdmin(t, store, "bob")
 
 	err := svc.Revoke(context.Background(), "alice", "admin")
 	require.NoError(t, err)
@@ -157,13 +160,16 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 func TestService_Durable_DoesNotCallSessionRepoDirectly(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, store, sessionRepo := newDurableTestService(t, ow, tx)
 
-	// Assign.
+	// Seed u1 as an effective admin (active + admin role) so Assign re-assigns
+	// the existing holder idempotently and Revoke later has a real role row.
+	assignActiveAdmin(t, store, "u1")
+	// Idempotent re-assign for the Assign step (no-op since u1 already holds admin).
 	require.NoError(t, svc.Assign(context.Background(), "u1", "admin"))
 
-	// Revoke — needs two admins to pass last-admin guard.
-	_, _ = roleRepo.AssignToUser(context.Background(), "u2", "admin")
+	// Revoke — needs a second effective admin to pass the guard.
+	assignActiveAdmin(t, store, "u2")
 	require.NoError(t, svc.Revoke(context.Background(), "u1", "admin"))
 
 	assert.Equal(t, 0, sessionRepo.revokeCalls,
@@ -196,11 +202,13 @@ func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
 func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
+	svc, store, sessionRepo := newDurableTestService(t, ow, tx)
 
-	// Seed two other holders so the last-admin guard does not short-circuit.
-	_, _ = roleRepo.AssignToUser(context.Background(), "bob", "admin")
-	_, _ = roleRepo.AssignToUser(context.Background(), "carol", "admin")
+	// Seed two effective admin holders so the no-op revoke path is exercised
+	// without falsely tripping the last-admin guard (alice does not hold
+	// admin and the user record need not exist for a no-op revoke).
+	assignActiveAdmin(t, store, "bob")
+	assignActiveAdmin(t, store, "carol")
 
 	require.NoError(t, svc.Revoke(context.Background(), "alice", "admin"))
 	assert.Empty(t, ow.entries, "revoke of non-member must not publish any event")
@@ -211,7 +219,7 @@ func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 // TestService_Assign_Demo_RepeatIsNoop mirrors the durable no-op test for
 // demo/synchronous dual-write mode: repeat assign must NOT call sessionRepo.Revoke.
 func TestService_Assign_Demo_RepeatIsNoop(t *testing.T) {
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID:   "admin",
 		Name: "admin",

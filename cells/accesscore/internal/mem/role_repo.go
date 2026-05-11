@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -15,48 +14,43 @@ import (
 
 var _ ports.RoleRepository = (*RoleRepository)(nil)
 
-// RoleRepository is an in-memory implementation of ports.RoleRepository.
+// RoleRepository is the in-memory implementation of ports.RoleRepository.
+// It is always vended by Store.RoleRepository() so the shared mutex covers
+// any cross-repo invariant — most importantly, CountEffectiveAdmins and the
+// admin branch of RemoveFromUserIfNotLast read user.Status atomically with
+// the role_assignments state, mirroring the PG advisory-lock + FOR UPDATE
+// guarantees in role_repo.go.
 type RoleRepository struct {
-	mu        sync.RWMutex
-	roles     map[string]*domain.Role        // roleID -> role
-	userRoles map[string]map[string]struct{} // userID -> set of roleIDs
-}
-
-// NewRoleRepository creates an empty in-memory RoleRepository.
-func NewRoleRepository() *RoleRepository {
-	return &RoleRepository{
-		roles:     make(map[string]*domain.Role),
-		userRoles: make(map[string]map[string]struct{}),
-	}
+	store *Store
 }
 
 // SeedRole adds a role for testing purposes.
 func (r *RoleRepository) SeedRole(role *domain.Role) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
 	clone := *role
 	clone.Permissions = make([]domain.Permission, len(role.Permissions))
 	copy(clone.Permissions, role.Permissions)
-	r.roles[role.ID] = &clone
+	r.store.roles[role.ID] = &clone
 }
 
 // Create persists a new role. Idempotent: if a role with the same ID already
 // exists, it is silently overwritten (upsert semantics for seed/bootstrap).
 func (r *RoleRepository) Create(_ context.Context, role *domain.Role) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
 	clone := *role
 	clone.Permissions = make([]domain.Permission, len(role.Permissions))
 	copy(clone.Permissions, role.Permissions)
-	r.roles[role.ID] = &clone
+	r.store.roles[role.ID] = &clone
 	return nil
 }
 
 func (r *RoleRepository) GetByID(_ context.Context, id string) (*domain.Role, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.store.mu.RLock()
+	defer r.store.mu.RUnlock()
 
-	role, ok := r.roles[id]
+	role, ok := r.store.roles[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
 			errcode.WithCategory(errcode.CategoryDomain),
@@ -67,17 +61,17 @@ func (r *RoleRepository) GetByID(_ context.Context, id string) (*domain.Role, er
 }
 
 func (r *RoleRepository) GetByUserID(_ context.Context, userID string) ([]*domain.Role, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.store.mu.RLock()
+	defer r.store.mu.RUnlock()
 
-	roleIDs, ok := r.userRoles[userID]
+	roleIDs, ok := r.store.userRoles[userID]
 	if !ok {
 		return []*domain.Role{}, nil
 	}
 
 	var result []*domain.Role
 	for rid := range roleIDs {
-		if role, ok := r.roles[rid]; ok {
+		if role, ok := r.store.roles[rid]; ok {
 			clone := *role
 			result = append(result, &clone)
 		}
@@ -86,76 +80,72 @@ func (r *RoleRepository) GetByUserID(_ context.Context, userID string) ([]*domai
 }
 
 func (r *RoleRepository) AssignToUser(_ context.Context, userID, roleID string) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
 
-	if _, ok := r.roles[roleID]; !ok {
+	if _, ok := r.store.roles[roleID]; !ok {
 		return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("role_id=%s", roleID)))
 	}
 
-	if r.userRoles[userID] == nil {
-		r.userRoles[userID] = make(map[string]struct{})
+	if r.store.userRoles[userID] == nil {
+		r.store.userRoles[userID] = make(map[string]struct{})
 	}
-	if _, already := r.userRoles[userID][roleID]; already {
+	if _, already := r.store.userRoles[userID][roleID]; already {
 		return false, nil
 	}
-	r.userRoles[userID][roleID] = struct{}{}
+	r.store.userRoles[userID][roleID] = struct{}{}
 	return true, nil
 }
 
 func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
 
-	if roles, ok := r.userRoles[userID]; ok {
+	if roles, ok := r.store.userRoles[userID]; ok {
 		delete(roles, roleID)
 	}
 	return nil
 }
 
-// RemoveFromUserIfNotLast atomically removes the role from the user only if
-// at least one other holder will remain. Holds the write lock for both the
-// count check and the removal to eliminate TOCTOU races.
+// RemoveFromUserIfNotLast atomically removes the admin role from a user only
+// when at least one OTHER effective admin (status='active' AND admin role)
+// remains. Non-admin roles are removed unconditionally (matches the
+// migration-024 trigger scope `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
+// Holds the store write lock for both the count and the removal so the check
+// is TOCTOU-free across users + role_assignments — mirrors the PG
+// FOR UPDATE OF u serialization (S4.0).
 func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
 
 	// Check if user actually holds the role.
 	userHoldsRole := false
-	if roles, ok := r.userRoles[userID]; ok {
+	if roles, ok := r.store.userRoles[userID]; ok {
 		_, userHoldsRole = roles[roleID]
 	}
-
-	// Revoking a role the user does not hold is an idempotent no-op — return
-	// changed=false so the caller does not publish a role-change fact.
 	if !userHoldsRole {
+		// Revoking a role the user does not hold is an idempotent no-op —
+		// changed=false so the caller does not publish a role-change fact.
 		return false, nil
 	}
 
-	// Last-holder protection is admin-scoped (ADR-admin-invariant §3.2 +
-	// migration 019:50 trigger condition `OLD.role_id = 'admin'`). For
-	// non-admin roles, allow revocation down to zero holders.
 	if roleID == auth.RoleAdmin {
-		count := 0
-		for _, roleIDs := range r.userRoles {
-			if _, ok := roleIDs[roleID]; ok {
-				count++
-			}
-		}
-		if count == 1 {
-			// Same business invariant as the DB last_admin_protected trigger:
-			// refuse removal of the sole admin. Both app-level (this branch)
-			// and DB-trigger paths return ErrAuthLastAdminProtected so
-			// client-side handlers match a single errcode.
+		// Effective admin = status=active AND has admin role. Count peers
+		// EXCLUDING userID so the check answers "does at least one OTHER
+		// effective admin remain after this revoke?".
+		if r.countOtherEffectiveAdminsLocked(userID) == 0 {
+			// Removing this admin would leave zero effective admins. Same
+			// errcode as the PG CTE detect path and migration-024 trigger
+			// path so client handlers match a single business invariant.
 			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
-				"cannot revoke admin: this is the only admin; assign the admin role to another user first",
+				"cannot revoke admin: removing this assignment would leave the system with no effective admin; assign admin to an active user first",
 				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
 		}
 	}
 
-	delete(r.userRoles[userID], roleID)
+	delete(r.store.userRoles[userID], roleID)
 	return true, nil
 }
 
@@ -172,16 +162,16 @@ func (r *RoleRepository) ListByUserID(_ context.Context, userID string, params q
 }
 
 func (r *RoleRepository) rolesByUserSnapshot(userID string) []*domain.Role {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	roleIDs, ok := r.userRoles[userID]
+	r.store.mu.RLock()
+	defer r.store.mu.RUnlock()
+	roleIDs, ok := r.store.userRoles[userID]
 	if !ok {
 		return []*domain.Role{}
 	}
 
 	roles := make([]*domain.Role, 0, len(roleIDs))
 	for rid := range roleIDs {
-		if role, ok := r.roles[rid]; ok {
+		if role, ok := r.store.roles[rid]; ok {
 			clone := *role
 			clone.Permissions = make([]domain.Permission, len(role.Permissions))
 			copy(clone.Permissions, role.Permissions)
@@ -213,16 +203,71 @@ func roleFieldValue(r *domain.Role, field string) any {
 	}
 }
 
-// CountByRole returns the number of users assigned to the given role.
+// CountByRole returns the total count of role_assignments for roleID,
+// regardless of user status. Used for bootstrap idempotency
+// (adminprovision); MUST NOT be used as the last-admin invariant counter —
+// see CountEffectiveAdmins.
 func (r *RoleRepository) CountByRole(_ context.Context, roleID string) (int, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+	r.store.mu.RLock()
+	defer r.store.mu.RUnlock()
 	count := 0
-	for _, roleIDs := range r.userRoles {
+	for _, roleIDs := range r.store.userRoles {
 		if _, ok := roleIDs[roleID]; ok {
 			count++
 		}
 	}
 	return count, nil
+}
+
+// CountEffectiveAdmins returns the number of users that are simultaneously
+// status='active' AND hold the admin role. Satisfies the domain.
+// EffectiveAdminCounter sealed interface (S4.0 invariant counter).
+//
+// Held under the shared store RLock so the user.status read and the
+// role_assignments read are atomic — mirrors PG's advisory xact lock +
+// FOR UPDATE OF u serialization.
+func (r *RoleRepository) CountEffectiveAdmins(_ context.Context) (int, error) {
+	r.store.mu.RLock()
+	defer r.store.mu.RUnlock()
+	count := 0
+	for userID, roleIDs := range r.store.userRoles {
+		if _, hasAdmin := roleIDs[auth.RoleAdmin]; !hasAdmin {
+			continue
+		}
+		u, ok := r.store.usersByID[userID]
+		if !ok {
+			// Role assignment refers to a user that no longer exists; in
+			// production this is prevented by FK ON DELETE CASCADE in
+			// migration 019. Treat as not-effective to be conservative.
+			continue
+		}
+		if u.Status == domain.StatusActive {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// countOtherEffectiveAdminsLocked is the internal helper used by
+// RemoveFromUserIfNotLast. It counts effective admins (status='active' AND
+// admin role) EXCLUDING excludeUserID. Caller MUST already hold store.mu
+// (write or read).
+func (r *RoleRepository) countOtherEffectiveAdminsLocked(excludeUserID string) int {
+	count := 0
+	for userID, roleIDs := range r.store.userRoles {
+		if userID == excludeUserID {
+			continue
+		}
+		if _, hasAdmin := roleIDs[auth.RoleAdmin]; !hasAdmin {
+			continue
+		}
+		u, ok := r.store.usersByID[userID]
+		if !ok {
+			continue
+		}
+		if u.Status == domain.StatusActive {
+			count++
+		}
+	}
+	return count
 }

@@ -164,9 +164,13 @@ func NewService(
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"identity-manage: last-admin protection requires a role repository")
 		}
-		guard, guardErr := domain.NewLastAdminGuard(func(ctx context.Context) (int, error) {
-			return s.lastAdminRoleRepo.CountByRole(ctx, auth.RoleAdmin)
-		})
+		// S4.0: the guard counts *effective* admins (status='active' AND admin
+		// role). RoleRepository.CountEffectiveAdmins is the canonical counter;
+		// the sealed EffectiveAdminCounter interface prevents accidentally
+		// wiring CountByRole (which counts locked/suspended holders too —
+		// correct for bootstrap idempotency, wrong for the at-least-one
+		// invariant).
+		guard, guardErr := domain.NewLastAdminGuard(s.lastAdminRoleRepo)
 		if guardErr != nil {
 			return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
 		}
@@ -287,27 +291,48 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		return nil, err
 	}
 
+	user, err := s.applyUserUpdate(ctx, input, actor)
+	if err != nil {
+		return nil, err
+	}
+	s.logger.Info("user updated", slog.String("user_id", user.ID))
+	return user, nil
+}
+
+// applyUserUpdate runs the transactional body of Update: fetch, optionally
+// guard a status-demotion, apply patch fields, persist, and publish. Split
+// out to keep Update's cognitive complexity within the CLAUDE.md ≤15 budget
+// once the S4.0 effective-admin guard was added.
+func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor string) (*domain.User, error) {
 	var user *domain.User
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		u, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
+		if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
+			return err
+		}
 		applyUpdateFields(u, input, s.clock.Now())
 		if err := s.repo.Update(txCtx, u); err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
 		user = u
-		if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor}); err != nil {
-			return err
-		}
-		return nil
+		return s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor})
 	}); err != nil {
 		return nil, err
 	}
-
-	s.logger.Info("user updated", slog.String("user_id", user.ID))
 	return user, nil
+}
+
+// guardUpdateStatusDemotion enforces the effective-admin invariant when an
+// Update would demote an active admin to suspended/locked. Returning a
+// precise 403 here avoids falling through to the DB trigger's P0001 (500).
+func (s *Service) guardUpdateStatusDemotion(ctx context.Context, u *domain.User, input UpdateInput) error {
+	if input.Status == nil || u.Status != domain.StatusActive || *input.Status == string(domain.StatusActive) {
+		return nil
+	}
+	return s.checkLastAdminRemoval(ctx, u.ID, u.Status)
 }
 
 // applyUpdateFields applies JSON-merge-patch semantics in-place on u: every
@@ -359,7 +384,16 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 
 func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor string) error {
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.checkLastAdminRemoval(txCtx, id); err != nil {
+		// S4.0: fetch the user so the effective-admin guard can use the real
+		// status (active vs locked/suspended). Pre-S4.0 the guard didn't need
+		// the user record because hasAdminRole was sufficient, but the
+		// effective-admin semantics make locked admins removable without the
+		// invariant being touched, so we need status to short-circuit.
+		user, err := s.repo.GetByID(txCtx, id)
+		if err != nil {
+			return fmt.Errorf("identity-manage: delete: %w", err)
+		}
+		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
 			return err
 		}
 		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
@@ -412,7 +446,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		if err := s.checkLastAdminRemoval(txCtx, user.ID); err != nil {
+		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
 			return err
 		}
 		user.LockAccount(s.clock.Now())
@@ -437,7 +471,20 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 	})
 }
 
-func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string) error {
+// checkLastAdminRemoval invokes the effective-admin guard for a mutation that
+// would remove userID (delete, lock, or status change away from 'active').
+//
+// userStatus is the user's current Status — required so the guard can short-
+// circuit when the user is already not an effective admin (locked/suspended
+// users do not contribute to the invariant). Callers that already fetched the
+// user pass user.Status; callers that bypass the fetch (only the Update path,
+// which fetches inside applyUpdateFields) re-fetch via GetByID.
+//
+// S4.0 upgrade: the guard counts effective admins (status='active' AND admin
+// role) via lastAdminRoleRepo.CountEffectiveAdmins. The "hasAdminRole" leg is
+// kept as a fast pre-check so we do not query CountEffectiveAdmins for users
+// that don't hold admin at all.
+func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, userStatus domain.UserStatus) error {
 	if s.lastAdminGuard == nil {
 		return nil
 	}
@@ -452,7 +499,10 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string) erro
 			break
 		}
 	}
-	if err := s.lastAdminGuard.CheckRemove(ctx, userID, hasAdminRole); err != nil {
+	// Effective admin = active + admin role. Locked/suspended admins are not
+	// counted by the invariant and may be freely removed.
+	userIsActiveAdmin := hasAdminRole && userStatus == domain.StatusActive
+	if err := s.lastAdminGuard.CheckRemove(ctx, userID, userIsActiveAdmin); err != nil {
 		return fmt.Errorf("identity-manage: last-admin: %w", err)
 	}
 	return nil

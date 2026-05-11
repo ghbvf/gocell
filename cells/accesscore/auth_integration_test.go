@@ -112,8 +112,8 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		o(&cfg)
 	}
 
-	userRepo := mem.NewUserRepository(clock.Real())
-	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
 
 	// Pre-fill alice as admin via direct repo seeding (no bootstrap flow).
@@ -306,7 +306,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	ctx := context.Background()
 
 	// Shared repos (simulates cell's single repo wiring).
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
 
 	// Seed "member" role.

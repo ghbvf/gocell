@@ -10,10 +10,11 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 func newTestService() (*Service, *mem.RoleRepository) {
-	repo := mem.NewRoleRepository()
+	repo := mem.NewStore(clock.Real()).RoleRepository()
 	return NewService(repo, slog.Default()), repo
 }
 

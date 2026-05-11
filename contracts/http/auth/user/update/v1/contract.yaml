@@ -26,7 +26,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks admin role"
+        description: "Forbidden — authenticated but lacks admin role, OR ERR_AUTH_LAST_ADMIN_PROTECTED when updating this user's status away from 'active' would leave the system with no effective admin (status='active' AND admin role) [S4.0]"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — user with given id does not exist"

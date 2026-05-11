@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
@@ -24,7 +25,7 @@ import (
 // routes (/api/v1/access/roles/...) so the contract test covers the complete
 // routing chain, not just the relative handler paths.
 func newContractRBACHandler() http.Handler {
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{

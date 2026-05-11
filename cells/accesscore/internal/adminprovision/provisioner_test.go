@@ -67,10 +67,22 @@ func TestNewProvisioner_NilDeps_ReturnsErrcode(t *testing.T) {
 		log  *slog.Logger
 		id   adminprovision.UUIDGenerator
 	}{
-		{name: "nil user repo", user: nil, role: mem.NewRoleRepository(), log: discardLogger(), id: fixedUUID("x")},
-		{name: "nil role repo", user: mem.NewUserRepository(clock.Real()), role: nil, log: discardLogger(), id: fixedUUID("x")},
-		{name: "nil logger", user: mem.NewUserRepository(clock.Real()), role: mem.NewRoleRepository(), log: nil, id: fixedUUID("x")},
-		{name: "nil uuid gen", user: mem.NewUserRepository(clock.Real()), role: mem.NewRoleRepository(), log: discardLogger(), id: nil},
+		{
+			name: "nil user repo", user: nil, role: mem.NewStore(clock.Real()).RoleRepository(),
+			log: discardLogger(), id: fixedUUID("x"),
+		},
+		{
+			name: "nil role repo", user: mem.NewStore(clock.Real()).UserRepository(), role: nil,
+			log: discardLogger(), id: fixedUUID("x"),
+		},
+		{
+			name: "nil logger", user: mem.NewStore(clock.Real()).UserRepository(),
+			role: mem.NewStore(clock.Real()).RoleRepository(), log: nil, id: fixedUUID("x"),
+		},
+		{
+			name: "nil uuid gen", user: mem.NewStore(clock.Real()).UserRepository(),
+			role: mem.NewStore(clock.Real()).RoleRepository(), log: discardLogger(), id: nil,
+		},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -90,13 +102,13 @@ func TestNewProvisioner_NilDeps_ReturnsErrcode(t *testing.T) {
 // must return 409 ErrAuthUserDuplicate without any recovery attempt.
 func TestEnsure_DuplicateUsername_Returns409(t *testing.T) {
 	t.Parallel()
-	userRepo := mem.NewUserRepository(clock.Real())
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$identityhash", time.Now())
 	require.NoError(t, err)
 	existing.ID = "usr-existing"
 	require.NoError(t, userRepo.Create(context.Background(), existing))
 
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("y"))
 
 	// Use setup source (no bootstrap source), no admin role yet.
@@ -140,15 +152,15 @@ func TestEnsure_RaceDetected_ReturnsRaceSkipped(t *testing.T) {
 // --- Status ---------------------------------------------------------------
 
 func TestProvisioner_Status_NoAdmin_ReturnsFalse(t *testing.T) {
-	p := newProvisioner(t, mem.NewUserRepository(clock.Real()), mem.NewRoleRepository(), fixedUUID("x"))
+	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), fixedUUID("x"))
 	has, err := p.Status(context.Background())
 	require.NoError(t, err)
 	assert.False(t, has)
 }
 
 func TestProvisioner_Status_WithAdmin_ReturnsTrue(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
-	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	seedAdmin(t, userRepo, roleRepo, "usr-seed")
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
 	has, err := p.Status(context.Background())
@@ -158,7 +170,7 @@ func TestProvisioner_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 
 func TestProvisioner_Status_InfraError_Surfaced(t *testing.T) {
 	roleRepo := &errRoleRepo{countErr: errors.New("boom")}
-	p := newProvisioner(t, mem.NewUserRepository(clock.Real()), roleRepo, fixedUUID("x"))
+	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
 	_, err := p.Status(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "count admin users")
@@ -168,8 +180,8 @@ func TestProvisioner_Status_InfraError_Surfaced(t *testing.T) {
 // --- Ensure ---------------------------------------------------------------
 
 func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
-	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("00000000-0000-4000-8000-000000000001"))
 
 	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
@@ -187,8 +199,8 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 }
 
 func TestProvisioner_Ensure_AdminExists_FastPathSkipsNoWrites(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
-	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	seedAdmin(t, userRepo, roleRepo, "usr-prior")
 
 	// Wrap repos to observe that Create is never called on the fast path.
@@ -229,7 +241,7 @@ func TestProvisioner_Ensure_RecountAfterDuplicateFails_Surfaced(t *testing.T) {
 
 func TestProvisioner_Ensure_RoleRepoCountError_Surfaced(t *testing.T) {
 	roleRepo := &errRoleRepo{countErr: errors.New("boom")}
-	p := newProvisioner(t, mem.NewUserRepository(clock.Real()), roleRepo, fixedUUID("x"))
+	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
 	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
@@ -237,7 +249,7 @@ func TestProvisioner_Ensure_RoleRepoCountError_Surfaced(t *testing.T) {
 
 func TestProvisioner_Ensure_RoleCreateNonDuplicateError_Surfaced(t *testing.T) {
 	roleRepo := &errRoleRepo{createErr: errors.New("pg down")}
-	p := newProvisioner(t, mem.NewUserRepository(clock.Real()), roleRepo, fixedUUID("x"))
+	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
 	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
@@ -246,11 +258,11 @@ func TestProvisioner_Ensure_RoleCreateNonDuplicateError_Surfaced(t *testing.T) {
 
 func TestProvisioner_Ensure_RoleCreateDuplicate_Tolerated(t *testing.T) {
 	// Admin role already exists (but no users assigned yet).
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	role := &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}
 	require.NoError(t, roleRepo.Create(context.Background(), role))
 
-	p := newProvisioner(t, mem.NewUserRepository(clock.Real()), roleRepo, fixedUUID("x"))
+	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
 	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeCreated, outcome)
@@ -259,7 +271,7 @@ func TestProvisioner_Ensure_RoleCreateDuplicate_Tolerated(t *testing.T) {
 
 func TestProvisioner_Ensure_UserCreateInfraError_Surfaced(t *testing.T) {
 	userRepo := &errUserRepo{createErr: errors.New("db down")}
-	p := newProvisioner(t, userRepo, mem.NewRoleRepository(), fixedUUID("x"))
+	p := newProvisioner(t, userRepo, mem.NewStore(clock.Real()).RoleRepository(), fixedUUID("x"))
 	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
@@ -268,7 +280,7 @@ func TestProvisioner_Ensure_UserCreateInfraError_Surfaced(t *testing.T) {
 
 func TestProvisioner_Ensure_AssignToUserError_Surfaced(t *testing.T) {
 	roleRepo := &errRoleRepo{assignErr: errors.New("fk violation")}
-	p := newProvisioner(t, mem.NewUserRepository(clock.Real()), roleRepo, fixedUUID("x"))
+	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
 	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
@@ -276,7 +288,7 @@ func TestProvisioner_Ensure_AssignToUserError_Surfaced(t *testing.T) {
 }
 
 func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
-	p := newProvisioner(t, mem.NewUserRepository(clock.Real()), mem.NewRoleRepository(), fixedUUID("x"))
+	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), fixedUUID("x"))
 	tests := []struct {
 		name string
 		in   adminprovision.ProvisionInput
@@ -295,8 +307,8 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 // --- Compensate -----------------------------------------------------------
 
 func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
-	userRepo := mem.NewUserRepository(clock.Real())
-	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("zzz"))
 	user, _, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
@@ -419,6 +431,14 @@ func (r *scriptedRoleRepo) ListByUserID(ctx context.Context, userID string, para
 	return nil, nil
 }
 
+// CountEffectiveAdmins is provided to satisfy ports.RoleRepository (S4.0
+// added it). The adminprovision tests exercise CountByRole semantics only;
+// the bootstrap provisioner does not consult CountEffectiveAdmins. Panicking
+// here makes any accidental usage in a future test obvious.
+func (r *scriptedRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) {
+	panic("scriptedRoleRepo.CountEffectiveAdmins: unused in adminprovision tests")
+}
+
 // errRoleRepo injects errors into each method.
 type errRoleRepo struct {
 	createErr error
@@ -454,6 +474,10 @@ func (r *errRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, err
 
 func (r *errRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
+}
+
+func (r *errRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) {
+	panic("errRoleRepo.CountEffectiveAdmins: unused in adminprovision tests")
 }
 
 // recountErrRoleRepo returns firstCount then recountErr on subsequent CountByRole.
