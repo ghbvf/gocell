@@ -698,21 +698,34 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	r1 := <-results
 	r2 := <-results
 
-	successes := 0
-	conflicts := 0
+	var (
+		successes        int
+		versionConflicts int
+		loginFailures    int
+	)
 	for _, r := range []result{r1, r2} {
 		if r.err == nil {
 			successes++
 		} else {
-			// Either ErrVersionConflict or "old password incorrect" is acceptable —
-			// the second goroutine may fail at bcrypt verify if the first already
-			// changed the hash, OR at the CAS step if reads were interleaved.
-			conflicts++
+			var ce *errcode.Error
+			if errors.As(r.err, &ce) && ce.Code == errcode.ErrVersionConflict {
+				versionConflicts++
+			} else {
+				loginFailures++
+			}
 		}
 	}
-	// At least one must succeed; at most one can succeed.
+	// CAS semantics: exactly one goroutine must succeed and the other must
+	// receive ErrVersionConflict. Any loginFailure indicates a test defect
+	// (unexpected error classification — the race path should always resolve
+	// to ErrVersionConflict, not ErrAuthLoginFailed, when reads are interleaved
+	// after the CAS guard is in place).
+	if loginFailures > 0 {
+		t.Fatalf("unexpected loginFailure(s) in concurrent ChangePassword test: successes=%d versionConflicts=%d loginFailures=%d",
+			successes, versionConflicts, loginFailures)
+	}
 	assert.Equal(t, 1, successes, "exactly one concurrent ChangePassword must succeed")
-	assert.Equal(t, 1, conflicts, "exactly one concurrent ChangePassword must fail")
+	assert.Equal(t, 1, versionConflicts, "exactly one concurrent ChangePassword must yield ErrVersionConflict")
 
 	// Version must have advanced.
 	got, err := repo.GetByID(context.Background(), "usr-cas-race")

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // failingTxRunner simulates a tx that wraps fn but fails after fn returns nil,
@@ -203,4 +206,53 @@ func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 
 	deleteErr := svc.Delete(context.Background(), "flag-no-emit", 3)
 	require.NoError(t, deleteErr, "Delete must succeed without emitter (L1 only)")
+}
+
+// concurrentSafeTxRunner is a stateless pass-through TxRunner safe for concurrent use.
+// Unlike testutil.NoopTxRunner it has no mutable Calls field, avoiding data races.
+type concurrentSafeTxRunner struct{}
+
+func (concurrentSafeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestConcurrentToggle_ExactlyOneSucceeds verifies that when two goroutines race
+// to toggle the same feature flag with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentToggle_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	seedFlag(t, repo, "cas-toggle-flag")
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		enabled := i == 0
+		go func(enabled bool) {
+			defer wg.Done()
+			_, togErr := svc.Toggle(context.Background(), "cas-toggle-flag", 1, enabled)
+			if togErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(togErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Toggle: %v", togErr)
+				}
+			}
+		}(enabled)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Toggle must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Toggle must yield ErrVersionConflict")
 }

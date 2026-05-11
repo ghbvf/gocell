@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -506,4 +508,54 @@ func TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal(upsertedPayload, &raw))
 	_, hasValue := raw["value"]
 	assert.False(t, hasValue, "entry-upserted payload must NOT contain 'value' field (metadata-only)")
+}
+
+// concurrentSafeTxRunner is a stateless pass-through TxRunner safe for concurrent use.
+// Unlike testutil.NoopTxRunner it has no mutable Calls field, avoiding data races.
+type concurrentSafeTxRunner struct{}
+
+func (concurrentSafeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestConcurrentRollback_ExactlyOneSucceeds verifies that when two goroutines race
+// to rollback the same config entry with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentRollback_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewConfigRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	mustSeedEntry(repo, "cas-rollback-key", "v1")
+	_, err = svc.Publish(adminSvcCtx(), "cas-rollback-key")
+	require.NoError(t, err)
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			_, rbErr := svc.Rollback(adminSvcCtx(), "cas-rollback-key", 1, 1)
+			if rbErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(rbErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Rollback: %v", rbErr)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Rollback must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Rollback must yield ErrVersionConflict")
 }

@@ -89,9 +89,9 @@ func assertExpectedVersionInBodySchema(t *testing.T, root, contractDir string) {
 
 	var schema struct {
 		Properties map[string]struct {
-			Type        string `json:"type"`
-			Minimum     *int   `json:"minimum"`
-			Description string `json:"description"`
+			Type        string   `json:"type"`
+			Minimum     *float64 `json:"minimum"`
+			Description string   `json:"description"`
 		} `json:"properties"`
 		Required []string `json:"required"`
 	}
@@ -105,7 +105,7 @@ func assertExpectedVersionInBodySchema(t *testing.T, root, contractDir string) {
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s expectedVersion.type must be integer", path)
 	require.NotNil(t, ev.Minimum,
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s expectedVersion.minimum must be set", path)
-	assert.GreaterOrEqual(t, *ev.Minimum, 1,
+	assert.GreaterOrEqual(t, *ev.Minimum, 1.0,
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s expectedVersion.minimum must be ≥ 1", path)
 
 	requiredSet := make(map[string]bool, len(schema.Required))
@@ -129,9 +129,9 @@ func assertExpectedVersionInQueryParams(t *testing.T, root, contractDir string) 
 		Endpoints struct {
 			HTTP struct {
 				QueryParams map[string]struct {
-					Type     string `yaml:"type"`
-					Required bool   `yaml:"required"`
-					Minimum  *int   `yaml:"minimum"`
+					Type     string   `yaml:"type"`
+					Required bool     `yaml:"required"`
+					Minimum  *float64 `yaml:"minimum"`
 				} `yaml:"queryParams"`
 			} `yaml:"http"`
 		} `yaml:"endpoints"`
@@ -148,7 +148,7 @@ func assertExpectedVersionInQueryParams(t *testing.T, root, contractDir string) 
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s expectedVersion.required must be true", path)
 	require.NotNil(t, ev.Minimum,
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s expectedVersion.minimum must be set", path)
-	assert.GreaterOrEqual(t, *ev.Minimum, 1,
+	assert.GreaterOrEqual(t, *ev.Minimum, 1.0,
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s expectedVersion.minimum must be ≥ 1", path)
 }
 

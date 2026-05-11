@@ -124,6 +124,13 @@ func MustNewProtocol(opts ...Option) *Protocol {
 //
 // entityDesc and entityKey populate Details (slog.String). Pass non-PII
 // identifiers — keys, IDs, but NOT user-supplied content.
+//
+// Callers MUST distinguish key-absent vs version-mismatch by probing existence
+// first (e.g. via SELECT FOR UPDATE before UPDATE, or a GetByKey probe after
+// UPDATE/DELETE returns no rows). CheckVersionMatch unconditionally translates
+// rowsAffected==0 to ErrVersionConflict; the caller's pre-check provides the
+// NotFound branch. Without a pre-check, a DELETE on a non-existent key returns
+// ErrVersionConflict (409) instead of the correct ErrNotFound (404).
 func CheckVersionMatch(rowsAffected int64, entityDesc, entityKey string) error {
 	if rowsAffected == 1 {
 		return nil

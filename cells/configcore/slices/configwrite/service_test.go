@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
@@ -346,4 +348,61 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	entry, err := svc.Create(adminSvcCtx(), CreateInput{Key: "pub-err", Value: "v"})
 	require.NoError(t, err, "publish failure in demo mode must not fail Create")
 	assert.Equal(t, "pub-err", entry.Key)
+}
+
+// concurrentSafeTxRunner is a stateless pass-through TxRunner safe for concurrent use.
+// Unlike testutil.NoopTxRunner it has no mutable Calls field, avoiding data races.
+type concurrentSafeTxRunner struct{}
+
+func (concurrentSafeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestConcurrentUpdate_ExactlyOneSucceeds verifies that when two goroutines race
+// to update the same config entry with the same expectedVersion, exactly one
+// succeeds and the other receives ErrVersionConflict.
+func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	repo := mem.NewConfigRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(concurrentSafeTxRunner{}))
+	require.NoError(t, err)
+	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "cas-race-key", Value: "initial"})
+	require.NoError(t, err)
+
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		newVal := "value-A"
+		if i == 1 {
+			newVal = "value-B"
+		}
+		go func(newVal string) {
+			defer wg.Done()
+			_, upErr := svc.Update(adminSvcCtx(), UpdateInput{
+				Key:             "cas-race-key",
+				Value:           newVal,
+				ExpectedVersion: 1,
+			})
+			if upErr == nil {
+				successes.Add(1)
+			} else {
+				var ce *errcode.Error
+				if errors.As(upErr, &ce) && ce.Code == errcode.ErrVersionConflict {
+					versionConflicts.Add(1)
+				} else {
+					t.Errorf("unexpected error in concurrent Update: %v", upErr)
+				}
+			}
+		}(newVal)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Update must succeed")
+	assert.Equal(t, int32(1), versionConflicts.Load(), "exactly one concurrent Update must yield ErrVersionConflict")
 }
