@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -502,4 +503,84 @@ func TestHandler_Authz_Delete(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// PR464 P2.2: typed 404 / 409 envelope adapter regression coverage.
+// fakeConfigRepoErr wraps mem.ConfigRepository and overrides Update/Delete
+// to inject controlled errcode.Error responses, asserting the adapter's
+// errors.As + ce.Code switch returns the typed envelope (not framework
+// fallback) so codegen-declared status codes stay locked.
+// ---------------------------------------------------------------------------
+
+type fakeConfigRepoErr struct {
+	*mem.ConfigRepository
+	updateErr error
+	deleteErr error
+}
+
+func (f *fakeConfigRepoErr) Update(_ context.Context, _ string, _ int, _ string) (*domain.ConfigEntry, error) {
+	return nil, f.updateErr
+}
+
+func (f *fakeConfigRepoErr) Delete(_ context.Context, _ string, _ int) (*domain.ConfigEntry, error) {
+	return nil, f.deleteErr
+}
+
+func newConfigwriteAdapterUnderTest(t *testing.T, updateErr, deleteErr error) (UpdateAdapter, DeleteAdapter) {
+	t.Helper()
+	repo := &fakeConfigRepoErr{
+		ConfigRepository: mem.NewConfigRepository(clock.Real()),
+		updateErr:        updateErr,
+		deleteErr:        deleteErr,
+	}
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
+	return UpdateAdapter{S: svc}, DeleteAdapter{S: svc}
+}
+
+func TestUpdateAdapter_NotFound_Returns404Typed(t *testing.T) {
+	updateAd, _ := newConfigwriteAdapterUnderTest(t,
+		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"),
+		nil)
+	resp, err := updateAd.Update(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&update.Request{Key: "missing.key", Value: "v", ExpectedVersion: 1})
+	require.NoError(t, err, "adapter must map ErrConfigRepoNotFound to typed 404 (not framework fallback)")
+	typed, ok := resp.(update.Update404ErrorResponse)
+	require.True(t, ok, "expected Update404ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, typed.Body.Code)
+}
+
+func TestUpdateAdapter_VersionConflict_Returns409Typed(t *testing.T) {
+	updateAd, _ := newConfigwriteAdapterUnderTest(t,
+		errcode.New(errcode.KindConflict, errcode.ErrVersionConflict, "concurrent update detected; reload and retry"),
+		nil)
+	resp, err := updateAd.Update(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&update.Request{Key: "stale.key", Value: "v", ExpectedVersion: 1})
+	require.NoError(t, err, "adapter must map ErrVersionConflict to typed 409")
+	typed, ok := resp.(update.Update409ErrorResponse)
+	require.True(t, ok, "expected Update409ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
+}
+
+func TestDeleteAdapter_NotFound_Returns404Typed(t *testing.T) {
+	_, deleteAd := newConfigwriteAdapterUnderTest(t, nil,
+		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"))
+	resp, err := deleteAd.Delete(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&configdelete.Request{Key: "missing.key", ExpectedVersion: 1})
+	require.NoError(t, err)
+	typed, ok := resp.(configdelete.Delete404ErrorResponse)
+	require.True(t, ok, "expected Delete404ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, typed.Body.Code)
+}
+
+func TestDeleteAdapter_VersionConflict_Returns409Typed(t *testing.T) {
+	_, deleteAd := newConfigwriteAdapterUnderTest(t, nil,
+		errcode.New(errcode.KindConflict, errcode.ErrVersionConflict, "concurrent update detected; reload and retry"))
+	resp, err := deleteAd.Delete(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+		&configdelete.Request{Key: "stale.key", ExpectedVersion: 1})
+	require.NoError(t, err)
+	typed, ok := resp.(configdelete.Delete409ErrorResponse)
+	require.True(t, ok, "expected Delete409ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
 }

@@ -18,10 +18,12 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	rollbackgen "github.com/ghbvf/gocell/generated/contracts/http/config/rollback/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -457,4 +459,68 @@ func seedForService(repo *mem.ConfigRepository, key, value string) {
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// PR464 P2.2: typed 404 / 409 envelope adapter regression coverage.
+// fakeConfigRepoForRollback wraps mem.ConfigRepository and overrides
+// UpdateForRollback to inject controlled errcode.Error responses, asserting
+// RollbackAdapter's errors.As + ce.Code switch returns the typed envelope.
+// ---------------------------------------------------------------------------
+
+type fakeConfigRepoForRollback struct {
+	*mem.ConfigRepository
+	rollbackErr error
+}
+
+func (f *fakeConfigRepoForRollback) UpdateForRollback(_ context.Context, _ string, _ int, _ string, _ bool) (*domain.ConfigEntry, error) {
+	return nil, f.rollbackErr
+}
+
+func newRollbackAdapter(t *testing.T, rollbackErr error) RollbackAdapter {
+	t.Helper()
+	repo := &fakeConfigRepoForRollback{
+		ConfigRepository: mem.NewConfigRepository(clock.Real()),
+		rollbackErr:      rollbackErr,
+	}
+	// Seed an entry + a version snapshot so service-level pre-checks
+	// (GetByKey + GetVersion) succeed and we reach UpdateForRollback.
+	seedForRollbackAdapter(repo.ConfigRepository, "k-rollback", "v1")
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
+	return RollbackAdapter{S: svc}
+}
+
+func seedForRollbackAdapter(repo *mem.ConfigRepository, key, value string) {
+	now := time.Now()
+	entry := &domain.ConfigEntry{
+		ID: "cfg-rollback", Key: key, Value: value, Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	_ = repo.Create(context.Background(), entry)
+	_ = repo.PublishVersion(context.Background(), &domain.ConfigVersion{
+		ID: "ver-1", ConfigID: entry.ID, Version: 1, Value: value, PublishedAt: &now,
+	})
+}
+
+func TestRollbackAdapter_NotFound_Returns404Typed(t *testing.T) {
+	rollbackAd := newRollbackAdapter(t,
+		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"))
+	resp, err := rollbackAd.Rollback(adminCtx(),
+		&rollbackgen.Request{Key: "k-rollback", Version: 1, ExpectedVersion: 1})
+	require.NoError(t, err, "adapter must map ErrConfigRepoNotFound to typed 404")
+	typed, ok := resp.(rollbackgen.Rollback404ErrorResponse)
+	require.True(t, ok, "expected Rollback404ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, typed.Body.Code)
+}
+
+func TestRollbackAdapter_VersionConflict_Returns409Typed(t *testing.T) {
+	rollbackAd := newRollbackAdapter(t,
+		errcode.New(errcode.KindConflict, errcode.ErrVersionConflict, "concurrent update detected; reload and retry"))
+	resp, err := rollbackAd.Rollback(adminCtx(),
+		&rollbackgen.Request{Key: "k-rollback", Version: 1, ExpectedVersion: 1})
+	require.NoError(t, err, "adapter must map ErrVersionConflict to typed 409")
+	typed, ok := resp.(rollbackgen.Rollback409ErrorResponse)
+	require.True(t, ok, "expected Rollback409ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
 }

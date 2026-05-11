@@ -234,3 +234,54 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 			"nil emitter must not produce outbox checker: key=%s", k)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// PR464 P2.1 follow-up: cover phase0 missing-CASProtocol rejection path so
+// regression catches a composition root that forgets WithCASProtocol.
+// ---------------------------------------------------------------------------
+
+// TestInit_MissingCASProtocol_FailsFast verifies that omitting WithCASProtocol
+// from the composition root causes Init() to return ErrCellInvalidConfig at
+// phase0 — protecting the ChangePassword concurrent-write guard.
+func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
+	c := NewAccessCore(
+		WithClock(clock.Real()),
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestBootstrapAuth(),
+		// withTestCASProtocol() omitted on purpose.
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err, "missing WithCASProtocol must produce a phase0 error")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "WithCASProtocol is required",
+		"diagnostic must point operators at the missing wiring")
+}
+
+// TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit verifies that a typed-nil
+// *cas.Protocol passed via WithCASProtocol does NOT silently override a real
+// protocol (it is ignored, leaving phase0 to reject when nothing else wired one).
+func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
+	c := NewAccessCore(
+		WithClock(clock.Real()),
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestBootstrapAuth(),
+		WithCASProtocol(nil), // bare-nil intentionally
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+}

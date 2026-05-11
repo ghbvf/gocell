@@ -314,20 +314,15 @@ func (r *FlagRepository) Toggle(ctx context.Context, key string, expectedVersion
 func (r *FlagRepository) resolveUpdateConflict(ctx context.Context, op, key string) error {
 	_, probeErr := r.GetByKey(ctx, key)
 	if probeErr != nil {
-		var ce *errcode.Error
-		if errors.As(probeErr, &ce) && ce.Code == errcode.ErrFlagNotFound {
-			// Confirmed key absent → 404.
-			return errcode.Wrap(errcode.KindNotFound, errcode.ErrFlagNotFound,
-				"flag not found", probeErr,
-				errcode.WithInternal(fmt.Sprintf("flag repo: %s miss key=%s", op, key)),
-				errcode.WithCategory(errcode.CategoryDomain),
-			)
+		notFound, infraErr := classifyProbeFailure(probeErr, errcode.ErrFlagNotFound, op, key, "feature_flag")
+		if !notFound {
+			return infraErr
 		}
-		// Infra failure during CAS probe — surface as internal, not 404.
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"flag repo: probe failed during CAS conflict resolution", probeErr,
-			errcode.WithInternal(fmt.Sprintf("flag repo: %s probe failed key=%s", op, key)),
-			errcode.WithCategory(errcode.CategoryInfra),
+		// Confirmed key absent → 404.
+		return errcode.Wrap(errcode.KindNotFound, errcode.ErrFlagNotFound,
+			"flag not found", probeErr,
+			errcode.WithInternal(fmt.Sprintf("flag repo: %s miss key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
 	// Key exists but version did not match → 409.

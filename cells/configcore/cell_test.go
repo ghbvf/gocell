@@ -689,3 +689,45 @@ func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	snap := recorder.Snapshot()
 	assert.Empty(t, snap.HealthCheckers, "WriterEmitter must produce empty health checkers map")
 }
+
+// ---------------------------------------------------------------------------
+// PR464 P2.1 follow-up: cover phase0 CAS-protocol rejection paths so
+// regression catches a composition root that wires typed-nil or omits CAS in
+// durable mode.
+// ---------------------------------------------------------------------------
+
+// TestConfigCore_WithCASProtocol_TypedNil_RejectedAtInit verifies that passing
+// a typed-nil *cas.Protocol via WithCASProtocol sets the sticky sentinel and
+// phase0 rejects with ErrCellInvalidConfig.
+func TestConfigCore_WithCASProtocol_TypedNil_RejectedAtInit(t *testing.T) {
+	var typedNil *cas.Protocol // typed-nil
+	c := NewConfigCore(
+		WithClock(clock.Real()),
+		WithInMemoryDefaults(),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		WithCASProtocol(typedNil),
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err, "typed-nil *cas.Protocol must be rejected at phase0 sentinel")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "typed-nil *cas.Protocol rejected",
+		"phase0 diagnostic must name the typed-nil sentinel branch")
+}
+
+// TestConfigCore_DurableMode_MissingCASProtocol_FailsFast verifies that durable
+// mode requires WithCASProtocol; omitting it causes phase0 to fail at the
+// early CAS check (before other dependency validations).
+func TestConfigCore_DurableMode_MissingCASProtocol_FailsFast(t *testing.T) {
+	c := NewConfigCore(WithClock(clock.Real()))
+	// DurabilityDurable + no WithCASProtocol must fail at phase0 CAS check.
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "durable mode requires a CAS protocol",
+		"diagnostic must point operators at the missing CAS wiring")
+}

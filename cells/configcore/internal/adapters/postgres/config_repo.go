@@ -592,20 +592,15 @@ func (r *ConfigRepository) doUpdate(
 func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, op, key string) error {
 	probe, probeErr := r.GetByKey(ctx, key)
 	if probeErr != nil {
-		var ce *errcode.Error
-		if errors.As(probeErr, &ce) && ce.Code == errcode.ErrConfigRepoNotFound {
-			// Confirmed key absent → 404.
-			return errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
-				"config not found", probeErr,
-				errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
-				errcode.WithCategory(errcode.CategoryDomain),
-			)
+		notFound, infraErr := classifyProbeFailure(probeErr, errcode.ErrConfigRepoNotFound, op, key, "config_entry")
+		if !notFound {
+			return infraErr
 		}
-		// Infra failure during CAS probe — surface as internal, not 404.
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"config repo: probe failed during CAS conflict resolution", probeErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: %s probe failed key=%s", op, key)),
-			errcode.WithCategory(errcode.CategoryInfra),
+		// Confirmed key absent → 404.
+		return errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+			"config not found", probeErr,
+			errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
 	// Key exists but version did not match → 409.
