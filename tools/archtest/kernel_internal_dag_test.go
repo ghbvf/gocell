@@ -78,7 +78,6 @@ var allowedKernelEdges = map[string][]string{
 	"outbox":        {"clock", "idempotency", "metautil", "observability"},
 	"persistence":   nil,
 	"registry":      {"metadata"},
-	"scaffold":      nil,
 	"verify":        {"metadata"},
 	"worker":        nil,
 	"wrapper":       {"contractspec", "ctxkeys", "outbox"},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -17,13 +18,13 @@ import (
 // idMock 仅实现 CellIdentity 三方法。
 type idMock struct {
 	id    string
-	ctype CellType
-	level Level
+	ctype cellvocab.CellType
+	level cellvocab.Level
 }
 
-func (m idMock) ID() string              { return m.id }
-func (m idMock) Type() CellType          { return m.ctype }
-func (m idMock) ConsistencyLevel() Level { return m.level }
+func (m idMock) ID() string                        { return m.id }
+func (m idMock) Type() cellvocab.CellType          { return m.ctype }
+func (m idMock) ConsistencyLevel() cellvocab.Level { return m.level }
 
 var _ CellIdentity = (*idMock)(nil)
 
