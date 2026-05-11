@@ -124,7 +124,9 @@ func assertShardPartitionExactlyOnce(t *testing.T, repoRoot string, scriptSet ma
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01 (partition): %d discovered tests unassigned across K=%d shards — partition not covering full set:\n  %s",
+		t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01 (partition): "+
+			"%d discovered tests unassigned across K=%d shards "+
+			"— partition not covering full set:\n  %s",
 			len(missing), k, strings.Join(missing, "\n  "))
 	}
 	// Reverse check: every assigned name is in scriptSet (catches script
@@ -137,7 +139,8 @@ func assertShardPartitionExactlyOnce(t *testing.T, repoRoot string, scriptSet ma
 	}
 	if len(extra) > 0 {
 		sort.Strings(extra)
-		t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01 (partition): K=%d shards reported names not in discovery set:\n  %s",
+		t.Fatalf("ARCHTEST-VERIFY-COVERAGE-01 (partition): "+
+			"K=%d shards reported names not in discovery set:\n  %s",
 			k, strings.Join(extra, "\n  "))
 	}
 }
