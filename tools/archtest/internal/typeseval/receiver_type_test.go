@@ -100,6 +100,47 @@ func _[F fs.ReadDirFS](x F) error {
 	assert.Equal(t, "ReadDir", fn.Name())
 }
 
+func TestResolveMethodCall_MethodExprQualifiedInterface(t *testing.T) {
+	// `fs.ReadDirFS.ReadDir(fsys, ".")` — method expression where the outer
+	// selector is `<interface-type>.<method>`. info.Selections[sel].Kind() is
+	// MethodExpr (not MethodVal). Round-3 reviewer flagged this as a bypass
+	// before the helper accepted MethodExpr.
+	src := `package fixture
+import "io/fs"
+func _(fsys fs.ReadDirFS) error {
+	_, err := fs.ReadDirFS.ReadDir(fsys, ".")
+	return err
+}
+`
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "ReadDir")
+
+	fn, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	require.True(t, ok, "MethodExpr on qualified interface must resolve")
+	assert.Equal(t, "io/fs", fn.Pkg().Path())
+	assert.Equal(t, "ReadDir", fn.Name())
+}
+
+func TestResolveMethodCall_MethodExprPointerType(t *testing.T) {
+	// `(*os.File).ReadDir(f, -1)` — method expression where the outer
+	// selector is `<pointer-type>.<method>`. sel.X is a ParenExpr wrapping
+	// a StarExpr around a qualified type reference.
+	src := `package fixture
+import "os"
+func _(f *os.File) error {
+	_, err := (*os.File).ReadDir(f, -1)
+	return err
+}
+`
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "ReadDir")
+
+	fn, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	require.True(t, ok, "MethodExpr on pointer type must resolve")
+	assert.Equal(t, "os", fn.Pkg().Path())
+	assert.Equal(t, "ReadDir", fn.Name())
+}
+
 func TestResolveMethodCall_QualifiedSelectorReturnsFalse(t *testing.T) {
 	// Qualified identifier `pkg.Func` is in info.Uses, NOT info.Selections —
 	// ResolvePackageRef handles that shape. ResolveMethodCall must not match it.

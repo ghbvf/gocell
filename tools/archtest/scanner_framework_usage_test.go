@@ -82,8 +82,13 @@ import (
 //     (dot-imported) via info.Uses → *types.Func; Sel idents are pre-collected
 //     and skipped so qualified `pkg.Func` (A.2) and method calls do not
 //     double-count.
-//   - Path A': SelectorExpr scan resolves receiver types via info.Types[X];
-//     covers pointer types (*os.File) and interface types (fs.FS / fs.ReadDirFS).
+//   - Path A': SelectorExpr scan + typeseval.ResolveMethodCall reads
+//     info.Selections.Obj() to recover the dispatched *types.Func. Covers
+//     MethodVal (`recv.Method()`) and MethodExpr (`T.Method(recv, ...)`)
+//     across pointer types, interface types, promoted via struct embedding,
+//     named-type definitions, type aliases, and generic type-parameter
+//     constraints (including multi-embed). The dispatched method's owning
+//     package replaces the prior sel.X-static-type walker.
 //   - Path B: scanner.EachInSubtree[ast.RangeStmt] then
 //     scanner.EachInSubtree[ast.TypeAssertExpr] with binding-name + ast-list
 //     element-kind verification.
@@ -875,6 +880,51 @@ type MyFS fs.ReadDirFS
 func _(x MyFS) error { _, err := x.ReadDir("."); return err }
 `,
 			wantHits: 1,
+		},
+		{
+			// PR469-review-round-3 P1: method expression `fs.ReadDirFS.ReadDir(fsys, ".")`.
+			// info.Selections[sel].Kind() is MethodExpr (not MethodVal); the
+			// resolver must accept both kinds. sel.X is the qualified interface
+			// type SelectorExpr `fs.ReadDirFS`, not a value.
+			name: "method_expr_qualified_interface",
+			src: `package fake
+import "io/fs"
+func _(fsys fs.ReadDirFS) error {
+	_, err := fs.ReadDirFS.ReadDir(fsys, ".")
+	return err
+}
+`,
+			wantHits: 1,
+		},
+		{
+			// PR469-review-round-3 P1: method expression `(*os.File).ReadDir(f, -1)`.
+			// sel.X is ParenExpr(StarExpr(SelectorExpr os.File)); Selection.Kind() is MethodExpr.
+			name: "method_expr_pointer_type",
+			src: `package fake
+import "os"
+func _(f *os.File) error {
+	_, err := (*os.File).ReadDir(f, -1)
+	return err
+}
+`,
+			wantHits: 1,
+		},
+		{
+			// PR469-review-round-3 P1: multi-embed generic constraint. RWFS
+			// embeds fs.ReadDirFS AND fs.GlobFS; each method resolves to its
+			// own embedded interface. Selections.Obj() returns the correct
+			// owning *types.Func per call (not just the first embed walked).
+			name: "method_call_multi_embed_generic_constraint",
+			src: `package fake
+import "io/fs"
+type RWFS interface{ fs.ReadDirFS; fs.GlobFS }
+func _[F RWFS](fsys F) error {
+	if _, err := fsys.ReadDir("."); err != nil { return err }
+	_, err := fsys.Glob("*")
+	return err
+}
+`,
+			wantHits: 2,
 		},
 		{
 			// Generic API form (Go 1.23+): inspector.All[*ast.X] produces a
