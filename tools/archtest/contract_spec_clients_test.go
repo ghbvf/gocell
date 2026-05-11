@@ -145,6 +145,9 @@ func isContractSpecLit(cl *ast.CompositeLit, info *types.Info) bool {
 // does not pollute the outer literal's reading.
 func contractSpecStringField(cl *ast.CompositeLit, fieldName string) string {
 	var result string
+	// done sentinel: EachInChildren has no early-exit return value;
+	// the done flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
 	done := false
 	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 		if done {
@@ -173,6 +176,9 @@ func contractSpecStringField(cl *ast.CompositeLit, fieldName string) string {
 // field whose value is a non-empty composite literal. EachInChildren visits
 // only direct children of cl, so nested composites are not reached.
 func hasNonEmptyClientsField(cl *ast.CompositeLit) bool {
+	// done/found sentinel: EachInChildren has no early-exit return value;
+	// the found flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
 	found := false
 	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 		if found {

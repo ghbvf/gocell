@@ -868,6 +868,10 @@ func isConstructorFailFast(fn *ast.FuncDecl) bool {
 		return false
 	}
 	last := fn.Type.Results.List[len(fn.Type.Results.List)-1]
+	// Conservatively restricted to bare `error` interface (not pkg-qualified
+	// SelectorExpr like *pkg.ErrType). All 12 current outbox-bound services
+	// return standard `error`; extend here if a future service returns a
+	// pkg-qualified error type that should still trigger the fail-fast check.
 	id, ok := last.Type.(*ast.Ident)
 	if !ok || id.Name != "error" {
 		return false
@@ -879,6 +883,9 @@ func isConstructorFailFast(fn *ast.FuncDecl) bool {
 	// NOT count — a constructor that quietly installs a noop fallback in a nested
 	// branch must not be whitelisted just because some inner block contains a
 	// fail-fast pattern. EachInChildren visits only direct children of fn.Body.
+	// done/matched sentinel: EachInChildren has no early-exit return value;
+	// the matched flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
 	matched := false
 	scanner.EachInChildren[ast.IfStmt](fn.Body, func(ifStmt *ast.IfStmt) {
 		if matched {
@@ -914,6 +921,9 @@ func isFailFastReturn(stmt *ast.IfStmt) bool {
 	// inside stmt.Body are NOT recognized — a return buried inside `for { ... }`
 	// is not the unconditional fail-fast pattern we whitelist.
 	// EachInChildren visits only direct children of stmt.Body.
+	// done/found sentinel: EachInChildren has no early-exit return value;
+	// the found flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
 	found := false
 	scanner.EachInChildren[ast.ReturnStmt](stmt.Body, func(ret *ast.ReturnStmt) {
 		if found {
@@ -1215,6 +1225,9 @@ func effectiveOutboxRoute(topic, eventType outboxTopicFieldValue) outboxTopicFie
 // pollute lit's reading.
 func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
 	var result outboxTopicFieldValue
+	// done sentinel: EachInChildren has no early-exit return value;
+	// the done flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
 	done := false
 	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 		if done {
@@ -1347,6 +1360,9 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 // inside a nested struct is not hoisted to lit's level.
 func extractFailurePolicy(pkg *packages.Package, lit *ast.CompositeLit) outboxFailurePolicyStatus {
 	result := outboxPolicyAbsent
+	// done sentinel: EachInChildren has no early-exit return value;
+	// the done flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
 	done := false
 	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 		if done {

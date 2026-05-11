@@ -859,6 +859,9 @@ func isUpgradeConfigType(expr ast.Expr) bool {
 // EachInChildren visits only direct children of cl, so nested composites
 // (e.g. `Other: Sub{Authenticator: ...}`) are not reached.
 func hasKey(cl *ast.CompositeLit, key string) bool {
+	// done/found sentinel: EachInChildren has no early-exit return value;
+	// the found flag skips subsequent matches to preserve "find-first-and-stop"
+	// semantics. Intentional GoCell pattern — closure+done family.
 	found := false
 	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 		if found {

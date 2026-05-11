@@ -512,6 +512,10 @@ func identNameOf(expr ast.Expr) string {
 // sub-tree (e.g. IndexExpr.X vs. the RangeStmt's X in form (c) detection).
 // A fresh token.FileSet is used so that position differences do not affect the
 // printed output — only the expression shape matters.
+//
+// types.Identical is not applicable here: we compare expression shape
+// (variable name / selector path), not type equality. A fresh FileSet ensures
+// position bytes do not affect the printed output.
 func exprRepr(e ast.Expr) string {
 	if e == nil {
 		return ""
@@ -601,9 +605,11 @@ func runFixture(t *testing.T, src string) []scanner.Diagnostic {
 
 // TestScannerFrameworkUsage01_Fixture exercises forbiddenWalkRefs and
 // forbiddenAstListTypeAssertions directly via parsed-from-string fixtures.
-// 24 cases cover every AST shape the live rule must catch (path A: 12, path
-// A': 3, path B: 7) plus negatives (2). Because both the live rule and this
-// fixture call the same pure functions, they cannot drift.
+// 30 cases cover every AST shape the live rule must catch (path A: 12, path
+// A': 4, path B: 10, form-(c) escape hatches: 3) plus 6 negative shapes
+// scattered within path B, plus 1 standalone negative.
+// Because both the live rule and this fixture call the same pure functions,
+// they cannot drift.
 func TestScannerFrameworkUsage01_Fixture(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -847,7 +853,7 @@ func _(file *ast.File) {
 			// is now flagged. Previously exempted by rs.Value == nil early-return;
 			// that exemption is removed now that EachInChildren provides a typed
 			// children-only API making paired-index iteration unnecessary.
-			name: "for_range_index_no_binding_passes",
+			name: "for_range_index_no_binding_flagged",
 			src: `package fake
 import "go/ast"
 func _(file *ast.File) {
@@ -939,6 +945,66 @@ import "path/filepath"
 func _() string { return filepath.Join("a", "b") }
 `,
 			wantHits: 0, // Join is not banned
+		},
+
+		// ============ Form (c) companion-index escape hatch — F4 ============
+
+		{
+			// F4: companion-index via another slice indexed with i — form (c) must
+			// NOT flag when a second distinct slice is also indexed by the same
+			// loop variable. The loop has LHS/RHS pairing semantics and cannot be
+			// replaced by EachInChildren; the companion-index guard fires.
+			name: "for_range_paired_index_companion_index_expr_passes",
+			src: `package fake
+import "go/ast"
+func _(stmt *ast.AssignStmt) {
+	for i := range stmt.Lhs {
+		_ = stmt.Lhs[i].(*ast.Ident)
+		_ = stmt.Rhs[i]
+	}
+}
+`,
+			wantHits: 0, // companion-index guard: stmt.Rhs[i] pairs with stmt.Lhs[i] → not flagged
+		},
+		{
+			// F4: companion-index via CallExpr.Args passing index i — form (c) must
+			// NOT flag when the loop index is passed as a bare argument to a call
+			// (the callee may do OtherSlice[i] internally; pairing semantics).
+			name: "for_range_paired_index_companion_call_arg_passes",
+			src: `package fake
+import "go/ast"
+func process(decls []ast.Decl, i int) {}
+func _(file *ast.File) {
+	for i := range file.Decls {
+		_ = file.Decls[i].(*ast.FuncDecl)
+		process(file.Decls, i)
+	}
+}
+`,
+			wantHits: 0, // companion-index guard: i passed as call arg → not flagged
+		},
+
+		// ============ Form (c) intermediate-variable escape hatch — F10 ============
+
+		{
+			// F10: intermediate variable decouples the index from the type assertion.
+			// form (c) checks for `Y[i].(*ast.W)` — i.e. TypeAssertExpr.X must be
+			// an IndexExpr. When the caller writes `decl := file.Decls[i]; decl.(*ast.FuncDecl)`,
+			// ta.X is the Ident `decl`, not an IndexExpr — form (c) does not fire.
+			// This is an intentional escape hatch: intermediate variable makes the
+			// pairing intent explicit and is a valid GoCell pattern when the variable
+			// name clarifies meaning.
+			name: "for_range_index_with_intermediate_var_passes",
+			src: `package fake
+import "go/ast"
+func _(file *ast.File) {
+	for i := range file.Decls {
+		decl := file.Decls[i]
+		if d, ok := decl.(*ast.FuncDecl); ok { _ = d }
+	}
+}
+`,
+			wantHits: 0, // intermediate variable: ta.X is Ident not IndexExpr → form (c) does not fire
 		},
 	}
 
