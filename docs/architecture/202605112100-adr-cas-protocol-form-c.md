@@ -17,7 +17,7 @@
 ### 1.1 触发因素
 
 S6（PR #464）引入 `runtime/state/cas` Protocol，为 accesscore ChangePassword、
-configcore config-write / flag-write 的乐观并发控制（Optimistic Concurrency Control）
+configcore configwrite / flagwrite 的乐观并发控制（Optimistic Concurrency Control）
 提供统一的冲突检测词汇表：
 
 - `cas.Protocol`：封装版本字段名、冲突判定逻辑。
