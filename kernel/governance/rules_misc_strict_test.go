@@ -866,6 +866,25 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 			contractDir: "contracts/event/session/created/v1",
 			wantCount:   0,
 		},
+		{
+			// id segment "internal-get" (dash) versus dir segments "internal/get"
+			// (slash). Pins the canonical PATH-ID-MAPPING regression that
+			// PR-CFG-G1-FU6-RECYCLE filed against FMT-CONTRACT-PATH-ID-MAPPING-01
+			// and that FMT-21 already covers as the bijective inverse rule.
+			name:        "dash-instead-of-slash regression (PR-CFG-G1-FU6-RECYCLE)",
+			contractID:  "http.config.internal-get.v1",
+			contractDir: "contracts/http/config/internal/get/v1",
+			wantCount:   1,
+		},
+		{
+			// Legitimate single-segment dash (e.g. event.config.entry-deleted.v1
+			// matches contracts/event/config/entry-deleted/v1). Guards against a
+			// future "dashes are always wrong" weakening of the rule.
+			name:        "dash matches both id and path (compliant)",
+			contractID:  "event.config.entry-deleted.v1",
+			contractDir: "contracts/event/config/entry-deleted/v1",
+			wantCount:   0,
+		},
 	}
 
 	for _, tc := range tests {

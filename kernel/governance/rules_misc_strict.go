@@ -548,11 +548,14 @@ func checkAdditionalProperties(node map[string]any, path string, missing *[]stri
 	*missing = append(*missing, path)
 }
 
-// --- FMT-21 (formerly FMT-CONTRACT-DIR-ID-MATCH-01) ---
+// --- FMT-21 (formerly FMT-CONTRACT-DIR-ID-MATCH-01; also satisfies FMT-CONTRACT-PATH-ID-MAPPING-01) ---
 
-// validateFMTContractDirIDMatch01 checks that every contract's Dir matches the
-// directory derived from its ID. For example, "http.auth.login.v1" must live at
-// "contracts/http/auth/login/v1".
+// validateFMTContractDirIDMatch01 enforces the bijection between a contract's
+// declared ID and its filesystem location. For "http.auth.login.v1" the
+// contract must live at "contracts/http/auth/login/v1". This rule is the
+// canonical PATH-ID-MAPPING governance contract: a dash-vs-slash mismatch
+// (e.g. id "http.config.internal-get.v1" at "contracts/http/config/internal/
+// get/v1") fires here. See PR-CFG-G1-FU6-RECYCLE for the subsumption record.
 //
 // Contracts under example projects (e.g. "examples/iotdevice/contracts/…") are
 // accepted as long as the segment after the last "contracts/" separator matches

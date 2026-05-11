@@ -24,12 +24,12 @@
 | 5 | PR-CFG-A-DEFER-2 (L2 divergence) | ⚠️ 未实施 | 已有完整设计草案（参 `docs/bak/202605010354-backlog-pre-pr341-cleanup.md` L57） |
 | 6 | C-05 CELLS-CELLROUTES-PLACEHOLDER-DELETE | ✅ 已合（PR-CFG-CELL-ROUTES-CLEAN） | `cells/configcore/cell_routes.go` + `cells/accesscore/cell_routes.go` 同源 4 行占位均删除 |
 | 7 | PR320-FU-CONFIGCORE-CI-NOOP | ❌ 未解决 | 只有 `testutil.FailingPublisher`，无 noop publisher CI 路径覆盖 |
-| 8 | PR-CFG-G1-FU6 | ⚠️ 未实施 | 详情已找到（CONTRACT-PATH-ID-MAPPING-ARCHTEST-01，参 `docs/plans/archive/202604260058-l4-virtual-taco.md` L375） |
+| 8 | PR-CFG-G1-FU6 | ✅ subsumed by FMT-21 (PR-CFG-G1-FU6-RECYCLE) | `kernel/governance/rules_misc_strict.go:551-602` (`validateFMTContractDirIDMatch01`) is the bijective inverse and already fires on the canonical regression. Regression test pinned at `rules_misc_strict_test.go::TestFMTContractDirIDMatch01_Mismatch` "dash-instead-of-slash regression"; docstring aliased. |
 | 9 | PR238-FU4 legacy NotFound 测试去重 | ❌ 未解决 | `cells/configcore/internal/adapters/postgres/config_repo_test.go:314` 与 `:665` 仍并存 |
 | 10 | PR238-FU8 UpdateForRollback op label 断言 | ❌ 未解决 | `:395-411` 仍无 `assert.Contains(InternalMessage, "UpdateForRollback")` |
 | 11 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | ❌ 未解决 | `cells/auditcore/slices/auditappend/slice.yaml` 仍 14 contractUsages；`cells/configcore/slices/configread/` 未拆 internal |
 
-**汇总**：已解决 1（#6）/ 撤回主方案 1（#4，改业务触发）/ 信息已补全 11 / 实际未实施 9
+**汇总**：已解决 2（#6, #8 subsumed by FMT-21）/ 撤回主方案 1（#4，改业务触发）/ 信息已补全 11 / 实际未实施 8
 
 ---
 
@@ -41,7 +41,7 @@
 | **PR-CFG-TEST-RESIDUALS** | configcore 测试补丁批 | #7, #9, #10 | Cx1 | 0.5d | 无（推荐先合） |
 | ~~**PR-CFG-PLACEHOLDER-CLEAN**~~ → **PR-CFG-CELL-ROUTES-CLEAN** | configcore + accesscore cell_routes.go 占位清理 | ~~#4,~~ #6 | Cx1 | 0.1d | 无（已合）|
 | **PR-CFG-L2-DIVERGENCE** | ConfigCore L2 与 memory 行为分歧治理 | #5 | Cx1（决策）+ Cx2（实施） | 1d 设计 + 4h 实施 | architect 评估 |
-| **PR-CFG-G1-FU6-RECYCLE** | CONTRACT-PATH-ID-MAPPING-ARCHTEST | #8 | Cx2 | 2-3h | 复用 typeseval helper |
+| **PR-CFG-G1-FU6-RECYCLE** | ~~CONTRACT-PATH-ID-MAPPING-ARCHTEST~~ → **subsumed by FMT-21**; pin regression test + alias docstring | #8 | Cx1 | 0.5h | subsumed-by: FMT-21 (`validateFMTContractDirIDMatch01`) |
 | **PR-CFG-SLICE-DECOMPOSE** | auditappend / configread 多 verb 拆分 | #11 | Cx3 | 1.5-2d | 在 PR-CFG-CACHE-LIFECYCLE 后做 |
 
 ---
@@ -81,7 +81,7 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| PR-CFG-G1-FU6 | **CONTRACT-PATH-ID-MAPPING-ARCHTEST-01** (Cx2, P2, 🟡): 新规则 `kernel/governance/rules_fmt.go::FMT-CONTRACT-PATH-ID-MAPPING-01` 或 `tools/archtest/contract_path_id_test.go`，扫 `contracts/{kind}/.../v1/contract.yaml`，机械验证 `path-segments-joined-by-dot == id`。FMT-08 仅校验 ID 第一段等于 kind，命名错位（如 `id: http.config.internal-get.v1` 落在 `contracts/http/config/internal/get/v1/`）现状不会拦截。**对标**：原 PR-CFG-I.X2 archtest batch 计划共用 `tools/archtest/internal/typeseval`，但本规则纯文件树 + YAML 解析，不需要 typeseval helper；评估直接落 governance walker 还是 archtest（建议 governance walker，FMT-08 同位置扩展更内聚）。**AI-rebust**：Hard 档（违反不可表达——文件路径 vs YAML id 直接对账，零字面量约定）。 | 2-3h | `kernel/governance/rules_fmt.go`（推荐）或 `tools/archtest/contract_path_id_test.go` + `kernel/governance/walker_test.go` | PR-CFG-G1 review 新登记（参 `docs/plans/archive/202604260058-l4-virtual-taco.md` L375）；典型受害样本：`contracts/http/config/internal/get/v1/contract.yaml` |
+| PR-CFG-G1-FU6 | **RECYCLED → subsumed by FMT-21** (Cx1, P2, ✅ done): `kernel/governance/rules_misc_strict.go:551-602` 的 `validateFMTContractDirIDMatch01`（FMT-21）是 path-id-mapping 的 bijective inverse——既有规则用 `id → derived dir` 方向比对 `c.Dir`，与提议的 `path → derived id` 方向比对 `c.ID` 在数学上等价（共用 `split(".") ↔ join(".")` 算法），对原 plan 描述的 `id: http.config.internal-get.v1` at `contracts/http/config/internal/get/v1/` 同样 fire。FMT-21 还覆盖更广（`examples/*/contracts/...` 通过 parts-walk）。**实际改动**：(1) 在 `TestFMTContractDirIDMatch01_Mismatch` 表中追加 dash-vs-slash 回归 case 与"合法 dash" 反向 case 各 1 条，pin FMT-21 对该规则的覆盖；(2) FMT-21 docstring alias 为 `also satisfies FMT-CONTRACT-PATH-ID-MAPPING-01` 防止再 re-file。**AI-rebust**：Hard 档（FMT-21 default rules slice 成员，SeverityError，违反不可表达）。 | 0.5h | `kernel/governance/rules_misc_strict.go` (docstring) + `kernel/governance/rules_misc_strict_test.go` (2 表行) | PR-CFG-G1 review 新登记（参 `docs/plans/archive/202604260058-l4-virtual-taco.md` L375）；典型受害样本：`contracts/http/config/internal/get/v1/contract.yaml` (id 写成 `http.config.internal-get.v1` 即被 FMT-21 拦) |
 
 ### PR-CFG-SLICE-DECOMPOSE — auditappend / configread 多 verb 拆分
 
