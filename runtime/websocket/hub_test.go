@@ -1223,10 +1223,9 @@ const (
 func TestNewHub_RejectsNegativeShutdownTimeout(t *testing.T) {
 	cfg := DefaultHubConfig(clock.Real())
 	cfg.ShutdownTimeout = negativeShutdownTimeout
-	assert.PanicsWithValue(t,
+	assertNewHubPanicsWithErrcodeMessage(t,
 		"websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0",
-		func() { NewHub(cfg, nil) },
-		"negative ShutdownTimeout must panic at construction")
+		func() { NewHub(cfg, nil) })
 }
 
 // TestNewHub_RejectsNegativeConcurrentCloseLimit — negative ConcurrentCloseLimit
@@ -1235,10 +1234,23 @@ func TestNewHub_RejectsNegativeShutdownTimeout(t *testing.T) {
 func TestNewHub_RejectsNegativeConcurrentCloseLimit(t *testing.T) {
 	cfg := DefaultHubConfig(clock.Real())
 	cfg.ConcurrentCloseLimit = negativeConcurrentCloseLimit
-	assert.PanicsWithValue(t,
+	assertNewHubPanicsWithErrcodeMessage(t,
 		"websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0",
-		func() { NewHub(cfg, nil) },
-		"negative ConcurrentCloseLimit must panic at construction")
+		func() { NewHub(cfg, nil) })
+}
+
+func assertNewHubPanicsWithErrcodeMessage(t *testing.T, wantMessage string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic")
+		err, ok := r.(*errcode.Error)
+		require.True(t, ok, "expected *errcode.Error, got %T (%v)", r, r)
+		assert.Equal(t, wantMessage, err.Message)
+		assert.Equal(t, errcode.KindInternal, err.Kind, "Assertion uses KindInternal")
+		assert.Equal(t, errcode.CategoryInfra, err.Category, "Assertion uses CategoryInfra")
+	}()
+	fn()
 }
 
 // ---------------------------------------------------------------------------

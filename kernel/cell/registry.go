@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // ---------------------------------------------------------------------------
@@ -451,7 +452,7 @@ func (r *RegistryRecorder) Health(name string, check func(context.Context) error
 // MustHaveNonEmptyHealthName panics when name is empty (programming error).
 func MustHaveNonEmptyHealthName(name string) {
 	if name == "" {
-		panic(errcode.Assertion("registry Health: name must not be empty"))
+		panic(panicregister.Approved("registry-health-name", errcode.Assertion("registry Health: name must not be empty")))
 	}
 }
 
@@ -465,7 +466,7 @@ func (r *RegistryRecorder) Lifecycle(h LifecycleHook) {
 // MustHaveLifecycleHookName panics when the hook Name is empty (programming error).
 func MustHaveLifecycleHookName(h LifecycleHook) {
 	if h.Name == "" {
-		panic(errcode.Assertion("registry Lifecycle: hook Name must not be empty"))
+		panic(panicregister.Approved("registry-lifecycle-hook-name", errcode.Assertion("registry Lifecycle: hook Name must not be empty")))
 	}
 }
 
@@ -488,7 +489,8 @@ func (r *RegistryRecorder) OnConfigReload(
 func MustHaveNonEmptyConfigPrefixes(prefixes []string) {
 	for _, p := range prefixes {
 		if p == "" {
-			panic(errcode.Assertion("registry OnConfigReload: prefixes must not contain an empty string"))
+			panic(panicregister.Approved("registry-reload-prefix-empty",
+				errcode.Assertion("registry OnConfigReload: prefixes must not contain an empty string")))
 		}
 	}
 }
@@ -496,7 +498,7 @@ func MustHaveNonEmptyConfigPrefixes(prefixes []string) {
 // MustHaveNonNilConfigReloadFn panics when fn is nil (programming error).
 func MustHaveNonNilConfigReloadFn(fn func(context.Context, ConfigChangeEvent) error) {
 	if fn == nil {
-		panic(errcode.Assertion("registry OnConfigReload: fn must not be nil"))
+		panic(panicregister.Approved("registry-reload-fn-nil", errcode.Assertion("registry OnConfigReload: fn must not be nil")))
 	}
 }
 
@@ -540,6 +542,7 @@ func (r *RegistryRecorder) mustNotBeFinalized(method string) {
 // MustNotBeRegistryFinalized panics when finalized is true (programming error).
 func MustNotBeRegistryFinalized(finalized bool, method string) {
 	if finalized {
-		panic(errcode.Assertion("registry %s: called after Snapshot() — registration must happen during Cell.Init", method))
+		panic(panicregister.Approved("registry-post-snapshot-mutate",
+			errcode.Assertion("registry %s: called after Snapshot() — registration must happen during Cell.Init", method)))
 	}
 }

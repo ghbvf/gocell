@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -246,7 +247,8 @@ func (m *MemStore) MustTamperEntryHash(seq int64, newHash string) {
 	defer m.mu.Unlock()
 	idx := seq - 1
 	if int(idx) < 0 || int(idx) >= len(m.entries) {
-		panic(errcode.Assertion("MustTamperEntryHash: seq %d out of range [1, %d]", seq, len(m.entries)))
+		panic(panicregister.Approved("audit-mem-tamper-hash-out-of-range",
+			errcode.Assertion("MustTamperEntryHash: seq %d out of range [1, %d]", seq, len(m.entries))))
 	}
 	m.entries[idx].Hash = newHash
 }
@@ -260,7 +262,8 @@ func (m *MemStore) MustTamperEntryPrevHash(seq int64, newPrevHash string) {
 	defer m.mu.Unlock()
 	idx := seq - 1
 	if int(idx) < 0 || int(idx) >= len(m.entries) {
-		panic(errcode.Assertion("MustTamperEntryPrevHash: seq %d out of range [1, %d]", seq, len(m.entries)))
+		panic(panicregister.Approved("audit-mem-tamper-prev-hash-out-of-range",
+			errcode.Assertion("MustTamperEntryPrevHash: seq %d out of range [1, %d]", seq, len(m.entries))))
 	}
 	m.entries[idx].PrevHash = newPrevHash
 }

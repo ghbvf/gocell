@@ -42,6 +42,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -197,7 +198,7 @@ func (h *Handler) RegisterChecker(name string, fn Checker) error {
 // MustRegisterChecker is the static-wiring variant of RegisterChecker.
 func (h *Handler) MustRegisterChecker(name string, fn Checker) {
 	if err := h.RegisterChecker(name, fn); err != nil {
-		panic(errcode.Assertion("health: %v", err))
+		panic(panicregister.Approved("health-checker-register", errcode.Assertion("health: %v", err)))
 	}
 }
 

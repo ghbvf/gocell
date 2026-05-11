@@ -1,7 +1,7 @@
 # ADR: Architectural Panic Whitelist (ERROR-FIRST-API-01)
 
 > Date: 2026-04-27
-> Status: Accepted
+> Status: Accepted (revised 2026-05-11)
 > Context PR: PR-MODE-6 ERROR-FIRST-API (refactor/555-pr-mode-6-error-first-api)
 > Scope update: PR-MODE-6.1 Nil / Error-First full cleanup
 > Tag: ERROR-FIRST-API-01
@@ -53,7 +53,7 @@ panic on error):
 
 Internal envelope construction with caller-controlled invariants. Marshalling
 failure indicates a writer-side programmer error; the rename makes the
-panic semantics explicit (auto-exempted by the `Must*` rule).
+panic semantics explicit (panic now wrapped with panicregister.Approved per Wave 2 single funnel).
 
 ### 3. Map worker nil-exit to `ErrWorkerExitedEarly` sentinel
 
@@ -63,29 +63,62 @@ cancellation. Modelled as `kworker.ErrWorkerExitedEarly` so callers can
 `errors.Is`-detect the abnormal signal — not strictly part of the panic
 refactor, but bundled for the same "fail loudly, propagate errors" theme.
 
-### 4. Hardcoded ADR-pinned whitelist (4 functions)
+### 4. Approved panic reason catalog
 
-The archtest holds **four** function-level whitelist entries. Every other
-production panic is either refactored into an error-returning API or made
-explicit through a `Must*` wrapper.
+All production panic call sites use `panic(panicregister.Approved(<reason>, <value>))`.
+The `<reason>` literal documents the architectural category; it is not cross-checked
+against this catalog by archtest (`PANIC-REGISTERED-01` only enforces the call shape).
+This section serves as human-readable governance reference.
 
-| # | Function | Justification |
+#### 4.1 C-class framework re-throw (preserve panic semantics after cleanup)
+
+These re-panic the original recovered value after mandatory cleanup. Refactoring to
+return error would break the panic-propagation contract observed by outer recover.
+
+| Reason | Call site | Justification |
 |---|---|---|
-| 1 | `kernel/wrapper/lifecycle.go::recoverAndFinish` | Middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
-| 2 | `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure` | Middle of a `defer recover()` chain that first reports the handler panic as a circuit-breaker failure, then re-panics so the outer `Recovery` middleware remains the single panic-to-HTTP and panic-to-tracing boundary. Swallowing the panic here would bypass `Recovery` and lose panic span recording in the normal router chain. |
-| 3 | `adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback` | Top-level transaction panic path must rollback the open pgx transaction before preserving the caller's original panic semantics. Returning an error would swallow programmer/runtime panics from the callback and change `RunInTx`'s transaction-safety contract. |
-| 4 | `adapters/postgres/tx_manager.go::repanicAfterSavepointRollback` | Nested transaction panic path must rollback to the savepoint before preserving the caller's original panic semantics. Returning an error would swallow programmer/runtime panics from the callback and make nested and top-level transactions diverge. |
+| `lifecycle-recover-rethrow-to-recovery-middleware` | `kernel/wrapper/lifecycle.go::recoverAndFinish` | Middle of defer recover() chain; outer `runtime/http/middleware.Recovery` must serialize the panic. |
+| `circuit-breaker-rethrow-after-failure-report` | `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure` | Reports handler panic as circuit-breaker failure then re-panics so Recovery remains single panic-to-HTTP boundary. |
+| `pg-tx-top-level-rollback-rethrow` | `adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback` | Rolls back open pgx transaction before preserving caller panic; returning error would change RunInTx contract. |
+| `pg-tx-savepoint-rollback-rethrow` | `adapters/postgres/tx_manager.go::repanicAfterSavepointRollback` | Rolls back to savepoint before preserving caller panic; ensures nested/top-level semantics align. |
 
-### 5. Auto-exempt categories
+#### 4.2 Programmer-error sites (state-machine / param validation)
 
-- **`Must*` prefix**: Go community convention for the panic-on-misuse
-  twin of an error-returning constructor. Examples in this PR:
-  `MustNewAuthJWT`, `MustHTTPHandler`, `MustWrapConsumer`,
-  `MustMount`, `MustNewEntryID`,
-  `MustMarshalDirectEnvelope` (renamed from non-Must form), plus
-  pre-existing `MustValidateLabels`, `MustRegister`, `MustNewTestKeyProvider`,
-  `MustCookieSession`, etc.
-  (Note: `MustNewRefreshStore` was removed in B2-A-11 / PR-V1-PG-REFRESH-HARDEN-AND-IDLE-GRACE.)
+These wrap `errcode.Assertion(...)` for structured 500 conversion by Recovery middleware.
+reason-literal is `<module>-<invariant>` kebab-case. Catalog is illustrative; new sites
+add their own reason at the call site; review verifies the reason is descriptive but
+there is no automatic cross-check.
+
+Examples by module:
+- `cells/accesscore/slices/session{login,logout,refresh}/service.go` — `sessionlogin-invariant` / `sessionlogout-invariant` / `sessionrefresh-invariant`
+- `kernel/cell/auth_plan.go` — `auth-plan-jwt-init`, `auth-plan-jwt-assembly-init`, `auth-plan-service-token-init`
+- `kernel/cell/base.go` — `cell-base-init`
+- `kernel/cell/registry.go` — `registry-health-name`, `registry-lifecycle-hook-name`, `registry-reload-prefix-empty`, `registry-reload-fn-nil`, `registry-post-snapshot-mutate`
+- `kernel/clock/guard.go` — `clock-nil`, `clock-typed-nil`, `clock-non-positive-interval`
+- `kernel/outbox/entry_id.go` — `outbox-entry-id-init`
+- `kernel/wrapper/{consumer,handler}.go` — `wrapper-consumer-init`, `wrapper-handler-init`
+- `pkg/errcode/errcode.go` — `errcode-redact-attr-self`, `errcode-redact-message-self`
+- `runtime/audit/ledger/mem_store.go` — `audit-mem-tamper-hash-out-of-range`, `audit-mem-tamper-prev-hash-out-of-range`
+- `runtime/auth/{keys,principal,provider,route}.go` — `auth-test-rsa-keypair`, `auth-test-keyset`, `auth-principal-context-missing`, `auth-test-hmac-keyring`, `auth-route-mount`
+- `runtime/distlock/locker.go` — `distlock-init`
+- `runtime/http/{health,middleware/cookie_session,middleware/circuit_breaker,router}` — `health-checker-register`, `cookie-session-init`, `circuit-breaker-init`, `router-init`
+- `cells/auditcore/internal/appender/spec.go` — `appender-actor-mode-zero`, `appender-actor-mode-unknown`
+- `runtime/websocket/hub.go` — `websocket-hub-shutdown-timeout-negative`, `websocket-hub-close-limit-negative`
+- `kernel/observability/metrics/metrics.go` — `metrics-validate-labels-mismatch`
+- `adapters/websocket/handler.go` — `websocket-upgrade-handler-init`
+- `runtime/audit/ledger/protocol.go` — `audit-ledger-protocol-init`
+- `runtime/auth/session/protocol.go` — `auth-session-protocol-init`
+- `kernel/metadata/identifier.go` — `metadata-go-identifier-codegen-invalid`
+- `generated/contracts/http/**/*_gen.go` — codegen emits `<contract-id>-policy-nil`, `<contract-id>-schema-compile-failed`
+
+### 5. No prefix-based exemption
+
+There is no `Must*`-prefix exemption. Every production panic — including those in
+`Must*` constructors — must go through `panicregister.Approved`. The Must convention
+remains a useful naming pattern for composition-root convenience constructors, but it
+is not recognized by archtest. `Must*` wrappers that previously received an implicit
+free pass now carry `panic(panicregister.Approved("<reason>", err))` at their panic
+site, making the architectural intent explicit and machine-verifiable.
 
 ### 6. PR-MODE-6.1 scope expansion
 
@@ -150,7 +183,9 @@ Three reasons:
 The `Must*` wrappers preserve the static-composition ergonomics: cells
 that construct a single static `cell.NewAuthJWTFromAssembly(asm)` continue
 to write `cell.MustNewAuthJWTFromAssembly(asm)` with no error-handling
-boilerplate.
+boilerplate. Under the Wave 2 single-funnel design, each `Must*` wrapper's
+panic site now calls `panic(panicregister.Approved("<reason>", err))` rather
+than bare `panic(err)`.
 
 ### Why minimum (4) whitelist?
 
@@ -159,7 +194,7 @@ Each whitelist entry is a future regression risk: a new contributor sees
 review loop catches new architectural panic claims via the ADR, not via
 the archtest list. By keeping the whitelist to **only** re-panic propagation
 helpers that preserve an already in-flight panic after mandatory cleanup or
-recording, we maximize the "panic outside Must* = bug" signal.
+recording, we maximize the "panic outside Approved = bug" signal.
 
 The previous design (5 entries) was rejected: outbox crypto/rand failures
 and envelope marshal invariants were absorbable as either error
@@ -170,25 +205,22 @@ and unfinalized auth state now surface through errors or fail-closed HTTP
 responses, while `MustNew` remains the explicit panic wrapper for static
 wiring.
 
-### Whitelist mechanics
+### Mechanics
 
-Hardcoded in `tools/archtest/panic_registered_test.go`:
+`pkg/panicregister/panicregister.go` exports a single function:
 
 ```go
-var architecturalPanicWhitelist = map[string]string{
-    "kernel/wrapper/lifecycle.go::recoverAndFinish": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
-    "runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
-    "adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback": "re-panics after top-level transaction rollback so caller panic semantics are preserved",
-    "adapters/postgres/tx_manager.go::repanicAfterSavepointRollback": "re-panics after savepoint rollback so nested transaction panic semantics are preserved",
-}
+func Approved(reason string, value any) any { return value }
 ```
 
-To add an entry: open a PR, update this ADR's §4 table with a new row,
-update the map. `PANIC-REGISTERED-01` parses the ADR table and fails unless
-the table and map are exactly equal, every map entry is used by a real panic,
-and the whitelist contains exactly the four approved permanent entries.
-Reviewer must reject any whitelist addition that's absorbable as `Must*`
-rename or error propagation.
+Archtest `PANIC-REGISTERED-01` (`tools/archtest/panic_invariants_test.go`) enforces:
+
+- Every production `panic(arg)` call has `arg = *ast.CallExpr` whose Fun resolves (via `*types.Info`) to `pkg/panicregister.Approved`
+- The first argument is `*ast.BasicLit` of kind STRING (no fmt.Sprintf / concat / variable)
+
+Both checks are pure AST + types.Info — no comment scanning, no name convention.
+The previous `architecturalPanicWhitelist` Go map and `AllowMust` prefix exemption
+have been removed; this ADR is no longer cross-referenced by archtest at runtime.
 
 ### Trade-offs
 
@@ -229,13 +261,20 @@ Completed in PR-MODE-6.1:
 
 Remaining watchlist:
 
-- `kernel/observability/metrics/metrics.go` — already auto-exempt via
-  `MustRegister` prefix, but worth confirming the pattern holds when new
-  metrics are added.
+- `kernel/observability/metrics/metrics.go` — previously auto-exempt via
+  `MustRegister` prefix; under the Wave 2 design the panic site now uses
+  `panicregister.Approved("metrics-validate-labels-mismatch", ...)`.
 
-Order suggestion: each PR adds 1-3 files to `errorFirstEnforcedFiles`
-in the archtest, refactors the corresponding panics, and updates this
-ADR's §Roadmap to mark the file done.
+## Revision history
+
+2026-05-11: rewritten for Wave 2 single-funnel design (PR #467; commit message
+references this ADR). §4 replaced the 4-row Function-name whitelist table with a
+categorized reason-literal catalog. §5 (Auto-exempt categories / Must* prefix) deleted
+and replaced with "No prefix-based exemption". §"Whitelist mechanics" deleted and
+replaced with the Mechanics section describing `pkg/panicregister.Approved` and the
+updated `PANIC-REGISTERED-01` enforcement. The previous `architecturalPanicWhitelist`
+Go map and `AllowMust` flag are removed from archtest; this ADR is no longer
+cross-referenced at archtest runtime.
 
 ## References
 
@@ -251,3 +290,5 @@ ADR's §Roadmap to mark the file done.
 - Go `nilness` analyzer; `golangci-lint` `nilnil` settings.
 - Kratos middleware constructors and Kubernetes client-go resourcelock
   constructor error patterns.
+- Charter §4 Wave 2 panic 单源 typed marker: `docs/plans/202605101300-ai-first-governance-charter.md`.
+- Single-funnel implementation: `pkg/panicregister/panicregister.go`.

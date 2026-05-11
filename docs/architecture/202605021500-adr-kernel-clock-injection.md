@@ -234,7 +234,7 @@ three structural gaps and closed them in a single PR continuation:
    `IsNil` on Ptr/Map/Chan/Func/Slice/Interface kinds) so misconfiguration
    surfaces at composition rather than at first method call. The kernel
    panic is delegated to the public `clock.MustHaveClock(c, ctx)` helper,
-   keeping it auto-exempt under PANIC-REGISTERED-01 §5 (Must* prefix).
+   wrapped with panicregister.Approved per PANIC-REGISTERED-01 (Wave 2 update, PR #467).
 
 3. **All `nil → clock.Real()` fallbacks and `WithXxxClock` Options that
    carried the old `func() time.Time` pattern were deleted.** Every

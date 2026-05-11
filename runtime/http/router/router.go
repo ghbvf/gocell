@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -502,7 +503,7 @@ func New(opts ...Option) (*Router, error) {
 func MustNew(opts ...Option) *Router {
 	r, err := New(opts...)
 	if err != nil {
-		panic(errcode.Assertion("router: %v", err))
+		panic(panicregister.Approved("router-init", errcode.Assertion("router: %v", err)))
 	}
 	return r
 }

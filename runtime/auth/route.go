@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // Route binds a handler to a contract. Contract is the single source of
@@ -158,7 +159,7 @@ func Mount(mux cell.RouteHandler, r Route) error {
 // RouteGroup.Register closure and propagate the error.
 func MustMount(mux cell.RouteHandler, r Route) {
 	if err := Mount(mux, r); err != nil {
-		panic(errcode.Assertion("auth: route: %v", err))
+		panic(panicregister.Approved("auth-route-mount", errcode.Assertion("auth: route: %v", err)))
 	}
 }
 

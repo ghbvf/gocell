@@ -35,7 +35,7 @@
 2. 既有 Soft 档项目按"实际事故密度 × AI 暴露面"排队升级
 3. 改造方向规范化：
    - 字符串锚点 → typed function call（`archtest.Invariant("ID")`）
-   - 注释豁免 → typed marker（`panicregister.Approved("reason")`）
+   - 注释豁免 → typed marker（`panicregister.Approved("reason", value)`）
    - 名字 convention → sealed interface / receiver type
    - hand-crafted fixture → real source AST capture（AI 难造假）
 
@@ -56,13 +56,13 @@
 | #431 | PR-B BFS reachability + 防漂移 guard | **Medium**（按方法名 convention，AI-soft 边缘）|
 | #432 | PR-C single oracle + 5 层 mirror | **Hard**（AI-rebust 范本）|
 | #435 | PR-A' 彻底版（删 inventory.md + drift gate + list-archtests.sh stdout-only + INVENTORY-ANCHOR-REQUIRED-01 archtest）| **Soft**（锚点是 `// INVARIANT: ID` 字符串约定，AI 可写假锚点）|
+| #TBD | panic 单源 typed marker（Wave 2）: `pkg/panicregister.Approved` funnel + archtest PANIC-REGISTERED-01 重写（删 architecturalPanicWhitelist + AllowMust + ADR reconciliation）+ 50 call-site 迁移 + codegen template + ADR/error-handling.md/ai-collab.md 同步 | **Hard**（typed function call 唯一 funnel；form uniqueness + archtest fail-on-deviation）|
 
 ### 未启动
 
 | 名 | 简述 | 第一性原理判 |
 |---|---|---|
 | 节点遍历漏斗（原 PR-Φ）| framework typed callback per node kind + 一锅替换 65 手写 for-loop + 131 裸 ast.Inspect | Hard 档，**保留启动**（typed callback 是 AI-hard）|
-| panic 单源（原 PR-D'）| 删 architecturalPanicWhitelist + AllowMust + reconciliation guard，改单源 | **方案重审**：原计划"就地注释 `// PANIC-REGISTERED-01: ADR-approved:`"是 Soft 档（AI 可写任意 reason 通过）→ 应改 typed marker 函数 |
 | 测试 polling 单源（PR #438 衍生）| `(require\|assert).Eventually` 339 站点 / 70 文件；当前形态是字符串 budget + 注释 allowlist 倾向（Soft）；PR #438 race CI flake 已暴露 D500ms 踩穿事故 → 应改 `pkg/testutil/testwait.External("reason")` typed marker + `Deterministic` 框架收纳 channel-as-condvar，archtest 拦裸 Eventually | **事故密度驱动**：与 panic 单源同范式（注释豁免 → typed marker，§1 改造方向 #2）；按 §6.2 一锅替换不 ratchet；当前事故密度 1，挂 Wave 4 触发型 |
 
 ---
@@ -97,7 +97,7 @@
 |---|---|---|
 | **节点遍历漏斗（原 PR-Φ）** | 14-18h dev / 5-7h review | 保留（typed callback per node kind 是 AI-hard 范本）|
 | **PR-Φ-HARD-EACHNODE-WALKDEPTH-01**（PR-Φ 补遗）✅ 已 ship (PR #460) | 12-16h dev / 4-5h review | **已 ship (PR #460)**。`scanner.EachNode[N](root, fn)` 拆为 `EachInSubtree[N]` + `EachInChildren[N]`，删 `EachNode`；让 walk depth 在编译期成为 typed choice（违反不可表达 = Hard）。实际范围：297 调用站点 / 64 文件 audit + bulk-rename；高风险站点（CompositeLit/SwitchStmt/SelectStmt 内嵌 KeyValueExpr/CaseClause/CommClause 类）逐个语义审计。完成后删除 `eachnode.go`（符号彻底消除）。7 commits（详见 PR #460 commit history；squash merge 后通过 PR 编号追溯）。**paired-index 收编**：原 plan 估 8 处，实际扩展到 14 处（path B 守卫翻牌命中 PR #445 之外的隐性 Soft 残留：adapter_returns_declared_types / goose_session_locker / redis_key_namespace / setup_admin_bootstrap_closure 等）——符合 §6.2 一锅替换不 ratchet。**PR445-FU F1**（contract_spec_clients_test.go paired-index）+ **F3**（rmq_invariants_test.go SelectStmt/容器）+ **4ad2b4a6 commit 已提取的 outbox/security helpers** 一并收编关闭。**吸收 PR #445 round-2 已确认的 direct-child 漂移**：codegen ContractSpec nested KeyValueExpr、ROLE-ADMIN top-level const、outbox top-level const。单源 backlog：`PR-Φ-HARD-EACHNODE-WALKDEPTH-01`。 |
-| **panic 单源 typed marker（原 PR-D' 重审）** | 7-10h dev / 3h review | **方案改造**：放弃"就地注释 ADR-approved"（Soft），改成 `panicregister.Approved("reason")` typed function 包装 panic（Hard）；同 PR 加 archtest 强制所有 `panic(...)` 必须包装 + 4 处 re-throw + 30+ Must* 改造 |
+| **panic 单源 typed marker（原 PR-D' 重审）✅ 已 ship (PR #467，2026-05-11)** | 7-10h dev / 3h review | **已 ship (PR #467)**。放弃"就地注释 ADR-approved"（Soft），改为 `pkg/panicregister.Approved("reason", value)` typed function 包装所有生产 panic（Hard）。archtest `PANIC-REGISTERED-01` 重写：删除 `architecturalPanicWhitelist` Go map、`AllowMust` prefix 豁免、ADR reconciliation guard；改为 AST + `*types.Info` 验证 panic arg = `panicregister.Approved(literal, _)` CallExpr。50 call-site 迁移（4 C-class re-throw + 4.2 目录 A/B-class programmer-error sites）。codegen template 更新。ADR `docs/architecture/202604270030-architectural-panic-whitelist.md` 同步重写（§4 reason catalog + §5 No prefix-based exemption + Mechanics 段）。`.claude/rules/gocell/error-handling.md` Panic taxonomy 段重写。`.claude/rules/gocell/ai-collab.md` Hard 范本新增 typed function call as Hard funnel 条目。 |
 
 ### Wave 3：AI-rebust 升级批（与 Wave 2 并行或之后）
 
@@ -161,7 +161,7 @@ GoCell invariant 不只 archtest 一种载体——按"违反可不可达 → AI
 L5（scanner AST）默认 Medium，但落入下面任一形态即降为 Soft，必须升 L4 或 L0：
 
 - **按方法名识别 receiver**：`f.ReadDir(...)` AST 看不到 `f` 是 `*os.File`（PR431-FU-BFS-EMITTER 仍待治理；同类 USAGE-01 已由 PR #445 升 type-aware 闭环）
-- **按字符串注释豁免**：`// PANIC-REGISTERED-01: ADR-approved: ...`（panic 单源 typed marker 是 Wave 2 必做）
+- **按字符串注释豁免**：`// PANIC-REGISTERED-01: ADR-approved: ...`（panic 单源 typed marker 已 ship PR #467，2026-05-11）
 - **按方法名 convention**：`newResult` / `Emit*` 等命名约定识别 emitter
 - **hand-crafted fixture**：fixture 内容由人/AI 编写，不是 real source AST capture
 

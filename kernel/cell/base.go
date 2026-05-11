@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // Compile-time interface compliance checks.
@@ -126,7 +127,7 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
 	c, err := NewBaseCell(meta)
 	if err != nil {
-		panic(errcode.Assertion("cell.MustNewBaseCell: %v", err))
+		panic(panicregister.Approved("cell-base-init", errcode.Assertion("cell.MustNewBaseCell: %v", err)))
 	}
 	return c
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // HTTPHandler wraps next with contract-id propagation and contract-derived
@@ -65,7 +66,7 @@ func HTTPHandler(spec contractspec.ContractSpec, next http.Handler) (http.Handle
 func MustHTTPHandler(spec contractspec.ContractSpec, next http.Handler) http.Handler {
 	h, err := HTTPHandler(spec, next)
 	if err != nil {
-		panic(errcode.Assertion("wrapper: handler: %v", err))
+		panic(panicregister.Approved("wrapper-handler-init", errcode.Assertion("wrapper: handler: %v", err)))
 	}
 	return h
 }

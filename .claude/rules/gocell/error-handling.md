@@ -36,15 +36,43 @@
 
 `WithInternal` 不受 const literal 约束。archtest `MESSAGE-CONST-LITERAL-01` 静态守卫，拦截任何在 `errcode.New/Wrap` 第三参数位置出现 `fmt.Sprintf` 或字符串拼接的调用点。
 
-## Assertion vs panic
+## Panic taxonomy and Approved funnel
 
-生产代码 panic 分三类处理：
+All production panic calls must wrap with the typed marker:
 
-- **A 类（状态机不可达分支）**：走 `errcode.Assertion("invalid state: %v", state)`，语义等同 `errcode.New(KindInternal, ErrInternal, ..., WithCategory(CategoryInfra))`，由 kernel recover 捕获后转 500 并记 Error 日志。
-- **B 类（参数约定违反，编程错误）**：同 A 类，用 `errcode.Assertion`。
-- **C 类（显式 re-throw，框架生命周期）**：保留 bare `panic`，共 6 处明确豁免：`lifecycle.go` 启动超时、`circuit_breaker` recover re-throw、`tx_manager` 嵌套事务 re-throw、`websocket handler` protocol error、`metrics` 注册冲突、`kernel/cell` bootstrap fatal。
+```
+panic(panicregister.Approved("<reason>", <value>))
+```
 
-新增 panic 必须在代码注释中声明属于哪一类，C 类需额外说明豁免理由。archtest `PANIC-REGISTERED-01` 拦截在非豁免列表文件里出现的 bare panic（recover 块内 re-throw 需在 `architecturalPanicWhitelist` 中显式注册）。
+`<reason>` is a kebab-case string literal identifying the site (e.g.
+`registry-health-name`, `pg-tx-savepoint-rollback-rethrow`). It is not
+cross-checked against any catalog at build time; it serves as source-level
+documentation.
+
+`<value>` is the panic payload:
+
+- **A class** (state-machine unreachable branch): wrap `errcode.Assertion("...")` —
+  the constructor returns `*errcode.Error` with KindInternal/ErrInternal/CategoryInfra
+  for kernel Recovery middleware to convert to 500 and log.
+- **B class** (programmer-error parameter): same as A — `errcode.Assertion("...")`.
+- **C class** (framework re-throw): wrap the original recovered value unchanged.
+  These are exactly four sites — `kernel/wrapper/lifecycle.go::recoverAndFinish`,
+  `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure`,
+  `adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback`,
+  `adapters/postgres/tx_manager.go::repanicAfterSavepointRollback`. See
+  `docs/architecture/202604270030-architectural-panic-whitelist.md` §4.1.
+
+Archtest `PANIC-REGISTERED-01` enforces the wrap shape: every production
+`panic(arg)` must have `arg = panicregister.Approved(literal, _)` CallExpr.
+There is no `Must*`-prefix exemption, no comment-anchor escape, no whitelist
+map. AI co-authors writing a new panic call site can either:
+
+1. Wrap with Approved + Assertion (A/B class) and the archtest passes.
+2. Wrap with Approved + recovered value (C class) — used in exactly the
+   four ADR-listed re-throw functions.
+
+Any other shape — bare panic, missing wrap, non-literal reason, different
+callee — fails archtest immediately.
 
 ## Details 类型安全：slog.Attr
 

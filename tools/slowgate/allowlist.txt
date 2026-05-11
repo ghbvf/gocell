@@ -35,6 +35,9 @@ github.com/ghbvf/gocell/tools/archtest	TestClockInjectionProdCallsite
 github.com/ghbvf/gocell/tools/archtest	TestErrcodeMessageConstLiteral
 # type-graph-load: exported error-new scan over module
 github.com/ghbvf/gocell/tools/archtest	TestExportedErrorNew
+# type-graph-load: PANIC-REGISTERED-01 scan over module — iterates 7 build-tag
+# sets (typeseval.KnownNonDefaultTags), each driving its own packages.Load
+github.com/ghbvf/gocell/tools/archtest	TestPanicRegistered
 # type-graph-load: kernel/clock leaf-fallback scan over module
 github.com/ghbvf/gocell/tools/archtest	TestKernelClockLeafFallback
 # type-graph-load: kernel/clock reset-relative scan over module

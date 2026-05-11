@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // Code is a typed error code string.
@@ -729,9 +731,8 @@ func WithDetails(attrs ...slog.Attr) Option {
 }
 
 // MustValidateDetailsKinds panics with errcode.Assertion when any attr in
-// attrs has a wire-unsafe kind. The Must* prefix marks this as a
-// programmer-error fail-fast site (PANIC-REGISTERED-01 auto-exempt under
-// the project's "Must* may panic" convention).
+// attrs has a wire-unsafe kind. This is a programmer-error fail-fast site
+// (panic wrapped with panicregister.Approved per PANIC-REGISTERED-01).
 //
 // Exposed so callers that build *Error values directly (test fixtures,
 // future builders) can validate at construction time the same way
@@ -739,16 +740,16 @@ func WithDetails(attrs ...slog.Attr) Option {
 func MustValidateDetailsKinds(attrs []slog.Attr) {
 	for _, attr := range attrs {
 		if !isWireSafeAttrKind(attr.Value.Kind()) {
-			panic(Assertion(
+			panic(panicregister.Approved("errcode-redact-attr-self", Assertion(
 				"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
 					"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
-				attr.Key, attr.Value.Kind()))
+				attr.Key, attr.Value.Kind())))
 		}
 		if !isWireSafeAttrValue(attr) {
-			panic(Assertion(
+			panic(panicregister.Approved("errcode-redact-message-self", Assertion(
 				"errcode.WithDetails: attr %q has non-finite float64 value; "+
 					"use a finite number or string sentinel",
-				attr.Key))
+				attr.Key)))
 		}
 	}
 }

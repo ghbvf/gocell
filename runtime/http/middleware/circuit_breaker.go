@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -80,7 +81,7 @@ func CircuitBreaker(cb Allower) (func(http.Handler) http.Handler, error) {
 func MustCircuitBreaker(cb Allower) func(http.Handler) http.Handler {
 	mw, err := CircuitBreaker(cb)
 	if err != nil {
-		panic(errcode.Assertion("circuit_breaker: %v", err))
+		panic(panicregister.Approved("circuit-breaker-init", errcode.Assertion("circuit_breaker: %v", err)))
 	}
 	return mw
 }
@@ -132,7 +133,7 @@ func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r
 // preserves the in-flight panic for the outer Recovery middleware, which owns
 // panic logging, tracing, and HTTP 500 serialization.
 func repanicAfterBreakerFailure(recovered any) {
-	panic(recovered)
+	panic(panicregister.Approved("circuit-breaker-rethrow-after-failure-report", recovered))
 }
 
 // ensureRecorder returns the existing RecorderState from context, or creates a

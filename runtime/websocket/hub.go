@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -186,9 +187,8 @@ type Hub struct {
 }
 
 // MustValidateHubConfig panics if cfg contains values that would cause
-// runtime panics or zero-budget shutdown later. Called by NewHub. Exposed as
-// a Must* function to satisfy archtest PANIC-REGISTERED-01 (panic() must
-// live inside Must* functions or ADR-registered exceptions).
+// runtime panics or zero-budget shutdown later. Called by NewHub. Every panic
+// in this function is wrapped with panicregister.Approved per PANIC-REGISTERED-01.
 //
 // Validates:
 //   - ShutdownTimeout < 0 → would collapse external-cancel context to
@@ -199,10 +199,16 @@ type Hub struct {
 // Zero values are accepted (NewHub falls back to package defaults).
 func MustValidateHubConfig(cfg HubConfig) {
 	if cfg.ShutdownTimeout < 0 {
-		panic("websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0")
+		panic(panicregister.Approved(
+			"websocket-hub-shutdown-timeout-negative",
+			errcode.Assertion("websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0"),
+		))
 	}
 	if cfg.ConcurrentCloseLimit < 0 {
-		panic("websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0")
+		panic(panicregister.Approved(
+			"websocket-hub-close-limit-negative",
+			errcode.Assertion("websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0"),
+		))
 	}
 }
 

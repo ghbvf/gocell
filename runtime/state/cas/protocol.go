@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -116,7 +117,8 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 func MustNewProtocol(opts ...Option) *Protocol {
 	p, err := NewProtocol(opts...)
 	if err != nil {
-		panic(err)
+		panic(panicregister.Approved("cas-protocol-init",
+			errcode.Assertion("cas: protocol construction failed: %v", err)))
 	}
 	return p
 }

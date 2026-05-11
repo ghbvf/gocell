@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
@@ -43,7 +44,7 @@ func NewHandler(svc Service) *Handler {
 	h := &Handler{svc: svc}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(errcode.Assertion("generated handler http.auth.login.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(panicregister.Approved("http-auth-login-v1-public-schema-compile-failed", errcode.Assertion("generated handler http.auth.login.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 	return h
