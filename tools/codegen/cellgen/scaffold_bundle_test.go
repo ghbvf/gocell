@@ -480,3 +480,53 @@ func TestScaffoldCellBundle_BundleDefaultIsHTTP(t *testing.T) {
 		t.Errorf("default bundle should produce HTTP contract; got: %v", err)
 	}
 }
+
+// TestPlanBundleFiles_ErrorCarriesKindLabelInDetails asserts that when the
+// shared slice/contract render pipeline (planBundleFiles) fails at the
+// ContainPath leaf, the wrapped *errcode.Error carries the caller-supplied
+// kindLabel as a `kind` detail. This locks the contract that bundle-layer
+// errors disambiguate slice vs contract origin through structured details
+// rather than message-string prefixes — protecting against re-introduction
+// of message/kind coupling (PR453 P2 finding).
+func TestPlanBundleFiles_ErrorCarriesKindLabelInDetails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	cases := []struct {
+		name      string
+		kindLabel string
+	}{
+		{"slice path", "slice"},
+		{"contract path", "contract"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Absolute targetRel forces pathsafe.ContainPath to reject before
+			// any template work, exercising the planBundleFiles top-level wrap.
+			_, err := planBundleFiles(root, "/escapes", nil, nil, nil, tc.kindLabel)
+			if err == nil {
+				t.Fatal("planBundleFiles with absolute targetRel: want error, got nil")
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("err is not *errcode.Error: %T (%v)", err, err)
+			}
+			attr, ok := ec.FindAttr("kind")
+			if !ok {
+				t.Fatalf("planBundleFiles wrap must carry 'kind' detail; got details=%v", ec.Details)
+			}
+			if got := attr.Value.String(); got != tc.kindLabel {
+				t.Errorf("kind detail = %q, want %q", got, tc.kindLabel)
+			}
+			// Message must remain neutral (no slice/contract leakage) so that
+			// kind disambiguation lives in structured details only.
+			if strings.Contains(ec.Message, tc.kindLabel) {
+				t.Errorf("message %q must not embed kind label %q; carry it in details instead",
+					ec.Message, tc.kindLabel)
+			}
+		})
+	}
+}

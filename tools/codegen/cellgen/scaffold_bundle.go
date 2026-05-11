@@ -248,7 +248,7 @@ func planBundleFiles(
 	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"scaffold contract: render failed", err,
+			"scaffold bundle: plan path failed", err,
 			errcode.WithDetails(slog.String("kind", kindLabel)))
 	}
 
@@ -275,7 +275,7 @@ func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data a
 		var buf bytes.Buffer
 		if err := tpl.ExecuteTemplate(&buf, f.Section, data); err != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-				"scaffold contract: render artifact failed", err,
+				"scaffold bundle: render artifact failed", err,
 				errcode.WithDetails(
 					slog.String("kind", kindLabel),
 					slog.String("artifact", f.Description),
@@ -286,7 +286,7 @@ func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data a
 			formatted, err := codegen.FormatGoSource("", out)
 			if err != nil {
 				return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-					"scaffold contract: format artifact failed", err,
+					"scaffold bundle: format artifact failed", err,
 					errcode.WithDetails(
 						slog.String("kind", kindLabel),
 						slog.String("artifact", f.Name),

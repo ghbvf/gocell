@@ -331,18 +331,18 @@ func buildSubscriptionSpecFromBundle(p *metadata.ProjectMeta, cellID string, sub
 	}
 	contract, ok := p.Contracts[sub.Topic]
 	if !ok {
-		isStub := stubTopicPattern.MatchString(sub.Topic)
 		details := []slog.Attr{
 			slog.String("cellID", cellID),
 			slog.String("sliceID", sub.Slice),
 			slog.String("topic", sub.Topic),
 		}
-		msg := "cellgen build: subscribes to unknown contract"
-		if isStub {
-			msg = "cellgen build: subscribes to unknown contract (looks like a scaffold stub — replace topic with a real contract id)"
+		if stubTopicPattern.MatchString(sub.Topic) {
+			return SubscriptionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
+				"cellgen build: subscribes to unknown contract (looks like a scaffold stub — replace topic with a real contract id)",
+				errcode.WithDetails(details...))
 		}
 		return SubscriptionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
-			msg,
+			"cellgen build: subscribes to unknown contract",
 			errcode.WithDetails(details...))
 	}
 	if contract.Kind != "event" {
