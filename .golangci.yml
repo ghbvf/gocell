@@ -336,7 +336,10 @@ linters:
           # Two-layer defense:
           #   - depguard scaffold-os-ban → fails at golangci-lint (Hard, package-level)
           #   - tools/archtest/scaffold_write_funnel_test.go → fails at go test
-          #     (Medium, AST method-call level — covers reflect/unsafe bypass)
+          #     (Medium, type-aware via go/types Info — recognises os calls
+          #     across normal import, `import osx "os"` alias, and
+          #     `import . "os"` dot-import; reflect/unsafe stays the only
+          #     remaining bypass surface)
           #
           # Exempted paths (not in this rule's files list):
           #   - pkg/pathsafe/**   (funnel implementation itself)
