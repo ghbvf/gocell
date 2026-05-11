@@ -267,7 +267,7 @@ Remaining watchlist:
 
 ## Revision history
 
-2026-05-11: rewritten for Wave 2 single-funnel design (PR #TBD; commit message
+2026-05-11: rewritten for Wave 2 single-funnel design (PR #467; commit message
 references this ADR). §4 replaced the 4-row Function-name whitelist table with a
 categorized reason-literal catalog. §5 (Auto-exempt categories / Must* prefix) deleted
 and replaced with "No prefix-based exemption". §"Whitelist mechanics" deleted and
