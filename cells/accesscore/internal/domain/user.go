@@ -48,6 +48,16 @@ const (
 	UserSourceSetup UserSource = "setup"
 )
 
+// ValidUserSource returns true if the given source is a known valid source.
+func ValidUserSource(s UserSource) bool {
+	switch s {
+	case UserSourceIdentity, UserSourceSetup:
+		return true
+	default:
+		return false
+	}
+}
+
 // User is the identity aggregate root for accesscore.
 type User struct {
 	ID                    string

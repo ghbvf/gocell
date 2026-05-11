@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -264,6 +265,18 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+	if !domain.ValidUserStatus(domain.UserStatus(status)) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"scanUser: invalid status from DB",
+			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "status")),
+			errcode.WithInternal(fmt.Sprintf("scanned status=%q", status)))
+	}
+	if !domain.ValidUserSource(domain.UserSource(source)) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"scanUser: invalid creation_source from DB",
+			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "creation_source")),
+			errcode.WithInternal(fmt.Sprintf("scanned source=%q", source)))
 	}
 	u.Status = domain.UserStatus(status)
 	u.CreationSource = domain.UserSource(source)

@@ -59,6 +59,15 @@ CREATE INDEX IF NOT EXISTS idx_users_status
 -- WARNING: Irreversible — DROP TABLE destroys every user row including the
 -- bootstrap admin. Coordinate with operator before running in any
 -- environment that has real data.
+-- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
+-- Set by Migrator.Down's destructiveDownSessionLocker; direct goose CLI / psql bypass
+-- without the GUC will RAISE EXCEPTION here.
+DO $$
+BEGIN
+    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
+    END IF;
+END $$;
 DROP INDEX IF EXISTS idx_users_status;
 DROP INDEX IF EXISTS idx_users_email;
 DROP INDEX IF EXISTS idx_users_username;

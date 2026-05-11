@@ -56,7 +56,7 @@ type MigrationStatus struct {
 	AppliedAt time.Time
 }
 
-const allowDestructiveRefreshTokensDownGUC = "gocell.allow_destructive_refresh_tokens_down"
+const allowDestructiveDownGUC = "gocell.allow_destructive_down"
 
 // DestructiveDownPermit is an explicit break-glass token required for any schema
 // rollback. The unexported marker makes the permit sealed: callers outside this
@@ -243,8 +243,8 @@ func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sq
 		}
 	}()
 	if _, err := conn.ExecContext(ctx,
-		`SELECT set_config($1, 'true', false)`, allowDestructiveRefreshTokensDownGUC); err != nil {
-		return fmt.Errorf("postgres: enable destructive refresh_tokens down SQL guard: %w", err)
+		`SELECT set_config($1, 'true', false)`, allowDestructiveDownGUC); err != nil {
+		return fmt.Errorf("postgres: enable destructive down SQL guard: %w", err)
 	}
 	return nil
 }
@@ -252,7 +252,7 @@ func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sq
 func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
 	resetCtx := context.WithoutCancel(ctx)
 	_, resetErr := conn.ExecContext(resetCtx,
-		`SELECT set_config($1, '', false)`, allowDestructiveRefreshTokensDownGUC)
+		`SELECT set_config($1, '', false)`, allowDestructiveDownGUC)
 	unlockErr := l.inner.SessionUnlock(resetCtx, conn)
 	return errors.Join(resetErr, unlockErr)
 }

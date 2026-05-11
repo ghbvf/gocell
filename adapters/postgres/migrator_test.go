@@ -156,11 +156,23 @@ func TestMigrationsFS_SubDirectory(t *testing.T) {
 
 	expected, err := ExpectedVersion(mfs)
 	require.NoError(t, err)
-	assert.Equal(t, int64(len(versions)), expected,
-		"max version (%d) must equal file count (%d) — migrations must be contiguous from 001",
-		expected, len(versions))
+
+	// knownGaps records migration version numbers that are intentionally absent.
+	// Add an entry here only when an in-flight PR has reserved the slot but
+	// the migration file has not yet landed; remove the entry once the gap
+	// closes (e.g. PR #464 reserved 022 → S6 merged → entry removed).
+	// Empty map = contiguous migrations, the steady state.
+	knownGaps := map[int64]string{}
+
+	// Max version must equal file count plus known-gap count.
+	assert.Equal(t, int64(len(versions)+len(knownGaps)), expected,
+		"max version (%d) must equal file count (%d) + known gaps (%d)",
+		expected, len(versions), len(knownGaps))
 
 	for v := int64(1); v <= expected; v++ {
+		if _, ok := knownGaps[v]; ok {
+			continue // intentionally absent
+		}
 		assert.Contains(t, versions, v, "missing migration with version %03d", v)
 	}
 }
