@@ -238,11 +238,15 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 //     b) `for _, X := range Y { switch X := X.(type) { case *ast.W: } }` —
 //     TypeSwitchStmt in body with binding-name operand + *ast.<Kind> case
 //     c) `for i := range Y { Y[i].(*ast.W) }` — rs.Value is nil (paired-index);
-//     TypeAssertExpr in body is IndexExpr(Y, i).(*ast.<Kind>)
+//     TypeAssertExpr in body is IndexExpr(Y, i).(*ast.<Kind>), OR the type
+//     assertion targets an intermediate variable trivially aliased to Y[i]
+//     via `tmp := Y[i]` inside rs.Body (single-level alias only).
 //
 // Form (c) was previously exempted by the `rs.Value == nil` early-return; that
 // exemption is removed now that EachInChildren provides a typed children-only
-// API that makes paired-index iteration unnecessary.
+// API that makes paired-index iteration unnecessary. The intermediate-variable
+// path closes a trivial AST rewrite that would otherwise let AI bypass form
+// (c) by writing `tmp := Y[i]; tmp.(*ast.W)` instead of the direct form.
 func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var diags []scanner.Diagnostic
 	scanner.EachInSubtree[ast.RangeStmt](file, func(rs *ast.RangeStmt) {
@@ -308,14 +312,27 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 				return
 			}
 
-			scanner.EachInSubtree[ast.TypeAssertExpr](rs.Body, func(ta *ast.TypeAssertExpr) {
-				if ta.Type == nil {
+			// Collect intermediate variable aliases for Y[indexName] introduced
+			// in rs.Body via `tmp := Y[i]` (token.DEFINE, single LHS+RHS,
+			// matching index variable and same slice as rs.X). This closes the
+			// trivial AST rewrite that would otherwise let AI bypass form (c)
+			// by writing `tmp := Y[i]; tmp.(*ast.W)` instead of the direct
+			// form. Double-aliasing (`tmp1 := Y[i]; tmp2 := tmp1; tmp2.(*ast.W)`)
+			// is intentionally not chased — single-level alias is the natural
+			// rewrite; deeper chains are corner.
+			intermediateAliases := map[string]struct{}{}
+			scanner.EachInSubtree[ast.AssignStmt](rs.Body, func(asgn *ast.AssignStmt) {
+				if asgn.Tok != token.DEFINE {
 					return
 				}
-				if !isStarAstNodeType(info, ta.Type) {
+				if len(asgn.Lhs) != 1 || len(asgn.Rhs) != 1 {
 					return
 				}
-				idx, ok := ta.X.(*ast.IndexExpr)
+				lhsId, ok := asgn.Lhs[0].(*ast.Ident)
+				if !ok {
+					return
+				}
+				idx, ok := asgn.Rhs[0].(*ast.IndexExpr)
 				if !ok {
 					return
 				}
@@ -324,6 +341,33 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 					return
 				}
 				if exprRepr(idx.X) != rsXRepr {
+					return
+				}
+				intermediateAliases[lhsId.Name] = struct{}{}
+			})
+
+			scanner.EachInSubtree[ast.TypeAssertExpr](rs.Body, func(ta *ast.TypeAssertExpr) {
+				if ta.Type == nil {
+					return
+				}
+				if !isStarAstNodeType(info, ta.Type) {
+					return
+				}
+				// Direct form: `Y[i].(*ast.W)` — ta.X is the IndexExpr.
+				if idx, ok := ta.X.(*ast.IndexExpr); ok {
+					idxId, ok := idx.Index.(*ast.Ident)
+					if !ok || idxId.Name != indexName {
+						return
+					}
+					if exprRepr(idx.X) != rsXRepr {
+						return
+					}
+				} else if id, ok := ta.X.(*ast.Ident); ok {
+					// Intermediate-alias form: `tmp := Y[i]; tmp.(*ast.W)`.
+					if _, found := intermediateAliases[id.Name]; !found {
+						return
+					}
+				} else {
 					return
 				}
 				diags = append(diags, scanner.Diagnostic{
@@ -605,8 +649,9 @@ func runFixture(t *testing.T, src string) []scanner.Diagnostic {
 
 // TestScannerFrameworkUsage01_Fixture exercises forbiddenWalkRefs and
 // forbiddenAstListTypeAssertions directly via parsed-from-string fixtures.
-// 30 cases cover every AST shape the live rule must catch (path A: 12, path
-// A': 4, path B: 10, form-(c) escape hatches: 3) plus 6 negative shapes
+// 32 cases cover every AST shape the live rule must catch (path A: 12, path
+// A': 4, path B: 10, form-(c) including paired-index direct + intermediate-
+// alias rewrite: 5, companion-index escape hatches: 2) plus 6 negative shapes
 // scattered within path B, plus 1 standalone negative.
 // Because both the live rule and this fixture call the same pure functions,
 // they cannot drift.
@@ -984,17 +1029,18 @@ func _(file *ast.File) {
 			wantHits: 0, // companion-index guard: i passed as call arg → not flagged
 		},
 
-		// ============ Form (c) intermediate-variable escape hatch — F10 ============
+		// ============ Form (c) intermediate-variable trivial rewrite — F10 (post-review hardening) ============
 
 		{
-			// F10: intermediate variable decouples the index from the type assertion.
-			// form (c) checks for `Y[i].(*ast.W)` — i.e. TypeAssertExpr.X must be
-			// an IndexExpr. When the caller writes `decl := file.Decls[i]; decl.(*ast.FuncDecl)`,
-			// ta.X is the Ident `decl`, not an IndexExpr — form (c) does not fire.
-			// This is an intentional escape hatch: intermediate variable makes the
-			// pairing intent explicit and is a valid GoCell pattern when the variable
-			// name clarifies meaning.
-			name: "for_range_index_with_intermediate_var_passes",
+			// Trivial AST rewrite: `tmp := Y[i]; tmp.(*ast.W)` is semantically
+			// identical to `Y[i].(*ast.W)`. Before the post-review hardening,
+			// form (c) only checked ta.X.(*ast.IndexExpr) and missed this
+			// alias form — AI could mechanically rewrite paired-index into a
+			// two-line alias to bypass the guard. The form (c) implementation
+			// now collects single-level intermediate aliases via AssignStmt
+			// (DEFINE token, single LHS+RHS, indexing rs.X with rs.Key) and
+			// flags TypeAssertExpr on those aliases.
+			name: "for_range_index_with_intermediate_var_flagged",
 			src: `package fake
 import "go/ast"
 func _(file *ast.File) {
@@ -1004,7 +1050,39 @@ func _(file *ast.File) {
 	}
 }
 `,
-			wantHits: 0, // intermediate variable: ta.X is Ident not IndexExpr → form (c) does not fire
+			wantHits: 1, // post-review: intermediate alias is a trivial rewrite, now flagged
+		},
+		{
+			// Negative: intermediate variable is bound but never type-asserted —
+			// no path B violation, even though the alias exists.
+			name: "for_range_index_intermediate_var_no_type_assert_passes",
+			src: `package fake
+import "go/ast"
+func _(file *ast.File) {
+	for i := range file.Decls {
+		decl := file.Decls[i]
+		_ = decl
+	}
+}
+`,
+			wantHits: 0,
+		},
+		{
+			// Negative: alias indexes a *different* slice (rs.X mismatch) —
+			// intermediateAliases pruning checks exprRepr(idx.X) == rsXRepr,
+			// so this Ident is not registered as an alias of file.Decls[i].
+			name: "for_range_index_intermediate_var_different_slice_passes",
+			src: `package fake
+import "go/ast"
+func _(file *ast.File, other []ast.Decl) {
+	for i := range file.Decls {
+		_ = file.Decls[i]
+		alt := other[i]
+		if d, ok := alt.(*ast.FuncDecl); ok { _ = d }
+	}
+}
+`,
+			wantHits: 0, // alt aliases other[i], not file.Decls[i] → not a form (c) violation for this range
 		},
 	}
 
