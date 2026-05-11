@@ -127,6 +127,20 @@ func (v *Validator) newResult(s string) {}
 			expected: nil,
 		},
 		{
+			name: "variadic_format_emitter_ignored_RED",
+			// A method with the canonical (string, ...) → ValidationResult
+			// shape but variadic must NOT be treated as an emitter:
+			// x.Args[0] would be the format template, not a rule ID.
+			source: `package fixture
+type ValidationResult struct{ Code string }
+type Validator struct{}
+func (v *Validator) rules()                                       { v.newResultf("rule %s applied", "FOO-BAR") }
+func (v *Validator) newResultf(fmtStr string, args ...interface{}) ValidationResult { return ValidationResult{} }
+`,
+			roots:    []funcKey{{recv: "Validator", name: "rules"}},
+			expected: nil,
+		},
+		{
 			name: "foreign_package_named_validationresult_ignored_RED",
 			// A method that returns a *types.Named called ValidationResult
 			// from a *different package* than the receiver must NOT be

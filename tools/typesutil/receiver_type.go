@@ -24,6 +24,38 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
+// ResolveCallee returns the static method callee together with its
+// receiver's named type for a method call. This is the canonical resolver
+// for archtest / governance rules that need both pieces — typically the
+// signature (for parameter / return type checks) AND the receiver named
+// type (for owner-package or specific-type checks).
+//
+// Returns ok=false in the same cases as ResolveReceiverType: builtins,
+// interface dispatch, package-level functions, method values, methods on
+// anonymous receivers.
+//
+// Callers that only need the named receiver type should use
+// ResolveReceiverType; this entry point exists so callers needing the
+// signature don't pay a second typeutil.StaticCallee lookup.
+func ResolveCallee(typesInfo *types.Info, call *ast.CallExpr) (fn *types.Func, named *types.Named, isPtr bool, ok bool) {
+	if typesInfo == nil || call == nil {
+		return nil, nil, false, false
+	}
+	fn = typeutil.StaticCallee(typesInfo, call)
+	if fn == nil {
+		return nil, nil, false, false
+	}
+	sig, sigOK := fn.Type().(*types.Signature)
+	if !sigOK || sig.Recv() == nil {
+		return nil, nil, false, false
+	}
+	isPtr, named = receiverNamed(sig.Recv())
+	if named == nil {
+		return nil, nil, false, false
+	}
+	return fn, named, isPtr, true
+}
+
 // ResolveReceiverType returns the named receiver type for a method call,
 // e.g. (*scanner.Scanner) for s.EachInSubtree(...). It returns ok=false for
 // any call that cannot be statically resolved to a method on a named type:
@@ -46,19 +78,8 @@ import (
 //   - Alias-pointer chains (`type P = *T; func (P) M()`) unalias before the
 //     pointer cast, matching upstream typesinternal.ReceiverNamed.
 func ResolveReceiverType(typesInfo *types.Info, call *ast.CallExpr) (named *types.Named, isPtr bool, ok bool) {
-	if typesInfo == nil || call == nil {
-		return nil, false, false
-	}
-	fn := typeutil.StaticCallee(typesInfo, call)
-	if fn == nil {
-		return nil, false, false
-	}
-	sig, sigOK := fn.Type().(*types.Signature)
-	if !sigOK || sig.Recv() == nil {
-		return nil, false, false
-	}
-	isPtr, named = receiverNamed(sig.Recv())
-	return named, isPtr, named != nil
+	_, named, isPtr, ok = ResolveCallee(typesInfo, call)
+	return
 }
 
 // receiverNamed inlines golang.org/x/tools/internal/typesinternal.ReceiverNamed,

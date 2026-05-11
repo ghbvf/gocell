@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"golang.org/x/tools/go/packages"
-	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
@@ -220,6 +219,15 @@ func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir strin
 	// must not appear in the BFS sweep (they would self-reference the helpers).
 	// packages.Load with no test build tag returns non-test files only, but
 	// keep an explicit filter to harden against future flag changes.
+	//
+	// pkg.Syntax and pkg.GoFiles share a 1:1 index correspondence by
+	// packages.Load contract (parsed AST <-> file path); assert it explicitly
+	// so a future loader regression that breaks the alignment fails fast
+	// rather than silently picking the wrong path for each AST file.
+	if len(pkg.Syntax) != len(pkg.GoFiles) {
+		t.Fatalf("packages.Load returned Syntax/GoFiles of unequal length (%d vs %d)",
+			len(pkg.Syntax), len(pkg.GoFiles))
+	}
 	var files []*ast.File
 	for i, f := range pkg.Syntax {
 		path := pkg.GoFiles[i]
@@ -476,16 +484,12 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 	if len(x.Args) == 0 {
 		return
 	}
-	recvNamed, _, ok := typesutil.ResolveReceiverType(c.typesInfo, x)
+	fn, recvNamed, _, ok := typesutil.ResolveCallee(c.typesInfo, x)
 	if !ok {
 		return
 	}
-	fn := typeutil.StaticCallee(c.typesInfo, x)
-	if fn == nil {
-		return
-	}
-	sig, sigOK := fn.Type().(*types.Signature)
-	if !sigOK || !signatureMatchesValidationResultEmitter(sig, recvNamed) {
+	sig := fn.Type().(*types.Signature)
+	if !signatureMatchesValidationResultEmitter(sig, recvNamed) {
 		return
 	}
 	if id := c.resolveID(x.Args[0]); id != "" {
@@ -502,6 +506,14 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 // the type-system definition of "ValidationResult emitter", independent of
 // any method-name convention.
 func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *types.Named) bool {
+	// Variadic emitters are not a canonical shape — a format-string
+	// emitter like `newResultf(fmt string, args ...any) ValidationResult`
+	// has a string at param 0 but x.Args[0] is the format template, not a
+	// rule ID. Reject variadic outright; if a future emitter genuinely
+	// needs variadic args, extend handleCall's ID-resolution accordingly.
+	if sig.Variadic() {
+		return false
+	}
 	if sig.Params().Len() < 1 || sig.Results().Len() != 1 {
 		return false
 	}

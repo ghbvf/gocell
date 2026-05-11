@@ -174,6 +174,50 @@ func init() { _ = Box[int]{}.Get() }
 	assert.False(t, isPtr)
 }
 
+func TestResolveReceiverType_AliasPointerReceiver(t *testing.T) {
+	// type P = *T is a Go 1.22+ alias pointer. The helper must unalias
+	// before the pointer cast so methods declared on the alias resolve
+	// to T (the underlying named type).
+	src := `package fixture
+type T struct{}
+type P = *T
+func (p P) M() {}
+func init() { var p P = &T{}; p.M() }
+`
+	call, info := firstCall(t, src)
+	named, isPtr, ok := ResolveReceiverType(info, call)
+	require.True(t, ok)
+	assert.Equal(t, "T", named.Obj().Name(),
+		"alias-pointer receiver should unalias to the underlying named type")
+	assert.True(t, isPtr)
+}
+
+func TestResolveCallee_ReturnsBothFuncAndNamed(t *testing.T) {
+	src := `package fixture
+type T struct{}
+func (t *T) M() int { return 0 }
+func init() { _ = (&T{}).M() }
+`
+	call, info := firstCall(t, src)
+	fn, named, isPtr, ok := ResolveCallee(info, call)
+	require.True(t, ok)
+	assert.Equal(t, "M", fn.Name())
+	assert.Equal(t, "T", named.Obj().Name())
+	assert.True(t, isPtr)
+}
+
+func TestResolveCallee_NilOnNonMethod(t *testing.T) {
+	src := `package fixture
+func F() {}
+func init() { F() }
+`
+	call, info := firstCall(t, src)
+	fn, named, _, ok := ResolveCallee(info, call)
+	assert.False(t, ok)
+	assert.Nil(t, fn)
+	assert.Nil(t, named)
+}
+
 func TestResolveReceiverType_NilTypesInfo(t *testing.T) {
 	call := &ast.CallExpr{}
 	named, isPtr, ok := ResolveReceiverType(nil, call)

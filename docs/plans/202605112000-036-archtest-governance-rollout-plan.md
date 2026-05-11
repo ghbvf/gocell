@@ -87,7 +87,7 @@
 - **不含**：`ImplementsInterface` helper、ARCHTEST-TYPEAWARE-HARDENING bundle 其他子条迁移
 - **工时**：实际 ~6h dev
 - **依赖**：无
-- **关闭 backlog**：`PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01` ✅（charter §3 line 79 覆盖架构师 2026-05-10 "不升级" 决议）
+- **关闭 backlog**：`PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01` ✅（charter §3 "AI-rebust 评级" table 中 PR431-FU 行的 mandate 覆盖架构师 2026-05-10 "不升级" 决议）
 - **AI-rebust 升级**：Soft（名字约定）→ Medium-偏-Hard（三重 type 谓词）。真 Hard 需 sealed interface emitter，超 PR 范围
 
 ### Phase 2.2：typeseval `ResolveCallTargetFunc` helper + dogfood（PR-TS2）
