@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 type setupPGHarness struct {
@@ -126,6 +127,8 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(bootstrapMW),
+
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -134,6 +137,8 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
+
+		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),

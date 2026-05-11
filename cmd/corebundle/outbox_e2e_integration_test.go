@@ -59,6 +59,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -220,6 +221,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(e2eBootstrapMW),
+
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
@@ -539,6 +542,8 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(refetchBootstrapMW),
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
+
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),

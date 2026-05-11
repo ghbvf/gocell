@@ -30,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // noopTxRunner executes fn directly without a real transaction.
@@ -90,6 +91,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(authBootstrapMW),
+
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -98,6 +101,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
+
+		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
@@ -312,6 +317,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(guardBootstrapMW),
+
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -320,6 +327,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
+
+		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
@@ -545,6 +554,8 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(healthBootstrapMW),
+
+		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -553,6 +564,8 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
+
+		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
