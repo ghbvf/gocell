@@ -90,17 +90,19 @@
 - **关闭 backlog**：`PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01` ✅（charter §3 "AI-rebust 评级" table 中 PR431-FU 行的 mandate 覆盖架构师 2026-05-10 "不升级" 决议）
 - **AI-rebust 升级**：Soft（名字约定）→ Medium-偏-Hard（三重 type 谓词）。真 Hard 需 sealed interface emitter，超 PR 范围
 
-### Phase 2.2：typeseval `ResolveCallTargetFunc` helper + dogfood（PR-TS2）
+### Phase 2.2：typeseval `ResolvePackageRef` + `ResolveMethodCall` helpers + dogfood（PR-TS2）
 - **范围**：
-  - `tools/archtest/internal/typeseval/call_target.go` 加 `ResolveCallTargetFunc(typesInfo *types.Info, fun ast.Expr) (*types.Func, bool)`
-  - dogfood：给 `scanner_framework_usage_test.go::forbiddenWalkRefs` 加 Ident 分支，覆盖 dot-import 路径（PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 dogfood scope 闭合）
-- **不含**：bundle 其他子条（svctoken / role_admin 剩余 dot-import 迁移留 Phase 3.2）；`ImplementsInterface` helper 不在本 PR 内（详见下方"helper 命名修订"）
+  - `tools/archtest/internal/typeseval/call_target.go` 加 `ResolvePackageRef(typesInfo *types.Info, expr ast.Expr) (pkgPath, name string, ok bool)`（path A.2 qualified `pkg.Func` + path A.3 dot-imported bare `Func`，单源 info.Uses 配 partial type info 容错）
+  - `tools/archtest/internal/typeseval/receiver_type.go` 加 `ResolveMethodCall(typesInfo *types.Info, sel *ast.SelectorExpr) (*types.Func, bool)`（path A' 方法调用，走 info.Selections.Obj() 单源，原生处理 promoted/named-type-def/generic-typeparam/alias 多形态）
+  - dogfood：给 `scanner_framework_usage_test.go::forbiddenWalkRefs` 加 (2c) bare-Ident 分支（path A.3），把 (2b) SelectorExpr 分支的 path A.2 + path A' 全部迁到上述两个 helper；新增 promoted method + named-type def fixture 关 RED bypass（PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 + path A' embedding gap 一并闭合）
+- **不含**：bundle 其他子条（svctoken / role_admin 剩余 dot-import 迁移留 Phase 3.2 PR-SH1）；`ImplementsInterface` helper 不在本 PR 内（详见下方"helper 命名修订"）
 - **工时**：6-8h dev / 2h review
 - **依赖**：无（与 Phase 2.1 可并行）
 
-### helper 命名修订（plan v0 → v1）
+### helper 命名修订（plan v0 → v1 → v2 → v3）
 plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 Ident / dot-import 匹配"）—— 两者不是同一个 helper。修订后：
-- **PR-TS2 实际做 call-matcher**（`ResolveCallTargetFunc`），与 dogfood / Phase 3.2 依赖断言一致
+- **PR-TS2 实际做 call-matcher**：实施期再次修订为 `ResolvePackageRef(typesInfo, expr) (pkgPath, name string, ok bool)`（v2），不返回 `*types.Func`。原因：fixture 经常用 `importer.Default()`，对非 stdlib 包（如 `golang.org/x/tools/go/ast/inspector`）`info.Uses[sel.X]` 仍是 `*types.PkgName`，但 `info.Uses[sel.Sel]` 是 nil；strict `*types.Func` 形式会误判漏报。`(pkgPath, name)` tuple 形式对 partial type info 容错，并且更贴合 archtest matcher 的实际消费形态（svctoken / role_admin 也是 `pkgPath + symbolName` 配对）
+- **v3 再修订**：path A' 不再走 sel.X 静态类型 walker（旧 `NamedTypeImportPath`，PR469 review-round-2 P1 证明 promoted/named-type-def case 漏报），改为 `ResolveMethodCall(info, sel) (*types.Func, bool)` 走 `info.Selections.Obj()` 路径，对齐 upstream `golang/tools` `go/types/typeutil.Callee` / `dominikh/go-tools` `analysis/code.IsCallTo`。`ResolveMethodCall` 与 Phase 2.1 计划的 `ResolveReceiverType(callExpr) (*types.Named, bool)` 各管一面：前者面向方法调用 → method `*types.Func`，后者面向 receiver value → named type；不冲突可共存
 - **`ImplementsInterface` helper 不在 rollout plan 内**，移至 backlog 作为触发型 refactor（ID：`TYPESEVAL-IFACE-IMPL-HELPER-CONSOLIDATE-01`，触发：第 4 处 runtime guard 重复 / 新规则真值需要 interface impl 枚举）。当前 3 处重复（如 `rmq_invariants_test.go::implementsAMQPChannel`）属 refactor 收编，紧迫度低
 - charter §5 L4 "interface impl 枚举"语义需求仍承认，但 helper 化驱动由真实场景触发，不预先立项
 
@@ -122,7 +124,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 ### Phase 3.2：scanner / call-matcher hardening（PR-SH1）
 - **范围**：2 子条同主题（scanner 守卫面 + path A' matcher）
   - `PR445-FU-SCANNER-FRAMEWORK-HARDENING-01`：`*inspector.Inspector` 实例方法 `Preorder/Nodes/WithStack` 加 forbiddenMethodSymbols；scanner 内部 subpackage exact allowlist
-  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01`：path A' matcher 支持裸 Ident（dot-import）—— Phase 2.2 PR-TS2 已 dogfood `ResolveCallTargetFunc` helper（forbiddenWalkRefs Ident 分支），本 PR 把剩余 2 个规则（svctoken / role_admin）按同一 helper 迁移
+  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01`（**注**：原描述把 bare-Ident 误标 path A'，实际属 path A.3 dot-import 形态；path A' 指 receiver-type 方法调用）—— Phase 2.2 PR-TS2 已 dogfood `ResolvePackageRef`（forbiddenWalkRefs 的 2b/2c 双扫描，path A.2 qualified + path A.3 bare-Ident，含 SelectorExpr.Sel 去重）+ `ResolveMethodCall`（path A' method-call，原生处理 promoted/named-type-def/generic-typeparam），本 PR 把剩余 2 个规则（svctoken / role_admin）按 `ResolvePackageRef` 迁移闭合 dot-import 路径
 - **工时**：8-11h dev / 3-4h review
 - **依赖**：Phase 2.2 PR-TS2 merge
 
@@ -181,8 +183,8 @@ Phase 1.1 (panicregister fw)  ──┐│   独立 (可与 0.1/2.x 并行)
 Phase 1.2 (Must* migration)   ←─┤│
 Phase 1.3 (archtest enforce)  ←─┘│
                                  │
-Phase 2.1 (ResolveReceiverType) ─┤  独立 (helper #1 + BFS emitter dogfood)
-Phase 2.2 (ResolveCallTargetFunc) ┤  独立 (call-matcher helper + forbiddenWalkRefs Ident dogfood，与 2.1 并行)
+Phase 2.1 (ResolveReceiverType) ─┤  独立 (helper #1 + BFS emitter dogfood) ✅ done
+Phase 2.2 (ResolvePackageRef)    ┤  独立 (call-matcher helper + forbiddenWalkRefs 2b/2c dogfood，与 2.1 并行)
                                  │
 Phase 3.1 (build-tag failclosed) │  独立
 Phase 3.2 (scanner hardening)  ←─┤  需 Phase 2.2 merge
@@ -204,7 +206,7 @@ Wave 4 触发型              触发后 按 Template-Wave4-3PR
 | Rank | Phase | 解锁的下游 | 工时 |
 |---|---|---|---|
 | 1 | Phase 2.1 PR-TS1（ResolveReceiverType helper + BFS emitter dogfood）✅ done | Phase 3.2 scanner hardening 部分 + 关闭 PR431-FU | 6-8h |
-| 2 | Phase 2.2 PR-TS2（ResolveCallTargetFunc helper + forbiddenWalkRefs Ident dogfood）| Phase 3.2 scanner hardening 剩余 | 6-8h |
+| 2 | Phase 2.2 PR-TS2（ResolvePackageRef helper + forbiddenWalkRefs 2b/2c dogfood）| Phase 3.2 scanner hardening 剩余 | 6-8h |
 | 3 | Phase 0.1（backlog 收尾，独立小）| — | 1-2h |
 | 4 | Phase 1.1 PR-PR1（panicregister framework）| Phase 1.2/1.3 | 3-4h |
 | 5 | Phase 3.1 PR-BT1（build-tag fail-closed）| — | 8-12h |

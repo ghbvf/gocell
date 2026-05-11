@@ -33,13 +33,20 @@ import (
 // archtest *_test.go files at tools/archtest/<file>_test.go must use the
 // tools/archtest/internal/scanner framework. Forbidden, on three paths:
 //
-//	Path A — package-level symbol calls and dot-imports of these import paths:
-//	  path/filepath: WalkDir, Walk, Glob
-//	  os:            ReadDir
-//	  io/ioutil:     ReadDir   (deprecated but still callable)
-//	  io/fs:         WalkDir, Walk, Glob, ReadDir
-//	  go/ast:                              Inspect, Walk, Preorder
-//	  golang.org/x/tools/go/ast/inspector: New, Preorder, Nodes, WithStack, All, PreorderSeq
+//	Path A — references to banned package-level symbols in three forms:
+//	    A.1 dot-import declarations:        `import . "<banned>"`
+//	    A.2 qualified call sites:           `banned.Func(...)` / `banned.Func` value ref
+//	    A.3 dot-imported bare-Ident refs:   `Func(...)` after `import . "banned"`
+//	  Banned import paths and symbols:
+//	    path/filepath: WalkDir, Walk, Glob
+//	    os:            ReadDir
+//	    io/ioutil:     ReadDir   (deprecated but still callable)
+//	    io/fs:         WalkDir, Walk, Glob, ReadDir
+//	    go/ast:                              Inspect, Walk, Preorder
+//	    golang.org/x/tools/go/ast/inspector: New, Preorder, Nodes, WithStack, All, PreorderSeq
+//	  A.2/A.3 share a single typeseval.ResolvePackageRef resolver. A.3 closes
+//	  PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 (PR-TS2): pre-PR-TS2 the bare
+//	  call site was protected only by A.1 (dot-import declaration scan).
 //
 //	Path A' — method calls whose receiver type is a named type from a banned
 //	  package, e.g. `f := os.Open(dir); f.ReadDir(-1)` resolves to
@@ -65,12 +72,23 @@ import (
 // scanner.EachInChildren[N] for typed AST iteration.
 //
 // Coverage:
-//   - SelectorExpr scan via scanner.EachInSubtree[ast.SelectorExpr] (dogfood —
-//     the framework's first consumer is the rule that enforces it).
-//   - Path A: dot-import scan flags `import . "<pkg>"` directly; SelectorExpr
-//     scan resolves package-level calls via info.Uses[id].(*types.PkgName).
-//   - Path A': SelectorExpr scan resolves receiver types via info.Types[X];
-//     covers pointer types (*os.File) and interface types (fs.FS / fs.ReadDirFS).
+//   - SelectorExpr / Ident scans via scanner.EachInSubtree (dogfood — the
+//     framework's first consumer is the rule that enforces it).
+//   - Path A.1: dot-import declaration scan flags `import . "<pkg>"` directly.
+//   - Path A.2: SelectorExpr scan + typeseval.ResolvePackageRef returns
+//     (pkgPath, name) syntactically from info.Uses[sel.X] → *types.PkgName
+//     plus sel.Sel.Name; tolerates partial type info for non-stdlib imports.
+//   - Path A.3: Ident scan + typeseval.ResolvePackageRef resolves bare `Func`
+//     (dot-imported) via info.Uses → *types.Func; Sel idents are pre-collected
+//     and skipped so qualified `pkg.Func` (A.2) and method calls do not
+//     double-count.
+//   - Path A': SelectorExpr scan + typeseval.ResolveMethodCall reads
+//     info.Selections.Obj() to recover the dispatched *types.Func. Covers
+//     MethodVal (`recv.Method()`) and MethodExpr (`T.Method(recv, ...)`)
+//     across pointer types, interface types, promoted via struct embedding,
+//     named-type definitions, type aliases, and generic type-parameter
+//     constraints (including multi-embed). The dispatched method's owning
+//     package replaces the prior sel.X-static-type walker.
 //   - Path B: scanner.EachInSubtree[ast.RangeStmt] then
 //     scanner.EachInSubtree[ast.TypeAssertExpr] with binding-name + ast-list
 //     element-kind verification.
@@ -159,22 +177,35 @@ var forbiddenMethodSymbols = map[string][]string{
 }
 
 // forbiddenWalkRefs reports any reference to a banned package-level symbol or
-// type-method, with two branches: dot-import (1) and SelectorExpr scan (2).
-// Type-aware via *types.Info: package-level calls resolved via
-// info.Uses[id].(*types.PkgName); receiver-type method calls resolved via
-// info.Types[sel.X].
+// receiver-type method, with three sub-paths:
+//
+//	(1)  dot-import declaration scan — flags `import . "<banned>"` at the import.
+//	(2b) SelectorExpr scan — qualified calls `pkg.Func` (path A.2) resolved via
+//	     typeseval.ResolvePackageRef; receiver-type method calls (path A')
+//	     resolved via typeseval.ResolveMethodCall (info.Selections-based, so
+//	     promoted methods via struct embedding and named-type definitions of
+//	     banned interfaces are recovered, not just direct interface/pointer
+//	     receivers).
+//	(2c) Bare-Ident scan — dot-imported call/value references `Func` (path A.3)
+//	     resolved via typeseval.ResolvePackageRef. SelectorExpr.Sel idents are
+//	     pre-collected and skipped (2a) so qualified `pkg.Func` and method calls
+//	     `recv.Method` do not double-count.
 //
 // Signature: minimal type-info dependency `(*types.Info, *token.FileSet,
 // *ast.File, rel)`. Production callers pass (pkg.TypesInfo, pkg.Fset, file,
 // pkgFileRel(...)); fixture callers pass (minimalCheck.Info, fset, file,
 // "fake.go"). Same pure function for both — fixture/prod cannot drift.
 //
-// SelectorExpr iteration uses scanner.EachInSubtree (dogfood — the rule that
-// enforces the framework is itself implemented in the framework).
+// Iteration uses scanner.EachInSubtree (dogfood — the rule that enforces the
+// framework is itself implemented in the framework).
+//
+// ref: golang/tools go/analysis/passes/copylock/copylock.go — qualified
+//
+//	identifier resolution via info.Uses[id].(*types.PkgName)
 func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var out []scanner.Diagnostic
 
-	// (1) Dot-import branch.
+	// (1) Dot-import declaration scan.
 	for _, imp := range file.Imports {
 		if imp == nil || imp.Path == nil || imp.Name == nil || imp.Name.Name != "." {
 			continue
@@ -190,35 +221,66 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 		}
 	}
 
-	// (2) Type-aware SelectorExpr scan.
+	// (2a) Pre-collect Sel idents of every SelectorExpr so the bare-Ident scan
+	// (2c) can skip them. Sel positions are matched in (2b) as part of their
+	// owning SelectorExpr; visiting them again would double-count.
+	selSels := make(map[*ast.Ident]bool)
 	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		// (2a) Package-level call: sel.X is *ast.Ident bound to imported pkg.
-		if id, ok := sel.X.(*ast.Ident); ok {
-			if pkgName, isPkg := info.Uses[id].(*types.PkgName); isPkg {
-				importPath := pkgName.Imported().Path()
-				if symbols, banned := forbiddenWalkSymbols[importPath]; banned && contains(symbols, sel.Sel.Name) {
-					out = append(out, scanner.Diagnostic{
-						Rel:     rel,
-						Line:    fset.Position(sel.Pos()).Line,
-						Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of %s.%s", importPath, sel.Sel.Name),
-					})
-					return
-				}
+		if sel.Sel != nil {
+			selSels[sel.Sel] = true
+		}
+	})
+
+	// (2b) SelectorExpr scan: path A.2 (qualified call) + path A' (receiver
+	// method).
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if path, name, ok := typeseval.ResolvePackageRef(info, sel); ok {
+			if symbols, banned := forbiddenWalkSymbols[path]; banned && contains(symbols, name) {
+				out = append(out, scanner.Diagnostic{
+					Rel:     rel,
+					Line:    fset.Position(sel.Pos()).Line,
+					Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of %s.%s", path, name),
+				})
+				return
 			}
 		}
-		// (2b) Method call on receiver type: (*os.File).ReadDir, (fs.FS).WalkDir, etc.
-		if tv, ok := info.Types[sel.X]; ok && tv.Type != nil {
-			if recvImportPath := namedTypeImportPath(tv.Type); recvImportPath != "" {
-				if methods, banned := forbiddenMethodSymbols[recvImportPath]; banned && contains(methods, sel.Sel.Name) {
-					out = append(out, scanner.Diagnostic{
-						Rel:     rel,
-						Line:    fset.Position(sel.Pos()).Line,
-						Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of (%s).%s", recvImportPath, sel.Sel.Name),
-					})
-				}
+		// Method call on banned receiver type: (*os.File).ReadDir,
+		// (fs.FS).WalkDir, promoted via struct embedding, named-type definition
+		// of a banned interface, generic type-parameter constrained by a banned
+		// interface, etc. typeseval.ResolveMethodCall recovers the actual method
+		// object via info.Selections so the dispatch source is preserved across
+		// all these AST shapes (the prior NamedTypeImportPath walker only saw
+		// sel.X's static type and missed promoted/named-def cases — closed by
+		// PR469-review-round-2).
+		if fn, ok := typeseval.ResolveMethodCall(info, sel); ok {
+			if methods, banned := forbiddenMethodSymbols[fn.Pkg().Path()]; banned && contains(methods, fn.Name()) {
+				out = append(out, scanner.Diagnostic{
+					Rel:     rel,
+					Line:    fset.Position(sel.Pos()).Line,
+					Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of (%s).%s", fn.Pkg().Path(), fn.Name()),
+				})
 			}
 		}
 	})
+
+	// (2c) Bare-Ident scan: path A.3 (dot-imported function reference).
+	scanner.EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		if selSels[id] {
+			return
+		}
+		path, name, ok := typeseval.ResolvePackageRef(info, id)
+		if !ok {
+			return
+		}
+		if symbols, banned := forbiddenWalkSymbols[path]; banned && contains(symbols, name) {
+			out = append(out, scanner.Diagnostic{
+				Rel:     rel,
+				Line:    fset.Position(id.Pos()).Line,
+				Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of %s.%s", path, name),
+			})
+		}
+	})
+
 	return out
 }
 
@@ -478,44 +540,6 @@ func contains(ss []string, s string) bool {
 	return false
 }
 
-// namedTypeImportPath returns the import path of the package that declares
-// the named type underlying t. Handles three wrappings:
-//   - *types.Pointer (one level)
-//   - *types.Named (the base case)
-//   - *types.TypeParam (generic constraint): when a method is called on a
-//     generic-bound value (e.g. `func [F fs.ReadDirFS](fsys F) { fsys.ReadDir(...) }`),
-//     the receiver's static type is *types.TypeParam — its constraint's
-//     core type or sole named-interface embedding identifies the package.
-//
-// Returns "" if t resolves to none of these.
-func namedTypeImportPath(t types.Type) string {
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-	if tp, ok := t.(*types.TypeParam); ok {
-		// Walk the constraint interface for an embedded named type from a
-		// banned package. types.TypeParam.Constraint() returns *types.Interface
-		// (possibly via Underlying for aliases).
-		if iface, ok := tp.Constraint().Underlying().(*types.Interface); ok {
-			for i := 0; i < iface.NumEmbeddeds(); i++ {
-				if path := namedTypeImportPath(iface.EmbeddedType(i)); path != "" {
-					return path
-				}
-			}
-		}
-		return ""
-	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return ""
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil {
-		return ""
-	}
-	return obj.Pkg().Path()
-}
-
 // astListElemKind returns "Decl"|"Spec"|"Stmt"|"Expr" if expr's static type
 // is []ast.<Kind> from package go/ast; otherwise ("", false).
 func astListElemKind(info *types.Info, expr ast.Expr) (string, bool) {
@@ -632,9 +656,10 @@ func runFixture(t *testing.T, src string) []scanner.Diagnostic {
 		t.Fatalf("parse: %v", err)
 	}
 	info := &types.Info{
-		Types: map[ast.Expr]types.TypeAndValue{},
-		Defs:  map[*ast.Ident]types.Object{},
-		Uses:  map[*ast.Ident]types.Object{},
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Defs:       map[*ast.Ident]types.Object{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
 	}
 	cfg := &types.Config{
 		Importer: importer.Default(),
@@ -673,18 +698,45 @@ func _() string { return Join("a", "b") }
 			wantHits: 1,
 		},
 		{
+			// Hit breakdown: (1) dot-import declaration scan = 1, (2b)
+			// SelectorExpr scan = 0 (bare call has no SelectorExpr), (2c)
+			// bare-Ident scan via typeseval.ResolvePackageRef = 1.
 			name: "dot_import_os",
 			src: `package fake
 import . "os"
 func _() error { _, err := ReadDir("/tmp"); return err }
 `,
-			wantHits: 1,
+			wantHits: 2,
 		},
 		{
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 1.
 			name: "dot_import_io_fs",
 			src: `package fake
 import . "io/fs"
 func _() error { return WalkDir(nil, ".", nil) }
+`,
+			wantHits: 2,
+		},
+		{
+			// Bare-Ident scan must catch dot-imported call to a forbidden symbol
+			// even when the import declaration is already flagged. Closes the
+			// PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 dogfood gap.
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 1.
+			name: "dot_import_filepath_bare_walkdir_call",
+			src: `package fake
+import . "path/filepath"
+func _() error { return WalkDir(".", nil) }
+`,
+			wantHits: 2,
+		},
+		{
+			// Bare-Ident scan must NOT fire on type-only references through a
+			// dot-import (no Func resolution). Only the import declaration warns.
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 0 (FS resolves to TypeName, helper returns false).
+			name: "dot_import_type_reference_only",
+			src: `package fake
+import . "io/fs"
+var _ FS // type-only reference; no func call
 `,
 			wantHits: 1,
 		},
@@ -730,12 +782,13 @@ func _() error { return iofs.WalkDir(nil, ".", nil) }
 			wantHits: 1,
 		},
 		{
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 1.
 			name: "dot_import_go_ast",
 			src: `package fake
 import . "go/ast"
 func _() { Inspect(nil, nil) }
 `,
-			wantHits: 1,
+			wantHits: 2,
 		},
 		{
 			name: "direct_call_ast_inspect",
@@ -790,9 +843,9 @@ func _(fsys fs.ReadDirFS) error {
 		},
 		{
 			// Generic TypeParam constraint: receiver is a type parameter bound
-			// by fs.ReadDirFS — namedTypeImportPath must descend into the
-			// constraint interface to find the banned package, otherwise the
-			// generic form silently bypasses path A'.
+			// by fs.ReadDirFS — typeseval.ResolveMethodCall reads
+			// info.Selections.Obj() which returns the interface's method
+			// regardless of the receiver's static *types.TypeParam wrapping.
 			name: "method_call_generic_typeparam_bypass",
 			src: `package fake
 import "io/fs"
@@ -802,6 +855,76 @@ func _[F fs.ReadDirFS](fsys F) error {
 }
 `,
 			wantHits: 1,
+		},
+		{
+			// PR469-review-round-2 P1 closure: struct embedding promotes
+			// (fs.ReadDirFS).ReadDir into Wrap. info.Types[sel.X] would yield
+			// *Wrap (current pkg) which has no entry in forbiddenMethodSymbols;
+			// info.Selections.Obj() gives the actual *types.Func from io/fs.
+			name: "method_call_promoted_via_struct_embedding",
+			src: `package fake
+import "io/fs"
+type Wrap struct{ fs.ReadDirFS }
+func _(w *Wrap) error { _, err := w.ReadDir("."); return err }
+`,
+			wantHits: 1,
+		},
+		{
+			// Named-type definition of a banned interface. MyFS has the same
+			// method set as fs.ReadDirFS; the Selection's Obj() points back to
+			// the interface's *types.Func, so the io/fs package is recovered.
+			name: "method_call_named_type_def_of_banned_interface",
+			src: `package fake
+import "io/fs"
+type MyFS fs.ReadDirFS
+func _(x MyFS) error { _, err := x.ReadDir("."); return err }
+`,
+			wantHits: 1,
+		},
+		{
+			// PR469-review-round-3 P1: method expression `fs.ReadDirFS.ReadDir(fsys, ".")`.
+			// info.Selections[sel].Kind() is MethodExpr (not MethodVal); the
+			// resolver must accept both kinds. sel.X is the qualified interface
+			// type SelectorExpr `fs.ReadDirFS`, not a value.
+			name: "method_expr_qualified_interface",
+			src: `package fake
+import "io/fs"
+func _(fsys fs.ReadDirFS) error {
+	_, err := fs.ReadDirFS.ReadDir(fsys, ".")
+	return err
+}
+`,
+			wantHits: 1,
+		},
+		{
+			// PR469-review-round-3 P1: method expression `(*os.File).ReadDir(f, -1)`.
+			// sel.X is ParenExpr(StarExpr(SelectorExpr os.File)); Selection.Kind() is MethodExpr.
+			name: "method_expr_pointer_type",
+			src: `package fake
+import "os"
+func _(f *os.File) error {
+	_, err := (*os.File).ReadDir(f, -1)
+	return err
+}
+`,
+			wantHits: 1,
+		},
+		{
+			// PR469-review-round-3 P1: multi-embed generic constraint. RWFS
+			// embeds fs.ReadDirFS AND fs.GlobFS; each method resolves to its
+			// own embedded interface. Selections.Obj() returns the correct
+			// owning *types.Func per call (not just the first embed walked).
+			name: "method_call_multi_embed_generic_constraint",
+			src: `package fake
+import "io/fs"
+type RWFS interface{ fs.ReadDirFS; fs.GlobFS }
+func _[F RWFS](fsys F) error {
+	if _, err := fsys.ReadDir("."); err != nil { return err }
+	_, err := fsys.Glob("*")
+	return err
+}
+`,
+			wantHits: 2,
 		},
 		{
 			// Generic API form (Go 1.23+): inspector.All[*ast.X] produces a
