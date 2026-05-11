@@ -2,8 +2,10 @@ package governance
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strings"
 	"testing"
 )
@@ -14,14 +16,23 @@ import (
 // routine TestRuleReachabilityFromRegistrationRoots uses — then asserts
 // the expected reachable set.
 //
-// The fixtures pin the post-PR-B tightenings:
+// The fixtures pin the post-PR-B tightenings and the post-PR-TS1
+// signature-based emission rules:
 //   - emission detection works inside free functions that take a
 //     *Validator parameter (BFS sees `v.newResult(...)` even when the
 //     enclosing receiver name is "");
 //   - composite literals nested in non-ValidationResult slices do not
 //     contribute foreign Code field values to reachable;
 //   - BFS scope is bounded by roots — orphan methods are not visited;
-//   - const-ident emission resolves through scanPackageConstStrings.
+//   - const-ident emission resolves through scanPackageConstStrings;
+//   - signature-mismatched same-named method is NOT an emitter (RED
+//     fixture): a method literally named `newResult(string)` whose
+//     return type is not ValidationResult is ignored by handleCall.
+//
+// All fixtures are type-checked in-memory because handleCall now uses
+// typeutil.StaticCallee + signature predicates (isValidationResultEmitter)
+// rather than name matching. Without *types.Info the fixtures would have
+// no method to dispatch against.
 //
 // ref: kubernetes/apimachinery pkg/runtime/scheme_test.go (registration
 // equivalence fixtures); golang.org/x/tools go/analysis/analysistest
@@ -39,24 +50,20 @@ func TestBFSReachabilityFixtures(t *testing.T) {
 			name: "free_function_with_validator_param_emits_rule_id",
 			// BFS reaches helper(v) via the free-function call edge, then
 			// detects v.newResult inside helper despite recvName == "".
-			// Pre-relaxation this would be missed because the CallExpr
-			// emission branch required recvIdent.Name == recvName.
 			source: `package fixture
+type ValidationResult struct{ Code string }
 type Validator struct{}
-func (v *Validator) rules()             { helper(v) }
-func helper(v *Validator)               { v.newResult("FIX-A-01") }
-func (v *Validator) newResult(s string) {}
+func (v *Validator) rules()                                { helper(v) }
+func helper(v *Validator)                                  { v.newResult("FIX-A-01") }
+func (v *Validator) newResult(s string) ValidationResult   { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"FIX-A-01"},
 		},
 		{
 			name: "non_validationresult_composite_literal_skipped",
-			// A foreign struct with a Code field nested inside []Other{{}}
-			// must not contribute to reachable. Pre-tightening, the
-			// inner nil-Type literal would be accepted by the permissive
-			// fallback and "FOREIGN-02" would slip into reachable.
 			source: `package fixture
+type ValidationResult struct{ Code string }
 type Validator struct{}
 type Other struct{ Code string }
 func (v *Validator) rules() {
@@ -68,10 +75,6 @@ func (v *Validator) rules() {
 		},
 		{
 			name: "validationresult_inferred_inner_literal_picked_up",
-			// Sanity check on the parent-context pre-pass: a nil-Type
-			// inner literal whose outer is []ValidationResult IS still
-			// recognized, so DOC-NAME-style emissions through helper
-			// constructors keep working.
 			source: `package fixture
 type ValidationResult struct{ Code string }
 type Validator struct{}
@@ -84,32 +87,82 @@ func (v *Validator) rules() []ValidationResult {
 		},
 		{
 			name: "orphan_method_not_in_roots_is_unreachable",
-			// dead() is not in any registration root and not transitively
-			// reached from rules(). Its emission must not appear.
 			source: `package fixture
+type ValidationResult struct{ Code string }
 type Validator struct{}
-func (v *Validator) rules()             { v.live() }
-func (v *Validator) live()              { v.newResult("LIVE-04") }
-func (v *Validator) dead()              { v.newResult("DEAD-99") }
-func (v *Validator) newResult(s string) {}
+func (v *Validator) rules()                                { v.live() }
+func (v *Validator) live()                                 { v.newResult("LIVE-04") }
+func (v *Validator) dead()                                 { v.newResult("DEAD-99") }
+func (v *Validator) newResult(s string) ValidationResult   { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"LIVE-04"},
 		},
 		{
 			name: "const_ident_emission_resolved_via_const_map",
-			// Package-level const string is emitted as the rule code
-			// argument; resolveIDArg looks it up in scanPackageConstStrings'
-			// output. Mirrors how rules_misc_strict.go uses ruleFMT20..25.
 			source: `package fixture
+type ValidationResult struct{ Code string }
 type Validator struct{}
 const ruleX = "X-CONST-05"
-func (v *Validator) rules()             { v.do() }
-func (v *Validator) do()                { v.newResult(ruleX) }
-func (v *Validator) newResult(s string) {}
+func (v *Validator) rules()                                { v.do() }
+func (v *Validator) do()                                   { v.newResult(ruleX) }
+func (v *Validator) newResult(s string) ValidationResult   { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"X-CONST-05"},
+		},
+		{
+			name: "signature_mismatched_same_named_method_ignored_RED",
+			// Method literally named newResult with string arg 0 but
+			// missing the ValidationResult return type — handleCall's
+			// signature filter must reject it. Pre-PR-TS1 (name-based
+			// match) this would have captured "RED-06" into reachable.
+			source: `package fixture
+type ValidationResult struct{ Code string }
+type Validator struct{}
+func (v *Validator) rules()             { v.newResult("RED-06") }
+func (v *Validator) newResult(s string) {}
+`,
+			roots:    []funcKey{{recv: "Validator", name: "rules"}},
+			expected: nil,
+		},
+		{
+			name: "variadic_format_emitter_ignored_RED",
+			// A method with the canonical (string, ...) → ValidationResult
+			// shape but variadic must NOT be treated as an emitter:
+			// x.Args[0] would be the format template, not a rule ID.
+			source: `package fixture
+type ValidationResult struct{ Code string }
+type Validator struct{}
+func (v *Validator) rules()                                       { v.newResultf("rule %s applied", "FOO-BAR") }
+func (v *Validator) newResultf(fmtStr string, args ...interface{}) ValidationResult { return ValidationResult{} }
+`,
+			roots:    []funcKey{{recv: "Validator", name: "rules"}},
+			expected: nil,
+		},
+		{
+			name: "interface_dispatch_emitter_ignored_RED",
+			// Interface-dispatched calls return nil from typeutil.StaticCallee,
+			// so handleCall early-returns via ResolveCallee's ok=false branch
+			// before any signature predicates run. This fixture pins that
+			// safety boundary: even if an interface method's signature shape
+			// matches an emitter, dynamic dispatch is not statically
+			// resolvable and therefore not picked up.
+			//
+			// Cross-package emitter rejection (recv/result Pkg().Path() mismatch)
+			// is covered directly via go/types synthesis in
+			// TestSignatureMatchesValidationResultEmitter_CrossPackageRejected
+			// — the fixture path cannot reach that branch because
+			// types.Config.Check on a single in-memory file produces only
+			// one *types.Package.
+			source: `package fixture
+type ValidationResult struct{ Code string }
+type Emitter interface{ newResult(s string) ValidationResult }
+type Validator struct{ e Emitter }
+func (v *Validator) rules() { v.e.newResult("IFACE-07") }
+`,
+			roots:    []funcKey{{recv: "Validator", name: "rules"}},
+			expected: nil,
 		},
 	}
 
@@ -118,14 +171,27 @@ func (v *Validator) newResult(s string) {}
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fset := token.NewFileSet()
-			f, err := parser.ParseFile(fset, "fixture.go", tc.source, parser.SkipObjectResolution)
+			f, err := parser.ParseFile(fset, "fixture.go", tc.source, parser.ParseComments)
 			if err != nil {
 				t.Fatalf("parse fixture: %v", err)
 			}
 			files := []*ast.File{f}
+
+			info := &types.Info{
+				Types:      make(map[ast.Expr]types.TypeAndValue),
+				Defs:       make(map[*ast.Ident]types.Object),
+				Uses:       make(map[*ast.Ident]types.Object),
+				Selections: make(map[*ast.SelectorExpr]*types.Selection),
+				Instances:  make(map[*ast.Ident]types.Instance),
+			}
+			conf := types.Config{Importer: importer.Default()}
+			if _, err := conf.Check("fixture", fset, files, info); err != nil {
+				t.Fatalf("type-check fixture: %v", err)
+			}
+
 			funcIdx := buildFuncIndex(files)
 
-			actual := runReachabilityBFS(t, fset, files, funcIdx, tc.roots)
+			actual := runReachabilityBFS(t, fset, files, info, funcIdx, tc.roots)
 			if diff := symmetricDiff(tc.expected, actual); len(diff) > 0 {
 				t.Errorf("BFS reachable mismatch for %q:\n%s",
 					tc.name, strings.Join(diff, "\n"))

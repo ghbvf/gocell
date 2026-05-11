@@ -304,6 +304,25 @@ linters:
             - github.com/ghbvf/gocell/pkg/errcode
             - github.com/ghbvf/gocell/runtime/auth
             - github.com/go-chi/chi/v5
+        typesutil-test-tool-only:
+          # PROD-TYPESUTIL-IMPORT-01: tools/typesutil exposes go/types-backed
+          # helpers (ResolveReceiverType, ResolveCallee) that depend on
+          # golang.org/x/tools/go/types/typeutil. The package is intended for
+          # test and archtest tooling only — pulling it into production code
+          # would inflate the runtime binary with a test-time dependency and
+          # blur the test-tooling/runtime boundary.
+          # Exemptions:
+          #   - tools/typesutil/ self
+          #   - **/tools/** (sibling tools may compose typesutil)
+          #   - *_test.go (kernel/governance BFS reachability test and any
+          #     future archtest consumers)
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/tools/**"
+          deny:
+            - pkg: github.com/ghbvf/gocell/tools/typesutil
+              desc: "tools/typesutil is test/tool-only; production code must not import go/types helpers"
         clockmock-test-only:
           # PROD-CLOCKMOCK-IMPORT-01: kernel/clock/clockmock is a test-only
           # package. Production code (non-_test.go) must use clock.Clock via
