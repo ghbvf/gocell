@@ -697,7 +697,7 @@ func casUpdateRetryWorker(ctx context.Context, repo *ConfigRepository, key, valu
 }
 
 // isVersionConflict reports whether err is the standard CAS conflict signal.
-// Centralised so concurrent-test loops do not duplicate the errors.As pattern.
+// Centralized so concurrent-test loops do not duplicate the errors.As pattern.
 func isVersionConflict(err error) bool {
 	var ecErr *errcode.Error
 	return errors.As(err, &ecErr) && ecErr.Code == errcode.ErrVersionConflict
