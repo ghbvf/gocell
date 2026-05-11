@@ -42,13 +42,14 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 22 migrations (001-022). 017/018/019 land users/sessions/
-	// roles schema for accesscore PG repos (S3+S5); 020 adds audit_entries
-	// table for the ledger.Store PG backend; 021 adds the
+	// Currently 23 migrations (001-023, contiguous after S6 merge).
+	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
+	// 020 adds audit_entries table for the ledger.Store PG backend; 021 adds the
 	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
-	// 022 adds users.password_version for S6 narrow-scope CAS.
-	assert.Equal(t, int64(22), v,
-		"expected version should be exactly 22 (current migration count)")
+	// 022 adds users.password_version for S6 narrow-scope CAS;
+	// 023 adds users.status / creation_source CHECK constraints (S3F).
+	assert.Equal(t, int64(23), v,
+		"expected version should be exactly 23 (current migration max)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -227,11 +228,13 @@ func TestVerifyExpectedVersion_ExpectedVersionError(t *testing.T) {
 // shapeRequiredColumns (no DB required).
 // ---------------------------------------------------------------------------
 
-// containsColumn returns true when shapeRequiredColumns contains an entry
-// with the given table and column.
+// containsColumn returns true when expectedColumns contains an entry
+// with the given table and column. The 9-dim refactor replaced the prior
+// shapeRequiredColumns slice with a structured expectedColumns registry
+// (type + nullability + …); these tests verify presence-only membership.
 func containsColumn(table, column string) bool {
-	for _, r := range shapeRequiredColumns {
-		if r.table == table && r.column == column {
+	for _, r := range expectedColumns {
+		if r.Table == table && r.Column == column {
 			return true
 		}
 	}
@@ -242,19 +245,19 @@ func containsColumn(table, column string) bool {
 // narrow-scope CAS column is declared in the required-column list.
 func TestVerifyExpectedShape_RequiresUsersPasswordVersion(t *testing.T) {
 	assert.True(t, containsColumn("users", "password_version"),
-		"shapeRequiredColumns must include users.password_version (S6 migration 022)")
+		"expectedColumns must include users.password_version (S6 migration 022)")
 }
 
 // TestVerifyExpectedShape_RequiresConfigEntriesVersion verifies that the
 // PR449-F7 maintenance entry for config_entries.version is declared.
 func TestVerifyExpectedShape_RequiresConfigEntriesVersion(t *testing.T) {
 	assert.True(t, containsColumn("config_entries", "version"),
-		"shapeRequiredColumns must include config_entries.version (migration 004 carry-over)")
+		"expectedColumns must include config_entries.version (migration 004 carry-over)")
 }
 
 // TestVerifyExpectedShape_RequiresFeatureFlagsVersion verifies that the
 // PR449-F7 maintenance entry for feature_flags.version is declared.
 func TestVerifyExpectedShape_RequiresFeatureFlagsVersion(t *testing.T) {
 	assert.True(t, containsColumn("feature_flags", "version"),
-		"shapeRequiredColumns must include feature_flags.version (migration 008 carry-over)")
+		"expectedColumns must include feature_flags.version (migration 008 carry-over)")
 }

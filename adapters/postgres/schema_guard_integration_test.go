@@ -553,3 +553,348 @@ func TestInvalidIndexCheck_NoInvalidIndexes(t *testing.T) {
 	err = InvalidIndexCheck(ctx, pool)
 	assert.NoError(t, err, "InvalidIndexCheck should return nil when no invalid indexes exist")
 }
+
+// ---------------------------------------------------------------------------
+// VerifyExpectedShape: multi-dimension wrong-shape tests
+// ---------------------------------------------------------------------------
+
+// extractDimensionDetail extracts the "dimension" slog.Attr value from an
+// errcode.Error's Details slice. Returns "" if not found.
+func extractDimensionDetail(ec *errcode.Error) string {
+	for _, a := range ec.Details {
+		if a.Key == "dimension" {
+			return a.Value.String()
+		}
+	}
+	return ""
+}
+
+// TestVerifyExpectedShape_AllDimensionsHappy verifies that after all migrations
+// are applied (including migration 023 adding CHECK constraints), VerifyExpectedShape
+// returns nil.
+func TestVerifyExpectedShape_AllDimensionsHappy(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_9dim_happy")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	err = VerifyExpectedShape(ctx, pool)
+	assert.NoError(t, err, "VerifyExpectedShape should return nil after full Up() with all migrations")
+}
+
+// TestVerifyExpectedShape_DetectsMissingForeignKey verifies that dropping a
+// foreign key constraint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="foreign_key".
+func TestVerifyExpectedShape_DetectsMissingForeignKey(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fk")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE sessions DROP CONSTRAINT sessions_subject_id_fkey`)
+	require.NoError(t, execErr, "DROP CONSTRAINT must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect missing FK")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "foreign_key", extractDimensionDetail(ec),
+		"details must contain dimension=foreign_key; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction verifies that
+// recreating a FK with a different ON DELETE action causes VerifyExpectedShape
+// to surface the on-delete mismatch (covers verifyOneForeignKey OnDelete branch).
+func TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fk_ondel")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Drop the cascade FK and re-add it with NO ACTION (default).
+	_, err = pool.DB().Exec(ctx, `ALTER TABLE sessions DROP CONSTRAINT sessions_subject_id_fkey`)
+	require.NoError(t, err)
+	_, err = pool.DB().Exec(ctx,
+		`ALTER TABLE sessions ADD CONSTRAINT sessions_subject_id_fkey FOREIGN KEY (subject_id) REFERENCES users(id)`)
+	require.NoError(t, err, "recreate FK without ON DELETE clause must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect on-delete drift")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code)
+	assert.Equal(t, "foreign_key", extractDimensionDetail(ec))
+	assert.Contains(t, ec.InternalMessage, "on_delete")
+}
+
+// TestVerifyExpectedShape_DetectsMissingUniqueIndex verifies that dropping a
+// unique index causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="index".
+func TestVerifyExpectedShape_DetectsMissingUniqueIndex(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_uidx")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `DROP INDEX idx_sessions_jti`)
+	require.NoError(t, execErr, "DROP INDEX must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect missing unique index")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "index", extractDimensionDetail(ec),
+		"details must contain dimension=index; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsMissingTrigger verifies that dropping a
+// trigger causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="trigger".
+func TestVerifyExpectedShape_DetectsMissingTrigger(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_trig")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `DROP TRIGGER last_admin_protected ON role_assignments`)
+	require.NoError(t, execErr, "DROP TRIGGER must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect missing trigger")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "trigger", extractDimensionDetail(ec),
+		"details must contain dimension=trigger; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsDisabledTrigger verifies that disabling a
+// trigger causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="trigger_enabled".
+func TestVerifyExpectedShape_DetectsDisabledTrigger(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_trig_dis")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE role_assignments DISABLE TRIGGER last_admin_protected`)
+	require.NoError(t, execErr, "DISABLE TRIGGER must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect disabled trigger")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "trigger_enabled", extractDimensionDetail(ec),
+		"details must contain dimension=trigger_enabled; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsWrongColumnType verifies that changing a
+// column's type causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="column_type".
+func TestVerifyExpectedShape_DetectsWrongColumnType(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_coltype")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx,
+		`ALTER TABLE users ALTER COLUMN authz_epoch TYPE INTEGER USING authz_epoch::INTEGER`)
+	require.NoError(t, execErr, "ALTER COLUMN TYPE must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect column type change")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "column_type", extractDimensionDetail(ec),
+		"details must contain dimension=column_type; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsNullableColumn verifies that dropping NOT NULL
+// from a column causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="column_nullability".
+func TestVerifyExpectedShape_DetectsNullableColumn(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_nullable")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE users ALTER COLUMN status DROP NOT NULL`)
+	require.NoError(t, execErr, "DROP NOT NULL must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect nullable column")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "column_nullability", extractDimensionDetail(ec),
+		"details must contain dimension=column_nullability; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsMissingCheckConstraint verifies that dropping
+// a CHECK constraint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="check".
+func TestVerifyExpectedShape_DetectsMissingCheckConstraint(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_chk")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
+	require.NoError(t, execErr, "DROP CONSTRAINT must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect missing CHECK constraint")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "check", extractDimensionDetail(ec),
+		"details must contain dimension=check; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsMissingPrimaryKey verifies that dropping the
+// primary key causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="primary_key".
+func TestVerifyExpectedShape_DetectsMissingPrimaryKey(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_pk")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// CASCADE because sessions.subject_id and role_assignments.user_id FKs
+	// reference users(id); without CASCADE the PK drop fails with SQLSTATE 2BP01.
+	// The test only asserts the PK-detection path; cascading FK drops are
+	// inconsequential because VerifyExpectedShape runs PK checks before FK checks.
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT users_pkey CASCADE`)
+	require.NoError(t, execErr, "DROP CONSTRAINT users_pkey CASCADE must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect missing primary key")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "primary_key", extractDimensionDetail(ec),
+		"details must contain dimension=primary_key; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsMissingFunction verifies that dropping the
+// PL/pgSQL function causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
+// with dimension="function".
+func TestVerifyExpectedShape_DetectsMissingFunction(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fn")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `DROP FUNCTION last_admin_protected_fn CASCADE`)
+	require.NoError(t, execErr, "DROP FUNCTION CASCADE must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect missing function")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "function", extractDimensionDetail(ec),
+		"details must contain dimension=function; got %v", ec.Details)
+}
+
+// ---------------------------------------------------------------------------
+// DetectInvalidIndexes: in-progress filter tests
+// ---------------------------------------------------------------------------
+
+// TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded verifies
+// that the LEFT JOIN pg_stat_progress_create_index added to the
+// DetectInvalidIndexes query does not suppress orphan invalid indexes (i.e.,
+// indexes with indisvalid=false that have no in-progress CONCURRENTLY build).
+// This is a live integration test: it injects an invalid index into a real
+// container and asserts the index is still returned.
+func TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_inprogress_filter")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Inject an invalid index (not in-progress).
+	_, execErr := pool.DB().Exec(ctx,
+		`UPDATE pg_index SET indisvalid = false
+		 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+	require.NoError(t, execErr, "injecting invalid index must succeed")
+	defer func() {
+		_, _ = pool.DB().Exec(ctx,
+			`UPDATE pg_index SET indisvalid = true
+			 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+	}()
+
+	indexes, err := DetectInvalidIndexes(ctx, pool)
+	require.NoError(t, err, "LEFT JOIN pg_stat_progress_create_index must not break the query")
+	// The orphan invalid index (no pg_stat_progress entry) must still be reported.
+	var found bool
+	for _, idx := range indexes {
+		if idx.Index == "public.idx_outbox_pending_v2" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"DetectInvalidIndexes must still report orphan invalid indexes; got %v", indexes)
+}

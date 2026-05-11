@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -20,6 +21,51 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
+
+// sqlStateCheckViolation is SQLSTATE 23514 (check constraint violation).
+const sqlStateCheckViolation = "23514"
+
+// setupUserRepoPGWithPool is like setupUserRepoPG but also returns the Pool
+// for tests that need direct SQL access (e.g. to bypass domain validation).
+func setupUserRepoPGWithPool(t *testing.T) (*PGUserRepo, *adapterpg.Pool, func()) {
+	t.Helper()
+	testutil.RequireDocker(t)
+
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err, "failed to start postgres container")
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
+	require.NoError(t, err)
+
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	txMgr := adapterpg.NewTxManager(pool)
+	repo, err := NewPGUserRepo(pool.DB(), txMgr, clock.Real())
+	require.NoError(t, err)
+
+	cleanup := func() {
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close: %v", err)
+		}
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("WARN: failed to terminate postgres container: %v", err)
+		}
+	}
+
+	return repo, pool, cleanup
+}
 
 // testAdapterMigrationsFS returns the shared adapters/postgres migration FS.
 // Duplicate of adapters/postgres/embed_test.go:testMigrationsFS — needed
@@ -340,4 +386,206 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code,
 			"absent user must return ErrAuthUserNotFound (404), got %s", ec.Code)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// S3F: DB CHECK constraint enforcement tests (migration 023)
+// ---------------------------------------------------------------------------
+
+// TestUserRepo_Create_RejectsInvalidStatus_DBCheck verifies that PostgreSQL's
+// users_status_chk CHECK constraint (migration 023) rejects direct INSERTs with
+// an invalid status value, even if the domain layer is bypassed. SQLSTATE 23514.
+func TestUserRepo_Create_RejectsInvalidStatus_DBCheck(t *testing.T) {
+	_, pool, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Bypass domain/repo layer and INSERT directly with an invalid status.
+	id := uuid.NewString()
+	now := time.Now().UTC()
+	_, err := pool.DB().Exec(ctx, `
+		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		                   status, creation_source, authz_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, 'bogus', 'identity', 0, $5, $5)`,
+		id, "check_status_user", "check_status@example.com", "$2a$12$fakehash", now)
+
+	require.Error(t, err, "INSERT with invalid status must be rejected by DB CHECK constraint")
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr),
+		"error must be a PG error")
+	assert.Equal(t, sqlStateCheckViolation, pgErr.Code,
+		"SQLSTATE must be 23514 (check constraint violation) for invalid status")
+}
+
+// TestUserRepo_Create_RejectsInvalidCreationSource_DBCheck verifies that the
+// users_creation_source_chk CHECK constraint (migration 023) rejects direct
+// INSERTs with an invalid creation_source value. SQLSTATE 23514.
+func TestUserRepo_Create_RejectsInvalidCreationSource_DBCheck(t *testing.T) {
+	_, pool, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	id := uuid.NewString()
+	now := time.Now().UTC()
+	_, err := pool.DB().Exec(ctx, `
+		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		                   status, creation_source, authz_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, 'active', 'bogus', 0, $5, $5)`,
+		id, "check_source_user", "check_source@example.com", "$2a$12$fakehash", now)
+
+	require.Error(t, err, "INSERT with invalid creation_source must be rejected by DB CHECK constraint")
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr),
+		"error must be a PG error")
+	assert.Equal(t, sqlStateCheckViolation, pgErr.Code,
+		"SQLSTATE must be 23514 (check constraint violation) for invalid creation_source")
+}
+
+// TestUserRepo_Scan_RejectsInvalidStatus verifies that scanUser returns an
+// ErrInternal error when a row with an invalid status value is scanned.
+// To bypass the DB CHECK constraint (migration 023), we temporarily DROP the
+// constraint, write the bad row, then restore it, then call GetByID.
+func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
+	repo, pool, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Temporarily drop the CHECK constraint to allow writing an invalid status.
+	// This simulates the real-world scenario where the constraint is added later
+	// (by migration 023) over a table that may already contain pre-existing
+	// invalid rows from an earlier schema.
+	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
+	require.NoError(t, err, "must be able to drop constraint for test setup")
+	// Per-test container is fresh; no constraint restore needed and a NOT VALID
+	// restore would mask future scan-side regressions. Container teardown via
+	// cleanup() drops the entire schema, so leaving the constraint absent here
+	// has no cross-test side effect.
+
+	id := uuid.NewString()
+	now := time.Now().UTC()
+	_, err = pool.DB().Exec(ctx, `
+		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		                   status, creation_source, authz_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, 'invalid_status', 'identity', 0, $5, $5)`,
+		id, "scan_invalid_status_user", "scan_invalid@example.com", "$2a$12$fakehash", now)
+	require.NoError(t, err, "INSERT with constraint dropped must succeed")
+
+	// Now scanUser must reject the invalid status and GetByID must propagate
+	// ErrPGSchemaShape unchanged (no ErrInternal wrap) so operators can
+	// distinguish DB schema drift from generic infra faults.
+	_, scanErr := repo.GetByID(ctx, id)
+	require.Error(t, scanErr, "GetByID must return error for row with invalid status")
+	var ec *errcode.Error
+	require.True(t, errors.As(scanErr, &ec),
+		"error must be an *errcode.Error")
+	assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code,
+		"scan must propagate ErrPGSchemaShape (not collapse to ErrInternal)")
+	assert.Equal(t, errcode.KindInternal, ec.Kind,
+		"scan enum violation must surface as KindInternal (5xx)")
+	assert.Contains(t, ec.Message, "invalid status",
+		"error message must identify the invalid field")
+}
+
+// TestUserRepo_Scan_RejectsInvalidCreationSource verifies that scanUser
+// surfaces ErrPGSchemaShape when DB row carries an unknown creation_source
+// enum value. Mirrors TestUserRepo_Scan_RejectsInvalidStatus for the
+// orthogonal enum column.
+func TestUserRepo_Scan_RejectsInvalidCreationSource(t *testing.T) {
+	repo, pool, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_creation_source_chk`)
+	require.NoError(t, err, "must be able to drop creation_source CHECK")
+
+	id := uuid.NewString()
+	now := time.Now().UTC()
+	_, err = pool.DB().Exec(ctx, `
+		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		                   status, creation_source, authz_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, 'active', 'bogus_source', 0, $5, $5)`,
+		id, "scan_invalid_source_user", "scan_invalid_source@example.com", "$2a$12$fakehash", now)
+	require.NoError(t, err)
+
+	_, scanErr := repo.GetByID(ctx, id)
+	require.Error(t, scanErr)
+	var ec *errcode.Error
+	require.True(t, errors.As(scanErr, &ec))
+	assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code,
+		"scan must propagate ErrPGSchemaShape, not collapse to ErrInternal")
+	assert.Contains(t, ec.Message, "invalid creation_source",
+		"error message must identify the invalid field")
+}
+
+// TestUserRepo_GetByUsername_RejectsInvalidStatus exercises the
+// GetByUsername path's ErrPGSchemaShape propagation (parallel to GetByID).
+func TestUserRepo_GetByUsername_RejectsInvalidStatus(t *testing.T) {
+	repo, pool, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
+	require.NoError(t, err)
+
+	id := uuid.NewString()
+	username := "scan_invalid_byname"
+	now := time.Now().UTC()
+	_, err = pool.DB().Exec(ctx, `
+		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		                   status, creation_source, authz_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, 'bogus_status', 'identity', 0, $5, $5)`,
+		id, username, "scan_invalid_byname@example.com", "$2a$12$fakehash", now)
+	require.NoError(t, err)
+
+	_, scanErr := repo.GetByUsername(ctx, username)
+	require.Error(t, scanErr)
+	var ec *errcode.Error
+	require.True(t, errors.As(scanErr, &ec))
+	assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code,
+		"GetByUsername must propagate ErrPGSchemaShape unchanged")
+	assert.Contains(t, ec.Message, "invalid status")
+}
+
+// TestUserRepo_CreationSource_BothValid verifies that users with both
+// valid creation_source values ('identity' and 'setup') can be created
+// and read back without error.
+func TestUserRepo_CreationSource_BothValid(t *testing.T) {
+	repo, _, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	identityUser := &domain.User{
+		ID:             uuid.NewString(),
+		Username:       "src_identity_user",
+		Email:          "src_identity@example.com",
+		PasswordHash:   "$2a$12$fakehash_identity",
+		Status:         domain.StatusActive,
+		CreationSource: domain.UserSourceIdentity,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	setupUser := &domain.User{
+		ID:             uuid.NewString(),
+		Username:       "src_setup_user",
+		Email:          "src_setup@example.com",
+		PasswordHash:   "$2a$12$fakehash_setup",
+		Status:         domain.StatusActive,
+		CreationSource: domain.UserSourceSetup,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	require.NoError(t, repo.Create(ctx, identityUser), "identity source user must be created")
+	require.NoError(t, repo.Create(ctx, setupUser), "setup source user must be created")
+
+	gotIdentity, err := repo.GetByID(ctx, identityUser.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.UserSourceIdentity, gotIdentity.CreationSource)
+
+	gotSetup, err := repo.GetByID(ctx, setupUser.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.UserSourceSetup, gotSetup.CreationSource)
 }

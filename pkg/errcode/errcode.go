@@ -71,7 +71,14 @@ const (
 	ErrDeviceNotFound          Code = "ERR_DEVICE_NOT_FOUND"
 	ErrCommandNotFound         Code = "ERR_COMMAND_NOT_FOUND"
 	ErrAdapterPGNoTx           Code = "ERR_ADAPTER_PG_NO_TX"
-	ErrAuthKeyInvalid          Code = "ERR_AUTH_KEY_INVALID"
+	// ErrPGSchemaShape signals that a value read from a PostgreSQL column does
+	// not conform to the expected schema shape — e.g., an enum column returned a
+	// value not in the application's known set. Usable from both adapters/postgres
+	// and cell-layer repositories without creating a cross-layer import. Distinct
+	// from ErrAdapterPGSchemaShape (adapters/postgres package-level alias) so
+	// cells/ can reference this shared code without depending on adapters/.
+	ErrPGSchemaShape  Code = "ERR_PG_SCHEMA_SHAPE"
+	ErrAuthKeyInvalid Code = "ERR_AUTH_KEY_INVALID"
 	// ErrAuthVerifierConfig signals a JWT verifier construction error — e.g.
 	// required configuration (WithExpectedAudiences) was not provided.
 	// Distinct from ErrAuthKeyInvalid (key material) so operators can route

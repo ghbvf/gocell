@@ -279,7 +279,12 @@ func TestIntegration_Migrator(t *testing.T) {
 
 		statuses, sErr := migrator.Status(ctx)
 		require.NoError(t, sErr)
-		require.GreaterOrEqual(t, len(statuses), int(expected), "status list must cover all migrations")
+		// Sanity-check the status list is non-empty. We deliberately do NOT
+		// compare len(statuses) to ExpectedVersion: migration version numbers
+		// can be sparse when a slot is reserved for an in-flight PR (e.g.
+		// version 022 reserved for S6 PR #464 leaves max=23 but file count=22).
+		// The foundLatest assertion below covers what we actually care about.
+		require.NotEmpty(t, statuses, "status must list at least one migration")
 		latestVersion := fmt.Sprintf("%03d", expected)
 		foundLatest := false
 		for _, s := range statuses {
@@ -306,7 +311,7 @@ func TestMigration012Down_SQLGuardRejectsDirectProviderBypass(t *testing.T) {
 
 	_, err = migrator.provider.Down(ctx)
 	require.Error(t, err, "direct goose down must be rejected by migration 012 SQL guard")
-	assert.Contains(t, err.Error(), "migration 012 down refused")
+	assert.Contains(t, err.Error(), "destructive down blocked")
 
 	var selectorExists bool
 	err = pool.DB().QueryRow(ctx, `
@@ -841,6 +846,73 @@ func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
 	require.Len(t, statuses, 1)
 	assert.False(t, statuses[0].Applied,
 		"001 must remain rolled back after repeated Down() at v=0")
+}
+
+// ---------------------------------------------------------------------------
+// S3F: TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected
+// ---------------------------------------------------------------------------
+
+// TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected verifies that
+// calling Down directly on a goose Provider (bypassing Migrator.Down) is
+// rejected by the SQL fail-closed guard in destructive migration Down sections.
+// The guard raises EXCEPTION P0001 unless gocell.allow_destructive_down = 'true'.
+func TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Apply only up to migration 019 (includes the destructive users/sessions/roles tables).
+	mfs := migrationsUpToFS(t, 19)
+	migrator, err := NewMigrator(pool, mfs, "schema_migrations_guc_guard")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 019")
+
+	// Direct provider.Down bypasses the destructiveDownSessionLocker — the GUC
+	// is NOT set, so the SQL DO $$ guard in migration 019's Down must RAISE EXCEPTION.
+	_, downErr := migrator.provider.Down(ctx)
+	require.Error(t, downErr, "direct goose provider Down must be rejected by migration SQL guard")
+	assert.Contains(t, downErr.Error(), "destructive down blocked",
+		"error must mention the GUC guard sentinel")
+}
+
+// ---------------------------------------------------------------------------
+// S3F: TestMigrator_Down_WithPermit_SetsGUC
+// ---------------------------------------------------------------------------
+
+// TestMigrator_Down_WithPermit_SetsGUC verifies that Migrator.Down with a
+// valid DestructiveDownPermit sets gocell.allow_destructive_down on the goose
+// session, allowing the migration SQL guard to pass. If this test fails with a
+// GUC-blocked error, the destructiveDownSessionLocker is not wiring the GUC
+// correctly.
+func TestMigrator_Down_WithPermit_SetsGUC(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Apply migrations up to 019 so there is a destructive migration to roll back.
+	mfs := migrationsUpToFS(t, 19)
+	migrator, err := NewMigrator(pool, mfs, "schema_migrations_permit_guc")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 019")
+
+	permit := mustAllowDestructiveDown(t, "S3F permit GUC integration test")
+	require.NoError(t, migrator.Down(ctx, permit),
+		"Migrator.Down with typed permit must succeed: locker sets GUC on the goose connection")
+}
+
+// ---------------------------------------------------------------------------
+// S3F: TestMigrator_GUCName_AllowDestructiveDown
+// ---------------------------------------------------------------------------
+
+// TestMigrator_GUCName_AllowDestructiveDown asserts that the GUC constant used
+// by the destructiveDownSessionLocker matches the sentinel expected by migration
+// SQL guards. This is a compile-time (constant value) regression test — any
+// rename that makes the Go constant diverge from the SQL literal will break
+// the permit flow rather than the direct-bypass flow.
+func TestMigrator_GUCName_AllowDestructiveDown(t *testing.T) {
+	const wantGUC = "gocell.allow_destructive_down"
+	assert.Equal(t, wantGUC, allowDestructiveDownGUC,
+		"allowDestructiveDownGUC must match the GUC literal used in migration SQL guards")
 }
 
 // Target: adapters/postgres coverage >= 80%
