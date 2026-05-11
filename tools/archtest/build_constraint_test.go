@@ -36,7 +36,7 @@ func findIntegrationTagViolations(rootDir string) ([]string, error) {
 		if relErr != nil {
 			rel = path
 		}
-		ok, checkErr := fileHasIntegrationTag(path)
+		ok, checkErr := fileHasExclusivelyTag(path, "integration")
 		if checkErr != nil || !ok {
 			violations = append(violations, rel)
 		}
@@ -111,33 +111,6 @@ func fileHasStricterThanIntegrationTag(path string) (bool, error) {
 	withoutAny := expr.Eval(func(_ string) bool { return false })
 	withDefaultCtx := expr.Eval(typeseval.BuildContextPredicate())
 	return !withIntegrationCtx && !withoutAny && !withDefaultCtx, nil
-}
-
-// fileHasIntegrationTag returns true iff the file carries, in its header
-// section (before the package clause and following only blank lines and other
-// comments — the only zone the Go toolchain recognizes for build constraints),
-// a //go:build line whose constraint expression:
-//  1. evaluates to true when the "integration" tag is active, AND
-//  2. evaluates to false when no tags are active (i.e., the file is not built
-//     unconditionally — it must actually be gated on the integration tag).
-//
-// A //go:build line that appears after the package clause (or after any other
-// non-comment, non-blank line) is invisible to the toolchain and therefore
-// counted as a violation, matching the semantics of `go build` / `go test`.
-//
-// Returns (false, nil) when the file lacks a //go:build line in the header.
-// Returns (false, err) when the line cannot be parsed.
-func fileHasIntegrationTag(path string) (bool, error) {
-	expr, err := typeseval.ParseBuildConstraint(path)
-	if err != nil {
-		return false, err
-	}
-	if expr == nil {
-		return false, nil
-	}
-	withIntegration := expr.Eval(func(tag string) bool { return tag == "integration" })
-	withoutAny := expr.Eval(func(_ string) bool { return false })
-	return withIntegration && !withoutAny, nil
 }
 
 // TestArchtest_AllIntegrationTestFiles_HaveIntegrationBuildTag walks the entire
