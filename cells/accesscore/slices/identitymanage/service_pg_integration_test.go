@@ -41,6 +41,7 @@ import (
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	globaltestutil "github.com/ghbvf/gocell/tests/testutil"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // pgIntegMigrationsFS returns the shared adapters/postgres migration FS.
@@ -101,7 +102,7 @@ func setupIdentityManagePG(t *testing.T) (*accesspgrepo.PGUserRepo, *adapterpg.T
 func newPGIntegRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
 	store, err := refreshmem.New(refresh.Policy{
-		ReuseInterval:  2 * time.Second,
+		ReuseInterval:  testtime.D2s,
 		MaxAge:         time.Hour,
 		MaxIdle:        refresh.DefaultMaxIdle,
 		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
