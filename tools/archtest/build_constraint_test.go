@@ -2,8 +2,6 @@
 package archtest
 
 import (
-	"bufio"
-	"go/build/constraint"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // findIntegrationTagViolations walks rootDir and returns the relative paths (from
@@ -82,90 +81,36 @@ func findRealTagViolations(rootDir string) ([]string, error) {
 	return violations, nil
 }
 
-// defaultBuildContextTags is the set of tags every Go toolchain run sets
-// implicitly: GOOS, GOARCH, cgo (when CGO_ENABLED=1, the default), and the
-// release tags go1.x for the running compiler back to the project floor.
-// Any //go:build expression satisfied by some subset of these alone — for
-// example `//go:build linux` — would be a no-op gate on a CI Linux runner,
-// so for the purposes of *_real_test.go strictness we treat satisfaction
-// under the default context as a violation, just like satisfaction under
-// the bare `integration` tag.
-//
-// The list intentionally errs broad. Adding a tag the compiler does not
-// actually set produces false positives only if a file's build expression
-// requires that tag in conjunction with something else — and any such
-// dependency on a non-default tag would already make the gate happy. Tags
-// that DO get set need to be present here or strict evaluation under-fires.
-//
-// Keep in sync with the Go floor declared in go.mod (currently 1.25); add
-// future release tags as we bump the floor.
-var defaultBuildContextTags = map[string]bool{
-	// GOOS values (https://pkg.go.dev/internal/syslist)
-	"aix": true, "android": true, "darwin": true, "dragonfly": true,
-	"freebsd": true, "hurd": true, "illumos": true, "ios": true,
-	"js": true, "linux": true, "nacl": true, "netbsd": true,
-	"openbsd": true, "plan9": true, "solaris": true, "wasip1": true,
-	"windows": true, "zos": true,
-
-	// GOARCH values
-	"386": true, "amd64": true, "amd64p32": true, "arm": true,
-	"arm64": true, "arm64be": true, "armbe": true, "loong64": true,
-	"mips": true, "mips64": true, "mips64le": true, "mips64p32": true,
-	"mips64p32le": true, "mipsle": true, "ppc": true, "ppc64": true,
-	"ppc64le": true, "riscv": true, "riscv64": true, "s390": true,
-	"s390x": true, "sparc": true, "sparc64": true, "wasm": true,
-
-	// Cgo + Go release tags through the current go.mod floor.
-	"cgo":   true,
-	"go1.1": true, "go1.2": true, "go1.3": true, "go1.4": true,
-	"go1.5": true, "go1.6": true, "go1.7": true, "go1.8": true,
-	"go1.9": true, "go1.10": true, "go1.11": true, "go1.12": true,
-	"go1.13": true, "go1.14": true, "go1.15": true, "go1.16": true,
-	"go1.17": true, "go1.18": true, "go1.19": true, "go1.20": true,
-	"go1.21": true, "go1.22": true, "go1.23": true, "go1.24": true,
-	"go1.25": true,
-}
-
 // fileHasStricterThanIntegrationTag returns true iff the file's //go:build
 // expression evaluates to false under three scopes:
 //  1. tag set = {} (file would build unconditionally)
-//  2. tag set = {integration}, all the *_integration_test.go gate covers
-//  3. tag set = default Go build context (GOOS/GOARCH/cgo/go1.x), which
-//     CI runners satisfy implicitly even with no -tags flag
+//  2. tag set = {integration} + toolchain defaults (GOOS/GOARCH/cgo/go1.x),
+//     which CI runners satisfy implicitly even with no -tags flag
+//  3. tag set = toolchain defaults alone (no integration), catching files
+//     that pass under the default build context regardless of tags
+//
+// All three evals are required: withoutAny catches edge cases like
+// //go:build !linux that union-over-GOOS would misclassify; withDefaultCtx
+// catches files that pass on a CI Linux runner without any -tags flag.
 //
 // Only when all three reject does the file genuinely require an opt-in tag
 // such as `integration_cluster`. Files matching `_real_test.go` that pass
 // under any of those scopes are violations.
 func fileHasStricterThanIntegrationTag(path string) (bool, error) {
-	f, err := os.Open(filepath.Clean(path))
+	expr, err := typeseval.ParseBuildConstraint(path)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
-			if !constraint.IsGoBuild(line) {
-				continue
-			}
-			expr, parseErr := constraint.Parse(line)
-			if parseErr != nil {
-				return false, parseErr
-			}
-			withIntegrationOnly := expr.Eval(func(tag string) bool { return tag == "integration" })
-			withoutAny := expr.Eval(func(_ string) bool { return false })
-			withDefaultCtx := expr.Eval(func(tag string) bool { return defaultBuildContextTags[tag] })
-			return !withIntegrationOnly && !withoutAny && !withDefaultCtx, nil
-		}
-		break
+	if expr == nil {
+		return false, nil
 	}
-	if err := scanner.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
+	// Three independent evals — each catches a different class of non-stricter file.
+	// All three must be false for the file to genuinely require an opt-in tag beyond
+	// integration / toolchain defaults.
+	withIntegrationCtx := expr.Eval(typeseval.BuildContextPredicate("integration"))
+	withoutAny := expr.Eval(func(_ string) bool { return false })
+	withDefaultCtx := expr.Eval(typeseval.BuildContextPredicate())
+	return !withIntegrationCtx && !withoutAny && !withDefaultCtx, nil
 }
 
 // fileHasIntegrationTag returns true iff the file carries, in its header
@@ -183,42 +128,16 @@ func fileHasStricterThanIntegrationTag(path string) (bool, error) {
 // Returns (false, nil) when the file lacks a //go:build line in the header.
 // Returns (false, err) when the line cannot be parsed.
 func fileHasIntegrationTag(path string) (bool, error) {
-	f, err := os.Open(filepath.Clean(path))
+	expr, err := typeseval.ParseBuildConstraint(path)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-
-		// Header zone ends at the first non-blank, non-comment line. The Go
-		// toolchain (see go/build/read.go readGoInfo) stops parsing build
-		// constraints once it sees the package clause, so any //go:build below
-		// that point would be ignored at compile time and must not be accepted
-		// by this gate either.
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
-			if !constraint.IsGoBuild(line) {
-				continue
-			}
-			expr, parseErr := constraint.Parse(line)
-			if parseErr != nil {
-				return false, parseErr
-			}
-			withIntegration := expr.Eval(func(tag string) bool { return tag == "integration" })
-			withoutAny := expr.Eval(func(_ string) bool { return false })
-			return withIntegration && !withoutAny, nil
-		}
-		// First substantive line (typically `package …`) — stop scanning.
-		break
+	if expr == nil {
+		return false, nil
 	}
-	if err := scanner.Err(); err != nil {
-		return false, err
-	}
-	// No //go:build line found in the header zone.
-	return false, nil
+	withIntegration := expr.Eval(func(tag string) bool { return tag == "integration" })
+	withoutAny := expr.Eval(func(_ string) bool { return false })
+	return withIntegration && !withoutAny, nil
 }
 
 // TestArchtest_AllIntegrationTestFiles_HaveIntegrationBuildTag walks the entire
