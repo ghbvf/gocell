@@ -146,7 +146,7 @@ func TestAuthPlan_NoLegacyPolicyStringLiterals(t *testing.T) {
 		if err != nil {
 			continue // unparseable; other tools will catch syntax errors
 		}
-		scanner.EachNode[ast.BasicLit](af, func(bl *ast.BasicLit) {
+		scanner.EachInSubtree[ast.BasicLit](af, func(bl *ast.BasicLit) {
 			if bl.Kind != token.STRING {
 				return
 			}
@@ -206,7 +206,7 @@ func TestAuthPlan_NoLegacyPolicySelectorExpressions(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		scanner.EachNode[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
+		scanner.EachInSubtree[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
 			id, ok := sel.X.(*ast.Ident)
 			if !ok || id.Name != "bootstrap" {
 				return
@@ -262,7 +262,7 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		scanner.EachNode[ast.CompositeLit](af, func(lit *ast.CompositeLit) {
+		scanner.EachInSubtree[ast.CompositeLit](af, func(lit *ast.CompositeLit) {
 			sel, ok := lit.Type.(*ast.SelectorExpr)
 			if !ok {
 				return
@@ -276,7 +276,7 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 				})
 			}
 		})
-		scanner.EachNode[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
+		scanner.EachInSubtree[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
 			id, ok := sel.X.(*ast.Ident)
 			if ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
 				hits = append(hits, hit{
@@ -366,7 +366,7 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		scanner.EachNode[ast.CompositeLit](af, func(node *ast.CompositeLit) {
+		scanner.EachInSubtree[ast.CompositeLit](af, func(node *ast.CompositeLit) {
 			// Composite literal: cell.AuthJWT{} / AuthJWT{...}
 			typeName := ""
 			switch t := node.Type.(type) {
@@ -388,7 +388,7 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 				}
 			}
 		})
-		scanner.EachNode[ast.CallExpr](af, func(node *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](af, func(node *ast.CallExpr) {
 			// Constructor calls: cell.NewAuthJWT(...) / cell.NewAuthJWTFromAssembly(...)
 			// etc. These are SelectorExpr call expressions where the package is "cell".
 			sel, ok := node.Fun.(*ast.SelectorExpr)
@@ -445,7 +445,7 @@ var x = "jwt"
 	require.NoError(t, err)
 
 	var found bool
-	scanner.EachNode[ast.BasicLit](af, func(bl *ast.BasicLit) {
+	scanner.EachInSubtree[ast.BasicLit](af, func(bl *ast.BasicLit) {
 		if bl.Kind == token.STRING && bl.Value == `"jwt"` {
 			found = true
 		}
@@ -464,7 +464,7 @@ var _ = bootstrap.PolicyJWT(nil)
 	require.NoError(t, err)
 
 	var found bool
-	scanner.EachNode[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](af, func(sel *ast.SelectorExpr) {
 		id, ok := sel.X.(*ast.Ident)
 		if ok && id.Name == "bootstrap" && sel.Sel.Name == "PolicyJWT" {
 			found = true
@@ -484,7 +484,7 @@ var _ = cell.Policy{}
 	require.NoError(t, err)
 
 	var found bool
-	scanner.EachNode[ast.CompositeLit](af, func(lit *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](af, func(lit *ast.CompositeLit) {
 		sel, ok := lit.Type.(*ast.SelectorExpr)
 		if !ok {
 			return

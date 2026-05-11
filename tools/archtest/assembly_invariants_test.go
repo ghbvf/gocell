@@ -176,7 +176,7 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 // function declaration `func generatedCellModules() []CellModule`.
 func hasGeneratedCellModulesFunc(af *ast.File) bool {
 	found := false
-	archscanner.EachNode[ast.FuncDecl](af, func(fn *ast.FuncDecl) {
+	archscanner.EachInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) {
 		if found {
 			return
 		}
@@ -236,10 +236,10 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 	var violations []violation
 
 	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc archscanner.FileContext) {
-		archscanner.EachNode[ast.SwitchStmt](fc.File, func(sw *ast.SwitchStmt) {
-			archscanner.EachNode[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
+		archscanner.EachInSubtree[ast.SwitchStmt](fc.File, func(sw *ast.SwitchStmt) {
+			archscanner.EachInChildren[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
 				for _, expr := range cc.List {
-					archscanner.EachNode[ast.BasicLit](expr, func(lit *ast.BasicLit) {
+					archscanner.EachInSubtree[ast.BasicLit](expr, func(lit *ast.BasicLit) {
 						if lit.Kind != token.STRING {
 							return
 						}
@@ -353,7 +353,7 @@ func containsYAMLDashTag(rawTag string) bool {
 // af, or nil if not found.
 func findStructDecl(af *ast.File, name string) *ast.StructType {
 	var result *ast.StructType
-	archscanner.EachNode[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+	archscanner.EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
 		if result != nil {
 			return
 		}
@@ -453,7 +453,7 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, cmdDir string) {
 // any other type kind.
 func hasTopLevelTypeDecl(af *ast.File, name string) bool {
 	found := false
-	archscanner.EachNode[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+	archscanner.EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
 		if !found && ts.Name.Name == name {
 			found = true
 		}
@@ -810,7 +810,7 @@ func asnCheckSource(label, src string) ([]string, error) {
 
 func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	var violations []string
-	archscanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	archscanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -819,9 +819,9 @@ func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	// Independently inspect every FuncLit (closure / goroutine body / inline
 	// callback). A FuncLit owns its lock scope: writes inside a closure do
 	// not inherit the caller's lockDepth, so each starts fresh at 0. The
-	// outer EachNode[ast.FuncLit] catches FuncLits anywhere in the file
+	// outer EachInSubtree[ast.FuncLit] catches FuncLits anywhere in the file
 	// (top-level decls, nested calls, struct field initializers, ...).
-	archscanner.EachNode[ast.FuncLit](f, func(fl *ast.FuncLit) {
+	archscanner.EachInSubtree[ast.FuncLit](f, func(fl *ast.FuncLit) {
 		if fl.Body == nil {
 			return
 		}
@@ -1113,7 +1113,7 @@ func TestAssemblyRefMethodSet(t *testing.T) {
 // interface { … }` in af, or nil if not found.
 func findInterfaceDecl(af *ast.File, name string) *ast.InterfaceType {
 	var result *ast.InterfaceType
-	archscanner.EachNode[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+	archscanner.EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
 		if result != nil {
 			return
 		}

@@ -62,7 +62,7 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	require.NoError(t, err, "%s: parse failed", rel)
 
 	var refreshFunc *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if refreshFunc != nil || fn.Recv == nil || fn.Name.Name != "Refresh" {
 			return
 		}
@@ -76,7 +76,7 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// `do := func(txCtx) error { ... }` pattern). Both are accepted.
 	var runInTxCalls []*ast.CallExpr
 	var closureArg ast.Expr
-	scanner.EachNode[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
 		if !isTxRunnerRunInTxCall(call) {
 			return
 		}
@@ -101,7 +101,7 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// without actually doing work. The closure body must contain at least one
 	// method call on `s`.
 	var hasReceiverCall bool
-	scanner.EachNode[ast.CallExpr](runInTxClosure.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](runInTxClosure.Body, func(call *ast.CallExpr) {
 		if hasReceiverCall {
 			return
 		}
@@ -142,7 +142,7 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// closure body so we can skip calls that are inside the desired location.
 	closureLbrace := runInTxClosure.Body.Lbrace
 	closureRbrace := runInTxClosure.Body.Rbrace
-	scanner.EachNode[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
 		// Skip nodes inside the RunInTx closure body — those are the desired location.
 		if call.Pos() > closureLbrace && call.Pos() < closureRbrace {
 			return
@@ -205,10 +205,10 @@ func resolveClosureArg(body *ast.BlockStmt, arg ast.Expr) *ast.FuncLit {
 		return nil
 	}
 	var lastAssigned *ast.FuncLit
-	scanner.EachNode[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
+	scanner.EachInSubtree[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
 		// Build an index map from Ident pointer to position in Lhs.
 		lhsIndex := make(map[*ast.Ident]int, len(assign.Lhs))
-		scanner.EachNode[ast.Ident](assign, func(id *ast.Ident) {
+		scanner.EachInSubtree[ast.Ident](assign, func(id *ast.Ident) {
 			for i, lhs := range assign.Lhs {
 				if lhs == id {
 					lhsIndex[id] = i
@@ -277,7 +277,7 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 
 	scope := scanner.ModuleScope(root)
 	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
+		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 			if fd.Name.Name != "DetectInvalidIndexes" {
 				return
 			}
@@ -344,7 +344,7 @@ func TestRefreshAmbientTX01(t *testing.T) {
 	}
 	var violations []violation
 
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Begin" {
 			return

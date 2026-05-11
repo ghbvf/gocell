@@ -139,7 +139,7 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 		path := fc.AbsPath
 		_ = path
 		hits++
-		scanner.EachNode[ast.AssignStmt](fc.File, func(assign *ast.AssignStmt) {
+		scanner.EachInSubtree[ast.AssignStmt](fc.File, func(assign *ast.AssignStmt) {
 			if len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
 				return
 			}
@@ -193,7 +193,7 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 	// the helper call.
 	chunkCallsEncoder := false
 
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || fn.Body == nil {
 			return
 		}
@@ -201,7 +201,7 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 		if !want && fn.Name.Name != "writeBatchChunk" {
 			return
 		}
-		scanner.EachNode[ast.Ident](fn.Body, func(id *ast.Ident) {
+		scanner.EachInSubtree[ast.Ident](fn.Body, func(id *ast.Ident) {
 			if want && id.Name == "MaxMetadataBytes" {
 				required[fn.Name.Name] = true
 			}
@@ -236,11 +236,11 @@ func readSQLConstants(t *testing.T, path string) map[string]string {
 	}
 
 	consts := make(map[string]string)
-	scanner.EachNode[ast.GenDecl](f, func(gd *ast.GenDecl) {
+	scanner.EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
 		if gd.Tok != token.CONST {
 			return
 		}
-		scanner.EachNode[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+		scanner.EachInSubtree[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for i, name := range vs.Names {
 				if i >= len(vs.Values) {
 					continue
@@ -303,11 +303,11 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 
 	const constName = "MaxPayloadBytes"
 	var declared bool
-	scanner.EachNode[ast.GenDecl](f, func(gd *ast.GenDecl) {
+	scanner.EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
 		if gd.Tok != token.CONST {
 			return
 		}
-		scanner.EachNode[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+		scanner.EachInSubtree[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for _, name := range vs.Names {
 				if name.Name == constName {
 					declared = true
@@ -325,7 +325,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 
 	// Walk Entry.Validate body for any reference to MaxPayloadBytes.
 	var validate *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if validate != nil {
 			return
 		}
@@ -347,7 +347,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	// must drive an actual size check, otherwise the cap is decorative
 	// ("`_ = MaxPayloadBytes`" would have passed an ident-only scan).
 	var compared bool
-	scanner.EachNode[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) {
+	scanner.EachInSubtree[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) {
 		if compared {
 			return
 		}
@@ -421,7 +421,7 @@ func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 		receiptLine  int
 		receiptField string
 	)
-	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "HandleResult" {
 			return
 		}
@@ -481,7 +481,7 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	}
 
 	var handle *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "handleFailedEntry" && fd.Recv != nil {
 			handle = fd
 		}
@@ -494,7 +494,7 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	// MarkDead. The LHS first ident MUST NOT be `_` — discarding the updated
 	// bool collapses the lost-lease branch into an uncounted writeback.
 	var violations []token.Pos
-	scanner.EachNode[ast.AssignStmt](handle.Body, func(assign *ast.AssignStmt) {
+	scanner.EachInSubtree[ast.AssignStmt](handle.Body, func(assign *ast.AssignStmt) {
 		if len(assign.Rhs) != 1 {
 			return
 		}
@@ -548,7 +548,7 @@ func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	}
 
 	var hasLost bool
-	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name.Name != "PollCycleResult" {
 			return
 		}
@@ -721,13 +721,13 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 
 	// OUTBOX-SERVICE-01 requires knowing the enclosing FuncDecl to distinguish
 	// constructor fail-fast (allowed) from runtime-method nil fallback (forbidden).
-	// We use EachNode[ast.FuncDecl] to iterate FuncDecls and check FuncDecl-level
+	// We use EachInSubtree[ast.FuncDecl] to iterate FuncDecls and check FuncDecl-level
 	// violations plus the BinaryExpr within each body. All other node types that
 	// appear anywhere in the file (including struct fields, top-level declarations)
 	// are scanned on the full file.
 
 	// FuncDecl-level checks and BinaryExpr within each function body.
-	scanner.EachNode[ast.FuncDecl](file, func(enclosing *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(enclosing *ast.FuncDecl) {
 		if isWithOutboxWriterFunc(enclosing) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRuleWriterAdapter,
@@ -746,7 +746,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 		}
 		// OUTBOX-SERVICE-01: BinaryExpr nil checks scoped within the function body
 		// so enclosing context is available for isConstructorFailFast.
-		scanner.EachNode[ast.BinaryExpr](enclosing, func(expr *ast.BinaryExpr) {
+		scanner.EachInSubtree[ast.BinaryExpr](enclosing, func(expr *ast.BinaryExpr) {
 			if isTxRunnerNilComparison(expr) && !isConstructorFailFast(enclosing) {
 				violations = append(violations, outboxServiceViolation{
 					Rule: outboxServiceRuleTxRunnerNil,
@@ -762,7 +762,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 	})
 	// File-wide checks for node types that can appear both inside and outside
 	// function bodies (struct fields, top-level var/const, expressions).
-	scanner.EachNode[ast.CallExpr](file, func(expr *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(expr *ast.CallExpr) {
 		if isDirectPublishCall(expr) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRuleDirectPublish,
@@ -780,7 +780,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 			})
 		}
 	})
-	scanner.EachNode[ast.SelectorExpr](file, func(expr *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(expr *ast.SelectorExpr) {
 		if isOutboxPublisherSelector(expr) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRulePublisherMode,
@@ -798,7 +798,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 			})
 		}
 	})
-	scanner.EachNode[ast.Field](file, func(expr *ast.Field) {
+	scanner.EachInSubtree[ast.Field](file, func(expr *ast.Field) {
 		if hasPublisherModeState(expr.Names) || isPublishFailureModeExpr(expr.Type) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRulePublisherMode,
@@ -808,7 +808,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 			})
 		}
 	})
-	scanner.EachNode[ast.Ident](file, func(expr *ast.Ident) {
+	scanner.EachInSubtree[ast.Ident](file, func(expr *ast.Ident) {
 		if isPublisherModeIdent(expr) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRulePublisherMode,
@@ -1137,7 +1137,7 @@ func scanPackage(root string, p *packages.Package) ([]outboxTopicViolation, erro
 // covering BasicLit, same-package const Ident, and cross-package SelectorExpr.
 func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, pkg *packages.Package) []outboxTopicViolation {
 	var violations []outboxTopicViolation
-	scanner.EachNode[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
 		if !isOutboxEntryLiteral(pkg, lit) {
 			return
 		}
@@ -1495,11 +1495,11 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 		if file == nil {
 			continue
 		}
-		scanner.EachNode[ast.GenDecl](file, func(gen *ast.GenDecl) {
+		scanner.EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
 			if gen.Tok != token.CONST {
 				return
 			}
-			scanner.EachNode[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
+			scanner.EachInSubtree[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
 				for _, name := range vs.Names {
 					if _, bad := forbidden[name.Name]; !bad {
 						continue
@@ -1596,7 +1596,7 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 		seen    = make(map[string]struct{})
 		unknown []string
 	)
-	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "HandleResult" {
 			return
 		}
@@ -1810,7 +1810,7 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 func scanForHandleResultLiterals(pkg *packages.Package, file *ast.File, rel, outboxImportPath string) []string {
 	inPackageOutbox := pkg.PkgPath == outboxImportPath
 	var hits []string
-	scanner.EachNode[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		switch tn := cl.Type.(type) {
 		case *ast.SelectorExpr:
 			ident, ok := tn.X.(*ast.Ident)
