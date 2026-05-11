@@ -866,6 +866,44 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 			contractDir: "contracts/event/session/created/v1",
 			wantCount:   0,
 		},
+		{
+			// id segment "internal-get" (dash) versus dir segments "internal/get"
+			// (slash). Pins the canonical PATH-ID-MAPPING regression that
+			// PR-CFG-G1-FU6-RECYCLE filed against FMT-CONTRACT-PATH-ID-MAPPING-01
+			// and that FMT-21 already covers as the bijective inverse rule.
+			//
+			// INTEGRATION ANCHOR — DO NOT DELETE WITHOUT REPLACEMENT.
+			// This case calls v.Validate(t.Context()) (the full rules() chain),
+			// so removing FMT-21 from rules() makes wantCount:1 fail. The case
+			// therefore pins both the rule logic AND the rule's membership in
+			// the default validator slice. Removing it (or downgrading wantCount
+			// to 0) silently weakens the PATH-ID-MAPPING governance contract.
+			name:        "dash-instead-of-slash regression (PR-CFG-G1-FU6-RECYCLE)",
+			contractID:  "http.config.internal-get.v1",
+			contractDir: "contracts/http/config/internal/get/v1",
+			wantCount:   1,
+		},
+		{
+			// Legitimate single-segment dash (e.g. event.config.entry-deleted.v1
+			// matches contracts/event/config/entry-deleted/v1). Guards against a
+			// future "dashes are always wrong" weakening of the rule.
+			name:        "dash matches both id and path (compliant)",
+			contractID:  "event.config.entry-deleted.v1",
+			contractDir: "contracts/event/config/entry-deleted/v1",
+			wantCount:   0,
+		},
+		{
+			// Pins the defensive skip in FMT-21 (rules_misc_strict.go:569-571).
+			// Removing the `if c.Dir == "" { continue }` guard would cause an
+			// empty Dir to derive "contracts/" and fire on every contract — this
+			// test catches that regression. Empty Dir is unreachable in
+			// production parser loads, but the defensive skip is part of the
+			// rule's documented contract.
+			name:        "empty dir is skipped (defensive guard)",
+			contractID:  "http.x.y.v1",
+			contractDir: "",
+			wantCount:   0,
+		},
 	}
 
 	for _, tc := range tests {
