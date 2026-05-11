@@ -291,7 +291,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		require.True(t, errors.As(err, &ec))
 		assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code)
 		assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
-		assert.Contains(t, ec.Message, "only admin")
+		assert.Contains(t, ec.Message, "no effective admin")
 	})
 
 	t.Run("RemoveFromUserIfNotLast_non_admin_sole_holder_revoked_cleanly", func(t *testing.T) {

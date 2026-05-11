@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -101,7 +102,7 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 	if !hasRoles {
 		return nil
 	}
-	if _, hasAdmin := roles["admin"]; !hasAdmin {
+	if _, hasAdmin := roles[auth.RoleAdmin]; !hasAdmin {
 		return nil
 	}
 	// User is admin AND currently active. Count OTHER effective admins.
@@ -110,7 +111,7 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 		if otherID == userID {
 			continue
 		}
-		if _, ok := otherRoles["admin"]; !ok {
+		if _, ok := otherRoles[auth.RoleAdmin]; !ok {
 			continue
 		}
 		u, ok := r.store.usersByID[otherID]

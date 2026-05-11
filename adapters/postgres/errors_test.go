@@ -107,7 +107,7 @@ func TestIsForeignKeyViolation(t *testing.T) {
 func TestIsLastAdminProtected(t *testing.T) {
 	matchErr := &pgconn.PgError{
 		Code:    SQLStateRaiseException,
-		Message: "last_admin_protected: cannot remove the last admin",
+		Message: "effective_admin_invariant: would leave the system with no effective admin",
 	}
 
 	tests := []struct {

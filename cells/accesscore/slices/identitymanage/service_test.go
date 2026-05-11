@@ -255,6 +255,42 @@ func TestService_Lock_LastAdminProtected(t *testing.T) {
 	assert.False(t, persisted.IsLocked(), "last-admin-protected lock must not update the user")
 }
 
+func TestService_Update_LastAdminProtected_StatusDemotion(t *testing.T) {
+	svc, userRepo, roleRepo := newLastAdminProtectedService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "last-admin-update", Email: "last-admin-update@example.com", Password: "hash",
+	})
+	require.NoError(t, err)
+	assignAdminForIdentityManageTest(t, roleRepo, user.ID)
+
+	suspended := string(domain.StatusSuspended)
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
+
+	assertLastAdminProtected(t, err)
+	persisted, getErr := userRepo.GetByID(context.Background(), user.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, domain.StatusActive, persisted.Status,
+		"last-admin-protected update must not change the user's status")
+}
+
+func TestService_Update_LastAdminAllowedWhenAnotherActiveAdminRemains(t *testing.T) {
+	svc, _, roleRepo := newLastAdminProtectedService(t)
+	first, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "admin-one-upd", Email: "admin-one-upd@example.com", Password: "hash",
+	})
+	require.NoError(t, err)
+	second, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "admin-two-upd", Email: "admin-two-upd@example.com", Password: "hash",
+	})
+	require.NoError(t, err)
+	assignAdminForIdentityManageTest(t, roleRepo, first.ID)
+	assignAdminForIdentityManageTest(t, roleRepo, second.ID)
+
+	suspended := string(domain.StatusSuspended)
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: first.ID, Status: &suspended})
+	require.NoError(t, err)
+}
+
 func TestService_Delete_LastAdminAllowedWhenAnotherAdminRemains(t *testing.T) {
 	svc, userRepo, roleRepo := newLastAdminProtectedService(t)
 	first, err := svc.Create(adminCtxForService(), CreateInput{

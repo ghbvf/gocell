@@ -128,6 +128,15 @@ SELECT COUNT(*)::INT FROM role_assignments WHERE role_id = $1`
 	// sealed interface (S4.0). Advisory lock is taken inside the CTE so the
 	// read serializes with concurrent mutation guards (CTE prelude in
 	// removeIfNotLastSQL + migration-024 triggers all share the same key).
+	//
+	// IMPORTANT: This query MUST only be executed within an open write
+	// transaction. The advisory lock (pg_advisory_xact_lock) is transaction-
+	// scoped: it is automatically released when the enclosing transaction
+	// commits or rolls back. Calling this outside a transaction defeats the
+	// serialization guarantee — the lock acquires and immediately releases,
+	// leaving a window for concurrent mutations. If a lock-free diagnostic
+	// variant is needed (e.g. for observability reads), add a separate query
+	// without the advisory-lock CTE rather than lifting the constraint here.
 	countEffectiveAdminsSQL = `
 WITH lock_acquired AS (
     SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0))
@@ -326,6 +335,15 @@ func (r *PGRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error
 // Acquires advisory xact lock 'gocell.accesscore.last_admin' inside the CTE
 // so concurrent guard paths (this read, removeIfNotLastSQL CTE, and the
 // migration-024 trigger on users) serialize.
+//
+// CONTRACT: Must be called within an open write transaction. The advisory lock
+// is transaction-scoped (pg_advisory_xact_lock) and releases on commit/rollback;
+// outside-transaction callers acquire and immediately release the lock, defeating
+// the invariant guarantee. The current sole caller (domain.LastAdminGuard.CheckRemove
+// via identitymanage/rbacassign service entry points) always runs inside
+// txRunner.RunInTx — this contract is satisfied. If a lock-free read is ever
+// needed for diagnostics or observability, add a dedicated variant without the
+// advisory-lock CTE rather than relaxing this contract.
 func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context) (int, error) {
 	var count int
 	row := r.db.QueryRow(ctx, countEffectiveAdminsSQL)
