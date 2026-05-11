@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -131,7 +132,7 @@ func WrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) (C
 func MustWrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) ConsumerFunc {
 	c, err := WrapConsumer(tr, spec, fn)
 	if err != nil {
-		panic(errcode.Assertion("wrapper: consumer: %v", err))
+		panic(panicregister.Approved("wrapper-consumer-init", errcode.Assertion("wrapper: consumer: %v", err)))
 	}
 	return c
 }

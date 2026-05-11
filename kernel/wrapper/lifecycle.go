@@ -3,6 +3,7 @@ package wrapper
 import (
 	"fmt"
 
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -31,5 +32,5 @@ func recoverAndFinish(span Span, rec any) {
 	}
 	span.RecordError(redaction.RedactError(err))
 	span.End()
-	panic(rec)
+	panic(panicregister.Approved("lifecycle-recover-rethrow-to-recovery-middleware", rec))
 }

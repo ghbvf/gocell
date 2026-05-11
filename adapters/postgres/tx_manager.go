@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -166,9 +167,9 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 }
 
 func repanicAfterTopLevelTxRollback(recovered any) {
-	panic(recovered)
+	panic(panicregister.Approved("pg-tx-top-level-rollback-rethrow", recovered))
 }
 
 func repanicAfterSavepointRollback(recovered any) {
-	panic(recovered)
+	panic(panicregister.Approved("pg-tx-savepoint-rollback-rethrow", recovered))
 }

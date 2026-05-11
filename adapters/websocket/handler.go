@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
@@ -218,7 +219,7 @@ func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.
 func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 	handler, err := UpgradeHandler(hub, cfg)
 	if err != nil {
-		panic(err)
+		panic(panicregister.Approved("websocket-upgrade-handler-init", err))
 	}
 	return handler
 }
