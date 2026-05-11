@@ -18,11 +18,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -186,8 +185,11 @@ type AuthRouteMeta struct {
 }
 
 // IsInternal reports whether this route lives on the internal listener.
+// Delegates to metadata.IsInternalHTTPPath so the bare "/internal/v1"
+// root and the trailing-slash form share one predicate across governance
+// (REF-17 / FMT-28 / FMT-31), runtime routing, and admission.
 func (m AuthRouteMeta) IsInternal() bool {
-	return strings.HasPrefix(m.Path, cellvocab.InternalPathPrefix)
+	return metadata.IsInternalHTTPPath(m.Path)
 }
 
 // AuthRouteDeclarer is implemented by aggregators that want to receive the

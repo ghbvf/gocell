@@ -994,6 +994,7 @@ const (
 	codeFMT28 = "FMT-28"
 	codeFMT29 = "FMT-29"
 	codeFMT30 = "FMT-30"
+	codeFMT31 = "FMT-31"
 )
 
 // validateFMT27 checks mutually exclusive HTTP auth metadata modes.
@@ -1185,6 +1186,64 @@ func (v *Validator) validateFMT28() []ValidationResult {
 				),
 			))
 		}
+	}
+	return results
+}
+
+// validateFMT31 enforces that every HTTP contract whose path matches
+// metadata.IsInternalHTTPPath declares a non-empty endpoints.clients list.
+//
+// /internal/v1/* endpoints rely on Contract.Clients caller-cell allowlist via
+// runtime auth.RequireCallerCell — an empty allowlist means anyone holding a
+// valid service token can call, which defeats the purpose of internal-port
+// isolation. This rule lifts the check from the L5 archtest
+// (tools/archtest/contract_spec_clients_test.go) that scanned generated Go
+// ContractSpec literals up to the L6 contract.yaml source of truth (charter
+// §5.1 L5→L6 carrier migration); codegen at
+// tools/codegen/contractgen/builder.go faithfully copies endpoints.clients to
+// the Go literal, and runtime kernel/contractspec/spec.go::validateHTTP
+// catches any drift at boot.
+//
+// FMT-31 is intentionally unidirectional. The inverse direction
+// (non-internal path forbids non-empty clients) cannot be enforced here:
+// endpoints.clients is semantically polymorphic — on internal paths it
+// declares the caller-cell allowlist that codegen copies into
+// ContractSpec.Clients; on non-internal paths it is declarative consumer
+// metadata that codegen (tools/codegen/contractgen/builder.go) filters out
+// of the runtime ContractSpec entirely (FMT-28 forbids auth.clientsOnly
+// outside internal paths, so clientsOnly cannot pick up these declarations
+// either). The runtime check at kernel/contractspec/spec.go remains the
+// sole inverse-direction gate.
+//
+// ref: kernel/contractspec/spec.go::validateHTTP for the runtime mirror;
+// ADR docs/architecture/202605051500-adr-k05-markergen-cellgen-unified.md
+// for the deleted FMT-18 predecessor.
+func (v *Validator) validateFMT31() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "http" {
+			continue
+		}
+		if c.Endpoints.HTTP == nil {
+			continue
+		}
+		if !metadata.IsInternalHTTPPath(c.Endpoints.HTTP.Path) {
+			continue
+		}
+		if len(c.Endpoints.Clients) > 0 {
+			continue
+		}
+		results = append(results, v.newResult(
+			codeFMT31, SeverityError, IssueRequired,
+			contractFile(c),
+			"endpoints.clients",
+			fmt.Sprintf(
+				"internal HTTP contract %q (path %q) has empty endpoints.clients; "+
+					"/internal/v1/ contracts must declare at least one caller cell "+
+					"so RequireCallerCell has an allowlist",
+				c.ID, c.Endpoints.HTTP.Path,
+			),
+		))
 	}
 	return results
 }

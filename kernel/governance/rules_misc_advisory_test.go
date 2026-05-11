@@ -147,6 +147,10 @@ func TestValidateSliceConsistency_MissingParentCell(t *testing.T) {
 //   - NO-MANUAL-CONTRACTSPEC-LITERAL-01
 //   - EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
 //
+// The /internal/v1 caller-clients invariant FMT-18 also carried was later
+// reclaimed at the YAML governance layer by FMT-31 (see rules_fmt_test.go
+// TestFMT31_*); its dedicated tests live there rather than in this file.
+//
 // All FMT-18 unit tests (TestScanContractSpecLiterals*, TestValidateContractSpecLiteral*,
 // TestValidateContractSpecClientsLiteral) have been removed alongside the rule.
 

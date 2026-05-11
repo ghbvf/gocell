@@ -79,7 +79,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 // kernel/governance/*.go. Update this list whenever a rule is added /
 // renamed / removed.
 //
-// Total: 81 IDs across 11 series.
+// Total: 82 IDs across 11 series.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).
@@ -100,7 +100,7 @@ func goldenRuleIDs() []string {
 		// strict-mode orchestrator is in rules_misc_strict.go)
 		"DOC-NAME-01",
 
-		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..30
+		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..31
 		// + strict-mode FMT-16/17/19/A1/C1 + FMT-20..23/25 in
 		// rules_misc_strict.go; FMT-19 implementation in rules_misc_advisory.go).
 		"FMT-01", "FMT-02", "FMT-03", "FMT-04", "FMT-05",
@@ -108,9 +108,12 @@ func goldenRuleIDs() []string {
 		"FMT-11", "FMT-12", "FMT-13", "FMT-14", "FMT-15",
 		// FMT-18 deleted in PR-V1-CODEGEN-FULL-MIGRATION W4 (replaced by
 		// archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01); gap intentional.
+		// FMT-31 (rules_fmt.go) reclaimed the /internal/v1 caller-clients
+		// invariant at the YAML governance layer (charter §5.1 L5→L6 carrier
+		// migration, replaces tools/archtest/contract_spec_clients_test.go).
 		"FMT-16", "FMT-17", "FMT-19",
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
-		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30",
+		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30", "FMT-31",
 		"FMT-A1", "FMT-C1",
 
 		// OUTGUARD — outbox durability (rules_misc_advisory.go)

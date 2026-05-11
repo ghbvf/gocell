@@ -725,3 +725,175 @@ func TestFMT29_FullOwner(t *testing.T) {
 		}
 	}
 }
+
+// --- FMT-31: /internal/v1/* HTTP contracts must declare non-empty endpoints.clients ---
+
+// fmt31Project returns a minimal *metadata.ProjectMeta with one HTTP contract
+// shaped by the test inputs. lifecycle="" defaults to "active". When httpNil
+// is true, Endpoints.HTTP is left nil (covers FMT-07 boundary). kind is the
+// contract Kind ("http", "event", ...).
+func fmt31Project(kind, path string, clients []string, lifecycle string, httpNil bool) *metadata.ProjectMeta {
+	if lifecycle == "" {
+		lifecycle = "active"
+	}
+	endpoints := metadata.EndpointsMeta{
+		Server:  "samplecore",
+		Clients: clients,
+	}
+	if !httpNil {
+		endpoints.HTTP = &metadata.HTTPTransportMeta{
+			Method:        "GET",
+			Path:          path,
+			SuccessStatus: 200,
+		}
+	}
+	return &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.sample.list.v1": {
+				ID:               "http.sample.list.v1",
+				Kind:             kind,
+				ConsistencyLevel: "L1",
+				Lifecycle:        lifecycle,
+				Endpoints:        endpoints,
+				Dir:              "contracts/http/sample/list/v1",
+				File:             "contracts/http/sample/list/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+}
+
+func TestFMT31_InternalPathWithClients_OK(t *testing.T) {
+	project := fmt31Project("http", "/internal/v1/foo/list", []string{"edgecell"}, "", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-31: expected 0 findings for internal path with declared clients, got: %v", matches)
+	}
+}
+
+func TestFMT31_InternalPathEmptyClients_Error(t *testing.T) {
+	project := fmt31Project("http", "/internal/v1/foo/list", nil, "", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-31: expected 1 finding for internal path with empty clients, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Field != "endpoints.clients" {
+		t.Errorf("FMT-31: expected Field=endpoints.clients, got %q", matches[0].Field)
+	}
+	if matches[0].Severity != SeverityError {
+		t.Errorf("FMT-31: expected SeverityError, got %v", matches[0].Severity)
+	}
+}
+
+func TestFMT31_BareInternalRoot_Error(t *testing.T) {
+	// metadata.IsInternalHTTPPath also matches the bare "/internal/v1" (no
+	// trailing slash) edge — verify FMT-31 inherits that semantics rather than
+	// inlining strings.HasPrefix.
+	project := fmt31Project("http", "/internal/v1", nil, "", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-31: expected 1 finding for bare /internal/v1 with empty clients, got %d", len(matches))
+	}
+}
+
+func TestFMT31_NonInternalPathEmptyClients_OK(t *testing.T) {
+	// FMT-31 is unidirectional: non-internal paths with empty clients are out
+	// of its scope. The inverse direction (non-internal must have empty clients)
+	// is enforced at runtime by kernel/contractspec.ContractSpec.validateHTTP,
+	// not at the YAML governance layer (endpoints.clients is semantically
+	// polymorphic — clientsOnly auth declares it on non-internal paths).
+	project := fmt31Project("http", "/api/v1/sample/list", nil, "", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-31: expected 0 findings for non-internal path, got: %v", matches)
+	}
+}
+
+func TestFMT31_NonHTTPKind_Skipped(t *testing.T) {
+	project := fmt31Project("event", "", nil, "", true)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-31: expected 0 findings for non-http kind, got: %v", matches)
+	}
+}
+
+func TestFMT31_HTTPNil_Skipped(t *testing.T) {
+	// HTTP=nil on kind=http is FMT-07's domain; FMT-31 must not duplicate.
+	project := fmt31Project("http", "", nil, "", true)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-31: expected 0 findings when Endpoints.HTTP is nil, got: %v", matches)
+	}
+}
+
+func TestFMT31_DeprecatedLifecycle_StillEnforced(t *testing.T) {
+	// A deprecated internal endpoint without clients is still a security
+	// liability (anyone with service-token could call it). Mirror the runtime
+	// validateHTTP check which has no lifecycle gate.
+	project := fmt31Project("http", "/internal/v1/foo/list", nil, "deprecated", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-31: expected 1 finding for deprecated internal with empty clients, got %d", len(matches))
+	}
+}
+
+func TestFMT31_DraftLifecycle_StillEnforced(t *testing.T) {
+	// Same rationale as the deprecated case: lifecycle is not a gate. A draft
+	// internal endpoint missing its caller allowlist would still serve traffic
+	// in any environment that runs it, so FMT-31 fires regardless of lifecycle.
+	project := fmt31Project("http", "/internal/v1/foo/list", nil, "draft", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-31: expected 1 finding for draft internal with empty clients, got %d", len(matches))
+	}
+}
+
+func TestFMT31_InternalV10_SubstringTrap(t *testing.T) {
+	// Verifies metadata.IsInternalHTTPPath does not match "/internal/v10/x"
+	// (substring trap); FMT-31 must inherit that boundary discipline.
+	project := fmt31Project("http", "/internal/v10/x", nil, "", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-31: expected 0 findings for /internal/v10/x (not internal-v1), got: %v", matches)
+	}
+}
+
+func TestFMT31_MultipleContracts_Aggregate(t *testing.T) {
+	project := fmt31Project("http", "/internal/v1/foo", nil, "", false)
+	// Add a second internal contract; Clients is intentionally omitted (zero
+	// value) so FMT-31 must flag both this and the contract from
+	// fmt31Project above, producing exactly 2 aggregated findings.
+	project.Contracts["http.sample.detail.v1"] = &metadata.ContractMeta{
+		ID:               "http.sample.detail.v1",
+		Kind:             "http",
+		ConsistencyLevel: "L1",
+		Lifecycle:        "active",
+		Endpoints: metadata.EndpointsMeta{
+			Server: "samplecore",
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:        "GET",
+				Path:          "/internal/v1/bar",
+				SuccessStatus: 200,
+			},
+		},
+		Dir:  "contracts/http/sample/detail/v1",
+		File: "contracts/http/sample/detail/v1/contract.yaml",
+	}
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 2 {
+		t.Fatalf("FMT-31: expected 2 findings (one per offending contract), got %d: %v", len(matches), matches)
+	}
+}
