@@ -21,8 +21,8 @@ type AdminCounter func(ctx context.Context) (int, error)
 //  1. Application: CheckRemove is invoked from identitymanage.DeleteUser /
 //     ChangeUserStatus(Locked) / rbacassign.RevokeRole("admin") so callers
 //     receive ErrAuthLastAdminProtected (HTTP 403) with a precise errcode.
-//     Composition-root wiring lands in S4 (this PR ships the rule + its
-//     unit tests; service-level wiring is the cell-injection PR).
+//     S4 still owns the session/refresh/JWT closed loop, but the last-admin
+//     service wiring is live before that tranche.
 //
 //  2. DB: migrations/019_roles.sql installs a BEFORE DELETE trigger on
 //     role_assignments that raises 'last_admin_protected' when a direct

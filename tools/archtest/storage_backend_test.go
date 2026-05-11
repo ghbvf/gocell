@@ -169,7 +169,10 @@ func analyzeStorageBackendFile(file *ast.File) storageBackendFileInfo {
 	// Walk function declarations so we can build per-function localVarValues.
 	// Strategy: for each FuncDecl, collect variable assignments from the body,
 	// then scan IfStmts within that function.
+	funcsByName := map[string]*ast.FuncDecl{}
+	pgBranchHelpers := map[string]bool{}
 	scanner.EachInSubtree[ast.FuncDecl](file, func(funcDecl *ast.FuncDecl) {
+		funcsByName[funcDecl.Name.Name] = funcDecl
 		if funcDecl.Body == nil {
 			return
 		}
@@ -181,6 +184,9 @@ func analyzeStorageBackendFile(file *ast.File) storageBackendFileInfo {
 			scanner.EachInSubtree[ast.CallExpr](ifStmt.Body, func(call *ast.CallExpr) {
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
+					if helperIdent, helperOK := call.Fun.(*ast.Ident); helperOK && isPGBranch {
+						pgBranchHelpers[helperIdent.Name] = true
+					}
 					return
 				}
 				pkgIdent, ok := sel.X.(*ast.Ident)
@@ -201,6 +207,28 @@ func analyzeStorageBackendFile(file *ast.File) storageBackendFileInfo {
 			})
 		})
 	})
+	for helperName := range pgBranchHelpers {
+		helper := funcsByName[helperName]
+		if helper == nil || helper.Body == nil {
+			continue
+		}
+		scanner.EachInSubtree[ast.CallExpr](helper.Body, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok || !pgAliases[pkgIdent.Name] {
+				return
+			}
+			switch sel.Sel.Name {
+			case pgNewOutboxWriterIdent:
+				info.hasNewOutboxWriterInPGBranch = true
+			case pgNewTxManagerIdent:
+				info.hasNewTxManagerInPGBranch = true
+			}
+		})
+	}
 
 	// Detect unconditional NewPool calls: any call to <pgAlias>.NewPool that
 	// is NOT inside an if-block whose condition mentions "postgres".

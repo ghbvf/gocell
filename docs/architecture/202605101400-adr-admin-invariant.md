@@ -27,7 +27,7 @@ PR#417 §12 倾向"至少一个"，但未拍板。本 ADR 锁定决议。
 |---|---|
 | `cells/accesscore/internal/adminprovision/provisioner.go:76-174` | `Ensure()`：fast-path `CountByRole("admin") == 0` → 创建 admin user + role assignment；进程内 mutex 序列化；返回 `OutcomeCreated` / `OutcomeAlreadyExists` / `OutcomeRaceSkipped` |
 | `cells/accesscore/slices/setup/handler.go` | `POST /api/v1/access/setup/admin` 调 `Provisioner.Ensure()`；handler 用 `auth.Route{Bootstrap: true}` 保护（HTTP Basic Auth + per-IP 限流） |
-| `cells/accesscore/slices/identitymanage/` | 现有 ChangePassword / Lock / Delete 路径无 "如果是最后一个 admin 拒绝" 校验；mem 模式下"删最后一个 admin 后系统失能"作为运维风险隐式存在 |
+| `cells/accesscore/slices/identitymanage/` | PR449 follow-up 已在 Lock / Delete 路径接入 "如果是最后一个 admin 拒绝" 校验；ChangePassword 不移除 admin 身份，不属于该不变量入口 |
 
 ### 1.2 关联 backlog
 
@@ -83,11 +83,11 @@ func (g *LastAdminGuard) CheckRemove(ctx context.Context, userID string, hasAdmi
 }
 ```
 
-调用点（S3+S5 PR）：
+调用点（PR449 follow-up 已拉前落地）：
 
-- `identitymanage.DeleteUser` 入口
-- `identitymanage.ChangeUserStatus(Locked)` 入口（lock 视同"暂时不可用"，对 last admin 也拒）
-- `rbacassign.RevokeRole("admin")` 入口
+- `identitymanage.Delete` 入口
+- `identitymanage.Lock` 入口（lock 视同"暂时不可用"，对 last admin 也拒）
+- `rbacassign.RevokeRole("admin")` 入口（通过 `RoleRepository.RemoveFromUserIfNotLast`）
 
 ### 3.2 PG schema 约束（S3+S5 PR）
 
@@ -96,7 +96,7 @@ func (g *LastAdminGuard) CheckRemove(ctx context.Context, userID string, hasAdmi
 改用：
 
 - 应用层 `LastAdminGuard.CheckRemove` 在 tx 内执行
-- DB 兜底：`role_assignments` 表上加 `BEFORE DELETE` trigger（行级），当被删行 `role='admin'` 且 `(SELECT COUNT(*) FROM role_assignments WHERE role='admin') = 1` 时 `RAISE EXCEPTION 'last_admin_protected'`
+- DB 兜底：`role_assignments` 表上加 `BEFORE DELETE` trigger（行级），当被删行 `role='admin'` 且 `(SELECT COUNT(*) FROM role_assignments WHERE role='admin') = 1` 时 `RAISE EXCEPTION 'last_admin_protected'`；trigger 在 count 前持有 transaction-scoped advisory lock，序列化 direct SQL / cascade delete 并发
 - trigger 不替代应用层校验（应用层错误码更精准），是 DB 兜底防直连 SQL 误删
 
 ### 3.3 setup endpoint lifecycle
@@ -140,8 +140,8 @@ mem 模式当前已是"至少一个 admin"语义（`Provisioner.Ensure` 仅在 c
 | 阶段 | 工作 | PR |
 |---|---|---|
 | S1（本 PR） | ADR 落地；无代码改动 | refactor/547 |
-| S3+S5 | PG schema 落地：`role_assignments` 表 + last-admin trigger；`LastAdminGuard` domain 实现；setup endpoint lifecycle 切换 | TBD |
-| S4 | accesscore composition root 注入 `LastAdminGuard` 给 identitymanage / rbacassign service | TBD |
+| S3+S5 + PR449 follow-up | PG schema 落地：`role_assignments` 表 + advisory-lock last-admin trigger；`LastAdminGuard` domain 实现；setup endpoint lifecycle 切换；identitymanage Delete/Lock 与 rbacassign revoke 接入 | fix/308-pr449-followups |
+| S4 | 非 last-admin 项继续开放：session/refresh PG wiring、JWT `jti` + `authz_epoch` issue/validate closed loop、active session forced re-login | TBD |
 
 **不向后兼容**：S3+S5 落地后，旧 mem 路径下"无校验删 admin" 行为消失；任何依赖该旧行为的测试必须更新（GoCell 项目无外部消费方，按 CLAUDE.md "Review 和重构时不考虑向后兼容" 原则）。
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -33,15 +32,15 @@ var _ ports.UserRepository = (*PGUserRepo)(nil)
 // ambient pgx.Tx from ctx via kernel/persistence.TxCtxKey (the value stored
 // by adapters/postgres.TxManager.RunInTx); when no tx is in ctx the methods
 // fall through to the pool. The setup service wraps Create + outbox.Write
-// in a single TxManager.RunInTx call so both writes share the tx that
-// execCtx picks up here.
+// in a single TxManager.RunInTx call so both writes share the tx that the
+// package-local typed executor picks up here.
 //
 // Compare runtime/auth/refresh adapters/postgres/refresh_store.go where
 // txRunner IS invoked directly because its multi-statement methods (Peek,
 // Rotate) need an explicit boundary. PGUserRepo's pattern is the
 // "single-statement repo" variant of the same dual-signal contract.
 type PGUserRepo struct {
-	pool *pgxpool.Pool
+	db pgExecutor
 	// txRunner is retained at construction time as policy declaration only —
 	// see the type godoc above. Repo methods read tx from ctx, not this field.
 	txRunner persistence.TxRunner
@@ -67,29 +66,10 @@ func NewPGUserRepo(
 			"accesscore.NewPGUserRepo: clock must not be nil")
 	}
 	return &PGUserRepo{
-		pool:     pool,
+		db:       newPGExecutor(pool),
 		txRunner: txRunner,
 		clock:    clk,
 	}, nil
-}
-
-// execCtx executes a SQL statement using the ambient transaction when one is
-// present in ctx (stored by adapters/postgres.TxManager via
-// kernel/persistence.TxCtxKey). Falls back to the pool when no tx is in ctx.
-func (r *PGUserRepo) execCtx(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
-		return tx.Exec(ctx, sql, args...)
-	}
-	return r.pool.Exec(ctx, sql, args...)
-}
-
-// queryRowCtx queries a single row using the ambient transaction when present.
-// Falls back to the pool when no tx is in ctx.
-func (r *PGUserRepo) queryRowCtx(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
-		return tx.QueryRow(ctx, sql, args...)
-	}
-	return r.pool.QueryRow(ctx, sql, args...)
 }
 
 const (
@@ -126,7 +106,7 @@ WHERE id = $1`
 // Create inserts a new user row. Returns ErrAuthUserDuplicate on unique
 // constraint violation (username or email already taken).
 func (r *PGUserRepo) Create(ctx context.Context, user *domain.User) error {
-	_, err := r.execCtx(ctx, insertUserSQL,
+	_, err := r.db.Exec(ctx, insertUserSQL,
 		user.ID,
 		user.Username,
 		user.Email,
@@ -150,7 +130,7 @@ func (r *PGUserRepo) Create(ctx context.Context, user *domain.User) error {
 
 // GetByID fetches a user by primary key. Returns ErrAuthUserNotFound when absent.
 func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	row := r.queryRowCtx(ctx, selectUserByIDSQL, id)
+	row := r.db.QueryRow(ctx, selectUserByIDSQL, id)
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -165,7 +145,7 @@ func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, erro
 
 // GetByUsername fetches a user by username. Returns ErrAuthUserNotFound when absent.
 func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
-	row := r.queryRowCtx(ctx, selectUserByUsernameSQL, username)
+	row := r.db.QueryRow(ctx, selectUserByUsernameSQL, username)
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -182,7 +162,7 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 // ErrAuthUserNotFound when no row matched. Returns ErrAuthUserDuplicate (409)
 // when the updated username or email collides with an existing row.
 func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
-	tag, err := r.execCtx(ctx, updateUserSQL,
+	tag, err := r.db.Exec(ctx, updateUserSQL,
 		user.ID,
 		user.Username,
 		user.Email,
@@ -212,7 +192,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 // Returns ErrAuthLastAdminProtected (403) when the DB trigger rejects the
 // delete because the user is the sole admin holder.
 func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
-	tag, err := r.execCtx(ctx, deleteUserSQL, id)
+	tag, err := r.db.Exec(ctx, deleteUserSQL, id)
 	if err != nil {
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,

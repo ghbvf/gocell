@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"strconv"
@@ -167,4 +168,25 @@ func TestMigrationsFS_SubDirectory(t *testing.T) {
 func TestMigrationDirection_Values(t *testing.T) {
 	assert.Equal(t, MigrationDirection("up"), MigrationUp)
 	assert.Equal(t, MigrationDirection("down"), MigrationDown)
+}
+
+func TestAllowDestructiveDown(t *testing.T) {
+	permit, err := AllowDestructiveDown("  approved rollback  ")
+	require.NoError(t, err)
+	assert.Equal(t, "approved rollback", permit.Reason())
+
+	permit, err = AllowDestructiveDown(" \t ")
+	require.Error(t, err)
+	assert.Equal(t, DestructiveDownPermit{}, permit)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
+func TestMigrator_Down_RequiresDestructiveDownPermit(t *testing.T) {
+	err := (&Migrator{}).Down(context.Background(), DestructiveDownPermit{})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }

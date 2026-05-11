@@ -17,6 +17,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -71,11 +72,13 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	pgDeps, err := accesscore.NewPGDeps(pool.DB(), txMgr, clock.Real())
+	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
-	pgUserRepo, err := accesscore.NewPGUserRepository(pgDeps)
+	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
 	require.NoError(t, err)
-	pgRoleRepo, err := accesscore.NewPGRoleRepository(pgDeps)
+	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
+	require.NoError(t, err)
+	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
 	require.NoError(t, err)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -92,6 +95,7 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	var nw outbox.Writer = outbox.NoopWriter{}
+	pgOutboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
@@ -115,7 +119,8 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithUserRepository(pgUserRepo),
 		accesscore.WithRoleRepository(pgRoleRepo),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		accesscore.WithSetupLock(pgSetupLock),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
@@ -190,6 +195,27 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+
+		var eventType, status string
+		var payload []byte
+		err = pool.DB().QueryRow(ctx, `
+SELECT event_type, payload, status
+FROM outbox_entries
+WHERE event_type = $1`,
+			"event.user.created.v1",
+		).Scan(&eventType, &payload, &status)
+		require.NoError(t, err, "setup admin must commit a durable user.created outbox row")
+		assert.Equal(t, "event.user.created.v1", eventType)
+		assert.Equal(t, "pending", status)
+		var eventPayload struct {
+			UserID   string `json:"userId"`
+			Username string `json:"username"`
+			ActorID  string `json:"actorId"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &eventPayload))
+		assert.NotEmpty(t, eventPayload.UserID)
+		assert.Equal(t, "pg-admin", eventPayload.Username)
+		assert.Equal(t, "system", eventPayload.ActorID)
 	})
 
 	// 2. Retry: POST → 410, ErrSetupAlreadyInitialized (admin row counted in PG).

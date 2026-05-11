@@ -468,9 +468,10 @@ func TestLastAdminTrigger_RawDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count, "test setup: exactly one admin required before raw DELETE")
 
-	// Issue a raw DELETE directly to the pool — bypasses the application-level
-	// last-admin guard. The DB trigger must intercept this and raise P0001.
-	_, rawErr := roleRepo.pool.Exec(ctx,
+	// Issue a raw DELETE directly through the explicit bypass executor —
+	// bypasses the application-level last-admin guard. The DB trigger must
+	// intercept this and raise P0001.
+	_, rawErr := roleRepo.db.ExecDirect(ctx,
 		"DELETE FROM role_assignments WHERE user_id = $1 AND role_id = 'admin'",
 		soloUser.ID,
 	)
@@ -480,4 +481,46 @@ func TestLastAdminTrigger_RawDelete(t *testing.T) {
 	require.True(t, errors.As(rawErr, &pgErr), "error must be *pgconn.PgError")
 	assert.Equal(t, "P0001", pgErr.Code, "SQLSTATE must be P0001 (PL/pgSQL RAISE EXCEPTION)")
 	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
+}
+
+func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
+	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	u1 := createTestUserInDB(t, userRepo, "cascade1")
+	u2 := createTestUserInDB(t, userRepo, "cascade2")
+	_, err := roleRepo.AssignToUser(ctx, u1.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+	_, err = roleRepo.AssignToUser(ctx, u2.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	results := make(chan error, 2)
+	for _, userID := range []string{u1.ID, u2.ID} {
+		userID := userID
+		go func() {
+			_, execErr := roleRepo.db.ExecDirect(ctx, "DELETE FROM users WHERE id = $1", userID)
+			results <- execErr
+		}()
+	}
+
+	var successCount, protectedCount int
+	for i := 0; i < 2; i++ {
+		err := <-results
+		switch {
+		case err == nil:
+			successCount++
+		case isLastAdminProtected(err):
+			protectedCount++
+		default:
+			t.Fatalf("unexpected raw cascade delete error: %v", err)
+		}
+	}
+	assert.Equal(t, 1, successCount, "exactly one concurrent cascade delete may remove an admin")
+	assert.Equal(t, 1, protectedCount, "exactly one concurrent cascade delete must be rejected as last admin")
+
+	count, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "advisory lock must leave exactly one admin after concurrent raw deletes")
 }

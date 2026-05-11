@@ -182,6 +182,88 @@ func TestService_Delete(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func newLastAdminProtectedService(t testing.TB) (*Service, *mem.UserRepository, *mem.RoleRepository) {
+	t.Helper()
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{
+		ID:   auth.RoleAdmin,
+		Name: auth.RoleAdmin,
+	}))
+	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer),
+		WithClock(clock.Real()),
+		WithTxManager(simpleTxRunner{}),
+		WithLastAdminProtection(roleRepo),
+	)
+	require.NoError(t, err)
+	return svc, userRepo, roleRepo
+}
+
+func assignAdminForIdentityManageTest(t testing.TB, roleRepo *mem.RoleRepository, userID string) {
+	t.Helper()
+	_, err := roleRepo.AssignToUser(context.Background(), userID, auth.RoleAdmin)
+	require.NoError(t, err)
+}
+
+func assertLastAdminProtected(t testing.TB, err error) {
+	t.Helper()
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code)
+}
+
+func TestService_Delete_LastAdminProtected(t *testing.T) {
+	svc, userRepo, roleRepo := newLastAdminProtectedService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "last-admin-delete", Email: "last-admin-delete@example.com", Password: "hash",
+	})
+	require.NoError(t, err)
+	assignAdminForIdentityManageTest(t, roleRepo, user.ID)
+
+	err = svc.Delete(adminCtxForService(), user.ID)
+
+	assertLastAdminProtected(t, err)
+	_, getErr := userRepo.GetByID(context.Background(), user.ID)
+	require.NoError(t, getErr, "last-admin-protected delete must leave the user row intact")
+}
+
+func TestService_Lock_LastAdminProtected(t *testing.T) {
+	svc, userRepo, roleRepo := newLastAdminProtectedService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "last-admin-lock", Email: "last-admin-lock@example.com", Password: "hash",
+	})
+	require.NoError(t, err)
+	assignAdminForIdentityManageTest(t, roleRepo, user.ID)
+
+	err = svc.Lock(adminCtxForService(), user.ID)
+
+	assertLastAdminProtected(t, err)
+	persisted, getErr := userRepo.GetByID(context.Background(), user.ID)
+	require.NoError(t, getErr)
+	assert.False(t, persisted.IsLocked(), "last-admin-protected lock must not update the user")
+}
+
+func TestService_Delete_LastAdminAllowedWhenAnotherAdminRemains(t *testing.T) {
+	svc, userRepo, roleRepo := newLastAdminProtectedService(t)
+	first, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "admin-one", Email: "admin-one@example.com", Password: "hash",
+	})
+	require.NoError(t, err)
+	second, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "admin-two", Email: "admin-two@example.com", Password: "hash",
+	})
+	require.NoError(t, err)
+	assignAdminForIdentityManageTest(t, roleRepo, first.ID)
+	assignAdminForIdentityManageTest(t, roleRepo, second.ID)
+
+	require.NoError(t, svc.Delete(adminCtxForService(), first.ID))
+
+	_, getErr := userRepo.GetByID(context.Background(), first.ID)
+	require.Error(t, getErr)
+}
+
 func TestService_Update(t *testing.T) {
 	svc := newTestService(t)
 	user, _ := svc.Create(adminCtxForService(), CreateInput{

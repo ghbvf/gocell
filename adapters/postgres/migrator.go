@@ -56,6 +56,29 @@ type MigrationStatus struct {
 	AppliedAt time.Time
 }
 
+// DestructiveDownPermit is an explicit break-glass token required for any
+// schema rollback. Down migrations can drop user, session, and role data; this
+// value makes accidental rollback calls impossible at the API boundary.
+type DestructiveDownPermit struct {
+	reason string
+}
+
+// AllowDestructiveDown constructs the explicit permit required by Migrator.Down.
+// The reason is kept for audit/log plumbing and must be non-empty.
+func AllowDestructiveDown(reason string) (DestructiveDownPermit, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return DestructiveDownPermit{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"postgres: destructive migration down requires a non-empty reason")
+	}
+	return DestructiveDownPermit{reason: reason}, nil
+}
+
+// Reason returns the operator-supplied reason for the destructive rollback.
+func (p DestructiveDownPermit) Reason() string {
+	return p.reason
+}
+
 // Migrator manages SQL database migrations using goose v3 and an embed.FS source.
 // It tracks applied migrations in a configurable table using goose's built-in
 // advisory locking.
@@ -150,8 +173,14 @@ func (m *Migrator) Up(ctx context.Context) error {
 }
 
 // Down rolls back the last applied migration. If no migrations have been
-// applied (version 0), Down is a no-op and returns nil.
-func (m *Migrator) Down(ctx context.Context) error {
+// applied (version 0), Down is a no-op and returns nil. Callers must pass an
+// explicit DestructiveDownPermit because rollback files may drop production
+// data even when they only move the schema back by one version.
+func (m *Migrator) Down(ctx context.Context, permit DestructiveDownPermit) error {
+	if strings.TrimSpace(permit.reason) == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"postgres: destructive migration down requires explicit permit")
+	}
 	if _, err := m.provider.Down(ctx); err != nil {
 		if errors.Is(err, goose.ErrNoCurrentVersion) || errors.Is(err, goose.ErrNoNextVersion) {
 			return nil // already at version 0, idempotent no-op

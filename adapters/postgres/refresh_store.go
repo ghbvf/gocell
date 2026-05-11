@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -112,7 +111,7 @@ WHERE id IN (
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + constant-time compare)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse cascade)
 type PGRefreshStore struct {
-	pool     *pgxpool.Pool
+	db       pgExecutor
 	txRunner persistence.TxRunner
 	policy   refresh.Policy
 	clock    clock.Clock
@@ -148,8 +147,8 @@ func (r refreshRow) toToken() *refresh.Token {
 // Returns a non-nil error if pool, txRunner, or clock are nil, or if policy
 // values are out of range.
 //
-// pool is retained for Health probes (ping path); all SQL operations go
-// through execCtx/queryRowCtx which join the ambient transaction from context.
+// SQL operations go through the typed executor, which joins the ambient
+// transaction from context unless a method explicitly asks for a direct bypass.
 //
 // txRunner is required: Peek and Rotate need a transaction boundary. Pass
 // NewTxManager(pool) for standalone callers; ambient-tx callers (e.g. session
@@ -178,31 +177,12 @@ func NewRefreshStore(
 		randReader = rand.Reader
 	}
 	return &PGRefreshStore{
-		pool:     pool,
+		db:       newPGExecutor(pool),
 		txRunner: txRunner,
 		policy:   policy,
 		clock:    clk,
 		rand:     randReader,
 	}, nil
-}
-
-// execCtx executes a SQL statement against the ambient transaction in ctx when
-// one is present (F1: join caller's tx so refresh revokes are atomic with the
-// session revoke). Falls back to the pool when no tx is in context.
-func (s *PGRefreshStore) execCtx(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if tx, ok := TxFromContext(ctx); ok {
-		return tx.Exec(ctx, sql, args...)
-	}
-	return s.pool.Exec(ctx, sql, args...)
-}
-
-// queryRowCtx queries a single row against the ambient transaction in ctx when
-// one is present. Falls back to the pool when no tx is in context.
-func (s *PGRefreshStore) queryRowCtx(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx, ok := TxFromContext(ctx); ok {
-		return tx.QueryRow(ctx, sql, args...)
-	}
-	return s.pool.QueryRow(ctx, sql, args...)
 }
 
 // generatePair delegates to the shared refresh.GeneratePair helper (F10).
@@ -226,7 +206,7 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	id := uuid.New()
 	verHash := sha256.Sum256(ver)
 
-	if _, err := s.execCtx(ctx, insertRowSQL,
+	if _, err := s.db.Exec(ctx, insertRowSQL,
 		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt, idleExpiresAt,
 	); err != nil {
 		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: issue", err)
@@ -265,7 +245,8 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 		// Peek is read-only by contract: pass mutate=false so the grace
 		// counter (used_times) is not incremented. Cascade revoke on
 		// reuse / grace_exhausted still fires (it bypasses the ambient tx
-		// directly via s.pool.Exec — security response must persist).
+		// directly via the typed executor's explicit bypass — security
+		// response must persist).
 		row, innerErr = s.validatePresentedInTx(txCtx, sel, ver, false)
 		if innerErr == nil {
 			return nil
@@ -357,7 +338,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 	newExpires := now.Add(s.policy.MaxAge)
 	newIdleExpires := s.idleDeadline(now)
 
-	if _, err := s.execCtx(ctx, insertRowSQL,
+	if _, err := s.db.Exec(ctx, insertRowSQL,
 		newID, uuid.NullUUID{UUID: row.id, Valid: true},
 		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires, newIdleExpires,
 	); err != nil {
@@ -365,7 +346,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 	}
 
 	if row.rotatedAt == nil {
-		if _, err := s.execCtx(ctx, markRotatedSQL, now, row.id); err != nil {
+		if _, err := s.db.Exec(ctx, markRotatedSQL, now, row.id); err != nil {
 			return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
 		}
 	}
@@ -407,7 +388,7 @@ func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, sel, ver []b
 
 func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, sel []byte) (refreshRow, error) {
 	var row refreshRow
-	err := s.queryRowCtx(ctx, selectBySelectorSQL, sel).Scan(
+	err := s.db.QueryRow(ctx, selectBySelectorSQL, sel).Scan(
 		&row.id, &row.sessionID, &row.subjectID,
 		&row.verifierHash, &row.createdAt, &row.expiresAt, &row.rotatedAt, &row.revokedAt,
 		&row.idleExpiresAt, &row.firstUsedAt, &row.usedTimes,
@@ -422,7 +403,7 @@ func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, sel []byte) (
 }
 
 func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, sessionID string) error {
-	if _, err := s.execCtx(ctx, lockSessionSQL, sessionID); err != nil {
+	if _, err := s.db.Exec(ctx, lockSessionSQL, sessionID); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: session lock", err)
 	}
 	return nil
@@ -520,7 +501,7 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 	if !mutate {
 		return nil
 	}
-	if _, execErr := s.execCtx(ctx, markGraceUsedSQL, now, row.id); execErr != nil {
+	if _, execErr := s.db.Exec(ctx, markGraceUsedSQL, now, row.id); execErr != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark grace used", execErr)
 	}
 	return nil
@@ -530,7 +511,7 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 // Uses the ambient transaction from ctx when present (F1).
 func (s *PGRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
 	now := s.clock.Now()
-	if _, err := s.execCtx(ctx, revokeSessionSQL, now, sessionID); err != nil {
+	if _, err := s.db.Exec(ctx, revokeSessionSQL, now, sessionID); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke session", err)
 	}
 	return nil
@@ -551,13 +532,14 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID 
 	// Detach from the caller's cancellation context: a security/compensation
 	// revoke MUST persist even when the HTTP request is canceled or times out.
 	// The detached context gets a bounded 5-second deadline so the write does
-	// not run indefinitely. The ambient tx is bypassed via s.pool.Exec so the
-	// revoke commits on its own connection regardless of the outer RunInTx outcome.
+	// not run indefinitely. The ambient tx is bypassed via the executor's direct
+	// path so the revoke commits on its own connection regardless of the outer
+	// RunInTx outcome.
 	// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
 	// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
 	cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
 	defer cancelCascade()
-	_, err := s.pool.Exec(cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
+	_, err := s.db.ExecDirect(cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
 	return err
 }
 
@@ -565,7 +547,7 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID 
 // Uses the ambient transaction from ctx when present (F1).
 func (s *PGRefreshStore) RevokeUser(ctx context.Context, subjectID string) error {
 	now := s.clock.Now()
-	if _, err := s.execCtx(ctx, revokeUserSQL, now, subjectID); err != nil {
+	if _, err := s.db.Exec(ctx, revokeUserSQL, now, subjectID); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke user", err)
 	}
 	return nil
@@ -576,7 +558,7 @@ func (s *PGRefreshStore) RevokeUser(ctx context.Context, subjectID string) error
 func (s *PGRefreshStore) GC(ctx context.Context, olderThan time.Time) (int, error) {
 	total := 0
 	for {
-		ct, err := s.execCtx(ctx, gcBatchSQL, olderThan, gcBatchSize)
+		ct, err := s.db.Exec(ctx, gcBatchSQL, olderThan, gcBatchSize)
 		if err != nil {
 			return total, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: gc batch", err)
 		}

@@ -3,10 +3,9 @@
 //
 // Package archtest — PG-REPO-AMBIENT-TX-01.
 //
-// Write-path methods on PostgreSQL-backed repositories must route through an
-// ambient-tx-aware helper (typically `s.execCtx` / `s.queryRowCtx` from
-// `adapters/postgres/refresh_store.go`-style implementations, OR through
-// `txRunner.RunInTx`). Direct `s.pool.Exec` / `s.pool.QueryRow` /
+// Write-path methods on PostgreSQL-backed repositories must route through the
+// package-local typed executor, or through `txRunner.RunInTx` for explicit
+// multi-statement boundaries. Direct `s.pool.Exec` / `s.pool.QueryRow` /
 // `s.pool.Query` / `s.pool.Begin` calls inside a write method bypass the
 // caller's ambient tx and break ADR-credential D5 same-tx revoke + L2
 // outbox atomicity.
@@ -18,7 +17,9 @@
 // #3). Type-aware: the bypass is identified by resolving the call receiver's
 // type to `*pgxpool.Pool` via `go/types`, not by string-matching a field name.
 // A future repo using `pgPool *pgxpool.Pool` (different field name) is still
-// caught.
+// caught. This remains Medium because Go cannot make future repositories use a
+// sealed executor abstraction; the rule is a typed regression guard, not a
+// Hard proof.
 package archtest
 
 import (
@@ -69,9 +70,9 @@ var pgWriteMethodPrefixes = []string{
 }
 
 // pgPoolBypassCalls is the set of pool-method names that bypass ambient tx
-// when invoked directly on a *pgxpool.Pool. The ambient-tx-aware helpers
-// (s.execCtx / s.queryRowCtx) wrap these and consult ctx for an existing
-// pgx.Tx before falling through to pool.
+// when invoked directly on a *pgxpool.Pool. The package-local typed executors
+// wrap these and consult ctx for an existing pgx.Tx before falling through to
+// pool.
 var pgPoolBypassCalls = map[string]struct{}{
 	"Exec":     {},
 	"Query":    {},
@@ -139,7 +140,7 @@ func TestPGRepoAmbientTx(t *testing.T) {
 	}
 	assert.Empty(t, violations,
 		"PG-REPO-AMBIENT-TX-01: write-method bodies must route via ambient-tx "+
-			"aware helpers (execCtx / queryRowCtx) or txRunner.RunInTx; direct "+
+			"aware typed executors or txRunner.RunInTx; direct "+
 			"*pgxpool.Pool method calls bypass the caller's ambient transaction.")
 }
 
@@ -184,7 +185,7 @@ func scanPGRepoFileTyped(
 			pos := fset.Position(sel.Sel.Pos())
 			out = append(out, fmt.Sprintf(
 				"%s:%d: write-method %s.%s calls *pgxpool.Pool.%s directly; "+
-					"route via execCtx/queryRowCtx (ambient-tx aware) or txRunner.RunInTx",
+					"route via the package-local typed executor or txRunner.RunInTx",
 				rel, pos.Line, receiverTypeName(fn), fn.Name.Name, sel.Sel.Name))
 		})
 	})

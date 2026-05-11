@@ -5,7 +5,7 @@
 -- ADR-admin §3.2 ("at least one admin"): the last-admin invariant is enforced
 -- in two layers:
 --
---   1. Application layer (S4): cells/accesscore/internal/domain/admin.go
+--   1. Application layer: cells/accesscore/internal/domain/admin.go
 --      LastAdminGuard.CheckRemove returns ERR_AUTH_LAST_ADMIN_PROTECTED
 --      when DeleteUser / Lock / RevokeRole would remove the only admin.
 --
@@ -13,7 +13,10 @@
 --      `last_admin_protected` raises EXCEPTION when the row being removed is
 --      the sole admin holder. This is the "direct-SQL safety net" — never
 --      replaces the application check (which produces a precise errcode);
---      it just prevents accidental DELETE bypassing the service path.
+--      it just prevents accidental DELETE bypassing the service path. The
+--      trigger takes a transaction-scoped advisory lock before counting so
+--      concurrent direct DELETE / ON DELETE CASCADE paths serialize under
+--      READ COMMITTED and cannot both observe the other admin as remaining.
 --
 -- We DO NOT use a partial unique index `WHERE role_id='admin'` — that would
 -- enforce "only one admin" semantics, explicitly rejected in ADR-admin §2.1
@@ -50,6 +53,7 @@ BEGIN
     IF OLD.role_id <> 'admin' THEN
         RETURN OLD;
     END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0));
     SELECT count(*) INTO remaining_admins
       FROM role_assignments
      WHERE role_id = 'admin'

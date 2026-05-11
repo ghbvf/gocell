@@ -183,6 +183,7 @@ func (c *AccessCore) initSlices() error {
 		identitymanage.WithEmitter(c.emitter),
 		identitymanage.WithTxManager(c.txRunner),
 		identitymanage.WithClock(c.clk),
+		identitymanage.WithLastAdminProtection(c.roleRepo),
 	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
 	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.refreshStore, c.logger, identityOpts...)

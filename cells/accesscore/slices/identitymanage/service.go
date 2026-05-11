@@ -95,16 +95,28 @@ func WithTokenIssuer(ti TokenIssuer) Option {
 	return func(s *Service) { s.tokenIssuer = ti }
 }
 
+// WithLastAdminProtection wires the role repository used to reject operations
+// that would remove the final effective admin from the system.
+func WithLastAdminProtection(roleRepo ports.RoleRepository) Option {
+	return func(s *Service) {
+		s.lastAdminProtectionRequested = true
+		s.lastAdminRoleRepo = roleRepo
+	}
+}
+
 // Service implements identity management business logic.
 type Service struct {
-	repo         ports.UserRepository
-	sessionRepo  ports.SessionRepository
-	refreshStore refresh.Store
-	txRunner     persistence.TxRunner
-	emitter      outbox.Emitter
-	logger       *slog.Logger
-	tokenIssuer  TokenIssuer
-	clock        clock.Clock
+	repo                         ports.UserRepository
+	sessionRepo                  ports.SessionRepository
+	refreshStore                 refresh.Store
+	txRunner                     persistence.TxRunner
+	emitter                      outbox.Emitter
+	logger                       *slog.Logger
+	tokenIssuer                  TokenIssuer
+	clock                        clock.Clock
+	lastAdminProtectionRequested bool
+	lastAdminRoleRepo            ports.RoleRepository
+	lastAdminGuard               *domain.LastAdminGuard
 }
 
 // NewService creates an identity-manage Service. tokenIssuer is required;
@@ -146,6 +158,19 @@ func NewService(
 	if s.tokenIssuer == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
 			"identity-manage: tokenIssuer is required; wire via WithTokenIssuer")
+	}
+	if s.lastAdminProtectionRequested {
+		if validation.IsNilInterface(s.lastAdminRoleRepo) {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"identity-manage: last-admin protection requires a role repository")
+		}
+		guard, guardErr := domain.NewLastAdminGuard(func(ctx context.Context) (int, error) {
+			return s.lastAdminRoleRepo.CountByRole(ctx, auth.RoleAdmin)
+		})
+		if guardErr != nil {
+			return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
+		}
+		s.lastAdminGuard = guard
 	}
 	clock.MustHaveClock(s.clock, "identitymanage.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
@@ -325,6 +350,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	}
 
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.checkLastAdminRemoval(txCtx, id); err != nil {
+			return err
+		}
 		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete revoke sessions: %w", err)
 		}
@@ -380,6 +408,9 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
+		if err := s.checkLastAdminRemoval(txCtx, user.ID); err != nil {
+			return err
+		}
 		user.LockAccount(s.clock.Now())
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
@@ -400,6 +431,27 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		}
 		return nil
 	})
+}
+
+func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string) error {
+	if s.lastAdminGuard == nil {
+		return nil
+	}
+	roles, err := s.lastAdminRoleRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("identity-manage: last-admin roles: %w", err)
+	}
+	hasAdminRole := false
+	for _, role := range roles {
+		if role != nil && role.ID == auth.RoleAdmin {
+			hasAdminRole = true
+			break
+		}
+	}
+	if err := s.lastAdminGuard.CheckRemove(ctx, userID, hasAdminRole); err != nil {
+		return fmt.Errorf("identity-manage: last-admin: %w", err)
+	}
+	return nil
 }
 
 // Unlock unlocks a user account.
