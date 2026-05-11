@@ -184,8 +184,9 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 	require.Equal(t, 0, beforeState, "no entry-upserted outbox rows should exist before Rollback call")
 	require.Equal(t, 0, beforeAudit, "no rollback outbox rows should exist before Rollback call")
 
-	// Rollback to version 1.
-	rolled, err := bundle.svc.Rollback(svcCtx, "integration.rollback.key", 1)
+	// Rollback to version 1. The live entry is at version 1 (Publish does not
+	// bump the live entry's version), so expectedVersion=1.
+	rolled, err := bundle.svc.Rollback(svcCtx, "integration.rollback.key", 1, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 2, rolled.Version,
 		"Rollback must increment the config_entries version (UPDATE...RETURNING)")
@@ -271,7 +272,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = svcFail.Rollback(svcCtx, "rollback.failure.key", 1)
+	_, err = svcFail.Rollback(svcCtx, "rollback.failure.key", 1, versionBefore)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outbox")
 

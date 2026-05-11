@@ -85,19 +85,21 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 
 	mux := newContractMux(svc)
 
-	c.ValidateRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"updated"}`))
+	c.ValidateRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"updated","expectedVersion":1}`))
 	c.MustRejectRequest(t, []byte(`{"enabled":true,"extra":"bad"}`))
 	// PUT is full replacement: schema must reject bodies missing any of the
-	// three required fields. Catches any future drift that relaxes required
+	// required fields. Catches any future drift that relaxes required
 	// constraints in request.schema.json.
-	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50}`))    // missing description
-	c.MustRejectRequest(t, []byte(`{"enabled":true,"description":"x"}`))         // missing rolloutPercentage
-	c.MustRejectRequest(t, []byte(`{"rolloutPercentage":50,"description":"x"}`)) // missing enabled
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50}`))                               // missing description + expectedVersion
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"description":"x"}`))                                    // missing rolloutPercentage + expectedVersion
+	c.MustRejectRequest(t, []byte(`{"rolloutPercentage":50,"description":"x","expectedVersion":1}`))        // missing enabled
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"x"}`))             // missing expectedVersion
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"x","expectedVersion":0}`)) // expectedVersion < 1
 
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "upd-flag")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path,
-		strings.NewReader(`{"enabled":true,"rolloutPercentage":50,"description":"updated"}`))
+		strings.NewReader(`{"enabled":true,"rolloutPercentage":50,"description":"updated","expectedVersion":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
@@ -107,8 +109,8 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	// Runtime range guard: rolloutPercentage outside [0, 100] must 400 even
 	// when the schema is bypassed. Covers both bounds.
 	for _, bad := range []string{
-		`{"enabled":true,"rolloutPercentage":-1,"description":"d"}`,
-		`{"enabled":true,"rolloutPercentage":101,"description":"d"}`,
+		`{"enabled":true,"rolloutPercentage":-1,"description":"d","expectedVersion":1}`,
+		`{"enabled":true,"rolloutPercentage":101,"description":"d","expectedVersion":1}`,
 	} {
 		recBad := httptest.NewRecorder()
 		reqBad := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(bad))
@@ -133,13 +135,15 @@ func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 
 	mux := newContractMux(svc)
 
-	c.ValidateRequest(t, []byte(`{"enabled":true}`))
+	c.ValidateRequest(t, []byte(`{"enabled":true,"expectedVersion":1}`))
 	c.MustRejectRequest(t, []byte(`{"enabled":true,"extra":"bad"}`))
+	c.MustRejectRequest(t, []byte(`{"enabled":true}`))                 // missing expectedVersion
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"expectedVersion":0}`)) // expectedVersion < 1
 
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "tgl-flag")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path,
-		strings.NewReader(`{"enabled":true}`))
+		strings.NewReader(`{"enabled":true,"expectedVersion":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
@@ -159,7 +163,7 @@ func TestHttpConfigFlagsDeleteV1Serve(t *testing.T) {
 
 	mux := newContractMux(svc)
 
-	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "del-flag")
+	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "del-flag") + "?expectedVersion=1"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, http.NoBody)
 	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))

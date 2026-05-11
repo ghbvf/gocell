@@ -165,7 +165,7 @@ func TestHandler_HandleUpdate_UnknownField(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	body := `{"value":"new","extra":"y"}`
+	body := `{"value":"new","expectedVersion":1,"extra":"y"}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/k", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -183,7 +183,7 @@ func TestHandler_HandleUpdate_OK(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	body := `{"value":"new"}`
+	body := `{"value":"new","expectedVersion":1}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/app.name", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -197,7 +197,7 @@ func TestHandler_HandleUpdate_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	body := `{"value":"v"}`
+	body := `{"value":"v","expectedVersion":1}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/missing", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -227,7 +227,7 @@ func TestHandler_HandleDelete_OK(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/app.name", nil)
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/app.name?expectedVersion=1", nil)
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
@@ -238,7 +238,7 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/missing", nil)
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/missing?expectedVersion=1", nil)
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
@@ -276,7 +276,7 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	body := `{"value":"new-secret"}`
+	body := `{"value":"new-secret","expectedVersion":1}`
 	req := httptest.NewRequest(http.MethodPut, configPrefix+"/api.key", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
@@ -357,11 +357,11 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update
-	_, err = svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{Key: "k1", Value: "v2"})
+	_, err = svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{Key: "k1", Value: "v2", ExpectedVersion: 1})
 	require.NoError(t, err)
 
 	// Delete
-	err = svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "k1")
+	err = svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "k1", 2)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, tx.calls, "each op should use tx")
@@ -435,7 +435,7 @@ func TestHandler_Authz_Update(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
-			body := `{"value":"new"}`
+			body := `{"value":"new","expectedVersion":1}`
 			req := httptest.NewRequest(http.MethodPut, configPrefix+tc.path, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.injectAuth {
@@ -468,15 +468,15 @@ func TestHandler_Authz_Delete(t *testing.T) {
 		wantStatus  int
 		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
+		{"no_auth", "", nil, false, nil, "/nonexistent?expectedVersion=1", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent?expectedVersion=1", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent?expectedVersion=1", http.StatusNotFound, ""},
 		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), &domain.ConfigEntry{
 				ID: "ad-1", Key: "test.delete", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
 			})
-		}, "/test.delete", http.StatusNoContent, ""},
+		}, "/test.delete?expectedVersion=1", http.StatusNoContent, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -52,9 +52,10 @@ func (a PublishAdapter) Publish(ctx context.Context, req *configpublishgen.Reque
 // RollbackAdapter wraps Service to implement rollbackgen.Service for http.config.rollback.v1.
 type RollbackAdapter struct{ S *Service }
 
-// Rollback implements rollbackgen.Service. Key comes from path param; Version from body.
+// Rollback implements rollbackgen.Service. Key comes from path param; Version from body;
+// ExpectedVersion is the CAS guard for the current entry.
 func (a RollbackAdapter) Rollback(ctx context.Context, req *rollbackgen.Request) (rollbackgen.RollbackResponseObject, error) {
-	entry, err := a.S.Rollback(ctx, req.Key, int(req.Version))
+	entry, err := a.S.Rollback(ctx, req.Key, int(req.Version), int(req.ExpectedVersion))
 	if err != nil {
 		return nil, err
 	}

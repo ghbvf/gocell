@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // Compile-time interface check.
@@ -162,20 +163,38 @@ func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.Feat
 
 // Update atomically sets enabled, rollout_percentage, description, and
 // increments version by 1 via UPDATE...SET version=version+1 RETURNING.
-// Returns the updated flag. Returns ErrFlagNotFound if key does not exist.
+// Returns the updated flag. Returns ErrFlagNotFound if key does not exist,
+// or ErrVersionConflict if expectedVersion does not match.
+//
+// CAS flow: rowsAffected==0 → probe GetByKey:
+//   - exists → ErrVersionConflict (409)
+//   - not found → ErrFlagNotFound (404)
 func (r *FlagRepository) Update(
-	ctx context.Context, key string, enabled bool, rolloutPercentage int, description string,
+	ctx context.Context, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
 ) (*domain.FeatureFlag, error) {
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, rollout_percentage=$2, description=$3, version=version+1, updated_at=now()
-		WHERE key=$4
+		WHERE key=$4 AND version=$5
 		RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.scanFlagOrMapError(ctx, db.QueryRow(ctx, sql, enabled, rolloutPercentage, description, key), "Update", key)
+	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, enabled, rolloutPercentage, description, key, expectedVersion))
+	if scanErr != nil {
+		if cancelErr := ctxcancel.Wrap(scanErr, "Update", "key="+key); cancelErr != nil {
+			return nil, cancelErr
+		}
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return nil, r.resolveUpdateConflict(ctx, "Update", key)
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", scanErr,
+			errcode.WithInternal(fmt.Sprintf("flag repo: Update scan error key=%s", key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+	return flag, nil
 }
 
 // List retrieves feature flags with keyset cursor pagination.
@@ -212,33 +231,89 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 	return flags, nil
 }
 
-// Delete removes a feature flag by key and returns the deleted entity via
-// DELETE...RETURNING. Returns ErrFlagNotFound if the key does not exist.
-func (r *FlagRepository) Delete(ctx context.Context, key string) (*domain.FeatureFlag, error) {
-	const sql = `DELETE FROM feature_flags WHERE key=$1 RETURNING ` + flagColumns
+// Delete removes a feature flag by key if expectedVersion matches the stored
+// version (CAS guard). Returns the deleted entity via DELETE...RETURNING.
+// Returns ErrFlagNotFound if the key does not exist,
+// or ErrVersionConflict if expectedVersion does not match.
+//
+// CAS flow: rowsAffected==0 → probe GetByKey:
+//   - exists → ErrVersionConflict (409)
+//   - not found → ErrFlagNotFound (404)
+func (r *FlagRepository) Delete(ctx context.Context, key string, expectedVersion int) (*domain.FeatureFlag, error) {
+	const sql = `DELETE FROM feature_flags WHERE key=$1 AND version=$2 RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.scanFlagOrMapError(ctx, db.QueryRow(ctx, sql, key), "Delete", key)
+	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, key, expectedVersion))
+	if scanErr != nil {
+		if cancelErr := ctxcancel.Wrap(scanErr, "Delete", "key="+key); cancelErr != nil {
+			return nil, cancelErr
+		}
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return nil, r.resolveUpdateConflict(ctx, "Delete", key)
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", scanErr,
+			errcode.WithInternal(fmt.Sprintf("flag repo: Delete scan error key=%s", key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+	return flag, nil
 }
 
-// Toggle atomically sets the enabled state and increments version by 1.
+// Toggle atomically sets the enabled state and increments version by 1
+// if expectedVersion matches the stored version (CAS guard).
 // It does NOT overwrite rollout_percentage or description.
 // Returns the updated flag via RETURNING clause.
+// Returns ErrFlagNotFound if the key does not exist,
+// or ErrVersionConflict if expectedVersion does not match.
 //
 // ref: Unleash feature-environment-store.ts toggleEnvironment — dedicated toggle
 // method prevents concurrent overwrites on unrelated fields.
-func (r *FlagRepository) Toggle(ctx context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
+//
+// CAS flow: rowsAffected==0 → probe GetByKey:
+//   - exists → ErrVersionConflict (409)
+//   - not found → ErrFlagNotFound (404)
+func (r *FlagRepository) Toggle(ctx context.Context, key string, expectedVersion int, enabled bool) (*domain.FeatureFlag, error) {
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, version=version+1, updated_at=now()
-		WHERE key=$2
+		WHERE key=$2 AND version=$3
 		RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.scanFlagOrMapError(ctx, db.QueryRow(ctx, sql, enabled, key), "Toggle", key)
+	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, enabled, key, expectedVersion))
+	if scanErr != nil {
+		if cancelErr := ctxcancel.Wrap(scanErr, "Toggle", "key="+key); cancelErr != nil {
+			return nil, cancelErr
+		}
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return nil, r.resolveUpdateConflict(ctx, "Toggle", key)
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", scanErr,
+			errcode.WithInternal(fmt.Sprintf("flag repo: Toggle scan error key=%s", key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+	return flag, nil
+}
+
+// resolveUpdateConflict probes whether a key exists after an UPDATE/DELETE...WHERE version=$N
+// returned no rows. If the key exists, returns ErrVersionConflict (409); if not,
+// returns ErrFlagNotFound (404). Uses the pool (no write tx needed for probe).
+func (r *FlagRepository) resolveUpdateConflict(ctx context.Context, op, key string) error {
+	_, probeErr := r.GetByKey(ctx, key)
+	if probeErr != nil {
+		// Key not found at all → 404.
+		return errcode.Wrap(errcode.KindNotFound, errcode.ErrFlagNotFound,
+			"flag not found", probeErr,
+			errcode.WithInternal(fmt.Sprintf("flag repo: %s miss key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryDomain),
+		)
+	}
+	// Key exists but version did not match → 409.
+	return cas.CheckVersionMatch(0, "feature_flag", key)
 }

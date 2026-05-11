@@ -14,6 +14,7 @@ import (
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // ConfigCoreModule wires configcore: KeyProvider → ValueTransformer →
@@ -133,6 +134,12 @@ func (m ConfigCoreModule) Provide(
 	// stays nil and the downstream modules skip the postgres outbox path.
 	shared.SharedPGPool = modResult.PGPool
 
+	// CAS protocol: declares the version-field name and conflict policy used by
+	// all 6 CAS write paths in configcore (config Update/Delete/Rollback +
+	// flag Update/Toggle/Delete). MustNewProtocol is the composition-root-only
+	// constructor (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this).
+	casProto := cas.MustNewProtocol(cas.WithVersionField("version"))
+
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
 		// the transactional writer; memory adapter passes writer=nil).
@@ -140,6 +147,7 @@ func (m ConfigCoreModule) Provide(
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 		configcore.WithConfigEventCollector(shared.ConfigEventCollector),
+		configcore.WithCASProtocol(casProto),
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts
 

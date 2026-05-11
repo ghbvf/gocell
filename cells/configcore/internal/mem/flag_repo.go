@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // Compile-time check.
@@ -65,10 +66,11 @@ func (r *FlagRepository) GetByKey(_ context.Context, key string) (*domain.Featur
 }
 
 // Update atomically sets enabled, rollout_percentage, description, and
-// increments version by 1. Returns the updated flag.
-// Returns ErrFlagNotFound if the key does not exist.
+// increments version by 1 if expectedVersion matches. Returns the updated flag.
+// Returns ErrFlagNotFound if the key does not exist,
+// or ErrVersionConflict if expectedVersion does not match.
 func (r *FlagRepository) Update(
-	_ context.Context, key string, enabled bool, rolloutPercentage int, description string,
+	_ context.Context, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
 ) (*domain.FeatureFlag, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -77,6 +79,9 @@ func (r *FlagRepository) Update(
 	if !exists {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
 			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, key)))
+	}
+	if existing.Version != expectedVersion {
+		return nil, cas.CheckVersionMatch(0, "feature_flag", key)
 	}
 	existing.Enabled = enabled
 	existing.RolloutPercentage = rolloutPercentage
@@ -87,9 +92,10 @@ func (r *FlagRepository) Update(
 	return &clone, nil
 }
 
-// Delete removes a feature flag by key and returns the deleted entity.
-// Returns ErrFlagNotFound if the key does not exist.
-func (r *FlagRepository) Delete(_ context.Context, key string) (*domain.FeatureFlag, error) {
+// Delete removes a feature flag by key if expectedVersion matches.
+// Returns the deleted entity. Returns ErrFlagNotFound if the key does not exist,
+// or ErrVersionConflict if expectedVersion does not match.
+func (r *FlagRepository) Delete(_ context.Context, key string, expectedVersion int) (*domain.FeatureFlag, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -98,14 +104,20 @@ func (r *FlagRepository) Delete(_ context.Context, key string) (*domain.FeatureF
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
 			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, key)))
 	}
+	if existing.Version != expectedVersion {
+		return nil, cas.CheckVersionMatch(0, "feature_flag", key)
+	}
 	clone := *existing
 	delete(r.flags, key)
 	return &clone, nil
 }
 
-// Toggle sets the enabled state atomically. It increments version by 1 and
-// sets UpdatedAt to now(). It does not overwrite RolloutPercentage or Description.
-func (r *FlagRepository) Toggle(_ context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
+// Toggle sets the enabled state atomically if expectedVersion matches.
+// It increments version by 1 and sets UpdatedAt to now().
+// It does not overwrite RolloutPercentage or Description.
+// Returns ErrFlagNotFound if the key does not exist,
+// or ErrVersionConflict if expectedVersion does not match.
+func (r *FlagRepository) Toggle(_ context.Context, key string, expectedVersion int, enabled bool) (*domain.FeatureFlag, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -113,6 +125,9 @@ func (r *FlagRepository) Toggle(_ context.Context, key string, enabled bool) (*d
 	if !exists {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
 			errcode.WithInternal(fmt.Sprintf(flagInternalKeyQuotedFmt, key)))
+	}
+	if existing.Version != expectedVersion {
+		return nil, cas.CheckVersionMatch(0, "feature_flag", key)
 	}
 	existing.Enabled = enabled
 	existing.Version++

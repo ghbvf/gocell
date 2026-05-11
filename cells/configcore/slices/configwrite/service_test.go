@@ -120,7 +120,7 @@ func TestService_Update(t *testing.T) {
 			setup: func(svc *Service) {
 				_, _ = svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 			},
-			input:   UpdateInput{Key: "k", Value: "v2"},
+			input:   UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1},
 			wantErr: false,
 			wantVer: 2,
 		},
@@ -187,7 +187,7 @@ func TestService_Delete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newTestService()
 			tt.setup(svc)
-			err := svc.Delete(adminSvcCtx(), tt.key)
+			err := svc.Delete(adminSvcCtx(), tt.key, 1)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -225,7 +225,7 @@ func TestService_Update_OutboxWriteError(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
-	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2"})
+	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
 	require.Error(t, err, "Update must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -244,7 +244,7 @@ func TestService_Delete_OutboxWriteError(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
-	err = svc.Delete(adminSvcCtx(), "k")
+	err = svc.Delete(adminSvcCtx(), "k", 1)
 	require.Error(t, err, "Delete must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -301,7 +301,7 @@ func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	_, _ = seedSvc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
-	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2"})
+	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Update must call RunInTx exactly once")
 }
@@ -323,7 +323,7 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	_, _ = seedSvc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
-	err = svc.Delete(adminSvcCtx(), "k")
+	err = svc.Delete(adminSvcCtx(), "k", 1)
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Delete must call RunInTx exactly once")
 }

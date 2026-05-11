@@ -120,7 +120,7 @@ func TestFlagWrite_Toggle_TogglesFlag(t *testing.T) {
 	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feature-x")
 
-	flag, err := svc.Toggle(context.Background(), "feature-x", true)
+	flag, err := svc.Toggle(context.Background(), "feature-x", 1, true)
 	require.NoError(t, err)
 	assert.True(t, flag.Enabled)
 	assert.Equal(t, "feature-x", flag.Key)
@@ -135,6 +135,7 @@ func TestFlagWrite_Update_UpdatesFlag(t *testing.T) {
 
 	flag, err := svc.Update(context.Background(), UpdateInput{
 		Key:               "feat-update",
+		ExpectedVersion:   1,
 		Enabled:           true,
 		RolloutPercentage: 50,
 		Description:       "updated desc",
@@ -153,7 +154,7 @@ func TestFlagWrite_Delete_RemovesFlag(t *testing.T) {
 	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feat-delete")
 
-	err := svc.Delete(context.Background(), "feat-delete")
+	err := svc.Delete(context.Background(), "feat-delete", 1)
 	require.NoError(t, err)
 
 	_, getErr := repo.GetByKey(context.Background(), "feat-delete")
@@ -194,12 +195,12 @@ func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 	_, createErr := svc.Create(context.Background(), CreateInput{Key: "flag-no-emit", Description: "test"})
 	require.NoError(t, createErr, "Create must succeed without emitter (L1 only)")
 
-	_, updateErr := svc.Update(context.Background(), UpdateInput{Key: "flag-no-emit", Description: "updated"})
+	_, updateErr := svc.Update(context.Background(), UpdateInput{Key: "flag-no-emit", ExpectedVersion: 1, Description: "updated"})
 	require.NoError(t, updateErr, "Update must succeed without emitter (L1 only)")
 
-	_, toggleErr := svc.Toggle(context.Background(), "flag-no-emit", true)
+	_, toggleErr := svc.Toggle(context.Background(), "flag-no-emit", 2, true)
 	require.NoError(t, toggleErr, "Toggle must succeed without emitter (L1 only)")
 
-	deleteErr := svc.Delete(context.Background(), "flag-no-emit")
+	deleteErr := svc.Delete(context.Background(), "flag-no-emit", 3)
 	require.NoError(t, deleteErr, "Delete must succeed without emitter (L1 only)")
 }

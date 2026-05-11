@@ -76,7 +76,7 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 		}
 		repo := &FlagRepository{db: db, clock: clock.Real()}
 
-		got, err := repo.Update(context.Background(), "dark-mode", true, 50, "updated desc")
+		got, err := repo.Update(context.Background(), "dark-mode", 1, true, 50, "updated desc")
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.Contains(t, db.queryRowSQL, "UPDATE feature_flags")
@@ -96,7 +96,7 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 		}
 		repo := &FlagRepository{db: db, clock: clock.Real()}
 
-		got, err := repo.Delete(context.Background(), "dark-mode")
+		got, err := repo.Delete(context.Background(), "dark-mode", 1)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.Contains(t, db.queryRowSQL, "DELETE FROM feature_flags")
@@ -119,7 +119,7 @@ func TestFlagRepo_Toggle_OnlyAffectsEnabledColumn(t *testing.T) {
 	}
 	repo := &FlagRepository{db: capDB, clock: clock.Real()}
 
-	flag, err := repo.Toggle(context.Background(), "dark-mode", true)
+	flag, err := repo.Toggle(context.Background(), "dark-mode", 1, true)
 	require.NoError(t, err)
 	require.NotNil(t, flag)
 	// Verify the SQL only touches enabled, version, updated_at — not rollout_percentage or description.
@@ -220,7 +220,7 @@ func TestFlagRepo_Toggle_Concurrent_NoLost(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			enabled := idx%2 == 0
-			flag, err := repo.Toggle(context.Background(), "dark-mode", enabled)
+			flag, err := repo.Toggle(context.Background(), "dark-mode", 1, enabled)
 			if err == nil {
 				mu.Lock()
 				results[idx] = flag
@@ -274,7 +274,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.Toggle(context.Background(), "missing", true)
+		_, err := repo.Toggle(context.Background(), "missing", 1, true)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -287,7 +287,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.Update(context.Background(), "missing", false, 0, "")
+		_, err := repo.Update(context.Background(), "missing", 1, false, 0, "")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -300,7 +300,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.Delete(context.Background(), "missing")
+		_, err := repo.Delete(context.Background(), "missing", 1)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -351,7 +351,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Update", func(t *testing.T) {
 		repo := NewFlagRepository(session, clock.Real())
-		_, err := repo.Update(context.Background(), "k", false, 0, "")
+		_, err := repo.Update(context.Background(), "k", 1, false, 0, "")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -360,7 +360,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Delete", func(t *testing.T) {
 		repo := NewFlagRepository(session, clock.Real())
-		_, err := repo.Delete(context.Background(), "k")
+		_, err := repo.Delete(context.Background(), "k", 1)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -369,7 +369,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Toggle", func(t *testing.T) {
 		repo := NewFlagRepository(session, clock.Real())
-		_, err := repo.Toggle(context.Background(), "k", true)
+		_, err := repo.Toggle(context.Background(), "k", 1, true)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)

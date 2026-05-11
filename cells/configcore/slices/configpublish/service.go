@@ -141,7 +141,10 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 // All reads (GetByKey + GetVersion) and the atomic Update happen inside runInTx
 // to eliminate the TOCTOU stale-read race where a concurrent write could change
 // the entry between the reads and the update.
-func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (*domain.ConfigEntry, error) {
+// expectedVersion is the CAS guard for the current entry version; returns
+// ErrVersionConflict (409) if a concurrent write changed the entry since the
+// caller read it.
+func (s *Service) Rollback(ctx context.Context, key string, targetVersion int, expectedVersion int) (*domain.ConfigEntry, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrConfigPublishInvalidInput,
 		validation.F("key", key),
 	); err != nil {
@@ -160,7 +163,7 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.rollbackInTx(txCtx, key, targetVersion, actor)
+		updated, err = s.rollbackInTx(txCtx, key, targetVersion, expectedVersion, actor)
 		return err
 	}); err != nil {
 		return nil, err
@@ -174,7 +177,7 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 // rollbackInTx executes the rollback steps inside an active transaction:
 // resolve current entry, fetch target version snapshot, atomic UPDATE...RETURNING,
 // dual emit (entry-upserted + rollback). Caller MUST invoke inside runInTx.
-func (s *Service) rollbackInTx(txCtx context.Context, key string, targetVersion int, actor string) (*domain.ConfigEntry, error) {
+func (s *Service) rollbackInTx(txCtx context.Context, key string, targetVersion int, expectedVersion int, actor string) (*domain.ConfigEntry, error) {
 	entry, err := s.repo.GetByKey(txCtx, key)
 	if err != nil {
 		return nil, fmt.Errorf("config-publish: rollback: %w", err)
@@ -187,7 +190,9 @@ func (s *Service) rollbackInTx(txCtx context.Context, key string, targetVersion 
 
 	// Atomic UPDATE...RETURNING restores the snapshot's value and sensitivity.
 	// The repo handles version=version+1 and updated_at=now() internally.
-	updated, err := s.repo.UpdateForRollback(txCtx, key, ver.Value, ver.Sensitive)
+	// expectedVersion is the CAS guard: returns ErrVersionConflict if a concurrent
+	// write changed the entry between GetByKey and now.
+	updated, err := s.repo.UpdateForRollback(txCtx, key, expectedVersion, ver.Value, ver.Sensitive)
 	if err != nil {
 		return nil, fmt.Errorf("config-publish: rollback update: %w", err)
 	}

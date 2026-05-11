@@ -190,7 +190,7 @@ func TestHandler_HandleRollback_RequiresAuth(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
-		strings.NewReader(`{"version":1}`))
+		strings.NewReader(`{"version":1,"expectedVersion":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
@@ -203,7 +203,7 @@ func TestHandler_HandleRollback_RequiresAdminRole(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
-		strings.NewReader(`{"version":1}`)).
+		strings.NewReader(`{"version":1,"expectedVersion":1}`)).
 		WithContext(auth.TestContext("user-1", []string{"viewer"}))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
@@ -272,7 +272,7 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	body := `{"version":1}`
+	body := `{"version":1,"expectedVersion":1}`
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
@@ -288,7 +288,7 @@ func TestHandler_HandleRollback_KeyNotFound(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/missing/rollback",
-		strings.NewReader(`{"version":1}`)))
+		strings.NewReader(`{"version":1,"expectedVersion":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
@@ -305,7 +305,7 @@ func TestHandler_HandleRollback_VersionNotFound(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
-		strings.NewReader(`{"version":42}`)))
+		strings.NewReader(`{"version":42,"expectedVersion":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
@@ -334,7 +334,7 @@ func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/db.password/rollback",
-		strings.NewReader(`{"version":1}`)))
+		strings.NewReader(`{"version":1,"expectedVersion":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
@@ -355,7 +355,7 @@ func TestHandler_HandleRollback_UnknownField(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	body := `{"version":1,"extra":"y"}`
+	body := `{"version":1,"expectedVersion":1,"extra":"y"}`
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
@@ -389,7 +389,7 @@ func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
 			seedForPublish(t, repo)
 
 			w := httptest.NewRecorder()
-			body := fmt.Sprintf(`{"version":%d}`, tt.version)
+			body := fmt.Sprintf(`{"version":%d,"expectedVersion":1}`, tt.version)
 			req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback", strings.NewReader(body)))
 			req.Header.Set("Content-Type", "application/json")
 			handler.ServeHTTP(w, req)
@@ -443,7 +443,7 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 	_, err = svc.Publish(adminCtx(), "k3")
 	require.NoError(t, err)
 
-	_, err = svc.Rollback(adminCtx(), "k3", 1)
+	_, err = svc.Rollback(adminCtx(), "k3", 1, 1)
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 3, "publish writes version-published; rollback writes state-sync then audit")

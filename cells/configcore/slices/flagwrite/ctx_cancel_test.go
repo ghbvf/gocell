@@ -83,7 +83,7 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
-	_, err = svc.Toggle(context.Background(), "toggle-cancel", true)
+	_, err = svc.Toggle(context.Background(), "toggle-cancel", 1, true)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 
@@ -137,7 +137,7 @@ func TestFlagWrite_Delete_CtxCancel_ReturnsError(t *testing.T) {
 	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
-	err = svc.Delete(context.Background(), "delete-cancel")
+	err = svc.Delete(context.Background(), "delete-cancel", 1)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 

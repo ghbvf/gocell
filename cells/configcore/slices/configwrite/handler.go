@@ -41,8 +41,9 @@ type UpdateAdapter struct{ S *Service }
 // and converts the domain result to the generated response type.
 func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (update.UpdateResponseObject, error) {
 	entry, err := a.S.Update(ctx, UpdateInput{
-		Key:   req.Key,
-		Value: req.Value,
+		Key:             req.Key,
+		Value:           req.Value,
+		ExpectedVersion: int(req.ExpectedVersion),
 	})
 	if err != nil {
 		return nil, err
@@ -55,7 +56,7 @@ type DeleteAdapter struct{ S *Service }
 
 // Delete implements configdelete.Service.
 func (a DeleteAdapter) Delete(ctx context.Context, req *configdelete.Request) (configdelete.DeleteResponseObject, error) {
-	if err := a.S.Delete(ctx, req.Key); err != nil {
+	if err := a.S.Delete(ctx, req.Key, int(req.ExpectedVersion)); err != nil {
 		return nil, err
 	}
 	return configdelete.Delete204NoContentResponse{}, nil

@@ -118,14 +118,16 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 
 // UpdateInput holds parameters for updating a config entry.
 type UpdateInput struct {
-	Key   string
-	Value string
+	Key             string
+	Value           string
+	ExpectedVersion int
 }
 
 // Update modifies an existing config entry and publishes a change event.
 // The repo reads the sensitive flag internally via SELECT...FOR UPDATE, so no
 // pre-read is needed here. The entire update and outbox write are wrapped in
 // a single transaction for L2 atomicity.
+// Returns ErrVersionConflict (409) if expectedVersion does not match the stored version.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
 		validation.F("key", input.Key),
@@ -141,7 +143,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.repo.Update(txCtx, input.Key, input.Value)
+		updated, err = s.repo.Update(txCtx, input.Key, input.ExpectedVersion, input.Value)
 		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
@@ -155,7 +157,8 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 }
 
 // Delete removes a config entry by key and publishes a change event.
-func (s *Service) Delete(ctx context.Context, key string) error {
+// Returns ErrVersionConflict (409) if expectedVersion does not match the stored version.
+func (s *Service) Delete(ctx context.Context, key string, expectedVersion int) error {
 	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
 		validation.F("key", key),
 	); err != nil {
@@ -168,7 +171,7 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		deleted, err := s.repo.Delete(txCtx, key)
+		deleted, err := s.repo.Delete(txCtx, key, expectedVersion)
 		if err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}

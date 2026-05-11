@@ -179,7 +179,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		t.Run("Update_SelectForUpdate/"+tc.name, func(t *testing.T) {
 			seqDB := &sequencedMockDB{rows: []*mockRow{{scanErr: tc.scanErr}}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
-			_, err := repo.Update(context.Background(), "k", "v")
+			_, err := repo.Update(context.Background(), "k", 1, "v")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("GetVersion/"+tc.name, func(t *testing.T) {
@@ -195,13 +195,13 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 				{scanErr: tc.scanErr},  // UPDATE RETURNING → ctx cancel
 			}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
-			_, err := repo.Update(context.Background(), "k", "v")
+			_, err := repo.Update(context.Background(), "k", 1, "v")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Delete/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
-			_, err := repo.Delete(context.Background(), "k")
+			_, err := repo.Delete(context.Background(), "k", 1)
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("List/QueryErr/"+tc.name, func(t *testing.T) {
@@ -323,7 +323,7 @@ func TestConfigRepository_Update(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(seqDB)
 
-	entry, err := repo.Update(context.Background(), "app.name", "GoCell v2")
+	entry, err := repo.Update(context.Background(), "app.name", 1, "GoCell v2")
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.Equal(t, "GoCell v2", entry.Value)
@@ -343,7 +343,7 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(seqDB)
 
-	_, err := repo.Update(context.Background(), "missing", "v")
+	_, err := repo.Update(context.Background(), "missing", 1, "v")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -368,7 +368,7 @@ func TestConfigRepository_UpdateForRollback(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	entry, err := repo.UpdateForRollback(context.Background(), "app.name", "GoCell v2", false)
+	entry, err := repo.UpdateForRollback(context.Background(), "app.name", 1, "GoCell v2", false)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.Equal(t, "GoCell v2", entry.Value)
@@ -385,7 +385,7 @@ func TestConfigRepository_UpdateForRollback_NotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.UpdateForRollback(context.Background(), "missing", "v", false)
+	_, err := repo.UpdateForRollback(context.Background(), "missing", 1, "v", false)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -409,7 +409,7 @@ func TestConfigRepository_Delete(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	deleted, err := repo.Delete(context.Background(), "app.name")
+	deleted, err := repo.Delete(context.Background(), "app.name", 1)
 	require.NoError(t, err)
 	require.NotNil(t, deleted)
 	assert.Equal(t, "app.name", deleted.Key)
@@ -424,7 +424,7 @@ func TestConfigRepository_Delete_NotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.Delete(context.Background(), "missing")
+	_, err := repo.Delete(context.Background(), "missing", 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -671,7 +671,7 @@ func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
-	_, err := repo.Update(context.Background(), "k", "v")
+	_, err := repo.Update(context.Background(), "k", 1, "v")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -685,7 +685,7 @@ func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
-	_, err := repo.Delete(context.Background(), "k")
+	_, err := repo.Delete(context.Background(), "k", 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error

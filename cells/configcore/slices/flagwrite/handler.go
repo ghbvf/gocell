@@ -42,6 +42,7 @@ type UpdateAdapter struct{ S *Service }
 func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (update.UpdateResponseObject, error) {
 	flag, err := a.S.Update(ctx, UpdateInput{
 		Key:               req.Key,
+		ExpectedVersion:   int(req.ExpectedVersion),
 		Enabled:           req.Enabled,
 		RolloutPercentage: int(req.RolloutPercentage),
 		Description:       req.Description,
@@ -57,7 +58,7 @@ type ToggleAdapter struct{ S *Service }
 
 // Toggle implements toggle.Service. Key from path param; Enabled from body, decoded by handler_gen.
 func (a ToggleAdapter) Toggle(ctx context.Context, req *toggle.Request) (toggle.ToggleResponseObject, error) {
-	flag, err := a.S.Toggle(ctx, req.Key, req.Enabled)
+	flag, err := a.S.Toggle(ctx, req.Key, int(req.ExpectedVersion), req.Enabled)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +70,7 @@ type FlagDeleteAdapter struct{ S *Service }
 
 // Delete implements flagsdelete.Service. Key from path param, decoded by handler_gen.
 func (a FlagDeleteAdapter) Delete(ctx context.Context, req *flagsdelete.Request) (flagsdelete.DeleteResponseObject, error) {
-	if err := a.S.Delete(ctx, req.Key); err != nil {
+	if err := a.S.Delete(ctx, req.Key, int(req.ExpectedVersion)); err != nil {
 		return nil, err
 	}
 	return flagsdelete.Delete204NoContentResponse{}, nil

@@ -95,16 +95,18 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	mux := newContractMux(svc)
 
 	// Request schema acceptance + rejection.
-	c.ValidateRequest(t, []byte(`{"version":1}`))
-	c.MustRejectRequest(t, []byte(`{"version":0}`))
-	c.MustRejectRequest(t, []byte(`{"version":"1"}`))
+	c.ValidateRequest(t, []byte(`{"version":1,"expectedVersion":1}`))
+	c.MustRejectRequest(t, []byte(`{"version":0,"expectedVersion":1}`))
+	c.MustRejectRequest(t, []byte(`{"version":"1","expectedVersion":1}`))
 	c.MustRejectRequest(t, []byte(`{}`))
 	c.MustRejectRequest(t, []byte(`{"version":1,"extra":"x"}`))
+	c.MustRejectRequest(t, []byte(`{"version":1}`))                            // missing expectedVersion
+	c.MustRejectRequest(t, []byte(`{"version":1,"expectedVersion":0}`))        // expectedVersion < 1
 
 	// Real-handler exercise: 200 OK + response schema.
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
-	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`)).
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1,"expectedVersion":1}`)).
 		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
@@ -237,7 +239,7 @@ func TestEventConfigRollbackV1Publish_RollbackEmitsStateThenAudit(t *testing.T) 
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	_, err = svc.Rollback(auth.TestContext("contract-admin", []string{"admin"}), "app.name", 1)
+	_, err = svc.Rollback(auth.TestContext("contract-admin", []string{"admin"}), "app.name", 1, 1)
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 2, "Rollback must emit state-sync then audit outbox entries")
