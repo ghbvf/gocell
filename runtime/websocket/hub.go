@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -199,10 +200,16 @@ type Hub struct {
 // Zero values are accepted (NewHub falls back to package defaults).
 func MustValidateHubConfig(cfg HubConfig) {
 	if cfg.ShutdownTimeout < 0 {
-		panic("websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0")
+		panic(panicregister.Approved(
+			"websocket-hub-shutdown-timeout-negative",
+			errcode.Assertion("websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0"),
+		))
 	}
 	if cfg.ConcurrentCloseLimit < 0 {
-		panic("websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0")
+		panic(panicregister.Approved(
+			"websocket-hub-close-limit-negative",
+			errcode.Assertion("websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0"),
+		))
 	}
 }
 

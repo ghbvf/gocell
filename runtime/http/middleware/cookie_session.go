@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/securecookie"
 )
 
@@ -135,7 +136,7 @@ func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler,
 func MustCookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler {
 	mw, err := NewCookieSession(cfg)
 	if err != nil {
-		panic(errcode.Assertion("cookie_session: %v", err))
+		panic(panicregister.Approved("cookie-session-init", errcode.Assertion("cookie_session: %v", err)))
 	}
 	return mw
 }
