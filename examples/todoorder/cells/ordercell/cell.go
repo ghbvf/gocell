@@ -65,7 +65,7 @@ func WithRepository(r domain.OrderRepository) Option {
 // AI-HARD per ADR cell-raw-infra-sealed-marker: the option signature
 // rejects raw outbox.Writer at compile time.
 //
-// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md
+// ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1
 func WithOutboxWriter(writer outbox.CellWriter) Option {
 	return func(c *OrderCell) {
 		if writer != nil {

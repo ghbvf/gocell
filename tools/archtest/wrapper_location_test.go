@@ -11,14 +11,14 @@
 // kernel/outbox.CellPublisher / CellWriter) eliminated.
 //
 // AI-rebust 评级：Medium (archtest type-aware via typeseval.SharedResolver
-// caller-package check). The sealed marker is the AI-HARD primary defense
-// (违反不可表达 — cells can no longer declare With* Options that accept raw
-// types because the type system rejects raw → CellXxx assignment without
-// the wrapper). This archtest is belt-and-suspenders that additionally pins
-// the authorized wrap-call locations, preventing a cell from importing
-// kernel/persistence and calling WrapForCell internally.
+// caller-package check). The sealed marker is the AI-HARD field/assignment
+// defense; public With* raw-parameter signatures remain syntactically
+// expressible and are guarded by CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01.
+// This archtest is the required Medium companion for wrapper call locations,
+// preventing a cell from importing kernel/persistence and calling WrapForCell
+// internally.
 //
-// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md §D2
+// ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D2
 // ref: ADR 202605101800 §D6 (history; archtest scanner predecessor deleted)
 package archtest
 
