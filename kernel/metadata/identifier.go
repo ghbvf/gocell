@@ -6,6 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // GoIdentifier is a string statically guaranteed to satisfy
@@ -45,7 +46,7 @@ func NewGoIdentifier(s string) (GoIdentifier, error) {
 func MustNewGoIdentifier(s string) GoIdentifier {
 	g, err := NewGoIdentifier(s)
 	if err != nil {
-		panic(err) // C-class: codegen-emitted literal proven invalid at init
+		panic(panicregister.Approved("metadata-go-identifier-codegen-invalid", err))
 	}
 	return g
 }

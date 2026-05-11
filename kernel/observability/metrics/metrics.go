@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // Collector is a handle to a registered metric family (counter or histogram
@@ -179,7 +180,7 @@ func ValidateLabels(expected []string, got Labels) error {
 // a programmer bug surfaces immediately with a precise message.
 func MustValidateLabels(expected []string, got Labels) {
 	if err := ValidateLabels(expected, got); err != nil {
-		panic(err)
+		panic(panicregister.Approved("metrics-validate-labels-mismatch", err))
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -120,7 +121,7 @@ func NewAuthJWT(v IntentTokenVerifier) (AuthJWT, error) {
 func MustNewAuthJWT(v IntentTokenVerifier) AuthJWT {
 	plan, err := NewAuthJWT(v)
 	if err != nil {
-		panic(errcode.Assertion("auth_plan: MustNewAuthJWT: %v", err))
+		panic(panicregister.Approved("auth-plan-jwt-init", errcode.Assertion("auth_plan: MustNewAuthJWT: %v", err)))
 	}
 	return plan
 }
@@ -208,7 +209,7 @@ func NewAuthJWTFromAssembly(asm AssemblyRef) (AuthJWTFromAssembly, error) {
 func MustNewAuthJWTFromAssembly(asm AssemblyRef) AuthJWTFromAssembly {
 	plan, err := NewAuthJWTFromAssembly(asm)
 	if err != nil {
-		panic(errcode.Assertion("auth_plan: MustNewAuthJWTFromAssembly: %v", err))
+		panic(panicregister.Approved("auth-plan-jwt-assembly-init", errcode.Assertion("auth_plan: MustNewAuthJWTFromAssembly: %v", err)))
 	}
 	return plan
 }
@@ -329,7 +330,7 @@ func NewAuthServiceToken(store NonceStore, ring HMACKeyring) (AuthServiceToken, 
 func MustNewAuthServiceToken(store NonceStore, ring HMACKeyring) AuthServiceToken {
 	plan, err := NewAuthServiceToken(store, ring)
 	if err != nil {
-		panic(errcode.Assertion("auth_plan: MustNewAuthServiceToken: %v", err))
+		panic(panicregister.Approved("auth-plan-service-token-init", errcode.Assertion("auth_plan: MustNewAuthServiceToken: %v", err)))
 	}
 	return plan
 }

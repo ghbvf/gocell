@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // EntryIDPrefix is the prefix for all outbox entry IDs — distinguishes
@@ -39,7 +40,7 @@ func NewEntryID() (string, error) {
 func MustNewEntryID() string {
 	id, err := NewEntryID()
 	if err != nil {
-		panic(errcode.Assertion("outbox: entry id: %v", err))
+		panic(panicregister.Approved("outbox-entry-id-init", errcode.Assertion("outbox: entry id: %v", err)))
 	}
 	return id
 }
