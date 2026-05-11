@@ -177,10 +177,15 @@ func ValidateLabels(expected []string, got Labels) error {
 
 // MustValidateLabels panics with a wrapped ErrLabelMismatch when labels do
 // not match. Adapter With() implementations call this as the first line so
-// a programmer bug surfaces immediately with a precise message.
+// a programmer bug surfaces immediately with a precise message. Uses
+// errcode.Wrap (not errcode.Assertion) so consumers can errors.Is(panic,
+// metrics.ErrLabelMismatch) through the *errcode.Error.Cause chain.
 func MustValidateLabels(expected []string, got Labels) {
 	if err := ValidateLabels(expected, got); err != nil {
-		panic(panicregister.Approved("metrics-validate-labels-mismatch", errcode.Assertion("metrics: invalid labels: %v", err)))
+		panic(panicregister.Approved("metrics-validate-labels-mismatch",
+			errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"metrics: invalid labels", err,
+				errcode.WithCategory(errcode.CategoryInfra))))
 	}
 }
 
