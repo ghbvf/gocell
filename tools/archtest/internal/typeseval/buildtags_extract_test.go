@@ -134,6 +134,35 @@ func TestParseBuildConstraint(t *testing.T) {
 				{active: nil, want: false},
 			},
 		},
+		{
+			// P2 regression: valid //go:build with malformed // +build → return
+			// go:build expr, no error. cmd/go's shouldBuild only scans // +build
+			// when goBuild == nil, so malformed +build lines are irrelevant here.
+			name:   "valid_gobuild_plus_malformed_plusbuild_ignored",
+			source: "//go:build foo\n// +build !!!invalid syntax!!!\n\npackage p\n",
+			evals:  []evalCase{{active: []string{"foo"}, want: true}},
+		},
+		{
+			// P2 regression: +build without blank line before package clause →
+			// cmd/go does not recognize it; must be ignored (return nil constraint).
+			name:    "legacy_plus_build_no_blank_line_ignored",
+			source:  "// +build foo\npackage p\n",
+			wantNil: true,
+		},
+		{
+			// P2 regression: +build in last CG with blank line before package → honored.
+			name:   "legacy_plus_build_blank_line_before_package_honored",
+			source: "// +build foo\n\npackage p\n",
+			evals:  []evalCase{{active: []string{"foo"}, want: true}},
+		},
+		{
+			// P2 regression: +build in non-last CG that has a blank-line gap to
+			// the next CG (AST splits CGs at blank lines, so the gap exists by
+			// construction whenever there are two distinct CGs). Must be honored.
+			name:   "legacy_plus_build_in_non_last_cg_honored",
+			source: "// +build foo\n\n// doc\n\npackage p\n",
+			evals:  []evalCase{{active: []string{"foo"}, want: true}},
+		},
 	}
 
 	for _, tc := range cases {

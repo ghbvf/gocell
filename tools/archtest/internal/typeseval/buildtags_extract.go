@@ -25,9 +25,14 @@ import (
 //
 // Directive precedence matches cmd/go (go/build/build.go parseFileHeader):
 //  1. If a //go:build line is present, it is authoritative; any // +build
-//     lines are ignored (legacy syntax retained for old-toolchain compat).
+//     lines are ignored entirely (legacy syntax retained for old-toolchain
+//     compat — cmd/go's shouldBuild only scans +build when goBuild == nil).
 //  2. If only // +build lines are present (no //go:build), they are
 //     AND-merged into a single expression per go/build/constraint package doc.
+//
+// Legacy plus-build recognition requires a blank line between the directive's
+// CommentGroup and the package clause (cmd/go's parseFileHeader). The
+// per-CG blank-line gate is equivalent because AST splits CGs at blank lines.
 //
 // This helper replaces three independent bufio.Scanner+constraint.Parse
 // duplicates that existed in build_constraint_test.go,
@@ -36,6 +41,7 @@ import (
 //
 // ref: golang/go src/go/build/constraint/expr.go
 // ref: golang/go src/go/build/build.go::parseFileHeader (lines 1627-1662)
+// ref: golang/go src/go/build/build.go::shouldBuild +build fallback
 func ParseBuildConstraint(filePath string) (constraint.Expr, error) {
 	fset := token.NewFileSet()
 	// PackageClauseOnly keeps the parser cheap: it stops after `package …`,
@@ -47,11 +53,12 @@ func ParseBuildConstraint(filePath string) (constraint.Expr, error) {
 	}
 
 	// goBuildExpr holds the single allowed //go:build expression; at most one is permitted.
-	// plusBuildExprs accumulates // +build lines, AND-merged when no //go:build is present.
+	// plusBuildLines accumulates raw // +build lines (as strings, not parsed exprs),
+	// AND-merged lazily only when no //go:build is present — matching cmd/go's shouldBuild.
 	var goBuildExpr constraint.Expr
-	var plusBuildExprs []constraint.Expr
+	var plusBuildLines []string
 
-	for _, cg := range file.Comments {
+	for i, cg := range file.Comments {
 		// Only CommentGroups that end strictly before the package clause are
 		// in the constraint zone (Go spec: build constraints precede the
 		// package clause and are separated from it by a blank line — the
@@ -63,27 +70,46 @@ func ParseBuildConstraint(filePath string) (constraint.Expr, error) {
 		if cg.End() >= file.Package {
 			break
 		}
+
+		// Per cmd/go parseFileHeader: // +build is only recognized when the
+		// directive's CommentGroup is followed by at least one blank line
+		// before the next CG (or package clause). Compute the line number of
+		// the start of whatever follows this CG.
+		var nextLine int
+		if i+1 < len(file.Comments) && file.Comments[i+1].End() < file.Package {
+			nextLine = fset.Position(file.Comments[i+1].Pos()).Line
+		} else {
+			nextLine = fset.Position(file.Package).Line
+		}
+		// Blank line exists iff the next element starts ≥ 2 lines after this
+		// CG's last line (one line = comment itself, one line = blank separator).
+		plusBuildValid := nextLine-fset.Position(cg.End()).Line >= 2
+
 		var mergeErr error
-		goBuildExpr, plusBuildExprs, mergeErr = collectGroupDirectives(filePath, cg.List, goBuildExpr, plusBuildExprs)
+		goBuildExpr, plusBuildLines, mergeErr = collectGroupDirectives(filePath, cg.List, goBuildExpr, plusBuildLines, plusBuildValid)
 		if mergeErr != nil {
 			return nil, mergeErr
 		}
 	}
 
-	return finalizeConstraint(goBuildExpr, plusBuildExprs), nil
+	return finalizeConstraint(filePath, goBuildExpr, plusBuildLines)
 }
 
 // collectGroupDirectives scans one CommentGroup's comment lines for build
-// directives and collects them into the running goBuildExpr / plusBuildExprs
-// accumulators. Returns an error if a second //go:build line is encountered
+// directives and collects them into the running goBuildExpr / plusBuildLines
+// accumulators. plusBuildValid controls whether // +build lines in this CG
+// are recognized (false when no blank-line gap follows the CG, matching
+// cmd/go's parseFileHeader blank-line requirement).
+// Returns an error if a second //go:build line is encountered
 // (errMultipleGoBuild semantics from go/build/build.go:1660).
 // Extracted to reduce the cognitive complexity of ParseBuildConstraint.
 func collectGroupDirectives(
 	filePath string,
 	comments []*ast.Comment,
 	goBuildExpr constraint.Expr,
-	plusBuildExprs []constraint.Expr,
-) (constraint.Expr, []constraint.Expr, error) {
+	plusBuildLines []string,
+	plusBuildValid bool,
+) (constraint.Expr, []string, error) {
 	for _, c := range comments {
 		line := c.Text
 		switch {
@@ -101,33 +127,50 @@ func collectGroupDirectives(
 			goBuildExpr = expr
 
 		case constraint.IsPlusBuild(line):
-			expr, perr := constraint.Parse(line)
-			if perr != nil {
-				return nil, nil, fmt.Errorf("typeseval.ParseBuildConstraint(%s): %w", filePath, perr)
+			if !plusBuildValid {
+				// No blank line between this CG and the next element — cmd/go
+				// would not recognize this // +build directive.
+				continue
 			}
-			plusBuildExprs = append(plusBuildExprs, expr)
+			// Store the raw line; parsing is deferred to finalizeConstraint so
+			// that malformed // +build lines are ignored when a valid //go:build
+			// is already present (matching cmd/go's shouldBuild fallback logic).
+			plusBuildLines = append(plusBuildLines, line)
 		}
 	}
-	return goBuildExpr, plusBuildExprs, nil
+	return goBuildExpr, plusBuildLines, nil
 }
 
 // finalizeConstraint resolves the collected directives into a single
 // constraint.Expr following cmd/go precedence rules:
-//   - //go:build is authoritative when present; // +build lines are ignored.
-//   - When only // +build lines are present, AND-merge them.
+//   - //go:build is authoritative when present; // +build lines are ignored entirely.
+//   - When only // +build lines are present, parse and AND-merge them.
 //   - Returns nil when neither kind was found.
-func finalizeConstraint(goBuildExpr constraint.Expr, plusBuildExprs []constraint.Expr) constraint.Expr {
+//
+// Parsing // +build lines is deferred here (not in collectGroupDirectives) so
+// that malformed legacy lines do not produce errors when a valid //go:build is
+// already authoritative — matching cmd/go's shouldBuild which only reaches the
+// // +build scanning branch when goBuild == nil.
+func finalizeConstraint(filePath string, goBuildExpr constraint.Expr, plusBuildLines []string) (constraint.Expr, error) {
 	if goBuildExpr != nil {
-		return goBuildExpr
+		// //go:build is present and authoritative; // +build lines ignored entirely.
+		return goBuildExpr, nil
 	}
-	if len(plusBuildExprs) == 0 {
-		return nil
+	// No //go:build — parse and AND-merge any // +build lines found.
+	var combined constraint.Expr
+	for _, line := range plusBuildLines {
+		expr, perr := constraint.Parse(line)
+		if perr != nil {
+			return nil, fmt.Errorf("typeseval.ParseBuildConstraint(%s): %w", filePath, perr)
+		}
+		if combined == nil {
+			combined = expr
+		} else {
+			combined = &constraint.AndExpr{X: combined, Y: expr}
+		}
 	}
-	combined := plusBuildExprs[0]
-	for _, e := range plusBuildExprs[1:] {
-		combined = &constraint.AndExpr{X: combined, Y: e}
-	}
-	return combined
+	// combined is nil when plusBuildLines is empty — caller treats nil as "no constraint".
+	return combined, nil
 }
 
 // walkConstraintTags appends every TagExpr's Tag identifier under e to *out,
