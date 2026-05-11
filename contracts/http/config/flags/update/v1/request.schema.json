@@ -10,6 +10,7 @@
     "expectedVersion": {
       "type": "integer",
       "minimum": 1,
+      "maximum": 99999,
       "description": "Compare-and-swap guard. Must equal the flag's current version; mismatch returns 409 ERR_VERSION_CONFLICT."
     }
   },
