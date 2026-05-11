@@ -177,7 +177,7 @@ var forbiddenMethodSymbols = map[string][]string{
 //	(1)  dot-import declaration scan — flags `import . "<banned>"` at the import.
 //	(2b) SelectorExpr scan — qualified calls `pkg.Func` (path A.2) resolved via
 //	     typeseval.ResolvePackageRef; receiver-type method calls (path A')
-//	     resolved via info.Types[sel.X] + namedTypeImportPath.
+//	     resolved via info.Types[sel.X] + typeseval.NamedTypeImportPath.
 //	(2c) Bare-Ident scan — dot-imported call/value references `Func` (path A.3)
 //	     resolved via typeseval.ResolvePackageRef. SelectorExpr.Sel idents are
 //	     pre-collected and skipped (2a) so qualified `pkg.Func` and method calls
@@ -238,7 +238,7 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 		}
 		// Method call on receiver type: (*os.File).ReadDir, (fs.FS).WalkDir, etc.
 		if tv, ok := info.Types[sel.X]; ok && tv.Type != nil {
-			if recvImportPath := namedTypeImportPath(tv.Type); recvImportPath != "" {
+			if recvImportPath := typeseval.NamedTypeImportPath(tv.Type); recvImportPath != "" {
 				if methods, banned := forbiddenMethodSymbols[recvImportPath]; banned && contains(methods, sel.Sel.Name) {
 					out = append(out, scanner.Diagnostic{
 						Rel:     rel,
@@ -527,44 +527,6 @@ func contains(ss []string, s string) bool {
 	return false
 }
 
-// namedTypeImportPath returns the import path of the package that declares
-// the named type underlying t. Handles three wrappings:
-//   - *types.Pointer (one level)
-//   - *types.Named (the base case)
-//   - *types.TypeParam (generic constraint): when a method is called on a
-//     generic-bound value (e.g. `func [F fs.ReadDirFS](fsys F) { fsys.ReadDir(...) }`),
-//     the receiver's static type is *types.TypeParam — its constraint's
-//     core type or sole named-interface embedding identifies the package.
-//
-// Returns "" if t resolves to none of these.
-func namedTypeImportPath(t types.Type) string {
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-	if tp, ok := t.(*types.TypeParam); ok {
-		// Walk the constraint interface for an embedded named type from a
-		// banned package. types.TypeParam.Constraint() returns *types.Interface
-		// (possibly via Underlying for aliases).
-		if iface, ok := tp.Constraint().Underlying().(*types.Interface); ok {
-			for i := 0; i < iface.NumEmbeddeds(); i++ {
-				if path := namedTypeImportPath(iface.EmbeddedType(i)); path != "" {
-					return path
-				}
-			}
-		}
-		return ""
-	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return ""
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil {
-		return ""
-	}
-	return obj.Pkg().Path()
-}
-
 // astListElemKind returns "Decl"|"Spec"|"Stmt"|"Expr" if expr's static type
 // is []ast.<Kind> from package go/ast; otherwise ("", false).
 func astListElemKind(info *types.Info, expr ast.Expr) (string, bool) {
@@ -722,8 +684,9 @@ func _() string { return Join("a", "b") }
 			wantHits: 1,
 		},
 		{
-			// (1) import-declaration scan + (2c) bare-Ident scan via
-			// typeseval.ResolvePackageRef both fire on this fixture.
+			// Hit breakdown: (1) dot-import declaration scan = 1, (2b)
+			// SelectorExpr scan = 0 (bare call has no SelectorExpr), (2c)
+			// bare-Ident scan via typeseval.ResolvePackageRef = 1.
 			name: "dot_import_os",
 			src: `package fake
 import . "os"
@@ -732,6 +695,7 @@ func _() error { _, err := ReadDir("/tmp"); return err }
 			wantHits: 2,
 		},
 		{
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 1.
 			name: "dot_import_io_fs",
 			src: `package fake
 import . "io/fs"
@@ -743,6 +707,7 @@ func _() error { return WalkDir(nil, ".", nil) }
 			// Bare-Ident scan must catch dot-imported call to a forbidden symbol
 			// even when the import declaration is already flagged. Closes the
 			// PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 dogfood gap.
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 1.
 			name: "dot_import_filepath_bare_walkdir_call",
 			src: `package fake
 import . "path/filepath"
@@ -753,6 +718,7 @@ func _() error { return WalkDir(".", nil) }
 		{
 			// Bare-Ident scan must NOT fire on type-only references through a
 			// dot-import (no Func resolution). Only the import declaration warns.
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 0 (FS resolves to TypeName, helper returns false).
 			name: "dot_import_type_reference_only",
 			src: `package fake
 import . "io/fs"
@@ -802,6 +768,7 @@ func _() error { return iofs.WalkDir(nil, ".", nil) }
 			wantHits: 1,
 		},
 		{
+			// Hit breakdown: (1) = 1, (2b) = 0, (2c) = 1.
 			name: "dot_import_go_ast",
 			src: `package fake
 import . "go/ast"
@@ -862,7 +829,7 @@ func _(fsys fs.ReadDirFS) error {
 		},
 		{
 			// Generic TypeParam constraint: receiver is a type parameter bound
-			// by fs.ReadDirFS — namedTypeImportPath must descend into the
+			// by fs.ReadDirFS — typeseval.NamedTypeImportPath must descend into the
 			// constraint interface to find the banned package, otherwise the
 			// generic form silently bypasses path A'.
 			name: "method_call_generic_typeparam_bypass",

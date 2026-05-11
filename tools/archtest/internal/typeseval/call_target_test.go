@@ -200,6 +200,14 @@ func _() { time.Sleep(0) }
 }
 
 func TestResolvePackageRef_ParenExprUnhandled(t *testing.T) {
+	// Helper contract boundary: passing a *ast.ParenExpr directly returns
+	// (nil, false). In real archtest matchers this is never a problem because
+	// scanner.EachInSubtree recurses into ParenExpr / IndexExpr wrappers and
+	// visits the inner Ident / SelectorExpr nodes directly — the helper is
+	// only ever called on those inner nodes. This test pins the helper's
+	// "no implicit unwrap" boundary so a future refactor cannot silently
+	// start unwrapping (which would risk double-counting in callers that
+	// rely on the current behavior).
 	src := `package fixture
 import "time"
 func _() {
@@ -211,7 +219,22 @@ func _() {
 	parens := &ast.ParenExpr{X: findFirstSelector(t, file, "Sleep")}
 
 	_, _, ok := ResolvePackageRef(pkg.TypesInfo, parens)
-	assert.False(t, ok, "ParenExpr unhandled by helper; caller must unwrap")
+	assert.False(t, ok, "ParenExpr boundary: helper does not unwrap")
+}
+
+func TestResolvePackageRef_DotImportNonFuncIdent(t *testing.T) {
+	// Helper-level coverage for "dot-imported non-Func identifier returns
+	// false" — decouples this contract from the fixture-layer
+	// `dot_import_type_reference_only` test in scanner_framework_usage_test.go.
+	src := `package fixture
+import . "io/fs"
+var _ FS
+`
+	pkg, file := buildFakePkg(t, src)
+	id := findFirstIdent(t, file, "FS")
+
+	_, _, ok := ResolvePackageRef(pkg.TypesInfo, id)
+	assert.False(t, ok, "dot-imported TypeName ident must not resolve as package ref")
 }
 
 // TestResolvePackageRef_PartialTypeInfoQualified models the fixture scenario

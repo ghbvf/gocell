@@ -27,7 +27,12 @@ import (
 //   - method-position selectors (`receiver.Method` where sel.X is a value)
 //   - identifiers whose owning *types.Package is nil (universe builtins)
 //   - nil typesInfo or nil expr
-//   - any expression kind other than *ast.Ident or *ast.SelectorExpr
+//   - any expression kind other than *ast.Ident or *ast.SelectorExpr —
+//     wrappers like *ast.ParenExpr, *ast.IndexExpr (generic instantiation
+//     `Func[T]`), and *ast.IndexListExpr (`Func[T, U]`) are NOT unwrapped;
+//     callers iterating via scanner.EachInSubtree pick up the underlying
+//     Ident/SelectorExpr nodes directly, but a caller that passes a wrapper
+//     gets (nil, false)
 //
 // Callers are responsible for filtering by pkgPath / name. In particular,
 // bare-Ident matches for a locally-defined function return the current
