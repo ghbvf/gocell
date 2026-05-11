@@ -101,7 +101,8 @@ func (s ContractSpec) validateHTTP() error {
 	if s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
-	isInternalPath := strings.HasPrefix(s.Path, cellvocab.InternalPathPrefix) || s.Path == strings.TrimSuffix(cellvocab.InternalPathPrefix, "/")
+	isInternalPath := strings.HasPrefix(s.Path, cellvocab.InternalPathPrefix) ||
+		s.Path == strings.TrimSuffix(cellvocab.InternalPathPrefix, "/")
 	if isInternalPath && len(s.Clients) == 0 {
 		return fmt.Errorf(
 			"ContractSpec[%s]: internal path requires non-empty Clients "+

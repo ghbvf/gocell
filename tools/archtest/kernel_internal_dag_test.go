@@ -200,30 +200,10 @@ func TestKernelInternalDAG(t *testing.T) {
 	})
 }
 
-// sortedKeys returns the keys of m in deterministic order.
-func sortedKeys(m map[string]map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // sortedSet returns the keys of m in deterministic order.
 func sortedSet(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// sortedAllowKeys returns allowedKernelEdges keys in deterministic order.
-func sortedAllowKeys() []string {
-	out := make([]string, 0, len(allowedKernelEdges))
-	for k := range allowedKernelEdges {
 		out = append(out, k)
 	}
 	sort.Strings(out)
@@ -322,7 +302,7 @@ func TestKernelInternalDAG_ViolationKinds_TableDriven(t *testing.T) {
 		wantKind string
 	}{
 		{
-			name:   "forward — unauthorised edge detected",
+			name:   "forward — unauthorized edge detected",
 			allow:  map[string][]string{"a": {"b"}, "b": nil},
 			owners: map[string]bool{"a": true, "b": true},
 			// a actually imports c, which is not in allowlist

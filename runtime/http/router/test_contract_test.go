@@ -8,7 +8,13 @@ import (
 )
 
 func testHTTPContract(method, path string) contractspec.ContractSpec {
-	spec := contractspec.ContractSpec{ID: "test:" + method + ":" + path, Kind: cellvocab.ContractHTTP, Transport: "http", Method: method, Path: path}
+	spec := contractspec.ContractSpec{
+		ID:        "test:" + method + ":" + path,
+		Kind:      cellvocab.ContractHTTP,
+		Transport: "http",
+		Method:    method,
+		Path:      path,
+	}
 	// Internal paths require non-empty Clients (Wave 2: caller-cell identity).
 	// Use a test sentinel caller so router unit tests remain self-contained.
 	if strings.HasPrefix(path, "/internal/v1/") {

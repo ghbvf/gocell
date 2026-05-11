@@ -8,7 +8,13 @@ import (
 )
 
 func testHTTPContract(method, path string) contractspec.ContractSpec {
-	spec := contractspec.ContractSpec{ID: "test:" + method + ":" + path, Kind: cellvocab.ContractHTTP, Transport: "http", Method: method, Path: path}
+	spec := contractspec.ContractSpec{
+		ID:        "test:" + method + ":" + path,
+		Kind:      cellvocab.ContractHTTP,
+		Transport: "http",
+		Method:    method,
+		Path:      path,
+	}
 	// Internal paths require non-empty Clients (ContractSpec.Validate enforced by wrapper.HTTPHandler).
 	// Bootstrap integration tests use "accesscore" as the service-token caller cell.
 	if strings.HasPrefix(path, "/internal/v1/") {

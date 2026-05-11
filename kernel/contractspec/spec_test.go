@@ -23,8 +23,12 @@ func TestContractSpec_HTTPSpec_Validate(t *testing.T) {
 		{"empty transport rejected", contractspec.ContractSpec{ID: "a", Kind: cellvocab.ContractHTTP, Method: "POST", Path: "/x"}, true},
 		{"http kind requires method", contractspec.ContractSpec{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Path: "/x"}, true},
 		{"http kind requires path", contractspec.ContractSpec{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "POST"}, true},
-		{"path must start with slash", contractspec.ContractSpec{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "POST", Path: "nope"}, true},
-		{"method must be upper case", contractspec.ContractSpec{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "post", Path: "/x"}, true},
+		{"path must start with slash", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "POST", Path: "nope",
+		}, true},
+		{"method must be upper case", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "post", Path: "/x",
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

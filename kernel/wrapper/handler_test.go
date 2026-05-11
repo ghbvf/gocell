@@ -92,7 +92,7 @@ func TestHTTPHandler_NoCarrier_StillInvokesInner(t *testing.T) {
 func TestHTTPHandler_ReturnsErrorOnInvalidSpec(t *testing.T) {
 	t.Parallel()
 	cases := []contractspec.ContractSpec{
-		{},                      // all empty
+		{},                                      // all empty
 		{ID: "a", Kind: cellvocab.ContractHTTP}, // missing transport/method/path
 		{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http"},                 // missing method/path
 		{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "POST"}, // missing path
