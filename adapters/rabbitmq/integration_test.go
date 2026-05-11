@@ -186,7 +186,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Run subscriber in a goroutine since Subscribe blocks.
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test"}, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test", CellID: "integration-test"}, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
 			return outbox.Ack()
 		}))
@@ -318,14 +318,14 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	subCtx, subCancel := context.WithTimeout(ctx, testtime.CtxLong)
 	defer subCancel()
 
-	wrappedHandler := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	wrappedHandler := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e", CellID: "test-retry-e2e"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount.Add(1)
 		return outbox.Requeue(assert.AnError)
 	})
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e"}, wrappedHandler)
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e", CellID: "test-retry-e2e"}, wrappedHandler)
 	}()
 
 	waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)

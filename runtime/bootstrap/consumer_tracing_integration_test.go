@@ -104,7 +104,7 @@ func (c *consumerSpyCell) Init(ctx context.Context, reg cell.Registry) error {
 		c.calls <- entry
 		return outbox.Ack()
 	})
-	return reg.Subscribe(c.spec, handler, "consumer-spy")
+	return reg.Subscribe(c.spec, handler, "consumer-spy", c.ID())
 }
 
 // TestBootstrap_ConsumerTracingIntegration wires bootstrap ->

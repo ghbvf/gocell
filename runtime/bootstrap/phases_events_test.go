@@ -62,7 +62,7 @@ func (c *stubEventCell) Init(ctx context.Context, reg cell.Registry) error {
 	noopHandler := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
 	})
-	return reg.Subscribe(c.spec, noopHandler, "stub-cg")
+	return reg.Subscribe(c.spec, noopHandler, "stub-cg", c.ID())
 }
 
 // TestPhase6_ConsumerMiddleware_AppliedInChain verifies that a middleware

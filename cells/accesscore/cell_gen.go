@@ -91,19 +91,19 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	if err := sub0.NewSubscription(c.configReceiveSvc.HandleEntryDeleted, "accesscore", "configreceive").Mount(reg); err != nil {
+	if err := sub0.NewSubscription(c.configReceiveSvc.HandleEntryDeleted, "accesscore", "accesscore", "configreceive").Mount(reg); err != nil {
 		return fmt.Errorf("accesscore: subscribe event.config.entry-deleted.v1: %w", err)
 	}
 
-	if err := sub1.NewSubscription(c.configReceiveSvc.HandleEntryUpserted, "accesscore", "configreceive").Mount(reg); err != nil {
+	if err := sub1.NewSubscription(c.configReceiveSvc.HandleEntryUpserted, "accesscore", "accesscore", "configreceive").Mount(reg); err != nil {
 		return fmt.Errorf("accesscore: subscribe event.config.entry-upserted.v1: %w", err)
 	}
 
-	if err := sub2.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "sessionlogout").Mount(reg); err != nil {
+	if err := sub2.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "accesscore", "sessionlogout").Mount(reg); err != nil {
 		return fmt.Errorf("accesscore: subscribe event.role.assigned.v1: %w", err)
 	}
 
-	if err := sub3.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "sessionlogout").Mount(reg); err != nil {
+	if err := sub3.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "accesscore", "sessionlogout").Mount(reg); err != nil {
 		return fmt.Errorf("accesscore: subscribe event.role.revoked.v1: %w", err)
 	}
 

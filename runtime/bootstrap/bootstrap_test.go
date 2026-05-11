@@ -526,7 +526,7 @@ func (c *contextCaptureCell) Init(ctx context.Context, reg cell.Registry) error 
 			"trace_id":       traceID,
 		}
 		return outbox.Ack()
-	}, "capture-cell")
+	}, "capture-cell", c.ID())
 }
 
 type invokeOnceSubscriber struct {
@@ -570,7 +570,7 @@ func (c *eventCell) Init(ctx context.Context, reg cell.Registry) error {
 	}
 	return reg.Subscribe(testEventSpec("test.topic"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
-	}, "test")
+	}, "test", c.ID())
 }
 
 func TestBootstrap_MissingSubscriber_WithCellSubscriptions_Fails(t *testing.T) {

@@ -75,7 +75,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 
 		subErrCh := make(chan error, 1)
 		go func() {
-			subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-disposition-ack"}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-disposition-ack", CellID: "test-disposition-ack"}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				callCount.Add(1)
 				select {
 				case handlerFired <- struct{}{}:
@@ -179,7 +179,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 
 		subErrCh := make(chan error, 1)
 		go func() {
-			subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-disposition-requeue"}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-disposition-requeue", CellID: "test-disposition-requeue"}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				n := callCount.Add(1)
 				if n == 1 {
 					// First call: return Requeue so broker redelivers.
@@ -295,7 +295,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		handlerCalled := make(chan struct{}, 1)
 		subErrCh := make(chan error, 1)
 		go func() {
-			subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-disposition-reject"}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-disposition-reject", CellID: "test-disposition-reject"}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				select {
 				case handlerCalled <- struct{}{}:
 				default:

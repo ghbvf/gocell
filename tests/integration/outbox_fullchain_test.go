@@ -314,7 +314,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- wrappedSub.SubscribeEntry(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-test", ContractID: "event.test.fullchain.v1", ContractKind: "event", ContractTransport: "memory"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.SubscribeEntry(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-test", CellID: "fullchain-test", ContractID: "event.test.fullchain.v1", ContractKind: "event", ContractTransport: "memory"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, _ := ctxkeys.TraceIDFrom(handlerCtx)
@@ -562,7 +562,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- wrappedSub.SubscribeEntry(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-notrace-test", ContractID: "event.test.fullchain.v1", ContractKind: "event", ContractTransport: "memory"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.SubscribeEntry(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-notrace-test", CellID: "fullchain-notrace-test", ContractID: "event.test.fullchain.v1", ContractKind: "event", ContractTransport: "memory"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, traceOK := ctxkeys.TraceIDFrom(handlerCtx)

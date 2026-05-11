@@ -358,4 +358,3 @@ func isIdent(expr ast.Expr, name string) bool {
 	id, ok := expr.(*ast.Ident)
 	return ok && id.Name == name
 }
-

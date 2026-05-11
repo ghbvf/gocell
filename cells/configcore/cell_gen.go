@@ -84,11 +84,11 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	if err := sub0.NewSubscription(c.subscribeSvc.HandleEntryDeleted, "configcore", "configsubscribe").Mount(reg); err != nil {
+	if err := sub0.NewSubscription(c.subscribeSvc.HandleEntryDeleted, "configcore", "configcore", "configsubscribe").Mount(reg); err != nil {
 		return fmt.Errorf("configcore: subscribe event.config.entry-deleted.v1: %w", err)
 	}
 
-	if err := sub1.NewSubscription(c.subscribeSvc.HandleEntryUpserted, "configcore", "configsubscribe").Mount(reg); err != nil {
+	if err := sub1.NewSubscription(c.subscribeSvc.HandleEntryUpserted, "configcore", "configcore", "configsubscribe").Mount(reg); err != nil {
 		return fmt.Errorf("configcore: subscribe event.config.entry-upserted.v1: %w", err)
 	}
 

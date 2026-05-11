@@ -227,6 +227,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{
 			Topic:         topic,
 			ConsumerGroup: "cg-shutdown-noloss",
+			CellID:        "cg-shutdown-noloss",
 		}, handler)
 	}()
 
@@ -366,6 +367,7 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{
 			Topic:         topic,
 			ConsumerGroup: "cg-shutdown-hardclose",
+			CellID:        "cg-shutdown-hardclose",
 		}, handler)
 	}()
 

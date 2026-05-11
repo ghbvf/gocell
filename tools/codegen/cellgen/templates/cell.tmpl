@@ -74,7 +74,7 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registry) error {
 	})
 {{ end }}
 {{- range .Subscriptions }}
-	if err := {{.SubscriptionAlias}}.NewSubscription({{.HandlerExpr}}, {{ if .ConsumerGroup }}{{ printf "%q" .ConsumerGroup }}{{ else }}{{ printf "%q" $.ConsumerGroupDefault }}{{ end }}, {{ printf "%q" .SliceID }}).Mount(reg); err != nil {
+	if err := {{.SubscriptionAlias}}.NewSubscription({{.HandlerExpr}}, {{ if .ConsumerGroup }}{{ printf "%q" .ConsumerGroup }}{{ else }}{{ printf "%q" $.ConsumerGroupDefault }}{{ end }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }}).Mount(reg); err != nil {
 		return fmt.Errorf({{ printf "%q" (printf "%s: subscribe %s: %%w" $.CellID .ContractID) }}, err)
 	}
 {{ end }}

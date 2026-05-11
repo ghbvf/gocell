@@ -77,7 +77,7 @@ func TestRegistry_RouteGroup_AccumulatesInOrder(t *testing.T) {
 
 func TestRegistry_Subscribe_RejectsNilHandler(t *testing.T) {
 	rec := NewRegistryRecorder(nil, DurabilityDurable)
-	err := rec.Subscribe(testRegistrySpec("user.created"), nil, "cg-test")
+	err := rec.Subscribe(testRegistrySpec("user.created"), nil, "cg-test", "ordercell")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "handler")
 }
@@ -88,9 +88,24 @@ func TestRegistry_Subscribe_RejectsNilHandler(t *testing.T) {
 
 func TestRegistry_Subscribe_RejectsEmptyConsumerGroup(t *testing.T) {
 	rec := NewRegistryRecorder(nil, DurabilityDurable)
-	err := rec.Subscribe(testRegistrySpec("user.created"), noopHandler, "")
+	err := rec.Subscribe(testRegistrySpec("user.created"), noopHandler, "", "ordercell")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "consumerGroup")
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Subscribe_RejectsEmptyCellID
+// ---------------------------------------------------------------------------
+
+// K#07 HARD contract: cellID is a positional, mandatory string. The validator
+// rejects empty strings so a programmer passing "" (e.g. via a misconfigured
+// cellgen template) sees a fail-fast error rather than a downstream silent
+// failure in bootstrap drain.
+func TestRegistry_Subscribe_RejectsEmptyCellID(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	err := rec.Subscribe(testRegistrySpec("user.created"), noopHandler, "cg-test", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cellID")
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +120,7 @@ func TestRegistry_Subscribe_RejectsBadSpecKind(t *testing.T) {
 		Transport: "amqp",
 		Topic:     "foo",
 	}
-	err := rec.Subscribe(spec, noopHandler, "cg-test")
+	err := rec.Subscribe(spec, noopHandler, "cg-test", "ordercell")
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
@@ -120,13 +135,14 @@ func TestRegistry_Subscribe_HappyPath_AppendsToSnapshot(t *testing.T) {
 	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	spec := testRegistrySpec("order.placed")
-	err := rec.Subscribe(spec, noopHandler, "cg-order", WithSubscriptionSliceID("order-slice"))
+	err := rec.Subscribe(spec, noopHandler, "cg-order", "ordercell", WithSubscriptionSliceID("order-slice"))
 	require.NoError(t, err)
 
 	snap := rec.Snapshot()
 	require.Len(t, snap.Subscriptions, 1)
 	assert.Equal(t, spec, snap.Subscriptions[0].Spec)
 	assert.Equal(t, "cg-order", snap.Subscriptions[0].ConsumerGroup)
+	assert.Equal(t, "ordercell", snap.Subscriptions[0].CellID)
 	assert.Equal(t, "order-slice", snap.Subscriptions[0].SliceID)
 	assert.NotNil(t, snap.Subscriptions[0].Handler)
 }
@@ -235,7 +251,7 @@ func TestRegistry_PostSnapshot_Subscribe_Panics(t *testing.T) {
 	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	_ = rec.Snapshot() // finalize
 	assert.Panics(t, func() {
-		_ = rec.Subscribe(testRegistrySpec("x"), noopHandler, "cg")
+		_ = rec.Subscribe(testRegistrySpec("x"), noopHandler, "cg", "ordercell")
 	})
 }
 
@@ -345,7 +361,7 @@ func TestRegistry_Subscribe_RejectsEmptyTopic(t *testing.T) {
 		Transport: "amqp",
 		Topic:     "", // empty — must be rejected
 	}
-	err := rec.Subscribe(spec, noopHandler, "cg-test")
+	err := rec.Subscribe(spec, noopHandler, "cg-test", "ordercell")
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "topic")
 }
@@ -383,7 +399,7 @@ func TestRegistry_Snapshot_DefensiveCopy(t *testing.T) {
 
 	// Register one of each type before taking the snapshot.
 	rec.RouteGroup(SingleGroup(PrimaryListener, "/api/v1/x", func(RouteMux) error { return nil }))
-	err := rec.Subscribe(testRegistrySpec("snap.test"), noopHandler, "cg-snap")
+	err := rec.Subscribe(testRegistrySpec("snap.test"), noopHandler, "cg-snap", "ordercell")
 	require.NoError(t, err)
 	rec.Health("snap-probe", func(context.Context) error { return nil })
 

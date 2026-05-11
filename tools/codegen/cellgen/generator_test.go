@@ -108,7 +108,8 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T)
 	}
 	// New pattern: generated package import + NewSubscription.Mount call.
 	mustContain(t, got, `sub0 "github.com/ghbvf/gocell/generated/contracts/event/foo/bar/v1"`)
-	mustContain(t, got, `sub0.NewSubscription(c.svc.HandleBar, "demo", "subs").Mount(reg)`)
+	// K#07: cellID (4th positional arg) flows from CellGenSpec.CellID, mandatory HARD.
+	mustContain(t, got, `sub0.NewSubscription(c.svc.HandleBar, "demo", "demo", "subs").Mount(reg)`)
 }
 
 func TestRenderCell_EmptySubPathDirectMount(t *testing.T) {

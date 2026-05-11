@@ -49,11 +49,13 @@ func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Regist
 		Topic:     "event.config.entry-upserted.v1",
 	}
 	// Intentionally omit cell.WithSubscriptionSliceID to trigger validator.
+	// K#07: cellID is the HARD positional parameter (4th) — passed explicitly here.
 	return reg.Subscribe(spec,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.Ack()
 		},
-		"testcellnoowner", // consumerGroup == cell ID
+		"testcellnoowner", // consumerGroup
+		"testcellnoowner", // cellID (HARD positional)
 	)
 }
 
