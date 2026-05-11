@@ -155,6 +155,14 @@ func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, erro
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 		}
+		// scanUser may return errcode.ErrPGSchemaShape for invalid enum drift
+		// from the DB; propagate that code instead of collapsing to ErrInternal
+		// so operators can distinguish schema-drift faults from generic infra
+		// failures (e.g. /readyz?verbose triage).
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
+		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id", err)
 	}
 	return u, nil
@@ -169,6 +177,10 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username", err)
 	}

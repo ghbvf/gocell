@@ -210,10 +210,13 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 	if err := verifyForeignKeys(ctx, pool); err != nil {
 		return err
 	}
-	if err := verifyTriggers(ctx, pool); err != nil {
+	// Functions before triggers: a trigger depends on its function (DROP
+	// FUNCTION ... CASCADE removes both), so reporting the function as the
+	// root cause is more actionable than the cascaded trigger absence.
+	if err := verifyFunctions(ctx, pool); err != nil {
 		return err
 	}
-	if err := verifyFunctions(ctx, pool); err != nil {
+	if err := verifyTriggers(ctx, pool); err != nil {
 		return err
 	}
 	if err := verifyChecks(ctx, pool); err != nil {
@@ -367,29 +370,37 @@ var expectedIndexes = []expectedIndex{
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
 }
 
-// expectedFKs is the foreign key constraint registry (ON DELETE action uses
-// single-char PG catalog codes: 'a'=CASCADE, 'r'=RESTRICT, 'n'=SET NULL).
+// expectedFKs is the foreign key constraint registry. ON DELETE action uses
+// single-char PG catalog codes from pg_constraint.confdeltype:
+//
+//	'a' = NO ACTION (default; no clause in DDL)
+//	'r' = RESTRICT
+//	'c' = CASCADE
+//	'n' = SET NULL
+//	'd' = SET DEFAULT
+//
+// ref: https://www.postgresql.org/docs/current/catalog-pg-constraint.html
 var expectedFKs = []expectedFK{
 	{
 		Table:      "sessions",
 		Constraint: "sessions_subject_id_fkey",
 		RefTable:   "users",
 		RefColumns: []string{"id"},
-		OnDelete:   "a", // CASCADE
+		OnDelete:   "c", // CASCADE — migrations/018_sessions.sql
 	},
 	{
 		Table:      "role_assignments",
 		Constraint: "role_assignments_user_id_fkey",
 		RefTable:   "users",
 		RefColumns: []string{"id"},
-		OnDelete:   "a", // CASCADE
+		OnDelete:   "c", // CASCADE — migrations/019_roles.sql
 	},
 	{
 		Table:      "role_assignments",
 		Constraint: "role_assignments_role_id_fkey",
 		RefTable:   "roles",
 		RefColumns: []string{"id"},
-		OnDelete:   "r", // RESTRICT
+		OnDelete:   "r", // RESTRICT — migrations/019_roles.sql
 	},
 }
 
@@ -729,8 +740,12 @@ func verifyFKRefColumns(ctx context.Context, pool *Pool, fk expectedFK, refColsQ
 
 // verifyTriggers checks trigger presence, enabled state, and function name.
 func verifyTriggers(ctx context.Context, pool *Pool) error {
+	// pg_trigger.tgenabled is `char` (single-byte: 'O' origin / 'D' disabled /
+	// 'R' replica / 'A' always). Cast to text so pgx binary protocol can scan
+	// into *string — same constraint as confdeltype above (PG char OID 18 has
+	// no default binary→string codec).
 	const q = `
-	SELECT tg.tgenabled, p.proname
+	SELECT tg.tgenabled::text, p.proname
 	  FROM pg_trigger tg
 	  JOIN pg_class c ON c.oid = tg.tgrelid
 	  JOIN pg_namespace n ON n.oid = c.relnamespace

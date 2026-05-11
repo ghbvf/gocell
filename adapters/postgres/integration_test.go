@@ -279,7 +279,12 @@ func TestIntegration_Migrator(t *testing.T) {
 
 		statuses, sErr := migrator.Status(ctx)
 		require.NoError(t, sErr)
-		require.GreaterOrEqual(t, len(statuses), int(expected), "status list must cover all migrations")
+		// Sanity-check the status list is non-empty. We deliberately do NOT
+		// compare len(statuses) to ExpectedVersion: migration version numbers
+		// can be sparse when a slot is reserved for an in-flight PR (e.g.
+		// version 022 reserved for S6 PR #464 leaves max=23 but file count=22).
+		// The foundLatest assertion below covers what we actually care about.
+		require.NotEmpty(t, statuses, "status must list at least one migration")
 		latestVersion := fmt.Sprintf("%03d", expected)
 		foundLatest := false
 		for _, s := range statuses {

@@ -451,16 +451,15 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 	ctx := context.Background()
 
 	// Temporarily drop the CHECK constraint to allow writing an invalid status.
+	// This simulates the real-world scenario where the constraint is added later
+	// (by migration 023) over a table that may already contain pre-existing
+	// invalid rows from an earlier schema.
 	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
 	require.NoError(t, err, "must be able to drop constraint for test setup")
-	t.Cleanup(func() {
-		// Restore the CHECK constraint after the test.
-		_, restoreErr := pool.DB().Exec(ctx,
-			`ALTER TABLE users ADD CONSTRAINT users_status_chk CHECK (status IN ('active', 'suspended', 'locked'))`)
-		if restoreErr != nil {
-			t.Logf("WARN: failed to restore users_status_chk constraint: %v", restoreErr)
-		}
-	})
+	// Per-test container is fresh; no constraint restore needed and a NOT VALID
+	// restore would mask future scan-side regressions. Container teardown via
+	// cleanup() drops the entire schema, so leaving the constraint absent here
+	// has no cross-test side effect.
 
 	id := uuid.NewString()
 	now := time.Now().UTC()
@@ -470,11 +469,6 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 		VALUES ($1, $2, $3, $4, false, 'invalid_status', 'identity', 0, $5, $5)`,
 		id, "scan_invalid_status_user", "scan_invalid@example.com", "$2a$12$fakehash", now)
 	require.NoError(t, err, "INSERT with constraint dropped must succeed")
-
-	// Restore CHECK constraint before reading so DB is in clean state.
-	_, err = pool.DB().Exec(ctx,
-		`ALTER TABLE users ADD CONSTRAINT users_status_chk CHECK (status IN ('active', 'suspended', 'locked'))`)
-	require.NoError(t, err, "must restore constraint before reading")
 
 	// Now scanUser must reject the invalid status.
 	_, scanErr := repo.GetByID(ctx, id)
