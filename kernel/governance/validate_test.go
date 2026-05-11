@@ -2638,12 +2638,37 @@ func TestREF17(t *testing.T) {
 			wantCount: 2, // both fail-closed: wildcard + external actor
 		},
 		{
-			name: "non-v1 internal-looking path is not flagged (uses cellvocab.InternalPathPrefix SoR)",
+			name: "non-v1 internal-looking path is not flagged (uses metadata.IsInternalHTTPPath SoR)",
 			setup: func(pm *metadata.ProjectMeta) {
 				// /internal/foo (no /v1/) is NOT routed to InternalListener by
 				// runtime — REF-17 must align with the runtime SoR and not
 				// flag such paths as internal.
 				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/foo"
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "bare /internal/v1 with external client errors (no trailing slash)",
+			setup: func(pm *metadata.ProjectMeta) {
+				// metadata.IsInternalHTTPPath matches both "/internal/v1" and
+				// "/internal/v1/...". Earlier REF-17 inlined
+				// strings.HasPrefix(path, cellvocab.InternalPathPrefix) which
+				// only matched the trailing-slash form — a bare root
+				// declaration could ship an external actor as a client and
+				// silently bypass the audience check.
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/v1"
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "/internal/v10 substring trap is not flagged",
+			setup: func(pm *metadata.ProjectMeta) {
+				// IsInternalHTTPPath must not over-match version-extension
+				// paths like /internal/v10/...; mirrors FMT-31's substring
+				// trap test so the predicate semantics are double-anchored.
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/v10/foo"
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 			},
 			wantCount: 0,

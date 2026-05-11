@@ -1206,10 +1206,14 @@ func (v *Validator) validateFMT28() []ValidationResult {
 //
 // FMT-31 is intentionally unidirectional. The inverse direction
 // (non-internal path forbids non-empty clients) cannot be enforced here:
-// endpoints.clients is semantically polymorphic — on non-internal paths it
-// declares the auth.clientsOnly allowlist (see FMT-28), which codegen filters
-// out of the generated ContractSpec.Clients. The runtime check at
-// kernel/contractspec/spec.go remains the sole inverse-direction gate.
+// endpoints.clients is semantically polymorphic — on internal paths it
+// declares the caller-cell allowlist that codegen copies into
+// ContractSpec.Clients; on non-internal paths it is declarative consumer
+// metadata that codegen (tools/codegen/contractgen/builder.go) filters out
+// of the runtime ContractSpec entirely (FMT-28 forbids auth.clientsOnly
+// outside internal paths, so clientsOnly cannot pick up these declarations
+// either). The runtime check at kernel/contractspec/spec.go remains the
+// sole inverse-direction gate.
 //
 // ref: kernel/contractspec/spec.go::validateHTTP for the runtime mirror;
 // ADR docs/architecture/202605051500-adr-k05-markergen-cellgen-unified.md
