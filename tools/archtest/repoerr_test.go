@@ -149,7 +149,7 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 	ctxAliases := contextImportAliases(file)
 	var out []repoErrViolation
 
-	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 		if bannedTypeNameRegex.MatchString(ts.Name.Name) {
 			out = append(out, repoErrViolation{
 				Rule:    ruleCtxCancelLocalImplBan,
@@ -159,7 +159,7 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 			})
 		}
 	})
-	scanner.EachNode[ast.FuncDecl](file, func(d *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(d *ast.FuncDecl) {
 		if isThinCtxCancelWrapper(d) {
 			out = append(out, repoErrViolation{
 				Rule:    ruleCtxCancelLocalImplBan,
@@ -169,7 +169,7 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 			})
 		}
 		if d.Body != nil {
-			scanner.EachNode[ast.CallExpr](d.Body, func(call *ast.CallExpr) {
+			scanner.EachInSubtree[ast.CallExpr](d.Body, func(call *ast.CallExpr) {
 				if !isErrorsIsCall(call) || len(call.Args) < 2 {
 					return
 				}
@@ -552,7 +552,7 @@ func scanRepoLogKeyIDRedact(path string) ([]repoErrViolation, error) {
 func scanRepoLogKeyIDRedactAST(fset *token.FileSet, file *ast.File, path string) []repoErrViolation {
 	consts := buildStringConstResolver(file)
 	var out []repoErrViolation
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		keyStart, ok := logCallKeyStart(call)
 		if !ok {
 			return
@@ -670,11 +670,11 @@ type stringConstResolver map[string]string
 
 func buildStringConstResolver(file *ast.File) stringConstResolver {
 	m := stringConstResolver{}
-	scanner.EachNode[ast.GenDecl](file, func(gd *ast.GenDecl) {
+	scanner.EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
 		if gd.Tok != token.CONST {
 			return
 		}
-		scanner.EachNode[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+		scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for i, name := range vs.Names {
 				if i >= len(vs.Values) {
 					continue

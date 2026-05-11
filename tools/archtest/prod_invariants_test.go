@@ -135,11 +135,11 @@ func scanProdDurationAST(
 		// recognize: BasicLit (var x time.Duration = 5), BinaryExpr
 		// (5*time.Second), CallExpr (time.Duration(5)), UnaryExpr
 		// (-5*time.Second), ParenExpr ((5*time.Second)).
-		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
-		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
-		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
-		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
-		scanner.EachNode[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
+		scanner.EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		scanner.EachInSubtree[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
 
 		// Outer-wins dedup: sort by start ascending, then drop any hit fully
 		// contained inside the most recent retained hit's [pos,end] range.
@@ -542,10 +542,10 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 				hits = append(hits, hit{pos: expr.Pos(), end: expr.End()})
 			}
 		}
-		scanner.EachNode[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
-		scanner.EachNode[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
-		scanner.EachNode[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
-		scanner.EachNode[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		scanner.EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		scanner.EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		scanner.EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
 		sort.Slice(hits, func(i, j int) bool {
 			if hits[i].pos != hits[j].pos {
 				return hits[i].pos < hits[j].pos
