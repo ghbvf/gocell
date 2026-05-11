@@ -72,7 +72,7 @@ func discoverPackagesUnderTag(rootDir, tag string) ([]string, error) {
 // (OTel smoke, integration_cluster vet, etc.) and must not be confused
 // with the main integration-test gate.
 //
-// Legacy `// +build` form is honoured via typeseval.ParseBuildConstraint.
+// Legacy `// +build` form is honored via typeseval.ParseBuildConstraint.
 func fileHasExclusivelyTag(path, tag string) (bool, error) {
 	expr, err := typeseval.ParseBuildConstraint(path)
 	if err != nil {
@@ -244,7 +244,7 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesExactlyOneGoTest(t *test
 //     (different tag name; covered by separate vet step)
 //   - `//go:build integration || e2e`       → discovered under both tags
 //   - pre-Go-1.17 `// +build integration` (no `//go:build` line) → discovered;
-//     typeseval.ParseBuildConstraint honours the legacy directive form
+//     typeseval.ParseBuildConstraint honors the legacy directive form
 //   - production .go (filename != _test.go) with the tag → discovered;
 //     mirrors the workflow set-diff's .GoFiles coverage
 //   - `_test.go` filename with the tag → discovered; mirrors the workflow
@@ -270,7 +270,7 @@ func TestArchtest_CIIntegrationDiscovery_FixtureMetaTest(t *testing.T) {
 		{name: "no_tag", content: "package f\n"},
 		{name: "cluster", content: "//go:build integration_cluster\n\npackage f\n"},
 		{name: "or_form", content: "//go:build integration || e2e\n\npackage f\n", wantInt: true, wantE2E: true},
-		// Legacy `// +build` form is honoured via typeseval.ParseBuildConstraint.
+		// Legacy `// +build` form is honored via typeseval.ParseBuildConstraint.
 		{name: "old_plus_build", content: "// +build integration\n\npackage f\n", wantInt: true},
 		// Filename-typed cases: explicit production .go vs _test.go to mirror
 		// workflow set-diff symmetry across .GoFiles / .TestGoFiles axes.

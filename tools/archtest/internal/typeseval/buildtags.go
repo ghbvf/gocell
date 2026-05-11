@@ -36,15 +36,20 @@ func KnownNonDefaultTags() [][]string {
 		// Excluded from `go build ./...` and `go test ./...` so fixtures never
 		// pollute real-repo scans (ai-collab.md §"real source AST capture").
 		{"archtest_fixture"},
-		// catalog_gen — cmd/corebundle/catalog_gen_stub.go 使用 //go:build !catalog_gen
-		// (negated: stub is active when catalog_gen is NOT set; generated catalog_gen.go
-		// is .gitignore'd and built only when -tags=catalog_gen is passed).
-		// Discovered by AST-based ParseBuildConstraint (COMMENTGROUP-COVERAGE-01); was
-		// silently missed by the old bufio.Scanner path which stopped at the blank line
-		// separating the file doc comment from the build directive.
-		{"catalog_gen"},
 	}
 }
+
+// catalog_gen 不在 KnownNonDefaultTags 中：cmd/corebundle/catalog_gen_stub.go 用
+// //go:build !catalog_gen 守护，活跃版本是 stub（默认 build 即包含），真正的
+// catalog_gen.go 是 .gitignore'd 的 codegen 产物，只在 CI -tags=catalog_gen 模式
+// 下存在。把 catalog_gen 加进 KnownNonDefaultTags 会让 LoadPackages 在 clean tree
+// 上尝试加载不存在的 generated 文件 → undefined symbol。该 tag 在
+// buildtags_test.go::platformTagAllowlist 与 "never" synthetic skip-marker
+// 同类声明为 build-mode skip，仅用于覆盖自检知晓存在性。
+//
+// AST-aware extractor（COMMENTGROUP-COVERAGE-01）首次 surface 了这个 tag——
+// 旧 bufio.Scanner 因 file doc comment 与 build directive 间空行误判而静默漏掉
+// （Soft → Medium 升级的真实 dividend）。
 
 // FlatNonDefaultTags returns the union of all distinct non-empty tags
 // appearing in KnownNonDefaultTags(), sorted. Suitable for callers that

@@ -36,6 +36,14 @@ var platformTagAllowlist = map[string]bool{
 	// Synthetic non-existent tags only used as "skip this file" markers
 	// (the file is intentionally excluded from every real build set).
 	"never": true,
+	// catalog_gen — build-mode marker for codegen output. The active variant
+	// in source control is cmd/corebundle/catalog_gen_stub.go gated on
+	// //go:build !catalog_gen. The generated catalog_gen.go counterpart is
+	// .gitignore'd and only built in CI under -tags=catalog_gen. archtest
+	// scans the source-of-truth stub, so catalog_gen must NOT be propagated
+	// into KnownNonDefaultTags() (doing so causes LoadPackages to attempt
+	// loading the absent generated file → undefined symbol on clean tree).
+	"catalog_gen": true,
 }
 
 // isGoVersionTag matches tags like "go1.18", "go1.21", etc.
