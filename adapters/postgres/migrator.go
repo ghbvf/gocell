@@ -243,7 +243,7 @@ func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sq
 		}
 	}()
 	if _, err := conn.ExecContext(ctx,
-		`SELECT set_config('`+allowDestructiveRefreshTokensDownGUC+`', 'true', false)`); err != nil {
+		`SELECT set_config($1, 'true', false)`, allowDestructiveRefreshTokensDownGUC); err != nil {
 		return fmt.Errorf("postgres: enable destructive refresh_tokens down SQL guard: %w", err)
 	}
 	return nil
@@ -251,7 +251,8 @@ func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sq
 
 func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
 	resetCtx := context.WithoutCancel(ctx)
-	_, resetErr := conn.ExecContext(resetCtx, `RESET `+allowDestructiveRefreshTokensDownGUC)
+	_, resetErr := conn.ExecContext(resetCtx,
+		`SELECT set_config($1, '', false)`, allowDestructiveRefreshTokensDownGUC)
 	unlockErr := l.inner.SessionUnlock(resetCtx, conn)
 	return errors.Join(resetErr, unlockErr)
 }
