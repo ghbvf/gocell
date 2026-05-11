@@ -35,16 +35,37 @@ type ContractGenSpec struct {
 	// Pre-computed from ContractID (dots replaced by dashes) + "-policy-nil".
 	// Example: "http-order-create-v1-policy-nil".
 	PanicReasonPolicyNil string
-	// PanicReasonSchemaCompileFailed is the kebab-case reason literal passed
-	// to panicregister.Approved for the "schema compile failed" panic site.
-	// Pre-computed from ContractID + "-schema-compile-failed".
-	// Example: "http-order-create-v1-schema-compile-failed".
-	PanicReasonSchemaCompileFailed string
 	// PanicReasonBootstrapAuthNil is the kebab-case reason literal passed to
 	// panicregister.Approved for the "bootstrapAuth must not be nil" panic site.
 	// Pre-computed from ContractID + "-bootstrap-auth-nil".
 	// Example: "http-sample-bootstrap-v1-bootstrap-auth-nil".
 	PanicReasonBootstrapAuthNil string
+	// PanicReasonPublicSchemaCompileFailed is the kebab-case reason literal passed
+	// to panicregister.Approved for the schema compile failed panic in NewPublicHandler.
+	// Pre-computed from ContractID + "-public-schema-compile-failed".
+	// Example: "http-order-create-v1-public-schema-compile-failed".
+	PanicReasonPublicSchemaCompileFailed string
+	// PanicReasonBootstrapSchemaCompileFailed is the kebab-case reason literal passed
+	// to panicregister.Approved for the schema compile failed panic in NewBootstrapHandler.
+	// Pre-computed from ContractID + "-bootstrap-schema-compile-failed".
+	// Example: "http-auth-setup-admin-v1-bootstrap-schema-compile-failed".
+	PanicReasonBootstrapSchemaCompileFailed string
+	// PanicReasonClientsOnlySchemaCompileFailed is the kebab-case reason literal passed
+	// to panicregister.Approved for the schema compile failed panic in NewClientsOnlyHandler.
+	// Pre-computed from ContractID + "-clients-only-schema-compile-failed".
+	// Example: "http-config-flags-evaluate-v1-clients-only-schema-compile-failed".
+	PanicReasonClientsOnlySchemaCompileFailed string
+	// PanicReasonServiceOwnedSchemaCompileFailed is the kebab-case reason literal passed
+	// to panicregister.Approved for the schema compile failed panic in NewServiceOwnedHandler.
+	// Pre-computed from ContractID + "-service-owned-schema-compile-failed".
+	// Example: "http-auth-session-delete-v1-service-owned-schema-compile-failed".
+	PanicReasonServiceOwnedSchemaCompileFailed string
+	// PanicReasonStandardSchemaCompileFailed is the kebab-case reason literal passed
+	// to panicregister.Approved for the schema compile failed panic in the standard
+	// NewHandler (with policy parameter).
+	// Pre-computed from ContractID + "-standard-schema-compile-failed".
+	// Example: "http-order-create-v1-standard-schema-compile-failed".
+	PanicReasonStandardSchemaCompileFailed string
 }
 
 // DTOSpec is one Go struct definition.

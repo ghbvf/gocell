@@ -51,7 +51,7 @@ func NewHandler(svc Service, policy auth.Policy) *Handler {
 	h := &Handler{svc: svc, policy: policy}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("http-order-create-v1-schema-compile-failed", errcode.Assertion("generated handler http.order.create.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("http-order-create-v1-standard-schema-compile-failed", errcode.Assertion("generated handler http.order.create.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 	return h

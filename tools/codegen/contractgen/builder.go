@@ -39,14 +39,18 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 
 	kebab := contractIDToKebab(contractID)
 	spec := &ContractGenSpec{
-		PackageName:                    pkgName,
-		PackagePath:                    pkgPath,
-		ContractID:                     contractID,
-		Kind:                           contract.Kind,
-		SourceFile:                     contract.File,
-		PanicReasonPolicyNil:           kebab + "-policy-nil",
-		PanicReasonSchemaCompileFailed: kebab + "-schema-compile-failed",
-		PanicReasonBootstrapAuthNil:    kebab + "-bootstrap-auth-nil",
+		PackageName:                             pkgName,
+		PackagePath:                             pkgPath,
+		ContractID:                              contractID,
+		Kind:                                    contract.Kind,
+		SourceFile:                              contract.File,
+		PanicReasonPolicyNil:                    kebab + "-policy-nil",
+		PanicReasonBootstrapAuthNil:             kebab + "-bootstrap-auth-nil",
+		PanicReasonPublicSchemaCompileFailed:    kebab + "-public-schema-compile-failed",
+		PanicReasonBootstrapSchemaCompileFailed: kebab + "-bootstrap-schema-compile-failed",
+		PanicReasonClientsOnlySchemaCompileFailed:  kebab + "-clients-only-schema-compile-failed",
+		PanicReasonServiceOwnedSchemaCompileFailed: kebab + "-service-owned-schema-compile-failed",
+		PanicReasonStandardSchemaCompileFailed:     kebab + "-standard-schema-compile-failed",
 	}
 
 	contractDir := filepath.Dir(contract.File)

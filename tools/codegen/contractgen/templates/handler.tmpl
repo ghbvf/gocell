@@ -188,7 +188,7 @@ func NewHandler(svc Service) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("{{.PanicReasonPublicSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -219,7 +219,7 @@ func NewHandler(svc Service, bootstrapAuth func(http.Handler) http.Handler) *Han
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("{{.PanicReasonBootstrapSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -236,7 +236,7 @@ func NewHandler(svc Service) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("{{.PanicReasonClientsOnlySchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -251,7 +251,7 @@ func NewHandler(svc Service) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("{{.PanicReasonServiceOwnedSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -273,7 +273,7 @@ func NewHandler(svc Service, policy auth.Policy) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("{{.PanicReasonSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("{{.PanicReasonStandardSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}

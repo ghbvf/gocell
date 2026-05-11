@@ -1184,6 +1184,37 @@ func TestCollectAndValidateStatuses(t *testing.T) {
 	}
 }
 
+// --- contractIDToKebab unit tests (P2-07) ---
+
+// TestContractIDToKebab verifies that contractIDToKebab converts contract IDs to
+// kebab-case by replacing all dots with dashes. The function is the single source
+// used by BuildContractSpec to pre-compute all panicregister.Approved reason literals.
+func TestContractIDToKebab(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"simple_dotted_id", "http.order.create.v1", "http-order-create-v1"},
+		{"v_prefixed_version", "http.config.flags.evaluate.v1", "http-config-flags-evaluate-v1"},
+		{"single_segment", "foo", "foo"},
+		{"empty", "", ""},
+		{"underscore_preserved", "http.user_profile.v1", "http-user_profile-v1"},
+		{"hyphen_preserved", "http.foo-bar.v1", "http-foo-bar-v1"},
+		{"consecutive_dots", "http..baz", "http--baz"},
+		{"trailing_dot", "http.bar.", "http-bar-"},
+		{"leading_dot", ".http.bar.v1", "-http-bar-v1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := contractIDToKebab(tc.in)
+			if got != tc.want {
+				t.Errorf("contractIDToKebab(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // --- liftHTTPResponses status validation tests (C5 / C18) ---
 
 // TestLiftHTTPResponses_Validation covers the C5 (status range) and C18

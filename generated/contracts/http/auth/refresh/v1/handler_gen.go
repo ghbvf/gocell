@@ -44,7 +44,7 @@ func NewHandler(svc Service) *Handler {
 	h := &Handler{svc: svc}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("http-auth-refresh-v1-schema-compile-failed", errcode.Assertion("generated handler http.auth.refresh.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("http-auth-refresh-v1-public-schema-compile-failed", errcode.Assertion("generated handler http.auth.refresh.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 	return h
