@@ -612,6 +612,35 @@ func TestVerifyExpectedShape_DetectsMissingForeignKey(t *testing.T) {
 		"details must contain dimension=foreign_key; got %v", ec.Details)
 }
 
+// TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction verifies that
+// recreating a FK with a different ON DELETE action causes VerifyExpectedShape
+// to surface the on-delete mismatch (covers verifyOneForeignKey OnDelete branch).
+func TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fk_ondel")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Drop the cascade FK and re-add it with NO ACTION (default).
+	_, err = pool.DB().Exec(ctx, `ALTER TABLE sessions DROP CONSTRAINT sessions_subject_id_fkey`)
+	require.NoError(t, err)
+	_, err = pool.DB().Exec(ctx,
+		`ALTER TABLE sessions ADD CONSTRAINT sessions_subject_id_fkey FOREIGN KEY (subject_id) REFERENCES users(id)`)
+	require.NoError(t, err, "recreate FK without ON DELETE clause must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect on-delete drift")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code)
+	assert.Equal(t, "foreign_key", extractDimensionDetail(ec))
+	assert.Contains(t, ec.InternalMessage, "on_delete")
+}
+
 // TestVerifyExpectedShape_DetectsMissingUniqueIndex verifies that dropping a
 // unique index causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="index".

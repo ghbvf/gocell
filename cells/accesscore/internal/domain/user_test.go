@@ -223,3 +223,40 @@ func TestNewUser_InitializesPasswordVersionZero(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), user.PasswordVersion, "NewUser must initialize PasswordVersion to zero")
 }
+
+func TestValidUserStatus(t *testing.T) {
+	tests := []struct {
+		in   UserStatus
+		want bool
+	}{
+		{StatusActive, true},
+		{StatusSuspended, true},
+		{StatusLocked, true},
+		{UserStatus(""), false},
+		{UserStatus("invalid"), false},
+		{UserStatus("ACTIVE"), false}, // case-sensitive
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.in), func(t *testing.T) {
+			assert.Equal(t, tt.want, ValidUserStatus(tt.in))
+		})
+	}
+}
+
+func TestValidUserSource(t *testing.T) {
+	tests := []struct {
+		in   UserSource
+		want bool
+	}{
+		{UserSourceIdentity, true},
+		{UserSourceSetup, true},
+		{UserSource(""), false},
+		{UserSource("invalid"), false},
+		{UserSource("IDENTITY"), false}, // case-sensitive
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.in), func(t *testing.T) {
+			assert.Equal(t, tt.want, ValidUserSource(tt.in))
+		})
+	}
+}

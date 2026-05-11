@@ -470,16 +470,80 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 		id, "scan_invalid_status_user", "scan_invalid@example.com", "$2a$12$fakehash", now)
 	require.NoError(t, err, "INSERT with constraint dropped must succeed")
 
-	// Now scanUser must reject the invalid status.
+	// Now scanUser must reject the invalid status and GetByID must propagate
+	// ErrPGSchemaShape unchanged (no ErrInternal wrap) so operators can
+	// distinguish DB schema drift from generic infra faults.
 	_, scanErr := repo.GetByID(ctx, id)
 	require.Error(t, scanErr, "GetByID must return error for row with invalid status")
 	var ec *errcode.Error
 	require.True(t, errors.As(scanErr, &ec),
 		"error must be an *errcode.Error")
+	assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code,
+		"scan must propagate ErrPGSchemaShape (not collapse to ErrInternal)")
 	assert.Equal(t, errcode.KindInternal, ec.Kind,
 		"scan enum violation must surface as KindInternal (5xx)")
 	assert.Contains(t, ec.Message, "invalid status",
 		"error message must identify the invalid field")
+}
+
+// TestUserRepo_Scan_RejectsInvalidCreationSource verifies that scanUser
+// surfaces ErrPGSchemaShape when DB row carries an unknown creation_source
+// enum value. Mirrors TestUserRepo_Scan_RejectsInvalidStatus for the
+// orthogonal enum column.
+func TestUserRepo_Scan_RejectsInvalidCreationSource(t *testing.T) {
+	repo, pool, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_creation_source_chk`)
+	require.NoError(t, err, "must be able to drop creation_source CHECK")
+
+	id := uuid.NewString()
+	now := time.Now().UTC()
+	_, err = pool.DB().Exec(ctx, `
+		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		                   status, creation_source, authz_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, 'active', 'bogus_source', 0, $5, $5)`,
+		id, "scan_invalid_source_user", "scan_invalid_source@example.com", "$2a$12$fakehash", now)
+	require.NoError(t, err)
+
+	_, scanErr := repo.GetByID(ctx, id)
+	require.Error(t, scanErr)
+	var ec *errcode.Error
+	require.True(t, errors.As(scanErr, &ec))
+	assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code,
+		"scan must propagate ErrPGSchemaShape, not collapse to ErrInternal")
+	assert.Contains(t, ec.Message, "invalid creation_source",
+		"error message must identify the invalid field")
+}
+
+// TestUserRepo_GetByUsername_RejectsInvalidStatus exercises the
+// GetByUsername path's ErrPGSchemaShape propagation (parallel to GetByID).
+func TestUserRepo_GetByUsername_RejectsInvalidStatus(t *testing.T) {
+	repo, pool, cleanup := setupUserRepoPGWithPool(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
+	require.NoError(t, err)
+
+	id := uuid.NewString()
+	username := "scan_invalid_byname"
+	now := time.Now().UTC()
+	_, err = pool.DB().Exec(ctx, `
+		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		                   status, creation_source, authz_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, 'bogus_status', 'identity', 0, $5, $5)`,
+		id, username, "scan_invalid_byname@example.com", "$2a$12$fakehash", now)
+	require.NoError(t, err)
+
+	_, scanErr := repo.GetByUsername(ctx, username)
+	require.Error(t, scanErr)
+	var ec *errcode.Error
+	require.True(t, errors.As(scanErr, &ec))
+	assert.Equal(t, errcode.ErrPGSchemaShape, ec.Code,
+		"GetByUsername must propagate ErrPGSchemaShape unchanged")
+	assert.Contains(t, ec.Message, "invalid status")
 }
 
 // TestUserRepo_CreationSource_BothValid verifies that users with both
