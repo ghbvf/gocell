@@ -25,9 +25,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
-// tailVerifyTestSlack is the upper-bound window used by
-// TestStrictTailVerifyOnStartup_TimeoutCapped: 30s cap + 5s scheduling slack.
-const tailVerifyTestSlack = 35 * time.Second
+// tailVerifyTestTimeout is the short timeout the test injects into
+// tailVerifyStartupTimeout to exercise the deadline path without paying 30 s
+// of wall-clock cost (slowgate threshold is 15 s). Production stays at 30 s.
+const tailVerifyTestTimeout = 200 * time.Millisecond
+
+// tailVerifyTestSlack is the upper-bound window the test waits for Init to
+// return after the injected timeout fires — generous slack for scheduling.
+const tailVerifyTestSlack = 2 * time.Second
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
@@ -585,13 +590,17 @@ func (b *blockingStore) Verify(ctx context.Context, from, to int64) (bool, int64
 }
 
 // TestStrictTailVerifyOnStartup_TimeoutCapped asserts that strictTailVerifyOnStartup
-// respects a ≤31s context deadline and returns an error when the store blocks.
+// wraps the caller context with a deadline so a hung store cannot stall startup.
 //
-// A-02/F-04 RED: current strictTailVerifyOnStartup calls the store with the
-// caller-supplied ctx, which may have no deadline. After the fix it must wrap
-// the context with a ~30s timeout so a blocked store cannot stall startup forever.
-// We verify the deadline exists and is ≤31s from now without waiting for it to fire.
+// F-04: production tailVerifyStartupTimeout is 30s; we inject a 200ms override
+// via the package-level var so the test exercises the deadline path without
+// paying 30s of wall-clock cost (slowgate cap 15s).
 func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
+	// Inject short timeout; restore after test.
+	prevTimeout := tailVerifyStartupTimeout
+	tailVerifyStartupTimeout = tailVerifyTestTimeout
+	t.Cleanup(func() { tailVerifyStartupTimeout = prevTimeout })
+
 	p := newTestProtocol(t)
 	inner := newTestMemStore(t, p)
 	blocking := newBlockingStore(t, inner)
@@ -606,8 +615,8 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	// Run Init in a goroutine; it will block in Verify until the internal
-	// timeout fires or the test cancels it.
+	// Run Init in a goroutine; it will block in Verify until the injected
+	// short timeout fires.
 	initDone := make(chan error, 1)
 	go func() {
 		ctx := context.Background() // no deadline from test side
@@ -622,35 +631,23 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 		t.Fatal("timed out waiting for blockingStore.Verify to be entered; Init may not have reached strictTailVerifyOnStartup")
 	}
 
-	// A-02 RED: if strictTailVerifyOnStartup does NOT set a timeout, Init will
-	// block indefinitely. We assert it returns within 35s (5s slack over 30s cap).
-	// In the RED state (no timeout), this assertion will time out at 35s.
-	//
-	// To avoid actually waiting 35s in the RED test run, we use a much shorter
-	// window and verify the OTHER observable: the context passed to Verify must
-	// have a deadline ≤31s from now. We can't inspect that directly from outside,
-	// so we rely on the Init goroutine returning promptly as the observable.
-	//
-	// For the RED test to compile-pass but runtime-FAIL without waiting forever,
-	// we assert that Init returns within 35s. In practice the RED run will wait
-	// the full 35s before failing — acceptable for a conformance test.
+	// With the 200ms injected timeout, Init must return within tailVerifyTestSlack
+	// (2s, generous scheduling slack). If strictTailVerifyOnStartup did NOT wrap
+	// ctx with a deadline, this would block indefinitely and the slack timer fires.
 	select {
 	case err := <-initDone:
 		if err == nil {
 			t.Fatal("Init should have returned an error after strictTailVerify timeout")
 		}
-		// Verify the error is context-related (deadline exceeded or canceled)
 		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			// Might be wrapped — check string
 			errStr := err.Error()
 			if len(errStr) == 0 {
 				t.Error("Init returned non-nil error but empty message")
 			}
-			// Accept any error that includes context/deadline/timeout semantics
 			t.Logf("strictTailVerifyOnStartup returned (acceptable): %v", err)
 		}
 	case <-time.After(tailVerifyTestSlack):
-		t.Error("A-02 RED: Init blocked indefinitely; strictTailVerifyOnStartup must cap with ≤30s timeout")
+		t.Error("Init blocked past injected timeout + slack; strictTailVerifyOnStartup must cap ctx with deadline")
 	}
 }
 
