@@ -40,24 +40,18 @@ import "go/ast"
 //
 // # Pruning
 //
-// By node-kind selection only. To skip a sub-tree, register sibling
-// handlers on parent kinds and check ancestor in handler body, OR call
-// EachInSubtree again with the chosen sub-root.
-//
-// # Why no testing.T parameter (unlike [EachFile])
-//
-// EachInSubtree is pure — no parse error, no I/O, no t.Fatalf path.
-// Callers' own t.Errorf inside fn handles violations. The pure-function
-// form is reusable from non-test paths (forbiddenWalkRefs in
-// scanner_framework_usage_test.go is the production type-aware walker
-// called from inside the SCANNER-FRAMEWORK-USAGE-01 self-test; threading
-// a *testing.T through it would be vestigial).
+// By node-kind selection only; there is no "skip subtree" callback.
+// To constrain scope, pass a narrower sub-root or call EachInSubtree
+// again on a chosen descendant.
 //
 // # Nil root
 //
 // Returns silently (no-op).
 //
 // ref: go/ast.Preorder — Go 1.23 stdlib typed iteration
+// No *testing.T parameter: EachInSubtree is pure (no I/O, no parse errors).
+// Callers call t.Errorf inside fn. The pure form also allows use from
+// non-test paths (e.g. SCANNER-FRAMEWORK-USAGE-01 self-test walkers).
 func EachInSubtree[S any, N interface {
 	*S
 	ast.Node
@@ -83,8 +77,10 @@ func EachInSubtree[S any, N interface {
 //
 // Use for "container's direct elements" semantics: KeyValueExpr from a
 // CompositeLit, CaseClause from SwitchStmt.Body / TypeSwitchStmt.Body,
-// CommClause from SelectStmt.Body, top-level Decl from a *ast.File,
-// top-level Stmt from a *ast.BlockStmt (e.g. fn.Body's direct statements).
+// CommClause from SelectStmt.Body, top-level FuncDecl/GenDecl from a
+// *ast.File (each concrete decl kind passed as N, since ast.Decl is an
+// interface and would fail the `*S` constraint), top-level Stmt from a
+// *ast.BlockStmt (e.g. fn.Body's direct statements).
 //
 // See [EachInSubtree] for the recursive variant and for the depth-choice
 // decision criteria.

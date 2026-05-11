@@ -898,19 +898,32 @@ func TestRMQPublisherFailureHandling01_ContainerCoverage_Wave4_RED(t *testing.T)
 	}
 }
 
-// isCtxDoneCase returns true if the CommClause is a `case <-ctx.Done():` arm.
+// isCtxDoneCase returns true if the CommClause is a `case <-ctx.Done():` or
+// `case v := <-ctx.Done():` arm (both ExprStmt and AssignStmt forms).
 func isCtxDoneCase(cc *ast.CommClause) bool {
 	if cc.Comm == nil {
 		return false
 	}
-	// Looking for: case <-ctx.Done():
-	// Which is an ExprStmt containing a UnaryExpr (<-) of a CallExpr (ctx.Done()).
-	recv, ok := cc.Comm.(*ast.ExprStmt)
-	if !ok {
-		return false
-	}
-	unary, ok := recv.X.(*ast.UnaryExpr)
-	if !ok || unary.Op != token.ARROW {
+	var unary *ast.UnaryExpr
+	switch comm := cc.Comm.(type) {
+	case *ast.ExprStmt:
+		// case <-ctx.Done():
+		u, ok := comm.X.(*ast.UnaryExpr)
+		if !ok || u.Op != token.ARROW {
+			return false
+		}
+		unary = u
+	case *ast.AssignStmt:
+		// case v := <-ctx.Done():
+		if len(comm.Rhs) != 1 {
+			return false
+		}
+		u, ok := comm.Rhs[0].(*ast.UnaryExpr)
+		if !ok || u.Op != token.ARROW {
+			return false
+		}
+		unary = u
+	default:
 		return false
 	}
 	call, ok := unary.X.(*ast.CallExpr)
