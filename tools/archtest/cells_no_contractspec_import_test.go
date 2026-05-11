@@ -213,6 +213,52 @@ func TestCELLS_NO_CONTRACTSPEC_IMPORT_01_NegativeFixture(t *testing.T) {
 	}
 }
 
+// TestBlankImportNoViolation explicitly locks the contract that a blank import
+// of kernel/contractspec never triggers CELLS-NO-CONTRACTSPEC-IMPORT-01.
+//
+// In production Go, `import _ "..."` prevents any selector expression of the
+// form `_.ContractSpec` (the blank identifier cannot be used as a qualifier).
+// This test verifies that scanForContractspecUsage correctly produces zero
+// violations when the local alias is "_", even when the source file's text
+// contains the substring "_.ContractSpec" in a comment.
+func TestBlankImportNoViolation(t *testing.T) {
+	t.Parallel()
+	// The only legal Go file with a blank import of contractspec cannot
+	// reference _.ContractSpec as an expression; any occurrence in a comment
+	// must not trigger the scanner (which operates on the AST, not raw text).
+	src := `package p
+// _.ContractSpec is mentioned here only as documentation.
+import _ "github.com/ghbvf/gocell/kernel/contractspec"
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "blank_import.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// Confirm alias is "_".
+	alias := contractspecLocalAlias(f)
+	if alias != "_" {
+		t.Fatalf("expected alias \"_\", got %q", alias)
+	}
+
+	// Write to a temp file so scanForContractspecUsage can os.ReadFile it.
+	tmp, err := os.CreateTemp(t.TempDir(), "blank_import_*.go")
+	if err != nil {
+		t.Fatalf("create temp: %v", err)
+	}
+	if _, err := tmp.WriteString(src); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("close temp: %v", err)
+	}
+
+	violations := scanForContractspecUsage(token.NewFileSet(), tmp.Name(), "cells/fake/blank_import.go")
+	if len(violations) != 0 {
+		t.Errorf("blank-import alias \"_\" must produce 0 violations; got %d: %v", len(violations), violations)
+	}
+}
+
 // TestContractspecLocalAlias_TableDriven verifies the four key import patterns
 // for kernel/contractspec: (a) no import, (b) default "contractspec" name,
 // (c) explicit alias, (d) blank/underscore alias (import side effect — not
