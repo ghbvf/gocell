@@ -136,6 +136,7 @@ import (
 {{- end}}
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -147,7 +148,7 @@ import (
 
 var contractSpec = contractspec.ContractSpec{
 	ID:        "{{.ContractID}}",
-	Kind:      "http",
+	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "{{.Endpoint.Method}}",
 	Path:      "{{.Endpoint.Path}}",

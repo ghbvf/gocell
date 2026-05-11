@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -22,7 +23,7 @@ func TestMount_AutoEnforceClients_InAllowlist_200(t *testing.T) {
 	// Spec: contractspec.ContractSpec.Clients declares the allowed caller cells.
 	spec := contractspec.ContractSpec{
 		ID:        "http.auth.role.assign.v1",
-		Kind:      "http",
+		Kind:      cellvocab.ContractHTTP,
 		Transport: "http",
 		Method:    "POST",
 		Path:      "/internal/v1/access/roles/assign",
@@ -57,7 +58,7 @@ func TestMount_AutoEnforceClients_InAllowlist_200(t *testing.T) {
 func TestMount_AutoEnforceClients_OutAllowlist_403(t *testing.T) {
 	spec := contractspec.ContractSpec{
 		ID:        "http.auth.role.assign.v1",
-		Kind:      "http",
+		Kind:      cellvocab.ContractHTTP,
 		Transport: "http",
 		Method:    "POST",
 		Path:      "/internal/v1/access/roles/assign",
@@ -100,7 +101,7 @@ func TestMount_AutoEnforceClients_OutAllowlist_403(t *testing.T) {
 func TestMount_AutoEnforceClients_ComposeWithPolicy(t *testing.T) {
 	spec := contractspec.ContractSpec{
 		ID:        "http.auth.role.assign.v1",
-		Kind:      "http",
+		Kind:      cellvocab.ContractHTTP,
 		Transport: "http",
 		Method:    "POST",
 		Path:      "/internal/v1/access/roles/assign",

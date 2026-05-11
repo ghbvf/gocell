@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -116,7 +117,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	spec := contractspec.ContractSpec{
-		ID: "event.integration.test.v1", Kind: "event", Transport: "inmem",
+		ID: "event.integration.test.v1", Kind: cellvocab.ContractEvent, Transport: "inmem",
 		Topic: "event.integration.test.v1",
 	}
 	cellImpl := &consumerSpyCell{

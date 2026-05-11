@@ -460,7 +460,7 @@ func (h handlerConfig) subscription() outbox.Subscription {
 	}
 	if h.contract.ID != "" {
 		sub.ContractID = h.contract.ID
-		sub.ContractKind = h.contract.Kind
+		sub.ContractKind = string(h.contract.Kind)
 		sub.ContractTransport = h.contract.Transport
 	}
 	return sub

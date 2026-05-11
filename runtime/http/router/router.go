@@ -1496,7 +1496,7 @@ func cleanRoutePath(routePath string) string {
 func httpContractAttrs(spec contractspec.ContractSpec) []wrapper.Attr {
 	return []wrapper.Attr{
 		{Key: "gocell.contract.id", Value: spec.ID},
-		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.kind", Value: string(spec.Kind)},
 		{Key: "gocell.contract.transport", Value: spec.Transport},
 		{Key: "http.method", Value: spec.Method},
 		{Key: "http.route", Value: spec.Path},

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
@@ -27,7 +28,7 @@ import (
 // routes; framework-internal routes follow their own wire formats.
 var specCatalog = contractspec.ContractSpec{
 	ID:        "http.framework.devtools.catalog.v1",
-	Kind:      "http",
+	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "GET",
 	Path:      "/api/v1/devtools/catalog",

@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -14,7 +15,7 @@ import (
 
 var contractSpec = contractspec.ContractSpec{
 	ID:        "http.sample.serviceowned.v1",
-	Kind:      "http",
+	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "DELETE",
 	Path:      "/api/v1/sample/service-owned/{id}",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -64,7 +65,7 @@ func (s *contractTracingSubscriber) Subscribe(
 	}
 	spec := contractspec.ContractSpec{
 		ID:        sub.ContractID,
-		Kind:      sub.ContractKind,
+		Kind:      cellvocab.ContractKind(sub.ContractKind),
 		Transport: sub.ContractTransport,
 		Topic:     sub.Topic,
 	}

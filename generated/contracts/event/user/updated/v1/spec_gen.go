@@ -3,13 +3,16 @@
 
 package updated
 
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import (
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
+)
 
 // spec is the ContractSpec for event.user.updated.v1.
 // Private — callers must use NewSubscription.Mount(reg) to register this event.
 var spec = contractspec.ContractSpec{
 	ID:        "event.user.updated.v1",
-	Kind:      "event",
+	Kind:      cellvocab.ContractEvent,
 	Transport: "amqp",
 	Topic:     "event.user.updated.v1",
 }

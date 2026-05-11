@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -18,7 +19,7 @@ import (
 
 var contractSpec = contractspec.ContractSpec{
 	ID:        "http.auth.user.update.v1",
-	Kind:      "http",
+	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "PUT",
 	Path:      "/api/v1/access/users/{id}",

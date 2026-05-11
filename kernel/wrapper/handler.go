@@ -86,7 +86,7 @@ func validateHTTPHandlerArgs(spec contractspec.ContractSpec, next http.Handler) 
 func httpBaseAttrs(spec contractspec.ContractSpec) []Attr {
 	return []Attr{
 		{Key: "gocell.contract.id", Value: spec.ID},
-		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.kind", Value: string(spec.Kind)},
 		{Key: "gocell.contract.transport", Value: spec.Transport},
 		{Key: "http.method", Value: spec.Method},
 		{Key: "http.route", Value: spec.Path},

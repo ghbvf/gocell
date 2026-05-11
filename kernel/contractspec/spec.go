@@ -3,15 +3,9 @@ package contractspec
 import (
 	"fmt"
 	"strings"
-)
 
-// internalPathPrefix mirrors kernel/cellvocab.InternalPathPrefix. Duplicated
-// here because contractspec is a leaf and may not import any other kernel
-// sub-module (KERNEL-INTERNAL-DAG-01). Both constants must stay in lockstep;
-// changing one without the other is caught by tests under
-// runtime/auth/route_test.go and tools/archtest/contract_spec_clients_test.go
-// which exercise the /internal/v1/ branching from both sides.
-const internalPathPrefix = "/internal/v1/"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+)
 
 // ContractSpec is the runtime descriptor for one contract endpoint.
 // It is consumed by:
@@ -41,8 +35,8 @@ type ContractSpec struct {
 	// contract.yaml file identified by Kind + path.
 	ID string
 
-	// Kind is one of "http" | "event" | "command" | "projection".
-	Kind string
+	// Kind is one of ContractHTTP | ContractEvent | ContractCommand | ContractProjection.
+	Kind cellvocab.ContractKind
 
 	// Transport names the wire protocol: "http" for Kind=="http",
 	// "amqp" / "internal" / ... for event/command/projection.
@@ -70,7 +64,7 @@ func (s ContractSpec) Validate() error {
 	if strings.TrimSpace(s.ID) == "" {
 		return fmt.Errorf("contractspec.ContractSpec: ID must not be empty")
 	}
-	if strings.TrimSpace(s.Kind) == "" {
+	if strings.TrimSpace(string(s.Kind)) == "" {
 		return fmt.Errorf("contractspec.ContractSpec: Kind must not be empty")
 	}
 	if strings.TrimSpace(s.Transport) == "" {
@@ -78,11 +72,11 @@ func (s ContractSpec) Validate() error {
 	}
 
 	switch s.Kind {
-	case "http":
+	case cellvocab.ContractHTTP:
 		return s.validateHTTP()
-	case "event":
+	case cellvocab.ContractEvent:
 		return s.validateEvent()
-	case "command", "projection":
+	case cellvocab.ContractCommand, cellvocab.ContractProjection:
 		// Allowed but no additional validation yet — future PRs add
 		// command/projection transports.
 		return nil
@@ -107,7 +101,7 @@ func (s ContractSpec) validateHTTP() error {
 	if s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
-	isInternalPath := strings.HasPrefix(s.Path, internalPathPrefix) || s.Path == strings.TrimSuffix(internalPathPrefix, "/")
+	isInternalPath := strings.HasPrefix(s.Path, cellvocab.InternalPathPrefix) || s.Path == strings.TrimSuffix(cellvocab.InternalPathPrefix, "/")
 	if isInternalPath && len(s.Clients) == 0 {
 		return fmt.Errorf(
 			"ContractSpec[%s]: internal path requires non-empty Clients "+
@@ -119,7 +113,7 @@ func (s ContractSpec) validateHTTP() error {
 		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)
 	}
 	for i, c := range s.Clients {
-		if !isCellIDLike(strings.ToLower(c)) {
+		if !isCellIDLike(c) {
 			return fmt.Errorf("ContractSpec[%s]: Clients[%d] %q does not match cell ID pattern ^[a-z][a-z0-9-]*$",
 				s.ID, i, c)
 		}

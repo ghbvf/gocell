@@ -3,13 +3,16 @@
 
 package appended
 
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import (
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
+)
 
 // spec is the ContractSpec for event.audit.appended.v1.
 // Private — callers must use NewSubscription.Mount(reg) to register this event.
 var spec = contractspec.ContractSpec{
 	ID:        "event.audit.appended.v1",
-	Kind:      "event",
+	Kind:      cellvocab.ContractEvent,
 	Transport: "amqp",
 	Topic:     "event.audit.appended.v1",
 }

@@ -14,11 +14,6 @@
 // (depgraph.Node.TestOnly == true) are skipped to keep parity with
 // LAYER-05/06 production-only semantics.
 //
-// This rule pairs with the package-level boundary statements in
-// kernel/<owner>/doc.go (the K-03 doc.go side of the double guard) — see
-// `docs/plans/archive/202605011500-029-master-roadmap.md` line 282 for
-// the original framing.
-//
 // AI-rebust: Medium. Uses kernel/depgraph (typed import graph) plus a
 // typed Go map allowlist; no string anchors, comment exemptions, or name
 // conventions. The Go language has no Hard mechanism for "package A may
@@ -64,7 +59,7 @@ var allowedKernelEdges = map[string][]string{
 	"cellvocab":     nil,
 	"clock":         nil,
 	"command":       {"clock", "metautil"},
-	"contractspec":  nil,
+	"contractspec":  {"cellvocab"},
 	"crypto":        nil,
 	"ctxkeys":       nil,
 	"depgraph":      nil,
@@ -144,64 +139,7 @@ func TestKernelInternalDAG(t *testing.T) {
 		}
 	}
 
-	var violations []kernelEdgeViolation
-
-	// Forward check: every actual cross-owner edge must be in allowlist.
-	for _, from := range sortedKeys(actual) {
-		allowSet := map[string]bool{}
-		for _, to := range allowedKernelEdges[from] {
-			allowSet[to] = true
-		}
-		for _, to := range sortedSet(actual[from]) {
-			if !allowSet[to] {
-				violations = append(violations, kernelEdgeViolation{
-					Kind: "forward",
-					From: from,
-					To:   to,
-					Message: ruleKernelInternalDAG + ": kernel/" + from +
-						" imports kernel/" + to + " (not in DAG allowlist)",
-				})
-			}
-		}
-	}
-
-	// Reverse check: every allowlist edge must still exist in actual.
-	for _, from := range sortedAllowKeys() {
-		actualSet := actual[from]
-		for _, to := range allowedKernelEdges[from] {
-			if !actualSet[to] {
-				violations = append(violations, kernelEdgeViolation{
-					Kind: "reverse",
-					From: from,
-					To:   to,
-					Message: ruleKernelInternalDAG + ": declared edge kernel/" + from +
-						" → kernel/" + to + " no longer present in code; remove from allowlist",
-				})
-			}
-		}
-	}
-
-	// Coverage check: actual owner set must equal allowlist key set.
-	for _, owner := range sortedSet(owners) {
-		if _, ok := allowedKernelEdges[owner]; !ok {
-			violations = append(violations, kernelEdgeViolation{
-				Kind: "coverage-extra",
-				From: owner,
-				Message: ruleKernelInternalDAG + ": kernel sub-module kernel/" + owner +
-					" exists but is not in allowedKernelEdges; add it",
-			})
-		}
-	}
-	for _, owner := range sortedAllowKeys() {
-		if !owners[owner] {
-			violations = append(violations, kernelEdgeViolation{
-				Kind: "coverage-missing",
-				From: owner,
-				Message: ruleKernelInternalDAG + ": kernel sub-module kernel/" + owner +
-					" is in allowedKernelEdges but not present in code; remove it",
-			})
-		}
-	}
+	violations := computeKernelDAGViolations(allowedKernelEdges, owners, actual)
 
 	if len(violations) > 0 {
 		// Deterministic order for stable failure output.
@@ -222,8 +160,7 @@ func TestKernelInternalDAG(t *testing.T) {
 	}
 
 	assert.Empty(t, violations,
-		"%s: kernel-internal DAG must match allowedKernelEdges exactly. "+
-			"See kernel/<owner>/doc.go for the boundary statements forming the double guard.",
+		"%s: kernel-internal DAG must match allowedKernelEdges exactly.",
 		ruleKernelInternalDAG)
 
 	// Sub-test 1: kernelOwnerOf folds sub-packages to first segment.
@@ -291,4 +228,146 @@ func sortedAllowKeys() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// computeKernelDAGViolations checks the three invariants of the kernel-internal
+// DAG rule against the provided allowlist, owner set, and actual edge map.
+// Extracted from TestKernelInternalDAG for unit-testability.
+func computeKernelDAGViolations(
+	allow map[string][]string,
+	owners map[string]bool,
+	edges map[string]map[string]bool,
+) []kernelEdgeViolation {
+	var violations []kernelEdgeViolation
+
+	// Forward check: every actual cross-owner edge must be in allowlist.
+	allowedKeys := make([]string, 0, len(edges))
+	for k := range edges {
+		allowedKeys = append(allowedKeys, k)
+	}
+	sort.Strings(allowedKeys)
+	for _, from := range allowedKeys {
+		allowSet := map[string]bool{}
+		for _, to := range allow[from] {
+			allowSet[to] = true
+		}
+		for _, to := range sortedSet(edges[from]) {
+			if !allowSet[to] {
+				violations = append(violations, kernelEdgeViolation{
+					Kind: "forward",
+					From: from,
+					To:   to,
+					Message: ruleKernelInternalDAG + ": kernel/" + from +
+						" imports kernel/" + to + " (not in DAG allowlist)",
+				})
+			}
+		}
+	}
+
+	// Reverse check: every allowlist edge must still exist in actual.
+	allowKeys := make([]string, 0, len(allow))
+	for k := range allow {
+		allowKeys = append(allowKeys, k)
+	}
+	sort.Strings(allowKeys)
+	for _, from := range allowKeys {
+		actualSet := edges[from]
+		for _, to := range allow[from] {
+			if !actualSet[to] {
+				violations = append(violations, kernelEdgeViolation{
+					Kind: "reverse",
+					From: from,
+					To:   to,
+					Message: ruleKernelInternalDAG + ": declared edge kernel/" + from +
+						" → kernel/" + to + " no longer present in code; remove from allowlist",
+				})
+			}
+		}
+	}
+
+	// Coverage check: actual owner set must equal allowlist key set.
+	for _, owner := range sortedSet(owners) {
+		if _, ok := allow[owner]; !ok {
+			violations = append(violations, kernelEdgeViolation{
+				Kind: "coverage-extra",
+				From: owner,
+				Message: ruleKernelInternalDAG + ": kernel sub-module kernel/" + owner +
+					" exists but is not in allowedKernelEdges; add it",
+			})
+		}
+	}
+	for _, owner := range allowKeys {
+		if !owners[owner] {
+			violations = append(violations, kernelEdgeViolation{
+				Kind: "coverage-missing",
+				From: owner,
+				Message: ruleKernelInternalDAG + ": kernel sub-module kernel/" + owner +
+					" is in allowedKernelEdges but not present in code; remove it",
+			})
+		}
+	}
+
+	return violations
+}
+
+// TestKernelInternalDAG_ViolationKinds_TableDriven verifies that the
+// computeKernelDAGViolations helper detects all four violation kinds.
+func TestKernelInternalDAG_ViolationKinds_TableDriven(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		allow    map[string][]string
+		owners   map[string]bool
+		edges    map[string]map[string]bool
+		wantKind string
+	}{
+		{
+			name:   "forward — unauthorised edge detected",
+			allow:  map[string][]string{"a": {"b"}, "b": nil},
+			owners: map[string]bool{"a": true, "b": true},
+			// a actually imports c, which is not in allowlist
+			edges:    map[string]map[string]bool{"a": {"b": true, "c": true}, "b": {}},
+			wantKind: "forward",
+		},
+		{
+			name:  "reverse — declared edge no longer present",
+			allow: map[string][]string{"a": {"b"}, "b": nil},
+			// allow says a→b but actual edges has no a→b edge
+			owners:   map[string]bool{"a": true, "b": true},
+			edges:    map[string]map[string]bool{"a": {}, "b": {}},
+			wantKind: "reverse",
+		},
+		{
+			name:  "coverage-extra — owner exists but not in allowlist",
+			allow: map[string][]string{"a": nil},
+			// b exists in code but not in allowlist
+			owners:   map[string]bool{"a": true, "b": true},
+			edges:    map[string]map[string]bool{"a": {}, "b": {}},
+			wantKind: "coverage-extra",
+		},
+		{
+			name:  "coverage-missing — allowlist has key missing from code",
+			allow: map[string][]string{"a": nil, "b": nil},
+			// b is in allowlist but not in actual owners
+			owners:   map[string]bool{"a": true},
+			edges:    map[string]map[string]bool{"a": {}},
+			wantKind: "coverage-missing",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vios := computeKernelDAGViolations(tc.allow, tc.owners, tc.edges)
+			found := false
+			for _, v := range vios {
+				if v.Kind == tc.wantKind {
+					found = true
+					break
+				}
+			}
+			require.True(t, found,
+				"expected at least one %q violation; got %+v", tc.wantKind, vios)
+		})
+	}
 }

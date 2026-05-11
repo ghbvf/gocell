@@ -26,6 +26,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -47,7 +48,7 @@ func newStubEventCell(topic string) *stubEventCell {
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "stub", Type: "core"}),
 		spec: contractspec.ContractSpec{
 			ID:        topic,
-			Kind:      "event",
+			Kind:      cellvocab.ContractEvent,
 			Transport: "inmem",
 			Topic:     topic,
 		},

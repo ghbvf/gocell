@@ -21,6 +21,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -135,7 +136,7 @@ func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registry) err
 	}
 	return reg.Subscribe(contractspec.ContractSpec{
 		ID:        c.topic,
-		Kind:      "event",
+		Kind:      cellvocab.ContractEvent,
 		Transport: "amqp",
 		Topic:     c.topic,
 	}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {

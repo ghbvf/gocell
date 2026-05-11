@@ -86,7 +86,7 @@ func WrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) (C
 
 	baseAttrs := []Attr{
 		{Key: "gocell.contract.id", Value: spec.ID},
-		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.kind", Value: string(spec.Kind)},
 		{Key: "gocell.contract.transport", Value: spec.Transport},
 		{Key: "messaging.system", Value: spec.Transport},
 		{Key: "messaging.destination", Value: spec.Topic},
