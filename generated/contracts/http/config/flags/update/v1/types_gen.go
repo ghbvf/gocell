@@ -20,6 +20,7 @@ type Request struct {
 	Enabled           bool   `json:"enabled"`
 	RolloutPercentage int64  `json:"rolloutPercentage"`
 	Description       string `json:"description"`
+	ExpectedVersion   int64  `json:"expectedVersion"`
 }
 
 // Response — http.config.flags.update.v1.response
@@ -109,6 +110,19 @@ type Update403ErrorResponse struct {
 
 func (r Update403ErrorResponse) visitUpdateResponse(ctx context.Context, w http.ResponseWriter) error {
 	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Update409ErrorResponse renders an HTTP 409 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Update409ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Update409ErrorResponse) visitUpdateResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 409, &r.Body)
 	return nil
 }
 

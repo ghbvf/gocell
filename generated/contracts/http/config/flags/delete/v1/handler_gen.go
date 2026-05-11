@@ -6,6 +6,7 @@ package flagsdelete
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -78,6 +79,30 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Key = v
+	}
+
+	{
+		rawExpectedVersion := r.URL.Query().Get("expectedVersion")
+		if rawExpectedVersion == "" {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: required field missing",
+				errcode.WithDetails(slog.String("field", "expectedVersion"))))
+			return
+		}
+		v, err := strconv.ParseInt(rawExpectedVersion, 10, 64)
+		if err != nil {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "expectedVersion"), slog.String("reason", "must be an integer"))))
+			return
+		}
+		if v < 1 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "expectedVersion"), slog.String("reason", "invalid"))))
+			return
+		}
+		req.ExpectedVersion = v
 	}
 	resp, err := h.svc.Delete(r.Context(), req)
 	if err != nil {

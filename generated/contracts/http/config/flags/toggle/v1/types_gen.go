@@ -16,8 +16,9 @@ import (
 
 // Request — http.config.flags.toggle.v1.request
 type Request struct {
-	Key     string `json:"key"`
-	Enabled bool   `json:"enabled"`
+	Key             string `json:"key"`
+	Enabled         bool   `json:"enabled"`
+	ExpectedVersion int64  `json:"expectedVersion"`
 }
 
 // Response — http.config.flags.toggle.v1.response
@@ -107,6 +108,19 @@ type Toggle403ErrorResponse struct {
 
 func (r Toggle403ErrorResponse) visitToggleResponse(ctx context.Context, w http.ResponseWriter) error {
 	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+	return nil
+}
+
+// Toggle409ErrorResponse renders an HTTP 409 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Toggle409ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Toggle409ErrorResponse) visitToggleResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 409, &r.Body)
 	return nil
 }
 
