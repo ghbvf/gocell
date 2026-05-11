@@ -1,4 +1,4 @@
--- Migration 018: add UNIQUE INDEX on audit_entries(namespace, event_id).
+-- Migration 021: add UNIQUE INDEX on audit_entries(namespace, event_id).
 --
 -- Design decisions:
 --   - The application-layer idempotency fingerprint in LedgerStore.checkFingerprint
@@ -6,11 +6,11 @@
 --     provides a second-line DB guard that prevents a concurrent bypass (two
 --     Append calls with the same EventID racing past the application check before
 --     either INSERT completes).
---   - Since audit_entries is a new table introduced in migration 017 and
+--   - Since audit_entries is a new table introduced in migration 020 and
 --     deployed together with this migration, there are no pre-existing rows that
 --     could violate the uniqueness constraint. CREATE UNIQUE INDEX (without
 --     CONCURRENTLY) is safe here.
---   - Future index additions after the first production deploy of migration 017
+--   - Future index additions after the first production deploy of migration 020
 --     must use CREATE INDEX CONCURRENTLY (table no longer empty).
 --
 -- ref: adapters/postgres/audit_ledger_store.go selectFingerprintSQL (F-CR-2)

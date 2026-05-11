@@ -75,7 +75,7 @@ ORDER BY seq_no ASC`
 	// each time; Timestamp changes on every retry — the old multi-field form
 	// produced a different fingerprint on each attempt, defeating idempotency.
 	//
-	// The DB-level uq_audit_namespace_event_id UNIQUE INDEX (migration 018)
+	// The DB-level uq_audit_namespace_event_id UNIQUE INDEX (migration 021)
 	// provides a second-line guard against concurrent bypass of this check.
 	//
 	// ref: Watermill router.go — message.UUID as dedup key.
@@ -98,7 +98,7 @@ LIMIT 1`
 //   - Idempotency uses a stable EventID fingerprint check before inserting.
 //     EventID (UUID from the outbox entry) is the same across at-least-once
 //     redeliveries; Timestamp changes per retry so it is excluded (F-CR-2).
-//     A DB-level UNIQUE INDEX on (namespace, event_id) (migration 018) is the
+//     A DB-level UNIQUE INDEX on (namespace, event_id) (migration 021) is the
 //     second-line guard against concurrent bypass of the application check.
 //
 // Consistency level: L1 LocalTx — Append is a single-transaction write that

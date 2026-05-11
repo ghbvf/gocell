@@ -85,7 +85,7 @@ EventID 对应 outbox Entry UUID，在所有重投中保持不变，是唯一稳
 - Timestamp：每次重投不同 → 不得纳入指纹。
 - Payload：可能因 schema 演化略有变化 → 不得纳入指纹。
 
-**DB 第二防线**：`adapters/postgres/migrations/018_audit_entries_event_id_unique.sql` 在
+**DB 第二防线**：`adapters/postgres/migrations/021_audit_entries_event_id_unique.sql` 在
 `audit_entries(namespace, event_id)` 加 UNIQUE INDEX，防止并发 Append 绕过应用层检查。
 
 重复 EventID 的 `Append` 返回 `ErrAuditLedgerAlreadyExists`（idempotent — 调用方将第二次视为成功，不重试）。

@@ -275,7 +275,7 @@ func validatePayloadJSON(payload []byte) error {
 //     produce a different fingerprint for each retry, defeating idempotency.
 //   - Payload: may differ due to schema evolution; EventID is the stable key.
 //
-// The DB-level UNIQUE INDEX on (namespace, event_id) (migration 018) acts as a
+// The DB-level UNIQUE INDEX on (namespace, event_id) (migration 021) acts as a
 // second-line guard against concurrent bypass of this application-level check.
 //
 // ref: Watermill router.go — message.UUID as dedup key (handler receives each

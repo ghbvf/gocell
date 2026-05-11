@@ -42,11 +42,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 20 migrations (001-020). 017/018/019 land users/sessions/
+	// Currently 21 migrations (001-021). 017/018/019 land users/sessions/
 	// roles schema for accesscore PG repos (S3+S5); 020 adds audit_entries
-	// table for the ledger.Store PG backend.
-	assert.Equal(t, int64(20), v,
-		"expected version should be exactly 20 (current migration count)")
+	// table for the ledger.Store PG backend; 021 adds the
+	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard.
+	assert.Equal(t, int64(21), v,
+		"expected version should be exactly 21 (current migration count)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
