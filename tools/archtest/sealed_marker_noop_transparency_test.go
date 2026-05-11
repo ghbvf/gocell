@@ -11,7 +11,18 @@
 // internalCell* types are unexported so go/types canonical cannot be used
 // without loading the package; AST scan is the appropriate tool here.
 //
-// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md §D1 Noop passthrough
+// **行为覆盖分工**：本 archtest 仅守 "method 存在 + 签名"（结构性约束）；
+// runtime 透传行为（inner=nooper → wrapped.Noop()=true / inner=non-nooper
+// → wrapped.Noop()=false）由 unit test 守 —
+//   - kernel/persistence/cell_marker_test.go::TestWrapForCell_PreservesNooperPassThrough
+//   - kernel/persistence/cell_marker_test.go::TestWrapForCell_NonNooperReturnsFalse
+//   - kernel/outbox/cell_marker_test.go::TestWrapPublisherForCell_PreservesNooperPassThrough
+//   - kernel/outbox/cell_marker_test.go::TestWrapWriterForCell_PreservesNooperPassThrough
+//
+// archtest 加 runtime 行为断言是反模式（static analysis 工具不应内嵌运行时）；
+// 双层防线分工已完整。
+//
+// ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1 Noop passthrough
 package archtest
 
 import (

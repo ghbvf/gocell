@@ -23,6 +23,22 @@ type errSweeperMock struct {
 func (m *errSweeperMock) Start(_ context.Context) error { return m.startErr }
 func (m *errSweeperMock) Stop(_ context.Context) error  { return nil }
 
+// TestSweeperLifecycle_StartRejectsNilClock pins the defensive guard against
+// struct-literal construction that forgets Clock. NewSweeperLifecycle validates
+// Clock at construction, but `&SweeperLifecycle{Sweeper: x}` literal path
+// bypasses it; without the Start-side check the startup probe's NewTimerAt
+// call would panic on nil interface deref. This is third-party-review P2-1.
+func TestSweeperLifecycle_StartRejectsNilClock(t *testing.T) {
+	t.Parallel()
+	mock := &errSweeperMock{}
+	lc := &SweeperLifecycle{Name: "test.sweeper", Sweeper: mock} // Clock intentionally nil
+
+	err := lc.Start(context.Background())
+	require.Error(t, err, "Start must return error when Clock is nil")
+	assert.Contains(t, err.Error(), "non-nil Clock",
+		"error message must point at the missing Clock so callers can diagnose")
+}
+
 // TestSweeperLifecycle_StartFailImmediately 验证 mock Sweeper.Run 立即返 error 时
 // Start 在 50ms 探针窗口内传播 error。
 // clock.Real() 而非 fake clock：mock 立即退出不依赖时间推进，使用 real clock

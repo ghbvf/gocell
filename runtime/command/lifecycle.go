@@ -96,6 +96,16 @@ func (l *SweeperLifecycle) Start(_ context.Context) error {
 	if l == nil || l.Sweeper == nil {
 		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil Sweeper")
 	}
+	// Defensive Clock check: NewSweeperLifecycle validates Clock at construction
+	// via clock.MustHaveClock, but composers may also build SweeperLifecycle as
+	// a struct literal (`&SweeperLifecycle{...}`) and forget Clock. Without this
+	// guard, the startup probe's `l.clk().NewTimerAt(...)` would panic on a nil
+	// interface deref. Returning a typed error keeps the path diagnosable
+	// instead of crashing the bootstrap goroutine.
+	if l.Clock == nil {
+		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil Clock " +
+			"(use NewSweeperLifecycle, or set Clock when constructing as a struct literal)")
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
