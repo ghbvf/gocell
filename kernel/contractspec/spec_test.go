@@ -179,10 +179,9 @@ func TestContractSpec_Validate_InternalWithClientsOK(t *testing.T) {
 
 // TestContractSpec_Validate_InvalidClientID tests that Clients containing
 // invalid cell-ID strings are rejected by validateHTTP → isCellIDLike.
-// Note: validateHTTP applies strings.ToLower before calling isCellIDLike, so
-// uppercase-only violations (e.g. "Abc") are normalised and pass. Only
-// characters that remain illegal after lowercasing (digits-first, hyphens-first,
-// underscores, punctuation, empty) trigger the error.
+// isCellIDLike requires a lowercase ASCII letter as the first byte (range
+// 'a'-'z'); uppercase first characters (e.g. "Accesscore") are rejected
+// because 'A' falls outside the 'a'-'z' range. No normalisation is applied.
 func TestContractSpec_Validate_InvalidClientID(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

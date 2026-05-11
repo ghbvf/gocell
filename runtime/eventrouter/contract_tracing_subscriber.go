@@ -72,6 +72,9 @@ func (s *contractTracingSubscriber) Subscribe(
 		sub.ContractTransport,
 		sub.Topic,
 	)
+	if err := spec.Validate(); err != nil {
+		return fmt.Errorf("eventrouter: contract tracing subscriber: derived spec invalid: %w", err)
+	}
 	wrapped, err := wrapper.WrapSubscriber(s.tracer, spec, handler)
 	if err != nil {
 		return fmt.Errorf("eventrouter: contract tracing subscriber: %w", err)

@@ -139,6 +139,46 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture(t *testing.T) {
 	}
 }
 
+// TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture_EventSpec verifies that
+// the scanner correctly identifies a contractspec.EventSpec() call expression.
+// EventSpec does not exist in the real codebase (it is a hypothetical helper),
+// so this test uses in-memory source parsing rather than building the source.
+func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture_EventSpec(t *testing.T) {
+	t.Parallel()
+	src := `package p
+import "github.com/ghbvf/gocell/kernel/contractspec"
+func init() {
+	_ = contractspec.EventSpec("event.bad.v1", "amqp", "bad.topic")
+}
+`
+	fset := token.NewFileSet()
+	_, err := parser.ParseFile(fset, "handler.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	tmp, err := os.CreateTemp(t.TempDir(), "eventspec_test_*.go")
+	if err != nil {
+		t.Fatalf("create temp: %v", err)
+	}
+	if _, err := tmp.WriteString(src); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("close temp: %v", err)
+	}
+
+	violations := scanForContractSpecLiterals(token.NewFileSet(), tmp.Name(), "cells/fake/handler.go")
+	if len(violations) == 0 {
+		t.Errorf("expected at least 1 violation for contractspec.EventSpec() call, got 0")
+	}
+	for _, v := range violations {
+		if !strings.Contains(v, "EventSpec") {
+			t.Errorf("violation message should mention EventSpec: %q", v)
+		}
+	}
+}
+
 // scanForContractSpecLiterals AST-scans f for:
 //  1. contractspec.ContractSpec{…} composite literals
 //  2. contractspec.EventSpec(…) call expressions

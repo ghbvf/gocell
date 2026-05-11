@@ -1,19 +1,43 @@
 package contractspec
 
-import "github.com/ghbvf/gocell/kernel/cellvocab"
+import (
+	"strings"
+
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+)
+
+// FrameworkHTTPIDPrefix is the required prefix for IDs passed to
+// NewFrameworkHTTP. The prefix signals runtime-internal ownership and
+// distinguishes framework infra specs from business contracts (which use
+// kind.domain.v1 style IDs and live in generated/contracts/).
+//
+// Enforcement is Hard: NewFrameworkHTTP panics at process start when the
+// prefix is absent. All five call sites use static string literals, so the
+// panic fires during initialization, not during request handling.
+const FrameworkHTTPIDPrefix = "http.framework."
 
 // NewFrameworkHTTP constructs a ContractSpec for runtime-owned HTTP
 // infrastructure endpoints (health probes, devtools catalog, etc.). Kind is
-// fixed as cellvocab.ContractHTTP; Transport is fixed as "http". The id
-// SHOULD use the "http.framework." prefix to signal runtime-internal
-// ownership (no contract.yaml source); the prefix is a convention enforced
-// by code review, not at runtime.
+// fixed as cellvocab.ContractHTTP; Transport is fixed as "http".
+//
+// The id MUST start with FrameworkHTTPIDPrefix ("http.framework."). This
+// constraint is enforced at construction time with a panic (A-class
+// assertion), not merely by code review. All legitimate call sites use
+// static string literals so the panic fires at process initialization.
 //
 // This is the ONLY legitimate construction path for ContractSpec values in
 // runtime/ HTTP infrastructure code. Composite literal
 // `contractspec.ContractSpec{...}` is forbidden under cells/,
 // examples/*/cells/, and runtime/ by archtest NO-MANUAL-CONTRACTSPEC-LITERAL-01.
 func NewFrameworkHTTP(id, method, path string) ContractSpec {
+	if !strings.HasPrefix(id, FrameworkHTTPIDPrefix) {
+		panic(panicregister.Approved(
+			"contractspec-framework-id-prefix",
+			errcode.Assertion("NewFrameworkHTTP id must start with FrameworkHTTPIDPrefix %q, got %q", FrameworkHTTPIDPrefix, id),
+		))
+	}
 	return ContractSpec{
 		ID:        id,
 		Kind:      cellvocab.ContractHTTP,

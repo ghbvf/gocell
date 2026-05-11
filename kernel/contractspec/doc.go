@@ -16,11 +16,20 @@
 // kernel/cellvocab for the ContractKind type and InternalPathPrefix
 // constant (single source of truth, no lockstep duplication).
 //
-// Cells MUST NOT construct ContractSpec literals directly. The only
-// valid construction site is `generated/contracts/**/spec_gen.go`
-// (private `var spec`); subscription/route mounting goes through the
-// generated `NewSubscription` / `NewHandler` adapters in
-// `generated/contracts/**`. Three archtest gates enforce this:
+// Cells MUST NOT construct ContractSpec literals directly. The valid
+// construction sites are:
+//
+//  1. generated/contracts/**/spec_gen.go (private `var spec`) — business
+//     contracts produced by contractgen codegen; subscription/route mounting
+//     goes through the generated NewSubscription / NewHandler adapters.
+//  2. kernel/contractspec.NewFrameworkHTTP — runtime-owned HTTP infrastructure
+//     endpoints (health probes, devtools catalog, etc.); the only legitimate
+//     construction path for ContractSpec values in runtime/ HTTP infra code.
+//  3. kernel/contractspec.NewEventDerivation — tracing/observability projections
+//     of already-validated event metadata; the canonical path for eventrouter
+//     contract tracing decorators.
+//
+// Three archtest gates enforce this invariant:
 //
 //   - CELLS-NO-CONTRACTSPEC-IMPORT-01
 //   - NO-MANUAL-CONTRACTSPEC-LITERAL-01
