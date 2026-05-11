@@ -847,6 +847,18 @@ func TestFMT31_DeprecatedLifecycle_StillEnforced(t *testing.T) {
 	}
 }
 
+func TestFMT31_DraftLifecycle_StillEnforced(t *testing.T) {
+	// Same rationale as the deprecated case: lifecycle is not a gate. A draft
+	// internal endpoint missing its caller allowlist would still serve traffic
+	// in any environment that runs it, so FMT-31 fires regardless of lifecycle.
+	project := fmt31Project("http", "/internal/v1/foo/list", nil, "draft", false)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT31(), codeFMT31)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-31: expected 1 finding for draft internal with empty clients, got %d", len(matches))
+	}
+}
+
 func TestFMT31_InternalV10_SubstringTrap(t *testing.T) {
 	// Verifies metadata.IsInternalHTTPPath does not match "/internal/v10/x"
 	// (substring trap); FMT-31 must inherit that boundary discipline.
@@ -860,7 +872,9 @@ func TestFMT31_InternalV10_SubstringTrap(t *testing.T) {
 
 func TestFMT31_MultipleContracts_Aggregate(t *testing.T) {
 	project := fmt31Project("http", "/internal/v1/foo", nil, "", false)
-	// Add a second internal contract with empty clients.
+	// Add a second internal contract; Clients is intentionally omitted (zero
+	// value) so FMT-31 must flag both this and the contract from
+	// fmt31Project above, producing exactly 2 aggregated findings.
 	project.Contracts["http.sample.detail.v1"] = &metadata.ContractMeta{
 		ID:               "http.sample.detail.v1",
 		Kind:             "http",

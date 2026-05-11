@@ -1199,10 +1199,10 @@ func (v *Validator) validateFMT28() []ValidationResult {
 // isolation. This rule lifts the check from the L5 archtest
 // (tools/archtest/contract_spec_clients_test.go) that scanned generated Go
 // ContractSpec literals up to the L6 contract.yaml source of truth (charter
-// §5.1 L5→L6 carrier migration). codegen
-// (tools/codegen/contractgen/builder.go) faithfully copies endpoints.clients
-// to the Go literal; runtime kernel/contractspec/spec.go::validateHTTP catches
-// any drift at boot.
+// §5.1 L5→L6 carrier migration); codegen at
+// tools/codegen/contractgen/builder.go faithfully copies endpoints.clients to
+// the Go literal, and runtime kernel/contractspec/spec.go::validateHTTP
+// catches any drift at boot.
 //
 // FMT-31 is intentionally unidirectional. The inverse direction
 // (non-internal path forbids non-empty clients) cannot be enforced here:
