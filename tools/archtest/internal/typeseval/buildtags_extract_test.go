@@ -1,3 +1,6 @@
+// INVARIANT: TYPESEVAL-BUILDTAGS-COMMENTGROUP-COVERAGE-01
+//   - INVARIANT: TYPESEVAL-BUILDTAGS-LEGACY-DIRECTIVE-01
+
 package typeseval_test
 
 import (
@@ -15,9 +18,14 @@ import (
 // supersedes the prior bufio.Scanner line-prefix path. Cases enumerate the
 // directive shapes that the typeseval coverage self-check and downstream
 // consumer rules must observe: modern //go:build (with AND / OR / NOT),
-// legacy // +build directives, mixed/paired form, multi-line AND merging,
-// and position-sensitivity (constraints below the package clause or in a
-// non-leading CommentGroup must be ignored, matching Go toolchain semantics).
+// legacy // +build directives, mixed/paired form, multi-line // +build
+// AND-merging, and position-sensitivity (constraints below the package clause
+// or in a non-leading CommentGroup must be ignored, matching Go toolchain
+// semantics).
+//
+// Directive precedence matches cmd/go (go/build/build.go parseFileHeader):
+// when //go:build is present it is authoritative; // +build lines are ignored.
+// Multiple //go:build lines are rejected (see TestParseBuildConstraint_MultipleGoBuildDirectives).
 func TestParseBuildConstraint(t *testing.T) {
 	t.Parallel()
 
@@ -27,11 +35,10 @@ func TestParseBuildConstraint(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		source    string
-		wantNil   bool
-		evals     []evalCase
-		wantParse bool // expect ParseBuildConstraint to return non-nil error
+		name    string
+		source  string
+		wantNil bool
+		evals   []evalCase
 	}{
 		{
 			name:   "modern_single_tag",
@@ -68,7 +75,9 @@ func TestParseBuildConstraint(t *testing.T) {
 			},
 		},
 		{
-			name:   "legacy_plus_build_paired_with_modern",
+			name: "legacy_plus_build_paired_with_modern",
+			// The modern directive is authoritative per cmd/go semantics (parseFileHeader);
+			// the legacy line is retained only for old-toolchain compat and is ignored.
 			source: "//go:build foo\n// +build foo\n\npackage p\n",
 			evals: []evalCase{
 				{active: []string{"foo"}, want: true},
@@ -76,9 +85,10 @@ func TestParseBuildConstraint(t *testing.T) {
 			},
 		},
 		{
-			name: "multi_line_modern_and_merge",
-			// Two modern directives are AND-merged per Go spec (read.go).
-			source: "//go:build foo\n//go:build bar\n\npackage p\n",
+			name: "multi_line_legacy_plus_build_and_merge",
+			// Two // +build lines (no //go:build) are AND-merged per
+			// go/build/constraint package doc.
+			source: "// +build foo\n// +build bar\n\npackage p\n",
 			evals: []evalCase{
 				{active: []string{"foo"}, want: false},
 				{active: []string{"bar"}, want: false},
@@ -133,10 +143,6 @@ func TestParseBuildConstraint(t *testing.T) {
 			path := writeTempGoFile(t, tc.name+".go", tc.source)
 
 			expr, err := typeseval.ParseBuildConstraint(path)
-			if tc.wantParse {
-				require.Error(t, err)
-				return
-			}
 			require.NoError(t, err)
 
 			if tc.wantNil {
@@ -150,6 +156,20 @@ func TestParseBuildConstraint(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestParseBuildConstraint_MultipleGoBuildDirectives asserts that a file
+// containing two //go:build lines is rejected, matching cmd/go's
+// errMultipleGoBuild semantics (go/build/build.go:1660). This is the
+// regression test that locks in the F2 directive-semantics fix.
+func TestParseBuildConstraint_MultipleGoBuildDirectives(t *testing.T) {
+	t.Parallel()
+	// Two //go:build lines in the same CommentGroup — cmd/go rejects this.
+	path := writeTempGoFile(t, "multi_gobuild.go", "//go:build foo\n//go:build bar\n\npackage p\n")
+
+	_, err := typeseval.ParseBuildConstraint(path)
+	require.Error(t, err, "multiple //go:build directives must be rejected (errMultipleGoBuild)")
+	require.Contains(t, err.Error(), "multiple //go:build directives")
 }
 
 // TestParseBuildConstraint_MalformedDirectiveFailsClosed asserts that a
