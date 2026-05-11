@@ -98,7 +98,10 @@ func TestProductionLoaderFunnel01(t *testing.T) {
 // funcDeclCallsBannedRealRepoLoader returns true when fd's body contains a
 // call to typeseval.SharedResolver or typeseval.LoadPackages where:
 //
-//   - the call has the "./..." string literal in its CallExpr subtree, AND
+//   - the FuncDecl body contains a "./..." BasicLit somewhere
+//     (catches direct args, composite-literal spreads, and same-function
+//     variable indirection like `pat := "./..."; LoadPackages(root, _, _, pat)`),
+//     AND
 //   - the call's first positional arg resolves to findModuleRoot at the
 //     file level (either an inline findModuleRoot(...) call, or an Ident
 //     whose name is bound by a file-level AssignStmt to findModuleRoot).
@@ -106,17 +109,36 @@ func TestProductionLoaderFunnel01(t *testing.T) {
 // Fixture-bound helpers like prod_duration_fixtures_test.go::runFixtureScan
 // take `fixtureDir string` as a parameter and the file only ever binds
 // fixtureDir via filepath.Join, never findModuleRoot — they are structurally
-// excluded by the first-arg trace, not by a string allowlist.
+// excluded by the first-arg trace, not by a string allowlist. They keep
+// their own "./..." literal in fd.Body but escape via the first-arg trace.
+//
+// Function-body scope (not file scope) is intentional: clock_invariants_test.go
+// holds real-repo loads in TestX functions and fixture loads in
+// runXxxFixtureScan helpers in the SAME file. File-scope "./..." detection
+// would over-flag the real-repo TestX functions whose pattern arg is a
+// `patterns` variable. Function-scope keeps the two domains separate.
 //
 // Note: this archtest BANS a specific call form (real-repo "./..." loader).
 // Unlike a "must call typeseval.IsGeneratedRelPath somewhere" presence
-// check, the detection here resolves a real AST fact — does this call exist
-// or not — and cannot be bypassed by adding dead code or sibling-file
-// helpers. The combination with the ProductionResolver typed funnel
-// (LoadProductionPackages/Production()) makes the iteration path Hard:
-// callers reach codegen output only by spelling out .All() at the call
-// site, which is itself easy to grep and review.
+// check, the detection here resolves real AST facts — does the call exist
+// AND does a `./...` literal exist in the SAME function body — and cannot
+// be bypassed by adding dead code, sibling-file helpers, or same-function
+// variable indirection. The combination with the ProductionResolver typed
+// funnel (LoadProductionPackages/Production()) makes the iteration path
+// Hard: callers reach codegen output only by spelling out .All() at the
+// call site, which is itself easy to grep and review.
+//
+// Remaining marginal escape (documented Soft): cross-function `var pat =
+// "./..."` at file scope referenced from fd.Body via Ident. Closing it
+// requires unexporting typeseval.SharedResolver/LoadPackages and providing
+// an explicit LoadPackagesForFixtures + internal anchor accessor; tracked
+// as PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01 in docs/backlog.md
+// (trigger: first sighting of the cross-function indirection pattern in
+// any archtest).
 func funcDeclCallsBannedRealRepoLoader(f *ast.File, fd *ast.FuncDecl) bool {
+	if !funcBodyHasAllPatternLiteral(fd.Body) {
+		return false
+	}
 	var found bool
 	scanner.EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 		if found {
@@ -138,13 +160,27 @@ func funcDeclCallsBannedRealRepoLoader(f *ast.File, fd *ast.FuncDecl) bool {
 		if len(call.Args) < 2 {
 			return
 		}
-		if !callExprContainsAllPatternLiteral(call) {
-			return
-		}
 		if !firstArgResolvesToFindModuleRoot(f, call.Args[0]) {
 			return
 		}
 		found = true
+	})
+	return found
+}
+
+// funcBodyHasAllPatternLiteral returns true when body's AST subtree
+// contains a BasicLit equal to `"./..."`. Function-body scope catches
+// direct args, composite-literal spreads, and same-function variable
+// indirection (`pat := "./..."; ...`).
+func funcBodyHasAllPatternLiteral(body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+	var found bool
+	scanner.EachInSubtree[ast.BasicLit](body, func(lit *ast.BasicLit) {
+		if !found && lit.Value == `"./..."` {
+			found = true
+		}
 	})
 	return found
 }
@@ -234,17 +270,4 @@ func assignRhsCallsFindModuleRoot(as *ast.AssignStmt) bool {
 		}
 	}
 	return false
-}
-
-// callExprContainsAllPatternLiteral returns true when call's AST subtree
-// contains a BasicLit equal to `"./..."`. EachInSubtree covers direct args
-// AND nested composite-literal spreads (e.g. `[]string{"./..."}...`).
-func callExprContainsAllPatternLiteral(call *ast.CallExpr) bool {
-	var found bool
-	scanner.EachInSubtree[ast.BasicLit](call, func(lit *ast.BasicLit) {
-		if !found && lit.Value == `"./..."` {
-			found = true
-		}
-	})
-	return found
 }
