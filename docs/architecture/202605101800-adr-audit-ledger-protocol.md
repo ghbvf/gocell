@@ -53,6 +53,8 @@ hash = hex.EncodeToString(HMAC-SHA256(key, msg))
 
 **为什么 byte-for-byte 等价**：PG store（S8）接入时需要将已有 in-cell entries 迁移到新 ledger store。如果 hash 算法不一致，历史链断链，无法 verify。
 
+**PG store 落库字节保留（migration 020）**：`audit_entries.payload` 列类型为 `BYTEA`（非 JSONB）。BYTEA 直接存储原始字节，不做任何 JSON 规范化（字段重排序、空白压缩等），保证读路径 round-trip 的字节与写路径 HMAC 计算输入完全等价，与 MemStore 路径一致。Strict JSON 校验（D5 invariant，`validateAuditPayloadJSON`）在 Go 层于 INSERT 前完成；DB 层仅作字节存储，不参与 JSON 语义解析。
+
 **HMAC key 安全要求**：
 - key 必须 ≥ 32 bytes（hash output 大小；短 key 降低 HMAC 安全强度）
 - key 不得出现在错误消息或 slog 字段中

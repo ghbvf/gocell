@@ -9,8 +9,10 @@
 --   - id UUID PRIMARY KEY provides a stable opaque row handle for callers.
 --   - prev_hash + hash form the tamper-evident HMAC-SHA256 chain. Both are stored
 --     as TEXT hex strings (64 chars for SHA-256).
---   - payload JSONB stores the structured event payload; strict JSON validation is
---     enforced in Go before the INSERT.
+--   - payload BYTEA stores the raw event payload bytes; strict JSON validation is
+--     enforced in Go (validateAuditPayloadJSON) before the INSERT. BYTEA preserves
+--     the exact byte sequence used as HMAC input, ensuring byte-for-byte equivalence
+--     with the MemStore path (D1 invariant). No JSONB normalization occurs.
 --   - UNIQUE (namespace, seq_no) enforces the monotonic-per-namespace invariant at
 --     the DB level as a secondary guard.
 --
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS audit_entries (
     event_type   TEXT        NOT NULL,
     actor_id     TEXT        NOT NULL,
     timestamp    TIMESTAMPTZ NOT NULL,
-    payload      JSONB       NOT NULL,
+    payload      BYTEA       NOT NULL,
     prev_hash    TEXT        NOT NULL,
     hash         TEXT        NOT NULL,
     CONSTRAINT uq_audit_namespace_seq UNIQUE (namespace, seq_no)

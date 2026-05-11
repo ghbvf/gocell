@@ -24,7 +24,7 @@ import (
 //   - config_versions  (004)  immutable configuration version history
 //   - refresh_tokens   (007)  append-only refresh token lineage
 //   - feature_flags    (008)  flag definitions
-//   - audit_entries    (017)  tamper-evident audit ledger (per-namespace hash chain)
+//   - audit_entries    (020)  tamper-evident audit ledger (per-namespace hash chain)
 
 // migrationVersionRe matches migration file names like "006_add_something.sql"
 // and captures the numeric prefix.
