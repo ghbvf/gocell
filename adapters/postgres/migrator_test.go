@@ -177,14 +177,14 @@ func TestAllowDestructiveDown(t *testing.T) {
 
 	permit, err = AllowDestructiveDown(" \t ")
 	require.Error(t, err)
-	assert.Equal(t, DestructiveDownPermit{}, permit)
+	assert.Nil(t, permit)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }
 
 func TestMigrator_Down_RequiresDestructiveDownPermit(t *testing.T) {
-	err := (&Migrator{}).Down(context.Background(), DestructiveDownPermit{})
+	err := (&Migrator{}).Down(context.Background(), nil)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)

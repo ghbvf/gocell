@@ -56,10 +56,17 @@ type MigrationStatus struct {
 	AppliedAt time.Time
 }
 
-// DestructiveDownPermit is an explicit break-glass token required for any
-// schema rollback. Down migrations can drop user, session, and role data; this
-// value makes accidental rollback calls impossible at the API boundary.
-type DestructiveDownPermit struct {
+const allowDestructiveRefreshTokensDownGUC = "gocell.allow_destructive_refresh_tokens_down"
+
+// DestructiveDownPermit is an explicit break-glass token required for any schema
+// rollback. The unexported marker makes the permit sealed: callers outside this
+// package cannot fabricate one and must go through AllowDestructiveDown.
+type DestructiveDownPermit interface {
+	destructiveDownPermit()
+	Reason() string
+}
+
+type destructiveDownPermit struct {
 	reason string
 }
 
@@ -68,14 +75,16 @@ type DestructiveDownPermit struct {
 func AllowDestructiveDown(reason string) (DestructiveDownPermit, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return DestructiveDownPermit{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres: destructive migration down requires a non-empty reason")
 	}
-	return DestructiveDownPermit{reason: reason}, nil
+	return destructiveDownPermit{reason: reason}, nil
 }
 
+func (destructiveDownPermit) destructiveDownPermit() {}
+
 // Reason returns the operator-supplied reason for the destructive rollback.
-func (p DestructiveDownPermit) Reason() string {
+func (p destructiveDownPermit) Reason() string {
 	return p.reason
 }
 
@@ -83,10 +92,11 @@ func (p DestructiveDownPermit) Reason() string {
 // It tracks applied migrations in a configurable table using goose's built-in
 // advisory locking.
 type Migrator struct {
-	provider  *goose.Provider
-	db        *sql.DB
-	pool      *Pool
-	tableName string
+	provider   *goose.Provider
+	db         *sql.DB
+	pool       *Pool
+	migrations fs.FS
+	tableName  string
 }
 
 // NewMigrator creates a Migrator that reads SQL files from the given fs.FS.
@@ -106,20 +116,38 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 
 	db := stdlib.OpenDBFromPool(p.inner)
 
-	// SessionLocker holds a pg_advisory_lock for the duration of Up/Down so
-	// concurrent migrators (multi-pod startup) serialize on the lock rather
-	// than racing the schema_migrations table. Default lockID is goose's
-	// constant 4097083626 (CRC of "goose"), which the codebase does not use
-	// elsewhere. Defaults give a 5min acquire budget (60 retries × 5s
-	// pg_try_advisory_lock); the ctx passed to Up/Down has priority — if it
-	// is canceled before the budget is exhausted, retry.Do returns
-	// immediately, so the caller's startup deadline always wins.
-	//
-	// ref: pressly/goose lock/postgres.go pg_try_advisory_lock + retry
-	locker, err := lock.NewPostgresSessionLocker()
+	provider, err := newGooseProvider(db, migrations, tableName, nil)
 	if err != nil {
 		_ = db.Close()
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
+		return nil, err
+	}
+
+	return &Migrator{
+		provider:   provider,
+		db:         db,
+		pool:       p,
+		migrations: migrations,
+		tableName:  tableName,
+	}, nil
+}
+
+func newGooseProvider(db *sql.DB, migrations fs.FS, tableName string, locker lock.SessionLocker) (*goose.Provider, error) {
+	var err error
+	if locker == nil {
+		// SessionLocker holds a pg_advisory_lock for the duration of Up/Down so
+		// concurrent migrators (multi-pod startup) serialize on the lock rather
+		// than racing the schema_migrations table. Default lockID is goose's
+		// constant 4097083626 (CRC of "goose"), which the codebase does not use
+		// elsewhere. Defaults give a 5min acquire budget (60 retries × 5s
+		// pg_try_advisory_lock); the ctx passed to Up/Down has priority — if it
+		// is canceled before the budget is exhausted, retry.Do returns
+		// immediately, so the caller's startup deadline always wins.
+		//
+		// ref: pressly/goose lock/postgres.go pg_try_advisory_lock + retry
+		locker, err = lock.NewPostgresSessionLocker()
+		if err != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
+		}
 	}
 
 	provider, err := goose.NewProvider(
@@ -130,16 +158,9 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 		goose.WithSessionLocker(locker),
 	)
 	if err != nil {
-		_ = db.Close()
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create goose provider", err)
 	}
-
-	return &Migrator{
-		provider:  provider,
-		db:        db,
-		pool:      p,
-		tableName: tableName,
-	}, nil
+	return provider, nil
 }
 
 // Up applies all unapplied migrations in order.
@@ -177,17 +198,60 @@ func (m *Migrator) Up(ctx context.Context) error {
 // explicit DestructiveDownPermit because rollback files may drop production
 // data even when they only move the schema back by one version.
 func (m *Migrator) Down(ctx context.Context, permit DestructiveDownPermit) error {
-	if strings.TrimSpace(permit.reason) == "" {
+	if permit == nil || strings.TrimSpace(permit.Reason()) == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres: destructive migration down requires explicit permit")
 	}
-	if _, err := m.provider.Down(ctx); err != nil {
+	locker, err := newDestructiveDownSessionLocker()
+	if err != nil {
+		return err
+	}
+	provider, err := newGooseProvider(m.db, m.migrations, m.tableName, locker)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.Down(ctx); err != nil {
 		if errors.Is(err, goose.ErrNoCurrentVersion) || errors.Is(err, goose.ErrNoNextVersion) {
 			return nil // already at version 0, idempotent no-op
 		}
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: rollback migration", err)
 	}
 	return nil
+}
+
+type destructiveDownSessionLocker struct {
+	inner lock.SessionLocker
+}
+
+func newDestructiveDownSessionLocker() (lock.SessionLocker, error) {
+	inner, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
+	}
+	return &destructiveDownSessionLocker{inner: inner}, nil
+}
+
+func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sql.Conn) (retErr error) {
+	if err := l.inner.SessionLock(ctx, conn); err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			retErr = errors.Join(retErr, l.inner.SessionUnlock(context.WithoutCancel(ctx), conn))
+		}
+	}()
+	if _, err := conn.ExecContext(ctx,
+		`SELECT set_config('`+allowDestructiveRefreshTokensDownGUC+`', 'true', false)`); err != nil {
+		return fmt.Errorf("postgres: enable destructive refresh_tokens down SQL guard: %w", err)
+	}
+	return nil
+}
+
+func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
+	resetCtx := context.WithoutCancel(ctx)
+	_, resetErr := conn.ExecContext(resetCtx, `RESET `+allowDestructiveRefreshTokensDownGUC)
+	unlockErr := l.inner.SessionUnlock(resetCtx, conn)
+	return errors.Join(resetErr, unlockErr)
 }
 
 // Status returns the status of all discovered migrations.

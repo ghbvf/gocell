@@ -254,7 +254,7 @@ runtime/auth/session/
 - `cells/accesscore/cell_init.go`：Redis session cache adapter 注入
 - `cells/accesscore/internal/{ports,domain,mem}/`：5 联动激活
 
-**PR449 follow-up 已拉前（不再作为 S4 carry-over）**：LastAdminGuard service wiring 已接入 `identitymanage.Delete` / `Lock`（`rbacassign` 既有 `RemoveFromUserIfNotLast` 继续负责 revoke），DB trigger 增加 transaction-scoped advisory lock 覆盖 direct SQL / cascade delete 并发；`cmd/corebundle/setup_pg_integration_test.go` 已改用 `adapterpg.NewOutboxWriter` 并断言已提交的 `event.user.created.v1` outbox row。
+**PR449 follow-up 已拉前（不再作为 S4 carry-over）**：LastAdminGuard service wiring 已接入 `identitymanage.Delete` / `Lock`（`rbacassign` 既有 `RemoveFromUserIfNotLast` 继续负责 revoke），DB trigger 增加 transaction-scoped advisory lock 覆盖 direct SQL / cascade delete 并发；`cmd/corebundle/setup_pg_integration_test.go` 已改用 `adapterpg.NewOutboxWriter` 并断言已提交的 `event.user.created.v1` outbox row，另用 writer 失败注入验证 setup user/role/outbox 在真实 PG 事务内同步回滚。
 
 **收口 backlog**（PR #449 review carry-over entries）：
 - S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01 🟠 P0（PR #449 review round-2 + round-3 重提 carry-over）：S3+S5 仅 wiring user/role/outbox PG，session/refresh repo 仍是 mem；当前 PG 模式下 sessionlogin.persistSessionWithRefresh 在真 PG tx 里写 mem session/refresh，rollback 不回滚 mem 状态（pre-existing hazard，S3+S5 PG TxManager wiring 让区域更显眼；round-3 reviewer 重申此为合并风险，用户裁决"忽略 + 更新计划文档"以本条目落地）。S4 必须同 PR：(a) cell consume runtime session.Store + adapters/postgres PG session store；(b) PG refresh store 接入；(c) 删除 cell-private SessionRepository + cell-internal mem session 路径；(d) 启动期 forced re-login 全员 session；(e) 同 PR 验证：sessionlogin happy path + 故障注入下 mem-in-tx hazard 消失（rollback 完整回滚 session/refresh PG 行）。

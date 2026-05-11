@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -26,6 +29,34 @@ func mustAllowDestructiveDown(t testing.TB, reason string) DestructiveDownPermit
 	permit, err := AllowDestructiveDown(reason)
 	require.NoError(t, err)
 	return permit
+}
+
+func migrationsUpToFS(t testing.TB, maxVersion int64) fstest.MapFS {
+	t.Helper()
+	source := testMigrationsFS(t)
+	entries, err := fs.ReadDir(source, ".")
+	require.NoError(t, err)
+
+	out := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		match := migrationVersionRe.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		version, parseErr := strconv.ParseInt(match[1], 10, 64)
+		require.NoError(t, parseErr)
+		if version > maxVersion {
+			continue
+		}
+		data, readErr := fs.ReadFile(source, entry.Name())
+		require.NoError(t, readErr)
+		out[entry.Name()] = &fstest.MapFile{Data: data}
+	}
+	require.NotEmpty(t, out)
+	return out
 }
 
 // setupPostgres starts a PostgreSQL container via testcontainers and returns a
@@ -229,7 +260,7 @@ func TestIntegration_Migrator(t *testing.T) {
 		expected, fsErr := ExpectedVersion(testMigrationsFS(t))
 		require.NoError(t, fsErr)
 
-		dErr := migrator.Down(ctx, DestructiveDownPermit{})
+		dErr := migrator.Down(ctx, nil)
 		require.Error(t, dErr, "Down without an explicit permit must fail closed")
 		var ec *errcode.Error
 		require.ErrorAs(t, dErr, &ec)
@@ -260,6 +291,43 @@ func TestIntegration_Migrator(t *testing.T) {
 		}
 		assert.True(t, foundLatest, "status must include latest migration %s", latestVersion)
 	})
+}
+
+func TestMigration012Down_SQLGuardRejectsDirectProviderBypass(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	mfs := migrationsUpToFS(t, 12)
+
+	migrator, err := NewMigrator(pool, mfs, "schema_migrations_012_down_guard")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 012")
+
+	_, err = migrator.provider.Down(ctx)
+	require.Error(t, err, "direct goose down must be rejected by migration 012 SQL guard")
+	assert.Contains(t, err.Error(), "migration 012 down refused")
+
+	var selectorExists bool
+	err = pool.DB().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'refresh_tokens' AND column_name = 'selector'
+)`).Scan(&selectorExists)
+	require.NoError(t, err)
+	assert.True(t, selectorExists, "failed direct down must leave 012 refresh token schema intact")
+
+	require.NoError(t, migrator.Down(ctx, mustAllowDestructiveDown(t, "integration test rollback through SQL guard")),
+		"Migrator.Down with typed permit must set the SQL guard on goose's execution connection")
+
+	var tokenExists bool
+	err = pool.DB().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'refresh_tokens' AND column_name = 'token'
+)`).Scan(&tokenExists)
+	require.NoError(t, err)
+	assert.True(t, tokenExists, "permitted down must recreate the pre-012 token column")
 }
 
 // ---------------------------------------------------------------------------

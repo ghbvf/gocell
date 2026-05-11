@@ -113,11 +113,23 @@ CREATE INDEX idx_refresh_tokens_parent
 -- binary also cannot run against the 012 schema and may not embed this Down
 -- migration. To rollback safely: drain/stop app traffic, run a maintenance
 -- migrator built from the PR-A29 binary and pass the typed destructive-down
--- permit at the Migrator.Down API boundary, then start the old binary after
--- the DB schema is back at 011. Never run new and old binaries against the
--- opposite refresh_tokens schema.
+-- permit at the Migrator.Down API boundary. The migrator sets
+-- gocell.allow_destructive_refresh_tokens_down=true on goose's execution
+-- connection; direct SQL/goose bypasses fail closed unless an operator
+-- explicitly sets the same GUC. Then start the old binary after the DB schema
+-- is back at 011. Never run new and old binaries against the opposite
+-- refresh_tokens schema.
 --
 -- Recreate the pre-X11 schema shape. Token data is not recoverable.
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF lower(coalesce(current_setting('gocell.allow_destructive_refresh_tokens_down', true), '')) <> 'true' THEN
+        RAISE EXCEPTION 'migration 012 down refused: destructive rollback disabled; set gocell.allow_destructive_refresh_tokens_down=true only after an approved destructive rollback';
+    END IF;
+END $$;
+-- +goose StatementEnd
+
 DROP INDEX IF EXISTS idx_refresh_tokens_parent;
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;
 DROP INDEX IF EXISTS idx_refresh_tokens_subject;
