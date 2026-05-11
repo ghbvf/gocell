@@ -136,7 +136,7 @@ func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMi
 			// Fast path: non-config-prefix or non-config topic — skip instrumentation.
 			return next
 		}
-		owner := configEventOwner{cellID: sub.CellID, sliceID: sub.SliceID}
+		owner := configEventOwner{cellID: sub.ObservabilityID(), sliceID: sub.SliceID}
 		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			ctx = context.WithValue(ctx, configEventOwnerContextKey{}, owner)
 			result := next(ctx, entry)

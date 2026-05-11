@@ -65,7 +65,7 @@ type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
 	consumerGroup string
-	cellID        string // ownerCellID resolved by AddContractHandler; used for Subscription.CellID
+	cellID        string // cellID is the observability owner; must be provided by caller — no fallback to consumerGroup (K#07).
 	sliceID       string
 	contract      contractspec.ContractSpec
 }
@@ -327,6 +327,8 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 			r.markHealthError(wrapped)
 			slog.Error("eventrouter: subscription setup failed, aborting",
 				slog.String("topic", sub.Topic),
+				slog.String("consumer_group", sub.ConsumerGroup),
+				slog.String("cell_id", sub.CellID),
 				slog.Any("error", err))
 			cancel()
 			return wrapped
@@ -354,7 +356,8 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 			}()
 			slog.Info("eventrouter: starting subscription",
 				slog.String("topic", sub.Topic),
-				slog.String("consumer_group", sub.ConsumerGroup))
+				slog.String("consumer_group", sub.ConsumerGroup),
+				slog.String("cell_id", sub.CellID))
 			err := r.subscriber.SubscribeEntry(ctx, sub, h.handler)
 			if err != nil && ctx.Err() == nil {
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
@@ -424,7 +427,7 @@ func (r *Router) diagnoseNotReady(handlers []handlerConfig) []string {
 		case <-r.subscriber.Ready(sub):
 			// ready
 		default:
-			notReady = append(notReady, fmt.Sprintf("%s/%s", h.consumerGroup, h.topic))
+			notReady = append(notReady, fmt.Sprintf("%s/%s/%s", h.cellID, h.consumerGroup, h.topic))
 		}
 	}
 	return notReady

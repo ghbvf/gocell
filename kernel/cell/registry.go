@@ -72,6 +72,14 @@ type Registry interface {
 	// drift" — making cellID an option would silently demote the contract
 	// from compile-time to opt-in.
 	//
+	// Typical usage (consumerGroup == cellID):
+	//
+	//	reg.Subscribe(spec, handler, c.ID(), c.ID())
+	//
+	// Role-suffix usage (fanout consumer with sub-group, cellID stays the cell):
+	//
+	//	reg.Subscribe(spec, handler, "accesscore-rbac-session-sync", c.ID())
+	//
 	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
 	//
 	// The handler type outbox.EntryHandler is the canonical event handler in

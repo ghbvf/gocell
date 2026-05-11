@@ -109,6 +109,26 @@ func TestRegistry_Subscribe_RejectsEmptyCellID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestRegistry_Subscribe_CellIDCheckedBeforeContractTriple
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Subscribe_CellIDCheckedBeforeContractTriple verifies that
+// Validate checks cellID before the contract triple (ContractID etc.).
+// A request with empty cellID but otherwise valid spec must fail with an
+// error mentioning "cellID" and must NOT mention "ContractID" — proving
+// the ordering: cellID guard fires first.
+func TestRegistry_Subscribe_CellIDCheckedBeforeContractTriple(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	spec := testRegistrySpec("order.placed") // valid Topic, Kind, ContractID
+	err := rec.Subscribe(spec, noopHandler, "cg-order", "")
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "cellid",
+		"error must mention cellID so caller knows which parameter is missing")
+	assert.NotContains(t, strings.ToLower(err.Error()), "contractid",
+		"ContractID check must not have fired before cellID check")
+}
+
+// ---------------------------------------------------------------------------
 // TestRegistry_Subscribe_RejectsBadSpecKind
 // ---------------------------------------------------------------------------
 

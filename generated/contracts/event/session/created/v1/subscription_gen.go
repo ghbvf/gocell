@@ -24,7 +24,8 @@ type Subscription struct {
 // All four arguments are mandatory:
 //   - consumerGroup: broker partition key + idempotency namespace
 //   - cellID: observability owner (cell ID); cellgen injects it from cell
-//     metadata at compile time. Omitting cellID is a compile failure because
+//     metadata at compile time; direct callers must provide the owning cell's
+//     ID explicitly. Omitting cellID is a compile failure because
 //     Registry.Subscribe takes it as a positional parameter — there is no
 //     SubscriptionOption escape hatch (HARD contract; see ADR
 //     docs/architecture/202605111000-adr-subscription-cellid-mandatory.md).
