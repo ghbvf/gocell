@@ -250,7 +250,7 @@ func F() {
 }
 
 // -----------------------------------------------------------------------
-// EachInSubtree behavioural tests carried forward from the old EachNode
+// EachInSubtree behavioral tests carried forward from the old EachNode
 // suite, renamed only. These lock the "preorder over the full sub-tree"
 // contract that the new EachInSubtree inherits from the previous EachNode.
 // -----------------------------------------------------------------------

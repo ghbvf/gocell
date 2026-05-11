@@ -22,7 +22,7 @@ import "go/ast"
 //
 // Walk depth is a compile-time choice: different API names express
 // different traversal semantics, so picking the wrong depth is statically
-// visible at the call site rather than hidden in runtime AST behaviour.
+// visible at the call site rather than hidden in runtime AST behavior.
 //
 //   - EachInSubtree: recursive over the full sub-tree (root + every
 //     descendant). Use when the rule reasons over all positions in a
@@ -94,7 +94,7 @@ func EachInSubtree[S any, N interface {
 // Returns silently (no-op).
 //
 // ref: go/ast.Walk — Go stdlib Visitor pattern (depth control via returning
-// nil from Visit)
+// nil from Visit).
 func EachInChildren[S any, N interface {
 	*S
 	ast.Node
