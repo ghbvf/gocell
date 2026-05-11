@@ -177,7 +177,10 @@ var forbiddenMethodSymbols = map[string][]string{
 //	(1)  dot-import declaration scan — flags `import . "<banned>"` at the import.
 //	(2b) SelectorExpr scan — qualified calls `pkg.Func` (path A.2) resolved via
 //	     typeseval.ResolvePackageRef; receiver-type method calls (path A')
-//	     resolved via info.Types[sel.X] + typeseval.NamedTypeImportPath.
+//	     resolved via typeseval.ResolveMethodCall (info.Selections-based, so
+//	     promoted methods via struct embedding and named-type definitions of
+//	     banned interfaces are recovered, not just direct interface/pointer
+//	     receivers).
 //	(2c) Bare-Ident scan — dot-imported call/value references `Func` (path A.3)
 //	     resolved via typeseval.ResolvePackageRef. SelectorExpr.Sel idents are
 //	     pre-collected and skipped (2a) so qualified `pkg.Func` and method calls
@@ -236,16 +239,21 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 				return
 			}
 		}
-		// Method call on receiver type: (*os.File).ReadDir, (fs.FS).WalkDir, etc.
-		if tv, ok := info.Types[sel.X]; ok && tv.Type != nil {
-			if recvImportPath := typeseval.NamedTypeImportPath(tv.Type); recvImportPath != "" {
-				if methods, banned := forbiddenMethodSymbols[recvImportPath]; banned && contains(methods, sel.Sel.Name) {
-					out = append(out, scanner.Diagnostic{
-						Rel:     rel,
-						Line:    fset.Position(sel.Pos()).Line,
-						Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of (%s).%s", recvImportPath, sel.Sel.Name),
-					})
-				}
+		// Method call on banned receiver type: (*os.File).ReadDir,
+		// (fs.FS).WalkDir, promoted via struct embedding, named-type definition
+		// of a banned interface, generic type-parameter constrained by a banned
+		// interface, etc. typeseval.ResolveMethodCall recovers the actual method
+		// object via info.Selections so the dispatch source is preserved across
+		// all these AST shapes (the prior NamedTypeImportPath walker only saw
+		// sel.X's static type and missed promoted/named-def cases — closed by
+		// PR469-review-round-2).
+		if fn, ok := typeseval.ResolveMethodCall(info, sel); ok {
+			if methods, banned := forbiddenMethodSymbols[fn.Pkg().Path()]; banned && contains(methods, fn.Name()) {
+				out = append(out, scanner.Diagnostic{
+					Rel:     rel,
+					Line:    fset.Position(sel.Pos()).Line,
+					Message: fmt.Sprintf("use tools/archtest/internal/scanner instead of (%s).%s", fn.Pkg().Path(), fn.Name()),
+				})
 			}
 		}
 	})
@@ -643,9 +651,10 @@ func runFixture(t *testing.T, src string) []scanner.Diagnostic {
 		t.Fatalf("parse: %v", err)
 	}
 	info := &types.Info{
-		Types: map[ast.Expr]types.TypeAndValue{},
-		Defs:  map[*ast.Ident]types.Object{},
-		Uses:  map[*ast.Ident]types.Object{},
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Defs:       map[*ast.Ident]types.Object{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
 	}
 	cfg := &types.Config{
 		Importer: importer.Default(),
@@ -829,9 +838,9 @@ func _(fsys fs.ReadDirFS) error {
 		},
 		{
 			// Generic TypeParam constraint: receiver is a type parameter bound
-			// by fs.ReadDirFS — typeseval.NamedTypeImportPath must descend into the
-			// constraint interface to find the banned package, otherwise the
-			// generic form silently bypasses path A'.
+			// by fs.ReadDirFS — typeseval.ResolveMethodCall reads
+			// info.Selections.Obj() which returns the interface's method
+			// regardless of the receiver's static *types.TypeParam wrapping.
 			name: "method_call_generic_typeparam_bypass",
 			src: `package fake
 import "io/fs"
@@ -839,6 +848,31 @@ func _[F fs.ReadDirFS](fsys F) error {
 	_, err := fsys.ReadDir(".") // F.ReadDir resolves to (fs.ReadDirFS).ReadDir
 	return err
 }
+`,
+			wantHits: 1,
+		},
+		{
+			// PR469-review-round-2 P1 closure: struct embedding promotes
+			// (fs.ReadDirFS).ReadDir into Wrap. info.Types[sel.X] would yield
+			// *Wrap (current pkg) which has no entry in forbiddenMethodSymbols;
+			// info.Selections.Obj() gives the actual *types.Func from io/fs.
+			name: "method_call_promoted_via_struct_embedding",
+			src: `package fake
+import "io/fs"
+type Wrap struct{ fs.ReadDirFS }
+func _(w *Wrap) error { _, err := w.ReadDir("."); return err }
+`,
+			wantHits: 1,
+		},
+		{
+			// Named-type definition of a banned interface. MyFS has the same
+			// method set as fs.ReadDirFS; the Selection's Obj() points back to
+			// the interface's *types.Func, so the io/fs package is recovered.
+			name: "method_call_named_type_def_of_banned_interface",
+			src: `package fake
+import "io/fs"
+type MyFS fs.ReadDirFS
+func _(x MyFS) error { _, err := x.ReadDir("."); return err }
 `,
 			wantHits: 1,
 		},

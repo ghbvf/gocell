@@ -1,54 +1,52 @@
 package typeseval
 
-import "go/types"
+import (
+	"go/ast"
+	"go/types"
+)
 
-// NamedTypeImportPath returns the import path of the package that declares
-// the named type underlying t. Handles three type wrappings:
+// ResolveMethodCall returns the *types.Func that a method-call SelectorExpr
+// `recv.Method()` resolves to, using info.Selections to recover the actual
+// method object regardless of how the call site reaches it. Handles:
 //
-//   - *types.Pointer (one level): unwrap to element; `*os.File` → os.File
-//   - *types.Named (the base case): return obj.Pkg().Path()
-//   - *types.TypeParam (generic constraint): walk the constraint interface
-//     for an embedded named type from any package, e.g.
-//     `func [F fs.ReadDirFS](fsys F) { fsys.ReadDir(...) }` resolves the
-//     receiver's static type *types.TypeParam to its bound fs.ReadDirFS
+//   - Direct interface receiver:    `var x fs.ReadDirFS; x.ReadDir(...)`
+//   - Pointer / value method:       `f := os.Open(...); f.ReadDir(-1)`
+//   - Promoted via struct embed:    `type W struct{ fs.ReadDirFS }; w.ReadDir(...)`
+//   - Named type definition:        `type MyFS fs.ReadDirFS; var x MyFS; x.ReadDir(...)`
+//   - Type alias:                   `type MyFS = fs.ReadDirFS; x.ReadDir(...)`
+//   - Generic type parameter:       `func [F fs.ReadDirFS](x F) { x.ReadDir(...) }`
 //
-// Returns "" for:
-//   - basic types, slices, maps, channels, structs, function types
-//   - named types declared in the universe scope (e.g. error)
-//   - nil or non-Named/Pointer/TypeParam shapes after one level of unwrapping
+// Callers filter by the resolved method's owning package and name:
 //
-// Used by archtest matchers that filter method calls by receiver-type owning
-// package (path A' in SCANNER-FRAMEWORK-USAGE-01). Companion to
-// ResolvePackageRef which covers function/value references (paths A.2/A.3).
+//	fn, ok := typeseval.ResolveMethodCall(info, sel)
+//	if !ok { return }
+//	if banned[fn.Pkg().Path()] && contains(banned[fn.Pkg().Path()], fn.Name()) {
+//	    // forbidden method call
+//	}
 //
-// ref: go/types Type interface — Pointer / Named / TypeParam shapes per spec.
-func NamedTypeImportPath(t types.Type) string {
-	if t == nil {
-		return ""
+// Returns (nil, false) for:
+//
+//   - non-method selectors (qualified `pkg.Func` is in info.Uses, not Selections;
+//     use ResolvePackageRef for that shape)
+//   - field-position selectors (info.Selections[sel].Kind() != MethodVal)
+//   - method-expression syntax `T.Method` (Kind == MethodExpr; conservative skip
+//     until a real consumer needs it)
+//   - methods whose owning *types.Package is nil (universe pseudo-types)
+//   - nil typesInfo or nil sel
+//
+// ref: golang/tools go/types/typeutil.Callee (same info.Selections lookup pattern)
+// ref: dominikh/go-tools analysis/code.IsCallTo (Selections.Obj() typed filter)
+func ResolveMethodCall(typesInfo *types.Info, sel *ast.SelectorExpr) (*types.Func, bool) {
+	if typesInfo == nil || sel == nil {
+		return nil, false
 	}
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
+	s, ok := typesInfo.Selections[sel]
+	if !ok || s.Kind() != types.MethodVal {
+		return nil, false
 	}
-	if tp, ok := t.(*types.TypeParam); ok {
-		// types.TypeParam.Constraint() returns *types.Interface (possibly via Underlying for aliases).
-		iface, ok := tp.Constraint().Underlying().(*types.Interface)
-		if !ok {
-			return ""
-		}
-		for i := 0; i < iface.NumEmbeddeds(); i++ {
-			if path := NamedTypeImportPath(iface.EmbeddedType(i)); path != "" {
-				return path
-			}
-		}
-		return ""
+	fn, ok := s.Obj().(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return nil, false
 	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return ""
-	}
-	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil {
-		return ""
-	}
-	return obj.Pkg().Path()
+	return fn, true
 }

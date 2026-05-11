@@ -2,113 +2,157 @@ package typeseval
 
 import (
 	"go/ast"
-	"go/types"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// findUseSiteIdent returns the use-site (info.Types-recorded) ident for the
-// named variable. Declaration-site idents only appear in info.Defs, not Types.
-func findUseSiteIdent(t *testing.T, file *ast.File, name string) *ast.Ident {
-	t.Helper()
-	var found *ast.Ident
-	ast.Inspect(file, func(n ast.Node) bool {
-		if found != nil {
-			return false
-		}
-		// Look for `_ = <ident>` blank-assign RHS as the use site.
-		if as, ok := n.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
-			if id, ok := as.Rhs[0].(*ast.Ident); ok && id.Name == name {
-				found = id
-				return false
-			}
-		}
-		return true
-	})
-	require.NotNilf(t, found, "use-site ident %q (blank-assign RHS) not found in fixture", name)
-	return found
-}
-
-func resolveTypeOf(t *testing.T, src string, exprFinder func(*ast.File) ast.Expr) types.Type {
-	t.Helper()
-	pkg, file := buildFakePkg(t, src)
-	expr := exprFinder(file)
-	require.NotNil(t, expr, "fixture expression not found")
-	tv, ok := pkg.TypesInfo.Types[expr]
-	require.True(t, ok, "info.Types missing entry for fixture expr")
-	return tv.Type
-}
-
-func TestNamedTypeImportPath_NilType(t *testing.T) {
-	assert.Equal(t, "", NamedTypeImportPath(nil))
-}
-
-func TestNamedTypeImportPath_PointerToStdlibStruct(t *testing.T) {
+func TestResolveMethodCall_PointerReceiverStdlib(t *testing.T) {
 	src := `package fixture
 import "os"
 func _() {
-	var f *os.File
-	_ = f
+	f, _ := os.Open("/")
+	_ = f.Name()
 }
 `
-	typ := resolveTypeOf(t, src, func(f *ast.File) ast.Expr {
-		return findUseSiteIdent(t, f, "f")
-	})
-	assert.Equal(t, "os", NamedTypeImportPath(typ))
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "Name")
+
+	fn, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	require.True(t, ok, "(*os.File).Name() must resolve to *types.Func")
+	assert.Equal(t, "os", fn.Pkg().Path())
+	assert.Equal(t, "Name", fn.Name())
 }
 
-func TestNamedTypeImportPath_StdlibInterface(t *testing.T) {
+func TestResolveMethodCall_DirectInterfaceReceiver(t *testing.T) {
 	src := `package fixture
 import "io/fs"
-func _() {
-	var fsys fs.ReadDirFS
-	_ = fsys
+func _(fsys fs.ReadDirFS) error {
+	_, err := fsys.ReadDir(".")
+	return err
 }
 `
-	typ := resolveTypeOf(t, src, func(f *ast.File) ast.Expr {
-		return findUseSiteIdent(t, f, "fsys")
-	})
-	assert.Equal(t, "io/fs", NamedTypeImportPath(typ))
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "ReadDir")
+
+	fn, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	require.True(t, ok)
+	assert.Equal(t, "io/fs", fn.Pkg().Path())
+	assert.Equal(t, "ReadDir", fn.Name())
 }
 
-func TestNamedTypeImportPath_BasicTypeReturnsEmpty(t *testing.T) {
-	src := `package fixture
-func _() {
-	var x int
-	_ = x
-}
-`
-	typ := resolveTypeOf(t, src, func(f *ast.File) ast.Expr {
-		return findUseSiteIdent(t, f, "x")
-	})
-	assert.Equal(t, "", NamedTypeImportPath(typ), "universe basic type has no import path")
-}
-
-func TestNamedTypeImportPath_LocalNamedType(t *testing.T) {
-	src := `package fixture
-type Local struct{}
-func _() {
-	var x Local
-	_ = x
-}
-`
-	typ := resolveTypeOf(t, src, func(f *ast.File) ast.Expr {
-		return findUseSiteIdent(t, f, "x")
-	})
-	assert.Equal(t, "fixture", NamedTypeImportPath(typ),
-		"local named type returns current package path; caller filters")
-}
-
-func TestNamedTypeImportPath_GenericTypeParamConstraint(t *testing.T) {
+func TestResolveMethodCall_PromotedViaStructEmbedding(t *testing.T) {
+	// PR469-review-round-2 P1 RED case: struct embedding promotes ReadDir.
+	// The pre-PR fix (NamedTypeImportPath via sel.X type) returned "fixture"
+	// (the wrapping struct's package); the Selections-based resolver picks the
+	// actual method's owning package "io/fs".
 	src := `package fixture
 import "io/fs"
-func _[F fs.ReadDirFS](fsys F) { _ = fsys }
+type Wrap struct{ fs.ReadDirFS }
+func _(w *Wrap) error {
+	_, err := w.ReadDir(".")
+	return err
+}
 `
-	typ := resolveTypeOf(t, src, func(f *ast.File) ast.Expr {
-		return findUseSiteIdent(t, f, "fsys")
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "ReadDir")
+
+	fn, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	require.True(t, ok, "promoted method via struct embedding must resolve")
+	assert.Equal(t, "io/fs", fn.Pkg().Path(),
+		"Selections.Obj() returns the embedded interface's method, not the wrapper's package")
+	assert.Equal(t, "ReadDir", fn.Name())
+}
+
+func TestResolveMethodCall_NamedTypeDefinitionOfInterface(t *testing.T) {
+	src := `package fixture
+import "io/fs"
+type MyFS fs.ReadDirFS
+func _(x MyFS) error {
+	_, err := x.ReadDir(".")
+	return err
+}
+`
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "ReadDir")
+
+	fn, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	require.True(t, ok, "method via named type definition of an interface must resolve")
+	assert.Equal(t, "io/fs", fn.Pkg().Path())
+	assert.Equal(t, "ReadDir", fn.Name())
+}
+
+func TestResolveMethodCall_GenericTypeParamConstraint(t *testing.T) {
+	src := `package fixture
+import "io/fs"
+func _[F fs.ReadDirFS](x F) error {
+	_, err := x.ReadDir(".")
+	return err
+}
+`
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "ReadDir")
+
+	fn, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	require.True(t, ok, "method on type parameter constrained by an interface must resolve")
+	assert.Equal(t, "io/fs", fn.Pkg().Path())
+	assert.Equal(t, "ReadDir", fn.Name())
+}
+
+func TestResolveMethodCall_QualifiedSelectorReturnsFalse(t *testing.T) {
+	// Qualified identifier `pkg.Func` is in info.Uses, NOT info.Selections —
+	// ResolvePackageRef handles that shape. ResolveMethodCall must not match it.
+	src := `package fixture
+import "time"
+func _() { time.Sleep(0) }
+`
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "Sleep")
+
+	_, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	assert.False(t, ok, "qualified `pkg.Func` is not a MethodVal selection")
+}
+
+func TestResolveMethodCall_FieldSelectorReturnsFalse(t *testing.T) {
+	src := `package fixture
+type S struct{ X int }
+func _(s S) int { return s.X }
+`
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "X")
+
+	_, ok := ResolveMethodCall(pkg.TypesInfo, sel)
+	assert.False(t, ok, "field-position selector (FieldVal) must not resolve as method")
+}
+
+func TestResolveMethodCall_NilGuards(t *testing.T) {
+	src := `package fixture
+import "io/fs"
+func _(fsys fs.ReadDirFS) error { _, err := fsys.ReadDir("."); return err }
+`
+	pkg, file := buildFakePkg(t, src)
+	sel := findFirstSelector(t, file, "ReadDir")
+
+	t.Run("nil typesInfo", func(t *testing.T) {
+		_, ok := ResolveMethodCall(nil, sel)
+		assert.False(t, ok)
 	})
-	assert.Equal(t, "io/fs", NamedTypeImportPath(typ),
-		"type parameter constraint resolves through embedded interface")
+	t.Run("nil sel", func(t *testing.T) {
+		_, ok := ResolveMethodCall(pkg.TypesInfo, nil)
+		assert.False(t, ok)
+	})
+}
+
+func TestResolveMethodCall_NonSelectorIgnored(t *testing.T) {
+	// Sanity: the helper takes *ast.SelectorExpr; passing a synthesized one with
+	// no entry in info.Selections must return (nil, false), not panic.
+	src := `package fixture
+func _() {}
+`
+	pkg, _ := buildFakePkg(t, src)
+	synthetic := &ast.SelectorExpr{X: &ast.Ident{Name: "x"}, Sel: &ast.Ident{Name: "y"}}
+
+	_, ok := ResolveMethodCall(pkg.TypesInfo, synthetic)
+	assert.False(t, ok, "synthetic SelectorExpr absent from info.Selections returns false")
 }

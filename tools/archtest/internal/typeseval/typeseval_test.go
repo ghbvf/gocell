@@ -23,9 +23,10 @@ func buildFakePkg(t *testing.T, src string) (*packages.Package, *ast.File) {
 	require.NoError(t, err, "parse fixture source")
 
 	info := &types.Info{
-		Types: make(map[ast.Expr]types.TypeAndValue),
-		Uses:  make(map[*ast.Ident]types.Object),
-		Defs:  make(map[*ast.Ident]types.Object),
+		Types:      make(map[ast.Expr]types.TypeAndValue),
+		Uses:       make(map[*ast.Ident]types.Object),
+		Defs:       make(map[*ast.Ident]types.Object),
+		Selections: make(map[*ast.SelectorExpr]*types.Selection),
 	}
 	conf := types.Config{Importer: importer.Default()}
 	typesPkg, err := conf.Check("fixture", fset, []*ast.File{file}, info)
