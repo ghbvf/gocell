@@ -100,8 +100,8 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"version":"1","expectedVersion":1}`))
 	c.MustRejectRequest(t, []byte(`{}`))
 	c.MustRejectRequest(t, []byte(`{"version":1,"extra":"x"}`))
-	c.MustRejectRequest(t, []byte(`{"version":1}`))                            // missing expectedVersion
-	c.MustRejectRequest(t, []byte(`{"version":1,"expectedVersion":0}`))        // expectedVersion < 1
+	c.MustRejectRequest(t, []byte(`{"version":1}`))                     // missing expectedVersion
+	c.MustRejectRequest(t, []byte(`{"version":1,"expectedVersion":0}`)) // expectedVersion < 1
 
 	// Real-handler exercise: 200 OK + response schema.
 	rec := httptest.NewRecorder()

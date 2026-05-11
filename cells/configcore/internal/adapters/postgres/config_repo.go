@@ -509,7 +509,9 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, expectedVersi
 // Used exclusively by configpublish.Rollback to restore a snapshot's sensitivity
 // alongside its value. Returns ErrConfigRepoNotFound if the key does not exist,
 // or ErrVersionConflict if expectedVersion does not match.
-func (r *ConfigRepository) UpdateForRollback(ctx context.Context, key string, expectedVersion int, value string, sensitive bool) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) UpdateForRollback(
+	ctx context.Context, key string, expectedVersion int, value string, sensitive bool,
+) (*domain.ConfigEntry, error) {
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err

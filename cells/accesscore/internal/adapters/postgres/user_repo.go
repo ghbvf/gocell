@@ -108,6 +108,7 @@ WHERE id = $1`
 	// results in 0 RowsAffected, which CheckVersionMatch translates to
 	// ErrVersionConflict (HTTP 409). RETURNING password_version gives the
 	// caller the new monotonic version without a second round-trip.
+	//nolint:gosec // G101: SQL constant containing "password" column name, not a credential value
 	updatePasswordSQL = `
 UPDATE users
 SET password_hash = $1,

@@ -177,7 +177,9 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int, e
 // rollbackInTx executes the rollback steps inside an active transaction:
 // resolve current entry, fetch target version snapshot, atomic UPDATE...RETURNING,
 // dual emit (entry-upserted + rollback). Caller MUST invoke inside runInTx.
-func (s *Service) rollbackInTx(txCtx context.Context, key string, targetVersion int, expectedVersion int, actor string) (*domain.ConfigEntry, error) {
+func (s *Service) rollbackInTx(
+	txCtx context.Context, key string, targetVersion int, expectedVersion int, actor string,
+) (*domain.ConfigEntry, error) {
 	entry, err := s.repo.GetByKey(txCtx, key)
 	if err != nil {
 		return nil, fmt.Errorf("config-publish: rollback: %w", err)

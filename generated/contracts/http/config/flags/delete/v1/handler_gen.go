@@ -102,6 +102,12 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 				errcode.WithDetails(slog.String("field", "expectedVersion"), slog.String("reason", "invalid"))))
 			return
 		}
+		if v > 99999 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "expectedVersion"), slog.String("reason", "invalid"))))
+			return
+		}
 		req.ExpectedVersion = v
 	}
 	resp, err := h.svc.Delete(r.Context(), req)

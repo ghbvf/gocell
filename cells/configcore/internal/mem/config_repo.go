@@ -89,7 +89,9 @@ func (r *ConfigRepository) Update(_ context.Context, key string, expectedVersion
 	return &clone, nil
 }
 
-func (r *ConfigRepository) UpdateForRollback(_ context.Context, key string, expectedVersion int, value string, sensitive bool) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) UpdateForRollback(
+	_ context.Context, key string, expectedVersion int, value string, sensitive bool,
+) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

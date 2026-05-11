@@ -15,7 +15,8 @@ type FlagRepository interface {
 	// increments version by 1 if expectedVersion matches the stored version (CAS guard).
 	// Returns the updated flag. Returns ErrFlagNotFound if key does not exist,
 	// or ErrVersionConflict if expectedVersion does not match.
-	Update(ctx context.Context, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string) (*domain.FeatureFlag, error)
+	Update(ctx context.Context, key string, expectedVersion int,
+		enabled bool, rolloutPercentage int, description string) (*domain.FeatureFlag, error)
 	List(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error)
 	// Delete removes a feature flag by key if expectedVersion matches the stored version
 	// (CAS guard). Returns the deleted entity via DELETE...RETURNING.
