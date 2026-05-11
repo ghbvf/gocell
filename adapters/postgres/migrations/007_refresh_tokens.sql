@@ -46,12 +46,15 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires
 -- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
 -- Set by Migrator.Down's destructiveDownSessionLocker; direct goose CLI / psql bypass
 -- without the GUC will RAISE EXCEPTION here.
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
         RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
     END IF;
 END $$;
+-- +goose StatementEnd
+
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;
 DROP INDEX IF EXISTS idx_refresh_tokens_session;
 DROP INDEX IF EXISTS idx_refresh_tokens_obsolete_active;

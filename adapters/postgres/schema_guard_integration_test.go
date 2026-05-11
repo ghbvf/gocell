@@ -782,8 +782,12 @@ func TestVerifyExpectedShape_DetectsMissingPrimaryKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
-	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT users_pkey`)
-	require.NoError(t, execErr, "DROP CONSTRAINT users_pkey must succeed")
+	// CASCADE because sessions.subject_id and role_assignments.user_id FKs
+	// reference users(id); without CASCADE the PK drop fails with SQLSTATE 2BP01.
+	// The test only asserts the PK-detection path; cascading FK drops are
+	// inconsequential because VerifyExpectedShape runs PK checks before FK checks.
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT users_pkey CASCADE`)
+	require.NoError(t, execErr, "DROP CONSTRAINT users_pkey CASCADE must succeed")
 
 	err = VerifyExpectedShape(ctx, pool)
 	require.Error(t, err, "VerifyExpectedShape must detect missing primary key")

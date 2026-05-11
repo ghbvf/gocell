@@ -614,8 +614,12 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 
 // verifyForeignKeys checks FK constraints including ON DELETE action.
 func verifyForeignKeys(ctx context.Context, pool *Pool) error {
+	// confdeltype is PG `char` (single-byte: 'a' NO ACTION / 'r' RESTRICT /
+	// 'c' CASCADE / 'n' SET NULL / 'd' SET DEFAULT). Cast to text so pgx's
+	// binary protocol can scan into *string (default binary scan of `char`
+	// OID 18 into *string is rejected).
 	const fkQ = `
-	SELECT co.oid, ref.relname, co.confdeltype
+	SELECT co.oid, ref.relname, co.confdeltype::text
 	  FROM pg_constraint co
 	  JOIN pg_class c ON c.oid = co.conrelid
 	  JOIN pg_namespace n ON n.oid = c.relnamespace
