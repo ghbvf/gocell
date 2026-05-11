@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -58,8 +59,8 @@ func TestBaseCellAccessors(t *testing.T) {
 	c := MustNewBaseCell(meta)
 
 	assert.Equal(t, "configcore", c.ID())
-	assert.Equal(t, CellTypeSupport, c.Type())
-	assert.Equal(t, L1, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.CellTypeSupport, c.Type())
+	assert.Equal(t, cellvocab.L1, c.ConsistencyLevel())
 	// Metadata() returns a pointer to the deep-copied internal snapshot;
 	// compare by value (reflect.DeepEqual through assert.Equal handles
 	// pointer-target comparison automatically).
@@ -75,19 +76,19 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 	assert.Empty(t, c.ConsumedContracts())
 
 	// Add slice.
-	s := NewBaseSlice("s1", "test-cell", L0)
+	s := NewBaseSlice("s1", "test-cell", cellvocab.L0)
 	c.AddSlice(s)
 	require.Len(t, c.OwnedSlices(), 1)
 	assert.Equal(t, "s1", c.OwnedSlices()[0].ID())
 
 	// Add produced contract.
-	pc := NewBaseContract("pc1", ContractHTTP, "test-cell", L1)
+	pc := NewBaseContract("pc1", cellvocab.ContractHTTP, "test-cell", cellvocab.L1)
 	c.AddProducedContract(pc)
 	require.Len(t, c.ProducedContracts(), 1)
 	assert.Equal(t, "pc1", c.ProducedContracts()[0].ID())
 
 	// Add consumed contract.
-	cc := NewBaseContract("cc1", ContractEvent, "other-cell", L2)
+	cc := NewBaseContract("cc1", cellvocab.ContractEvent, "other-cell", cellvocab.L2)
 	c.AddConsumedContract(cc)
 	require.Len(t, c.ConsumedContracts(), 1)
 	assert.Equal(t, "cc1", c.ConsumedContracts()[0].ID())
@@ -95,11 +96,11 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 
 func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "copy-test"})
-	s := NewBaseSlice("s1", "copy-test", L0)
+	s := NewBaseSlice("s1", "copy-test", cellvocab.L0)
 	c.AddSlice(s)
-	pc := NewBaseContract("pc1", ContractHTTP, "copy-test", L1)
+	pc := NewBaseContract("pc1", cellvocab.ContractHTTP, "copy-test", cellvocab.L1)
 	c.AddProducedContract(pc)
-	cc := NewBaseContract("cc1", ContractEvent, "other", L2)
+	cc := NewBaseContract("cc1", cellvocab.ContractEvent, "other", cellvocab.L2)
 	c.AddConsumedContract(cc)
 
 	// Mutating the returned slice must not affect the internal state.
@@ -260,9 +261,9 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range n {
-			c.AddSlice(NewBaseSlice("s", "race-add", L0))
-			c.AddProducedContract(NewBaseContract("pc", ContractHTTP, "race-add", L1))
-			c.AddConsumedContract(NewBaseContract("cc", ContractEvent, "other", L2))
+			c.AddSlice(NewBaseSlice("s", "race-add", cellvocab.L0))
+			c.AddProducedContract(NewBaseContract("pc", cellvocab.ContractHTTP, "race-add", cellvocab.L1))
+			c.AddConsumedContract(NewBaseContract("cc", cellvocab.ContractEvent, "other", cellvocab.L2))
 		}
 	}()
 
@@ -284,20 +285,20 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseSliceAccessors(t *testing.T) {
-	s := NewBaseSlice("login-slice", "accesscore", L1)
+	s := NewBaseSlice("login-slice", "accesscore", cellvocab.L1)
 
 	assert.Equal(t, "login-slice", s.ID())
 	assert.Equal(t, "accesscore", s.BelongsToCell())
-	assert.Equal(t, L1, s.ConsistencyLevel())
+	assert.Equal(t, cellvocab.L1, s.ConsistencyLevel())
 }
 
 func TestBaseSliceInit(t *testing.T) {
-	s := NewBaseSlice("s", "c", L0)
+	s := NewBaseSlice("s", "c", cellvocab.L0)
 	require.NoError(t, s.Init(context.Background()))
 }
 
 func TestBaseSliceVerify(t *testing.T) {
-	s := NewBaseSlice("s", "c", L0)
+	s := NewBaseSlice("s", "c", cellvocab.L0)
 
 	// Default empty.
 	assert.Empty(t, s.Verify().Unit)
@@ -314,19 +315,19 @@ func TestBaseSliceVerify(t *testing.T) {
 }
 
 func TestBaseSliceAllowedFilesNilWhenUnset(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", L1)
+	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
 	assert.Nil(t, s.AllowedFiles(), "unset AllowedFiles returns nil — convention defaults are metadata-only (FMT-14)")
 }
 
 func TestBaseSliceAllowedFilesExplicit(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", L1)
+	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
 	custom := []string{"cells/accesscore/slices/login/**"}
 	s.SetAllowedFiles(custom)
 	assert.Equal(t, custom, s.AllowedFiles())
 }
 
 func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", L1)
+	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
 	s.SetAllowedFiles([]string{"a/**", "b/**"})
 	got := s.AllowedFiles()
 	got[0] = "mutated"
@@ -334,7 +335,7 @@ func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
 }
 
 func TestBaseSliceAffectedJourneys(t *testing.T) {
-	s := NewBaseSlice("s", "c", L0)
+	s := NewBaseSlice("s", "c", cellvocab.L0)
 
 	// Default empty.
 	assert.Empty(t, s.AffectedJourneys())
@@ -349,26 +350,26 @@ func TestBaseSliceAffectedJourneys(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseContractAccessors(t *testing.T) {
-	c := NewBaseContract("session-api", ContractHTTP, "accesscore", L2)
+	c := NewBaseContract("session-api", cellvocab.ContractHTTP, "accesscore", cellvocab.L2)
 
 	assert.Equal(t, "session-api", c.ID())
-	assert.Equal(t, ContractHTTP, c.Kind())
+	assert.Equal(t, cellvocab.ContractHTTP, c.Kind())
 	assert.Equal(t, "accesscore", c.OwnerCell())
-	assert.Equal(t, L2, c.ConsistencyLevel())
-	assert.Equal(t, LifecycleActive, c.Lifecycle(), "default lifecycle should be active")
+	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.LifecycleActive, c.Lifecycle(), "default lifecycle should be active")
 }
 
 func TestBaseContractSetLifecycle(t *testing.T) {
-	c := NewBaseContract("api-v1", ContractHTTP, "accesscore", L1)
-	assert.Equal(t, LifecycleActive, c.Lifecycle(), "default should be active")
+	c := NewBaseContract("api-v1", cellvocab.ContractHTTP, "accesscore", cellvocab.L1)
+	assert.Equal(t, cellvocab.LifecycleActive, c.Lifecycle(), "default should be active")
 
 	tests := []struct {
 		name string
-		lc   Lifecycle
+		lc   cellvocab.Lifecycle
 	}{
-		{"draft", LifecycleDraft},
-		{"deprecated", LifecycleDeprecated},
-		{"back to active", LifecycleActive},
+		{"draft", cellvocab.LifecycleDraft},
+		{"deprecated", cellvocab.LifecycleDeprecated},
+		{"back to active", cellvocab.LifecycleActive},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -380,16 +381,16 @@ func TestBaseContractSetLifecycle(t *testing.T) {
 
 func TestBaseContractAllKinds(t *testing.T) {
 	tests := []struct {
-		kind ContractKind
+		kind cellvocab.ContractKind
 	}{
-		{ContractHTTP},
-		{ContractEvent},
-		{ContractCommand},
-		{ContractProjection},
+		{cellvocab.ContractHTTP},
+		{cellvocab.ContractEvent},
+		{cellvocab.ContractCommand},
+		{cellvocab.ContractProjection},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {
-			c := NewBaseContract("id", tt.kind, "owner", L0)
+			c := NewBaseContract("id", tt.kind, "owner", cellvocab.L0)
 			assert.Equal(t, tt.kind, c.Kind())
 		})
 	}

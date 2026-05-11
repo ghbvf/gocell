@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -17,8 +17,8 @@ func (v *Validator) validateTOPO01() []ValidationResult {
 			if !ok {
 				continue // REF-02 covers missing contracts
 			}
-			validRoles := cell.ValidRolesForKind(cell.ContractKind(c.Kind))
-			if !containsRole(validRoles, cell.ContractRole(cu.Role)) {
+			validRoles := cellvocab.ValidRolesForKind(cellvocab.ContractKind(c.Kind))
+			if !containsRole(validRoles, cellvocab.ContractRole(cu.Role)) {
 				results = append(results, v.newResult(
 					"TOPO-01", SeverityError, IssueInvalid,
 					sliceFile(s),
@@ -36,7 +36,7 @@ func (v *Validator) validateTOPO02() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
-			if !cell.IsProviderRole(cell.ContractRole(cu.Role)) {
+			if !cellvocab.IsProviderRole(cellvocab.ContractRole(cu.Role)) {
 				continue
 			}
 			c, ok := v.project.Contracts[cu.Contract]
@@ -65,7 +65,7 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
-			if !cell.IsConsumerRole(cell.ContractRole(cu.Role)) {
+			if !cellvocab.IsConsumerRole(cellvocab.ContractRole(cu.Role)) {
 				continue
 			}
 			c, ok := v.project.Contracts[cu.Contract]
@@ -97,7 +97,7 @@ func (v *Validator) validateTOPO04() []ValidationResult {
 
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		contractLevel, err := cell.ParseLevel(c.ConsistencyLevel)
+		contractLevel, err := cellvocab.ParseLevel(c.ConsistencyLevel)
 		if err != nil {
 			continue // FMT-03 covers invalid levels
 		}
@@ -113,14 +113,14 @@ func (v *Validator) validateTOPO04() []ValidationResult {
 // buildActorLevelMaps scans all actors and returns two maps:
 //   - actorMaxLevel: actor ID → parsed Level (valid entries only)
 //   - actorMalformed: actor ID → raw invalid maxConsistencyLevel string
-func (v *Validator) buildActorLevelMaps() (actorMaxLevel map[string]cell.Level, actorMalformed map[string]string) {
-	actorMaxLevel = make(map[string]cell.Level)
+func (v *Validator) buildActorLevelMaps() (actorMaxLevel map[string]cellvocab.Level, actorMalformed map[string]string) {
+	actorMaxLevel = make(map[string]cellvocab.Level)
 	actorMalformed = make(map[string]string)
 	for _, a := range v.project.Actors {
 		if a.MaxConsistencyLevel == "" {
 			continue // no constraint declared — unconstrained
 		}
-		lvl, err := cell.ParseLevel(a.MaxConsistencyLevel)
+		lvl, err := cellvocab.ParseLevel(a.MaxConsistencyLevel)
 		if err != nil {
 			actorMalformed[a.ID] = a.MaxConsistencyLevel
 			continue
@@ -135,14 +135,14 @@ func (v *Validator) buildActorLevelMaps() (actorMaxLevel map[string]cell.Level, 
 // valid-level Actor.
 func (v *Validator) checkContractProviderLevel(
 	c *metadata.ContractMeta,
-	contractLevel cell.Level,
+	contractLevel cellvocab.Level,
 	providerID string,
-	actorMaxLevel map[string]cell.Level,
+	actorMaxLevel map[string]cellvocab.Level,
 	actorMalformed map[string]string,
 ) []ValidationResult {
 	// Check if provider is a Cell.
 	if providerCell, ok := v.project.Cells[providerID]; ok {
-		providerLevel, err := cell.ParseLevel(providerCell.ConsistencyLevel)
+		providerLevel, err := cellvocab.ParseLevel(providerCell.ConsistencyLevel)
 		if err != nil {
 			return nil
 		}
@@ -196,11 +196,11 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 	// Build set of L0 cells.
 	l0Cells := make(map[string]bool)
 	for _, c := range v.project.Cells {
-		level, err := cell.ParseLevel(c.ConsistencyLevel)
+		level, err := cellvocab.ParseLevel(c.ConsistencyLevel)
 		if err != nil {
 			continue // FMT-03 covers invalid levels
 		}
-		if level == cell.L0 {
+		if level == cellvocab.L0 {
 			l0Cells[c.ID] = true
 		}
 	}
@@ -244,7 +244,7 @@ func (v *Validator) validateTOPO07() []ValidationResult {
 
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		contractLevel, err := cell.ParseLevel(c.ConsistencyLevel)
+		contractLevel, err := cellvocab.ParseLevel(c.ConsistencyLevel)
 		if err != nil {
 			continue // FMT-03 covers invalid levels
 		}
@@ -254,14 +254,14 @@ func (v *Validator) validateTOPO07() []ValidationResult {
 }
 
 // buildActorConsumerLookup builds lookup maps for external actor maxConsistencyLevel.
-func (v *Validator) buildActorConsumerLookup() (maxLevel map[string]cell.Level, malformed map[string]string) {
-	maxLevel = make(map[string]cell.Level)
+func (v *Validator) buildActorConsumerLookup() (maxLevel map[string]cellvocab.Level, malformed map[string]string) {
+	maxLevel = make(map[string]cellvocab.Level)
 	malformed = make(map[string]string)
 	for _, a := range v.project.Actors {
 		if a.MaxConsistencyLevel == "" {
 			continue // no constraint declared
 		}
-		lvl, err := cell.ParseLevel(a.MaxConsistencyLevel)
+		lvl, err := cellvocab.ParseLevel(a.MaxConsistencyLevel)
 		if err != nil {
 			malformed[a.ID] = a.MaxConsistencyLevel
 			continue
@@ -273,8 +273,8 @@ func (v *Validator) buildActorConsumerLookup() (maxLevel map[string]cell.Level, 
 
 // checkConsumerActors checks each consumer actor of a contract against maxConsistencyLevel constraints.
 func (v *Validator) checkConsumerActors(
-	c *metadata.ContractMeta, contractLevel cell.Level,
-	actorMaxLevel map[string]cell.Level, actorMalformed map[string]string,
+	c *metadata.ContractMeta, contractLevel cellvocab.Level,
+	actorMaxLevel map[string]cellvocab.Level, actorMalformed map[string]string,
 ) []ValidationResult {
 	var results []ValidationResult
 	consumers := contractConsumers(c)
@@ -395,14 +395,14 @@ func (v *Validator) validateTOPO09() []ValidationResult {
 // computeExpectedMax returns the highest ConsistencyLevel among an assembly's
 // member cells. Returns (_, false) when any cell ID is unknown or has an
 // unparseable level.
-func computeExpectedMax(pm *metadata.ProjectMeta, asm *metadata.AssemblyMeta) (cell.Level, bool) {
-	var maxLvl cell.Level
+func computeExpectedMax(pm *metadata.ProjectMeta, asm *metadata.AssemblyMeta) (cellvocab.Level, bool) {
+	var maxLvl cellvocab.Level
 	for i, cellID := range asm.Cells {
 		c, found := pm.Cells[cellID]
 		if !found {
 			return 0, false
 		}
-		lvl, err := cell.ParseLevel(c.ConsistencyLevel)
+		lvl, err := cellvocab.ParseLevel(c.ConsistencyLevel)
 		if err != nil {
 			return 0, false
 		}

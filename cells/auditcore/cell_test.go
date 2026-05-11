@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -114,8 +115,8 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 func TestAuditCore_Metadata(t *testing.T) {
 	c := newTestCell(t)
 	assert.Equal(t, "auditcore", c.ID())
-	assert.Equal(t, cell.CellTypeCore, c.Type())
-	assert.Equal(t, cell.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
+	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
 }
 
 func TestAuditCore_Startup(t *testing.T) {

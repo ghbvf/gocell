@@ -3,11 +3,18 @@ package router
 import (
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 )
 
-func testHTTPContract(method, path string) wrapper.ContractSpec {
-	spec := wrapper.ContractSpec{ID: "test:" + method + ":" + path, Kind: "http", Transport: "http", Method: method, Path: path}
+func testHTTPContract(method, path string) contractspec.ContractSpec {
+	spec := contractspec.ContractSpec{
+		ID:        "test:" + method + ":" + path,
+		Kind:      cellvocab.ContractHTTP,
+		Transport: "http",
+		Method:    method,
+		Path:      path,
+	}
 	// Internal paths require non-empty Clients (Wave 2: caller-cell identity).
 	// Use a test sentinel caller so router unit tests remain self-contained.
 	if strings.HasPrefix(path, "/internal/v1/") {

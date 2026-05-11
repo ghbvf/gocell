@@ -21,8 +21,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -78,7 +79,7 @@ type Registry interface {
 	//
 	// ref: ThreeDotsLabs/watermill message/router.go AddHandler (handler
 	// registration decoupled from goroutine start).
-	Subscribe(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...SubscriptionOption) error
+	Subscribe(spec contractspec.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...SubscriptionOption) error
 
 	// Health registers a named readiness probe. If name is already registered,
 	// the duplicate is logged at slog.LevelError and silently dropped
@@ -157,12 +158,9 @@ type AuthRouteMeta struct {
 	Bootstrap bool
 }
 
-// InternalPathPrefix is the URL prefix that designates an internal-listener route.
-const InternalPathPrefix = "/internal/v1/"
-
 // IsInternal reports whether this route lives on the internal listener.
 func (m AuthRouteMeta) IsInternal() bool {
-	return strings.HasPrefix(m.Path, InternalPathPrefix)
+	return strings.HasPrefix(m.Path, cellvocab.InternalPathPrefix)
 }
 
 // AuthRouteDeclarer is implemented by aggregators that want to receive the
@@ -174,7 +172,7 @@ type AuthRouteDeclarer interface {
 // HTTPContractDeclarer is implemented by aggregators that want to receive the
 // ContractSpec a slice declares alongside an HTTP route.
 type HTTPContractDeclarer interface {
-	DeclareHTTPContract(spec wrapper.ContractSpec) error
+	DeclareHTTPContract(spec contractspec.ContractSpec) error
 }
 
 // RouteGroup declares where a batch of routes physically lives: which listener
@@ -204,7 +202,7 @@ func SingleGroup(l ListenerRef, prefix string, fn func(RouteMux) error) RouteGro
 // SubscriptionRequest holds everything needed to register one event subscription.
 // RegistryRecorder accumulates these; bootstrap drains them at phase6.
 type SubscriptionRequest struct {
-	Spec          wrapper.ContractSpec
+	Spec          contractspec.ContractSpec
 	Handler       outbox.EntryHandler
 	ConsumerGroup string
 	SliceID       string
@@ -357,7 +355,7 @@ func (r *RegistryRecorder) RouteGroup(g RouteGroup) {
 
 // Subscribe validates and appends a SubscriptionRequest.
 func (r *RegistryRecorder) Subscribe(
-	spec wrapper.ContractSpec,
+	spec contractspec.ContractSpec,
 	handler outbox.EntryHandler,
 	consumerGroup string,
 	opts ...SubscriptionOption,

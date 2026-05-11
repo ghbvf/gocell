@@ -4,7 +4,13 @@
 // pure-AST mode; not intended to compile.
 package violates
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+)
 
 // CallWithSprintfMessage is the canonical violation pattern: runtime data
 // is interpolated into the message argument instead of WithDetails or
@@ -25,7 +31,7 @@ func CallWrapWithSprintfMessage(cause error, tenant string) error {
 // concatenation in the message argument.
 func CallNewWithConcatenation(resource string) error {
 	return errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
-		"resource " + resource + " not found")
+		"resource "+resource+" not found")
 }
 
 // CallWritePublicWithSprintfMessage violates MESSAGE-CONST-LITERAL-01 by

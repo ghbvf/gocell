@@ -1,4 +1,4 @@
-package cell
+package cellvocab
 
 // ValidRolesForKind returns the legal ContractRoles for a given ContractKind.
 //

@@ -26,10 +26,11 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -39,15 +40,15 @@ import (
 // subscription via reg.Subscribe(...). Used by the phase6 wiring tests below.
 type stubEventCell struct {
 	*cell.BaseCell
-	spec wrapper.ContractSpec
+	spec contractspec.ContractSpec
 }
 
 func newStubEventCell(topic string) *stubEventCell {
 	return &stubEventCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "stub", Type: "core"}),
-		spec: wrapper.ContractSpec{
+		spec: contractspec.ContractSpec{
 			ID:        topic,
-			Kind:      "event",
+			Kind:      cellvocab.ContractEvent,
 			Transport: "inmem",
 			Topic:     topic,
 		},

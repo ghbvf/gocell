@@ -3,6 +3,7 @@ package cell
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -38,9 +39,9 @@ type CellIdentity interface {
 	// ID returns the cell's stable identifier (matches cell.yaml id).
 	ID() string
 	// Type classifies the cell's architectural role (core / edge / support).
-	Type() CellType
-	// ConsistencyLevel reports the cell's declared consistency tier (L0–L4).
-	ConsistencyLevel() Level
+	Type() cellvocab.CellType
+	// ConsistencyLevel reports the cell's declared consistency tier (cellvocab.L0–cellvocab.L4).
+	ConsistencyLevel() cellvocab.Level
 }
 
 // CellLifecycle drives the cell through Init → Start → Stop transitions. All
@@ -130,7 +131,7 @@ type Slice interface {
 	BelongsToCell() string
 	// ConsistencyLevel reports the slice's consistency tier; falls back to the
 	// owning cell's level when not declared explicitly.
-	ConsistencyLevel() Level
+	ConsistencyLevel() cellvocab.Level
 	// Init runs slice-local initialisation (no dependencies; that lives on Cell.Init).
 	Init(ctx context.Context) error
 	// Verify returns the verification spec parsed from slice.yaml.
@@ -149,13 +150,13 @@ type Contract interface {
 	// ID returns the contract's stable identifier (matches contract.yaml id).
 	ID() string
 	// Kind classifies the communication pattern (http / event / command / projection).
-	Kind() ContractKind
+	Kind() cellvocab.ContractKind
 	// OwnerCell returns the cell ID that owns the contract's authoritative side.
 	OwnerCell() string
-	// ConsistencyLevel reports the contract's consistency tier (L0–L4).
-	ConsistencyLevel() Level
+	// ConsistencyLevel reports the contract's consistency tier (cellvocab.L0–cellvocab.L4).
+	ConsistencyLevel() cellvocab.Level
 	// Lifecycle returns the contract's governance state (draft / active / deprecated).
-	Lifecycle() Lifecycle
+	Lifecycle() cellvocab.Lifecycle
 }
 
 // Assembly orchestrates a set of Cells into a runnable application: registers

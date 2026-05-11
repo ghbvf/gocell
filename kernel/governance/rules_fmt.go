@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -32,9 +32,9 @@ const codeFMT24 = "FMT-24"
 // Package-level lookup maps for validation rules, avoiding per-call allocation.
 var (
 	validLifecycles = map[string]bool{
-		string(cell.LifecycleDraft):      true,
-		string(cell.LifecycleActive):     true,
-		string(cell.LifecycleDeprecated): true,
+		string(cellvocab.LifecycleDraft):      true,
+		string(cellvocab.LifecycleActive):     true,
+		string(cellvocab.LifecycleDeprecated): true,
 	}
 	validJourneyLifecycles = map[string]bool{
 		"active":       true,
@@ -45,25 +45,25 @@ var (
 		"manual": true,
 	}
 	validCellTypes = map[string]bool{
-		string(cell.CellTypeCore):    true,
-		string(cell.CellTypeEdge):    true,
-		string(cell.CellTypeSupport): true,
+		string(cellvocab.CellTypeCore):    true,
+		string(cellvocab.CellTypeEdge):    true,
+		string(cellvocab.CellTypeSupport): true,
 	}
 	validRoles = map[string]bool{
-		string(cell.RoleServe):     true,
-		string(cell.RoleCall):      true,
-		string(cell.RolePublish):   true,
-		string(cell.RoleSubscribe): true,
-		string(cell.RoleHandle):    true,
-		string(cell.RoleInvoke):    true,
-		string(cell.RoleProvide):   true,
-		string(cell.RoleRead):      true,
+		string(cellvocab.RoleServe):     true,
+		string(cellvocab.RoleCall):      true,
+		string(cellvocab.RolePublish):   true,
+		string(cellvocab.RoleSubscribe): true,
+		string(cellvocab.RoleHandle):    true,
+		string(cellvocab.RoleInvoke):    true,
+		string(cellvocab.RoleProvide):   true,
+		string(cellvocab.RoleRead):      true,
 	}
 	validKinds = map[string]bool{
-		string(cell.ContractHTTP):       true,
-		string(cell.ContractEvent):      true,
-		string(cell.ContractCommand):    true,
-		string(cell.ContractProjection): true,
+		string(cellvocab.ContractHTTP):       true,
+		string(cellvocab.ContractEvent):      true,
+		string(cellvocab.ContractCommand):    true,
+		string(cellvocab.ContractProjection): true,
 	}
 	validHTTPMethods = map[string]bool{
 		"GET":    true,
@@ -171,7 +171,7 @@ func (v *Validator) validateFMT02() []ValidationResult {
 func (v *Validator) validateFMT03() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
-		if _, err := cell.ParseLevel(c.ConsistencyLevel); err != nil {
+		if _, err := cellvocab.ParseLevel(c.ConsistencyLevel); err != nil {
 			results = append(results, v.newResult(
 				"FMT-03", SeverityError, IssueInvalid,
 				cellFile(c),
@@ -181,7 +181,7 @@ func (v *Validator) validateFMT03() []ValidationResult {
 		}
 	}
 	for _, c := range v.project.Contracts {
-		if _, err := cell.ParseLevel(c.ConsistencyLevel); err != nil {
+		if _, err := cellvocab.ParseLevel(c.ConsistencyLevel); err != nil {
 			results = append(results, v.newResult(
 				"FMT-03", SeverityError, IssueInvalid,
 				contractFile(c),
@@ -198,10 +198,10 @@ func (v *Validator) validateFMT03() []ValidationResult {
 func (v *Validator) validateFMT04() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		kind := cell.ContractKind(c.Kind)
+		kind := cellvocab.ContractKind(c.Kind)
 
 		// Both event and projection contracts require replayable.
-		if kind == cell.ContractEvent || kind == cell.ContractProjection {
+		if kind == cellvocab.ContractEvent || kind == cellvocab.ContractProjection {
 			if c.Replayable == nil {
 				results = append(results, v.newResult(
 					"FMT-04", SeverityError, IssueRequired,
@@ -213,7 +213,7 @@ func (v *Validator) validateFMT04() []ValidationResult {
 		}
 
 		// Only event contracts require idempotencyKey and deliverySemantics.
-		if kind == cell.ContractEvent {
+		if kind == cellvocab.ContractEvent {
 			if c.IdempotencyKey == "" {
 				results = append(results, v.newResult(
 					"FMT-04", SeverityError, IssueRequired,
@@ -257,11 +257,11 @@ func (v *Validator) validateFMT05() []ValidationResult {
 func (v *Validator) validateFMT06() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
-		level, err := cell.ParseLevel(c.ConsistencyLevel)
+		level, err := cellvocab.ParseLevel(c.ConsistencyLevel)
 		if err != nil {
 			continue // FMT-03 covers invalid levels
 		}
-		if level != cell.L0 && c.Schema.Primary == "" {
+		if level != cellvocab.L0 && c.Schema.Primary == "" {
 			results = append(results, v.newResult(
 				"FMT-06", SeverityError, IssueRequired,
 				cellFile(c),
@@ -280,14 +280,14 @@ func (v *Validator) validateFMT07() []ValidationResult {
 		provider := contractProvider(c)
 		if provider == "" {
 			var field string
-			switch cell.ContractKind(c.Kind) {
-			case cell.ContractHTTP:
+			switch cellvocab.ContractKind(c.Kind) {
+			case cellvocab.ContractHTTP:
 				field = "endpoints.server"
-			case cell.ContractEvent:
+			case cellvocab.ContractEvent:
 				field = "endpoints.publisher"
-			case cell.ContractCommand:
+			case cellvocab.ContractCommand:
 				field = "endpoints.handler"
-			case cell.ContractProjection:
+			case cellvocab.ContractProjection:
 				field = "endpoints.provider"
 			default:
 				field = "endpoints"
@@ -466,7 +466,7 @@ const (
 func (v *Validator) validateFMT13() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		isHTTP := cell.ContractKind(c.Kind) == cell.ContractHTTP
+		isHTTP := cellvocab.ContractKind(c.Kind) == cellvocab.ContractHTTP
 		if isHTTP && c.Endpoints.HTTP == nil {
 			// FMT-13 必填化: HTTP contracts must now declare endpoints.http.
 			results = append(results, v.newResult(
@@ -493,7 +493,7 @@ func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []Validat
 	httpMeta := c.Endpoints.HTTP
 	file := contractFile(c)
 
-	if cell.ContractKind(c.Kind) != cell.ContractHTTP {
+	if cellvocab.ContractKind(c.Kind) != cellvocab.ContractHTTP {
 		return []ValidationResult{v.newResult(
 			codeFMT13, SeverityError, IssueInvalid,
 			file,

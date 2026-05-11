@@ -819,7 +819,7 @@ func TestSpecGenIsPackagePrivate(t *testing.T) {
 	}
 	got := string(content)
 
-	if !strings.Contains(got, "var spec = wrapper.ContractSpec{") {
+	if !strings.Contains(got, "var spec = contractspec.ContractSpec{") {
 		t.Errorf("expected private var spec, not found in:\n%s", got)
 	}
 	if strings.Contains(got, "var Spec") {
@@ -953,7 +953,7 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 	for _, path := range res.Generated {
 		if filepath.Base(path) == "spec_gen.go" {
 			content := fileutil.MustReadFile(t, path)
-			if !strings.Contains(string(content), "var spec = wrapper.ContractSpec{") {
+			if !strings.Contains(string(content), "var spec = contractspec.ContractSpec{") {
 				t.Errorf("spec_gen.go missing private spec var:\n%s", content)
 			}
 		}

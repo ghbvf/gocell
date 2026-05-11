@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -41,7 +42,7 @@ import (
 // spans.
 // ref: open-telemetry/opentelemetry-go-contrib otelhttp — "one middleware,
 // one span" invariant; late-binding route metadata via chi RouteContext.
-func HTTPHandler(spec ContractSpec, next http.Handler) (http.Handler, error) {
+func HTTPHandler(spec contractspec.ContractSpec, next http.Handler) (http.Handler, error) {
 	if err := validateHTTPHandlerArgs(spec, next); err != nil {
 		return nil, err
 	}
@@ -61,7 +62,7 @@ func HTTPHandler(spec ContractSpec, next http.Handler) (http.Handler, error) {
 // It panics when HTTPHandler returns an error. Suitable for static wiring
 // where the spec is a build-time literal; use HTTPHandler directly when the
 // spec is data-driven.
-func MustHTTPHandler(spec ContractSpec, next http.Handler) http.Handler {
+func MustHTTPHandler(spec contractspec.ContractSpec, next http.Handler) http.Handler {
 	h, err := HTTPHandler(spec, next)
 	if err != nil {
 		panic(errcode.Assertion("wrapper: handler: %v", err))
@@ -69,7 +70,7 @@ func MustHTTPHandler(spec ContractSpec, next http.Handler) http.Handler {
 	return h
 }
 
-func validateHTTPHandlerArgs(spec ContractSpec, next http.Handler) error {
+func validateHTTPHandlerArgs(spec contractspec.ContractSpec, next http.Handler) error {
 	if next == nil {
 		return fmt.Errorf("wrapper.HTTPHandler: next handler must not be nil")
 	}
@@ -82,10 +83,10 @@ func validateHTTPHandlerArgs(spec ContractSpec, next http.Handler) error {
 	return nil
 }
 
-func httpBaseAttrs(spec ContractSpec) []Attr {
+func httpBaseAttrs(spec contractspec.ContractSpec) []Attr {
 	return []Attr{
 		{Key: "gocell.contract.id", Value: spec.ID},
-		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.kind", Value: string(spec.Kind)},
 		{Key: "gocell.contract.transport", Value: spec.Transport},
 		{Key: "http.method", Value: spec.Method},
 		{Key: "http.route", Value: spec.Path},

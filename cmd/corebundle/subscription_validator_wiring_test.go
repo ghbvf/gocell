@@ -11,9 +11,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -42,7 +42,7 @@ func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Regist
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	spec := wrapper.ContractSpec{
+	spec := contractspec.ContractSpec{
 		ID:        "event.config.entry-upserted.v1",
 		Kind:      "event",
 		Transport: "amqp",

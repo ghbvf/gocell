@@ -26,6 +26,7 @@ import (
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	internallistcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
@@ -271,7 +272,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		deviceregister.WithClock(c.clk),
 	)
 	c.registerHandler = registercontract.NewHandler(registerSvc)
-	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
+	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cellvocab.L4))
 
 	// device-command slice: uses commandtest.InMemQueue as the command store in
 	// demo/example mode. For a production deployment, inject a durable adapter
@@ -312,14 +313,14 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		return fmt.Errorf("device-command sweeper: %w", err)
 	}
 	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, c.clk)
-	c.AddSlice(cell.NewBaseSlice("devicecommand", "devicecell", cell.L4))
+	c.AddSlice(cell.NewBaseSlice("devicecommand", "devicecell", cellvocab.L4))
 
 	// device-status slice
 	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)
 	// status: admin and operator may read any device's status; a device may only
 	// read its own status (path {id} must match the token subject).
 	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
-	c.AddSlice(cell.NewBaseSlice("devicestatus", "devicecell", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("devicestatus", "devicecell", cellvocab.L0))
 
 	// device-list slice
 	listSvc, err := devicelist.NewService(c.deviceRepo, c.cursorCodec, c.logger,
@@ -328,7 +329,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		return fmt.Errorf("device-list: %w", err)
 	}
 	c.listHandler = listcontract.NewHandler(listSvc, auth.AnyRole("admin"))
-	c.AddSlice(cell.NewBaseSlice("devicelist", "devicecell", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("devicelist", "devicecell", cellvocab.L0))
 	return nil
 }
 

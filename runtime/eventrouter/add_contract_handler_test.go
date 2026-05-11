@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
@@ -76,10 +78,10 @@ func (t *contractSpyTracer) only(tb testing.TB) *contractSpySpan {
 
 // --- Fixtures ---
 
-func configEntryUpsertedSpec() wrapper.ContractSpec {
-	return wrapper.ContractSpec{
+func configEntryUpsertedSpec() contractspec.ContractSpec {
+	return contractspec.ContractSpec{
 		ID:        "event.config.entry-upserted.v1",
-		Kind:      "event",
+		Kind:      cellvocab.ContractEvent,
 		Transport: "amqp",
 		Topic:     "event.config.entry-upserted.v1",
 	}
@@ -112,8 +114,8 @@ func TestAddContractHandler_EmptyConsumerGroup_ReturnsError(t *testing.T) {
 func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 	t.Parallel()
 	// Spec with Kind != "event" must be rejected at registration time.
-	httpSpec := wrapper.ContractSpec{
-		ID: "http.x.v1", Kind: "http", Transport: "http",
+	httpSpec := contractspec.ContractSpec{
+		ID: "http.x.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 		Method: "POST", Path: "/x",
 	}
 	r := New(wrap(&blockingSubscriber{}), clock.Real())

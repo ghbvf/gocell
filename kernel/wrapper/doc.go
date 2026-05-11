@@ -8,10 +8,6 @@
 // and annotates it with gocell.contract.* plus messaging.destination/system.
 // The consumer Tracer is injected by bootstrap, defaulting to NoopTracer.
 //
-// Layering: package wrapper depends only on stdlib + kernel/ctxkeys +
-// kernel/outbox + pkg/ctxkeys. OpenTelemetry lives in runtime/observability
-// where an adapter implements wrapper.Tracer.
-//
 // ref: go-kratos/kratos middleware/tracing/tracing.go — decorator + Options
 // ref: open-telemetry/opentelemetry-go-contrib otelhttp/config.go — Filter
 // and SpanNameFormatter extensibility

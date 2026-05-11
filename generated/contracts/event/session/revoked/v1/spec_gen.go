@@ -3,13 +3,16 @@
 
 package revoked
 
-import "github.com/ghbvf/gocell/kernel/wrapper"
+import (
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
+)
 
 // spec is the ContractSpec for event.session.revoked.v1.
 // Private — callers must use NewSubscription.Mount(reg) to register this event.
-var spec = wrapper.ContractSpec{
+var spec = contractspec.ContractSpec{
 	ID:        "event.session.revoked.v1",
-	Kind:      "event",
+	Kind:      cellvocab.ContractEvent,
 	Transport: "amqp",
 	Topic:     "event.session.revoked.v1",
 }

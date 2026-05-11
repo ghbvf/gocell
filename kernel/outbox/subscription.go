@@ -30,7 +30,7 @@ type Subscription struct {
 
 	// ContractID/Kind/Transport identify the contract bound to this
 	// subscription. They are intentionally primitive strings rather than a
-	// wrapper.ContractSpec to keep kernel/outbox independent of
+	// contractspec.ContractSpec to keep kernel/outbox independent of
 	// kernel/wrapper (wrapper already imports outbox for EntryHandler).
 	//
 	// Runtime eventrouter fills these fields for AddContractHandler

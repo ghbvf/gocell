@@ -7,14 +7,15 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-var contractSpec = wrapper.ContractSpec{
+var contractSpec = contractspec.ContractSpec{
 	ID:        "http.auth.setup.status.v1",
-	Kind:      "http",
+	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "GET",
 	Path:      "/api/v1/access/setup/status",

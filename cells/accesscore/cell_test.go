@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -431,8 +432,8 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 func TestAccessCore_Metadata(t *testing.T) {
 	c := newTestCell(t)
 	assert.Equal(t, "accesscore", c.ID())
-	assert.Equal(t, cell.CellTypeCore, c.Type())
-	assert.Equal(t, cell.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
+	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
 }
 
 func TestAccessCore_Startup(t *testing.T) {

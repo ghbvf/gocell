@@ -26,7 +26,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -160,7 +160,7 @@ func addServingSliceTriggers(
 	slicesByKey map[string]sliceRef,
 	sliceTriggerSets map[string]map[string]struct{},
 ) {
-	if cell.ContractKind(c.Kind) != cell.ContractHTTP || isExamplePath(c.File) || isExamplePath(c.Dir) {
+	if cellvocab.ContractKind(c.Kind) != cellvocab.ContractHTTP || isExamplePath(c.File) || isExamplePath(c.Dir) {
 		return
 	}
 	if len(c.Triggers) == 0 || !isL2OrHigher(c.ConsistencyLevel) {
@@ -205,7 +205,7 @@ func (v *Validator) runPerContractPhase(
 ) []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if cell.ContractKind(c.Kind) != cell.ContractHTTP {
+		if cellvocab.ContractKind(c.Kind) != cellvocab.ContractHTTP {
 			continue
 		}
 		if isExamplePath(c.File) || isExamplePath(c.Dir) {
@@ -273,7 +273,7 @@ func (v *Validator) checkTriggerContracts(
 			))
 			continue
 		}
-		if cell.ContractKind(eventContract.Kind) != cell.ContractEvent {
+		if cellvocab.ContractKind(eventContract.Kind) != cellvocab.ContractEvent {
 			results = append(results, v.newResult(
 				codeContractConsistencyEmit01, SeverityError, IssueMismatch,
 				contractFile(c), "triggers",

@@ -140,7 +140,7 @@ func TestValidateSliceConsistency_MissingParentCell(t *testing.T) {
 // FMT-19 wrapper package-state scanner (formerly rules_wrapper_test.go)
 // =============================================================================
 
-// FMT-18 (wrapper.ContractSpec literal cross-check against contracts/**/contract.yaml)
+// FMT-18 (contractspec.ContractSpec literal cross-check against contracts/**/contract.yaml)
 // was deleted in PR-V1-CODEGEN-FULL-MIGRATION. After W3 cells/** contains 0
 // ContractSpec literals — enforced statically by archtest gates:
 //   - CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01

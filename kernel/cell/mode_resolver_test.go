@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -260,7 +261,7 @@ func (durableEmitter) Emit(_ context.Context, _ outbox.Entry) error { return nil
 func (durableEmitter) Durable() bool                                { return true }
 
 // TestResolveCellEmitter covers the Cell-boundary wrapper: mutual exclusion,
-// WithEmitter durable-mode guard, delegation to ResolveEmitter, and the L2
+// WithEmitter durable-mode guard, delegation to ResolveEmitter, and the cellvocab.L2
 // non-durable Warn log.
 func TestResolveCellEmitter(t *testing.T) {
 	t.Parallel()
@@ -343,7 +344,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				Logger: logger,
 			},
 			PreResolved:      nonDurableEmitter{},
-			ConsistencyLevel: cell.L2,
+			ConsistencyLevel: cellvocab.L2,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -352,7 +353,7 @@ func TestResolveCellEmitter(t *testing.T) {
 			t.Fatal("expected non-durable outcome")
 		}
 		if !strings.Contains(buf.String(), "L2 transactional atomicity not guaranteed") {
-			t.Fatalf("expected L2 warn log, got: %q", buf.String())
+			t.Fatalf("expected cellvocab.L2 warn log, got: %q", buf.String())
 		}
 		if !strings.Contains(buf.String(), "durability_mode=demo") {
 			t.Fatalf("expected durability_mode=demo in log, got: %q", buf.String())
@@ -369,13 +370,13 @@ func TestResolveCellEmitter(t *testing.T) {
 				Logger: logger,
 			},
 			PreResolved:      nonDurableEmitter{},
-			ConsistencyLevel: cell.L1,
+			ConsistencyLevel: cellvocab.L1,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if strings.Contains(buf.String(), "L2 transactional atomicity") {
-			t.Fatalf("expected no L2 warn at L1, got: %q", buf.String())
+			t.Fatalf("expected no cellvocab.L2 warn at cellvocab.L1, got: %q", buf.String())
 		}
 	})
 
@@ -392,7 +393,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				MetricsProvider:   metrics.NopProvider{},
 				Clock:             clock.Real(),
 			},
-			ConsistencyLevel: cell.L2,
+			ConsistencyLevel: cellvocab.L2,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -404,7 +405,7 @@ func TestResolveCellEmitter(t *testing.T) {
 			t.Fatal("expected non-durable DirectEmitter")
 		}
 		if !strings.Contains(buf.String(), "L2 transactional atomicity not guaranteed") {
-			t.Fatalf("expected L2 warn for non-durable demo path, got: %q", buf.String())
+			t.Fatalf("expected cellvocab.L2 warn for non-durable demo path, got: %q", buf.String())
 		}
 	})
 
@@ -415,7 +416,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				CellID: "testcell",
 				Mode:   cell.DurabilityDemo,
 			},
-			ConsistencyLevel: cell.L2,
+			ConsistencyLevel: cellvocab.L2,
 		})
 		if err == nil {
 			t.Fatal("expected no-sink error from ResolveEmitter")

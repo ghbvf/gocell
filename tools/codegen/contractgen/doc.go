@@ -76,7 +76,7 @@
 //
 // # spec_gen.go (kind=event only)
 //
-// Renders the cell-facing wrapper.ContractSpec literal so cells can
+// Renders the cell-facing contractspec.ContractSpec literal so cells can
 // reference one canonical declaration for the topic, transport, delivery
 // semantics, and idempotency policy. Single source for the contract id
 // stamped into every consumer's reg.Subscribe call.

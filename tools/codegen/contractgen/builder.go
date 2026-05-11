@@ -221,7 +221,7 @@ func buildHTTPEndpointSpec(
 	// Clients are only wired into the generated contractSpec for /internal/v1/...
 	// paths. For public /api/v1/... paths, contract.yaml endpoints.clients is
 	// informational metadata (who calls this endpoint) — auth.Mount rejects
-	// Clients on non-internal paths (wrapper.ContractSpec validation rule).
+	// Clients on non-internal paths (contractspec.ContractSpec validation rule).
 	var clients []string
 	isInternalPath := metadata.IsInternalHTTPPath(http.Path)
 	if isInternalPath && len(contract.Endpoints.Clients) > 0 {

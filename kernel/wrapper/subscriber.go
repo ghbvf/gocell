@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -28,7 +29,7 @@ import (
 // validation per Watermill / MassTransit pattern). Structural assertions
 // (nil fn, kind!=event) remain because they catch programming errors
 // that no upstream validate would have caught.
-func WrapSubscriber(tr Tracer, spec ContractSpec, fn outbox.SubscriberHandler) (outbox.SubscriberHandler, error) {
+func WrapSubscriber(tr Tracer, spec contractspec.ContractSpec, fn outbox.SubscriberHandler) (outbox.SubscriberHandler, error) {
 	if fn == nil {
 		return nil, fmt.Errorf("wrapper.WrapSubscriber: fn must not be nil")
 	}
@@ -41,7 +42,7 @@ func WrapSubscriber(tr Tracer, spec ContractSpec, fn outbox.SubscriberHandler) (
 
 	baseAttrs := []Attr{
 		{Key: "gocell.contract.id", Value: spec.ID},
-		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.kind", Value: string(spec.Kind)},
 		{Key: "gocell.contract.transport", Value: spec.Transport},
 		{Key: "messaging.system", Value: spec.Transport},
 		{Key: "messaging.destination", Value: spec.Topic},

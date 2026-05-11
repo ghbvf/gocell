@@ -14,7 +14,9 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -90,7 +92,7 @@ func (s *endToEndSpySpan) attrMap() map[string]any {
 // delivery round-trip in addition to the span assertions.
 type consumerSpyCell struct {
 	cell.BaseCell
-	spec  wrapper.ContractSpec
+	spec  contractspec.ContractSpec
 	calls chan outbox.Entry
 }
 
@@ -114,8 +116,8 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	spyTracer := &endToEndSpyTracer{}
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
 
-	spec := wrapper.ContractSpec{
-		ID: "event.integration.test.v1", Kind: "event", Transport: "inmem",
+	spec := contractspec.ContractSpec{
+		ID: "event.integration.test.v1", Kind: cellvocab.ContractEvent, Transport: "inmem",
 		Topic: "event.integration.test.v1",
 	}
 	cellImpl := &consumerSpyCell{

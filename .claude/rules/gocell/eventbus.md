@@ -76,7 +76,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }
-    return reg.Subscribe(wrapper.ContractSpec{
+    return reg.Subscribe(contractspec.ContractSpec{
         ID:        "event.my.topic.v1",
         Kind:      "event",
         Transport: "amqp",

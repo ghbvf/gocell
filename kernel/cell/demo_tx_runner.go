@@ -12,7 +12,7 @@ import (
 // (publisher-only demo assemblies). It implements Nooper, so CheckNotNoop
 // rejects it under DurabilityDurable mode — demo callers that forget to wire
 // a real TxRunner surface an error at Init() time instead of silently losing
-// L2 atomicity guarantees.
+// cellvocab.L2 atomicity guarantees.
 type DemoTxRunner struct{}
 
 // Compile-time assertion: DemoTxRunner must satisfy Nooper.

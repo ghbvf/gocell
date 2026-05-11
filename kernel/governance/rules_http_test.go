@@ -37,7 +37,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-var spec = wrapper.ContractSpec{ID: "` + contractID + `"}
+var spec = contractspec.ContractSpec{ID: "` + contractID + `"}
 
 func setup(mux http.Handler) {
 	auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h)})
@@ -63,7 +63,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-var spec = wrapper.ContractSpec{ID: "` + contractID + `"}
+var spec = contractspec.ContractSpec{ID: "` + contractID + `"}
 
 func setup(mux http.Handler) {
 	auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h)})
@@ -360,7 +360,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-var contractSpec = wrapper.ContractSpec{ID: "` + contractID + `"}
+var contractSpec = contractspec.ContractSpec{ID: "` + contractID + `"}
 
 type Handler struct{}
 
@@ -800,7 +800,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-var spec = wrapper.ContractSpec{ID: "` + contractID + `"}
+var spec = contractspec.ContractSpec{ID: "` + contractID + `"}
 
 func setup(mux http.Handler) {
 	auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h)})
@@ -1025,8 +1025,8 @@ func TestCheckHTTPPathParamUUID_FunctionNarrowing(t *testing.T) {
 	// CH-05 must detect that contractB's required "userID" param is not
 	// parsed in handleB, even though it IS parsed in handleA.
 	src := `
-var specA = wrapper.ContractSpec{ID: "` + contractA + `"}
-var specB = wrapper.ContractSpec{ID: "` + contractB + `"}
+var specA = contractspec.ContractSpec{ID: "` + contractA + `"}
+var specB = contractspec.ContractSpec{ID: "` + contractB + `"}
 
 func setup(mux http.Handler) {
 	auth.Mount(mux, auth.Route{Contract: specA, Handler: http.HandlerFunc(handleA)})

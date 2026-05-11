@@ -9,16 +9,17 @@
 // Specifically the legacy scan looks for the substring:
 //   `ID:        "event.fake.notify.v1"`
 // AST scan must extract the actual KeyValueExpr value from the
-// wrapper.ContractSpec composite literal, not match arbitrary text.
+// contractspec.ContractSpec composite literal, not match arbitrary text.
 
 package wrongid
 
-import "github.com/ghbvf/gocell/kernel/wrapper"
+import "github.com/ghbvf/gocell/kernel/contractspec"
 
 // Documentation reference (legacy file scanner would match the substring here):
+//
 //	ID:        "event.fake.notify.v1"
 //	Topic:     "event.fake.notify.v1"
-var spec = wrapper.ContractSpec{
+var spec = contractspec.ContractSpec{
 	ID:        "event.fake.WRONG.v1",
 	Kind:      "event",
 	Transport: "amqp",

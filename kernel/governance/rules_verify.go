@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/verify"
 )
@@ -159,11 +159,11 @@ func (v *Validator) validateVERIFY03() []ValidationResult {
 			if !ok {
 				continue // REF-09 covers missing cells
 			}
-			targetLevel, parseErr := cell.ParseLevel(target.ConsistencyLevel)
+			targetLevel, parseErr := cellvocab.ParseLevel(target.ConsistencyLevel)
 			if parseErr != nil {
 				continue // FMT-03 covers invalid levels
 			}
-			if targetLevel != cell.L0 {
+			if targetLevel != cellvocab.L0 {
 				results = append(results, v.newResult(
 					"VERIFY-03", SeverityError, IssueMismatch,
 					cellFile(c),
@@ -220,7 +220,7 @@ func (v *Validator) hasProviderSlice(contractID, providerCell string) bool {
 			continue
 		}
 		for _, cu := range s.ContractUsages {
-			if cu.Contract == contractID && cell.IsProviderRole(cell.ContractRole(cu.Role)) {
+			if cu.Contract == contractID && cellvocab.IsProviderRole(cellvocab.ContractRole(cu.Role)) {
 				return true
 			}
 		}

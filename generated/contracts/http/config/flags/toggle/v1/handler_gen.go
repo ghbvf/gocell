@@ -10,16 +10,17 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
 
-var contractSpec = wrapper.ContractSpec{
+var contractSpec = contractspec.ContractSpec{
 	ID:        "http.config.flags.toggle.v1",
-	Kind:      "http",
+	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "POST",
 	Path:      "/api/v1/flags/{key}/toggle",

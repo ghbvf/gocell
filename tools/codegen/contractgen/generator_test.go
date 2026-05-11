@@ -215,8 +215,8 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 	// spec_gen.go: must declare "var spec" (lowercase — private to package).
 	if specPath, ok := filesByName["spec_gen.go"]; ok {
 		content := fileutil.MustReadFile(t, specPath)
-		if !strings.Contains(string(content), "var spec = wrapper.ContractSpec{") {
-			t.Errorf("spec_gen.go should contain 'var spec = wrapper.ContractSpec{' (private), content:\n%s", string(content))
+		if !strings.Contains(string(content), "var spec = contractspec.ContractSpec{") {
+			t.Errorf("spec_gen.go should contain 'var spec = contractspec.ContractSpec{' (private), content:\n%s", string(content))
 		}
 	}
 

@@ -32,7 +32,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -178,8 +178,8 @@ func (v *Validator) validateADV06() []ValidationResult {
 // which is the precondition shared by ADV-05 and ADV-06 for active drift checks.
 func isActiveEvent(c *metadata.ContractMeta) bool {
 	return c != nil &&
-		cell.ContractKind(c.Kind) == cell.ContractEvent &&
-		c.Lifecycle == string(cell.LifecycleActive)
+		cellvocab.ContractKind(c.Kind) == cellvocab.ContractEvent &&
+		c.Lifecycle == string(cellvocab.LifecycleActive)
 }
 
 // buildCellSubscribeIndex maps each cell ID to the set of contract IDs that
@@ -192,7 +192,7 @@ func buildCellSubscribeIndex(slices map[string]*metadata.SliceMeta) map[string]m
 	idx := make(map[string]map[string]bool, len(slices))
 	for _, s := range slices {
 		for _, cu := range s.ContractUsages {
-			if cell.ContractRole(cu.Role) != cell.RoleSubscribe {
+			if cellvocab.ContractRole(cu.Role) != cellvocab.RoleSubscribe {
 				continue
 			}
 			set, ok := idx[s.BelongsToCell]
@@ -242,7 +242,7 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
-			if cell.ContractRole(cu.Role) != cell.RoleSubscribe {
+			if cellvocab.ContractRole(cu.Role) != cellvocab.RoleSubscribe {
 				continue
 			}
 			c := v.project.Contracts[cu.Contract]
@@ -350,7 +350,7 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 			// empty means inherit cell — always valid
 			continue
 		}
-		sliceLevel, err := cell.ParseLevel(s.ConsistencyLevel)
+		sliceLevel, err := cellvocab.ParseLevel(s.ConsistencyLevel)
 		if err != nil {
 			results = append(results, v.newResult(
 				"SLICE-CONSISTENCY-01", SeverityError, IssueInvalid,
@@ -368,7 +368,7 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 			// REF-01 already catches missing parent cell; skip here
 			continue
 		}
-		cellLevel, err := cell.ParseLevel(parentCell.ConsistencyLevel)
+		cellLevel, err := cellvocab.ParseLevel(parentCell.ConsistencyLevel)
 		if err != nil {
 			// FMT-03 already catches invalid cell consistencyLevel; skip here
 			continue

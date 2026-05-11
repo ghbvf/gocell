@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
@@ -175,7 +176,7 @@ func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
 func mustWrapSubscriberForTest(
 	t *testing.T,
 	tr wrapper.Tracer,
-	spec wrapper.ContractSpec,
+	spec contractspec.ContractSpec,
 	fn outbox.SubscriberHandler,
 ) outbox.SubscriberHandler {
 	t.Helper()

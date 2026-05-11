@@ -49,7 +49,7 @@ var kernelMetadataWireSymbols = map[string]bool{
 	// Note: "Filter" is intentionally excluded here because many packages
 	// may use "Filter" as a type name — we only forbid the wire-specific
 	// names above. ContractSpec is also excluded because kernel/wrapper
-	// defines wrapper.ContractSpec (a different type entirely).
+	// defines contractspec.ContractSpec (a different type entirely).
 }
 
 type wireViolation struct {

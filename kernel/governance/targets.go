@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -363,7 +363,7 @@ func (ts *TargetSelector) collectL0CellsFromSlices(sliceSet map[string]struct{})
 		if !ok {
 			continue
 		}
-		if lvl, err := cell.ParseLevel(c.ConsistencyLevel); err == nil && lvl == cell.L0 {
+		if lvl, err := cellvocab.ParseLevel(c.ConsistencyLevel); err == nil && lvl == cellvocab.L0 {
 			l0Cells[c.ID] = struct{}{}
 		}
 	}
@@ -378,7 +378,7 @@ func (ts *TargetSelector) collectL0CellsFromFileSet(fileCellSet map[string]struc
 		if !ok {
 			continue
 		}
-		if lvl, err := cell.ParseLevel(c.ConsistencyLevel); err == nil && lvl == cell.L0 {
+		if lvl, err := cellvocab.ParseLevel(c.ConsistencyLevel); err == nil && lvl == cellvocab.L0 {
 			l0Cells[c.ID] = struct{}{}
 		}
 	}

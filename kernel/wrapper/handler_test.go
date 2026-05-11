@@ -9,14 +9,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
-func loginSpec() wrapper.ContractSpec {
-	return wrapper.ContractSpec{
+func loginSpec() contractspec.ContractSpec {
+	return contractspec.ContractSpec{
 		ID:        "http.auth.login.v1",
-		Kind:      "http",
+		Kind:      cellvocab.ContractHTTP,
 		Transport: "http",
 		Method:    "POST",
 		Path:      "/api/v1/auth/login",
@@ -89,11 +91,11 @@ func TestHTTPHandler_NoCarrier_StillInvokesInner(t *testing.T) {
 // validation: HTTPHandler returns a non-nil error rather than panicking.
 func TestHTTPHandler_ReturnsErrorOnInvalidSpec(t *testing.T) {
 	t.Parallel()
-	cases := []wrapper.ContractSpec{
-		{},                      // all empty
-		{ID: "a", Kind: "http"}, // missing transport/method/path
-		{ID: "a", Kind: "http", Transport: "http"},                 // missing method/path
-		{ID: "a", Kind: "http", Transport: "http", Method: "POST"}, // missing path
+	cases := []contractspec.ContractSpec{
+		{},                                      // all empty
+		{ID: "a", Kind: cellvocab.ContractHTTP}, // missing transport/method/path
+		{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http"},                 // missing method/path
+		{ID: "a", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "POST"}, // missing path
 	}
 	for _, spec := range cases {
 		_, err := wrapper.HTTPHandler(spec, okHandler(200))
@@ -111,8 +113,8 @@ func TestHTTPHandler_ReturnsErrorOnNilHandler(t *testing.T) {
 // TestHTTPHandler_ReturnsErrorOnNonHTTPKind ensures event-kind specs are rejected.
 func TestHTTPHandler_ReturnsErrorOnNonHTTPKind(t *testing.T) {
 	t.Parallel()
-	_, err := wrapper.HTTPHandler(wrapper.ContractSpec{
-		ID: "event.x.v1", Kind: "event", Transport: "amqp", Topic: "x",
+	_, err := wrapper.HTTPHandler(contractspec.ContractSpec{
+		ID: "event.x.v1", Kind: cellvocab.ContractEvent, Transport: "amqp", Topic: "x",
 	}, okHandler(200))
 	require.Error(t, err)
 }

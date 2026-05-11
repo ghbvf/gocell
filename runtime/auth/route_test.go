@@ -9,8 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 // captureMux pairs a stdlib ServeMux with an AuthRouteDeclarer counter so
@@ -71,7 +72,7 @@ func (m *failingContractDeclareMux) Handle(pattern string, h http.Handler) {
 	m.ServeMux.Handle(pattern, h)
 }
 
-func (m *failingContractDeclareMux) DeclareHTTPContract(wrapper.ContractSpec) error {
+func (m *failingContractDeclareMux) DeclareHTTPContract(contractspec.ContractSpec) error {
 	return assert.AnError
 }
 
@@ -82,9 +83,9 @@ var (
 
 var noopHandler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 
-func loginContractSpec() wrapper.ContractSpec {
-	return wrapper.ContractSpec{
-		ID: "http.auth.login.v1", Kind: "http", Transport: "http",
+func loginContractSpec() contractspec.ContractSpec {
+	return contractspec.ContractSpec{
+		ID: "http.auth.login.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 		Method: "POST", Path: "/api/v1/access/sessions/login",
 	}
 }
@@ -194,7 +195,7 @@ func TestMount_ReturnsErrorOnNilHandler(t *testing.T) {
 
 func TestMount_ReturnsErrorOnNonHTTPKind(t *testing.T) {
 	err := Mount(newCaptureMux(), Route{
-		Contract: wrapper.ContractSpec{ID: "event.x.v1", Kind: "event", Transport: "amqp", Topic: "x"},
+		Contract: contractspec.ContractSpec{ID: "event.x.v1", Kind: cellvocab.ContractEvent, Transport: "amqp", Topic: "x"},
 		Handler:  noopHandler,
 	})
 	require.Error(t, err)
@@ -202,8 +203,8 @@ func TestMount_ReturnsErrorOnNonHTTPKind(t *testing.T) {
 
 func TestMount_ReturnsErrorOnInvalidMethod(t *testing.T) {
 	err := Mount(newCaptureMux(), Route{
-		Contract: wrapper.ContractSpec{
-			ID: "http.x.v1", Kind: "http", Transport: "http",
+		Contract: contractspec.ContractSpec{
+			ID: "http.x.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 			Method: "foo", Path: "/x",
 		},
 		Handler: noopHandler,
@@ -373,8 +374,8 @@ func TestMount_AcceptsRootPrefix(t *testing.T) {
 	mux := newPrefixedCaptureMux("/")
 	require.NotPanics(t, func() {
 		require.NoError(t, Mount(mux, Route{
-			Contract: wrapper.ContractSpec{
-				ID: "http.auth.login.v1", Kind: "http", Transport: "http",
+			Contract: contractspec.ContractSpec{
+				ID: "http.auth.login.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 				Method: "POST", Path: "/api/v1/access/sessions/login",
 			},
 			Handler: noopHandler,
@@ -390,8 +391,8 @@ func TestMount_AcceptsRootPrefix(t *testing.T) {
 func TestMount_ReturnsErrorOnPrefixMismatch(t *testing.T) {
 	mux := newPrefixedCaptureMux("/api/v1/access")
 	err := Mount(mux, Route{
-		Contract: wrapper.ContractSpec{
-			ID: "http.foo.bar.v1", Kind: "http", Transport: "http",
+		Contract: contractspec.ContractSpec{
+			ID: "http.foo.bar.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 			Method: "GET", Path: "/foo/bar",
 		},
 		Handler: noopHandler,
@@ -403,8 +404,8 @@ func TestMount_ReturnsErrorOnPrefixMismatch(t *testing.T) {
 func TestMount_ReturnsErrorOnPartialSegmentPrefix(t *testing.T) {
 	mux := newPrefixedCaptureMux("/api/v1/a")
 	err := Mount(mux, Route{
-		Contract: wrapper.ContractSpec{
-			ID: "http.auth.x.v1", Kind: "http", Transport: "http",
+		Contract: contractspec.ContractSpec{
+			ID: "http.auth.x.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 			Method: "GET", Path: "/api/v1/auth/x",
 		},
 		Handler: noopHandler,
@@ -416,8 +417,8 @@ func TestMount_ReturnsErrorOnPartialSegmentPrefix(t *testing.T) {
 func TestMount_ReturnsErrorOnUnrecognizedMethod(t *testing.T) {
 	// "FETCH" is uppercase (passes the ToUpper check) but not in validRouteMethods.
 	err := Mount(newCaptureMux(), Route{
-		Contract: wrapper.ContractSpec{
-			ID: "http.x.v1", Kind: "http", Transport: "http",
+		Contract: contractspec.ContractSpec{
+			ID: "http.x.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 			Method: "FETCH", Path: "/x",
 		},
 		Handler: noopHandler,
@@ -439,9 +440,9 @@ func TestMount_ReturnsErrorOnPublicWithPasswordResetExempt(t *testing.T) {
 
 func TestMount_ReturnsErrorOnEmptyPath(t *testing.T) {
 	err := Mount(newCaptureMux(), Route{
-		Contract: wrapper.ContractSpec{
+		Contract: contractspec.ContractSpec{
 			ID:   "http.x.v1",
-			Kind: "http", Transport: "http",
+			Kind: cellvocab.ContractHTTP, Transport: "http",
 			Method: "GET",
 			Path:   "",
 		},
@@ -459,8 +460,8 @@ func TestMount_AcceptsValidSegmentPrefix(t *testing.T) {
 	mux := newPrefixedCaptureMux("/api/v1/access")
 	require.NotPanics(t, func() {
 		require.NoError(t, Mount(mux, Route{
-			Contract: wrapper.ContractSpec{
-				ID: "http.auth.login.v1", Kind: "http", Transport: "http",
+			Contract: contractspec.ContractSpec{
+				ID: "http.auth.login.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 				Method: "POST", Path: "/api/v1/access/sessions/login",
 			},
 			Handler: noopHandler,

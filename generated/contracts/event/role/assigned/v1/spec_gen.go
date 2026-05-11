@@ -3,13 +3,16 @@
 
 package assigned
 
-import "github.com/ghbvf/gocell/kernel/wrapper"
+import (
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
+)
 
 // spec is the ContractSpec for event.role.assigned.v1.
 // Private — callers must use NewSubscription.Mount(reg) to register this event.
-var spec = wrapper.ContractSpec{
+var spec = contractspec.ContractSpec{
 	ID:        "event.role.assigned.v1",
-	Kind:      "event",
+	Kind:      cellvocab.ContractEvent,
 	Transport: "amqp",
 	Topic:     "event.role.assigned.v1",
 }

@@ -17,7 +17,8 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
 )
@@ -27,16 +28,16 @@ import (
 // live in runtime/ (not cells/ or contracts/) and are registered by bootstrap
 // itself rather than by a Cell RouteGroups implementation.
 var (
-	specHealthLivez = wrapper.ContractSpec{
-		ID: "http.framework.health.livez.v1", Kind: "http", Transport: "http",
+	specHealthLivez = contractspec.ContractSpec{
+		ID: "http.framework.health.livez.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 		Method: "GET", Path: "/healthz",
 	}
-	specHealthReadyz = wrapper.ContractSpec{
-		ID: "http.framework.health.readyz.v1", Kind: "http", Transport: "http",
+	specHealthReadyz = contractspec.ContractSpec{
+		ID: "http.framework.health.readyz.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 		Method: "GET", Path: "/readyz",
 	}
-	specHealthMetrics = wrapper.ContractSpec{
-		ID: "http.framework.health.metrics.v1", Kind: "http", Transport: "http",
+	specHealthMetrics = contractspec.ContractSpec{
+		ID: "http.framework.health.metrics.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
 		Method: "GET", Path: "/metrics",
 	}
 )

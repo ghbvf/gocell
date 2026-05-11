@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 )
 
 // validateREF01 checks that slice.belongsToCell references an existing cell.
@@ -329,7 +329,7 @@ func (v *Validator) validateREF16() []ValidationResult {
 }
 
 // validateREF17 checks that HTTP contracts on the internal audience
-// (cell.InternalPathPrefix) do not list any external actor as a client.
+// (cellvocab.InternalPathPrefix) do not list any external actor as a client.
 // Internal endpoints are reserved for cell-to-cell traffic and admin/ops
 // callers reached through trusted internal listeners; routing a registered
 // external actor through them bypasses the public-API contract surface and
@@ -353,7 +353,7 @@ func (v *Validator) validateREF17() []ValidationResult {
 			continue
 		}
 		path := c.Endpoints.HTTP.Path
-		if !strings.HasPrefix(path, cell.InternalPathPrefix) {
+		if !strings.HasPrefix(path, cellvocab.InternalPathPrefix) {
 			continue
 		}
 		for i, client := range c.Endpoints.Clients {

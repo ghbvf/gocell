@@ -1,8 +1,10 @@
-package wrapper
+package contractspec
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 )
 
 // ContractSpec is the runtime descriptor for one contract endpoint.
@@ -17,12 +19,9 @@ import (
 // NewHandler adapters in generated/contracts/**.
 //
 // Three archtest gates enforce this invariant:
-//   - CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01
+//   - CELLS-NO-CONTRACTSPEC-IMPORT-01
 //   - NO-MANUAL-CONTRACTSPEC-LITERAL-01
 //   - EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
-//
-// Replace any prior usage of the deleted `EventSpec(id, transport)` helper
-// with `<contractpkg>.NewSubscription(handler, consumerGroup, sliceID).Mount(reg)`.
 //
 // The zero value is invalid — callers must populate ID / Kind / Transport
 // and the kind-specific fields, then rely on auth.Mount / wrapper.HTTPHandler
@@ -36,8 +35,8 @@ type ContractSpec struct {
 	// contract.yaml file identified by Kind + path.
 	ID string
 
-	// Kind is one of "http" | "event" | "command" | "projection".
-	Kind string
+	// Kind is one of ContractHTTP | ContractEvent | ContractCommand | ContractProjection.
+	Kind cellvocab.ContractKind
 
 	// Transport names the wire protocol: "http" for Kind=="http",
 	// "amqp" / "internal" / ... for event/command/projection.
@@ -63,46 +62,47 @@ type ContractSpec struct {
 // cost of a full wrapper.HTTPHandler call.
 func (s ContractSpec) Validate() error {
 	if strings.TrimSpace(s.ID) == "" {
-		return fmt.Errorf("wrapper.ContractSpec: ID must not be empty")
+		return fmt.Errorf("contractspec.ContractSpec: ID must not be empty")
 	}
-	if strings.TrimSpace(s.Kind) == "" {
-		return fmt.Errorf("wrapper.ContractSpec: Kind must not be empty")
+	if strings.TrimSpace(string(s.Kind)) == "" {
+		return fmt.Errorf("contractspec.ContractSpec: Kind must not be empty")
 	}
 	if strings.TrimSpace(s.Transport) == "" {
-		return fmt.Errorf("wrapper.ContractSpec: Transport must not be empty")
+		return fmt.Errorf("contractspec.ContractSpec: Transport must not be empty")
 	}
 
 	switch s.Kind {
-	case "http":
+	case cellvocab.ContractHTTP:
 		return s.validateHTTP()
-	case "event":
+	case cellvocab.ContractEvent:
 		return s.validateEvent()
-	case "command", "projection":
+	case cellvocab.ContractCommand, cellvocab.ContractProjection:
 		// Allowed but no additional validation yet — future PRs add
 		// command/projection transports.
 		return nil
 	default:
-		return fmt.Errorf("wrapper.ContractSpec: Kind %q not recognized (http|event|command|projection)", s.Kind)
+		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection)", s.Kind)
 	}
 }
 
 func (s ContractSpec) validateHTTP() error {
 	if s.Method == "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind requires Method", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind requires Method", s.ID)
 	}
 	if s.Method != strings.ToUpper(s.Method) {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: Method %q must be upper-case", s.ID, s.Method)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: Method %q must be upper-case", s.ID, s.Method)
 	}
 	if s.Path == "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind requires Path", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind requires Path", s.ID)
 	}
 	if !strings.HasPrefix(s.Path, "/") {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: Path %q must start with '/'", s.ID, s.Path)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: Path %q must start with '/'", s.ID, s.Path)
 	}
 	if s.Topic != "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind must not carry Topic", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
-	isInternalPath := strings.HasPrefix(s.Path, "/internal/v1/") || s.Path == "/internal/v1"
+	isInternalPath := strings.HasPrefix(s.Path, cellvocab.InternalPathPrefix) ||
+		s.Path == strings.TrimSuffix(cellvocab.InternalPathPrefix, "/")
 	if isInternalPath && len(s.Clients) == 0 {
 		return fmt.Errorf(
 			"ContractSpec[%s]: internal path requires non-empty Clients "+
@@ -114,7 +114,7 @@ func (s ContractSpec) validateHTTP() error {
 		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)
 	}
 	for i, c := range s.Clients {
-		if !isCellIDLike(strings.ToLower(c)) {
+		if !isCellIDLike(c) {
 			return fmt.Errorf("ContractSpec[%s]: Clients[%d] %q does not match cell ID pattern ^[a-z][a-z0-9-]*$",
 				s.ID, i, c)
 		}
@@ -123,10 +123,10 @@ func (s ContractSpec) validateHTTP() error {
 }
 
 // isCellIDLike reports whether s matches the cell-ID pattern
-// `^[a-z][a-z0-9-]*$`. Implemented byte-wise so that kernel/wrapper avoids a
-// package-level regexp var (FMT-19 forbids initializer state in kernel/).
-// Mirrors runtime/auth.callerCellPattern semantics but adds no runtime
-// dependency.
+// `^[a-z][a-z0-9-]*$`. Implemented byte-wise so that kernel/contractspec
+// avoids a package-level regexp var (FMT-19 forbids initializer state in
+// kernel/). Mirrors runtime/auth.callerCellPattern semantics but adds no
+// runtime dependency.
 func isCellIDLike(s string) bool {
 	if s == "" {
 		return false
@@ -149,10 +149,10 @@ func isCellIDLike(s string) bool {
 
 func (s ContractSpec) validateEvent() error {
 	if s.Topic == "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: event kind requires Topic", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind requires Topic", s.ID)
 	}
 	if s.Method != "" || s.Path != "" {
-		return fmt.Errorf("wrapper.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package cell
+package cellvocab_test
 
 import (
 	"errors"
@@ -7,23 +7,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestParseLevelRoundTrip(t *testing.T) {
 	tests := []struct {
 		input string
-		want  Level
+		want  cellvocab.Level
 	}{
-		{"L0", L0},
-		{"L1", L1},
-		{"L2", L2},
-		{"L3", L3},
-		{"L4", L4},
+		{"L0", cellvocab.L0},
+		{"L1", cellvocab.L1},
+		{"L2", cellvocab.L2},
+		{"L3", cellvocab.L3},
+		{"L4", cellvocab.L4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := ParseLevel(tt.input)
+			got, err := cellvocab.ParseLevel(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.input, got.String())
@@ -44,7 +45,7 @@ func TestParseLevelInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseLevel(tt.input)
+			_, err := cellvocab.ParseLevel(tt.input)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
@@ -54,46 +55,46 @@ func TestParseLevelInvalid(t *testing.T) {
 }
 
 func TestLevelStringOutOfRange(t *testing.T) {
-	l := Level(99)
+	l := cellvocab.Level(99)
 	assert.Contains(t, l.String(), "Level(99)")
 }
 
 func TestLevelConstants(t *testing.T) {
-	assert.Equal(t, Level(0), L0)
-	assert.Equal(t, Level(1), L1)
-	assert.Equal(t, Level(2), L2)
-	assert.Equal(t, Level(3), L3)
-	assert.Equal(t, Level(4), L4)
+	assert.Equal(t, cellvocab.Level(0), cellvocab.L0)
+	assert.Equal(t, cellvocab.Level(1), cellvocab.L1)
+	assert.Equal(t, cellvocab.Level(2), cellvocab.L2)
+	assert.Equal(t, cellvocab.Level(3), cellvocab.L3)
+	assert.Equal(t, cellvocab.Level(4), cellvocab.L4)
 }
 
 func TestCellTypeValues(t *testing.T) {
-	assert.Equal(t, CellType("core"), CellTypeCore)
-	assert.Equal(t, CellType("edge"), CellTypeEdge)
-	assert.Equal(t, CellType("support"), CellTypeSupport)
+	assert.Equal(t, cellvocab.CellType("core"), cellvocab.CellTypeCore)
+	assert.Equal(t, cellvocab.CellType("edge"), cellvocab.CellTypeEdge)
+	assert.Equal(t, cellvocab.CellType("support"), cellvocab.CellTypeSupport)
 }
 
 func TestContractKindValues(t *testing.T) {
-	assert.Equal(t, ContractKind("http"), ContractHTTP)
-	assert.Equal(t, ContractKind("event"), ContractEvent)
-	assert.Equal(t, ContractKind("command"), ContractCommand)
-	assert.Equal(t, ContractKind("projection"), ContractProjection)
+	assert.Equal(t, cellvocab.ContractKind("http"), cellvocab.ContractHTTP)
+	assert.Equal(t, cellvocab.ContractKind("event"), cellvocab.ContractEvent)
+	assert.Equal(t, cellvocab.ContractKind("command"), cellvocab.ContractCommand)
+	assert.Equal(t, cellvocab.ContractKind("projection"), cellvocab.ContractProjection)
 }
 
 func TestContractRoleValues(t *testing.T) {
-	assert.Equal(t, ContractRole("serve"), RoleServe)
-	assert.Equal(t, ContractRole("call"), RoleCall)
-	assert.Equal(t, ContractRole("publish"), RolePublish)
-	assert.Equal(t, ContractRole("subscribe"), RoleSubscribe)
-	assert.Equal(t, ContractRole("handle"), RoleHandle)
-	assert.Equal(t, ContractRole("invoke"), RoleInvoke)
-	assert.Equal(t, ContractRole("provide"), RoleProvide)
-	assert.Equal(t, ContractRole("read"), RoleRead)
+	assert.Equal(t, cellvocab.ContractRole("serve"), cellvocab.RoleServe)
+	assert.Equal(t, cellvocab.ContractRole("call"), cellvocab.RoleCall)
+	assert.Equal(t, cellvocab.ContractRole("publish"), cellvocab.RolePublish)
+	assert.Equal(t, cellvocab.ContractRole("subscribe"), cellvocab.RoleSubscribe)
+	assert.Equal(t, cellvocab.ContractRole("handle"), cellvocab.RoleHandle)
+	assert.Equal(t, cellvocab.ContractRole("invoke"), cellvocab.RoleInvoke)
+	assert.Equal(t, cellvocab.ContractRole("provide"), cellvocab.RoleProvide)
+	assert.Equal(t, cellvocab.ContractRole("read"), cellvocab.RoleRead)
 }
 
 func TestLifecycleValues(t *testing.T) {
-	assert.Equal(t, Lifecycle("draft"), LifecycleDraft)
-	assert.Equal(t, Lifecycle("active"), LifecycleActive)
-	assert.Equal(t, Lifecycle("deprecated"), LifecycleDeprecated)
+	assert.Equal(t, cellvocab.Lifecycle("draft"), cellvocab.LifecycleDraft)
+	assert.Equal(t, cellvocab.Lifecycle("active"), cellvocab.LifecycleActive)
+	assert.Equal(t, cellvocab.Lifecycle("deprecated"), cellvocab.LifecycleDeprecated)
 }
 
 // ---------------------------------------------------------------------------
@@ -103,15 +104,15 @@ func TestLifecycleValues(t *testing.T) {
 func TestParseCellTypeRoundTrip(t *testing.T) {
 	tests := []struct {
 		input string
-		want  CellType
+		want  cellvocab.CellType
 	}{
-		{"core", CellTypeCore},
-		{"edge", CellTypeEdge},
-		{"support", CellTypeSupport},
+		{"core", cellvocab.CellTypeCore},
+		{"edge", cellvocab.CellTypeEdge},
+		{"support", cellvocab.CellTypeSupport},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := ParseCellType(tt.input)
+			got, err := cellvocab.ParseCellType(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.input, string(got))
@@ -130,7 +131,7 @@ func TestParseCellTypeInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseCellType(tt.input)
+			_, err := cellvocab.ParseCellType(tt.input)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
@@ -146,16 +147,16 @@ func TestParseCellTypeInvalid(t *testing.T) {
 func TestParseContractKindRoundTrip(t *testing.T) {
 	tests := []struct {
 		input string
-		want  ContractKind
+		want  cellvocab.ContractKind
 	}{
-		{"http", ContractHTTP},
-		{"event", ContractEvent},
-		{"command", ContractCommand},
-		{"projection", ContractProjection},
+		{"http", cellvocab.ContractHTTP},
+		{"event", cellvocab.ContractEvent},
+		{"command", cellvocab.ContractCommand},
+		{"projection", cellvocab.ContractProjection},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := ParseContractKind(tt.input)
+			got, err := cellvocab.ParseContractKind(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.input, string(got))
@@ -174,7 +175,7 @@ func TestParseContractKindInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseContractKind(tt.input)
+			_, err := cellvocab.ParseContractKind(tt.input)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
@@ -190,20 +191,20 @@ func TestParseContractKindInvalid(t *testing.T) {
 func TestParseContractRoleRoundTrip(t *testing.T) {
 	tests := []struct {
 		input string
-		want  ContractRole
+		want  cellvocab.ContractRole
 	}{
-		{"serve", RoleServe},
-		{"call", RoleCall},
-		{"publish", RolePublish},
-		{"subscribe", RoleSubscribe},
-		{"handle", RoleHandle},
-		{"invoke", RoleInvoke},
-		{"provide", RoleProvide},
-		{"read", RoleRead},
+		{"serve", cellvocab.RoleServe},
+		{"call", cellvocab.RoleCall},
+		{"publish", cellvocab.RolePublish},
+		{"subscribe", cellvocab.RoleSubscribe},
+		{"handle", cellvocab.RoleHandle},
+		{"invoke", cellvocab.RoleInvoke},
+		{"provide", cellvocab.RoleProvide},
+		{"read", cellvocab.RoleRead},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := ParseContractRole(tt.input)
+			got, err := cellvocab.ParseContractRole(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.input, string(got))
@@ -222,7 +223,7 @@ func TestParseContractRoleInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseContractRole(tt.input)
+			_, err := cellvocab.ParseContractRole(tt.input)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
@@ -238,15 +239,15 @@ func TestParseContractRoleInvalid(t *testing.T) {
 func TestParseLifecycleRoundTrip(t *testing.T) {
 	tests := []struct {
 		input string
-		want  Lifecycle
+		want  cellvocab.Lifecycle
 	}{
-		{"draft", LifecycleDraft},
-		{"active", LifecycleActive},
-		{"deprecated", LifecycleDeprecated},
+		{"draft", cellvocab.LifecycleDraft},
+		{"active", cellvocab.LifecycleActive},
+		{"deprecated", cellvocab.LifecycleDeprecated},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := ParseLifecycle(tt.input)
+			got, err := cellvocab.ParseLifecycle(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.input, string(got))
@@ -265,7 +266,7 @@ func TestParseLifecycleInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseLifecycle(tt.input)
+			_, err := cellvocab.ParseLifecycle(tt.input)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))

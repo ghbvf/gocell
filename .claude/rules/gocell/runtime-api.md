@@ -14,13 +14,13 @@ paths:
 每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux) error` — PR-MODE-6: error-first 链路，phase5 把 Register 的错误连同 cell+listener+prefix 上下文 wrap 后冒泡到 `Bootstrap.Run`）。
 Bootstrap 在 phase5 drain 所有 `RegistrySnapshot.RouteGroups` 并挂载到对应 listener 的 stdlib `*http.ServeMux` 上。
 
-每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `wrapper.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 ServeMux handler（`METHOD /path` 形式）、转发 AuthRouteMeta 给 FinalizeAuth。Mount 返回 `error`（PR-MODE-6 ERROR-FIRST-API）；`auth.MustMount` 是 composition-root fail-fast 包装，但 **slice handler 内部应直接用 `auth.Mount` + 错误传播**，让错误一路冒泡到 phase5。
+每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `contractspec.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 ServeMux handler（`METHOD /path` 形式）、转发 AuthRouteMeta 给 FinalizeAuth。Mount 返回 `error`（PR-MODE-6 ERROR-FIRST-API）；`auth.MustMount` 是 composition-root fail-fast 包装，但 **slice handler 内部应直接用 `auth.Mount` + 错误传播**，让错误一路冒泡到 phase5。
 
 ```go
 // Slice handler — RegisterRoutes 返回 error，使用 auth.Mount + 错误传播
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
     if err := auth.Mount(mux, auth.Route{
-        Contract: specSessionsLogin, // wrapper.ContractSpec — Method+Path+Kind=http
+        Contract: specSessionsLogin, // contractspec.ContractSpec — Method+Path+Kind=http
         Handler:  http.HandlerFunc(h.loginHandler.HandleLogin),
         Public:   true,              // JWT 豁免
     }); err != nil {
@@ -174,7 +174,7 @@ bootstrap.WithListener(WebhookListener, ":8090",
 
 | 字段 | 说明 | 约束 |
 |------|------|------|
-| `Contract` | `wrapper.ContractSpec`（Method + Path + Kind="http"） | 必填，drives 注册 pattern + span attrs |
+| `Contract` | `contractspec.ContractSpec`（Method + Path + Kind="http"） | 必填，drives 注册 pattern + span attrs |
 | `Handler` | `http.Handler` | 必填，非 nil |
 | `Policy` | `auth.Policy` — 路由级策略。当 `Contract.Clients` 非空时，`auth.Mount` 自动注入 `RequireCallerCell` 守卫，handler 无需显式 Policy；显式 Policy 与自动 caller_cell 守卫复合（外层 caller-cell guard → 内层 Policy） | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |

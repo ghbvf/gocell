@@ -15,6 +15,7 @@ import (
 	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -70,8 +71,8 @@ func TestOrderCell_Lifecycle(t *testing.T) {
 func TestOrderCell_Metadata(t *testing.T) {
 	c := newTestCell()
 	assert.Equal(t, "ordercell", c.ID())
-	assert.Equal(t, cell.CellTypeCore, c.Type())
-	assert.Equal(t, cell.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
+	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
 }
 
 func TestOrderCell_Startup(t *testing.T) {
