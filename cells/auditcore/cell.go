@@ -30,11 +30,7 @@ import (
 
 // tailVerifyStartupTimeout caps strictTailVerifyOnStartup so that a slow or
 // hung store cannot stall k8s readiness indefinitely (F-04).
-//
-// var (not const) so tests can override with a short duration (e.g. 200ms) to
-// exercise the deadline path without paying 30 s of wall-clock cost — the
-// production default stays 30 s.
-var tailVerifyStartupTimeout = 30 * time.Second
+const tailVerifyStartupTimeout = 30 * time.Second
 
 // Option configures an AuditCore Cell.
 type Option func(*AuditCore)

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,21 +17,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
-
-// tailVerifyTestTimeout is the short timeout the test injects into
-// tailVerifyStartupTimeout to exercise the deadline path without paying 30 s
-// of wall-clock cost (slowgate threshold is 15 s). Production stays at 30 s.
-const tailVerifyTestTimeout = 200 * time.Millisecond
-
-// tailVerifyTestSlack is the upper-bound window the test waits for Init to
-// return after the injected timeout fires — generous slack for scheduling.
-const tailVerifyTestSlack = 2 * time.Second
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
@@ -558,97 +547,66 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
 
-// blockingStore is a ledger.Store where Verify blocks until the context is
-// canceled. Used to test that strictTailVerifyOnStartup respects a deadline.
-type blockingStore struct {
+// deadlineProbeStore is a ledger.Store whose Verify asserts that the caller
+// supplied a context with a deadline (strictTailVerifyOnStartup must wrap ctx
+// with WithTimeout). It does NOT actually wait for the deadline to fire —
+// it returns ctx.DeadlineExceeded immediately so the test runs in milliseconds
+// rather than paying 30 s of wall-clock cost (slowgate cap 15 s).
+type deadlineProbeStore struct {
 	ledger.Store
-	verifyStarted chan struct{} // closed when Verify is entered
+	gotDeadline bool
+	verifyCalls int
 }
 
-func newBlockingStore(t *testing.T, inner ledger.Store) *blockingStore {
+func newDeadlineProbeStore(t *testing.T, inner ledger.Store) *deadlineProbeStore {
 	t.Helper()
-	return &blockingStore{
-		Store:         inner,
-		verifyStarted: make(chan struct{}),
-	}
+	return &deadlineProbeStore{Store: inner}
 }
 
-func (b *blockingStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
+func (b *deadlineProbeStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 	// Return a non-empty tail so strictTailVerifyOnStartup proceeds to Verify.
 	return ledger.TailSnapshot{SeqNo: 1, EntryCount: 1}, nil
 }
 
-func (b *blockingStore) Verify(ctx context.Context, from, to int64) (bool, int64, error) {
-	// Signal that Verify has been entered, then block until ctx is done.
-	select {
-	case <-b.verifyStarted:
-	default:
-		close(b.verifyStarted)
-	}
-	<-ctx.Done()
-	return false, 0, ctx.Err()
+func (b *deadlineProbeStore) Verify(ctx context.Context, from, to int64) (bool, int64, error) {
+	b.verifyCalls++
+	_, b.gotDeadline = ctx.Deadline()
+	// Synthesize the same error a real timed-out store would return so the
+	// caller error path is exercised end-to-end.
+	return false, 0, context.DeadlineExceeded
 }
 
 // TestStrictTailVerifyOnStartup_TimeoutCapped asserts that strictTailVerifyOnStartup
-// wraps the caller context with a deadline so a hung store cannot stall startup.
+// wraps the caller context with a deadline before calling ledger.Store.Verify,
+// so a hung store cannot stall k8s readiness indefinitely.
 //
-// F-04: production tailVerifyStartupTimeout is 30s; we inject a 200ms override
-// via the package-level var so the test exercises the deadline path without
-// paying 30s of wall-clock cost (slowgate cap 15s).
+// F-04: rather than block on the production 30 s timeout (slowgate cap 15 s),
+// the probe store inspects ctx.Deadline() at call time and returns
+// DeadlineExceeded immediately — testing the deadline-injection contract
+// without paying wall-clock cost.
 func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
-	// Inject short timeout; restore after test.
-	prevTimeout := tailVerifyStartupTimeout
-	tailVerifyStartupTimeout = tailVerifyTestTimeout
-	t.Cleanup(func() { tailVerifyStartupTimeout = prevTimeout })
-
 	p := newTestProtocol(t)
 	inner := newTestMemStore(t, p)
-	blocking := newBlockingStore(t, inner)
+	probe := newDeadlineProbeStore(t, inner)
 
 	c := NewAuditCore(
 		WithClock(clock.Real()),
 		WithLedgerProtocol(p),
-		WithLedgerStore(blocking),
+		WithLedgerStore(probe),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	// Run Init in a goroutine; it will block in Verify until the injected
-	// short timeout fires.
-	initDone := make(chan error, 1)
-	go func() {
-		ctx := context.Background() // no deadline from test side
-		initDone <- c.Init(ctx, newTestRecorder())
-	}()
+	err := c.Init(context.Background(), newTestRecorder())
+	require.Error(t, err, "Init should fail when Verify returns DeadlineExceeded")
 
-	// Wait until blockingStore.Verify is entered so we know Init reached that point.
-	select {
-	case <-blocking.verifyStarted:
-		// good
-	case <-time.After(testtime.EventuallyLong):
-		t.Fatal("timed out waiting for blockingStore.Verify to be entered; Init may not have reached strictTailVerifyOnStartup")
-	}
-
-	// With the 200ms injected timeout, Init must return within tailVerifyTestSlack
-	// (2s, generous scheduling slack). If strictTailVerifyOnStartup did NOT wrap
-	// ctx with a deadline, this would block indefinitely and the slack timer fires.
-	select {
-	case err := <-initDone:
-		if err == nil {
-			t.Fatal("Init should have returned an error after strictTailVerify timeout")
-		}
-		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			errStr := err.Error()
-			if len(errStr) == 0 {
-				t.Error("Init returned non-nil error but empty message")
-			}
-			t.Logf("strictTailVerifyOnStartup returned (acceptable): %v", err)
-		}
-	case <-time.After(tailVerifyTestSlack):
-		t.Error("Init blocked past injected timeout + slack; strictTailVerifyOnStartup must cap ctx with deadline")
-	}
+	assert.Equal(t, 1, probe.verifyCalls,
+		"strictTailVerifyOnStartup should call Verify exactly once")
+	assert.True(t, probe.gotDeadline,
+		"strictTailVerifyOnStartup must wrap ctx with a deadline before calling Verify; "+
+			"caller-supplied context.Background has none")
 }
 
 // TestAuditCore_HealthCheckers_NilEmitter verifies that when the emitter does

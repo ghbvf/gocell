@@ -584,26 +584,33 @@ func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
 }
 
 // runQueryOrderingTimestampDescIDAsc verifies that Query returns entries sorted
-// by timestamp DESC as the primary key and id ASC as the tie-breaker.
+// by timestamp DESC as the primary key (cross-backend contract).
 //
-// F-05 regression guard: MemStore.Query does not sort — it returns entries in
-// SeqNo ascending order, which differs from the expected timestamp DESC + id ASC
-// order. PG already uses ORDER BY timestamp DESC, id ASC.
+// F-05 regression guard: MemStore.Query previously returned entries in SeqNo
+// ascending insertion order, which differs from PG's ORDER BY timestamp DESC.
+// This case asserts both backends produce the same timestamp-DESC ordering.
+//
+// Note on id-ASC tie-break: PG ORDER BY uses `id` (a uuid.NewString() per row)
+// for tie-break — that's a PG implementation detail for query stability, NOT
+// part of the cross-backend contract. MemStore's Entry.ID (assigned from
+// EventID) and PG's Entry.ID (random UUID) cannot agree on tie-break ordering
+// by construction, so this case uses 4 distinct timestamps to eliminate ties
+// and validate only the timestamp-DESC contract that both backends must honor.
 func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
 
 	base := fc.Now()
-	// Seed 4 entries: 3 distinct timestamps + 2 entries sharing the tie timestamp.
-	// Entry IDs are chosen so that ASC order differs from insertion order.
+	// Seed 4 entries with distinct timestamps; insertion order ≠ desired order
+	// so a backend that returns insertion order (the F-05 RED state) fails.
 	entries := []struct {
 		id    string
 		delta time.Duration
 	}{
-		{"ord-c", testtime.D3s}, // timestamp T3 — latest
-		{"ord-a", testtime.D1s}, // timestamp T1 — oldest
-		{"ord-d", testtime.D2s}, // timestamp T2 — tie with ord-b, id "d" > "b"
-		{"ord-b", testtime.D2s}, // timestamp T2 — tie with ord-d, id "b" < "d"
+		{"ord-c", testtime.D3s},  // T3
+		{"ord-a", testtime.D1s},  // T1 — oldest
+		{"ord-d", testtime.D10s}, // T10 — latest
+		{"ord-b", testtime.D2s},  // T2
 	}
 	for _, en := range entries {
 		e := &ledger.Entry{
@@ -626,16 +633,14 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 		t.Fatalf("Query: got %d results, want 4", len(results))
 	}
 
-	// Expected order: T3(ord-c), T2(ord-b), T2(ord-d), T1(ord-a)
-	// i.e. timestamp DESC; within same timestamp, id ASC.
-	wantOrder := []string{"ord-c", "ord-b", "ord-d", "ord-a"}
+	// Expected order: T4(ord-d), T3(ord-c), T2(ord-b), T1(ord-a) — timestamp DESC.
+	wantOrder := []string{"ord-d", "ord-c", "ord-b", "ord-a"}
 	for i, want := range wantOrder {
-		// Match by EventID (entries were seeded as "evt-<id>")
 		gotEventID := results[i].EventID
 		wantEventID := "evt-" + want
 		if gotEventID != wantEventID {
 			t.Errorf("Query order[%d]: got EventID=%q, want EventID=%q "+
-				"(F-05: MemStore must sort timestamp DESC + id ASC; PG already does)",
+				"(F-05: both backends must sort timestamp DESC)",
 				i, gotEventID, wantEventID)
 		}
 	}
