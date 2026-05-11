@@ -19,14 +19,8 @@ var _ cell.Cell = (*Demo)(nil)
 // passes it to cell.MustNewBaseCell which deep-copies the value so callers
 // cannot mutate the generated literal.
 var cellMeta = &metadata.CellMeta{
-	ID:               "demo",
-	Type:             "",
-	ConsistencyLevel: "",
-	DurabilityMode:   "",
-	Owner:            metadata.OwnerMeta{Team: "", Role: ""},
-	Schema:           metadata.SchemaMeta{Primary: ""},
-	Verify:           metadata.CellVerifyMeta{Smoke: []string{}},
-	GoStructName:     metadata.MustNewGoIdentifier("Demo"),
+	ID:           "demo",
+	GoStructName: metadata.MustNewGoIdentifier("Demo"),
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }
