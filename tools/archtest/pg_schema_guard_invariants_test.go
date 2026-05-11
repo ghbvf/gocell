@@ -35,20 +35,24 @@ import (
 // ---------------------------------------------------------------------------
 
 // destructiveOps are the DDL tokens that classify a Down section as
-// "data-destructive" — operations that delete row-level data and require
-// the SQL-side fail-closed GUC guard.
+// "data-destructive" — operations that delete row-level or column-level data
+// and require the SQL-side fail-closed GUC guard.
 //
-// Scope is intentionally narrow: DROP TABLE / TRUNCATE / DELETE FROM delete
-// row data and demand operator opt-in. Schema-only operations (DROP INDEX,
-// DROP COLUMN, DROP CONSTRAINT, DROP TRIGGER, DROP FUNCTION) are NOT in this
-// set — they alter schema shape but do not by themselves delete row data
-// outside the column being removed; binding them to the same gate would
+// Scope rationale:
+//   - DROP TABLE: destroys all row data in the table. Operator opt-in required.
+//   - TRUNCATE: destroys all row data in the table. Operator opt-in required.
+//   - DELETE FROM: destroys row data matching a predicate. Operator opt-in required.
+//   - DROP COLUMN: destroys all data stored in the column. Operator opt-in required;
+//     a rollback that drops a column is irreversible without a DB restore or
+//     manual backfill. Included alongside DROP TABLE / TRUNCATE for consistency.
+//
+// Schema-only operations (DROP INDEX, DROP CONSTRAINT, DROP TRIGGER,
+// DROP FUNCTION) are NOT in this set — they alter schema shape but do not
+// delete stored row or column data; binding them to the same gate would
 // over-pressurize routine schema evolution.
-//
-// Future tightening: re-evaluate after ADR on schema-evolution gating
-// (e.g. should DROP COLUMN require operator opt-in too?).
 var destructiveOps = []string{
 	"DROP TABLE",
+	"DROP COLUMN",
 	"TRUNCATE",
 	"DELETE FROM",
 }
@@ -163,12 +167,12 @@ func TestArchtest_MigrationDestructiveDownGUCGuard(t *testing.T) {
 // This list must be updated when tables are added to expectedColumns to
 // "lift the floor".
 //
-// Current exclusions:
-//   - audit_entries (020): owned by auditcore S7; schema guard coverage is a
-//     separate work item; excluded until audit schema hardening PR ships.
-var archtestExcludedTables = map[string]string{
-	"audit_entries": "auditcore S7 hardening not yet in scope; add to expectedColumns when audit schema guard ships",
-}
+// All post-017 tables currently have expectedColumns coverage. This map is
+// retained as a typed extension point for future tables that genuinely cannot
+// be covered at the time of creation (e.g. a table introduced in a separate PR
+// before its schema guard coverage ships). An empty map is the intended steady
+// state.
+var archtestExcludedTables = map[string]string{}
 
 // createTableRE matches CREATE TABLE statements in migration SQL files.
 var createTableRE = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)`)

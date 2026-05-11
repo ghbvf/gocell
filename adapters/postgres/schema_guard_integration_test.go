@@ -746,8 +746,6 @@ func TestVerifyExpectedShape_DetectsNullableColumn(t *testing.T) {
 // TestVerifyExpectedShape_DetectsMissingCheckConstraint verifies that dropping
 // a CHECK constraint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="check".
-// NOTE: This test depends on migration 023 (users_status_chk) being present
-// (added by Agent A in the same PR). It will fail until migration 023 is applied.
 func TestVerifyExpectedShape_DetectsMissingCheckConstraint(t *testing.T) {
 	pool, cleanup := setupPostgres(t)
 	defer cleanup()
@@ -827,19 +825,13 @@ func TestVerifyExpectedShape_DetectsMissingFunction(t *testing.T) {
 // DetectInvalidIndexes: in-progress filter tests
 // ---------------------------------------------------------------------------
 
-// TestDetectInvalidIndexes_QueryHasInProgressFilter is a unit-level regression
-// guard that asserts the DetectInvalidIndexes SQL contains the
-// pg_stat_progress_create_index join.
-// TODO: upgrade to a catalog-level integration test once there is a reliable
-// way to inject an in-progress CONCURRENTLY build without timing sensitivity.
-func TestDetectInvalidIndexes_QueryHasInProgressFilter(t *testing.T) {
-	// This test reads the source SQL by inspecting the compiled-in constant
-	// used by DetectInvalidIndexes. We call DetectInvalidIndexes against a
-	// fresh container and examine any error — but actually the simplest
-	// approach is just to spin up a pool, run DetectInvalidIndexes on an
-	// empty DB, and separately rely on code review + archtest coverage.
-	// Instead, this test spins up a live pool and calls DetectInvalidIndexes
-	// to confirm the LEFT JOIN does not break the query structurally.
+// TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded verifies
+// that the LEFT JOIN pg_stat_progress_create_index added to the
+// DetectInvalidIndexes query does not suppress orphan invalid indexes (i.e.,
+// indexes with indisvalid=false that have no in-progress CONCURRENTLY build).
+// This is a live integration test: it injects an invalid index into a real
+// container and asserts the index is still returned.
+func TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded(t *testing.T) {
 	pool, cleanup := setupPostgres(t)
 	defer cleanup()
 

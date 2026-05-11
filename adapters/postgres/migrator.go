@@ -233,6 +233,19 @@ func newDestructiveDownSessionLocker() (lock.SessionLocker, error) {
 	return &destructiveDownSessionLocker{inner: inner}, nil
 }
 
+// SessionLock acquires the underlying advisory lock and sets the GUC
+// gocell.allow_destructive_down to 'true' for the duration of the session.
+//
+// The third argument to set_config is `false` (session-scope, NOT
+// transaction-local). This is intentional: migration 004 and any migration
+// annotated with `-- +goose no transaction` execute each DDL statement in its
+// own implicit transaction. A transaction-local GUC (third arg = true) would
+// be reset at the end of each implicit transaction and would NOT be visible to
+// the next DDL statement in the same migration file. Session-scope ensures the
+// GUC survives across all DDL statements in a no-transaction migration.
+//
+// SessionUnlock resets the GUC explicitly at the end of the destructive Down
+// session so the connection is clean when returned to the pool.
 func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sql.Conn) (retErr error) {
 	if err := l.inner.SessionLock(ctx, conn); err != nil {
 		return err
@@ -242,6 +255,9 @@ func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sq
 			retErr = errors.Join(retErr, l.inner.SessionUnlock(context.WithoutCancel(ctx), conn))
 		}
 	}()
+	// set_config third arg = false → session-scope; MUST be session-scope so the
+	// GUC survives `-- +goose no transaction` migrations (e.g. 004) where each
+	// DDL runs in its own implicit transaction.
 	if _, err := conn.ExecContext(ctx,
 		`SELECT set_config($1, 'true', false)`, allowDestructiveDownGUC); err != nil {
 		return fmt.Errorf("postgres: enable destructive down SQL guard: %w", err)
@@ -249,8 +265,11 @@ func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sq
 	return nil
 }
 
+// SessionUnlock resets gocell.allow_destructive_down to empty string (session-scope,
+// matching SessionLock's set_config call) and releases the advisory lock.
 func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
 	resetCtx := context.WithoutCancel(ctx)
+	// Reset with session-scope (false) to match the SessionLock set_config call.
 	_, resetErr := conn.ExecContext(resetCtx,
 		`SELECT set_config($1, '', false)`, allowDestructiveDownGUC)
 	unlockErr := l.inner.SessionUnlock(resetCtx, conn)

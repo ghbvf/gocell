@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,6 +26,7 @@ import (
 //   - refresh_tokens     (007)  append-only refresh token lineage
 //   - feature_flags      (008)  flag definitions
 //   - users              (017)  accesscore user identities
+//     users_status_chk, users_creation_source_chk (CHECK constraints added by 023)
 //   - sessions           (018)  accesscore session / JTI store
 //   - roles              (019)  accesscore role definitions
 //   - role_assignments   (019)  accesscore user-role grants + last-admin trigger
@@ -280,7 +282,8 @@ type expectedCheck struct {
 // ---------------------------------------------------------------------------
 
 // expectedColumns is the authoritative column-type-nullability registry for
-// the four S3F-owned tables (users/sessions/roles/role_assignments).
+// the S3F-owned tables (users/sessions/roles/role_assignments) and the
+// auditcore-owned audit_entries table (020_audit_ledger.sql).
 var expectedColumns = []expectedColumn{
 	// users (017_users.sql + 022_users_password_version.sql)
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
@@ -316,6 +319,17 @@ var expectedColumns = []expectedColumn{
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: "timestamp with time zone", NotNull: true},
+	// audit_entries (020_audit_ledger.sql)
+	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
+	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},
+	{Table: "audit_entries", Column: "seq_no", Type: "bigint", NotNull: true},
+	{Table: "audit_entries", Column: "event_id", Type: "text", NotNull: true},
+	{Table: "audit_entries", Column: "event_type", Type: "text", NotNull: true},
+	{Table: "audit_entries", Column: "actor_id", Type: "text", NotNull: true},
+	{Table: "audit_entries", Column: "timestamp", Type: "timestamp with time zone", NotNull: true},
+	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
+	{Table: "audit_entries", Column: "prev_hash", Type: "text", NotNull: true},
+	{Table: "audit_entries", Column: "hash", Type: "text", NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
@@ -329,7 +343,9 @@ var expectedPKs = []expectedPK{
 	{Table: "users", Columns: []string{"id"}},
 	{Table: "sessions", Columns: []string{"id"}},
 	{Table: "roles", Columns: []string{"id"}},
-	{Table: "role_assignments", Columns: []string{"role_id", "user_id"}},
+	{Table: "role_assignments", Columns: []string{"user_id", "role_id"}},
+	// audit_entries (020_audit_ledger.sql)
+	{Table: "audit_entries", Columns: []string{"id"}},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -345,6 +361,10 @@ var expectedIndexes = []expectedIndex{
 	// roles: no additional non-PK indexes in migration 019
 	// role_assignments
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false},
+	// audit_entries (020_audit_ledger.sql)
+	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
+	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
+	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
 }
 
 // expectedFKs is the foreign key constraint registry (ON DELETE action uses
@@ -479,9 +499,12 @@ func verifyForbiddenColumns(ctx context.Context, pool *Pool) error {
 // Dimension helper: primary keys
 // ---------------------------------------------------------------------------
 
-// verifyPrimaryKeys checks that each table's PRIMARY KEY matches the registry.
-// The query resolves conkey (array of column attnum) to column names and
-// returns them sorted by their position in the PK (ordinal).
+// verifyPrimaryKeys checks that each table's PRIMARY KEY matches the registry,
+// including column order. The query resolves conkey (array of column attnum) to
+// column names and returns them in PK ordinal order via ORDER BY
+// array_position(conkey, attnum). Comparison uses slices.Equal (ordered) so
+// that PK column order drift is detected — e.g., PRIMARY KEY (a, b) vs
+// PRIMARY KEY (b, a) produces different physical index pages and query plans.
 func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 	const q = `
 	SELECT a.attname
@@ -525,7 +548,7 @@ func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 				),
 			)
 		}
-		if !stringSliceEqualUnordered(got, pk.Columns) {
+		if !slices.Equal(got, pk.Columns) {
 			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: primary key column mismatch",
 				errcode.WithDetails(

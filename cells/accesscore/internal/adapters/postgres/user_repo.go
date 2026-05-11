@@ -267,13 +267,13 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		return nil, err
 	}
 	if !domain.ValidUserStatus(domain.UserStatus(status)) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: invalid status from DB",
 			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "status")),
 			errcode.WithInternal(fmt.Sprintf("scanned status=%q", status)))
 	}
 	if !domain.ValidUserSource(domain.UserSource(source)) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: invalid creation_source from DB",
 			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "creation_source")),
 			errcode.WithInternal(fmt.Sprintf("scanned source=%q", source)))
