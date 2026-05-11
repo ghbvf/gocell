@@ -1735,29 +1735,27 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
+	modulePath := readModulePath(t, root)
 
-	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
+	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
 	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
+		t.Fatalf("typeseval.LoadProductionPackages: %v", err)
 	}
 
 	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
+	for _, pkg := range resolver.Production() {
 		if pkg.TypesInfo == nil || pkg.Fset == nil {
 			continue
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
-			// Allowlist (explicit opt-in) is checked first so the kernel
-			// internal sites in handleResultLiteralAllowlist remain
-			// permitted; generated/ skip (implicit opt-out) is then
-			// applied for codegen output that must never be flagged.
+			// Explicit kernel-internal allowlist remains in force; the
+			// production-package partition has already filtered codegen
+			// output at the package level (see LoadProductionPackages), so
+			// no per-file generated/ skip is needed here.
 			if _, ok := handleResultLiteralAllowlist[rel]; ok {
-				continue
-			}
-			if typeseval.IsGeneratedRelPath(rel) {
 				continue
 			}
 			violations = append(violations,

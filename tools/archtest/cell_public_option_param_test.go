@@ -361,10 +361,11 @@ func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restr
 func TestCellRawInfraPublicOptionParam01_RealRepoClean(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
+	modulePath := readModulePath(t, root)
+	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
 	require.NoError(t, err)
 
-	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), true)
+	violations := scanPackagesForRawPublicOption(root, resolver.Production(), true)
 	for _, v := range violations {
 		t.Errorf("CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01: %s:%d func %s(...) param[%d] type=%s — "+
 			"public Option must accept sealed marker (persistence.CellTxManager / outbox.Cell{Publisher,Writer}) "+

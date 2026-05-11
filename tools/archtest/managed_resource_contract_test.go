@@ -94,8 +94,8 @@ var adapterManagedResourceOptOut = map[string]string{
 func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	_, allPkgs := loadModule(t, root)
-	pkgs := filterPkgsByPathPrefix(allPkgs,
+	_, resolver := loadModule(t, root)
+	pkgs := filterPkgsByPathPrefix(resolver.Production(),
 		modulePath+"/kernel/lifecycle",
 		modulePath+"/adapters/")
 	managedResource := managedResourceInterface(t, pkgs, modulePath)
@@ -118,8 +118,8 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	_, allPkgs := loadModule(t, root)
-	pkgs := filterPkgsByPathPrefix(allPkgs,
+	_, resolver := loadModule(t, root)
+	pkgs := filterPkgsByPathPrefix(resolver.Production(),
 		modulePath+"/adapters/",
 		modulePath+"/cmd/corebundle")
 
@@ -149,8 +149,8 @@ func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
 func TestRuntimeWebsocketCheckerNamesUseReadySuffix(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	_, allPkgs := loadModule(t, root)
-	pkgs := filterPkgsByPathPrefix(allPkgs, modulePath+"/runtime/websocket")
+	_, resolver := loadModule(t, root)
+	pkgs := filterPkgsByPathPrefix(resolver.Production(), modulePath+"/runtime/websocket")
 
 	var violations []string
 	for _, pkg := range pkgs {
