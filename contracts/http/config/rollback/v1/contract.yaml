@@ -3,7 +3,6 @@ kind: http
 ownerCell: configcore
 consistencyLevel: L2
 lifecycle: active
-codegen: true
 triggers:
   - event.config.entry-upserted.v1
   - event.config.rollback.v1

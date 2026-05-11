@@ -3,7 +3,6 @@ kind: event
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
-codegen: true
 endpoints:
   publisher: devicecell
   subscribers: [example-iot-platform]

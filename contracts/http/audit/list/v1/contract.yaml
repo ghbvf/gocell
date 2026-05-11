@@ -3,7 +3,6 @@ kind: http
 ownerCell: auditcore
 consistencyLevel: L0
 lifecycle: active
-codegen: true
 endpoints:
   server: auditcore
   clients:

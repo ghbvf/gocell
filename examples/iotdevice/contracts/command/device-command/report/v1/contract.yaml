@@ -1,6 +1,6 @@
 id: command.device-command.report.v1
 kind: command
-codegen: false  # K#09 funnel: kind=command deferred from K#06 PR-4 (see roadmap line 114)
+codegen: false  # K#09 funnel: kind=command deferred from K#06 PR-4 (see backlog CONTRACT-YAML-CODEGEN-DEFAULT-CLEANUP @ PR559)
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
