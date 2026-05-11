@@ -70,7 +70,7 @@ func scanContractCodegenViolations(rel string, root *yaml.Node) []string {
 		if val.Kind == yaml.ScalarNode && val.Value == "true" {
 			violations = append(violations, fmt.Sprintf(
 				"INVARIANT CONTRACT-YAML-NO-CODEGEN-TRUE-LITERAL-01 violated: %s: "+
-					"declares `codegen: true` (occurrence #%d) which is redundant — "+
+					"declares `codegen: true` (at `codegen` key #%d) which is redundant — "+
 					"kernel/metadata.parseContract (K#09 funnel) defaults Codegen=true "+
 					"when the key is absent. Remove the line; keep `codegen: false` "+
 					"only for opt-out contracts.",
