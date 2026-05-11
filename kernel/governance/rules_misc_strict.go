@@ -52,6 +52,8 @@ import (
 // PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0 ContractSpec literals,
 // enforced by archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
 // NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01.
+// The /internal/v1 caller-clients invariant FMT-18 also carried was later
+// reclaimed at the YAML governance layer by FMT-31 (rules_fmt.go).
 //
 // When strict is false the method is equivalent to Validate(ctx) —
 // strict-only rules emit nothing (they are strict-only by design, there is
