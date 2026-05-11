@@ -871,6 +871,13 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 			// (slash). Pins the canonical PATH-ID-MAPPING regression that
 			// PR-CFG-G1-FU6-RECYCLE filed against FMT-CONTRACT-PATH-ID-MAPPING-01
 			// and that FMT-21 already covers as the bijective inverse rule.
+			//
+			// INTEGRATION ANCHOR — DO NOT DELETE WITHOUT REPLACEMENT.
+			// This case calls v.Validate(t.Context()) (the full rules() chain),
+			// so removing FMT-21 from rules() makes wantCount:1 fail. The case
+			// therefore pins both the rule logic AND the rule's membership in
+			// the default validator slice. Removing it (or downgrading wantCount
+			// to 0) silently weakens the PATH-ID-MAPPING governance contract.
 			name:        "dash-instead-of-slash regression (PR-CFG-G1-FU6-RECYCLE)",
 			contractID:  "http.config.internal-get.v1",
 			contractDir: "contracts/http/config/internal/get/v1",

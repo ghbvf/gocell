@@ -560,7 +560,10 @@ func checkAdditionalProperties(node map[string]any, path string, missing *[]stri
 // Contracts under example projects (e.g. "examples/iotdevice/contracts/…") are
 // accepted as long as the segment after the last "contracts/" separator matches
 // the ID-derived suffix. A Dir that contains no "contracts/" component at all
-// is itself a violation.
+// is itself a violation. Contracts with empty Dir are skipped: the parser
+// (kernel/metadata.parseContract) only walks "contracts/…" and
+// "examples/*/contracts/…" paths, so empty Dir is unreachable in production
+// project loads and skipping is safe.
 //
 // Severity: Error, IssueMismatch.
 func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
