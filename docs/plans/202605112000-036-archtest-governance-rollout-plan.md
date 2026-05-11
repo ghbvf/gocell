@@ -1,6 +1,7 @@
 # archtest / governance 治理 Rollout 计划
 
 **生成日期**：2026-05-11
+**最近同步**：2026-05-12（origin/develop @ `17795281`，Wave 2 panic 单源 + Phase 2.1/2.2/3.1/3.3/3.4 已 ship；Phase 0.1 ✅ done，Phase 3.6 ❌ cancelled by PR #435）
 **关系**：本文件是 `docs/plans/202605101300-ai-first-governance-charter.md`（AI-first 章程）的 **PR 级 rollout 视角**。章程是第一性原理 + 决策原则视角不动；本文件按 PR #445 复盘教训（scope 失控、多维捆绑）把章程 Wave 1-4 翻译成"单 PR = 单维度"的可独立 ship 的 PR 序列，含 Phase 顺序、依赖图、优先级。冲突时以本文件的拆分为准，章程的判断/原则不变。
 
 **核心拆分规则**：新增/修改工程机制的 PR 不得跨维度捆绑。维度清单：
@@ -28,48 +29,52 @@
 | PR-Φ 主线 + PR-Φ-HARD-EACHNODE-WALKDEPTH-01 | PR #445 + PR #460 |
 | PR430-FU-USAGE-01-TYPE-AWARE | closed by PR #445 |
 | PR445-FU-PACKAGEALIASES-TYPE-AWARE-01 | closed by PR #445 |
+| Phase 2.1 PR-TS1（ResolveReceiverType + BFS emitter dogfood）| PR #468 |
+| Phase 2.2 PR-TS2（ResolvePackageRef + forbiddenWalkRefs 2b/2c dogfood）| PR #469 |
+| Phase 3.1 PR-BT1（build-tag fail-closed 3 子条）| PR #472 |
+| Phase 3.3 PR-SH2（GENERATED-SKIP-CROSS-RULE-INVARIANT-01）| PR #471 |
+| Phase 3.4 PR-IC1（FMT-31 INTERNAL-CONTRACT-CLIENTS → L6）| PR #470 |
+
+### Wave 2 已 ship 项（panic 单源 typed marker）
+| 项 | 证据 |
+|---|---|
+| Phase 1.1 + 1.2 + 1.3（panicregister framework + 30+ Must* 迁移 + archtest enforcement + 4 处 re-throw）| PR #467（一锅推，未按本计划"3 PR 拆分"，详见 §7 差异）|
 
 ### 撤回项（backlog 应标 WONTFIX）
 - `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES` — charter §3 已撤回（fixture 框架 AI 可造假，是 Soft 形态）
 
 ### Phase 0 实施
-**Phase 0.1：backlog 状态收尾**（独立小 PR，1-2h dev）
-- `docs/backlog.md` line 408/409/410 三条 PR430-FU 标 ✅ closed by PR #440
-- `docs/backlog.md` line 407 `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES` 标 WONTFIX（reason: charter §3 撤回，fixture 框架 AI 可造假）
-- 同步移动到 `docs/backlog/archive/2026-q2-completed.md`（按 backlog.md schema 行 14）
+**Phase 0.1：backlog 状态收尾** ✅ done (2026-05-12, in-place backlog 直接标记)
+- ✅ `docs/backlog.md` 三条 PR430-FU 标 ✅ closed by PR #440：`PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01` / `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01` / `PR430-FU-SCANNER-SYMLINK-FAIL-CLOSED-01`
+- ✅ `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES` 标 ❌ WONTFIX（reason: charter §3 撤回，fixture 框架 AI 可造假，违反 AI-rebust 立项硬门槛 ≥ Medium）
+- ✅ Wave 3 已 ship 条目同步：
+  - `PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01`（cap-02 line 82）已 ✅ closed by PR-TS1（无需改动）
+  - `ARCHTEST-TYPEAWARE-HARDENING-BUNDLE` 8 子条：`TYPESEVAL-BUILDTAGS-*` 3 条 ✅ closed by PR #472；`GENERATED-SKIP-CROSS-RULE-INVARIANT-01` ✅ closed by PR #567；`INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01` ✅ closed by PR-IC1；`PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` helper ✅ closed by PR-TS2（caller 迁移仍 OPEN 转 Phase 3.2 PR-SH1）；bundle 主条目状态从 🟠 改 🟢 partial（trigger 列写明剩余去向）
+- ⏳ 归档：✅/WONTFIX 条目移 `docs/backlog/archive/2026-q2-completed.md` —— 按 backlog schema 行 28 "归档：人工"，留待手动归档
 
 ---
 
-## 1. Wave 2 panic 单源 typed marker（按维度拆 3 PR）
+## 1. Wave 2 panic 单源 typed marker ✅ 已 ship（PR #467 一锅推）
 
 ### 章程原始描述
 > 改成 `panicregister.Approved("reason")` typed function 包装 panic + 同 PR 加 archtest 强制 + 4 处 re-throw + 30+ Must* 改造
 
-→ 4 维捆绑（framework + bulk migration + enforcement + special case）。按拆分规则改成 3 PR：
+### 实际落地：PR #467（charter Wave 2 panic-single-source 行）
+本计划原拟按"framework / bulk migration / enforcement"拆 3 PR。实际 PR #467 把 4 维一次性合并：
 
-### Phase 1.1：panicregister framework + special case（PR-PR1）
-- **范围**：
-  - 新建 `kernel/panicregister/` 包，提供 `Approved(reason string) func(any)` typed wrapper 或 `panicregister.Mustf(format, args...)` 形式（具体 API 在本 PR 内决策）
-  - 同时处理 4 处 re-throw（架构师 C 类豁免，charter §3 + error-handling.md "Assertion vs panic"）：lifecycle 启动超时、circuit_breaker、tx_manager、websocket / metrics / kernel/cell bootstrap fatal
-- **不含**：30+ Must* 函数包装、archtest 强制
-- **工时**：3-4h dev / 1h review
-- **特别要求**：本 PR 单独 dogfood 一个最简调用点（比如某个 Must* 函数）作为范本，验证 API 形态
-- **依赖**：无
+- `pkg/panicregister/Approved(reason string, value any) any` typed marker 新建（zero-dep，允许 `pkg/errcode` 反向 import 不成环）
+- 全量 30+ `Must*` / 状态机不可达 panic 站点迁移至 `panic(panicregister.Approved("<kebab-reason>", errcode.Assertion(...)))`
+- 4 处 C 类 re-throw 收编：`kernel/wrapper/lifecycle.go::recoverAndFinish` / `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure` / `adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback` / `repanicAfterSavepointRollback`（**精简至 4 处**，原计划描述的"6 处豁免"在落地时实际整合至 4 处具名函数）
+- `tools/archtest/panic_invariants_test.go` 重写为 `PANIC-REGISTERED-01`：panic arg 必须 = `*ast.CallExpr` 且 Fun 经 `*types.Info` 解析到 `pkg/panicregister.Approved`，reason 必须 = `*ast.BasicLit` STRING；删除 `architecturalPanicWhitelist` map + `AllowMust` 字符串约定（Soft 形态彻底消除）
+- 12 类 RED/GREEN fixture 覆盖（`tools/archtest/testdata/panic_registered_fixtures/`）
+- `tools/codegen/contractgen` handler.tmpl 同步 emit `panic(panicregister.Approved("<contract-id>-<reason>", errcode.Assertion(...)))`，reason 由 `BuildContractSpec` 在 Go 侧预算 const literal，避免 archtest 误判
+- 关闭 backlog：`PR419-FU-PANIC-MUST-PATH-SCOPE-01`（path-scope 窄化被 typed marker 替代）
 
-### Phase 1.2：30+ Must* 包装 bulk migration（PR-PR2）
-- **范围**：把当前 30+ `MustXxx` 函数内部的 `panic(...)` 全部换 `panicregister.Approved("...")` 或等价 typed wrapper
-- **不含**：framework 改动、archtest 强制
-- **工时**：3-4h dev / 1h review
-- **依赖**：Phase 1.1 merge
-
-### Phase 1.3：panic archtest enforcement + 删除旧 allowlist（PR-PR3）
-- **范围**：
-  - 新增 archtest 强制所有 `panic(...)` 必须经 `panicregister.Approved` 包装
-  - 删 `panic_invariants_test.go` 中 `architecturalPanicWhitelist` + `AllowMust` 字符串约定（charter §1 Soft 形态彻底消除）
-  - 同时关闭 `PR419-FU-PANIC-MUST-PATH-SCOPE-01`（path-scope 窄化方案被 typed marker 替代）
-- **不含**：任何 panic 站点改动
-- **工时**：1-2h dev / 1h review
-- **依赖**：Phase 1.2 全部合并（否则 enforcement 上线时仍有未包装站点 → fail-closed 触发）
+**对应 ADR / 章程更新**：
+- `docs/architecture/202604270030-architectural-panic-whitelist.md` 改写 §4 Approved reason catalog（取代函数名 whitelist 表）+ §5 No prefix-based exemption
+- `.claude/rules/gocell/error-handling.md` "Panic taxonomy and Approved funnel" 章节
+- `.claude/rules/gocell/ai-collab.md` "Hard 范本" 新增 "typed function call as Hard funnel for unbounded operations" 条目
+- charter §4 Wave 2 panic-single-source 行已标 shipped
 
 ---
 
@@ -90,14 +95,14 @@
 - **关闭 backlog**：`PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01` ✅（charter §3 "AI-rebust 评级" table 中 PR431-FU 行的 mandate 覆盖架构师 2026-05-10 "不升级" 决议）
 - **AI-rebust 升级**：Soft（名字约定）→ Medium-偏-Hard（三重 type 谓词）。真 Hard 需 sealed interface emitter，超 PR 范围
 
-### Phase 2.2：typeseval `ResolvePackageRef` + `ResolveMethodCall` helpers + dogfood（PR-TS2）
+### Phase 2.2：typeseval `ResolvePackageRef` + `ResolveMethodCall` helpers + dogfood（PR-TS2）✅ done
 - **范围**：
   - `tools/archtest/internal/typeseval/call_target.go` 加 `ResolvePackageRef(typesInfo *types.Info, expr ast.Expr) (pkgPath, name string, ok bool)`（path A.2 qualified `pkg.Func` + path A.3 dot-imported bare `Func`，单源 info.Uses 配 partial type info 容错）
   - `tools/archtest/internal/typeseval/receiver_type.go` 加 `ResolveMethodCall(typesInfo *types.Info, sel *ast.SelectorExpr) (*types.Func, bool)`（path A' 方法调用，走 info.Selections.Obj() 单源，原生处理 promoted/named-type-def/generic-typeparam/alias 多形态）
   - dogfood：给 `scanner_framework_usage_test.go::forbiddenWalkRefs` 加 (2c) bare-Ident 分支（path A.3），把 (2b) SelectorExpr 分支的 path A.2 + path A' 全部迁到上述两个 helper；新增 promoted method + named-type def fixture 关 RED bypass（PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 + path A' embedding gap 一并闭合）
 - **不含**：bundle 其他子条（svctoken / role_admin 剩余 dot-import 迁移留 Phase 3.2 PR-SH1）；`ImplementsInterface` helper 不在本 PR 内（详见下方"helper 命名修订"）
-- **工时**：6-8h dev / 2h review
-- **依赖**：无（与 Phase 2.1 可并行）
+- **工时**：实际 ~6h dev
+- **证据**：PR #469
 
 ### helper 命名修订（plan v0 → v1 → v2 → v3）
 plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 Ident / dot-import 匹配"）—— 两者不是同一个 helper。修订后：
@@ -113,46 +118,108 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 ### backlog 现状
 `ARCHTEST-TYPEAWARE-HARDENING-BUNDLE`（line 418）8 子条吸收了 charter Wave 3/4 多项。bundle 是 **backlog 索引视角**，不是 PR 视角。按维度拆回 4 PR：
 
-### Phase 3.1：build-tag fail-closed（PR-BT1）
+### Phase 3.1：build-tag fail-closed（PR-BT1）✅ done
 - **范围**：3 子条同主题（typeseval build-tag scope）
   - `TYPESEVAL-BUILDTAGS-COMMENTGROUP-COVERAGE-01`：bufio.Scanner → `go/parser.ParseFile + ParseComments`
   - `TYPESEVAL-BUILDTAGS-SCOPE-FAILCLOSED-01`：`FlatNonDefaultTags` 对 `!tag`/OR/互斥 tag-set 改 tag-set evaluator + per-rule helper
   - `TYPESEVAL-BUILDTAGS-LEGACY-DIRECTIVE-01`：扩 coverage 自检覆盖 `// +build` legacy directive
-- **工时**：8-12h dev / 3-4h review
-- **依赖**：无（typeseval helper 不依赖）
+- **证据**：PR #472
 
 ### Phase 3.2：scanner / call-matcher hardening（PR-SH1）
-- **范围**：2 子条同主题（scanner 守卫面 + path A' matcher）
-  - `PR445-FU-SCANNER-FRAMEWORK-HARDENING-01`：`*inspector.Inspector` 实例方法 `Preorder/Nodes/WithStack` 加 forbiddenMethodSymbols；scanner 内部 subpackage exact allowlist
-  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01`（**注**：原描述把 bare-Ident 误标 path A'，实际属 path A.3 dot-import 形态；path A' 指 receiver-type 方法调用）—— Phase 2.2 PR-TS2 已 dogfood `ResolvePackageRef`（forbiddenWalkRefs 的 2b/2c 双扫描，path A.2 qualified + path A.3 bare-Ident，含 SelectorExpr.Sel 去重）+ `ResolveMethodCall`（path A' method-call，原生处理 promoted/named-type-def/generic-typeparam），本 PR 把剩余 2 个规则（svctoken / role_admin）按 `ResolvePackageRef` 迁移闭合 dot-import 路径
-- **工时**：8-11h dev / 3-4h review
-- **依赖**：Phase 2.2 PR-TS2 merge
+- **范围**：5 子条同主题（scanner 守卫面 + path A' matcher + scanner 内部漂移收口 + symlink fail-closed + 双轨整理）
+  - `PR445-FU-SCANNER-FRAMEWORK-HARDENING-01`（cap-14 line 419）：`*inspector.Inspector` 实例方法 `Preorder/Nodes/WithStack` 加 forbiddenMethodSymbols；scanner 内部 subpackage exact allowlist
+  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` caller 迁移残余（cap-14 line 419）：Phase 2.2 PR-TS2 已 dogfood `ResolvePackageRef` + `ResolveMethodCall`，本 PR 把剩余 2 个规则（svctoken / role_admin）按 `ResolvePackageRef` 迁移闭合 dot-import 路径
+  - `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01`（cap-14 line 411，P1/Cx2 发布前必做）：5 个具体迁移漂移点修复
+    - (a) ModuleScope 默认跳 `generated/` 与 `span_record_error_redact_test.go:238` / `pgquery_boundary_test.go:145` 旧实现 repo-wide guard 不跳过 → 加 `IncludeGenerated()` scope option
+    - (b) `codegen_invariants_test.go:313` generated/contracts 手写 .go 禁止规则 EachFile 未 IncludeTests()，foo_test.go 漏 → 改 `EachFile(..., IncludeTests())` 或同效
+    - (c) `assembly_invariants_test.go:57` cells/*/cell.yaml 形状被放宽成递归匹配 → 收紧成 `MatchRels` 严格匹配 `cells/*/cell.yaml`（仅一层）
+    - (d) SEC-FAIL-CLOSED-05 `depth==2` 硬编码 → 适配 IncludeGenerated() option
+    - (e) ModuleScope skip generated 与 anywhere 文档漂移 / migration recursive docstring 漂 → 修文档 / 实现一致
+  - `PR430-FU-SCANNER-SYMLINK-FAIL-CLOSED-01`（cap-14 line 412，P2/Cx2 发布前安全收口）：`tools/archtest/internal/scanner/walk.go:27` + `content.go:57` 默认拒 symlink（lstat 检查 + skip 或 fatal）；显式 `FollowSymlinks()` option opt-in
+  - `PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01`（cap-14 line 410，P2/Cx2）：(1) 抽 `eachByPredicate(suffixSet || includeAllGo)` 共享骨架收编 Files/contentFiles 双轨；(2) DirsScope escapeErr 兑现"列出全部越界路径"承诺（推荐前者，attacker model 上"列出所有越界"对调试和审计更有用）
+- **工时**：12-16h dev / 4-5h review（原 8-11h + scanner drift fixes/symlink/consolidate +4-5h）
+- **依赖**：Phase 2.2 PR-TS2 merge ✅
 
-### Phase 3.3：generated-skip cross-rule invariant（PR-SH2）
+### Phase 3.3：generated-skip cross-rule invariant（PR-SH2）✅ done
 - **范围**：1 子条独立
   - `GENERATED-SKIP-CROSS-RULE-INVARIANT-01`：archtest cross-test invariant 扫 `SharedResolver/LoadPackages + ./... + pkg.Syntax/pkgFileRel` 组合，要求显式 `typeseval.IsGeneratedRelPath` 或 allowlist
-- **工时**：3-4h dev / 1-2h review
-- **依赖**：无（独立 cross-rule invariant）
+- **证据**：PR #471
 
-### Phase 3.4：INTERNAL-CONTRACT-CLIENTS 上移 governance（PR-IC1）
+### Phase 3.4：INTERNAL-CONTRACT-CLIENTS 上移 governance（PR-IC1）✅ done
 - **范围**：1 子条独立
   - `INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01`：把 `/internal/v1/*` 必须声明 caller clients 从手写 `wrapper.ContractSpec{}` AST 扫描上移到 contract YAML/governance（charter §5.1 决策树：L5 → L0/L6 载体纠偏）
-- **工时**：5-7h dev / 2-3h review
-- **依赖**：无（载体上移，与 type-aware 边界无关）
+- **证据**：PR #470（FMT-31）
+
+### Phase 3.5：typeseval eval predicate centralization（PR-EP1）
+- **范围**：1 子条独立（PR #472 follow-up，trigger 已满足）
+  - `TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01`（cap-02 line 85）：新增 `tools/archtest/eval_predicate_centralization_test.go`，AST walk `tools/archtest/` 包下所有 `constraint.Expr.Eval(...)` callsite，断言 predicate argument ∈ {`typeseval.BuildContextPredicate(...)`, 全 false sentinel `func(_ string) bool { return false }`}；其他形式 fail-closed
+  - **AI-rebust 升级**：near-Hard → Hard（违反不可表达，未来手写含过期 tag map 的 predicate 在 archtest 时报错）
+- **工时**：3-5h dev / 1h review
+- **依赖**：Phase 3.1 PR-BT1 merge ✅
+
+### Phase 3.6：archtest-inventory drift CI gate（PR-IG1）❌ cancelled by PR #435 (PR-A')
+- **取消理由**：原任务前提已不成立。PR #435 (PR-A', 2026-05-10) 已将 `hack/verify-archtest-inventory.sh` + `docs/audit/archtest-inventory.md` 派生产物整体删除，改由 `tools/archtest/inventory_anchor_required_test.go`（`INVENTORY-ANCHOR-REQUIRED-01` + `INVENTORY-ANCHOR-VALID-ID-01`）单源接替，并已通过 `.github/workflows/_build-lint.yml::verify-archtest` 16-shard 矩阵在 CI 强制
+- **enforcement gap 分析**：新机制严格强于旧机制——(1) 锚点本身即 ground truth，无派生 inventory 文件 → drift surface 从根本上消除；(2) VALID-ID-01 额外校验锚点 ID 规范 grammar（旧 gate 无此能力）；(3) `ARCHTEST-VERIFY-COVERAGE-01` 守卫 16-shard discovery 与 `tools/archtest/*_test.go` AST 集合一致，新文件自动入 shard
+- **backlog 同步**：`PR419-FU-INVENTORY-CI-GATE-01`（cap-14 line 405）已标 ✅ closed by PR #435（2026-05-12 直接 in-place 标记）
+
+### Phase 3.7：archtest 扫描 scope 扩展束（PR-SC1）
+- **范围**：2 子条同主题合并（同主题"archtest 扫描根 / 路径过滤扩展"）
+  - `ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME`（cap-14 line 399，P1/Cx1）：`NO-MANUAL-CONTRACTSPEC-LITERAL-01` 扫描根从 `cells/` + `examples/` 扩到 `runtime/`，保留 framework infra 必要的豁免列表
+  - `PR245-F6 OUTBOX-ARCHTEST-SCAN-SCOPE-EXPAND-01`（cap-14 line 336，Cx2）：`isCellFile` 从 `cell.go` 扩到 `cells/<n>/*.go` 排除 internal/slices/test
+- **工时**：4-6h dev / 1-2h review
+- **依赖**：无
+
+### Phase 3.8：metadata → 派生消费方字段漂移守卫束（PR-MD1）
+- **范围**：2 子条同主题合并（同主题"元数据 ↔ 派生 DTO 字段级漂移"）
+  - `ARCHTEST-CELL-METADATA-FIELD-DRIFT`（cap-14 line 400，P1/Cx2）：archtest 扫 3 cell 的 cell.yaml 与 cell_gen.go 对应字段值（owner / Schema.Primary / VerifySmoke）一致
+  - `CATALOG-DTO-DRIFT-ARCHTEST`（cap-14 line 401，P2/Cx2）：archtest 校验 AssemblyMeta 字段必映射到 `runtime/devtools/catalog/wire.go` DTO
+- **工时**：4-6h dev / 1-2h review
+- **依赖**：无
+
+### Phase 3.9：PR450 治理升级束（PR-S7）
+- **范围**：5 子条 bundle（cap-14 line 403，已是 bundle）
+  - `K-01`：`audit_ledger_composition_root_test.go:75-78` AST 仅 `pkg.Name` 匹配 `"ledger"` import alias 绕过；升 go/types resolution 或补 `IMPORT-ALIAS-FORBIDDEN` 锚点
+  - `K-04`：prefix allowlist "runtime/audit/ledger/" 覆盖所有子目录；收窄为枚举式白名单
+  - `K-05`：migration 020/021 顺序依赖仅靠 SQL 注释；新建通用 `MIGRATION-PAIR-DEPLOY-01` archtest 扫 migration godoc `deploy-pair` 锚点
+  - `A-10`：`audit_ledger_composition_root_test.go` 自评 Medium 但含 `pkg.Name` 字符串识别，实为 Soft；真 Medium 需 go/types + import path identity
+  - `F-12/K-02`：`appender.WithTxManager` + `auditverify.WithTxManager` 形参 raw `persistence.TxRunner` non-sealed；改为 `persistence.CellTxManager` 保持 cell 子树 raw infra 完全不可见
+- **工时**：8-12h dev / 3-4h review
+- **依赖**：无（与 Phase 3.2 PR-SH1 主线无文件重叠，但 review 面积较大，建议 PR-SH1 ship 后顺位开）
 
 ---
 
 ## 4. Wave 4 触发型——保留 + 落地时按维度拆模板
 
-### 触发条件不变（charter §4 line 113-122）
-| 项 | trigger（与 charter 一致）|
-|---|---|
-| HANDLER-POLICY-TYPEAWARE-SCANNER-01 | scanner 误报/漏报触发 |
-| SERVICEOWNED-OWNERSHIP-GUARD-01 | `auth.serviceOwned` endpoint > 1 |
-| B-FLOOR-FOLLOWUP §2.5/§4 | contract.yaml status ↔ adapter typed return 漂移事故首现 |
-| AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | `hasFMT27AuthModeConflict` 被重新 inline 化 |
-| TEST-POLLING-DETERMINISM typed marker | 第二次 race CI flake / 进入下一治理批 / 339 站点新增违反 |
-| FINDFIRSTCHILD-TYPED-API-01 | 第 7 处 closure+done sentinel helper 出现 |
+### 触发条件（charter §4 line 113-122 + 2026-05-12 backlog 同步）
+| 项 | trigger | backlog 锚点 |
+|---|---|---|
+| HANDLER-POLICY-TYPEAWARE-SCANNER-01 | scanner 误报/漏报触发 | charter §4 |
+| SERVICEOWNED-OWNERSHIP-GUARD-01 | `auth.serviceOwned` endpoint > 1 | charter §4 |
+| B-FLOOR-FOLLOWUP §2.5/§4 | contract.yaml status ↔ adapter typed return 漂移事故首现 | charter §4 |
+| AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | `hasFMT27AuthModeConflict` 被重新 inline 化 | charter §4 |
+| TEST-POLLING-DETERMINISM typed marker | 第二次 race CI flake / 进入下一治理批 / 339 站点新增违反 | charter §4 |
+| FINDFIRSTCHILD-TYPED-API-01 | 第 7 处 closure+done sentinel helper 出现 | charter §4 + cap-14 line 421 PR460-FU |
+
+### 保留触发型条目（trigger 是真事故/方案待定/量级未到，A + C 类筛选后 6 条）
+| 项 | trigger | backlog 锚点 |
+|---|---|---|
+| **PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01**（A2）| (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要 sealed marker 范本时顺带建立 | cap-02 line 83 |
+| **PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01**（A3）| 首次出现 cross-function file-scope `var pat = "./..."` 间接调用 escape，或新 archtest 规则需要绕过 funnel；unexport `typeseval.SharedResolver/LoadPackages` 为包内私有 + `LoadPackagesForFixtures` 显式入口 | cap-14 line 421 |
+| **CELLGEN-ERRCODE-FUNNEL-HARDEN**（C2）| depguard method-level rule 方案确定 OR typed wrapper 抽出；cellgen 包 errcode Hard 升级路径 | cap-14 line 417 |
+| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| 第 3 个 file-level carve-out 出现；改 function-level（仅豁免 `WrapOrInfra` / `writeErrcodeError` struct literal 行）+ 新 ADR 登记 carve-out 列表+理由 | cap-14 line 398 + line 361 |
+| **PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01**（C6）| 第二次主题归属错误；`list-archtests.sh` grep → go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 `referenced_by` 列 | cap-02 line 72 |
+| **POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01**（C8）| 第 2 次同类漂移；archtest 静态扫 `*_test.go`，`_NotFound` 后缀测试必须断言 typed `errcode.Error.Code` 等于 `Err*NotFound`，禁裸 `assert.AnError`（违反不可表达 → Hard）| cap-14 line 334 |
+
+### 已从触发型移出 → 立即排期的条目（2026-05-12 重审）
+2026-05-12 决策：把"trigger 已满足 / trigger 反向逻辑（等事故等于晚了）/ 方案确定的扩范围动作"从触发型里剥离，作为独立 phase 立即排期。详见 §3 Phase 3.5-3.9：
+
+| 原触发型项 | 移出理由 | 新 phase |
+|---|---|---|
+| TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01（A1）| PR #472 已 merge，trigger 已满足 | Phase 3.5 PR-EP1 |
+| PR419-FU-INVENTORY-CI-GATE-01（C7）| 一次性 CI 配置项，等漂移事故是反向逻辑 | Phase 3.6 PR-IG1 |
+| ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME（C4） + PR245-F6（C9）| 扫描 scope 扩展是确定动作，无 trigger 等待价值；合并为束 | Phase 3.7 PR-SC1（合并）|
+| ARCHTEST-CELL-METADATA-FIELD-DRIFT（C5a） + CATALOG-DTO-DRIFT-ARCHTEST（C5b）| 防御性 archtest，字段漂移事故首现 = 已晚；合并为束 | Phase 3.8 PR-MD1（合并）|
+| S7-FU-ARCHTEST 5 子条 bundle（C1）| PR #450 review 已出 5 条独立 archtest 升级，不是"等事故"语义 | Phase 3.9 PR-S7 |
 
 ### 落地时统一按维度拆模板
 有 framework + bulk migration + enforcement 三维以上的项目（**TEST-POLLING-DETERMINISM** 和 **FINDFIRSTCHILD-TYPED-API-01** 都是），触发时按以下模板拆：
@@ -174,67 +241,51 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 
 ---
 
-## 5. 实施依赖图与并行度
+## 5. 实施依赖图与并行度（更新后剩余）
 
 ```
-Phase 0.1 (backlog 收尾)  独立  ─┐
-                                 │
-Phase 1.1 (panicregister fw)  ──┐│   独立 (可与 0.1/2.x 并行)
-Phase 1.2 (Must* migration)   ←─┤│
-Phase 1.3 (archtest enforce)  ←─┘│
-                                 │
-Phase 2.1 (ResolveReceiverType) ─┤  独立 (helper #1 + BFS emitter dogfood) ✅ done
-Phase 2.2 (ResolvePackageRef)    ┤  独立 (call-matcher helper + forbiddenWalkRefs 2b/2c dogfood，与 2.1 并行)
-                                 │
-Phase 3.1 (build-tag failclosed) │  独立
-Phase 3.2 (scanner hardening)  ←─┤  需 Phase 2.2 merge
-Phase 3.3 (generated-skip)       │  独立
-Phase 3.4 (internal-contract)    │  独立
-                                 │
-Wave 4 触发型              触发后 按 Template-Wave4-3PR
+Phase 0.1 (backlog 收尾)             ✅ done 2026-05-12（in-place 标记，归档待人工）
+Phase 1.x (panic 单源)               ✅ PR #467
+Phase 2.1 (ResolveReceiverType)      ✅ PR #468
+Phase 2.2 (ResolvePackageRef)        ✅ PR #469
+Phase 3.1 (build-tag failclosed)     ✅ PR #472
+Phase 3.2 (scanner hardening)        pending — 依赖已就绪（2.2 已 merge）
+Phase 3.3 (generated-skip)           ✅ PR #471
+Phase 3.4 (internal-contract)        ✅ PR #470
+Phase 3.5 (eval predicate central)   pending — 依赖 3.1 ✅
+Phase 3.6 (inventory CI gate)        ❌ cancelled by PR #435 (PR-A')，原任务前提不成立
+Phase 3.7 (扫描 scope 扩展束)        pending — 独立
+Phase 3.8 (字段漂移守卫束)           pending — 独立
+Phase 3.9 (PR450 治理升级束)         pending — 独立，但与 3.2 review 面积冲突，建议 3.2 后
+
+Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 ```
 
-并行窗口：
-- **Window 1**：Phase 0.1 + 1.1 + 2.1 + 2.2 + 3.1 + 3.3 + 3.4 七个 PR 完全独立可并行
-- **Window 2**：Phase 1.2 (依赖 1.1) + 3.2 (依赖 2.2)
-- **Window 3**：Phase 1.3 (依赖 1.2)
+**当前剩余（Wave 2/3 范围）**：Phase 3.2 PR-SH1 + Phase 3.5 / 3.7 / 3.8 / 3.9 共 5 项（Phase 0.1 ✅ done 2026-05-12；Phase 3.6 ❌ cancelled by PR #435）。Phase 3.2 是劳动密集主线（12-16h），其余 4 项与 3.2 文件无重叠可并行；Phase 3.9 review 面积大，建议 3.2 ship 后顺位开。
 
 ---
 
-## 6. 优先级 next-up（按"解锁后续"排序）
+## 6. 优先级 next-up（按"与 Phase 3.2 PR-SH1 并行能力"排序）
 
-| Rank | Phase | 解锁的下游 | 工时 |
+| Rank | Phase | 工时 | 与 PR-SH1 并行能力 |
 |---|---|---|---|
-| 1 | Phase 2.1 PR-TS1（ResolveReceiverType helper + BFS emitter dogfood）✅ done | Phase 3.2 scanner hardening 部分 + 关闭 PR431-FU | 6-8h |
-| 2 | Phase 2.2 PR-TS2（ResolvePackageRef helper + forbiddenWalkRefs 2b/2c dogfood）| Phase 3.2 scanner hardening 剩余 | 6-8h |
-| 3 | Phase 0.1（backlog 收尾，独立小）| — | 1-2h |
-| 4 | Phase 1.1 PR-PR1（panicregister framework）| Phase 1.2/1.3 | 3-4h |
-| 5 | Phase 3.1 PR-BT1（build-tag fail-closed）| — | 8-12h |
-| 6 | Phase 3.3 PR-SH2（generated-skip cross-rule）| — | 3-4h |
-| 7 | Phase 3.4 PR-IC1（internal-contract 上移 L0/L6）| — | 5-7h |
-| 8 | Phase 1.2 PR-PR2（Must* migration，依赖 1.1）| — | 3-4h |
-| 9 | Phase 3.2 PR-SH1（scanner hardening，依赖 2.2）| — | 8-11h |
-| 10 | Phase 1.3 PR-PR3（panic archtest enforcement，依赖 1.2）| — | 1-2h |
+| 1 | **Phase 3.2 PR-SH1**（scanner hardening + 5 case drift fixes + symlink fail-closed + 双轨整理）| 12-16h | — 主线，先开 |
+| 2 | **Phase 3.7 PR-SC1**（archtest 扫描 scope 扩展束，CONTRACTSPEC-LITERAL-RUNTIME + OUTBOX-SCAN-SCOPE-EXPAND 合并）| 4-6h | ✅ 完全并行（扫描根扩展到 runtime/ + isCellFile glob，与 PR-SH1 内部 walk.go/content.go 不同文件）|
+| 3 | **Phase 3.5 PR-EP1**（typeseval eval predicate centralization）| 3-5h | ⚠️ 同 typeseval 包 — 文件不同（archtest 新规则 vs internal/typeseval/scanner.go）但 review 维度重叠，建议 PR-SH1 进入 review 中后期再开 |
+| 4 | **Phase 3.8 PR-MD1**（字段漂移守卫束，CELL-METADATA + CATALOG-DTO 合并）| 4-6h | ✅ 完全并行（扫 cell.yaml + AssemblyMeta → wire.go DTO，与 PR-SH1 无文件重叠）|
+| 5 | **Phase 3.9 PR-S7**（PR450 治理升级束 5 子条 bundle）| 8-12h | ⚠️ 较大 review 面积，建议 PR-SH1 ship 后顺位开 |
 
-总工时（Wave 2 + 3）：**50-70h dev / 17-23h review**
-对照章程原估：~73-95h dev / 18-25h review（按 charter §4 加总）
-减幅约 25%（不是因为干得少，而是 PR #445 类的"两轮 review 仍遗留 8+ 条 FU"在按维度拆后大幅减少）
+**总剩余工时（Wave 2/3 范围）**：12-16h + 4-6h + 3-5h + 4-6h + 8-12h = **31-45h dev / 10-15h review**（已扣除 Phase 0.1 done + Phase 3.6 cancelled 共 3-5h dev / 1-2h review）
 
----
+### 并行窗口建议
 
-## 7. 与章程的差异点
-
-| 章程 §4 | 本计划 | 差异理由 |
-|---|---|---|
-| panic 单源一锅推（7-10h）| 拆 3 PR（Phase 1.1/1.2/1.3）| PR #445 教训：framework + migration + enforcement 同 PR 触发多维 fail-open |
-| typeseval helper 20-30h | 拆 Phase 2.1/2.2 各 6-8h | helper 本身代码小，膨胀来自捆绑 dogfood；按"helper + 一个 dogfood"切片 |
-| ARCHTEST-TYPEAWARE-HARDENING bundle 推 | 拆 Phase 3.1/3.2/3.3/3.4 共 4 PR | bundle 是 backlog 索引视角，不是 PR 视角 |
-| TEST-POLLING-DETERMINISM 一锅推（24-32h）| Template-Wave4-3PR 拆 3 PR | 同 panic 单源理由 |
-| FINDFIRSTCHILD-TYPED-API-01 单 PR | 保留单 PR，但 commit-level 分维度 | 总改动 < 200 LOC，review 面积可控，是例外 |
+- **Window 1**（PR-SH1 开工同时启）：Phase 3.7 PR-SC1 / Phase 3.8 PR-MD1 — 2 个完全并行小 PR（合计 8-12h）
+- **Window 2**（PR-SH1 review 中后期）：Phase 3.5 PR-EP1（3-5h，同 typeseval 包须等 SH1 内部稳定）
+- **Window 3**（PR-SH1 ship 后）：Phase 3.9 PR-S7（8-12h，review 面积大顺位）
 
 ---
 
-## 8. 引用
+## 7. 引用
 
 - 章程（原则视角）：`docs/plans/202605101300-ai-first-governance-charter.md`
 - PR #445 复盘（scope 失控元教训）：本对话 §"PR #445 为什么遗留这么多问题" 5 层根因分析
