@@ -43,6 +43,11 @@
 - 名字 convention → sealed interface / receiver type 识别
 - hand-crafted fixture → real source AST capture
 
+
+**Hard 范本（已 ship 案例）**：
+
+- **typed function choice for walk depth** — 当一个 API 同时承担多种语义（深度选择 / 早返模式 / 容器范围等）时，拆成多个 typed function 让"选错语义 = 选错 API 名"成为 compile-or-fixture 抓的层级。范例：`scanner.EachInSubtree[N]`（recursive，遍历以该节点为根的全树）vs `scanner.EachInChildren[N]`（depth=1，仅直接子节点）拆分——两个函数名语义不重叠，AI 无法"按字面翻译"选错后仍通过 build。（PR #553，charter `docs/plans/202605101300-ai-first-governance-charter.md` §4 Wave 2 PR-Φ-HARD-EACHNODE-WALKDEPTH-01）
+
 ## archtest 文件命名
 
 - 单条独立规则 → `{rule}_test.go`
