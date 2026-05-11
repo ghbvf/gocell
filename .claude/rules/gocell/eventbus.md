@@ -69,7 +69,7 @@ fallback；构造期 fail-fast 是唯一允许的 nil-branch。
 
 ### Cell 订阅注册（Registry builder 模式）
 
-Cell 在 `Init(ctx, reg)` 中通过 `reg.Subscribe(spec, handler, consumerGroup)` 声明订阅意图，bootstrap 把 RegistrySnapshot.Subscriptions drain 到 EventRouter，Router 管理所有 goroutine 生命周期。
+Cell 在 `Init(ctx, reg)` 中通过 `reg.Subscribe(spec, handler, consumerGroup, cellID, opts...)` 声明订阅意图，bootstrap 把 RegistrySnapshot.Subscriptions drain 到 EventRouter，Router 管理所有 goroutine 生命周期。
 
 ```go
 func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
@@ -81,13 +81,20 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
         Kind:      "event",
         Transport: "amqp",
         Topic:     "my.topic.v1",
-    }, c.svc.HandleEvent, c.ID())
+    }, c.svc.HandleEvent, "my-cg", c.ID())
 }
 ```
 
-`consumerGroup` 与 owner cellID 解耦：drain loop 用 RegistrySnapshot 的 cell ID 作为
-`Subscription.CellID`（observability owner），`consumerGroup` 仅作 broker 分区/竞争消费标识。
-两者通常同值（`c.ID()`），需要 sub-group 的场景（例如 fan-out 消费）可显式分离。
+`consumerGroup` 与 `cellID` 是 **两个完全独立的语义轴**，Registry.Subscribe 都要求显式提供：
+
+- `cellID`（**第 4 个位置必填参数**，HARD 契约）= observability owner，作为 metric label / slog field / trace span attribute 的 cell 维度。codegen（contractgen NewSubscription + cellgen cell.tmpl）从 cell metadata 在编译期注入；business 手写 `reg.Subscribe` 时漏传是**编译失败**，不是 runtime fallback。
+- `consumerGroup`（第 3 个位置必填参数）= broker 分区键 + 幂等命名空间 `"{ConsumerGroup}:{entry.ID}"`。同 group 竞争消费；不同 group 各自收到完整副本（fanout）。
+
+两者**没有任何自动 fallback**：`Subscription.ObservabilityID()` 直接返回 `s.CellID`（不再 `if CellID == "" return ConsumerGroup`），`Subscription.Validate()` 拒空 CellID。Bootstrap drainCellSubscriptions 检查 `sub.CellID == snapshotKey`，不匹配 fail-fast（不再静默 `sub.OwnerCellID = id`）。
+
+两者常同值（`c.ID()` 用作 consumerGroup 和 cellID），需要 sub-group 的场景（fanout 消费 / 角色分支 like `accesscore-rbac-session-sync`）可显式分离 consumerGroup，但 cellID 始终 = `c.ID()`。
+
+> **不要**新增 `WithSubscriptionCellID(string)` option — 这会把 HARD 位置必填降级为 Soft 可选，由 `REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01` archtest 拒绝。详见 ADR `docs/architecture/202605111000-adr-subscription-cellid-mandatory.md`。
 
 **声明对齐约束**：`spec.ID` 必须同步声明在三处：
 1. slice.yaml `contractUsages` 含 `{contract: event.my.topic.v1, role: subscribe}` 条目
