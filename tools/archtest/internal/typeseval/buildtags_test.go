@@ -17,24 +17,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// platformTagAllowlist are tags handled by the Go toolchain itself and do
-// not represent project-specific gates that archtest rules must iterate.
-var platformTagAllowlist = map[string]bool{
-	// OS
-	"darwin": true, "linux": true, "windows": true, "freebsd": true,
-	"openbsd": true, "netbsd": true, "android": true, "ios": true,
-	"plan9": true, "solaris": true, "aix": true, "dragonfly": true,
-	"js": true, "wasip1": true,
-	// Architecture
-	"amd64": true, "arm64": true, "386": true, "arm": true,
-	"ppc64": true, "ppc64le": true, "mips": true, "mipsle": true,
-	"mips64": true, "mips64le": true, "riscv64": true, "s390x": true,
-	"loong64": true, "wasm": true,
-	// Build
-	"cgo": true, "ignore": true, "race": true, "msan": true, "asan": true,
-	"unix": true, "boringcrypto": true,
-	// Synthetic non-existent tags only used as "skip this file" markers
-	// (the file is intentionally excluded from every real build set).
+// repoSkipTagAllowlist names project-internal tags that the coverage
+// self-check knows about but that are NOT propagated into LoadPackages
+// (KnownNonDefaultTags) and are NOT implicit toolchain defaults. They
+// gate non-source-controlled content (codegen output) or are intentional
+// skip markers; archtest always scans the default variant.
+//
+// Tags that the Go toolchain sets implicitly (GOOS/GOARCH/cgo/unix/gc/go1.X)
+// are no longer listed here — they are provided by BuildContextPredicate()
+// which sources them from build.Default.ReleaseTags + hardcoded syslist,
+// ensuring toolchain upgrades automatically propagate without hand-edits.
+var repoSkipTagAllowlist = map[string]bool{
+	// Synthetic always-excluded marker — no file in any real build set uses this.
 	"never": true,
 	// catalog_gen — build-mode marker for codegen output. The active variant
 	// in source control is cmd/corebundle/catalog_gen_stub.go gated on
@@ -129,9 +123,10 @@ func TestKnownNonDefaultTagsCoverage(t *testing.T) {
 	})
 	require.NoError(t, err, "filepath.WalkDir")
 
+	defaultPred := BuildContextPredicate()
 	var unknown []string
 	for tag, entry := range seen {
-		if known[tag] || platformTagAllowlist[tag] || isGoVersionTag(tag) {
+		if known[tag] || defaultPred(tag) || repoSkipTagAllowlist[tag] || isGoVersionTag(tag) {
 			continue
 		}
 		example := entry.paths[0]
@@ -153,17 +148,23 @@ func TestKnownNonDefaultTagsCoverage(t *testing.T) {
 // TestFlatLoadCoverage_DetectsAmbiguousConstraint.
 //
 // The predicate includes:
-//   - the supplied project tags
-//   - all entries in platformTagAllowlist
-//   - any go-version tags seen in the goVersionTags set
+//   - the supplied project tags (non-default tags from KnownNonDefaultTags slices)
+//   - all implicit toolchain defaults via BuildContextPredicate (GOOS/GOARCH/cgo/unix/gc/go1.X)
+//   - any go-version tags seen in the goVersionTags set (belt-and-suspenders for
+//     go1.X versions above the current toolchain floor)
 //
 // This prevents platform/OS/arch and go-version tags from causing
 // false-positive ambiguity: those tags are handled by the Go toolchain
 // and do not represent project-specific gate interactions.
 func buildEvalPredicate(projectTags map[string]bool, goVersionTags map[string]bool) func(string) bool {
-	return func(t string) bool {
-		return projectTags[t] || platformTagAllowlist[t] || goVersionTags[t]
+	var extra []string
+	for t := range projectTags {
+		extra = append(extra, t)
 	}
+	for t := range goVersionTags {
+		extra = append(extra, t)
+	}
+	return BuildContextPredicate(extra...)
 }
 
 // collectGoVersionTags walks the repo and collects every go1.* tag referenced
