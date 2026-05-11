@@ -99,6 +99,15 @@ func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) (*eventrouter.Router
 }
 
 // drainCellSubscriptions registers all cell snapshot subscriptions into the router.
+//
+// CellID is the AI-HARD positional parameter on Registry.Subscribe (codegen
+// injects it from cell metadata at compile time), so each SubscriptionRequest
+// arrives with CellID already populated. The drain loop only cross-checks
+// that CellID matches the snapshot owner (fail-fast on drift) — it does NOT
+// silently rewrite the field, which would mask a codegen defect where a cell
+// has been miswired to register a subscription owned by a different cell.
+//
+// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
 func (b *Bootstrap) drainCellSubscriptions(s *phaseState, evtRouter *eventrouter.Router) error {
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
@@ -106,14 +115,16 @@ func (b *Bootstrap) drainCellSubscriptions(s *phaseState, evtRouter *eventrouter
 			continue
 		}
 		for _, sub := range snap.Subscriptions {
-			// Drain loop knows the true owner cell; set OwnerCellID so the
-			// event router can record it independently of ConsumerGroup.
-			sub.OwnerCellID = id
+			if sub.CellID != id {
+				return fmt.Errorf("bootstrap: cell %s subscription drift: declared CellID=%q but snapshot owner=%q"+
+					" (codegen should inject cellID from cell metadata; check cellgen + contractgen templates)",
+					id, sub.CellID, id)
+			}
 			var opts []cell.SubscriptionOption
 			if sub.SliceID != "" {
 				opts = append(opts, cell.WithSubscriptionSliceID(sub.SliceID))
 			}
-			if err := evtRouter.AddContractHandler(sub.Spec, sub.Handler, sub.ConsumerGroup, sub.OwnerCellID, opts...); err != nil {
+			if err := evtRouter.AddContractHandler(sub.Spec, sub.Handler, sub.ConsumerGroup, sub.CellID, opts...); err != nil {
 				return fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err)
 			}
 		}

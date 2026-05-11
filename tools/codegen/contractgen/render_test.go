@@ -828,7 +828,7 @@ func TestSpecGenIsPackagePrivate(t *testing.T) {
 }
 
 // TestSubscriptionMountCallsRegistrySubscribe verifies the generated Mount method
-// calls reg.Subscribe with the correct arguments including WithSubscriptionSliceID.
+// calls reg.Subscribe with cellID + sliceID (post-K#07 HARD-positional cellID).
 func TestSubscriptionMountCallsRegistrySubscribe(t *testing.T) {
 	t.Parallel()
 	testDir := filepath.Join("testdata", "synth", "synth_event")
@@ -856,15 +856,20 @@ func TestSubscriptionMountCallsRegistrySubscribe(t *testing.T) {
 	if !strings.Contains(got, "func (s *Subscription) Mount(reg cell.Registry) error {") {
 		t.Errorf("expected Mount method signature, not found in:\n%s", got)
 	}
-	if !strings.Contains(got, "reg.Subscribe(spec, s.handler, s.consumerGroup,") {
-		t.Errorf("expected reg.Subscribe call, not found in:\n%s", got)
+	// K#07: cellID is the 4th positional parameter (HARD contract).
+	if !strings.Contains(got, "reg.Subscribe(spec, s.handler, s.consumerGroup, s.cellID,") {
+		t.Errorf("expected reg.Subscribe call with positional s.cellID, not found in:\n%s", got)
 	}
 	if !strings.Contains(got, "cell.WithSubscriptionSliceID(s.sliceID)") {
 		t.Errorf("expected WithSubscriptionSliceID call, not found in:\n%s", got)
 	}
 }
 
-// TestNewSubscriptionFourArgSignature verifies the constructor signature.
+// TestNewSubscriptionFourArgSignature verifies the constructor signature post-K#07:
+// NewSubscription(handler, consumerGroup, cellID, sliceID) — four parameters,
+// all mandatory positional. cellID is HARD-required to mirror the
+// Registry.Subscribe contract; omitting it would be a compile failure at the
+// cellgen Mount call site.
 func TestNewSubscriptionFourArgSignature(t *testing.T) {
 	t.Parallel()
 	testDir := filepath.Join("testdata", "synth", "synth_event")
@@ -889,10 +894,13 @@ func TestNewSubscriptionFourArgSignature(t *testing.T) {
 	}
 	got := string(content)
 
-	if !strings.Contains(got, "func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string) *Subscription {") {
-		t.Errorf("expected 4-arg NewSubscription signature, not found in:\n%s", got)
+	if !strings.Contains(got, "func NewSubscription(handler outbox.EntryHandler, consumerGroup, cellID, sliceID string) *Subscription {") {
+		t.Errorf("expected 4-arg NewSubscription signature with cellID, not found in:\n%s", got)
 	}
-	// No fluent options.
+	// No fluent options for cellID — K#07 HARD contract requires positional.
+	if strings.Contains(got, "WithSubscriptionCellID") {
+		t.Errorf("unexpected WithSubscriptionCellID fluent option — cellID must be positional (HARD), found in:\n%s", got)
+	}
 	if strings.Contains(got, "WithSliceID") {
 		t.Errorf("unexpected WithSliceID method (fluent option), found in:\n%s", got)
 	}

@@ -59,6 +59,7 @@ func TestNewContractTracingSubscriber_WrapsSubscribeAndDelegatesLifecycle(t *tes
 	sub := outbox.Subscription{
 		Topic:             "event.config.entry-upserted.v1",
 		ConsumerGroup:     "accesscore",
+		CellID:            "accesscore",
 		ContractID:        "event.config.entry-upserted.v1",
 		ContractKind:      "event",
 		ContractTransport: "amqp",
@@ -121,6 +122,7 @@ func TestNewContractTracingSubscriber_Subscribe_ReturnsErrorOnEmptyContractID(t 
 	panicked, subscribeErr := subscribeCapturingPanic(t, decorated, outbox.Subscription{
 		Topic:             "event.legacy.v1",
 		ConsumerGroup:     "legacy",
+		CellID:            "legacy",
 		ContractKind:      "event",
 		ContractTransport: "amqp",
 	})
@@ -139,6 +141,7 @@ func TestNewContractTracingSubscriber_Subscribe_ReturnsErrorOnEmptyContractKind(
 	panicked, subscribeErr := subscribeCapturingPanic(t, decorated, outbox.Subscription{
 		Topic:             "event.legacy.v1",
 		ConsumerGroup:     "legacy",
+		CellID:            "legacy",
 		ContractID:        "event.legacy.v1",
 		ContractTransport: "amqp",
 	})
@@ -157,6 +160,7 @@ func TestNewContractTracingSubscriber_Subscribe_ReturnsErrorOnEmptyContractTrans
 	panicked, subscribeErr := subscribeCapturingPanic(t, decorated, outbox.Subscription{
 		Topic:         "event.legacy.v1",
 		ConsumerGroup: "legacy",
+		CellID:        "legacy",
 		ContractID:    "event.legacy.v1",
 		ContractKind:  "event",
 	})
@@ -180,6 +184,7 @@ func TestContractTracingSubscriber_Setup_ValidatesSubscription(t *testing.T) {
 	err := decorated.Setup(context.Background(), outbox.Subscription{
 		Topic:         "event.gap.v1",
 		ConsumerGroup: "gap",
+		CellID:        "gap",
 		// ContractID/Kind/Transport intentionally omitted.
 	})
 	require.Error(t, err)
@@ -198,6 +203,7 @@ func TestContractTracingSubscriber_NilInnerLifecycle(t *testing.T) {
 	sub := outbox.Subscription{
 		Topic:             "event.nilinner.v1",
 		ConsumerGroup:     "nilinner",
+		CellID:            "nilinner",
 		ContractID:        "event.nilinner.v1",
 		ContractKind:      "event",
 		ContractTransport: "amqp",
@@ -319,6 +325,7 @@ func TestContractTracingSubscriber_Subscribe_PropagatesWrapSubscriberError(t *te
 	err := decorated.Subscribe(context.Background(), outbox.Subscription{
 		Topic:             "event.bad-kind.v1",
 		ConsumerGroup:     "badkind",
+		CellID:            "badkind",
 		ContractID:        "event.bad-kind.v1",
 		ContractKind:      "command", // WrapSubscriber rejects non-"event" kinds.
 		ContractTransport: "amqp",

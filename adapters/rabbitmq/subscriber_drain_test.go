@@ -83,7 +83,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "drain.topic"}, handler)
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "drain.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until all 3 handler goroutines have started (they're blocked on <-released).
@@ -176,7 +176,7 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: longTopic},
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: longTopic, CellID: "test-cell"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				return outbox.Ack()
 			}))
@@ -262,7 +262,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "close.fast.topic"}, handler)
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "close.fast.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until the delivery is acked (handler completed).
@@ -338,7 +338,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: "timeout.topic"}, handler)
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: "timeout.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait briefly to let the delivery reach the handler goroutine
@@ -404,7 +404,7 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "ctx.topic"},
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "ctx.topic", CellID: "test-cell"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				return outbox.Ack()
 			}))
@@ -477,7 +477,7 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "per-call.topic"},
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "per-call.topic", CellID: "test-cell"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				return outbox.Ack()
 			}))
@@ -552,7 +552,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "lock.topic"},
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "lock.topic", CellID: "test-cell"},
 			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				return outbox.Ack()
 			}))

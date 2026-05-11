@@ -84,6 +84,7 @@ func TestIntegration_StopIntakeDrainsPrefetchedMessages(t *testing.T) {
 		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{
 			Topic:         topic,
 			ConsumerGroup: "stopintake-drain",
+			CellID:        "stopintake-drain",
 		}, handler)
 	}()
 

@@ -39,10 +39,14 @@ const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
 // one, the pre-declared queue stays empty, and messages may be routed to the
 // wrong queue under broker scheduling, producing flaky timeouts.
 //
+// K#07: CellID is mandatory on Subscription; this helper sets CellID=consumerGroup
+// (the one-arg-equals-the-other pattern) because the helper itself does not know
+// the owning cell — callers that own a distinct cell ID should pass it explicitly.
+//
 // ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
 func waitForSubscription(t testing.TB, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
 	t.Helper()
-	subSpec := outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup}
+	subSpec := outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup, CellID: consumerGroup}
 	if err := sub.Setup(ctx, subSpec); err != nil {
 		t.Fatalf("waitForSubscription: Setup(%s): %v", topic, err)
 	}
@@ -159,7 +163,7 @@ func CollectN(
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, handler)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"}, handler)
 	}()
 
 	// Wait for the subscriber to declare topology via Setup, then Ready closes.
@@ -225,7 +229,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 	go func() {
 		defer close(c.subDone)
 		close(ready) // signal: goroutine is running, Subscribe call is imminent
-		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic},
+		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
 			func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 				c.mu.Lock()
 				c.collected = append(c.collected, entry)
@@ -342,7 +346,7 @@ func (h *pubSubHarness) subscribeWithHandler(handler outbox.SubscriberHandler) {
 	go func() {
 		defer close(h.subDone)
 		close(ready)
-		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
+		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic, CellID: "_outboxtest"}, wrapped)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			h.T.Errorf(errSubscribeUnexpectedFmt, err)
 		}
@@ -376,7 +380,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	go func() {
 		defer close(h.subDone)
 		close(ready)
-		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
+		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic, CellID: "_outboxtest"}, wrapped)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			h.T.Errorf(errSubscribeUnexpectedFmt, err)
 		}

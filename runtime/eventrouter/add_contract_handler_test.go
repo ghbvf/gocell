@@ -111,6 +111,14 @@ func TestAddContractHandler_EmptyConsumerGroup_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "empty consumerGroup")
 }
 
+func TestAddContractHandler_EmptyOwnerCellID_ReturnsError(t *testing.T) {
+	t.Parallel()
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
+	err := r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty ownerCellID")
+}
+
 func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 	t.Parallel()
 	// Spec with Kind != "event" must be rejected at registration time.

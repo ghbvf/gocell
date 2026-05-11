@@ -79,7 +79,7 @@ func TestStopIntake_DrainSurvivesParentCtxCancel(t *testing.T) {
 	subCtx, subCancel := context.WithCancel(context.Background())
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "drain.detached.topic"}, handler)
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "drain.detached.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until handlers are running (stuck on <-released).
@@ -186,7 +186,7 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "inflight.wait.topic"}, handler)
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "inflight.wait.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until handler is actually running (inflight == 1).
@@ -287,7 +287,7 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 	subCtx, subCancel := context.WithCancel(context.Background())
 	defer subCancel()
 	go func() {
-		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: "drain.timeout.topic"}, handler)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: "drain.timeout.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until handler is inflight.
@@ -373,7 +373,7 @@ func TestStopIntake_OuterCtxCancel_DoesNotAbortDrain(t *testing.T) {
 	subCtx, subCancel := context.WithCancel(context.Background())
 	defer subCancel()
 	go func() {
-		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: "drain.outer.cancel.topic"}, handler)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: "drain.outer.cancel.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until handler is inflight.

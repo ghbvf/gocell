@@ -185,7 +185,9 @@ func TestGenerate_WriteMode_HTTP(t *testing.T) {
 // TestGenerate_WriteMode_Event verifies that event contracts produce 4 files
 // (types_gen.go + iface_gen.go + spec_gen.go + subscription_gen.go) but NOT handler_gen.go.
 // It also asserts key content invariants: spec_gen.go uses lowercase "var spec" (private),
-// and subscription_gen.go exposes a 3-arg NewSubscription(handler, consumerGroup, sliceID).
+// and subscription_gen.go exposes a 4-arg NewSubscription(handler, consumerGroup, cellID, sliceID).
+// K#07: cellID became a HARD positional parameter on NewSubscription (mirroring the
+// Registry.Subscribe contract), so the signature widened from 3 to 4 params.
 func TestGenerate_WriteMode_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
@@ -220,11 +222,12 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 		}
 	}
 
-	// subscription_gen.go: must expose NewSubscription with 3 args (handler, consumerGroup, sliceID).
+	// subscription_gen.go: must expose NewSubscription with 4 args
+	// (handler, consumerGroup, cellID, sliceID) — K#07 HARD-positional cellID.
 	if subPath, ok := filesByName["subscription_gen.go"]; ok {
 		content := fileutil.MustReadFile(t, subPath)
-		if !strings.Contains(string(content), "func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string)") {
-			t.Errorf("subscription_gen.go should contain 3-arg NewSubscription signature, content:\n%s", string(content))
+		if !strings.Contains(string(content), "func NewSubscription(handler outbox.EntryHandler, consumerGroup, cellID, sliceID string)") {
+			t.Errorf("subscription_gen.go should contain 4-arg NewSubscription signature with cellID, content:\n%s", string(content))
 		}
 	}
 }

@@ -79,7 +79,7 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	require.NoError(t, err)
 
 	var handlerCalls atomic.Int32
-	wrapped := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: group},
+	wrapped := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: group, CellID: group},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			handlerCalls.Add(1)
 			return outbox.Ack()
@@ -97,7 +97,7 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: group}, wrapped)
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: group, CellID: group}, wrapped)
 	}()
 
 	waitForSubscriberReady(t, conn, queueName, subErrCh, testtime.EventuallyLong)

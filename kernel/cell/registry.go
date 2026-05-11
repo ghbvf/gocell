@@ -58,7 +58,27 @@ type Registry interface {
 	// Subscribe registers an event subscription. Returns a non-nil error when:
 	//   - handler is nil
 	//   - consumerGroup is empty
+	//   - cellID is empty
 	//   - spec.Kind != "event"
+	//
+	// cellID is the cell that owns this subscription — distinct from
+	// consumerGroup (which may include a role suffix like
+	// "accesscore-rbac-session-sync"). It is a positional, mandatory string
+	// parameter rather than a SubscriptionOption: codegen (contractgen
+	// NewSubscription + cellgen cell.tmpl) injects it from cell metadata at
+	// compile time, so a missing cellID is a compile failure at the
+	// reg.Subscribe call site (HARD contract). This is the AI-rebust gate for
+	// "metric/log owner must trace to cell metadata, not to consumerGroup
+	// drift" — making cellID an option would silently demote the contract
+	// from compile-time to opt-in.
+	//
+	// Typical usage (consumerGroup == cellID):
+	//
+	//	reg.Subscribe(spec, handler, c.ID(), c.ID())
+	//
+	// Role-suffix usage (fanout consumer with sub-group, cellID stays the cell):
+	//
+	//	reg.Subscribe(spec, handler, "accesscore-rbac-session-sync", c.ID())
 	//
 	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
 	//
@@ -79,7 +99,14 @@ type Registry interface {
 	//
 	// ref: ThreeDotsLabs/watermill message/router.go AddHandler (handler
 	// registration decoupled from goroutine start).
-	Subscribe(spec contractspec.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...SubscriptionOption) error
+	// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
+	Subscribe(
+		spec contractspec.ContractSpec,
+		handler outbox.EntryHandler,
+		consumerGroup string,
+		cellID string,
+		opts ...SubscriptionOption,
+	) error
 
 	// Health registers a named readiness probe. If name is already registered,
 	// the duplicate is logged at slog.LevelError and silently dropped
@@ -207,20 +234,25 @@ type SubscriptionRequest struct {
 	ConsumerGroup string
 	SliceID       string
 
-	// OwnerCellID is the cell that owns this subscription. It is NOT set by the
-	// cell itself during Init — cells only know their ConsumerGroup. Instead,
-	// bootstrap's drainCellSubscriptions fills this field from the cell-ID key
-	// used to look up the snapshot, so the event router can record the true
-	// owner cell for observability (CellID label in metrics/traces) rather than
-	// overloading ConsumerGroup as a proxy cell identity.
+	// CellID is the cell that owns this subscription — observability owner,
+	// distinct from ConsumerGroup (broker partition key + idempotency
+	// namespace). The cell declares it explicitly during Init via the
+	// positional cellID parameter on Registry.Subscribe; codegen
+	// (contractgen + cellgen) injects the value from cell metadata at
+	// compile time. Bootstrap's drainCellSubscriptions cross-checks that
+	// CellID equals the snapshot key (fail-fast on drift) and does NOT
+	// silently populate it: a missing CellID is a compile failure at the
+	// reg.Subscribe call site, not a runtime fallback.
 	//
 	// Example: accesscore registers subscriptions with
 	//   ConsumerGroup = "accesscore-rbac-session-sync"
-	//   OwnerCellID   = "accesscore"   (set by drain loop)
-	// so that Subscription.CellID = "accesscore" (the cell), not the consumer group.
+	//   CellID        = "accesscore"   (positional parameter, from cell metadata)
+	// so that the resulting outbox.Subscription.CellID is "accesscore" — the
+	// cell — without ever proxying ConsumerGroup as cell identity.
 	//
 	// ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
-	OwnerCellID string
+	// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
+	CellID string
 }
 
 // SubscriptionOption mutates a SubscriptionRequest to attach optional metadata.
@@ -358,6 +390,7 @@ func (r *RegistryRecorder) Subscribe(
 	spec contractspec.ContractSpec,
 	handler outbox.EntryHandler,
 	consumerGroup string,
+	cellID string,
 	opts ...SubscriptionOption,
 ) error {
 	r.mustNotBeFinalized("Subscribe")
@@ -369,6 +402,10 @@ func (r *RegistryRecorder) Subscribe(
 	if consumerGroup == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: consumerGroup must not be empty")
+	}
+	if cellID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry Subscribe: cellID must not be empty")
 	}
 	if spec.Kind != "event" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -384,6 +421,7 @@ func (r *RegistryRecorder) Subscribe(
 		Spec:          spec,
 		Handler:       handler,
 		ConsumerGroup: consumerGroup,
+		CellID:        cellID,
 	}
 	for _, opt := range opts {
 		if opt != nil {

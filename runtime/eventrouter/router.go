@@ -65,7 +65,7 @@ type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
 	consumerGroup string
-	cellID        string // ownerCellID resolved by AddContractHandler; used for Subscription.CellID
+	cellID        string // cellID is the observability owner; must be provided by caller — no fallback to consumerGroup (K#07).
 	sliceID       string
 	contract      contractspec.ContractSpec
 }
@@ -138,15 +138,18 @@ func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) 
 // do not pass a separate topic string.
 //
 // ownerCellID is the cell that owns this subscription — distinct from
-// consumerGroup (which may include a role suffix like "accesscore-rbac-session-sync").
-// When set, Subscription.CellID is populated from ownerCellID; otherwise it
-// falls back to consumerGroup for backward compatibility.
+// consumerGroup (which may include a role suffix like
+// "accesscore-rbac-session-sync"). It is mandatory and populates
+// Subscription.CellID directly; there is no fallback to consumerGroup
+// because Registry.Subscribe forces cellID to flow positionally from cell
+// metadata at codegen time (HARD contract).
 //
-// Returns a non-nil error when handler is nil, consumerGroup is empty, or the
-// spec is malformed; callers should propagate the error to the bootstrap
-// phase6 subscription walker.
+// Returns a non-nil error when handler is nil, consumerGroup is empty,
+// ownerCellID is empty, or the spec is malformed; callers should propagate
+// the error to the bootstrap phase6 subscription walker.
 //
 // ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
+// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
 func (r *Router) AddContractHandler(
 	spec contractspec.ContractSpec, handler outbox.EntryHandler, consumerGroup string, ownerCellID string, opts ...cell.SubscriptionOption,
 ) error {
@@ -155,6 +158,10 @@ func (r *Router) AddContractHandler(
 	}
 	if consumerGroup == "" {
 		return fmt.Errorf("eventrouter: AddContractHandler called with empty consumerGroup; cells must declare their identity")
+	}
+	if ownerCellID == "" {
+		return fmt.Errorf("eventrouter: AddContractHandler called with empty ownerCellID; " +
+			"cellID is HARD-required (positional parameter on Registry.Subscribe, injected by codegen)")
 	}
 	if spec.Kind != "event" {
 		return fmt.Errorf("eventrouter: Contract.Kind %q must be \"event\"", spec.Kind)
@@ -166,19 +173,12 @@ func (r *Router) AddContractHandler(
 		Spec:          spec,
 		Handler:       handler,
 		ConsumerGroup: consumerGroup,
-		OwnerCellID:   ownerCellID,
+		CellID:        ownerCellID,
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&req)
 		}
-	}
-
-	// Resolve the cell ID: use ownerCellID when provided; fall back to
-	// consumerGroup so test-direct callers that pass "" still get a label.
-	cellID := ownerCellID
-	if cellID == "" {
-		cellID = consumerGroup
 	}
 
 	// Build a representative Subscription so validators can inspect all fields.
@@ -187,7 +187,7 @@ func (r *Router) AddContractHandler(
 	candidateSub := outbox.Subscription{
 		Topic:         spec.Topic,
 		ConsumerGroup: consumerGroup,
-		CellID:        cellID,
+		CellID:        ownerCellID,
 		SliceID:       req.SliceID,
 	}
 	r.mu.Lock()
@@ -214,7 +214,7 @@ func (r *Router) AddContractHandler(
 		topic:         spec.Topic,
 		handler:       handler,
 		consumerGroup: consumerGroup,
-		cellID:        cellID,
+		cellID:        ownerCellID,
 		sliceID:       req.SliceID,
 		contract:      spec,
 	})
@@ -327,6 +327,8 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 			r.markHealthError(wrapped)
 			slog.Error("eventrouter: subscription setup failed, aborting",
 				slog.String("topic", sub.Topic),
+				slog.String("consumer_group", sub.ConsumerGroup),
+				slog.String("cell_id", sub.CellID),
 				slog.Any("error", err))
 			cancel()
 			return wrapped
@@ -354,7 +356,8 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 			}()
 			slog.Info("eventrouter: starting subscription",
 				slog.String("topic", sub.Topic),
-				slog.String("consumer_group", sub.ConsumerGroup))
+				slog.String("consumer_group", sub.ConsumerGroup),
+				slog.String("cell_id", sub.CellID))
 			err := r.subscriber.SubscribeEntry(ctx, sub, h.handler)
 			if err != nil && ctx.Err() == nil {
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
@@ -424,7 +427,7 @@ func (r *Router) diagnoseNotReady(handlers []handlerConfig) []string {
 		case <-r.subscriber.Ready(sub):
 			// ready
 		default:
-			notReady = append(notReady, fmt.Sprintf("%s/%s", h.consumerGroup, h.topic))
+			notReady = append(notReady, fmt.Sprintf("%s/%s/%s", h.cellID, h.consumerGroup, h.topic))
 		}
 	}
 	return notReady

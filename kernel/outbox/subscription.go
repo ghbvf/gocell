@@ -19,13 +19,22 @@ type Subscription struct {
 	// different groups each receive a full copy (fanout).
 	ConsumerGroup string
 
-	// CellID is an optional observability label. When set it is used in log
-	// fields and metrics labels; falls back to ConsumerGroup when empty.
+	// CellID is the observability owner label. Required.
+	//
+	// CellID is the single source of truth for the cell owning this
+	// subscription — metrics, slog fields, and trace span attributes use it
+	// to route subscriber telemetry to the right owner. The value is set by
+	// codegen (contractgen NewSubscription / cellgen cell.tmpl) from the
+	// cell's metadata.ID at compile time; there is no runtime fallback to
+	// ConsumerGroup. ConsumerGroup is a broker partition key + idempotency
+	// namespace, conceptually orthogonal to ownership.
+	//
+	// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
 	CellID string
 
-	// SliceID is an optional observability owner label. Runtime eventrouter
-	// fills it from the subscription declaration when a cell wants per-slice
-	// consumer metrics.
+	// SliceID is an optional observability owner label. Codegen fills it
+	// from +slice:subscribe markers when a cell wants per-slice consumer
+	// metrics.
 	SliceID string
 
 	// ContractID/Kind/Transport identify the contract bound to this
@@ -54,6 +63,9 @@ func (s Subscription) Validate() error {
 	if s.ConsumerGroup == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ConsumerGroup must not be empty")
 	}
+	if s.CellID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription CellID must not be empty")
+	}
 	if s.ContractID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ContractID must not be empty")
 	}
@@ -73,12 +85,17 @@ func (s Subscription) IdempotencyNamespace() string {
 }
 
 // ObservabilityID returns the human-readable identifier used in logs and metrics.
-// Prefers CellID when set; falls back to ConsumerGroup.
+//
+// Returns CellID unconditionally — Validate enforces CellID is non-empty, so
+// the empty string only surfaces when the caller bypassed Validate (e.g.
+// constructing a literal in a test fixture). There is no fallback to
+// ConsumerGroup: substituting ConsumerGroup would mask a codegen defect (the
+// cell metadata → reg.Subscribe positional parameter chain failed to populate
+// the field), so the empty value is intentionally surfaced.
+//
+// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
 func (s Subscription) ObservabilityID() string {
-	if s.CellID != "" {
-		return s.CellID
-	}
-	return s.ConsumerGroup
+	return s.CellID
 }
 
 // SubscriptionMiddleware is the event-consumer middleware type. It carries

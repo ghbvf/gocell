@@ -74,7 +74,12 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registry) error {
 	})
 {{ end }}
 {{- range .Subscriptions }}
-	if err := {{.SubscriptionAlias}}.NewSubscription({{.HandlerExpr}}, {{ if .ConsumerGroup }}{{ printf "%q" .ConsumerGroup }}{{ else }}{{ printf "%q" $.ConsumerGroupDefault }}{{ end }}, {{ printf "%q" .SliceID }}).Mount(reg); err != nil {
+	{{/* $.CellID is the HARD positional cellID parameter on Registry.Subscribe. Codegen injects it
+	     from cell metadata (cell.yaml id) at code-generation time so that callers cannot omit it
+	     without a compile failure. Changing this to an option would demote the contract from
+	     compile-time HARD to opt-in Soft — rejected by REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01.
+	     ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md */}}
+	if err := {{.SubscriptionAlias}}.NewSubscription({{.HandlerExpr}}, {{ if .ConsumerGroup }}{{ printf "%q" .ConsumerGroup }}{{ else }}{{ printf "%q" $.ConsumerGroupDefault }}{{ end }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }}).Mount(reg); err != nil {
 		return fmt.Errorf({{ printf "%q" (printf "%s: subscribe %s: %%w" $.CellID .ContractID) }}, err)
 	}
 {{ end }}

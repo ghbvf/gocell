@@ -406,7 +406,7 @@ func TestSubscribeOnce_SetupFailure_ReleasesInUseChannel(t *testing.T) {
 
 	ctx := context.Background()
 	// Subscribe returns error immediately (permanent setup failure).
-	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "setup.fail.topic"}, entryToSubHandler(
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "setup.fail.topic", CellID: "test-cell"}, entryToSubHandler(
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.Ack()
 		},
@@ -442,7 +442,7 @@ func TestSubscriptionRun_WaitAndClose_ReleasesInUseChannel(t *testing.T) {
 	subCtx, subCancel := context.WithCancel(context.Background())
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "waitandclose.topic"}, entryToSubHandler(
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "waitandclose.topic", CellID: "test-cell"}, entryToSubHandler(
 			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				return outbox.Ack()
 			},

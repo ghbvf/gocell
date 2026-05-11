@@ -262,7 +262,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA},
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA, CellID: "_outboxtest"},
 			func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 				select {
 				case deliveryA <- struct{}{}:
@@ -332,8 +332,8 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	// time.Sleep tail-window race. For broadcast bus semantics (inmem),
 	// distinct groups still receive every published message; competing-group
 	// brokers (RabbitMQ) skip this entire test path via BroadcastSubscribe=false.
-	sub1Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-1"}
-	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-2"}
+	sub1Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-1", CellID: "broadcast-1"}
+	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-2", CellID: "broadcast-2"}
 
 	wg.Go(func() {
 		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -388,7 +388,7 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 	// Start two competing subscribers on the same topic.
 	for range 2 {
 		wg.Go(func() {
-			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic},
+			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
 				func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 					select {
 					case delivery <- struct{}{}:
@@ -686,7 +686,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 
 	subscribeReturned := make(chan error, 1)
 	go func() {
-		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t)},
+		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t), CellID: "_outboxtest"},
 			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 				return outbox.Ack(), nil
 			})
@@ -719,7 +719,7 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	subscribeReturned := make(chan struct{})
 	go func() {
 		defer close(subscribeReturned)
-		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic},
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
 			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 				return outbox.Ack(), nil
 			})
@@ -836,6 +836,7 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 			outbox.Subscription{
 				Topic:             h.Topic,
 				ConsumerGroup:     "conformance-cg",
+				CellID:            "conformance-cg",
 				ContractID:        "event." + h.Topic + ".v1",
 				ContractKind:      "event",
 				ContractTransport: "memory",

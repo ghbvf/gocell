@@ -123,7 +123,9 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	defer cancel()
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f6.ack.order.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f6.ack.order.topic", CellID: "test-cell"}, handler)
+	}()
 
 	// Wait for all deliveries to be acked (each handler sleeps 50 ms).
 	// At this point all processDelivery goroutines have called ch.Ack AND returned.
@@ -224,7 +226,7 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "close.deadline.topic"}, handler)
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "close.deadline.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until handler is in-flight.
@@ -327,7 +329,7 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "graceful.topic"}, handler)
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "graceful.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait for handler to complete.
@@ -389,7 +391,7 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "inflight.topic"}, handler)
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "inflight.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until handler is in-flight.
@@ -437,7 +439,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "nodeadline.topic"}, handler)
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "nodeadline.topic", CellID: "test-cell"}, handler)
 	}()
 
 	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable

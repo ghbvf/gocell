@@ -11,6 +11,7 @@ import (
 type Subscription struct {
 	handler       outbox.EntryHandler
 	consumerGroup string
+	cellID        string
 	sliceID       string
 }
 
@@ -18,14 +19,23 @@ type Subscription struct {
 // handler must be an outbox.EntryHandler (func(ctx, entry) HandleResult).
 // There is no generated EventHandler interface — consumers implement
 // outbox.EntryHandler directly and pass it here.
-// All three arguments are mandatory: sliceID is supplied by cellgen from the
-// +slice:subscribe marker and identifies the owning slice for observability.
-func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string) *Subscription {
-	return &Subscription{handler: handler, consumerGroup: consumerGroup, sliceID: sliceID}
+//
+// All four arguments are mandatory:
+//   - consumerGroup: broker partition key + idempotency namespace
+//   - cellID: observability owner (cell ID); cellgen injects it from cell
+//     metadata at compile time; direct callers must provide the owning cell's
+//     ID explicitly. Omitting cellID is a compile failure because
+//     Registry.Subscribe takes it as a positional parameter — there is no
+//     SubscriptionOption escape hatch (HARD contract; see ADR
+//     docs/architecture/202605111000-adr-subscription-cellid-mandatory.md).
+//   - sliceID: per-slice observability owner; cellgen supplies it from the
+//     +slice:subscribe marker.
+func NewSubscription(handler outbox.EntryHandler, consumerGroup, cellID, sliceID string) *Subscription {
+	return &Subscription{handler: handler, consumerGroup: consumerGroup, cellID: cellID, sliceID: sliceID}
 }
 
 // Mount registers the subscription with the cell registry.
 func (s *Subscription) Mount(reg cell.Registry) error {
-	return reg.Subscribe(spec, s.handler, s.consumerGroup,
+	return reg.Subscribe(spec, s.handler, s.consumerGroup, s.cellID,
 		cell.WithSubscriptionSliceID(s.sliceID))
 }

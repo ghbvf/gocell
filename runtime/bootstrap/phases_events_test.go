@@ -62,7 +62,7 @@ func (c *stubEventCell) Init(ctx context.Context, reg cell.Registry) error {
 	noopHandler := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
 	})
-	return reg.Subscribe(c.spec, noopHandler, "stub-cg")
+	return reg.Subscribe(c.spec, noopHandler, "stub-cg", c.ID())
 }
 
 // TestPhase6_ConsumerMiddleware_AppliedInChain verifies that a middleware
@@ -176,6 +176,66 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 		"timeout must wait at least the configured budget")
 	assert.Less(t, elapsed, testtime.D2s,
 		"timeout must not exceed budget by more than 25x — the option clearly is not plumbed")
+}
+
+// TestPhase6_DrainCellSubscriptions_DriftedCellID_ReturnsError verifies the
+// drainCellSubscriptions drift guard: when a SubscriptionRequest.CellID differs
+// from the snapshot key (i.e. the cell that registered it), phase6 must return
+// an error containing "subscription drift".
+//
+// Approach: register a real assembly with "stub" cell, then manually inject a
+// cellSnapshots entry whose subscription carries CellID="wrong-owner" instead of
+// "stub". This isolates the drift-guard path without requiring a real broker.
+func TestPhase6_DrainCellSubscriptions_DriftedCellID_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	bus := eventbus.New(eventbus.WithClock(clock.Real()))
+	asm := assembly.New(assembly.Config{ID: "phase6-drift-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.drift.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	b := New(
+		WithClock(clock.Real()),
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+		WithConsumerBase(newTestConsumerBase(t)),
+	)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.sub = bus
+	s.hh = health.New(asm, clock.Real())
+
+	// Inject a drifted snapshot: cell "stub" registers a subscription whose
+	// CellID claims "wrong-owner" — mismatched from the snapshot key "stub".
+	noopH := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.Ack()
+	})
+	s.cellSnapshots = map[string]cell.RegistrySnapshot{
+		"stub": {
+			Subscriptions: []cell.SubscriptionRequest{
+				{
+					Spec: contractspec.ContractSpec{
+						ID:        "event.phase6.drift.v1",
+						Kind:      cellvocab.ContractEvent,
+						Transport: "inmem",
+						Topic:     "event.phase6.drift.v1",
+					},
+					Handler:       noopH,
+					ConsumerGroup: "stub-cg",
+					CellID:        "wrong-owner", // drift: must differ from key "stub"
+				},
+			},
+		},
+	}
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err, "phase6 must fail when CellID drifts from snapshot owner")
+	assert.Contains(t, err.Error(), "subscription drift",
+		"error must identify the drift failure mode")
 }
 
 func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testing.T) {

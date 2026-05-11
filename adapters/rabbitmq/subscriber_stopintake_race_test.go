@@ -80,7 +80,7 @@ func TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "addafterwait.topic"}, handler)
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "addafterwait.topic", CellID: "test-cell"}, handler)
 	}()
 
 	// Wait until the first handler is actually running (counter == 1).
@@ -199,7 +199,7 @@ func runPostCancelArrivalScenario(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "stress.topic"}, handler)
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "stress.topic", CellID: "test-cell"}, handler)
 	}()
 
 	require.Eventually(t, func() bool {

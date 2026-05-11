@@ -141,7 +141,7 @@ func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registry) err
 		Topic:     c.topic,
 	}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
-	}, c.ID())
+	}, c.ID(), c.ID())
 }
 
 // ---------------------------------------------------------------------------
