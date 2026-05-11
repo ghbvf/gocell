@@ -16,11 +16,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 func TestWithLogger(t *testing.T) {
 	logger := slog.Default()
-	c := NewAccessCore(WithClock(clock.Real()), WithLogger(logger))
+	c := NewAccessCore(WithClock(clock.Real()), WithLogger(logger), withTestCASProtocol())
 	assert.Equal(t, logger, c.logger)
 }
 
@@ -31,7 +32,7 @@ func (stubSetupLock) Acquire(_ context.Context) error { return nil }
 
 func TestWithSetupLock(t *testing.T) {
 	lock := stubSetupLock{}
-	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(lock))
+	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(lock), withTestCASProtocol())
 	assert.Equal(t, lock, c.setupLock)
 }
 
@@ -39,7 +40,7 @@ func TestWithSetupLock(t *testing.T) {
 // unset (mem-mode contract: intra-process sync.Mutex in adminprovision.Provisioner
 // is sufficient when no cross-process lock is wired).
 func TestWithSetupLock_NilNoop(t *testing.T) {
-	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(nil))
+	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(nil), withTestCASProtocol())
 	assert.Nil(t, c.setupLock)
 }
 
@@ -52,6 +53,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	// userRepo and roleRepo are set eagerly; sessionRepo is deferred to Init()
@@ -72,6 +74,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -91,6 +94,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -134,6 +138,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -151,6 +156,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -166,6 +172,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 		WithClock(clock.Real()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -186,6 +193,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
+		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -214,6 +222,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("password_version"))),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
