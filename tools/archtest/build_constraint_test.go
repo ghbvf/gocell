@@ -17,7 +17,13 @@ import (
 // findIntegrationTagViolations walks rootDir and returns the relative paths (from
 // rootDir) of every *_integration_test.go file that does NOT carry a //go:build
 // constraint expression that evaluates to true when the "integration" tag is set
-// and false when no tags are set.
+// AND false under the default toolchain context (no extra tags).
+//
+// Delegates to fileHasExclusivelyTag(path, "integration") for the per-file gate
+// — the same helper drives CI-INTEGRATION-DISCOVERY-01. PR #472 (PR-BT1) routed
+// fileHasExclusivelyTag through typeseval.BuildContextPredicate so toolchain
+// defaults (GOOS/GOARCH/cgo/unix/gc/go1.X) are honored; this avoids a latent
+// false-negative on compound directives like `//go:build integration && linux`.
 //
 // Parse failures are treated as violations (conservative / fail-closed strategy).
 func findIntegrationTagViolations(rootDir string) ([]string, error) {

@@ -22,10 +22,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 const (
@@ -261,6 +263,11 @@ func isBuildContextPredicateCallee(funExpr ast.Expr, info *types.Info) bool {
 		if pkgPath, name, ok := typeseval.ResolvePackageRef(info, sel); ok {
 			return pkgPath == buildContextPredicatePkg && name == buildContextPredicateFunc
 		}
+		// info is non-nil but ResolvePackageRef declined: sel.X is not a
+		// package qualifier (e.g. method-position selector on a value with
+		// a `BuildContextPredicate` method). Decline rather than falling
+		// through to the AST-only path — that path matches any Ident named
+		// "typeseval" and would over-accept under method-position shadowing.
 		return false
 	}
 	// AST-only fallback (no info): match `typeseval.BuildContextPredicate`.
@@ -284,6 +291,13 @@ func isBuildContextPredicateCallee(funExpr ast.Expr, info *types.Info) bool {
 // (`var f = func(...) bool { return false }; expr.Eval(f)`) are NOT
 // accepted. The inline-literal-with-`false`-ident shape is the Hard
 // surface — anything else fails archtest.
+//
+// Note on `false` shadowing: Go permits redefining the predeclared
+// `false` identifier via assignment (e.g. `false := true`), but only
+// across multiple statements. The single-statement body check
+// (len(fl.Body.List) == 1) structurally rules out a shadowing pattern,
+// so `id.Name == "false"` is a complete check — there is no
+// `{ false := true; return false }` form that fits in 1 statement.
 func isAllFalseSentinelFuncLit(fl *ast.FuncLit) bool {
 	if fl == nil || fl.Body == nil {
 		return false
@@ -303,6 +317,88 @@ func isAllFalseSentinelFuncLit(fl *ast.FuncLit) bool {
 		return false
 	}
 	return id.Name == "false"
+}
+
+// TestEvalPredicateCentralizationFixtures is the "test the test" meta-test
+// for TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01 detection helpers. Each fixture
+// package under
+//
+//	tools/archtest/testdata/eval_predicate_centralization_fixtures/<case>/
+//
+// is a synthetic single-file Go package that demonstrates one canonical
+// shape (GREEN, 0 violations expected) or one violation shape (RED, the
+// expected violation line(s) listed in the table below). Loading goes
+// through typeseval.LoadPackages with full types.Info so the type-aware
+// detection paths (isConstraintExprEvalCall via ResolveMethodCall;
+// isBuildContextPredicateCallee via ResolvePackageRef) are exercised the
+// same way as the main test.
+//
+// Adding a new fixture: drop a `<case>/usage.go` file with the demonstration
+// shape and add a row to `cases` below. testdata/ is skipped by the Go
+// toolchain so fixtures never run in default builds.
+func TestEvalPredicateCentralizationFixtures(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	fixtureBase := filepath.Join(root, "tools", "archtest", "testdata",
+		"eval_predicate_centralization_fixtures")
+
+	cases := []struct {
+		dir       string
+		wantLines []int // empty / nil = GREEN; non-empty = RED with these line numbers
+	}{
+		// GREEN — Form A and Form B canonical shapes accepted.
+		{"form_a_good", nil},
+		{"form_b_good", nil},
+		// RED — hand-rolled predicate (most common drift form).
+		{"inline_predicate_red", []int{10}},
+		// RED — var binding indirection (arg is Ident, not CallExpr / FuncLit).
+		{"var_binding_red", []int{10}},
+		// RED — FuncLit body has multi-statement, fails sentinel single-stmt check.
+		{"funclit_multi_stmt_red", []int{9}},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.dir, func(t *testing.T) {
+			t.Parallel()
+
+			fixtureDir := filepath.Join(fixtureBase, tc.dir)
+			pkgs, errs, err := typeseval.LoadPackages(root, false, nil,
+				"./tools/archtest/testdata/eval_predicate_centralization_fixtures/"+tc.dir)
+			require.NoError(t, err, "LoadPackages failed for fixture %s", tc.dir)
+			require.Empty(t, errs, "package load errors for fixture %s: %v", tc.dir, errs)
+			require.NotEmpty(t, pkgs, "no packages loaded for fixture %s", tc.dir)
+
+			var violations []evalPredicateViolation
+			for _, p := range pkgs {
+				for i, file := range p.Syntax {
+					if i >= len(p.GoFiles) {
+						continue
+					}
+					abs := p.GoFiles[i]
+					rel, ok := fileroles.Rel(fixtureDir, abs)
+					if !ok {
+						continue
+					}
+					violations = append(violations,
+						scanFileForEvalPredicateViolations(p.Fset, file, p.TypesInfo, rel)...)
+				}
+			}
+
+			var gotLines []int
+			for _, v := range violations {
+				gotLines = append(gotLines, v.Line)
+			}
+			sort.Ints(gotLines)
+
+			wantLines := append([]int(nil), tc.wantLines...)
+			sort.Ints(wantLines)
+
+			assert.Equal(t, wantLines, gotLines,
+				"fixture %s: violation lines mismatch (got: %+v)", tc.dir, violations)
+		})
+	}
 }
 
 // formatEvalCallee returns a short human-readable callee for violation
