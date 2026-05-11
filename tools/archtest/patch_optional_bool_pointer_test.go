@@ -83,7 +83,7 @@ func TestPatchOptionalBoolPointer01(t *testing.T) {
 			continue
 		}
 
-		scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 			if ts.Name == nil || ts.Name.Name != "Request" {
 				return
 			}
@@ -145,7 +145,7 @@ func TestPatchOptionalBoolPointer01_NegativeFixture(t *testing.T) {
 	}
 
 	foundBool := false
-	scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "Request" {
 			return
 		}

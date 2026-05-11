@@ -56,7 +56,7 @@ func TestCellgenScaffoldErrcodeFunnel(t *testing.T) {
 	var violations []string
 
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return

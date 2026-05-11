@@ -165,7 +165,7 @@ func scanForContractSpecLiterals(fset *token.FileSet, path, rel string) []string
 
 	var violations []string
 	// Match wrapper.ContractSpec{…} composite literals.
-	scanner.EachNode[ast.CompositeLit](f, func(node *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](f, func(node *ast.CompositeLit) {
 		sel, ok := node.Type.(*ast.SelectorExpr)
 		if !ok {
 			return
@@ -181,7 +181,7 @@ func scanForContractSpecLiterals(fset *token.FileSet, path, rel string) []string
 		))
 	})
 	// Match wrapper.EventSpec(…) call expressions.
-	scanner.EachNode[ast.CallExpr](f, func(node *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(node *ast.CallExpr) {
 		sel, ok := node.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return

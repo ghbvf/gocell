@@ -109,7 +109,7 @@ func collectGenerateServiceTokenDiags(
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
-			scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				if !isAuthFuncCall(call, pkg.TypesInfo, "GenerateServiceToken") {
 					return
 				}

@@ -64,7 +64,7 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
 		// Cheap filter: skip files that don't reference the symbol literally.
 		// We re-read is not needed; the AST is already parsed — just inspect.
-		scanner.EachNode[ast.StructType](fc.File, func(st *ast.StructType) {
+		scanner.EachInSubtree[ast.StructType](fc.File, func(st *ast.StructType) {
 			if st.Fields == nil {
 				return
 			}
@@ -126,7 +126,7 @@ func TestAuthRouteBootstrapFlagRemoved(t *testing.T) {
 		hasBootstrapAuth bool
 	)
 
-	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "Route" {
 			return
 		}
@@ -184,7 +184,7 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 		mountCallHasBootstrapAuthField  bool
 	)
 
-	scanner.EachNode[ast.FuncDecl](file, func(node *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(node *ast.FuncDecl) {
 		if node.Name == nil || node.Name.Name != "NewHandler" || node.Recv != nil {
 			return
 		}
@@ -198,7 +198,7 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 			}
 		}
 	})
-	scanner.EachNode[ast.CompositeLit](file, func(node *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](file, func(node *ast.CompositeLit) {
 		sel, ok := node.Type.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "Route" {
 			return

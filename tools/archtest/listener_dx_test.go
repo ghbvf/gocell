@@ -195,7 +195,7 @@ func oldListenerAPIIdentViolations(t *testing.T, root, path string) []string {
 	require.NoError(t, err)
 
 	var violations []string
-	scanner.EachNode[ast.Ident](file, func(id *ast.Ident) {
+	scanner.EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
 		if _, forbidden := oldListenerAPIIdents[id.Name]; !forbidden {
 			return
 		}
@@ -212,7 +212,7 @@ func delegatedRouteFieldViolations(t *testing.T, root, path string) []string {
 	require.NoError(t, err)
 
 	var violations []string
-	scanner.EachNode[ast.KeyValueExpr](file, func(kv *ast.KeyValueExpr) {
+	scanner.EachInSubtree[ast.KeyValueExpr](file, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != "Delegated" {
 			return
@@ -230,7 +230,7 @@ func forbiddenProductionSurfaceViolations(t *testing.T, root, path string) []str
 	require.NoError(t, err)
 
 	var violations []string
-	scanner.EachNode[ast.Ident](file, func(id *ast.Ident) {
+	scanner.EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
 		for _, term := range productionForbiddenSurfaceTerms {
 			if strings.Contains(id.Name, term) {
 				violations = append(violations, listenerDXViolation(root, path, fset.Position(id.Pos()).Line,
@@ -261,7 +261,7 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 
 	var result []string
 	found := false
-	scanner.EachNode[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 		if found || ts.Name.Name != "RouteGroup" {
 			return
 		}
@@ -304,7 +304,7 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 
 	var result []string
 	found := false
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if found || fn.Name.Name != "Mount" {
 			return
 		}

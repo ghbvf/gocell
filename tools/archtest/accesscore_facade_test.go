@@ -39,7 +39,7 @@ func scanAccesscoreFacadeDeclarations(t *testing.T, root string) []string {
 	var violations []string
 	scope := scanner.DirsScope(root, []string{"cells/accesscore"})
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.FuncDecl](fc.File, func(fn *ast.FuncDecl) {
+		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fn *ast.FuncDecl) {
 			if fn.Recv == nil && fn.Name.Name == "ResolveBootstrapCredentialPath" {
 				violations = append(violations, fc.Rel+": exported facade ResolveBootstrapCredentialPath must be deleted")
 			}
@@ -55,7 +55,7 @@ func scanResolveBootstrapCredentialPathCalls(t *testing.T, root, dir string) []s
 	scope := scanner.DirsScope(root, []string{filepath.ToSlash(rel)})
 	var violations []string
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.SelectorExpr](fc.File, func(sel *ast.SelectorExpr) {
+		scanner.EachInSubtree[ast.SelectorExpr](fc.File, func(sel *ast.SelectorExpr) {
 			if sel.Sel.Name != "ResolveBootstrapCredentialPath" {
 				return
 			}

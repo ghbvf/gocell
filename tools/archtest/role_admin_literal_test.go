@@ -80,7 +80,7 @@ func TestRoleAdminLiteralIsForbidden(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.GenDecl](fc.File, func(genDecl *ast.GenDecl) {
+		scanner.EachInSubtree[ast.GenDecl](fc.File, func(genDecl *ast.GenDecl) {
 			if genDecl.Tok != token.CONST {
 				return
 			}
@@ -89,7 +89,7 @@ func TestRoleAdminLiteralIsForbidden(t *testing.T) {
 			// Track the most recent non-empty Values within this GenDecl so
 			// that `const ( AdminRole = "admin"; OtherRole )` flags OtherRole.
 			var lastValues []ast.Expr
-			scanner.EachNode[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
+			scanner.EachInChildren[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
 				values := vs.Values
 				if values == nil {
 					values = lastValues
@@ -176,7 +176,7 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
-			scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
 					return
@@ -195,7 +195,7 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 				if pkgName.Imported().Path() != authRuntimeImportPath {
 					return
 				}
-				scanner.EachNode[ast.BasicLit](call, func(lit *ast.BasicLit) {
+				scanner.EachInSubtree[ast.BasicLit](call, func(lit *ast.BasicLit) {
 					value, ok := scanner.StringLitValue(lit)
 					if !ok || value != "admin" {
 						return

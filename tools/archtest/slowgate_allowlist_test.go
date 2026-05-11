@@ -106,7 +106,7 @@ func TestSlowgateAllowlist(t *testing.T) {
 
 		funcs := map[string]bool{}
 		for _, file := range p.Syntax {
-			scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Recv != nil {
 					return
 				}

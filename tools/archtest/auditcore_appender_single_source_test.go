@@ -102,7 +102,7 @@ func scanAuditcoreAppenderSliceFile(fc scanner.FileContext) []string {
 	// or interface. ImportSpec / ValueSpec (var Spec = ...) are allowed and
 	// not inspected here (Spec's whitelist enforcement lives in
 	// appender.MustNewSpec).
-	scanner.EachNode[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
+	scanner.EachInSubtree[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
 		if ts.Name.Name == "Service" && !ts.Assign.IsValid() {
 			violations = append(violations, fmt.Sprintf(
 				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
@@ -116,7 +116,7 @@ func scanAuditcoreAppenderSliceFile(fc scanner.FileContext) []string {
 	// NewService / With* / extractActorID re-fork behavior the appender
 	// package owns. EachNode walks the whole file; slice packages have no
 	// nested function literals so every FuncDecl returned is top-level.
-	scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 		violations = append(violations, scanAppenderFuncDecl(fc, fd)...)
 	})
 

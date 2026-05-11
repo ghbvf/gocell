@@ -124,12 +124,12 @@ func TestCellIfaceISP03_BaseCellFourSegmentCheck(t *testing.T) {
 	}
 
 	// Collect all `var _ Iface = (*BaseCell)(nil)` checks across file's
-	// ValueSpec nodes. Walks via scanner.EachNode[ast.ValueSpec] (the funnel
+	// ValueSpec nodes. Walks via scanner.EachInSubtree[ast.ValueSpec] (the funnel
 	// SCANNER-FRAMEWORK-USAGE-01 mandates) instead of for-range over
 	// f.Decls + nested type assertions.
 	subSeen := make(map[string]bool)
 	plainCellSeen := false
-	scanner.EachNode[ast.ValueSpec](f, func(vs *ast.ValueSpec) {
+	scanner.EachInSubtree[ast.ValueSpec](f, func(vs *ast.ValueSpec) {
 		if !isBlankIdentList(vs.Names) {
 			return
 		}
@@ -185,7 +185,7 @@ func loadInterfaceType(t *testing.T, root, name string) *ast.InterfaceType {
 		}
 		var found *ast.InterfaceType
 		var bail bool
-		scanner.EachNode[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 			if found != nil || bail || ts.Name.Name != name {
 				return
 			}

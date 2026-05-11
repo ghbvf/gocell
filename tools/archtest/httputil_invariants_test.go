@@ -57,11 +57,11 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 		"writeErrcodeError":    true,
 	}
 
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if !targetFuncs[fn.Name.Name] {
 			return
 		}
-		scanner.EachNode[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			if len(call.Args) < 1 {
 				return
 			}
@@ -139,7 +139,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	}
 
 	var log5xxFn *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if log5xxFn == nil && fn.Name.Name == "log5xx" {
 			log5xxFn = fn
 		}
@@ -149,7 +149,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	}
 
 	found := false
-	scanner.EachNode[ast.CallExpr](log5xxFn.Body, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](log5xxFn.Body, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return
@@ -233,7 +233,7 @@ func collectExportedFuncs(t *testing.T, root, dirRel string) map[string]bool {
 	)
 	result := make(map[string]bool)
 	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.FuncDecl](fc.File, func(fn *ast.FuncDecl) {
+		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fn *ast.FuncDecl) {
 			if fn.Recv != nil {
 				// skip methods — only top-level functions
 				return

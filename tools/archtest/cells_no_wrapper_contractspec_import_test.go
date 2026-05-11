@@ -139,7 +139,7 @@ func scanForWrapperSpecUsage(fset *token.FileSet, path, rel string) []string {
 	}
 
 	var violations []string
-	scanner.EachNode[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
 		ident, ok2 := sel.X.(*ast.Ident)
 		if !ok2 || ident.Name != alias {
 			return

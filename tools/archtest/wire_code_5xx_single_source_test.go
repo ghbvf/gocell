@@ -169,15 +169,15 @@ func collectSwitchCases(t *testing.T, f *ast.File, funcName string) map[int]stri
 	t.Helper()
 	result := make(map[int]string)
 
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		// Match both top-level func and method by name.
 		if fn.Name.Name != funcName {
 			return
 		}
 
-		scanner.EachNode[ast.SwitchStmt](fn.Body, func(sw *ast.SwitchStmt) {
+		scanner.EachInSubtree[ast.SwitchStmt](fn.Body, func(sw *ast.SwitchStmt) {
 			kindIndex := -1 // used for Kind-based switch cases
-			scanner.EachNode[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
+			scanner.EachInChildren[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
 				if cc.List == nil {
 					return // default clause — skip
 				}
@@ -191,7 +191,7 @@ func collectSwitchCases(t *testing.T, f *ast.File, funcName string) map[int]stri
 				// Try to interpret each case expression as an http.StatusXxx selector.
 				for _, expr := range cc.List {
 					var isSel bool
-					scanner.EachNode[ast.SelectorExpr](expr, func(sel *ast.SelectorExpr) {
+					scanner.EachInSubtree[ast.SelectorExpr](expr, func(sel *ast.SelectorExpr) {
 						isSel = true
 						statusVal := httpStatusValue(sel)
 						if statusVal != 0 {
@@ -222,7 +222,7 @@ func extractReturnIdent(stmts []ast.Stmt) string {
 	// Wrap into a synthetic BlockStmt so EachNode can traverse the stmt list.
 	block := &ast.BlockStmt{List: stmts}
 	var result string
-	scanner.EachNode[ast.ReturnStmt](block, func(ret *ast.ReturnStmt) {
+	scanner.EachInSubtree[ast.ReturnStmt](block, func(ret *ast.ReturnStmt) {
 		if result != "" || len(ret.Results) == 0 {
 			return
 		}

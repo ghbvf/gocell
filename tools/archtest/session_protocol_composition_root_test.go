@@ -78,7 +78,7 @@ func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		scanner.EachNode[ast.CallExpr](af, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](af, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return

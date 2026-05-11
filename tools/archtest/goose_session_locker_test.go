@@ -168,7 +168,7 @@ func scanGooseSessionLockerFile(
 ) []gooseLockerViolation {
 	var out []gooseLockerViolation
 
-	scanner.EachNode[ast.CallExpr](file, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isGooseFuncCall(info, call, gooseImportPath, "NewProvider") {
 			return
 		}

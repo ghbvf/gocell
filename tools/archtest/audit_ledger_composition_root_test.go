@@ -67,7 +67,7 @@ func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
 	var hits []hit
 
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		scanner.EachNode[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
+		scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return

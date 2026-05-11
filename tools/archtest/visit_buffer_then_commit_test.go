@@ -81,7 +81,7 @@ func checkVisitBufferThenCommit(t *testing.T, path string) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 
-	scanner.EachNode[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || len(fn.Recv.List) == 0 {
 			return
 		}
@@ -115,15 +115,15 @@ func hasBufferThenCommit(body *ast.BlockStmt) bool {
 	var hasBuffer bool
 
 	// detect: var <name> bytes.Buffer
-	scanner.EachNode[ast.GenDecl](body, func(x *ast.GenDecl) {
-		scanner.EachNode[ast.ValueSpec](x, func(vs *ast.ValueSpec) {
+	scanner.EachInSubtree[ast.GenDecl](body, func(x *ast.GenDecl) {
+		scanner.EachInChildren[ast.ValueSpec](x, func(vs *ast.ValueSpec) {
 			if isBytesBufferType(vs.Type) {
 				hasBuffer = true
 			}
 		})
 	})
 	// detect: <name> := bytes.Buffer{}
-	scanner.EachNode[ast.AssignStmt](body, func(x *ast.AssignStmt) {
+	scanner.EachInSubtree[ast.AssignStmt](body, func(x *ast.AssignStmt) {
 		for _, rhs := range x.Rhs {
 			if isBytesBufferLiteral(rhs) {
 				hasBuffer = true
@@ -131,7 +131,7 @@ func hasBufferThenCommit(body *ast.BlockStmt) bool {
 		}
 	})
 	// detect Encode / WriteHeader / WriteTo call positions.
-	scanner.EachNode[ast.CallExpr](body, func(x *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](body, func(x *ast.CallExpr) {
 		sel, ok := x.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return

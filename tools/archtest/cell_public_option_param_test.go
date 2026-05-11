@@ -309,7 +309,7 @@ func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restr
 			if restrictToCellRoots && !isCellPackageRootFile(relSlash) {
 				continue
 			}
-			scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Recv != nil || !fn.Name.IsExported() ||
 					!strings.HasPrefix(fn.Name.Name, "With") {
 					return

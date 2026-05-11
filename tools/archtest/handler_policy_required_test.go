@@ -140,7 +140,7 @@ func scanForNilPolicyNewHandler(path, rel string) []string {
 	}
 
 	var violations []string
-	scanner.EachNode[ast.CallExpr](f, func(call *ast.CallExpr) {
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return

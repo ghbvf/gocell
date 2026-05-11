@@ -86,9 +86,9 @@ func TestRedisConstructorsRequireKeyNamespace(t *testing.T) {
 
 func findRedisConstructorDecl(file *ast.File, name string) *ast.FuncDecl {
 	var found *ast.FuncDecl
-	scanner.EachNode[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if found != nil {
-			return // first-match wins; EachNode has no break
+			return // first-match wins; EachInSubtree has no break
 		}
 		if fn.Recv != nil {
 			// Only top-level (non-method) functions are constructors.

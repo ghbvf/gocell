@@ -41,7 +41,7 @@ func TestPGConstructorMustFree01(t *testing.T) {
 		if strings.HasSuffix(fc.AbsPath, "_test.go") {
 			return
 		}
-		scanner.EachNode[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
+		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
 			name := fd.Name.Name
 			// exported MustNew* at package level (no receiver)
 			if fd.Recv != nil {

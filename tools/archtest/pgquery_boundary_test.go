@@ -132,7 +132,7 @@ func scanLegacyQuerySymbolDecls(root, path string) ([]pgQueryBoundaryViolation, 
 			continue
 		}
 		if d, ok := decl.(*ast.GenDecl); ok {
-			scanner.EachNode[ast.TypeSpec](d, func(typeSpec *ast.TypeSpec) {
+			scanner.EachInChildren[ast.TypeSpec](d, func(typeSpec *ast.TypeSpec) {
 				if !slices.Contains(legacyQuerySymbols, typeSpec.Name.Name) {
 					return
 				}
@@ -193,7 +193,7 @@ func scanLegacyQueryBuilderUses(root, module, path string) ([]pgQueryBoundaryVio
 		})
 	}
 
-	scanner.EachNode[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if !isLegacyQueryBuilderSymbol(sel.Sel.Name) {
 			return
 		}

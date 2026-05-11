@@ -77,7 +77,7 @@ func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
-			scanner.EachNode[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+			scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 				if !isContractSpecLit(cl, pkg.TypesInfo) {
 					return
 				}
@@ -237,7 +237,7 @@ var outer = Outer{
 	require.NoError(t, err, "parse inline fixture")
 
 	var matched []string
-	scanner.EachNode[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+	scanner.EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
 		if !isContractSpecLit(cl, nil) {
 			return
 		}
