@@ -23,8 +23,11 @@ import "strings"
 // already exclude generated/ at the file-walk layer (those scopes have
 // generated/ in their default skip set) and do not need this helper.
 //
-// Closes PR445-FU finding F4. Tracking future cross-rule invariant:
-// backlog item GENERATED-SKIP-CROSS-RULE-INVARIANT-01.
+// Closes PR445-FU finding F4. Enforced by
+// GENERATED-SKIP-CROSS-RULE-INVARIANT-01 in
+// tools/archtest/generated_skip_cross_rule_test.go (the file-level invariant
+// flags any tools/archtest *_test.go that loads the real module root with
+// "./..." but does not call this helper).
 func IsGeneratedRelPath(rel string) bool {
 	return strings.HasPrefix(rel, "generated/")
 }

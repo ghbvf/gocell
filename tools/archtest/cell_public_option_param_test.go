@@ -306,6 +306,12 @@ func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restr
 				continue
 			}
 			relSlash := filepath.ToSlash(rel)
+			// GENERATED-SKIP-CROSS-RULE-INVARIANT-01: SharedResolver(root, ..., "./...")
+			// loads generated/ packages; the public-option-param rule reasons over
+			// hand-written cell public APIs only.
+			if typeseval.IsGeneratedRelPath(relSlash) {
+				continue
+			}
 			if restrictToCellRoots && !isCellPackageRootFile(relSlash) {
 				continue
 			}

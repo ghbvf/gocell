@@ -361,7 +361,7 @@ func layer10IncompleteTypeDataViolation(pkgPath, detail string) violation {
 	}
 }
 
-func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) []violation {
+func checkCellPublicAPIAdapterTypes(modPrefix, root string, pkgs []*packages.Package) []violation {
 	var out []violation
 	for _, pkg := range pkgs {
 		if !isRootCellPackage(modPrefix, pkg.PkgPath) {
@@ -384,6 +384,15 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 			continue
 		}
 		for _, file := range pkg.Syntax {
+			// GENERATED-SKIP-CROSS-RULE-INVARIANT-01: loadModule loads ./... via
+			// typeseval.SharedResolver, which includes generated/ packages.
+			// filterCellPackages already constrains pkgs to module/cells/... at
+			// the call site, so this skip is defensive — but it ensures any
+			// future LAYER-10 caller that omits the cells/ filter still excludes
+			// codegen output.
+			if typeseval.IsGeneratedRelPath(pkgFileRel(root, pkg, file)) {
+				continue
+			}
 			scanner.EachInChildren[ast.FuncDecl](file, func(d *ast.FuncDecl) {
 				if !d.Name.IsExported() {
 					return
@@ -607,7 +616,7 @@ func TestLayeringRules(t *testing.T) {
 	// concrete adapter/driver types.
 	t.Run("LAYER-10_cell_root_public_api_no_adapter_driver_types", func(t *testing.T) {
 		typedCellPkgs := filterCellPackages(module, typedPkgs)
-		violations := checkCellPublicAPIAdapterTypes(modPrefix, typedCellPkgs)
+		violations := checkCellPublicAPIAdapterTypes(modPrefix, root, typedCellPkgs)
 		for _, v := range violations {
 			t.Logf("LAYER-10 violation: %s", v.Message)
 		}
@@ -959,7 +968,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	fakePkg.TypesInfo.Defs[metricName] = types.NewVar(token.NoPos, rootPkg, "ExportedMetric", counterType)
 	fakePkg.PkgPath = "github.com/ghbvf/gocell/cells/accesscore"
 
-	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{fakePkg})
+	violations := checkCellPublicAPIAdapterTypes(mod, "", []*packages.Package{fakePkg})
 
 	var messages []string
 	for _, v := range violations {
@@ -1007,7 +1016,7 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 		Types:   types.NewPackage("github.com/ghbvf/gocell/cells/auditcore", "auditcore"),
 	}
 
-	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{
+	violations := checkCellPublicAPIAdapterTypes(mod, "", []*packages.Package{
 		loadErrorPkg,
 		missingObjectPkg,
 		missingTypesInfoPkg,

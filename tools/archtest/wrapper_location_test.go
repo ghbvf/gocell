@@ -135,6 +135,12 @@ func scanWrapperViolations(root string, resolver *typeseval.Resolver) []wrapperV
 				continue
 			}
 			relSlash := filepath.ToSlash(rel)
+			// GENERATED-SKIP-CROSS-RULE-INVARIANT-01: SharedResolver(root, ..., "./...")
+			// loads generated/ packages; the wrapper-location rule reasons over
+			// hand-written composition roots only.
+			if typeseval.IsGeneratedRelPath(relSlash) {
+				continue
+			}
 			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				canon := canonicalCalledFunc(pkg.TypesInfo, call)
 				if !wrapperFunctionsCanonical[canon] {
