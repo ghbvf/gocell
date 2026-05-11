@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -32,27 +34,27 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// TestSetupEndpoints_FirstRunFlow_PG mirrors TestSetupEndpoints_FirstRunFlow
-// but with a real PostgreSQL container backing the accesscore user / role
-// repositories. Closes A26-R4 (SETUP-ORPHAN-E2E-01) and validates the
-// cmd/corebundle PG wiring path landed in S3+S5 (access_module.go).
-//
-// Steps mirror the mem variant exactly:
-//
-//  1. POST /api/v1/access/setup/admin (Basic Auth) → 201 + user persisted in PG
-//  2. POST /api/v1/access/setup/admin (again)      → 410 ERR_SETUP_ALREADY_INITIALIZED
-//  3. GET  /api/v1/access/setup/status             → {hasAdmin:true} (PG row counted)
-//
-// Diff vs. mem variant: WithInMemoryDefaults stays (initialises
-// SessionRepository in mem; PG session.Store is library-only in S3+S5 per
-// the plan, S4 wires it into the cell), but UserRepository / RoleRepository
-// are overridden via WithUserRepository / WithRoleRepository to point at
-// the PG implementations. TxManager is a real adapterpg.NewTxManager(pool)
-// so setup.Service's L2 atomicity (user write + outbox emit) actually
-// commits a transaction.
-func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
+type setupPGHarness struct {
+	pool *adapterpg.Pool
+	base string
+}
+
+type failingSetupOutboxWriter struct {
+	err error
+}
+
+func (w failingSetupOutboxWriter) Write(context.Context, outbox.Entry) error {
+	return w.err
+}
+
+var _ outbox.Writer = failingSetupOutboxWriter{}
+
+func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarness {
+	t.Helper()
+	require.NotNil(t, pgOutboxWriter)
+
 	dsn, dsnCleanup := setupPostgresForMain(t)
-	defer dsnCleanup()
+	t.Cleanup(dsnCleanup)
 
 	ctx := context.Background()
 
@@ -71,11 +73,13 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	pgDeps, err := accesscore.NewPGDeps(pool.DB(), txMgr, clock.Real())
+	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
-	pgUserRepo, err := accesscore.NewPGUserRepository(pgDeps)
+	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
 	require.NoError(t, err)
-	pgRoleRepo, err := accesscore.NewPGRoleRepository(pgDeps)
+	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
+	require.NoError(t, err)
+	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
 	require.NoError(t, err)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -115,7 +119,8 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithUserRepository(pgUserRepo),
 		accesscore.WithRoleRepository(pgRoleRepo),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		accesscore.WithSetupLock(pgSetupLock),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
@@ -158,7 +163,7 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- app.Run(runCtx) }()
-	defer func() {
+	t.Cleanup(func() {
 		cancel()
 		select {
 		case runErr := <-done:
@@ -166,7 +171,7 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 		case <-time.After(testtime.SelectShutdown):
 			t.Fatal("bootstrap did not shut down in time")
 		}
-	}()
+	})
 
 	addr := ln.Addr().String()
 	require.Eventually(t, func() bool {
@@ -178,23 +183,67 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
-	base := "http://" + addr
+	return &setupPGHarness{pool: pool, base: "http://" + addr}
+}
+
+// TestSetupEndpoints_FirstRunFlow_PG mirrors TestSetupEndpoints_FirstRunFlow
+// but with a real PostgreSQL container backing the accesscore user / role
+// repositories. Closes A26-R4 (SETUP-ORPHAN-E2E-01) and validates the
+// cmd/corebundle PG wiring path landed in S3+S5 (access_module.go).
+//
+// Steps mirror the mem variant exactly:
+//
+//  1. POST /api/v1/access/setup/admin (Basic Auth) → 201 + user persisted in PG
+//  2. POST /api/v1/access/setup/admin (again)      → 410 ERR_SETUP_ALREADY_INITIALIZED
+//  3. GET  /api/v1/access/setup/status             → {hasAdmin:true} (PG row counted)
+//
+// Diff vs. mem variant: WithInMemoryDefaults stays (initialises
+// SessionRepository in mem; PG session.Store is library-only in S3+S5 per
+// the plan, S4 wires it into the cell), but UserRepository / RoleRepository
+// are overridden via WithUserRepository / WithRoleRepository to point at
+// the PG implementations. TxManager is a real adapterpg.NewTxManager(pool)
+// so setup.Service's L2 atomicity (user write + outbox emit) actually
+// commits a transaction.
+func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
+	ctx := context.Background()
+	h := newSetupPGHarness(t, adapterpg.NewOutboxWriter(clock.Real()))
 	body := `{"username":"pg-admin","email":"pg-admin@example.com","password":"PgAdminPass!23"}`
 
 	// 1. Fresh PG: POST → 201, admin row persisted.
 	t.Run("create_admin_returns_201", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/setup/admin", strings.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/setup/admin", strings.NewReader(body))
 		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+
+		var eventType, status string
+		var payload []byte
+		err = h.pool.DB().QueryRow(ctx, `
+SELECT event_type, payload, status
+FROM outbox_entries
+WHERE event_type = $1`,
+			"event.user.created.v1",
+		).Scan(&eventType, &payload, &status)
+		require.NoError(t, err, "setup admin must commit a durable user.created outbox row")
+		assert.Equal(t, "event.user.created.v1", eventType)
+		assert.Equal(t, "pending", status)
+		var eventPayload struct {
+			UserID   string `json:"userId"`
+			Username string `json:"username"`
+			ActorID  string `json:"actorId"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &eventPayload))
+		assert.NotEmpty(t, eventPayload.UserID)
+		assert.Equal(t, "pg-admin", eventPayload.Username)
+		assert.Equal(t, "system", eventPayload.ActorID)
 	})
 
 	// 2. Retry: POST → 410, ErrSetupAlreadyInitialized (admin row counted in PG).
 	t.Run("create_admin_retry_returns_410", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/setup/admin", strings.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/setup/admin", strings.NewReader(body))
 		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := setupHTTPClient.Do(req)
@@ -212,7 +261,7 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 
 	// 3. Status: hasAdmin=true (count(admin) > 0 from PG).
 	t.Run("status_after_returns_true", func(t *testing.T) {
-		resp, err := setupHTTPClient.Get(base + "/api/v1/access/setup/status")
+		resp, err := setupHTTPClient.Get(h.base + "/api/v1/access/setup/status")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -224,4 +273,37 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&status))
 		assert.True(t, status.Data.HasAdmin, "PG-backed RoleRepository.CountByRole(admin) must report 1+ admins")
 	})
+}
+
+func TestSetupEndpoints_FirstRunFlow_PG_OutboxFailureRollsBack(t *testing.T) {
+	ctx := context.Background()
+	h := newSetupPGHarness(t, failingSetupOutboxWriter{err: errors.New("injected setup outbox failure")})
+	body := `{"username":"pg-admin","email":"pg-admin@example.com","password":"PgAdminPass!23"}`
+
+	req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/setup/admin", strings.NewReader(body))
+	req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := setupHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+	var userCount int
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE username = $1`, "pg-admin").Scan(&userCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, userCount, "failed outbox write must roll back setup user row")
+
+	var roleAssignmentCount int
+	err = h.pool.DB().QueryRow(ctx, `SELECT count(*) FROM role_assignments`).Scan(&roleAssignmentCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, roleAssignmentCount, "failed outbox write must roll back admin role assignment")
+
+	var outboxCount int
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM outbox_entries WHERE event_type = $1`,
+		"event.user.created.v1",
+	).Scan(&outboxCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, outboxCount, "failed setup transaction must not commit an outbox row")
 }

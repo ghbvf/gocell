@@ -41,22 +41,42 @@ func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 
 var _ persistence.TxRunner = noopTxRunner{}
 
+type setupLockTxMarkerKey struct{}
+
+type markerTxRunner struct{}
+
+func (markerTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(context.WithValue(ctx, setupLockTxMarkerKey{}, true))
+}
+
+var _ persistence.TxRunner = markerTxRunner{}
+
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 type stubWriter struct {
 	entries []outbox.Entry
 	err     error
+	onWrite func()
 }
 
 func (s *stubWriter) Write(_ context.Context, e outbox.Entry) error {
 	if s.err != nil {
 		return s.err
 	}
+	if s.onWrite != nil {
+		s.onWrite()
+	}
 	s.entries = append(s.entries, e)
 	return nil
 }
 
-func newService(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository, w *stubWriter) *setup.Service {
+func newService(
+	t *testing.T,
+	userRepo ports.UserRepository,
+	roleRepo ports.RoleRepository,
+	w *stubWriter,
+	extraOpts ...setup.Option,
+) *setup.Service {
 	t.Helper()
 	prov, err := adminprovision.NewProvisioner(userRepo, roleRepo, discardLogger(), func() string {
 		return "00000000-0000-4000-8000-000000000001"
@@ -66,10 +86,31 @@ func newService(t *testing.T, userRepo ports.UserRepository, roleRepo ports.Role
 	if w != nil {
 		opts = append(opts, setup.WithEmitter(testoutbox.MustEmitter(t, w)))
 	}
+	opts = append(opts, extraOpts...)
 	svc, err := setup.NewService(prov, discardLogger(), opts...)
 	require.NoError(t, err)
 	return svc
 }
+
+type recordingSetupLock struct {
+	err             error
+	requireTxMarker bool
+	events          *[]string
+	calls           int
+}
+
+func (l *recordingSetupLock) Acquire(ctx context.Context) error {
+	l.calls++
+	if l.requireTxMarker && ctx.Value(setupLockTxMarkerKey{}) != true {
+		return errors.New("setup lock did not receive transaction context")
+	}
+	if l.events != nil {
+		*l.events = append(*l.events, "lock")
+	}
+	return l.err
+}
+
+var _ ports.SetupLock = (*recordingSetupLock)(nil)
 
 // --- NewService validation ------------------------------------------------
 
@@ -181,6 +222,78 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.False(t, persisted.PasswordResetRequired, "setup path creates with operator-chosen password")
 	// Verify password was hashed with bcrypt
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("SecretPass!23")))
+}
+
+func TestService_CreateAdmin_WithSetupLock_AcquiresInsideTxBeforeEmit(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	events := []string{}
+	w := &stubWriter{onWrite: func() { events = append(events, "emit") }}
+	lock := &recordingSetupLock{requireTxMarker: true, events: &events}
+	svc := newService(t, userRepo, roleRepo, w,
+		setup.WithTxManager(markerTxRunner{}),
+		setup.WithSetupLock(lock),
+	)
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, 1, lock.calls)
+	assert.Equal(t, []string{"lock", "emit"}, events,
+		"setup lock must be acquired inside the transaction before user.created emit")
+}
+
+func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	w := &stubWriter{}
+	lockErr := errors.New("lock unavailable")
+	lock := &recordingSetupLock{err: lockErr}
+	svc := newService(t, userRepo, roleRepo, w, setup.WithSetupLock(lock))
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.ErrorIs(t, err, lockErr)
+	assert.Contains(t, err.Error(), "setup: acquire setup lock")
+	assert.Empty(t, w.entries, "lock failure must happen before outbox emit")
+
+	_, userErr := userRepo.GetByUsername(context.Background(), "root")
+	require.Error(t, userErr, "lock failure must happen before user creation")
+	var ec *errcode.Error
+	require.ErrorAs(t, userErr, &ec)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
+	cnt, countErr := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	require.NoError(t, countErr)
+	assert.Equal(t, 0, cnt, "lock failure must not assign admin role")
+}
+
+func TestService_CreateAdmin_NoSetupLock_StillCreates(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	w := &stubWriter{}
+	svc := newService(t, userRepo, roleRepo, w, setup.WithSetupLock(nil))
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.Len(t, w.entries, 1)
+	cnt, countErr := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	require.NoError(t, countErr)
+	assert.Equal(t, 1, cnt)
 }
 
 func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {

@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -61,15 +60,14 @@ WHERE subject_id = $2::uuid
 // writes that participate in the ambient transaction (ADR-credential D5
 // same-tx revoke).
 //
-// Transaction contract: PGSessionStore uses the ambient transaction for all
-// write paths (execCtx joins caller's tx). Get uses queryRowCtx which also
-// joins the ambient tx when present, enabling consistent reads within a
-// business transaction.
+// Transaction contract: PGSessionStore uses the typed executor for all SQL.
+// The executor joins the ambient tx when present, enabling write atomicity and
+// consistent reads within a business transaction.
 //
 // ref: dexidp/dex storage/sql/sql.go — session row model
 // ref: ory/hydra persistence/sql/persister_oauth2.go — ambient-tx pattern
 type PGSessionStore struct {
-	pool     *pgxpool.Pool
+	db       pgExecutor
 	txRunner persistence.TxRunner
 	protocol *session.Protocol
 	clock    clock.Clock
@@ -106,31 +104,11 @@ func NewSessionStore(
 			"postgres.NewSessionStore: clock must not be nil")
 	}
 	return &PGSessionStore{
-		pool:     pool,
+		db:       newPGExecutor(pool),
 		txRunner: txRunner,
 		protocol: protocol,
 		clock:    clk,
 	}, nil
-}
-
-// execCtx executes a SQL statement against the ambient transaction in ctx when
-// one is present (join caller's tx so session operations are atomic with the
-// surrounding business transaction). Falls back to the pool when no tx is in
-// context.
-func (s *PGSessionStore) execCtx(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if tx, ok := TxFromContext(ctx); ok {
-		return tx.Exec(ctx, sql, args...)
-	}
-	return s.pool.Exec(ctx, sql, args...)
-}
-
-// queryRowCtx queries a single row against the ambient transaction in ctx when
-// one is present. Falls back to the pool when no tx is in context.
-func (s *PGSessionStore) queryRowCtx(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx, ok := TxFromContext(ctx); ok {
-		return tx.QueryRow(ctx, sql, args...)
-	}
-	return s.pool.QueryRow(ctx, sql, args...)
 }
 
 // validateFingerprintShape enforces per-FingerprintMode invariants on the Session
@@ -174,7 +152,7 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 		return err
 	}
 
-	_, err := s.execCtx(
+	_, err := s.db.Exec(
 		ctx, insertSessionSQL,
 		sess.ID,
 		sess.SubjectID,
@@ -184,14 +162,24 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 		sess.ExpiresAt.UTC(),
 	)
 	if err != nil {
-		if IsUniqueViolation(err) {
-			return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
-				"session: duplicate ID",
-				errcode.WithDetails(slog.String("sessionID", sess.ID)))
-		}
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: create", err)
+		return sessionCreateError(err, sess.ID, sess.SubjectID)
 	}
 	return nil
+}
+
+func sessionCreateError(err error, sessionID, subjectID string) error {
+	if IsUniqueViolation(err) {
+		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
+			"session: duplicate ID",
+			errcode.WithDetails(slog.String("sessionID", sessionID)))
+	}
+	if IsForeignKeyViolation(err) {
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
+			"session: subject user not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithDetails(slog.String("subjectID", subjectID)))
+	}
+	return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: create", err)
 }
 
 // Get fetches the session by ID. Returns ErrSessionNotFound if the ID is not
@@ -199,7 +187,7 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 // Session.RevokedAt and Session.ExpiresAt to make policy decisions.
 func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.Session, error) {
 	var sess session.Session
-	err := s.queryRowCtx(ctx, selectSessionByIDSQL, id).Scan(
+	err := s.db.QueryRow(ctx, selectSessionByIDSQL, id).Scan(
 		&sess.ID,
 		&sess.SubjectID,
 		&sess.JTI,
@@ -233,7 +221,7 @@ func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.Session, 
 // no-ops at the SQL level.
 func (s *PGSessionStore) Revoke(ctx context.Context, id string) error {
 	now := s.clock.Now().UTC()
-	_, err := s.execCtx(ctx, revokeSessionByIDSQL, now, id)
+	_, err := s.db.Exec(ctx, revokeSessionByIDSQL, now, id)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: revoke", err)
 	}
@@ -278,13 +266,18 @@ func (s *PGSessionStore) RevokeForSubject(ctx context.Context, subjectID string,
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: RevokeForSubject requires non-empty subjectID")
 	}
+	if _, err := uuid.Parse(subjectID); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"PG session store requires UUID-formatted subjectID",
+			errcode.WithDetails(slog.String("subjectID", subjectID)))
+	}
 	if !session.ValidateCredentialEvent(event) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: RevokeForSubject received unknown CredentialEvent")
 	}
 
 	now := s.clock.Now().UTC()
-	_, err := s.execCtx(ctx, revokeSessionsBySubjectSQL, now, subjectID)
+	_, err := s.db.Exec(ctx, revokeSessionsBySubjectSQL, now, subjectID)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: revoke for subject", err)
 	}

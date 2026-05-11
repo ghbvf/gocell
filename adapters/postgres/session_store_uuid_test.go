@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,4 +50,37 @@ func TestPGSessionStore_NonUUIDSubjectRejected(t *testing.T) {
 	var coded *errcode.Error
 	require.True(t, errors.As(createErr, &coded), "error must be *errcode.Error")
 	assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
+}
+
+func TestPGSessionStore_RevokeForSubjectNonUUIDRejected(t *testing.T) {
+	t.Parallel()
+
+	fakePool := new(pgxpool.Pool)
+	txm := &TxManager{}
+	fc := clockmock.New(storetest.EpochAnchor())
+	proto := storetest.NewTestProtocol(t)
+
+	store, err := NewSessionStore(fakePool, txm, proto, fc)
+	require.NoError(t, err)
+
+	revokeErr := store.RevokeForSubject(context.Background(), "not-a-uuid", session.CredentialEventPasswordReset)
+	require.Error(t, revokeErr, "non-UUID subjectID must be rejected before DB execution")
+
+	var coded *errcode.Error
+	require.True(t, errors.As(revokeErr, &coded), "error must be *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
+}
+
+func TestPGSessionStore_CreateForeignKeyViolationMapsUserNotFound(t *testing.T) {
+	t.Parallel()
+
+	err := sessionCreateError(&pgconn.PgError{
+		Code:           SQLStateForeignKeyViolation,
+		ConstraintName: "sessions_subject_id_fkey",
+	}, "sess-test-id", uuid.NewString())
+
+	var coded *errcode.Error
+	require.True(t, errors.As(err, &coded), "error must be *errcode.Error")
+	assert.Equal(t, errcode.ErrAuthUserNotFound, coded.Code)
+	assert.Equal(t, errcode.KindNotFound, coded.Kind)
 }

@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -21,6 +23,41 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
+
+func mustAllowDestructiveDown(t testing.TB, reason string) DestructiveDownPermit {
+	t.Helper()
+	permit, err := AllowDestructiveDown(reason)
+	require.NoError(t, err)
+	return permit
+}
+
+func migrationsUpToFS(t testing.TB, maxVersion int64) fstest.MapFS {
+	t.Helper()
+	source := testMigrationsFS(t)
+	entries, err := fs.ReadDir(source, ".")
+	require.NoError(t, err)
+
+	out := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		match := migrationVersionRe.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		version, parseErr := strconv.ParseInt(match[1], 10, 64)
+		require.NoError(t, parseErr)
+		if version > maxVersion {
+			continue
+		}
+		data, readErr := fs.ReadFile(source, entry.Name())
+		require.NoError(t, readErr)
+		out[entry.Name()] = &fstest.MapFile{Data: data}
+	}
+	require.NotEmpty(t, out)
+	return out
+}
 
 // setupPostgres starts a PostgreSQL container via testcontainers and returns a
 // connected Pool along with a cleanup function. The caller must invoke cleanup
@@ -220,28 +257,14 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
-		// Roll non-destructive migrations back one by one until we reach 012,
-		// the destructive PR-A29 refresh_tokens_rebuild that is hard-gated by
-		// default. 014 (lease_id column) and 013 (observability column) are
-		// both non-destructive column/index drops and must succeed; the call
-		// that targets 012 must surface the RAISE EXCEPTION error.
-		//
-		// Driving the loop off ExpectedVersion keeps the test correct as new
-		// non-destructive migrations are added on top of 014.
 		expected, fsErr := ExpectedVersion(testMigrationsFS(t))
 		require.NoError(t, fsErr)
-		const hardGatedVersion = int64(12)
-		require.Greater(t, expected, hardGatedVersion,
-			"this test assumes at least one non-destructive migration on top of the 012 hard-gate")
 
-		for v := expected; v > hardGatedVersion; v-- {
-			require.NoError(t, migrator.Down(ctx),
-				"migration %d down should succeed — non-destructive rollback", v)
-		}
-
-		dErr := migrator.Down(ctx)
-		require.Error(t, dErr, "migration 012 down must be hard-gated by default")
-		assert.Contains(t, dErr.Error(), "gocell.allow_destructive_refresh_tokens_down")
+		dErr := migrator.Down(ctx, nil)
+		require.Error(t, dErr, "Down without an explicit permit must fail closed")
+		var ec *errcode.Error
+		require.ErrorAs(t, dErr, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 
 		var exists bool
 		qErr := pool.DB().QueryRow(ctx,
@@ -250,23 +273,61 @@ func TestIntegration_Migrator(t *testing.T) {
 		require.NoError(t, qErr)
 		assert.True(t, exists, "outbox_entries table should still exist after refused rollback")
 
+		permit := mustAllowDestructiveDown(t, "integration test rollback")
+		require.NoError(t, migrator.Down(ctx, permit),
+			"Down with an explicit permit rolls back exactly the latest migration")
+
 		statuses, sErr := migrator.Status(ctx)
 		require.NoError(t, sErr)
 		require.GreaterOrEqual(t, len(statuses), int(expected), "status list must cover all migrations")
-		// All migrations above 012 are rolled back; 012 must remain applied
-		// (gate refused).
+		latestVersion := fmt.Sprintf("%03d", expected)
+		foundLatest := false
 		for _, s := range statuses {
-			version, parseErr := strconv.ParseInt(s.Version, 10, 64)
-			require.NoError(t, parseErr, "migration %s must have integer version", s.Version)
-			if version <= hardGatedVersion {
-				assert.True(t, s.Applied,
-					"migration %d must remain applied after refused rollback", version)
-			} else {
+			if s.Version == latestVersion {
+				foundLatest = true
 				assert.False(t, s.Applied,
-					"migration %d must be rolled back", version)
+					"latest migration %s must be rolled back after permitted Down", latestVersion)
 			}
 		}
+		assert.True(t, foundLatest, "status must include latest migration %s", latestVersion)
 	})
+}
+
+func TestMigration012Down_SQLGuardRejectsDirectProviderBypass(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	mfs := migrationsUpToFS(t, 12)
+
+	migrator, err := NewMigrator(pool, mfs, "schema_migrations_012_down_guard")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 012")
+
+	_, err = migrator.provider.Down(ctx)
+	require.Error(t, err, "direct goose down must be rejected by migration 012 SQL guard")
+	assert.Contains(t, err.Error(), "migration 012 down refused")
+
+	var selectorExists bool
+	err = pool.DB().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'refresh_tokens' AND column_name = 'selector'
+)`).Scan(&selectorExists)
+	require.NoError(t, err)
+	assert.True(t, selectorExists, "failed direct down must leave 012 refresh token schema intact")
+
+	require.NoError(t, migrator.Down(ctx, mustAllowDestructiveDown(t, "integration test rollback through SQL guard")),
+		"Migrator.Down with typed permit must set the SQL guard on goose's execution connection")
+
+	var tokenExists bool
+	err = pool.DB().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'refresh_tokens' AND column_name = 'token'
+)`).Scan(&tokenExists)
+	require.NoError(t, err)
+	assert.True(t, tokenExists, "permitted down must recreate the pre-012 token column")
 }
 
 // ---------------------------------------------------------------------------
@@ -732,7 +793,7 @@ func TestMigrator_NineBeforeTen_OrderRegression(t *testing.T) {
 	assert.True(t, statuses[idx010].Applied, "010 must be applied after Up")
 
 	// Down rolls back exactly the latest version (010).
-	require.NoError(t, m.Down(ctx))
+	require.NoError(t, m.Down(ctx, mustAllowDestructiveDown(t, "sequence order test rollback")))
 
 	var xExists, yExists bool
 	require.NoError(t, pool.DB().QueryRow(ctx,
@@ -770,9 +831,10 @@ func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
 	defer func() { _ = m.Close() }()
 
 	require.NoError(t, m.Up(ctx))
-	require.NoError(t, m.Down(ctx), "1st Down rolls back 001 → v=0")
-	require.NoError(t, m.Down(ctx), "2nd Down at v=0 must be idempotent no-op")
-	require.NoError(t, m.Down(ctx), "3rd Down at v=0 still idempotent")
+	permit := mustAllowDestructiveDown(t, "idempotent v0 rollback test")
+	require.NoError(t, m.Down(ctx, permit), "1st Down rolls back 001 → v=0")
+	require.NoError(t, m.Down(ctx, permit), "2nd Down at v=0 must be idempotent no-op")
+	require.NoError(t, m.Down(ctx, permit), "3rd Down at v=0 still idempotent")
 
 	statuses, sErr := m.Status(ctx)
 	require.NoError(t, sErr)

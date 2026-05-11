@@ -27,7 +27,7 @@ var _ ports.RoleRepository = (*PGRoleRepo)(nil)
 // PGRoleRepo is the cell-private PostgreSQL implementation of ports.RoleRepository.
 // It reads/writes the `roles` and `role_assignments` tables (migration 019).
 type PGRoleRepo struct {
-	pool     *pgxpool.Pool
+	db       pgExecutor
 	txRunner persistence.TxRunner
 	clock    clock.Clock
 }
@@ -51,34 +51,10 @@ func NewPGRoleRepo(
 			"accesscore.NewPGRoleRepo: clock must not be nil")
 	}
 	return &PGRoleRepo{
-		pool:     pool,
+		db:       newPGExecutor(pool),
 		txRunner: txRunner,
 		clock:    clk,
 	}, nil
-}
-
-// execCtx executes SQL using the ambient tx from ctx when present.
-func (r *PGRoleRepo) execCtx(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
-		return tx.Exec(ctx, sql, args...)
-	}
-	return r.pool.Exec(ctx, sql, args...)
-}
-
-// queryRowCtx queries a single row using the ambient tx when present.
-func (r *PGRoleRepo) queryRowCtx(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
-		return tx.QueryRow(ctx, sql, args...)
-	}
-	return r.pool.QueryRow(ctx, sql, args...)
-}
-
-// queryCtx queries multiple rows using the ambient tx when present.
-func (r *PGRoleRepo) queryCtx(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
-		return tx.Query(ctx, sql, args...)
-	}
-	return r.pool.Query(ctx, sql, args...)
 }
 
 const (
@@ -143,7 +119,7 @@ func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: marshal permissions", err)
 	}
-	_, err = r.execCtx(ctx, upsertRoleSQL,
+	_, err = r.db.Exec(ctx, upsertRoleSQL,
 		role.ID,
 		role.Name,
 		permJSON,
@@ -157,7 +133,7 @@ func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 
 // GetByID fetches a role by primary key. Returns ErrAuthRoleNotFound when absent.
 func (r *PGRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
-	row := r.queryRowCtx(ctx, selectRoleByIDSQL, id)
+	row := r.db.QueryRow(ctx, selectRoleByIDSQL, id)
 	role, err := scanRole(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -173,7 +149,7 @@ func (r *PGRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, erro
 // GetByUserID returns all roles assigned to the user. Returns an empty slice
 // when the user has no roles (mirrors mem behavior).
 func (r *PGRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
-	rows, err := r.queryCtx(ctx, selectRolesByUserIDSQL, userID)
+	rows, err := r.db.Query(ctx, selectRolesByUserIDSQL, userID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: get-by-user-id", err)
 	}
@@ -207,7 +183,7 @@ func fkConstraintName(err error) string {
 // not exist (FK on role_id). Returns ErrAuthUserNotFound when the user does not
 // exist (FK on user_id). Fallback for unknown FK violations returns ErrAuthRoleNotFound.
 func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
-	tag, err := r.execCtx(ctx, insertAssignmentSQL,
+	tag, err := r.db.Exec(ctx, insertAssignmentSQL,
 		userID,
 		roleID,
 		r.clock.Now(),
@@ -235,7 +211,7 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 // RemoveFromUser removes a role assignment. Idempotent — no error when the
 // assignment did not exist.
 func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
-	_, err := r.execCtx(ctx, deleteAssignmentSQL, userID, roleID)
+	_, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
 	if err != nil {
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
@@ -266,7 +242,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 	if roleID != auth.RoleAdmin {
 		// Non-admin role: plain DELETE, no last-holder check. Trigger
 		// (migration 019) also short-circuits on `role_id <> 'admin'`.
-		tag, err := r.execCtx(ctx, deleteAssignmentSQL, userID, roleID)
+		tag, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
 		if err != nil {
 			return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"role_repo: remove-if-not-last (non-admin)", err)
@@ -275,7 +251,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 	}
 
 	var userHeldRole, wasDeleted bool
-	row := r.queryRowCtx(ctx, removeIfNotLastSQL, userID, roleID)
+	row := r.db.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
 	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
 		if isLastAdminProtected(err) {
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
@@ -306,7 +282,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 // CountByRole returns the number of users assigned to the given role.
 func (r *PGRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
 	var count int
-	row := r.queryRowCtx(ctx, countByRoleSQL, roleID)
+	row := r.db.QueryRow(ctx, countByRoleSQL, roleID)
 	if err := row.Scan(&count); err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: count-by-role", err)
 	}

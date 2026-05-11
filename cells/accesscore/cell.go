@@ -283,7 +283,7 @@ type AccessCore struct {
 	bootstrapAuth func(http.Handler) http.Handler
 
 	// setupLock is an optional cross-process advisory lock injected by the PG
-	// composition root (accesscore.NewPGSetupLock). Nil in mem mode — the
+	// composition root (accesscore/postgres.NewSetupLock). Nil in mem mode — the
 	// intra-process sync.Mutex in adminprovision.Provisioner is sufficient.
 	// Closes backlog ADMINPROVISION-DIST-LOCK-01.
 	setupLock ports.SetupLock

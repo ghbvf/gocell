@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -42,7 +43,7 @@ func (AccessCoreModule) ID() string { return "accesscore" }
 // Reads GOCELL_BOOTSTRAP_ADMIN_USERNAME, GOCELL_BOOTSTRAP_ADMIN_PASSWORD,
 // GOCELL_ACCESSCORE_CURSOR_KEY, GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY from
 // the environment.
-func (m AccessCoreModule) Provide( //nolint:gocognit // PG wiring must stay inline (STORAGE-BACKEND-PG-WIRING-01)
+func (m AccessCoreModule) Provide(
 	_ context.Context, shared *SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	creds, err := loadBootstrapCredentials(
@@ -89,65 +90,11 @@ func (m AccessCoreModule) Provide( //nolint:gocognit // PG wiring must stay inli
 		accesscore.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
 	}
 	if shared.Topology.StorageBackend == "postgres" {
-		if shared.SharedPGPool == nil {
-			return nil, nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires SharedPGPool " +
-				"(ConfigCoreModule must run before AccessCoreModule)")
-		}
-		writer := adapterpg.NewOutboxWriter(shared.Clock)
-		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
-		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
-		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
-		accessOpts = append(accessOpts,
-			accesscore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
-			accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
-		)
-		// Build PGDeps once and share across all PG-backed repo factories so the
-		// underlying pool/txRunner/clock are not repeated at each call site.
-		// LAYER-10: PGDeps hides pgxpool.Pool behind the accesscore boundary.
-		deps, err := accesscore.NewPGDeps(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+		pgOpts, err := accessPostgresOptions(shared)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGDeps: %w", err)
+			return nil, nil, nil, err
 		}
-		// Cell-private PG repos override the in-memory defaults installed by
-		// WithInMemoryDefaults above (S3+S5: users/roles persisted in PG).
-		//
-		// HAZARD: session repository stays mem in S3+S5 even when PG storage backend
-		// is selected. accesscore's PG-mode TxRunner writes user/role/outbox to PG
-		// but session/refresh to mem — sessionlogin.persistSessionWithRefresh runs
-		// mem writes inside a real PG tx. PG rollback does NOT unwind mem
-		// session/refresh state. S4 wires the runtime session.Store + PG refresh
-		// store and removes this hazard. Backlog: S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01.
-		pgUserRepo, err := accesscore.NewPGUserRepository(deps)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGUserRepository: %w", err)
-		}
-		pgRoleRepo, err := accesscore.NewPGRoleRepository(deps)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGRoleRepository: %w", err)
-		}
-		pgSetupLock, err := accesscore.NewPGSetupLock(deps)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGSetupLock: %w", err)
-		}
-		accessOpts = append(accessOpts,
-			accesscore.WithUserRepository(pgUserRepo),
-			accesscore.WithRoleRepository(pgRoleRepo),
-			accesscore.WithSetupLock(pgSetupLock),
-		)
-		// Wire the ConfigGetter for the configreceive slice to fetch entry values
-		// from configcore's internal GET /internal/v1/config/{key} endpoint after
-		// an upsert event (contract: http.config.internal.get.v1).
-		// baseURL is constructed from InternalHTTPAddr. If the addr is a port-only
-		// string (e.g. ":9090") we resolve to loopback; if host:port, prepend scheme.
-		// The HMAC ring from InternalGuard is reused for outbound service-token signing.
-		// If tests construct SharedDeps without InternalGuard, configreceive stays
-		// in log-only mode.
-		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
-		if shared.InternalGuard != nil {
-			accessOpts = append(accessOpts,
-				configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring, shared.Clock),
-			)
-		}
+		accessOpts = append(accessOpts, pgOpts...)
 	}
 	// Bootstrap credential auth + per-IP token bucket rate limiter protects
 	// the setup/admin endpoint (ADR §D2 operator credential via env).
@@ -174,6 +121,68 @@ func (m AccessCoreModule) Provide( //nolint:gocognit // PG wiring must stay inli
 	// rlLimiter owns a cleanup goroutine that exits on Close(); bind it to a
 	// ManagedResource so phase10 LIFO teardown stops the goroutine cleanly.
 	return c, nil, []kernellifecycle.ManagedResource{bootstrapLimiterResource{lim: rlLimiter}}, nil
+}
+
+func accessPostgresOptions(shared *SharedDeps) ([]accesscore.Option, error) {
+	if shared.SharedPGPool == nil {
+		return nil, fmt.Errorf("AccessCoreModule: postgres mode requires SharedPGPool " +
+			"(ConfigCoreModule must run before AccessCoreModule)")
+	}
+	writer := adapterpg.NewOutboxWriter(shared.Clock)
+	txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
+	// Accumulative WithOutboxDeps: adds writer without replacing the publisher
+	// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
+	accessOpts := []accesscore.Option{
+		accesscore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
+		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
+	}
+	// Build PG deps once and share across all PG-backed repo factories so the
+	// underlying pool/txRunner/clock are not repeated at each call site.
+	deps, err := accesspg.NewDeps(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+	if err != nil {
+		return nil, fmt.Errorf("AccessCoreModule: PGDeps: %w", err)
+	}
+	// Cell-private PG repos override the in-memory defaults installed by
+	// WithInMemoryDefaults above (S3+S5: users/roles persisted in PG).
+	//
+	// HAZARD: session repository stays mem in S3+S5 even when PG storage backend
+	// is selected. accesscore's PG-mode TxRunner writes user/role/outbox to PG
+	// but session/refresh to mem — sessionlogin.persistSessionWithRefresh runs
+	// mem writes inside a real PG tx. PG rollback does NOT unwind mem
+	// session/refresh state. S4 wires the runtime session.Store + PG refresh
+	// store and removes this hazard. Backlog: S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01.
+	pgUserRepo, err := accesspg.NewUserRepository(deps)
+	if err != nil {
+		return nil, fmt.Errorf("AccessCoreModule: PGUserRepository: %w", err)
+	}
+	pgRoleRepo, err := accesspg.NewRoleRepository(deps)
+	if err != nil {
+		return nil, fmt.Errorf("AccessCoreModule: PGRoleRepository: %w", err)
+	}
+	pgSetupLock, err := accesspg.NewSetupLock(deps)
+	if err != nil {
+		return nil, fmt.Errorf("AccessCoreModule: PGSetupLock: %w", err)
+	}
+	accessOpts = append(accessOpts,
+		accesscore.WithUserRepository(pgUserRepo),
+		accesscore.WithRoleRepository(pgRoleRepo),
+		accesscore.WithSetupLock(pgSetupLock),
+	)
+	// Wire the ConfigGetter for the configreceive slice to fetch entry values
+	// from configcore's internal GET /internal/v1/config/{key} endpoint after
+	// an upsert event (contract: http.config.internal.get.v1).
+	// baseURL is constructed from InternalHTTPAddr. If the addr is a port-only
+	// string (e.g. ":9090") we resolve to loopback; if host:port, prepend scheme.
+	// The HMAC ring from InternalGuard is reused for outbound service-token signing.
+	// If tests construct SharedDeps without InternalGuard, configreceive stays
+	// in log-only mode.
+	if shared.InternalGuard != nil {
+		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
+		accessOpts = append(accessOpts,
+			configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring, shared.Clock),
+		)
+	}
+	return accessOpts, nil
 }
 
 // bootstrapRateLimitPerSec is 5 req/min expressed in per-second tokens — the
