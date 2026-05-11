@@ -361,7 +361,7 @@ func layer10IncompleteTypeDataViolation(pkgPath, detail string) violation {
 	}
 }
 
-func checkCellPublicAPIAdapterTypes(modPrefix, root string, pkgs []*packages.Package) []violation {
+func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) []violation {
 	var out []violation
 	for _, pkg := range pkgs {
 		if !isRootCellPackage(modPrefix, pkg.PkgPath) {
@@ -383,19 +383,11 @@ func checkCellPublicAPIAdapterTypes(modPrefix, root string, pkgs []*packages.Pac
 			out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath, "missing syntax"))
 			continue
 		}
+		// Generated/ packages cannot reach this loop: the caller passes the
+		// production-only set (filterCellPackages over resolver.Production()),
+		// so codegen output is excluded at the package level by the
+		// LoadProductionPackages funnel.
 		for _, file := range pkg.Syntax {
-			// GENERATED-SKIP-CROSS-RULE-INVARIANT-01: loadModule loads ./... via
-			// typeseval.SharedResolver, which includes generated/ packages.
-			// The production LAYER-10 call site (line ~610) pre-filters via
-			// filterCellPackages so this skip is a no-op there. For the two
-			// synthetic-package tests (root=""), pkgFileRel returns "" because
-			// Fset positions have no Filename, and IsGeneratedRelPath("") is
-			// false — also a no-op. The skip becomes meaningful only if a future
-			// LAYER-10 caller omits the cells/ pre-filter while passing a real
-			// module root; in that case the codegen exclusion still holds.
-			if typeseval.IsGeneratedRelPath(pkgFileRel(root, pkg, file)) {
-				continue
-			}
 			scanner.EachInChildren[ast.FuncDecl](file, func(d *ast.FuncDecl) {
 				if !d.Name.IsExported() {
 					return
@@ -483,27 +475,33 @@ func findModuleRoot(t *testing.T) string {
 	}
 }
 
-// loadModule loads the entire module under root once via
-// typeseval.SharedResolver (process-wide singleflight cache), then folds the
-// resulting *packages.Package slice into a depgraph.Graph for layer rules.
+// loadModule loads the entire module under root once via the
+// typeseval.LoadProductionPackages typed funnel, then folds the resulting
+// package set into a depgraph.Graph for layer rules.
 //
 // Returning both views from a single Load avoids running packages.Load twice
-// per test invocation: the typed slice powers LAYER-08 (type-scope walk) and
-// LAYER-10 (cell-API adapter check); the graph powers LAYER-05/06/09 plus
-// the transitive variants. Subsequent calls within the same process reuse
-// the cached resolver result.
-func loadModule(t *testing.T, root string) (*kerneldepgraph.Graph, []*packages.Package) {
+// per test invocation: the typed resolver powers LAYER-08 (type-scope walk
+// via All()) and LAYER-10 (cell-API adapter check via Production()); the
+// graph powers LAYER-05/06/09 plus the transitive variants. Subsequent
+// calls within the same process reuse the SharedResolver cache underneath
+// LoadProductionPackages.
+//
+// LoadProductionPackages is the Hard-grade replacement for the legacy
+// `typeseval.SharedResolver(root, _, _, "./...")` form. Direct calls to
+// SharedResolver with the "./..." literal in archtest test files are
+// banned by PRODUCTION-LOADER-FUNNEL-01.
+func loadModule(t *testing.T, root string) (*kerneldepgraph.Graph, *typeseval.ProductionResolver) {
 	t.Helper()
-	resolver, err := typeseval.SharedResolver(root, false /* tests */, []string{"integration"}, "./...")
-	require.NoError(t, err, "typeseval.SharedResolver failed")
-	typedPkgs := resolver.Packages()
-	for _, p := range typedPkgs {
+	module := readModulePath(t, root)
+	resolver, err := typeseval.LoadProductionPackages(root, module, false /* tests */, []string{"integration"})
+	require.NoError(t, err, "typeseval.LoadProductionPackages failed")
+	all := resolver.All()
+	for _, p := range all {
 		for _, pe := range p.Errors {
 			t.Logf("packages.Load: package %q error: %v", p.PkgPath, pe)
 		}
 	}
-	module := readModulePath(t, root)
-	return depgraph.FromPackages(module, typedPkgs), typedPkgs
+	return depgraph.FromPackages(module, all), resolver
 }
 
 // filterPkgsByPathPrefix returns the subset of pkgs whose PkgPath equals or
@@ -538,7 +536,7 @@ func TestLayeringRules(t *testing.T) {
 	modPrefix := readModulePath(t, root) + "/"
 	module := strings.TrimSuffix(modPrefix, "/")
 
-	g, typedPkgs := loadModule(t, root)
+	g, resolver := loadModule(t, root)
 	require.NotEmpty(t, g.Packages, "depgraph returned no packages")
 
 	violations := checkLayering(modPrefix, g)
@@ -600,7 +598,7 @@ func TestLayeringRules(t *testing.T) {
 	// Type-level scope walk is precise where the previous file-grep
 	// over-matched on comments and missed renamed-import aliases.
 	t.Run("LAYER-08_no_HTTPRegistrar_type_definition", func(t *testing.T) {
-		violations := checkLayer08TypedSeal(module, typedPkgs)
+		violations := checkLayer08TypedSeal(module, resolver.All())
 		for _, v := range violations {
 			t.Logf("LAYER-08 violation: %s", v.Message)
 		}
@@ -618,8 +616,8 @@ func TestLayeringRules(t *testing.T) {
 	// LAYER-10: cells/<cell> root package exported APIs must not expose
 	// concrete adapter/driver types.
 	t.Run("LAYER-10_cell_root_public_api_no_adapter_driver_types", func(t *testing.T) {
-		typedCellPkgs := filterCellPackages(module, typedPkgs)
-		violations := checkCellPublicAPIAdapterTypes(modPrefix, root, typedCellPkgs)
+		typedCellPkgs := filterCellPackages(module, resolver.Production())
+		violations := checkCellPublicAPIAdapterTypes(modPrefix, typedCellPkgs)
 		for _, v := range violations {
 			t.Logf("LAYER-10 violation: %s", v.Message)
 		}
@@ -971,7 +969,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	fakePkg.TypesInfo.Defs[metricName] = types.NewVar(token.NoPos, rootPkg, "ExportedMetric", counterType)
 	fakePkg.PkgPath = "github.com/ghbvf/gocell/cells/accesscore"
 
-	violations := checkCellPublicAPIAdapterTypes(mod, "", []*packages.Package{fakePkg})
+	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{fakePkg})
 
 	var messages []string
 	for _, v := range violations {
@@ -1019,7 +1017,7 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 		Types:   types.NewPackage("github.com/ghbvf/gocell/cells/auditcore", "auditcore"),
 	}
 
-	violations := checkCellPublicAPIAdapterTypes(mod, "", []*packages.Package{
+	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{
 		loadErrorPkg,
 		missingObjectPkg,
 		missingTypesInfoPkg,
