@@ -226,43 +226,6 @@ func TestNewProtocol_WithNamespaceMissing_Rejected(t *testing.T) {
 	}
 }
 
-// TestNewProtocol_RestartRecoveryNilSticky: once typed-nil is observed, a
-// subsequent valid call does NOT clear the sentinel (sentinel sticky doctrine).
-func TestNewProtocol_RestartRecoveryNilSticky(t *testing.T) {
-	t.Parallel()
-	hmacKey := make([]byte, 32)
-	ns, _ := ledger.ParseNamespaceID("auditcore")
-	var nilRR ledger.RestartRecoveryMode // typed nil
-	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
-		ledger.WithRestartRecovery(nilRR),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}), // valid after nil
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	if err == nil {
-		t.Fatal("expected error: typed-nil sentinel must be sticky")
-	}
-}
-
-// TestNewProtocol_IdempotencyNilSticky: same for IdempotencyMode sentinel.
-func TestNewProtocol_IdempotencyNilSticky(t *testing.T) {
-	t.Parallel()
-	hmacKey := make([]byte, 32)
-	ns, _ := ledger.ParseNamespaceID("auditcore")
-	var nilIM ledger.IdempotencyMode // typed nil
-	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(nilIM),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}), // valid after nil
-	)
-	if err == nil {
-		t.Fatal("expected error: typed-nil sentinel must be sticky for IdempotencyMode")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // A-06 RED: With* Option nil → immediate error (short-circuit), not sticky sentinel.
 //

@@ -26,7 +26,7 @@ import (
 // cells/configcore/internal/adapters/postgres/config_repo.go::List) so that
 // large result sets are streamed page-by-page from PG rather than loaded into
 // memory in full.
-const auditQueryFetchCap = 5000
+const auditQueryFetchCap = 500
 
 // auditSort defines the default sort for audit listings: newest first.
 var auditSort = []query.SortColumn{
@@ -59,12 +59,20 @@ func NewService(store ledger.Store, codec *query.CursorCodec, logger *slog.Logge
 func (s *Service) Query(
 	ctx context.Context, filters ledger.AuditFilters, pageReq query.PageParams,
 ) (query.PageResult[*ledger.Entry], error) {
-	qctx := query.QueryContext("endpoint", "audit-query",
-		"eventType", filters.EventType,
-		"actorId", filters.ActorID,
-		"from", filters.From.Format(time.RFC3339Nano),
-		"to", filters.To.Format(time.RFC3339Nano),
-	)
+	attrs := []string{"endpoint", "audit-query"}
+	if filters.EventType != "" {
+		attrs = append(attrs, "eventType", filters.EventType)
+	}
+	if filters.ActorID != "" {
+		attrs = append(attrs, "actorId", filters.ActorID)
+	}
+	// From/To are time-range filter predicates, not cursor-scope identifiers.
+	// Including zero-value time.Time in the scope would embed "0001-01-01T00:00:00Z"
+	// and break cursor reuse when callers omit From/To (F-07). Non-zero values
+	// are intentionally excluded from scope as well: time-range filters narrow
+	// results within a stable data type; changing From/To does not change the
+	// kind of data being paged, so they must not participate in scope fingerprinting.
+	qctx := query.QueryContext(attrs...)
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*ledger.Entry]{
 		Codec:      s.codec,
 		PageParams: pageReq,
@@ -76,7 +84,7 @@ func (s *Service) Query(
 			// semantics are provided here at the service layer for MemStore
 			// compatibility.
 			//
-			// auditQueryFetchCap (5000) is a defensive ceiling against OOM when
+			// auditQueryFetchCap (500) is a defensive ceiling against OOM when
 			// the audit_entries table grows large and filters are not narrow enough.
 			// Real keyset pagination pushed into SQL is tracked in backlog item
 			// S8-AUDIT-QUERY-KEYSET-PUSH-DOWN-01.

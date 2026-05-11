@@ -42,10 +42,16 @@
 //
 // # Idempotency
 //
-// IdempotencyContentFingerprint uses a SHA-256 digest of the entry fields
-// (eventID + eventType + actorID + UnixNano(timestamp) + payload) as the
-// idempotency key. Duplicate appends return ErrAuditLedgerAlreadyExists.
+// IdempotencyContentFingerprint uses the entry's EventID as the sole
+// idempotency key. EventID (the outbox.Entry UUID) is stable across
+// at-least-once redeliveries while Timestamp/Payload may vary per attempt —
+// including them would defeat dedup. Duplicate appends return
+// ErrAuditLedgerAlreadyExists.
 //
+// The DB-level UNIQUE INDEX on (namespace, event_id) (migration 021) is the
+// second-line guard against concurrent bypass of this application-level check.
+//
+// ref: ADR 202605101800-adr-audit-ledger-protocol §D3 F-CR-2
 // ref: google/trillian types/logroot.go — LeafIdentityHash content-addressed
 // deduplication.
 //

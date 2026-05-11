@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -130,7 +131,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		EventID:   entry.ID,
 		EventType: entry.EventType,
 		ActorID:   actorID,
-		Timestamp: s.clk.Now(),
+		Timestamp: tsForLedger(entry, s.clk, s.logger, s.spec.name),
 		Payload:   entry.Payload,
 	}
 
@@ -157,6 +158,20 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		slog.String("event_type", entry.EventType),
 		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
+}
+
+// tsForLedger picks the audit entry timestamp source. Prefers outbox.Entry.CreatedAt
+// (original event production time) over clock.Now() (consume time) so the audit ledger
+// reflects when the business event happened, not when this consumer processed it.
+// Zero CreatedAt is defensive fallback — outbox publishers always populate it, but
+// we guard against unintended zero-value injection.
+func tsForLedger(entry outbox.Entry, clk clock.Clock, logger *slog.Logger, slice string) time.Time {
+	if entry.CreatedAt.IsZero() {
+		logger.Warn("audit append: outbox.Entry.CreatedAt is zero — falling back to clk.Now()",
+			slog.String("slice", slice), slog.String("event_id", entry.ID))
+		return clk.Now()
+	}
+	return entry.CreatedAt
 }
 
 // slicePrefix turns "auditappenduser" into "auditappend-user". The kebab

@@ -341,6 +341,12 @@ func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
 	assert.False(t, present, "request_id field must be absent when not in ctx")
 }
 
+// TestService_Query_SubsecondFilterContext verifies that From/To are not part of
+// the cursor scope fingerprint. Changing From between pages does not invalidate
+// the cursor — time-range filters narrow store results but do not define the
+// "kind of data" being paged (F-07: zero and non-zero From are both excluded
+// from scope to prevent "0001-01-01T00:00:00Z" noise and to allow callers to
+// refine time windows across page requests without cursor invalidation).
 func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	base := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
 	svc, store := newTestService()
@@ -354,15 +360,13 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, pageA.HasMore)
 
+	// From/To are NOT cursor-scope keys — changing From must not invalidate the cursor.
 	filtersB := ledger.AuditFilters{From: base.Add(auditNs200)}
 	_, err = svc.Query(context.Background(), filtersB, query.PageParams{
 		Limit:  3,
 		Cursor: pageA.NextCursor,
 	})
-	require.Error(t, err)
-	var ecErr2 *errcode.Error
-	require.ErrorAs(t, err, &ecErr2)
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr2.Code)
+	require.NoError(t, err, "changing From between pages must not invalidate the cursor")
 }
 
 // TestQuery_FetchCap_500 asserts that auditQueryFetchCap equals 500.
@@ -510,7 +514,7 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 		// RED: scope mismatch because "from=0001-01-01T00:00:00Z" was embedded
 		var ecErr *errcode.Error
 		if errors.As(err2, &ecErr) && ecErr.Code == errcode.ErrCursorInvalid {
-			t.Errorf("A-07 RED: cursor scope mismatch when changing From zero→nonzero; "+
+			t.Errorf("A-07 RED: cursor scope mismatch when changing From zero→nonzero; " +
 				"'from' is embedded in QueryContext for zero time. Fix: skip From/To when zero.")
 		} else {
 			t.Errorf("unexpected error on page2 with non-zero From: %v", err2)

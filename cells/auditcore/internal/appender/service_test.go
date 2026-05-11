@@ -282,7 +282,9 @@ func (c *captureStore) Append(ctx context.Context, e *ledger.Entry) error {
 
 // newServiceWithLogBuf constructs a Service using a fakeClock and a JSON slog buffer
 // so tests can inspect Warn-level log output.
-func newServiceWithLogBuf(t *testing.T, spec appender.Spec, store ledger.Store, p *ledger.Protocol, fc *clockmock.FakeClock) (*appender.Service, *bytes.Buffer) {
+func newServiceWithLogBuf(
+	t *testing.T, spec appender.Spec, store ledger.Store, p *ledger.Protocol, fc *clockmock.FakeClock,
+) (*appender.Service, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

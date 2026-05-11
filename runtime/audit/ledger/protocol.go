@@ -123,14 +123,10 @@ func ParseNamespaceID(s string) (NamespaceID, error) {
 // immutable after construction. Accessor methods return defensive copies
 // where applicable.
 type Protocol struct {
-	hmacKey            []byte
-	hmacKeyNil         bool // sentinel: WithChainHMAC received a nil/empty key
-	namespace          NamespaceID
-	namespaceNil       bool // sentinel: WithNamespace was never called
-	restartRecovery    RestartRecoveryMode
-	restartRecoveryNil bool // sentinel: WithRestartRecovery received a nil interface value
-	idempotency        IdempotencyMode
-	idempotencyNil     bool // sentinel: WithIdempotency received a nil interface value
+	hmacKey         []byte
+	namespace       NamespaceID
+	restartRecovery RestartRecoveryMode
+	idempotency     IdempotencyMode
 }
 
 // HMACKey returns a defensive copy of the configured HMAC key.
@@ -180,10 +176,9 @@ type Option func(*Protocol) error
 
 // WithChainHMAC declares the HMAC-SHA256 key used for hash chain computation.
 //
-// Both nil and zero-length keys are rejected by NewProtocol (key must be ≥ 32
-// bytes per RFC 2104 §3). The nil sentinel is sticky: once set, a subsequent
-// valid WithChainHMAC call does NOT clear it — misconfiguration must surface
-// at startup rather than being silently masked.
+// Nil and zero-length keys are rejected immediately (key must be ≥ 32 bytes
+// per RFC 2104 §3). NewProtocol short-circuits on the first error — a nil key
+// prevents subsequent options from running.
 //
 // F7: after the defensive copy is made, the caller's key slice is zeroed
 // (clear(key)) so that sensitive key material does not remain live in the
@@ -191,14 +186,11 @@ type Option func(*Protocol) error
 //
 // Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency wiring
 // option — runtime-api.md §Option 范式分层).
-//
-// Both bare-nil and typed-nil are rejected by NewProtocol. The nil sentinel is
-// sticky: once set, a subsequent valid WithChainHMAC call does NOT clear it.
 func WithChainHMAC(key []byte) Option {
 	return func(p *Protocol) error {
 		if len(key) == 0 {
-			p.hmacKeyNil = true
-			return nil
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"audit ledger: HMAC key must not be nil or empty (use WithChainHMAC, key >= 32 bytes)")
 		}
 		if len(key) < minHMACKeyBytes {
 			// Reject short keys immediately; error mentions only byte counts,
@@ -224,16 +216,16 @@ func WithChainHMAC(key []byte) Option {
 // WithNamespace declares the NamespaceID that prefixes all store keys for
 // this ledger instance.
 //
-// Both bare-nil (zero-value NamespaceID "") and invalid values are rejected
-// by NewProtocol. The nil sentinel is sticky: once set, a subsequent valid
-// WithNamespace call does NOT clear it — mirrors WithRestartRecovery.
+// Empty (zero-value) and invalid NamespaceID values are rejected immediately.
+// NewProtocol short-circuits on the first error — an empty namespace prevents
+// subsequent options from running.
 // Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency
 // wiring option — runtime-api.md §Option 范式分层).
 func WithNamespace(ns NamespaceID) Option {
 	return func(p *Protocol) error {
 		if ns == "" {
-			p.namespaceNil = true
-			return nil
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"audit ledger: namespace ID must not be empty")
 		}
 		if err := ns.Validate(); err != nil {
 			return err
@@ -245,16 +237,15 @@ func WithNamespace(ns NamespaceID) Option {
 
 // WithRestartRecovery declares the restart recovery mode.
 //
-// Both bare-nil and typed-nil are rejected by NewProtocol so the recovery
-// mode is never silently absent. The nil sentinel is sticky: once set, a
-// subsequent valid WithRestartRecovery call does NOT clear it.
+// Both bare-nil and typed-nil RestartRecoveryMode values are rejected
+// immediately. NewProtocol short-circuits on the first error.
 // Pattern mirrors runtime/http/router.WithRateLimiter
 // (strong-dependency wiring option).
 func WithRestartRecovery(rr RestartRecoveryMode) Option {
 	return func(p *Protocol) error {
 		if validation.IsNilInterface(rr) {
-			p.restartRecoveryNil = true
-			return nil
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"audit ledger: restart recovery mode must not be nil (use WithRestartRecovery)")
 		}
 		p.restartRecovery = rr
 		return nil
@@ -263,16 +254,15 @@ func WithRestartRecovery(rr RestartRecoveryMode) Option {
 
 // WithIdempotency declares the idempotency mode.
 //
-// Both bare-nil and typed-nil are rejected by NewProtocol so the idempotency
-// mode is never silently absent. The nil sentinel is sticky: once set, a
-// subsequent valid WithIdempotency call does NOT clear it.
+// Both bare-nil and typed-nil IdempotencyMode values are rejected
+// immediately. NewProtocol short-circuits on the first error.
 // Pattern mirrors runtime/http/router.WithRateLimiter
 // (strong-dependency wiring option).
 func WithIdempotency(im IdempotencyMode) Option {
 	return func(p *Protocol) error {
 		if validation.IsNilInterface(im) {
-			p.idempotencyNil = true
-			return nil
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"audit ledger: idempotency mode must not be nil (use WithIdempotency)")
 		}
 		p.idempotency = im
 		return nil
@@ -280,8 +270,9 @@ func WithIdempotency(im IdempotencyMode) Option {
 }
 
 // NewProtocol assembles a Protocol from the supplied options and fail-fasts
-// on missing required fields. The returned *Protocol is safe for concurrent
-// read-only use.
+// on missing or invalid required fields. Options are applied in order; the
+// first error short-circuits and no subsequent options are applied.
+// The returned *Protocol is safe for concurrent read-only use.
 func NewProtocol(opts ...Option) (*Protocol, error) {
 	p := &Protocol{}
 	for _, opt := range opts {
@@ -292,19 +283,20 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 			return nil, err
 		}
 	}
-	if p.hmacKeyNil || len(p.hmacKey) == 0 {
+	// Zero-value defense: catch the case where no Option was passed at all.
+	if len(p.hmacKey) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger protocol: HMAC key required (use WithChainHMAC, key >= 32 bytes)")
 	}
-	if p.namespaceNil || p.namespace == "" {
+	if p.namespace == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger protocol: namespace required (use WithNamespace)")
 	}
-	if p.restartRecoveryNil || validation.IsNilInterface(p.restartRecovery) {
+	if validation.IsNilInterface(p.restartRecovery) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger protocol: restart recovery mode required (use WithRestartRecovery)")
 	}
-	if p.idempotencyNil || validation.IsNilInterface(p.idempotency) {
+	if validation.IsNilInterface(p.idempotency) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger protocol: idempotency mode required (use WithIdempotency)")
 	}

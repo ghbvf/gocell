@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -109,6 +110,11 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 
 	// Build the stored entry (copy to prevent caller mutations from leaking).
 	stored := copyEntry(e)
+	// Assign a stable store-level ID from EventID (mirrors PG store assigning a
+	// UUID primary key on INSERT). Using EventID keeps the ID deterministic so
+	// Query tie-breaking by ID ASC is stable across test runs — random UUIDs
+	// would make same-timestamp tie ordering non-deterministic.
+	stored.ID = e.EventID
 	stored.SeqNo = int64(len(m.entries)) + 1
 	stored.PrevHash = prevHash
 	stored.Hash = m.protocol.ComputeHash(prevHash, stored)
@@ -116,7 +122,8 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 	m.entries = append(m.entries, stored)
 	m.fingerprints[fp] = struct{}{}
 
-	// Write back SeqNo and Hash to caller's entry so caller can observe them.
+	// Write back SeqNo, ID, and Hash to caller's entry so caller can observe them.
+	e.ID = stored.ID
 	e.SeqNo = stored.SeqNo
 	e.PrevHash = stored.PrevHash
 	e.Hash = stored.Hash
@@ -154,21 +161,35 @@ func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
 	return copyEntry(m.entries[seq-1]), nil
 }
 
-// Query returns entries matching the supplied filters in ascending SeqNo order.
+// Query returns entries matching the supplied filters sorted by timestamp DESC,
+// with ID ASC as the tie-breaker for entries sharing the same timestamp.
+// This matches the PG store ORDER BY clause (ORDER BY timestamp DESC, id ASC).
 // Zero-value filter fields are treated as "no filter". Applies Limit if > 0.
 func (m *MemStore) Query(_ context.Context, filters AuditFilters, params QueryListParams) ([]*Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var results []*Entry
+	// Collect all matching entries first (before applying Limit) so that the
+	// sort sees the full candidate set and Limit is applied after ordering.
+	var candidates []*Entry
 	for _, e := range m.entries {
-		if !matchesFilters(e, filters) {
-			continue
+		if matchesFilters(e, filters) {
+			candidates = append(candidates, copyEntry(e))
 		}
-		results = append(results, copyEntry(e))
-		if params.Limit > 0 && len(results) >= params.Limit {
-			break
+	}
+
+	// Sort: primary timestamp DESC, secondary ID ASC (mirrors PG ORDER BY).
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Timestamp.Equal(candidates[j].Timestamp) {
+			return candidates[i].ID < candidates[j].ID
 		}
+		return candidates[i].Timestamp.After(candidates[j].Timestamp)
+	})
+
+	// Apply Limit after sorting.
+	results := candidates
+	if params.Limit > 0 && len(results) > params.Limit {
+		results = results[:params.Limit]
 	}
 	if results == nil {
 		results = []*Entry{}
