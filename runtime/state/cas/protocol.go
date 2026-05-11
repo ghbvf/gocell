@@ -7,17 +7,27 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// ConflictPolicy is a sealed interface — today only ConflictPolicyStrictReject
-// is implemented. Future siblings (LastWriteWins / RetryWithMerge) may be
-// added as additional types in this package. External packages cannot implement
-// ConflictPolicy.
-type ConflictPolicy interface{ conflictPolicyOK() }
+// ConflictPolicy is a sealed marker interface — it carries no behavior, only
+// type discrimination. Today only ConflictPolicyStrictReject is implemented;
+// future siblings (LastWriteWins / RetryWithMerge) may be added as additional
+// types in this package. The marker method conflictPolicyOK is unexported, so
+// external packages cannot implement ConflictPolicy — this prevents callers
+// from injecting unsanctioned conflict strategies past the runtime/state/cas
+// API boundary. Matches the sealed-marker pattern in runtime/auth/session
+// (FingerprintMode / OrderingModel) and runtime/audit/ledger (RestartRecoveryMode
+// / IdempotencyMode).
+type ConflictPolicy interface {
+	conflictPolicyOK()
+}
 
 // ConflictPolicyStrictReject means CAS mismatch returns ErrVersionConflict
 // (HTTP 409) without retry. This is the safe default and the only policy
 // implemented today.
 type ConflictPolicyStrictReject struct{}
 
+// conflictPolicyOK is the sealed-marker method. Intentionally empty: presence
+// of the method (not its body) is what implements ConflictPolicy, denying
+// out-of-package types from satisfying the interface.
 func (ConflictPolicyStrictReject) conflictPolicyOK() {}
 
 // Protocol bundles CAS protocol decisions for a particular consumer (cell).

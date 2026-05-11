@@ -26,6 +26,13 @@ var _ ports.FlagRepository = (*FlagRepository)(nil)
 // stays in sync between the INSERT, SELECT, RETURNING, and scanFlagRow calls.
 const flagColumns = "id, key, enabled, rollout_percentage, description, version, created_at, updated_at"
 
+// msgFlagRepoQueryFailed is the public-facing diagnostic for non-recoverable
+// flag-repo query errors (unique-violation, scan corruption, infra fault).
+// Centralized per SonarCloud design.duplicate-literal: 4 sites (Create / List /
+// GetByKey / scan paths) share the same Message so client envelopes stay
+// uniform and grep for the literal returns one source of truth.
+const msgFlagRepoQueryFailed = "flag repo query failed"
+
 // FlagRepository implements ports.FlagRepository using PostgreSQL.
 //
 // Write paths (Create/Update/Delete/Toggle) require an ambient pgx.Tx in ctx
@@ -95,7 +102,7 @@ func (r *FlagRepository) scanFlagOrMapError(_ context.Context, row Row, op, key 
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
-	return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", err,
+	return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, err,
 		errcode.WithInternal(fmt.Sprintf("flag repo: %s scan error key=%s", op, key)),
 		errcode.WithCategory(errcode.CategoryInfra),
 	)
@@ -189,7 +196,7 @@ func (r *FlagRepository) Update(
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, r.resolveUpdateConflict(ctx, "Update", key)
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", scanErr,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
 			errcode.WithInternal(fmt.Sprintf("flag repo: Update scan error key=%s", key)),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
@@ -254,7 +261,7 @@ func (r *FlagRepository) Delete(ctx context.Context, key string, expectedVersion
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, r.resolveUpdateConflict(ctx, "Delete", key)
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", scanErr,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
 			errcode.WithInternal(fmt.Sprintf("flag repo: Delete scan error key=%s", key)),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
@@ -293,7 +300,7 @@ func (r *FlagRepository) Toggle(ctx context.Context, key string, expectedVersion
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, r.resolveUpdateConflict(ctx, "Toggle", key)
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", scanErr,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
 			errcode.WithInternal(fmt.Sprintf("flag repo: Toggle scan error key=%s", key)),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)

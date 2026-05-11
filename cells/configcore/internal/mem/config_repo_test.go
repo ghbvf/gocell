@@ -676,6 +676,33 @@ func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }
 
+// casUpdateRetryWorker performs a read-then-CAS Update retry loop against the
+// shared repo for a single concurrent writer. Extracted from
+// TestConcurrentUpdate_CAS so each branch (success / unexpected error /
+// retry-on-conflict) stays linear, reducing the parent test's cognitive
+// complexity below the lint cap.
+func casUpdateRetryWorker(ctx context.Context, repo *ConfigRepository, key, value string) {
+	for {
+		cur, err := repo.GetByKey(ctx, key)
+		if err != nil {
+			return
+		}
+		if _, updateErr := repo.Update(ctx, key, cur.Version, value); updateErr == nil {
+			return
+		} else if !isVersionConflict(updateErr) {
+			return // unexpected error — abandon this worker
+		}
+		// ErrVersionConflict: yield and retry until our CAS wins.
+	}
+}
+
+// isVersionConflict reports whether err is the standard CAS conflict signal.
+// Centralised so concurrent-test loops do not duplicate the errors.As pattern.
+func isVersionConflict(err error) bool {
+	var ecErr *errcode.Error
+	return errors.As(err, &ecErr) && ecErr.Code == errcode.ErrVersionConflict
+}
+
 // TestConcurrentUpdate_CAS verifies that concurrent Update calls on the same key
 // with read-then-CAS retry each succeed exactly once: each goroutine retries on
 // ErrVersionConflict until it wins, resulting in exactly N increments total.
@@ -693,25 +720,7 @@ func TestConcurrentUpdate_CAS(t *testing.T) {
 	for i := range updates {
 		go func(i int) {
 			defer wg.Done()
-			ctx := context.Background()
-			val := fmt.Sprintf("v%d", i)
-			for {
-				cur, err := repo.GetByKey(ctx, "k")
-				if err != nil {
-					return
-				}
-				_, updateErr := repo.Update(ctx, "k", cur.Version, val)
-				if updateErr == nil {
-					return // success
-				}
-				// Only retry on ErrVersionConflict; any other error is unexpected.
-				var ecErr *errcode.Error
-				if !errors.As(updateErr, &ecErr) || ecErr.Code != errcode.ErrVersionConflict {
-					return
-				}
-				// Back off and retry: yield to let another goroutine win.
-				// In the test, conflicts are expected; retry until our turn.
-			}
+			casUpdateRetryWorker(context.Background(), repo, "k", fmt.Sprintf("v%d", i))
 		}(i)
 	}
 	wg.Wait()

@@ -106,6 +106,15 @@ const (
 	opUpdateForRollback = "UpdateForRollback"
 )
 
+// Diagnostic message + format constants reused across Update / UpdateForRollback /
+// Delete / resolveUpdateConflict 404 paths. Centralized per SonarCloud
+// design.duplicate-literal: a single-source message keeps client-visible text
+// uniform and Internal format consistent for ops log correlation.
+const (
+	msgConfigNotFound        = "config not found"
+	internalFmtConfigMissKey = "config repo: %s miss key=%s"
+)
+
 type encryptedPayload struct {
 	Ciphertext []byte
 	KeyID      string
@@ -377,8 +386,8 @@ func (r *ConfigRepository) scanConfigOrMapError(
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
-			"config not found", err,
-			errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
+			msgConfigNotFound, err,
+			errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, op, key)),
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
@@ -489,8 +498,8 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, expectedVersi
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
-				"config not found", scanErr,
-				errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", opUpdate, key)),
+				msgConfigNotFound, scanErr,
+				errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, opUpdate, key)),
 				errcode.WithCategory(errcode.CategoryDomain),
 			)
 		}
@@ -598,8 +607,8 @@ func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, op, key st
 		}
 		// Confirmed key absent → 404.
 		return errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
-			"config not found", probeErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
+			msgConfigNotFound, probeErr,
+			errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, op, key)),
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
