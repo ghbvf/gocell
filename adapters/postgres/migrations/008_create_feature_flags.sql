@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS feature_flags (
 -- +goose Down
 -- CAUTION: data-destructive; for dev/CI only. Production rollback should rename
 -- table to feature_flags_deprecated_YYYYMMDD instead.
+
+-- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
+-- Set by Migrator.Down's destructiveDownSessionLocker; direct goose CLI / psql bypass
+-- without the GUC will RAISE EXCEPTION here.
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
+    END IF;
+END $$;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP TABLE IF EXISTS feature_flags;
 -- +goose StatementEnd

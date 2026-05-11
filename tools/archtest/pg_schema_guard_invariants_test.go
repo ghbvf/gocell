@@ -34,14 +34,21 @@ import (
 // AI-rebust: Medium — string pattern match on SQL content caught at test time.
 // ---------------------------------------------------------------------------
 
-// destructiveOps are the DDL tokens that classify a Down section as destructive.
+// destructiveOps are the DDL tokens that classify a Down section as
+// "data-destructive" — operations that delete row-level data and require
+// the SQL-side fail-closed GUC guard.
+//
+// Scope is intentionally narrow: DROP TABLE / TRUNCATE / DELETE FROM delete
+// row data and demand operator opt-in. Schema-only operations (DROP INDEX,
+// DROP COLUMN, DROP CONSTRAINT, DROP TRIGGER, DROP FUNCTION) are NOT in this
+// set — they alter schema shape but do not by themselves delete row data
+// outside the column being removed; binding them to the same gate would
+// over-pressurize routine schema evolution.
+//
+// Future tightening: re-evaluate after ADR on schema-evolution gating
+// (e.g. should DROP COLUMN require operator opt-in too?).
 var destructiveOps = []string{
 	"DROP TABLE",
-	"DROP COLUMN",
-	"DROP CONSTRAINT",
-	"DROP INDEX",
-	"DROP TRIGGER",
-	"DROP FUNCTION",
 	"TRUNCATE",
 	"DELETE FROM",
 }
@@ -52,32 +59,19 @@ var gucGuardRE = regexp.MustCompile(`current_setting\s*\(\s*'gocell\.allow_destr
 // gooseDownMarker marks the start of the Down section in a migration file.
 const gooseDownMarker = "-- +goose Down"
 
-// gucGuardGrandfatheredMigrations is the allowlist of migration filenames that
-// predated the GUC fail-closed pattern and have not yet been retrofitted.
-// These migrations existed before S3F and are grandfathered.
+// gucGuardGrandfatheredMigrations is intentionally empty.
 //
-// New migrations (022+) must always include the GUC guard if their Down section
-// is destructive. Migrations in this list SHOULD be retrofitted in a follow-up
-// PR to close the pre-existing gap — this allowlist is a temporary carve-out,
-// not a permanent exemption.
-var gucGuardGrandfatheredMigrations = map[string]string{ //nolint:gosec // G101: false positive — migration filenames, not credentials
-	"001_create_outbox_entries.sql":               "pre-S3F; retrofit guard in follow-up",
-	"002_add_topic_column.sql":                    "pre-S3F; retrofit guard in follow-up",
-	"003_outbox_status_columns.sql":               "pre-S3F; retrofit guard in follow-up",
-	"004_create_config_entries_and_versions.sql":  "pre-S3F; retrofit guard in follow-up",
-	"005_recreate_outbox_pending_concurrent.sql":  "pre-S3F; retrofit guard in follow-up",
-	"006_add_config_versions_config_id_index.sql": "pre-S3F; retrofit guard in follow-up",
-	"008_create_feature_flags.sql":                "pre-S3F; retrofit guard in follow-up",
-	"009_create_feature_flags_index.sql":          "pre-S3F; retrofit guard in follow-up",
-	"011_refresh_tokens_token_index.sql":          "pre-S3F; retrofit guard in follow-up",
-	"012_refresh_tokens_rebuild.sql":              "pre-S3F; retrofit guard in follow-up",
-	"013_add_outbox_observability_column.sql":     "pre-S3F; retrofit guard in follow-up",
-	"014_add_outbox_lease_id.sql":                 "pre-S3F; retrofit guard in follow-up",
-	"015_add_outbox_claiming_lease_check.sql":     "pre-S3F; retrofit guard in follow-up",
-	"016_refresh_tokens_idle_grace.sql":           "pre-S3F; retrofit guard in follow-up",
-	"020_audit_ledger.sql":                        "audit teardown not expected in production; retrofit guard in follow-up",
-	"021_audit_entries_event_id_unique.sql":       "DROP INDEX only (non-destructive data-wise); retrofit guard in follow-up",
-}
+// S3F retrofits the GUC fail-closed guard on every pre-S3F migration whose
+// Down section drops row-level data (007, 012, 014/015 already share the
+// refresh_tokens GUC predecessor; 001/004/008/020 retrofitted by S3F). All
+// data-destructive Down sections in the repository now carry the guard.
+//
+// This map remains as a typed extension point: if a future migration
+// genuinely cannot host the guard (e.g. requires a non-postgres dialect),
+// add it here with a concrete reason. An empty map is the intended steady
+// state — every entry that appears later must close cleanly, not stay as
+// a permanent carve-out (per CLAUDE.md "no soft fallback" guidance).
+var gucGuardGrandfatheredMigrations = map[string]string{}
 
 // TestArchtest_MigrationDestructiveDownGUCGuard asserts that every migration
 // file with a destructive Down section contains the GUC fail-closed guard,

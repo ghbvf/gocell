@@ -14,5 +14,15 @@ CREATE TABLE IF NOT EXISTS outbox_entries (
 CREATE INDEX IF NOT EXISTS idx_outbox_unpublished ON outbox_entries (created_at) WHERE published = false;
 
 -- +goose Down
+-- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
+-- Set by Migrator.Down's destructiveDownSessionLocker; direct goose CLI / psql bypass
+-- without the GUC will RAISE EXCEPTION here.
+DO $$
+BEGIN
+    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
+    END IF;
+END $$;
+
 DROP INDEX IF EXISTS idx_outbox_unpublished;
 DROP TABLE IF EXISTS outbox_entries;
