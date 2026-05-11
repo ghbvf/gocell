@@ -157,7 +157,7 @@ func WithSweeperOnError(fn func(error)) SweeperOption {
 //
 //	sweeper, err := command.NewSweeper(scanner, queue, clock.Real(),
 //	    command.WithSweeperInterval(30*time.Second),
-//	    command.WithSweeperOnError(func(err error) { logger.Error("sweeper", err) }),
+//	    command.WithSweeperOnError(func(err error) { slog.Error("sweeper run failed", "err", err) }),
 //	)
 //	if err != nil {
 //	    return fmt.Errorf("sweeper: %w", err)

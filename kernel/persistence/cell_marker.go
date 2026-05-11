@@ -8,24 +8,21 @@ import "github.com/ghbvf/gocell/pkg/validation"
 // kernel/persistence is the sole entry point via WrapForCell, which
 // composition roots must call.
 //
-// AI-HARD per ai-collab.md §"违反不可表达": writing
-// `WithFoo(tx persistence.TxRunner) Option` in any cell.go and trying to
-// wire it from a composition root will fail at compile time — the type
-// system rejects assignment of a raw TxRunner to CellTxManager (the
-// composition root must call WrapForCell first), and external packages
-// cannot implement CellTxManager (sealedCellTxManager is unexported).
+// AI-rebust 评级：
+//   - 字段/赋值层：Hard（sealed marker，外部不可表达 internalCellTxManager 字面量）
+//   - 公开 With* Option 签名层：Medium（CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 archtest type-aware 守）
 //
-// Replaces the predecessor archtest CELL-RAW-DEPS-01 scanner-based Medium
-// guard with type-system Hard enforcement.
+// 双重防线，参见 ADR 202605101900-adr-cell-raw-infra-sealed-marker §D2。
 //
 // CellTxManager embeds TxRunner so cells can pass the wrapped value
 // directly to internal service constructors — service.NewXxx accepts
 // TxRunner and the embedded interface satisfies it transparently, so
 // service signatures do not change.
 //
-// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md §D1
+// ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1
 type CellTxManager interface {
 	TxRunner
+	// MARKER: do not implement; this is the sealing marker — call persistence.WrapForCell(...) from your composition root instead.
 	sealedCellTxManager()
 }
 

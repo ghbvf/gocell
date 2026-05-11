@@ -38,3 +38,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `pkg/httputil.WriteErrorWithStatus(ctx, w, status, ecErr)` — pin wire status to typed envelope identity, share 4xx/5xx redaction policy with `WriteError`.
 - `pkg/httputil.AppendCorrelationAttrs(ctx, attrs) []any` — exported correlation key set for generated handlers (request_id / trace_id / span_id).
 - kernel/governance CH-06 — typed-response-set bijection between contract.yaml `responses[]` and generated `XxxResponseObject` struct set.
+- `kernel/cell` adds `CellIdentity` / `CellLifecycle` / `CellStatus` / `CellInventory` sub-interfaces; `Cell` is now their composite (io.ReadWriter pattern). Callers may declare narrower sub-interface dependencies (metrics middleware / health handler etc.). See ADR 202605101800 §D1/D2.

@@ -4,6 +4,10 @@
 // CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 negative fixture loaded only when the
 // archtest_fixture build tag is set.
 //
+// 本 fixture 包含 10 个违规的 With* Option 函数（4 基础 + 3 嵌入形式 + 1 纯方法接口
+// + 1 命名本地嵌入 + 1 泛型）。修改本文件请同步更新
+// tools/archtest/cell_public_option_param_test.go 的 expectedRawParamFixtureViolations 常量。
+//
 // The build tag excludes this package from `go build ./...` and `go test
 // ./...` so it never pollutes real-repo scans. It is loaded explicitly by
 // TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation via
@@ -97,3 +101,9 @@ type LocalRawPub interface {
 // named type's underlying *types.Interface to detect the embedded
 // forbidden type.
 func WithBadNamedLocalEmbedPublisher(p LocalRawPub) Option { return func(any) {} }
+
+// WithGenericTx is a generic function whose type parameter is constrained to
+// persistence.TxRunner. The scanner must walk *types.TypeParam.Constraint()
+// to detect this forbidden type. Without the TypeParam case in
+// canonicalFromType, this bypasses the guard.
+func WithGenericTx[T persistence.TxRunner](tx T) Option { return func(any) {} }

@@ -8,28 +8,32 @@ import "github.com/ghbvf/gocell/pkg/validation"
 // kernel/outbox is the sole entry point via WrapPublisherForCell, which
 // composition roots must call.
 //
-// AI-HARD per ai-collab.md §"违反不可表达": writing
-// `WithFoo(pub outbox.Publisher) Option` in any cell.go and trying to
-// wire it from a composition root will fail at compile time — the type
-// system rejects assignment of a raw Publisher to CellPublisher, and
-// external packages cannot implement CellPublisher.
+// AI-rebust 评级：
+//   - 字段/赋值层：Hard（sealed marker，外部不可表达 internalCellPublisher 字面量）
+//   - 公开 With* Option 签名层：Medium（CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 archtest type-aware 守）
+//
+// 双重防线，参见 ADR 202605101900-adr-cell-raw-infra-sealed-marker §D2。
 //
 // CellPublisher embeds Publisher so cells can pass the wrapped value
 // directly to outbox.NewDirectEmitter etc. — those constructors accept
 // Publisher and the embedded interface satisfies them transparently, so
 // internal kernel/outbox API does not change.
 //
-// ref: docs/architecture/<adr-cell-raw-infra-sealed-marker>.md §D1
+// ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1
 type CellPublisher interface {
 	Publisher
+	// MARKER: do not implement; this is the sealing marker — call outbox.WrapPublisherForCell(...) from your composition root instead.
 	sealedCellPublisher()
 }
 
 // CellWriter mirrors CellPublisher for the outbox.Writer side: cells/<x>
 // public With* Options accept CellWriter; raw Writer is sealed off behind
 // WrapWriterForCell, callable only from composition roots.
+//
+// ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1
 type CellWriter interface {
 	Writer
+	// MARKER: do not implement; this is the sealing marker — call outbox.WrapWriterForCell(...) from your composition root instead.
 	sealedCellWriter()
 }
 

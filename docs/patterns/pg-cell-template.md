@@ -222,15 +222,14 @@ func buildFooCoreOpts(
 			_ = pool.Close(ctx)
 			return nil, nil, nil, fmt.Errorf("foocore PG resource: %w", resErr)
 		}
+		// Composition root 将 raw infra 类型包装为 sealed marker，
+		// cell.go 公开 Option 在编译期拒绝 raw 类型
+		// （ADR 202605101900-adr-cell-raw-infra-sealed-marker §D1）。
+		runner := persistence.WrapForCell(txMgr)
+		writer := outbox.WrapWriterForCell(outboxWriter)
 		opts := []foocore.Option{
-			foocore.WithPostgresDefaults(pool.DB(), outboxWriter),
-			// Composition root wraps raw outbox.Writer + persistence.TxRunner
-			// into sealed marker types. cell.go public Options reject raw
-			// types at compile time (ADR 202605101900-adr-cell-raw-infra-
-			// sealed-marker §D1). For pure writer-side cells use
-			// foocore.WithOutboxWriter(outbox.WrapWriterForCell(outboxWriter))
-			// instead of merging into WithPostgresDefaults.
-			foocore.WithTxManager(persistence.WrapForCell(txMgr)),
+			foocore.WithTxManager(runner),
+			foocore.WithOutboxWriter(writer),
 		}
 		relayOpts := []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)}
 		return pgRes, relayOpts, opts, nil

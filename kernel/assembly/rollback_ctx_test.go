@@ -107,6 +107,25 @@ var (
 	_ cell.BeforeStopper = (*afterStartFailingCell)(nil)
 )
 
+// beforeStartFailingCell implements BeforeStarter and returns an error from
+// BeforeStart, triggering the i=0 rollback boundary: rollbackCells(-1) →
+// early return with no cells to clean up and no goroutines spawned.
+type beforeStartFailingCell struct {
+	*cell.BaseCell
+}
+
+func newBeforeStartFailingCell(id string) *beforeStartFailingCell {
+	return &beforeStartFailingCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+	}
+}
+
+func (c *beforeStartFailingCell) BeforeStart(_ context.Context) error {
+	return errors.New(c.ID() + " before-start boom")
+}
+
+var _ cell.BeforeStarter = (*beforeStartFailingCell)(nil)
+
 // TestRollbackCells_DerivedCtx covers PR-V1-030-G02: rollback hooks on
 // already-started cells must NOT inherit a canceled startCtx. They must run
 // against a fresh ctx derived from context.Background(), with a deadline
@@ -237,4 +256,28 @@ func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
 		"prior cell Stop must observe a deadline")
 	assert.Equal(t, failing.stopDeadline, prior.stopDeadline,
 		"both cells' Stop must share the same rollback ctx deadline — single HookTimeout budget across the whole rollback")
+}
+
+// TestRollbackCells_I0BeforeStartFails covers the i=0 boundary case:
+// when the very first cell's BeforeStart hook returns an error, rollbackCells(-1)
+// exits immediately without acquiring a rollback ctx — no cells were started so
+// there is nothing to roll back. Goroutine leak detection is provided by
+// goleak.VerifyTestMain in hook_dispatcher_test.go (package-wide guard).
+func TestRollbackCells_I0BeforeStartFails(t *testing.T) {
+	t.Parallel()
+
+	a := newTestAssembly(t, Config{
+		ID:             "rollback-i0-beforestart",
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
+	})
+
+	failing := newBeforeStartFailingCell("A")
+	require.NoError(t, a.Register(failing))
+
+	err := a.Start(context.Background())
+	require.Error(t, err, "Start must fail because A.BeforeStart returns boom")
+
+	// Snapshots must be nil after a failed start (failStart clears the map).
+	assert.Nil(t, a.Snapshots(), "Snapshots() must return nil after failed start")
 }

@@ -69,7 +69,7 @@ func WithDeviceRepository(r domain.DeviceRepository) Option {
 // Demo mode: from the composition root, pass
 // outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}) to swallow events.
 //
-// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D6
+// ref: docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1
 func WithDirectPublisher(pub outbox.CellPublisher) Option {
 	return func(c *DeviceCell) {
 		if pub != nil {
@@ -311,7 +311,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command sweeper: %w", err)
 	}
-	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper)
+	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, c.clk)
 	c.AddSlice(cell.NewBaseSlice("devicecommand", "devicecell", cell.L4))
 
 	// device-status slice

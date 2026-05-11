@@ -42,7 +42,7 @@ func (AccessCoreModule) ID() string { return "accesscore" }
 // Reads GOCELL_BOOTSTRAP_ADMIN_USERNAME, GOCELL_BOOTSTRAP_ADMIN_PASSWORD,
 // GOCELL_ACCESSCORE_CURSOR_KEY, GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY from
 // the environment.
-func (m AccessCoreModule) Provide(
+func (m AccessCoreModule) Provide( //nolint:gocognit // PG wiring must stay inline (STORAGE-BACKEND-PG-WIRING-01)
 	_ context.Context, shared *SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	creds, err := loadBootstrapCredentials(

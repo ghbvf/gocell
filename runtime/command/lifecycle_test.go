@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,12 +14,53 @@ import (
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 )
 
+// errSweeperMock is a SweeperRunner mock that returns an error from Start
+// immediately, exercising the startup-fail probe in SweeperLifecycle.Start.
+type errSweeperMock struct {
+	startErr error
+}
+
+func (m *errSweeperMock) Start(_ context.Context) error { return m.startErr }
+func (m *errSweeperMock) Stop(_ context.Context) error  { return nil }
+
+// TestSweeperLifecycle_StartRejectsNilClock pins the defensive guard against
+// struct-literal construction that forgets Clock. NewSweeperLifecycle validates
+// Clock at construction, but `&SweeperLifecycle{Sweeper: x}` literal path
+// bypasses it; without the Start-side check the startup probe's NewTimerAt
+// call would panic on nil interface deref. This is third-party-review P2-1.
+func TestSweeperLifecycle_StartRejectsNilClock(t *testing.T) {
+	t.Parallel()
+	mock := &errSweeperMock{}
+	lc := &SweeperLifecycle{Name: "test.sweeper", Sweeper: mock} // Clock intentionally nil
+
+	err := lc.Start(context.Background())
+	require.Error(t, err, "Start must return error when Clock is nil")
+	assert.Contains(t, err.Error(), "non-nil Clock",
+		"error message must point at the missing Clock so callers can diagnose")
+}
+
+// TestSweeperLifecycle_StartFailImmediately 验证 mock Sweeper.Run 立即返 error 时
+// Start 在 50ms 探针窗口内传播 error。
+// clock.Real() 而非 fake clock：mock 立即退出不依赖时间推进，使用 real clock
+// 让测试在生产路径下验证 select-on-done 的真实行为。
+func TestSweeperLifecycle_StartFailImmediately(t *testing.T) {
+	t.Parallel()
+	wantErr := errors.New("sweeper-start-failed")
+	mock := &errSweeperMock{startErr: wantErr}
+	lc := &SweeperLifecycle{Name: "test.sweeper", Sweeper: mock, Clock: clock.Real()}
+
+	err := lc.Start(context.Background())
+	require.Error(t, err, "Start must return error when sweeper Start fails immediately")
+	assert.ErrorIs(t, err, wantErr, "returned error must wrap the sweeper's start error")
+}
+
 func TestSweeperLifecycle_ContributesHook(t *testing.T) {
+	t.Parallel()
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
 		kcommand.WithSweeperInterval(time.Hour))
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("devicecommand.sweeper", sw)
+	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, clock.Real())
 
 	hook := lc.Hook()
 	assert.Equal(t, "devicecommand.sweeper", hook.Name)
@@ -27,11 +69,12 @@ func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 }
 
 func TestSweeperLifecycle_StartStop(t *testing.T) {
+	t.Parallel()
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
 		kcommand.WithSweeperInterval(time.Hour))
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("", sw)
+	lc := NewSweeperLifecycle("", sw, clock.Real())
 
 	require.NoError(t, lc.Start(context.Background()))
 	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)

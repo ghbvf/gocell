@@ -66,6 +66,8 @@ sealed marker 是字段类型与 raw→sealed 赋值层的 Hard 防线，但 typ
 
 **AI-rebust 评级**：Medium（archtest type-aware via `typeseval.SharedResolver` + `go/types` Uses 解析）。type system 单独不可达签名形态空间是该问题域的客观特性，不是 archtest 实现不足；因此双重防线是该层级的 Medium 天花板，与 PII redaction / 安全语义双重防线同质（都是 type system 不可表达的横向空间）。
 
+**架构师裁决**：本场景 D2 的 Medium 评级是该问题域的天花板，与 PII redaction 双重防线同质。Hard 化路径需要语言级 sealed-by-position 等特性，超出当前 GoCell 范围。**不进 backlog 升 Hard 跟踪**，后续 reviewer 不再质疑该评级。
+
 scanner 检测能力由 `tools/archtest/internal/{rawparamfixture,wrapfixture/violation}/`（build tag `archtest_fixture`，不污染 `./...` 真实 repo 扫描）的 negative fixture 验证：fixture 故意写出每种攻击形态（raw param + alias bypass + inline-embed + dot-import），测试断言 scanner 报告每条 violation。Per ai-collab.md §"real source AST capture (AI 难造假)"，fixture 是真实 Go 包载入（非手 craft AST）。
 
 ### D3. internalCellXxx 透传 Nooper 接口
@@ -120,6 +122,16 @@ B. **kernel/cell** 暴露 `DemoCellTxManager() persistence.CellTxManager` 工厂
 - composition root 与测试每处 raw infra 注入多写一行 wrap（`outbox.WrapPublisherForCell(eb)` 比 `eb` 多 33 字符）。语义清晰度（"我在跨边界注入"）大于字面冗长
 - internalCellXxx 的 Noop() 透传是隐式契约（inner Nooper interface 通过 anonymous local interface 反射断言），不是显式接口实现。文件级 godoc 已说明意图
 - D2 archtest 是 Medium 而非 Hard——签名形态空间由 Go AST/types 模型决定，type system 不可达。Hard 化路径需要语言级 sealed-by-position 等特性，超出当前 GoCell 范围
+
+## D7：OUTBOX-CELL-01 archtest 删除决议
+
+**决议**：删除 `tools/archtest/outbox_invariants_test.go` 中的 `TestOUTBOX-CELL-01` 测试函数及其 helpers（`isCellFile` / `findCellFiles`）。
+
+**理由**：OUTBOX-CELL-01 的语义是"禁止 cells/* 暴露 `WithPublisher` / `WithOutboxWriter` raw 名字 Option"，本质是名字 convention（虽实施方式是 AST 扫描）。但 sealed marker（D1）已通过类型层覆盖该语义——即便有人重新引入 `WithPublisher` 名字、参数也必须是 `outbox.CellPublisher`（unexported `sealedCellPublisher()` method 强制），raw `outbox.Publisher` 不可能被赋值到 cell 字段。OUTBOX-CELL-01 与 sealed marker 形成双源治理而无新增覆盖。
+
+**实施**：本 ADR 落地的 PR 441 follow-up 同时删除 OUTBOX-CELL-01 测试与 helpers（commit 见 PR-560）。
+
+**AI-rebust 评级影响**：减法（删除有效 enforcement → 无评级）。语义由 sealed marker Hard（字段层）+ `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` Medium（签名层）双重防线完整覆盖。
 
 ## ref
 
