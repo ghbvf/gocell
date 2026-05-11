@@ -34,7 +34,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"go/types"
 	"strings"
 	"testing"
 
@@ -176,23 +175,16 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
+			// typeseval.ResolvePackageRef accepts both *ast.SelectorExpr (path A.2
+			// qualified `auth.Func(...)`) and *ast.Ident (path A.3 dot-imported
+			// bare `Func(...)` after `import . ".../runtime/auth"`); closes the
+			// dot-import bypass that the prior PkgName-only matcher missed.
 			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
+				path, name, ok := typeseval.ResolvePackageRef(pkg.TypesInfo, call.Fun)
+				if !ok || path != authRuntimeImportPath {
 					return
 				}
-				if _, matched := authCallSiteFuncNames[sel.Sel.Name]; !matched {
-					return
-				}
-				id, isIdent := sel.X.(*ast.Ident)
-				if !isIdent {
-					return
-				}
-				pkgName, isPkg := pkg.TypesInfo.Uses[id].(*types.PkgName)
-				if !isPkg {
-					return
-				}
-				if pkgName.Imported().Path() != authRuntimeImportPath {
+				if _, matched := authCallSiteFuncNames[name]; !matched {
 					return
 				}
 				scanner.EachInSubtree[ast.BasicLit](call, func(lit *ast.BasicLit) {
@@ -203,7 +195,7 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 					diags = append(diags, scanner.Diagnostic{
 						Rel:  rel,
 						Line: pkg.Fset.Position(lit.Pos()).Line,
-						Message: `string literal "admin" passed to auth.` + sel.Sel.Name +
+						Message: `string literal "admin" passed to auth.` + name +
 							` violates ` + ruleRoleAdminLiteral02 +
 							`; use auth.RoleAdmin constant instead`,
 					})

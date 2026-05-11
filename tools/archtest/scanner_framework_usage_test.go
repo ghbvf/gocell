@@ -37,13 +37,15 @@ import (
 //	    A.1 dot-import declarations:        `import . "<banned>"`
 //	    A.2 qualified call sites:           `banned.Func(...)` / `banned.Func` value ref
 //	    A.3 dot-imported bare-Ident refs:   `Func(...)` after `import . "banned"`
-//	  Banned import paths and symbols:
+//	  Banned import paths and symbols (top-level functions only — methods
+//	  on banned receiver types are caught separately by path A' /
+//	  forbiddenMethodSymbols):
 //	    path/filepath: WalkDir, Walk, Glob
 //	    os:            ReadDir
 //	    io/ioutil:     ReadDir   (deprecated but still callable)
 //	    io/fs:         WalkDir, Walk, Glob, ReadDir
 //	    go/ast:                              Inspect, Walk, Preorder
-//	    golang.org/x/tools/go/ast/inspector: New, Preorder, Nodes, WithStack, All, PreorderSeq
+//	    golang.org/x/tools/go/ast/inspector: New, All
 //	  A.2/A.3 share a single typeseval.ResolvePackageRef resolver. A.3 closes
 //	  PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 (PR-TS2): pre-PR-TS2 the bare
 //	  call site was protected only by A.1 (dot-import declaration scan).
@@ -128,6 +130,62 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-01", diags)
 }
 
+// TestScannerFrameworkUsage01_InspectorMethodBanLive locks the
+// forbiddenMethodSymbols[golang.org/x/tools/go/ast/inspector] data row by
+// loading a controlled fixture sub-package via packages.Load (which can
+// resolve non-stdlib imports — importer.Default() in runFixture cannot) and
+// asserting forbiddenWalkRefs emits one diagnostic per banned method call.
+//
+// Coverage: the fixture package tools/archtest/internal/inspectorredfixture
+// contains exactly 4 (*inspector.Inspector) method calls — Preorder, Nodes,
+// WithStack, PreorderSeq. Removing the inspector entry from
+// forbiddenMethodSymbols turns this test red (got 0, want 4), so the data
+// row is locked Hard at the rule-pipeline level (not just data-snapshot).
+//
+// The fixture sub-package is out of scope of SCANNER-FRAMEWORK-USAGE-01's
+// own live scan (parent-dir filter at line 120) so the banned calls there
+// do not pollute the production rule.
+func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
+	root := findModuleRoot(t)
+	resolver, err := typeseval.SharedResolver(root, false, nil, "./tools/archtest/internal/inspectorredfixture")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
+	}
+
+	var diags []scanner.Diagnostic
+	for _, pkg := range resolver.Packages() {
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			diags = append(diags, forbiddenWalkRefs(pkg.TypesInfo, pkg.Fset, file, rel)...)
+		}
+	}
+
+	const wantHits = 4
+	if len(diags) != wantHits {
+		t.Fatalf("forbiddenMethodSymbols[inspector] coverage: got %d diags, want %d\n%v", len(diags), wantHits, diags)
+	}
+	bannedMethods := map[string]bool{"Preorder": true, "Nodes": true, "WithStack": true, "PreorderSeq": true}
+	for _, d := range diags {
+		matched := false
+		for m := range bannedMethods {
+			if strings.Contains(d.Message, "."+m) {
+				matched = true
+				delete(bannedMethods, m)
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("unexpected diag (none of Preorder/Nodes/WithStack/PreorderSeq matched): %q", d.Message)
+		}
+	}
+	if len(bannedMethods) > 0 {
+		t.Errorf("missing diag(s) for methods: %v", bannedMethods)
+	}
+}
+
 // forbiddenWalkImports lists the import paths whose directory-traversal /
 // AST-walk symbols are banned in archtest tests. Order is fixed so
 // diagnostics are emitted deterministically.
@@ -152,7 +210,7 @@ var forbiddenWalkSymbols = map[string][]string{
 	"io/ioutil":                           {"ReadDir"},
 	"io/fs":                               {"WalkDir", "Walk", "Glob", "ReadDir"},
 	"go/ast":                              {"Inspect", "Walk", "Preorder"},
-	"golang.org/x/tools/go/ast/inspector": {"New", "Preorder", "Nodes", "WithStack", "All", "PreorderSeq"},
+	"golang.org/x/tools/go/ast/inspector": {"New", "All"},
 }
 
 // forbiddenMethodSymbols maps banned receiver-type import paths to the
@@ -161,6 +219,7 @@ var forbiddenWalkSymbols = map[string][]string{
 //
 //	(*os.File).ReadDir
 //	(fs.FS).ReadDir / (fs.ReadDirFS).ReadDir / (fs.GlobFS).Glob / WalkDir variants
+//	(*inspector.Inspector).Preorder / .Nodes / .WithStack / .PreorderSeq
 //
 // Coverage limit: embed.FS is intentionally NOT listed here. Although
 // embed.FS exposes a ReadDir method, archtest never reads embedded data
@@ -172,8 +231,9 @@ var forbiddenWalkSymbols = map[string][]string{
 // Closes backlog PR430-FU-USAGE-01-TYPE-AWARE — the prior PackageAliases-
 // based AST scan could not see these because it had no type info.
 var forbiddenMethodSymbols = map[string][]string{
-	"os":    {"ReadDir"},
-	"io/fs": {"ReadDir", "WalkDir", "Glob"},
+	"os":                                  {"ReadDir"},
+	"io/fs":                               {"ReadDir", "WalkDir", "Glob"},
+	"golang.org/x/tools/go/ast/inspector": {"Preorder", "Nodes", "WithStack", "PreorderSeq"},
 }
 
 // forbiddenWalkRefs reports any reference to a banned package-level symbol or
@@ -678,6 +738,12 @@ func runFixture(t *testing.T, src string) []scanner.Diagnostic {
 // A': 4, path B: 10, form-(c) including paired-index direct + intermediate-
 // alias rewrite: 5, companion-index escape hatches: 2) plus 6 negative shapes
 // scattered within path B, plus 1 standalone negative.
+//
+// Inspector method-call coverage (forbiddenMethodSymbols
+// `golang.org/x/tools/go/ast/inspector` entry) is locked separately by
+// TestScannerFrameworkUsage01_InspectorMethodBanLive, which uses
+// packages.Load to resolve the non-stdlib `golang.org/x/tools/...` import
+// path that importer.Default() in runFixture cannot load.
 // Because both the live rule and this fixture call the same pure functions,
 // they cannot drift.
 func TestScannerFrameworkUsage01_Fixture(t *testing.T) {
@@ -944,7 +1010,6 @@ func _(insp *inspector.Inspector) {
 `,
 			wantHits: 1,
 		},
-
 		// ============ Path B: for-range over []ast.X + type assertion ============
 
 		{

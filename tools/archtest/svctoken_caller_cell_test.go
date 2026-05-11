@@ -12,19 +12,21 @@
 // unregistered cell name, which would defeat the purpose of 4-part service
 // token caller-cell propagation.
 //
-// Detection: type-aware — the SelectorExpr.X must resolve via go/types to
-// the runtime/auth PkgName (closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01:
-// the prior PackageAliases-based AST scan only matched syntactic alias
-// names; type-aware uses pkg.TypesInfo.Uses[id].(*types.PkgName).Imported()
-// to handle dot-import / blank-import / re-export cases via the type
-// checker authoritatively).
+// Detection: type-aware — resolved via typeseval.ResolvePackageRef which
+// uniformly handles SelectorExpr (path A.2 qualified `auth.GenerateServiceToken`)
+// and Ident (path A.3 dot-imported bare `GenerateServiceToken` after
+// `import . ".../runtime/auth"`). Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01
+// + PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01 caller migration: pre-PR-TS2
+// the matcher only saw SelectorExpr-shaped call sites; dot-imported bare
+// `GenerateServiceToken(...)` silently slipped through.
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/types"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -109,8 +111,20 @@ func collectGenerateServiceTokenDiags(
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
+			// Internal callers within the runtime/auth package itself
+			// (notably servicetoken_test.go's negative-path tests
+			// asserting GenerateServiceToken returns "" for bad input)
+			// are not cross-package consumers and are exempt from caller-
+			// cell validation. Pre-PR-SH1 these escaped the SelectorExpr-
+			// only matcher silently (bare-Ident in same package); the
+			// migration to typeseval.ResolvePackageRef surfaces them so
+			// the exemption must be explicit.
+			if strings.HasPrefix(filepath.ToSlash(rel), "runtime/auth/") {
+				continue
+			}
 			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if !isAuthFuncCall(call, pkg.TypesInfo, "GenerateServiceToken") {
+				path, name, ok := typeseval.ResolvePackageRef(pkg.TypesInfo, call.Fun)
+				if !ok || path != authRuntimeImportPath || name != "GenerateServiceToken" {
 					return
 				}
 				pos := pkg.Fset.Position(call.Pos())
@@ -274,29 +288,4 @@ func discoverKnownCells(t *testing.T, root string) map[string]bool {
 		}
 	}
 	return known
-}
-
-// isAuthFuncCall reports whether call is a call expression of the form
-// `<auth-import-name>.<funcName>(...)` resolved via go/types — the receiver
-// of the SelectorExpr must be a *types.PkgName whose imported package path
-// equals authRuntimeImportPath. This is import-aware authoritatively (renamed
-// imports are handled because PkgName.Imported().Path() reports the resolved
-// import path, not the local name).
-func isAuthFuncCall(call *ast.CallExpr, info *types.Info, funcName string) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	if sel.Sel.Name != funcName {
-		return false
-	}
-	id, ok := sel.X.(*ast.Ident)
-	if !ok {
-		return false
-	}
-	pkgName, ok := info.Uses[id].(*types.PkgName)
-	if !ok {
-		return false
-	}
-	return pkgName.Imported().Path() == authRuntimeImportPath
 }
