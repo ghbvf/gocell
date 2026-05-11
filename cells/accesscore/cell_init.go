@@ -255,6 +255,12 @@ func (c *AccessCore) initSlices() error {
 
 	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
+	if c.casProtocol == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: WithCASProtocol is required for ChangePassword concurrent-write guard (S6); "+
+				"composition root must wire cas.MustNewProtocol(cas.WithVersionField(\"password_version\")) "+
+				"via WithCASProtocol")
+	}
 	if c.bootstrapAuth == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore: WithBootstrapAuth is required (auth.bootstrap:true contracts "+

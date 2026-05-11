@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 const (
@@ -213,6 +214,26 @@ func WithSetupLock(lock ports.SetupLock) Option {
 	}
 }
 
+// WithCASProtocol injects the CAS Protocol used by the ChangePassword path
+// (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01). The Protocol declares which DB
+// column carries the monotonic version counter and which conflict policy to
+// apply on mismatch.
+//
+// REQUIRED: initValidate() rejects nil with ErrCellInvalidConfig so that the
+// cell will not start without a properly-configured CAS primitive.
+// Composition root constructs the Protocol via cas.MustNewProtocol and passes
+// it here; cells must not construct it directly (CAS-PROTOCOL-COMPOSITION-ROOT-01
+// archtest enforces this).
+//
+// Both bare-nil and typed-nil *cas.Protocol are rejected at phase0.
+func WithCASProtocol(p *cas.Protocol) Option {
+	return func(c *AccessCore) {
+		if p != nil {
+			c.casProtocol = p
+		}
+	}
+}
+
 // WithBootstrapAuth injects the per-route replacement authentication
 // middleware for the admin setup endpoint (POST /api/v1/access/setup/admin).
 //
@@ -287,6 +308,12 @@ type AccessCore struct {
 	// intra-process sync.Mutex in adminprovision.Provisioner is sufficient.
 	// Closes backlog ADMINPROVISION-DIST-LOCK-01.
 	setupLock ports.SetupLock
+
+	// casProtocol is the CAS primitive for the ChangePassword path (S6).
+	// Required — initValidate() rejects nil. Composition root injects via
+	// WithCASProtocol; CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces that
+	// cells never construct Protocol directly.
+	casProtocol *cas.Protocol
 
 	// Slice handlers.
 	// +slice:route:slice=identitymanage,subPath=/users

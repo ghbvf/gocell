@@ -8,7 +8,9 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 var _ ports.UserRepository = (*UserRepository)(nil)
@@ -20,6 +22,7 @@ type UserRepository struct {
 	mu     sync.RWMutex
 	byID   map[string]*domain.User
 	byName map[string]*domain.User
+	clock  clock.Clock
 }
 
 // NewUserRepository creates an empty in-memory UserRepository.
@@ -27,6 +30,17 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{
 		byID:   make(map[string]*domain.User),
 		byName: make(map[string]*domain.User),
+		clock:  clock.Real(),
+	}
+}
+
+// NewUserRepositoryWithClock creates a UserRepository that uses the given clock.
+// Use this in tests to control time.
+func NewUserRepositoryWithClock(clk clock.Clock) *UserRepository {
+	return &UserRepository{
+		byID:   make(map[string]*domain.User),
+		byName: make(map[string]*domain.User),
+		clock:  clk,
 	}
 }
 
@@ -94,12 +108,44 @@ func cloneUser(u *domain.User) *domain.User {
 		Username:              u.Username,
 		Email:                 u.Email,
 		PasswordHash:          u.PasswordHash,
+		PasswordVersion:       u.PasswordVersion,
 		PasswordResetRequired: u.PasswordResetRequired,
 		Status:                u.Status,
 		CreationSource:        u.CreationSource,
 		CreatedAt:             u.CreatedAt,
 		UpdatedAt:             u.UpdatedAt,
 	}
+}
+
+// UpdatePassword applies a CAS-guarded password update.
+//
+// If the stored PasswordVersion does not match expectedPV, it returns
+// ErrVersionConflict (KindConflict / HTTP 409). On success it returns the new
+// PasswordVersion (= expectedPV + 1).
+func (r *UserRepository) UpdatePassword(
+	_ context.Context,
+	userID string,
+	newHash string,
+	resetRequired bool,
+	expectedPV int64,
+) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	u, ok := r.byID[userID]
+	if !ok {
+		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+	}
+	if u.PasswordVersion != expectedPV {
+		return 0, cas.CheckVersionMatch(0, "user", userID)
+	}
+	u.PasswordHash = newHash
+	u.PasswordResetRequired = resetRequired
+	u.PasswordVersion++
+	u.UpdatedAt = r.clock.Now()
+	return u.PasswordVersion, nil
 }
 
 func (r *UserRepository) Delete(_ context.Context, id string) error {

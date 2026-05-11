@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // Compile-time assertion: PGUserRepo implements ports.UserRepository.
@@ -80,12 +81,12 @@ INSERT INTO users (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`
 
 	selectUserByIDSQL = `
-SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_version, password_reset_required, status, creation_source, created_at, updated_at
 FROM users
 WHERE id = $1`
 
 	selectUserByUsernameSQL = `
-SELECT id, username, email, password_hash, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_version, password_reset_required, status, creation_source, created_at, updated_at
 FROM users
 WHERE username = $1`
 
@@ -101,6 +102,20 @@ SET username = $2, email = $3, password_hash = $4, password_reset_required = $5,
 WHERE id = $1`
 
 	deleteUserSQL = `DELETE FROM users WHERE id = $1`
+
+	// updatePasswordSQL is the CAS-guarded password write. WHERE id=$4 AND
+	// password_version=$5 ensures that a stale view (from a concurrent change)
+	// results in 0 RowsAffected, which CheckVersionMatch translates to
+	// ErrVersionConflict (HTTP 409). RETURNING password_version gives the
+	// caller the new monotonic version without a second round-trip.
+	updatePasswordSQL = `
+UPDATE users
+SET password_hash = $1,
+    password_reset_required = $2,
+    password_version = password_version + 1,
+    updated_at = $3
+WHERE id = $4 AND password_version = $5
+RETURNING password_version`
 )
 
 // Create inserts a new user row. Returns ErrAuthUserDuplicate on unique
@@ -230,6 +245,7 @@ func (r *PGUserRepo) UpdateAuthzEpoch(_ context.Context, _ string, _ int64) erro
 }
 
 // scanUser scans a single Row into a domain.User.
+// Column order must match selectUserByIDSQL and selectUserByUsernameSQL.
 func scanUser(row pgx.Row) (*domain.User, error) {
 	var u domain.User
 	var status, source string
@@ -238,6 +254,7 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		&u.Username,
 		&u.Email,
 		&u.PasswordHash,
+		&u.PasswordVersion,
 		&u.PasswordResetRequired,
 		&status,
 		&source,
@@ -250,4 +267,37 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 	u.Status = domain.UserStatus(status)
 	u.CreationSource = domain.UserSource(source)
 	return &u, nil
+}
+
+// UpdatePassword applies a CAS-guarded password write.
+//
+// It executes updatePasswordSQL (WHERE id=$4 AND password_version=$5). If 0
+// rows were affected the method distinguishes "user absent" from "version
+// mismatch" via a follow-up GetByID probe — callers receive ErrAuthUserNotFound
+// or ErrVersionConflict respectively. On success the new password_version is
+// returned.
+func (r *PGUserRepo) UpdatePassword(
+	ctx context.Context,
+	userID string,
+	newHash string,
+	resetRequired bool,
+	expectedPV int64,
+) (int64, error) {
+	now := r.clock.Now()
+	var newPV int64
+	err := r.db.QueryRow(ctx, updatePasswordSQL,
+		newHash, resetRequired, now, userID, expectedPV,
+	).Scan(&newPV)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Distinguish "user does not exist" from "version mismatch".
+			if _, gerr := r.GetByID(ctx, userID); gerr != nil {
+				return 0, gerr
+			}
+			// Row exists but version didn't match — CAS conflict.
+			return 0, cas.CheckVersionMatch(0, "user", userID)
+		}
+		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update password", err)
+	}
+	return newPV, nil
 }

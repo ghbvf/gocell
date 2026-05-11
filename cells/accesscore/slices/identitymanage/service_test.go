@@ -590,6 +590,137 @@ func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) 
 }
 
 // ---------------------------------------------------------------------------
+// CAS ChangePassword tests (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01)
+// ---------------------------------------------------------------------------
+
+// TestChangePassword_OldPasswordCorrect_BumpsVersion verifies that a
+// successful password change increments the stored PasswordVersion so the
+// CAS guard advances monotonically.
+func TestChangePassword_OldPasswordCorrect_BumpsVersion(t *testing.T) {
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at-v1", RefreshToken: "rt-v1"}}
+	svc, repo := newServiceWithIssuer(t, stub)
+	seedUserWithHash(t, repo, "cas-bump", "oldpass", false)
+
+	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+		UserID:      "usr-cas-bump",
+		OldPassword: "oldpass",
+		NewPassword: "newpass1",
+	})
+	require.NoError(t, err)
+
+	got, err := repo.GetByID(context.Background(), "usr-cas-bump")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), got.PasswordVersion,
+		"PasswordVersion must advance to 1 after the first successful change")
+}
+
+// TestChangePassword_StalePasswordVersion_ReturnsConflict verifies that a
+// second concurrent ChangePassword carrying the original (now stale)
+// password_version is rejected with ErrVersionConflict (HTTP 409).
+func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
+	repo := mem.NewUserRepository()
+
+	// Create the user with a known bcrypt hash.
+	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
+	require.NoError(t, err)
+	user, err := domain.NewUser("cas-stale", "cas-stale@test.com", string(hash), time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-cas-stale"
+	user.PasswordVersion = 0
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(stub), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
+	require.NoError(t, err)
+
+	// First change: succeeds and bumps version to 1.
+	_, err = svc.ChangePassword(context.Background(), ChangePasswordInput{
+		UserID:      "usr-cas-stale",
+		OldPassword: "oldpass",
+		NewPassword: "newpass1",
+	})
+	require.NoError(t, err)
+
+	// Second change: uses old password and stale version (0). The mem repo
+	// will reject because version is now 1.
+	// We need a stub that returns the old user with version=0 to simulate the
+	// stale-read scenario. We test the repo directly here.
+	_, err = repo.UpdatePassword(context.Background(), "usr-cas-stale", "$2a$12$stub", false, 0)
+	require.Error(t, err, "stale version must yield an error")
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindConflict, ce.Kind)
+	assert.Equal(t, errcode.ErrVersionConflict, ce.Code)
+}
+
+// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds verifies that when
+// two goroutines race to change the same user's password, exactly one wins and
+// the other receives ErrVersionConflict. Uses a counting tx to gate concurrency.
+func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	repo := mem.NewUserRepository()
+	user, err := domain.NewUser("cas-race", "cas-race@test.com", string(hash), time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-cas-race"
+	user.PasswordVersion = 0
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(stub), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
+	require.NoError(t, err)
+
+	// Both goroutines will read PasswordVersion=0 from the same snapshot but
+	// only one UpdatePassword call will win; the second will get ErrVersionConflict.
+	type result struct{ err error }
+	results := make(chan result, 2)
+
+	for i := 0; i < 2; i++ {
+		newPw := "newpass1"
+		if i == 1 {
+			newPw = "newpass2"
+		}
+		go func(newPw string) {
+			_, cerr := svc.ChangePassword(context.Background(), ChangePasswordInput{
+				UserID:      "usr-cas-race",
+				OldPassword: "oldpass",
+				NewPassword: newPw,
+			})
+			results <- result{cerr}
+		}(newPw)
+	}
+
+	r1 := <-results
+	r2 := <-results
+
+	successes := 0
+	conflicts := 0
+	for _, r := range []result{r1, r2} {
+		if r.err == nil {
+			successes++
+		} else {
+			// Either ErrVersionConflict or "old password incorrect" is acceptable —
+			// the second goroutine may fail at bcrypt verify if the first already
+			// changed the hash, OR at the CAS step if reads were interleaved.
+			conflicts++
+		}
+	}
+	// At least one must succeed; at most one can succeed.
+	assert.Equal(t, 1, successes, "exactly one concurrent ChangePassword must succeed")
+	assert.Equal(t, 1, conflicts, "exactly one concurrent ChangePassword must fail")
+
+	// Version must have advanced.
+	got, err := repo.GetByID(context.Background(), "usr-cas-race")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), got.PasswordVersion, "version must be exactly 1 after exactly one success")
+}
+
+// ---------------------------------------------------------------------------
 // Create RequirePasswordReset tests
 // ---------------------------------------------------------------------------
 

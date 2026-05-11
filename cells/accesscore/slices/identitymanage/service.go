@@ -544,59 +544,71 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 		return dto.TokenPair{}, errcode.New(errcode.KindInvalid, errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
 	}
 
-	user, err := s.repo.GetByID(ctx, input.UserID)
+	// Steps 3-5 run inside a single transaction so the password write, old-session
+	// sweep, and refresh revoke are atomic. IssueForUser stays outside the tx
+	// (F18: new session must not be caught by the RevokeByUserID sweep inside the
+	// tx, and signing failure should not roll back a committed password change).
+	//
+	// CAS guard (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01): GetByID inside the tx
+	// snapshots user.PasswordVersion; UpdatePassword's WHERE password_version=$expected
+	// clause rejects the write if a concurrent change raced us to the commit.
+	// The caller receives ErrVersionConflict (HTTP 409) and should reload + retry.
+	//
+	// bcrypt inside the tx (B-class decision): ChangePassword is low-frequency;
+	// the ~100ms bcrypt cost is acceptable inside a short-lived tx, and keeping
+	// the hash computation next to the CAS write avoids a TOCTOU window where a
+	// concurrent change could replace the hash between hash computation and write.
+	var userID string
+	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		user, gerr := s.repo.GetByID(txCtx, input.UserID)
+		if gerr != nil {
+			return fmt.Errorf("identity-manage: change-password get user: %w", gerr)
+		}
+
+		// Step 3: Verify old password (expensive — inside tx by design, see above).
+		if cerr := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); cerr != nil {
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "old password incorrect")
+		}
+
+		newHash, herr := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)
+		if herr != nil {
+			return fmt.Errorf("identity-manage: change-password hash: %w", herr)
+		}
+
+		// CAS update via narrow signature; caller cannot mutate unrelated fields.
+		// resetRequired=false: password just rotated, no reset prompt needed.
+		const resetRequired = false
+		if _, uerr := s.repo.UpdatePassword(
+			txCtx, user.ID, string(newHash), resetRequired, user.PasswordVersion,
+		); uerr != nil {
+			return uerr // ErrVersionConflict on stale view
+		}
+
+		// Cascade revocations inside the same tx so that no old session survives
+		// the password change.
+		if rerr := s.sessionRepo.RevokeByUserID(txCtx, user.ID); rerr != nil {
+			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", rerr)
+		}
+		if rerr := s.refreshStore.RevokeUser(txCtx, user.ID); rerr != nil {
+			return fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", rerr)
+		}
+
+		userID = user.ID
+		return nil
+	})
 	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password get user: %w", err)
-	}
-
-	// Step 3: Verify old password (expensive).
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "old password incorrect")
-	}
-
-	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)
-	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password hash: %w", err)
-	}
-
-	user.PasswordHash = string(newHash)
-	user.ClearPasswordResetRequired(s.clock.Now())
-
-	// F2 session convergence + F10 atomic boundary: wrap the password write and
-	// the session revoke in a single transaction so a RevokeByUserID failure
-	// rolls back the password change. Without this, PG could commit the new hash
-	// but leave old sessions live — a stolen refresh token would keep minting
-	// access tokens despite the password rotation. IssueForUser stays outside
-	// the tx because it creates a NEW session that must not be caught by the
-	// revoke sweep, and because signing failure should not roll back a
-	// legitimate password change.
-	if err := s.updatePasswordAndRevokeSessions(ctx, user); err != nil {
 		return dto.TokenPair{}, err
 	}
 
 	s.logger.Info("user password changed; prior sessions revoked",
-		slog.String("user_id", user.ID))
+		slog.String("user_id", userID))
 
-	pair, err := s.tokenIssuer.IssueForUser(ctx, user.ID)
+	// IssueForUser outside tx (F18 rule — see godoc above).
+	pair, err := s.tokenIssuer.IssueForUser(ctx, userID)
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password issue token: %w", err)
 	}
 	return pair, nil
-}
-
-func (s *Service) updatePasswordAndRevokeSessions(ctx context.Context, user *domain.User) error {
-	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, user); err != nil {
-			return fmt.Errorf("identity-manage: change-password update: %w", err)
-		}
-		if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
-			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, user.ID); err != nil {
-			return fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", err)
-		}
-		return nil
-	})
 }
 
 func (s *Service) publish(ctx context.Context, topic string, payload any) error {

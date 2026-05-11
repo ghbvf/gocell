@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 const defaultRefreshGCRetention = 24 * time.Hour
@@ -75,6 +76,11 @@ func (m AccessCoreModule) Provide(
 		return nil, nil, nil, fmt.Errorf("accesscore cursor codec: %w", err)
 	}
 
+	// CAS Protocol for the ChangePassword narrow-scope concurrent-write guard
+	// (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01). Constructed here (composition
+	// root) per CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest.
+	casProto := cas.MustNewProtocol(cas.WithVersionField("password_version"))
+
 	accessOpts := []accesscore.Option{
 		accesscore.WithClock(shared.Clock),
 		accesscore.WithInMemoryDefaults(),
@@ -88,6 +94,7 @@ func (m AccessCoreModule) Provide(
 		accesscore.WithMetricsProvider(shared.PromStack.metricProvider),
 		accesscore.WithConfigEventCollector(shared.ConfigEventCollector),
 		accesscore.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
+		accesscore.WithCASProtocol(casProto),
 	}
 	if shared.Topology.StorageBackend == "postgres" {
 		pgOpts, err := accessPostgresOptions(shared)

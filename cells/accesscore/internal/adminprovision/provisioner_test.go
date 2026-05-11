@@ -372,6 +372,9 @@ func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) 
 }
 func (r *duplicateUserRepo) Update(ctx context.Context, u *domain.User) error { return nil }
 func (r *duplicateUserRepo) Delete(ctx context.Context, id string) error      { return nil }
+func (r *duplicateUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+	return 0, nil
+}
 
 // scriptedRoleRepo returns CountByRole values from a scripted sequence; tracks
 // whether AssignToUser / Create was called.
@@ -485,3 +488,6 @@ func (r *errUserRepo) GetByUsername(ctx context.Context, username string) (*doma
 }
 func (r *errUserRepo) Update(ctx context.Context, u *domain.User) error { return nil }
 func (r *errUserRepo) Delete(ctx context.Context, id string) error      { return r.deleteErr }
+func (r *errUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+	return 0, nil
+}
