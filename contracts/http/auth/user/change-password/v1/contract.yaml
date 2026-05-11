@@ -31,6 +31,9 @@ endpoints:
       404:
         description: "Not found — user with given id does not exist"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — concurrent password change detected; reload and retry (ERR_VERSION_CONFLICT)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
