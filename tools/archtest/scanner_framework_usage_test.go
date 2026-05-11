@@ -14,6 +14,7 @@ import (
 	"go/ast"
 	"go/importer"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"path/filepath"
@@ -221,41 +222,122 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 	return out
 }
 
-// forbiddenAstListTypeAssertions reports `for _, X := range Y { X.(*ast.W) }`
-// when Y's static type is []ast.{Decl,Spec,Stmt,Expr}. Equivalent to bare
-// ast.Inspect: the type assertion in the loop body dispatches by node kind
-// at runtime; AI may write/omit the wrong assertion silently. Use
-// scanner.EachInSubtree[ast.W](root, func(*ast.W){...}) instead.
+// forbiddenAstListTypeAssertions reports for-range over []ast.{Decl,Spec,Stmt,Expr}
+// with type assertions/switches in the body. Equivalent to bare ast.Inspect:
+// the type assertion in the loop body dispatches by node kind at runtime; AI
+// may write/omit the wrong assertion silently. Use
+// scanner.EachInChildren[ast.W](root, func(*ast.W){...}) for direct-child
+// semantics, or scanner.EachInSubtree[ast.W] for full-subtree, instead.
 //
 // Detection precision:
 //   - Outer: scanner.EachInSubtree[ast.RangeStmt] over file
 //   - rs.X must have static type []ast.{Decl|Spec|Stmt|Expr} via info.Types
-//   - rs.Value must be a plain *ast.Ident (binding name)
-//   - Inner forms (both flagged):
-//     a) Body: scanner.EachInSubtree[ast.TypeAssertExpr] within rs.Body —
-//     catches `x.(*ast.Kind)` form (`if y, ok := x.(*ast.X); ok` or
-//     `_ = x.(*ast.X)`)
-//     b) Body: scanner.EachInSubtree[ast.TypeSwitchStmt] within rs.Body —
-//     catches `switch x := x.(type) { case *ast.X: ... }` form, which is
-//     the same runtime kind-dispatch as TypeAssertExpr. The TypeSwitchStmt
-//     must be assigning from the binding name; at least one case clause
-//     must list a *ast.<Kind> type.
-//   - For (a): ta.X must be the same binding name (rs.Value) AND ta.Type
-//     must resolve to *ast.<Kind> via info.Types (excludes non-ast
-//     assertions like .(string) or .(*MyType))
-//   - For (b): switch.Init must be empty; switch.Assign's RHS (or sole
-//     X.(type) operand) must reference bindingName; at least one case
-//     clause's type list must contain a *ast.<Kind>.
+//   - Inner forms (all flagged):
+//     a) `for _, X := range Y { X.(*ast.W) }` — rs.Value is non-nil (binding
+//     name); TypeAssertExpr in body references that binding + *ast.<Kind>
+//     b) `for _, X := range Y { switch X := X.(type) { case *ast.W: } }` —
+//     TypeSwitchStmt in body with binding-name operand + *ast.<Kind> case
+//     c) `for i := range Y { Y[i].(*ast.W) }` — rs.Value is nil (paired-index);
+//     TypeAssertExpr in body is IndexExpr(Y, i).(*ast.<Kind>)
+//
+// Form (c) was previously exempted by the `rs.Value == nil` early-return; that
+// exemption is removed now that EachInChildren provides a typed children-only
+// API that makes paired-index iteration unnecessary.
 func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var diags []scanner.Diagnostic
 	scanner.EachInSubtree[ast.RangeStmt](file, func(rs *ast.RangeStmt) {
-		if rs.Value == nil || rs.Body == nil {
+		if rs.Body == nil {
 			return
 		}
 		elemKind, ok := astListElemKind(info, rs.X)
 		if !ok {
 			return
 		}
+
+		// Form (c): paired-index — `for i := range Y { Y[i].(*ast.W) }`.
+		// rs.Value is nil (no value binding), rs.Key is the index variable.
+		//
+		// Precision guard: if the loop body also uses the same index variable to
+		// index a *different* slice (e.g. `Lhs[i]` alongside `Rhs[i]`), the
+		// iteration has LHS/RHS pairing semantics and cannot be replaced by
+		// EachInChildren. Skip the entire range statement in that case.
+		if rs.Value == nil {
+			indexName := identNameOf(rs.Key)
+			if indexName == "" {
+				return
+			}
+			rsXRepr := exprRepr(rs.X)
+
+			// Check for companion index usage indicating LHS/RHS pairing semantics:
+			//   (a) any IndexExpr[i] where X differs from rs.X — e.g. Rhs[i]
+			//       alongside Lhs[i] in an assignment.
+			//   (b) index variable i passed as a standalone argument to a function
+			//       call — e.g. f(OtherSlice, i); the callee typically does
+			//       OtherSlice[i] internally, which is also pairing semantics.
+			// In both cases EachInChildren cannot replace the paired-index loop.
+			companionIndex := false
+			scanner.EachInSubtree[ast.IndexExpr](rs.Body, func(idx *ast.IndexExpr) {
+				if companionIndex {
+					return
+				}
+				idxId, ok := idx.Index.(*ast.Ident)
+				if !ok || idxId.Name != indexName {
+					return
+				}
+				if exprRepr(idx.X) != rsXRepr {
+					companionIndex = true
+				}
+			})
+			if !companionIndex {
+				// (b) index variable passed as a bare argument to a call.
+				// identNameOf is used to avoid a raw TypeAssertExpr inside a
+				// for-range over []ast.Expr, which would self-trigger form (a).
+				scanner.EachInSubtree[ast.CallExpr](rs.Body, func(call *ast.CallExpr) {
+					if companionIndex {
+						return
+					}
+					for _, arg := range call.Args {
+						if identNameOf(arg) == indexName {
+							companionIndex = true
+							return
+						}
+					}
+				})
+			}
+			if companionIndex {
+				return
+			}
+
+			scanner.EachInSubtree[ast.TypeAssertExpr](rs.Body, func(ta *ast.TypeAssertExpr) {
+				if ta.Type == nil {
+					return
+				}
+				if !isStarAstNodeType(info, ta.Type) {
+					return
+				}
+				idx, ok := ta.X.(*ast.IndexExpr)
+				if !ok {
+					return
+				}
+				idxId, ok := idx.Index.(*ast.Ident)
+				if !ok || idxId.Name != indexName {
+					return
+				}
+				if exprRepr(idx.X) != rsXRepr {
+					return
+				}
+				diags = append(diags, scanner.Diagnostic{
+					Rel:  rel,
+					Line: fset.Position(ta.Pos()).Line,
+					Message: fmt.Sprintf("use scanner.EachInChildren[ast.X](root, func(*ast.X){...}) "+
+						"for direct-child semantics, or scanner.EachInSubtree[ast.X] for full-subtree, "+
+						"instead of paired-index for-range over []ast.%s + type assertion", elemKind),
+				})
+			})
+			return
+		}
+
+		// Forms (a) and (b): value-binding — `for _, X := range Y { ... }`.
 		bindingName := identNameOf(rs.Value)
 		if bindingName == "" {
 			return
@@ -274,7 +356,8 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 			diags = append(diags, scanner.Diagnostic{
 				Rel:  rel,
 				Line: fset.Position(ta.Pos()).Line,
-				Message: fmt.Sprintf("use scanner.EachInSubtree[ast.X](root, func(*ast.X){...}) "+
+				Message: fmt.Sprintf("use scanner.EachInChildren[ast.X](root, func(*ast.X){...}) "+
+					"for direct-child semantics, or scanner.EachInSubtree[ast.X] for full-subtree, "+
 					"instead of for-range over []ast.%s + type assertion", elemKind),
 			})
 		})
@@ -290,21 +373,17 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 			// At least one case clause must list *ast.<Kind>.
 			caseHits := false
 			if ts.Body != nil {
-				for i := range ts.Body.List {
-					cc, ok := ts.Body.List[i].(*ast.CaseClause)
-					if !ok {
-						continue
+				scanner.EachInChildren[ast.CaseClause](ts.Body, func(cc *ast.CaseClause) {
+					if caseHits {
+						return
 					}
 					for j := range cc.List {
 						if isStarAstNodeType(info, cc.List[j]) {
 							caseHits = true
-							break
+							return
 						}
 					}
-					if caseHits {
-						break
-					}
-				}
+				})
 			}
 			if !caseHits {
 				return
@@ -312,7 +391,8 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 			diags = append(diags, scanner.Diagnostic{
 				Rel:  rel,
 				Line: fset.Position(ts.Pos()).Line,
-				Message: fmt.Sprintf("use scanner.EachInSubtree[ast.X](root, func(*ast.X){...}) "+
+				Message: fmt.Sprintf("use scanner.EachInChildren[ast.X](root, func(*ast.X){...}) "+
+					"for direct-child semantics, or scanner.EachInSubtree[ast.X] for full-subtree, "+
 					"instead of for-range over []ast.%s + type switch", elemKind),
 			})
 		})
@@ -427,6 +507,20 @@ func identNameOf(expr ast.Expr) string {
 	return ""
 }
 
+// exprRepr returns a stable string representation of an AST expression using
+// go/printer. Used to compare whether two expressions refer to the same
+// sub-tree (e.g. IndexExpr.X vs. the RangeStmt's X in form (c) detection).
+// A fresh token.FileSet is used so that position differences do not affect the
+// printed output — only the expression shape matters.
+func exprRepr(e ast.Expr) string {
+	if e == nil {
+		return ""
+	}
+	var sb strings.Builder
+	_ = printer.Fprint(&sb, token.NewFileSet(), e)
+	return sb.String()
+}
+
 // isStarAstNodeType reports whether expr's static type is *go/ast.<Kind>
 // (a concrete pointer to a struct in package go/ast).
 func isStarAstNodeType(info *types.Info, expr ast.Expr) bool {
@@ -507,8 +601,8 @@ func runFixture(t *testing.T, src string) []scanner.Diagnostic {
 
 // TestScannerFrameworkUsage01_Fixture exercises forbiddenWalkRefs and
 // forbiddenAstListTypeAssertions directly via parsed-from-string fixtures.
-// 21 cases cover every AST shape the live rule must catch (path A: 12, path
-// A': 2, path B: 5) plus negatives (2). Because both the live rule and this
+// 24 cases cover every AST shape the live rule must catch (path A: 12, path
+// A': 3, path B: 7) plus negatives (2). Because both the live rule and this
 // fixture call the same pure functions, they cannot drift.
 func TestScannerFrameworkUsage01_Fixture(t *testing.T) {
 	t.Parallel()
@@ -749,12 +843,10 @@ func _(file *ast.File) {
 			wantHits: 0, // *MyDecl is not in package go/ast — path B excludes
 		},
 		{
-			// Path B is INTENTIONALLY scoped to the binding-name form
-			// (rs.Value != nil). The paired-index form `for i := range Y { Y[i].(*ast.W) }`
-			// is treated as legitimate list iteration (e.g. LHS/RHS pairing,
-			// or restricting access to a sub-slice). This negative fixture
-			// locks that design — if path B is ever broadened to also flag
-			// the index form, this case will start hitting.
+			// Path B form (c): paired-index `for i := range Y { Y[i].(*ast.W) }`
+			// is now flagged. Previously exempted by rs.Value == nil early-return;
+			// that exemption is removed now that EachInChildren provides a typed
+			// children-only API making paired-index iteration unnecessary.
 			name: "for_range_index_no_binding_passes",
 			src: `package fake
 import "go/ast"
@@ -766,7 +858,39 @@ func _(file *ast.File) {
 	}
 }
 `,
-			wantHits: 0,
+			wantHits: 1,
+		},
+		{
+			// Negative: paired-index but ta.Type is not *ast.<Kind> — path B
+			// form (c) must not flag non-ast type assertions.
+			name: "for_range_index_non_ast_target_passes",
+			src: `package fake
+import "go/ast"
+type MyNode struct{}
+func _(file *ast.File) {
+	for i := range file.Decls {
+		if _, ok := file.Decls[i].(*MyNode); ok {
+			_ = i
+		}
+	}
+}
+`,
+			wantHits: 0, // *MyNode is not in package go/ast — form (c) excludes
+		},
+		{
+			// Negative: paired-index but rs.X is not []ast.<Kind> — path B
+			// form (c) must not flag non-ast-list range loops.
+			name: "for_range_index_non_ast_list_passes",
+			src: `package fake
+import "go/ast"
+func _(ints []int) {
+	for i := range ints {
+		_ = ints[i]
+		_ = (*ast.File)(nil) // use ast to avoid import error
+	}
+}
+`,
+			wantHits: 0, // []int is not []ast.<Kind> — form (c) excludes
 		},
 		{
 			// Form (b): TypeSwitchStmt is the same kind-dispatch semantically

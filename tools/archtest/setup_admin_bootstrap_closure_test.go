@@ -203,24 +203,21 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 		if !ok || sel.Sel == nil || sel.Sel.Name != "Route" {
 			return
 		}
-		// Paired index iteration: only direct KeyValueExpr children of node.Elts
-		// are checked, not nested KeyValueExprs from inner composite literals.
-		for i := range node.Elts {
-			kv, ok := node.Elts[i].(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
+		// EachInChildren visits only direct KeyValueExpr children of node (not
+		// nested KeyValueExprs from inner composite literals), equivalent to the
+		// prior paired-index loop over node.Elts.
+		scanner.EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
 			keyIdent, ok := kv.Key.(*ast.Ident)
 			if !ok || keyIdent.Name != "BootstrapAuth" {
-				continue
+				return
 			}
 			// Any non-nil expression as the value satisfies the wiring requirement;
 			// the codegen template cannot produce a literal nil because the param is
 			// a func value passed straight through.
-			if _, isNil := kv.Value.(*ast.Ident); !isNil || kv.Value.(*ast.Ident).Name != "nil" {
+			if id, isIdent := kv.Value.(*ast.Ident); !isIdent || id.Name != "nil" {
 				mountCallHasBootstrapAuthField = true
 			}
-		}
+		})
 	})
 
 	assert.True(t, newHandlerHasBootstrapAuthParam,
