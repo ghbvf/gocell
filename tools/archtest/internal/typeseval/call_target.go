@@ -32,7 +32,7 @@ import (
 //     `Func[T]`), and *ast.IndexListExpr (`Func[T, U]`) are NOT unwrapped;
 //     callers iterating via scanner.EachInSubtree pick up the underlying
 //     Ident/SelectorExpr nodes directly, but a caller that passes a wrapper
-//     gets (nil, false)
+//     gets ("", "", false)
 //
 // Callers are responsible for filtering by pkgPath / name. In particular,
 // bare-Ident matches for a locally-defined function return the current

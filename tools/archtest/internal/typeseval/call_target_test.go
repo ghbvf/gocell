@@ -201,7 +201,7 @@ func _() { time.Sleep(0) }
 
 func TestResolvePackageRef_ParenExprUnhandled(t *testing.T) {
 	// Helper contract boundary: passing a *ast.ParenExpr directly returns
-	// (nil, false). In real archtest matchers this is never a problem because
+	// ("", "", false). In real archtest matchers this is never a problem because
 	// scanner.EachInSubtree recurses into ParenExpr / IndexExpr wrappers and
 	// visits the inner Ident / SelectorExpr nodes directly — the helper is
 	// only ever called on those inner nodes. This test pins the helper's
