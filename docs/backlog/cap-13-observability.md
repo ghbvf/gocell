@@ -1,0 +1,67 @@
+# GoCell Backlog — cap-13: 可观测性
+
+> 主要包：`runtime/observability` + `runtime/audit` + `runtime/bootstrap`（health/readyz）+ `adapters/*`（managed resource）
+> 父表：[`docs/backlog.md`](../backlog.md)（schema / cap 主轴）
+> 归档：[`docs/backlog/archive/`](archive/)
+
+拆出日期：2026-05-12（32 条目，按主题分 5 个 h2 子节）
+
+---
+
+## 13.1 health / readyz / probe
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| R3 | **safe_observe DI** — 现状: observe DI 路径未统一；修复: 抽象统一 | arch-opt | — | 🟡 | — | `runtime/observability/` | R3 |
+| PR-CI-5-FU-HEALTH-LATE-WATCHER | **Health late watcher** — 现状: late watcher 路径未覆盖；修复: 补 | arch-opt | Cx2 | 🟡 | — | `runtime/http/health/` | PR-CI-5 |
+| PR284-FU-COMPOSE-HEALTH | **Compose health** — 现状: docker-compose health 不全；修复: 补 healthcheck | arch-opt | Cx2 | 🟡 | — | `examples/*/docker-compose.yml` | PR#284 |
+| B2-R-05 | **OTel metric provider ctx 固定 Background** — 现状: provider 用 ctx.Background()；修复: 透传 caller ctx | bug | P1/Cx4 | 🟡 | — | `adapters/otel/metric_provider.go:174,178,185` | backlog2 §3 B2-R-05 |
+| B2-R-06 | **OTel tracer provider 未注册全局** — 现状: tracer 实例化后未 SetGlobal；修复: SetTracerProvider | bug | P1/Cx2 | 🟡 | — | `adapters/otel/tracer.go:56,73` | backlog2 §3 B2-R-06 |
+| B2-R-07 | **OTel tracer shutdown 无 deadline** — 现状: shutdown 无超时上限；修复: 加 ctx deadline | bug | P1/Cx1 | 🟡 | — | `adapters/otel/tracer.go:63,65` | backlog2 §3 B2-R-07 |
+| B2-R-08 | **OTel callback 需手工 unregister** — 现状: callback 注册后无自动 unregister；修复: 接 lifecycle hook | bug | P1/Cx3 | 🟡 | — | `adapters/otel/pool_collector.go:43,110` | backlog2 §3 B2-R-08 |
+| B2-R-09 | **OTel attr cache key 碰撞无上界** — 现状: attr cache 无 LRU/eviction；修复: 加 LRU + max size | bug | P1/Cx3 | 🟡 | — | `adapters/otel/metric_provider.go:84,96,101` | backlog2 §3 B2-R-09 |
+| REPO-HEALTHCHECKER-01 | **configcore/auditcore repo 接 HealthCheckers** — 现状: HealthCheckers 仅接 outbox，关键 repo 未接探针；修复: 接入 cell HealthCheckers（与 PR-CFG-1 PG relay probe 同主题）| arch-opt | P1/Cx2 | 🟡 | 与 PR-A53 同 PR | `cells/configcore/cell.go` + `cells/auditcore/cell.go` | backlog1 §3 |
+| R-01 | **EVENT-OBSERVABILITY-METRIC-PACK**（吸收 G-05）— (a) RelayCollector 不被 bootstrap 自动注入；(b) eventrouter 无 collector；(c) InMemoryEventBus drop 仅 Warn 无 counter；(d) metrics 缺 outbox/event 命名空间；(e) Provider 无 GaugeVec；(f) relay pending depth 无 Gauge；(g) consumer reject 无 counter；修复: Provider 加 GaugeVec + 三套 collector 工厂 + bootstrap phase 5/6 自动 wire + 5 新 metric | feat | P1/Cx3 | 🟡 | — | `runtime/observability/metrics/{shutdown,outbox,event}.go` + `runtime/bootstrap/` + `kernel/observability/` | 030 §2 R-01 + G-05 |
+
+## 13.2 audit chain observability
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| PR392-FU-AUDIT-CHAIN-WIRING | **BOOTSTRAP-AUDIT-CHAIN-WIRING-01** — 现状: onAuthFail 用 slog 未接 audit chain；修复: 升级为 audit.AppendBootstrapAuthFail | arch-opt | P2/Cx2 | 🟠 | accesscore audit chain cross-cell wiring | `cmd/corebundle/access_module.go` | PR #392 ADR §D10 |
+| B2-C-01 | **Audit hashchain 重启未恢复尾节点** — 现状: NewHashChain 启动从空链开始，多实例或重启后尾哈希不连续；修复: cell 启动时从 repo `SELECT last hash` 注入；考虑 leader 单写或 advisory lock | arch-opt | P0/Cx4 | 🔴 | — | `cells/auditcore/internal/domain/hashchain.go:31` + `cells/auditcore/cell.go` | backlog2 §1 B2-C-01 |
+| B2-C-05 | **Auditappend actor 缺失降级不安全** — 现状: actor 缺失时静默降级；修复: fail-closed | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditappend/service.go:133` | backlog2 §4 B2-C-05 |
+| B2-C-09 | **Auditquery raw payload 直接回传** — 现状: handler 直接回传 raw payload 含敏感字段；修复: redact + slog level 区分 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditquery/handler.go:35,42` | backlog2 §4 B2-C-09 |
+| B2-C-14 | **Hash-chain 跨重启连续性测试缺** — 现状: 缺重启场景验证；修复: 加 testcontainer 重启回归 | test | P2/Cx2 | 🟡 | — | `cells/auditcore/slices/auditappend/service_test.go:110` | backlog2 §4 B2-C-14 |
+
+## 13.3 metrics / collector
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| OBS-SSA-ANALYZER-01 | **OBS SSA analyzer** — 现状: 缺静态分析；修复: 加 SSA-based analyzer | arch-opt | Cx3 | 🟡 | — | `tools/archtest/` + `runtime/observability/` | OBS-SSA |
+| M1-OBSERVED | **HEALTHZ-INTERFACE-PACKAGE-01** — 现状: 38 处 Health 实现分散无统一接口；修复: 新建 `kernel/healthz` 接口包 (Aggregator/Probe/Snapshot) + codegen 从 cell.yaml 派生状态 schema + 默认 `runtime/observability/healthz/inmemory` 实现 + 可选 postgres/otel adapter + `HEALTHZ-WRITE-01` archtest + 38 处分散 Health 收口（不持久化 yaml，持久化交宿主） (also: cap-14, cap-10) | feat | P2/Cx3 | 🟡 | — | `kernel/healthz/` (新) + `runtime/observability/healthz/` + `tools/codegen/` | ADR-202605041430 M1 |
+| K-03 | **KERNEL-OBSERVABILITY-PKGDOC** — kernel/observability 无包级 doc.go，与 runtime/observability 职责切分不明；修复: 加 30-50 行 doc.go 明确 provider-neutral 抽象 | doc | P1/Cx1 | 🟡 | — | `kernel/observability/doc.go` (新) | 030 §2 K-03 |
+| A-01 | **OIDC-FAILFAST-MR-COMPLETENESS**（含 A-07/A-08）— (1) `oidc.New(ctx, cfg)` 同步 discover；(2) 4 adapter (postgres/redis/s3/oidc) 实现 `Checkers()` 返回 `{name}_ready`；(3) s3 状态机 + 后台 health-check goroutine，probe 只读最新结果；(4) archtest `MANAGED-RESOURCE-COMPLETENESS-01`；(5) postgres.Pool 升 ManagedResource(Checkers + Worker=nil)；(6) `adapters/adapterutil/` Health → Checkers helper 下沉 4 adapter 复用 | feat | P0/Cx3 | 🔴 | — | `adapters/{oidc,postgres,redis,s3}/` + `adapters/adapterutil/` (新) + `tools/archtest/` | 030 §2 A-01 + A-07 + A-08 |
+| CONFIGPUBLISH-FAILOPEN-METRIC-ASSERT-HARD-01 | **fail-open metric counter 断言 (Hard 升级 PR320-FU)** — 现状: PR#553 用 `outbox.WarnDirectPublishFailOpen` exported const 把 fail-open 信号锁到 Medium；`outbox_emit_failopen_dropped_total` counter 已 fire（emitter.go:206-209）但无业务测试断言，需要 metricstest.RecordingProvider testutil 才能 assert counter +1。修复方向: 新建 `kernel/observability/metrics/metricstest/recording.go` (~80 行) + 测试 + ADR；改 fail-open service test 用 RecordingProvider 取代或补充 WARN const 断言（达 Hard：counter 没增 = 没走 fail-open，违反不可表达）。(also: cap-07) | arch-opt | P3/Cx3 | 🟠 | 第 2 个 cell 需要断言相同 counter 模式 | `kernel/observability/metrics/metricstest/`（新）+ `cells/*/slices/*/service_test.go` | PR#553 plan §AI-rebust evaluation |
+| S7-PG-OBSERVABILITY-ALIGN-BUNDLE | **S7 PG / observability / migration 对齐束（PR #450 review 聚合，4 子条）** — 现状: S7 落地的 PG/migrations/readyz/observability 与现有规范的对齐尚未补齐，加上跨 outbox/audit 共通的运维收口 3 条。子条：<ul><li>**S7-FU-OPS** (P2/Cx1, 🟡 13 条 D-02~D-09 + F-06/F-08/F-09/F-11/F-13) — 020 migration `prev_hash/hash` TEXT 加 `CHECK(length=64)`；`strictTailVerify` 加 30s timeout；021 Up/Down 加 `SET LOCAL lock_timeout='5s'`；`audit_ledger_ready` 注册到 readyz.md；`auditQueryFetchCap=5000` 注释；`audit_ledger_store` Append/Verify/Query 加 OTel span（S8）；020 Down 路径加 lock_timeout；actor_id 合规决策；$1 双引用注释；`clear(hmacKey)` 双重冗余；migration table 名硬编码 (Files: `adapters/postgres/migrations/{020_audit_ledger,021_audit_entries_event_id_unique}.sql` + `audit_ledger_store.go` + `cells/auditcore/` + `cmd/corebundle/audit_module.go`，PR #450 review)</li><li>**KERNEL-OUTBOX-PROBE-NAME-RENAME-01** (P3/Cx1, 🟠 下次 outbox 主题 PR) — `outbox-failopen-rate.auditcore` 含连字符违反 observability.md snake_case；改 `outbox_failopen_rate_<cellid>` + archtest 锁命名 (Files: `kernel/outbox/emitter.go`，PR #450 F-CR-OUT-OF-SCOPE-1)</li><li>**AUDIT-LEDGER-CROSS-POOL-TEST-IMPROVE-01** (P3/Cx1, 🟠 `setupPostgres` 暴露 DSN API) — `TestAuditLedgerStore_RestartRecovery_AcrossPool` 共享同一 `pgxpool.Pool`（非真物理重启）；`setupPostgres` 暴露 DSN 后用 `pgxpool.New(ctx, dsn)` 替代 pA (Files: `adapters/postgres/audit_ledger_store_test.go` + `integration_test.go`，PR #450 F-CR-OUT-OF-SCOPE-2)</li><li>**S8-AUDIT-QUERY-KEYSET-PUSH-DOWN-01** (P1/Cx3, 🟠 S8 audit query PG adapter 落地) — `runtime/audit/ledger.Store.Query` 扩 keyset cursor（mirror configcore List）；PG adapter 用 `pgquery.AppendKeyset`；auditquery service 去掉 5000 条硬 limit (Files: `runtime/audit/ledger/store.go` + `adapters/postgres/audit_ledger_store.go` + `cells/auditcore/slices/auditquery/service.go`，PR #450 F-CR-4 follow-up)</li></ul> | feat+arch-opt+test | P1/Cx3 | 🟠 | F.4 S8 落地一并；F.1 PR450 follow-up batch；F.2/F.3 触发型 | `adapters/postgres/migrations/` + `audit_ledger_store.go` + `runtime/audit/ledger/` + `cells/auditcore/` + `cmd/corebundle/audit_module.go` + `kernel/outbox/emitter.go` | PR #450 六角色 review 聚合 (2026-05-11) |
+
+## 13.4 slog / logging / OTel
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| PR237-OB2 | **Listener observability** — 现状: per-listener 观测 metric 不全；修复: 补 | arch-opt | Cx2 | 🟡 | — | `runtime/observability/` | PR#237 |
+| PR283-OTEL-SLOG-ERROR-ATTR | **OTEL-SLOG-ERROR-ATTR-NORMALISE-01** — 现状: `slog.Any("error", err)` 在 OTEL bridge 会展开 struct；修复: ReplaceAttr hook 序列化 err.Error() | arch-opt | P2/Cx2 | 🟠 | 首次 OTEL slog bridge 接入 | `adapters/otel/` + `runtime/observability/logging/` | PR#283 round-2 I3 |
+
+## 13.5 adapter managed resource / 杂项
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| ADAPTER-MANAGED-RESOURCE-COMPLETENESS-01 | **Adapter readyz probes 完整性** — 现状: 部分 adapter 缺 ready probe；修复: 统一规范 | arch-opt | Cx2 | 🟡 | — | `adapters/{postgres,redis,s3}/` | systems layer review |
+| A5a-R3 | **Observability ctx 透传** — 现状: 部分路径丢 ctx；修复: thread ctx | arch-opt | — | 🟡 | — | `runtime/observability/` | A5a |
+| A5a-R12 | **Observability 集成补全** — 现状: integration test gap；修复: 加测 | test | — | 🟡 | — | `runtime/observability/` | A5a |
+| P4-TD-10 | **Metrics path label cardinality** — 现状: `r.URL.Path` 直接作 label，参数化路由展开成高基数序列（`/users/123` `/orders/42`...）；修复: 改用 chi route template 或 `_` 占位 | bug | P2/Cx2 | 🟡 | — | `runtime/observability/metrics.go` | tech-debt-registry P4-TD-10 |
+| WS-DX-01 | **WS per-conn context tracing** — 现状: per-conn ctx 基于 Background()，无 tracing/correlation 传到 MessageHandler；修复: 透传 tracing ctx | arch-opt | Cx2 | 🟡 | observability 接入时 | `runtime/websocket/` | tech-debt-registry WS-DX-01 |
+| B2-A-20 | **OTel simple tracer propagation 不对称** — 现状: 解析 vs 注入实现不对称；修复: 统一 propagator | bug | P2/Cx2 | 🟡 | — | `runtime/observability/tracing/tracer.go:77` | backlog2 §5.3 B2-A-20 |
+| B2-A-22 | **Prometheus handler 无 timeout** — 现状: scrape 无超时控制；修复: 加 server.WriteTimeout | bug | P1/Cx1 | 🟡 | — | `cmd/corebundle/metrics.go:83` | backlog2 §5.3 B2-A-22 |
+| B2-A-23 | **Prometheus cellID label 无验证** — 现状: cellID label 接受任意字符串；修复: 加 enum/格式校验 | bug | P1/Cx1 | 🟡 | — | `adapters/prometheus/hook_observer.go:114-117` | backlog2 §5.3 B2-A-23 |
+| B2-A-24 | **Prometheus race test 缺** — 现状: provider 缺并发竞争测试；修复: 加 race | test | P1/Cx2 | 🟡 | — | `adapters/prometheus/metric_provider_test.go` | backlog2 §5.3 B2-A-24 |
+

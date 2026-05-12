@@ -1,0 +1,55 @@
+# GoCell Backlog — cap-02: 元数据解析与治理
+
+> 主要包：`kernel/governance` + `kernel/contractspec` + `kernel/depgraph` + `tools/archtest/internal/typeseval`
+> 父表：[`docs/backlog.md`](../backlog.md)（schema / cap 主轴）
+> 归档：[`docs/backlog/archive/`](archive/)
+
+拆出日期：2026-05-12（25 条目，按主题分 4 个 h2 子节）
+
+---
+
+## 02.1 kernel spec / contractspec / depgraph
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| P1-5 | **METADATA-PERF-BENCH-01** — 现状: 缺 `BenchmarkParseFS_500Files` 性能基准；修复: 加 bench + 评估 goccy/go-yaml 单次解码迁移成本 | test | P1/Cx3 | 🟡 | — | `kernel/metadata/parser_test.go` | PR#152 seat-4 |
+| KERNEL-CONTRACTSPEC-CONTRACTMETA-DUAL-DEF-01 | **Contract 双源定义** — 现状: `kernel/wrapper.ContractSpec` 与 `kernel/metadata.ContractMeta` 双源；修复: K#04 PR-4 codegen 落地时合一 | arch-opt | Cx3 | 🟠 | K#04 PR-4 codegen 迁移 | `kernel/wrapper/` + `kernel/metadata/` | systems layer review |
+| KERNEL-INTERNAL-DAG-GUARD-01 | **kernel 反向 import 守卫** — 现状: 缺 archtest 守 kernel 反向 import；修复: 引入新依赖时一并加 DAG 守卫 | arch-opt | Cx2 | 🟠 | kernel 出现新反向引用 | `tools/archtest/` | systems layer review |
+| SHARED-ERROR-SCHEMA-GENERATION-01 | **共享 error schema 单源** — 现状: 4 份 mirror 人工同步；修复: canonical → make generate 派生 examples/testdata | arch-opt | P2/Cx2-Cx3 | 🟡 | 下次 envelope schema 变更 | `contracts/shared/errors/` + `tests/contracttest/testdata/` | PR#396 review |
+| KERNEL-DEPGRAPH-OUT-EVAL-01 | **Depgraph out evaluation** — 现状: depgraph 只 in-eval；修复: 加 out-eval 路径 | arch-opt | Cx3 | 🟠 | 第 3 个 depgraph 消费方 | `kernel/depgraph/` + `runtime/` | PR#357 |
+| DURABLE-TYPE-01 | **L2/L3 持久化级别静态保护** — 现状: 类型抹除让 L2/L3 检测退化为启动期 panic；修复: 探索类型系统层面静态编译保护（仓储级能力推断） | arch-opt | P2/Cx3 | 🟡 | v1.1 启动 | `kernel/metadata/` + `kernel/persistence/` | backlog_later §6 |
+| KERNEL-TEST-RUNTIME-IMPORT-BAN-01 | **守 kernel/**/*_test.go 禁止 import runtime/*** — 现状: depguard kernel-isolation 排除了 _test.go（4 处历史 import: governance/rules_http_test.go, metadata/meta_struct_guard_test.go, cell/celltest/mux_test.go）；修复: 加 depguard kernel-test-isolation rule（allowlist runtime/auth + runtime/devtools/catalog 因测试 wiring 必需）或评估 auth/catalog 抽出 | arch | P3/Cx2 | 🟠 | 下次 touch 这些文件时一并处理 OR 独立守卫 PR | `.golangci.yml` + 4 处 kernel test | PR441 review reviewer-F1（探索后确认全部历史遗留，PR441 未引入）|
+
+## 02.2 typeseval / archtest helper
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01 | **ValidationResult emitter sealed marker Hard 升级** — 现状: PR-TS1 把 BFS emitter 从 name-based 升级到 signature-based 三谓词（return ValidationResult + arg0 string + receiver/result 同包），AI-rebust 达 Medium-偏-Hard；reviewer P2 finding（2026-05-11）：owner 约束 = "同包"，比原 `*locator` 单一允许集略宽，理论上同包新加非 `*locator` 的 `(string, ...) ValidationResult` 方法会被自动纳入。修复: 在 `kernel/governance` 加 unexported sealed marker interface（如 `validationResultEmitter interface { isValidationResultEmitter() }`），`*locator` 实现该 marker；BFS predicate 改 `types.Implements(recvNamed, emitterIface)`，达真 Hard（违反不可表达——非 emitter 类型编译期就不实现 marker） | arch-opt | P3/Cx2 | 🟠 | (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要"sealed marker" 范本时顺带建立 | `kernel/governance/locator.go` + `kernel/governance/rule_inventory_test.go` | PR-TS1 review P2-2（2026-05-11）|
+| TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01 | **TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01** — 现状: PR #472 引入 `typeseval.BuildContextPredicate` 作为 build-tag eval predicate 的单一来源，隐式 defaults map 不可见；所有 consumer 已通过 constructor 构造 predicate，绕过需要手工复制完整 defaults map（明显异常）→ near-Hard AI-rebust；修复: 新增 `tools/archtest/eval_predicate_centralization_test.go`，AST walk `tools/archtest/` 包下所有 `constraint.Expr.Eval(...)` callsite，断言 predicate argument 属于以下允许形式之一：(a) `typeseval.BuildContextPredicate(...)` 调用；(b) 全 false sentinel `func(_ string) bool { return false }`；其他形式 fail-closed。**AI-rebust 升级**：从 near-Hard → Hard（机制不可绕过：未来手写含过期 tag map 的 predicate 在 archtest 时即报错，不需要 semantic review 才能发现）。**触发条件**：PR #472 merge 后开 follow-up，不是同 PR。**估算**: 3-5h dev / 1h review。 | arch-opt | P2/Cx2 | 🟡 | PR #472 merge 后排期 | `tools/archtest/eval_predicate_centralization_test.go` (新) + `tools/archtest/internal/typeseval/buildtag_predicate.go` | PR #472 review P1+P2 findings |
+
+## 02.3 governance rule (G-series + PR-FU)
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| M2-LIFECYCLE | **CELL-SLICE-LIFECYCLE-FIELD-01 + STATE-MACHINE-EXPLICIT** — 现状: (a) cell/slice 缺生命周期相位声明；(b) `cell.lifecycle` 与 `outbox.entry.state` 隐含状态机，无 enum + transition 表；修复: cell.yaml/slice.yaml 加 `lifecycle` 字段 (experimental/candidate/asset/maintenance/retired) + `kernel/cell/lifecycle.go` 显式 `state enum + transition map` + `kernel/outbox/state.go` 同款 + governance 校验状态转移合法性 + archtest 校验状态转移完备性 + 运行时通过 Aggregator 接口暴露当前相位（差距由消费方计算）+ 1 ADR (also: cap-13) | feat | P2/Cx3 | 🟠 | M1 落地 | `kernel/metadata/types.go` + `kernel/cell/lifecycle.go` + `kernel/outbox/state.go` + `kernel/governance/` + `kernel/healthz/` + ADR | ADR-202605041430 M2 + 030 §3 F-08 |
+| M3-RULE-ENGINE | **GOVERNANCE-RULE-ENGINE-DATA-DRIVEN-01** — 现状: governance 64 规则散在 Go 代码；修复: `kernel/governance/engine.go` 唯一执行体 + `kernel/governance/rules/*.yaml` 数据化（5 槽位 detect/evidence/next/level/harvest）+ `next-action` 五级 (autofix/suggest/advisory/block/escalate) + 规则带 `metric` 距离函数 + 修 ADV-05 SeverityError 错分 | refactor | P2/Cx3 | 🟡 | — | `kernel/governance/engine.go` (新) + `kernel/governance/rules/*.yaml` (新) | ADR-202605041430 M3 |
+| G-1 | **FMT-11 dynamic-status-field 隔离** — 现状: 动态状态字段（readiness/risk/blocker）漏入非 status-board 文件，元数据被污染；修复: governance 加 FMT-11 严格隔离 | doc | P2/Cx2 | 🟡 | 出现元数据污染或非法 contract 引用 | `kernel/governance/` | backlog_later §1 |
+| GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN | **static governance 禁 auth.public 在 /internal/v1/** — 现状: runtime 守存在，元数据 governance 阶段无闸门；修复: 加 FMT-XX 规则 + codegen fail-fast，contract 出现 `auth.public:true` + `/internal/v1/*` 路径模式即报错 | bug | P1/Cx2 | 🔴 | 发布前安全收口 | `kernel/governance/rules_fmt.go` + `tools/codegen/contractgen/builder.go` | PR#376 F-SEC-002 |
+| PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01 | **Inventory governance section AST owner 提取** — 现状: `list-archtests.sh` 用 grep 抽 governance ID，引用关系被算成归属（PR-FUNNEL-03 已合并 strict_extra → rules_misc_strict.go，但跨文件 godoc 引用仍可能误归属），开发者按 inventory 改错文件；修复: 改 go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 referenced_by 列 | arch-opt | P1/Cx2 | 🟠 | 第二次主题归属错误 | `scripts/audit/list-archtests.sh` + `kernel/governance/rules_*.go` + `docs/audit/archtest-inventory.md` | 2026-05-07 review |
+| PR411-AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01 | **auth mode schema/governance boolean semantics alignment** — 现状: `contract.schema.json` 用 `required` 判断 auth mode 互斥，显式 `false` 字段也会触发 schema 冲突；governance FMT-27/FMT-28 按布尔真值判断，二者语义不完全一致；修复: 统一为真值语义（schema 用 const/if-then 或明确禁止显式 false），并补 `auth.public:false + auth.bootstrap:false` 等显式 false 回归测试 | bug+test | P2/Cx2 | 🟡 | PR#411 follow-up batch 或 schema/govalidate 语义收口 | `kernel/metadata/schemas/contract.schema.json` + `kernel/metadata/schemas/contract_schema_test.go` + `kernel/governance/rules_fmt_test.go` | PR#411 review |
+| G-11 | **SCAFFOLD-FREETEXT-YAML-INJECTION** — `Goal`/`OwnerTeam` 自由文本写 YAML 无字符过滤，`\n` 注入产生额外键绕过 VERIFY/FMT；修复: `validateFreeText()` 拒 `\n\r":#[]{}` + 模板裸 scalar 改单引号包裹 + `TestCreateJourney_YAMLInjection` 对抗测试 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `kernel/scaffold/` + `kernel/governance/` | 030 §3 G-11 |
+| G-13 | **GOVERNANCE-RULES-REGISTRATION-GUARD** — (a) `Validator.rules()` 手工 slice，漏注册零反馈；(b) `ValidateStrict`/`ValidateStrictFailFast` 双列表漂移；(c) error 规则无修复指导；(d) rule code 字面量散落；修复: archtest 反射枚举 + 统一 `ValidateStrict(strict, failFast bool)` 单入口 + error 规则参照 ADV-06 追加 `; fix: ...` + 提取 `rulecodes.go` | arch-opt | P1/Cx2 | 🟡 | — | `kernel/governance/` + `tools/archtest/` | 030 §3 G-13 |
+| G-15 | **KERNEL-METADATA-CODEGEN-OVERLAY** — kernel/metadata 既是被动数据又承载 `goStructName` 等 codegen-only 字段；修复: 二选一 (a) 把 codegen-only 字段挪到 `tools/codegen` schema overlay；(b) `metadata/doc.go` 注明"YAML schema 总账本"故意承载多消费方所需字段 | refactor | P2/Cx2 | 🟡 | — | `kernel/metadata/` + `tools/codegen/` | 030 §3 G-15 |
+| PR432-FU-AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE-01 | **auth combo archtest 双重防线评估** — 现状: PR-C(#432) 实施 single oracle (`metadata.AuthComboLegal`) + 5 层 mirror（type system / reflect 字段数 / governance 委托 / schema if-then mirror / 双侧 32-combo matrix），reviewer 提议是否再立 `tools/archtest/auth_combo_invariants_test.go` 做安全语义 archtest 双重防线；architect 决策（2026-05-10）: **不立**——现有 5 层防线已 exhaustive，archtest scanner 边际收益接近 0（所有静态守护都已被现有动态测试 + reflect 断言覆盖）；CLAUDE.md 双重防线"推荐而非强制"，prior art (`MESSAGE-CONST-LITERAL-01`/`DETAILS-SLOG-ATTR-01`) 是因 type system 拦截力弱才必要，本 case 不同。修复: 仅在触发条件出现时立 follow-up | arch-opt | P3/Cx2 | 🟠 | (a) `governance.hasFMT27AuthModeConflict` 被重新 inline 化绕过 oracle / (b) schema.json if-then 与 `AuthComboLegal` 漂移事故首现 / (c) auth bool 字段数突破 6 个使 32-combo matrix 测试时间不可接受 | `kernel/metadata/auth_combo.go` + `kernel/governance/rules_fmt.go` + `tools/archtest/`（新文件，仅触发后）| PR#432 review finding #1（2026-05-10） |
+
+## 02.4 杂项
+
+| ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
+|---|---|---|---|---|---|---|---|
+| CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | **Slice 多 verb 拆分** — 现状: auditappend 14 contractUsages、configread 双 listener；修复: 拆 `auditappend-{session,user,config,role}` 共享 dispatch + `configread-internal` 单独，不留兼容包装 | refactor | P1/Cx3 | 🟡 | — | `cells/auditcore/slices/auditappend/` + `cells/configcore/slices/configread/` | systems layer review + 030 §2 K-07 |
+| B2-K-05 | **Metadata parser error 路径泄漏** — 现状: parse error 含 fs 内部路径，低强度信息泄露；修复: error 双通道 (public 仅 cell/slice ID + 字段路径，internal slog 保留 fs path) | bug | P2/Cx2 | 🟡 | — | `kernel/metadata/parser.go:190,202` | backlog2 §2 B2-K-05 |
+| B2-K-07 | **Contracttest undeclared ref no-op** — 现状: `MustValidateRequest("not-declared", ...)` 静默 return，key 写错时假通过；修复: 未声明 key 改 `t.Fatalf` | bug | P1/Cx1 | 🟡 | — | `pkg/contracttest/contracttest.go:170,189` | backlog2 §2 B2-K-07 |
+| B2-T-07-FU-3 | **K04-CELLGEN-CONTRACTSPEC-CLIENTS** — 现状: cellgen 不派生 contract.clients；修复: 加派生（A5 follow-up） | arch-opt | Cx2 | 🟡 | cellgen 升级窗口 | `tools/codegen/cellgen/` | backlog2 §8 A5 follow-up |
+| J-03 | **CONTRACT-V1V2-DRY-RUN** — api-versioning.md 写 v2 规则但 0 实例、0 deprecation 模板、无 v1/v2 共存示例；修复: 选 contract（如 audit list）走一遍 v1→v2 演练（目录 + ContractMeta.id + ownerCell 双挂 + lifecycle + outbox triggers + journey checkRef）+ ADR；或写 ADR 明确"1.0 之前不做 v2 升级"删 v2 段落（与 029 F4 同根，可合并） | feat | P1/Cx2 | 🟡 | v1.1 启动 | `contracts/` + `.claude/rules/gocell/api-versioning.md` + ADR | 030 §3 J-03 |
+| F-09 | **CONSTRAINTS-PARAMETRIC-FIELD** — cell.yaml 无 `constraints` 字段；SLO/性能/容量约束写在 PR 描述而非模型；修复: 加 `constraints: { latency: {p99_ms, p999_ms}, throughput: {publish_per_second}, capacity: {queue_depth_max} }` + verify 钩子跑 micro-benchmark 校验 | feat | P3/Cx3 | 🟡 | F-06 落地后 | `kernel/metadata/types.go` + `kernel/verify/` + cell.yaml schema | 030 §3 F-09 |
+
