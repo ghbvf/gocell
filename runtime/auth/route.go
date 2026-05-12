@@ -307,8 +307,8 @@ func (r Route) validateBypassCompatibility() error {
 	// BootstrapAuth (env-credentialed HTTP Basic Auth, FMT-28 limits paths to
 	// /api/v1/*/setup/admin) and Contract.Clients (4-part service-token
 	// caller-cell allowlist, FMT-31 limits paths to /internal/v1/*) are
-	// orthogonal auth paths. The wrapMountGuards godoc at line 180-183 already
-	// declares this mutex; this branch is the runtime enforcement.
+	// orthogonal auth paths. The wrapMountGuards godoc above already declares
+	// this mutex; this branch is the runtime enforcement.
 	// AUTH-BOOTSTRAP-CLIENTS-MUTEX-01 in tools/archtest/auth_bootstrap_invariants_test.go
 	// is the static (Hard) gate; this is the runtime second layer.
 	if r.BootstrapAuth != nil && len(r.Contract.Clients) > 0 {

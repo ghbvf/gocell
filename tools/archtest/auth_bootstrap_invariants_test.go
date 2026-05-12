@@ -289,48 +289,7 @@ func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 
 	var violations []string
 	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		// Pass 1: collect package-level vars whose value is a
-		// contractspec.ContractSpec composite literal, mapping var name to
-		// "Clients field is non-empty".
-		specClientsNonEmpty := collectFileContractSpecClients(fc.File)
-
-		// Pass 2: scan every auth.Route composite literal in the file.
-		scanner.EachInSubtree[ast.CompositeLit](fc.File, func(node *ast.CompositeLit) {
-			if !isAuthRouteLitType(node.Type) {
-				return
-			}
-			var (
-				hasBootstrapAuth      bool
-				contractRef           string
-				contractInlineClients bool
-				contractResolved      bool
-			)
-			scanner.EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
-				key, ok := kv.Key.(*ast.Ident)
-				if !ok {
-					return
-				}
-				switch key.Name {
-				case "BootstrapAuth":
-					if id, isIdent := kv.Value.(*ast.Ident); !isIdent || id.Name != "nil" {
-						hasBootstrapAuth = true
-					}
-				case "Contract":
-					contractRef, contractInlineClients, contractResolved = resolveContractField(kv.Value, specClientsNonEmpty)
-				}
-			})
-			if !hasBootstrapAuth {
-				return
-			}
-			// Same-file resolution succeeded and Contract.Clients is non-empty.
-			if contractInlineClients || (contractResolved && specClientsNonEmpty[contractRef]) {
-				violations = append(violations,
-					fc.Rel+":"+fc.Fset.Position(node.Pos()).String()+
-						" — auth.Route{BootstrapAuth: <non-nil>, Contract: "+
-						describeContractRef(contractRef, contractInlineClients)+"} "+
-						"binds non-empty Clients (mutex violation)")
-			}
-		})
+		violations = append(violations, detectBootstrapClientsViolations(fc.File, fc.Fset, fc.Rel)...)
 	})
 
 	assert.Empty(t, violations,
@@ -341,6 +300,153 @@ func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 			"paths to /api/v1/*/setup/admin; Contract.Clients = service-token caller-"+
 			"cell allowlist, FMT-31 limits paths to /internal/v1/*). See ADR "+
 			"docs/architecture/202605061600-adr-bootstrap-admin-boundary.md.")
+}
+
+// detectBootstrapClientsViolations is the per-file detector kernel for
+// AUTH-BOOTSTRAP-CLIENTS-MUTEX-01. Factored out so the same logic powers both
+// the repo-wide static scan (TestAuthRouteBootstrapClientsMutex) and the
+// synthetic-source self-test (TestAuthRouteBootstrapClientsMutex_CoverageBoundary)
+// that locks the detection-coverage contract.
+func detectBootstrapClientsViolations(file *ast.File, fset *token.FileSet, rel string) []string {
+	// Pass 1: collect package-level (file-scope) vars whose value is a
+	// contractspec.ContractSpec composite literal, mapping var name to
+	// "Clients field is non-empty".
+	specClientsNonEmpty := collectFileContractSpecClients(file)
+
+	// Pass 2: scan every auth.Route composite literal in the file.
+	var violations []string
+	scanner.EachInSubtree[ast.CompositeLit](file, func(node *ast.CompositeLit) {
+		if !isAuthRouteLitType(node.Type) {
+			return
+		}
+		var (
+			hasBootstrapAuth      bool
+			contractRef           string
+			contractInlineClients bool
+			contractResolved      bool
+		)
+		scanner.EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				return
+			}
+			switch key.Name {
+			case "BootstrapAuth":
+				if id, isIdent := kv.Value.(*ast.Ident); !isIdent || id.Name != "nil" {
+					hasBootstrapAuth = true
+				}
+			case "Contract":
+				contractRef, contractInlineClients, contractResolved = resolveContractField(kv.Value, specClientsNonEmpty)
+			}
+		})
+		if !hasBootstrapAuth {
+			return
+		}
+		if contractInlineClients || (contractResolved && specClientsNonEmpty[contractRef]) {
+			violations = append(violations,
+				rel+":"+fset.Position(node.Pos()).String()+
+					" — auth.Route{BootstrapAuth: <non-nil>, Contract: "+
+					describeContractRef(contractRef, contractInlineClients)+"} "+
+					"binds non-empty Clients (mutex violation)")
+		}
+	})
+	return violations
+}
+
+// TestAuthRouteBootstrapClientsMutex_CoverageBoundary locks the static
+// detector's coverage contract via synthetic source files parsed in memory.
+// Three coverage classes are exercised:
+//
+//  1. File-scope `var spec = contractspec.ContractSpec{... Clients: [...]}`
+//     referenced by `Contract: spec` → MUST be detected.
+//  2. Inline `Contract: contractspec.ContractSpec{... Clients: [...]}` literal
+//     embedded directly in the Route literal → MUST be detected.
+//  3. Func-body-local `spec := contractspec.ContractSpec{... Clients: [...]}`
+//     referenced by `Contract: spec` → KNOWN GAP, NOT detected; covered by
+//     the runtime guard in runtime/auth/route.go validateBypassCompatibility
+//     as the second layer. This case is locked here so any future widening
+//     of the static detector intentionally updates this assertion.
+//
+// The detector must also leave a clean (no violations) source clean and a
+// BootstrapAuth-without-Clients source clean.
+func TestAuthRouteBootstrapClientsMutex_CoverageBoundary(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		src        string
+		wantHit    bool   // exactly one violation expected
+		wantSubstr string // substring required in the violation msg (when wantHit)
+		descr      string
+	}{
+		{
+			name: "filescope-var-DETECTED",
+			src: `package x
+import _ "stub"
+var spec = contractspec.ContractSpec{Method: "GET", Path: "/internal/v1/x", Clients: []string{"caller"}}
+func _f() { _ = auth.Route{BootstrapAuth: f, Contract: spec} }
+`,
+			wantHit:    true,
+			wantSubstr: "Contract: spec",
+			descr:      "package-level var pattern (codegen handler_gen.go)",
+		},
+		{
+			name: "inline-literal-DETECTED",
+			src: `package x
+import _ "stub"
+func _f() { _ = auth.Route{BootstrapAuth: f, Contract: contractspec.ContractSpec{Clients: []string{"c"}}} }
+`,
+			wantHit:    true,
+			wantSubstr: "Contract: <inline ContractSpec literal>",
+			descr:      "inline ContractSpec literal embedded in Route",
+		},
+		{
+			name: "funcbody-local-KNOWN-GAP",
+			src: `package x
+import _ "stub"
+func _f() {
+    spec := contractspec.ContractSpec{Clients: []string{"caller"}}
+    _ = auth.Route{BootstrapAuth: f, Contract: spec}
+}
+`,
+			wantHit: false,
+			descr:   "func-body-local := ContractSpec falls through to runtime guard",
+		},
+		{
+			name: "bootstrap-without-clients-CLEAN",
+			src: `package x
+import _ "stub"
+var spec = contractspec.ContractSpec{Method: "POST", Path: "/api/v1/x/setup/admin"}
+func _f() { _ = auth.Route{BootstrapAuth: f, Contract: spec} }
+`,
+			wantHit: false,
+			descr:   "BootstrapAuth alone with empty-Clients spec is legitimate (setup/admin pattern)",
+		},
+		{
+			name: "clients-without-bootstrap-CLEAN",
+			src: `package x
+import _ "stub"
+var spec = contractspec.ContractSpec{Method: "GET", Path: "/internal/v1/x", Clients: []string{"caller"}}
+func _f() { _ = auth.Route{Contract: spec, Public: true} }
+`,
+			wantHit: false,
+			descr:   "Clients alone without BootstrapAuth is legitimate (internal route pattern)",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "synthetic.go", tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err, tc.descr)
+			got := detectBootstrapClientsViolations(file, fset, "synthetic.go")
+			if !tc.wantHit {
+				assert.Empty(t, got, tc.descr+" (case "+tc.name+")")
+				return
+			}
+			require.Len(t, got, 1, tc.descr+" — expected exactly one violation")
+			assert.Contains(t, got[0], tc.wantSubstr, tc.descr)
+		})
+	}
 }
 
 // collectFileContractSpecClients walks file-scope ValueSpec entries and returns
@@ -393,19 +499,28 @@ func recordContractSpecVars(vs *ast.ValueSpec, out map[string]bool) {
 //   - inlineClients: true when the value is an inline composite literal of
 //     contractspec.ContractSpec with a non-empty Clients field.
 //   - resolved: true when same-file resolution succeeded (Ident in the
-//     specClients map, or any SelectorExpr; for SelectorExpr resolved=true so
-//     missing-from-map below correctly reads as "empty Clients" rather than
-//     "unresolved-violation"). Inline-literal cases set resolved=false because
-//     inlineClients carries the decisive answer directly.
+//     specClients map). Cross-package SelectorExpr and same-file Ident
+//     not-in-map both return resolved=false, which causes the caller to skip
+//     flagging — the violation can only fire on a definitively-resolved
+//     non-empty Clients spec. The runtime guard in
+//     runtime/auth/route.go:validateBypassCompatibility remains the second
+//     layer for the unresolved cases (cross-package / cross-file / func-body
+//     local), so detection coverage is layered rather than archtest-only.
+//
+// Why SelectorExpr is treated as unresolved rather than checked:
+// cross-package ContractSpec refs live in their declaring package's file
+// scope, and the path ranges enforced by FMT-28 (BootstrapAuth →
+// /api/v1/*/setup/admin) and FMT-31 (Clients → /internal/v1/*) make their
+// coexistence structurally impossible at the YAML source. Flagging
+// cross-package refs without cross-package var resolution would require
+// loading multiple packages and is out of scope for this AST-only archtest;
+// the runtime guard handles the remaining surface.
 func resolveContractField(value ast.Expr, specClients map[string]bool) (varName string, inlineClients bool, resolved bool) {
 	switch v := value.(type) {
 	case *ast.Ident:
 		if _, ok := specClients[v.Name]; ok {
 			return v.Name, false, true
 		}
-		// Same-file var not found — treat as unresolved; the caller does
-		// not flag this as a violation (Route may reference a cross-file
-		// var in the same package, which the runtime guard still catches).
 		return v.Name, false, false
 	case *ast.CompositeLit:
 		if isContractSpecLitType(v.Type) {
@@ -414,7 +529,7 @@ func resolveContractField(value ast.Expr, specClients map[string]bool) (varName 
 		return "", false, false
 	case *ast.SelectorExpr:
 		if v.Sel != nil {
-			return v.Sel.Name, false, true
+			return v.Sel.Name, false, false
 		}
 		return "", false, false
 	}
