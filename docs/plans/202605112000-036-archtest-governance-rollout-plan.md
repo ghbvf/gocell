@@ -24,7 +24,7 @@
 - ✅ `docs/backlog.md` 三条 PR430-FU 标 ✅ closed by PR #440：`PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01` / `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01` / `PR430-FU-SCANNER-SYMLINK-FAIL-CLOSED-01`
 - ✅ `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES` 标 ❌ WONTFIX（reason: charter §3 撤回，fixture 框架 AI 可造假，违反 AI-rebust 立项硬门槛 ≥ Medium）
 - ✅ Wave 3 已 ship 条目同步：
-  - `PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01`（cap-02 line 82）已 ✅ closed by PR-TS1（无需改动）
+  - `PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01`（`docs/backlog/cap-02-metadata-governance.md`）已 ✅ closed by PR-TS1（无需改动）
   - `ARCHTEST-TYPEAWARE-HARDENING-BUNDLE` 8 子条：`TYPESEVAL-BUILDTAGS-*` 3 条 ✅ closed by PR #472；`GENERATED-SKIP-CROSS-RULE-INVARIANT-01` ✅ closed by PR #567；`INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01` ✅ closed by PR-IC1；`PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` helper ✅ closed by PR-TS2（caller 迁移仍 OPEN 转 Phase 3.2 PR-SH1）；bundle 主条目状态从 🟠 改 🟢 partial（trigger 列写明剩余去向）
 - ⏳ 归档：✅/WONTFIX 条目移 `docs/backlog/archive/2026-q2-completed.md` —— 按 backlog schema 行 28 "归档：人工"，留待手动归档
 
@@ -89,10 +89,25 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 
 ---
 
-## 3. Wave 3 ARCHTEST-TYPEAWARE-HARDENING bundle 拆 4 PR
+## 3. Wave 3 ARCHTEST-TYPEAWARE-HARDENING bundle 拆 PR
 
-### backlog 现状
-`ARCHTEST-TYPEAWARE-HARDENING-BUNDLE`（line 418）8 子条吸收了 charter Wave 3/4 多项。bundle 是 **backlog 索引视角**，不是 PR 视角。按维度拆回 4 PR：
+### backlog absorption（2026-05-12）
+
+原 `ARCHTEST-TYPEAWARE-HARDENING-BUNDLE` 9 子条已 **100% 拆解吸收到本 plan**，bundle 主条目从 `docs/backlog.md` 删除（避免 mega-row 索引视角与 plan PR 视角双源不一致）。子条映射：
+
+| 子条 | 状态 | 落点 |
+|---|---|---|
+| `TYPESEVAL-BUILDTAGS-COMMENTGROUP-COVERAGE-01` | ✅ PR #472 | §3 Phase 3.1 PR-BT1 |
+| `TYPESEVAL-BUILDTAGS-SCOPE-FAILCLOSED-01` | ✅ PR #472 | §3 Phase 3.1 PR-BT1 |
+| `TYPESEVAL-BUILDTAGS-LEGACY-DIRECTIVE-01` | ✅ PR #472 | §3 Phase 3.1 PR-BT1 |
+| `PR445-FU-SCANNER-FRAMEWORK-HARDENING-01` | ✅ PR #474 | §3 Phase 3.2 PR-SH1 |
+| `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` | ✅ PR #474（caller）+ PR-TS2（helper） | §3 Phase 3.2 PR-SH1 |
+| `GENERATED-SKIP-CROSS-RULE-INVARIANT-01` | ✅ PR #471 | §3 Phase 3.3 PR-SH2 |
+| `INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01` | ✅ PR #470 | §3 Phase 3.4 PR-IC1 |
+| `PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01` | 🟢 触发型 | §4 trigger A3 |
+| `PR460-FU-FINDFIRSTCHILD-TYPED-API-01` | 🟡 触发型 | §4 trigger（FINDFIRSTCHILD-TYPED-API-01 行）|
+
+按维度拆 PR：
 
 ### Phase 3.1：build-tag fail-closed（PR-BT1）✅ done
 - **范围**：3 子条同主题（typeseval build-tag scope）
@@ -109,7 +124,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
     - `forbiddenMethodSymbols[inspector]` 新增 `{Preorder, Nodes, WithStack, PreorderSeq}`（path A' via `typeseval.ResolveMethodCall` → `info.Selections.Obj()`）
     - 新增 `tools/archtest/internal/inspectorredfixture/` 真实 package + `TestScannerFrameworkUsage01_InspectorMethodBanLive` 经 `typeseval.SharedResolver` end-to-end 锁定 4 method coverage（Hard：删除 inspector 条目 → 测试红）
     - scanner 内部 subpackage allowlist 已由 file-Dir 精确匹配（scanner_framework_usage_test.go:118 `Dir(rel) != "tools/archtest"`）实现，本 PR 不涉及
-  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` caller 迁移残余（cap-14 line 419）：
+  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` caller 迁移残余（`docs/backlog/cap-14-tooling.md`）：
     - `svctoken_caller_cell_test.go`：删除 `isAuthFuncCall` helper，inline `typeseval.ResolvePackageRef(call.Fun)` 统一覆盖 A.2 + A.3；同时为 `runtime/auth/` 包内调用加 exempt（迁移暴露 `servicetoken_test.go` 内部负向 test，rule 语义是 cross-package caller 校验，所以 owning package 自调用豁免）
     - `role_admin_literal_test.go`：替换 `call.Fun.(*ast.SelectorExpr) + info.Uses → *types.PkgName` 内联逻辑为 `typeseval.ResolvePackageRef`
     - 测试覆盖：helper 层 `TestResolvePackageRef_DotImportBareIdent` (call_target_test.go:85) 已锁 path A.3 契约；caller 迁移为机械委托
@@ -134,7 +149,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 ### Phase 3.5：typeseval eval predicate centralization（PR-EP1）✅ done
 - **证据**：PR #475 `feat(archtest): TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01 Hard funnel (Phase 3.5 PR-EP1)`
 - **范围**：1 子条独立（PR #472 follow-up，trigger 已满足）
-  - `TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01`（cap-02 line 85）：新增 `tools/archtest/eval_predicate_centralization_test.go`，AST walk `tools/archtest/` 包下所有 `constraint.Expr.Eval(...)` callsite，断言 predicate argument ∈ {`typeseval.BuildContextPredicate(...)`, 全 false sentinel `func(_ string) bool { return false }`}；其他形式 fail-closed
+  - `TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01`（`docs/backlog/cap-02-metadata-governance.md`）：新增 `tools/archtest/eval_predicate_centralization_test.go`，AST walk `tools/archtest/` 包下所有 `constraint.Expr.Eval(...)` callsite，断言 predicate argument ∈ {`typeseval.BuildContextPredicate(...)`, 全 false sentinel `func(_ string) bool { return false }`}；其他形式 fail-closed
   - **AI-rebust 升级**：near-Hard → Hard（违反不可表达，未来手写含过期 tag map 的 predicate 在 archtest 时报错）
 - **工时**：3-5h dev / 1h review
 - **依赖**：Phase 3.1 PR-BT1 merge ✅
@@ -142,12 +157,12 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 ### Phase 3.6：archtest-inventory drift CI gate（PR-IG1）❌ cancelled by PR #435 (PR-A')
 - **取消理由**：原任务前提已不成立。PR #435 (PR-A', 2026-05-10) 已将 `hack/verify-archtest-inventory.sh` + `docs/audit/archtest-inventory.md` 派生产物整体删除，改由 `tools/archtest/inventory_anchor_required_test.go`（`INVENTORY-ANCHOR-REQUIRED-01` + `INVENTORY-ANCHOR-VALID-ID-01`）单源接替，并已通过 `.github/workflows/_build-lint.yml::verify-archtest` 16-shard 矩阵在 CI 强制
 - **enforcement gap 分析**：新机制严格强于旧机制——(1) 锚点本身即 ground truth，无派生 inventory 文件 → drift surface 从根本上消除；(2) VALID-ID-01 额外校验锚点 ID 规范 grammar（旧 gate 无此能力）；(3) `ARCHTEST-VERIFY-COVERAGE-01` 守卫 16-shard discovery 与 `tools/archtest/*_test.go` AST 集合一致，新文件自动入 shard
-- **backlog 同步**：`PR419-FU-INVENTORY-CI-GATE-01`（cap-14 line 405）已标 ✅ closed by PR #435（2026-05-12 直接 in-place 标记）
+- **backlog 同步**：`PR419-FU-INVENTORY-CI-GATE-01`（`docs/backlog/cap-14-tooling.md`）已标 ✅ closed by PR #435（2026-05-12 直接 in-place 标记）
 
 ### Phase 3.7：archtest 扫描 scope 扩展（PR-SC1）✅ done
 - **证据**：PR #473 `refactor(contractspec): typed framework funnel + archtest Hard upgrade to runtime/ (Phase 3.7 PR-SC1)`
 - **范围**：1 子条（C9 已 moot，同 PR 关闭）
-  - `ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME`（cap-14 line 399，P1/Cx1）：`NO-MANUAL-CONTRACTSPEC-LITERAL-01` 扫描根从 `cells/` + `examples/` 扩到 `runtime/`，**并通过 typed funnel 升级为 Hard** —— 新增 `kernel/contractspec.NewFrameworkHTTP` + `NewEventDerivation` 两个 typed builder，5 处 runtime/ 字面量全量迁移；composite literal 在 cells/ + examples/ + runtime/ 0 escape hatch，违反不可表达
+  - `ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME`（`docs/backlog/cap-14-tooling.md`，P1/Cx1）：`NO-MANUAL-CONTRACTSPEC-LITERAL-01` 扫描根从 `cells/` + `examples/` 扩到 `runtime/`，**并通过 typed funnel 升级为 Hard** —— 新增 `kernel/contractspec.NewFrameworkHTTP` + `NewEventDerivation` 两个 typed builder，5 处 runtime/ 字面量全量迁移；composite literal 在 cells/ + examples/ + runtime/ 0 escape hatch，违反不可表达
   - ~~`PR245-F6 OUTBOX-ARCHTEST-SCAN-SCOPE-EXPAND-01`~~ — **MOOT**: target `tools/archtest/outbox_cell_test.go::isCellFile` 已在 PR-560 删除（ADR 202605101900 §D7）；替代规则 `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 已实现请求的 scope。backlog line 336 同 PR 标 ✅
 - **AI-rebust**：Soft（runtime/ "framework infra" 部落知识）→ **Hard**（typed funnel 是唯一合法构造路径，archtest 形态唯一性，对齐章程 `typed function call as Hard funnel` 范本）
 - **工时**：5-8h dev / 1-2h review（Hard 升级 + dead code 清理）
@@ -155,8 +170,8 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 
 ### Phase 3.8：metadata → 派生消费方字段集覆盖守卫束（PR-MD1）✅ done
 - **范围**：2 子条同主题合并（同主题"元数据 ↔ 派生 DTO 字段级漂移"）
-  - `ARCHTEST-CELL-METADATA-FIELD-DRIFT`（cap-14 line 400，P1/Cx2）：原 backlog 担心的"字段级漂移"实际已被 K#04 verify-codegen-cell.sh 守 Hard；真实 gap 在上一层 cellgen pipeline 字段集覆盖。PR-MD1 走 reflect-driven Go literal printer（Absolute Hard）：删 `cellgen.CellMetadataLiteral` 手写 struct + `buildMetadataLiteral` 手写 reduce；新增 `cellgen.RenderCellMetaLiteral` 用 reflect 遍历 `metadata.CellMeta` 自动渲染 Go 字面量。3 个 cell_gen.go 重生 0 diff，K#04 verify GREEN。
-  - `CATALOG-DTO-DRIFT-ARCHTEST`（cap-14 line 401，P2/Cx2）：原 `runtime/devtools/catalog/assembly_field_coverage_test.go` 等价实现已存在但缺治理目录注册。迁入 `tools/archtest/assembly_meta_dto_drift_test.go` 注册 INVARIANT `ASSEMBLY-META-DTO-COVERAGE-01`，删除 catalog 包内 4 个迁出符号（单源治理）。Medium-偏-Hard（reflect + excludelist）。
+  - `ARCHTEST-CELL-METADATA-FIELD-DRIFT`（`docs/backlog/cap-14-tooling.md`，P1/Cx2）：原 backlog 担心的"字段级漂移"实际已被 K#04 verify-codegen-cell.sh 守 Hard；真实 gap 在上一层 cellgen pipeline 字段集覆盖。PR-MD1 走 reflect-driven Go literal printer（Absolute Hard）：删 `cellgen.CellMetadataLiteral` 手写 struct + `buildMetadataLiteral` 手写 reduce；新增 `cellgen.RenderCellMetaLiteral` 用 reflect 遍历 `metadata.CellMeta` 自动渲染 Go 字面量。3 个 cell_gen.go 重生 0 diff，K#04 verify GREEN。
+  - `CATALOG-DTO-DRIFT-ARCHTEST`（`docs/backlog/cap-14-tooling.md`，P2/Cx2）：原 `runtime/devtools/catalog/assembly_field_coverage_test.go` 等价实现已存在但缺治理目录注册。迁入 `tools/archtest/assembly_meta_dto_drift_test.go` 注册 INVARIANT `ASSEMBLY-META-DTO-COVERAGE-01`，删除 catalog 包内 4 个迁出符号（单源治理）。Medium-偏-Hard（reflect + excludelist）。
 - **工时**：实际 ~5h dev（reflect renderer ~3h + 任务二迁移 ~1h + 文档/inventory ~1h）/ 1-2h review
 - **依赖**：无
 - **证据**：PR-MD1 (feat/004-cellgen-reflect-literal-printer)
@@ -173,6 +188,39 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **工时**：实际 ~10h dev / 待 review（含 PR review 后追加的 ADR + archtest scope 扩展闭环修复）
 - **依赖**：无
 
+### Phase 3.10：cellgen literal funnel type-system Hard guard（PR-MD1 follow-up）
+> **执行顺序**：§6 next-up Rank 1（**先于 Phase 3.9**），数字编号承 3.9 之后仅为索引连续。
+
+- **目标**：把 PR-MD1 的 L1（reflect renderer）+ L2（K#04 重生 diff）两层防线升级为 **type-system 级 Hard funnel guard**，关闭"AI 同 PR 改回手写 cell.tmpl 字段枚举 + 不加 CellMeta 字段"造成的 silent drift 漏洞窗口。
+
+- **当前漏洞模型**（PR-MD1 留下的窗口）：
+  - **L1** = `cellgen.RenderCellMetaLiteral`（reflect 遍历 `metadata.CellMeta` 自动渲染 Go 字面量）
+  - **L2** = `hack/verify-codegen-cell.sh`（worktree 沙箱重生 + diff，K#04 Hard 门）
+  - **gap**：L1 + L2 都依赖 "`cell.tmpl` 调用 `renderCellMetaLiteral` template func"。AI 同 PR 把 `cell.tmpl` 改回手写 `{{ .MetadataLiteral.ID }}...` + **不**给 `CellMeta` 加新字段 → K#04 重生 0 diff（稳定 PASS）→ 下次 `CellMeta` 真正加字段时 silent drift（cell_gen.go 静默漏字段）
+
+- **修复方案**（funnel API 层去除"手写枚举"的数据源）：
+  1. `tools/codegen/cellgen/spec.go::CellGenSpec`：
+     - **删除** `MetadataLiteral *metadata.CellMeta` 字段
+     - **新增** `RenderedMetaLiteral string` 字段（pre-rendered Go literal 字符串）
+  2. `tools/codegen/cellgen/builder.go::BuildCellSpec`：
+     - 调用 `RenderCellMetaLiteral(cell)` 一次，将结果填入 `spec.RenderedMetaLiteral`
+  3. `tools/codegen/cellgen/templates/cell.tmpl`：
+     - 改为 `var cellMeta = {{ .RenderedMetaLiteral }}`
+     - **删除** `renderCellMetaLiteral` template func（template 上下文不再有数据源可调）
+
+- **Hard 来源**（type system 最高档，对齐 charter §1 "violation not expressible"）：
+  - `cell.tmpl` 拿不到 `*metadata.CellMeta` 实例 —— `CellGenSpec` 字段集已不暴露此对象
+  - 手写字段枚举（如 `{{ .MetadataLiteral.ID }}`）在 template 执行期**没有数据源可访问** → 编译/渲染期 fail
+  - AI 想绕过必须**显式修改 `CellGenSpec` Go API**（重新暴露 `MetadataLiteral` 字段或加 helper）—— 高显式度变更，必触发 review，无法静默漂移
+
+- **AI-rebust 升级**：PR-MD1 的 Medium-偏-Hard（reflect renderer + K#04 重生 diff）→ **Absolute Hard**（type-system funnel API，违反不可表达 + archtest 形态唯一性）
+
+- **工时**：1.5-2h dev / ~0.5h review
+- **依赖**：Phase 3.8 PR-MD1 ship ✅
+- **触发**：**next-up**（不等触发条件；silent-drift 漏洞窗口越早封越好，且工时极小不阻塞 Phase 3.9）
+- **范围限制**：本 PR 仅做 CellGenSpec API 收窄 + cell.tmpl 改造 + 重生 0-diff 验证；**不**做 catalog DTO 派生（那是触发型 `CATALOG-DTO-CODEGEN-DERIVE-01`，工时 15-25h，不在本 PR scope）
+- **验证**：(1) `cellgen.CellGenSpec` 删字段后 grep `.MetadataLiteral` 在 cell.tmpl 0 命中；(2) 3 个 cell_gen.go 重生 0 diff；(3) K#04 verify GREEN；(4) 单测覆盖 `RenderedMetaLiteral` 字段被 BuildCellSpec 正确填充
+
 ---
 
 ## 4. Wave 4 触发型——保留 + 落地时按维度拆模板
@@ -185,17 +233,17 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | B-FLOOR-FOLLOWUP §2.5/§4 | contract.yaml status ↔ adapter typed return 漂移事故首现 | charter §4 |
 | AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | `hasFMT27AuthModeConflict` 被重新 inline 化 | charter §4 |
 | TEST-POLLING-DETERMINISM typed marker | 第二次 race CI flake / 进入下一治理批 / 339 站点新增违反 | charter §4 |
-| FINDFIRSTCHILD-TYPED-API-01 | 第 7 处 closure+done sentinel helper 出现 | charter §4 + cap-14 line 421 PR460-FU |
+| FINDFIRSTCHILD-TYPED-API-01 | 第 7 处 closure+done sentinel helper 出现 | charter §4 + `docs/backlog/cap-14-tooling.md` PR460-FU |
 
 ### 保留触发型条目（trigger 是真事故/方案待定/量级未到，A + C 类筛选后 6 条）
 | 项 | trigger | backlog 锚点 |
 |---|---|---|
-| **PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01**（A2）| (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要 sealed marker 范本时顺带建立 | cap-02 line 83 |
-| **PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01**（A3）| 首次出现 cross-function file-scope `var pat = "./..."` 间接调用 escape，或新 archtest 规则需要绕过 funnel；unexport `typeseval.SharedResolver/LoadPackages` 为包内私有 + `LoadPackagesForFixtures` 显式入口 | cap-14 line 421 |
-| **CELLGEN-ERRCODE-FUNNEL-HARDEN**（C2）| depguard method-level rule 方案确定 OR typed wrapper 抽出；cellgen 包 errcode Hard 升级路径 | cap-14 line 417 |
-| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| 第 3 个 file-level carve-out 出现；改 function-level（仅豁免 `WrapOrInfra` / `writeErrcodeError` struct literal 行）+ 新 ADR 登记 carve-out 列表+理由 | cap-14 line 398 + line 361 |
-| **PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01**（C6）| 第二次主题归属错误；`list-archtests.sh` grep → go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 `referenced_by` 列 | cap-02 line 72 |
-| **POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01**（C8）| 第 2 次同类漂移；archtest 静态扫 `*_test.go`，`_NotFound` 后缀测试必须断言 typed `errcode.Error.Code` 等于 `Err*NotFound`，禁裸 `assert.AnError`（违反不可表达 → Hard）| cap-14 line 334 |
+| **PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01**（A2）| (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要 sealed marker 范本时顺带建立 | `docs/backlog/cap-02-metadata-governance.md` |
+| **PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01**（A3）| 首次出现 cross-function file-scope `var pat = "./..."` 间接调用 escape，或新 archtest 规则需要绕过 funnel；unexport `typeseval.SharedResolver/LoadPackages` 为包内私有 + `LoadPackagesForFixtures` 显式入口 | `docs/backlog/cap-14-tooling.md` |
+| **CELLGEN-ERRCODE-FUNNEL-HARDEN**（C2）| depguard method-level rule 方案确定 OR typed wrapper 抽出；cellgen 包 errcode Hard 升级路径 | `docs/backlog/cap-14-tooling.md` |
+| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| 第 3 个 file-level carve-out 出现；改 function-level（仅豁免 `WrapOrInfra` / `writeErrcodeError` struct literal 行）+ 新 ADR 登记 carve-out 列表+理由 | `docs/backlog/cap-14-tooling.md` + line 361 |
+| **PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01**（C6）| 第二次主题归属错误；`list-archtests.sh` grep → go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 `referenced_by` 列 | `docs/backlog/cap-02-metadata-governance.md` |
+| **POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01**（C8）| 第 2 次同类漂移；archtest 静态扫 `*_test.go`，`_NotFound` 后缀测试必须断言 typed `errcode.Error.Code` 等于 `Err*NotFound`，禁裸 `assert.AnError`（违反不可表达 → Hard）| `docs/backlog/cap-14-tooling.md` |
 
 ### 落地时统一按维度拆模板
 有 framework + bulk migration + enforcement 三维以上的项目（**TEST-POLLING-DETERMINISM** 和 **FINDFIRSTCHILD-TYPED-API-01** 都是），触发时按以下模板拆：
@@ -222,8 +270,6 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 ```
 Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 ```
-
-**当前剩余（Wave 2/3 范围）**：PR-MD1 follow-up `CELLGEN-LITERAL-FUNNEL-02`（1.5-2h dev）**1 项**。Phase 0.1 ✅ done 2026-05-12；Phase 3.2/3.5/3.7 同时段 ship（2026-05-12 PR #473/#474/#475）；Phase 3.6 ❌ cancelled by PR #435；Phase 3.8 ✅ PR #477；Phase 3.9 ✅ PR-S7。
 
 ---
 

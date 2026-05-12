@@ -601,3 +601,42 @@ func TestBuildCellSpec_SubscribeValidExportedIdentAccepted(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildCellSpec_RenderedMetaLiteralPopulated locks CELLGEN-LITERAL-FUNNEL-02:
+// CellGenSpec exposes a pre-rendered Go literal string (RenderedMetaLiteral), not
+// the live *metadata.CellMeta pointer. The Hard property — cell.tmpl cannot
+// hand-enumerate CellMeta fields because the struct is not reachable from the
+// spec — depends on BuildCellSpec populating this field deterministically from
+// renderCellMetaLiteral(cell). A regression that re-exposes *CellMeta or leaves
+// the field blank breaks this test before reaching the template.
+func TestBuildCellSpec_RenderedMetaLiteralPopulated(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:               "demo",
+		Type:             "core",
+		ConsistencyLevel: "L1",
+		Dir:              "demo",
+		File:             "cells/demo/cell.yaml",
+		GoStructName:     metadata.MustNewGoIdentifier("Demo"),
+	}
+	p := fixtureProject(cell, nil, nil)
+
+	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{})
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	got := spec.RenderedMetaLiteral
+	if got == "" {
+		t.Fatalf("RenderedMetaLiteral is empty; BuildCellSpec must pre-render the literal")
+	}
+	if !strings.HasPrefix(got, "&metadata.CellMeta{") {
+		t.Errorf("RenderedMetaLiteral should start with '&metadata.CellMeta{', got: %q", got)
+	}
+	// Equivalence with renderCellMetaLiteral(cell) — locks BuildCellSpec to
+	// the canonical renderer (not a hand-built string), which is the Hard
+	// guarantee: any divergence here means BuildCellSpec stopped using the
+	// reflect-driven funnel.
+	if want := renderCellMetaLiteral(cell); got != want {
+		t.Errorf("RenderedMetaLiteral diverges from renderCellMetaLiteral output\n got: %q\nwant: %q", got, want)
+	}
+}

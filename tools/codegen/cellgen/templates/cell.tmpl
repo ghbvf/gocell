@@ -19,7 +19,7 @@ var _ cell.Cell = (*{{.StructName}})(nil)
 // loadCellMetadata returns the package-scope pointer; cell.go's constructor
 // passes it to cell.MustNewBaseCell which deep-copies the value so callers
 // cannot mutate the generated literal.
-var cellMeta = {{ renderCellMetaLiteral .MetadataLiteral }}
+var cellMeta = {{ .RenderedMetaLiteral }}
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }
 

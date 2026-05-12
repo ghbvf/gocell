@@ -26,11 +26,21 @@ var updateGolden = flag.Bool("update", false, "regenerate golden files")
 // initInternal hook, captureErr closure, mux.Route subPath block).
 func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 	t.Parallel()
+	// Exercise the full builder → renderer integration on the happy path so
+	// that any drift in renderCellMetaLiteral's output format (e.g. gofumpt
+	// alignment changes) surfaces here as a template-render failure rather
+	// than being silently masked by a "&metadata.CellMeta{}" stub.
 	spec := &CellGenSpec{
 		Package:              "demo",
 		StructName:           "Demo",
 		CellID:               "demo",
 		ConsumerGroupDefault: "demo",
+		RenderedMetaLiteral: renderCellMetaLiteral(&metadata.CellMeta{
+			ID:               "demo",
+			Type:             "core",
+			ConsistencyLevel: "L1",
+			GoStructName:     metadata.MustNewGoIdentifier("Demo"),
+		}),
 		RouteGroups: []RouteGroupGenSpec{{
 			ListenerConst: "cell.PrimaryListener",
 			Prefix:        "/api/v1",
@@ -77,7 +87,7 @@ func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T) {
 	t.Parallel()
 	spec := &CellGenSpec{
-		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
+		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo", RenderedMetaLiteral: "&metadata.CellMeta{}",
 		Subscriptions: []SubscriptionGenSpec{{
 			ContractID:          "event.foo.bar.v1",
 			Transport:           "amqp",
@@ -115,7 +125,7 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T)
 func TestRenderCell_EmptySubPathDirectMount(t *testing.T) {
 	t.Parallel()
 	spec := &CellGenSpec{
-		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
+		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo", RenderedMetaLiteral: "&metadata.CellMeta{}",
 		RouteGroups: []RouteGroupGenSpec{{
 			ListenerConst: "cell.InternalListener",
 			Prefix:        "/internal/v1/admin",
@@ -448,7 +458,7 @@ func mustContain(t *testing.T, haystack, needle string) {
 func TestCellGen_SubscribeBlockUsesGeneratedPackage(t *testing.T) {
 	t.Parallel()
 	spec := &CellGenSpec{
-		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
+		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo", RenderedMetaLiteral: "&metadata.CellMeta{}",
 		Subscriptions: []SubscriptionGenSpec{{
 			ContractID:          "event.order-created.v1",
 			SliceID:             "ordercreate",
