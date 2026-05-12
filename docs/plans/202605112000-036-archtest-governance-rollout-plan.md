@@ -125,19 +125,23 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
   - `TYPESEVAL-BUILDTAGS-LEGACY-DIRECTIVE-01`：扩 coverage 自检覆盖 `// +build` legacy directive
 - **证据**：PR #472
 
-### Phase 3.2：scanner / call-matcher hardening（PR-SH1）
-- **范围**：5 子条同主题（scanner 守卫面 + path A' matcher + scanner 内部漂移收口 + symlink fail-closed + 双轨整理）
-  - `PR445-FU-SCANNER-FRAMEWORK-HARDENING-01`（cap-14 line 419）：`*inspector.Inspector` 实例方法 `Preorder/Nodes/WithStack` 加 forbiddenMethodSymbols；scanner 内部 subpackage exact allowlist
-  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` caller 迁移残余（cap-14 line 419）：Phase 2.2 PR-TS2 已 dogfood `ResolvePackageRef` + `ResolveMethodCall`，本 PR 把剩余 2 个规则（svctoken / role_admin）按 `ResolvePackageRef` 迁移闭合 dot-import 路径
-  - `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01`（cap-14 line 411，P1/Cx2 发布前必做）：5 个具体迁移漂移点修复
-    - (a) ModuleScope 默认跳 `generated/` 与 `span_record_error_redact_test.go:238` / `pgquery_boundary_test.go:145` 旧实现 repo-wide guard 不跳过 → 加 `IncludeGenerated()` scope option
-    - (b) `codegen_invariants_test.go:313` generated/contracts 手写 .go 禁止规则 EachFile 未 IncludeTests()，foo_test.go 漏 → 改 `EachFile(..., IncludeTests())` 或同效
-    - (c) `assembly_invariants_test.go:57` cells/*/cell.yaml 形状被放宽成递归匹配 → 收紧成 `MatchRels` 严格匹配 `cells/*/cell.yaml`（仅一层）
-    - (d) SEC-FAIL-CLOSED-05 `depth==2` 硬编码 → 适配 IncludeGenerated() option
-    - (e) ModuleScope skip generated 与 anywhere 文档漂移 / migration recursive docstring 漂 → 修文档 / 实现一致
-  - `PR430-FU-SCANNER-SYMLINK-FAIL-CLOSED-01`（cap-14 line 412，P2/Cx2 发布前安全收口）：`tools/archtest/internal/scanner/walk.go:27` + `content.go:57` 默认拒 symlink（lstat 检查 + skip 或 fatal）；显式 `FollowSymlinks()` option opt-in
-  - `PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01`（cap-14 line 410，P2/Cx2）：(1) 抽 `eachByPredicate(suffixSet || includeAllGo)` 共享骨架收编 Files/contentFiles 双轨；(2) DirsScope escapeErr 兑现"列出全部越界路径"承诺（推荐前者，attacker model 上"列出所有越界"对调试和审计更有用）
-- **工时**：12-16h dev / 4-5h review（原 8-11h + scanner drift fixes/symlink/consolidate +4-5h）
+### Phase 3.2：scanner / call-matcher hardening（PR-SH1）— 最小化 scope
+- **范围**：2 子条（inspector method ban + svctoken/role_admin path A.3 closure）
+  - `PR445-FU-SCANNER-FRAMEWORK-HARDENING-01` partial — inspector 部分：
+    - `forbiddenWalkSymbols[inspector]` 从 6 项缩为 `{New, All}`（top-level 真集，反映 inspector 包实际导出形态）
+    - `forbiddenMethodSymbols[inspector]` 新增 `{Preorder, Nodes, WithStack, PreorderSeq}`（path A' via `typeseval.ResolveMethodCall` → `info.Selections.Obj()`）
+    - 新增 `tools/archtest/internal/inspectorredfixture/` 真实 package + `TestScannerFrameworkUsage01_InspectorMethodBanLive` 经 `typeseval.SharedResolver` end-to-end 锁定 4 method coverage（Hard：删除 inspector 条目 → 测试红）
+    - scanner 内部 subpackage allowlist 已由 file-Dir 精确匹配（scanner_framework_usage_test.go:118 `Dir(rel) != "tools/archtest"`）实现，本 PR 不涉及
+  - `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` caller 迁移残余（cap-14 line 419）：
+    - `svctoken_caller_cell_test.go`：删除 `isAuthFuncCall` helper，inline `typeseval.ResolvePackageRef(call.Fun)` 统一覆盖 A.2 + A.3；同时为 `runtime/auth/` 包内调用加 exempt（迁移暴露 `servicetoken_test.go` 内部负向 test，rule 语义是 cross-package caller 校验，所以 owning package 自调用豁免）
+    - `role_admin_literal_test.go`：替换 `call.Fun.(*ast.SelectorExpr) + info.Uses → *types.PkgName` 内联逻辑为 `typeseval.ResolvePackageRef`
+    - 测试覆盖：helper 层 `TestResolvePackageRef_DotImportBareIdent` (call_target_test.go:85) 已锁 path A.3 契约；caller 迁移为机械委托
+- **从原 PR-SH1 scope 移除（已 ship 项）**：
+  - `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01` ✅ closed by PR #440 (PR-Δ1)
+  - `PR430-FU-SCANNER-SYMLINK-FAIL-CLOSED-01` ✅ closed by PR #440
+  - `PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01` ✅ closed by PR #440
+  （三条 backlog 状态已对齐，rollout plan §3.2 滞后；本次同步修正）
+- **工时**：3-5h dev / 1-2h review（原 12-16h 估值含已 ship 项）
 - **依赖**：Phase 2.2 PR-TS2 merge ✅
 
 ### Phase 3.3：generated-skip cross-rule invariant（PR-SH2）✅ done
@@ -253,7 +257,7 @@ Phase 1.x (panic 单源)               ✅ PR #467
 Phase 2.1 (ResolveReceiverType)      ✅ PR #468
 Phase 2.2 (ResolvePackageRef)        ✅ PR #469
 Phase 3.1 (build-tag failclosed)     ✅ PR #472
-Phase 3.2 (scanner hardening)        pending — 依赖已就绪（2.2 已 merge）
+Phase 3.2 (scanner hardening)        ✅ PR #474（最小化 scope：inspector method ban + svctoken/role_admin A.3 closure + outbox dot-import gap closure）
 Phase 3.3 (generated-skip)           ✅ PR #471
 Phase 3.4 (internal-contract)        ✅ PR #470
 Phase 3.5 (eval predicate central)   pending — 依赖 3.1 ✅
@@ -265,6 +269,7 @@ Phase 3.9 (PR450 治理升级束)         pending — 独立，但与 3.2 review
 Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 ```
 
+**当前剩余（Wave 2/3 范围）**：Phase 3.2 PR-SH1 + Phase 3.5 / 3.7 / 3.8 / 3.9 共 5 项（Phase 0.1 ✅ done 2026-05-12；Phase 3.6 ❌ cancelled by PR #435）。Phase 3.2 最小化 scope 后 3-5h dev（原 12-16h 估值含已 ship 项；详见 §3.2 重写），与其余 4 项均无文件重叠可并行；Phase 3.9 review 面积大，建议 3.2 ship 后顺位开。
 **当前剩余（Wave 2/3 范围）**：Phase 3.2 PR-SH1 + Phase 3.5 / 3.7 / 3.9 共 4 项（Phase 0.1 ✅ done 2026-05-12；Phase 3.6 ❌ cancelled by PR #435；Phase 3.8 ✅ PR-MD1 2026-05-12）。Phase 3.2 是劳动密集主线（12-16h），其余 3 项与 3.2 文件无重叠可并行；Phase 3.9 review 面积大，建议 3.2 ship 后顺位开。PR-MD1 follow-up: `CELLGEN-LITERAL-FUNNEL-02` 立即排期 next-up（1.5-2h）。
 
 ---
@@ -273,6 +278,13 @@ Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 
 | Rank | Phase | 工时 | 与 PR-SH1 并行能力 |
 |---|---|---|---|
+| 1 | **Phase 3.2 PR-SH1**（inspector method ban + svctoken/role_admin path A.3 closure，最小化 scope）| 3-5h | — 主线，先开 |
+| 2 | **Phase 3.7 PR-SC1**（archtest 扫描 scope 扩展束，CONTRACTSPEC-LITERAL-RUNTIME + OUTBOX-SCAN-SCOPE-EXPAND 合并）| 4-6h | ✅ 完全并行 |
+| 3 | **Phase 3.5 PR-EP1**（typeseval eval predicate centralization）| 3-5h | ⚠️ 同 typeseval 包 — review 维度重叠，建议 PR-SH1 review 后期再开 |
+| 4 | **Phase 3.8 PR-MD1**（字段漂移守卫束，CELL-METADATA + CATALOG-DTO 合并）| 4-6h | ✅ 完全并行 |
+| 5 | **Phase 3.9 PR-S7**（PR450 治理升级束 5 子条 bundle）| 8-12h | ⚠️ 较大 review 面积，建议 PR-SH1 ship 后顺位开 |
+
+**总剩余工时（Wave 2/3 范围）**：3-5h + 4-6h + 3-5h + 4-6h + 8-12h = **22-34h dev / 7-12h review**（PR-SH1 最小化后从 12-16h 缩为 3-5h；已扣除 Phase 0.1 done + Phase 3.6 cancelled）
 | 1 | **Phase 3.2 PR-SH1**（scanner hardening + 5 case drift fixes + symlink fail-closed + 双轨整理）| 12-16h | — 主线，先开 |
 | 2 | **Phase 3.7 PR-SC1**（archtest 扫描 scope 扩展 + Hard 升级，CONTRACTSPEC-LITERAL-RUNTIME 走 typed funnel；C9 PR245-F6 已 moot 同 PR 关闭）| 5-8h | ✅ 完全并行（kernel/contractspec/framework.go 新建 + runtime/ 5 处迁移 + archtest 改造，与 PR-SH1 内部 walk.go/content.go 不同文件）|
 | 3 | **Phase 3.5 PR-EP1**（typeseval eval predicate centralization）| 3-5h | ⚠️ 同 typeseval 包 — 文件不同（archtest 新规则 vs internal/typeseval/scanner.go）但 review 维度重叠，建议 PR-SH1 进入 review 中后期再开 |
