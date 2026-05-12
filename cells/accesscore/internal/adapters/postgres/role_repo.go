@@ -85,32 +85,92 @@ ON CONFLICT (user_id, role_id) DO NOTHING`
 DELETE FROM role_assignments
 WHERE user_id = $1 AND role_id = $2`
 
-	// removeIfNotLastSQL atomically checks and removes the assignment only if
-	// another holder remains. The FOR UPDATE on the holders CTE locks all rows
-	// for role_id for the duration of the transaction, preventing TOCTOU races
-	// under READ COMMITTED: two concurrent callers with 2 admins serialize, and
-	// only the first to commit passes the COUNT > 1 condition.
+	// removeIfNotLastSQL atomically removes the admin role assignment from $1
+	// only if either (a) the target user is not currently active (locked /
+	// suspended targets can't reduce the effective-admin set, matching the
+	// migration-024 trigger which RETURNs OLD when target is non-active), or
+	// (b) at least one OTHER *effective* admin remains. Effective admin =
+	// (users.status='active' AND has admin role) — a locked/suspended admin
+	// peer does NOT keep the system administrable (S4.0 invariant upgrade).
 	//
-	// The DB last_admin_protected trigger (migration 019) remains the safety net
-	// for any direct DELETE that bypasses this CTE path.
+	// The CTE acquires (a) a transaction-scoped advisory lock on
+	// 'gocell.accesscore.last_admin' so any concurrent guard path (this CTE
+	// plus the migration-024 trigger on `users`) serializes, and (b)
+	// FOR UPDATE OF u on the *other* active-admin user rows so concurrent
+	// admin-revoke / lock / delete transactions block until the holder set is
+	// stable. READ COMMITTED isolation is sufficient under these locks.
+	//
+	// MATERIALIZED on lock_acquired forces evaluation: PG 12+ inlines
+	// unreferenced CTEs and a planner that drops the lock CTE would defeat
+	// serialization (the volatile pg_advisory_xact_lock would never run).
+	// We additionally CROSS JOIN lock_acquired into the deleted CTE so even a
+	// future planner that ignores MATERIALIZED keeps the dependency.
+	//
+	// target_status reads the current target user status (NULL if user does
+	// not exist); used to short-circuit the last-admin check when target is
+	// non-active.
+	//
+	// The migration-024 effective_admin_invariant_on_role_assignments trigger
+	// remains the safety net for any direct DELETE that bypasses this CTE path.
 	removeIfNotLastSQL = `
-WITH holders AS (
-    SELECT user_id FROM role_assignments
-    WHERE role_id = $2
-    FOR UPDATE
+WITH lock_acquired AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0)) AS locked
+),
+target_status AS (
+    SELECT status FROM users WHERE id = $1
+),
+others AS (
+    SELECT u.id FROM users u
+    JOIN role_assignments ra ON ra.user_id = u.id
+    WHERE ra.role_id = 'admin' AND u.status = 'active' AND u.id <> $1
+    FOR UPDATE OF u
 ),
 deleted AS (
     DELETE FROM role_assignments
     WHERE user_id = $1 AND role_id = $2
-      AND (SELECT COUNT(*) FROM holders) > 1
+      AND EXISTS (SELECT 1 FROM lock_acquired)
+      AND (
+          (SELECT status FROM target_status) IS DISTINCT FROM 'active'
+          OR EXISTS (SELECT 1 FROM others)
+      )
     RETURNING user_id
 )
 SELECT
-    EXISTS(SELECT 1 FROM holders WHERE user_id = $1) AS user_held_role,
-    EXISTS(SELECT 1 FROM deleted)                    AS was_deleted`
+    EXISTS(SELECT 1 FROM role_assignments WHERE user_id = $1 AND role_id = $2) AS user_held_role,
+    EXISTS(SELECT 1 FROM deleted)                                              AS was_deleted`
 
 	countByRoleSQL = `
 SELECT COUNT(*)::INT FROM role_assignments WHERE role_id = $1`
+
+	// countEffectiveAdminsSQL counts users that are simultaneously
+	// status='active' AND hold the admin role. This is the canonical
+	// last-admin invariant counter consumed via the EffectiveAdminCounter
+	// sealed interface (S4.0). Advisory lock is taken inside the CTE so the
+	// read serializes with concurrent mutation guards (CTE prelude in
+	// removeIfNotLastSQL + migration-024 triggers all share the same key).
+	//
+	// IMPORTANT: This query MUST only be executed within an open write
+	// transaction. The advisory lock (pg_advisory_xact_lock) is transaction-
+	// scoped: it is automatically released when the enclosing transaction
+	// commits or rolls back. Calling this outside a transaction defeats the
+	// serialization guarantee — the lock acquires and immediately releases,
+	// leaving a window for concurrent mutations. If a lock-free diagnostic
+	// variant is needed (e.g. for observability reads), add a separate query
+	// without the advisory-lock CTE rather than lifting the constraint here.
+	// MATERIALIZED + CROSS JOIN ensures the volatile pg_advisory_xact_lock
+	// actually runs: PG 12+ inlines unreferenced CTEs by default and would
+	// otherwise drop the lock entirely. lock_acquired references in the FROM
+	// clause via CROSS JOIN, so removing it would change query results — the
+	// planner cannot prune it.
+	countEffectiveAdminsSQL = `
+WITH lock_acquired AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0)) AS locked
+)
+SELECT COUNT(*)::INT
+FROM role_assignments ra
+JOIN users u ON u.id = ra.user_id
+CROSS JOIN lock_acquired
+WHERE ra.role_id = 'admin' AND u.status = 'active'`
 )
 
 // Create upserts a role (seed/bootstrap semantics: existing role is overwritten).
@@ -210,6 +270,18 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 
 // RemoveFromUser removes a role assignment. Idempotent — no error when the
 // assignment did not exist.
+//
+// SAFETY: callers needing the at-least-one-effective-admin invariant
+// (revoke admin role, demote sole admin) must use RemoveFromUserIfNotLast,
+// which combines the application-layer CTE check with the migration-024
+// trigger safety net. RemoveFromUser issues a plain DELETE and relies
+// SOLELY on the trigger to enforce the invariant — when the trigger
+// blocks the DELETE, isLastAdminProtected translates SQLSTATE P0001 into
+// ErrAuthLastAdminProtected (HTTP 403). The single legitimate caller
+// passing roleID == auth.RoleAdmin is adminprovision.Compensate, which
+// runs after a setup failure: if the just-provisioned admin is the only
+// effective admin, the trigger correctly blocks the cleanup and leaves
+// the operator with a usable account rather than an unusable system.
 func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	_, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
 	if err != nil {
@@ -224,24 +296,33 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 }
 
 // RemoveFromUserIfNotLast removes a role assignment with admin-scoped
-// last-holder protection (ADR-admin-invariant §3.2). For roleID == auth.RoleAdmin
-// the FOR UPDATE CTE atomically serializes concurrent revocations so only one
-// caller can remove an admin when exactly two admins exist (TOCTOU-safe under
-// READ COMMITTED), and refuses removal of the sole admin. For any other roleID
-// the operation is a plain idempotent DELETE (matches DB trigger scope:
-// migration 019:50 `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
+// last-effective-admin protection (ADR-admin-invariant §3.2, S4.0). For
+// roleID == auth.RoleAdmin the CTE acquires an advisory xact lock plus
+// FOR UPDATE OF u on the other active-admin users, atomically serializing
+// concurrent revocations / locks / deletes. The DELETE only fires when at
+// least one OTHER effective admin (status='active' AND admin) remains. For
+// any other roleID the operation is a plain idempotent DELETE (matches the
+// migration-024 trigger scope: `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
+//
+// CONTRACT (runtime-enforced for admin path): the admin-role branch must
+// be called within an open write transaction so the CTE's
+// pg_advisory_xact_lock scopes to the caller's tx, not a one-shot pool
+// connection. The function fail-fasts with ErrInternal when roleID equals
+// auth.RoleAdmin and no pgx.Tx is present under
+// kernel/persistence.TxCtxKey. The non-admin path stays pool-driven (no
+// lock involved); calling it outside a tx is fine.
 //
 // Returns:
 //   - (true, nil)  — role was held and successfully removed.
 //   - (false, nil) — role was not held (idempotent no-op).
-//   - (false, ErrAuthLastAdminProtected) — admin path only; user is the sole
-//     admin holder. Both the app-level CTE detect path and the DB trigger
-//     safety-net path return the same errcode so client handlers match a
-//     single business invariant.
+//   - (false, ErrAuthLastAdminProtected) — admin path only; removal would
+//     leave zero effective admins. Both the app-level CTE detect path and
+//     the DB trigger safety-net path return the same errcode so client
+//     handlers match a single business invariant.
 func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	if roleID != auth.RoleAdmin {
 		// Non-admin role: plain DELETE, no last-holder check. Trigger
-		// (migration 019) also short-circuits on `role_id <> 'admin'`.
+		// (migration 024) also short-circuits on `role_id <> 'admin'`.
 		tag, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
 		if err != nil {
 			return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
@@ -250,8 +331,14 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 		return tag.RowsAffected() == 1, nil
 	}
 
+	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
+	if !ok || tx == nil {
+		return false, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"role_repo: remove-if-not-last (admin) must be called inside a transaction (no pgx.Tx in ctx)")
+	}
+
 	var userHeldRole, wasDeleted bool
-	row := r.db.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
+	row := tx.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
 	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
 		if isLastAdminProtected(err) {
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
@@ -271,15 +358,19 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 		// Role held and removed successfully.
 		return true, nil
 	default:
-		// Admin held but not removed: user is the sole admin. Same errcode as
-		// the DB trigger path — single business invariant.
+		// Admin held but not removed: removing it would leave zero effective
+		// admins (no peer with status='active' AND admin role). Same errcode
+		// as the DB trigger path — single business invariant.
 		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
-			"cannot revoke admin: this is the only admin; assign the admin role to another user first",
+			"cannot revoke admin: removing this assignment would leave the system with no effective admin; assign admin to an active user first",
 			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
 	}
 }
 
-// CountByRole returns the number of users assigned to the given role.
+// CountByRole returns the total count of role_assignments for roleID
+// regardless of user status. Used for bootstrap idempotency
+// (adminprovision); MUST NOT be used as the last-admin invariant counter —
+// see CountEffectiveAdmins.
 func (r *PGRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
 	var count int
 	row := r.db.QueryRow(ctx, countByRoleSQL, roleID)
@@ -287,6 +378,60 @@ func (r *PGRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: count-by-role", err)
 	}
 	return count, nil
+}
+
+// CountEffectiveAdmins returns the number of users that are simultaneously
+// status='active' AND hold the admin role. Satisfies the domain.
+// EffectiveAdminCounter sealed interface (S4.0 invariant counter).
+//
+// Acquires advisory xact lock 'gocell.accesscore.last_admin' inside the CTE
+// so concurrent guard paths (this read, removeIfNotLastSQL CTE, and the
+// migration-024 trigger on users) serialize.
+//
+// CONTRACT (runtime-enforced): Must be called within an open write
+// transaction. The advisory lock is transaction-scoped
+// (pg_advisory_xact_lock) and releases on commit/rollback; outside-transaction
+// callers would acquire and immediately release the lock, defeating the
+// invariant guarantee. The function fail-fasts with ErrInternal when no
+// pgx.Tx is present under kernel/persistence.TxCtxKey — same shape as
+// PGSetupLock.Acquire / OutboxWriter.Write. If a lock-free read is ever
+// needed for diagnostics or observability, add a dedicated variant without
+// the advisory-lock CTE rather than relaxing this contract.
+func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context) (int, error) {
+	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
+	if !ok || tx == nil {
+		return 0, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"role_repo: count-effective-admins must be called inside a transaction (no pgx.Tx in ctx)")
+	}
+	var count int
+	row := tx.QueryRow(ctx, countEffectiveAdminsSQL)
+	if err := row.Scan(&count); err != nil {
+		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: count-effective-admins", err)
+	}
+	return count, nil
+}
+
+// effectiveAdminExistsSQL is the lock-free read counterpart to
+// countEffectiveAdminsSQL. No advisory lock and no tx requirement —
+// designed for fast-path checks (setup retirement, provisioner.Status)
+// where eventual consistency is acceptable and the result does not feed
+// into the at-least-one invariant decision.
+const effectiveAdminExistsSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM role_assignments ra
+    JOIN users u ON u.id = ra.user_id
+    WHERE ra.role_id = 'admin' AND u.status = 'active'
+)`
+
+// EffectiveAdminExists implements ports.RoleRepository — see the port godoc
+// for fast-path semantics. Pool-driven (no tx required, no advisory lock).
+func (r *PGRoleRepo) EffectiveAdminExists(ctx context.Context) (bool, error) {
+	var exists bool
+	row := r.db.QueryRow(ctx, effectiveAdminExistsSQL)
+	if err := row.Scan(&exists); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: effective-admin-exists", err)
+	}
+	return exists, nil
 }
 
 // ListByUserID returns a paginated, sorted list of roles assigned to userID.

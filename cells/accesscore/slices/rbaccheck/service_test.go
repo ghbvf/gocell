@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -29,14 +30,14 @@ func newTestService(t *testing.T) (*Service, *mem.RoleRepository) {
 
 func newTestServiceWithMode(t *testing.T, runMode query.RunMode) (*Service, *mem.RoleRepository) {
 	t.Helper()
-	repo := mem.NewRoleRepository()
+	repo := mem.NewStore(clock.Real()).RoleRepository()
 	svc, err := NewService(repo, newTestCodec(t), slog.Default(), runMode)
 	require.NoError(t, err)
 	return svc, repo
 }
 
 func TestNewService_RequiresCodec(t *testing.T) {
-	repo := mem.NewRoleRepository()
+	repo := mem.NewStore(clock.Real()).RoleRepository()
 	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
 	require.Error(t, err)
 	require.Nil(t, svc)

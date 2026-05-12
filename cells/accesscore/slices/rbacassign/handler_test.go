@@ -17,19 +17,30 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func setupHandler(t *testing.T) (http.Handler, *mem.RoleRepository) {
+func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 	t.Helper()
-	roleRepo := mem.NewRoleRepository()
-	roleRepo.SeedRole(&domain.Role{
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(&domain.Role{
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	})
-	_, _ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
+	// Seed usr-1 as an effective admin so the default Revoke test scenarios
+	// have a real admin to operate on. Additional active admins must be added
+	// by test setup hooks for the multi-holder cases.
+	require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
+		ID:       "usr-1",
+		Username: "usr-1",
+		Email:    "usr-1@test.local",
+		Status:   domain.StatusActive,
+	}))
+	_, err := store.RoleRepository().AssignToUser(context.Background(), "usr-1", "admin")
+	require.NoError(t, err)
 
-	svc := mustNewService(t, roleRepo, testutil.RealSessionRepo(t), slog.Default())
+	svc := mustNewService(t, store.RoleRepository(), testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {
@@ -37,7 +48,21 @@ func setupHandler(t *testing.T) (http.Handler, *mem.RoleRepository) {
 			panic("setupHandler: RegisterRoutes: " + err.Error())
 		}
 	})
-	return mux, roleRepo
+	return mux, store
+}
+
+// seedActiveAdminInStore is the handler-test analog of assignActiveAdmin
+// (service_test.go) that operates on the store returned by setupHandler.
+func seedActiveAdminInStore(t *testing.T, store *mem.Store, userID string) {
+	t.Helper()
+	require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
+		ID:       userID,
+		Username: userID,
+		Email:    userID + "@test.local",
+		Status:   domain.StatusActive,
+	}))
+	_, err := store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
+	require.NoError(t, err)
 }
 
 func TestHandler_Assign(t *testing.T) {
@@ -135,7 +160,7 @@ func TestHandler_Assign(t *testing.T) {
 func TestHandler_Revoke(t *testing.T) {
 	tests := []struct {
 		name       string
-		setup      func(*mem.RoleRepository) // extra setup before request
+		setup      func(*testing.T, *mem.Store) // extra setup before request
 		body       string
 		ctx        func() context.Context // nil = no auth
 		wantStatus int
@@ -143,9 +168,9 @@ func TestHandler_Revoke(t *testing.T) {
 	}{
 		{
 			name: "accesscore caller revokes role returns 200 (multiple holders)",
-			setup: func(r *mem.RoleRepository) {
-				// Ensure 2 admins so last-admin guard doesn't block.
-				_, _ = r.AssignToUser(context.Background(), "usr-2", "admin")
+			setup: func(t *testing.T, s *mem.Store) {
+				// Ensure 2 effective admins so last-admin guard doesn't block.
+				seedActiveAdminInStore(t, s, "usr-2")
 			},
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
@@ -210,9 +235,9 @@ func TestHandler_Revoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, roleRepo := setupHandler(t)
+			h, store := setupHandler(t)
 			if tc.setup != nil {
-				tc.setup(roleRepo)
+				tc.setup(t, store)
 			}
 			req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")

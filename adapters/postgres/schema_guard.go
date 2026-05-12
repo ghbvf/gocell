@@ -26,10 +26,12 @@ import (
 //   - refresh_tokens     (007)  append-only refresh token lineage
 //   - feature_flags      (008)  flag definitions
 //   - users              (017)  accesscore user identities
-//     users_status_chk, users_creation_source_chk (CHECK constraints added by 023)
+//                                 + users_status_chk, users_creation_source_chk (023 CHECK)
+//                                 + effective_admin_invariant_on_users trigger (024)
 //   - sessions           (018)  accesscore session / JTI store
 //   - roles              (019)  accesscore role definitions
-//   - role_assignments   (019)  accesscore user-role grants + last-admin trigger
+//   - role_assignments   (019)  accesscore user-role grants
+//                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //   - audit_entries      (020)  tamper-evident audit ledger (per-namespace hash chain)
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
@@ -405,18 +407,31 @@ var expectedFKs = []expectedFK{
 }
 
 // expectedTriggers is the trigger registry.
+//
+// Migration 024 (S4.0) replaced the migration-019 `last_admin_protected`
+// trigger on role_assignments with two triggers sharing
+// effective_admin_invariant_fn: one on role_assignments (direct DELETE
+// bypass safety net) and one on users (BEFORE UPDATE OR DELETE) to catch
+// status transitions that previously bypassed the role_assignments-only
+// trigger. Both names and the shared function are required-present.
 var expectedTriggers = []expectedTrigger{
 	{
 		Table:    "role_assignments",
-		Name:     "last_admin_protected",
-		Function: "last_admin_protected_fn",
+		Name:     "effective_admin_invariant_on_role_assignments",
+		Function: "effective_admin_invariant_fn",
+		Enabled:  true,
+	},
+	{
+		Table:    "users",
+		Name:     "effective_admin_invariant_on_users",
+		Function: "effective_admin_invariant_fn",
 		Enabled:  true,
 	},
 }
 
 // expectedFunctions is the PL/pgSQL function registry.
 var expectedFunctions = []expectedFunction{
-	{Name: "last_admin_protected_fn"},
+	{Name: "effective_admin_invariant_fn"},
 }
 
 // expectedChecks is the CHECK constraint registry.

@@ -189,7 +189,12 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 
 // Update overwrites the mutable fields of an existing user. Returns
 // ErrAuthUserNotFound when no row matched. Returns ErrAuthUserDuplicate (409)
-// when the updated username or email collides with an existing row.
+// when the updated username or email collides with an existing row. Returns
+// ErrAuthLastAdminProtected (403) when the migration-024 trigger on `users`
+// rejects the UPDATE because the row is the sole effective admin and the
+// status would demote (active → suspended/locked) — same errcode as the
+// application-layer guard so client handlers match a single business
+// invariant regardless of which layer caught the violation.
 func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 	tag, err := r.db.Exec(ctx, updateUserSQL,
 		user.ID,
@@ -202,6 +207,12 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		user.UpdatedAt,
 	)
 	if err != nil {
+		if isLastAdminProtected(err) {
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
+				"cannot remove the last effective admin",
+				errcode.WithCategory(errcode.CategoryAuth),
+				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", user.ID, string(user.Status))))
+		}
 		if isUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 				"username or email already exists",
@@ -218,14 +229,17 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 }
 
 // Delete removes a user row. Returns ErrAuthUserNotFound when no row matched.
-// Returns ErrAuthLastAdminProtected (403) when the DB trigger rejects the
-// delete because the user is the sole admin holder.
+// Returns ErrAuthLastAdminProtected (403) when the migration-024 trigger on
+// `users` rejects the delete because the row is the sole effective admin —
+// same errcode + message as PGUserRepo.Update / domain.LastAdminGuard so
+// client handlers match a single business invariant regardless of which
+// layer caught the violation.
 func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 	tag, err := r.db.Exec(ctx, deleteUserSQL, id)
 	if err != nil {
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
-				"delete blocked: last admin",
+				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
 				errcode.WithInternal(fmt.Sprintf("user_id=%s", id)))
 		}

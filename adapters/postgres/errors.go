@@ -86,10 +86,15 @@ func IsForeignKeyViolation(err error) bool {
 }
 
 // IsLastAdminProtected reports whether err is the PL/pgSQL exception raised
-// by the last_admin_protected trigger (migrations/019_roles.sql). Distinct
-// from the bare SQLSTATE check because P0001 is a generic class — we also
-// need the trigger name in the MESSAGE field to avoid catching unrelated
-// RAISE EXCEPTION sites.
+// by the effective_admin_invariant_fn trigger function
+// (migrations/024_effective_admin_invariant.sql). Distinct from the bare
+// SQLSTATE check because P0001 is a generic class — we also need the trigger
+// sentinel in the MESSAGE field to avoid catching unrelated RAISE EXCEPTION
+// sites.
+//
+// S4.0 (migration 024) renamed the trigger function from
+// `last_admin_protected_fn` → `effective_admin_invariant_fn` and changed the
+// message prefix accordingly. The 019 trigger / function are fully retired.
 func IsLastAdminProtected(err error) bool {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
@@ -99,10 +104,9 @@ func IsLastAdminProtected(err error) bool {
 		return false
 	}
 	// Match prefix only — the trigger function emits
-	// 'last_admin_protected: cannot remove the last admin' (see
-	// migrations/019_roles.sql). Substring search keeps the predicate
-	// resilient to minor message tweaks.
-	const triggerSentinel = "last_admin_protected"
+	// 'effective_admin_invariant: would leave the system with no effective admin'
+	// (see migrations/024_effective_admin_invariant.sql).
+	const triggerSentinel = "effective_admin_invariant"
 	for i := 0; i+len(triggerSentinel) <= len(pgErr.Message); i++ {
 		if pgErr.Message[i:i+len(triggerSentinel)] == triggerSentinel {
 			return true

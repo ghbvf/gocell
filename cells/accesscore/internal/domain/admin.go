@@ -4,68 +4,135 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// AdminCounter returns the number of users currently holding the admin role.
-// Implementations defer to the underlying RoleRepository (CountByRole("admin"))
-// — the type alias keeps LastAdminGuard's signature dependency narrow so unit
-// tests can supply a closure without standing up a full RoleRepository fake.
-type AdminCounter func(ctx context.Context) (int, error)
+// EffectiveAdminCounterImpl is the structural capability provided by the
+// concrete RoleRepositories (PG, mem). PG/mem repos satisfy this interface
+// directly via their CountEffectiveAdmins method. It is intentionally NOT
+// the type accepted by NewLastAdminGuard — the sealed wrapper
+// EffectiveAdminCounter is. Wiring callers (identitymanage.NewService,
+// tests) pass an impl into WrapEffectiveAdminCounter to obtain the sealed
+// wrapper.
+//
+// Effective admin = user.status='active' AND user holds the admin role
+// (ADR-admin-invariant §3.2, S4.0). A user that holds the admin role but
+// is locked/suspended is NOT counted (they cannot log in to administer).
+//
+// The narrow single-method shape prevents mis-wiring with the generic
+// CountByRole, whose semantics include inactive holders (used by
+// adminprovision bootstrap idempotency, not by the at-least-one
+// invariant).
+type EffectiveAdminCounterImpl interface {
+	CountEffectiveAdmins(ctx context.Context) (int, error)
+}
 
-// LastAdminGuard rejects operations that would remove the only remaining
-// admin from the system, enforcing the "at least one admin" invariant
-// (ADR `docs/architecture/202605101400-adr-admin-invariant.md`).
+// EffectiveAdminCounter is the sealed dependency required by
+// LastAdminGuard. The unexported sealedEffectiveAdminCounter() marker
+// method makes it unimplementable outside the domain package — the only
+// path to a value is WrapEffectiveAdminCounter.
+//
+// AI-rebust 评级 Hard (sealed interface, compile-time blocking): external
+// code cannot declare a type satisfying this interface (cannot implement
+// the unexported marker method); any attempt produces a compile error.
+// The single construction path is WrapEffectiveAdminCounter, which
+// validates the underlying impl is non-nil and rejects typed-nil. Same
+// pattern as kernel/persistence.CellTxManager (ADR
+// 202605101900-adr-cell-raw-infra-sealed-marker §D2).
+type EffectiveAdminCounter interface {
+	EffectiveAdminCounterImpl
+	// MARKER: do not implement; this is the sealing marker — call
+	// domain.WrapEffectiveAdminCounter(impl) to obtain a value of this
+	// interface.
+	sealedEffectiveAdminCounter()
+}
+
+// internalEffectiveAdminCounter is the only implementation of the sealed
+// EffectiveAdminCounter. It composes the raw impl provided by the wiring
+// caller and is constructed exclusively by WrapEffectiveAdminCounter.
+type internalEffectiveAdminCounter struct {
+	impl EffectiveAdminCounterImpl
+}
+
+func (i internalEffectiveAdminCounter) CountEffectiveAdmins(ctx context.Context) (int, error) {
+	return i.impl.CountEffectiveAdmins(ctx)
+}
+
+func (internalEffectiveAdminCounter) sealedEffectiveAdminCounter() {}
+
+// WrapEffectiveAdminCounter is the sole authorized path to construct an
+// EffectiveAdminCounter. impl must be non-nil and not a typed-nil
+// interface; the wrapper would otherwise hide the typed-nil from
+// NewLastAdminGuard's IsNilInterface guard, silently bypassing the
+// fail-fast.
+func WrapEffectiveAdminCounter(impl EffectiveAdminCounterImpl) (EffectiveAdminCounter, error) {
+	if validation.IsNilInterface(impl) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"domain.WrapEffectiveAdminCounter: EffectiveAdminCounterImpl must not be nil")
+	}
+	return internalEffectiveAdminCounter{impl: impl}, nil
+}
+
+// LastAdminGuard rejects operations that would leave the system with zero
+// effective admins, enforcing the "at least one effective admin" invariant
+// (ADR `docs/architecture/202605101400-adr-admin-invariant.md`, S4.0).
 //
 // Layered protection:
 //
-//  1. Application: CheckRemove is invoked from identitymanage.DeleteUser /
-//     ChangeUserStatus(Locked) / rbacassign.RevokeRole("admin") so callers
+//  1. Application: CheckRemove is invoked from identitymanage.Delete /
+//     Lock / Update(status mutation) and indirectly via
+//     rbacassign.Revoke → RoleRepository.RemoveFromUserIfNotLast. Callers
 //     receive ErrAuthLastAdminProtected (HTTP 403) with a precise errcode.
-//     S4 still owns the session/refresh/JWT closed loop, but the last-admin
-//     service wiring is live before that tranche.
 //
-//  2. DB: migrations/019_roles.sql installs a BEFORE DELETE trigger on
-//     role_assignments that raises 'last_admin_protected' when a direct
-//     DELETE would remove the sole admin holder. The DB layer is the
-//     SQL-level safety net, not the precision check.
+//  2. DB: migrations/024_effective_admin_invariant.sql installs BEFORE row
+//     triggers on `users` (UPDATE/DELETE) and `role_assignments` (DELETE)
+//     that raise 'effective_admin_invariant' when a mutation would leave
+//     zero effective admins. The DB layer is the SQL-level safety net for
+//     direct-SQL bypass, not the precision check.
 //
-// AdminCounter is required (NewLastAdminGuard fail-fasts on nil).
+// counter is the sealed EffectiveAdminCounter; NewLastAdminGuard
+// fail-fasts on bare-nil or typed-nil sealed values.
 type LastAdminGuard struct {
-	count AdminCounter
+	counter EffectiveAdminCounter
 }
 
-// NewLastAdminGuard constructs a LastAdminGuard. count must be non-nil; nil
-// returns ErrValidationFailed so misconfigured assemblies fail at startup.
-func NewLastAdminGuard(count AdminCounter) (*LastAdminGuard, error) {
-	if count == nil {
+// NewLastAdminGuard constructs a LastAdminGuard. counter must be the
+// sealed EffectiveAdminCounter constructed via WrapEffectiveAdminCounter;
+// a bare-nil or typed-nil sealed value returns ErrValidationFailed so
+// misconfigured assemblies fail at startup.
+func NewLastAdminGuard(counter EffectiveAdminCounter) (*LastAdminGuard, error) {
+	if validation.IsNilInterface(counter) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"domain.NewLastAdminGuard: AdminCounter must not be nil")
+			"domain.NewLastAdminGuard: EffectiveAdminCounter must not be nil")
 	}
-	return &LastAdminGuard{count: count}, nil
+	return &LastAdminGuard{counter: counter}, nil
 }
 
-// CheckRemove reports whether userID may be removed (deleted, locked, or
-// have its admin role revoked) without violating the at-least-one invariant.
+// CheckRemove reports whether mutating userID (delete, lock, status change
+// away from 'active', or admin role revoke) may proceed without violating the
+// at-least-one-effective-admin invariant.
 //
-// hasAdminRole is the caller's evidence that userID currently holds the admin
-// role; non-admin users are unconditionally allowed (returns nil). When the
-// user does hold admin, CheckRemove queries the live admin count: if exactly
-// one admin remains, the operation is rejected with ErrAuthLastAdminProtected.
+// userIsActiveAdmin is the caller's evidence that userID is currently an
+// effective admin (status='active' AND holds admin role). When false (target
+// user is not an effective admin), the mutation cannot reduce the effective
+// admin count, so CheckRemove returns nil without invoking the counter.
 //
-// The counter error is propagated unchanged so infrastructure faults (DB
-// outage, query error) do not get conflated with the fail-closed protection
+// When userIsActiveAdmin is true, the counter is queried; if the result is
+// ≤ 1 (the target is the only effective admin), CheckRemove returns
+// ErrAuthLastAdminProtected. The counter error is propagated unchanged so
+// infrastructure faults do not get conflated with the fail-closed protection
 // path. Caller's job to wrap with context (`fmt.Errorf("…: %w", err)`).
-func (g *LastAdminGuard) CheckRemove(ctx context.Context, _ string, hasAdminRole bool) error {
-	if !hasAdminRole {
+func (g *LastAdminGuard) CheckRemove(ctx context.Context, _ string, userIsActiveAdmin bool) error {
+	if !userIsActiveAdmin {
 		return nil
 	}
-	n, err := g.count(ctx)
+	n, err := g.counter.CountEffectiveAdmins(ctx)
 	if err != nil {
 		return err
 	}
 	if n <= 1 {
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
-			"cannot remove the last admin",
+			"cannot remove the last effective admin",
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	return nil

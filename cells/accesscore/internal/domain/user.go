@@ -132,6 +132,17 @@ func (u *User) IsLocked() bool {
 	return u.Status == StatusLocked
 }
 
+// CanAuthenticate returns true only when the account is currently active.
+// Any non-active status (locked, suspended, or unknown future state) MUST
+// fail-closed at every authentication surface: login, refresh, validate.
+// S4.0: suspended users were previously allowed to log in because the only
+// gate was IsLocked(); this method is the single source of truth that
+// closes that gap. Use this instead of `IsLocked()` for any code path that
+// decides whether a user may obtain or continue to use a session.
+func (u *User) CanAuthenticate() bool {
+	return u.Status == StatusActive
+}
+
 // BumpPasswordVersion advances the CAS counter that guards ChangePassword
 // from concurrent overwrites. Call after writing a new PasswordHash; the
 // repo's UpdatePassword SQL bumps the column via password_version+1, so this

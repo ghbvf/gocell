@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -42,22 +43,50 @@ func mustNewService(
 	return svc
 }
 
-func newTestService(t testing.TB) (*Service, *mem.RoleRepository, ports.SessionRepository) {
+// newTestService constructs a Service backed by a shared mem.Store so the
+// rbacassign RemoveFromUserIfNotLast admin path can observe user.Status
+// (effective-admin invariant, S4.0). Returns the store so callers can seed
+// active user records when staging admin role assignments.
+func newTestService(t testing.TB) (*Service, *mem.Store, ports.SessionRepository) {
 	t.Helper()
-	roleRepo := mem.NewRoleRepository()
-	roleRepo.SeedRole(&domain.Role{
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(&domain.Role{
 		ID:   "admin",
 		Name: "admin",
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
 	})
+	store.RoleRepository().SeedRole(&domain.Role{ID: "editor", Name: "editor"})
 	sessionRepo := testutil.RealSessionRepo(t)
-	return mustNewService(t, roleRepo, sessionRepo, slog.Default()), roleRepo, sessionRepo
+	return mustNewService(t, store.RoleRepository(), sessionRepo, slog.Default()), store, sessionRepo
+}
+
+// seedActiveUser registers an active user in store so it counts as an
+// effective admin once admin role is assigned. Test convenience for the
+// effective-admin invariant: simply assigning admin role without an active
+// user record results in CountEffectiveAdmins == 0 and revoke rejection.
+func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
+	t.Helper()
+	require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
+		ID:       userID,
+		Username: userID,
+		Email:    userID + "@test.local",
+		Status:   domain.StatusActive,
+	}))
+}
+
+// assignActiveAdmin seeds an active user AND assigns the admin role. Use
+// where the test scaffolding expects "this user is an effective admin".
+func assignActiveAdmin(t testing.TB, store *mem.Store, userID string) {
+	t.Helper()
+	seedActiveUser(t, store, userID)
+	_, err := store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
+	require.NoError(t, err)
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
 	_, err := NewService(roleRepo, sessionRepo, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
@@ -70,7 +99,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 func TestService_Assign(t *testing.T) {
 	tests := []struct {
 		name     string
-		setup    func(*mem.RoleRepository)
+		setup    func(*testing.T, *mem.Store)
 		userID   string
 		roleID   string
 		wantErr  bool
@@ -86,8 +115,9 @@ func TestService_Assign(t *testing.T) {
 			name:   "assign same role twice is idempotent",
 			userID: "usr-1",
 			roleID: "admin",
-			setup: func(r *mem.RoleRepository) {
-				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
+			setup: func(t *testing.T, s *mem.Store) {
+				_, err := s.RoleRepository().AssignToUser(context.Background(), "usr-1", "admin")
+				require.NoError(t, err)
 			},
 			wantErr: false,
 		},
@@ -116,16 +146,16 @@ func TestService_Assign(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo, _ := newTestService(t)
+			svc, store, _ := newTestService(t)
 			if tc.setup != nil {
-				tc.setup(repo)
+				tc.setup(t, store)
 			}
 
 			err := svc.Assign(context.Background(), tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				// Verify assignment persisted.
-				roles, _ := repo.GetByUserID(context.Background(), tc.userID)
+				roles, _ := store.RoleRepository().GetByUserID(context.Background(), tc.userID)
 				var found bool
 				for _, r := range roles {
 					if r.ID == tc.roleID {
@@ -146,31 +176,66 @@ func TestService_Assign(t *testing.T) {
 func TestService_Revoke(t *testing.T) {
 	tests := []struct {
 		name     string
-		setup    func(*mem.RoleRepository)
+		setup    func(*testing.T, *mem.Store)
 		userID   string
 		roleID   string
 		wantErr  bool
 		wantCode errcode.Code
 	}{
 		{
-			name:   "revoke assigned role with multiple holders",
+			name:   "revoke assigned role with multiple active admin holders",
 			userID: "usr-1",
 			roleID: "admin",
-			setup: func(r *mem.RoleRepository) {
-				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
-				_, _ = r.AssignToUser(context.Background(), "usr-2", "admin")
+			setup: func(t *testing.T, s *mem.Store) {
+				assignActiveAdmin(t, s, "usr-1")
+				assignActiveAdmin(t, s, "usr-2")
 			},
 			wantErr: false,
 		},
 		{
-			name:   "revoke last admin returns error",
+			name:   "revoke sole effective admin returns ErrAuthLastAdminProtected",
 			userID: "usr-1",
 			roleID: "admin",
-			setup: func(r *mem.RoleRepository) {
-				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
+			setup: func(t *testing.T, s *mem.Store) {
+				assignActiveAdmin(t, s, "usr-1")
 			},
 			wantErr:  true,
 			wantCode: errcode.ErrAuthLastAdminProtected,
+		},
+		{
+			// S4.0 effective-admin upgrade: a locked admin peer is NOT a usable
+			// fallback, so revoking the *active* admin must be refused.
+			name:   "revoke active admin when only peer is locked is refused",
+			userID: "usr-1",
+			roleID: "admin",
+			setup: func(t *testing.T, s *mem.Store) {
+				assignActiveAdmin(t, s, "usr-1")
+				assignActiveAdmin(t, s, "usr-2")
+				// Lock usr-2 — now usr-1 is the sole effective admin.
+				u, err := s.UserRepository().GetByID(context.Background(), "usr-2")
+				require.NoError(t, err)
+				u.Status = domain.StatusLocked
+				require.NoError(t, s.UserRepository().Update(context.Background(), u))
+			},
+			wantErr:  true,
+			wantCode: errcode.ErrAuthLastAdminProtected,
+		},
+		{
+			// Inverse: revoking a *locked* admin does not reduce the effective
+			// admin count, so it must succeed even when the active peer is the
+			// only other holder.
+			name:   "revoke locked admin while active admin remains is allowed",
+			userID: "usr-locked",
+			roleID: "admin",
+			setup: func(t *testing.T, s *mem.Store) {
+				assignActiveAdmin(t, s, "usr-active")
+				assignActiveAdmin(t, s, "usr-locked")
+				u, err := s.UserRepository().GetByID(context.Background(), "usr-locked")
+				require.NoError(t, err)
+				u.Status = domain.StatusLocked
+				require.NoError(t, s.UserRepository().Update(context.Background(), u))
+			},
+			wantErr: false,
 		},
 		{
 			// ADR-admin-invariant §3.2: last-holder guard is admin-scoped.
@@ -178,8 +243,10 @@ func TestService_Revoke(t *testing.T) {
 			name:   "revoke last non-admin holder is allowed (admin-scoped guard)",
 			userID: "usr-1",
 			roleID: "editor",
-			setup: func(r *mem.RoleRepository) {
-				_, _ = r.AssignToUser(context.Background(), "usr-1", "editor")
+			setup: func(t *testing.T, s *mem.Store) {
+				seedActiveUser(t, s, "usr-1")
+				_, err := s.RoleRepository().AssignToUser(context.Background(), "usr-1", "editor")
+				require.NoError(t, err)
 			},
 			wantErr: false,
 		},
@@ -207,16 +274,16 @@ func TestService_Revoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo, _ := newTestService(t)
+			svc, store, _ := newTestService(t)
 			if tc.setup != nil {
-				tc.setup(repo)
+				tc.setup(t, store)
 			}
 
 			err := svc.Revoke(context.Background(), tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				// Verify removal persisted.
-				roles, _ := repo.GetByUserID(context.Background(), tc.userID)
+				roles, _ := store.RoleRepository().GetByUserID(context.Background(), tc.userID)
 				for _, r := range roles {
 					assert.NotEqual(t, tc.roleID, r.ID, "role %s should not be assigned to user %s after revoke", tc.roleID, tc.userID)
 				}
@@ -231,11 +298,12 @@ func TestService_Revoke(t *testing.T) {
 }
 
 func TestService_Revoke_InvalidatesSessions(t *testing.T) {
-	svc, roleRepo, sessionRepo := newTestService(t)
+	svc, store, sessionRepo := newTestService(t)
 	ctx := context.Background()
 
-	_, _ = roleRepo.AssignToUser(ctx, "usr-1", "admin")
-	_, _ = roleRepo.AssignToUser(ctx, "usr-2", "admin") // second admin to pass last-admin guard
+	// Two active admins so the effective-admin guard passes when revoking usr-1.
+	assignActiveAdmin(t, store, "usr-1")
+	assignActiveAdmin(t, store, "usr-2")
 	sess := &domain.Session{ID: "sess-1", UserID: "usr-1"}
 	require.NoError(t, sessionRepo.Create(ctx, sess))
 
@@ -268,19 +336,20 @@ func (failingSessionRepo) RevokeByUserID(_ context.Context, _ string) error {
 }
 
 func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
-	roleRepo := mem.NewRoleRepository()
-	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-	_, _ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
-	_, _ = roleRepo.AssignToUser(context.Background(), "usr-2", "admin") // second admin to pass last-admin guard
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	// Two active admins so the effective-admin guard passes when revoking usr-1.
+	assignActiveAdmin(t, store, "usr-1")
+	assignActiveAdmin(t, store, "usr-2")
 
-	svc := mustNewService(t, roleRepo, failingSessionRepo{}, slog.Default())
+	svc := mustNewService(t, store.RoleRepository(), failingSessionRepo{}, slog.Default())
 	err := svc.Revoke(context.Background(), "usr-1", "admin")
 	require.Error(t, err, "revoke must fail-closed when session revocation fails")
 	assert.Contains(t, err.Error(), "session revoke failed")
 }
 
 func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 
 	svc := mustNewService(t, roleRepo, failingSessionRepo{}, slog.Default())
@@ -303,7 +372,7 @@ func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			roleRepo := mem.NewRoleRepository()
+			roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 			roleRepo.SeedRole(&domain.Role{
 				ID:          "admin",
 				Name:        "admin",
@@ -335,19 +404,21 @@ func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			roleRepo := mem.NewRoleRepository()
-			roleRepo.SeedRole(&domain.Role{
+			store := mem.NewStore(clock.Real())
+			store.RoleRepository().SeedRole(&domain.Role{
 				ID:          "admin",
 				Name:        "admin",
 				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 			})
-			_, _ = roleRepo.AssignToUser(context.Background(), tc.userID, "admin")
-			_, _ = roleRepo.AssignToUser(context.Background(), "usr-other", "admin") // second admin
+			// Two active admins so the effective-admin guard passes when
+			// revoking tc.userID.
+			assignActiveAdmin(t, store, tc.userID)
+			assignActiveAdmin(t, store, "usr-other")
 			sessionRepo := testutil.RealSessionRepo(t)
 			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
 			require.NoError(t, sessionRepo.Create(context.Background(), sess))
 
-			svc := mustNewService(t, roleRepo, sessionRepo, slog.Default())
+			svc := mustNewService(t, store.RoleRepository(), sessionRepo, slog.Default())
 			require.NoError(t, svc.Revoke(context.Background(), tc.userID, tc.roleID))
 
 			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)

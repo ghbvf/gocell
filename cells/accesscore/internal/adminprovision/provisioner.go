@@ -110,16 +110,25 @@ func NewProvisioner(
 	}, nil
 }
 
-// Status reports whether at least one admin user exists.
+// Status reports whether at least one *effective* admin exists — that is,
+// a user with status='active' AND holding the admin role (S4.0). A
+// locked/suspended admin alone does NOT count: setup-retirement and Ensure
+// fast-paths must allow operator recovery when the only remaining admins
+// can't actually administer (see ADR `docs/architecture/202605101400-adr-admin-invariant.md`).
 //
-// Infrastructure errors bubble up unchanged so callers can distinguish a known
-// "no admin" from a transient RoleRepo outage.
+// Pre-S4.0 this method counted any role_assignments holder via CountByRole
+// — that semantic was wrong for setup retirement: a system with only
+// locked admins would silently retire setup, leaving the operator with no
+// HTTP recovery path.
+//
+// Infrastructure errors bubble up unchanged so callers can distinguish a
+// known "no effective admin" from a transient RoleRepo outage.
 func (p *Provisioner) Status(ctx context.Context) (bool, error) {
-	count, err := p.roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	exists, err := p.roleRepo.EffectiveAdminExists(ctx)
 	if err != nil {
-		return false, fmt.Errorf("adminprovision: count admin users: %w", err)
+		return false, fmt.Errorf("adminprovision: effective-admin-exists: %w", err)
 	}
-	return count > 0, nil
+	return exists, nil
 }
 
 // Ensure idempotently provisions the first admin. It is race-safe across

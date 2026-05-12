@@ -21,7 +21,7 @@ endpoints:
         description: "Unauthorized — missing or invalid service token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — caller_cell not in contract.clients allowlist"
+        description: "Forbidden — caller_cell not in contract.clients allowlist (ERR_AUTH_INVALID_CALLER_CELL), OR ERR_AUTH_LAST_ADMIN_PROTECTED when revoking the admin role from this user would leave the system with no effective admin (status='active' AND admin role) [S4.0]"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"

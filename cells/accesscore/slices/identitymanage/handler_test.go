@@ -53,7 +53,8 @@ var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setup(t testing.TB) http.Handler {
 	t.Helper()
-	svc, err := NewService(mem.NewUserRepository(clock.Real()), testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	if err != nil {
 		panic("setup: " + err.Error())
@@ -71,7 +72,7 @@ func setup(t testing.TB) http.Handler {
 // setupWithIssuer wires a service with a stub TokenIssuer for ChangePassword tests.
 func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	t.Helper()
-	repo := mem.NewUserRepository(clock.Real())
+	repo := mem.NewStore(clock.Real()).UserRepository()
 	effectiveIssuer := issuer
 	if effectiveIssuer == nil {
 		effectiveIssuer = handlerStubIssuer
@@ -568,7 +569,7 @@ func (*fakeRepoVersionConflict) UpdatePassword(_ context.Context, _ string, _ st
 }
 
 func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
-	repo := &fakeRepoVersionConflict{UserRepository: mem.NewUserRepository(clock.Real())}
+	repo := &fakeRepoVersionConflict{UserRepository: mem.NewStore(clock.Real()).UserRepository()}
 	userID := testutil.TestID("usr-409")
 	oldHash, hashErr := bcrypt.GenerateFromPassword([]byte("oldpass12"), domain.BcryptCost)
 	require.NoError(t, hashErr)

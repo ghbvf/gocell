@@ -58,6 +58,22 @@ func actorFromContext(ctx context.Context) (string, error) {
 	return p.Subject, nil
 }
 
+// callerHasRole reports whether the authenticated principal in ctx holds the
+// given role. Returns false for missing / anonymous principals so callers
+// fail-closed on field-level guards (e.g., status-mutation admin-only check).
+func callerHasRole(ctx context.Context, role string) bool {
+	p, ok := auth.FromContext(ctx)
+	if !ok {
+		return false
+	}
+	for _, r := range p.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
 // Option configures an identity-manage Service.
 type Option func(*Service)
 
@@ -164,9 +180,17 @@ func NewService(
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"identity-manage: last-admin protection requires a role repository")
 		}
-		guard, guardErr := domain.NewLastAdminGuard(func(ctx context.Context) (int, error) {
-			return s.lastAdminRoleRepo.CountByRole(ctx, auth.RoleAdmin)
-		})
+		// S4.0: the guard counts *effective* admins (status='active' AND admin
+		// role). RoleRepository.CountEffectiveAdmins is the canonical impl;
+		// WrapEffectiveAdminCounter produces the sealed
+		// domain.EffectiveAdminCounter wrapper that NewLastAdminGuard accepts.
+		// Sealed marker prevents structural mis-wiring with CountByRole or any
+		// other look-alike at compile time.
+		sealedCounter, wrapErr := domain.WrapEffectiveAdminCounter(s.lastAdminRoleRepo)
+		if wrapErr != nil {
+			return nil, fmt.Errorf("identity-manage: wrap effective-admin counter: %w", wrapErr)
+		}
+		guard, guardErr := domain.NewLastAdminGuard(sealedCounter)
 		if guardErr != nil {
 			return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
 		}
@@ -279,7 +303,28 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	if input.Status != nil &&
 		*input.Status != string(domain.StatusActive) &&
 		*input.Status != string(domain.StatusSuspended) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
+		// `locked` is intentionally not allowed via Update — it has its own
+		// dedicated Lock() endpoint with revoke-cascade semantics. The
+		// allowedValues detail keeps the wire payload self-describing without
+		// embedding the runtime value into the const-literal message
+		// (errcode MESSAGE-CONST-LITERAL-01 archtest).
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			"status value not allowed in Update; use Lock for the locked state",
+			errcode.WithDetails(
+				slog.String("field", "status"),
+				slog.String("allowedValues", string(domain.StatusActive)+","+string(domain.StatusSuspended)),
+			))
+	}
+	// S4.0 P1-A: status is an admin-only field. The route policy is
+	// selfOrAdminPolicy (PATCH allows users to update their own name/email/
+	// requirePasswordReset), but allowing a self-PATCH of status would let a
+	// suspended user re-activate themselves and defeat the admin's suspend
+	// gesture. Field-level guard: any Status mutation requires the actor to
+	// hold auth.RoleAdmin. Other fields stay self-editable.
+	if input.Status != nil && !callerHasRole(ctx, auth.RoleAdmin) {
+		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthIdentityInvalidInput,
+			"updating status requires admin role",
+			errcode.WithDetails(slog.String("field", "status")))
 	}
 
 	actor, err := actorFromContext(ctx)
@@ -287,27 +332,80 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		return nil, err
 	}
 
+	user, err := s.applyUserUpdate(ctx, input, actor)
+	if err != nil {
+		return nil, err
+	}
+	s.logger.Info("user updated", slog.String("user_id", user.ID))
+	return user, nil
+}
+
+// applyUserUpdate runs the transactional body of Update: fetch, optionally
+// guard a status-demotion, apply patch fields, persist, cascade-revoke
+// sessions when status demotes from 'active', and publish. Split out to keep
+// Update's cognitive complexity within the CLAUDE.md ≤15 budget once the
+// S4.0 effective-admin guard + status-demotion cascade were added.
+func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor string) (*domain.User, error) {
 	var user *domain.User
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		u, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
+		if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
+			return err
+		}
+		demotedFromActive := isStatusDemotion(u, input)
 		applyUpdateFields(u, input, s.clock.Now())
 		if err := s.repo.Update(txCtx, u); err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-		user = u
-		if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor}); err != nil {
+		if err := s.cascadeRevokeOnDemotion(txCtx, u.ID, demotedFromActive); err != nil {
 			return err
 		}
-		return nil
+		user = u
+		return s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor})
 	}); err != nil {
 		return nil, err
 	}
-
-	s.logger.Info("user updated", slog.String("user_id", user.ID))
 	return user, nil
+}
+
+// isStatusDemotion reports whether input demotes u.Status away from 'active'.
+// 'locked' is rejected at the Update entrypoint, so this returns true exactly
+// for active→suspended.
+func isStatusDemotion(u *domain.User, input UpdateInput) bool {
+	return input.Status != nil &&
+		u.Status == domain.StatusActive &&
+		*input.Status != string(domain.StatusActive)
+}
+
+// cascadeRevokeOnDemotion mirrors Lock's session+refresh revoke cascade for
+// the active→suspended Update path (S4.0 P1-A). Without this, a suspended
+// user keeps an unexpired access token + refresh chain and continues to
+// operate until natural expiry — defeating the suspend gesture. The boolean
+// gate keeps the no-op cost zero for non-status updates.
+func (s *Service) cascadeRevokeOnDemotion(ctx context.Context, userID string, demoted bool) error {
+	if !demoted {
+		return nil
+	}
+	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
+		return fmt.Errorf("identity-manage: update revoke sessions: %w", err)
+	}
+	if err := s.refreshStore.RevokeUser(ctx, userID); err != nil {
+		return fmt.Errorf("identity-manage: update revoke refresh chains: %w", err)
+	}
+	return nil
+}
+
+// guardUpdateStatusDemotion enforces the effective-admin invariant when an
+// Update would demote an active admin to suspended/locked. Returning a
+// precise 403 here avoids falling through to the DB trigger's P0001 (500).
+func (s *Service) guardUpdateStatusDemotion(ctx context.Context, u *domain.User, input UpdateInput) error {
+	if input.Status == nil || u.Status != domain.StatusActive || *input.Status == string(domain.StatusActive) {
+		return nil
+	}
+	return s.checkLastAdminRemoval(ctx, u.ID, u.Status)
 }
 
 // applyUpdateFields applies JSON-merge-patch semantics in-place on u: every
@@ -359,7 +457,16 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 
 func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor string) error {
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.checkLastAdminRemoval(txCtx, id); err != nil {
+		// S4.0: fetch the user so the effective-admin guard can use the real
+		// status (active vs locked/suspended). Pre-S4.0 the guard didn't need
+		// the user record because hasAdminRole was sufficient, but the
+		// effective-admin semantics make locked admins removable without the
+		// invariant being touched, so we need status to short-circuit.
+		user, err := s.repo.GetByID(txCtx, id)
+		if err != nil {
+			return fmt.Errorf("identity-manage: delete: %w", err)
+		}
+		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
 			return err
 		}
 		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
@@ -412,7 +519,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		if err := s.checkLastAdminRemoval(txCtx, user.ID); err != nil {
+		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
 			return err
 		}
 		user.LockAccount(s.clock.Now())
@@ -437,7 +544,20 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 	})
 }
 
-func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string) error {
+// checkLastAdminRemoval invokes the effective-admin guard for a mutation that
+// would remove userID (delete, lock, or status change away from 'active').
+//
+// userStatus is the user's current Status — required so the guard can short-
+// circuit when the user is already not an effective admin (locked/suspended
+// users do not contribute to the invariant). Callers that already fetched the
+// user pass user.Status; callers that bypass the fetch (only the Update path,
+// which fetches inside applyUpdateFields) re-fetch via GetByID.
+//
+// S4.0 upgrade: the guard counts effective admins (status='active' AND admin
+// role) via lastAdminRoleRepo.CountEffectiveAdmins. The "hasAdminRole" leg is
+// kept as a fast pre-check so we do not query CountEffectiveAdmins for users
+// that don't hold admin at all.
+func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, userStatus domain.UserStatus) error {
 	if s.lastAdminGuard == nil {
 		return nil
 	}
@@ -452,7 +572,10 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string) erro
 			break
 		}
 	}
-	if err := s.lastAdminGuard.CheckRemove(ctx, userID, hasAdminRole); err != nil {
+	// Effective admin = active + admin role. Locked/suspended admins are not
+	// counted by the invariant and may be freely removed.
+	userIsActiveAdmin := hasAdminRole && userStatus == domain.StatusActive
+	if err := s.lastAdminGuard.CheckRemove(ctx, userID, userIsActiveAdmin); err != nil {
 		return fmt.Errorf("identity-manage: last-admin: %w", err)
 	}
 	return nil

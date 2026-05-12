@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -60,7 +61,7 @@ func TestRoleResponse_EmptyPermissions(t *testing.T) {
 
 func setup(t *testing.T, runMode query.RunMode) http.Handler {
 	t.Helper()
-	roleRepo := mem.NewRoleRepository()
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID: "r1", Name: "admin",
 		Permissions: []domain.Permission{

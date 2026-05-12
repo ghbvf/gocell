@@ -26,7 +26,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks admin role"
+        description: "Forbidden — authenticated but lacks the required role for this PUT update. PUT request schema only carries 'email'; status changes are not in PUT scope and live on the PATCH surface (last-admin protection 403 is declared on http.auth.user.patch.v1)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — user with given id does not exist"

@@ -155,8 +155,13 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
-	if user.IsLocked() {
-		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
+	if !user.CanAuthenticate() {
+		// S4.0: fail-closed for any non-active user. Pre-S4.0 only blocked
+		// 'locked'; a 'suspended' user could log in, defeating an admin's
+		// suspend gesture. domain.User.CanAuthenticate() is the single source
+		// of truth for "is this user allowed to obtain or continue a session".
+		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			"account is not active")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
