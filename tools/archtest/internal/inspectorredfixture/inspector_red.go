@@ -1,6 +1,19 @@
+//go:build archtest_fixture
+
 // Package inspectorredfixture is a deliberate violation surface that drives
 // real-package coverage of forbiddenMethodSymbols[golang.org/x/tools/go/ast/
 // inspector] in scanner_framework_usage_test.go.
+//
+// The archtest_fixture build tag excludes this package from `go build ./...`
+// and `go test ./...` so the deliberate banned-method calls below never
+// pollute real-repo scans, lint, or coverage. It is loaded explicitly by
+// TestScannerFrameworkUsage01_InspectorMethodBanLive via
+//
+//	typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
+//	    "./tools/archtest/internal/inspectorredfixture")
+//
+// Sister fixture packages (wrapfixture/violation, rawparamfixture,
+// wrapfixture/kernelcellsibling) follow the same convention.
 //
 // SCANNER-FRAMEWORK-USAGE-01 only scans tools/archtest/<file>_test.go (parent
 // dir exact match); this internal sub-package is out of scope of the live

@@ -148,9 +148,12 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
 	root := findModuleRoot(t)
 	// includeTests=false: the inspectorredfixture package has no _test.go files
-	// so loading tests would only add no-op work; nil tags is sufficient because
-	// the fixture has no build-tag-gated files.
-	resolver, err := typeseval.SharedResolver(root, false, nil, "./tools/archtest/internal/inspectorredfixture")
+	// so loading tests would only add no-op work. The archtest_fixture build
+	// tag is required because inspector_red.go is gated behind it (sister
+	// fixture convention — see wrapfixture/violation, rawparamfixture); without
+	// the tag packages.Load returns an empty package and the test fails red on
+	// got=0 want=4.
+	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"}, "./tools/archtest/internal/inspectorredfixture")
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}
