@@ -17,7 +17,6 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -27,20 +26,13 @@ import (
 // business contracts; they live in runtime/ (not cells/ or contracts/) and
 // are registered by bootstrap itself rather than by a Cell RouteGroups
 // implementation. The "http.framework.health." spec ID prefix marks them as
-// runtime-internal, distinguishing them from cell-owned routes.
+// runtime-internal, distinguishing them from cell-owned routes. The
+// contractspec.NewFrameworkHTTP funnel is the only legitimate ContractSpec
+// construction path under runtime/ per NO-MANUAL-CONTRACTSPEC-LITERAL-01.
 var (
-	specHealthLivez = contractspec.ContractSpec{
-		ID: "http.framework.health.livez.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
-		Method: "GET", Path: "/healthz",
-	}
-	specHealthReadyz = contractspec.ContractSpec{
-		ID: "http.framework.health.readyz.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
-		Method: "GET", Path: "/readyz",
-	}
-	specHealthMetrics = contractspec.ContractSpec{
-		ID: "http.framework.health.metrics.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
-		Method: "GET", Path: "/metrics",
-	}
+	specHealthLivez   = contractspec.NewFrameworkHTTP("http.framework.health.livez.v1", "GET", "/healthz")
+	specHealthReadyz  = contractspec.NewFrameworkHTTP("http.framework.health.readyz.v1", "GET", "/readyz")
+	specHealthMetrics = contractspec.NewFrameworkHTTP("http.framework.health.metrics.v1", "GET", "/metrics")
 )
 
 // HealthRouteGroupOption customizes the route groups returned by
