@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
 // --- stubs ---
@@ -72,7 +73,7 @@ func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner)
 	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	svc := mustNewService(t, store.RoleRepository(), sessionRepo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
-		WithTxManager(tx),
+		WithTxManager(persistence.WrapForCell(tx)),
 	)
 	return svc, store, sessionRepo
 }

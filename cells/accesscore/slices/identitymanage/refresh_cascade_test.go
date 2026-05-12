@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -48,7 +49,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "dave", Email: "d@e.f", Password: "hash"})
@@ -80,7 +81,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
 	// Use the service to create so it hashes the password for us.
@@ -118,7 +119,7 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "frank", Email: "f@g.h", Password: "pwd"})

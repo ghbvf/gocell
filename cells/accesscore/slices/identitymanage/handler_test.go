@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -55,7 +56,7 @@ func setup(t testing.TB) http.Handler {
 	t.Helper()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setup: " + err.Error())
 	}
@@ -78,7 +79,7 @@ func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserR
 		effectiveIssuer = handlerStubIssuer
 	}
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())
 	}
@@ -582,7 +583,7 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(),
 		slog.Default(), WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()),
-		WithTxManager(contractTxRunner{}))
+		WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
 	resp, err := ChangePasswordAdapter{S: svc}.ChangePassword(

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
 // --- stubs ---
@@ -37,7 +38,7 @@ func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
-		WithTxManager(noopTxRunner{}))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	seedSession(repo, "sess-1", "usr-1")
 
@@ -50,7 +51,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := testutil.RealSessionRepo(t)
 	tx := &stubTxRunner{}
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(tx))
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 
 	seedSession(repo, "sess-1", "usr-1")
 
@@ -63,7 +64,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
 	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(tx)))
 
 	seedSession(repo, "sess-1", "usr-1")
 

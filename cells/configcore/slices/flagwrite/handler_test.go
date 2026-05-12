@@ -14,6 +14,7 @@ import (
 	toggle "github.com/ghbvf/gocell/generated/contracts/http/config/flags/toggle/v1"
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/flags/update/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -63,7 +64,7 @@ func newFlagAdapters(t *testing.T, updateErr, toggleErr, deleteErr error) (Updat
 		toggleErr:      toggleErr,
 		deleteErr:      deleteErr,
 	}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(stubFlagTxRunner{}))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(stubFlagTxRunner{})))
 	require.NoError(t, err)
 	return UpdateAdapter{S: svc}, ToggleAdapter{S: svc}, FlagDeleteAdapter{S: svc}
 }

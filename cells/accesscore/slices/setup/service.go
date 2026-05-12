@@ -53,8 +53,10 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithTxManager sets the TxRunner for L2 atomicity (user write + event emit).
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for L2 atomicity (user write + event
+// emit). Callers obtain the sealed marker via persistence.WrapForCell from a
+// composition root.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) {
 		if tx != nil {
 			s.txRunner = tx
@@ -79,7 +81,7 @@ func WithSetupLock(lock ports.SetupLock) Option {
 // Service implements the setup slice's business logic.
 type Service struct {
 	provisioner *adminprovision.Provisioner
-	txRunner    persistence.TxRunner
+	txRunner    persistence.CellTxManager
 	emitter     outbox.Emitter
 	logger      *slog.Logger
 	// setupLock is an optional cross-process advisory lock (PG mode). When set,

@@ -35,12 +35,13 @@ func WithClock(clk clock.Clock) Option {
 	}
 }
 
-// WithTxManager wires the cross-store TxRunner. The Refresh flow wraps the
-// validate→update→rotate sequence in a single RunInTx so the session repo
-// and refresh store updates share one commit boundary; nil tx is silently
-// ignored to keep the option idempotent — final non-nil enforcement is in
-// NewService.
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager wires the cross-store CellTxManager. The Refresh flow wraps
+// the validate→update→rotate sequence in a single RunInTx so the session
+// repo and refresh store updates share one commit boundary; nil tx is
+// silently ignored to keep the option idempotent — final non-nil enforcement
+// is in NewService. Callers obtain the sealed marker via
+// persistence.WrapForCell from a composition root.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) {
 		if tx != nil {
 			s.txRunner = tx
@@ -54,7 +55,7 @@ type Service struct {
 	userRepo     ports.UserRepository
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
-	txRunner     persistence.TxRunner
+	txRunner     persistence.CellTxManager
 	issuer       *auth.JWTIssuer
 	logger       *slog.Logger
 	clock        clock.Clock

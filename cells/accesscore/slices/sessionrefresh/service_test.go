@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -132,7 +133,7 @@ func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, ports
 		t.Fatalf("test setup: %v", err)
 	}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	return svc, sessionRepo, refreshStore, fakeClock
 }
 
@@ -145,7 +146,7 @@ func newTestServiceWithUserRepo(t testing.TB) (*Service, ports.SessionRepository
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	return svc, sessionRepo, userRepo
 }
 
@@ -164,7 +165,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			run: func() (*Service, error) {
 				var typedNil *mem.SessionRepository
 				return NewService(typedNil, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
 		},
 		{
@@ -172,7 +173,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			run: func() (*Service, error) {
 				var typedNil *mem.RoleRepository
 				return NewService(sessionRepo, typedNil, userRepo, refreshStore, testIssuer, slog.Default(),
-					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
 		},
 		{
@@ -180,7 +181,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			run: func() (*Service, error) {
 				var typedNil *mem.UserRepository
 				return NewService(sessionRepo, roleRepo, typedNil, refreshStore, testIssuer, slog.Default(),
-					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
 		},
 		{
@@ -188,7 +189,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
 				return NewService(sessionRepo, roleRepo, userRepo, typedNil, testIssuer, slog.Default(),
-					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
 		},
 	}
@@ -278,7 +279,7 @@ func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
 
 	tr := &failingTxRunner{}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(tr))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(tr)))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 
@@ -415,7 +416,7 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess, err := domain.NewSession("usr-rolefail", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -638,7 +639,7 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess, err := domain.NewSession("usr-sa", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -674,7 +675,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository() // intentionally empty — GetByID returns error
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess, err := domain.NewSession("usr-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -705,7 +706,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 	// Recreate with a known refreshStore so we can issue and rotate wire tokens.
 	refreshStore := newTestRefreshStore()
 	svc2 := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-clear"
@@ -741,7 +742,7 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess, _ := domain.NewSession("usr-ref-reset", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-reset"
@@ -774,7 +775,7 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	// Issue a wire token but don't seed the session — GetByID will return infraErr.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra")
@@ -852,7 +853,7 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	spy := &spyRefreshStore{Store: innerStore}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "session-not-found must cause Refresh to fail")
@@ -879,7 +880,7 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 	}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -912,7 +913,7 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-infra"
@@ -946,7 +947,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 	innerStore := newTestRefreshStore()
 	spy := &spyRefreshStore{Store: innerStore}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-missing"
@@ -988,7 +989,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 					testIssuer,
 					slog.Default(),
 					WithClock(clock.Real()),
-					WithTxManager(cell.DemoTxRunner{}),
+					WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 				)
 				return svc, wireToken
 			},
@@ -1016,7 +1017,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				refreshStore := newTestRefreshStore()
 				svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), mem.NewStore(clock.Real()).UserRepository(),
 					refreshStore, testIssuer, slog.Default(),
-					WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour), time.Now())
 				require.NoError(t, err)
 				sess.ID = "sess-uniform-missing"
@@ -1062,7 +1063,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 					testIssuer,
 					logger,
 					WithClock(clock.Real()),
-					WithTxManager(cell.DemoTxRunner{}),
+					WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 				)
 				return svc, wireToken
 			},
@@ -1198,7 +1199,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "rotate store down"),
 	}
 	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1232,7 +1233,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	// Override Rotate to return a token with wrong SessionID.
 	mismatchStore := rotateMismatchRefreshStore{Store: spy, rotatedSessionID: "wrong-session", rotatedSubjectID: "usr-mismatch"}
 	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1278,7 +1279,7 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 		rotatedSubjectID: "usr-mismatch-revoke-fail",
 	}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1330,7 +1331,7 @@ func TestService_CascadeRevoke_UsesDetachedStoreMethod(t *testing.T) {
 	spy := &detachSpyRefreshStore{Store: innerStore}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	// Cancel the caller ctx before calling Refresh. This service-level test
 	// only asserts method routing; durable cancellation behavior is owned by

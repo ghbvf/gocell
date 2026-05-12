@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -44,7 +45,7 @@ func newContractService(t *testing.T) *Service {
 	t.Helper()
 	repo := mem.NewFlagRepository(clock.Real())
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithTxManager(&testutil.NoopTxRunner{}))
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	if err != nil {
 		t.Fatal(err)
 	}

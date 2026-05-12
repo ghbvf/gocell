@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
@@ -53,7 +54,7 @@ func setup(t testing.TB) (http.Handler, string) {
 	_ = userRepo.Create(context.Background(), u)
 
 	svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
@@ -206,7 +207,7 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
 	svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, store, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(cell.DemoTxRunner{}))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())

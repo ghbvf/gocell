@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -60,7 +61,7 @@ func setup(t *testing.T) http.Handler {
 	_ = userRepo.Create(context.Background(), user)
 
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
-		newHandlerRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
+		newHandlerRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())

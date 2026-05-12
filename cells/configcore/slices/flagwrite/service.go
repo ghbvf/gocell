@@ -23,8 +23,10 @@ import (
 // Option configures a flag-write Service.
 type Option func(*Service)
 
-// WithTxManager sets the TxRunner for transactional guarantees (L1 atomicity).
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for transactional guarantees (L1
+// atomicity). Callers obtain the sealed marker via persistence.WrapForCell
+// from a composition root.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) {
 		if tx != nil {
 			s.txRunner = tx
@@ -35,7 +37,7 @@ func WithTxManager(tx persistence.TxRunner) Option {
 // Service implements flag write business logic (L1 LocalTx).
 type Service struct {
 	repo     ports.FlagRepository
-	txRunner persistence.TxRunner
+	txRunner persistence.CellTxManager
 	logger   *slog.Logger
 	clock    clock.Clock
 }

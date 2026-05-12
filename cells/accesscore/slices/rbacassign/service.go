@@ -31,7 +31,7 @@ import (
 type Service struct {
 	roleRepo              ports.RoleRepository
 	sessionRepo           ports.SessionRepository
-	txRunner              persistence.TxRunner
+	txRunner              persistence.CellTxManager
 	emitter               outbox.Emitter
 	syncSessionRevocation bool
 	logger                *slog.Logger
@@ -50,8 +50,10 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithTxManager sets the TxRunner for L2 atomicity (must be paired with WithEmitter).
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for L2 atomicity (must be paired with
+// WithEmitter). Callers obtain the sealed marker via persistence.WrapForCell
+// from a composition root.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) {
 		if tx != nil {
 			s.txRunner = tx

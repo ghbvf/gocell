@@ -37,7 +37,7 @@ func mustNewService(
 	opts ...Option,
 ) *Service {
 	t.Helper()
-	opts = append([]Option{WithTxManager(rbacFakeTxRunner{})}, opts...)
+	opts = append([]Option{WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{}))}, opts...)
 	svc, err := NewService(roleRepo, sessionRepo, logger, opts...)
 	require.NoError(t, err)
 	return svc

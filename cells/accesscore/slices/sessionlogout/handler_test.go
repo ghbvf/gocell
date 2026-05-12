@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -55,7 +56,7 @@ func setup(t testing.TB) http.Handler {
 	other.ID = testutil.TestID("sess-victim")
 	_ = sessionRepo.Create(context.Background(), other)
 
-	svc := MustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())

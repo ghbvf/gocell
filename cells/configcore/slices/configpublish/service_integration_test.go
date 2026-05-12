@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -76,7 +77,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
-		WithTxManager(txMgr),
+		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 
 	cleanup := func() {
@@ -242,7 +243,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	goodWriter := adapterpg.NewOutboxWriter(clock.Real())
 	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, goodWriter)),
-		WithTxManager(txMgr),
+		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
 
@@ -268,7 +269,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	}
 	svcFail, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
-		WithTxManager(txMgr),
+		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
 

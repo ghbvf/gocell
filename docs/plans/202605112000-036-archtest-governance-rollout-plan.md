@@ -1,7 +1,7 @@
 # archtest / governance 治理 Rollout 计划
 
 **生成日期**：2026-05-11
-**最近同步**：2026-05-12（origin/develop @ `b9b7fd1a`，Wave 2 panic 单源 + Phase 2.1/2.2/3.1/3.2/3.3/3.4/3.5/3.7/3.8 已 ship；Phase 0.1 ✅ done，Phase 3.6 ❌ cancelled by PR #435；剩余 Wave 2/3 = Phase 3.9 PR-S7 + PR-MD1 follow-up `CELLGEN-LITERAL-FUNNEL-02`）
+**最近同步**：2026-05-12（origin/develop @ `8d213883`，Wave 2 panic 单源 + Phase 2.1/2.2/3.1/3.2/3.3/3.4/3.5/3.7/3.8/3.9 已 ship；Phase 0.1 ✅ done，Phase 3.6 ❌ cancelled by PR #435；剩余 Wave 2/3 = PR-MD1 follow-up `CELLGEN-LITERAL-FUNNEL-02`）
 **关系**：本文件是 `docs/plans/202605101300-ai-first-governance-charter.md`（AI-first 章程）的 **PR 级 rollout 视角**。章程是第一性原理 + 决策原则视角不动；本文件按 PR #445 复盘教训（scope 失控、多维捆绑）把章程 Wave 1-4 翻译成"单 PR = 单维度"的可独立 ship 的 PR 序列，含 Phase 顺序、依赖图、优先级。冲突时以本文件的拆分为准，章程的判断/原则不变。
 
 **核心拆分规则**：新增/修改工程机制的 PR 不得跨维度捆绑。维度清单：
@@ -163,15 +163,15 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **Follow-up 立即开 next-up**：`CELLGEN-LITERAL-FUNNEL-02`（P1/Cx1，🟠，type-system 级 Hard funnel guard，关闭"AI 改回手写 cell.tmpl 字段枚举"漏洞窗口，工时 1.5-2h）
 - **Follow-up 触发型**：`CATALOG-DTO-CODEGEN-DERIVE-01`（P3/Cx3，🟢，catalog 5 DTO codegen 派生 Hard 升级，工时 15-25h，触发条件：第 2 次 metadata 字段未同步 / DTO ≥ 6 / wire 漂移事故）
 
-### Phase 3.9：PR450 治理升级束（PR-S7）
+### Phase 3.9：PR450 治理升级束（PR-S7）✅ done
+- **证据**：PR-S7 (refactor/572-pr-s7-archtest-bundle)
 - **范围**：5 子条 bundle（cap-14 line 403，已是 bundle）
-  - `K-01`：`audit_ledger_composition_root_test.go:75-78` AST 仅 `pkg.Name` 匹配 `"ledger"` import alias 绕过；升 go/types resolution 或补 `IMPORT-ALIAS-FORBIDDEN` 锚点
-  - `K-04`：prefix allowlist "runtime/audit/ledger/" 覆盖所有子目录；收窄为枚举式白名单
-  - `K-05`：migration 020/021 顺序依赖仅靠 SQL 注释；新建通用 `MIGRATION-PAIR-DEPLOY-01` archtest 扫 migration godoc `deploy-pair` 锚点
-  - `A-10`：`audit_ledger_composition_root_test.go` 自评 Medium 但含 `pkg.Name` 字符串识别，实为 Soft；真 Medium 需 go/types + import path identity
-  - `F-12/K-02`：`appender.WithTxManager` + `auditverify.WithTxManager` 形参 raw `persistence.TxRunner` non-sealed；改为 `persistence.CellTxManager` 保持 cell 子树 raw infra 完全不可见
-- **工时**：8-12h dev / 3-4h review
-- **依赖**：无（与 Phase 3.2 PR-SH1 主线无文件重叠，但 review 面积较大，建议 PR-SH1 ship 后顺位开）
+  - ✅ `K-01` + `A-10`：`audit_ledger_composition_root_test.go` 升级为 type-aware `typeseval.LoadProductionPackages` + `ResolvePackageRef`，canonical import path 识别（alias-immune）。新增 `tools/archtest/internal/auditledgerfixture/aliased.go` build-tag fixture + `TestAuditLedgerProtocol_ScannerCatchesAliasBypass` 锁定检测能力。**AI-rebust 升级**：Soft（`pkg.Name` 字符串）→ Medium-true（canonical import path identity）；Hard 不可达——cells 必须 import ledger 消费 typed `*Protocol`，文件 godoc 诚实标注
+  - ✅ `K-04`：prefix allowlist 改为枚举 `{runtime/audit/ledger, runtime/audit/ledger/storetest}`（同 PR 落入）
+  - ✅ `K-05`：新增 `tools/archtest/migration_pair_deploy_test.go`（`MIGRATION-PAIR-DEPLOY-01`），扫 `-- pair-deploy: <stem>` 单向 directive + 校验被引用 migration 存在；canary hard-assert 021↔020 pair 防止 anchor 静默删除导致规则退化。`migrations/021_audit_entries_event_id_unique.sql` 已落入 anchor。**用户决策**：单向 anchor（拒绝双向 reciprocity——pair-deploy 是文档型 + filename-exists 静态校验，与 release manifest 解耦）
+  - ✅ `F-12/K-02`：**范围扩大到全部 10 个 slice 级 `WithTxManager`**（按"不留小尾巴"反馈，超出原 backlog 仅 auditcore appender 的窄 scope）。10 处形参与 `txRunner` 字段类型 `persistence.TxRunner` → `persistence.CellTxManager`：auditcore (appender) + configcore (configpublish/configwrite/flagwrite) + accesscore (identitymanage/rbacassign/sessionlogin/sessionlogout/sessionrefresh/setup)；测试调用点 ~80 处 `WithTxManager(x)` → `WithTxManager(persistence.WrapForCell(x))`。**注**：原 backlog 中提到的 `auditverify.WithTxManager` 已在 Wave 2 Batch D 删除，scope 项不存在；实际有效 scope 是 10 处
+- **工时**：实际 ~8h dev / 待 review
+- **依赖**：无
 
 ---
 
@@ -223,7 +223,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 ```
 
-**当前剩余（Wave 2/3 范围）**：Phase 3.9 PR-S7（8-12h dev / 3-4h review）+ PR-MD1 follow-up `CELLGEN-LITERAL-FUNNEL-02`（1.5-2h dev）共 **2 项**。Phase 0.1 ✅ done 2026-05-12；Phase 3.2/3.5/3.7 同时段 ship（2026-05-12 PR #473/#474/#475）；Phase 3.6 ❌ cancelled by PR #435；Phase 3.8 ✅ PR #477。
+**当前剩余（Wave 2/3 范围）**：PR-MD1 follow-up `CELLGEN-LITERAL-FUNNEL-02`（1.5-2h dev）**1 项**。Phase 0.1 ✅ done 2026-05-12；Phase 3.2/3.5/3.7 同时段 ship（2026-05-12 PR #473/#474/#475）；Phase 3.6 ❌ cancelled by PR #435；Phase 3.8 ✅ PR #477；Phase 3.9 ✅ PR-S7。
 
 ---
 
@@ -232,14 +232,12 @@ Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 | Rank | 项 | 工时 | 并行能力 |
 |---|---|---|---|
 | 1 | **`CELLGEN-LITERAL-FUNNEL-02`**（PR-MD1 follow-up，type-system Hard funnel guard，关闭"AI 改回手写 cell.tmpl 字段枚举"漏洞窗口）| 1.5-2h dev / ~0.5h review | ✅ 完全并行（仅改 cellgen spec.go/builder.go/cell.tmpl）|
-| 2 | **Phase 3.9 PR-S7**（PR450 治理升级束 5 子条 bundle：K-01/K-02/K-04/K-05/A-10/F-12）| 8-12h dev / 3-4h review | ✅ 独立 |
 
-**总剩余工时（Wave 2/3 范围）**：1.5-2h + 8-12h = **9.5-14h dev / 3.5-4.5h review**
+**总剩余工时（Wave 2/3 范围）**：**1.5-2h dev / 0.5h review**
 
 ### 排期建议
 
 - **Now**：`CELLGEN-LITERAL-FUNNEL-02` 立刻 next-up（PR-MD1 留下的 silent-drift 漏洞窗口越早封越好，1.5-2h 工时不阻塞其他工作）
-- **Then**：Phase 3.9 PR-S7（review 面积大，独立串行）
 - **Wave 4 触发型**：保留 6 条触发型 + 7 条 charter Wave 4 触发清单，触发时按 Template-Wave4-3PR 拆分
 
 ---
