@@ -197,17 +197,6 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | **PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01**（C6）| 第二次主题归属错误；`list-archtests.sh` grep → go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 `referenced_by` 列 | cap-02 line 72 |
 | **POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01**（C8）| 第 2 次同类漂移；archtest 静态扫 `*_test.go`，`_NotFound` 后缀测试必须断言 typed `errcode.Error.Code` 等于 `Err*NotFound`，禁裸 `assert.AnError`（违反不可表达 → Hard）| cap-14 line 334 |
 
-### 已从触发型移出 → 立即排期的条目（2026-05-12 重审）
-2026-05-12 决策：把"trigger 已满足 / trigger 反向逻辑（等事故等于晚了）/ 方案确定的扩范围动作"从触发型里剥离，作为独立 phase 立即排期。详见 §3 Phase 3.5-3.9：
-
-| 原触发型项 | 移出理由 | 新 phase |
-|---|---|---|
-| TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01（A1）| PR #472 已 merge，trigger 已满足 | Phase 3.5 PR-EP1 |
-| PR419-FU-INVENTORY-CI-GATE-01（C7）| 一次性 CI 配置项，等漂移事故是反向逻辑 | Phase 3.6 PR-IG1 |
-| ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME（C4） | 扫描 scope 扩展是确定动作，无 trigger 等待价值 | Phase 3.7 PR-SC1（Hard 升级；C9 PR245-F6 已 moot 同 PR 关闭）|
-| ARCHTEST-CELL-METADATA-FIELD-DRIFT（C5a） + CATALOG-DTO-DRIFT-ARCHTEST（C5b）| 防御性 archtest，字段漂移事故首现 = 已晚；合并为束 | Phase 3.8 PR-MD1（合并）|
-| S7-FU-ARCHTEST 5 子条 bundle（C1）| PR #450 review 已出 5 条独立 archtest 升级，不是"等事故"语义 | Phase 3.9 PR-S7 |
-
 ### 落地时统一按维度拆模板
 有 framework + bulk migration + enforcement 三维以上的项目（**TEST-POLLING-DETERMINISM** 和 **FINDFIRSTCHILD-TYPED-API-01** 都是），触发时按以下模板拆：
 
@@ -231,20 +220,6 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 ## 5. 实施依赖图与并行度（更新后剩余）
 
 ```
-Phase 0.1 (backlog 收尾)             ✅ done 2026-05-12（in-place 标记，归档待人工）
-Phase 1.x (panic 单源)               ✅ PR #467
-Phase 2.1 (ResolveReceiverType)      ✅ PR #468
-Phase 2.2 (ResolvePackageRef)        ✅ PR #469
-Phase 3.1 (build-tag failclosed)     ✅ PR #472
-Phase 3.2 (scanner hardening)        ✅ PR #474
-Phase 3.3 (generated-skip)           ✅ PR #471
-Phase 3.4 (internal-contract)        ✅ PR #470
-Phase 3.5 (eval predicate central)   ✅ PR #475
-Phase 3.6 (inventory CI gate)        ❌ cancelled by PR #435 (PR-A')，原任务前提不成立
-Phase 3.7 (扫描 scope 扩展束)        ✅ PR #473
-Phase 3.8 (字段集覆盖守卫束)         ✅ PR #477 (PR-MD1)
-Phase 3.9 (PR450 治理升级束)         pending — 独立
-
 Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 ```
 
