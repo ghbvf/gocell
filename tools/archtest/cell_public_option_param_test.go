@@ -2,12 +2,17 @@
 //   - INVARIANT: CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01
 //
 // CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 — exported With* Option functions
-// declared at the cell-package root (cells/<x>/*.go +
-// examples/<demo>/cells/<x>/*.go) MUST NOT accept raw infra types
-// (persistence.TxRunner / outbox.Publisher / outbox.Writer) as parameters.
-// Composition roots wrap raw infra into sealed marker types
-// (persistence.CellTxManager / outbox.CellPublisher / outbox.CellWriter)
-// before calling cell With* Options.
+// declared anywhere in a cell subtree (cells/<x>/**/*.go +
+// examples/<demo>/cells/<x>/**/*.go, covering cell-package root +
+// internal/ + slices/<y>/ + postgres/ + mem/ ...) MUST NOT accept raw
+// infra types (persistence.TxRunner / outbox.Publisher / outbox.Writer)
+// as parameters. Composition roots wrap raw infra into sealed marker
+// types (persistence.CellTxManager / outbox.CellPublisher / outbox.CellWriter)
+// before calling any cell-subtree With* Option.
+//
+// Scope was extended from cell-package root only to the full cell subtree
+// by ADR 202605101900 Amendment 2026-05-12 (PR #481 / PR-S7); the previous
+// `isCellPackageRootFile` predicate is now `isCellSubtreeFile`.
 //
 // AI-rebust 评级：Medium (archtest type-aware via typeseval.SharedResolver
 // + types.Unalias). The kernel sealed marker is the AI-HARD primary
@@ -51,9 +56,10 @@ import (
 const expectedRawParamFixtureViolations = 10
 
 // rawPublicOptionForbidden is the closed set of raw infra types that public
-// With* Options on cells/<x>/*.go + examples/<demo>/cells/<x>/*.go must NOT
-// accept. Adding a new type is permanent (AI-HARD): every existing exported
-// With* re-evaluates against the new entry.
+// With* Options anywhere in a cell subtree (cells/<x>/**/*.go +
+// examples/<demo>/cells/<x>/**/*.go) must NOT accept. Adding a new type is
+// permanent (AI-HARD): every existing exported With* re-evaluates against
+// the new entry.
 var rawPublicOptionForbidden = map[string]bool{
 	"github.com/ghbvf/gocell/kernel/persistence.TxRunner": true,
 	"github.com/ghbvf/gocell/kernel/outbox.Publisher":     true,
@@ -72,20 +78,23 @@ func (v rawPublicOptionViolation) String() string {
 	return fmt.Sprintf("%s:%d func %s param[%d] = %s", v.File, v.Line, v.FuncName, v.ParamIndex, v.ParamType)
 }
 
-// isCellPackageRootFile returns true for files at the cell package root —
-// the exact scope where public With* Options live:
+// isCellSubtreeFile returns true for any non-codegen, non-test file inside
+// a cell subtree — the full scope where sealed-marker enforcement applies:
 //
-//   - cells/<x>/<file>.go  (parts == 3, parts[0]=="cells")
-//   - examples/<demo>/cells/<x>/<file>.go  (parts == 5, parts[0]=="examples", parts[2]=="cells")
+//   - cells/<x>/**/*.go                  (cell-package root + internal/ +
+//     slices/<y>/ + postgres/ + mem/ + ...)
+//   - examples/<demo>/cells/<x>/**/*.go  (example cell subtree, same layout)
 //
-// Excludes _test.go and _gen.go (codegen output is not author-controlled
-// and is governed by the codegen contract instead).
+// Excludes _test.go and _gen.go (codegen output is governed by the codegen
+// contract; tests construct fakes via persistence.WrapForCell from any
+// location per CELL-RAW-INFRA-WRAPPER-LOCATION-01 allowlist).
 //
-// Sub-packages like cells/<x>/internal/, cells/<x>/slices/, cells/<x>/postgres/
-// are NOT in scope: those are cell-internal layers whose With* (if any)
-// accept raw types because they are below the cell boundary — the sealed
-// marker boundary is exactly the public cell.go API.
-func isCellPackageRootFile(rel string) bool {
+// Sealed-marker boundary covers the full cell subtree (not just cell.go) —
+// every exported With* Option in cells/<x>/{cell.go, slices/<y>/service.go,
+// internal/.../service.go, ...} must accept `persistence.CellTxManager` /
+// `outbox.Cell{Publisher,Writer}`, not raw infra. See ADR 202605101900 §D1
+// (boundary extension, Amendment 2026-05-12) for the architectural rationale.
+func isCellSubtreeFile(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	if strings.HasSuffix(rel, "_test.go") {
 		return false
@@ -94,10 +103,13 @@ func isCellPackageRootFile(rel string) bool {
 		return false
 	}
 	parts := strings.Split(rel, "/")
-	if len(parts) == 3 && parts[0] == "cells" {
+	if len(parts) < 3 {
+		return false
+	}
+	if parts[0] == "cells" {
 		return true
 	}
-	if len(parts) == 5 && parts[0] == "examples" && parts[2] == "cells" {
+	if len(parts) >= 5 && parts[0] == "examples" && parts[2] == "cells" {
 		return true
 	}
 	return false
@@ -285,8 +297,9 @@ func loadForbiddenIfaces(pkgs []*packages.Package) map[string]*types.Interface {
 
 // scanPackagesForRawPublicOption is the inner walker used by both the
 // real-repo scan and the fixture detection test. When restrictToCellRoots
-// is true, only files matching isCellPackageRootFile are scanned (the
-// real-repo invariant); when false, all files in supplied packages are
+// is true, only files matching isCellSubtreeFile are scanned (the
+// real-repo invariant, covering the full cell subtree per ADR 202605101900
+// Amendment 2026-05-12); when false, all files in supplied packages are
 // scanned (the fixture detection test, where the fixture lives outside
 // real cell paths).
 func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restrictToCellRoots bool) []rawPublicOptionViolation {
@@ -306,7 +319,7 @@ func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restr
 				continue
 			}
 			relSlash := filepath.ToSlash(rel)
-			if restrictToCellRoots && !isCellPackageRootFile(relSlash) {
+			if restrictToCellRoots && !isCellSubtreeFile(relSlash) {
 				continue
 			}
 			scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {

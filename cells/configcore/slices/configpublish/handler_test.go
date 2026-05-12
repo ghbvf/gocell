@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -111,7 +112,7 @@ const configPrefix = "/api/v1/config"
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	if err != nil {
 		panic("setupHandler: " + err.Error())
 	}
@@ -268,7 +269,7 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	seedForPublish(t, repo)
 	// Publish first to create a version.
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 	_, err = svc.Publish(adminCtx(), "app.name")
 	require.NoError(t, err)
@@ -329,7 +330,7 @@ func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
 	// Publish v1 carries Sensitive=true into the snapshot.
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 	_, err = svc.Publish(adminCtx(), "db.password")
 	require.NoError(t, err)
@@ -410,7 +411,7 @@ func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	seedForService(repo, "k1", "v1")
@@ -424,7 +425,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	tx := &stubTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	seedForService(repo, "k2", "v2")
@@ -438,7 +439,7 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	seedForService(repo, "k3", "v3")
@@ -486,7 +487,7 @@ func newRollbackAdapter(t *testing.T, rollbackErr error) RollbackAdapter {
 	// Seed an entry + a version snapshot so service-level pre-checks
 	// (GetByKey + GetVersion) succeed and we reach UpdateForRollback.
 	seedForRollbackAdapter(repo.ConfigRepository, "k-rollback", "v1")
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 	return RollbackAdapter{S: svc}
 }

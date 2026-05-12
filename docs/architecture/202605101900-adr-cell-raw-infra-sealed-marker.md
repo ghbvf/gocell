@@ -43,7 +43,11 @@ D1 的 Hard 部分（type system 编译期不可达）覆盖：cell 字段类型
 
 **Hard（type system 字段+赋值）+ Medium（archtest 签名形态）合并构成完整防线。**
 
-CellTxManager embed TxRunner、CellPublisher embed Publisher、CellWriter embed Writer，让 sealed wrapper 同时满足 raw 接口，cells 内部把 sealed 字段直接传给 service.NewXxx（service 接收 raw 类型，是 cell 内部、不在 sealed 约束面），service 签名零变化。
+CellTxManager embed TxRunner、CellPublisher embed Publisher、CellWriter embed Writer，让 sealed wrapper 同时满足 raw 接口；该 embed 保证 cell 子树内 sealed-typed 字段能透明调用 raw method（如 `s.txRunner.RunInTx(...)` / `pub.Publish(...)`），用于 cell 子树内部 method body 访问 raw API。
+
+**但 cell 整棵子树（`cells/<x>/**/*.go` + `examples/<demo>/cells/<x>/**/*.go`，含 cell-package root + `internal/` + `slices/<y>/` + `postgres/` + `mem/` 等）所有公开 With\* Option 签名一律接 sealed marker，不接 raw 接口。** Service 字段类型同步使用 sealed marker（如 `txRunner persistence.CellTxManager`），通过 embed 保留 service body 对 raw method 的访问能力。
+
+边界扩展决策见末尾 **Amendment 2026-05-12 (PR #481 / PR-S7)**。
 
 ### D2. archtest 双重防线治公开 API 签名形态（必需的 Medium 守卫，非 belt-and-suspenders）
 
@@ -54,7 +58,7 @@ sealed marker 是字段类型与 raw→sealed 赋值层的 Hard 防线，但 typ
 
 为此 PR 441 落地两条 archtest，构成 sealed marker 之外**必需的双重防线**（不是 dead weight）：
 
-- **`tools/archtest/cell_public_option_param_test.go` (`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01`)** — 扫 `cells/<x>/*.go` + `examples/<demo>/cells/<x>/*.go` 公开 With\* Option 参数 canonical type 不在 forbidden 集合（`persistence.TxRunner` / `outbox.Publisher` / `outbox.Writer`）。canonical 提取递归处理：pointer unwrap → `types.Unalias` → `*types.Named` 直取，或 `*types.Interface` 走 `NumEmbeddeds()`/`EmbeddedType(i)` 提取每个 embedded canonical（命中 forbidden 优先），覆盖 inline-embed 形态。
+- **`tools/archtest/cell_public_option_param_test.go` (`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01`)** — 扫 cell 整棵子树（`cells/<x>/**/*.go` + `examples/<demo>/cells/<x>/**/*.go`，含 cell-package root + `internal/` + `slices/<y>/` + `postgres/` + `mem/` 等）公开 With\* Option 参数 canonical type 不在 forbidden 集合（`persistence.TxRunner` / `outbox.Publisher` / `outbox.Writer`）。canonical 提取递归处理：pointer unwrap → `types.Unalias` → `*types.Named` 直取，或 `*types.Interface` 走 `NumEmbeddeds()`/`EmbeddedType(i)` 提取每个 embedded canonical（命中 forbidden 优先），覆盖 inline-embed 形态。scope predicate 由 `isCellSubtreeFile` 实现（Amendment 2026-05-12 从原 `isCellPackageRootFile` 扩展）。
 - **`tools/archtest/wrapper_location_test.go` (`CELL-RAW-INFRA-WRAPPER-LOCATION-01`)** — 守三个 wrap 函数（`persistence.WrapForCell` / `outbox.WrapPublisherForCell` / `outbox.WrapWriterForCell`）的调用方所在文件路径，仅允许：
   - `cmd/*` 任意文件（composition root）
   - `examples/<demo>/main.go` / `examples/<demo>/app.go`（example composition root）
@@ -67,6 +71,39 @@ sealed marker 是字段类型与 raw→sealed 赋值层的 Hard 防线，但 typ
 **AI-rebust 评级**：Medium（archtest type-aware via `typeseval.SharedResolver` + `go/types` Uses 解析）。type system 单独不可达签名形态空间是该问题域的客观特性，不是 archtest 实现不足；因此双重防线是该层级的 Medium 天花板，与 PII redaction / 安全语义双重防线同质（都是 type system 不可表达的横向空间）。
 
 **架构师裁决**：本场景 D2 的 Medium 评级是该问题域的天花板，与 PII redaction 双重防线同质。Hard 化路径需要语言级 sealed-by-position 等特性，超出当前 GoCell 范围。**不进 backlog 升 Hard 跟踪**，后续 reviewer 不再质疑该评级。
+
+---
+
+## Amendment 2026-05-12 (PR #481 / PR-S7)
+
+### 变更
+
+§D1 sealed-marker 边界从"仅 `cells/<x>/cell.go` 公开 API"扩展到"整棵 cell 子树（`cells/<x>/**/*.go` + `examples/<demo>/cells/<x>/**/*.go`，含 cell-package root + `internal/` + `slices/<y>/` + `postgres/` + `mem/` 等）所有公开 With\* Option"。
+
+### 范围影响
+
+- **11 处 cell 子树 service `WithTxManager`** 形参类型从 `persistence.TxRunner` 改为 `persistence.CellTxManager`，对应 service 字段类型同步：
+  - `cells/auditcore/internal/appender/service.go`
+  - `cells/configcore/slices/{configpublish,configwrite,flagwrite}/service.go`
+  - `cells/accesscore/slices/{identitymanage,rbacassign,sessionlogin,sessionlogout,sessionrefresh,setup}/service.go`
+  - `examples/todoorder/cells/ordercell/slices/ordercreate/service.go`
+- `tools/archtest/cell_public_option_param_test.go::isCellPackageRootFile` 重命名为 `isCellSubtreeFile`，scope 扩展；原 cell-package root 单文件限定取消
+- service 字段类型一并改为 sealed marker；`CellTxManager` embed `TxRunner` 仅保留以支持 service body 内 `s.txRunner.RunInTx(...)` 透明调用 raw method
+- outbox 维度 grep 验证 cell 子树 0 处 raw `outbox.Publisher` / `outbox.Writer` 暴露，scope 扩展自动覆盖该维度无额外改动
+
+### 动机
+
+PR #450 review F-12 + K-Guardian K-02 联合提出"cell 子树 raw infra 完全不可见"，与原 ADR §D1 line 46 "service 接收 raw 类型...service 签名零变化"存在设计冲突。本 amendment 采纳更深防御：sealed wrapper embed raw 接口的目的从"允许 cell 公开 API 边界外 service 接 raw"收窄为"允许 sealed 字段在 cell 内部 method body 直接调 raw method"，公开 With\* 签名一律 sealed。
+
+### AI-rebust
+
+- **Hard**（type system 字段 + 赋值）覆盖范围**自然扩展**到 cell 子树字段（slice services 字段类型现为 `persistence.CellTxManager`，type system 编译期不可表达 raw 写入）
+- **Medium**（archtest 签名形态）`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` scope 扩展，对 cell 子树整体应用同一签名形态守卫
+- Medium 是该问题域天花板（与 §D2 原架构师裁决一致；Go 无 sealed-by-position 语言特性）
+
+### 反向回归（手动验证 negative test）
+
+任一 cell 子树 service.go 把 `WithFoo(p persistence.CellTxManager)` 改回 `persistence.TxRunner` → `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` archtest 在 CI 立即 RED（实际于本 PR 实施过程中 archtest 扫到 `examples/todoorder/cells/ordercell/slices/ordercreate/service.go` 第 11 处遗漏并强制 sealed 化，验证了 scope 扩展的防御能力）；同时 cell 字段赋值 `c.txRunner = sealedWrapper` 仍由 Hard type system 拦截。
 
 scanner 检测能力由 `tools/archtest/internal/{rawparamfixture,wrapfixture/violation}/`（build tag `archtest_fixture`，不污染 `./...` 真实 repo 扫描）的 negative fixture 验证：fixture 故意写出每种攻击形态（raw param + alias bypass + inline-embed + dot-import），测试断言 scanner 报告每条 violation。Per ai-collab.md §"real source AST capture (AI 难造假)"，fixture 是真实 Go 包载入（非手 craft AST）。
 

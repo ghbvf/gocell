@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -45,7 +46,7 @@ type typedNilRefreshStore struct {
 func newTestService(t testing.TB) (*Service, ports.SessionRepository) {
 	t.Helper()
 	repo := testutil.RealSessionRepo(t)
-	return MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(noopTxRunner{})), repo
+	return MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{}))), repo
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
@@ -202,7 +203,8 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
+		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	err = svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")

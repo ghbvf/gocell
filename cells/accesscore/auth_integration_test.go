@@ -42,6 +42,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -252,7 +253,7 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	refreshSvc := sessionrefresh.MustNewService(
 		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
-		sessionrefresh.WithTxManager(cell.DemoTxRunner{}),
+		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 	)
 
 	_, err := refreshSvc.Refresh(context.Background(), fx.AccessToken)
@@ -274,7 +275,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	refreshSvc := sessionrefresh.MustNewService(
 		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
-		sessionrefresh.WithTxManager(cell.DemoTxRunner{}),
+		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 	)
 
 	newPair, err := refreshSvc.Refresh(context.Background(), fx.RefreshToken)
@@ -327,7 +328,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	stubTx := &rbacStubTxRunner{}
 	assignSvc, err := rbacassign.NewService(roleRepo, sessionRepo, slog.Default(),
 		rbacassign.WithEmitter(testoutbox.MustEmitter(t, stubWriter)),
-		rbacassign.WithTxManager(stubTx),
+		rbacassign.WithTxManager(persistence.WrapForCell(stubTx)),
 	)
 	require.NoError(t, err)
 

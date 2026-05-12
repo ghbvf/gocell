@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -101,7 +102,7 @@ func TestService_WithEmitter(t *testing.T) {
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
-		WithTxManager(&stubTxRunner{}),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -118,7 +119,7 @@ func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	tx := &stubTxRunner{}
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
-		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx), WithClock(clock.Real()))
+		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "bob", string(hash))
@@ -159,7 +160,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(emitter),
-		WithTxManager(tx),
+		WithTxManager(persistence.WrapForCell(tx)),
 		WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -187,7 +188,7 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	// so the service runs explicit session cleanup on emit failure.
 	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default(),
-		WithEmitter(emitter), WithTxManager(noopTxRunner{}), WithClock(clock.Real()))
+		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "noop-emit-fail", string(hash))

@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -175,7 +176,8 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminCtxForService(), CreateInput{
@@ -190,7 +192,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithTxManager(tx), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
+		WithTxManager(persistence.WrapForCell(tx)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminCtxForService(), CreateInput{
@@ -203,7 +205,8 @@ func TestService_WithTxManager(t *testing.T) {
 func TestService_Lock_WithOutbox(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -248,7 +251,8 @@ func TestService_Update_EmptyID(t *testing.T) {
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	ow := &stubOutboxWriter{err: errors.New("outbox unavailable")}
 	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminCtxForService(), CreateInput{
@@ -263,7 +267,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	// Create user with working outbox
 	svcCreate, err := NewService(repo, testutil.RealSessionRepo(t),
 		newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(&stubTxRunner{}),
+		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 	user, err := svcCreate.Create(adminCtxForService(), CreateInput{
@@ -275,7 +279,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	failWriter := &stubOutboxWriter{err: errors.New("outbox unavailable")}
 	svcLock, err := NewService(repo, testutil.RealSessionRepo(t),
 		newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&stubTxRunner{}),
+		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 

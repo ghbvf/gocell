@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -22,7 +23,8 @@ func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	t.Helper()
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
-	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
 	require.NoError(t, err)
 	h := createv1.NewHandler(svc, allowAllContractPolicy)
 	return h, writer

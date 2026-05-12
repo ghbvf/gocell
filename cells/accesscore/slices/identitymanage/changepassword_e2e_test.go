@@ -40,6 +40,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -118,13 +119,13 @@ func newE2EFixture() *e2eFixture {
 	loginSvc := sessionlogin.MustNewService(
 		userRepo, sessionRepo, roleRepo, refreshStore, e2eIssuer, slog.Default(),
 		sessionlogin.WithClock(clock.Real()),
-		sessionlogin.WithTxManager(tx),
+		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
 	)
 
 	idmSvc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 		WithClock(clock.Real()),
-		WithTxManager(tx),
+		WithTxManager(persistence.WrapForCell(tx)),
 	)
 	if err != nil {
 		panic(err)

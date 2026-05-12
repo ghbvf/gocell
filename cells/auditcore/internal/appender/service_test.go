@@ -67,7 +67,7 @@ func newSpec(t *testing.T, name string, mode appender.ActorMode) appender.Spec {
 
 func newService(t *testing.T, spec appender.Spec, store ledger.Store, p *ledger.Protocol, opts ...appender.Option) *appender.Service {
 	t.Helper()
-	defaultOpts := []appender.Option{appender.WithTxManager(directRunner{})}
+	defaultOpts := []appender.Option{appender.WithTxManager(persistence.WrapForCell(directRunner{}))}
 	svc, err := appender.NewService(spec, store, p, slog.Default(), clock.Real(), append(defaultOpts, opts...)...)
 	require.NoError(t, err)
 	return svc
@@ -289,7 +289,7 @@ func newServiceWithLogBuf(
 	t.Helper()
 	buf := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	svc, err := appender.NewService(spec, store, p, logger, fc, appender.WithTxManager(directRunner{}))
+	svc, err := appender.NewService(spec, store, p, logger, fc, appender.WithTxManager(persistence.WrapForCell(directRunner{})))
 	require.NoError(t, err)
 	return svc, buf
 }

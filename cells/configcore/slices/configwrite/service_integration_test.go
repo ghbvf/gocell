@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	cctestutil "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -73,7 +74,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
-		WithTxManager(txMgr),
+		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 
 	cleanup := func() {
@@ -227,7 +228,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	txMgr := adapterpg.NewTxManager(pool)
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
-		WithTxManager(txMgr),
+		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 
 	_, err = svc.Create(adminIntegCtx(), CreateInput{Key: "rollback.test", Value: "v"})

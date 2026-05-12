@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -56,7 +57,7 @@ func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 	wire, _, err := refreshStore.Issue(ctx, sessionID, userID)
 	require.NoError(t, err)
 
-	svc := MustNewService(sessionRepo, refreshStore, slog.Default(), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(sessionRepo, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	require.NoError(t, svc.Logout(ctx, sessionID, userID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire)
@@ -87,7 +88,7 @@ func TestService_LogoutUser_RevokesAllRefreshChains(t *testing.T) {
 	otherWire, _, err := refreshStore.Issue(ctx, "sess-other", "other-user")
 	require.NoError(t, err)
 
-	svc := MustNewService(sessionRepo, refreshStore, slog.Default(), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(sessionRepo, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	require.NoError(t, svc.LogoutUser(ctx, userID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire1)

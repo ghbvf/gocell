@@ -73,7 +73,7 @@ var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
 func setupContractHandler(t testing.TB) http.Handler {
 	t.Helper()
 	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
 	}
@@ -85,7 +85,7 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 	writer := &contractRecordingWriter{}
 	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t),
 		newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(contractTxRunner{}),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(contractTxRunner{})),
 		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithOutbox: %v", err)
@@ -112,7 +112,7 @@ func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Hand
 	t.Helper()
 	repo := mem.NewStore(clock.Real()).UserRepository()
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(issuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
+		WithTokenIssuer(issuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithIssuer: %v", err)
 	}

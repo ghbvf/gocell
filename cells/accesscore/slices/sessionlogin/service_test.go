@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -116,7 +117,7 @@ func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	return MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(&stubTxRunner{})), userRepo
+		testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(&stubTxRunner{}))), userRepo
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
@@ -268,7 +269,7 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(noopTxRunner{}))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	seedUser(userRepo, "refresh-down", "pass123")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
@@ -379,7 +380,7 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(&stubTxRunner{}))
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	seedUser(userRepo, "issue-persist", "pass123")
 
 	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
@@ -406,7 +407,7 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(noopTxRunner{}))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	seedUser(userRepo, "issue-refresh-down", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
 	require.NoError(t, err)
@@ -515,7 +516,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 
 	emitter := &countingEmitter{}
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
+		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
@@ -542,7 +543,7 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(&stubTxRunner{}))
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.Error(t, err, "IssueForUser must fail when role fetch fails")
@@ -581,7 +582,7 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer,
-		slog.Default(), WithEmitter(emitter), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
+		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")
@@ -601,7 +602,7 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 
 	emitter := &countingEmitter{}
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
+		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.NoError(t, err)
@@ -624,7 +625,7 @@ func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup
 	// stubTxRunner (defined in outbox_test.go) is NOT a Nooper — isNoopTx returns false.
 	tx := &stubTxRunner{}
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
-		WithTxManager(tx), WithClock(clock.Real()))
+		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()))
 	seedUser(userRepo, "durable-refresh-fail", "pass123")
 
 	_, err := svc.Login(context.Background(), LoginInput{Username: "durable-refresh-fail", Password: "pass123"})
@@ -661,7 +662,7 @@ func TestCleanupIssuedSession_NotFound_LogsDebug(t *testing.T) {
 	// the not-found branch in cleanupIssuedSession.
 	svc := MustNewService(userRepo, notFoundSessionRepo, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(noopTxRunner{}))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	seedUser(userRepo, "cleanup-not-found", "pass123")
 
 	// Should not panic or return an unexpected error — the original refresh issue error propagates.

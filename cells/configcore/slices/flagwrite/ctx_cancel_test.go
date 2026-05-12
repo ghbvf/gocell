@@ -47,7 +47,7 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	txRunner := &cancellingTxRunner{}
 
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(txRunner))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(txRunner)))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{
@@ -73,14 +73,14 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	// Seed a flag so Toggle reaches the RunInTx call.
-	seedSvc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&testutil.NoopTxRunner{}))
+	seedSvc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = seedSvc.Create(context.Background(), CreateInput{Key: "toggle-cancel"})
 	require.NoError(t, err)
 
 	// Now create a service with the canceling tx runner.
 	cancelTx := &cancellingTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(cancelTx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(cancelTx)))
 	require.NoError(t, err)
 
 	_, err = svc.Toggle(context.Background(), "toggle-cancel", 1, true)
@@ -97,7 +97,7 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 // context cancellation and leaves the flag unchanged.
 func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
-	seedSvc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&testutil.NoopTxRunner{}))
+	seedSvc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = seedSvc.Create(context.Background(), CreateInput{
 		Key:         "update-cancel",
@@ -106,7 +106,7 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	cancelTx := &cancellingTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(cancelTx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(cancelTx)))
 	require.NoError(t, err)
 
 	_, err = svc.Update(context.Background(), UpdateInput{
@@ -128,13 +128,13 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 // context cancellation and leaves the flag in the repo.
 func TestFlagWrite_Delete_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
-	seedSvc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&testutil.NoopTxRunner{}))
+	seedSvc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = seedSvc.Create(context.Background(), CreateInput{Key: "delete-cancel"})
 	require.NoError(t, err)
 
 	cancelTx := &cancellingTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(cancelTx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(cancelTx)))
 	require.NoError(t, err)
 
 	err = svc.Delete(context.Background(), "delete-cancel", 1)

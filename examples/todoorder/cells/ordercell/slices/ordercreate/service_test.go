@@ -77,7 +77,7 @@ func TestService_Create(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, err := NewService(mem.NewOrderRepository(), slog.Default(),
 				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-				WithTxManager(&stubTxRunner{}),
+				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 				WithClock(clock.Real()),
 			)
 			require.NoError(t, err)
@@ -107,7 +107,8 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
 	txRunner := &stubTxRunner{}
-	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
+		WithTxManager(persistence.WrapForCell(txRunner)), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	resp, err := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
@@ -130,7 +131,8 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	txRunner := &stubTxRunner{}
-	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
+		WithTxManager(persistence.WrapForCell(txRunner)), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
@@ -153,7 +155,7 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-		WithTxManager(&stubTxRunner{}),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()),
 	)
 	require.NoError(t, err)
@@ -171,7 +173,7 @@ func TestService_Create_PersistsOrder(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-		WithTxManager(&stubTxRunner{}),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()),
 	)
 	require.NoError(t, err)
@@ -201,7 +203,7 @@ func (failRepo) Create(_ context.Context, _ *domain.Order) error {
 func TestService_Create_RepoFailure(t *testing.T) {
 	svc, err := NewService(failRepo{}, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-		WithTxManager(&stubTxRunner{}),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()),
 	)
 	require.NoError(t, err)

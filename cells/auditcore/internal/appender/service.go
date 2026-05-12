@@ -35,10 +35,11 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithTxManager wires the TxRunner that brackets store.Append + outbox.Emit
-// in one transaction (L2 OutboxFact pattern). NewService fails fast when
-// no TxRunner is wired (OUTBOX-SERVICE-01).
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager wires the CellTxManager that brackets store.Append +
+// outbox.Emit in one transaction (L2 OutboxFact pattern). NewService fails
+// fast when no CellTxManager is wired (OUTBOX-SERVICE-01). Callers obtain
+// the sealed marker via persistence.WrapForCell from a composition root.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) {
 		if tx != nil {
 			s.txRunner = tx
@@ -52,7 +53,7 @@ type Service struct {
 	spec     Spec
 	store    ledger.Store
 	protocol *ledger.Protocol
-	txRunner persistence.TxRunner
+	txRunner persistence.CellTxManager
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clk      clock.Clock

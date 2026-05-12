@@ -36,6 +36,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -171,7 +172,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 		slog.Default(),
 		WithTokenIssuer(stub),
 		WithClock(clock.Real()),
-		WithTxManager(txMgr),
+		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
 

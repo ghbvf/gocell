@@ -82,7 +82,7 @@ func newService(
 		return "00000000-0000-4000-8000-000000000001"
 	}, clock.Real())
 	require.NoError(t, err)
-	opts := []setup.Option{setup.WithTxManager(noopTxRunner{})}
+	opts := []setup.Option{setup.WithTxManager(persistence.WrapForCell(noopTxRunner{}))}
 	if w != nil {
 		opts = append(opts, setup.WithEmitter(testoutbox.MustEmitter(t, w)))
 	}
@@ -235,7 +235,7 @@ func TestService_CreateAdmin_WithSetupLock_AcquiresInsideTxBeforeEmit(t *testing
 	w := &stubWriter{onWrite: func() { events = append(events, "emit") }}
 	lock := &recordingSetupLock{requireTxMarker: true, events: &events}
 	svc := newService(t, userRepo, roleRepo, w,
-		setup.WithTxManager(markerTxRunner{}),
+		setup.WithTxManager(persistence.WrapForCell(markerTxRunner{})),
 		setup.WithSetupLock(lock),
 	)
 

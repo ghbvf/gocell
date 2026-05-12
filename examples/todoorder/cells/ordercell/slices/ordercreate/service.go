@@ -55,8 +55,10 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithTxManager sets the TxRunner for transactional guarantees.
-func WithTxManager(tx persistence.TxRunner) Option {
+// WithTxManager sets the CellTxManager for transactional guarantees.
+// Callers obtain the sealed marker via persistence.WrapForCell from a
+// composition root.
+func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
@@ -75,7 +77,7 @@ func WithClock(clk clock.Clock) Option {
 // runs through the same Emitter + TxRunner code path.
 type Service struct {
 	repo     domain.OrderRepository
-	txRunner persistence.TxRunner
+	txRunner persistence.CellTxManager
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clock    clock.Clock
