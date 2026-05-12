@@ -12,6 +12,8 @@
 // should use Generate.
 package cellgen
 
+import "github.com/ghbvf/gocell/kernel/metadata"
+
 // CellGenSpec is the rendering input for cell.tmpl. It is the projection of
 // CellMeta + child slices that the template needs to emit cell_gen.go.
 //
@@ -32,33 +34,20 @@ type CellGenSpec struct {
 	// Rendered into the file header as "// Source: <SourceFile>" so that
 	// readers of the generated file can locate the authoritative YAML.
 	SourceFile string
-	// MetadataLiteral renders into cell_gen.go as a package-scope
-	// `var cellMeta = &metadata.CellMeta{...}` plus a
-	// `func loadCellMetadata() *metadata.CellMeta` accessor. cell.go
-	// constructors call loadCellMetadata() — the K#05 single source for
-	// metadata literal (was hand-written in cell.go pre-K#05).
-	MetadataLiteral CellMetadataLiteral
+	// MetadataLiteral is the parsed CellMeta passed directly to cell.tmpl.
+	// The template renders it via the renderCellMetaLiteral template func
+	// (reflect-driven literal printer) into the package-scope
+	// `var cellMeta = &metadata.CellMeta{...}` block. Using *CellMeta
+	// directly — instead of a hand-written projection struct — closes the
+	// pipeline field-coverage gap: CellMeta yaml-tag field additions are
+	// automatically emitted by the reflect renderer without any builder change.
+	MetadataLiteral *metadata.CellMeta
 	// RouteGroups holds the listener-aggregated route mounts. Each entry
 	// emits one reg.RouteGroup() call.
 	RouteGroups []RouteGroupGenSpec
 	// Subscriptions holds the per-slice event subscriptions. Each entry
 	// emits one reg.Subscribe() call (and one specEvent... var declaration).
 	Subscriptions []SubscriptionGenSpec
-}
-
-// CellMetadataLiteral projects CellMeta yaml fields into the rendering
-// shape consumed by the metadata block in cell.tmpl. All slice fields are
-// pre-sorted upstream (BuildCellSpec) for diff stability.
-type CellMetadataLiteral struct {
-	ID               string
-	Type             string
-	ConsistencyLevel string
-	DurabilityMode   string
-	OwnerTeam        string
-	OwnerRole        string
-	SchemaPrimary    string
-	VerifySmoke      []string
-	GoStructName     string
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.

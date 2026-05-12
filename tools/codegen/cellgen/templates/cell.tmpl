@@ -19,20 +19,7 @@ var _ cell.Cell = (*{{.StructName}})(nil)
 // loadCellMetadata returns the package-scope pointer; cell.go's constructor
 // passes it to cell.MustNewBaseCell which deep-copies the value so callers
 // cannot mutate the generated literal.
-var cellMeta = &metadata.CellMeta{
-	ID:               {{ printf "%q" .MetadataLiteral.ID }},
-	Type:             {{ printf "%q" .MetadataLiteral.Type }},
-	ConsistencyLevel: {{ printf "%q" .MetadataLiteral.ConsistencyLevel }},
-	DurabilityMode:   {{ printf "%q" .MetadataLiteral.DurabilityMode }},
-	Owner:            metadata.OwnerMeta{Team: {{ printf "%q" .MetadataLiteral.OwnerTeam }}, Role: {{ printf "%q" .MetadataLiteral.OwnerRole }}},
-	Schema:           metadata.SchemaMeta{Primary: {{ printf "%q" .MetadataLiteral.SchemaPrimary }}},
-	Verify: metadata.CellVerifyMeta{Smoke: []string{
-{{- range .MetadataLiteral.VerifySmoke }}
-		{{ printf "%q" . }},
-{{- end }}
-	}},
-	GoStructName: metadata.MustNewGoIdentifier({{ printf "%q" .MetadataLiteral.GoStructName }}),
-}
+var cellMeta = {{ renderCellMetaLiteral .MetadataLiteral }}
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }
 

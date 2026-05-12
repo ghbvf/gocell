@@ -1,6 +1,4 @@
-// invariants:
-//   - INVARIANT: CELLS-NO-CONTRACTSPEC-IMPORT-01
-//   - INVARIANT: NO-MANUAL-CONTRACTSPEC-LITERAL-01
+// INVARIANT: CELLS-NO-CONTRACTSPEC-IMPORT-01
 //
 // # CELLS-NO-CONTRACTSPEC-IMPORT-01
 //
@@ -144,16 +142,28 @@ func scanForContractspecUsage(fset *token.FileSet, path, rel string) []string {
 		return nil // file does not import kernel/contractspec
 	}
 
+	// blockedNames covers the ContractSpec type itself and the typed funnels
+	// (NewFrameworkHTTP / NewEventDerivation). The funnels are for runtime/
+	// framework infra only — cells/ must use generated NewSubscription /
+	// NewHandler adapters from generated/contracts/**.
+	blockedNames := map[string]bool{
+		"ContractSpec":       true,
+		"NewFrameworkHTTP":   true,
+		"NewEventDerivation": true,
+	}
+
 	var violations []string
 	scanner.EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
 		ident, ok2 := sel.X.(*ast.Ident)
 		if !ok2 || ident.Name != alias {
 			return
 		}
-		if sel.Sel.Name == "ContractSpec" {
+		if blockedNames[sel.Sel.Name] {
 			pos := fset.Position(sel.Pos())
 			violations = append(violations, fmt.Sprintf(
-				"%s:%d: uses %s.%s — migrate to generated contract package (see W3 plan)",
+				"%s:%d: uses %s.%s — kernel/contractspec is for generated contracts "+
+					"(cells/) and runtime/ framework infra only; cells/ must use "+
+					"generated NewSubscription / NewHandler adapters",
 				rel, pos.Line, alias, sel.Sel.Name,
 			))
 		}
@@ -209,6 +219,50 @@ func TestCELLS_NO_CONTRACTSPEC_IMPORT_01_NegativeFixture(t *testing.T) {
 	for _, v := range violations {
 		if !strings.Contains(v, "ContractSpec") {
 			t.Errorf("violation message should mention ContractSpec: %q", v)
+		}
+	}
+}
+
+// TestCELLS_NO_CONTRACTSPEC_IMPORT_01_FunnelBlocked verifies that a cells/ file
+// calling contractspec.NewFrameworkHTTP produces a violation. The typed funnels
+// are for runtime/ framework infra only; cells/ must use generated adapters.
+func TestCELLS_NO_CONTRACTSPEC_IMPORT_01_FunnelBlocked(t *testing.T) {
+	t.Parallel()
+	src := `package p
+import "github.com/ghbvf/gocell/kernel/contractspec"
+func init() {
+	_ = contractspec.NewFrameworkHTTP("http.fake.v1", "GET", "/api/v1/fake")
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "handler.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	tmp, err := os.CreateTemp(t.TempDir(), "funnel_test_*.go")
+	if err != nil {
+		t.Fatalf("create temp: %v", err)
+	}
+	if _, err := tmp.WriteString(src); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("close temp: %v", err)
+	}
+
+	alias := contractspecLocalAlias(f)
+	if alias != "contractspec" {
+		t.Fatalf("expected alias %q, got %q", "contractspec", alias)
+	}
+
+	violations := scanForContractspecUsage(token.NewFileSet(), tmp.Name(), "cells/fake/handler.go")
+	if len(violations) == 0 {
+		t.Errorf("expected at least 1 violation for cells/ file calling contractspec.NewFrameworkHTTP, got 0")
+	}
+	for _, v := range violations {
+		if !strings.Contains(v, "NewFrameworkHTTP") {
+			t.Errorf("violation message should mention NewFrameworkHTTP: %q", v)
 		}
 	}
 }
