@@ -170,12 +170,15 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **工时**：5-8h dev / 1-2h review（Hard 升级 + dead code 清理）
 - **依赖**：无
 
-### Phase 3.8：metadata → 派生消费方字段漂移守卫束（PR-MD1）
+### Phase 3.8：metadata → 派生消费方字段集覆盖守卫束（PR-MD1）✅ done
 - **范围**：2 子条同主题合并（同主题"元数据 ↔ 派生 DTO 字段级漂移"）
-  - `ARCHTEST-CELL-METADATA-FIELD-DRIFT`（cap-14 line 400，P1/Cx2）：archtest 扫 3 cell 的 cell.yaml 与 cell_gen.go 对应字段值（owner / Schema.Primary / VerifySmoke）一致
-  - `CATALOG-DTO-DRIFT-ARCHTEST`（cap-14 line 401，P2/Cx2）：archtest 校验 AssemblyMeta 字段必映射到 `runtime/devtools/catalog/wire.go` DTO
-- **工时**：4-6h dev / 1-2h review
+  - `ARCHTEST-CELL-METADATA-FIELD-DRIFT`（cap-14 line 400，P1/Cx2）：原 backlog 担心的"字段级漂移"实际已被 K#04 verify-codegen-cell.sh 守 Hard；真实 gap 在上一层 cellgen pipeline 字段集覆盖。PR-MD1 走 reflect-driven Go literal printer（Absolute Hard）：删 `cellgen.CellMetadataLiteral` 手写 struct + `buildMetadataLiteral` 手写 reduce；新增 `cellgen.RenderCellMetaLiteral` 用 reflect 遍历 `metadata.CellMeta` 自动渲染 Go 字面量。3 个 cell_gen.go 重生 0 diff，K#04 verify GREEN。
+  - `CATALOG-DTO-DRIFT-ARCHTEST`（cap-14 line 401，P2/Cx2）：原 `runtime/devtools/catalog/assembly_field_coverage_test.go` 等价实现已存在但缺治理目录注册。迁入 `tools/archtest/assembly_meta_dto_drift_test.go` 注册 INVARIANT `ASSEMBLY-META-DTO-COVERAGE-01`，删除 catalog 包内 4 个迁出符号（单源治理）。Medium-偏-Hard（reflect + excludelist）。
+- **工时**：实际 ~5h dev（reflect renderer ~3h + 任务二迁移 ~1h + 文档/inventory ~1h）/ 1-2h review
 - **依赖**：无
+- **证据**：PR-MD1 (feat/004-cellgen-reflect-literal-printer)
+- **Follow-up 立即开 next-up**：`CELLGEN-LITERAL-FUNNEL-02`（P1/Cx1，🟠，type-system 级 Hard funnel guard，关闭"AI 改回手写 cell.tmpl 字段枚举"漏洞窗口，工时 1.5-2h）
+- **Follow-up 触发型**：`CATALOG-DTO-CODEGEN-DERIVE-01`（P3/Cx3，🟢，catalog 5 DTO codegen 派生 Hard 升级，工时 15-25h，触发条件：第 2 次 metadata 字段未同步 / DTO ≥ 6 / wire 漂移事故）
 
 ### Phase 3.9：PR450 治理升级束（PR-S7）
 - **范围**：5 子条 bundle（cap-14 line 403，已是 bundle）
@@ -256,13 +259,13 @@ Phase 3.4 (internal-contract)        ✅ PR #470
 Phase 3.5 (eval predicate central)   pending — 依赖 3.1 ✅
 Phase 3.6 (inventory CI gate)        ❌ cancelled by PR #435 (PR-A')，原任务前提不成立
 Phase 3.7 (扫描 scope 扩展束)        pending — 独立
-Phase 3.8 (字段漂移守卫束)           pending — 独立
+Phase 3.8 (字段集覆盖守卫束)         ✅ PR-MD1 (feat/004-cellgen-reflect-literal-printer)
 Phase 3.9 (PR450 治理升级束)         pending — 独立，但与 3.2 review 面积冲突，建议 3.2 后
 
 Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 ```
 
-**当前剩余（Wave 2/3 范围）**：Phase 3.2 PR-SH1 + Phase 3.5 / 3.7 / 3.8 / 3.9 共 5 项（Phase 0.1 ✅ done 2026-05-12；Phase 3.6 ❌ cancelled by PR #435）。Phase 3.2 是劳动密集主线（12-16h），其余 4 项与 3.2 文件无重叠可并行；Phase 3.9 review 面积大，建议 3.2 ship 后顺位开。
+**当前剩余（Wave 2/3 范围）**：Phase 3.2 PR-SH1 + Phase 3.5 / 3.7 / 3.9 共 4 项（Phase 0.1 ✅ done 2026-05-12；Phase 3.6 ❌ cancelled by PR #435；Phase 3.8 ✅ PR-MD1 2026-05-12）。Phase 3.2 是劳动密集主线（12-16h），其余 3 项与 3.2 文件无重叠可并行；Phase 3.9 review 面积大，建议 3.2 ship 后顺位开。PR-MD1 follow-up: `CELLGEN-LITERAL-FUNNEL-02` 立即排期 next-up（1.5-2h）。
 
 ---
 
@@ -273,14 +276,14 @@ Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 | 1 | **Phase 3.2 PR-SH1**（scanner hardening + 5 case drift fixes + symlink fail-closed + 双轨整理）| 12-16h | — 主线，先开 |
 | 2 | **Phase 3.7 PR-SC1**（archtest 扫描 scope 扩展 + Hard 升级，CONTRACTSPEC-LITERAL-RUNTIME 走 typed funnel；C9 PR245-F6 已 moot 同 PR 关闭）| 5-8h | ✅ 完全并行（kernel/contractspec/framework.go 新建 + runtime/ 5 处迁移 + archtest 改造，与 PR-SH1 内部 walk.go/content.go 不同文件）|
 | 3 | **Phase 3.5 PR-EP1**（typeseval eval predicate centralization）| 3-5h | ⚠️ 同 typeseval 包 — 文件不同（archtest 新规则 vs internal/typeseval/scanner.go）但 review 维度重叠，建议 PR-SH1 进入 review 中后期再开 |
-| 4 | **Phase 3.8 PR-MD1**（字段漂移守卫束，CELL-METADATA + CATALOG-DTO 合并）| 4-6h | ✅ 完全并行（扫 cell.yaml + AssemblyMeta → wire.go DTO，与 PR-SH1 无文件重叠）|
+| 4 | **`CELLGEN-LITERAL-FUNNEL-02`**（PR-MD1 follow-up，type-system Hard funnel guard）| 1.5-2h | ✅ 完全并行（仅改 cellgen spec.go/builder.go/cell.tmpl，与 PR-SH1 无文件重叠）|
 | 5 | **Phase 3.9 PR-S7**（PR450 治理升级束 5 子条 bundle）| 8-12h | ⚠️ 较大 review 面积，建议 PR-SH1 ship 后顺位开 |
 
-**总剩余工时（Wave 2/3 范围）**：12-16h + 5-8h + 3-5h + 4-6h + 8-12h = **32-47h dev / 10-15h review**（已扣除 Phase 0.1 done + Phase 3.6 cancelled 共 3-5h dev / 1-2h review）
+**总剩余工时（Wave 2/3 范围）**：12-16h + 4-6h + 3-5h + 1.5-2h + 8-12h = **29-41h dev / 9-14h review**（已扣除 Phase 0.1 done + Phase 3.6 cancelled + Phase 3.8 done 共 8-11h dev / 3-5h review）
 
 ### 并行窗口建议
 
-- **Window 1**（PR-SH1 开工同时启）：Phase 3.7 PR-SC1 / Phase 3.8 PR-MD1 — 2 个完全并行小 PR（合计 8-12h）
+- **Window 1**（PR-SH1 开工同时启）：Phase 3.7 PR-SC1 / `CELLGEN-LITERAL-FUNNEL-02` — 2 个完全并行小 PR（合计 5.5-8h）
 - **Window 2**（PR-SH1 review 中后期）：Phase 3.5 PR-EP1（3-5h，同 typeseval 包须等 SH1 内部稳定）
 - **Window 3**（PR-SH1 ship 后）：Phase 3.9 PR-S7（8-12h，review 面积大顺位）
 

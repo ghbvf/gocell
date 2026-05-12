@@ -27,6 +27,10 @@ var templateFS embed.FS
 // contractgen / markergen that also need the shared header).
 var templates = func() *template.Template {
 	t := template.Must(codegen.SharedTemplates.Clone())
+	// Register renderCellMetaLiteral before ParseFS so cell.tmpl can use it.
+	// The FuncMap must be registered before template parsing or ParseFS will
+	// return an error for unknown function references.
+	t = t.Funcs(template.FuncMap{"renderCellMetaLiteral": RenderCellMetaLiteral})
 	return template.Must(t.ParseFS(templateFS, "templates/*.tmpl"))
 }()
 
