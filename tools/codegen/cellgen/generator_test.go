@@ -31,6 +31,7 @@ func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 		StructName:           "Demo",
 		CellID:               "demo",
 		ConsumerGroupDefault: "demo",
+		RenderedMetaLiteral:  "&metadata.CellMeta{}",
 		RouteGroups: []RouteGroupGenSpec{{
 			ListenerConst: "cell.PrimaryListener",
 			Prefix:        "/api/v1",
@@ -77,7 +78,7 @@ func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T) {
 	t.Parallel()
 	spec := &CellGenSpec{
-		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
+		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo", RenderedMetaLiteral: "&metadata.CellMeta{}",
 		Subscriptions: []SubscriptionGenSpec{{
 			ContractID:          "event.foo.bar.v1",
 			Transport:           "amqp",
@@ -115,7 +116,7 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T)
 func TestRenderCell_EmptySubPathDirectMount(t *testing.T) {
 	t.Parallel()
 	spec := &CellGenSpec{
-		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
+		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo", RenderedMetaLiteral: "&metadata.CellMeta{}",
 		RouteGroups: []RouteGroupGenSpec{{
 			ListenerConst: "cell.InternalListener",
 			Prefix:        "/internal/v1/admin",
@@ -448,7 +449,7 @@ func mustContain(t *testing.T, haystack, needle string) {
 func TestCellGen_SubscribeBlockUsesGeneratedPackage(t *testing.T) {
 	t.Parallel()
 	spec := &CellGenSpec{
-		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
+		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo", RenderedMetaLiteral: "&metadata.CellMeta{}",
 		Subscriptions: []SubscriptionGenSpec{{
 			ContractID:          "event.order-created.v1",
 			SliceID:             "ordercreate",

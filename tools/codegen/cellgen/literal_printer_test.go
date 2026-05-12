@@ -76,13 +76,13 @@ func TestRenderCellMetaLiteral_AccesscoreGreenBaseline(t *testing.T) {
 		// Dir and File have yaml:"-" — must be omitted
 	}
 
-	raw := RenderCellMetaLiteral(cell)
+	raw := renderCellMetaLiteral(cell)
 	got := fmtLiteral(t, raw)
 	// Normalize the golden through fmtLiteral as well so test expectations
 	// do not depend on hand-crafted gofumpt alignment.
 	want := fmtLiteral(t, accesscoreGolden)
 	if got != want {
-		t.Errorf("RenderCellMetaLiteral() GREEN baseline mismatch")
+		t.Errorf("renderCellMetaLiteral() GREEN baseline mismatch")
 		gotLines := strings.Split(got, "\n")
 		wantLines := strings.Split(want, "\n")
 		for i := 0; i < len(gotLines) || i < len(wantLines); i++ {
@@ -243,13 +243,13 @@ func TestRenderCellMetaLiteral_TableDriven(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			raw := RenderCellMetaLiteral(tc.input)
+			raw := renderCellMetaLiteral(tc.input)
 			got := fmtLiteral(t, raw)
 			// Normalize tc.want through fmtLiteral as well so test expectations
 			// don't need hand-crafted alignment.
 			want := fmtLiteral(t, tc.want)
 			if got != want {
-				t.Errorf("RenderCellMetaLiteral(%s) mismatch\ngot:\n%s\nwant:\n%s", tc.name, got, want)
+				t.Errorf("renderCellMetaLiteral(%s) mismatch\ngot:\n%s\nwant:\n%s", tc.name, got, want)
 				gotLines := strings.Split(got, "\n")
 				wantLines := strings.Split(want, "\n")
 				for i := 0; i < len(gotLines) || i < len(wantLines); i++ {

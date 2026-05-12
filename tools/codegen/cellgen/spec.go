@@ -12,8 +12,6 @@
 // should use Generate.
 package cellgen
 
-import "github.com/ghbvf/gocell/kernel/metadata"
-
 // CellGenSpec is the rendering input for cell.tmpl. It is the projection of
 // CellMeta + child slices that the template needs to emit cell_gen.go.
 //
@@ -34,14 +32,17 @@ type CellGenSpec struct {
 	// Rendered into the file header as "// Source: <SourceFile>" so that
 	// readers of the generated file can locate the authoritative YAML.
 	SourceFile string
-	// MetadataLiteral is the parsed CellMeta passed directly to cell.tmpl.
-	// The template renders it via the renderCellMetaLiteral template func
-	// (reflect-driven literal printer) into the package-scope
-	// `var cellMeta = &metadata.CellMeta{...}` block. Using *CellMeta
-	// directly — instead of a hand-written projection struct — closes the
-	// pipeline field-coverage gap: CellMeta yaml-tag field additions are
-	// automatically emitted by the reflect renderer without any builder change.
-	MetadataLiteral *metadata.CellMeta
+	// RenderedMetaLiteral is the pre-rendered Go source literal for the cell's
+	// metadata, of the form "&metadata.CellMeta{...}". BuildCellSpec calls
+	// renderCellMetaLiteral(cell) at spec build time and assigns the result;
+	// cell.tmpl emits the string verbatim into
+	// `var cellMeta = {{ .RenderedMetaLiteral }}`.
+	//
+	// CELLGEN-LITERAL-FUNNEL-02 Hard 来源（type system 最高档）：cell.tmpl
+	// 拿不到 *metadata.CellMeta（CellGenSpec 不暴露），手写字段枚举
+	// **不可表达** — 没有数据源可访问。任何想绕过 reflect-driven renderer
+	// 的尝试必须修改此字段类型（公开 API 变更，review 必然可见）。
+	RenderedMetaLiteral string
 	// RouteGroups holds the listener-aggregated route mounts. Each entry
 	// emits one reg.RouteGroup() call.
 	RouteGroups []RouteGroupGenSpec
