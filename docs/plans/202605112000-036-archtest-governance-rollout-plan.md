@@ -162,11 +162,12 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **enforcement gap 分析**：新机制严格强于旧机制——(1) 锚点本身即 ground truth，无派生 inventory 文件 → drift surface 从根本上消除；(2) VALID-ID-01 额外校验锚点 ID 规范 grammar（旧 gate 无此能力）；(3) `ARCHTEST-VERIFY-COVERAGE-01` 守卫 16-shard discovery 与 `tools/archtest/*_test.go` AST 集合一致，新文件自动入 shard
 - **backlog 同步**：`PR419-FU-INVENTORY-CI-GATE-01`（cap-14 line 405）已标 ✅ closed by PR #435（2026-05-12 直接 in-place 标记）
 
-### Phase 3.7：archtest 扫描 scope 扩展束（PR-SC1）
-- **范围**：2 子条同主题合并（同主题"archtest 扫描根 / 路径过滤扩展"）
-  - `ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME`（cap-14 line 399，P1/Cx1）：`NO-MANUAL-CONTRACTSPEC-LITERAL-01` 扫描根从 `cells/` + `examples/` 扩到 `runtime/`，保留 framework infra 必要的豁免列表
-  - `PR245-F6 OUTBOX-ARCHTEST-SCAN-SCOPE-EXPAND-01`（cap-14 line 336，Cx2）：`isCellFile` 从 `cell.go` 扩到 `cells/<n>/*.go` 排除 internal/slices/test
-- **工时**：4-6h dev / 1-2h review
+### Phase 3.7：archtest 扫描 scope 扩展（PR-SC1）— Hard 升级版
+- **范围**：1 子条（C9 已 moot，同 PR 关闭）
+  - `ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME`（cap-14 line 399，P1/Cx1）：`NO-MANUAL-CONTRACTSPEC-LITERAL-01` 扫描根从 `cells/` + `examples/` 扩到 `runtime/`，**并通过 typed funnel 升级为 Hard** —— 新增 `kernel/contractspec.NewFrameworkHTTP` + `NewEventDerivation` 两个 typed builder，5 处 runtime/ 字面量全量迁移；composite literal 在 cells/ + examples/ + runtime/ 0 escape hatch，违反不可表达
+  - ~~`PR245-F6 OUTBOX-ARCHTEST-SCAN-SCOPE-EXPAND-01`~~ — **MOOT**: target `tools/archtest/outbox_cell_test.go::isCellFile` 已在 PR-560 删除（ADR 202605101900 §D7）；替代规则 `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 已实现请求的 scope。backlog line 336 同 PR 标 ✅
+- **AI-rebust**：Soft（runtime/ "framework infra" 部落知识）→ **Hard**（typed funnel 是唯一合法构造路径，archtest 形态唯一性，对齐章程 `typed function call as Hard funnel` 范本）
+- **工时**：5-8h dev / 1-2h review（Hard 升级 + dead code 清理）
 - **依赖**：无
 
 ### Phase 3.8：metadata → 派生消费方字段漂移守卫束（PR-MD1）
@@ -217,7 +218,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 |---|---|---|
 | TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01（A1）| PR #472 已 merge，trigger 已满足 | Phase 3.5 PR-EP1 |
 | PR419-FU-INVENTORY-CI-GATE-01（C7）| 一次性 CI 配置项，等漂移事故是反向逻辑 | Phase 3.6 PR-IG1 |
-| ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME（C4） + PR245-F6（C9）| 扫描 scope 扩展是确定动作，无 trigger 等待价值；合并为束 | Phase 3.7 PR-SC1（合并）|
+| ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME（C4） | 扫描 scope 扩展是确定动作，无 trigger 等待价值 | Phase 3.7 PR-SC1（Hard 升级；C9 PR245-F6 已 moot 同 PR 关闭）|
 | ARCHTEST-CELL-METADATA-FIELD-DRIFT（C5a） + CATALOG-DTO-DRIFT-ARCHTEST（C5b）| 防御性 archtest，字段漂移事故首现 = 已晚；合并为束 | Phase 3.8 PR-MD1（合并）|
 | S7-FU-ARCHTEST 5 子条 bundle（C1）| PR #450 review 已出 5 条独立 archtest 升级，不是"等事故"语义 | Phase 3.9 PR-S7 |
 
@@ -270,12 +271,12 @@ Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 | Rank | Phase | 工时 | 与 PR-SH1 并行能力 |
 |---|---|---|---|
 | 1 | **Phase 3.2 PR-SH1**（scanner hardening + 5 case drift fixes + symlink fail-closed + 双轨整理）| 12-16h | — 主线，先开 |
-| 2 | **Phase 3.7 PR-SC1**（archtest 扫描 scope 扩展束，CONTRACTSPEC-LITERAL-RUNTIME + OUTBOX-SCAN-SCOPE-EXPAND 合并）| 4-6h | ✅ 完全并行（扫描根扩展到 runtime/ + isCellFile glob，与 PR-SH1 内部 walk.go/content.go 不同文件）|
+| 2 | **Phase 3.7 PR-SC1**（archtest 扫描 scope 扩展 + Hard 升级，CONTRACTSPEC-LITERAL-RUNTIME 走 typed funnel；C9 PR245-F6 已 moot 同 PR 关闭）| 5-8h | ✅ 完全并行（kernel/contractspec/framework.go 新建 + runtime/ 5 处迁移 + archtest 改造，与 PR-SH1 内部 walk.go/content.go 不同文件）|
 | 3 | **Phase 3.5 PR-EP1**（typeseval eval predicate centralization）| 3-5h | ⚠️ 同 typeseval 包 — 文件不同（archtest 新规则 vs internal/typeseval/scanner.go）但 review 维度重叠，建议 PR-SH1 进入 review 中后期再开 |
 | 4 | **Phase 3.8 PR-MD1**（字段漂移守卫束，CELL-METADATA + CATALOG-DTO 合并）| 4-6h | ✅ 完全并行（扫 cell.yaml + AssemblyMeta → wire.go DTO，与 PR-SH1 无文件重叠）|
 | 5 | **Phase 3.9 PR-S7**（PR450 治理升级束 5 子条 bundle）| 8-12h | ⚠️ 较大 review 面积，建议 PR-SH1 ship 后顺位开 |
 
-**总剩余工时（Wave 2/3 范围）**：12-16h + 4-6h + 3-5h + 4-6h + 8-12h = **31-45h dev / 10-15h review**（已扣除 Phase 0.1 done + Phase 3.6 cancelled 共 3-5h dev / 1-2h review）
+**总剩余工时（Wave 2/3 范围）**：12-16h + 5-8h + 3-5h + 4-6h + 8-12h = **32-47h dev / 10-15h review**（已扣除 Phase 0.1 done + Phase 3.6 cancelled 共 3-5h dev / 1-2h review）
 
 ### 并行窗口建议
 

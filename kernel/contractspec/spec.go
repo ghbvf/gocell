@@ -13,19 +13,14 @@ import (
 //   - runtime/eventbus / kernel/cell.Registry.Subscribe (event subscription)
 //   - tracing span attributes (gocell.contract.id / kind / transport)
 //
-// Cells MUST NOT construct ContractSpec literals. The only valid construction
-// site is generated/contracts/**/spec_gen.go (private `var spec`).
-// Subscription/route mounting goes through the generated NewSubscription /
-// NewHandler adapters in generated/contracts/**.
-//
-// Three archtest gates enforce this invariant:
-//   - CELLS-NO-CONTRACTSPEC-IMPORT-01
-//   - NO-MANUAL-CONTRACTSPEC-LITERAL-01
-//   - EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
-//
 // The zero value is invalid — callers must populate ID / Kind / Transport
 // and the kind-specific fields, then rely on auth.Mount / wrapper.HTTPHandler
 // to Validate() before registration.
+//
+// Construction-site catalog and archtest enforcement gates are documented
+// in this package's doc.go (single source). Composite literal under cells/,
+// examples/*/cells/, and runtime/ is forbidden by archtest
+// NO-MANUAL-CONTRACTSPEC-LITERAL-01.
 //
 // ref: k8s.io/apimachinery — lightweight value types shared across layers
 // without runtime parsing dependencies.
