@@ -747,6 +747,112 @@ func TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG(t *testing.T) {
 		"locked peer must not save the invariant; revoke must surface ErrAuthLastAdminProtected")
 }
 
+// TestPGRoleRepo_EffectiveAdminExists_PG covers the lock-free fast-path
+// boolean reader of the effective-admin set. Mirrors the mem-layer
+// TestRoleRepository_EffectiveAdminExists table but against a real PG
+// instance so the PG SELECT EXISTS shape is exercised end-to-end (closing
+// the unit-test coverage gap on the PG implementation of the port method).
+func TestPGRoleRepo_EffectiveAdminExists_PG(t *testing.T) {
+	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	t.Run("empty_returns_false", func(t *testing.T) {
+		exists, err := roleRepo.EffectiveAdminExists(ctx)
+		require.NoError(t, err)
+		assert.False(t, exists, "fresh DB has no effective admin")
+	})
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+
+	t.Run("active_admin_returns_true", func(t *testing.T) {
+		u := createTestUserInDB(t, userRepo, "exists_active_"+uuid.NewString()[:6])
+		_, err := roleRepo.AssignToUser(ctx, u.ID, auth.RoleAdmin)
+		require.NoError(t, err)
+
+		exists, err := roleRepo.EffectiveAdminExists(ctx)
+		require.NoError(t, err)
+		assert.True(t, exists, "active admin must satisfy the predicate")
+	})
+
+	t.Run("locked_peer_still_true_when_other_active_admin_remains", func(t *testing.T) {
+		// One active admin already seeded from previous subtest. Add a
+		// second admin, lock it (allowed because first peer is active),
+		// then verify EffectiveAdminExists still true (first admin still
+		// active).
+		extra := createTestUserInDB(t, userRepo, "exists_locked_"+uuid.NewString()[:6])
+		_, err := roleRepo.AssignToUser(ctx, extra.ID, auth.RoleAdmin)
+		require.NoError(t, err)
+		// Demote the new admin via tx (allowed since the original peer
+		// stays active).
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := roleRepo.db.ExecDirect(txCtx,
+				"UPDATE users SET status = 'locked' WHERE id = $1", extra.ID)
+			return err
+		}))
+
+		exists, err := roleRepo.EffectiveAdminExists(ctx)
+		require.NoError(t, err)
+		assert.True(t, exists, "at least one active admin remains across the set")
+	})
+}
+
+// TestPGUserRepo_Update_LastAdminProtected_Mapping_PG exercises the
+// PGUserRepo.Update error-mapping branch added in PR #476 round-3 P1-C:
+// when the migration-024 trigger rejects a status demotion of the sole
+// effective admin, the SQLSTATE P0001 must be translated into
+// ErrAuthLastAdminProtected (403). Pre-fix it surfaced as ErrInternal/500.
+func TestPGUserRepo_Update_LastAdminProtected_Mapping_PG(t *testing.T) {
+	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	sole := createTestUserInDB(t, userRepo, "update_mapping_"+uuid.NewString()[:6])
+	_, err := roleRepo.AssignToUser(ctx, sole.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	// Read-modify-write: demote status to locked. Trigger must block.
+	got, err := userRepo.GetByID(ctx, sole.ID)
+	require.NoError(t, err)
+	got.Status = domain.StatusLocked
+	err = userRepo.Update(ctx, got)
+	require.Error(t, err, "Update on sole effective admin status demotion must surface a typed error")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code,
+		"PGUserRepo.Update must map P0001 trigger error to ErrAuthLastAdminProtected (403)")
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+	assert.Contains(t, ec.Message, "last effective admin")
+}
+
+// TestPGUserRepo_Delete_LastAdminProtected_MessageConsistency_PG validates
+// the PR #476 round-3 #4 followup: PGUserRepo.Delete's trigger-rejection
+// error message now matches PGUserRepo.Update + domain.LastAdminGuard
+// ("cannot remove the last effective admin"), replacing the pre-fix
+// "delete blocked: last admin" divergent literal.
+func TestPGUserRepo_Delete_LastAdminProtected_MessageConsistency_PG(t *testing.T) {
+	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	sole := createTestUserInDB(t, userRepo, "delete_msg_"+uuid.NewString()[:6])
+	_, err := roleRepo.AssignToUser(ctx, sole.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	err = userRepo.Delete(ctx, sole.ID)
+	require.Error(t, err, "Delete on sole effective admin must be rejected by trigger")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code)
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+	assert.Equal(t, "cannot remove the last effective admin", ec.Message,
+		"Delete error message must match Update + domain.LastAdminGuard (single source)")
+}
+
 func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
 	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
 	defer cleanup()

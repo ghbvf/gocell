@@ -624,6 +624,80 @@ func seedActiveAdmin(t testing.TB, store *Store, userID string) {
 	require.NoError(t, err)
 }
 
+// TestRoleRepository_EffectiveAdminExists covers the lock-free fast-path
+// boolean variant used by provisioner.Status / setup-retirement gating.
+// Mirrors the CountEffectiveAdmins filter (status='active' AND admin role)
+// but returns bool — verify both polarities.
+func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
+	t.Run("empty_store_returns_false", func(t *testing.T) {
+		store := NewStore(clock.Real())
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		require.NoError(t, err)
+		assert.False(t, exists, "fresh store has no effective admin")
+	})
+
+	t.Run("only_locked_admin_returns_false", func(t *testing.T) {
+		// Seed a user already in locked state + admin role. Going through
+		// UserRepository.Update would trip the effective-admin guard, so
+		// we write directly into the store maps (this test lives in
+		// package mem and exercises the read-side predicate).
+		store := NewStore(clock.Real())
+		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+		store.mu.Lock()
+		store.usersByID["locked-admin"] = &domain.User{
+			ID: "locked-admin", Username: "locked-admin",
+			Email: "la@test.local", Status: domain.StatusLocked,
+		}
+		store.byName["locked-admin"] = store.usersByID["locked-admin"]
+		store.userRoles["locked-admin"] = map[string]struct{}{"admin": {}}
+		store.mu.Unlock()
+
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		require.NoError(t, err)
+		assert.False(t, exists, "locked admin must not satisfy the effective predicate")
+	})
+
+	t.Run("active_admin_returns_true", func(t *testing.T) {
+		store := NewStore(clock.Real())
+		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+		seedActiveAdmin(t, store, "active-admin")
+
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		require.NoError(t, err)
+		assert.True(t, exists, "active admin must satisfy the effective predicate")
+	})
+
+	t.Run("orphan_role_assignment_returns_false", func(t *testing.T) {
+		// Role assignment exists for a userID that has no users row (FK CASCADE
+		// would prevent this in PG, but the mem path defensively skips orphans).
+		store := NewStore(clock.Real())
+		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+		_, err := store.RoleRepository().AssignToUser(context.Background(), "ghost", "admin")
+		require.NoError(t, err)
+
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		require.NoError(t, err)
+		assert.False(t, exists, "orphan role assignment without user row must not count")
+	})
+
+	t.Run("non_admin_role_only_returns_false", func(t *testing.T) {
+		// Active user holds a non-admin role only; effective-admin predicate
+		// must reject because the role-id filter ignores them.
+		store := NewStore(clock.Real())
+		store.RoleRepository().SeedRole(&domain.Role{ID: "viewer", Name: "viewer"})
+		require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
+			ID: "viewer-user", Username: "viewer-user",
+			Email: "vu@test.local", Status: domain.StatusActive,
+		}))
+		_, err := store.RoleRepository().AssignToUser(context.Background(), "viewer-user", "viewer")
+		require.NoError(t, err)
+
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		require.NoError(t, err)
+		assert.False(t, exists, "non-admin role must not satisfy effective-admin predicate")
+	})
+}
+
 // TestRoleRepository_CountEffectiveAdmins_FiltersLocked covers the core
 // S4.0 invariant counter: a user with admin role but non-active status does
 // NOT count toward the at-least-one-effective-admin invariant.

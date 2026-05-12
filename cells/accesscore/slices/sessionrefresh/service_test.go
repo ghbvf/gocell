@@ -339,6 +339,72 @@ func (c *countingSessionRepo) Update(ctx context.Context, s *domain.Session) err
 // RoleRepository is unavailable, Refresh fails with ErrAuthRoleFetchFailed
 // and does NOT persist the rotated session — the fail-closed contract of
 // PR-A7 / sessionmint: never issue a silently-degraded token.
+// TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes covers the
+// S4.0 fail-closed path added by rejectIfUserNotActive: when the session
+// owner is non-active (suspended / locked), Refresh must (a) refuse with
+// ErrAuthUserNotActive (403) and (b) cascade-revoke the refresh chain so
+// subsequent rotation attempts cannot keep returning new tokens. Tests
+// both non-active states to confirm CanAuthenticate() applies uniformly.
+func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
+	cases := []struct {
+		name        string
+		status      domain.UserStatus
+		expectError errcode.Code
+	}{
+		{name: "suspended_rejected", status: domain.StatusSuspended, expectError: errcode.ErrAuthUserNotActive},
+		{name: "locked_rejected", status: domain.StatusLocked, expectError: errcode.ErrAuthUserNotActive},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, sessionRepo, userRepo := newTestServiceWithUserRepo(t)
+			// Seed an active user, then directly mutate to non-active so the
+			// session predates the demotion (real-world scenario: admin
+			// suspends a user with a live session).
+			u, err := domain.NewUser("notactive", "notactive@test.local", "hash", time.Now())
+			require.NoError(t, err)
+			u.ID = "usr-notactive-" + string(tc.status)
+			require.NoError(t, userRepo.Create(context.Background(), u))
+			u.Status = tc.status
+			require.NoError(t, userRepo.Update(context.Background(), u))
+
+			sess, err := domain.NewSession(u.ID, "at", time.Now().Add(time.Hour), time.Now())
+			require.NoError(t, err)
+			sess.ID = "sess-" + u.ID
+			require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+			// Wire the refresh-store side of the test directly via the service
+			// internals — newTestServiceWithUserRepo builds the refresh store
+			// inside MustNewService, so seed an entry through svc.refreshStore.
+			wireToken, _, issueErr := svc.refreshStore.Issue(context.Background(), sess.ID, u.ID)
+			require.NoError(t, issueErr)
+
+			_, err = svc.Refresh(context.Background(), wireToken)
+			require.Error(t, err, "refresh must reject non-active user")
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, tc.expectError, ec.Code,
+				"non-active refresh must surface ErrAuthUserNotActive (403)")
+			assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+
+			// Cascade-revoke side effect: the refresh chain must be gone so a
+			// retry with the same wire token cannot keep returning tokens.
+			// cascadeRevoke routes through RevokeSessionDetached, which
+			// invalidates the refresh store entry; subsequent Refresh sees
+			// the refresh store reject the token rather than reaching the
+			// user-state check again.
+			_, retryErr := svc.Refresh(context.Background(), wireToken)
+			require.Error(t, retryErr, "retry must fail (refresh chain revoked)")
+			var retryEc *errcode.Error
+			require.ErrorAs(t, retryErr, &retryEc)
+			// After cascade revoke, the retry hits the refresh-store layer
+			// and surfaces ErrAuthRefreshFailed (uniform rejection message),
+			// not the user-state code.
+			assert.Equal(t, errcode.ErrAuthRefreshFailed, retryEc.Code,
+				"retry after cascade revoke must surface uniform refresh rejection")
+		})
+	}
+}
+
 func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	sessionRepo := &countingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}

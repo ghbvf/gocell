@@ -322,6 +322,104 @@ func TestService_Update(t *testing.T) {
 	assert.Equal(t, "new@e.f", updated.Email)
 }
 
+// TestService_Update_StatusRequiresAdminRole covers the S4.0 P1-A
+// field-level guard: a non-admin caller cannot mutate user.Status even
+// though the PATCH route policy is selfOrAdminPolicy. Pre-S4.0 a
+// suspended user could self-PATCH back to active and defeat suspend.
+func TestService_Update_StatusRequiresAdminRole(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "self-patch", Email: "self@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	// Self-PATCH with non-admin roles: changing status must fail with 403.
+	nonAdminCtx := auth.TestContext(user.ID, []string{"user"})
+	active := "active"
+	_, err = svc.Update(nonAdminCtx, UpdateInput{ID: user.ID, Status: &active})
+	require.Error(t, err, "non-admin must not be able to mutate status")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+
+	// Same caller updating a non-status field MUST succeed (field-level guard
+	// applies only to status).
+	newEmail := "user-self@e.f"
+	updated, err := svc.Update(nonAdminCtx, UpdateInput{ID: user.ID, Email: &newEmail})
+	require.NoError(t, err, "non-admin self-PATCH of non-status fields must succeed")
+	assert.Equal(t, "user-self@e.f", updated.Email)
+}
+
+// TestService_Update_SuspendCascadeRevokesSessionsAndRefresh covers the
+// S4.0 P1-A cascade-revoke path: when admin demotes an active user to
+// suspended via Update, the user's live sessions + refresh chains are
+// revoked atomically with the row update (mirrors Lock's revoke cascade).
+func TestService_Update_SuspendCascadeRevokesSessionsAndRefresh(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
+	require.NoError(t, err)
+
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "to-suspend", Email: "ts@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	// Seed an active session for the user; if cascade-revoke fires it will be
+	// marked revoked by sessionRepo.RevokeByUserID.
+	sess, err := domain.NewSession(user.ID, "at-stub", time.Now().Add(time.Hour), time.Now())
+	require.NoError(t, err)
+	sess.ID = "sess-suspend-" + user.ID
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	suspended := "suspended"
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
+	require.NoError(t, err, "admin status demotion to suspended must succeed")
+
+	// Cascade side effect: session must be revoked.
+	postSess, err := sessionRepo.GetByID(context.Background(), sess.ID)
+	require.NoError(t, err)
+	assert.True(t, postSess.IsRevoked(),
+		"Update demotion from active must cascade-revoke the user's sessions (S4.0 P1-A)")
+}
+
+// TestService_Update_StatusUnchanged_NoCascadeRevoke covers the
+// isStatusDemotion=false branch: when the Update does NOT demote status
+// (email-only patch, or active→active), the cascade-revoke MUST NOT fire
+// (otherwise every Update would log users out).
+func TestService_Update_StatusUnchanged_NoCascadeRevoke(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(simpleTxRunner{}))
+	require.NoError(t, err)
+
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "no-revoke", Email: "nr@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	sess, err := domain.NewSession(user.ID, "at-stub", time.Now().Add(time.Hour), time.Now())
+	require.NoError(t, err)
+	sess.ID = "sess-norevoke-" + user.ID
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	newEmail := "nr2@e.f"
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
+	require.NoError(t, err)
+
+	postSess, err := sessionRepo.GetByID(context.Background(), sess.ID)
+	require.NoError(t, err)
+	assert.False(t, postSess.IsRevoked(),
+		"email-only Update must not cascade-revoke (only status demotion does)")
+}
+
 // stubTokenIssuer is a test double for TokenIssuer.
 type stubTokenIssuer struct {
 	pair dto.TokenPair

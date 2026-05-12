@@ -243,6 +243,26 @@ func TestValidUserStatus(t *testing.T) {
 	}
 }
 
+func TestUser_CanAuthenticate(t *testing.T) {
+	tests := []struct {
+		name   string
+		status UserStatus
+		want   bool
+	}{
+		{name: "active", status: StatusActive, want: true},
+		{name: "suspended_rejected", status: StatusSuspended, want: false},
+		{name: "locked_rejected", status: StatusLocked, want: false},
+		{name: "unknown_status_fail_closed", status: UserStatus("unknown"), want: false},
+		{name: "empty_status_fail_closed", status: UserStatus(""), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := &User{Status: tt.status}
+			assert.Equal(t, tt.want, u.CanAuthenticate())
+		})
+	}
+}
+
 func TestValidUserSource(t *testing.T) {
 	tests := []struct {
 		in   UserSource
