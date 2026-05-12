@@ -1,15 +1,17 @@
 // INVARIANT: ASSEMBLY-META-DTO-COVERAGE-01
 //
-// TestAssemblyMetaDTOCoverage enforces that every yaml-bearing exported field
-// on metadata.AssemblyMeta is either:
+// TestAssemblyMetaDTOCoverage enforces that every top-level yaml-bearing
+// exported field on metadata.AssemblyMeta is either:
 //
 //   - mapped onto runtime/devtools/catalog.AssemblySpec, or
 //   - listed in catalogExcludedAssemblyFields with a documented reason.
 //
-// Adding a new metadata.AssemblyMeta field without wire DTO sync triggers
-// this test, preventing the "metadata extends but catalog stays stale"
-// drift class identified in PR #404 review §F4. The check uses reflection
-// rather than AST scanning to keep the guard a few lines.
+// Adding a new top-level metadata.AssemblyMeta field without wire DTO sync
+// triggers this test, preventing the "metadata extends but catalog stays stale"
+// drift class identified in PR #404 review §F4. The check uses one-level
+// reflection rather than recursive AST/type scanning; nested struct field
+// equality such as metadata.BuildMeta ↔ catalog.AssemblySpecBuild remains
+// outside this invariant and is covered by focused catalog round-trip tests.
 //
 // Migrated from runtime/devtools/catalog/assembly_field_coverage_test.go
 // (TestAssemblySpecCoversAssemblyMeta) into tools/archtest/ for single-source
@@ -36,7 +38,8 @@ var catalogExcludedAssemblyFields = map[string]string{
 	"id": "surfaced via EntityMetadata.Name, not Spec",
 }
 
-// TestAssemblyMetaDTOCoverage is the ASSEMBLY-META-DTO-COVERAGE-01 gate.
+// TestAssemblyMetaDTOCoverage is the ASSEMBLY-META-DTO-COVERAGE-01 top-level
+// field-set gate.
 func TestAssemblyMetaDTOCoverage(t *testing.T) {
 	t.Parallel()
 	metaFields := exportedYAMLNames(reflect.TypeOf(metadata.AssemblyMeta{}))
