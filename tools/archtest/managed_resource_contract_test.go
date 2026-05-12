@@ -1,4 +1,4 @@
-// INVARIANT: MANAGED-RESOURCE-CONTRACT-01: adapter exported types with owned lifecycle must implement ManagedResource or be opted-out
+// INVARIANT: MANAGED-RESOURCE-COMPLETENESS-01: adapter exported types with owned lifecycle must implement ManagedResource or be opted-out. The 4 external-dependency owner types (postgres.Pool / redis.Client / s3.Client / oidc.Adapter) are deliberately excluded from the opt-out table and MUST implement ManagedResource directly.
 package archtest
 
 import (
@@ -29,7 +29,6 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/circuitbreaker.Config":           "config: construction input value",
 	"adapters/circuitbreaker.Counts":           "value-object: breaker statistics snapshot",
 	"adapters/circuitbreaker.State":            "value-object: breaker enum",
-	"adapters/oidc.Adapter":                    "stateless-adapter: wraps OIDC provider calls without owned lifecycle",
 	"adapters/oidc.Config":                     "config: construction input value",
 	"adapters/otel.MessagingChannelStatter":    "value-object: statter config for external metric collection",
 	"adapters/otel.MetricProvider":             "stateless-adapter: emits metrics through caller-owned SDK/provider",
@@ -45,7 +44,6 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/postgres.OutboxWriter":           "stateless-adapter: writes through ctx-bound transaction",
 	"adapters/postgres.PGOutboxStore":          "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PGRefreshStore":         "subresource-not-owner: storage facade over caller-owned pool",
-	"adapters/postgres.Pool":                   "subresource-not-owner: wrapped by PGResource for ManagedResource wiring",
 	"adapters/postgres.PoolStats":              "value-object: pool diagnostic snapshot",
 	"adapters/postgres.RowScanner":             "interface: query row abstraction, not a resource",
 	"adapters/postgres.TxManager":              "subresource-not-owner: transaction facade over caller-owned pool",
@@ -71,7 +69,6 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/ratelimit.Config":                "config: construction input value",
 	"adapters/ratelimit.Limiter":               "close-only-resource: in-memory limiter has no readiness or worker surface",
 	"adapters/redis.Cache":                     "subresource-not-owner: uses caller-owned Redis Client",
-	"adapters/redis.Client":                    "close-only-resource: health/close are wired explicitly; no worker/checker bundle yet",
 	"adapters/redis.Config":                    "config: construction input value",
 	"adapters/redis.IdempotencyClaimer":        "subresource-not-owner: uses caller-owned Redis Client",
 	"adapters/redis.KeyNamespace":              "value-object: typed string for cell-scoped Redis key prefix",
@@ -79,7 +76,6 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/redis.NonceStore":                "subresource-not-owner: uses caller-owned Redis Client",
 	"adapters/redis.PoolStats":                 "value-object: pool diagnostic snapshot",
 	"adapters/redis.RedisDriver":               "subresource-not-owner: distlock driver over caller-owned Redis Client",
-	"adapters/s3.Client":                       "stateless-adapter: AWS SDK client has no GoCell readiness/worker contract",
 	"adapters/s3.Config":                       "config: construction input value",
 	"adapters/vault.AuthMethod":                "interface: authentication strategy, not a resource",
 	"adapters/vault.AuthResult":                "value-object: auth result",
