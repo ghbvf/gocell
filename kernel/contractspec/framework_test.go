@@ -1,6 +1,7 @@
 package contractspec_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -8,77 +9,112 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 )
 
+// assertSpecEqual reports whether got and want match on every public
+// ContractSpec field. Per-field comparison preserves "which field drifted"
+// readability when a test fails; the helper exists so callers stay below the
+// cognitive-complexity ceiling enforced by go-standards.md (≤15).
+//
+// Sonar / gocyclo accounts for the inline ifs against this helper rather
+// than the caller test function — keeping table-driven test bodies trivial.
+func assertSpecEqual(t *testing.T, got, want contractspec.ContractSpec) {
+	t.Helper()
+	if got.ID != want.ID {
+		t.Errorf("ID = %q, want %q", got.ID, want.ID)
+	}
+	if got.Kind != want.Kind {
+		t.Errorf("Kind = %q, want %q", got.Kind, want.Kind)
+	}
+	if got.Transport != want.Transport {
+		t.Errorf("Transport = %q, want %q", got.Transport, want.Transport)
+	}
+	if got.Method != want.Method {
+		t.Errorf("Method = %q, want %q", got.Method, want.Method)
+	}
+	if got.Path != want.Path {
+		t.Errorf("Path = %q, want %q", got.Path, want.Path)
+	}
+	if got.Topic != want.Topic {
+		t.Errorf("Topic = %q, want %q", got.Topic, want.Topic)
+	}
+	if len(got.Clients) != len(want.Clients) {
+		t.Errorf("Clients length = %d, want %d", len(got.Clients), len(want.Clients))
+	}
+}
+
 // TestNewFrameworkHTTP verifies that NewFrameworkHTTP produces a ContractSpec
 // with the correct field values for each input combination, and that the
-// resulting spec passes Validate() for the valid case.
+// resulting spec passes Validate(). The bad-prefix panic path is covered
+// separately by TestNewFrameworkHTTP_BadPrefixPanics.
 func TestNewFrameworkHTTP(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		id        string
-		method    string
-		path      string
-		wantValid bool
+		name   string
+		id     string
+		method string
+		path   string
+		want   contractspec.ContractSpec
 	}{
 		{
-			name:      "valid health livez",
-			id:        "http.framework.health.livez.v1",
-			method:    "GET",
-			path:      "/healthz",
-			wantValid: true,
+			name:   "valid health livez",
+			id:     "http.framework.health.livez.v1",
+			method: "GET",
+			path:   "/healthz",
+			want: contractspec.ContractSpec{
+				ID:        "http.framework.health.livez.v1",
+				Kind:      cellvocab.ContractHTTP,
+				Transport: "http",
+				Method:    "GET",
+				Path:      "/healthz",
+			},
 		},
 		{
-			name:      "valid metrics endpoint",
-			id:        "http.framework.health.metrics.v1",
-			method:    "GET",
-			path:      "/metrics",
-			wantValid: true,
+			name:   "valid metrics endpoint",
+			id:     "http.framework.health.metrics.v1",
+			method: "GET",
+			path:   "/metrics",
+			want: contractspec.ContractSpec{
+				ID:        "http.framework.health.metrics.v1",
+				Kind:      cellvocab.ContractHTTP,
+				Transport: "http",
+				Method:    "GET",
+				Path:      "/metrics",
+			},
 		},
 		{
-			name:      "valid devtools catalog",
-			id:        "http.framework.devtools.catalog.v1",
-			method:    "GET",
-			path:      "/api/v1/devtools/catalog",
-			wantValid: true,
+			name:   "valid devtools catalog",
+			id:     "http.framework.devtools.catalog.v1",
+			method: "GET",
+			path:   "/api/v1/devtools/catalog",
+			want: contractspec.ContractSpec{
+				ID:        "http.framework.devtools.catalog.v1",
+				Kind:      cellvocab.ContractHTTP,
+				Transport: "http",
+				Method:    "GET",
+				Path:      "/api/v1/devtools/catalog",
+			},
 		},
 		{
-			name:      "POST method",
-			id:        "http.framework.test.post.v1",
-			method:    "POST",
-			path:      "/api/v1/test",
-			wantValid: true,
+			name:   "POST method",
+			id:     "http.framework.test.post.v1",
+			method: "POST",
+			path:   "/api/v1/test",
+			want: contractspec.ContractSpec{
+				ID:        "http.framework.test.post.v1",
+				Kind:      cellvocab.ContractHTTP,
+				Transport: "http",
+				Method:    "POST",
+				Path:      "/api/v1/test",
+			},
 		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			spec := contractspec.NewFrameworkHTTP(tc.id, tc.method, tc.path)
-
-			if spec.ID != tc.id {
-				t.Errorf("ID = %q, want %q", spec.ID, tc.id)
-			}
-			if spec.Kind != cellvocab.ContractHTTP {
-				t.Errorf("Kind = %q, want %q", spec.Kind, cellvocab.ContractHTTP)
-			}
-			if spec.Transport != "http" {
-				t.Errorf("Transport = %q, want %q", spec.Transport, "http")
-			}
-			if spec.Method != tc.method {
-				t.Errorf("Method = %q, want %q", spec.Method, tc.method)
-			}
-			if spec.Path != tc.path {
-				t.Errorf("Path = %q, want %q", spec.Path, tc.path)
-			}
-			// Topic must be zero for HTTP specs.
-			if spec.Topic != "" {
-				t.Errorf("Topic = %q, want empty for http kind", spec.Topic)
-			}
-
-			if tc.wantValid {
-				if err := spec.Validate(); err != nil {
-					t.Errorf("Validate() unexpected error: %v", err)
-				}
+			got := contractspec.NewFrameworkHTTP(tc.id, tc.method, tc.path)
+			assertSpecEqual(t, got, tc.want)
+			if err := got.Validate(); err != nil {
+				t.Errorf("Validate() unexpected error: %v", err)
 			}
 		})
 	}
@@ -120,9 +156,9 @@ func TestNewFrameworkHTTP_BadPrefixPanics(t *testing.T) {
 	}
 }
 
-// TestNewEventDerivation verifies that NewEventDerivation produces a
-// ContractSpec with the correct field values for each input combination, and
-// that the resulting spec passes Validate() for a valid event kind + topic.
+// TestNewEventDerivation covers the funnel's success path: a valid event /
+// projection spec should be returned with no error and match the expected
+// shape. The bad-input path is covered by TestNewEventDerivation_InvalidPanics.
 func TestNewEventDerivation(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -131,7 +167,7 @@ func TestNewEventDerivation(t *testing.T) {
 		kind      cellvocab.ContractKind
 		transport string
 		topic     string
-		wantValid bool
+		want      contractspec.ContractSpec
 	}{
 		{
 			name:      "valid amqp event",
@@ -139,7 +175,12 @@ func TestNewEventDerivation(t *testing.T) {
 			kind:      cellvocab.ContractEvent,
 			transport: "amqp",
 			topic:     "session.created.v1",
-			wantValid: true,
+			want: contractspec.ContractSpec{
+				ID:        "event.session.created.v1",
+				Kind:      cellvocab.ContractEvent,
+				Transport: "amqp",
+				Topic:     "session.created.v1",
+			},
 		},
 		{
 			name:      "valid internal event",
@@ -147,51 +188,102 @@ func TestNewEventDerivation(t *testing.T) {
 			kind:      cellvocab.ContractEvent,
 			transport: "internal",
 			topic:     "config.entry-upserted.v1",
-			wantValid: true,
+			want: contractspec.ContractSpec{
+				ID:        "event.config.entry-upserted.v1",
+				Kind:      cellvocab.ContractEvent,
+				Transport: "internal",
+				Topic:     "config.entry-upserted.v1",
+			},
 		},
 		{
-			name:      "projection kind — no method or path",
+			name:      "valid projection — no topic required by validator",
 			id:        "projection.session.view.v1",
 			kind:      cellvocab.ContractProjection,
 			transport: "internal",
 			topic:     "",
-			wantValid: false, // projection kind skips event validation; topic empty is fine
+			want: contractspec.ContractSpec{
+				ID:        "projection.session.view.v1",
+				Kind:      cellvocab.ContractProjection,
+				Transport: "internal",
+				Topic:     "",
+			},
 		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			spec := contractspec.NewEventDerivation(tc.id, tc.kind, tc.transport, tc.topic)
+			got, err := contractspec.NewEventDerivation(tc.id, tc.kind, tc.transport, tc.topic)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertSpecEqual(t, got, tc.want)
+		})
+	}
+}
 
-			if spec.ID != tc.id {
-				t.Errorf("ID = %q, want %q", spec.ID, tc.id)
+// TestNewEventDerivation_InvalidPanics verifies the funnel rejects malformed
+// inputs by returning a wrapped error (NOT panic — content invariant lives
+// in spec.Validate(), not in a panic guard). Each case targets a distinct
+// validation path.
+func TestNewEventDerivation_Invalid(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		id        string
+		kind      cellvocab.ContractKind
+		transport string
+		topic     string
+		wantMsg   string
+	}{
+		{
+			name:      "empty id",
+			id:        "",
+			kind:      cellvocab.ContractEvent,
+			transport: "amqp",
+			topic:     "session.created.v1",
+			wantMsg:   "ID must not be empty",
+		},
+		{
+			name:      "event kind missing topic",
+			id:        "event.session.created.v1",
+			kind:      cellvocab.ContractEvent,
+			transport: "amqp",
+			topic:     "",
+			wantMsg:   "event kind requires Topic",
+		},
+		{
+			name:      "unrecognized kind",
+			id:        "garbage.kind.v1",
+			kind:      cellvocab.ContractKind("garbage"),
+			transport: "amqp",
+			topic:     "garbage.topic",
+			wantMsg:   "not recognized",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := contractspec.NewEventDerivation(tc.id, tc.kind, tc.transport, tc.topic)
+			if err == nil {
+				t.Fatalf("expected error, got nil (spec=%+v)", got)
 			}
-			if spec.Kind != tc.kind {
-				t.Errorf("Kind = %q, want %q", spec.Kind, tc.kind)
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error message = %q, want substring %q", err.Error(), tc.wantMsg)
 			}
-			if spec.Transport != tc.transport {
-				t.Errorf("Transport = %q, want %q", spec.Transport, tc.transport)
+			if !strings.Contains(err.Error(), "NewEventDerivation") {
+				t.Errorf("error message = %q, want funnel context %q", err.Error(), "NewEventDerivation")
 			}
-			if spec.Topic != tc.topic {
-				t.Errorf("Topic = %q, want %q", spec.Topic, tc.topic)
+			// Returned spec must be zero on error (fail-closed contract).
+			// ContractSpec contains a slice so == is not available; check ID
+			// emptiness as the canonical zero-value witness.
+			if got.ID != "" || got.Kind != "" || got.Transport != "" || got.Topic != "" {
+				t.Errorf("spec on error = %+v, want zero value", got)
 			}
-			// Method and Path must be zero for event derivations.
-			if spec.Method != "" {
-				t.Errorf("Method = %q, want empty for event derivation", spec.Method)
-			}
-			if spec.Path != "" {
-				t.Errorf("Path = %q, want empty for event derivation", spec.Path)
-			}
-			// Clients must be nil for event derivations.
-			if len(spec.Clients) != 0 {
-				t.Errorf("Clients = %v, want empty for event derivation", spec.Clients)
-			}
-
-			if tc.wantValid {
-				if err := spec.Validate(); err != nil {
-					t.Errorf("Validate() unexpected error: %v", err)
-				}
+			// errors.Is contract: underlying validator error is wrapped via %w.
+			if errors.Unwrap(err) == nil {
+				t.Errorf("error is not wrapping a cause; expected %%w chain")
 			}
 		})
 	}

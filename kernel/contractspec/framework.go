@@ -1,6 +1,7 @@
 package contractspec
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -53,14 +54,24 @@ func NewFrameworkHTTP(id, method, path string) ContractSpec {
 // new specs through this path; the source metadata must already pass
 // upstream validation (typically outbox.Subscription.Validate()).
 //
+// Validation is enforced at construction time: the funnel runs
+// ContractSpec.Validate() before returning and wraps any failure as a
+// derivation error. Callers MUST handle the returned error — content
+// invariants are funnel-owned, not caller discipline.
+//
 // Inputs are primitives (not outbox.Subscription) so kernel/contractspec
 // stays independent of kernel/outbox; the eventrouter tracing decorator is
-// the canonical caller.
-func NewEventDerivation(id string, kind cellvocab.ContractKind, transport, topic string) ContractSpec {
-	return ContractSpec{
+// the canonical caller, enforced by archtest
+// NO-MANUAL-CONTRACTSPEC-LITERAL-01 (single-file caller allowlist).
+func NewEventDerivation(id string, kind cellvocab.ContractKind, transport, topic string) (ContractSpec, error) {
+	spec := ContractSpec{
 		ID:        id,
 		Kind:      kind,
 		Transport: transport,
 		Topic:     topic,
 	}
+	if err := spec.Validate(); err != nil {
+		return ContractSpec{}, fmt.Errorf("contractspec: NewEventDerivation: %w", err)
+	}
+	return spec, nil
 }

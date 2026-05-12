@@ -26,8 +26,11 @@
 //     endpoints (health probes, devtools catalog, etc.); the only legitimate
 //     construction path for ContractSpec values in runtime/ HTTP infra code.
 //  3. kernel/contractspec.NewEventDerivation — tracing/observability projections
-//     of already-validated event metadata; the canonical path for eventrouter
-//     contract tracing decorators.
+//     of already-validated event metadata; returns (ContractSpec, error) with
+//     Validate() embedded inside the funnel. Closed to a single caller
+//     (runtime/eventrouter/contract_tracing_subscriber.go) by archtest
+//     NO-MANUAL-CONTRACTSPEC-LITERAL-01; no other production file may invoke
+//     this funnel.
 //
 // Three archtest gates enforce this invariant:
 //

@@ -66,14 +66,16 @@ func (s *contractTracingSubscriber) Subscribe(
 	// Derivation funnel — projects already-validated Subscription metadata
 	// into ContractSpec shape for the tracer; not a declaration. The only
 	// legitimate runtime/ derivation path per NO-MANUAL-CONTRACTSPEC-LITERAL-01.
-	spec := contractspec.NewEventDerivation(
+	// Validate() runs inside the funnel, so a derived-spec error surfaces here
+	// with a wrapped context.
+	spec, err := contractspec.NewEventDerivation(
 		sub.ContractID,
 		cellvocab.ContractKind(sub.ContractKind),
 		sub.ContractTransport,
 		sub.Topic,
 	)
-	if err := spec.Validate(); err != nil {
-		return fmt.Errorf("eventrouter: contract tracing subscriber: derived spec invalid: %w", err)
+	if err != nil {
+		return fmt.Errorf("eventrouter: contract tracing subscriber: %w", err)
 	}
 	wrapped, err := wrapper.WrapSubscriber(s.tracer, spec, handler)
 	if err != nil {
