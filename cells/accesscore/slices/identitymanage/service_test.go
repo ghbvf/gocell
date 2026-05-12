@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // adminCtxForService returns a context with an admin principal for service-layer tests.
@@ -158,22 +160,22 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 	require.NoError(t, err)
 
 	// Seed a session for this user.
-	session := &domain.Session{
-		ID:          "sess-carol",
-		UserID:      user.ID,
-		AccessToken: "at",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
+	sess := &session.Session{
+		ID:        "sess-carol",
+		SubjectID: user.ID,
+		JTI:       "jti-carol",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
 	}
-	require.NoError(t, sessionRepo.Create(context.Background(), session))
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
 
 	// Lock the user — sessions should be revoked.
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 
 	// Verify session was revoked.
-	got, err := sessionRepo.GetByID(context.Background(), "sess-carol")
+	got, err := sessionRepo.Get(context.Background(), "sess-carol")
 	require.NoError(t, err)
-	assert.True(t, got.IsRevoked(), "session should be revoked after user lock")
+	assert.True(t, got.RevokedAt != nil, "session should be revoked after user lock")
 }
 
 func TestService_Delete(t *testing.T) {
@@ -370,20 +372,25 @@ func TestService_Update_SuspendCascadeRevokesSessionsAndRefresh(t *testing.T) {
 	require.NoError(t, err)
 
 	// Seed an active session for the user; if cascade-revoke fires it will be
-	// marked revoked by sessionRepo.RevokeByUserID.
-	sess, err := domain.NewSession(user.ID, "at-stub", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-suspend-" + user.ID
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	// marked revoked by sessionStore.RevokeForSubject.
+	sessID := "sess-suspend-" + user.ID
+	seedSess := &session.Session{
+		ID:        sessID,
+		SubjectID: user.ID,
+		JTI:       "jti-suspend-" + user.ID,
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, sessionRepo.Create(context.Background(), seedSess))
 
 	suspended := "suspended"
 	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
 	require.NoError(t, err, "admin status demotion to suspended must succeed")
 
 	// Cascade side effect: session must be revoked.
-	postSess, err := sessionRepo.GetByID(context.Background(), sess.ID)
+	postSess, err := sessionRepo.Get(context.Background(), sessID)
 	require.NoError(t, err)
-	assert.True(t, postSess.IsRevoked(),
+	assert.True(t, postSess.RevokedAt != nil,
 		"Update demotion from active must cascade-revoke the user's sessions (S4.0 P1-A)")
 }
 
@@ -405,18 +412,23 @@ func TestService_Update_StatusUnchanged_NoCascadeRevoke(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sess, err := domain.NewSession(user.ID, "at-stub", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-norevoke-" + user.ID
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sessID := "sess-norevoke-" + user.ID
+	seedSess := &session.Session{
+		ID:        sessID,
+		SubjectID: user.ID,
+		JTI:       "jti-norevoke-" + user.ID,
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, sessionRepo.Create(context.Background(), seedSess))
 
 	newEmail := "nr2@e.f"
 	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 
-	postSess, err := sessionRepo.GetByID(context.Background(), sess.ID)
+	postSess, err := sessionRepo.Get(context.Background(), sessID)
 	require.NoError(t, err)
-	assert.False(t, postSess.IsRevoked(),
+	assert.False(t, postSess.RevokedAt != nil,
 		"email-only Update must not cascade-revoke (only status demotion does)")
 }
 
@@ -612,10 +624,14 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	seedUserWithHash(t, userRepo, "cp-revoke", "oldpass", false)
 
 	// Seed two active sessions for this user.
-	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
-		sess, sessErr := domain.NewSession("usr-cp-revoke", "at", time.Now().Add(time.Hour), time.Now())
-		require.NoError(t, sessErr)
-		sess.ID = sid
+	for i, sid := range []string{"sess-old-1", "sess-old-2"} {
+		sess := &session.Session{
+			ID:        sid,
+			SubjectID: "usr-cp-revoke",
+			JTI:       fmt.Sprintf("jti-cp-revoke-%d", i),
+			ExpiresAt: time.Now().Add(time.Hour),
+			CreatedAt: time.Now(),
+		}
 		require.NoError(t, sessionRepo.Create(context.Background(), sess))
 	}
 
@@ -627,23 +643,22 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
-		got, gerr := sessionRepo.GetByID(context.Background(), sid)
+		got, gerr := sessionRepo.Get(context.Background(), sid)
 		require.NoError(t, gerr)
-		assert.True(t, got.IsRevoked(),
+		assert.True(t, got.RevokedAt != nil,
 			"session %s must be revoked after ChangePassword (fail-closed on stolen refresh)", sid)
 	}
 }
 
-// revokeFailingSessionRepo wraps ports.SessionRepository and fails
-// RevokeByUserID with a fixed error — exercises the F10 transactional
-// boundary: RevokeByUserID failure must abort ChangePassword before any new
-// token is issued.
-type revokeFailingSessionRepo struct {
-	ports.SessionRepository
+// revokeFailingSessionStore wraps session.Store and fails RevokeForSubject
+// with a fixed error — exercises the F10 transactional boundary:
+// RevokeForSubject failure must abort ChangePassword before any new token is issued.
+type revokeFailingSessionStore struct {
+	session.Store
 	err error
 }
 
-func (r *revokeFailingSessionRepo) RevokeByUserID(context.Context, string) error {
+func (r *revokeFailingSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
 	return r.err
 }
 
@@ -682,9 +697,9 @@ func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Cont
 // PG-mode failure mode this test exists to forbid.
 func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &revokeFailingSessionRepo{
-		SessionRepository: testutil.RealSessionRepo(t),
-		err:               errors.New("transient DB error"),
+	sessionRepo := &revokeFailingSessionStore{
+		Store: testutil.RealSessionRepo(t),
+		err:   errors.New("transient DB error"),
 	}
 	issuerCalled := false
 	stub := &stubTokenIssuer{

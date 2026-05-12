@@ -10,9 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -23,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 func newLogoutRefreshStore() refresh.Store {
@@ -43,16 +41,16 @@ type typedNilRefreshStore struct {
 	refresh.Store
 }
 
-func newTestService(t testing.TB) (*Service, ports.SessionRepository) {
+func newTestService(t testing.TB) (*Service, session.Store) {
 	t.Helper()
-	repo := testutil.RealSessionRepo(t)
-	return MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{}))), repo
+	store := testutil.RealSessionRepo(t)
+	return MustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{}))), store
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
-	repo := testutil.RealSessionRepo(t)
+	store := testutil.RealSessionRepo(t)
 	refreshStore := newLogoutRefreshStore()
-	_, err := NewService(repo, refreshStore, slog.Default() /* no WithTxManager */)
+	_, err := NewService(store, refreshStore, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -61,7 +59,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 }
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	store := testutil.RealSessionRepo(t)
 	refreshStore := newLogoutRefreshStore()
 
 	cases := []struct {
@@ -69,9 +67,9 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 		run  func() (*Service, error)
 	}{
 		{
-			name: "typed nil sessionRepo",
+			name: "typed nil sessionStore",
 			run: func() (*Service, error) {
-				var typedNil *mem.SessionRepository
+				var typedNil *session.MemStore
 				return NewService(typedNil, refreshStore, slog.Default())
 			},
 		},
@@ -79,7 +77,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(sessionRepo, typedNil, slog.Default())
+				return NewService(store, typedNil, slog.Default())
 			},
 		},
 	}
@@ -95,16 +93,22 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 	}
 }
 
-func seedSession(repo ports.SessionRepository, id, userID string) {
-	sess, _ := domain.NewSession(userID, "at-"+id, time.Now().Add(time.Hour), time.Now())
-	sess.ID = id
-	_ = repo.Create(context.Background(), sess)
+// seedSession creates a session in the store for the given sessionID and userID.
+// JTI is set to a non-empty value so FingerprintJTIRef validation passes.
+func seedSession(store session.Store, id, userID string) {
+	_ = store.Create(context.Background(), &session.Session{
+		ID:        id,
+		SubjectID: userID,
+		JTI:       "jti-" + id,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
 }
 
 func TestService_Logout(t *testing.T) {
 	tests := []struct {
 		name         string
-		setup        func(ports.SessionRepository)
+		setup        func(session.Store)
 		sessionID    string
 		callerUserID string
 		wantErr      bool
@@ -112,14 +116,14 @@ func TestService_Logout(t *testing.T) {
 	}{
 		{
 			name:         "valid self logout",
-			setup:        func(r ports.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
+			setup:        func(s session.Store) { seedSession(s, "sess-1", "usr-1") },
 			sessionID:    "sess-1",
 			callerUserID: "usr-1",
 			wantErr:      false,
 		},
 		{
 			name:         "empty session ID",
-			setup:        func(_ ports.SessionRepository) {},
+			setup:        func(_ session.Store) {},
 			sessionID:    "",
 			callerUserID: "usr-1",
 			wantErr:      true,
@@ -127,7 +131,7 @@ func TestService_Logout(t *testing.T) {
 		},
 		{
 			name:         "empty caller user ID",
-			setup:        func(r ports.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
+			setup:        func(s session.Store) { seedSession(s, "sess-1", "usr-1") },
 			sessionID:    "sess-1",
 			callerUserID: "",
 			wantErr:      true,
@@ -135,7 +139,7 @@ func TestService_Logout(t *testing.T) {
 		},
 		{
 			name:         "non-existent session",
-			setup:        func(_ ports.SessionRepository) {},
+			setup:        func(_ session.Store) {},
 			sessionID:    "sess-missing",
 			callerUserID: "usr-1",
 			wantErr:      true,
@@ -147,21 +151,34 @@ func TestService_Logout(t *testing.T) {
 			// missing-session), so no information leaks about whether the
 			// session id belongs to someone else.
 			name:         "other user's session yields not-found",
-			setup:        func(r ports.SessionRepository) { seedSession(r, "sess-other", "usr-victim") },
+			setup:        func(s session.Store) { seedSession(s, "sess-other", "usr-victim") },
 			sessionID:    "sess-other",
 			callerUserID: "usr-attacker",
 			wantErr:      true,
 			wantCode:     errcode.ErrSessionNotFound,
 		},
 		{
-			// Double-revoke is idempotent at DB level (UPDATE is no-op after
+			// owner-mismatch and missing-session produce the same error code —
+			// callers cannot distinguish between the two (防枚举).
+			name: "owner mismatch and not-found are indistinguishable",
+			setup: func(s session.Store) {
+				// sess-owned exists but belongs to usr-owner, not usr-other.
+				seedSession(s, "sess-owned", "usr-owner")
+			},
+			sessionID:    "sess-owned",
+			callerUserID: "usr-other",
+			wantErr:      true,
+			wantCode:     errcode.ErrSessionNotFound,
+		},
+		{
+			// Double-revoke is idempotent at store level (Revoke is a no-op after
 			// the first revoke); event is emitted again but consumers must
 			// already dedupe on event_id.
 			name: "already revoked self logout succeeds",
-			setup: func(r ports.SessionRepository) {
-				seedSession(r, "sess-rev", "usr-1")
-				s, _ := r.GetByID(context.Background(), "sess-rev")
-				s.Revoke(time.Now())
+			setup: func(s session.Store) {
+				seedSession(s, "sess-rev", "usr-1")
+				// Pre-revoke so the session is already revoked when Logout runs.
+				_ = s.Revoke(context.Background(), "sess-rev")
 			},
 			sessionID:    "sess-rev",
 			callerUserID: "usr-1",
@@ -171,8 +188,8 @@ func TestService_Logout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService(t)
-			tt.setup(repo)
+			svc, store := newTestService(t)
+			tt.setup(store)
 
 			err := svc.Logout(context.Background(), tt.sessionID, tt.callerUserID)
 			if tt.wantErr {
@@ -194,26 +211,53 @@ type failingPublisher struct{ err error }
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
 func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
+// infraFailingSessionStore wraps session.Store and overrides Get to return a
+// caller-supplied infra error so the logout fail-fast path can be exercised.
+type infraFailingSessionStore struct {
+	session.Store
+	err error
+}
+
+func (f *infraFailingSessionStore) Get(context.Context, string) (*session.Session, error) {
+	return nil, f.err
+}
+
+// TestService_Logout_InfraErrorOnGet_ReturnsUnavailable verifies that a
+// PG / connection failure on sessionStore.Get surfaces as 503 / ErrAuthLogout
+// Unavailable rather than being silently squashed into ErrSessionNotFound.
+// Squashing all errors hides outages and lets clients incorrectly assume the
+// session was already gone — leaving refresh chains uncascaded.
+func TestService_Logout_InfraErrorOnGet_ReturnsUnavailable(t *testing.T) {
+	inner := testutil.RealSessionRepo(t)
+	store := &infraFailingSessionStore{
+		Store: inner,
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "session store down"),
+	}
+	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+
+	err := svc.Logout(context.Background(), "sess-infra", "usr-1")
+	require.Error(t, err, "logout must surface infra failures, not squash to not-found")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "error must be an *errcode.Error")
+	assert.Equal(t, errcode.ErrAuthLogoutUnavailable, ec.Code,
+		"infra error must surface as ErrAuthLogoutUnavailable, not ErrSessionNotFound")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+		"KindUnavailable so HTTP layer returns 503 + client retries")
+}
+
 func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
-	repo := testutil.RealSessionRepo(t)
-	seedSession(repo, "sess-pub", "usr-1")
+	store := testutil.RealSessionRepo(t)
+	seedSession(store, "sess-pub", "usr-1")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
+	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	err = svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")
-}
-
-func TestService_LogoutUser(t *testing.T) {
-	svc, repo := newTestService(t)
-	seedSession(repo, "s1", "usr-1")
-	seedSession(repo, "s2", "usr-1")
-
-	require.NoError(t, svc.LogoutUser(context.Background(), "usr-1"))
 }

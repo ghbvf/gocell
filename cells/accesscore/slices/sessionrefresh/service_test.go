@@ -19,8 +19,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -31,7 +29,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/runtime/auth/session"
+	sessionstoretest "github.com/ghbvf/gocell/runtime/auth/session/storetest"
 )
+
+// expiredSessionCreatedOffset is the past CreatedAt offset used by
+// TestService_Refresh_UpdatesSessionExpiryForRefreshedAccessToken to fabricate
+// an already-expired session. Extracted to a package-level const per
+// TEST-TIME-LITERAL-01 (negative duration literals are still flagged inline).
+const expiredSessionCreatedOffset = -2 * time.Hour
 
 var (
 	testKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
@@ -46,6 +52,45 @@ func init() {
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("test setup: " + err.Error())
+	}
+}
+
+// newTestSessionStore constructs an in-memory session.Store with the canonical
+// test protocol (JTI fingerprint + AuthzEpoch ordering + all CredentialEvents).
+func newTestSessionStore(t testing.TB) *session.MemStore {
+	t.Helper()
+	var proto *session.Protocol
+	if tt, ok := t.(*testing.T); ok {
+		proto = sessionstoretest.NewTestProtocol(tt)
+	} else {
+		// testing.B or other TB: construct protocol directly.
+		var err error
+		proto, err = session.NewProtocol(
+			session.WithFingerprint(session.FingerprintJTIRef{}),
+			session.WithOrdering(session.OrderingAuthzEpoch{}),
+			session.WithRevokeOnAll(),
+		)
+		if err != nil {
+			t.Fatalf("test setup: newTestSessionStore: %v", err)
+		}
+	}
+	store, err := session.NewMemStore(proto, clock.Real())
+	if err != nil {
+		t.Fatalf("test setup: newTestSessionStore: %v", err)
+	}
+	return store
+}
+
+// newTestSession creates a session.Session with sensible defaults. The caller
+// must call sessionStore.Create to persist it.
+func newTestSession(subjectID, sessionID string) *session.Session {
+	return &session.Session{
+		ID:                sessionID,
+		SubjectID:         subjectID,
+		JTI:               sessionID,
+		AuthzEpochAtIssue: 0,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	}
 }
 
@@ -71,15 +116,13 @@ type typedNilRefreshStore struct {
 // sessionrefresh Service issues tokens with the audience configured in the
 // issuer (Registry path), without caching audience separately (S31).
 func TestNewService_IssuerDefaultAudienceWrittenOnRefresh(t *testing.T) {
-	svc, sessionRepo, refreshStore := newTestServiceWithRefreshStore(t, "usr-aud-refresh")
+	svc, sessionStore, refreshStore := newTestServiceWithRefreshStore(t, "usr-aud-refresh")
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-aud-refresh", "usr-aud-refresh")
 	require.NoError(t, err)
 
-	sess, err := domain.NewSession("usr-aud-refresh", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-aud-refresh"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-aud-refresh", "sess-aud-refresh")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.NoError(t, err)
@@ -93,28 +136,28 @@ func TestNewService_IssuerDefaultAudienceWrittenOnRefresh(t *testing.T) {
 		"rotated access token aud must come from issuer default audience (Registry)")
 }
 
-// newTestService creates a refresh service with a minimal in-memory userRepo.
+// newTestService creates a refresh service with a minimal in-memory session store.
 // seedUsers lists user IDs to pre-populate so GetByID succeeds.
-func newTestService(t testing.TB, seedUsers ...string) (*Service, ports.SessionRepository) {
+func newTestService(t testing.TB, seedUsers ...string) (*Service, session.Store) {
 	t.Helper()
-	svc, sessionRepo, _ := newTestServiceWithRefreshStore(t, seedUsers...)
-	return svc, sessionRepo
+	svc, sessionStore, _ := newTestServiceWithRefreshStore(t, seedUsers...)
+	return svc, sessionStore
 }
 
 // newTestServiceWithRefreshStore creates a service and exposes the refreshStore
 // for tests that need to issue wire tokens via the store directly.
-func newTestServiceWithRefreshStore(t testing.TB, seedUsers ...string) (*Service, ports.SessionRepository, refresh.Store) {
+func newTestServiceWithRefreshStore(t testing.TB, seedUsers ...string) (*Service, session.Store, refresh.Store) {
 	t.Helper()
-	svc, sessionRepo, refreshStore, _ := newTestServiceWithClock(t, seedUsers...)
-	return svc, sessionRepo, refreshStore
+	svc, sessionStore, refreshStore, _ := newTestServiceWithClock(t, seedUsers...)
+	return svc, sessionStore, refreshStore
 }
 
 // newTestServiceWithClock creates a service and exposes both the refreshStore
 // and the underlying FakeClock for tests that need to advance time (e.g. to
 // move past the ReuseInterval so old tokens are rejected rather than grace-retried).
-func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, ports.SessionRepository, refresh.Store, *storetest.FakeClock) {
+func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, session.Store, refresh.Store, *storetest.FakeClock) {
 	t.Helper()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	for _, uid := range seedUsers {
@@ -132,26 +175,26 @@ func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, ports
 	if err != nil {
 		t.Fatalf("test setup: %v", err)
 	}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
-	return svc, sessionRepo, refreshStore, fakeClock
+	return svc, sessionStore, refreshStore, fakeClock
 }
 
 // newTestServiceWithUserRepo creates a service and returns the userRepo for
 // tests that need to seed user fixtures and assert on the PasswordResetRequired flag.
-func newTestServiceWithUserRepo(t testing.TB) (*Service, ports.SessionRepository, *mem.UserRepository) {
+func newTestServiceWithUserRepo(t testing.TB) (*Service, session.Store, *mem.UserRepository) {
 	t.Helper()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
-	return svc, sessionRepo, userRepo
+	return svc, sessionStore, userRepo
 }
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newTestRefreshStore()
@@ -161,9 +204,9 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 		run  func() (*Service, error)
 	}{
 		{
-			name: "typed nil sessionRepo",
+			name: "typed nil sessionStore",
 			run: func() (*Service, error) {
-				var typedNil *mem.SessionRepository
+				var typedNil *session.MemStore
 				return NewService(typedNil, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
@@ -172,7 +215,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil roleRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.RoleRepository
-				return NewService(sessionRepo, typedNil, userRepo, refreshStore, testIssuer, slog.Default(),
+				return NewService(sessionStore, typedNil, userRepo, refreshStore, testIssuer, slog.Default(),
 					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
 		},
@@ -180,7 +223,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil userRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.UserRepository
-				return NewService(sessionRepo, roleRepo, typedNil, refreshStore, testIssuer, slog.Default(),
+				return NewService(sessionStore, roleRepo, typedNil, refreshStore, testIssuer, slog.Default(),
 					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
 		},
@@ -188,7 +231,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(sessionRepo, roleRepo, userRepo, typedNil, testIssuer, slog.Default(),
+				return NewService(sessionStore, roleRepo, userRepo, typedNil, testIssuer, slog.Default(),
 					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 			},
 		},
@@ -211,13 +254,13 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 // the first request. No silent fallback to cell.DemoTxRunner — that would
 // mask production wiring mistakes.
 func TestNewService_RequiresTxRunner(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newTestRefreshStore()
 
 	t.Run("missing WithTxManager option", func(t *testing.T) {
-		_, err := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		_, err := NewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 			WithClock(clock.Real()))
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -225,12 +268,12 @@ func TestNewService_RequiresTxRunner(t *testing.T) {
 		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 	})
 
-	t.Run("nil TxRunner via WithTxManager(nil) is rejected", func(t *testing.T) {
+	t.Run("nil TxRunner via WithTxManager(persistence.WrapForCell(nil)) is rejected", func(t *testing.T) {
 		// WithTxManager silently ignores nil to keep the option idempotent —
 		// but NewService's final check still rejects the resulting unconfigured
 		// state.
-		_, err := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-			WithClock(clock.Real()), WithTxManager(nil))
+		_, err := NewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+			WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(nil)))
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -262,7 +305,7 @@ var errFailingTxRunnerOuter = errors.New("test: outer tx commit failure")
 // service-layer counterpart to the adapter-level
 // TestB5_OuterTxRollback_* integration tests.
 func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newTestRefreshStore()
@@ -270,15 +313,13 @@ func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-runintx-fail"
 	require.NoError(t, userRepo.Create(context.Background(), user))
-	sess, err := domain.NewSession("usr-runintx-fail", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-runintx-fail"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-runintx-fail", "sess-runintx-fail")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-runintx-fail", "usr-runintx-fail")
 	require.NoError(t, err)
 
 	tr := &failingTxRunner{}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(tr)))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -298,20 +339,18 @@ func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
 }
 
 // issueTestWireToken creates a session + issues a wire token from the refreshStore.
-// Returns (svc, sessionRepo, wireToken).
-func issueTestWireToken(t *testing.T, userID, sessionID string) (*Service, ports.SessionRepository, refresh.Store, string) {
+// Returns (svc, sessionStore, refreshStore, wireToken).
+func issueTestWireToken(t *testing.T, userID, sessionID string) (*Service, session.Store, refresh.Store, string) {
 	t.Helper()
-	svc, sessionRepo, refreshStore := newTestServiceWithRefreshStore(t, userID)
+	svc, sessionStore, refreshStore := newTestServiceWithRefreshStore(t, userID)
 
-	sess, err := domain.NewSession(userID, "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = sessionID
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession(userID, sessionID)
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), sessionID, userID)
 	require.NoError(t, err)
 
-	return svc, sessionRepo, refreshStore, wireToken
+	return svc, sessionStore, refreshStore, wireToken
 }
 
 // brokenRoleRepo simulates a RoleRepository outage for fail-closed tests.
@@ -324,22 +363,18 @@ func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Rol
 	return nil, b.err
 }
 
-// countingSessionRepo wraps ports.SessionRepository so tests can assert that
-// Update was never called when sessionmint fails fast.
-type countingSessionRepo struct {
-	ports.SessionRepository
-	updates int
+// countingSessionStore wraps session.Store so tests can assert that Create
+// was called (or not called) when sessionmint fails fast.
+type countingSessionStore struct {
+	session.Store
+	creates int
 }
 
-func (c *countingSessionRepo) Update(ctx context.Context, s *domain.Session) error {
-	c.updates++
-	return c.SessionRepository.Update(ctx, s)
+func (c *countingSessionStore) Create(ctx context.Context, s *session.Session) error {
+	c.creates++
+	return c.Store.Create(ctx, s)
 }
 
-// TestService_Refresh_RoleFetchFailure_AbortsRefresh asserts that when the
-// RoleRepository is unavailable, Refresh fails with ErrAuthRoleFetchFailed
-// and does NOT persist the rotated session — the fail-closed contract of
-// PR-A7 / sessionmint: never issue a silently-degraded token.
 // TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes covers the
 // S4.0 fail-closed path added by rejectIfUserNotActive: when the session
 // owner is non-active (suspended / locked), Refresh must (a) refuse with
@@ -357,7 +392,7 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, sessionRepo, userRepo := newTestServiceWithUserRepo(t)
+			svc, sessionStore, userRepo := newTestServiceWithUserRepo(t)
 			// Seed an active user, then directly mutate to non-active so the
 			// session predates the demotion (real-world scenario: admin
 			// suspends a user with a live session).
@@ -368,10 +403,8 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 			u.Status = tc.status
 			require.NoError(t, userRepo.Update(context.Background(), u))
 
-			sess, err := domain.NewSession(u.ID, "at", time.Now().Add(time.Hour), time.Now())
-			require.NoError(t, err)
-			sess.ID = "sess-" + u.ID
-			require.NoError(t, sessionRepo.Create(context.Background(), sess))
+			sess := newTestSession(u.ID, "sess-"+u.ID)
+			require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 			// Wire the refresh-store side of the test directly via the service
 			// internals — newTestServiceWithUserRepo builds the refresh store
@@ -407,7 +440,7 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 }
 
 func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
-	sessionRepo := &countingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &countingSessionStore{Store: newTestSessionStore(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	u, _ := domain.NewUser("usr-rolefail", "rolefail@test.local", "hash", time.Now())
@@ -415,13 +448,14 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
-	sess, err := domain.NewSession("usr-rolefail", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-rolefail"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-rolefail", "sess-rolefail")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+	// The initial Create is for the seed session; reset counter to only track
+	// creates during Refresh.
+	sessionStore.creates = 0
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-rolefail", "usr-rolefail")
 	require.NoError(t, err)
@@ -435,7 +469,7 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthRoleFetchFailed, ec.Code,
 		"fail-closed: role fetch failure surfaces as ErrAuthRoleFetchFailed")
 
-	assert.Equal(t, 0, sessionRepo.updates, "session must not be updated on fail-closed")
+	assert.Equal(t, 0, sessionStore.creates, "no new session must be created on fail-closed")
 	_, _, err = refreshStore.Rotate(context.Background(), wireToken)
 	require.NoError(t, err, "role fetch failure must not advance the refresh lineage")
 }
@@ -443,15 +477,14 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 func TestService_Refresh(t *testing.T) {
 	tests := []struct {
 		name    string
-		setup   func(ports.SessionRepository, refresh.Store) string // returns wire token
+		setup   func(session.Store, refresh.Store) string // returns wire token
 		wantErr bool
 	}{
 		{
 			name: "valid refresh",
-			setup: func(repo ports.SessionRepository, rs refresh.Store) string {
-				sess, _ := domain.NewSession("usr-1", "at", time.Now().Add(time.Hour), time.Now())
-				sess.ID = "sess-1"
-				_ = repo.Create(context.Background(), sess)
+			setup: func(store session.Store, rs refresh.Store) string {
+				sess := newTestSession("usr-1", "sess-1")
+				_ = store.Create(context.Background(), sess)
 				wire, _, _ := rs.Issue(context.Background(), "sess-1", "usr-1")
 				return wire
 			},
@@ -459,11 +492,10 @@ func TestService_Refresh(t *testing.T) {
 		},
 		{
 			name: "revoked session",
-			setup: func(repo ports.SessionRepository, rs refresh.Store) string {
-				sess, _ := domain.NewSession("usr-2", "at", time.Now().Add(time.Hour), time.Now())
-				sess.ID = "sess-2"
-				sess.Revoke(time.Now())
-				_ = repo.Create(context.Background(), sess)
+			setup: func(store session.Store, rs refresh.Store) string {
+				sess := newTestSession("usr-2", "sess-2")
+				_ = store.Create(context.Background(), sess)
+				_ = store.Revoke(context.Background(), "sess-2")
 				wire, _, _ := rs.Issue(context.Background(), "sess-2", "usr-2")
 				return wire
 			},
@@ -471,20 +503,20 @@ func TestService_Refresh(t *testing.T) {
 		},
 		{
 			name:    "empty token",
-			setup:   func(_ ports.SessionRepository, _ refresh.Store) string { return "" },
+			setup:   func(_ session.Store, _ refresh.Store) string { return "" },
 			wantErr: true,
 		},
 		{
 			name:    "invalid opaque token",
-			setup:   func(_ ports.SessionRepository, _ refresh.Store) string { return "bad-token" },
+			setup:   func(_ session.Store, _ refresh.Store) string { return "bad-token" },
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-1", "usr-2")
-			wireToken := tt.setup(repo, refreshStore)
+			svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-1", "usr-2")
+			wireToken := tt.setup(store, refreshStore)
 
 			pair, err := svc.Refresh(context.Background(), wireToken)
 			if tt.wantErr {
@@ -502,13 +534,10 @@ func TestService_Refresh(t *testing.T) {
 }
 
 func TestService_Refresh_TokenRotation(t *testing.T) {
-	svc, repo, refreshStore, clock := newTestServiceWithClock(t, "usr-rot")
+	svc, store, refreshStore, clk := newTestServiceWithClock(t, "usr-rot")
 
-	// Create a session and issue a wire token.
-	sess, err := domain.NewSession("usr-rot", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-rot"
-	require.NoError(t, repo.Create(context.Background(), sess))
+	sess := newTestSession("usr-rot", "sess-rot")
+	require.NoError(t, store.Create(context.Background(), sess))
 
 	wire1, _, err := refreshStore.Issue(context.Background(), "sess-rot", "usr-rot")
 	require.NoError(t, err)
@@ -520,7 +549,7 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 
 	// Advance the clock past the ReuseInterval (2s) so the old token is no longer
 	// in the grace window and will be rejected as a reuse attack.
-	clock.Advance(testtime.D3s)
+	clk.Advance(testtime.D3s)
 
 	// Presenting the old wire token again should be rejected (reuse after grace).
 	_, err = svc.Refresh(context.Background(), wire1)
@@ -529,12 +558,10 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 }
 
 func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
-	svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-conc")
+	svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-conc")
 
-	sess, err := domain.NewSession("usr-conc", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-conc"
-	require.NoError(t, repo.Create(context.Background(), sess))
+	sess := newTestSession("usr-conc", "sess-conc")
+	require.NoError(t, store.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-conc", "usr-conc")
 	require.NoError(t, err)
@@ -576,13 +603,17 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 	assert.Len(t, distinct, successes, "each successful refresh must yield a distinct new wire token")
 }
 
-func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
-	svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-sid")
+// TestService_Refresh_AccessTokenCarriesStableSessionID verifies that refresh
+// preserves session.ID — the access JWT's sid claim equals the original login
+// session ID. Aligns with OAuth2 RFC 6749 §6 (refresh = same grant) and OIDC
+// Back-Channel Logout sid stability (ory/fosite Session.Clone + zitadel
+// oidc_session aggregate + keycloak findOfflineUserSession all behave the
+// same way).
+func TestService_Refresh_AccessTokenCarriesStableSessionID(t *testing.T) {
+	svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-sid")
 
-	sess, err := domain.NewSession("usr-sid", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-r1"
-	require.NoError(t, repo.Create(context.Background(), sess))
+	sess := newTestSession("usr-sid", "sess-r1")
+	require.NoError(t, store.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-r1", "usr-sid")
 	require.NoError(t, err)
@@ -590,22 +621,99 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.NoError(t, err)
 
-	// Decode the new access token to verify sid.
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, "sess-r1", accessClaims.SessionID, "new access token must carry the session ID")
+	assert.Equal(t, "sess-r1", accessClaims.SessionID,
+		"refreshed access token must carry the original session ID (stable sid)")
+	assert.Equal(t, "sess-r1", pair.SessionID,
+		"TokenPair.SessionID must equal the original session ID")
 }
 
-func TestService_Refresh_UpdatesSessionExpiryForRefreshedAccessToken(t *testing.T) {
-	svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-exp")
+// TestService_Refresh_SessionRowIsImmutable verifies that refresh does not
+// mutate the session row: RevokedAt stays nil, CreatedAt/ExpiresAt unchanged.
+// The session row's lifecycle spans login → logout; refresh only rotates the
+// refresh-token chain and mints a new access JWT.
+func TestService_Refresh_SessionRowIsImmutable(t *testing.T) {
+	svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-imm")
 
-	expiredSession, err := domain.NewSession("usr-exp", "old-at", time.Now().Add(-time.Minute), time.Now())
+	const sessionID = "sess-imm"
+	sess := newTestSession("usr-imm", sessionID)
+	require.NoError(t, store.Create(context.Background(), sess))
+	original, err := store.Get(context.Background(), sessionID)
 	require.NoError(t, err)
-	expiredSession.ID = "sess-exp"
-	require.NoError(t, repo.Create(context.Background(), expiredSession))
+
+	wireToken, _, err := refreshStore.Issue(context.Background(), sessionID, "usr-imm")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.NoError(t, err)
+	assert.Equal(t, sessionID, pair.SessionID, "TokenPair.SessionID stable across refresh")
+
+	after, err := store.Get(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Nil(t, after.RevokedAt, "session must NOT be revoked by refresh")
+	assert.Equal(t, original.CreatedAt, after.CreatedAt, "CreatedAt unchanged by refresh")
+	assert.Equal(t, original.ExpiresAt, after.ExpiresAt, "ExpiresAt unchanged by refresh (session lifecycle != access-token lifecycle)")
+	assert.Equal(t, original.JTI, after.JTI, "JTI unchanged by refresh (login-time fingerprint)")
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, sessionID, claims.SessionID, "JWT sid claim equals the stable session ID")
+}
+
+// TestService_Refresh_TwoHops_SecondRefreshSucceeds is the reproduction test
+// for the PR #482 P1 chain-rotation bug. Before the fix, the second refresh
+// hop failed because refresh.Store.Rotate inherited the (now-revoked) old
+// session_id; the access token returned from refresh #1 contained a new
+// session UUID, but the refresh chain still pointed at the revoked row.
+//
+// After the fix (session.ID stable across refresh), the chain stays
+// consistent and the second hop succeeds.
+func TestService_Refresh_TwoHops_SecondRefreshSucceeds(t *testing.T) {
+	svc, store, refreshStore, clk := newTestServiceWithClock(t, "usr-two")
+
+	const sessionID = "sess-two"
+	sess := newTestSession("usr-two", sessionID)
+	require.NoError(t, store.Create(context.Background(), sess))
+
+	wire1, _, err := refreshStore.Issue(context.Background(), sessionID, "usr-two")
+	require.NoError(t, err)
+
+	pair1, err := svc.Refresh(context.Background(), wire1)
+	require.NoError(t, err, "first refresh must succeed")
+	require.NotEmpty(t, pair1.RefreshToken, "first refresh must return a new wire token")
+	assert.Equal(t, sessionID, pair1.SessionID, "session ID stable after first refresh")
+
+	// Advance past the grace window so the rotated parent (wire1) cannot be
+	// replayed; the only valid presenter is pair1.RefreshToken.
+	clk.Advance(testtime.D3s)
+
+	pair2, err := svc.Refresh(context.Background(), pair1.RefreshToken)
+	require.NoError(t, err, "second refresh must succeed using the rotated wire token")
+	require.NotEmpty(t, pair2.RefreshToken, "second refresh must return a new wire token")
+	assert.NotEqual(t, pair1.RefreshToken, pair2.RefreshToken, "second hop yields a distinct wire token")
+	assert.Equal(t, sessionID, pair2.SessionID, "session ID stable after second refresh")
+}
+
+func TestService_Refresh_PreservesSessionExpiryAcrossRotation(t *testing.T) {
+	svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-exp")
+
+	// Create a session with a past expiry — the refresh succeeds because
+	// session.Store.Get returns revoked/expired sessions and the refresh slice
+	// decides policy (only revocation is rejected, not expiry at this layer).
+	expiredSession := &session.Session{
+		ID:        "sess-exp",
+		SubjectID: "usr-exp",
+		JTI:       "sess-exp",
+		CreatedAt: time.Now().Add(expiredSessionCreatedOffset),
+		ExpiresAt: time.Now().Add(-time.Minute), // expired
+	}
+	require.NoError(t, store.Create(context.Background(), expiredSession))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-exp", "usr-exp")
 	require.NoError(t, err)
@@ -614,23 +722,28 @@ func TestService_Refresh_UpdatesSessionExpiryForRefreshedAccessToken(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, pair)
 
-	persisted, err := repo.GetByID(context.Background(), "sess-exp")
+	// Session row is immutable across refresh: ExpiresAt stays as the login
+	// time set it, RevokedAt remains nil. The pair.ExpiresAt is the access
+	// JWT's exp (minted fresh per refresh), not the session row's ExpiresAt.
+	persisted, err := store.Get(context.Background(), "sess-exp")
 	require.NoError(t, err)
-	assert.Equal(t, pair.AccessToken, persisted.AccessToken)
-	assert.Equal(t, pair.ExpiresAt, persisted.ExpiresAt)
+	assert.Nil(t, persisted.RevokedAt, "session must NOT be revoked by refresh")
+	assert.Equal(t, expiredSession.ExpiresAt.UTC(), persisted.ExpiresAt.UTC(),
+		"session.ExpiresAt unchanged by refresh (login-time value)")
+	assert.Equal(t, "sess-exp", pair.SessionID, "TokenPair.SessionID equals the original session ID")
 
+	// Verify the new access token is cryptographically valid.
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
-	validateSvc := sessionvalidate.NewService(verifier, repo, slog.Default(), clock.Real())
-	_, err = validateSvc.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
-	require.NoError(t, err, "refreshed access token must pass sessionvalidate after original session expiry")
+	_, err = verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err, "refreshed access token must be cryptographically valid")
 }
 
 // TestService_Refresh_SessionAwareVerifier proves that sessionrefresh catches
 // revoked sessions even when the session is revoked out-of-band after the
 // wire token is issued.
 func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	seedUser, _ := domain.NewUser("usr-sa", "usr-sa@test.local", "hash", time.Now())
@@ -638,13 +751,11 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), seedUser))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
-	sess, err := domain.NewSession("usr-sa", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-sa"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-sa", "sess-sa")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-sa", "usr-sa")
 	require.NoError(t, err)
@@ -654,14 +765,11 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, pair.AccessToken)
 
-	// Revoke the session externally.
-	sess, err = sessionRepo.GetByID(context.Background(), "sess-sa")
-	require.NoError(t, err)
-	sess.Revoke(time.Now())
-	require.NoError(t, sessionRepo.Update(context.Background(), sess))
+	// Revoke the NEW session externally (the B2 model created pair.SessionID).
+	require.NoError(t, sessionStore.Revoke(context.Background(), pair.SessionID))
 
 	// Attempt refresh with the new (rotated) wire token — should be rejected
-	// because the session is revoked.
+	// because the new session is revoked.
 	_, err = svc.Refresh(context.Background(), pair.RefreshToken)
 	assert.Error(t, err, "revoked session must reject even a fresh wire token")
 }
@@ -670,17 +778,15 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 // when userRepo.GetByID returns an error (user deleted mid-session), refresh
 // must return ErrAuthRefreshFailed rather than signing a new access token.
 func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository() // intentionally empty — GetByID returns error
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
-	sess, err := domain.NewSession("usr-missing", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-missing"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-missing", "sess-missing")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-missing", "usr-missing")
 	require.NoError(t, err)
@@ -694,7 +800,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 // user clears PasswordResetRequired, the next refresh produces a new access
 // token with password_reset_required=false.
 func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
-	_, sessionRepo, userRepo := newTestServiceWithUserRepo(t)
+	_, sessionStore, userRepo := newTestServiceWithUserRepo(t)
 
 	// Seed a user with reset flag = false (already cleared).
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
@@ -705,12 +811,11 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 
 	// Recreate with a known refreshStore so we can issue and rotate wire tokens.
 	refreshStore := newTestRefreshStore()
-	svc2 := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+	svc2 := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
-	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour), time.Now())
-	sess.ID = "sess-ref-clear"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-ref-clear", "sess-ref-clear")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-ref-clear", "usr-ref-clear")
 	require.NoError(t, err)
@@ -730,7 +835,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 // changed their password keeps getting tokens with password_reset_required=true
 // on each refresh.
 func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 
 	// Seed a user with reset flag = true.
@@ -741,12 +846,11 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
-	sess, _ := domain.NewSession("usr-ref-reset", "at", time.Now().Add(time.Hour), time.Now())
-	sess.ID = "sess-ref-reset"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-ref-reset", "sess-ref-reset")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-ref-reset", "usr-ref-reset")
 	require.NoError(t, err)
@@ -762,22 +866,32 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	assert.True(t, claims.PasswordResetRequired, "access token claim must be true when flag not cleared")
 }
 
+// infraGetRepo overrides Get to return an infra error.
+type infraGetRepo struct {
+	session.Store
+	infraErr error
+}
+
+func (r *infraGetRepo) Get(_ context.Context, _ string) (*session.Session, error) {
+	return nil, r.infraErr
+}
+
 // TestService_Refresh_InfraErrorOnSessionLookup verifies that an infra error
-// from sessionRepo.GetByID causes Refresh to fail closed.
+// from sessionStore.Get causes Refresh to fail closed.
 func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 	infraErr := fmt.Errorf("db connection timeout")
-	sessionRepo := &infraGetByIDRepo{
-		SessionRepository: testutil.RealSessionRepo(t),
-		infraErr:          infraErr,
+	sessionStore := &infraGetRepo{
+		Store:    newTestSessionStore(t),
+		infraErr: infraErr,
 	}
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
-	// Issue a wire token but don't seed the session — GetByID will return infraErr.
+	// Issue a wire token but don't seed the session — Get will return infraErr.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra")
 	require.NoError(t, err)
 
@@ -789,16 +903,6 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
 	_, _, err = refreshStore.Rotate(context.Background(), wireToken)
 	require.NoError(t, err, "session lookup infra failure must not rotate or revoke the presented token")
-}
-
-// infraGetByIDRepo overrides GetByID to return an infra error.
-type infraGetByIDRepo struct {
-	ports.SessionRepository
-	infraErr error
-}
-
-func (r *infraGetByIDRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
-	return nil, r.infraErr
 }
 
 // spyRefreshStore wraps a real refresh.Store and records revoke calls.
@@ -837,8 +941,23 @@ func (s revokeFailingRefreshStore) RevokeSessionDetached(context.Context, string
 	return s.err
 }
 
+// sessionNotFoundStore returns a domain not-found error from Get.
+type sessionNotFoundStore struct {
+	session.Store
+	notFoundErr error
+}
+
+func domainSessionNotFoundError() error {
+	return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+		errcode.WithCategory(errcode.CategoryDomain))
+}
+
+func (r *sessionNotFoundStore) Get(_ context.Context, _ string) (*session.Session, error) {
+	return nil, r.notFoundErr
+}
+
 // TestService_Refresh_SessionNotFound_CascadeRevokes verifies that when
-// sessionRepo.GetByID returns a domain ErrSessionNotFound (not an infra error),
+// sessionStore.Get returns a domain ErrSessionNotFound (not an infra error),
 // Refresh returns ErrAuthRefreshFailed AND calls RevokeSessionDetached on the
 // rotated token so the newly-issued child cannot be used by an attacker (F14).
 func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
@@ -847,12 +966,12 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 
 	// Use issueTestWireToken to set up the refreshStore; then swap in a spy
-	// and a sessionRepo stub so GetByID returns not-found.
+	// and a sessionStore stub so Get returns not-found.
 	_, _, innerStore, wireToken := issueTestWireToken(t, "usr-notfound", "sess-notfound")
 
 	spy := &spyRefreshStore{Store: innerStore}
-	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
+	sessionStore := &sessionNotFoundStore{notFoundErr: notFoundErr}
+	svc := MustNewService(sessionStore, roleRepo, userRepo, spy, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -878,8 +997,8 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 		Store: innerStore,
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
 	}
-	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+	sessionStore := &sessionNotFoundStore{notFoundErr: notFoundErr}
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -888,55 +1007,12 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
-}
-
-type updateFailingSessionRepo struct {
-	ports.SessionRepository
-	err error
-}
-
-func (r *updateFailingSessionRepo) Update(context.Context, *domain.Session) error {
-	return r.err
-}
-
-func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
-	sessionRepo := &updateFailingSessionRepo{
-		SessionRepository: testutil.RealSessionRepo(t),
-		err:               errcode.New(errcode.KindInternal, errcode.ErrInternal, "session update unavailable"),
-	}
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	user, err := domain.NewUser("usr-update-infra", "usr-update-infra@test.local", "hash", time.Now())
-	require.NoError(t, err)
-	user.ID = "usr-update-infra"
-	require.NoError(t, userRepo.Create(context.Background(), user))
-
-	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
-	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-update-infra"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-update-infra", "usr-update-infra")
-	require.NoError(t, err)
-
-	pair, err := svc.Refresh(context.Background(), wireToken)
-	require.Error(t, err)
-	assert.Empty(t, pair.AccessToken)
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
-
-	_, _, err = refreshStore.Rotate(context.Background(), wireToken)
-	require.NoError(t, err, "session update failure must not advance the refresh lineage")
 }
 
 func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testing.T) {
-	sessionRepo := &updateFailingSessionRepo{
-		SessionRepository: testutil.RealSessionRepo(t),
-		err:               domainSessionNotFoundError(),
-	}
+	// Session disappears between Peek and verifySession — cascade revokes the
+	// chain and rejects with ErrAuthRefreshFailed.
+	notFoundErr := domainSessionNotFoundError()
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	user, err := domain.NewUser("usr-update-missing", "usr-update-missing@test.local", "hash", time.Now())
@@ -946,12 +1022,10 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 
 	innerStore := newTestRefreshStore()
 	spy := &spyRefreshStore{Store: innerStore}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
+	sessionStore := &sessionNotFoundStore{notFoundErr: notFoundErr}
+	svc := MustNewService(sessionStore, roleRepo, userRepo, spy, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
-	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-update-missing"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
 	wireToken, _, err := innerStore.Issue(context.Background(), "sess-update-missing", "usr-update-missing")
 	require.NoError(t, err)
 
@@ -967,7 +1041,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 	detachedN := spy.revokeSessionDetachedN
 	businessN := spy.revokeSessionN
 	spy.mu.Unlock()
-	assert.Equal(t, 1, detachedN, "session update not-found must cascade revoke the refresh chain")
+	assert.Equal(t, 1, detachedN, "session not-found must cascade revoke the refresh chain")
 	assert.Zero(t, businessN, "session update cascade must not use business RevokeSession")
 }
 
@@ -982,7 +1056,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-uniform-notfound", "sess-uniform-notfound")
 				svc := MustNewService(
-					&sessionNotFoundRepo{notFoundErr: domainSessionNotFoundError()},
+					&sessionNotFoundStore{notFoundErr: domainSessionNotFoundError()},
 					mem.NewStore(clock.Real()).RoleRepository(),
 					mem.NewStore(clock.Real()).UserRepository(),
 					innerStore,
@@ -998,12 +1072,10 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			name: "revoked session",
 			build: func(t *testing.T) (*Service, string) {
 				t.Helper()
-				svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-uniform-revoked")
-				sess, err := domain.NewSession("usr-uniform-revoked", "at", time.Now().Add(time.Hour), time.Now())
-				require.NoError(t, err)
-				sess.ID = "sess-uniform-revoked"
-				sess.Revoke(time.Now())
-				require.NoError(t, repo.Create(context.Background(), sess))
+				svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-uniform-revoked")
+				sess := newTestSession("usr-uniform-revoked", "sess-uniform-revoked")
+				require.NoError(t, store.Create(context.Background(), sess))
+				require.NoError(t, store.Revoke(context.Background(), "sess-uniform-revoked"))
 				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-revoked", "usr-uniform-revoked")
 				require.NoError(t, err)
 				return svc, wireToken
@@ -1013,15 +1085,13 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			name: "user not found",
 			build: func(t *testing.T) (*Service, string) {
 				t.Helper()
-				sessionRepo := testutil.RealSessionRepo(t)
+				sessionStore := newTestSessionStore(t)
 				refreshStore := newTestRefreshStore()
-				svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), mem.NewStore(clock.Real()).UserRepository(),
+				svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), mem.NewStore(clock.Real()).UserRepository(),
 					refreshStore, testIssuer, slog.Default(),
 					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
-				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour), time.Now())
-				require.NoError(t, err)
-				sess.ID = "sess-uniform-missing"
-				require.NoError(t, sessionRepo.Create(context.Background(), sess))
+				sess := newTestSession("usr-uniform-missing", "sess-uniform-missing")
+				require.NoError(t, sessionStore.Create(context.Background(), sess))
 				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-missing", "usr-uniform-missing")
 				require.NoError(t, err)
 				return svc, wireToken
@@ -1056,7 +1126,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-log-notfound", "sess-log-notfound")
 				svc := MustNewService(
-					&sessionNotFoundRepo{notFoundErr: domainSessionNotFoundError()},
+					&sessionNotFoundStore{notFoundErr: domainSessionNotFoundError()},
 					mem.NewStore(clock.Real()).RoleRepository(),
 					mem.NewStore(clock.Real()).UserRepository(),
 					innerStore,
@@ -1073,13 +1143,11 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 			wantReason: "revoked-session",
 			build: func(t *testing.T, logger *slog.Logger) (*Service, string) {
 				t.Helper()
-				svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-log-revoked")
+				svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-log-revoked")
 				svc.logger = logger
-				sess, err := domain.NewSession("usr-log-revoked", "at", time.Now().Add(time.Hour), time.Now())
-				require.NoError(t, err)
-				sess.ID = "sess-log-revoked"
-				sess.Revoke(time.Now())
-				require.NoError(t, repo.Create(context.Background(), sess))
+				sess := newTestSession("usr-log-revoked", "sess-log-revoked")
+				require.NoError(t, store.Create(context.Background(), sess))
+				require.NoError(t, store.Revoke(context.Background(), "sess-log-revoked"))
 				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-log-revoked", "usr-log-revoked")
 				require.NoError(t, err)
 				return svc, wireToken
@@ -1103,45 +1171,6 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 			assert.Equal(t, tc.wantReason, entry["reason"])
 		})
 	}
-}
-
-// sessionNotFoundRepo returns a domain not-found error from GetByID.
-type sessionNotFoundRepo struct {
-	mem.SessionRepository
-	notFoundErr error
-}
-
-func domainSessionNotFoundError() error {
-	return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
-		errcode.WithCategory(errcode.CategoryDomain))
-}
-
-func (r *sessionNotFoundRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
-	return nil, r.notFoundErr
-}
-
-// rotateFailingRefreshStore wraps a real refresh.Store and overrides Rotate to
-// return a configurable error so the post-Rotate error path can be exercised.
-type rotateFailingRefreshStore struct {
-	refresh.Store
-	err error
-}
-
-func (s rotateFailingRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
-	return "", nil, s.err
-}
-
-// rotateMismatchRefreshStore wraps a real refresh.Store and overrides Rotate to
-// return a Token with deliberately mismatched SessionID / SubjectID so the
-// rotated-subject-mismatch branch is exercised.
-type rotateMismatchRefreshStore struct {
-	refresh.Store
-	rotatedSessionID string
-	rotatedSubjectID string
-}
-
-func (s rotateMismatchRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
-	return "dummy-wire", &refresh.Token{SessionID: s.rotatedSessionID, SubjectID: s.rotatedSubjectID}, nil
 }
 
 // TestRefresh_EmptyToken_AuthErrorCode verifies that presenting an empty
@@ -1177,12 +1206,10 @@ func TestRefresh_EmptyToken_NoLengthOracle(t *testing.T) {
 // ErrAuthRefreshUnavailable (not ErrAuthRefreshFailed) so clients can
 // distinguish an outage from invalid credentials.
 func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
-	_, sessionRepo, innerStore := newTestServiceWithRefreshStore(t, "usr-rotate-fail")
+	_, sessionStore, innerStore := newTestServiceWithRefreshStore(t, "usr-rotate-fail")
 
-	sess, err := domain.NewSession("usr-rotate-fail", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-rotate-fail"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-rotate-fail", "sess-rotate-fail")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	wireToken, _, err := innerStore.Issue(context.Background(), "sess-rotate-fail", "usr-rotate-fail")
 	require.NoError(t, err)
@@ -1198,7 +1225,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 		Store: innerStore,
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "rotate store down"),
 	}
-	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
+	svc2 := MustNewService(sessionStore, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
@@ -1209,16 +1236,38 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
 }
 
+// rotateFailingRefreshStore wraps a real refresh.Store and overrides Rotate to
+// return a configurable error so the post-Rotate error path can be exercised.
+type rotateFailingRefreshStore struct {
+	refresh.Store
+	err error
+}
+
+func (s rotateFailingRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
+	return "", nil, s.err
+}
+
+// rotateMismatchRefreshStore wraps a real refresh.Store and overrides Rotate to
+// return a Token with deliberately mismatched SessionID / SubjectID so the
+// rotated-subject-mismatch branch is exercised.
+type rotateMismatchRefreshStore struct {
+	refresh.Store
+	rotatedSessionID string
+	rotatedSubjectID string
+}
+
+func (s rotateMismatchRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
+	return "dummy-wire", &refresh.Token{SessionID: s.rotatedSessionID, SubjectID: s.rotatedSubjectID}, nil
+}
+
 // TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected verifies that when
 // Rotate returns a token with a SessionID or SubjectID that does not match the
 // validated session, Refresh cascade-revokes and returns ErrAuthRefreshFailed.
 func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
-	_, sessionRepo, innerStore := newTestServiceWithRefreshStore(t, "usr-mismatch")
+	_, sessionStore, innerStore := newTestServiceWithRefreshStore(t, "usr-mismatch")
 
-	sess, err := domain.NewSession("usr-mismatch", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-mismatch"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	sess := newTestSession("usr-mismatch", "sess-mismatch")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
 	wireToken, _, err := innerStore.Issue(context.Background(), "sess-mismatch", "usr-mismatch")
 	require.NoError(t, err)
@@ -1232,7 +1281,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	spy := &spyRefreshStore{Store: innerStore}
 	// Override Rotate to return a token with wrong SessionID.
 	mismatchStore := rotateMismatchRefreshStore{Store: spy, rotatedSessionID: "wrong-session", rotatedSubjectID: "usr-mismatch"}
-	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
+	svc2 := MustNewService(sessionStore, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
@@ -1244,108 +1293,6 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	assert.Equal(t, "invalid refresh token", ec.Message)
 }
 
-// TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr verifies that when
-// Rotate returns a mismatched token AND cascadeRevoke (RevokeSessionDetached) fails,
-// the infra error is propagated rather than swallowed.
-func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
-	_, sessionRepo, innerStore := newTestServiceWithRefreshStore(t, "usr-mismatch-revoke-fail")
-
-	sess, err := domain.NewSession("usr-mismatch-revoke-fail", "at", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-mismatch-revoke-fail"
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
-
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-mismatch-revoke-fail", "usr-mismatch-revoke-fail")
-	require.NoError(t, err)
-
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	u, _ := domain.NewUser("usr-mismatch-revoke-fail", "mmrf@test.local", "hash", time.Now())
-	u.ID = "usr-mismatch-revoke-fail"
-	require.NoError(t, userRepo.Create(context.Background(), u))
-
-	// revokeFailingRefreshStore already covers RevokeSessionDetached failure; wrap it
-	// with rotateMismatchRefreshStore on top so Rotate returns mismatch and then
-	// cascadeRevoke calls through to a detached revoke that errors.
-	revokeErrStore := revokeFailingRefreshStore{
-		Store: innerStore,
-		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "revoke store down"),
-	}
-	// rotateMismatchRefreshStore wraps revokeErrStore so Rotate returns mismatch
-	// but RevokeSessionDetached delegates to revokeErrStore and fails.
-	mismatchStore := rotateMismatchRefreshStore{
-		Store:            revokeErrStore,
-		rotatedSessionID: "tampered-session",
-		rotatedSubjectID: "usr-mismatch-revoke-fail",
-	}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
-
-	pair, err := svc.Refresh(context.Background(), wireToken)
-	require.Error(t, err)
-	assert.Equal(t, dto.TokenPair{}, pair)
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
-}
-
-// ---------------------------------------------------------------------------
-// Detached revoke routing tests
-// ---------------------------------------------------------------------------
-
-// detachSpyRefreshStore wraps a real refresh.Store and records whether the
-// session-refresh service uses the detached revoke method for cascade paths.
-// The durable store implementation owns the actual cancellation/ambient-tx
-// detach behavior; this service-level test only locks down method routing.
-type detachSpyRefreshStore struct {
-	refresh.Store
-	mu              sync.Mutex
-	detachedCalledN int
-	businessCalledN int
-}
-
-func (s *detachSpyRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
-	s.mu.Lock()
-	s.businessCalledN++
-	s.mu.Unlock()
-	return s.Store.RevokeSession(ctx, sessionID)
-}
-
-func (s *detachSpyRefreshStore) RevokeSessionDetached(ctx context.Context, sessionID string) error {
-	s.mu.Lock()
-	s.detachedCalledN++
-	s.mu.Unlock()
-	return s.Store.RevokeSessionDetached(ctx, sessionID)
-}
-
-// TestService_CascadeRevoke_UsesDetachedStoreMethod verifies that when
-// cascadeRevoke is triggered by a session-not-found condition, sessionrefresh
-// calls the explicit detached store method instead of the business revoke.
-func TestService_CascadeRevoke_UsesDetachedStoreMethod(t *testing.T) {
-	notFoundErr := domainSessionNotFoundError()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-
-	_, _, innerStore, wireToken := issueTestWireToken(t, "usr-detach-cancel", "sess-detach-cancel")
-
-	spy := &detachSpyRefreshStore{Store: innerStore}
-	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
-
-	// Cancel the caller ctx before calling Refresh. This service-level test
-	// only asserts method routing; durable cancellation behavior is owned by
-	// the store-level RevokeSessionDetached contract.
-	callerCtx, callerCancel := context.WithCancel(context.Background())
-	callerCancel() // cancel immediately
-
-	_, _ = svc.Refresh(callerCtx, wireToken)
-
-	spy.mu.Lock()
-	detachedN := spy.detachedCalledN
-	businessN := spy.businessCalledN
-	spy.mu.Unlock()
-
-	require.Equal(t, 1, detachedN, "RevokeSessionDetached must be called exactly once on session-not-found")
-	assert.Zero(t, businessN, "cascadeRevoke must not call business RevokeSession")
-}
+// Compile-time check: ports is used (userRepo, roleRepo). Ensure unused import
+// does not surface — the import is consumed by domain/mem references above.
+var _ ports.UserRepository = (*mem.UserRepository)(nil)

@@ -33,7 +33,6 @@ import (
 	accesspgrepo "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -175,10 +174,6 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
-
-	// Use a mem.SessionRepository to satisfy the session revoke path inside the tx.
-	// (PG session repo is not required for this CAS-focused test.)
-	_ = mem.NewSessionRepository(clock.Real()) // already injected via testutil.RealSessionRepo above
 
 	type result struct{ err error }
 	results := make(chan result, 2)

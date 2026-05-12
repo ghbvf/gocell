@@ -341,17 +341,22 @@ runtime/auth/session/
 - 删除或隔离 cell-private `SessionRepository` / cell-internal mem session 在 PG 模式下的路径
 - `sessionlogin.persistSessionWithRefresh` 的 session + refresh 写入与 PG tx 同一回滚边界
 - 启动/升级期 forced re-login 策略：旧 mem session 不迁移，PG backend 首次启用要求全员重新登录
+- **refresh 保持 session.ID 稳定**：refresh 不创建 / 不撤销 / 不更新 session 行；access JWT 跨 refresh 共享同一 sid claim，仅 jti / exp 推进。对齐 OAuth2 RFC 6749 §6 + OIDC Back-Channel Logout sid stability + ory/fosite / zitadel / keycloak 业界惯例（PR #482 review 撤回 fd954cb8 "revoke-old + create-new" 反模式，详见 ADR-credential D4.1）
+- AuthzEpoch / role snapshot 在 refresh 时通过 user state 重新签发 claims（claims-at-sign），但**不写回 session 行**；真正的 epoch 闭环留给 S4b
 
 **收口项**：
 - `S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01`
 - `PR338-FU-LOGIN-DURABLE-TX-ATOMICITY-TEST`
 - `B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01`
+- `SESSIONREFRESH-NO-SESSION-CREATE-01`（archtest Medium，PR #482 同 PR 落地）
 
 **验收**：
 - login happy path 创建 PG session + PG refresh row
 - refresh/logout/revoke 对 PG 行生效，重启后状态仍一致
-- 故障注入证明 PG tx rollback 会回滚 session/refresh row，不再留下 mem-in-tx 脏状态
+- refresh 链可连续多跳：login → refresh → 用返回的 refreshToken 再 refresh → 200（PR #482 P1 复现测试 `TestSessionRefresh_TwoHops_PG`）
+- 故障注入证明 PG tx rollback 会回滚 session/refresh row，不再留下 mem-in-tx 脏状态；`TestSessionLogin_OutboxFailureRollsBackPGRows` 通过 spy + topic 断言定位失败注入点在 `event.session.created.v1` emit
 - PG backend 启动时若 session/refresh store 未注入，phase0 fail-fast
+- `SESSIONREFRESH-NO-SESSION-CREATE-01` archtest 静态拦截 `cells/accesscore/slices/sessionrefresh/` 内 session.Store.Create / Revoke / RevokeForSubject 调用
 
 #### S4b authz_epoch + credential event closed loop
 

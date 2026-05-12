@@ -6,12 +6,10 @@ package sessionrefresh
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -39,12 +37,10 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 }
 
 func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
-	svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-r1")
+	svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-r1")
 
-	sess, err := domain.NewSession("usr-r1", "access-tok", time.Now().Add(time.Hour), time.Now())
-	require.NoError(t, err)
-	sess.ID = "sess-r1"
-	require.NoError(t, repo.Create(context.Background(), sess))
+	sess := newTestSession("usr-r1", "sess-r1")
+	require.NoError(t, store.Create(context.Background(), sess))
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-r1", "usr-r1")
 	require.NoError(t, err)

@@ -7,9 +7,9 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // Consumer handles role-change events and invalidates affected user sessions.
@@ -27,21 +27,21 @@ import (
 // concrete wiring (in-mem Claimer in corebundle; redis IdempotencyClaimer
 // in multi-pod deployments).
 //
-// Ack timing: after sessionRepo.RevokeByUserID returns nil
+// Ack timing: after sessionStore.RevokeForSubject returns nil
 // Disposition:
 //   - unmarshal fail / empty userID  → DispositionReject (PermanentError) → DLX
-//   - sessionRepo transient error    → DispositionRequeue → retry with backoff
+//   - sessionStore transient error   → DispositionRequeue → retry with backoff
 //   - success                        → DispositionAck
 //
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
 type Consumer struct {
-	sessionRepo ports.SessionRepository
-	logger      *slog.Logger
+	sessionStore session.Store
+	logger       *slog.Logger
 }
 
 // NewConsumer creates a new role-change consumer.
-func NewConsumer(repo ports.SessionRepository, logger *slog.Logger) *Consumer {
-	return &Consumer{sessionRepo: repo, logger: logger}
+func NewConsumer(store session.Store, logger *slog.Logger) *Consumer {
+	return &Consumer{sessionStore: store, logger: logger}
 }
 
 // HandleRoleChanged is an EntryHandler (func(context.Context, outbox.Entry) outbox.HandleResult).
@@ -50,7 +50,7 @@ func NewConsumer(repo ports.SessionRepository, logger *slog.Logger) *Consumer {
 // Behavior:
 //   - Unmarshal failure → DispositionReject (PermanentError, routed to DLX).
 //   - Empty userId in payload → DispositionReject (PermanentError, routed to DLX).
-//   - sessionRepo error → DispositionRequeue (transient, retried by ConsumerBase).
+//   - sessionStore error → DispositionRequeue (transient, retried by ConsumerBase).
 //   - Success → DispositionAck.
 func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload dto.RoleChangedEvent
@@ -64,7 +64,7 @@ func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) ou
 		))
 	}
 
-	if err := c.sessionRepo.RevokeByUserID(ctx, payload.UserID); err != nil {
+	if err := c.sessionStore.RevokeForSubject(ctx, payload.UserID, session.CredentialEventRoleRevoke); err != nil {
 		c.logger.Warn("sessionlogout: revoke sessions failed",
 			slog.String("user_id", payload.UserID),
 			slog.Any("error", err))

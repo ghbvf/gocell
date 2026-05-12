@@ -101,7 +101,8 @@ func (m *MemStore) Get(_ context.Context, id string) (*Session, error) {
 	s, ok := m.sessions[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
-			"session: not found")
+			"session: not found",
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 	return copySession(s), nil
 }

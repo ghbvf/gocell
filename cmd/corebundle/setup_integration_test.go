@@ -97,9 +97,8 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(
+	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -108,7 +107,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
@@ -332,9 +331,8 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 		nil,
 	)
 
-	ac := accesscore.NewAccessCore(
+	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -343,7 +341,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),

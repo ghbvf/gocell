@@ -199,6 +199,7 @@ func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.Session, 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
 			"session: not found",
+			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithDetails(slog.String("sessionID", id)))
 	}
 	if err != nil {

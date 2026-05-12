@@ -123,6 +123,7 @@ const (
 	ErrAuthLoginInvalidInput    Code = "ERR_AUTH_LOGIN_INVALID_INPUT"
 	ErrAuthLoginFailed          Code = "ERR_AUTH_LOGIN_FAILED"
 	ErrAuthLogoutInvalidInput   Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
+	ErrAuthLogoutUnavailable    Code = "ERR_AUTH_LOGOUT_UNAVAILABLE"
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
 	ErrAuthRefreshUnavailable   Code = "ERR_AUTH_REFRESH_UNAVAILABLE"

@@ -15,7 +15,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -25,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	session "github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 func newOutboxRefreshStore() refresh.Store {
@@ -134,31 +134,31 @@ type failingEmitter struct{ err error }
 
 func (f *failingEmitter) Emit(_ context.Context, _ outbox.Entry) error { return f.err }
 
-// trackingOutboxSessionRepo wraps ports.SessionRepository and records Delete calls.
-type trackingOutboxSessionRepo struct {
-	ports.SessionRepository
-	deleted []string
+// trackingOutboxSessionStore wraps session.Store and records Revoke calls.
+type trackingOutboxSessionStore struct {
+	session.Store
+	revoked []string
 }
 
-func (r *trackingOutboxSessionRepo) Delete(ctx context.Context, id string) error {
-	r.deleted = append(r.deleted, id)
-	return r.SessionRepository.Delete(ctx, id)
+func (r *trackingOutboxSessionStore) Revoke(ctx context.Context, id string) error {
+	r.revoked = append(r.revoked, id)
+	return r.Store.Revoke(ctx, id)
 }
 
 // TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup verifies
 // that when a durable (non-noop) TxRunner is used and outbox.Emit fails,
 // no explicit cleanupIssuedSession call is made. The tx rollback handles
-// atomicity; explicit cleanup would double-delete in a real durable setup.
+// atomicity; explicit cleanup would double-revoke in a real durable setup.
 func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &trackingOutboxSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
 	// stubTxRunner is NOT a Nooper — isNoopTx(tx) returns false.
 	tx := &stubTxRunner{}
 
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
+	svc := MustNewService(userRepo, sessionStore, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(emitter),
 		WithTxManager(persistence.WrapForCell(tx)),
 		WithClock(clock.Real()))
@@ -170,24 +170,24 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 	require.Error(t, err, "emit failure must propagate as an error")
 
 	// In durable tx mode, cleanupIssuedSession must NOT be called (tx rollback handles it).
-	assert.Len(t, sessionRepo.deleted, 0,
-		"durable tx: no explicit Delete during emit failure — tx rollback is the recovery mechanism")
+	assert.Len(t, sessionStore.revoked, 0,
+		"durable tx: no explicit Revoke during emit failure — tx rollback is the recovery mechanism")
 }
 
 // TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns verifies
 // that when a Nooper TxRunner (cell.Nooper.Noop()==true) is in use and outbox.Emit fails,
-// cleanupIssuedSession IS called to compensate the already-written session.
+// cleanupIssuedSession IS called to compensate the already-written session via Revoke.
 // This is the mirror case of the durable-tx test above.
 func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &trackingOutboxSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
 	// noopTxRunner implements cell.Nooper (Noop()==true) → isNoopTx returns true,
 	// so the service runs explicit session cleanup on emit failure.
 	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(),
 		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -196,9 +196,9 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	_, err := svc.Login(context.Background(), LoginInput{Username: "noop-emit-fail", Password: string(testCredential)})
 	require.Error(t, err, "emit failure must propagate as an error")
 
-	// In noop tx mode, cleanupIssuedSession must compensate the session write.
-	assert.Len(t, sessionRepo.deleted, 1,
-		"noop tx (demo mode): explicit Delete must run to compensate the already-written session")
+	// In noop tx mode, cleanupIssuedSession must compensate the session write via Revoke.
+	assert.Len(t, sessionStore.revoked, 1,
+		"noop tx (demo mode): explicit Revoke must run to compensate the already-written session")
 	assert.Equal(t, 1, refreshStore.revokeSessionDetachedN,
 		"cleanupIssuedSession must use RevokeSessionDetached for refresh cleanup")
 	assert.Zero(t, refreshStore.revokeSessionN,

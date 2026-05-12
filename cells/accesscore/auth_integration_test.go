@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout"
@@ -159,7 +160,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(outbox.WrapPublisherForCell(noopPublisher{}), nil),
 		WithJWTIssuer(issuer),
@@ -251,7 +252,7 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	// After the opaque-store rewrite, ParseOpaque rejects the JWT (wrong
 	// selector/verifier format) → refresh.ErrRejected → ErrAuthRefreshFailed.
 	refreshSvc := sessionrefresh.MustNewService(
-		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
+		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 	)
@@ -269,11 +270,11 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	fx := loginAndGetPair(t)
 
 	// Need sessionlogin's persisted session (loginAndGetPair went through the
-	// real login flow, so fx.Cell.sessionRepo already has one).
-	require.NotNil(t, fx.Cell.sessionRepo, "session repo must be wired")
+	// real login flow, so fx.Cell.sessionStore already has one).
+	require.NotNil(t, fx.Cell.sessionStore, "session repo must be wired")
 
 	refreshSvc := sessionrefresh.MustNewService(
-		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
+		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 	)
@@ -320,7 +321,14 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	_, _ = roleRepo.AssignToUser(ctx, "usr-carol", "member")
 
 	// Give bob an active session.
-	bobSession := &domain.Session{ID: "sess-bob", UserID: "usr-bob"}
+	bobSession := &session.Session{
+		ID:                "sess-bob",
+		SubjectID:         "usr-bob",
+		JTI:               "sess-bob",
+		AuthzEpochAtIssue: 0,
+		CreatedAt:         time.Now().UTC(),
+		ExpiresAt:         time.Now().Add(time.Hour).UTC(),
+	}
 	require.NoError(t, sessionRepo.Create(ctx, bobSession))
 
 	// Wire rbacassign with outbox stubs (durable mode).
@@ -346,9 +354,9 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	assert.NoError(t, res.Err, "role-revoke Ack must carry nil Err")
 
 	// Bob's session must now be revoked.
-	sess, err := sessionRepo.GetByID(ctx, "sess-bob")
+	sess, err := sessionRepo.Get(ctx, "sess-bob")
 	require.NoError(t, err)
-	assert.True(t, sess.IsRevoked(),
+	assert.True(t, sess.RevokedAt != nil,
 		"session must be revoked after role-revoke outbox entry is consumed")
 }
 

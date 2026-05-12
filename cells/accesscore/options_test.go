@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -47,7 +49,9 @@ func TestWithSetupLock_NilNoop(t *testing.T) {
 func TestWithInMemoryDefaults(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -56,19 +60,25 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)
-	// userRepo and roleRepo are set eagerly; sessionRepo is deferred to Init()
-	// so that c.clk is available (clock injection pattern).
+	// userRepo, roleRepo, and sessionStore are all set eagerly via explicit options.
 	assert.NotNil(t, c.userRepo)
 	assert.NotNil(t, c.roleRepo)
-	// Verify sessionRepo is wired after Init.
+	// Verify sessionStore is wired before Init (explicit injection, no clock deferral).
+	assert.NotNil(t, c.sessionStore)
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
-	assert.NotNil(t, c.sessionRepo)
+	assert.NotNil(t, c.sessionStore)
 }
 
 func TestHealthCheckers_InMemory(t *testing.T) {
+	// session.MemStore does not implement Health() — session_store_ready is only
+	// registered when the injected store implements the optional HealthCheckable
+	// interface (reserved for infrastructure stores like the PG adapter).
+	// In-memory mode deliberately has no external dependency to probe.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -80,18 +90,22 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	require.Contains(t, snap.HealthCheckers, "session_store_ready", "in-memory session repo implements Health()")
-	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()))
+	// MemStore does not implement HealthCheckable; no probe expected.
+	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
+		"session.MemStore does not implement Health(); probe must not be registered")
 }
 
 func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
-	// WithInMemoryDefaults defers sessionRepo construction to Init() so that
-	// c.clk is available; after Init the session-store health probe is registered.
+	// session.MemStore does not implement Health() — no session_store_ready probe
+	// is registered in pure in-memory mode. Init must succeed without it.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
@@ -100,7 +114,9 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	assert.Contains(t, snap.HealthCheckers, "session_store_ready")
+	// MemStore does not implement HealthCheckable; probe absent is correct.
+	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
+		"session.MemStore does not implement Health(); probe must not be registered")
 }
 
 func TestRegisterSubscriptions(t *testing.T) {
@@ -151,7 +167,10 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
@@ -187,7 +206,10 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
@@ -200,7 +222,9 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), rec))
 
 	snap := rec.Snapshot()
-	require.Contains(t, snap.HealthCheckers, "session_store_ready", "session_store_ready checker must be present")
+	// session.MemStore does not implement HealthCheckable; no session_store_ready probe expected.
+	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
+		"session.MemStore does not implement Health(); probe must not be registered")
 	const emitterKey = "outbox-failopen-rate.accesscore"
 	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
 	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
@@ -212,11 +236,11 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	// WriterEmitter (NoopWriter path) does not implement emitterHealthChecker,
 	// so no outbox-failopen-rate checker is produced.
-	// sessionRepo is deferred to Init() (clock injection pattern), so Init
-	// must be called before snapshot to have session-store present.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -228,7 +252,9 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	assert.Contains(t, snap.HealthCheckers, "session_store_ready", "session-store must still be present")
+	// session.MemStore does not implement HealthCheckable; no session_store_ready probe expected.
+	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
+		"session.MemStore does not implement Health(); probe must not be registered")
 	for k := range snap.HealthCheckers {
 		assert.NotContains(t, k, "outbox-failopen-rate",
 			"nil emitter must not produce outbox checker: key=%s", k)
@@ -246,7 +272,9 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -270,7 +298,9 @@ func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),

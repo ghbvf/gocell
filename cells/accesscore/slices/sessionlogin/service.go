@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
@@ -24,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	session "github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // Option configures a session-login Service.
@@ -61,7 +61,7 @@ func WithClock(clk clock.Clock) Option {
 // Service implements password login with JWT issuance.
 type Service struct {
 	userRepo     ports.UserRepository
-	sessionRepo  ports.SessionRepository
+	sessionStore session.Store
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
 	txRunner     persistence.CellTxManager
@@ -76,7 +76,7 @@ type Service struct {
 // sessionmint.MintAccess.
 func NewService(
 	userRepo ports.UserRepository,
-	sessionRepo ports.SessionRepository,
+	sessionStore session.Store,
 	roleRepo ports.RoleRepository,
 	refreshStore refresh.Store,
 	issuer *auth.JWTIssuer,
@@ -86,8 +86,8 @@ func NewService(
 	if validation.IsNilInterface(userRepo) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: userRepo must not be nil")
 	}
-	if validation.IsNilInterface(sessionRepo) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: sessionRepo must not be nil")
+	if validation.IsNilInterface(sessionStore) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: sessionStore must not be nil")
 	}
 	if validation.IsNilInterface(roleRepo) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: roleRepo must not be nil")
@@ -103,7 +103,7 @@ func NewService(
 	}
 	s := &Service{
 		userRepo:     userRepo,
-		sessionRepo:  sessionRepo,
+		sessionStore: sessionStore,
 		roleRepo:     roleRepo,
 		refreshStore: refreshStore,
 		emitter:      outbox.NewNoopEmitter(),
@@ -123,14 +123,14 @@ func NewService(
 // MustNewService is the static-wiring variant of NewService.
 func MustNewService(
 	userRepo ports.UserRepository,
-	sessionRepo ports.SessionRepository,
+	sessionStore session.Store,
 	roleRepo ports.RoleRepository,
 	refreshStore refresh.Store,
 	issuer *auth.JWTIssuer,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
-	s, err := NewService(userRepo, sessionRepo, roleRepo, refreshStore, issuer, logger, opts...)
+	s, err := NewService(userRepo, sessionStore, roleRepo, refreshStore, issuer, logger, opts...)
 	if err != nil {
 		panic(panicregister.Approved("sessionlogin-invariant", errcode.Assertion("sessionlogin: invariant violated: %v", err)))
 	}
@@ -186,19 +186,22 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, err
 	}
 
-	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
-	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: create session: %w", err)
+	sess := &session.Session{
+		ID:                sessionID,
+		SubjectID:         user.ID,
+		JTI:               sessionID, // same UUID used as store ID and JWT jti claim
+		AuthzEpochAtIssue: 0,         // S4a placeholder; S4b will snapshot users.authz_epoch
+		CreatedAt:         s.clock.Now(),
+		ExpiresAt:         minted.ExpiresAt,
 	}
-	session.ID = sessionID
 
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, user.ID)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
 
 	s.logger.Info("user logged in",
-		slog.String("user_id", user.ID), slog.String("session_id", session.ID))
+		slog.String("user_id", user.ID), slog.String("session_id", sess.ID))
 	return dto.TokenPair{
 		AccessToken:           minted.AccessToken,
 		RefreshToken:          refreshWire,
@@ -217,32 +220,32 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // Always emits event.session.created.v1 — both Login and IssueForUser paths
 // must record session creation for audit trail (no emitCreated flag: removed
 // per PR-CFG-G1 commit 2).
-func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID string) (string, error) {
+func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.Session, userID string) (string, error) {
 	var refreshWire string
 	do := func(txCtx context.Context) error {
-		if err := s.sessionRepo.Create(txCtx, session); err != nil {
+		if err := s.sessionStore.Create(txCtx, sess); err != nil {
 			return fmt.Errorf("session-login: persist session: %w", err)
 		}
-		wire, _, err := s.refreshStore.Issue(txCtx, session.ID, userID)
+		wire, _, err := s.refreshStore.Issue(txCtx, sess.ID, userID)
 		if err != nil {
 			s.logger.Error("session-login: refresh store issue failed",
 				slog.Any("error", err), slog.String("user_id", userID))
 			// In demo/noop-tx mode, the session was already written without a real
 			// transaction; compensate explicitly. In durable-tx mode, the tx rollback
-			// handles atomicity — no explicit cleanup is needed (and would double-delete).
+			// handles atomicity — no explicit cleanup is needed (and would double-revoke).
 			if isNoopTx(s.txRunner) {
-				_ = s.sessionRepo.Delete(context.WithoutCancel(txCtx), session.ID)
+				_ = s.sessionStore.Revoke(context.WithoutCancel(txCtx), sess.ID)
 			}
 			return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 		}
 		refreshWire = wire
 		if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
-			SessionID: session.ID,
+			SessionID: sess.ID,
 			UserID:    userID,
 		}); err != nil {
 			// Same pattern: explicit cleanup only in noop/demo mode.
 			if isNoopTx(s.txRunner) {
-				s.cleanupIssuedSession(txCtx, session.ID)
+				s.cleanupIssuedSession(txCtx, sess.ID)
 			}
 			return fmt.Errorf("session-login: emit event: %w", err)
 		}
@@ -269,17 +272,10 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 		s.logger.Error("session-login: cleanup refresh chain failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
-	if err := s.sessionRepo.Delete(cleanupCtx, sessionID); err != nil {
-		// Not-found means the session was already gone (concurrent cleanup or
-		// prior rollback) — this is harmless. Log at Debug to avoid paging on-call
-		// for a condition that has no correctness impact.
-		// Matches the pattern in sessionrefresh/service.go and sessionvalidate/service.go.
-		if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
-			s.logger.Debug("session-login: cleanup session already absent",
-				slog.String("session_id", sessionID))
-			return
-		}
-		s.logger.Error("session-login: cleanup session failed",
+	// session.Store.Revoke is idempotent: missing IDs are no-ops returning nil
+	// (防枚举 — append-only revoke semantics per ADR-Session D3).
+	if err := s.sessionStore.Revoke(cleanupCtx, sessionID); err != nil {
+		s.logger.Error("session-login: cleanup session revoke failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
 }
@@ -327,12 +323,15 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	// Persist the session so sessionvalidate can look it up by sid claim.
-	session, err := domain.NewSession(userID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
-	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
+	sess := &session.Session{
+		ID:                sessionID,
+		SubjectID:         userID,
+		JTI:               sessionID, // same UUID used as store ID and JWT jti claim
+		AuthzEpochAtIssue: 0,         // S4a placeholder; S4b will snapshot users.authz_epoch
+		CreatedAt:         s.clock.Now(),
+		ExpiresAt:         minted.ExpiresAt,
 	}
-	session.ID = sessionID
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, userID)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}

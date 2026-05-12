@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -22,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 const (
@@ -48,13 +48,23 @@ func newHandlerLogoutRefreshStore() refresh.Store {
 func setup(t testing.TB) http.Handler {
 	t.Helper()
 	sessionRepo := testutil.RealSessionRepo(t)
-	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "access-tok", time.Now().Add(time.Hour), time.Now())
-	sess.ID = testutil.TestID("sess-1")
-	_ = sessionRepo.Create(context.Background(), sess)
+	sessID := testutil.TestID("sess-1")
+	_ = sessionRepo.Create(context.Background(), &session.Session{
+		ID:        sessID,
+		SubjectID: testutil.TestID("usr-1"),
+		JTI:       "jti-" + sessID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
 	// Victim session owned by a different user — used to prove IDOR guard.
-	other, _ := domain.NewSession(testutil.TestID("usr-victim"), "at-v", time.Now().Add(time.Hour), time.Now())
-	other.ID = testutil.TestID("sess-victim")
-	_ = sessionRepo.Create(context.Background(), other)
+	victimID := testutil.TestID("sess-victim")
+	_ = sessionRepo.Create(context.Background(), &session.Session{
+		ID:        victimID,
+		SubjectID: testutil.TestID("usr-victim"),
+		JTI:       "jti-" + victimID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
 
 	svc := MustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	mux := celltest.NewTestMux()

@@ -213,9 +213,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(
+	accessCell := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -223,7 +222,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithBootstrapAuth(e2eBootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
@@ -533,9 +532,8 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(
+	accessCell := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -544,7 +542,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),

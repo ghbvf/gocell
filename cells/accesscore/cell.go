@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
@@ -26,8 +25,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
@@ -39,24 +40,6 @@ import (
 //	cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
 const PasswordVersionField = "password_version"
 
-const (
-	// defaultAccessCoreRefreshReuseInterval is the token reuse window for the
-	// in-memory refresh policy (demo/testing only).
-	defaultAccessCoreRefreshReuseInterval = 2 * time.Second
-	// defaultAccessCoreRefreshMaxAge is the maximum lifetime of a refresh token
-	// for the in-memory refresh policy (demo/testing only).
-	defaultAccessCoreRefreshMaxAge = 7 * 24 * time.Hour
-)
-
-// defaultRefreshPolicy is used only by WithInMemoryDefaults for demo/testing.
-// Durable mode must inject an explicit store via WithRefreshStore.
-var defaultRefreshPolicy = refresh.Policy{
-	ReuseInterval:  defaultAccessCoreRefreshReuseInterval,
-	MaxAge:         defaultAccessCoreRefreshMaxAge,
-	MaxIdle:        refresh.DefaultMaxIdle,
-	GraceMaxReuses: refresh.DefaultGraceMaxReuses,
-}
-
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
 // Option configures an AccessCore Cell.
@@ -67,9 +50,24 @@ func WithUserRepository(r ports.UserRepository) Option {
 	return func(c *AccessCore) { c.userRepo = r }
 }
 
-// WithSessionRepository sets the SessionRepository.
-func WithSessionRepository(r ports.SessionRepository) Option {
-	return func(c *AccessCore) { c.sessionRepo = r }
+// WithSessionStore injects the session.Store used for session lifecycle
+// (create / get / revoke / revokeForSubject). Required — Init() fails with
+// ErrCellInvalidConfig when nil.
+//
+// Strong-dependency wiring option: both bare-nil and typed-nil session.Store
+// are rejected at phase0 (via sessionStoreNil sentinel). Pass
+// session.NewMemStore or adapters/postgres.NewSessionStore from the
+// composition root.
+//
+// ref: runtime-api.md §Option 范式分层 — wiring option, nil rejected at phase0.
+func WithSessionStore(s session.Store) Option {
+	return func(c *AccessCore) {
+		if validation.IsNilInterface(s) {
+			c.sessionStoreNil = true
+			return
+		}
+		c.sessionStore = s
+	}
 }
 
 // WithRoleRepository sets the RoleRepository.
@@ -149,8 +147,8 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 }
 
 // WithRefreshStore injects the refresh.Store used for opaque refresh token
-// Issue/Rotate/Revoke. Required in production (durable) mode — demo mode
-// falls back to an in-memory store via WithInMemoryDefaults.
+// Issue/Rotate/Revoke. Required — Init() fails with ErrCellMissingTokenIssuer
+// when nil. Composition root passes the mem or PG store.
 func WithRefreshStore(store refresh.Store) Option {
 	return func(c *AccessCore) { c.refreshStore = store }
 }
@@ -180,26 +178,6 @@ func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 // inject a deterministic clock to control time-sensitive logic.
 func WithClock(clk clock.Clock) Option {
 	return func(c *AccessCore) { c.clk = clk }
-}
-
-// WithInMemoryDefaults configures in-memory repositories for development
-// and testing. Not suitable for production use.
-// sessionRepo and refreshStore construction are deferred to Init() so that
-// c.clk is available.
-//
-// S4.0: userRepo and roleRepo are vended from a single mem.Store so the
-// effective-admin invariant (cross-repo: user.Status + role_assignments)
-// can be checked atomically under the shared mutex. Two independent Stores
-// would silently lose this property.
-func WithInMemoryDefaults() Option {
-	return func(c *AccessCore) {
-		store := mem.NewStore(c.clk)
-		c.userRepo = store.UserRepository()
-		// sessionRepo construction is deferred to Init() so that c.clk is
-		// available for mem.NewSessionRepository.
-		c.roleRepo = store.RoleRepository()
-		c.useInMemoryDefaults = true
-	}
 }
 
 // WithConfigGetter injects the ConfigGetter used by the configreceive slice to
@@ -271,13 +249,15 @@ type AccessCore struct {
 	*cell.BaseCell
 	clk          clock.Clock
 	userRepo     ports.UserRepository
-	sessionRepo  ports.SessionRepository
+	sessionStore session.Store
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
 
-	// useInMemoryDefaults tracks whether WithInMemoryDefaults was applied so
-	// Init() can construct the refreshStore (which needs c.clk) after deps are wired.
-	useInMemoryDefaults bool
+	// sessionStoreNil is set by WithSessionStore when a nil session.Store is
+	// passed. Phase0 validation rejects the cell when this sentinel is true
+	// so the error is associated with the option name rather than surfacing as
+	// a cryptic nil-pointer dereference inside initSlices.
+	sessionStoreNil bool
 
 	// Outbox wiring. Two mutually exclusive paths populate `emitter`:
 	//   (a) WithEmitter(e)          — `emitter` is set pre-Init.

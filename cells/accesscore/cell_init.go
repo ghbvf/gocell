@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
@@ -26,7 +25,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 )
 
 // resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
@@ -79,26 +77,8 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
 	}
-
-	if c.jwtIssuer == nil || c.jwtVerifier == nil {
-		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
-	}
-	if c.userRepo == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore requires a user repository: use WithUserRepository or WithInMemoryDefaults")
-	}
-	if c.sessionRepo == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore requires a session repository: use WithSessionRepository or WithInMemoryDefaults")
-	}
-	if c.roleRepo == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore requires a role repository: use WithRoleRepository or WithInMemoryDefaults")
-	}
-	if c.refreshStore == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
-			"refresh.Store required: use WithRefreshStore (durable) or WithInMemoryDefaults (demo)")
+	if err := c.validateRequiredDeps(); err != nil {
+		return err
 	}
 	if err := c.initRefreshGC(); err != nil {
 		return err
@@ -131,6 +111,33 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	// so that assemblies that forget to wire a real TxRunner fail at Init() time.
 	if err := cell.CheckNotNoop(durabilityMode, "accesscore", c.txRunner); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateRequiredDeps checks the closed set of mandatory dependencies that
+// every accesscore deployment must wire. Extracted from initValidate to keep
+// the parent's cognitive complexity ≤ 15.
+func (c *AccessCore) validateRequiredDeps() error {
+	if c.jwtIssuer == nil || c.jwtVerifier == nil {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
+	}
+	if c.userRepo == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore requires a user repository: use WithUserRepository")
+	}
+	if c.sessionStoreNil || c.sessionStore == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore requires a session store: use WithSessionStore")
+	}
+	if c.roleRepo == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore requires a role repository: use WithRoleRepository")
+	}
+	if c.refreshStore == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
+			"refresh.Store required: use WithRefreshStore")
 	}
 	return nil
 }
@@ -172,7 +179,7 @@ func (c *AccessCore) initSlices() error {
 		sessionlogin.WithTxManager(c.txRunner),
 		sessionlogin.WithClock(c.clk),
 	}
-	loginSvc, err := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
+	loginSvc, err := sessionlogin.NewService(c.userRepo, c.sessionStore, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
 	if err != nil {
 		return err
 	}
@@ -187,7 +194,7 @@ func (c *AccessCore) initSlices() error {
 		identitymanage.WithLastAdminProtection(c.roleRepo),
 	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
-	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.refreshStore, c.logger, identityOpts...)
+	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionStore, c.refreshStore, c.logger, identityOpts...)
 	if err != nil {
 		return err
 	}
@@ -195,7 +202,7 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("identitymanage", "accesscore", cellvocab.L1))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
-	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger, c.clk)
+	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.logger, c.clk)
 	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cellvocab.L0))
 
 	// session-refresh uses refresh.Store for token state validation and
@@ -203,7 +210,7 @@ func (c *AccessCore) initSlices() error {
 	// validated by the store itself; any malformed input (including an
 	// access JWT replay attempt) returns ErrRejected.
 	refreshSvc, err := sessionrefresh.NewService(
-		c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore,
+		c.sessionStore, c.roleRepo, c.userRepo, c.refreshStore,
 		c.jwtIssuer, c.logger,
 		sessionrefresh.WithClock(c.clk),
 		sessionrefresh.WithTxManager(c.txRunner),
@@ -217,7 +224,7 @@ func (c *AccessCore) initSlices() error {
 	// session-logout — cascades revocation to refresh.Store so logout
 	// invalidates the full refresh chain, not just the access session.
 	logoutOpts := []sessionlogout.Option{sessionlogout.WithEmitter(c.emitter), sessionlogout.WithTxManager(c.txRunner)}
-	logoutSvc, err := sessionlogout.NewService(c.sessionRepo, c.refreshStore, c.logger, logoutOpts...)
+	logoutSvc, err := sessionlogout.NewService(c.sessionStore, c.refreshStore, c.logger, logoutOpts...)
 	if err != nil {
 		return err
 	}
@@ -243,7 +250,7 @@ func (c *AccessCore) initSlices() error {
 	}
 
 	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
-	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
+	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionStore, c.logger)
 
 	// config-receive: subscribes to config state-sync events from configcore.
 	// WithConfigGetter is optional — nil disables the cross-cell GetEntry fetch.
@@ -292,7 +299,7 @@ func (c *AccessCore) initRbacAssign() error {
 	if c.rbacEmitterMode {
 		rbacOpts = append(rbacOpts, rbacassign.WithEmitter(c.emitter))
 	}
-	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger, rbacOpts...)
+	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.sessionStore, c.logger, rbacOpts...)
 	if err != nil {
 		return err
 	}
@@ -315,26 +322,6 @@ func (c *AccessCore) initRbacAssign() error {
 func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	clock.MustHaveClock(c.clk, "accesscore.initInternal")
 
-	// WithInMemoryDefaults defers sessionRepo and refreshStore construction
-	// to here so that c.clk is available.
-	//
-	// HAZARD: session repository stays mem in S3+S5 even when PG storage backend
-	// is selected. accesscore's PG-mode TxRunner writes user/role/outbox to PG
-	// but session/refresh to mem — sessionlogin.persistSessionWithRefresh runs
-	// mem writes inside a real PG tx. PG rollback does NOT unwind mem
-	// session/refresh state. S4 wires the runtime session.Store + PG refresh
-	// store and removes this hazard. Backlog: S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01.
-	if c.useInMemoryDefaults && c.sessionRepo == nil {
-		c.sessionRepo = mem.NewSessionRepository(c.clk)
-	}
-	if c.useInMemoryDefaults && c.refreshStore == nil {
-		rstore, rstoreErr := refreshmem.New(defaultRefreshPolicy, c.clk, nil)
-		if rstoreErr != nil {
-			return errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, "accesscore: init in-memory refresh store", rstoreErr)
-		}
-		c.refreshStore = rstore
-	}
-
 	durabilityMode := reg.DurabilityMode()
 
 	if err := c.initValidate(durabilityMode); err != nil {
@@ -352,7 +339,7 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error 
 
 // registerHealthAndLifecycle registers health probes and lifecycle hooks into reg.
 func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) {
-	if hc, ok := c.sessionRepo.(interface {
+	if hc, ok := c.sessionStore.(interface {
 		Health(context.Context) error
 	}); ok {
 		reg.Health("session_store_ready", hc.Health)

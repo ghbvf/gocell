@@ -12,8 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -24,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -64,11 +63,16 @@ func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 
 var _ persistence.TxRunner = noopTxRunner{}
 
-func seedContractSession(repo ports.SessionRepository) string {
-	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "at-1", time.Now().Add(time.Hour), time.Now())
-	sess.ID = testutil.TestID("sess-1")
-	_ = repo.Create(context.Background(), sess)
-	return sess.ID
+func seedContractSession(store session.Store) string {
+	id := testutil.TestID("sess-1")
+	_ = store.Create(context.Background(), &session.Session{
+		ID:        id,
+		SubjectID: testutil.TestID("usr-1"),
+		JTI:       "jti-" + id,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	return id
 }
 
 // --- HTTP contract test (S1-F1) ---

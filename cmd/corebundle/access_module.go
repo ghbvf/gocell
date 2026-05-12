@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
+	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -22,6 +24,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
@@ -81,9 +85,14 @@ func (m AccessCoreModule) Provide(
 	// root) per CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest.
 	casProto := cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
 
+	sessionProto := session.MustNewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+
 	accessOpts := []accesscore.Option{
 		accesscore.WithClock(shared.Clock),
-		accesscore.WithInMemoryDefaults(),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
 		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
@@ -97,11 +106,29 @@ func (m AccessCoreModule) Provide(
 		accesscore.WithCASProtocol(casProto),
 	}
 	if shared.Topology.StorageBackend == "postgres" {
-		pgOpts, err := accessPostgresOptions(shared)
+		pgOpts, err := accessPostgresOptions(shared, sessionProto)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		accessOpts = append(accessOpts, pgOpts...)
+	} else {
+		// mem mode: explicit construction so UserRepository + RoleRepository share
+		// a single Store (required for cross-repo effective-admin invariant, S4.0).
+		userMemStore := accessmem.NewStore(shared.Clock)
+		sessionMemStore, err := session.NewMemStore(sessionProto, shared.Clock)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("accesscore: session.NewMemStore: %w", err)
+		}
+		refreshMemStore, err := refreshmem.New(accesscore.DefaultRefreshPolicy(), shared.Clock, nil)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
+		}
+		accessOpts = append(accessOpts,
+			accesscore.WithUserRepository(userMemStore.UserRepository()),
+			accesscore.WithRoleRepository(userMemStore.RoleRepository()),
+			accesscore.WithSessionStore(sessionMemStore),
+			accesscore.WithRefreshStore(refreshMemStore),
+		)
 	}
 	// Bootstrap credential auth + per-IP token bucket rate limiter protects
 	// the setup/admin endpoint (ADR §D2 operator credential via env).
@@ -130,7 +157,7 @@ func (m AccessCoreModule) Provide(
 	return c, nil, []kernellifecycle.ManagedResource{bootstrapLimiterResource{lim: rlLimiter}}, nil
 }
 
-func accessPostgresOptions(shared *SharedDeps) ([]accesscore.Option, error) {
+func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) ([]accesscore.Option, error) {
 	if shared.SharedPGPool == nil {
 		return nil, fmt.Errorf("AccessCoreModule: postgres mode requires SharedPGPool " +
 			"(ConfigCoreModule must run before AccessCoreModule)")
@@ -149,15 +176,6 @@ func accessPostgresOptions(shared *SharedDeps) ([]accesscore.Option, error) {
 	if err != nil {
 		return nil, fmt.Errorf("AccessCoreModule: PGDeps: %w", err)
 	}
-	// Cell-private PG repos override the in-memory defaults installed by
-	// WithInMemoryDefaults above (S3+S5: users/roles persisted in PG).
-	//
-	// HAZARD: session repository stays mem in S3+S5 even when PG storage backend
-	// is selected. accesscore's PG-mode TxRunner writes user/role/outbox to PG
-	// but session/refresh to mem — sessionlogin.persistSessionWithRefresh runs
-	// mem writes inside a real PG tx. PG rollback does NOT unwind mem
-	// session/refresh state. S4 wires the runtime session.Store + PG refresh
-	// store and removes this hazard. Backlog: S4-PG-SESSION-REFRESH-WIRING-COMPLETE-01.
 	pgUserRepo, err := accesspg.NewUserRepository(deps)
 	if err != nil {
 		return nil, fmt.Errorf("AccessCoreModule: PGUserRepository: %w", err)
@@ -170,10 +188,23 @@ func accessPostgresOptions(shared *SharedDeps) ([]accesscore.Option, error) {
 	if err != nil {
 		return nil, fmt.Errorf("AccessCoreModule: PGSetupLock: %w", err)
 	}
+	pgSessionStore, err := adapterpg.NewSessionStore(shared.SharedPGPool.DB(), txMgr, sessionProto, shared.Clock)
+	if err != nil {
+		return nil, fmt.Errorf("AccessCoreModule: PGSessionStore: %w", err)
+	}
+	pgRefreshStore, err := adapterpg.NewRefreshStore(
+		shared.SharedPGPool.DB(), txMgr,
+		accesscore.DefaultRefreshPolicy(), shared.Clock, rand.Reader,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
+	}
 	accessOpts = append(accessOpts,
 		accesscore.WithUserRepository(pgUserRepo),
 		accesscore.WithRoleRepository(pgRoleRepo),
 		accesscore.WithSetupLock(pgSetupLock),
+		accesscore.WithSessionStore(pgSessionStore),
+		accesscore.WithRefreshStore(pgRefreshStore),
 	)
 	// Wire the ConfigGetter for the configreceive slice to fetch entry values
 	// from configcore's internal GET /internal/v1/config/{key} endpoint after

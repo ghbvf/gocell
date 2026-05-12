@@ -166,6 +166,52 @@ session revoke ⇒ 该 session 下所有 refresh chain 同 tx 标记 revoked。
 
 `runtime/auth/refresh/` 已是 selector+verifier opaque-token 范式（与 session 的 jti-ref 概念一致）；session.Store 的 `RevokeForSubject(ctx, subjectID, event)` 与 refresh.Store 的 batch revoke 在 cell 层组合，runtime 不引入跨包 dependency。
 
+#### D4.1 Refresh 不轮换 session 行（session.ID stable across refresh）
+
+`sessionrefresh.Service.Refresh` **不创建 / 不撤销 / 不更新** session 行。
+session.ID 从 login 时刻设定后保持稳定，直到 logout / `RevokeForSubject` /
+`expires_at` 自然过期；access JWT 在每次 refresh 时携带同一个 `sid` claim，
+仅 `jti` 与 `exp` 随每次 mint 推进。
+
+本条对齐三层业界标准：
+
+- **OAuth2 RFC 6749 §1.5 / §6**：refresh token 代表 "the authorization granted"，
+  refresh 是同一份 grant 的持续延伸，**不产生新 authorization**。
+- **OIDC Back-Channel Logout 1.0**：`sid` claim 标识一个用户登录会话，
+  OP 用它通知 RP 撤销同一会话；隐含语义是 `sid` 跨 refresh 稳定，否则
+  logout 通知无法定位 RP session。
+- **业界实现**：
+  - ory/fosite `handler/oauth2/flow_refresh.go`：refresh 时 `request.SetID(originalRequest.GetID())` + `session.Clone()`，aggregate ID 不变
+  - zitadel/zitadel `internal/command/oidc_session.go`：refresh 在同一 OIDCSession aggregate 上 append `OIDCSessionRefreshTokenRenewedEvent`
+  - keycloak `TokenManager.java::refreshAccessToken`：`findOfflineUserSession(realm, oldToken.getSessionState())` 复用 sid
+
+**反模式（不允许）**：每次 refresh 都 Revoke 旧 session ID + Create 新 UUID。
+该模式与 refresh chain 一致性域冲突（child refresh row 仍继承旧 session_id，
+二次 refresh 失败），且使 OIDC `sid` 不再 stable。曾在 commit fd954cb8 引入，
+在 PR #482 review 撤回。`SESSIONREFRESH-NO-SESSION-CREATE-01` archtest 静态拦截
+任何重新引入该模式的尝试（`cells/accesscore/slices/sessionrefresh/` 包内禁止
+调用 `session.Store.Create / Revoke / RevokeForSubject`）。
+
+**AuthzEpoch / role snapshot 推进路径**：refresh 时通过 `users.authz_epoch` +
+`sessions.authz_epoch_at_issue` 比对实现 fail-closed（D2，由 S4b 闭环），不通过
+session UUID 轮换。访问令牌 claims 在 refresh 时按 user state 重新签发（password
+reset flag / role membership），但不写回 session 行。
+
+#### D4.2 Session 行 retention
+
+session 行只在以下路径状态变化：
+
+| 路径 | 操作 |
+|---|---|
+| login | INSERT 新行，`revoked_at = NULL` |
+| logout / `RevokeForSubject` | UPDATE `revoked_at = NOW()` |
+| `expires_at` 自然过期 | 行保留，应用层基于 `expires_at` 判失效 |
+
+session 行不进行 in-place rotation。冷数据清理由运维侧 cron 处理（与
+`audit_entries` 同模式），不在 cells/accesscore 内引入 session_gc worker
+——避免 refresh_gc 的 lifecycle 复杂度被复制；refresh_gc 之所以存在是因为
+refresh_tokens 的 sliding window 模型必须实时 GC，session 行没有同等压力。
+
 ### D5 事务边界 = credential event 与 session revoke 同 tx + outbox
 
 任何 credential event 触发的 session revoke **必须**与 credential 状态变更同 tx：
