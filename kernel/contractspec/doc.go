@@ -27,10 +27,12 @@
 //     construction path for ContractSpec values in runtime/ HTTP infra code.
 //  3. kernel/contractspec.NewEventDerivation — tracing/observability projections
 //     of already-validated event metadata; returns (ContractSpec, error) with
-//     Validate() embedded inside the funnel. Closed to a single caller
-//     (runtime/eventrouter/contract_tracing_subscriber.go) by archtest
-//     NO-MANUAL-CONTRACTSPEC-LITERAL-01; no other production file may invoke
-//     this funnel.
+//     Validate() embedded inside the funnel (content invariant: Hard). Closed
+//     to a single caller (runtime/eventrouter/contract_tracing_subscriber.go)
+//     via path-string allowlist in archtest NO-MANUAL-CONTRACTSPEC-LITERAL-01
+//     plus a drift-guard test verifying the allowlisted file still exists
+//     (caller invariant: Medium per ai-collab.md taxonomy). No other production
+//     file may invoke this funnel.
 //
 // Three archtest gates enforce this invariant:
 //

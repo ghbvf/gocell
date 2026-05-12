@@ -158,7 +158,7 @@ func TestNewFrameworkHTTP_BadPrefixPanics(t *testing.T) {
 
 // TestNewEventDerivation covers the funnel's success path: a valid event /
 // projection spec should be returned with no error and match the expected
-// shape. The bad-input path is covered by TestNewEventDerivation_InvalidPanics.
+// shape. The bad-input path is covered by TestNewEventDerivation_Invalid.
 func TestNewEventDerivation(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -222,7 +222,7 @@ func TestNewEventDerivation(t *testing.T) {
 	}
 }
 
-// TestNewEventDerivation_InvalidPanics verifies the funnel rejects malformed
+// TestNewEventDerivation_Invalid verifies the funnel rejects malformed
 // inputs by returning a wrapped error (NOT panic — content invariant lives
 // in spec.Validate(), not in a panic guard). Each case targets a distinct
 // validation path.
@@ -276,11 +276,9 @@ func TestNewEventDerivation_Invalid(t *testing.T) {
 				t.Errorf("error message = %q, want funnel context %q", err.Error(), "NewEventDerivation")
 			}
 			// Returned spec must be zero on error (fail-closed contract).
-			// ContractSpec contains a slice so == is not available; check ID
-			// emptiness as the canonical zero-value witness.
-			if got.ID != "" || got.Kind != "" || got.Transport != "" || got.Topic != "" {
-				t.Errorf("spec on error = %+v, want zero value", got)
-			}
+			// assertSpecEqual checks every field including Method/Path/Clients,
+			// guarding against future leaks on the error path.
+			assertSpecEqual(t, got, contractspec.ContractSpec{})
 			// errors.Is contract: underlying validator error is wrapped via %w.
 			if errors.Unwrap(err) == nil {
 				t.Errorf("error is not wrapping a cause; expected %%w chain")

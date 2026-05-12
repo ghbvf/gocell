@@ -30,10 +30,20 @@
 //   - kernel/contractspec/** itself    — defines ContractSpec and the typed funnels
 //   - *_test.go                        — test helpers may reference specs for assertions
 //
-// AI-rebust: Hard — composite literal under cells/ + examples/ + runtime/
-// is unrepresentable (archtest fails CI); the typed funnels are the only
-// form that survives, and NewEventDerivation is further locked to a single
-// caller. Aligns with the "typed function call as Hard funnel for unbounded
+// AI-rebust:
+//   - Composite-literal ban: Hard — `contractspec.ContractSpec{…}` under
+//     cells/ + examples/ + runtime/ is unrepresentable (archtest fails CI),
+//     the typed funnels are the only surviving form.
+//   - NewEventDerivation content invariant: Hard — Validate() is embedded
+//     inside the funnel, so a malformed spec cannot be returned.
+//   - NewEventDerivation caller allowlist: Medium — enforced by path-string
+//     match against eventDerivationAllowedCaller. The drift guard
+//     TestEventDerivationAllowedCallerFileExists upgrades safety by failing
+//     CI if the constant goes stale, but the gate remains string-anchored
+//     per ai-collab.md taxonomy. Upgrade path to Hard would be a typed
+//     authority token only the eventrouter package can mint.
+//
+// Aligns with the "typed function call as Hard funnel for unbounded
 // operations" charter pattern (PANIC-REGISTERED-01 same path).
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#PR4 W3 + G-04
@@ -272,6 +282,11 @@ func init() {
 //     single-file allowlist (eventDerivationAllowedCaller)
 //
 // where "contractspec" is the local alias for kernel/contractspec.
+//
+// rel MUST be slash-separated (apply filepath.ToSlash at the caller). The
+// NewEventDerivation allowlist compares rel against eventDerivationAllowedCaller
+// by exact string match; an OS-native path on Windows would silently miss the
+// allowlist and report false violations.
 func scanForContractSpecLiterals(fset *token.FileSet, path, rel string) []string {
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
