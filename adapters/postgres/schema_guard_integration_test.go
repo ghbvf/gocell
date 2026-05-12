@@ -680,11 +680,40 @@ func TestVerifyExpectedShape_DetectsMissingTrigger(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
-	_, execErr := pool.DB().Exec(ctx, `DROP TRIGGER last_admin_protected ON role_assignments`)
+	_, execErr := pool.DB().Exec(ctx, `DROP TRIGGER effective_admin_invariant_on_role_assignments ON role_assignments`)
 	require.NoError(t, execErr, "DROP TRIGGER must succeed")
 
 	err = VerifyExpectedShape(ctx, pool)
 	require.Error(t, err, "VerifyExpectedShape must detect missing trigger")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "trigger", extractDimensionDetail(ec),
+		"details must contain dimension=trigger; got %v", ec.Details)
+}
+
+// TestVerifyExpectedShape_DetectsMissingUsersTrigger verifies that dropping
+// the users-table effective-admin trigger causes VerifyExpectedShape to return
+// ErrAdapterPGSchemaShape with dimension="trigger". migration 024 installs a
+// shared function on two tables; both trigger registrations must be guarded
+// independently or a partial drop would silently disable the users-side
+// invariant safety net.
+func TestVerifyExpectedShape_DetectsMissingUsersTrigger(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_users_trig")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `DROP TRIGGER effective_admin_invariant_on_users ON users`)
+	require.NoError(t, execErr, "DROP TRIGGER must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect missing users trigger")
 
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
@@ -706,7 +735,7 @@ func TestVerifyExpectedShape_DetectsDisabledTrigger(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
-	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE role_assignments DISABLE TRIGGER last_admin_protected`)
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE role_assignments DISABLE TRIGGER effective_admin_invariant_on_role_assignments`)
 	require.NoError(t, execErr, "DISABLE TRIGGER must succeed")
 
 	err = VerifyExpectedShape(ctx, pool)
@@ -841,7 +870,7 @@ func TestVerifyExpectedShape_DetectsMissingFunction(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
-	_, execErr := pool.DB().Exec(ctx, `DROP FUNCTION last_admin_protected_fn CASCADE`)
+	_, execErr := pool.DB().Exec(ctx, `DROP FUNCTION effective_admin_invariant_fn CASCADE`)
 	require.NoError(t, execErr, "DROP FUNCTION CASCADE must succeed")
 
 	err = VerifyExpectedShape(ctx, pool)
