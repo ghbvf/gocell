@@ -4,8 +4,6 @@
 > 父表：[`docs/backlog.md`](../backlog.md)（schema / cap 主轴）
 > 归档：[`docs/backlog/archive/`](archive/)
 
-拆出日期：2026-05-12（36 条目，按主题分 5 个 h2 子节）
-
 ---
 
 ## x.1 adapter / 外部系统

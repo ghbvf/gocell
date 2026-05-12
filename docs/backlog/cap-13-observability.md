@@ -4,8 +4,6 @@
 > 父表：[`docs/backlog.md`](../backlog.md)（schema / cap 主轴）
 > 归档：[`docs/backlog/archive/`](archive/)
 
-拆出日期：2026-05-12（32 条目，按主题分 5 个 h2 子节）
-
 ---
 
 ## 13.1 health / readyz / probe
@@ -28,10 +26,10 @@
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | PR392-FU-AUDIT-CHAIN-WIRING | **BOOTSTRAP-AUDIT-CHAIN-WIRING-01** — 现状: onAuthFail 用 slog 未接 audit chain；修复: 升级为 audit.AppendBootstrapAuthFail | arch-opt | P2/Cx2 | 🟠 | accesscore audit chain cross-cell wiring | `cmd/corebundle/access_module.go` | PR #392 ADR §D10 |
-| B2-C-01 | **Audit hashchain 重启未恢复尾节点** — 现状: NewHashChain 启动从空链开始，多实例或重启后尾哈希不连续；修复: cell 启动时从 repo `SELECT last hash` 注入；考虑 leader 单写或 advisory lock | arch-opt | P0/Cx4 | 🔴 | — | `cells/auditcore/internal/domain/hashchain.go:31` + `cells/auditcore/cell.go` | backlog2 §1 B2-C-01 |
-| B2-C-05 | **Auditappend actor 缺失降级不安全** — 现状: actor 缺失时静默降级；修复: fail-closed | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditappend/service.go:133` | backlog2 §4 B2-C-05 |
-| B2-C-09 | **Auditquery raw payload 直接回传** — 现状: handler 直接回传 raw payload 含敏感字段；修复: redact + slog level 区分 | bug | P1/Cx2 | 🟡 | 发布前安全收口 | `cells/auditcore/slices/auditquery/handler.go:35,42` | backlog2 §4 B2-C-09 |
-| B2-C-14 | **Hash-chain 跨重启连续性测试缺** — 现状: 缺重启场景验证；修复: 加 testcontainer 重启回归 | test | P2/Cx2 | 🟡 | — | `cells/auditcore/slices/auditappend/service_test.go:110` | backlog2 §4 B2-C-14 |
+| B2-C-01 | **Audit hashchain 重启未恢复尾节点** — ✅ closed by PR #450 (S7, 2026-05-11)：`runtime/audit/ledger.MustNewProtocol(WithRestartRecovery, RestartRecoveryStrictTailVerify, ...)` 在 cell 构造期 `store.Tail()` 读 DB 末端 hash + strict-verify chain integrity 后 inject；原 backlog 提议「leader 单写 or advisory lock」未采纳，方案改为 strict-tail-verify-on-construction（更轻量）；测试 `TestAuditLedgerStore_RestartRecovery_AcrossPool`；`cells/auditcore/internal/domain/hashchain.go` 整文件删除无 compat shim | arch-opt | P0/Cx4 | ✅ PR #450 | — | `runtime/audit/ledger/protocol.go` + `cells/auditcore/cell.go` | backlog2 §1 B2-C-01 → PR #450 (S7) |
+| B2-C-05 | **Auditappend actor 缺失降级不安全** — ✅ closed by PR #450 (S7, 2026-05-11)：actor 缺失时返回 `outbox.Reject(outbox.NewPermanentError(...))`，DLX 路由 fail-closed | bug | P1/Cx2 | ✅ PR #450 | — | `cells/auditcore/slices/auditappend/service.go` | backlog2 §4 B2-C-05 → PR #450 |
+| B2-C-09 | **Auditquery raw payload 直接回传** — ✅ closed by PR #450 (S7, 2026-05-11)：`cells/auditcore/slices/auditquery/handler.go` 出口走 `pkg/redaction.RedactPayload`，递归剔除敏感 key（与 `RedactError` 同源 list），不可解析 JSON 整段返回 `"<REDACTED>"` 合法 JSON 字符串（fail-closed，对标 Vault audit formatter）；store 落盘 `audit_entries.payload` 保留原始 | bug | P1/Cx2 | ✅ PR #450 | — | `cells/auditcore/slices/auditquery/handler.go` + `pkg/redaction/redaction.go` | backlog2 §4 B2-C-09 → PR #450 |
+| B2-C-14 | **Hash-chain 跨重启连续性测试缺** — ✅ closed by PR #450 (S7, 2026-05-11)：`TestAuditLedgerStore_RestartRecovery_AcrossPool` 跨 pool 重启 + cross-pool restart recovery via Tail() reads DB tail on construction；F26 加 cross-pool limitation comment | test | P2/Cx2 | ✅ PR #450 | — | `adapters/postgres/audit_ledger_store_test.go` | backlog2 §4 B2-C-14 → PR #450 |
 
 ## 13.3 metrics / collector
 

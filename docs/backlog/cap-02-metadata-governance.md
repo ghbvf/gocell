@@ -4,8 +4,6 @@
 > 父表：[`docs/backlog.md`](../backlog.md)（schema / cap 主轴）
 > 归档：[`docs/backlog/archive/`](archive/)
 
-拆出日期：2026-05-12（25 条目，按主题分 4 个 h2 子节）
-
 ---
 
 ## 02.1 kernel spec / contractspec / depgraph
@@ -25,7 +23,7 @@
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
 | PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01 | **ValidationResult emitter sealed marker Hard 升级** — 现状: PR-TS1 把 BFS emitter 从 name-based 升级到 signature-based 三谓词（return ValidationResult + arg0 string + receiver/result 同包），AI-rebust 达 Medium-偏-Hard；reviewer P2 finding（2026-05-11）：owner 约束 = "同包"，比原 `*locator` 单一允许集略宽，理论上同包新加非 `*locator` 的 `(string, ...) ValidationResult` 方法会被自动纳入。修复: 在 `kernel/governance` 加 unexported sealed marker interface（如 `validationResultEmitter interface { isValidationResultEmitter() }`），`*locator` 实现该 marker；BFS predicate 改 `types.Implements(recvNamed, emitterIface)`，达真 Hard（违反不可表达——非 emitter 类型编译期就不实现 marker） | arch-opt | P3/Cx2 | 🟠 | (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要"sealed marker" 范本时顺带建立 | `kernel/governance/locator.go` + `kernel/governance/rule_inventory_test.go` | PR-TS1 review P2-2（2026-05-11）|
-| TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01 | **TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01** — 现状: PR #472 引入 `typeseval.BuildContextPredicate` 作为 build-tag eval predicate 的单一来源，隐式 defaults map 不可见；所有 consumer 已通过 constructor 构造 predicate，绕过需要手工复制完整 defaults map（明显异常）→ near-Hard AI-rebust；修复: 新增 `tools/archtest/eval_predicate_centralization_test.go`，AST walk `tools/archtest/` 包下所有 `constraint.Expr.Eval(...)` callsite，断言 predicate argument 属于以下允许形式之一：(a) `typeseval.BuildContextPredicate(...)` 调用；(b) 全 false sentinel `func(_ string) bool { return false }`；其他形式 fail-closed。**AI-rebust 升级**：从 near-Hard → Hard（机制不可绕过：未来手写含过期 tag map 的 predicate 在 archtest 时即报错，不需要 semantic review 才能发现）。**触发条件**：PR #472 merge 后开 follow-up，不是同 PR。**估算**: 3-5h dev / 1h review。 | arch-opt | P2/Cx2 | 🟡 | PR #472 merge 后排期 | `tools/archtest/eval_predicate_centralization_test.go` (新) + `tools/archtest/internal/typeseval/buildtag_predicate.go` | PR #472 review P1+P2 findings |
+| TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01 | **TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01** — ✅ closed by PR #475 (Phase 3.5 PR-EP1, 2026-05-12, Hard funnel)：`eval_predicate_centralization_test.go` AST walk `tools/archtest/` 所有 `constraint.Expr.Eval(...)` callsite，断言 predicate 属两种 canonical shape 之一（`typeseval.BuildContextPredicate(...)` / 全 false sentinel）；其他形式 fail-closed。**AI-rebust Hard**：手写含 hard-coded toolchain default tags 的 predicate 在 archtest 即报错。Form-uniqueness pattern 对齐 PANIC-REGISTERED-01 inline-literal Hard surface | arch-opt | P2/Cx2 | ✅ PR #475 | — | `tools/archtest/eval_predicate_centralization_test.go` + `tools/archtest/internal/typeseval/buildtag_predicate.go` | PR #472 review P1+P2 → PR #475 |
 
 ## 02.3 governance rule (G-series + PR-FU)
 
