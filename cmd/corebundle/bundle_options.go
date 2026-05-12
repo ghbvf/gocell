@@ -56,8 +56,7 @@ func runtimeBaseOptions(
 	}
 	if shared.RedisClient != nil {
 		opts = append(opts,
-			bootstrap.WithHealthChecker("redis_ready", shared.RedisClient.Health),
-			bootstrap.WithManagedCloser(shared.RedisClient),
+			bootstrap.WithManagedResource(shared.RedisClient),
 		)
 	}
 	return opts

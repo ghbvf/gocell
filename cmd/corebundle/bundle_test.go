@@ -143,7 +143,9 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared.RedisClient = new(adapterredis.Client)
 	withRedis := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 
-	assert.Len(t, withRedis, len(base)+2)
+	// PR-8 OIDC-MR-COMPLETENESS Group C: WithHealthChecker+WithManagedCloser collapsed
+	// into a single WithManagedResource, so redis adds exactly 1 option (not 2).
+	assert.Len(t, withRedis, len(base)+1)
 }
 
 // ---------------------------------------------------------------------------
