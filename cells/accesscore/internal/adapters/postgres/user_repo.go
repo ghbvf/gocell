@@ -229,14 +229,17 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 }
 
 // Delete removes a user row. Returns ErrAuthUserNotFound when no row matched.
-// Returns ErrAuthLastAdminProtected (403) when the DB trigger rejects the
-// delete because the user is the sole admin holder.
+// Returns ErrAuthLastAdminProtected (403) when the migration-024 trigger on
+// `users` rejects the delete because the row is the sole effective admin —
+// same errcode + message as PGUserRepo.Update / domain.LastAdminGuard so
+// client handlers match a single business invariant regardless of which
+// layer caught the violation.
 func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 	tag, err := r.db.Exec(ctx, deleteUserSQL, id)
 	if err != nil {
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
-				"delete blocked: last admin",
+				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
 				errcode.WithInternal(fmt.Sprintf("user_id=%s", id)))
 		}

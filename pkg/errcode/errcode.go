@@ -105,11 +105,11 @@ const (
 	ErrAuthInvalidTokenIntent Code = "ERR_AUTH_INVALID_TOKEN_INTENT"
 
 	// Access-core cell error codes.
-	ErrAuthUserNotFound         Code = "ERR_AUTH_USER_NOT_FOUND"
-	ErrAuthUserDuplicate        Code = "ERR_AUTH_USER_DUPLICATE"
-	ErrAuthRoleNotFound         Code = "ERR_AUTH_ROLE_NOT_FOUND"
-	ErrAuthRoleDuplicate        Code = "ERR_AUTH_ROLE_DUPLICATE"
-	ErrAuthInvalidInput         Code = "ERR_AUTH_INVALID_INPUT"
+	ErrAuthUserNotFound  Code = "ERR_AUTH_USER_NOT_FOUND"
+	ErrAuthUserDuplicate Code = "ERR_AUTH_USER_DUPLICATE"
+	ErrAuthRoleNotFound  Code = "ERR_AUTH_ROLE_NOT_FOUND"
+	ErrAuthRoleDuplicate Code = "ERR_AUTH_ROLE_DUPLICATE"
+	ErrAuthInvalidInput  Code = "ERR_AUTH_INVALID_INPUT"
 	// ErrAuthUserNotActive signals the user's status is not 'active' (i.e.,
 	// locked or suspended). Authentication surfaces (login / refresh /
 	// validate) reject any non-active user fail-closed: a suspended user

@@ -287,8 +287,8 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		var (
-			changed     bool
-			revokeErr   error
+			changed   bool
+			revokeErr error
 		)
 		txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
 			changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, user.ID, auth.RoleAdmin)
@@ -590,6 +590,161 @@ func TestLastAdminTrigger_RawDelete(t *testing.T) {
 	require.True(t, errors.As(rawErr, &pgErr), "error must be *pgconn.PgError")
 	assert.Equal(t, "P0001", pgErr.Code, "SQLSTATE must be P0001 (PL/pgSQL RAISE EXCEPTION)")
 	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
+}
+
+// TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG verifies that the
+// migration-024 `effective_admin_invariant_on_users` BEFORE UPDATE trigger
+// fires on a raw `UPDATE users SET status='locked'` that would demote the
+// sole effective admin. The application-layer guard
+// (domain.LastAdminGuard.CheckRemove via identitymanage.Lock/Update) catches
+// this before the SQL fires; this test drives the trigger directly via
+// ExecDirect so the DB safety net is independently covered. PR #476
+// round-2 deferred #1 (PR476-FU-PG-USERS-TRIGGER-ISOLATED-TEST closed in
+// PR.).
+func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
+	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	soloAdmin := createTestUserInDB(t, userRepo, "users_trigger_update_"+uuid.NewString()[:6])
+	_, err := roleRepo.AssignToUser(ctx, soloAdmin.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	// Sanity: sole effective admin pre-condition met.
+	count, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "test setup: exactly one admin assignment required")
+
+	_, rawErr := roleRepo.db.ExecDirect(ctx,
+		"UPDATE users SET status = 'locked' WHERE id = $1", soloAdmin.ID)
+	require.Error(t, rawErr, "DB trigger must reject status demotion of sole effective admin")
+
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(rawErr, &pgErr), "error must be *pgconn.PgError")
+	assert.Equal(t, "P0001", pgErr.Code, "SQLSTATE must be P0001 (PL/pgSQL RAISE EXCEPTION)")
+	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
+
+	// Confirm the status was NOT actually updated (trigger fired BEFORE UPDATE).
+	got, err := userRepo.GetByID(ctx, soloAdmin.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusActive, got.Status, "trigger must reject UPDATE before row is changed")
+}
+
+// TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG
+// pairs the rejection test above: when a second active admin exists, the
+// trigger's user_was_active_admin branch finds a peer and lets the UPDATE
+// proceed. Covers the "allow" path through the trigger.
+func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t *testing.T) {
+	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	target := createTestUserInDB(t, userRepo, "users_trigger_target_"+uuid.NewString()[:6])
+	peer := createTestUserInDB(t, userRepo, "users_trigger_peer_"+uuid.NewString()[:6])
+	_, err := roleRepo.AssignToUser(ctx, target.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+	_, err = roleRepo.AssignToUser(ctx, peer.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	_, rawErr := roleRepo.db.ExecDirect(ctx,
+		"UPDATE users SET status = 'locked' WHERE id = $1", target.ID)
+	require.NoError(t, rawErr, "DB trigger must allow status demotion when a peer effective admin remains")
+
+	got, err := userRepo.GetByID(ctx, target.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusLocked, got.Status, "status must have been updated")
+}
+
+// TestCountEffectiveAdmins_LockedAdminExcluded_PG verifies the PG
+// CountEffectiveAdmins SQL filter `JOIN users u ON u.id=ra.user_id WHERE
+// u.status='active'` correctly excludes locked / suspended admin role
+// holders. mem layer already covers this; this PG-layer test confirms the
+// JOIN + status filter end-to-end against a real PG instance. PR #476
+// round-2 deferred #2 (PR476-FU-PG-COUNT-EFFECTIVE-LOCKED-PEER-TEST closed
+// in PR).
+func TestCountEffectiveAdmins_LockedAdminExcluded_PG(t *testing.T) {
+	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	activeAdmin := createTestUserInDB(t, userRepo, "count_active_"+uuid.NewString()[:6])
+	lockedAdmin := createTestUserInDB(t, userRepo, "count_locked_"+uuid.NewString()[:6])
+	_, err := roleRepo.AssignToUser(ctx, activeAdmin.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+	_, err = roleRepo.AssignToUser(ctx, lockedAdmin.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	// Demote the second admin to locked via a peer-allowed update.
+	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		_, err := roleRepo.db.ExecDirect(txCtx, "UPDATE users SET status = 'locked' WHERE id = $1", lockedAdmin.ID)
+		return err
+	}))
+
+	// CountByRole counts both (status-agnostic) — invariant under S4.0.
+	rawCount, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 2, rawCount, "CountByRole must count all admin role holders regardless of status")
+
+	// CountEffectiveAdmins requires tx + lock; only the active admin must count.
+	var effective int
+	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		n, err := roleRepo.CountEffectiveAdmins(txCtx)
+		if err != nil {
+			return err
+		}
+		effective = n
+		return nil
+	}))
+	assert.Equal(t, 1, effective,
+		"CountEffectiveAdmins must EXCLUDE locked admin (status='active' filter)")
+}
+
+// TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG verifies the PG
+// removeIfNotLastSQL CTE's `others` subquery filter `WHERE u.status='active'`:
+// when the only peer admin is locked, removing the sole active admin must
+// fail with ErrAuthLastAdminProtected (the locked peer cannot save the
+// invariant). mirrors mem-layer
+// TestRoleRepository_RemoveFromUserIfNotLast_LockedPeerRejected. PR #476
+// round-2 deferred #2 (closed in PR).
+func TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG(t *testing.T) {
+	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	activeAdmin := createTestUserInDB(t, userRepo, "peerlocked_active_"+uuid.NewString()[:6])
+	lockedPeer := createTestUserInDB(t, userRepo, "peerlocked_locked_"+uuid.NewString()[:6])
+	_, err := roleRepo.AssignToUser(ctx, activeAdmin.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+	_, err = roleRepo.AssignToUser(ctx, lockedPeer.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	// Demote the peer to locked via a peer-allowed update.
+	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		_, err := roleRepo.db.ExecDirect(txCtx, "UPDATE users SET status = 'locked' WHERE id = $1", lockedPeer.ID)
+		return err
+	}))
+
+	// Attempt to revoke the active admin: locked peer must not count, so
+	// the CTE returns "no other effective admin" and refuses.
+	var (
+		changed   bool
+		revokeErr error
+	)
+	txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, activeAdmin.ID, auth.RoleAdmin)
+		return revokeErr
+	})
+	require.Error(t, txErr, "revoke must fail when only peer is locked")
+	require.Error(t, revokeErr)
+	assert.False(t, changed)
+	var ec *errcode.Error
+	require.True(t, errors.As(revokeErr, &ec))
+	assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code,
+		"locked peer must not save the invariant; revoke must surface ErrAuthLastAdminProtected")
 }
 
 func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {

@@ -106,10 +106,11 @@ BEGIN
 
     -- If the user was not an effective admin, the mutation cannot reduce the
     -- effective-admin count below the invariant. Allow without lock.
-    -- BEFORE-trigger return convention: NULL cancels, OLD/NEW allows.
-    -- DELETE has NEW IS NULL; UPDATE has both populated; using explicit
-    -- TG_OP branches makes the "allow" intent obvious without relying on
-    -- the COALESCE-of-NULL-NEW idiom.
+    -- BEFORE-trigger return convention: returning NULL cancels the mutation,
+    -- returning OLD or NEW allows it. On a DELETE row trigger the NEW pseudo-
+    -- record is undefined; on an UPDATE trigger both OLD and NEW are present.
+    -- Using explicit TG_OP branches below makes the "allow" intent obvious
+    -- without relying on the COALESCE idiom over an undefined NEW.
     IF NOT user_was_active_admin THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
