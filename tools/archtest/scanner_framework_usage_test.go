@@ -110,8 +110,14 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 
 	var diags []scanner.Diagnostic
 	for _, pkg := range resolver.Packages() {
+		if pkg == nil {
+			t.Fatalf("typeseval.SharedResolver returned nil package " +
+				"(SharedResolver invariant broken)")
+		}
 		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+			t.Fatalf("package %q loaded without TypesInfo/Fset "+
+				"(SharedResolver misconfigured — full type info is required "+
+				"for forbiddenWalkRefs/forbiddenAstListTypeAssertions)", pkg.PkgPath)
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
