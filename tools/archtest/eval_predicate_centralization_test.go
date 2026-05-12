@@ -99,8 +99,14 @@ func TestEvalPredicateCentralization01(t *testing.T) {
 
 	var violations []evalPredicateViolation
 	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+		if pkg == nil {
+			t.Fatalf("typeseval.SharedResolver returned nil package " +
+				"(SharedResolver invariant broken)")
+		}
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
+			t.Fatalf("package %q loaded without TypesInfo/Fset "+
+				"(SharedResolver misconfigured — full type info is required "+
+				"to resolve constraint.Expr.Eval callsites)", pkg.PkgPath)
 		}
 		for _, file := range pkg.Syntax {
 			rel := pkgFileRel(root, pkg, file)
