@@ -165,12 +165,16 @@ func NewService(
 				"identity-manage: last-admin protection requires a role repository")
 		}
 		// S4.0: the guard counts *effective* admins (status='active' AND admin
-		// role). RoleRepository.CountEffectiveAdmins is the canonical counter;
-		// the sealed EffectiveAdminCounter interface prevents accidentally
-		// wiring CountByRole (which counts locked/suspended holders too —
-		// correct for bootstrap idempotency, wrong for the at-least-one
-		// invariant).
-		guard, guardErr := domain.NewLastAdminGuard(s.lastAdminRoleRepo)
+		// role). RoleRepository.CountEffectiveAdmins is the canonical impl;
+		// WrapEffectiveAdminCounter produces the sealed
+		// domain.EffectiveAdminCounter wrapper that NewLastAdminGuard accepts.
+		// Sealed marker prevents structural mis-wiring with CountByRole or any
+		// other look-alike at compile time.
+		sealedCounter, wrapErr := domain.WrapEffectiveAdminCounter(s.lastAdminRoleRepo)
+		if wrapErr != nil {
+			return nil, fmt.Errorf("identity-manage: wrap effective-admin counter: %w", wrapErr)
+		}
+		guard, guardErr := domain.NewLastAdminGuard(sealedCounter)
 		if guardErr != nil {
 			return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
 		}
@@ -283,7 +287,17 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	if input.Status != nil &&
 		*input.Status != string(domain.StatusActive) &&
 		*input.Status != string(domain.StatusSuspended) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
+		// `locked` is intentionally not allowed via Update — it has its own
+		// dedicated Lock() endpoint with revoke-cascade semantics. The
+		// allowedValues detail keeps the wire payload self-describing without
+		// embedding the runtime value into the const-literal message
+		// (errcode MESSAGE-CONST-LITERAL-01 archtest).
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			"status value not allowed in Update; use Lock for the locked state",
+			errcode.WithDetails(
+				slog.String("field", "status"),
+				slog.String("allowedValues", string(domain.StatusActive)+","+string(domain.StatusSuspended)),
+			))
 	}
 
 	actor, err := actorFromContext(ctx)

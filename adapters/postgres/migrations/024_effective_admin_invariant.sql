@@ -73,8 +73,15 @@ BEGIN
 
     -- If the user was not an effective admin, the mutation cannot reduce the
     -- effective-admin count below the invariant. Allow without lock.
+    -- BEFORE-trigger return convention: NULL cancels, OLD/NEW allows.
+    -- DELETE has NEW IS NULL; UPDATE has both populated; using explicit
+    -- TG_OP branches makes the "allow" intent obvious without relying on
+    -- the COALESCE-of-NULL-NEW idiom.
     IF NOT user_was_active_admin THEN
-        RETURN COALESCE(NEW, OLD);
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
     END IF;
 
     -- Serialize all concurrent guard paths (this trigger on either table, the
@@ -94,7 +101,12 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    RETURN COALESCE(NEW, OLD);
+    -- Allow the mutation to proceed; explicit TG_OP branches preserve the
+    -- BEFORE-trigger return contract without the COALESCE-of-NULL-NEW idiom.
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 -- +goose StatementEnd
@@ -127,9 +139,17 @@ DROP TRIGGER IF EXISTS effective_admin_invariant_on_role_assignments ON role_ass
 DROP FUNCTION IF EXISTS effective_admin_invariant_fn();
 
 -- Restore the migration-019 trigger / function so schema_guard's pre-024
--- expected shape is reachable after Down.
+-- expected shape is reachable after Down. The DROP IF EXISTS pair below
+-- makes this Down idempotent: the recreated function/trigger override any
+-- pre-existing remnants without depending on migration-019's run state
+-- (e.g., partial restore, replay after a manual restore, or an out-of-band
+-- patch to the 019 function). CREATE TRIGGER itself has no IF NOT EXISTS
+-- form in PG, so we DROP IF EXISTS first.
+DROP TRIGGER IF EXISTS last_admin_protected ON role_assignments;
+DROP FUNCTION IF EXISTS last_admin_protected_fn();
+
 -- +goose StatementBegin
-CREATE OR REPLACE FUNCTION last_admin_protected_fn() RETURNS trigger AS $$
+CREATE FUNCTION last_admin_protected_fn() RETURNS trigger AS $$
 DECLARE
     remaining_admins BIGINT;
 BEGIN

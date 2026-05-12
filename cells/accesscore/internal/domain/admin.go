@@ -7,17 +7,70 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// EffectiveAdminCounter is the sealed dependency required by LastAdminGuard.
-// Effective admin = user.status='active' AND user holds the admin role
-// (ADR-admin-invariant §3.2, S4.0). A user that holds the admin role but is
-// locked/suspended is NOT counted (they cannot log in to administer).
+// EffectiveAdminCounterImpl is the structural capability provided by the
+// concrete RoleRepositories (PG, mem). PG/mem repos satisfy this interface
+// directly via their CountEffectiveAdmins method. It is intentionally NOT
+// the type accepted by NewLastAdminGuard — the sealed wrapper
+// EffectiveAdminCounter is. Wiring callers (identitymanage.NewService,
+// tests) pass an impl into WrapEffectiveAdminCounter to obtain the sealed
+// wrapper.
 //
-// RoleRepository satisfies this interface via CountEffectiveAdmins. The narrow
-// single-method shape prevents mis-wiring with the generic CountByRole, whose
-// semantics include inactive holders (used by adminprovision bootstrap
-// idempotency, not by the at-least-one invariant).
-type EffectiveAdminCounter interface {
+// Effective admin = user.status='active' AND user holds the admin role
+// (ADR-admin-invariant §3.2, S4.0). A user that holds the admin role but
+// is locked/suspended is NOT counted (they cannot log in to administer).
+//
+// The narrow single-method shape prevents mis-wiring with the generic
+// CountByRole, whose semantics include inactive holders (used by
+// adminprovision bootstrap idempotency, not by the at-least-one
+// invariant).
+type EffectiveAdminCounterImpl interface {
 	CountEffectiveAdmins(ctx context.Context) (int, error)
+}
+
+// EffectiveAdminCounter is the sealed dependency required by
+// LastAdminGuard. The unexported sealedEffectiveAdminCounter() marker
+// method makes it unimplementable outside the domain package — the only
+// path to a value is WrapEffectiveAdminCounter.
+//
+// AI-rebust 评级 Hard (sealed interface, compile-time blocking): external
+// code cannot declare a type satisfying this interface (cannot implement
+// the unexported marker method); any attempt produces a compile error.
+// The single construction path is WrapEffectiveAdminCounter, which
+// validates the underlying impl is non-nil and rejects typed-nil. Same
+// pattern as kernel/persistence.CellTxManager (ADR
+// 202605101900-adr-cell-raw-infra-sealed-marker §D2).
+type EffectiveAdminCounter interface {
+	EffectiveAdminCounterImpl
+	// MARKER: do not implement; this is the sealing marker — call
+	// domain.WrapEffectiveAdminCounter(impl) to obtain a value of this
+	// interface.
+	sealedEffectiveAdminCounter()
+}
+
+// internalEffectiveAdminCounter is the only implementation of the sealed
+// EffectiveAdminCounter. It composes the raw impl provided by the wiring
+// caller and is constructed exclusively by WrapEffectiveAdminCounter.
+type internalEffectiveAdminCounter struct {
+	impl EffectiveAdminCounterImpl
+}
+
+func (i internalEffectiveAdminCounter) CountEffectiveAdmins(ctx context.Context) (int, error) {
+	return i.impl.CountEffectiveAdmins(ctx)
+}
+
+func (internalEffectiveAdminCounter) sealedEffectiveAdminCounter() {}
+
+// WrapEffectiveAdminCounter is the sole authorized path to construct an
+// EffectiveAdminCounter. impl must be non-nil and not a typed-nil
+// interface; the wrapper would otherwise hide the typed-nil from
+// NewLastAdminGuard's IsNilInterface guard, silently bypassing the
+// fail-fast.
+func WrapEffectiveAdminCounter(impl EffectiveAdminCounterImpl) (EffectiveAdminCounter, error) {
+	if validation.IsNilInterface(impl) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"domain.WrapEffectiveAdminCounter: EffectiveAdminCounterImpl must not be nil")
+	}
+	return internalEffectiveAdminCounter{impl: impl}, nil
 }
 
 // LastAdminGuard rejects operations that would leave the system with zero
@@ -37,13 +90,15 @@ type EffectiveAdminCounter interface {
 //     zero effective admins. The DB layer is the SQL-level safety net for
 //     direct-SQL bypass, not the precision check.
 //
-// counter is required (NewLastAdminGuard fail-fasts on nil).
+// counter is the sealed EffectiveAdminCounter; NewLastAdminGuard
+// fail-fasts on bare-nil or typed-nil sealed values.
 type LastAdminGuard struct {
 	counter EffectiveAdminCounter
 }
 
-// NewLastAdminGuard constructs a LastAdminGuard. counter must be non-nil; a
-// typed-nil or bare-nil EffectiveAdminCounter returns ErrValidationFailed so
+// NewLastAdminGuard constructs a LastAdminGuard. counter must be the
+// sealed EffectiveAdminCounter constructed via WrapEffectiveAdminCounter;
+// a bare-nil or typed-nil sealed value returns ErrValidationFailed so
 // misconfigured assemblies fail at startup.
 func NewLastAdminGuard(counter EffectiveAdminCounter) (*LastAdminGuard, error) {
 	if validation.IsNilInterface(counter) {

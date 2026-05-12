@@ -244,6 +244,18 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 
 // RemoveFromUser removes a role assignment. Idempotent — no error when the
 // assignment did not exist.
+//
+// SAFETY: callers needing the at-least-one-effective-admin invariant
+// (revoke admin role, demote sole admin) must use RemoveFromUserIfNotLast,
+// which combines the application-layer CTE check with the migration-024
+// trigger safety net. RemoveFromUser issues a plain DELETE and relies
+// SOLELY on the trigger to enforce the invariant — when the trigger
+// blocks the DELETE, isLastAdminProtected translates SQLSTATE P0001 into
+// ErrAuthLastAdminProtected (HTTP 403). The single legitimate caller
+// passing roleID == auth.RoleAdmin is adminprovision.Compensate, which
+// runs after a setup failure: if the just-provisioned admin is the only
+// effective admin, the trigger correctly blocks the cleanup and leaves
+// the operator with a usable account rather than an unusable system.
 func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	_, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
 	if err != nil {
@@ -266,6 +278,14 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 // any other roleID the operation is a plain idempotent DELETE (matches the
 // migration-024 trigger scope: `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
 //
+// CONTRACT (runtime-enforced for admin path): the admin-role branch must
+// be called within an open write transaction so the CTE's
+// pg_advisory_xact_lock scopes to the caller's tx, not a one-shot pool
+// connection. The function fail-fasts with ErrInternal when roleID equals
+// auth.RoleAdmin and no pgx.Tx is present under
+// kernel/persistence.TxCtxKey. The non-admin path stays pool-driven (no
+// lock involved); calling it outside a tx is fine.
+//
 // Returns:
 //   - (true, nil)  — role was held and successfully removed.
 //   - (false, nil) — role was not held (idempotent no-op).
@@ -285,8 +305,14 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 		return tag.RowsAffected() == 1, nil
 	}
 
+	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
+	if !ok || tx == nil {
+		return false, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"role_repo: remove-if-not-last (admin) must be called inside a transaction (no pgx.Tx in ctx)")
+	}
+
 	var userHeldRole, wasDeleted bool
-	row := r.db.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
+	row := tx.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
 	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
 		if isLastAdminProtected(err) {
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
@@ -336,17 +362,23 @@ func (r *PGRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error
 // so concurrent guard paths (this read, removeIfNotLastSQL CTE, and the
 // migration-024 trigger on users) serialize.
 //
-// CONTRACT: Must be called within an open write transaction. The advisory lock
-// is transaction-scoped (pg_advisory_xact_lock) and releases on commit/rollback;
-// outside-transaction callers acquire and immediately release the lock, defeating
-// the invariant guarantee. The current sole caller (domain.LastAdminGuard.CheckRemove
-// via identitymanage/rbacassign service entry points) always runs inside
-// txRunner.RunInTx — this contract is satisfied. If a lock-free read is ever
-// needed for diagnostics or observability, add a dedicated variant without the
-// advisory-lock CTE rather than relaxing this contract.
+// CONTRACT (runtime-enforced): Must be called within an open write
+// transaction. The advisory lock is transaction-scoped
+// (pg_advisory_xact_lock) and releases on commit/rollback; outside-transaction
+// callers would acquire and immediately release the lock, defeating the
+// invariant guarantee. The function fail-fasts with ErrInternal when no
+// pgx.Tx is present under kernel/persistence.TxCtxKey — same shape as
+// PGSetupLock.Acquire / OutboxWriter.Write. If a lock-free read is ever
+// needed for diagnostics or observability, add a dedicated variant without
+// the advisory-lock CTE rather than relaxing this contract.
 func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context) (int, error) {
+	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
+	if !ok || tx == nil {
+		return 0, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"role_repo: count-effective-admins must be called inside a transaction (no pgx.Tx in ctx)")
+	}
 	var count int
-	row := r.db.QueryRow(ctx, countEffectiveAdminsSQL)
+	row := tx.QueryRow(ctx, countEffectiveAdminsSQL)
 	if err := row.Scan(&count); err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: count-effective-admins", err)
 	}

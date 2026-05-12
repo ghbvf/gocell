@@ -9,22 +9,24 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// stubEffectiveAdminCounter is a test-only EffectiveAdminCounter that returns
-// a fixed (count, err) pair and records invocation.
-type stubEffectiveAdminCounter struct {
+// stubEffectiveAdminCounterImpl is a test-only EffectiveAdminCounterImpl
+// that returns a fixed (count, err) pair and records invocation. The
+// sealed EffectiveAdminCounter is obtained by wrapping this stub via
+// domain.WrapEffectiveAdminCounter (the only construction path).
+type stubEffectiveAdminCounterImpl struct {
 	count  int
 	err    error
 	called bool
 }
 
-func (s *stubEffectiveAdminCounter) CountEffectiveAdmins(_ context.Context) (int, error) {
+func (s *stubEffectiveAdminCounterImpl) CountEffectiveAdmins(_ context.Context) (int, error) {
 	s.called = true
 	return s.count, s.err
 }
 
 func TestNewLastAdminGuard_NilCounter_Rejected(t *testing.T) {
 	t.Parallel()
-	// Bare-nil interface value: pkg/validation.IsNilInterface rejects this and
+	// Bare-nil sealed wrapper: pkg/validation.IsNilInterface rejects this and
 	// NewLastAdminGuard returns ErrValidationFailed.
 	guard, err := domain.NewLastAdminGuard(nil)
 	if err == nil {
@@ -39,14 +41,29 @@ func TestNewLastAdminGuard_NilCounter_Rejected(t *testing.T) {
 	}
 }
 
-func TestNewLastAdminGuard_TypedNilCounter_Rejected(t *testing.T) {
+func TestWrapEffectiveAdminCounter_NilImpl_Rejected(t *testing.T) {
 	t.Parallel()
-	// Typed-nil also rejected via validation.IsNilInterface; matches the
-	// kernel/runtime single-source typed-nil convention.
-	var counter *stubEffectiveAdminCounter // typed-nil
-	guard, err := domain.NewLastAdminGuard(counter)
-	if err == nil || guard != nil {
-		t.Fatalf("expected typed-nil to fail; got guard=%v err=%v", guard, err)
+	// Bare-nil EffectiveAdminCounterImpl rejected at the wrap boundary so
+	// NewLastAdminGuard never sees a typed-nil sealed value.
+	sealed, err := domain.WrapEffectiveAdminCounter(nil)
+	if err == nil || sealed != nil {
+		t.Fatalf("expected bare-nil to fail; got sealed=%v err=%v", sealed, err)
+	}
+	var coded *errcode.Error
+	if !errors.As(err, &coded) || coded.Code != errcode.ErrValidationFailed {
+		t.Errorf("expected ErrValidationFailed, got %v", err)
+	}
+}
+
+func TestWrapEffectiveAdminCounter_TypedNilImpl_Rejected(t *testing.T) {
+	t.Parallel()
+	// Typed-nil also rejected via validation.IsNilInterface at the wrap
+	// boundary; matches the kernel/runtime single-source typed-nil convention
+	// and matches kernel/persistence.WrapForCell behavior.
+	var impl *stubEffectiveAdminCounterImpl // typed-nil
+	sealed, err := domain.WrapEffectiveAdminCounter(impl)
+	if err == nil || sealed != nil {
+		t.Fatalf("expected typed-nil impl to fail; got sealed=%v err=%v", sealed, err)
 	}
 	var coded *errcode.Error
 	if !errors.As(err, &coded) || coded.Code != errcode.ErrValidationFailed {
@@ -101,8 +118,12 @@ func TestLastAdminGuard_CheckRemove(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			stub := &stubEffectiveAdminCounter{count: tc.count, err: tc.countErr}
-			guard, err := domain.NewLastAdminGuard(stub)
+			stub := &stubEffectiveAdminCounterImpl{count: tc.count, err: tc.countErr}
+			sealed, wrapErr := domain.WrapEffectiveAdminCounter(stub)
+			if wrapErr != nil {
+				t.Fatalf("WrapEffectiveAdminCounter: %v", wrapErr)
+			}
+			guard, err := domain.NewLastAdminGuard(sealed)
 			if err != nil {
 				t.Fatalf("NewLastAdminGuard: %v", err)
 			}

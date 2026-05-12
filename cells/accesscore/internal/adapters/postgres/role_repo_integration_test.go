@@ -153,7 +153,7 @@ func TestPGRoleRepo_Constructor_FailFast(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPGRoleRepo_Integration(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -276,19 +276,32 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 
 	t.Run("RemoveFromUserIfNotLast_sole_admin_returns_ErrAuthLastAdminProtected", func(t *testing.T) {
 		// Last-holder protection is admin-scoped (ADR-admin-invariant §3.2 +
-		// migration 019:50 trigger). Use auth.RoleAdmin to exercise the
-		// CTE/trigger guard.
+		// migration-024 effective_admin_invariant_fn). Use auth.RoleAdmin to
+		// exercise the CTE/trigger guard. Admin-path RemoveFromUserIfNotLast
+		// requires an ambient tx so the CTE's pg_advisory_xact_lock scopes to
+		// the caller's tx, matching production rbacassign.Revoke wiring.
 		require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
 
 		user := createTestUserInDB(t, userRepo, "soleAdmin")
 		_, err := roleRepo.AssignToUser(ctx, user.ID, auth.RoleAdmin)
 		require.NoError(t, err)
 
-		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, user.ID, auth.RoleAdmin)
-		require.Error(t, err, "sole admin must not be removed")
+		var (
+			changed     bool
+			revokeErr   error
+		)
+		txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, user.ID, auth.RoleAdmin)
+			// Bubble revokeErr so the tx rolls back; otherwise txMgr commits
+			// despite the protection error and the assignment row would be
+			// left removed.
+			return revokeErr
+		})
+		require.Error(t, txErr, "sole admin must not be removed; tx must roll back")
+		require.Error(t, revokeErr)
 		assert.False(t, changed)
 		var ec *errcode.Error
-		require.True(t, errors.As(err, &ec))
+		require.True(t, errors.As(revokeErr, &ec))
 		assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code)
 		assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
 		assert.Contains(t, ec.Message, "no effective admin")
@@ -379,11 +392,13 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 
 // TestRemoveFromUserIfNotLast_ConcurrentRace verifies that the FOR UPDATE CTE
 // in removeIfNotLastSQL serializes two concurrent admin revocations correctly
-// when exactly two admins exist. Only one removal may succeed; the other must
-// return ErrAuthLastAdminProtected (last-admin error). Last-holder protection
-// is admin-scoped (ADR-admin-invariant §3.2 — non-admin roles bypass the CTE).
+// when exactly two admins exist. Both goroutines target u1 (same user); after
+// the race, u1's admin row is gone (idempotent — exactly one DELETE actually
+// fires, the other observes the row missing and reports changed=false).
+// Last-holder protection is admin-scoped (ADR-admin-invariant §3.2 —
+// non-admin roles bypass the CTE).
 func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
+	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -396,8 +411,10 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 	_, err = roleRepo.AssignToUser(ctx, u2.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
-	// Both goroutines attempt to remove u1 concurrently.
-	// The FOR UPDATE serialises them so exactly one succeeds.
+	// Both goroutines attempt to remove u1 concurrently. Each runs inside its
+	// own RunInTx so the CTE's pg_advisory_xact_lock scopes per-tx (matches
+	// production rbacassign.Revoke wiring, which always wraps the call in a
+	// tx). The FOR UPDATE serialises them so exactly one succeeds.
 	type result struct {
 		changed bool
 		err     error
@@ -409,8 +426,18 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, u1.ID, auth.RoleAdmin)
-			results[i] = result{changed: changed, err: err}
+			var changed bool
+			var revokeErr error
+			txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+				changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, u1.ID, auth.RoleAdmin)
+				return revokeErr // surface to tx so rollback on protection error
+			})
+			// txErr surfaces revokeErr; record the underlying revoke result.
+			if revokeErr != nil {
+				results[i] = result{changed: changed, err: revokeErr}
+				return
+			}
+			results[i] = result{changed: changed, err: txErr}
 		}()
 	}
 	wg.Wait()
@@ -441,6 +468,88 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 	// Together they must account for both goroutines.
 	assert.Equal(t, 2, successCount+forbiddenCount,
 		"both goroutine results must be clean success or last-holder refusal")
+}
+
+// TestRemoveFromUserIfNotLast_ConcurrentRevoke_DifferentAdmins_ExactlyOneSucceeds
+// stresses the application-layer CTE serialization that the per-user
+// TestRemoveFromUserIfNotLast_ConcurrentRace cannot exercise: two goroutines
+// concurrently revoke admin from DIFFERENT users (u1 and u2) when those two
+// are the only effective admins. The pg_advisory_xact_lock on
+// 'gocell.accesscore.last_admin' inside removeIfNotLastSQL must serialize the
+// two CTE evaluations so the second goroutine sees only one peer admin
+// remaining and refuses with ErrAuthLastAdminProtected. Without the advisory
+// lock + FOR UPDATE OF u, both could observe peerCount=2 simultaneously and
+// both succeed — leaving the system with zero admins.
+//
+// This is the real-DB counterpart to mem repo's
+// TestRoleRepository_RemoveFromUserIfNotLast_ConcurrentDifferentAdmins. Pair
+// with TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized which covers
+// the same race via the DB trigger safety net (raw DELETE FROM users path).
+func TestRemoveFromUserIfNotLast_ConcurrentRevoke_DifferentAdmins_ExactlyOneSucceeds(t *testing.T) {
+	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+
+	u1 := createTestUserInDB(t, userRepo, "diffrev1")
+	u2 := createTestUserInDB(t, userRepo, "diffrev2")
+	_, err := roleRepo.AssignToUser(ctx, u1.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+	_, err = roleRepo.AssignToUser(ctx, u2.ID, auth.RoleAdmin)
+	require.NoError(t, err)
+
+	type result struct {
+		userID  string
+		changed bool
+		err     error
+	}
+	results := make([]result, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i, userID := range []string{u1.ID, u2.ID} {
+		i, userID := i, userID
+		go func() {
+			defer wg.Done()
+			var changed bool
+			var revokeErr error
+			txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+				changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, userID, auth.RoleAdmin)
+				return revokeErr
+			})
+			if revokeErr != nil {
+				results[i] = result{userID: userID, changed: changed, err: revokeErr}
+				return
+			}
+			results[i] = result{userID: userID, changed: changed, err: txErr}
+		}()
+	}
+	wg.Wait()
+
+	successCount := 0
+	protectedCount := 0
+	for _, r := range results {
+		if r.err == nil && r.changed {
+			successCount++
+			continue
+		}
+		var ec *errcode.Error
+		if errors.As(r.err, &ec) && ec.Code == errcode.ErrAuthLastAdminProtected {
+			protectedCount++
+			continue
+		}
+		t.Errorf("unexpected result for user=%s: changed=%v err=%v", r.userID, r.changed, r.err)
+	}
+	assert.Equal(t, 1, successCount,
+		"exactly one of two concurrent admin revocations must succeed (advisory lock + FOR UPDATE serialization)")
+	assert.Equal(t, 1, protectedCount,
+		"the loser must observe peer count = 1 and refuse with ErrAuthLastAdminProtected")
+
+	// Sanity: exactly one effective admin remains.
+	count, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "after concurrent revokes, exactly one admin must remain")
 }
 
 // TestLastAdminTrigger_RawDelete verifies that the DB-level last_admin_protected
