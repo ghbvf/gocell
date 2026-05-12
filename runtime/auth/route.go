@@ -304,6 +304,21 @@ func (r Route) validateBypassCompatibility() error {
 				"not server-side JWT-time authorization)",
 			r.Contract.Method, r.Contract.Path)
 	}
+	// BootstrapAuth (env-credentialed HTTP Basic Auth, FMT-28 limits paths to
+	// /api/v1/*/setup/admin) and Contract.Clients (4-part service-token
+	// caller-cell allowlist, FMT-31 limits paths to /internal/v1/*) are
+	// orthogonal auth paths. The wrapMountGuards godoc at line 180-183 already
+	// declares this mutex; this branch is the runtime enforcement.
+	// AUTH-BOOTSTRAP-CLIENTS-MUTEX-01 in tools/archtest/auth_bootstrap_invariants_test.go
+	// is the static (Hard) gate; this is the runtime second layer.
+	if r.BootstrapAuth != nil && len(r.Contract.Clients) > 0 {
+		return fmt.Errorf(
+			"auth.Mount %s %s: BootstrapAuth conflicts with non-empty Contract.Clients "+
+				"(BootstrapAuth replaces JWT with HTTP Basic Auth via env credentials; "+
+				"Contract.Clients drives the service-token caller-cell allowlist on "+
+				"/internal/v1/*. The two authentication paths are mutually exclusive)",
+			r.Contract.Method, r.Contract.Path)
+	}
 	// Three-way mutual exclusivity: Public, PasswordResetExempt, BootstrapAuth.
 	// Each is a semantically distinct authentication bypass mode (Public skips
 	// JWT entirely, PasswordResetExempt narrows JWT to reset-required tokens,

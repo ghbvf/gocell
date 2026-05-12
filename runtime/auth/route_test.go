@@ -471,3 +471,70 @@ func TestMount_AcceptsValidSegmentPrefix(t *testing.T) {
 	require.Len(t, mux.metas, 1)
 	assert.Equal(t, "/sessions/login", mux.metas[0].Path)
 }
+
+// TestValidateBypassCompatibility_Matrix exercises every pairwise + valid-
+// alone combination of {Public, PasswordResetExempt, BootstrapAuth, Policy,
+// Contract.Clients} through Route.validate. Row 9 (BootstrapAuth + Clients)
+// is the case AUTH-BOOTSTRAP-CLIENTS-MUTEX-01 specifically targets; the
+// matrix shape also documents the deterministic order in which the existing
+// three mutex branches plus the new one fire.
+func TestValidateBypassCompatibility_Matrix(t *testing.T) {
+	contractWith := func(clients []string) contractspec.ContractSpec {
+		return contractspec.ContractSpec{
+			ID: "http.test.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
+			Method: "GET", Path: "/api/v1/x",
+			Clients: clients,
+		}
+	}
+	bootstrapMW := func(next http.Handler) http.Handler { return next }
+	okPolicy := func(_ *http.Request) error { return nil }
+	someClients := []string{"caller-cell"}
+
+	cases := []struct {
+		name                string
+		public              bool
+		passwordResetExempt bool
+		bootstrapAuth       func(http.Handler) http.Handler
+		policy              Policy
+		clients             []string
+		wantErrSubstr       string // empty = expect ok
+	}{
+		{"all-empty", false, false, nil, nil, nil, ""},
+		{"public-only", true, false, nil, nil, nil, ""},
+		{"pwreset-only", false, true, nil, nil, nil, ""},
+		{"bootstrap-only", false, false, bootstrapMW, nil, nil, ""},
+		{"policy-only", false, false, nil, okPolicy, nil, ""},
+		{"clients-only", false, false, nil, nil, someClients, ""},
+		{"public+policy", true, false, nil, okPolicy, nil, "Public=true conflicts"},
+		{"bootstrap+policy", false, false, bootstrapMW, okPolicy, nil, "BootstrapAuth conflicts with non-nil Policy"},
+		{"bootstrap+clients", false, false, bootstrapMW, nil, someClients, "BootstrapAuth conflicts with non-empty Contract.Clients"},
+		{"public+pwreset", true, true, nil, nil, nil, "mutually exclusive"},
+		{"public+bootstrap", true, false, bootstrapMW, nil, nil, "mutually exclusive"},
+		{"pwreset+bootstrap", false, true, bootstrapMW, nil, nil, "mutually exclusive"},
+		{"public+pwreset+bootstrap", true, true, bootstrapMW, nil, nil, "mutually exclusive"},
+		// Three-way conflict: BootstrapAuth+Policy fires first (it is checked
+		// before the new BootstrapAuth+Clients branch); guarantees a stable
+		// error message under multi-flag misconfiguration.
+		{"bootstrap+policy+clients", false, false, bootstrapMW, okPolicy, someClients, "BootstrapAuth conflicts with non-nil Policy"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			r := Route{
+				Contract:            contractWith(tc.clients),
+				Handler:             noopHandler,
+				Public:              tc.public,
+				PasswordResetExempt: tc.passwordResetExempt,
+				BootstrapAuth:       tc.bootstrapAuth,
+				Policy:              tc.policy,
+			}
+			err := r.validate()
+			if tc.wantErrSubstr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErrSubstr)
+		})
+	}
+}
