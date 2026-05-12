@@ -10,9 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// Compile-time assertion: *Pool must implement lifecycle.ManagedResource.
+var _ lifecycle.ManagedResource = (*Pool)(nil)
 
 // testPostgresDSN is a fixture DSN used for unit-level struct tests; no real DB is contacted.
 // Constructed as a concat to prevent gosec G101 false-positive on test fixture URLs.
@@ -290,4 +294,76 @@ func TestPool_Close_ImplementsContextCloser(t *testing.T) {
 	var _ interface {
 		Close(ctx context.Context) error
 	} = (*Pool)(nil)
+}
+
+// ---------------------------------------------------------------------------
+// ManagedResource interface tests (absorbed from pool_resource_test.go)
+// ---------------------------------------------------------------------------
+
+// TestPool_CheckersReturnsBothProbes verifies that Checkers() returns exactly
+// two named probes: "postgres_ready" and "postgres_indexes_valid_ready".
+// No real DB is required — we only verify the map structure.
+func TestPool_CheckersReturnsBothProbes(t *testing.T) {
+	p := &Pool{} // stub: inner=nil; Checkers() must not dereference inner
+	checkers := p.Checkers()
+	require.Len(t, checkers, 2, "expected 2 checkers (postgres_ready + postgres_indexes_valid_ready)")
+	for _, name := range []string{"postgres_ready", "postgres_indexes_valid_ready"} {
+		fn, ok := checkers[name]
+		if !ok {
+			t.Errorf("expected checker named %q", name)
+		}
+		if fn == nil {
+			t.Errorf("checker %q function must not be nil", name)
+		}
+	}
+}
+
+// TestPool_WorkerReturnsNil verifies that Worker() always returns nil —
+// Pool itself has no background goroutine; outbox relay is a separate resource.
+func TestPool_WorkerReturnsNil(t *testing.T) {
+	p := &Pool{}
+	if p.Worker() != nil {
+		t.Error("expected Worker() to return nil: pool has no background worker")
+	}
+}
+
+// TestPool_CloseDelegatesAndAcceptsCtx verifies that Close(ctx) delegates to
+// the underlying pool drain and that a pre-canceled context surfaces an error
+// (same behavior as the prior PGResource wrapper).
+func TestPool_CloseDelegatesAndAcceptsCtx(t *testing.T) {
+	// Pre-canceled context — Close must propagate ctx.Err().
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := &Pool{} // inner=nil; CloseWithDeadline checks ctx.Err() first.
+	err := p.Close(canceledCtx)
+	require.Error(t, err, "Close with pre-canceled ctx must return error")
+	assert.Equal(t, context.Canceled, err)
+}
+
+// TestPool_CheckerTimeout verifies that the "postgres_ready" probe applies an
+// inner ~5-second context deadline regardless of the caller's context.
+func TestPool_CheckerTimeout(t *testing.T) {
+	var receivedDeadline time.Time
+
+	p := &Pool{}
+	// Override the health function via the checkerHealthFnForTest field so we
+	// can inspect the context without a real DB.  Because Pool is in the same
+	// package we can set the unexported test hook directly.
+	p.checkerHealthFnForTest = func(ctx context.Context) error {
+		dl, _ := ctx.Deadline()
+		receivedDeadline = dl
+		return nil
+	}
+
+	checkers := p.Checkers()
+	fn := checkers["postgres_ready"]
+	require.NotNil(t, fn, "postgres_ready checker must not be nil")
+
+	require.NoError(t, fn(context.Background()))
+
+	diff := time.Until(receivedDeadline)
+	if diff < testtime.D3s || diff > testtime.D7s {
+		t.Errorf("expected checker deadline ~5s from now, got %v", diff)
+	}
 }

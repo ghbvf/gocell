@@ -623,10 +623,7 @@ func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 		)`)
 	require.NoError(t, err)
 
-	resource, err := NewPGResource(p)
-	require.NoError(t, err)
-
-	checkers := resource.Checkers()
+	checkers := p.Checkers()
 	invalidIdxChecker, ok := checkers["postgres_indexes_valid_ready"]
 	require.True(t, ok, "postgres_indexes_valid_ready checker must be present in Checkers()")
 

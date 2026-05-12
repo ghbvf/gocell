@@ -174,10 +174,6 @@ func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
 func buildConfigCorePGStorage(
 	pool *adapterpg.Pool, cfg ConfigCoreModuleConfig,
 ) (kernellifecycle.ManagedResource, configcore.Option, error) {
-	pgRes, err := adapterpg.NewPGResource(pool)
-	if err != nil {
-		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)
-	}
 	storageOpt, err := configpg.WithPool(pool.DB(), cfg.Clock,
 		configpg.WithValueTransformer(cfg.ValueTransformer),
 		configpg.WithOnStaleCipher(cfg.OnStaleCipher),
@@ -185,5 +181,5 @@ func buildConfigCorePGStorage(
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore PG repository wiring: %w", err)
 	}
-	return pgRes, storageOpt, nil
+	return pool, storageOpt, nil
 }
