@@ -57,6 +57,7 @@ func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _, _ string) (
 }
 func (s *stubRoleRepo) CountByRole(_ context.Context, _ string) (int, error) { panic("unused") }
 func (s *stubRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error)  { panic("unused") }
+func (s *stubRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) { panic("unused") }
 func (s *stubRoleRepo) ListByUserID(_ context.Context, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	panic("unused")
 }

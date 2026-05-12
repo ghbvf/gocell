@@ -159,8 +159,9 @@ func TestProvisioner_Status_NoAdmin_ReturnsFalse(t *testing.T) {
 }
 
 func TestProvisioner_Status_WithAdmin_ReturnsTrue(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo, "usr-seed")
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
 	has, err := p.Status(context.Background())
@@ -169,11 +170,15 @@ func TestProvisioner_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 }
 
 func TestProvisioner_Status_InfraError_Surfaced(t *testing.T) {
-	roleRepo := &errRoleRepo{countErr: errors.New("boom")}
+	// Status() routes through EffectiveAdminExists now (S4.0 follow-up). The
+	// errRoleRepo stub returns countErr from EffectiveAdminExists to drive
+	// the infra-failure surface; the legacy CountByRole path is no longer on
+	// the Status hot path.
+	roleRepo := &errRoleRepo{existsErr: errors.New("boom")}
 	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
 	_, err := p.Status(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "count admin users")
+	assert.Contains(t, err.Error(), "effective-admin-exists")
 	assert.ErrorContains(t, err, "boom")
 }
 
@@ -199,8 +204,9 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 }
 
 func TestProvisioner_Ensure_AdminExists_FastPathSkipsNoWrites(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo, "usr-prior")
 
 	// Wrap repos to observe that Create is never called on the fast path.
@@ -439,10 +445,31 @@ func (r *scriptedRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) 
 	panic("scriptedRoleRepo.CountEffectiveAdmins: unused in adminprovision tests")
 }
 
+// EffectiveAdminExists consumes the next scripted count and returns count > 0.
+// The fast-path Status check at the start of Ensure now routes through this
+// method (S4.0 follow-up), so the scripted-counts sequence is reused: step 0
+// answers Status, and subsequent steps answer createAdminUser's CountByRole
+// recount on duplicate. Embedders that supply empty counts (e.g.,
+// recountErrRoleRepo, which drives recount via its own CountByRole override)
+// see a default "no effective admin" answer so Status passes and Ensure
+// proceeds to the createAdminUser path.
+func (r *scriptedRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) {
+	if len(r.counts) == 0 {
+		return false, nil
+	}
+	if r.i >= len(r.counts) {
+		return r.counts[len(r.counts)-1] > 0, nil
+	}
+	v := r.counts[r.i]
+	r.i++
+	return v > 0, nil
+}
+
 // errRoleRepo injects errors into each method.
 type errRoleRepo struct {
 	createErr error
 	countErr  error
+	existsErr error
 	assignErr error
 	removeErr error
 }
@@ -480,19 +507,33 @@ func (r *errRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) {
 	panic("errRoleRepo.CountEffectiveAdmins: unused in adminprovision tests")
 }
 
+// EffectiveAdminExists returns existsErr when set; otherwise falls back to
+// countErr so legacy tests that fail-injected via countErr continue to drive
+// the same Status-surface error path (Status now routes through this method
+// instead of CountByRole, S4.0 follow-up).
+func (r *errRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) {
+	if r.existsErr != nil {
+		return false, r.existsErr
+	}
+	return false, r.countErr
+}
+
 // recountErrRoleRepo returns firstCount then recountErr on subsequent CountByRole.
+// recountErrRoleRepo drives the createAdminUser duplicate-detection recount
+// path. Status (now routed through EffectiveAdminExists in the embedded
+// scriptedRoleRepo with empty counts) returns "no effective admin" by
+// default, so Ensure proceeds; the first and only CountByRole call comes
+// from the recount block in createAdminUser, and recountErr surfaces there.
 type recountErrRoleRepo struct {
 	scriptedRoleRepo
-	firstCount int
+	firstCount int // retained for legacy fixture compatibility; unused post-S4.0
 	recountErr error
 	called     int
 }
 
 func (r *recountErrRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
 	r.called++
-	if r.called == 1 {
-		return r.firstCount, nil
-	}
+	_ = r.firstCount // retained field, no longer on the hot path
 	return 0, r.recountErr
 }
 

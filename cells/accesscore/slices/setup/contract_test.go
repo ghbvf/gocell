@@ -119,8 +119,9 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	}
 
 	t.Run("409 duplicate identity user response satisfies contract", func(t *testing.T) {
-		userRepo := mem.NewStore(clock.Real()).UserRepository()
-		roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+		store := mem.NewStore(clock.Real())
+		userRepo := store.UserRepository()
+		roleRepo := store.RoleRepository()
 		seedContractIdentityUser(t, userRepo, "root", "root@local")
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
 		h := setup.NewHandler(svc, testPassthroughAuth)
@@ -136,8 +137,9 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	})
 
 	t.Run("409 duplicate username response satisfies contract", func(t *testing.T) {
-		userRepo := mem.NewStore(clock.Real()).UserRepository()
-		roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+		store := mem.NewStore(clock.Real())
+		userRepo := store.UserRepository()
+		roleRepo := store.RoleRepository()
 		existing, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 		require.NoError(t, err)
 		existing.ID = "usr-prior"
@@ -159,8 +161,9 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		// PR-A42 N5 / N4: pin the retired-endpoint envelope through the contract
 		// validator and assert the wire shape carries semantic next-action only —
 		// no HTTP path literal (clients resolve via OpenAPI).
-		userRepo := mem.NewStore(clock.Real()).UserRepository()
-		roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+		store := mem.NewStore(clock.Real())
+		userRepo := store.UserRepository()
+		roleRepo := store.RoleRepository()
 		seedAdmin(t, userRepo, roleRepo)
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
 		h := setup.NewHandler(svc, testPassthroughAuth)

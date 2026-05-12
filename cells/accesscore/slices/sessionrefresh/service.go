@@ -202,10 +202,23 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 		return dto.TokenPair{}, authRefreshRejected()
 	}
 
-	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.ID, session.UserID)
+	user, err := s.fetchUserForRefresh(ctx, session.ID, session.UserID)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
+	// S4.0: refresh fails-closed if the user is not active. A suspended /
+	// locked user must not obtain a fresh access token; cascade-revoke the
+	// refresh chain so subsequent rotations don't keep returning new
+	// tokens. domain.User.CanAuthenticate() is the single source of truth
+	// shared with sessionlogin / sessionvalidate.
+	if !user.CanAuthenticate() {
+		if err := s.cascadeRevoke(ctx, session.ID, "user-not-active"); err != nil {
+			return dto.TokenPair{}, err
+		}
+		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			"account is not active")
+	}
+	passwordResetRequired := user.PasswordResetRequired
 
 	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
@@ -336,22 +349,22 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 	return nil
 }
 
-// fetchPasswordResetRequired reads the current PasswordResetRequired flag
-// from the user repo. Fail-closed: any error returns ErrAuthRefreshFailed so
-// the caller aborts refresh rather than signing a token that omits the
-// password_reset_required claim.
-func (s *Service) fetchPasswordResetRequired(ctx context.Context, sessionID, userID string) (bool, error) {
+// fetchUserForRefresh reads the session's owning user so the caller can
+// validate the per-refresh predicates (status='active', password-reset flag).
+// Fail-closed: any error returns ErrAuthRefreshFailed so the caller aborts
+// refresh rather than signing a token from stale or unknown user state.
+func (s *Service) fetchUserForRefresh(ctx context.Context, sessionID, userID string) (*domain.User, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		s.logger.Error("session-refresh: failed to fetch user for reset flag (fail-closed)",
+		s.logger.Error("session-refresh: failed to fetch user for refresh predicates (fail-closed)",
 			slog.Any("error", err), slog.String("user_id", userID))
 		if errcode.IsInfraError(err) {
-			return false, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
+			return nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
 		}
 		if err := s.cascadeRevoke(ctx, sessionID, "user-not-found"); err != nil {
-			return false, err
+			return nil, err
 		}
-		return false, authRefreshRejected()
+		return nil, authRefreshRejected()
 	}
-	return user.PasswordResetRequired, nil
+	return user, nil
 }

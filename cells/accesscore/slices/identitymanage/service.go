@@ -58,6 +58,22 @@ func actorFromContext(ctx context.Context) (string, error) {
 	return p.Subject, nil
 }
 
+// callerHasRole reports whether the authenticated principal in ctx holds the
+// given role. Returns false for missing / anonymous principals so callers
+// fail-closed on field-level guards (e.g., status-mutation admin-only check).
+func callerHasRole(ctx context.Context, role string) bool {
+	p, ok := auth.FromContext(ctx)
+	if !ok {
+		return false
+	}
+	for _, r := range p.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
 // Option configures an identity-manage Service.
 type Option func(*Service)
 
@@ -299,6 +315,17 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 				slog.String("allowedValues", string(domain.StatusActive)+","+string(domain.StatusSuspended)),
 			))
 	}
+	// S4.0 P1-A: status is an admin-only field. The route policy is
+	// selfOrAdminPolicy (PATCH allows users to update their own name/email/
+	// requirePasswordReset), but allowing a self-PATCH of status would let a
+	// suspended user re-activate themselves and defeat the admin's suspend
+	// gesture. Field-level guard: any Status mutation requires the actor to
+	// hold auth.RoleAdmin. Other fields stay self-editable.
+	if input.Status != nil && !callerHasRole(ctx, auth.RoleAdmin) {
+		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthIdentityInvalidInput,
+			"updating status requires admin role",
+			errcode.WithDetails(slog.String("field", "status")))
+	}
 
 	actor, err := actorFromContext(ctx)
 	if err != nil {
@@ -314,9 +341,10 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 }
 
 // applyUserUpdate runs the transactional body of Update: fetch, optionally
-// guard a status-demotion, apply patch fields, persist, and publish. Split
-// out to keep Update's cognitive complexity within the CLAUDE.md ≤15 budget
-// once the S4.0 effective-admin guard was added.
+// guard a status-demotion, apply patch fields, persist, cascade-revoke
+// sessions when status demotes from 'active', and publish. Split out to keep
+// Update's cognitive complexity within the CLAUDE.md ≤15 budget once the
+// S4.0 effective-admin guard + status-demotion cascade were added.
 func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor string) (*domain.User, error) {
 	var user *domain.User
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
@@ -327,9 +355,13 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 		if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
 			return err
 		}
+		demotedFromActive := isStatusDemotion(u, input)
 		applyUpdateFields(u, input, s.clock.Now())
 		if err := s.repo.Update(txCtx, u); err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
+		}
+		if err := s.cascadeRevokeOnDemotion(txCtx, u.ID, demotedFromActive); err != nil {
+			return err
 		}
 		user = u
 		return s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor})
@@ -337,6 +369,33 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 		return nil, err
 	}
 	return user, nil
+}
+
+// isStatusDemotion reports whether input demotes u.Status away from 'active'.
+// 'locked' is rejected at the Update entrypoint, so this returns true exactly
+// for active→suspended.
+func isStatusDemotion(u *domain.User, input UpdateInput) bool {
+	return input.Status != nil &&
+		u.Status == domain.StatusActive &&
+		*input.Status != string(domain.StatusActive)
+}
+
+// cascadeRevokeOnDemotion mirrors Lock's session+refresh revoke cascade for
+// the active→suspended Update path (S4.0 P1-A). Without this, a suspended
+// user keeps an unexpired access token + refresh chain and continues to
+// operate until natural expiry — defeating the suspend gesture. The boolean
+// gate keeps the no-op cost zero for non-status updates.
+func (s *Service) cascadeRevokeOnDemotion(ctx context.Context, userID string, demoted bool) error {
+	if !demoted {
+		return nil
+	}
+	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
+		return fmt.Errorf("identity-manage: update revoke sessions: %w", err)
+	}
+	if err := s.refreshStore.RevokeUser(ctx, userID); err != nil {
+		return fmt.Errorf("identity-manage: update revoke refresh chains: %w", err)
+	}
+	return nil
 }
 
 // guardUpdateStatusDemotion enforces the effective-admin invariant when an

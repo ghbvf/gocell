@@ -33,6 +33,39 @@
 -- +goose Up
 SET LOCAL lock_timeout = '5s';
 
+-- Pre-flight invariant check (S4.0 sanity gate): refuse to install the
+-- effective-admin trigger family on a database whose pre-existing state
+-- already violates the post-S4.0 invariant. Specifically: at least one
+-- admin role assignment exists but ZERO of them belong to an active user.
+-- Such a database, post-migration, would be locked out of every HTTP
+-- mutation guarded by the trigger (admin role / status changes), and the
+-- application-layer setup-retirement check would still fast-path 410 if
+-- it ran the pre-S4.0 logic. The application layer now also routes setup
+-- retirement through ports.RoleRepository.EffectiveAdminExists (S4.0
+-- follow-up), so post-migration recovery via /api/v1/access/setup/admin
+-- IS available — but failing fast at migration time gives the operator
+-- an unambiguous signal to plan the cutover (e.g., temporarily reactivate
+-- one admin row, deploy 024, then re-lock). Fresh installs (zero admin
+-- assignments) are not affected by this gate.
+-- +goose StatementBegin
+DO $$
+DECLARE
+    admin_assignments BIGINT;
+    effective_admins BIGINT;
+BEGIN
+    SELECT count(*) INTO admin_assignments
+      FROM role_assignments WHERE role_id = 'admin';
+    SELECT count(*) INTO effective_admins
+      FROM role_assignments ra
+      JOIN users u ON u.id = ra.user_id
+      WHERE ra.role_id = 'admin' AND u.status = 'active';
+    IF admin_assignments > 0 AND effective_admins = 0 THEN
+        RAISE EXCEPTION 'migration 024 pre-flight: % admin role assignment(s) exist but zero effective admins (status=active AND admin role); reactivate one admin before deploying S4.0 to keep an HTTP recovery path open', admin_assignments
+            USING ERRCODE = 'P0001';
+    END IF;
+END $$;
+-- +goose StatementEnd
+
 -- Drop the obsolete migration-019 trigger and its function before installing
 -- the new shared function. CREATE OR REPLACE on the new function name is
 -- safe; the old name is fully retired (no compatibility shim — S4.0 "彻底

@@ -86,7 +86,10 @@ DELETE FROM role_assignments
 WHERE user_id = $1 AND role_id = $2`
 
 	// removeIfNotLastSQL atomically removes the admin role assignment from $1
-	// only if at least one other *effective* admin remains. Effective admin =
+	// only if either (a) the target user is not currently active (locked /
+	// suspended targets can't reduce the effective-admin set, matching the
+	// migration-024 trigger which RETURNs OLD when target is non-active), or
+	// (b) at least one OTHER *effective* admin remains. Effective admin =
 	// (users.status='active' AND has admin role) — a locked/suspended admin
 	// peer does NOT keep the system administrable (S4.0 invariant upgrade).
 	//
@@ -97,11 +100,24 @@ WHERE user_id = $1 AND role_id = $2`
 	// admin-revoke / lock / delete transactions block until the holder set is
 	// stable. READ COMMITTED isolation is sufficient under these locks.
 	//
+	// MATERIALIZED on lock_acquired forces evaluation: PG 12+ inlines
+	// unreferenced CTEs and a planner that drops the lock CTE would defeat
+	// serialization (the volatile pg_advisory_xact_lock would never run).
+	// We additionally CROSS JOIN lock_acquired into the deleted CTE so even a
+	// future planner that ignores MATERIALIZED keeps the dependency.
+	//
+	// target_status reads the current target user status (NULL if user does
+	// not exist); used to short-circuit the last-admin check when target is
+	// non-active.
+	//
 	// The migration-024 effective_admin_invariant_on_role_assignments trigger
 	// remains the safety net for any direct DELETE that bypasses this CTE path.
 	removeIfNotLastSQL = `
-WITH lock_acquired AS (
-    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0))
+WITH lock_acquired AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0)) AS locked
+),
+target_status AS (
+    SELECT status FROM users WHERE id = $1
 ),
 others AS (
     SELECT u.id FROM users u
@@ -112,7 +128,11 @@ others AS (
 deleted AS (
     DELETE FROM role_assignments
     WHERE user_id = $1 AND role_id = $2
-      AND EXISTS (SELECT 1 FROM others)
+      AND EXISTS (SELECT 1 FROM lock_acquired)
+      AND (
+          (SELECT status FROM target_status) IS DISTINCT FROM 'active'
+          OR EXISTS (SELECT 1 FROM others)
+      )
     RETURNING user_id
 )
 SELECT
@@ -137,13 +157,19 @@ SELECT COUNT(*)::INT FROM role_assignments WHERE role_id = $1`
 	// leaving a window for concurrent mutations. If a lock-free diagnostic
 	// variant is needed (e.g. for observability reads), add a separate query
 	// without the advisory-lock CTE rather than lifting the constraint here.
+	// MATERIALIZED + CROSS JOIN ensures the volatile pg_advisory_xact_lock
+	// actually runs: PG 12+ inlines unreferenced CTEs by default and would
+	// otherwise drop the lock entirely. lock_acquired references in the FROM
+	// clause via CROSS JOIN, so removing it would change query results — the
+	// planner cannot prune it.
 	countEffectiveAdminsSQL = `
-WITH lock_acquired AS (
-    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0))
+WITH lock_acquired AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0)) AS locked
 )
 SELECT COUNT(*)::INT
 FROM role_assignments ra
 JOIN users u ON u.id = ra.user_id
+CROSS JOIN lock_acquired
 WHERE ra.role_id = 'admin' AND u.status = 'active'`
 )
 
@@ -383,6 +409,29 @@ func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context) (int, error) {
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: count-effective-admins", err)
 	}
 	return count, nil
+}
+
+// effectiveAdminExistsSQL is the lock-free read counterpart to
+// countEffectiveAdminsSQL. No advisory lock and no tx requirement —
+// designed for fast-path checks (setup retirement, provisioner.Status)
+// where eventual consistency is acceptable and the result does not feed
+// into the at-least-one invariant decision.
+const effectiveAdminExistsSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM role_assignments ra
+    JOIN users u ON u.id = ra.user_id
+    WHERE ra.role_id = 'admin' AND u.status = 'active'
+)`
+
+// EffectiveAdminExists implements ports.RoleRepository — see the port godoc
+// for fast-path semantics. Pool-driven (no tx required, no advisory lock).
+func (r *PGRoleRepo) EffectiveAdminExists(ctx context.Context) (bool, error) {
+	var exists bool
+	row := r.db.QueryRow(ctx, effectiveAdminExistsSQL)
+	if err := row.Scan(&exists); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: effective-admin-exists", err)
+	}
+	return exists, nil
 }
 
 // ListByUserID returns a paginated, sorted list of roles assigned to userID.

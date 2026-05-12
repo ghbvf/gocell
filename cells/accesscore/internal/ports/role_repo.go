@@ -49,6 +49,13 @@ type RoleRepository interface {
 	// sealed interface. Implementations must filter by user status (NOT just
 	// count role_assignments) so a locked/suspended admin is excluded.
 	CountEffectiveAdmins(ctx context.Context) (int, error)
+	// EffectiveAdminExists is the lock-free read counterpart to
+	// CountEffectiveAdmins. Used by setup-retirement and provisioner.Status
+	// fast-path checks where eventual consistency is acceptable and acquiring
+	// the advisory lock is overkill (these reads happen outside any tx and
+	// are not part of the at-least-one invariant decision). Returns true when
+	// at least one user satisfies status='active' AND holds the admin role.
+	EffectiveAdminExists(ctx context.Context) (bool, error)
 	// ListByUserID returns a paginated list of roles assigned to userID,
 	// sorted and filtered per params.
 	ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error)

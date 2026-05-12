@@ -47,7 +47,8 @@ func newHandlerMux(t *testing.T, h *setup.Handler) http.Handler {
 
 func newHandlerFresh(t *testing.T) http.Handler {
 	t.Helper()
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), &stubWriter{})
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), &stubWriter{})
 	return newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 }
 
@@ -69,8 +70,9 @@ func TestHandler_Status_FreshSystem_ReturnsFalse(t *testing.T) {
 }
 
 func TestHandler_Status_WithAdmin_ReturnsTrue(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, nil)
 	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
@@ -112,8 +114,9 @@ func TestHandler_CreateAdmin_FreshSystem_Returns201(t *testing.T) {
 }
 
 func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
@@ -224,8 +227,9 @@ func TestHandler_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 }
 
 func TestHandler_CreateAdmin_DuplicateIdentityUser_Returns409(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedIdentityUser(t, userRepo, "root", "root@local")
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
@@ -275,7 +279,8 @@ func newHandlerWithBootstrapCreds(t *testing.T, svc *setup.Service, envUsername,
 // configured with bootstrap credentials, a request with no Authorization header
 // is rejected with 401 ERR_AUTH_BOOTSTRAP_FAILED.
 func TestHandler_CreateAdmin_NoCreds_Returns401(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), &stubWriter{})
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), &stubWriter{})
 	handler := newHandlerWithBootstrapCreds(t, svc, "op", "opSecret123")
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
@@ -294,7 +299,8 @@ func TestHandler_CreateAdmin_NoCreds_Returns401(t *testing.T) {
 // TestHandler_CreateAdmin_WrongUsername_Returns401 verifies that wrong username
 // returns 401 with the same envelope as WrongPassword (oracle protection).
 func TestHandler_CreateAdmin_WrongUsername_Returns401(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), &stubWriter{})
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), &stubWriter{})
 	handler := newHandlerWithBootstrapCreds(t, svc, "op", "opSecret123")
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
@@ -319,7 +325,8 @@ func TestHandler_CreateAdmin_WrongUsername_Returns401(t *testing.T) {
 // codified in PR #392 review: NewHandler accepts bootstrapAuth as a required
 // parameter; there is no separate "JWT-exempt + no auth" intermediate state.
 func TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), &stubWriter{})
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), &stubWriter{})
 
 	const envUser = "op"
 	const envPass = "opSecret123"

@@ -110,7 +110,14 @@ const (
 	ErrAuthRoleNotFound         Code = "ERR_AUTH_ROLE_NOT_FOUND"
 	ErrAuthRoleDuplicate        Code = "ERR_AUTH_ROLE_DUPLICATE"
 	ErrAuthInvalidInput         Code = "ERR_AUTH_INVALID_INPUT"
-	ErrAuthUserLocked           Code = "ERR_AUTH_USER_LOCKED"
+	// ErrAuthUserNotActive signals the user's status is not 'active' (i.e.,
+	// locked or suspended). Authentication surfaces (login / refresh /
+	// validate) reject any non-active user fail-closed: a suspended user
+	// must not obtain a fresh session, refresh existing tokens, or have
+	// their existing session continue to validate. Replaces the
+	// pre-S4.0-narrow ErrAuthUserLocked which only covered the locked
+	// state and left suspended as a fail-open hole.
+	ErrAuthUserNotActive        Code = "ERR_AUTH_USER_NOT_ACTIVE"
 	ErrAuthSessionInvalidInput  Code = "ERR_AUTH_SESSION_INVALID_INPUT"
 	ErrAuthIdentityInvalidInput Code = "ERR_AUTH_IDENTITY_INVALID_INPUT"
 	ErrAuthLoginInvalidInput    Code = "ERR_AUTH_LOGIN_INVALID_INPUT"

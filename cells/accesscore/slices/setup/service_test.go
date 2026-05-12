@@ -166,15 +166,17 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 // --- Status ---------------------------------------------------------------
 
 func TestService_Status_NoAdmin_ReturnsFalse(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), nil)
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil)
 	out, err := svc.Status(context.Background())
 	require.NoError(t, err)
 	assert.False(t, out.HasAdmin)
 }
 
 func TestService_Status_WithAdmin_ReturnsTrue(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 
 	svc := newService(t, userRepo, roleRepo, nil)
@@ -186,8 +188,9 @@ func TestService_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 // --- CreateAdmin ----------------------------------------------------------
 
 func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	w := &stubWriter{}
 	svc := newService(t, userRepo, roleRepo, w)
 
@@ -225,8 +228,9 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 }
 
 func TestService_CreateAdmin_WithSetupLock_AcquiresInsideTxBeforeEmit(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	events := []string{}
 	w := &stubWriter{onWrite: func() { events = append(events, "emit") }}
 	lock := &recordingSetupLock{requireTxMarker: true, events: &events}
@@ -249,8 +253,9 @@ func TestService_CreateAdmin_WithSetupLock_AcquiresInsideTxBeforeEmit(t *testing
 }
 
 func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	w := &stubWriter{}
 	lockErr := errors.New("lock unavailable")
 	lock := &recordingSetupLock{err: lockErr}
@@ -278,8 +283,9 @@ func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *test
 }
 
 func TestService_CreateAdmin_NoSetupLock_StillCreates(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	w := &stubWriter{}
 	svc := newService(t, userRepo, roleRepo, w, setup.WithSetupLock(nil))
 
@@ -297,8 +303,9 @@ func TestService_CreateAdmin_NoSetupLock_StillCreates(t *testing.T) {
 }
 
 func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 
 	w := &stubWriter{}
@@ -318,7 +325,8 @@ func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
 }
 
 func TestService_CreateAdmin_BlankField_Returns400(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), nil)
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil)
 	tests := []struct {
 		name string
 		in   setup.CreateAdminInput
@@ -340,7 +348,8 @@ func TestService_CreateAdmin_BlankField_Returns400(t *testing.T) {
 }
 
 func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), nil)
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil)
 	tests := []struct {
 		name     string
 		password string
@@ -365,7 +374,8 @@ func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
 }
 
 func TestService_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), nil)
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil)
 	tests := []struct {
 		name string
 		in   setup.CreateAdminInput
@@ -391,8 +401,9 @@ func TestService_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 }
 
 func TestService_CreateAdmin_EmitterFailure_Propagates(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	w := &stubWriter{err: errors.New("broker down")}
 	svc := newService(t, userRepo, roleRepo, w)
 
@@ -430,8 +441,9 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 // ErrSetupAlreadyInitialized. This is the primary verification of the
 // read-after-check atomicity fix (round-1 P0).
 func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 
 	const workers = 10
@@ -490,8 +502,9 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 // before checking Status, burning ~1-2s CPU per anonymous POST after admin
 // already existed (round-1 M-01).
 func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 
@@ -548,7 +561,8 @@ func TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover(t *test
 // TestService_CreateAdmin_ControlCharInField_Returns400 pins the email/username
 // control-character rejection (round-1 N-07).
 func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), &stubWriter{})
+	store := mem.NewStore(clock.Real())
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), &stubWriter{})
 	tests := []struct {
 		name string
 		in   setup.CreateAdminInput
@@ -574,8 +588,9 @@ func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
 // via OpenAPI / contract registry; embedding the path here would create a
 // second source of truth.
 func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 
@@ -648,6 +663,15 @@ func (r *countErrRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) 
 	panic("countErrRoleRepo.CountEffectiveAdmins: unused in setup tests")
 }
 
+// EffectiveAdminExists is the S4.0 follow-up fast-path retirement check;
+// these err-injection tests fail the upstream EffectiveAdminExists call
+// (provisioner.Status routes through it) by making the underlying read
+// surface return r.err. The provisioner.Status implementation now calls
+// EffectiveAdminExists, so we route the same err through this method.
+func (r *countErrRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) {
+	return false, r.err
+}
+
 // newServiceWithProvisionerError builds a Service whose provisioner status
 // check fails with the supplied error. Shared by service_test.go (white-box)
 // and contract_test.go (envelope coverage) so the contract layer does not
@@ -666,8 +690,9 @@ func newServiceWithProvisionerError(t *testing.T, err error) *setup.Service {
 // concern. The service layer does not inspect env — 410 is driven by
 // adminprovision.Provisioner state alone.
 func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "op")

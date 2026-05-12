@@ -110,12 +110,27 @@ func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string
 }
 
 // RemoveFromUserIfNotLast atomically removes the admin role from a user only
-// when at least one OTHER effective admin (status='active' AND admin role)
-// remains. Non-admin roles are removed unconditionally (matches the
-// migration-024 trigger scope `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
-// Holds the store write lock for both the count and the removal so the check
+// when removing the assignment would not leave the system with zero effective
+// admins. Two short-circuits mirror the PG removeIfNotLastSQL path and the
+// migration-024 trigger semantics (S4.0):
+//
+//  1. If the target user is not currently active (locked / suspended),
+//     removing their admin assignment cannot reduce the effective-admin set
+//     (they were never counted), so the removal proceeds without a peer
+//     check. The migration-024 trigger does the same: when
+//     user_was_active_admin=false, the trigger RETURNs OLD without taking the
+//     advisory lock.
+//
+//  2. Otherwise the target IS an effective admin and the removal would only
+//     be safe if at least one OTHER effective admin remains after the
+//     revoke.
+//
+// Non-admin roles are removed unconditionally (matches the trigger scope
+// `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
+//
+// Holds the store write lock for both the read and the removal so the check
 // is TOCTOU-free across users + role_assignments — mirrors the PG
-// FOR UPDATE OF u serialization (S4.0).
+// advisory-lock + FOR UPDATE OF u serialization.
 func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) (bool, error) {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
@@ -132,16 +147,24 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 	}
 
 	if roleID == auth.RoleAdmin {
-		// Effective admin = status=active AND has admin role. Count peers
-		// EXCLUDING userID so the check answers "does at least one OTHER
-		// effective admin remain after this revoke?".
-		if r.countOtherEffectiveAdminsLocked(userID) == 0 {
-			// Removing this admin would leave zero effective admins. Same
-			// errcode as the PG CTE detect path and migration-024 trigger
-			// path so client handlers match a single business invariant.
-			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
-				"cannot revoke admin: removing this assignment would leave the system with no effective admin; assign admin to an active user first",
-				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+		// Short-circuit 1: target non-active → removal can never demote the
+		// effective-admin count (the user wasn't counted). Aligns with
+		// migration-024 trigger's user_was_active_admin=false branch.
+		targetIsActive := false
+		if u, ok := r.store.usersByID[userID]; ok {
+			targetIsActive = u.Status == domain.StatusActive
+		}
+		if targetIsActive {
+			// Short-circuit 2: target IS effective admin — require at least
+			// one OTHER effective admin to remain.
+			if r.countOtherEffectiveAdminsLocked(userID) == 0 {
+				// Removing this admin would leave zero effective admins. Same
+				// errcode as the PG CTE detect path and migration-024 trigger
+				// path so client handlers match a single business invariant.
+				return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
+					"cannot revoke admin: removing this assignment would leave the system with no effective admin; assign admin to an active user first",
+					errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+			}
 		}
 	}
 
@@ -246,6 +269,27 @@ func (r *RoleRepository) CountEffectiveAdmins(_ context.Context) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+// EffectiveAdminExists implements ports.RoleRepository — see the port godoc
+// for fast-path semantics. RLock-only, returns true on the first match
+// (constant-time-ish for typical small user sets).
+func (r *RoleRepository) EffectiveAdminExists(_ context.Context) (bool, error) {
+	r.store.mu.RLock()
+	defer r.store.mu.RUnlock()
+	for userID, roleIDs := range r.store.userRoles {
+		if _, hasAdmin := roleIDs[auth.RoleAdmin]; !hasAdmin {
+			continue
+		}
+		u, ok := r.store.usersByID[userID]
+		if !ok {
+			continue
+		}
+		if u.Status == domain.StatusActive {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // countOtherEffectiveAdminsLocked is the internal helper used by
