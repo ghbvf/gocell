@@ -1,5 +1,4 @@
-// invariants:
-//   - INVARIANT: AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01
+// INVARIANT: AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01
 //
 // AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: ledger.NewProtocol /
 // ledger.MustNewProtocol may only be invoked from cmd/* (composition root)
@@ -81,6 +80,13 @@ type ledgerHit struct {
 // composition roots and are the legitimate construction sites. When false
 // (fixture detection test), all supplied packages are scanned so a fixture
 // living under tools/archtest/internal/ still produces hits.
+//
+// The bool flag mirrors the precedent shape used by
+// scanPackagesForRawPublicOption in cell_public_option_param_test.go — both
+// gate "real-repo path filtering" off when called from a fixture-scoped
+// SharedResolver load whose `pkgs` argument is itself narrowed to the
+// fixture package, so the false branch is safe only when the caller has
+// already restricted the package set.
 func scanLedgerCompositionRootViolations(root, modulePath string, pkgs []*packages.Package, restrictScopeDirs bool) []ledgerHit {
 	var hits []ledgerHit
 	ledgerImportPath := modulePath + ledgerImportSuffix

@@ -49,6 +49,7 @@ import (
 // ref: docs/plans/202605112000-036-archtest-governance-rollout-plan.md §3.9 K-05
 // ref: adapters/postgres/migrations/021_audit_entries_event_id_unique.sql header
 func TestMigrationPairDeploy01(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
 	const migrationsDir = "adapters/postgres/migrations"
 	scope := scanner.DirsScope(root, []string{migrationsDir},

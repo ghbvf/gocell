@@ -29,6 +29,12 @@ import auditledger "github.com/ghbvf/gocell/runtime/audit/ledger"
 // AliasedMustNewProtocol intentionally invokes MustNewProtocol through a
 // non-default import alias. The return value is discarded; the function is
 // never called at runtime — the fixture exists for AST/type-info analysis.
+//
+// MustNewProtocol's signature is `func MustNewProtocol(opts ...Option) *Protocol`
+// (variadic), so the zero-arg form below compiles and is a real call expression
+// that ResolvePackageRef sees as `auditledger.MustNewProtocol`. A future
+// signature change to required parameters would cause a clean build error
+// in this fixture, not silent drift.
 func AliasedMustNewProtocol() {
 	_ = auditledger.MustNewProtocol()
 }
