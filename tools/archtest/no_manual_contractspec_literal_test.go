@@ -39,9 +39,12 @@
 //   - NewEventDerivation caller allowlist: Medium — enforced by path-string
 //     match against eventDerivationAllowedCaller. The drift guard
 //     TestEventDerivationAllowedCallerFileExists upgrades safety by failing
-//     CI if the constant goes stale, but the gate remains string-anchored
-//     per ai-collab.md taxonomy. Upgrade path to Hard would be a typed
-//     authority token only the eventrouter package can mint.
+//     CI when the constant goes stale, covering two modes: (a) the file
+//     disappears (Stat fails) and (b) the file remains but no longer invokes
+//     contractspec.NewEventDerivation (AST scan reports zero calls). The
+//     gate remains string-anchored per ai-collab.md taxonomy. Upgrade path
+//     to Hard would be a typed authority token only the eventrouter package
+//     can mint.
 //
 // Aligns with the "typed function call as Hard funnel for unbounded
 // operations" charter pattern (PANIC-REGISTERED-01 same path).
@@ -218,10 +221,20 @@ func init() {
 }
 
 // TestEventDerivationAllowedCallerFileExists guards the caller-allowlist
-// constant against drift. If runtime/eventrouter/contract_tracing_subscriber.go
-// is renamed or moved without updating eventDerivationAllowedCaller, every
-// future production caller silently becomes allowed (the allowlist matches
-// nothing). This test fails fast so the constant must be updated in lockstep.
+// constant against drift. Two failure modes are covered:
+//
+//  1. File missing — runtime/eventrouter/contract_tracing_subscriber.go is
+//     renamed or moved without updating eventDerivationAllowedCaller, so the
+//     allowlist matches nothing and every future production caller silently
+//     becomes allowed.
+//  2. Call moved within the package — the file still exists but no longer
+//     invokes contractspec.NewEventDerivation (e.g. the call was relocated to
+//     a sibling file in the same package). The allowlist path still matches
+//     for the original file but skips a check that no longer fires, weakening
+//     the gate without any test signal.
+//
+// Both modes fail fast so the constant must be updated in lockstep with any
+// reshuffling of the funnel call site.
 func TestEventDerivationAllowedCallerFileExists(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -232,6 +245,40 @@ func TestEventDerivationAllowedCallerFileExists(t *testing.T) {
 	}
 	if info.IsDir() {
 		t.Fatalf("eventDerivationAllowedCaller %q is a directory, want file", eventDerivationAllowedCaller)
+	}
+	// Verify the allowlisted file actually invokes
+	// contractspec.NewEventDerivation. Without this assertion, the allowlist
+	// could match a stale path whose call has migrated, silently weakening
+	// the gate (path-match short-circuits the violation report).
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, target, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", eventDerivationAllowedCaller, err)
+	}
+	alias := contractspecLocalAlias(f)
+	if alias == "" {
+		t.Fatalf("%s no longer imports kernel/contractspec — drift; "+
+			"update eventDerivationAllowedCaller or restore the import",
+			eventDerivationAllowedCaller)
+	}
+	var found bool
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		ident, ok2 := sel.X.(*ast.Ident)
+		if !ok2 || ident.Name != alias {
+			return
+		}
+		if sel.Sel.Name == "NewEventDerivation" {
+			found = true
+		}
+	})
+	if !found {
+		t.Fatalf("%s no longer calls %s.NewEventDerivation — drift; "+
+			"update eventDerivationAllowedCaller to the new caller file or restore the call",
+			eventDerivationAllowedCaller, alias)
 	}
 }
 

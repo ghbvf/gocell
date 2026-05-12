@@ -2,6 +2,7 @@ package contractspec_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,8 +37,8 @@ func assertSpecEqual(t *testing.T, got, want contractspec.ContractSpec) {
 	if got.Topic != want.Topic {
 		t.Errorf("Topic = %q, want %q", got.Topic, want.Topic)
 	}
-	if len(got.Clients) != len(want.Clients) {
-		t.Errorf("Clients length = %d, want %d", len(got.Clients), len(want.Clients))
+	if !slices.Equal(got.Clients, want.Clients) {
+		t.Errorf("Clients = %v, want %v", got.Clients, want.Clients)
 	}
 }
 
