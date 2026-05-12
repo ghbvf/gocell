@@ -10,7 +10,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
-// RenderCellMetaLiteral renders a *metadata.CellMeta value as a Go source
+// renderCellMetaLiteral renders a *metadata.CellMeta value as a Go source
 // literal string of the form `&metadata.CellMeta{...}`. The output is valid
 // Go that survives goimports+gofumpt without structural change.
 //
@@ -28,7 +28,12 @@ import (
 //
 // Unknown reflect.Kind panics with panicregister.Approved (fail-loud so future
 // CellMeta field additions surface immediately at development time).
-func RenderCellMetaLiteral(cell *metadata.CellMeta) string {
+//
+// CELLGEN-LITERAL-FUNNEL-02: unexported. The sole caller is BuildCellSpec,
+// which pre-renders this string into CellGenSpec.RenderedMetaLiteral so the
+// template never accesses *metadata.CellMeta. Out-of-package callers cannot
+// re-introduce a funcMap path that would let cell.tmpl hand-enumerate fields.
+func renderCellMetaLiteral(cell *metadata.CellMeta) string {
 	if cell == nil {
 		return "&metadata.CellMeta{}"
 	}

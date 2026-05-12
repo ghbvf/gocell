@@ -82,7 +82,7 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string, bundle markergen.Wire
 		CellID:               cell.ID,
 		ConsumerGroupDefault: cell.ID,
 		SourceFile:           cell.File,
-		MetadataLiteral:      cell,
+		RenderedMetaLiteral:  renderCellMetaLiteral(cell),
 	}
 
 	listenerPrefix := make(map[string]string, len(bundle.Listeners))
