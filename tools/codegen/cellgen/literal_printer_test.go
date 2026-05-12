@@ -109,6 +109,14 @@ func TestRenderCellMetaLiteral_TableDriven(t *testing.T) {
 		want string
 	}{
 		{
+			// nil guard is part of the public contract documented on
+			// renderCellMetaLiteral; defending it here prevents a regression
+			// that would surface only at code generation time.
+			name:  "nil cell returns empty literal",
+			input: nil,
+			want:  "&metadata.CellMeta{}",
+		},
+		{
 			name: "empty verify smoke slice omitted",
 			input: &metadata.CellMeta{
 				ID:               "testcell",

@@ -30,7 +30,12 @@ var templateFS embed.FS
 // into CellGenSpec.RenderedMetaLiteral at build time so cell.tmpl emits the
 // string directly without invoking any template function (and therefore
 // cannot reach the *metadata.CellMeta struct to hand-enumerate fields).
-var templates = template.Must(template.Must(codegen.SharedTemplates.Clone()).ParseFS(templateFS, "templates/*.tmpl"))
+var templates = mustParseTemplates()
+
+func mustParseTemplates() *template.Template {
+	cloned := template.Must(codegen.SharedTemplates.Clone())
+	return template.Must(cloned.ParseFS(templateFS, "templates/*.tmpl"))
+}
 
 // Options controls a Generate run.
 type Options struct {

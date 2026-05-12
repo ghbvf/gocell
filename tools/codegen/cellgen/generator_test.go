@@ -26,12 +26,21 @@ var updateGolden = flag.Bool("update", false, "regenerate golden files")
 // initInternal hook, captureErr closure, mux.Route subPath block).
 func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 	t.Parallel()
+	// Exercise the full builder → renderer integration on the happy path so
+	// that any drift in renderCellMetaLiteral's output format (e.g. gofumpt
+	// alignment changes) surfaces here as a template-render failure rather
+	// than being silently masked by a "&metadata.CellMeta{}" stub.
 	spec := &CellGenSpec{
 		Package:              "demo",
 		StructName:           "Demo",
 		CellID:               "demo",
 		ConsumerGroupDefault: "demo",
-		RenderedMetaLiteral:  "&metadata.CellMeta{}",
+		RenderedMetaLiteral: renderCellMetaLiteral(&metadata.CellMeta{
+			ID:               "demo",
+			Type:             "core",
+			ConsistencyLevel: "L1",
+			GoStructName:     metadata.MustNewGoIdentifier("Demo"),
+		}),
 		RouteGroups: []RouteGroupGenSpec{{
 			ListenerConst: "cell.PrimaryListener",
 			Prefix:        "/api/v1",

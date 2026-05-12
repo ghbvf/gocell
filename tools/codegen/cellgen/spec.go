@@ -38,10 +38,12 @@ type CellGenSpec struct {
 	// cell.tmpl emits the string verbatim into
 	// `var cellMeta = {{ .RenderedMetaLiteral }}`.
 	//
-	// CELLGEN-LITERAL-FUNNEL-02 Hard 来源（type system 最高档）：cell.tmpl
-	// 拿不到 *metadata.CellMeta（CellGenSpec 不暴露），手写字段枚举
-	// **不可表达** — 没有数据源可访问。任何想绕过 reflect-driven renderer
-	// 的尝试必须修改此字段类型（公开 API 变更，review 必然可见）。
+	// CELLGEN-LITERAL-FUNNEL-02 Hard source (highest type-system grade):
+	// cell.tmpl cannot reach *metadata.CellMeta because CellGenSpec does not
+	// expose it. Hand-enumeration of CellMeta fields in the template is
+	// structurally unreachable — there is no data source to access. Any
+	// attempt to bypass the reflect-driven renderer must change the type of
+	// this field, which is a public API change and therefore review-visible.
 	RenderedMetaLiteral string
 	// RouteGroups holds the listener-aggregated route mounts. Each entry
 	// emits one reg.RouteGroup() call.
