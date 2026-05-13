@@ -347,13 +347,14 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	// Persist the session so sessionvalidate can look it up by sid claim.
+	now := s.clock.Now()
 	sess := &session.Session{
 		ID:                sessionID,
 		SubjectID:         userID,
-		JTI:               sessionID, // same UUID used as store ID and JWT jti claim
-		AuthzEpochAtIssue: 0,         // S4a placeholder; S4b will snapshot users.authz_epoch
-		CreatedAt:         s.clock.Now(),
-		ExpiresAt:         minted.ExpiresAt,
+		JTI:               sessionID,
+		AuthzEpochAtIssue: 0,
+		CreatedAt:         now,
+		ExpiresAt:         now.Add(s.sessionTTL),
 	}
 	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, userID)
 	if err != nil {

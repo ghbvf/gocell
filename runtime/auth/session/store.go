@@ -29,14 +29,20 @@ type Session struct {
 	// Mem store accepts any non-empty string.
 	SubjectID string
 
-	// JTI is the JWT jti claim reference (RFC 9068 §2.2.4) — the canonical
-	// fingerprint mode for FingerprintJTIRef (ADR-Session D1). The session
-	// row holds this reference; the JWT itself never lands in the store.
+	// JTI is a unique fingerprint stored on the session row; backends with
+	// FingerprintJTIRef require it non-empty on Create. It is currently a
+	// placeholder: JWTIssuer does not emit a jti claim, so callers populate
+	// JTI with any unique identifier (typically the session UUID). The
+	// target end state — JTI storing the actual JWT jti claim per RFC 9068
+	// §2.2.4 — applies once jti emission is wired into the JWT path.
 	JTI string
 
-	// AuthzEpochAtIssue is the user.authz_epoch snapshot captured at sign-in
-	// (ADR-Session D2). Validate paths reject when claim.epoch <
-	// user.authz_epoch (i.e. the user's epoch has been bumped since issue).
+	// AuthzEpochAtIssue snapshots an authorization-epoch value at sign-in.
+	// It is currently always 0: JWTIssuer does not emit an epoch claim and
+	// Store.Get does not expose the field, so it is wire-only. The target
+	// end state — validate paths rejecting JWTs whose epoch claim is older
+	// than the user's current authz_epoch — applies once the closed loop
+	// lands on the JWT path.
 	AuthzEpochAtIssue int64
 
 	// CreatedAt is the issue timestamp in UTC.
