@@ -865,8 +865,11 @@ func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
 	}
 }
 
-// TestValidateCallerCell tests the validateCallerCell function directly with
-// a table-driven set of cases covering empty, uppercase, valid, and invalid IDs.
+// TestValidateCallerCell tests the validateCallerCell function directly.
+// Cases reflect metadata.CellIDPattern (^[a-z][a-z0-9]+$): lowercase ASCII
+// letters + digits, ≥2 chars, must start with a letter — same regex
+// schema/governance enforce. Dash, single char, leading digit, uppercase,
+// underscore are all invalid.
 func TestValidateCallerCell(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -890,9 +893,11 @@ func TestValidateCallerCell(t *testing.T) {
 			wantMsg:    "caller cell id",
 		},
 		{
-			name:       "lowercase access-core — valid",
+			name:       "dash access-core — invalid (no-dash CellIDPattern)",
 			callerCell: "access-core",
-			wantErr:    false,
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
 		},
 		{
 			name:       "starts with digit — invalid",
@@ -902,13 +907,39 @@ func TestValidateCallerCell(t *testing.T) {
 			wantMsg:    "caller cell id",
 		},
 		{
-			name:       "single letter — valid",
+			name:       "single letter — invalid (≥2 chars required)",
 			callerCell: "a",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
+		},
+		{
+			name:       "alphanumeric with hyphens — invalid (no-dash CellIDPattern)",
+			callerCell: "a-b-c-123",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
+		},
+		{
+			name:       "underscore foo_bar — invalid",
+			callerCell: "foo_bar",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
+		},
+		{
+			name:       "concat accesscore — valid",
+			callerCell: "accesscore",
 			wantErr:    false,
 		},
 		{
-			name:       "alphanumeric with hyphens — valid",
-			callerCell: "a-b-c-123",
+			name:       "two char min ab — valid",
+			callerCell: "ab",
+			wantErr:    false,
+		},
+		{
+			name:       "letter plus digit a0 — valid",
+			callerCell: "a0",
 			wantErr:    false,
 		},
 	}

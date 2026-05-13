@@ -107,7 +107,14 @@ func NewHookObserver(cfg HookObserverConfig) (*HookObserver, error) {
 
 // OnHookEvent records the event. Safe for concurrent use (Prometheus vec
 // types are goroutine-safe).
+//
+// cell_id is routed through promCellLabel — the single typed-function
+// funnel that enforces metadata.CellIDPattern. Upstream invariants
+// (schemas/cell.schema.json + FMT-C1) already guarantee every event in
+// flight has a valid cell id; promCellLabel is the A-class unreachable
+// defense backstop required by PROM-CELL-LABEL-FUNNEL-01.
 func (o *HookObserver) OnHookEvent(e cell.HookEvent) {
-	o.hookTotal.WithLabelValues(e.CellID, string(e.Hook), string(e.Outcome)).Inc()
-	o.hookDuration.WithLabelValues(e.CellID, string(e.Hook)).Observe(e.Duration.Seconds())
+	cellID := promCellLabel(e.CellID)
+	o.hookTotal.WithLabelValues(cellID, string(e.Hook), string(e.Outcome)).Inc()
+	o.hookDuration.WithLabelValues(cellID, string(e.Hook)).Observe(e.Duration.Seconds())
 }

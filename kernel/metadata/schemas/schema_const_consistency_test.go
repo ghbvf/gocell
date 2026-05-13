@@ -35,6 +35,11 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 		},
 		{
 			"cell.schema.json",
+			[]string{"properties", "id", "pattern"},
+			"CellIDPattern", metadata.CellIDPattern,
+		},
+		{
+			"cell.schema.json",
 			[]string{"properties", "goStructName", "pattern"},
 			"GoStructNamePattern", metadata.GoStructNamePattern,
 		},

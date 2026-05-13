@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -14,11 +15,43 @@ import (
 	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
 )
 
-// metricsAuthHeader names the request header used to authenticate
-// /metrics scrapers when a bearer token is configured. Mirrors the X-Readyz-Token
-// convention for /readyz?verbose — keeping the same shape for all
-// control-plane endpoints lets operators standardize scraper config.
-const metricsAuthHeader = "X-Metrics-Token"
+const (
+	// metricsAuthHeader names the request header used to authenticate
+	// /metrics scrapers when a bearer token is configured. Mirrors the
+	// X-Readyz-Token convention for /readyz?verbose — keeping the same shape
+	// for all control-plane endpoints lets operators standardize scraper config.
+	metricsAuthHeader = "X-Metrics-Token"
+
+	// metricsScrapeTimeout is the application-level Gather() timeout for the
+	// /metrics handler. Set to 10s following the Prometheus official default
+	// scrape_timeout. Must be strictly less than the bootstrap HTTP
+	// WriteTimeout (30s, runtime/bootstrap/bootstrap_phase7.go) so promhttp
+	// can send a clean 503 + "Exceeded configured timeout of {dur}.\n" before
+	// the TCP write deadline kicks in and forcibly closes the connection.
+	//
+	// Caveat: promhttp's Timeout option implements scrape budget enforcement
+	// by spawning Gather() in a goroutine and racing it against a time.After
+	// channel — the prom.Gatherer interface carries no context, so an
+	// overrunning Gather call keeps executing in the background even after
+	// the 503 has been written. All current GoCell collectors are pure
+	// in-memory reads (CounterVec/HistogramVec.Collect), so a stranded
+	// Gather goroutine is benign; introducing an IO collector later requires
+	// either (a) a custom Gatherer that owns its own context-cancellable
+	// reads, or (b) upstream context plumbing in client_golang.
+	//
+	// ref: prometheus/client_golang prometheus/promhttp/http.go HandlerOpts.Timeout
+	metricsScrapeTimeout = 10 * time.Second
+
+	// metricsMaxRequestsInFlight caps concurrent /metrics scrapes. Normal
+	// operation has a single Prometheus server scraping (concurrency 1); HA
+	// dual-Prometheus + an operator running curl tops out at 3. Excess
+	// requests get 503 so the scraper backs off, preventing a slow-scrape
+	// queue from exhausting HealthListener goroutines. Ordering: the outer
+	// withMetricsTokenGuard handles 401 before this limit checks 503, so
+	// unauthenticated traffic cannot exhaust the inflight budget (nginx
+	// auth_request → limit_req parity).
+	metricsMaxRequestsInFlight = 3
+)
 
 // withMetricsTokenGuard wraps h so requests without a matching
 // X-Metrics-Token header are rejected with 401 Unauthorized.
@@ -81,7 +114,11 @@ func buildPromStack() (promStack, error) {
 //
 // ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
 func buildMetricsHandler(metricsToken string, registry *prom.Registry) http.Handler {
-	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{
+		Timeout:             metricsScrapeTimeout,
+		MaxRequestsInFlight: metricsMaxRequestsInFlight,
+		Registry:            registry, // self-instrument: promhttp_metric_handler_errors_total
+	})
 	if metricsToken != "" {
 		return withMetricsTokenGuard(metricsToken, h)
 	}

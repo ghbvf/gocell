@@ -26,14 +26,17 @@ const (
 	// + digits, ≥2 chars, must start with a letter. Mirrors
 	// schemas/assembly.schema.json properties.id.pattern.
 	AssemblyIDPattern = `^[a-z][a-z0-9]+$`
+	// CellIDPattern restricts cell ids to lowercase ASCII letters + digits,
+	// ≥2 chars, must start with a letter. Mirrors
+	// schemas/cell.schema.json properties.id.pattern. Identical to
+	// AssemblyIDPattern by design — both share the no-dash concatenation
+	// convention enforced by FMT-16 / FMT-C1; single-sourced here so adapter
+	// (e.g. adapters/prometheus.promCellLabel), governance, and codegen
+	// layers consume the same regex.
+	CellIDPattern = `^[a-z][a-z0-9]+$`
 	// GoStructNamePattern restricts cell.GoStructName to a Go-exported
 	// identifier shape (uppercase first letter, ASCII letters + digits).
 	// Mirrors schemas/cell.schema.json properties.goStructName.pattern.
-	//
-	// Note: cell.schema.json id.pattern is intentionally more permissive
-	// than the governance FMT-C1 strict-mode rule; that pre-existing
-	// schema/governance gap is out of scope for this PR (see review
-	// docs/reviews/202605070218-pr404-second-wave-review.md §R-meta).
 	GoStructNamePattern = `^[A-Z][A-Za-z0-9]*$`
 )
 
@@ -44,11 +47,15 @@ var DeployTemplateEnum = []string{"k8s", "compose", "binary"}
 
 var (
 	assemblyIDRe   = regexp.MustCompile(AssemblyIDPattern)
+	cellIDRe       = regexp.MustCompile(CellIDPattern)
 	goStructNameRe = regexp.MustCompile(GoStructNamePattern)
 )
 
 // MatchAssemblyID reports whether s satisfies AssemblyIDPattern.
 func MatchAssemblyID(s string) bool { return assemblyIDRe.MatchString(s) }
+
+// MatchCellID reports whether s satisfies CellIDPattern.
+func MatchCellID(s string) bool { return cellIDRe.MatchString(s) }
 
 // MatchGoStructName reports whether s satisfies GoStructNamePattern.
 func MatchGoStructName(s string) bool { return goStructNameRe.MatchString(s) }

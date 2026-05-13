@@ -33,7 +33,7 @@ func runValidate(args []string) error {
 	strict := fs.Bool("strict", false,
 		"enforce strict-only governance rules"+
 			" (VERIFY-06 executable journey auto checks, FMT-16 slice/cell/assembly dirs,"+
-			" FMT-17 allowedFiles, FMT-C1 cell id, FMT-A1 assembly id)")
+			" FMT-17 allowedFiles)")
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
 	if err := fs.Parse(args); err != nil {

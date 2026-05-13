@@ -58,11 +58,15 @@ jobs:
         #   - kernel/ ... runtime/ ... pkg/ ... — repository's own goroutines
         #   - tools/archtest/internal/typeseval/ — process-wide SharedResolver
         #     cache (sync.Mutex + map) covered by TestSharedResolver_ConcurrentInit
+        #   - adapters/prometheus/ — MetricProvider RWMutex + HookObserver
+        #     concurrent OnHookEvent (B2-A-24 unit-level race coverage; no
+        #     Docker dependency, fits the fast lane budget)
         run: |
           go test -race -count=1 -timeout 10m \
             ./kernel/... \
             ./runtime/... \
             ./pkg/... \
+            ./adapters/prometheus/... \
             ./tools/archtest/internal/typeseval/...
 
   race-pg-integration:

@@ -6,6 +6,7 @@ package governance
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -564,51 +565,81 @@ func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 	}
 }
 
-// TestStrictValidator_FMTC1_KebabCellID verifies that FMT-C1 flags cell.yaml
-// ids containing '-' (kebab-case) in strict mode and is silent otherwise.
-// Uses synthetic ids (foo-bar) so later repo-wide sed renames do not erase
-// the kebab fixture.
-func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
-	project := &metadata.ProjectMeta{
-		Cells: map[string]*metadata.CellMeta{
-			"foo-bar": {
-				ID:               "foo-bar",
-				Type:             "core",
-				ConsistencyLevel: "L2",
-				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-				Schema:           metadata.SchemaMeta{Primary: "cell_foobar"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.startup"}},
-				Dir:              "foobar", // dir already no-dash, but id still dash
-			},
-		},
-		Slices:     map[string]*metadata.SliceMeta{},
-		Contracts:  map[string]*metadata.ContractMeta{},
-		Journeys:   map[string]*metadata.JourneyMeta{},
-		Assemblies: map[string]*metadata.AssemblyMeta{},
+// assertRuleFiresInBothModes runs ValidateStrict in both default and
+// strict modes and fails when the given rule code does not fire as a
+// SeverityError in either pass. Extracted so FMTC1/FMTA1 unconditional-
+// rule tests share the same shape and stay under the cognitive
+// complexity budget.
+func assertRuleFiresInBothModes(t *testing.T, v *Validator, code, fixtureDesc string) {
+	t.Helper()
+	for _, strict := range []bool{false, true} {
+		strict := strict
+		t.Run(fmtBoolName(strict), func(t *testing.T) {
+			results, err := v.ValidateStrict(t.Context(), strict)
+			require.NoError(t, err)
+			if !ruleFiredAsError(results, code) {
+				t.Errorf("%s must fire for %s (strict=%v)", code, fixtureDesc, strict)
+			}
+		})
 	}
+}
 
-	v := NewValidator(project, "", clock.Real())
-
-	// Non-strict: silent.
-	forRes569, err := v.ValidateStrict(t.Context(), false)
-	require.NoError(t, err)
-	for _, r := range forRes569 {
-		if r.Code == "FMT-C1" {
-			t.Errorf("non-strict mode must not emit FMT-C1: %s", r.Message)
+// ruleFiredAsError reports whether results contains at least one
+// SeverityError matching code. Side-effect free; used by the
+// assertRuleFires* helpers.
+func ruleFiredAsError(results []ValidationResult, code string) bool {
+	for _, r := range results {
+		if r.Code == code && r.Severity == SeverityError {
+			return true
 		}
 	}
+	return false
+}
 
-	// Strict: must fire FMT-C1.
-	var got bool
-	forRes577, err := v.ValidateStrict(t.Context(), true)
-	require.NoError(t, err)
-	for _, r := range forRes577 {
-		if r.Code == "FMT-C1" && r.Severity == SeverityError {
-			got = true
-		}
+// TestValidator_FMTC1_CellIDPattern verifies FMT-C1 fires unconditionally
+// for cell ids that violate CellIDPattern (kebab, uppercase, single char,
+// leading digit, etc.). FMT-C1 mirrors a schema constraint
+// (schemas/cell.schema.json id.pattern) so it must trip on both the default
+// and strict validate paths — schema-aware tooling rejects the same value
+// without a strict toggle. Uses synthetic ids so later repo-wide sed renames
+// do not erase the fixture.
+func TestValidator_FMTC1_CellIDPattern(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"kebab_disallowed", "foo-bar"},
+		{"uppercase_disallowed", "FooBar"},
+		{"single_char_disallowed", "a"},
+		{"leading_digit_disallowed", "1foo"},
+		{"underscore_disallowed", "foo_bar"},
 	}
-	if !got {
-		t.Error("strict mode should produce FMT-C1 error for kebab-case cell id")
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			project := &metadata.ProjectMeta{
+				Cells: map[string]*metadata.CellMeta{
+					tc.id: {
+						ID:               tc.id,
+						Type:             "core",
+						ConsistencyLevel: "L2",
+						Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+						Schema:           metadata.SchemaMeta{Primary: "cell_foobar"},
+						Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.startup"}},
+						Dir:              "foobar",
+					},
+				},
+				Slices:     map[string]*metadata.SliceMeta{},
+				Contracts:  map[string]*metadata.ContractMeta{},
+				Journeys:   map[string]*metadata.JourneyMeta{},
+				Assemblies: map[string]*metadata.AssemblyMeta{},
+			}
+
+			v := NewValidator(project, "", clock.Real())
+			assertRuleFiresInBothModes(t, v, "FMT-C1",
+				fmt.Sprintf("invalid cell id %q", tc.id))
+		})
 	}
 }
 
@@ -636,23 +667,7 @@ func TestValidator_FMTA1_AssemblyIDPattern(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-
-	for _, strict := range []bool{false, true} {
-		strict := strict
-		t.Run(fmtBoolName(strict), func(t *testing.T) {
-			results, err := v.ValidateStrict(t.Context(), strict)
-			require.NoError(t, err)
-			var got bool
-			for _, r := range results {
-				if r.Code == "FMT-A1" && r.Severity == SeverityError {
-					got = true
-				}
-			}
-			if !got {
-				t.Errorf("FMT-A1 must fire for kebab-case assembly id (strict=%v)", strict)
-			}
-		})
-	}
+	assertRuleFiresInBothModes(t, v, "FMT-A1", "kebab-case assembly id")
 }
 
 func fmtBoolName(b bool) string {
