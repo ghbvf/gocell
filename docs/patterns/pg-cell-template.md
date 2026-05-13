@@ -168,7 +168,7 @@ func (m FooCoreModule) Provide(ctx context.Context, shared *SharedDeps) (
 		opts = append(opts, bootstrap.WithManagedResource(pgRes))
 		provisional = append(provisional, pgRes)
 	}
-	// Relay opts are registered after pgRes so bootstrap's LIFO shutdown stops
+	// Relay opts are registered after the pool resource so bootstrap's LIFO shutdown stops
 	// the relay before closing the pool it uses.
 	opts = append(opts, relayOpts...)
 	return c, opts, provisional, nil
@@ -217,11 +217,6 @@ func buildFooCoreOpts(
 		txMgr := adapterpg.NewTxManager(pool)
 		relayWorker := outboxruntime.NewRelay(adapterpg.NewOutboxStore(pool.DB(), clk), pub,
 			outboxruntime.DefaultRelayConfig())
-		pgRes, resErr := adapterpg.NewPGResource(pool)
-		if resErr != nil {
-			_ = pool.Close(ctx)
-			return nil, nil, nil, fmt.Errorf("foocore PG resource: %w", resErr)
-		}
 		// Composition root 将 raw infra 类型包装为 sealed marker，
 		// cell.go 公开 Option 在编译期拒绝 raw 类型
 		// （ADR 202605101900-adr-cell-raw-infra-sealed-marker §D1）。
@@ -232,7 +227,7 @@ func buildFooCoreOpts(
 			foocore.WithOutboxWriter(writer),
 		}
 		relayOpts := []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)}
-		return pgRes, relayOpts, opts, nil
+		return pool, relayOpts, opts, nil
 
 	case "memory":
 		return nil, nil, []foocore.Option{foocore.WithInMemoryDefaults()}, nil
@@ -271,10 +266,10 @@ func buildFooCoreOpts(
    逆序 Close 已开启的连接，防止启动失败时泄漏。
 
 后台 worker 型资源（例如 outbox relay）通过独立
-`bootstrap.WithManagedResource(relayWorker)` 返回，但不塞进 `PGResource`。
+`bootstrap.WithManagedResource(relayWorker)` 返回，但不塞进 Pool。
 这样 relay 自己的 `Checkers()` 会进入 `/readyz?verbose`，`Worker()/Close()`
-也保持独立；同时 `PGResource.Worker()` 继续为 nil，只表达 pool 的健康检查
-和关闭职责。注册顺序必须是 pool resource 在前、relay opts 在后，bootstrap 的
+也保持独立；同时 Pool 直接实现 `lifecycle.ManagedResource`，其 `Worker()` 为 nil，
+只表达 pool 的健康检查和关闭职责。注册顺序必须是 pool 在前、relay opts 在后，bootstrap 的
 LIFO shutdown 才会先停 relay、再关 pool。
 
 ```
