@@ -1,4 +1,9 @@
-// INVARIANT: MANAGED-RESOURCE-COMPLETENESS-01: adapter exported types with owned lifecycle must implement ManagedResource or be opted-out. The 4 external-dependency owner types (postgres.Pool / redis.Client / s3.Client / oidc.Adapter) are deliberately excluded from the opt-out table and MUST implement ManagedResource directly.
+// INVARIANT: MANAGED-RESOURCE-COMPLETENESS-01: adapter exported types
+//
+//	with owned lifecycle must implement ManagedResource or be opted-out.
+//	The 4 external-dependency owner types (postgres.Pool / redis.Client /
+//	s3.Client / oidc.Adapter) are deliberately excluded from the opt-out
+//	table and MUST implement ManagedResource directly.
 package archtest
 
 import (
