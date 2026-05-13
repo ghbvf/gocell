@@ -22,6 +22,13 @@ import (
 // native variadic attribute.KeyValue makes drift silent.
 type MetricProvider struct {
 	meter otelmetric.Meter
+	// attrCacheMaxSize is the cap injected into each CounterVec /
+	// HistogramVec's attrCache. Always defaults to defaultAttrCacheMaxSize
+	// in NewMetricProvider; only same-package _test.go is permitted to
+	// overwrite it (unexported field — packages outside adapters/otel
+	// cannot reach it, so production misuse is a type-system error rather
+	// than a convention).
+	attrCacheMaxSize int
 }
 
 // Compile-time check: MetricProvider satisfies metrics.Provider.
@@ -33,16 +40,11 @@ var _ metrics.Provider = (*MetricProvider)(nil)
 // of high-cardinality writes degrades into the overflow bucket at the same
 // threshold the SDK would impose downstream.
 //
-// Declared as var (not const) so tests can save/restore around small-cap
-// end-to-end probes; production-time mutation is undefined behavior and the
-// value is captured per-vec at construction (mutating after CounterVec /
-// HistogramVec does NOT resize the live cache).
-//
 // ref: opentelemetry-go sdk/metric/config.go@main defaultCardinalityLimit
 // ref: opentelemetry-go sdk/metric/internal/aggregate/limit.go@main —
 // overflow bucket pattern (vs LRU eviction, which would silently produce
 // wrong-attribute reports on subsequent lookup of an evicted key).
-var defaultAttrCacheMaxSize = 2000
+const defaultAttrCacheMaxSize = 2000
 
 // overflowAttrKey is the attribute key OTel SDK uses to mark data points
 // produced past a cardinality cap (sourced from
@@ -69,7 +71,10 @@ func NewMetricProvider(meter otelmetric.Meter) (*MetricProvider, error) {
 	if meter == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig, "otel metric provider: Meter is required")
 	}
-	return &MetricProvider{meter: meter}, nil
+	return &MetricProvider{
+		meter:            meter,
+		attrCacheMaxSize: defaultAttrCacheMaxSize,
+	}, nil
 }
 
 // CounterVec creates a Float64Counter instrument. OTel counters are
@@ -85,7 +90,7 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	return &otelCounterVec{
 		inner:  c,
 		labels: append([]string(nil), opts.LabelNames...),
-		cache:  newAttrCache(defaultAttrCacheMaxSize),
+		cache:  newAttrCache(p.attrCacheMaxSize),
 	}, nil
 }
 
@@ -115,7 +120,7 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	return &otelHistogramVec{
 		inner:  h,
 		labels: append([]string(nil), opts.LabelNames...),
-		cache:  newAttrCache(defaultAttrCacheMaxSize),
+		cache:  newAttrCache(p.attrCacheMaxSize),
 	}, nil
 }
 

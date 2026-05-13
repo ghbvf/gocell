@@ -124,17 +124,18 @@ func TestAttrCache_OverflowIsStableAcrossLookups(t *testing.T) {
 // otel.metric.overflow=true — confirms the package-level overflowOpt
 // sentinel is wired correctly through the full instrument → reader pipeline.
 //
-// Uses defaultAttrCacheMaxSize save/restore to keep the emission loop small.
+// Overrides the per-provider attrCacheMaxSize via the unexported field
+// (test lives in package otel, so the field is reachable here but invisible
+// to any caller outside adapters/otel — production code cannot set a small
+// cap because the field is not part of the public API). This replaces an
+// earlier var-save/restore pattern around a package-level defaultAttrCacheMaxSize.
 func TestMetricProvider_OverflowDataPointEmitted(t *testing.T) {
-	orig := defaultAttrCacheMaxSize
-	defaultAttrCacheMaxSize = 3
-	t.Cleanup(func() { defaultAttrCacheMaxSize = orig })
-
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 	provider, err := NewMetricProvider(mp.Meter("gocell.test"))
 	require.NoError(t, err)
+	provider.attrCacheMaxSize = 3
 
 	cv, err := provider.CounterVec(metrics.CounterOpts{
 		Name:       "gocell_test_overflow_total",

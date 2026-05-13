@@ -35,6 +35,63 @@ func newTestMeterProvider(t *testing.T) (*sdkmetric.ManualReader, *sdkmetric.Met
 	return reader, mp
 }
 
+// poolMetricSnapshot flattens db.client.connection.* data points emitted
+// by NewPoolMetricsResource into keyed maps so assertions stay one-liners.
+// idleUsed keys are "<pool>:<state>" so a single map covers both states
+// without nesting.
+type poolMetricSnapshot struct {
+	idleUsed map[string]int64
+	max      map[string]int64
+	timeouts map[string]int64
+}
+
+// drainPoolMetrics extracts a flat snapshot of pool metrics from a
+// ManualReader collect result. Extracted from the test body to bring its
+// cognitive complexity under the project's 15 ceiling.
+func drainPoolMetrics(t *testing.T, rm metricdata.ResourceMetrics) poolMetricSnapshot {
+	t.Helper()
+	snap := poolMetricSnapshot{
+		idleUsed: map[string]int64{},
+		max:      map[string]int64{},
+		timeouts: map[string]int64{},
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			recordPoolMetric(t, m, &snap)
+		}
+	}
+	return snap
+}
+
+// recordPoolMetric appends one Metric's data points to snap, skipping
+// non-pool metrics. Split from drainPoolMetrics so each function stays
+// under the cognitive-complexity ceiling.
+func recordPoolMetric(t *testing.T, m metricdata.Metrics, snap *poolMetricSnapshot) {
+	t.Helper()
+	switch m.Name {
+	case "db.client.connection.count", "db.client.connection.max", "db.client.connection.timeouts":
+	default:
+		return
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("metric %s is not Sum[int64], got %T", m.Name, m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		pool, _ := dp.Attributes.Value("db.client.connection.pool.name")
+		switch m.Name {
+		case "db.client.connection.count":
+			if state, has := dp.Attributes.Value("db.client.connection.state"); has {
+				snap.idleUsed[pool.AsString()+":"+state.AsString()] = dp.Value
+			}
+		case "db.client.connection.max":
+			snap.max[pool.AsString()] = dp.Value
+		case "db.client.connection.timeouts":
+			snap.timeouts[pool.AsString()] = dp.Value
+		}
+	}
+}
+
 func TestNewPoolMetricsResource_EmitsIdleAndUsed(t *testing.T) {
 	reader, mp := newTestMeterProvider(t)
 	meter := mp.Meter("gocell.test")
@@ -57,45 +114,16 @@ func TestNewPoolMetricsResource_EmitsIdleAndUsed(t *testing.T) {
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))
 
-	idleUsed := map[string]int64{}
-	maxPerPool := map[string]int64{}
-	timeoutsPerPool := map[string]int64{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			switch m.Name {
-			case "db.client.connection.count", "db.client.connection.max", "db.client.connection.timeouts":
-			default:
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				t.Fatalf("metric %s is not Sum[int64], got %T", m.Name, m.Data)
-			}
-			for _, dp := range sum.DataPoints {
-				pool, _ := dp.Attributes.Value("db.client.connection.pool.name")
-				state, hasState := dp.Attributes.Value("db.client.connection.state")
-				switch m.Name {
-				case "db.client.connection.count":
-					if hasState {
-						idleUsed[pool.AsString()+":"+state.AsString()] = dp.Value
-					}
-				case "db.client.connection.max":
-					maxPerPool[pool.AsString()] = dp.Value
-				case "db.client.connection.timeouts":
-					timeoutsPerPool[pool.AsString()] = dp.Value
-				}
-			}
-		}
-	}
+	snap := drainPoolMetrics(t, rm)
 
-	assert.Equal(t, int64(3), idleUsed["pg-main:idle"])
-	assert.Equal(t, int64(7), idleUsed["pg-main:used"])
-	assert.Equal(t, int64(2), idleUsed["redis-main:idle"])
-	assert.Equal(t, int64(3), idleUsed["redis-main:used"])
-	assert.Equal(t, int64(20), maxPerPool["pg-main"])
-	assert.Equal(t, int64(8), maxPerPool["redis-main"])
-	assert.Equal(t, int64(1), timeoutsPerPool["pg-main"])
-	assert.Equal(t, int64(0), timeoutsPerPool["redis-main"])
+	assert.Equal(t, int64(3), snap.idleUsed["pg-main:idle"])
+	assert.Equal(t, int64(7), snap.idleUsed["pg-main:used"])
+	assert.Equal(t, int64(2), snap.idleUsed["redis-main:idle"])
+	assert.Equal(t, int64(3), snap.idleUsed["redis-main:used"])
+	assert.Equal(t, int64(20), snap.max["pg-main"])
+	assert.Equal(t, int64(8), snap.max["redis-main"])
+	assert.Equal(t, int64(1), snap.timeouts["pg-main"])
+	assert.Equal(t, int64(0), snap.timeouts["redis-main"])
 }
 
 // B2-R-08: NewPoolMetricsResource must return a value implementing
