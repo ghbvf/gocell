@@ -441,7 +441,7 @@ func TestL0UndeclaredImports_UndeclaredImport(t *testing.T) {
 
 	results := l0UndeclaredImports(cm, imported, declared)
 	require.Len(t, results, 1, "one undeclared import must produce one violation")
-	assert.Equal(t, "CHECK-L0-UNDECLARED-IMPORT", results[0].Code)
+	assert.Equal(t, governance.RuleCode("CHECK-L0-UNDECLARED-IMPORT"), results[0].Code)
 	assert.Contains(t, results[0].Message, "secret-dep")
 }
 
@@ -463,7 +463,7 @@ func TestL0DanglingDeclarations_DanglingDeclaration(t *testing.T) {
 
 	results := l0DanglingDeclarations(cm, imported, declared)
 	require.Len(t, results, 1, "one dangling declaration must produce one violation")
-	assert.Equal(t, "CHECK-L0-DANGLING-DECLARATION", results[0].Code)
+	assert.Equal(t, governance.RuleCode("CHECK-L0-DANGLING-DECLARATION"), results[0].Code)
 	assert.Contains(t, results[0].Message, "shared-crypto")
 }
 
@@ -502,7 +502,7 @@ func TestLoadCellImports_NonExistentDir(t *testing.T) {
 	// function does not panic.
 	if fatal {
 		require.NotEmpty(t, loadResults, "fatal load must produce at least one warning")
-		assert.Equal(t, "CHECK-L0-LOAD-ERROR", loadResults[0].Code)
+		assert.Equal(t, governance.RuleCode("CHECK-L0-LOAD-ERROR"), loadResults[0].Code)
 	}
 	// Non-fatal (empty dir) is also fine — just assert no panic.
 }

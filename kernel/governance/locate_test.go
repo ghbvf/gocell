@@ -82,11 +82,11 @@ func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
 	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
 	v := NewValidator(pm, "", clock.Real())
 
-	r := v.newResult("REF-02", SeverityError, IssueRefNotFound,
+	r := v.newResult(codeREF02, SeverityError, IssueRefNotFound,
 		"cells/x/slices/s/slice.yaml", "contractUsages[1].contract",
 		"references non-existent contract")
 
-	assert.Equal(t, "REF-02", r.Code)
+	assert.Equal(t, codeREF02, r.Code)
 	assert.Equal(t, SeverityError, r.Severity)
 	assert.Equal(t, IssueRefNotFound, r.IssueType)
 	assert.Equal(t, "cells/x/slices/s/slice.yaml", r.File)
@@ -102,11 +102,11 @@ func TestValidator_NewResult_UnknownLocation(t *testing.T) {
 	pm := &metadata.ProjectMeta{Cells: map[string]*metadata.CellMeta{}}
 	v := NewValidator(pm, "", clock.Real())
 
-	r := v.newResult("REF-01", SeverityError, IssueRefNotFound,
+	r := v.newResult(codeREF01, SeverityError, IssueRefNotFound,
 		"cells/x/slice.yaml", "belongsToCell",
 		"slice references non-existent cell")
 
-	assert.Equal(t, "REF-01", r.Code)
+	assert.Equal(t, codeREF01, r.Code)
 	assert.Zero(t, r.Line)
 	assert.Zero(t, r.Column)
 }
@@ -136,13 +136,13 @@ func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
 	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
 	dc := NewDependencyChecker(pm)
 
-	r := dc.newResult("DEP-01", SeverityError, IssueMismatch,
+	r := dc.newResult(codeDEP01, SeverityError, IssueMismatch,
 		"cells/x/slices/s/slice.yaml", "belongsToCell",
 		"slice belongsToCell mismatch")
 
 	assert.Equal(t, 2, r.Line)
 	assert.Positive(t, r.Column)
-	assert.Equal(t, "DEP-01", r.Code)
+	assert.Equal(t, codeDEP01, r.Code)
 }
 
 // TestDependencyChecker_Locate_FallsBack verifies the nil-project / missing

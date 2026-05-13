@@ -51,11 +51,12 @@ func TestBFSReachabilityFixtures(t *testing.T) {
 			// BFS reaches helper(v) via the free-function call edge, then
 			// detects v.newResult inside helper despite recvName == "".
 			source: `package fixture
-type ValidationResult struct{ Code string }
+type RuleCode string
+type ValidationResult struct{ Code RuleCode }
 type Validator struct{}
-func (v *Validator) rules()                                { helper(v) }
-func helper(v *Validator)                                  { v.newResult("FIX-A-01") }
-func (v *Validator) newResult(s string) ValidationResult   { return ValidationResult{} }
+func (v *Validator) rules()                                  { helper(v) }
+func helper(v *Validator)                                    { v.newResult("FIX-A-01") }
+func (v *Validator) newResult(s RuleCode) ValidationResult   { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"FIX-A-01"},
@@ -88,12 +89,13 @@ func (v *Validator) rules() []ValidationResult {
 		{
 			name: "orphan_method_not_in_roots_is_unreachable",
 			source: `package fixture
-type ValidationResult struct{ Code string }
+type RuleCode string
+type ValidationResult struct{ Code RuleCode }
 type Validator struct{}
-func (v *Validator) rules()                                { v.live() }
-func (v *Validator) live()                                 { v.newResult("LIVE-04") }
-func (v *Validator) dead()                                 { v.newResult("DEAD-99") }
-func (v *Validator) newResult(s string) ValidationResult   { return ValidationResult{} }
+func (v *Validator) rules()                                  { v.live() }
+func (v *Validator) live()                                   { v.newResult("LIVE-04") }
+func (v *Validator) dead()                                   { v.newResult("DEAD-99") }
+func (v *Validator) newResult(s RuleCode) ValidationResult   { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"LIVE-04"},
@@ -101,27 +103,29 @@ func (v *Validator) newResult(s string) ValidationResult   { return ValidationRe
 		{
 			name: "const_ident_emission_resolved_via_const_map",
 			source: `package fixture
-type ValidationResult struct{ Code string }
+type RuleCode string
+type ValidationResult struct{ Code RuleCode }
 type Validator struct{}
-const ruleX = "X-CONST-05"
-func (v *Validator) rules()                                { v.do() }
-func (v *Validator) do()                                   { v.newResult(ruleX) }
-func (v *Validator) newResult(s string) ValidationResult   { return ValidationResult{} }
+const ruleX RuleCode = "X-CONST-05"
+func (v *Validator) rules()                                  { v.do() }
+func (v *Validator) do()                                     { v.newResult(ruleX) }
+func (v *Validator) newResult(s RuleCode) ValidationResult   { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"X-CONST-05"},
 		},
 		{
 			name: "signature_mismatched_same_named_method_ignored_RED",
-			// Method literally named newResult with string arg 0 but
+			// Method literally named newResult with RuleCode arg 0 but
 			// missing the ValidationResult return type — handleCall's
 			// signature filter must reject it. Pre-PR-TS1 (name-based
 			// match) this would have captured "RED-06" into reachable.
 			source: `package fixture
-type ValidationResult struct{ Code string }
+type RuleCode string
+type ValidationResult struct{ Code RuleCode }
 type Validator struct{}
-func (v *Validator) rules()             { v.newResult("RED-06") }
-func (v *Validator) newResult(s string) {}
+func (v *Validator) rules()               { v.newResult("RED-06") }
+func (v *Validator) newResult(s RuleCode) {}
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: nil,

@@ -46,17 +46,6 @@ import (
 // finding rather than silently skipping the contract.
 var errCorrelationMissing = errors.New("auth.Mount correlation missing")
 
-// CodeContractHealthResponseAlignment is the rule code for CH-04 — emitted as
-// SeverityError when a handler returns a 4xx/5xx status code that the contract
-// does not declare in its responses map. The "extra declaration" inverse
-// (contract declares N but handler never returns it) is intentionally NOT
-// reported: status codes can be emitted by listener auth middleware (401/403),
-// rate-limit middleware (429), framework error paths (5xx), or service-layer
-// errcode flow through WriteError. Static handler-only AST analysis
-// cannot see those paths, and reporting them as "unused" would generate
-// systematic false positives that drown out genuine missing declarations.
-const CodeContractHealthResponseAlignment = "CH-04"
-
 // httpStatusNameToCode maps the AST selector name (e.g. "StatusBadRequest")
 // to the numeric HTTP status code for ≥400 responses. Only 4xx/5xx names are
 // included because CH-04 only validates error response declarations. This
@@ -180,7 +169,7 @@ func (v *Validator) checkResponseAlignmentForContract(
 	if err != nil {
 		if errors.Is(err, errCorrelationMissing) {
 			return []ValidationResult{v.newResult(
-				CodeContractHealthResponseAlignment, SeverityError, IssueRequired,
+				codeCH04, SeverityError, IssueRequired,
 				c.File, "endpoints.http.path",
 				fmt.Sprintf(advHintCH04CorrelationFailed, c.ID, handlerFile),
 			)}
@@ -221,14 +210,15 @@ func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 
 // buildAlignmentFindings compares handler-observed codes vs contract-declared
 // codes and emits CH-04 (missing) findings. Extra declarations are not
-// reported — see CodeContractHealthResponseAlignment doc for rationale.
+// reported — see codeCH04 doc for rationale.
 func buildAlignmentFindings(v *Validator, c *metadata.ContractMeta, observed, declared map[int]struct{}) []ValidationResult {
 	var results []ValidationResult
 	for _, status := range diffStatuses(observed, declared) {
 		results = append(results, v.newResult(
-			CodeContractHealthResponseAlignment, SeverityError, IssueRequired,
+			codeCH04, SeverityError, IssueRequired,
 			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status),
-			fmt.Sprintf("%s: handler returns %d but contract does not declare it", c.ID, status),
+			fmt.Sprintf("%s: handler returns %d but contract does not declare it;"+
+				" fix: add responses[%d] to the contract or remove the handler return path", c.ID, status, status),
 		))
 	}
 	return results
@@ -796,8 +786,6 @@ func stripQuotes(s string) string {
 // CH-05 — HTTP path-param UUID parsing
 // =============================================================================
 
-const CodeContractHealthPathParamUUID = "CH-05" // SeverityError
-
 // CheckHTTPPathParamUUID enforces CH-05: for every contract with
 // pathParams.{name}.format == "uuid", the corresponding handler must call
 // httputil.ParseUUIDPathParam(w, r, "{name}") for that parameter.
@@ -844,7 +832,7 @@ func (v *Validator) checkPathParamUUIDForContract(
 	fnName, ok := ph.contractToFuncs[c.ID]
 	if !ok {
 		return []ValidationResult{v.newResult(
-			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+			codeCH05, SeverityError, IssueRequired,
 			c.File, "endpoints.http.path",
 			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
 		)}
@@ -853,7 +841,7 @@ func (v *Validator) checkPathParamUUIDForContract(
 	body, ok := ph.funcBodies[fnName]
 	if !ok {
 		return []ValidationResult{v.newResult(
-			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+			codeCH05, SeverityError, IssueRequired,
 			c.File, "endpoints.http.path",
 			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
 		)}
@@ -871,7 +859,7 @@ func buildPathParamFindings(
 	for _, paramName := range uuidParams {
 		if _, ok := parsed[paramName]; !ok {
 			results = append(results, v.newResult(
-				CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+				codeCH05, SeverityError, IssueRequired,
 				c.File, fmt.Sprintf("endpoints.http.pathParams.%s", paramName),
 				fmt.Sprintf(advHintCH05MissingParseCall, c.ID, paramName, paramName),
 			))
@@ -951,26 +939,6 @@ func isParseUUIDPathParamCall(call *ast.CallExpr) bool {
 // CH-06 — typed response envelope alignment
 // =============================================================================
 
-// CodeContractHealthTypedEnvelope is the rule code for CH-06 — typed response
-// envelope alignment. Emitted as SeverityError when an HTTP contract's
-// declared response set (SuccessStatus + responses[] keys) does not match
-// the typed response struct set generated into types_gen.go.
-//
-// CH-06 closes the drift loop introduced by typed response envelope migration
-// (PR-V1-CONTRACT-TYPED-RESPONSE-ENVELOPE): the post-service response surface
-// is no longer reverse-inferred from errcode.Kind in handler AST (CH-04's
-// remaining job is the pre-service helper-emission set — DecodeJSONStrict
-// 400/413, ParsePageParams 400, ParseUUIDPathParam 400 — which still has no
-// other source of truth). Instead, the contract.yaml responses[] table and
-// the generated typed response struct set must agree exactly. Any builder bug
-// (missing lift), orphan struct (stale generated file), or contract drift
-// (yaml edited without regen) is statically caught here, replacing the
-// fragile reverse inference path described in roadmap 06.FU.
-//
-// ref: oapi-codegen pkg/codegen/templates/strict/strict-responses.tmpl@main —
-// the typed-response-set semantic this rule guards.
-const CodeContractHealthTypedEnvelope = "CH-06"
-
 // typedResponseStructPattern matches the generated typed response struct names
 // produced by tools/codegen/contractgen/templates/types.tmpl. The status code
 // is captured as the second-to-last 3-digit run before the suffix.
@@ -1034,20 +1002,20 @@ func (v *Validator) checkTypedEnvelopeForContract(
 
 	var results []ValidationResult
 	for _, status := range diffStatuses(declared, implemented) {
-		msg := fmt.Sprintf("%s: contract declares status %d but generated types_gen.go has no matching typed"+
-			" response struct (regenerate via `gocell generate contract --all`)", c.ID, status)
 		results = append(results, v.newResult(
-			CodeContractHealthTypedEnvelope, SeverityError, IssueRequired,
-			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status), msg,
+			codeCH06, SeverityError, IssueRequired,
+			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status),
+			fmt.Sprintf("%s: contract declares status %d but generated types_gen.go has no matching typed"+
+				" response struct; fix: run `gocell generate contract --all` to regenerate typed response structs", c.ID, status),
 		))
 	}
 	for _, status := range diffStatuses(implemented, declared) {
-		msg := fmt.Sprintf("%s: generated types_gen.go has typed response struct for status %d but contract.yaml"+
-			" does not declare it (orphan struct — edit contract.yaml or rerun `gocell generate contract --all`)",
-			c.ID, status)
 		results = append(results, v.newResult(
-			CodeContractHealthTypedEnvelope, SeverityError, IssueRequired,
-			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status), msg,
+			codeCH06, SeverityError, IssueRequired,
+			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status),
+			fmt.Sprintf("%s: generated types_gen.go has typed response struct for status %d but contract.yaml"+
+				" does not declare it (orphan struct); fix: add responses[%d] to contract.yaml or rerun `gocell generate contract --all`",
+				c.ID, status, status),
 		))
 	}
 	return results

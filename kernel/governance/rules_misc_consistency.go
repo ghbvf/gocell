@@ -30,8 +30,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-const codeContractConsistencyEmit01 = "CONTRACT-CONSISTENCY-EMIT-01"
-
 // pkgConstMap maps constName → stringValue for a single package.
 type pkgConstMap = map[string]string
 
@@ -234,17 +232,21 @@ func (v *Validator) checkConsistencyConstraints12(c *metadata.ContractMeta) ([]V
 	// Constraint 1: L2+ HTTP contract must have non-empty triggers.
 	if isL2OrHigher(c.ConsistencyLevel) && len(c.Triggers) == 0 {
 		return []ValidationResult{v.newResult(
-			codeContractConsistencyEmit01, SeverityError, IssueRequired,
+			codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRequired,
 			contractFile(c), "triggers",
-			fmt.Sprintf("contract %q: L2+ HTTP contract must declare non-empty triggers (matches outbox.Emit topics)", c.ID),
+			fmt.Sprintf("contract %q: L2+ HTTP contract must declare non-empty triggers (matches outbox.Emit topics);"+
+				" fix: list the event contract ids emitted by this endpoint under triggers in contract.yaml",
+				c.ID),
 		)}, true
 	}
 	// Constraint 2: triggers present but level ∈ {L0, L1}.
 	if len(c.Triggers) > 0 && !isL2OrHigher(c.ConsistencyLevel) {
 		return []ValidationResult{v.newResult(
-			codeContractConsistencyEmit01, SeverityError, IssueMismatch,
+			codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
 			contractFile(c), "triggers",
-			fmt.Sprintf("contract %q declares triggers but consistencyLevel=%s; triggers imply L2+", c.ID, c.ConsistencyLevel),
+			fmt.Sprintf("contract %q declares triggers but consistencyLevel=%s; triggers imply L2+;"+
+				" fix: raise consistencyLevel to L2 (or higher) or remove the triggers from contract.yaml",
+				c.ID, c.ConsistencyLevel),
 		)}, true
 	}
 	return nil, false
@@ -258,24 +260,28 @@ func (v *Validator) checkTriggerContracts(
 	var results []ValidationResult
 	if len(servingSlices) == 0 {
 		results = append(results, v.newResult(
-			codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
+			codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
 			contractFile(c), "triggers",
-			fmt.Sprintf("contract %q declares triggers but no slice declares role: serve for it", c.ID),
+			fmt.Sprintf("contract %q declares triggers but no slice declares role: serve for it;"+
+				" fix: add contractUsages: {contract: %q, role: serve} to the slice that owns this HTTP endpoint",
+				c.ID, c.ID),
 		))
 	}
 	for _, t := range c.Triggers {
 		eventContract, ok := idx.contractByID[t]
 		if !ok {
 			results = append(results, v.newResult(
-				codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
+				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
 				contractFile(c), "triggers",
-				fmt.Sprintf("contract %q declares trigger %q but it does not reference an existing event contract", c.ID, t),
+				fmt.Sprintf("contract %q declares trigger %q but it does not reference an existing event contract;"+
+					" fix: create the event contract or correct the trigger id to match an existing contract",
+					c.ID, t),
 			))
 			continue
 		}
 		if cellvocab.ContractKind(eventContract.Kind) != cellvocab.ContractEvent {
 			results = append(results, v.newResult(
-				codeContractConsistencyEmit01, SeverityError, IssueMismatch,
+				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
 				contractFile(c), "triggers",
 				fmt.Sprintf(advHintCCE01TriggerNotEvent, c.ID, t, eventContract.Kind),
 			))
@@ -283,7 +289,7 @@ func (v *Validator) checkTriggerContracts(
 		}
 		if eventContract.OwnerCell != c.OwnerCell || eventContract.Endpoints.Publisher != c.OwnerCell {
 			results = append(results, v.newResult(
-				codeContractConsistencyEmit01, SeverityError, IssueMismatch,
+				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
 				contractFile(c), "triggers",
 				fmt.Sprintf(advHintCCE01OwnerMismatch, c.ID, t, c.OwnerCell),
 			))
@@ -291,7 +297,7 @@ func (v *Validator) checkTriggerContracts(
 		for _, ref := range servingSlices {
 			if !slicePublishes(idx, ref, t) {
 				results = append(results, v.newResult(
-					codeContractConsistencyEmit01, SeverityError, IssueMismatch,
+					codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
 					contractFile(c), "triggers",
 					fmt.Sprintf(advHintCCE01SliceNotPublish, c.ID, t, ref.cellID, ref.sliceID),
 				))
@@ -323,7 +329,7 @@ func (v *Validator) checkForwardTriggers(
 		for _, t := range c.Triggers {
 			if _, found := emitTopics[t]; !found {
 				results = append(results, v.newResult(
-					codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
+					codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
 					contractFile(c), "triggers",
 					fmt.Sprintf(advHintCCE01TriggerNotEmitted, c.ID, t, ref.dir, ref.cellID, ref.sliceID),
 				))
@@ -344,7 +350,7 @@ func (v *Validator) checkReverseEmits(
 	for t := range emitTopics {
 		if _, found := declared[t]; !found {
 			results = append(results, v.newScopedResult(
-				codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
+				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
 				"project", "triggers",
 				fmt.Sprintf(advHintCCE01ReverseEmit, t, ref.cellID, ref.sliceID, t),
 			))
@@ -369,12 +375,13 @@ func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[st
 	allFiles, err := collectParsedFiles(fset, sliceDir)
 	if err != nil {
 		results = append(results, ValidationResult{
-			Code:      codeContractConsistencyEmit01,
+			Code:      codeCONTRACTCONSISTENCYEMIT01,
 			Severity:  SeverityError,
 			IssueType: IssueInvalid,
 			File:      fileForError,
 			Field:     "triggers",
-			Message:   fmt.Sprintf("cannot scan emitted topics in %s/%s: %v", ref.cellID, ref.sliceID, err),
+			Message: fmt.Sprintf("cannot scan emitted topics in %s/%s: %v;"+
+				" fix: ensure the slice source files are readable and free of parse errors", ref.cellID, ref.sliceID, err),
 		})
 		return topics, results
 	}
@@ -1120,7 +1127,8 @@ func collectHelperCallTopics(
 	}
 	return []ValidationResult{dynamicTopicResult(
 		topicArg, ctx.fset, ctx.root,
-		"dynamic topic in helper emit not allowed; topic argument must resolve to a string literal or named constant",
+		"dynamic topic in helper emit not allowed; topic argument must resolve to a string literal or named constant;"+
+			" fix: replace the dynamic topic expression with a string literal or a package-scope string constant",
 	)}
 }
 
@@ -1144,7 +1152,8 @@ func collectOutboxEmitTopic(
 	if isDynamicExpr(topicExpr) {
 		return []ValidationResult{dynamicTopicResult(
 			topicExpr, ctx.fset, ctx.root,
-			"dynamic topic in emit not allowed; topic must be string literal or named constant",
+			"dynamic topic in emit not allowed; topic must be string literal or named constant;"+
+				" fix: replace the dynamic topic expression with a string literal or a package-scope string constant",
 		)}
 	}
 	_ = state
@@ -1233,7 +1242,7 @@ func dynamicTopicResult(expr ast.Expr, fset *token.FileSet, root, message string
 		}
 	}
 	return ValidationResult{
-		Code:      codeContractConsistencyEmit01,
+		Code:      codeCONTRACTCONSISTENCYEMIT01,
 		Severity:  SeverityError,
 		IssueType: IssueInvalid,
 		File:      relFile,
@@ -1264,12 +1273,13 @@ func buildPkgConsts(cellDir, fileForError string) (cellPkgConsts, []ValidationRe
 		}
 		if err := parseGoDir(dir, pkgConsts[pkgIdent]); err != nil {
 			results = append(results, ValidationResult{
-				Code:      codeContractConsistencyEmit01,
+				Code:      codeCONTRACTCONSISTENCYEMIT01,
 				Severity:  SeverityError,
 				IssueType: IssueInvalid,
 				File:      fileForError,
 				Field:     "triggers",
-				Message:   fmt.Sprintf("cannot scan constants in %s: %v", filepath.ToSlash(dir), err),
+				Message: fmt.Sprintf("cannot scan constants in %s: %v;"+
+					" fix: ensure the directory exists, is readable, and contains valid Go source files", filepath.ToSlash(dir), err),
 			})
 		}
 	}
@@ -1503,7 +1513,8 @@ func extractEventTypeFromCompLit(compLit *ast.CompositeLit, ctx emitScanContext)
 		if isDynamicExpr(kv.Value) {
 			return "", false, []ValidationResult{dynamicTopicResult(
 				kv.Value, ctx.fset, ctx.root,
-				"dynamic topic in receiver emit not allowed; EventType must resolve to a string literal or named constant",
+				"dynamic topic in receiver emit not allowed; EventType must resolve to a string literal or named constant;"+
+					" fix: replace the dynamic EventType expression with a string literal or a package-scope string constant",
 			)}
 		}
 		return "", false, nil

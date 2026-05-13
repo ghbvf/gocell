@@ -330,7 +330,7 @@ schemaRefs:
 
 	var ownerFinding *ValidationResult
 	for i := range results {
-		if results[i].Code == CodeContractHealthOwner {
+		if results[i].Code == codeCH01 {
 			ownerFinding = &results[i]
 			break
 		}
@@ -384,7 +384,7 @@ schemaRefs:
 
 	var schemaFinding *ValidationResult
 	for i := range results {
-		if results[i].Code == CodeContractHealthSchema && strings.Contains(results[i].Field, "responses[401]") {
+		if results[i].Code == codeCH03 && strings.Contains(results[i].Field, "responses[401]") {
 			schemaFinding = &results[i]
 			break
 		}
@@ -415,7 +415,7 @@ func assertContractHealthIssues(t *testing.T, issues []ValidationResult, wantErr
 	for _, issue := range issues {
 		assert.Equal(t, SeverityError, issue.Severity,
 			"contract-health findings must be SeverityError")
-		assert.Contains(t, []string{CodeContractHealthOwner, CodeContractHealthLifecycle, CodeContractHealthSchema}, issue.Code,
+		assert.Contains(t, []RuleCode{codeCH01, codeCH02, codeCH03}, issue.Code,
 			"contract-health code must be CH-* family")
 	}
 }

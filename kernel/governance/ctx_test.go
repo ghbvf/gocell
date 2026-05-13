@@ -58,14 +58,14 @@ func TestValidateFailFast_ShortCircuitsOnFirstError(t *testing.T) {
 	pm := projectWithEarlyAndLateError(t)
 	val := NewValidator(pm, "", clock.Real())
 
-	// Sanity: the full Validate pass surfaces both findings.
-	full, err := val.Validate(t.Context())
+	// Sanity: the full ValidateStrict pass surfaces both findings.
+	full, err := val.ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
-	require.NotEmpty(t, findByCode(full, "REF-01"), "REF-01 must fire under full Validate")
-	require.NotEmpty(t, findByCode(full, "ADV-05"), "ADV-05 must fire under full Validate")
+	require.NotEmpty(t, findByCode(full, "REF-01"), "REF-01 must fire under full ValidateStrict")
+	require.NotEmpty(t, findByCode(full, "ADV-05"), "ADV-05 must fire under full ValidateStrict")
 
 	// Fail-fast bails after the first SeverityError-producing rule.
-	failFast, err := val.ValidateFailFast(t.Context())
+	failFast, err := val.ValidateStrict(t.Context(), false, true)
 	require.NoError(t, err)
 	require.NotEmpty(t, findByCode(failFast, "REF-01"), "REF-01 must fire under fail-fast")
 	assert.Empty(t, findByCode(failFast, "ADV-05"),
@@ -75,7 +75,7 @@ func TestValidateFailFast_ShortCircuitsOnFirstError(t *testing.T) {
 	// because the only reason fail-fast can match the full count is if no
 	// rule ever errored, which the require.NotEmpty above already rules out.
 	assert.Less(t, len(failFast), len(full),
-		"fail-fast must produce strictly fewer findings than full Validate when an error fires")
+		"fail-fast must produce strictly fewer findings than full ValidateStrict when an error fires")
 }
 
 // TestValidate_RespectsCtxCancel proves that a canceled context unwinds the
@@ -86,13 +86,13 @@ func TestValidate_RespectsCtxCancel(t *testing.T) {
 	val := NewValidator(pm, "", clock.Real())
 
 	// Baseline: live ctx produces findings.
-	live, err := val.Validate(t.Context())
+	live, err := val.ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	require.NotEmpty(t, live)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	results, cerr := val.Validate(ctx)
+	results, cerr := val.ValidateStrict(ctx, false, false)
 	require.Error(t, cerr, "canceled ctx must propagate as error")
 	assert.ErrorIs(t, cerr, context.Canceled)
 	assert.Empty(t, results,
@@ -106,13 +106,13 @@ func TestValidateFailFast_RespectsCtxCancel(t *testing.T) {
 	pm := projectWithEarlyAndLateError(t)
 	val := NewValidator(pm, "", clock.Real())
 
-	live, err := val.ValidateFailFast(t.Context())
+	live, err := val.ValidateStrict(t.Context(), false, true)
 	require.NoError(t, err)
 	require.NotEmpty(t, live)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	results, cerr := val.ValidateFailFast(ctx)
+	results, cerr := val.ValidateStrict(ctx, false, true)
 	require.Error(t, cerr, "canceled ctx must propagate as error")
 	assert.ErrorIs(t, cerr, context.Canceled)
 	assert.Empty(t, results,

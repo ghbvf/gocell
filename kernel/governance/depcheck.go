@@ -126,11 +126,12 @@ func (dc *DependencyChecker) checkDEP01() []ValidationResult {
 		keyCellID := parts[0]
 		if s.BelongsToCell != keyCellID {
 			results = append(results, dc.newResult(
-				"DEP-01", SeverityError, IssueMismatch,
+				codeDEP01, SeverityError, IssueMismatch,
 				sliceFile(s),
 				"belongsToCell",
 				fmt.Sprintf(
-					"slice %q declares belongsToCell %q but is registered under cell %q",
+					"slice %q declares belongsToCell %q but is registered under cell %q;"+
+						" fix: update belongsToCell to match the directory cell id or move the slice to the correct cell directory",
 					s.ID, s.BelongsToCell, keyCellID,
 				),
 			))
@@ -158,10 +159,11 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 		// so we emit a scoped result ("project") rather than a fake file
 		// path, which would mislead users into trying to click-jump to it.
 		return []ValidationResult{dc.newScopedResult(
-			"DEP-02", SeverityError, IssueForbidden,
+			codeDEP02, SeverityError, IssueForbidden,
 			"project",
 			"cells",
-			fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
+			fmt.Sprintf("circular dependency detected: %s;"+
+				" fix: remove the dependency cycle by restructuring cell contracts", strings.Join(cycle, " → ")),
 		)}
 	}
 	return nil
@@ -201,11 +203,12 @@ func (dc *DependencyChecker) addSliceEdges(graph map[string]map[string]bool, s *
 		consumers, consErr := dc.contracts.Consumers(cu.Contract)
 		if consErr != nil {
 			errs = append(errs, dc.newResult(
-				"DEP-02", SeverityError, IssueInvalid,
+				codeDEP02, SeverityError, IssueInvalid,
 				sliceFile(s),
 				"contractUsages",
 				fmt.Sprintf(
-					"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete",
+					"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete;"+
+						" fix: ensure the contract exists and has valid consumer declarations",
 					cu.Contract, consErr,
 				),
 			))
@@ -317,11 +320,11 @@ func (dc *DependencyChecker) checkDEP03() []ValidationResult {
 		if assemblyID == "" {
 			// Cell with L0 dependencies must be assigned to an assembly.
 			results = append(results, dc.newResult(
-				"DEP-03", SeverityError, IssueRequired,
+				codeDEP03, SeverityError, IssueRequired,
 				cellFile(c),
 				"l0Dependencies",
 				fmt.Sprintf(
-					"cell %q has L0 dependencies but is not assigned to any assembly",
+					"cell %q has L0 dependencies but is not assigned to any assembly; fix: add this cell to an assembly in assemblies/",
 					c.ID,
 				),
 			))
@@ -331,21 +334,22 @@ func (dc *DependencyChecker) checkDEP03() []ValidationResult {
 			depAssembly := cellToAssembly[dep.Cell]
 			if depAssembly == "" {
 				results = append(results, dc.newResult(
-					"DEP-03", SeverityError, IssueRequired,
+					codeDEP03, SeverityError, IssueRequired,
 					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
 					fmt.Sprintf(
-						"cell %q (assembly %q) has L0 dependency on %q which is not in any assembly",
+						"cell %q (assembly %q) has L0 dependency on %q which is not in any assembly; fix: add the dependency cell to an assembly",
 						c.ID, assemblyID, dep.Cell,
 					),
 				))
 			} else if assemblyID != depAssembly {
 				results = append(results, dc.newResult(
-					"DEP-03", SeverityError, IssueMismatch,
+					codeDEP03, SeverityError, IssueMismatch,
 					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
 					fmt.Sprintf(
-						"cell %q (assembly %q) has L0 dependency on %q (assembly %q); both must be in the same assembly",
+						"cell %q (assembly %q) has L0 dependency on %q (assembly %q); both must be in the same assembly;"+
+							" fix: move both cells to the same assembly",
 						c.ID, assemblyID, dep.Cell, depAssembly,
 					),
 				))

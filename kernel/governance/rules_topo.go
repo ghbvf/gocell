@@ -20,10 +20,11 @@ func (v *Validator) validateTOPO01() []ValidationResult {
 			validRoles := cellvocab.ValidRolesForKind(cellvocab.ContractKind(c.Kind))
 			if !containsRole(validRoles, cellvocab.ContractRole(cu.Role)) {
 				results = append(results, v.newResult(
-					"TOPO-01", SeverityError, IssueInvalid,
+					codeTOPO01, SeverityError, IssueInvalid,
 					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].role", i),
-					fmt.Sprintf("role %q is not valid for contract kind %q (contract %q)", cu.Role, c.Kind, cu.Contract),
+					fmt.Sprintf("role %q is not valid for contract kind %q (contract %q);"+
+						" fix: use a valid role for this contract kind", cu.Role, c.Kind, cu.Contract),
 				))
 			}
 		}
@@ -46,11 +47,12 @@ func (v *Validator) validateTOPO02() []ValidationResult {
 			provider := contractProvider(c)
 			if provider != "" && s.BelongsToCell != provider {
 				results = append(results, v.newResult(
-					"TOPO-02", SeverityError, IssueMismatch,
+					codeTOPO02, SeverityError, IssueMismatch,
 					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].role", i),
 					fmt.Sprintf(
-						"slice %q (cell %q) has provider role %q but contract %q provider is %q",
+						"slice %q (cell %q) has provider role %q but contract %q provider is %q;"+
+							" fix: move this slice to the owning cell or remove the provider role",
 						s.ID, s.BelongsToCell, cu.Role, cu.Contract, provider,
 					),
 				))
@@ -75,11 +77,12 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 			consumers := contractConsumers(c)
 			if len(consumers) > 0 && !cellMatchesConsumer(consumers, s.BelongsToCell) {
 				results = append(results, v.newResult(
-					"TOPO-03", SeverityError, IssueMismatch,
+					codeTOPO03, SeverityError, IssueMismatch,
 					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].role", i),
 					fmt.Sprintf(
-						"slice %q (cell %q) has consumer role %q but is not in contract %q consumers %v",
+						"slice %q (cell %q) has consumer role %q but is not in contract %q consumers %v;"+
+							" fix: add this cell to the contract's consumers or remove the consumer role from the slice",
 						s.ID, s.BelongsToCell, cu.Role, cu.Contract, consumers,
 					),
 				))
@@ -148,11 +151,12 @@ func (v *Validator) checkContractProviderLevel(
 		}
 		if contractLevel > providerLevel {
 			return []ValidationResult{v.newResult(
-				"TOPO-04", SeverityError, IssueMismatch,
+				codeTOPO04, SeverityError, IssueMismatch,
 				contractFile(c),
 				"consistencyLevel",
 				fmt.Sprintf(
-					"contract %q consistencyLevel %s exceeds provider cell %q level %s",
+					"contract %q consistencyLevel %s exceeds provider cell %q level %s;"+
+						" fix: lower the contract consistencyLevel or raise the provider cell's level",
 					c.ID, c.ConsistencyLevel, providerID, providerCell.ConsistencyLevel,
 				),
 			)}
@@ -163,11 +167,12 @@ func (v *Validator) checkContractProviderLevel(
 	// Check if provider is an external Actor with malformed level.
 	if rawVal, malformed := actorMalformed[providerID]; malformed {
 		return []ValidationResult{v.newResult(
-			"TOPO-04", SeverityError, IssueInvalid,
+			codeTOPO04, SeverityError, IssueInvalid,
 			"actors.yaml",
 			actorFieldPath(v.project.Actors, providerID, "maxConsistencyLevel"),
 			fmt.Sprintf(
-				"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
+				"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4);"+
+					" fix: set a valid maxConsistencyLevel (L0-L4) in actors.yaml for this actor",
 				c.ID, providerID, rawVal,
 			),
 		)}
@@ -176,11 +181,12 @@ func (v *Validator) checkContractProviderLevel(
 	// Check if provider is an external Actor with valid level.
 	if maxLvl, ok := actorMaxLevel[providerID]; ok && contractLevel > maxLvl {
 		return []ValidationResult{v.newResult(
-			"TOPO-04", SeverityError, IssueMismatch,
+			codeTOPO04, SeverityError, IssueMismatch,
 			contractFile(c),
 			"consistencyLevel",
 			fmt.Sprintf(
-				"contract %q consistencyLevel %s exceeds external actor %q maxConsistencyLevel %s",
+				"contract %q consistencyLevel %s exceeds external actor %q maxConsistencyLevel %s;"+
+					" fix: lower the contract consistencyLevel or raise the actor's maxConsistencyLevel",
 				c.ID, c.ConsistencyLevel, providerID, maxLvl,
 			),
 		)}
@@ -212,19 +218,21 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 		provider := contractProvider(ct)
 		if l0Cells[provider] {
 			results = append(results, v.newResult(
-				"TOPO-05", SeverityError, IssueForbidden,
+				codeTOPO05, SeverityError, IssueForbidden,
 				contractFile(ct),
 				"endpoints",
-				fmt.Sprintf("L0 cell %q must not appear as provider in contract %q", provider, ct.ID),
+				fmt.Sprintf("L0 cell %q must not appear as provider in contract %q;"+
+					" fix: remove this cell from the contract endpoints or change the contract kind", provider, ct.ID),
 			))
 		}
 		for _, consumer := range contractConsumers(ct) {
 			if l0Cells[consumer] {
 				results = append(results, v.newResult(
-					"TOPO-05", SeverityError, IssueForbidden,
+					codeTOPO05, SeverityError, IssueForbidden,
 					contractFile(ct),
 					"endpoints",
-					fmt.Sprintf("L0 cell %q must not appear as consumer in contract %q", consumer, ct.ID),
+					fmt.Sprintf("L0 cell %q must not appear as consumer in contract %q;"+
+						" fix: remove this cell from the contract endpoints", consumer, ct.ID),
 				))
 			}
 		}
@@ -287,11 +295,12 @@ func (v *Validator) checkConsumerActors(
 		}
 		if rawVal, ok := actorMalformed[consumerID]; ok {
 			results = append(results, v.newResult(
-				"TOPO-07", SeverityError, IssueInvalid,
+				codeTOPO07, SeverityError, IssueInvalid,
 				"actors.yaml",
 				actorFieldPath(v.project.Actors, consumerID, "maxConsistencyLevel"),
 				fmt.Sprintf(
-					"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
+					"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4);"+
+						" fix: set a valid maxConsistencyLevel (L0-L4) in actors.yaml for this actor",
 					c.ID, consumerID, rawVal,
 				),
 			))
@@ -299,11 +308,12 @@ func (v *Validator) checkConsumerActors(
 		}
 		if maxLvl, ok := actorMaxLevel[consumerID]; ok && contractLevel > maxLvl {
 			results = append(results, v.newResult(
-				"TOPO-07", SeverityError, IssueMismatch,
+				codeTOPO07, SeverityError, IssueMismatch,
 				contractFile(c),
 				fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
 				fmt.Sprintf(
-					"contract %q consistencyLevel %s exceeds consumer actor %q maxConsistencyLevel %s",
+					"contract %q consistencyLevel %s exceeds consumer actor %q maxConsistencyLevel %s;"+
+						" fix: lower the contract consistencyLevel or raise the actor's maxConsistencyLevel",
 					c.ID, c.ConsistencyLevel, consumerID, maxLvl,
 				),
 			))
@@ -337,12 +347,13 @@ func (v *Validator) validateTOPO08() []ValidationResult {
 					ownerCell = c.OwnerCell
 				}
 				results = append(results, v.newResult(
-					"TOPO-08", SeverityError, IssueForbidden,
+					codeTOPO08, SeverityError, IssueForbidden,
 					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].contract", i),
 					fmt.Sprintf(
 						"slice %q references deprecated contract %q (ownerCell: %q);"+
-							" check the contract description or contact the ownerCell team for the replacement",
+							" check the contract description or contact the ownerCell team for the replacement;"+
+							" fix: migrate to the replacement contract and remove this contractUsage",
 						s.ID, cu.Contract, ownerCell,
 					),
 				))
@@ -379,11 +390,11 @@ func (v *Validator) validateTOPO09() []ValidationResult {
 		}
 		if asm.MaxConsistencyLevel != expected.String() {
 			results = append(results, v.newResult(
-				"TOPO-09", SeverityError, IssueMismatch,
+				codeTOPO09, SeverityError, IssueMismatch,
 				assemblyFile(asm),
 				"maxConsistencyLevel",
 				fmt.Sprintf(
-					"assembly %q maxConsistencyLevel %q does not match cells max %q",
+					"assembly %q maxConsistencyLevel %q does not match cells max %q; fix: run 'gocell generate' to recompute maxConsistencyLevel",
 					asm.ID, asm.MaxConsistencyLevel, expected.String(),
 				),
 			))
@@ -430,11 +441,11 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 		for i, cellRef := range a.Cells {
 			if existing, ok := cellAssembly[cellRef]; ok {
 				results = append(results, v.newResult(
-					"TOPO-06", SeverityError, IssueDuplicate,
+					codeTOPO06, SeverityError, IssueDuplicate,
 					assemblyFile(a),
 					fmt.Sprintf("cells[%d]", i),
 					fmt.Sprintf(
-						"cell %q is already assigned to assembly %q, cannot also be in %q",
+						"cell %q is already assigned to assembly %q, cannot also be in %q; fix: remove this cell from one of the two assemblies",
 						cellRef, existing, a.ID,
 					),
 				))

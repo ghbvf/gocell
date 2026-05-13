@@ -503,11 +503,15 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 // signatureMatchesValidationResultEmitter reports whether sig is a method
 // with the canonical emitter shape:
 //
-//	(receiver recvNamed) (ruleID string, ...) ValidationResult
+//	(receiver recvNamed) (ruleID RuleCode, ...) ValidationResult
 //
 // where recvNamed and ValidationResult belong to the same package. This is
 // the type-system definition of "ValidationResult emitter", independent of
 // any method-name convention.
+//
+// The RuleCode named type (not plain string) is the distinguishing marker:
+// helpers like docNamingResult(file string, ...) share the same structural
+// shape but take a plain string at param 0, so they are correctly excluded.
 func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *types.Named) bool {
 	// Variadic emitters are not a canonical shape — a format-string
 	// emitter like `newResultf(fmt string, args ...any) ValidationResult`
@@ -520,8 +524,14 @@ func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *ty
 	if sig.Params().Len() < 1 || sig.Results().Len() != 1 {
 		return false
 	}
-	p0, ok := sig.Params().At(0).Type().(*types.Basic)
-	if !ok || p0.Kind() != types.String {
+	// Param 0 must be the RuleCode named type (not plain string). This
+	// distinguishes rule emitters (newResult, newScopedResult, newResultAt)
+	// from helpers whose first param is a plain file path (docNamingResult).
+	p0Named, ok := sig.Params().At(0).Type().(*types.Named)
+	if !ok || p0Named.Obj().Name() != "RuleCode" {
+		return false
+	}
+	if p0Named.Obj().Pkg() == nil || p0Named.Obj().Pkg().Path() != recvNamed.Obj().Pkg().Path() {
 		return false
 	}
 	r0, ok := sig.Results().At(0).Type().(*types.Named)
