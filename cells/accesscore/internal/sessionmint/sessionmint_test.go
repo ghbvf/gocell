@@ -167,6 +167,31 @@ func TestMintAccess_PasswordResetFlagPropagates(t *testing.T) {
 		"access token must carry password_reset_required=true when requested")
 }
 
+// TestMintAccess_AuthzEpochPropagates verifies that Request.AuthzEpoch is forwarded
+// to IssueOptions.AuthzEpoch so the issued JWT carries the correct authz_epoch claim.
+// This covers the F18 trade-off: the epoch in the token reflects the user's
+// authz_epoch at the time MintAccess is called (inside or after the credential-
+// invalidation tx).
+func TestMintAccess_AuthzEpochPropagates(t *testing.T) {
+	issuer, keySet := newTestIssuer(t)
+	deps := Deps{
+		Issuer:   issuer,
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+		Clk:      clock.Real(),
+	}
+	req := Request{UserID: "usr-1", SessionID: "sess-1", AuthzEpoch: 42}
+
+	res, err := MintAccess(context.Background(), deps, req)
+	require.NoError(t, err)
+
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), claims.AuthzEpoch,
+		"access token must carry the AuthzEpoch from Request")
+}
+
 // TestMintAccess_AccessTokenIssueFailure asserts that when the Issuer's access-token
 // Issue call fails, MintAccess wraps it with a recognizable prefix.
 func TestMintAccess_AccessTokenIssueFailure(t *testing.T) {

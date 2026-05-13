@@ -50,6 +50,15 @@ type Request struct {
 	UserID                string
 	SessionID             string
 	PasswordResetRequired bool
+	// AuthzEpoch is the user's current authz_epoch value written into the
+	// "authz_epoch" JWT claim. It must reflect the epoch at the time of
+	// issuance — typically the value returned by UserRepository.BumpAuthzEpoch
+	// (or the existing epoch when no credential invalidation occurred).
+	//
+	// F18 trade-off: ChangePassword calls IssueForUser after the tx commit;
+	// the new token therefore carries the post-commit epoch naturally, without
+	// a second BumpAuthzEpoch call.
+	AuthzEpoch int64
 }
 
 // Result is the MintAccess output.
@@ -83,6 +92,7 @@ func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 		Roles:                 roles,
 		SessionID:             req.SessionID,
 		PasswordResetRequired: req.PasswordResetRequired,
+		AuthzEpoch:            req.AuthzEpoch,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("sessionmint: issue access token: %w", err)

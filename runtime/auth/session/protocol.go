@@ -46,6 +46,16 @@ const (
 	// CredentialEventRoleRevoke is emitted when any role assignment changes
 	// for the user (revoke, downgrade, or permission-set change).
 	CredentialEventRoleRevoke
+	// CredentialEventRefreshReuse is emitted when refresh-token reuse is
+	// detected beyond the reuse-grace window. The credentialinvalidate funnel
+	// passes this event to RevokeForSubject so the security response is
+	// identical to a full credential revocation.
+	//
+	// This event is NOT part of allCredentialEvents (and therefore not required
+	// by WithRevokeOnAll / NewProtocol's completeness check). It is a
+	// security-response event triggered by the refresh-store's reuse detection
+	// path, not a user-lifecycle credential-state transition.
+	CredentialEventRefreshReuse
 )
 
 // String returns a stable textual label suitable for diagnostics, storetest
@@ -60,6 +70,8 @@ func (e CredentialEvent) String() string {
 		return "Delete"
 	case CredentialEventRoleRevoke:
 		return "RoleRevoke"
+	case CredentialEventRefreshReuse:
+		return "RefreshReuse"
 	default:
 		return "Unknown"
 	}
@@ -159,7 +171,8 @@ func ValidateCredentialEvent(e CredentialEvent) bool {
 	case CredentialEventPasswordReset,
 		CredentialEventLock,
 		CredentialEventDelete,
-		CredentialEventRoleRevoke:
+		CredentialEventRoleRevoke,
+		CredentialEventRefreshReuse:
 		return true
 	default:
 		return false
