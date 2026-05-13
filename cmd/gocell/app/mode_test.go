@@ -376,13 +376,14 @@ func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
 }
 
 // writeKebabCellID writes a cell whose directory and yaml id are both
-// kebab-case ("access-core"). The base pass REF-04 (id ↔ dir match) and
-// VERIFY-05 (smoke ref ↔ cell id match) therefore pass, and FMT-16 + FMT-C1
-// are the only strict-only errors. The fixture intentionally trips both
-// FMT-16 and FMT-C1 — REF-04 already catches the dir/id-divergence
-// half-migrations the FMT-C1 doc-string mentions, so the natural fixture
-// shape that exercises FMT-C1 in isolation does not exist; layering
-// FMT-C1 on top of FMT-16 is defense-in-depth.
+// kebab-case ("access-core"). REF-04 (id ↔ dir match) and VERIFY-05 (smoke
+// ref ↔ cell id match) therefore pass. FMT-C1 fires unconditionally on the
+// kebab id (base pipeline, since PR-PROM-HARDEN-3); FMT-16 fires strict-only
+// on the kebab directory. The fixture intentionally trips both — REF-04
+// already catches the dir/id-divergence half-migrations the FMT-C1
+// doc-string mentions, so the natural fixture shape that exercises FMT-C1
+// in isolation does not exist; layering FMT-C1 on top of FMT-16 is
+// defense-in-depth.
 func writeKebabCellID(t *testing.T) string {
 	t.Helper()
 	dir := setupProject(t, "cells/access-core") // kebab dir matching id
