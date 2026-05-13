@@ -3,8 +3,9 @@ package governance
 // rules_misc_strict.go consolidates two rule clusters tied to the strict
 // pipeline:
 //
-//   - strict-only registry (strictRules + the FMT-16 / FMT-17 / FMT-C1
-//     rules it points at, plus the FMT-A1 unconditional rule).
+//   - strict-only registry (strictRules + the FMT-16 / FMT-17 rules it
+//     points at, plus FMT-A1 / FMT-C1 unconditional rules registered in
+//     the base rules() pipeline alongside this file).
 //   - FMT-20 / FMT-21 / FMT-22 / FMT-23 / FMT-25 schema-walking rules
 //     (formerly rules_strict_extra.go) — registered in the base rules()
 //     pipeline but lineage-coupled to the strict scaffolding (FMT-20/25
@@ -30,7 +31,7 @@ import (
 )
 
 // =============================================================================
-// strict-only registry + FMT-16/17/C1 (formerly rules_strict.go)
+// strict-only registry + FMT-16/17 + FMT-A1/C1 unconditional (formerly rules_strict.go)
 // =============================================================================
 
 // strictRules returns the strict-only rule pipeline. Entries appended after
