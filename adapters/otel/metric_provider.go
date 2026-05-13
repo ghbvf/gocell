@@ -44,11 +44,20 @@ var _ metrics.Provider = (*MetricProvider)(nil)
 // wrong-attribute reports on subsequent lookup of an evicted key).
 var defaultAttrCacheMaxSize = 2000
 
+// overflowAttrKey is the attribute key OTel SDK uses to mark data points
+// produced past a cardinality cap (sourced from
+// sdk/metric/internal/aggregate/limit.go private const `overflowAttrKey`
+// in opentelemetry-go v1.43.0). Matching the SDK's key keeps GoCell's
+// overflow data points indistinguishable from SDK-side overflow at the
+// collector. If a future OTel release renames this key, update here and
+// re-verify TestMetricProvider_OverflowDataPointEmitted.
+const overflowAttrKey = "otel.metric.overflow"
+
 // overflowOpt is the single MeasurementOption returned by attrCache.lookup
 // when the cache is full. Emitting overflow under this sentinel collapses
 // the unbounded high-cardinality tail into one data point tagged
 // otel.metric.overflow=true, matching the OTel SDK's overflow attribute.
-var overflowOpt = otelmetric.WithAttributes(attribute.Bool("otel.metric.overflow", true))
+var overflowOpt = otelmetric.WithAttributes(attribute.Bool(overflowAttrKey, true))
 
 // NewMetricProvider returns a Provider that registers instruments on the
 // supplied Meter. Caller owns the MeterProvider (and exporter) lifecycle;
@@ -135,11 +144,11 @@ func newAttrCache(maxSize int) *attrCache {
 }
 
 // key builds the canonical cache key. LabelNames are ordered at
-// registration, so we render values in that order — stable and collision
-// resistant for this use (labels are strings, "|" cannot appear in typical
-// snake_case values; for extreme edge cases the adapter would deliver
-// wrong attributes silently, which is acceptable for internal metric
-// labels controlled by GoCell itself).
+// registration, so we render values in that order. Separator "|" is safe
+// because metrics.MustValidateLabels (called from CounterVec.With /
+// HistogramVec.With before reaching this cache) rejects label values
+// containing "|" or "=" via ErrLabelValueIllegal — collision via
+// separator injection is statically impossible at the cache boundary.
 func (c *attrCache) key(order []string, l metrics.Labels) string {
 	n := 0
 	for _, name := range order {

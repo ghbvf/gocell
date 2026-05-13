@@ -147,14 +147,35 @@ func TestNewPoolMetricsResource_CloseSilencesCallback(t *testing.T) {
 		"metric must be absent after Close — callback should be unregistered")
 }
 
-// B2-R-08: Close is idempotent — calling it twice from a forced-shutdown
-// path (caller defer + ManagedResource LIFO) must not panic.
+// B2-R-08: nil meter must short-circuit at the constructor — caller wiring
+// errors propagate as ErrAdapterOTelConfig instead of materializing as
+// nil-deref panics on first Close call.
 func TestNewPoolMetricsResource_NilMeterReturnsError(t *testing.T) {
 	res, err := gcotel.NewPoolMetricsResource(nil, []poolstats.Statter{
 		staticStatter{name: "x"},
 	})
 	require.Error(t, err)
 	assert.Nil(t, res)
+}
+
+// B2-R-08: Close must be idempotent — double Close from caller defer +
+// bootstrap LIFO shutdown must not panic or return a fresh error on the
+// second invocation. OTel Registration.Unregister itself is idempotent;
+// this test pins that the wrapper does not introduce its own state.
+func TestNewPoolMetricsResource_CloseIsIdempotent(t *testing.T) {
+	_, mp := newTestMeterProvider(t)
+	meter := mp.Meter("gocell.test")
+
+	res, err := gcotel.NewPoolMetricsResource(meter, []poolstats.Statter{
+		staticStatter{name: "p-idem", snap: poolstats.Snapshot{}},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, res.Close(context.Background()),
+		"first Close must succeed")
+	assert.NotPanics(t, func() {
+		_ = res.Close(context.Background())
+	}, "second Close must not panic")
 }
 
 // B2-R-08: Empty statters slice still returns a valid resource whose

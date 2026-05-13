@@ -42,10 +42,13 @@ func TestNewTracer_Insecure(t *testing.T) {
 	// Insecure flag exercises the WithInsecure branch. The OTLP exporter
 	// uses lazy dialing so no real connection to 127.0.0.1:4317 is made.
 	// We do NOT exercise span emission here: with no live OTLP collector,
-	// BSP shutdown can race against the 5s defaultShutdownTimeout
-	// (~33% flake rate observed). Span emission contracts are covered by
-	// tracer_test.go against an in-memory exporter; this test focuses on
-	// constructor success + clean teardown.
+	// BSP shutdown can race against defaultShutdownTimeout (flake observed
+	// at the prior 5s setting; raising to 10s reduces but does not
+	// eliminate the risk for tests). Span emission contracts are covered
+	// by tracer_test.go::TestTracer_StartCreatesSpan against an in-memory
+	// exporter, and end-to-end against a real OTLP collector by
+	// integration_test.go; this test focuses on constructor success and
+	// clean teardown only.
 	tracer, shutdown, err := NewTracer(context.Background(), TracerConfig{
 		ServiceName:      "test-svc",
 		ExporterEndpoint: "127.0.0.1:4317",

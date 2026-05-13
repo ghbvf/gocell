@@ -51,11 +51,19 @@ const (
 // Close returns nil — callers can always wire the resource without a nil
 // guard.
 //
+// Design note — why ManagedResource and not lifecycle.ContextCloser:
+// bootstrap.WithManagedResource is the single bootstrap option that drives
+// LIFO teardown for adapter-style components; using ContextCloser would
+// require a separate bootstrap option just for this collector. The
+// Checkers/Worker aspects are deliberately nil — OTel callback-based
+// metric emission has no out-of-band health probe (the callback runs
+// synchronously on every collect cycle; failures surface through OTel's
+// own internal diagnostic handler) and no background goroutine.
+//
 // ref: kernel/lifecycle/managed_resource.go — three-aspect bundle
-// (Checkers/Worker/Close); pool collector has no health probe and no
-// worker, only Close.
+// (Checkers/Worker/Close); pool collector uses only Close.
 // ref: opentelemetry-go metric/meter.go@main Registration.Unregister —
-// canonical callback teardown used inside Close.
+// canonical callback teardown used inside Close; idempotent per OTel SDK.
 func NewPoolMetricsResource(meter otelmetric.Meter, statters []poolstats.Statter) (lifecycle.ManagedResource, error) {
 	unregister, err := registerPoolCallbacks(meter, statters)
 	if err != nil {
