@@ -105,6 +105,21 @@ const (
 		" fix: add %q to the slice's HTTP contract triggers" +
 		" or change the emit if dead code"
 
+	// CCE-01: dynamic topic detected in a helper emit call — topic arg must be const/literal.
+	advHintCCE01DynamicTopicHelper = "dynamic topic in helper emit not allowed;" +
+		" topic argument must resolve to a string literal or named constant at %s:%d:%d;" +
+		" fix: replace the dynamic topic expression with a string literal or a package-scope string constant"
+
+	// CCE-01: dynamic topic detected in an outbox.Emit call — topic must be const/literal.
+	advHintCCE01DynamicTopicEmit = "dynamic topic in emit not allowed;" +
+		" topic must be string literal or named constant at %s:%d:%d;" +
+		" fix: replace the dynamic topic expression with a string literal or a package-scope string constant"
+
+	// CCE-01: dynamic EventType in receiver emit — EventType must be const/literal.
+	advHintCCE01DynamicTopicReceiver = "dynamic topic in receiver emit not allowed;" +
+		" EventType must resolve to a string literal or named constant at %s:%d:%d;" +
+		" fix: replace the dynamic EventType expression with a string literal or a package-scope string constant"
+
 	// DOC-NAME-01: guard file is absent.
 	advHintDOCNAME01GuardRequired = "document naming guard is required for strict validation;" +
 		" fix: create the guard file at " + docNamingGuardRelPath +

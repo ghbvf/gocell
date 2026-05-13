@@ -610,36 +610,6 @@ func isValidationResultCompositeLit(cl *ast.CompositeLit, info *types.Info, pkgP
 		named.Obj().Pkg().Path() == pkgPath
 }
 
-// containsNonConstIdent returns true when expr (or any sub-expression) contains
-// an *ast.Ident that resolves via info.Uses to a non-const object (function
-// parameter, local variable, or other var). This is used to skip INV-3
-// checks on builder functions that forward a `message` parameter — the
-// "; fix:" anchor is enforced at the call site where the actual literal is written.
-func containsNonConstIdent(expr ast.Expr, info *types.Info) bool {
-	switch e := expr.(type) {
-	case *ast.Ident:
-		obj, ok := info.Uses[e]
-		if !ok {
-			return false
-		}
-		_, isConst := obj.(*types.Const)
-		return !isConst
-	case *ast.BinaryExpr:
-		return containsNonConstIdent(e.X, info) || containsNonConstIdent(e.Y, info)
-	case *ast.CallExpr:
-		for _, arg := range e.Args {
-			if containsNonConstIdent(arg, info) {
-				return true
-			}
-		}
-		return false
-	case *ast.ParenExpr:
-		return containsNonConstIdent(e.X, info)
-	default:
-		return false
-	}
-}
-
 // astShapeName returns a human-readable name for the AST node kind of expr.
 func astShapeName(expr ast.Expr) string {
 	switch expr.(type) {
@@ -685,21 +655,86 @@ func TestGovernanceRuleErrorMessageFixSuffix(t *testing.T) {
 	t.Run("production_source_all_pass", testINV3ProductionSource)
 }
 
-// testINV3NegativeFixture proves INV-3 struct-literal scanning is active.
+// testINV3NegativeFixture proves INV-3 scanning is genuinely active for all
+// three bypass shapes. Each shape is exercised via a testdata fixture package
+// that imports kernel/governance and triggers the exact scan path used by
+// testINV3ProductionSource — single-source logic, fixture validates production.
+//
+// Shape 1 (struct_lit_missing_fix_red): ValidationResult{Severity: SeverityError,
+//
+//	Message: "no fix anchor"} — CompositeLit scan path.
+//
+// Shape 2 (forwarded_param_red): newResultAt(gov.SeverityError, msg) where msg
+//
+//	is a function parameter ident — after removing the helper-forwarding skip,
+//	the CallExpr scan path must flag this.
+//
+// Shape 3 (literal_missing_fix_red): newResultAt(gov.SeverityError, "no fix")
+//
+//	where the message is a plain literal lacking "; fix:".
 func testINV3NegativeFixture(t *testing.T) {
-	// We verify that a ValidationResult CompositeLit with SeverityError and
-	// a message lacking "; fix:" would be flagged by the production check.
-	// We synthesize the check inline rather than spinning up a full type-check
-	// run to keep the fixture lightweight.
-	//
-	// The Hard property here: once #4 removes the standalone docNamingResult
-	// package function, no kernel/governance non-test source file should have
-	// ValidationResult{Severity: SeverityError, Message: ...no fix...} — and
-	// if one is added, INV-3's struct literal scan catches it.
+	root := findModuleRoot(t)
 
-	// This test documents the contract; the actual runtime proof is the
-	// production scan below finding zero violations.
-	t.Log("INV-3 negative fixture: struct literal path is guarded by production scan")
+	// Fixture sub-directories and the expected violation count for each shape.
+	cases := []struct {
+		pattern string
+		wantMin int
+		shape   string
+	}{
+		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/struct_lit_missing_fix_red",
+			wantMin: 1,
+			shape:   "struct literal with SeverityError missing '; fix:'",
+		},
+		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/forwarded_param_red",
+			wantMin: 1,
+			shape:   "newResultAt callsite with non-const ident message (forwarded param)",
+		},
+		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/literal_missing_fix_red",
+			wantMin: 1,
+			shape:   "newResultAt callsite with string literal missing '; fix:'",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.shape, func(t *testing.T) {
+			// Load the fixture package. NeedDeps ensures kernel/governance is
+			// loaded as a transitive dependency so isSeverityErrorArg can compare
+			// *types.Const identity across the shared dependency graph.
+			pkgs, errs, err := typeseval.LoadPackages(root, false, nil, tc.pattern)
+			require.NoError(t, err, "LoadPackages failed for fixture %s", tc.pattern)
+			require.Empty(t, errs, "package load errors for %s: %v", tc.pattern, errs)
+			require.Len(t, pkgs, 1, "expected exactly one package for %s", tc.pattern)
+
+			fixturePkg := pkgs[0]
+
+			// Extract severityErrorConst from the kernel/governance package that
+			// was loaded transitively. All packages within a single LoadPackages
+			// call share the same *types.Const pointers for their common deps.
+			govSeverityErrorConst := lookupSeverityErrorConstFromDeps(t, fixturePkg)
+
+			consts := collectPackageStringConsts(fixturePkg.Types.Scope())
+			info := fixturePkg.TypesInfo
+			fset := fixturePkg.Fset
+
+			var violations []string
+			for i, file := range fixturePkg.Syntax {
+				if i >= len(fixturePkg.GoFiles) {
+					continue
+				}
+				relPath := fixturePkg.GoFiles[i]
+				violations = append(violations,
+					scanINV3ViolationsInFile(file, fset, info, consts, govSeverityErrorConst, relPath, governancePkgPath)...)
+			}
+
+			assert.GreaterOrEqual(t, len(violations), tc.wantMin,
+				"shape %q: expected at least %d INV-3 violation(s), got %d: %v",
+				tc.shape, tc.wantMin, len(violations), violations)
+		})
+	}
 }
 
 // testINV3ProductionSource verifies the production kernel/governance package
@@ -731,85 +766,148 @@ func testINV3ProductionSource(t *testing.T) {
 		if strings.HasSuffix(base, "_test.go") {
 			continue
 		}
-
-		// Scan newResult / newScopedResult / newResultAt CallExprs.
-		scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil {
-				return
-			}
-			name := sel.Sel.Name
-			if name != "newResult" && name != "newScopedResult" && name != "newResultAt" {
-				return
-			}
-			if len(call.Args) < 2 {
-				return
-			}
-			if !isSeverityErrorArg(call.Args[1], info, severityErrorConst) {
-				return
-			}
-			// Message is the last arg (index len-1).
-			msgArg := call.Args[len(call.Args)-1]
-			// Skip check when the message arg is a non-const ident (a function
-			// parameter or local variable whose value is determined at the call
-			// site — the call site's own message literal carries the "; fix:" anchor).
-			if ident, ok := msgArg.(*ast.Ident); ok {
-				if obj, ok := info.Uses[ident]; ok {
-					if _, isConst := obj.(*types.Const); !isConst {
-						return
-					}
-				}
-			}
-			if messageContainsFixAnchor(msgArg, consts, info) {
-				return
-			}
-			pos := fset.Position(msgArg.Pos())
-			violations = append(violations,
-				rel+":"+strconv.Itoa(pos.Line)+
-					": SeverityError message missing \"; fix:\" anchor — every error rule must guide the remediation")
-		})
-		// Also scan ValidationResult{} CompositeLits.
-		scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
-			if !isValidationResultCompositeLit(cl, info, governancePkgPath) {
-				return
-			}
-			var hasSeverityError bool
-			var msgExpr ast.Expr
-			scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-				key, ok := kv.Key.(*ast.Ident)
-				if !ok {
-					return
-				}
-				switch key.Name {
-				case "Severity":
-					if isSeverityErrorArg(kv.Value, info, severityErrorConst) {
-						hasSeverityError = true
-					}
-				case "Message":
-					msgExpr = kv.Value
-				}
-			})
-			if !hasSeverityError || msgExpr == nil {
-				return
-			}
-			// Skip when the message expr contains non-const identifiers that make
-			// the full runtime string unresolvable (e.g. a fmt.Sprintf builder
-			// that forwards a `message string` parameter). The "; fix:" anchor is
-			// enforced at the call site where the actual message literal is written.
-			if containsNonConstIdent(msgExpr, info) {
-				return
-			}
-			if messageContainsFixAnchor(msgExpr, consts, info) {
-				return
-			}
-			pos := fset.Position(msgExpr.Pos())
-			violations = append(violations,
-				rel+":"+strconv.Itoa(pos.Line)+
-					": ValidationResult{Severity: SeverityError} missing \"; fix:\" anchor in Message")
-		})
+		violations = append(violations,
+			scanINV3ViolationsInFile(file, fset, info, consts, severityErrorConst, rel, governancePkgPath)...)
 	}
 	sort.Strings(violations)
 	assert.Empty(t, violations)
+}
+
+// scanINV3ViolationsInFile reports all INV-3 violations in a single AST file.
+// It is shared between testINV3ProductionSource and testINV3NegativeFixture so
+// both exercise identical scan logic — fixture validates the production path.
+//
+// Two scan paths:
+//  1. CallExpr: method calls named newResult / newScopedResult / newResultAt
+//     where Args[1] is SeverityError and the last arg is a message that either
+//     cannot be resolved or does not contain the "; fix:" anchor. Any
+//     unresolvable message expression (including non-const ident function
+//     parameters used for helper-forwarding) is treated as a violation —
+//     there is no skip for forwarded params. Hard funnel form uniqueness:
+//     SeverityError construction must use a resolvable fix-anchor string.
+//  2. CompositeLit: ValidationResult{Severity: SeverityError, Message: …}
+//     where the message cannot be resolved to a string containing "; fix:".
+//
+// pkgPath is the import path used to recognize ValidationResult composite
+// literals as belonging to the governance package (production: governancePkgPath;
+// fixture: the testdata package's own path for struct lits it declares).
+func scanINV3ViolationsInFile(
+	file *ast.File,
+	fset *token.FileSet,
+	info *types.Info,
+	consts map[string]string,
+	severityErrorConst *types.Const,
+	relPath string,
+	pkgPath string,
+) []string {
+	var violations []string
+
+	// Scan newResult / newScopedResult / newResultAt CallExprs.
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil {
+			return
+		}
+		name := sel.Sel.Name
+		if name != "newResult" && name != "newScopedResult" && name != "newResultAt" {
+			return
+		}
+		if len(call.Args) < 2 {
+			return
+		}
+		if !isSeverityErrorArg(call.Args[1], info, severityErrorConst) {
+			return
+		}
+		// Message is the last arg (index len-1).
+		msgArg := call.Args[len(call.Args)-1]
+		// Hard funnel: any unresolvable message expression — including a
+		// non-const ident used for helper-forwarding — is a violation.
+		// Wrappers that forward a `message string` parameter are forbidden;
+		// every SeverityError call site must carry its own resolvable fix anchor.
+		if messageContainsFixAnchor(msgArg, consts, info) {
+			return
+		}
+		pos := fset.Position(msgArg.Pos())
+		violations = append(violations,
+			relPath+":"+strconv.Itoa(pos.Line)+
+				": SeverityError message missing \"; fix:\" anchor — every error rule must guide the remediation")
+	})
+
+	// Also scan ValidationResult{} CompositeLits.
+	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+		if !isValidationResultCompositeLit(cl, info, pkgPath) {
+			return
+		}
+		var hasSeverityError bool
+		var msgExpr ast.Expr
+		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				return
+			}
+			switch key.Name {
+			case "Severity":
+				if isSeverityErrorArg(kv.Value, info, severityErrorConst) {
+					hasSeverityError = true
+				}
+			case "Message":
+				msgExpr = kv.Value
+			}
+		})
+		if !hasSeverityError || msgExpr == nil {
+			return
+		}
+		if messageContainsFixAnchor(msgExpr, consts, info) {
+			return
+		}
+		pos := fset.Position(msgExpr.Pos())
+		violations = append(violations,
+			relPath+":"+strconv.Itoa(pos.Line)+
+				": ValidationResult{Severity: SeverityError} missing \"; fix:\" anchor in Message")
+	})
+
+	return violations
+}
+
+// lookupSeverityErrorConstFromDeps walks the transitive imports of pkg to find
+// the kernel/governance package and returns its SeverityError const. This is
+// used by testINV3NegativeFixture when a testdata fixture package has imported
+// kernel/governance as a dependency — within a single LoadPackages call all
+// packages share *types.Const pointers, so the returned const is
+// pointer-identical to the ones referenced in the fixture's TypesInfo.Uses.
+func lookupSeverityErrorConstFromDeps(t *testing.T, pkg *packages.Package) *types.Const {
+	t.Helper()
+	govPkg := findPackageInDeps(pkg, governancePkgPath)
+	require.NotNil(t, govPkg, "kernel/governance not found in transitive deps of fixture package")
+	obj := govPkg.Types.Scope().Lookup("SeverityError")
+	require.NotNil(t, obj, "SeverityError not found in kernel/governance scope")
+	c, ok := obj.(*types.Const)
+	require.True(t, ok, "SeverityError must be a *types.Const")
+	return c
+}
+
+// findPackageInDeps performs a breadth-first search through pkg's transitive
+// imports to find the package with the given import path.
+func findPackageInDeps(pkg *packages.Package, importPath string) *packages.Package {
+	visited := map[string]bool{}
+	queue := []*packages.Package{pkg}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if visited[cur.PkgPath] {
+			continue
+		}
+		visited[cur.PkgPath] = true
+		if cur.PkgPath == importPath {
+			return cur
+		}
+		for _, imp := range cur.Imports {
+			if !visited[imp.PkgPath] {
+				queue = append(queue, imp)
+			}
+		}
+	}
+	return nil
 }
 
 // lookupSeverityErrorConst resolves the package-scope SeverityError const

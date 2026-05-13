@@ -95,8 +95,13 @@ func (l *locator) newResult(code RuleCode, sev Severity, typ IssueType, file, fi
 // line text scan) rather than the yaml.Node cache. The file argument is not
 // resolved through the canonical-file resolver because content scanning
 // already works with relative paths directly.
+//
+// unparam: code currently only receives codeDOCNAME01 because DOC-NAME-01 is
+// the only rule using content-scanning positions. The parameter is retained
+// for INV-2 (GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01) enforcement, which
+// requires every newResultAt call site to pass a RuleCode-typed const.
 func (l *locator) newResultAt(
-	code RuleCode, sev Severity, typ IssueType,
+	code RuleCode, sev Severity, typ IssueType, //nolint:unparam // see comment above
 	file string, pos metadata.Position, field, msg string,
 ) ValidationResult {
 	return ValidationResult{

@@ -629,13 +629,11 @@ func (v *Validator) validateDOCNAME01() []ValidationResult {
 	for _, rel := range targets {
 		data, err := v.readFile(filepath.Join(v.root, filepath.FromSlash(rel)))
 		if err != nil {
-			results = append(results, v.docNamingResult(
-				rel,
-				0,
-				0,
+			results = append(results, v.newResultAt(
+				codeDOCNAME01, SeverityError, IssueInvalid,
+				rel, metadata.Position{},
 				"content",
 				fmt.Sprintf(advHintDOCNAME01CannotReadDoc, err),
-				IssueInvalid,
 			))
 			continue
 		}
@@ -648,57 +646,54 @@ func (v *Validator) loadDocNamingGuard() (docNamingGuardConfig, bool, []Validati
 	var cfg docNamingGuardConfig
 	data, err := v.readFile(filepath.Join(v.root, filepath.FromSlash(docNamingGuardRelPath)))
 	if errors.Is(err, os.ErrNotExist) {
-		return cfg, false, []ValidationResult{v.docNamingResult(
-			docNamingGuardRelPath,
-			0,
-			0,
+		return cfg, false, []ValidationResult{v.newResultAt(
+			codeDOCNAME01, SeverityError, IssueRequired,
+			docNamingGuardRelPath, metadata.Position{},
 			"",
 			advHintDOCNAME01GuardRequired,
-			IssueRequired,
 		)}
 	}
 	if err != nil {
-		return cfg, false, []ValidationResult{v.docNamingResult(
-			docNamingGuardRelPath,
-			0,
-			0,
+		return cfg, false, []ValidationResult{v.newResultAt(
+			codeDOCNAME01, SeverityError, IssueInvalid,
+			docNamingGuardRelPath, metadata.Position{},
 			"",
 			fmt.Sprintf(advHintDOCNAME01CannotReadGuard, err),
-			IssueInvalid,
 		)}
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return cfg, false, []ValidationResult{v.docNamingResult(
-			docNamingGuardRelPath,
-			0,
-			0,
+		return cfg, false, []ValidationResult{v.newResultAt(
+			codeDOCNAME01, SeverityError, IssueInvalid,
+			docNamingGuardRelPath, metadata.Position{},
 			"",
 			fmt.Sprintf(advHintDOCNAME01CannotParseGuard, err),
-			IssueInvalid,
 		)}
 	}
 
 	var results []ValidationResult
 	if len(cfg.Include) == 0 {
-		results = append(results, v.docNamingResult(
-			docNamingGuardRelPath, 0, 0, "include",
+		results = append(results, v.newResultAt(
+			codeDOCNAME01, SeverityError, IssueRequired,
+			docNamingGuardRelPath, metadata.Position{},
+			"include",
 			advHintDOCNAME01MissingInclude,
-			IssueRequired,
 		))
 	}
 	if len(cfg.Replacements) == 0 {
-		results = append(results, v.docNamingResult(
-			docNamingGuardRelPath, 0, 0, "replacements",
+		results = append(results, v.newResultAt(
+			codeDOCNAME01, SeverityError, IssueRequired,
+			docNamingGuardRelPath, metadata.Position{},
+			"replacements",
 			advHintDOCNAME01MissingReplacements,
-			IssueRequired,
 		))
 	}
 	for i, repl := range cfg.Replacements {
 		if repl.Literal == "" || repl.Replacement == "" {
-			results = append(results, v.docNamingResult(
-				docNamingGuardRelPath, 0, 0, fmt.Sprintf("replacements[%d]", i),
+			results = append(results, v.newResultAt(
+				codeDOCNAME01, SeverityError, IssueRequired,
+				docNamingGuardRelPath, metadata.Position{},
+				fmt.Sprintf("replacements[%d]", i),
 				advHintDOCNAME01InvalidReplacement,
-				IssueRequired,
 			))
 		}
 	}
@@ -759,20 +754,22 @@ func (v *Validator) walkDocNamingInclude(include string, exclude []string, seen 
 	if err == nil {
 		return nil
 	}
-	return []ValidationResult{v.docNamingResult(
-		baseRel, 0, 0, "",
+	return []ValidationResult{v.newResultAt(
+		codeDOCNAME01, SeverityError, IssueInvalid,
+		baseRel, metadata.Position{},
+		"",
 		fmt.Sprintf(advHintDOCNAME01CannotWalk, include, err),
-		IssueInvalid,
 	)}
 }
 
 func (v *Validator) globDocNamingInclude(include string, exclude []string, seen map[string]struct{}) []ValidationResult {
 	matches, err := filepath.Glob(filepath.Join(v.root, filepath.FromSlash(include)))
 	if err != nil {
-		return []ValidationResult{v.docNamingResult(
-			docNamingGuardRelPath, 0, 0, "include",
+		return []ValidationResult{v.newResultAt(
+			codeDOCNAME01, SeverityError, IssueInvalid,
+			docNamingGuardRelPath, metadata.Position{},
+			"include",
 			fmt.Sprintf(advHintDOCNAME01InvalidPattern, include, err),
-			IssueInvalid,
 		)}
 	}
 	for _, match := range matches {
@@ -808,25 +805,21 @@ func (v *Validator) scanDocNamingLiterals(file, content string, replacements []d
 		line := sc.Text()
 		for _, repl := range replacements {
 			for col := findDocLiteral(line, repl.Literal, 0); col >= 0; col = findDocLiteral(line, repl.Literal, col+len(repl.Literal)) {
-				results = append(results, v.docNamingResult(
-					file,
-					lineNo,
-					col+1,
+				results = append(results, v.newResultAt(
+					codeDOCNAME01, SeverityError, IssueForbidden,
+					file, metadata.Position{Line: lineNo, Column: col + 1},
 					"content",
 					fmt.Sprintf(advHintDOCNAME01LegacyLiteral, repl.Literal, repl.Replacement),
-					IssueForbidden,
 				))
 			}
 		}
 	}
 	if err := sc.Err(); err != nil {
-		results = append(results, v.docNamingResult(
-			file,
-			0,
-			0,
+		results = append(results, v.newResultAt(
+			codeDOCNAME01, SeverityError, IssueInvalid,
+			file, metadata.Position{},
 			"content",
 			fmt.Sprintf(advHintDOCNAME01CannotScan, err),
-			IssueInvalid,
 		))
 	}
 	return results
@@ -895,11 +888,4 @@ func docNamingPatternMatch(rel, pattern string) bool {
 
 func hasGlobMeta(pattern string) bool {
 	return strings.ContainsAny(pattern, "*?[")
-}
-
-// docNamingResult is a convenience wrapper around newResultAt for DOC-NAME-01
-// findings. It delegates to newResultAt so the code travels through the
-// single-source RuleCode funnel enforced by archtest INV-2.
-func (v *Validator) docNamingResult(file string, line, column int, field, message string, issue IssueType) ValidationResult {
-	return v.newResultAt(codeDOCNAME01, SeverityError, issue, file, metadata.Position{Line: line, Column: column}, field, message)
 }

@@ -1125,11 +1125,19 @@ func collectHelperCallTopics(
 	if isCurrentHelperTopicParam(topicArg, ctx) {
 		return nil
 	}
-	return []ValidationResult{dynamicTopicResult(
-		topicArg, ctx.fset, ctx.root,
-		"dynamic topic in helper emit not allowed; topic argument must resolve to a string literal or named constant;"+
-			" fix: replace the dynamic topic expression with a string literal or a package-scope string constant",
-	)}
+	{
+		relFile, line, col := dynamicTopicFilePos(topicArg, ctx.fset, ctx.root)
+		return []ValidationResult{{
+			Code:      codeCONTRACTCONSISTENCYEMIT01,
+			Severity:  SeverityError,
+			IssueType: IssueInvalid,
+			File:      relFile,
+			Field:     "triggers",
+			Message:   fmt.Sprintf(advHintCCE01DynamicTopicHelper, relFile, line, col),
+			Line:      line,
+			Column:    col,
+		}}
+	}
 }
 
 // collectOutboxEmitTopic extracts the topic from outbox.Emit third arg.
@@ -1150,11 +1158,17 @@ func collectOutboxEmitTopic(
 		return nil
 	}
 	if isDynamicExpr(topicExpr) {
-		return []ValidationResult{dynamicTopicResult(
-			topicExpr, ctx.fset, ctx.root,
-			"dynamic topic in emit not allowed; topic must be string literal or named constant;"+
-				" fix: replace the dynamic topic expression with a string literal or a package-scope string constant",
-		)}
+		relFile, line, col := dynamicTopicFilePos(topicExpr, ctx.fset, ctx.root)
+		return []ValidationResult{{
+			Code:      codeCONTRACTCONSISTENCYEMIT01,
+			Severity:  SeverityError,
+			IssueType: IssueInvalid,
+			File:      relFile,
+			Field:     "triggers",
+			Message:   fmt.Sprintf(advHintCCE01DynamicTopicEmit, relFile, line, col),
+			Line:      line,
+			Column:    col,
+		}}
 	}
 	_ = state
 	return nil
@@ -1233,27 +1247,20 @@ func isCurrentHelperTopicParam(expr ast.Expr, ctx emitScanContext) bool {
 	return ok && ident.Name == ctx.paramNames[ctx.currentHelperParam]
 }
 
-func dynamicTopicResult(expr ast.Expr, fset *token.FileSet, root, message string) ValidationResult {
+// dynamicTopicFilePos extracts the project-relative file path and source
+// position from an AST expression. It is a pure position helper used by the
+// three dynamicTopic result sites; each site constructs its own
+// ValidationResult with its own const message so INV-3 can resolve the
+// "; fix:" anchor without a forwarding wrapper.
+func dynamicTopicFilePos(expr ast.Expr, fset *token.FileSet, root string) (relFile string, line, col int) {
 	pos := fset.Position(expr.Pos())
-	relFile := pos.Filename
+	relFile = pos.Filename
 	if root != "" {
 		if rel, err := filepath.Rel(root, pos.Filename); err == nil {
 			relFile = filepath.ToSlash(rel)
 		}
 	}
-	return ValidationResult{
-		Code:      codeCONTRACTCONSISTENCYEMIT01,
-		Severity:  SeverityError,
-		IssueType: IssueInvalid,
-		File:      relFile,
-		Field:     "triggers",
-		Message: fmt.Sprintf(
-			"%s at %s:%d:%d",
-			message, relFile, pos.Line, pos.Column,
-		),
-		Line:   pos.Line,
-		Column: pos.Column,
-	}
+	return relFile, pos.Line, pos.Column
 }
 
 // buildPkgConsts scans internal/dto and internal/domain under cellDir
@@ -1511,11 +1518,17 @@ func extractEventTypeFromCompLit(compLit *ast.CompositeLit, ctx emitScanContext)
 			return "", false, nil
 		}
 		if isDynamicExpr(kv.Value) {
-			return "", false, []ValidationResult{dynamicTopicResult(
-				kv.Value, ctx.fset, ctx.root,
-				"dynamic topic in receiver emit not allowed; EventType must resolve to a string literal or named constant;"+
-					" fix: replace the dynamic EventType expression with a string literal or a package-scope string constant",
-			)}
+			relFile, line, col := dynamicTopicFilePos(kv.Value, ctx.fset, ctx.root)
+			return "", false, []ValidationResult{{
+				Code:      codeCONTRACTCONSISTENCYEMIT01,
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      relFile,
+				Field:     "triggers",
+				Message:   fmt.Sprintf(advHintCCE01DynamicTopicReceiver, relFile, line, col),
+				Line:      line,
+				Column:    col,
+			}}
 		}
 		return "", false, nil
 	}
