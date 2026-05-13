@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -51,8 +52,13 @@ func newTestClient(cfg Config, mock s3HeadBucketAPI) *Client {
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
 	}
+	clk := cfg.Clock
+	if clk == nil {
+		clk = clock.Real()
+	}
 	return &Client{
 		config:     cfg,
+		clk:        clk,
 		head:       mock,
 		stopCh:     make(chan struct{}),
 		workerDone: make(chan struct{}),
@@ -278,13 +284,9 @@ func TestWorker_TickerCallsHeadBucket(t *testing.T) {
 	go func() { errCh <- w.Start(ctx) }()
 
 	// Wait up to 3 ticks for at least one HeadBucket call.
-	deadline := time.Now().Add(tickInterval * 3)
-	for time.Now().Before(deadline) {
-		if mock.callCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(testtime.D5ms)
-	}
+	require.Eventually(t, func() bool {
+		return mock.callCount.Load() >= 1
+	}, testtime.D150ms, testtime.FastPoll)
 
 	cancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
@@ -315,15 +317,11 @@ func TestWorker_UpdatesStateOnError(t *testing.T) {
 
 	// Wait until the probe reports unhealthy.
 	checkers := c.Checkers()
-	deadline := time.Now().Add(tickInterval * 5)
 	var lastErr error
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		lastErr = checkers["s3_ready"](context.Background())
-		if lastErr != nil {
-			break
-		}
-		time.Sleep(testtime.D5ms)
-	}
+		return lastErr != nil
+	}, testtime.D250ms, testtime.FastPoll)
 
 	cancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
@@ -360,15 +358,11 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 
 	// Wait for the state to recover (second tick → nil).
 	checkers := c.Checkers()
-	deadline := time.Now().Add(tickInterval * 6)
 	var lastErr error
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		lastErr = checkers["s3_ready"](context.Background())
-		if callN.Load() >= 2 && lastErr == nil {
-			break
-		}
-		time.Sleep(testtime.D5ms)
-	}
+		return callN.Load() >= 2 && lastErr == nil
+	}, testtime.D300ms, testtime.FastPoll)
 
 	cancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
@@ -416,7 +410,7 @@ func TestClose_StopsWorkerLoop(t *testing.T) {
 	go func() { _ = w.Start(ctx) }()
 
 	// Give the worker a tick or two.
-	time.Sleep(tickInterval * 2)
+	time.Sleep(testtime.D100ms) //archtest:allow:test-sleep wait for worker to process ≥2 ticks before signaling Close
 
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
 	defer closeCancel()

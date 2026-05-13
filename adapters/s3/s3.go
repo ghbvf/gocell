@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -46,6 +47,10 @@ type Config struct {
 	UsePathStyle    bool
 	HTTPTimeout     time.Duration // default 30s
 	HealthInterval  time.Duration // default 30s; background probe cadence
+	// Clock is the time source for the background health ticker.
+	// If nil, defaults to clock.Real() — the stdlib wall-clock.
+	// Inject a clockmock in tests to control ticker behavior.
+	Clock clock.Clock
 }
 
 // ConfigFromEnv creates a Config from environment variables.
@@ -107,6 +112,7 @@ func (c Config) Validate() error {
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 type Client struct {
 	config Config
+	clk    clock.Clock     // injected time source; defaults to clock.Real()
 	s3     *awss3.Client   // full SDK client; used for Upload, SDK(), and Health()
 	head   s3HeadBucketAPI // narrow interface for state-machine probes; equals s3 in production
 
@@ -162,9 +168,13 @@ func newClientWithHead(ctx context.Context, cfg Config, head s3HeadBucketAPI) (*
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
 	}
+	if cfg.Clock == nil {
+		cfg.Clock = clock.Real()
+	}
 
 	c := &Client{
 		config:     cfg,
+		clk:        cfg.Clock,
 		head:       head,
 		stopCh:     make(chan struct{}),
 		workerDone: make(chan struct{}),
@@ -303,12 +313,12 @@ func (c *Client) signalStop() {
 func (c *Client) runHealthLoop(ctx context.Context) {
 	defer close(c.workerDone)
 
-	ticker := time.NewTicker(c.config.HealthInterval)
+	ticker := c.clk.NewTicker(c.config.HealthInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-ticker.C():
 			if err := c.headBucket(ctx); err != nil {
 				slog.Warn("s3: health probe failed; state marked unhealthy",
 					slog.String("bucket", c.config.Bucket),
