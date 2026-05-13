@@ -31,8 +31,11 @@ const (
 	defaultBootstrapHTTPReadHeaderTimeout = 10 * time.Second
 	// defaultBootstrapHTTPReadTimeout is the http.Server ReadTimeout.
 	defaultBootstrapHTTPReadTimeout = 30 * time.Second
-	// defaultBootstrapHTTPWriteTimeout is the http.Server WriteTimeout.
-	defaultBootstrapHTTPWriteTimeout = 30 * time.Second
+	// DefaultBootstrapHTTPWriteTimeout is the http.Server WriteTimeout.
+	// Exported so cross-package consumers (e.g. cmd/corebundle metrics
+	// handler scrape-timeout sanity tests) can pin against the same source
+	// of truth instead of duplicating the literal.
+	DefaultBootstrapHTTPWriteTimeout = 30 * time.Second
 	// defaultBootstrapHTTPIdleTimeout is the http.Server IdleTimeout for keep-alive
 	// connections.
 	defaultBootstrapHTTPIdleTimeout = 60 * time.Second
@@ -132,7 +135,7 @@ func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 				Handler:           rtr.Handler(),
 				ReadHeaderTimeout: defaultBootstrapHTTPReadHeaderTimeout,
 				ReadTimeout:       defaultBootstrapHTTPReadTimeout,
-				WriteTimeout:      defaultBootstrapHTTPWriteTimeout,
+				WriteTimeout:      DefaultBootstrapHTTPWriteTimeout,
 				IdleTimeout:       defaultBootstrapHTTPIdleTimeout,
 			},
 			ln:        ln,

@@ -589,10 +589,31 @@ func TestMetricProvider_ConcurrentCounterVec_RaceDetector(t *testing.T) {
 	}
 
 	// The N concurrent .Inc() calls share the same underlying *prom.CounterVec
-	// (registerOrReuse idempotent path), so the sum is exactly N.
+	// (registerOrReuse idempotent path): exactly 1 series, sum = N.
 	got := testutil.CollectAndCount(reg, "gocelltest_race_total")
 	if got != 1 {
 		t.Fatalf("expected exactly 1 series after concurrent register, got %d", got)
+	}
+	// Verify sum so a regression where Inc dropped writes (e.g. a future
+	// per-call register/unregister bug) does not pass with series-count
+	// alone. Gather() walks the registry directly — the abstracted
+	// metrics.Counter does not implement prom.Collector so testutil.ToFloat64
+	// is not directly applicable here.
+	gathered, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var sum float64
+	for _, mf := range gathered {
+		if mf.GetName() != "gocelltest_race_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			sum += m.GetCounter().GetValue()
+		}
+	}
+	if sum != float64(raceConcurrency) {
+		t.Fatalf("counter sum = %v, want %d", sum, raceConcurrency)
 	}
 }
 

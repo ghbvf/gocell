@@ -339,8 +339,8 @@ func l0Project() *metadata.ProjectMeta {
 				Type:             "support",
 				ConsistencyLevel: "L0",
 			},
-			"shared-validate": {
-				ID:               "shared-validate",
+			"sharedvalidate": {
+				ID:               "sharedvalidate",
 				Type:             "support",
 				ConsistencyLevel: "L0",
 				// L0 cell with NO slices — tests propagation for slice-less cells.
@@ -351,7 +351,7 @@ func l0Project() *metadata.ProjectMeta {
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
 					{Cell: "sharedcrypto", Reason: "hashing"},
-					{Cell: "shared-validate", Reason: "input validation"},
+					{Cell: "sharedvalidate", Reason: "input validation"},
 				},
 			},
 			"auditcore": {
@@ -360,8 +360,8 @@ func l0Project() *metadata.ProjectMeta {
 				ConsistencyLevel: "L2",
 				// no L0 dependencies
 			},
-			"billing-core": {
-				ID:               "billing-core",
+			"billingcore": {
+				ID:               "billingcore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
@@ -376,7 +376,7 @@ func l0Project() *metadata.ProjectMeta {
 				ID:            "hasher",
 				BelongsToCell: "sharedcrypto",
 			},
-			// shared-validate has NO slices (intentional).
+			// sharedvalidate has NO slices (intentional).
 			"accesscore/session-login": {
 				ID:            "session-login",
 				BelongsToCell: "accesscore",
@@ -388,9 +388,9 @@ func l0Project() *metadata.ProjectMeta {
 				ID:            "audit-write",
 				BelongsToCell: "auditcore",
 			},
-			"billing-core/payment": {
+			"billingcore/payment": {
 				ID:            "payment",
-				BelongsToCell: "billing-core",
+				BelongsToCell: "billingcore",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -421,10 +421,10 @@ func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
 			name:  "L0 cell change propagates to all dependent cells",
 			files: []string{"cells/sharedcrypto/slices/hasher/hash.go"},
 			// sharedcrypto/hasher is directly affected;
-			// accesscore AND billing-core both depend on sharedcrypto,
+			// accesscore AND billingcore both depend on sharedcrypto,
 			// so their slices are also selected.
-			wantSlices:    []string{"accesscore/session-login", "billing-core/payment", "sharedcrypto/hasher"},
-			wantCells:     []string{"accesscore", "billing-core", "sharedcrypto"},
+			wantSlices:    []string{"accesscore/session-login", "billingcore/payment", "sharedcrypto/hasher"},
+			wantCells:     []string{"accesscore", "billingcore", "sharedcrypto"},
 			wantContracts: []string{"http.auth.login.v1"},
 		},
 		{
@@ -439,8 +439,8 @@ func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
 			name:  "journey referencing L0 cell does NOT trigger L0 propagation",
 			files: []string{"journeys/J-l0-test.yaml"},
 			// Journey references sharedcrypto (L0) and accesscore.
-			// billing-core depends on sharedcrypto but is NOT in the journey.
-			// If L0 propagation fired from journey expansion, billing-core/payment
+			// billingcore depends on sharedcrypto but is NOT in the journey.
+			// If L0 propagation fired from journey expansion, billingcore/payment
 			// would appear — its absence proves the guard works.
 			wantSlices:    []string{"accesscore/session-login", "sharedcrypto/hasher"},
 			wantCells:     []string{"accesscore", "sharedcrypto"},
@@ -448,8 +448,8 @@ func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
 		},
 		{
 			name:  "L0 cell without slices propagates to dependents",
-			files: []string{"cells/shared-validate/cell.yaml"},
-			// shared-validate is L0 with no slices. Changing its cell.yaml
+			files: []string{"cells/sharedvalidate/cell.yaml"},
+			// sharedvalidate is L0 with no slices. Changing its cell.yaml
 			// should still propagate to accesscore (which depends on it).
 			wantSlices:    []string{"accesscore/session-login"},
 			wantCells:     []string{"accesscore"},

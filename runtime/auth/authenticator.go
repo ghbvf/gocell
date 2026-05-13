@@ -13,20 +13,16 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
-
-// callerCellPattern validates the caller cell id: must start with a lowercase
-// letter and contain only lowercase letters, digits, and hyphens.
-var callerCellPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // Authenticator inspects an HTTP request and resolves the caller's identity.
 type Authenticator interface {
@@ -266,12 +262,14 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 }
 
 // validateCallerCell validates the caller cell id extracted from the 4-part
-// service token. The cell id must be non-empty and match [a-z][a-z0-9-]*.
+// service token. The cell id must be non-empty and satisfy
+// metadata.CellIDPattern (^[a-z][a-z0-9]+$). Single source — same regex
+// the schema (cell.schema.json) and governance (FMT-C1) enforce.
 func validateCallerCell(callerCell string) error {
 	if callerCell == "" {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "caller cell missing")
 	}
-	if !callerCellPattern.MatchString(callerCell) {
+	if !metadata.MatchCellID(callerCell) {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
 			"caller cell id invalid",
 			errcode.WithDetails(slog.String("callerCell", callerCell)))

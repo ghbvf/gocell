@@ -24,7 +24,6 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -42,10 +41,6 @@ const ruleSvctokenCallerCellRequired01 = "SVCTOKEN-CALLER-CELL-REQUIRED-01"
 // Shared with role_admin_literal_test.go in the same archtest package; do
 // not duplicate.
 const authRuntimeImportPath = "github.com/ghbvf/gocell/runtime/auth"
-
-// cellIDRegex is the canonical cell-ID pattern: lowercase letter + lowercase
-// alphanumeric/dash, at least 2 chars total.
-var cellIDRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // TestSVCTOKEN_CALLER_CELL_REQUIRED_01 enforces that every call to
 // auth.GenerateServiceToken passes a valid cell-ID string literal as its
@@ -173,11 +168,13 @@ func collectGenerateServiceTokenDiags(
 					return
 				}
 
-				if !cellIDRegex.MatchString(callerCell) {
+				if !metadata.MatchCellID(callerCell) {
 					add(scanner.Diagnostic{
-						Rel:     rel,
-						Line:    pos.Line,
-						Message: fmt.Sprintf("auth.GenerateServiceToken callerCell %q does not match ^[a-z][a-z0-9-]*$", callerCell),
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"auth.GenerateServiceToken callerCell %q does not match metadata.CellIDPattern (%s)",
+							callerCell, metadata.CellIDPattern),
 					})
 					return
 				}
@@ -282,12 +279,12 @@ func discoverKnownCells(t *testing.T, root string) map[string]bool {
 		t.Fatalf("metadata.NewParser: %v", err)
 	}
 	for id := range project.Cells {
-		if cellIDRegex.MatchString(id) {
+		if metadata.MatchCellID(id) {
 			known[id] = true
 		}
 	}
 	for _, a := range project.Actors {
-		if cellIDRegex.MatchString(a.ID) {
+		if metadata.MatchCellID(a.ID) {
 			known[a.ID] = true
 		}
 	}

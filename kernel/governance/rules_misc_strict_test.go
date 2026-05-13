@@ -6,6 +6,7 @@ package governance
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -564,6 +565,37 @@ func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 	}
 }
 
+// assertRuleFiresInBothModes runs ValidateStrict in both default and
+// strict modes and fails when the given rule code does not fire as a
+// SeverityError in either pass. Extracted so FMTC1/FMTA1 unconditional-
+// rule tests share the same shape and stay under the cognitive
+// complexity budget.
+func assertRuleFiresInBothModes(t *testing.T, v *Validator, code, fixtureDesc string) {
+	t.Helper()
+	for _, strict := range []bool{false, true} {
+		strict := strict
+		t.Run(fmtBoolName(strict), func(t *testing.T) {
+			results, err := v.ValidateStrict(t.Context(), strict)
+			require.NoError(t, err)
+			if !ruleFiredAsError(results, code) {
+				t.Errorf("%s must fire for %s (strict=%v)", code, fixtureDesc, strict)
+			}
+		})
+	}
+}
+
+// ruleFiredAsError reports whether results contains at least one
+// SeverityError matching code. Side-effect free; used by the
+// assertRuleFires* helpers.
+func ruleFiredAsError(results []ValidationResult, code string) bool {
+	for _, r := range results {
+		if r.Code == code && r.Severity == SeverityError {
+			return true
+		}
+	}
+	return false
+}
+
 // TestValidator_FMTC1_CellIDPattern verifies FMT-C1 fires unconditionally
 // for cell ids that violate CellIDPattern (kebab, uppercase, single char,
 // leading digit, etc.). FMT-C1 mirrors a schema constraint
@@ -605,23 +637,8 @@ func TestValidator_FMTC1_CellIDPattern(t *testing.T) {
 			}
 
 			v := NewValidator(project, "", clock.Real())
-
-			for _, strict := range []bool{false, true} {
-				strict := strict
-				t.Run(fmtBoolName(strict), func(t *testing.T) {
-					results, err := v.ValidateStrict(t.Context(), strict)
-					require.NoError(t, err)
-					var got bool
-					for _, r := range results {
-						if r.Code == "FMT-C1" && r.Severity == SeverityError {
-							got = true
-						}
-					}
-					if !got {
-						t.Errorf("FMT-C1 must fire for invalid cell id %q (strict=%v)", tc.id, strict)
-					}
-				})
-			}
+			assertRuleFiresInBothModes(t, v, "FMT-C1",
+				fmt.Sprintf("invalid cell id %q", tc.id))
 		})
 	}
 }
@@ -650,23 +667,7 @@ func TestValidator_FMTA1_AssemblyIDPattern(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-
-	for _, strict := range []bool{false, true} {
-		strict := strict
-		t.Run(fmtBoolName(strict), func(t *testing.T) {
-			results, err := v.ValidateStrict(t.Context(), strict)
-			require.NoError(t, err)
-			var got bool
-			for _, r := range results {
-				if r.Code == "FMT-A1" && r.Severity == SeverityError {
-					got = true
-				}
-			}
-			if !got {
-				t.Errorf("FMT-A1 must fire for kebab-case assembly id (strict=%v)", strict)
-			}
-		})
-	}
+	assertRuleFiresInBothModes(t, v, "FMT-A1", "kebab-case assembly id")
 }
 
 func fmtBoolName(b bool) string {

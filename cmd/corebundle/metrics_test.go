@@ -13,6 +13,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 func TestWithMetricsTokenGuard(t *testing.T) {
@@ -110,12 +112,10 @@ func TestBuildPromStack_ProducesIndependentRegistries(t *testing.T) {
 
 // Test-time durations extracted to package-level constants to satisfy
 // archtest TEST-TIME-LITERAL-01 (extract test durations to consts).
+//
+// Bootstrap WriteTimeout is consumed via bootstrap.DefaultBootstrapHTTPWriteTimeout
+// (single-source) — see TestBuildMetricsHandler_TimeoutReturns503 sanity check.
 const (
-	// bootstrapWriteTimeoutSanity is the bootstrap HTTP WriteTimeout
-	// (runtime/bootstrap/bootstrap_phase7.go defaultBootstrapHTTPWriteTimeout).
-	// The metrics handler scrape timeout must be strictly less to ensure
-	// promhttp can send a clean 503 before TCP write deadline kicks in.
-	bootstrapWriteTimeoutSanity = 30 * time.Second
 	// metricsTestScrapeTimeout is a tiny test-only timeout to avoid waiting
 	// the production 10s value in unit tests.
 	metricsTestScrapeTimeout = 50 * time.Millisecond
@@ -153,7 +153,9 @@ func TestBuildMetricsHandler_TimeoutReturns503(t *testing.T) {
 	t.Parallel()
 
 	// Sanity: the production constant must be < bootstrap WriteTimeout.
-	require.Less(t, metricsScrapeTimeout, bootstrapWriteTimeoutSanity,
+	// Reads the real bootstrap default (no duplicated literal) so a future
+	// bootstrap timeout change is auto-reflected here.
+	require.Less(t, metricsScrapeTimeout, bootstrap.DefaultBootstrapHTTPWriteTimeout,
 		"metricsScrapeTimeout must be strictly less than bootstrap HTTP WriteTimeout")
 
 	gatherer := &slowGatherer{

@@ -418,8 +418,9 @@ func writeAllowedFilesMismatch(t *testing.T) string {
 }
 
 // writeKebabAssemblyID writes a no-dash assembly directory whose declared id
-// contains '-'. Triggers FMT-A1 in strict mode (in addition to whatever
-// base findings the metadata layer surfaces for the dir/id mismatch).
+// contains '-'. Triggers FMT-A1 unconditionally (it mirrors a schema
+// constraint and runs on every validate path; see
+// TestRunValidate_DetectsKebabAssemblyID for the positive lock).
 func writeKebabAssemblyID(t *testing.T) string {
 	t.Helper()
 	// REF-11 verifies build.entrypoint exists; the cmd/myasm stub keeps that
@@ -430,13 +431,13 @@ func writeKebabAssemblyID(t *testing.T) string {
 	return dir
 }
 
-// TestRunValidate_Strict_DetectsKebabCellID locks in FMT-C1 in strict full
-// mode: a kebab-case cell id is rejected only by ValidateStrict(true). The
-// fixture has a kebab directory (necessary because REF-04 enforces id ↔
-// dir match, so an id-only kebab is impossible to construct without a
-// base error pre-empting strict), so FMT-16 fires alongside FMT-C1 — that
-// is the defense-in-depth pair the rule was designed for, and the
-// assertion below verifies both rules light up.
+// TestRunValidate_Strict_DetectsKebabCellID locks in the strict-mode
+// co-trigger: when the fixture has both a kebab id and a kebab directory,
+// FMT-C1 (now unconditional, see TestRunValidate_DetectsKebabCellID for
+// the default-path lock) and FMT-16 (strict-only, kebab dir scan) must
+// both light up. The assertion verifies this defense-in-depth pair under
+// `--strict` so a future refactor that breaks the strict-mode rule chain
+// does not silently disarm FMT-16.
 func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
 	dir := writeKebabCellID(t)
 
@@ -444,9 +445,9 @@ func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
 	out := captureStdout(t, func() {
 		gotErr = runValidate([]string{"--root", dir, "--strict"})
 	})
-	require.Error(t, gotErr, "strict must return error when FMT-C1 fires on kebab cell id")
-	assert.Contains(t, out, "FMT-C1", "full-mode output must report FMT-C1 code")
-	assert.Contains(t, out, "FMT-16", "FMT-16 must also fire — kebab dir is the natural co-trigger")
+	require.Error(t, gotErr, "strict must return error when FMT-C1 + FMT-16 fire on kebab cell id + dir")
+	assert.Contains(t, out, "FMT-C1", "FMT-C1 (unconditional) must report on kebab cell id")
+	assert.Contains(t, out, "FMT-16", "FMT-16 (strict-only) must report on kebab cell dir")
 }
 
 // TestRunValidate_Strict_DetectsAllowedFilesMismatch locks in FMT-17: a
