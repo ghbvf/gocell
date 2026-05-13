@@ -9,6 +9,12 @@
 // (LabelNames at registration, Labels map at record) over OTel's variadic
 // attribute.KeyValue because a map makes callers name their dimensions and
 // makes label-set drift a detectable error rather than a silent mismatch.
+//
+// The Prom-shape rationale covers label binding only. Counter.Inc / Add and
+// Histogram.Observe also deliberately omit context.Context — adapters/otel
+// emits with context.Background(). Aligning to OTel's ctx-bearing form
+// (which enables exemplar / baggage propagation) is open work tracked under
+// METRICS-CTX-FUNNEL-01 in docs/backlog/cap-13-observability.md.
 package metrics
 
 import (

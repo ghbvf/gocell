@@ -2,7 +2,9 @@ package otel
 
 import (
 	"context"
+	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -18,6 +20,19 @@ import (
 // Compile-time check: Tracer implements tracing.Tracer.
 var _ tracing.Tracer = (*Tracer)(nil)
 
+// defaultShutdownTimeout caps tp.Shutdown to prevent caller ctx from being
+// unbounded. BatchSpanProcessor.Shutdown blocks until in-flight spans flush
+// through the exporter; without a deadline, a stalled OTLP collector turns
+// shutdown into an indefinite hang. 10s sits between the OTel SDK's
+// BatchSpanProcessor ExportTimeout default (30s) and aggressive
+// fail-fast values (1-5s) — keeps the last batch's flush in scope while
+// remaining well below typical Kubernetes SIGTERM windows (30s default).
+// Callers that need a tighter or looser bound pass their own ctx deadline;
+// shutdownTracerProvider honors the earlier of the two. Tests target
+// shutdownTracerProvider directly with custom timeouts, so the const does
+// not need to be a var for test override.
+const defaultShutdownTimeout = 10 * time.Second
+
 // Tracer implements tracing.Tracer using the OpenTelemetry SDK.
 type Tracer struct {
 	inner oteltrace.Tracer
@@ -26,6 +41,17 @@ type Tracer struct {
 // NewTracer creates an OTel-backed Tracer with an OTLP gRPC exporter.
 // It returns the tracer, a shutdown function, and any initialization error.
 // The shutdown function flushes pending spans and releases resources.
+//
+// On success the constructed TracerProvider and a composite (W3C
+// TraceContext + Baggage) propagator are registered as the OTel globals
+// so that auto-instrumented libraries (otelgrpc / otelhttp / database/sql
+// instrumentations) emit spans into the same provider. Registration is
+// the last step before return; any earlier error path leaves the previous
+// globals untouched.
+//
+// ref: opentelemetry-go exporters/otlp/otlptrace/otlptracegrpc/example_test.go
+// — canonical NewTracerProvider + SetTracerProvider + SetTextMapPropagator
+// sequence for OTLP gRPC exporters.
 func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Context) error, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelConfig, "otel: config validation failed", err)
@@ -51,6 +77,11 @@ func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Con
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit, "otel: create OTLP exporter", err)
 	}
 
+	// resource.New can return resource.ErrPartialResource when one of its
+	// detectors fails — we use only WithAttributes (no detectors), so a
+	// non-nil error here is fatal. If a future change adds detectors,
+	// add an errors.Is(err, resource.ErrPartialResource) branch to keep
+	// the partial resource and degrade gracefully instead of aborting.
 	res, err := resource.New(ctx,
 		resource.WithAttributes(semconv.ServiceName(cfg.ServiceName)),
 	)
@@ -64,14 +95,44 @@ func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Con
 		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SampleRate)),
 	)
 
+	// SetTracerProvider and SetTextMapPropagator must remain adjacent
+	// with no fallible operation between them; a half-applied global
+	// (new provider but old propagator) would let auto-instrumented
+	// libraries emit spans into the new provider while still extracting
+	// trace context with the old propagator.
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+
 	shutdown := func(shutdownCtx context.Context) error {
-		if shutdownErr := tp.Shutdown(shutdownCtx); shutdownErr != nil {
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterOTelShutdown, "otel: shutdown tracer provider", shutdownErr)
-		}
-		return nil
+		return shutdownTracerProvider(shutdownCtx, tp, defaultShutdownTimeout)
 	}
 
 	return &Tracer{inner: tp.Tracer(cfg.ServiceName)}, shutdown, nil
+}
+
+// tracerProviderShutdowner is the minimal Shutdown interface implemented by
+// sdktrace.TracerProvider. Extracted so shutdown deadline behavior is
+// testable against a stalling fake.
+type tracerProviderShutdowner interface {
+	Shutdown(context.Context) error
+}
+
+// shutdownTracerProvider applies a hard deadline to tp.Shutdown. Returns a
+// wrapped error (preserving context.DeadlineExceeded via errors.Is) if the
+// inner Shutdown does not complete within timeout.
+//
+// ref: opentelemetry-go sdk/trace/provider.go@main — Shutdown is entirely
+// caller-driven via context; the SDK does not impose its own timeout.
+func shutdownTracerProvider(callerCtx context.Context, tp tracerProviderShutdowner, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(callerCtx, timeout)
+	defer cancel()
+	if err := tp.Shutdown(ctx); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterOTelShutdown, "otel: shutdown tracer provider", err)
+	}
+	return nil
 }
 
 // NewTracerFromTracerProvider wraps a caller-owned TracerProvider into a

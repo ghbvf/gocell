@@ -54,7 +54,7 @@ type MessagingChannelStatter struct {
 // continue to read from snapshotters whose owning connections have been
 // closed.
 //
-// ref: adapters/otel/pool_collector.go — same Meter.RegisterCallback
+// ref: adapters/otel/pool_resource.go — same Meter.RegisterCallback
 // pattern; the split exists so each metric family carries correct
 // semantic-convention metadata (db vs messaging).
 func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []MessagingChannelStatter) (unregister func() error, err error) {
@@ -68,9 +68,9 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 	for i, s := range statters {
 		if s.Statter == nil || s.System == "" {
 			return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig,
-				"otel messaging channel collector: statters[%d] missing System or Statter")
+				"otel messaging channel collector: statter missing System or Statter",
+				errcode.WithDetails(slog.Int("statterIndex", i)))
 		}
-		_ = i
 	}
 
 	chanCount, err := meter.Int64ObservableUpDownCounter(
