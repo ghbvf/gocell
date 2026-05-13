@@ -901,5 +901,5 @@ func hasGlobMeta(pattern string) bool {
 // findings. It delegates to newResultAt so the code travels through the
 // single-source RuleCode funnel enforced by archtest INV-2.
 func (v *Validator) docNamingResult(file string, line, column int, field, message string, issue IssueType) ValidationResult {
-	return v.newResultAt(codeDOCNAME01, SeverityError, issue, file, line, column, field, message)
+	return v.newResultAt(codeDOCNAME01, SeverityError, issue, file, metadata.Position{Line: line, Column: column}, field, message)
 }

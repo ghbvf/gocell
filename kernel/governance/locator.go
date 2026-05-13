@@ -95,7 +95,10 @@ func (l *locator) newResult(code RuleCode, sev Severity, typ IssueType, file, fi
 // line text scan) rather than the yaml.Node cache. The file argument is not
 // resolved through the canonical-file resolver because content scanning
 // already works with relative paths directly.
-func (l *locator) newResultAt(code RuleCode, sev Severity, typ IssueType, file string, line, col int, field, msg string) ValidationResult {
+func (l *locator) newResultAt(
+	code RuleCode, sev Severity, typ IssueType,
+	file string, pos metadata.Position, field, msg string,
+) ValidationResult {
 	return ValidationResult{
 		Code:      code,
 		Severity:  sev,
@@ -103,8 +106,8 @@ func (l *locator) newResultAt(code RuleCode, sev Severity, typ IssueType, file s
 		File:      file,
 		Field:     field,
 		Message:   msg,
-		Line:      line,
-		Column:    col,
+		Line:      pos.Line,
+		Column:    pos.Column,
 	}
 }
 
