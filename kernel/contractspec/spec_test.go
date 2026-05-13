@@ -178,10 +178,12 @@ func TestContractSpec_Validate_InternalWithClientsOK(t *testing.T) {
 }
 
 // TestContractSpec_Validate_InvalidClientID tests that Clients containing
-// invalid cell-ID strings are rejected by validateHTTP → isCellIDLike.
-// isCellIDLike requires a lowercase ASCII letter as the first byte (range
-// 'a'-'z'); uppercase first characters (e.g. "Accesscore") are rejected
-// because 'A' falls outside the 'a'-'z' range. No normalisation is applied.
+// invalid cell-ID strings are rejected by validateHTTP → metadata.MatchCellID.
+// metadata.MatchCellID enforces metadata.CellIDPattern (^[a-z][a-z0-9]+$):
+// ≥2 chars, lowercase ASCII letter first, then lowercase letters or digits,
+// no dashes or underscores. Uppercase first characters (e.g. "Accesscore") are
+// rejected. Single-character IDs are rejected (pattern requires ≥2 chars).
+// IDs containing dashes are rejected (no-dash concatenation convention FMT-16).
 func TestContractSpec_Validate_InvalidClientID(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -194,8 +196,12 @@ func TestContractSpec_Validate_InvalidClientID(t *testing.T) {
 		{"starts with hyphen", []string{"-abc"}, true},
 		{"contains underscore", []string{"ab_c"}, true},
 		{"contains exclamation", []string{"ab!c"}, true},
-		{"valid single letter", []string{"a"}, false},
-		{"valid lowercase with digits and hyphens", []string{"ab-1-cd"}, false},
+		{"single letter rejected — pattern requires ≥2 chars", []string{"a"}, true},
+		{"dash rejected — no-dash convention FMT-16", []string{"ab-1-cd"}, true},
+		{"dash rejected — simple", []string{"foo-bar"}, true},
+		{"valid lowercase two chars", []string{"ab"}, false},
+		{"valid lowercase with digits no dash", []string{"ab1cd"}, false},
+		{"valid full id", []string{"accesscore"}, false},
 		{"uppercase rejected", []string{"Accesscore"}, true},
 	}
 	for _, tc := range cases {
