@@ -10,8 +10,8 @@ import "github.com/ghbvf/gocell/kernel/observability/poolstats"
 //
 // IMPORTANT — consume this statter via
 // adapters/otel.RegisterMessagingChannelMetrics (messaging semantics),
-// NOT RegisterPoolMetrics (db.client.connection.* semantics). Feeding a
-// channel-pool snapshot into the DB collector emits misleading
+// NOT NewPoolMetricsResource (db.client.connection.* semantics). Feeding
+// a channel-pool snapshot into the DB collector emits misleading
 // db.client.connection.count{state=…} time series and corrupts dashboard
 // capacity signaling — the kind of silent semantic drift that only
 // surfaces during an incident.

@@ -7,7 +7,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/poolstats"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -39,24 +41,74 @@ const (
 	msgCreatePoolCounterFailed = "otel pool collector: create counter failed"
 )
 
-// RegisterPoolMetrics registers observable gauges on the supplied Meter
+// NewPoolMetricsResource registers db.client.connection.* OTel observable
+// gauges driven by the supplied statters and returns the registration as a
+// kernel/lifecycle.ManagedResource. Bootstrap registers the resource via
+// bootstrap.WithManagedResource and the OTel callback is unregistered as
+// part of LIFO shutdown.
+//
+// Statter-less callers (len(statters) == 0) receive a no-op resource whose
+// Close returns nil — callers can always wire the resource without a nil
+// guard.
+//
+// ref: kernel/lifecycle/managed_resource.go — three-aspect bundle
+// (Checkers/Worker/Close); pool collector has no health probe and no
+// worker, only Close.
+// ref: opentelemetry-go metric/meter.go@main Registration.Unregister —
+// canonical callback teardown used inside Close.
+func NewPoolMetricsResource(meter otelmetric.Meter, statters []poolstats.Statter) (lifecycle.ManagedResource, error) {
+	unregister, err := registerPoolCallbacks(meter, statters)
+	if err != nil {
+		return nil, err
+	}
+	return &poolMetricsResource{unregister: unregister}, nil
+}
+
+// poolMetricsResource adapts an OTel callback Registration to the
+// kernel/lifecycle.ManagedResource contract.
+type poolMetricsResource struct {
+	unregister func() error
+}
+
+// Compile-time assertion: poolMetricsResource satisfies ManagedResource.
+var _ lifecycle.ManagedResource = (*poolMetricsResource)(nil)
+
+// Checkers returns nil: the OTel callback fires synchronously on each
+// collect cycle. There is no out-of-band "are we healthy" probe — if the
+// callback panics, OTel surfaces it through its own diagnostic channel.
+func (*poolMetricsResource) Checkers() map[string]func(context.Context) error {
+	return nil
+}
+
+// Worker returns nil: no background goroutine — emission is driven by
+// the OTel reader's collect cycle.
+func (*poolMetricsResource) Worker() worker.Worker { return nil }
+
+// Close unregisters the OTel callback. ctx is accepted for ManagedResource
+// contract symmetry; Registration.Unregister is synchronous and ignores it.
+func (r *poolMetricsResource) Close(_ context.Context) error {
+	return r.unregister()
+}
+
+// registerPoolCallbacks registers observable gauges on the supplied Meter
 // and drives them from the given list of Statters on every collection
 // cycle. The returned unregister function MUST be called at Stop to
 // release the callback — otherwise the callback retains the statters
-// and may outlive their owning pool.
+// and may outlive their owning pool. NewPoolMetricsResource is the only
+// public caller; it ties the unregister to ManagedResource.Close.
 //
 // ref: opentelemetry-go metric/meter.go@main — Int64ObservableUpDownCounter
 // + Meter.RegisterCallback is the canonical pattern for push-style gauges
 // backed by push-style snapshots (as opposed to pull-style readers that
 // would read directly during collection).
-func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (unregister func() error, err error) {
+func registerPoolCallbacks(meter otelmetric.Meter, statters []poolstats.Statter) (func() error, error) {
 	if meter == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig,
 			"otel pool collector: Meter is required")
 	}
 	if len(statters) == 0 {
 		// Register nothing, but return a no-op unregister so callers can
-		// always `defer unregister()` without a nil check.
+		// always invoke Close without a nil check.
 		return func() error { return nil }, nil
 	}
 
@@ -101,7 +153,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	// Snapshot each statter during the callback; OTel calls this on every
 	// collect cycle so the numbers always reflect the latest pool state.
 	reg, err := meter.RegisterCallback(
-		func(ctx context.Context, o otelmetric.Observer) error {
+		func(_ context.Context, o otelmetric.Observer) error {
 			for _, s := range statters {
 				snap := s.Snapshot()
 				name := s.PoolName()

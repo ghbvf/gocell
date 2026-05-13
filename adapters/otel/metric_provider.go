@@ -27,6 +27,29 @@ type MetricProvider struct {
 // Compile-time check: MetricProvider satisfies metrics.Provider.
 var _ metrics.Provider = (*MetricProvider)(nil)
 
+// defaultAttrCacheMaxSize caps the per-instrument attribute set cardinality
+// to prevent unbounded memory growth when a caller emits with high-cardinality
+// labels. 2000 matches the OTel SDK's own defaultCardinalityLimit so a stream
+// of high-cardinality writes degrades into the overflow bucket at the same
+// threshold the SDK would impose downstream.
+//
+// Declared as var (not const) so tests can save/restore around small-cap
+// end-to-end probes; production-time mutation is undefined behavior and the
+// value is captured per-vec at construction (mutating after CounterVec /
+// HistogramVec does NOT resize the live cache).
+//
+// ref: opentelemetry-go sdk/metric/config.go@main defaultCardinalityLimit
+// ref: opentelemetry-go sdk/metric/internal/aggregate/limit.go@main —
+// overflow bucket pattern (vs LRU eviction, which would silently produce
+// wrong-attribute reports on subsequent lookup of an evicted key).
+var defaultAttrCacheMaxSize = 2000
+
+// overflowOpt is the single MeasurementOption returned by attrCache.lookup
+// when the cache is full. Emitting overflow under this sentinel collapses
+// the unbounded high-cardinality tail into one data point tagged
+// otel.metric.overflow=true, matching the OTel SDK's overflow attribute.
+var overflowOpt = otelmetric.WithAttributes(attribute.Bool("otel.metric.overflow", true))
+
 // NewMetricProvider returns a Provider that registers instruments on the
 // supplied Meter. Caller owns the MeterProvider (and exporter) lifecycle;
 // this constructor does not spin up OTLP connections.
@@ -53,7 +76,7 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	return &otelCounterVec{
 		inner:  c,
 		labels: append([]string(nil), opts.LabelNames...),
-		cache:  &attrCache{m: map[string]otelmetric.MeasurementOption{}},
+		cache:  newAttrCache(defaultAttrCacheMaxSize),
 	}, nil
 }
 
@@ -83,16 +106,32 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	return &otelHistogramVec{
 		inner:  h,
 		labels: append([]string(nil), opts.LabelNames...),
-		cache:  &attrCache{m: map[string]otelmetric.MeasurementOption{}},
+		cache:  newAttrCache(defaultAttrCacheMaxSize),
 	}, nil
 }
 
 // attrCache memoises MeasurementOption per canonical label key so that
-// repeat emission paths (pool_collector loop, hook dispatcher) avoid
-// per-call []attribute.KeyValue allocation. Cache grows with cardinality.
+// repeat emission paths (pool collector loop, hook dispatcher) avoid
+// per-call []attribute.KeyValue allocation.
+//
+// The cache is bounded by maxSize. Once at cap, subsequent distinct keys
+// receive the package-level overflowOpt sentinel (otel.metric.overflow=true)
+// instead of being inserted — this is the cap-and-overflow pattern the OTel
+// SDK uses internally for view aggregation. Eviction (LRU) is deliberately
+// not used: an evicted key, on later re-lookup, would receive a fresh
+// MeasurementOption indistinguishable from the original, masking the
+// cardinality issue from operators.
 type attrCache struct {
-	mu sync.RWMutex
-	m  map[string]otelmetric.MeasurementOption
+	mu      sync.RWMutex
+	m       map[string]otelmetric.MeasurementOption
+	maxSize int
+}
+
+func newAttrCache(maxSize int) *attrCache {
+	return &attrCache{
+		m:       make(map[string]otelmetric.MeasurementOption, maxSize),
+		maxSize: maxSize,
+	}
 }
 
 // key builds the canonical cache key. LabelNames are ordered at
@@ -135,8 +174,16 @@ func (c *attrCache) lookup(order []string, l metrics.Labels) otelmetric.Measurem
 	opt := otelmetric.WithAttributes(attrs...)
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Double-check: another goroutine may have populated the entry between
+	// our RUnlock and Lock; return its result rather than racing it.
+	if existing, ok := c.m[key]; ok {
+		return existing
+	}
+	if len(c.m) >= c.maxSize {
+		return overflowOpt
+	}
 	c.m[key] = opt
-	c.mu.Unlock()
 	return opt
 }
 
@@ -178,6 +225,12 @@ type otelCounter struct {
 // Inc records 1. Uses context.Background() because the Counter interface
 // deliberately omits context (kernel modules emit from hot paths where
 // passing ctx everywhere would be noise). OTel tolerates Background.
+//
+// See METRICS-CTX-FUNNEL-01 in docs/backlog/cap-13-observability.md — the
+// ctx-bearing alignment to OTel exemplar/baggage semantics is an open
+// cross-layer refactor (kernel metrics interface + adapters/{prometheus,otel}
+// + all emission sites). Background() here is bounded by the kernel interface
+// shape, not by this adapter; the funnel ID points readers to the open work.
 func (c *otelCounter) Inc() { c.inner.Add(context.Background(), 1, c.attrs) }
 
 func (c *otelCounter) Add(delta float64) {
