@@ -20,6 +20,12 @@ const DefaultProbeTimeout = 5 * time.Second
 // lifecycle.ManagedResource. It is the dual to CloseWithDeadline for the
 // readiness-probe side of the contract.
 //
+// For adapters requiring multiple named probes (e.g. postgres.Pool exposes
+// postgres_ready + postgres_indexes_valid_ready), build the Checkers map
+// directly in the adapter; this helper is intentionally scoped to the common
+// single-probe case. A multi-entry variant was considered but deferred
+// until a third multi-probe caller emerges (YAGNI).
+//
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers with
 // per-probe deadlines.
 // ref: uber-go/fx app.go StopTimeout — same shared-deadline pattern, dual side.
