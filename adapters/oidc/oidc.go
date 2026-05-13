@@ -161,14 +161,9 @@ func (a *Adapter) Worker() worker.Worker { return nil }
 func (a *Adapter) Close(_ context.Context) error { return nil }
 
 // healthProbe verifies the cached provider is populated. It does NOT
-// re-discover — Refresh() / the future rotation worker (PR-11) handles that.
-//
-// Lock contention note: Provider(ctx) acquires a.mu.RLock(). When Refresh()
-// or the future PR-11/A-02 JWKS rotation worker holds a.mu.Lock() during
-// re-discover, healthProbe is briefly queued. The probe's inner 5s timeout
-// (adapterutil.DefaultProbeTimeout) bounds the worst case; if rotation
-// reliably exceeds that, PR-11 must switch oidc to an atomic.Bool state
-// machine (like adapters/s3.Client) so /readyz reads do not block.
+// re-discover — Refresh() handles that. Provider(ctx) acquires a.mu.RLock();
+// the probe's inner 5s timeout (adapterutil.DefaultProbeTimeout) bounds the
+// worst case if the lock is briefly held by a concurrent Refresh().
 func (a *Adapter) healthProbe(ctx context.Context) error {
 	_, err := a.Provider(ctx)
 	return err
