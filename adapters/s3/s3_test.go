@@ -37,6 +37,8 @@ func (m *mockHeadBucket) HeadBucket(
 }
 
 // validConfig returns a minimal Config that passes Validate() (loopback endpoint).
+// Clock is set to clock.Real() — Config.Clock is required after KERNEL-CLOCK-
+// LEAF-FALLBACK-01 (s3.New panics via clock.MustHaveClock when nil).
 func validConfig() Config {
 	return Config{
 		Endpoint:        "http://127.0.0.1:9000",
@@ -44,21 +46,19 @@ func validConfig() Config {
 		Bucket:          "test-bucket",
 		AccessKeyID:     "key",
 		SecretAccessKey: "secret",
+		Clock:           clock.Real(),
 	}
 }
 
 // newTestClient creates a Client with an injected mock, bypassing New's sync probe.
+// cfg.Clock must be non-nil (validConfig provides clock.Real() by default).
 func newTestClient(cfg Config, mock s3HeadBucketAPI) *Client {
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
 	}
-	clk := cfg.Clock
-	if clk == nil {
-		clk = clock.Real()
-	}
 	return &Client{
 		config:     cfg,
-		clk:        clk,
+		clk:        cfg.Clock,
 		head:       mock,
 		stopCh:     make(chan struct{}),
 		workerDone: make(chan struct{}),
@@ -196,6 +196,7 @@ func TestNew_FailsSyncOnHeadBucketError(t *testing.T) {
 		AccessKeyID:     "k",
 		SecretAccessKey: "s",
 		HealthInterval:  testtime.D30s,
+		Clock:           clock.Real(), // required after KERNEL-CLOCK-LEAF-FALLBACK-01
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 func TestEnvWithFallback_LegacyVar(t *testing.T) {
@@ -26,6 +28,7 @@ func TestNew_DefaultTimeout(t *testing.T) {
 	cfg := Config{
 		Endpoint: "http://127.0.0.1:9000", Region: "us-east-1",
 		Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s",
+		Clock: clock.Real(), // required after KERNEL-CLOCK-LEAF-FALLBACK-01
 		// HTTPTimeout is 0 — should use default.
 	}
 	client, err := newClientWithHead(context.Background(), cfg, mock)

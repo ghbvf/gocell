@@ -48,8 +48,8 @@ type Config struct {
 	HTTPTimeout     time.Duration // default 30s
 	HealthInterval  time.Duration // default 30s; background probe cadence
 	// Clock is the time source for the background health ticker.
-	// If nil, defaults to clock.Real() — the stdlib wall-clock.
-	// Inject a clockmock in tests to control ticker behavior.
+	// REQUIRED: panics via clock.MustHaveClock when nil at New().
+	// Composition root passes clock.Real(); tests pass clockmock.New(...).
 	Clock clock.Clock
 }
 
@@ -112,7 +112,7 @@ func (c Config) Validate() error {
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 type Client struct {
 	config Config
-	clk    clock.Clock     // injected time source; defaults to clock.Real()
+	clk    clock.Clock     // injected time source; required (validated via clock.MustHaveClock)
 	s3     *awss3.Client   // full SDK client; used for Upload, SDK(), and Health()
 	head   s3HeadBucketAPI // narrow interface for state-machine probes; equals s3 in production
 
@@ -164,12 +164,16 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 // It accepts an explicit s3HeadBucketAPI so tests can inject mocks without
 // going through the full AWS SDK setup. If head is a *awss3.Client, it is also
 // stored as c.s3 so SDK() and Upload() work; mock implementations leave c.s3 nil.
+//
+// Boundary validation: cfg.Clock is required (panics via clock.MustHaveClock
+// when nil or typed-nil). The composition root injects clock.Real(); tests
+// inject clockmock.New(...).
+// ref: KERNEL-CLOCK-LEAF-FALLBACK-01 — production leaves must not fallback to
+// clock.Real(); only the composition root may construct it.
 func newClientWithHead(ctx context.Context, cfg Config, head s3HeadBucketAPI) (*Client, error) {
+	clock.MustHaveClock(cfg.Clock, "s3.New")
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
-	}
-	if cfg.Clock == nil {
-		cfg.Clock = clock.Real()
 	}
 
 	c := &Client{
