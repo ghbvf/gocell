@@ -226,7 +226,7 @@ func (s *store) validatePresentedLocked(sel, ver []byte) (*tokenRecord, error) {
 				slog.String("reason", "reuse_detected"),
 				slog.Int("used_times", rec.usedTimes),
 			)
-			return nil, refresh.ErrRejected
+			return nil, refresh.ErrReused
 		}
 
 		// Parent already rotated — either grace retry or reuse attack.
@@ -236,7 +236,7 @@ func (s *store) validatePresentedLocked(sel, ver []byte) (*tokenRecord, error) {
 				slog.String("session_id", rec.sessionID),
 				slog.String("reason", "reuse_detected"),
 			)
-			return nil, refresh.ErrRejected
+			return nil, refresh.ErrReused
 		}
 	}
 

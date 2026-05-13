@@ -251,11 +251,11 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 		if innerErr == nil {
 			return nil
 		}
-		if errors.Is(innerErr, refresh.ErrRejected) {
-			// Capture reject through an outer variable so RunInTx commits the
-			// transaction. This persists the cascade-revoke SQL (reuse_detected /
-			// grace_exhausted) and keeps commit/rollback latency uniform across
-			// branches (B2-A-09 timing oracle defense).
+		if errors.Is(innerErr, refresh.ErrRejected) || errors.Is(innerErr, refresh.ErrReused) {
+			// Capture reject/reuse through an outer variable so RunInTx commits
+			// the transaction. This persists the cascade-revoke SQL
+			// (reuse_detected / grace_exhausted) and keeps commit/rollback
+			// latency uniform across branches (B2-A-09 timing oracle defense).
 			rejectErr = innerErr
 			return nil
 		}
@@ -295,11 +295,11 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 		if innerErr == nil {
 			return nil
 		}
-		if errors.Is(innerErr, refresh.ErrRejected) {
-			// Capture reject through an outer variable so RunInTx commits the
-			// transaction. This persists the cascade-revoke SQL on reuse_detected /
-			// grace_exhausted, and keeps commit latency uniform across branches
-			// (B2-A-09 timing oracle defense).
+		if errors.Is(innerErr, refresh.ErrRejected) || errors.Is(innerErr, refresh.ErrReused) {
+			// Capture reject/reuse through an outer variable so RunInTx commits
+			// the transaction. This persists the cascade-revoke SQL on
+			// reuse_detected / grace_exhausted, and keeps commit latency uniform
+			// across branches (B2-A-09 timing oracle defense).
 			rejectErr = innerErr
 			return nil
 		}
@@ -456,6 +456,11 @@ func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
 //
 // mutate=true (Rotate path): in-grace re-presentation increments used_times
 // via markGraceUsedSQL so that the counter approaches GraceMaxReuses.
+//
+// Reuse-detection branches return refresh.ErrReused (not ErrRejected) so
+// the sessionrefresh service (Batch 3) can branch on confirmed attacks and
+// trigger cascade revoke + epoch bump, while plain rejections (malformed,
+// expired, revoked) return ErrRejected without that side-effect.
 func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, mutate bool) error {
 	now := s.clock.Now()
 
@@ -472,7 +477,7 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 		if err := s.revokeSessionDetachedAt(ctx, row.sessionID, now); err != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", err)
 		}
-		return rejectWithReason("reuse_detected", row.sessionID)
+		return refresh.ErrReused
 	}
 
 	if now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
@@ -490,7 +495,7 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 		if err := s.revokeSessionDetachedAt(ctx, row.sessionID, now); err != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", err)
 		}
-		return rejectWithReason("reuse_detected", row.sessionID)
+		return refresh.ErrReused
 	}
 
 	// Within grace window. Only Rotate consumes the grace budget; Peek is
