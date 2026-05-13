@@ -139,3 +139,36 @@ func TestRefresh_StillCallableAfterConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p)
 }
+
+// ---------------------------------------------------------------------------
+// TLS enforcement tests (F-4: SEC-FAIL-CLOSED on IssuerURL)
+// ---------------------------------------------------------------------------
+
+// TestConfigValidate_RejectsNonTLSIssuer verifies that Config.Validate rejects
+// a plain-HTTP issuer URL for a remote host (SEC-FAIL-CLOSED).
+func TestConfigValidate_RejectsNonTLSIssuer(t *testing.T) {
+	t.Parallel()
+
+	err := Config{IssuerURL: "http://idp.example.com", ClientID: "id"}.Validate()
+	require.Error(t, err, "Validate must reject non-TLS remote issuer URL")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "error must be an *errcode.Error")
+	assert.Equal(t, errcode.ErrAdapterEndpointNotTLS, ec.Code)
+}
+
+// TestConfigValidate_AcceptsLoopbackHTTP verifies that loopback IPs are exempt
+// from the TLS requirement (dev/CI testcontainer exception).
+func TestConfigValidate_AcceptsLoopbackHTTP(t *testing.T) {
+	t.Parallel()
+
+	err := Config{IssuerURL: "http://127.0.0.1:8080", ClientID: "id"}.Validate()
+	require.NoError(t, err, "Validate must accept http://127.0.0.1:* (loopback exempt)")
+}
+
+// TestConfigValidate_AcceptsHTTPS verifies that HTTPS remote issuer URLs are accepted.
+func TestConfigValidate_AcceptsHTTPS(t *testing.T) {
+	t.Parallel()
+
+	err := Config{IssuerURL: "https://idp.example.com", ClientID: "id"}.Validate()
+	require.NoError(t, err, "Validate must accept https:// issuer URL")
+}
