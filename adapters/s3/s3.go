@@ -54,6 +54,10 @@ type Config struct {
 }
 
 // ConfigFromEnv creates a Config from environment variables.
+//
+// The returned Config.Clock field is zero (nil); callers MUST set Clock
+// before calling New() because s3.New panics via clock.MustHaveClock when
+// nil. Composition root: pass clock.Real(); tests: pass clockmock.New(...).
 func ConfigFromEnv() Config {
 	return Config{
 		Endpoint:        envWithFallback("GOCELL_S3_ENDPOINT", "S3_ENDPOINT"),
@@ -119,6 +123,11 @@ type Client struct {
 	// state holds the latest HeadBucket result.
 	// nil pointer = healthy; non-nil pointer to non-nil error = unhealthy.
 	state atomic.Pointer[error]
+
+	// started is set to true at the very beginning of runHealthLoop so that
+	// Close and Stop can skip the workerDone drain when the worker goroutine
+	// was never started (e.g. bootstrap aborted before Worker.Start).
+	started atomic.Bool
 
 	stopOnce   sync.Once
 	stopCh     chan struct{} // signals the worker goroutine to exit
@@ -219,7 +228,15 @@ func (c *Client) headBucket(ctx context.Context) error {
 func (c *Client) SDK() *awss3.Client { return c.s3 }
 
 // Upload stores an object via PutObject. Used by cells implementing object archival.
+//
+// Requires a full SDK client (c.s3 non-nil). When constructed via newClientWithHead
+// with a mock (tests), c.s3 is nil and Upload returns ErrAdapterS3Upload rather
+// than panicking on nil dereference.
 func (c *Client) Upload(ctx context.Context, key string, data []byte, contentType string) error {
+	if c.s3 == nil {
+		return errcode.New(errcode.KindInternal, ErrAdapterS3Upload,
+			"s3: full SDK client unavailable; Upload requires production s3.Client construction")
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
@@ -241,7 +258,15 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 // Health checks bucket accessibility via a direct HeadBucket network call.
 // This is useful for one-shot diagnostics. The background worker and Checkers
 // use the internal state, not this method.
+//
+// Requires a full SDK client (c.s3 non-nil). When constructed via newClientWithHead
+// with a mock (tests), c.s3 is nil and Health returns ErrAdapterS3Health rather
+// than panicking on nil dereference.
 func (c *Client) Health(ctx context.Context) error {
+	if c.s3 == nil {
+		return errcode.New(errcode.KindInternal, ErrAdapterS3Health,
+			"s3: full SDK client unavailable; Health requires production s3.Client construction")
+	}
 	_, err := c.s3.HeadBucket(ctx, &awss3.HeadBucketInput{
 		Bucket: aws.String(c.config.Bucket),
 	})
@@ -293,6 +318,10 @@ func (w *s3HealthWorker) Start(ctx context.Context) error {
 
 func (w *s3HealthWorker) Stop(ctx context.Context) error {
 	w.c.signalStop()
+	// Fast path: worker goroutine never started — nothing to drain.
+	if !w.c.started.Load() {
+		return nil
+	}
 	select {
 	case <-w.c.workerDone:
 		return nil
@@ -315,6 +344,7 @@ func (c *Client) signalStop() {
 // Config.HealthInterval, calls headBucket to update state, and exits when
 // either ctx is done or stopCh is closed. It closes workerDone on exit.
 func (c *Client) runHealthLoop(ctx context.Context) {
+	c.started.Store(true)
 	defer close(c.workerDone)
 
 	ticker := c.clk.NewTicker(c.config.HealthInterval)
@@ -342,9 +372,18 @@ func (c *Client) runHealthLoop(ctx context.Context) {
 // and waits for the goroutine to drain, bounded by ctx. Idempotent — safe to
 // call from both Worker.Stop and ManagedResource.Close teardown paths.
 //
+// Fast path: if the worker goroutine was never started (e.g. bootstrap aborted
+// before Worker.Start was called), workerDone will never be closed. In that
+// case we skip the select so we do not burn the shutdown budget on a
+// non-existent drain.
+//
 // ref: runtime/websocket/hub.go Close — idempotent + ctx-bounded pattern.
 func (c *Client) Close(ctx context.Context) error {
 	c.signalStop()
+	// Fast path: worker goroutine never started — nothing to drain.
+	if !c.started.Load() {
+		return nil
+	}
 	select {
 	case <-c.workerDone:
 		return nil

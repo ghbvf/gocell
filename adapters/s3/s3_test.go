@@ -427,6 +427,91 @@ func TestClose_StopsWorkerLoop(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Upload / Health nil-SDK guard tests (F-6)
+// ---------------------------------------------------------------------------
+
+// TestUpload_NilSDKReturnsError verifies that Upload returns a typed errcode
+// error (ErrAdapterS3Upload) when the full SDK client is nil (mock-only build).
+func TestUpload_NilSDKReturnsError(t *testing.T) {
+	mock := &mockHeadBucket{}
+	c := newTestClient(validConfig(), mock)
+	// c.s3 is nil because newTestClient injects a mock, not *awss3.Client.
+
+	err := c.Upload(context.Background(), "key", []byte("data"), "")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
+}
+
+// TestHealth_NilSDKReturnsError verifies that Health returns a typed errcode
+// error (ErrAdapterS3Health) when the full SDK client is nil (mock-only build).
+func TestHealth_NilSDKReturnsError(t *testing.T) {
+	mock := &mockHeadBucket{}
+	c := newTestClient(validConfig(), mock)
+	// c.s3 is nil because newTestClient injects a mock, not *awss3.Client.
+
+	err := c.Health(context.Background())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Health, ec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// Pre-start Close / Stop idempotency tests (F-5)
+// ---------------------------------------------------------------------------
+
+// TestClose_NeverStarted_ReturnsImmediately verifies that Close returns nil
+// quickly when Worker.Start was never called. Without the started fast path,
+// Close would block waiting on workerDone (which is never closed).
+func TestClose_NeverStarted_ReturnsImmediately(t *testing.T) {
+	mock := &mockHeadBucket{}
+	cfg := validConfig()
+	cfg.HealthInterval = testtime.D30s
+	c := newTestClient(cfg, mock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err := c.Close(ctx)
+	assert.NoError(t, err, "Close must return nil immediately when worker was never started")
+}
+
+// TestClose_AfterWorkerStop_Idempotent verifies that calling Stop followed by
+// Close returns nil for both — the idempotent teardown path used by bootstrap
+// when both Worker.Stop and ManagedResource.Close are called in sequence.
+func TestClose_AfterWorkerStop_Idempotent(t *testing.T) {
+	mock := &mockHeadBucket{errFn: func(_ int64) error { return nil }}
+	cfg := validConfig()
+	cfg.HealthInterval = testtime.D50ms
+
+	c := newTestClient(cfg, mock)
+	w := c.Worker()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+
+	// Wait for at least one tick so the worker is definitely running.
+	require.Eventually(t, func() bool {
+		return mock.callCount.Load() >= 1
+	}, testtime.D200ms, testtime.FastPoll)
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
+	defer stopCancel()
+
+	// Stop signals the worker and drains workerDone.
+	require.NoError(t, w.Stop(stopCtx), "Stop must return nil")
+
+	// Close after Stop must also return nil (workerDone already closed).
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
+	defer closeCancel()
+	require.NoError(t, c.Close(closeCtx), "Close after Stop must return nil")
+}
+
+// ---------------------------------------------------------------------------
 // SDK() accessor test (retained from original)
 // ---------------------------------------------------------------------------
 
