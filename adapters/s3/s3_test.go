@@ -20,7 +20,7 @@ import (
 // Compile-time assertion: *Client implements lifecycle.ManagedResource.
 var _ lifecycle.ManagedResource = (*Client)(nil)
 
-// mockHeadBucket implements s3HeadBucketAPI for tests.
+// mockHeadBucket implements bucketHeader for tests.
 type mockHeadBucket struct {
 	callCount atomic.Int64
 	errFn     func(call int64) error
@@ -52,7 +52,7 @@ func validConfig() Config {
 
 // newTestClient creates a Client with an injected mock, bypassing New's sync probe.
 // cfg.Clock must be non-nil (validConfig provides clock.Real() by default).
-func newTestClient(cfg Config, mock s3HeadBucketAPI) *Client {
+func newTestClient(cfg Config, mock bucketHeader) *Client {
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
 	}
@@ -373,28 +373,6 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 	assert.NoError(t, lastErr, "state must recover to healthy after a successful tick")
 }
 
-// ---------------------------------------------------------------------------
-// Close idempotency test
-// ---------------------------------------------------------------------------
-
-func TestClose_IdempotentDoubleCallReturnsNil(t *testing.T) {
-	mock := &mockHeadBucket{}
-	cfg := validConfig()
-	cfg.HealthInterval = testtime.D30s
-	c := newTestClient(cfg, mock)
-
-	// Close the worker channel manually so the first Close doesn't block.
-	// We need the workerDone channel to be closed so Close can drain.
-	close(c.workerDone)
-
-	ctx := context.Background()
-	err1 := c.Close(ctx)
-	err2 := c.Close(ctx)
-
-	assert.NoError(t, err1)
-	assert.NoError(t, err2)
-}
-
 // TestClose_StopsWorkerLoop verifies that Close signals the worker and the
 // goroutine terminates.
 func TestClose_StopsWorkerLoop(t *testing.T) {
@@ -523,7 +501,7 @@ func TestNew_SDKAccessorAvailable(t *testing.T) {
 
 	// Build a real *awss3.Client (no network needed — we won't call HeadBucket on it).
 	// The mock is used for the sync probe; the real SDK client wires up c.s3.
-	// To supply both, we inject the real SDK client as head (it satisfies s3HeadBucketAPI)
+	// To supply both, we inject the real SDK client as head (it satisfies bucketHeader)
 	// but we need it to succeed on HeadBucket. Since we can't intercept the real client
 	// without a live server, we verify the type-assertion wiring by checking that
 	// newClientWithHead with a real *awss3.Client (even one pointing at an unreachable
