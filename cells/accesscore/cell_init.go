@@ -203,7 +203,11 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("identitymanage", "accesscore", cellvocab.L1))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
-	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.logger)
+	validateSvc, err := sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.userRepo, c.logger)
+	if err != nil {
+		return err
+	}
+	c.validateSvc = validateSvc
 	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cellvocab.L0))
 
 	// session-refresh uses refresh.Store for token state validation and

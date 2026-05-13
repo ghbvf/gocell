@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -14,6 +15,10 @@ import (
 // errMsgAuthFailed is the uniform error message for all session validation
 // failures. Using a single message prevents session-state enumeration attacks.
 const errMsgAuthFailed = "invalid or expired authentication token"
+
+// errMsgServiceUnavailable is the uniform error message when an infrastructure
+// dependency (session store or user repo) is temporarily unreachable.
+const errMsgServiceUnavailable = "authentication service unavailable"
 
 // Compile-time check: Service satisfies runtime/auth.IntentTokenVerifier so it
 // can be plugged into AuthMiddleware (which now demands intent-aware verifiers
@@ -24,12 +29,23 @@ var _ auth.IntentTokenVerifier = (*Service)(nil)
 type Service struct {
 	verifier     auth.IntentTokenVerifier
 	sessionStore session.Store
+	userRepo     ports.UserRepository
 	logger       *slog.Logger
 }
 
-// NewService creates a session-validate Service.
-func NewService(verifier auth.IntentTokenVerifier, sessionStore session.Store, logger *slog.Logger) *Service {
-	return &Service{verifier: verifier, sessionStore: sessionStore, logger: logger}
+// NewService creates a session-validate Service. Returns an error when any
+// required dependency is nil.
+func NewService(
+	verifier auth.IntentTokenVerifier,
+	sessionStore session.Store,
+	userRepo ports.UserRepository,
+	logger *slog.Logger,
+) (*Service, error) {
+	if userRepo == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session-validate: UserRepository required")
+	}
+	return &Service{verifier: verifier, sessionStore: sessionStore, userRepo: userRepo, logger: logger}, nil
 }
 
 // VerifyIntent validates an access token. This service is intentionally
@@ -66,9 +82,12 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 	return claims, nil
 }
 
-// enforceSessionState performs the session-revocation / expiry checks that
-// follow a successful JWT verification. Tokens missing the sid claim are
+// enforceSessionState performs session-revocation and epoch-invariant checks
+// that follow a successful JWT verification. Tokens missing the sid claim are
 // rejected when sessionStore is configured (fail-closed).
+//
+// Two sequential reads are performed under READ COMMITTED isolation with no
+// snapshot guarantee (plan decision HIGH-4 — no read-only tx wrap).
 func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
 	sid := claims.SessionID
 	if sid == "" {
@@ -76,8 +95,18 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
+
+	// 1) Session row exists and is not revoked.
 	view, err := s.sessionStore.Get(ctx, sid)
 	if err != nil {
+		if errcode.IsInfraError(err) {
+			s.logger.Error("session-validate: session store unavailable",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject),
+				slog.Any("error", err))
+			return auth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				errMsgServiceUnavailable, err)
+		}
 		s.logSessionLookupError(sid, claims.Subject, err)
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
@@ -87,6 +116,30 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
+
+	// 2) Epoch invariant: user.authz_epoch must not exceed claims.AuthzEpoch.
+	user, err := s.userRepo.GetByID(ctx, claims.Subject)
+	if err != nil {
+		if errcode.IsInfraError(err) {
+			s.logger.Error("session-validate: user repo unavailable",
+				slog.String("subject", claims.Subject),
+				slog.Any("error", err))
+			return auth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				errMsgServiceUnavailable, err)
+		}
+		// Domain not-found: subject deleted or never existed → uniform 401.
+		s.logger.Warn("session-validate: subject not found",
+			slog.String("subject", claims.Subject))
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+	if user.AuthzEpoch > claims.AuthzEpoch {
+		s.logger.Warn("session-validate: authz epoch mismatch",
+			slog.String("subject", claims.Subject),
+			slog.Int64("user_epoch", user.AuthzEpoch),
+			slog.Int64("claim_epoch", claims.AuthzEpoch))
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
 	return claims, nil
 }
 
