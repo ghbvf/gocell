@@ -12,7 +12,7 @@ import (
 )
 
 // Validate is the startup invariant check for all cross-cutting dependencies.
-// Storage-specific invariants (PGResource, cursor codecs, HMAC key) are checked
+// Storage-specific invariants (PoolResource, cursor codecs, HMAC key) are checked
 // inside the corresponding CellModule.Provide, not here.
 //
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —

@@ -75,14 +75,14 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
-	require.NotNil(t, result.PGResource, "ManagedResource must be non-nil on success")
+	require.NotNil(t, result.PoolResource, "ManagedResource must be non-nil on success")
 	assert.NotNil(t, result.CellOptions, "cellOpts must be non-nil")
-	// Relay is now registered independently via bootstrap opts, not via PGResource.Worker().
+	// Relay is now registered independently via bootstrap opts, not via PoolResource.Worker().
 	assert.NotEmpty(t, result.BootstrapOpts, "bootstrapOpts must carry relay ManagedResource (A11 wire guard)")
-	assert.Nil(t, result.PGResource.Worker(), "PGResource.Worker() must be nil; relay is registered via bootstrapOpts")
+	assert.Nil(t, result.PoolResource.Worker(), "PoolResource.Worker() must be nil; relay is registered via bootstrapOpts")
 
 	// Close pool via ManagedResource so pool.Close(ctx) is called correctly.
-	require.NoError(t, result.PGResource.Close(ctx))
+	require.NoError(t, result.PoolResource.Close(ctx))
 }
 
 // TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that buildConfigCoreOpts
@@ -128,7 +128,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	assert.Nil(t, result.CellOptions, "cellOpts must be nil on schema mismatch")
 	assert.Nil(t, result.BootstrapOpts, "bootstrapOpts must be nil on schema mismatch")
 	// ManagedResource must be nil — pool was closed inside buildConfigCoreOpts before returning error.
-	assert.Nil(t, result.PGResource, "ManagedResource must be nil on schema mismatch (error path, pool was closed)")
+	assert.Nil(t, result.PoolResource, "ManagedResource must be nil on schema mismatch (error path, pool was closed)")
 }
 
 // TestIntegration_AdminExists_OrphanSwept was deleted by PR #392 follow-up:

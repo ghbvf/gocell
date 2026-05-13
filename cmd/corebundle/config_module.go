@@ -18,7 +18,7 @@ import (
 )
 
 // ConfigCoreModule wires configcore: KeyProvider → ValueTransformer →
-// PGResource/cellOpts (storage-backend specific) → configcore.ConfigCore.
+// PoolResource/cellOpts (storage-backend specific) → configcore.ConfigCore.
 //
 // ref: uber-go/fx fx.Module("configcore", ...) — self-contained module.
 // backlog: S29 CORE-BUNDLE-APP-BUILDER-01
@@ -111,7 +111,7 @@ func (m ConfigCoreModule) Provide(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	pgRes := modResult.PGResource
+	pgRes := modResult.PoolResource
 	cellOpts := modResult.CellOptions
 	relayOpts := modResult.BootstrapOpts
 	var opts []bootstrap.Option

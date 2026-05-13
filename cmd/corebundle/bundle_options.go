@@ -90,7 +90,7 @@ func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
 // shared cross-cutting deps, a pre-built assembly, a ConsumerBase, a metrics
 // handler, and the adapter info map. Called by runCorebundle after BuildApp returns.
 //
-// PGResource options are contributed per-Cell by CellModule.Provide (via
+// PoolResource options are contributed per-Cell by CellModule.Provide (via
 // BuildApp opts). This function covers only the cross-cutting concerns:
 // HTTP addr, publisher/subscriber, public/exempt endpoints, metrics, etc.
 func defaultRuntimeOptions(

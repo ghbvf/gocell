@@ -47,7 +47,7 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Nil(t, result.PGResource, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
+	assert.Nil(t, result.PoolResource, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
 	assert.NotEmpty(t, result.CellOptions, "in-memory mode must return cell options (WithInMemoryDefaults)")
 	assert.Empty(t, result.BootstrapOpts, "in-memory mode must not return bootstrap opts (no relay)")
 }
@@ -70,7 +70,7 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
-	assert.Nil(t, result.PGResource, "error path must not leak a ManagedResource")
+	assert.Nil(t, result.PoolResource, "error path must not leak a ManagedResource")
 }
 
 // TestBuildConfigCoreOpts_PGMode_MissingDSN asserts that postgres mode with an
@@ -93,7 +93,7 @@ func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
 	require.Error(t, err, "postgres mode with empty DSN must return an error")
 	assert.Contains(t, err.Error(), "GOCELL_CONFIGCORE_DATABASE_URL",
 		"error must name the missing env var so operators know what to set")
-	assert.Nil(t, result.PGResource, "error path must not leak a ManagedResource")
+	assert.Nil(t, result.PoolResource, "error path must not leak a ManagedResource")
 }
 
 // TestTopologyAdapterInfo_TableDriven locks the adapter_info map shape that
