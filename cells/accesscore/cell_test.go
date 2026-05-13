@@ -107,7 +107,7 @@ func newTestCell(t testing.TB) *AccessCore {
 	return NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
@@ -126,7 +126,7 @@ func newDurableTestCell(t testing.TB) *AccessCore {
 	return NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
@@ -144,7 +144,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTVerifier(testVerifier), // issuer missing
@@ -163,7 +163,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer), // verifier missing
@@ -202,7 +202,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
@@ -226,7 +226,7 @@ func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
@@ -251,7 +251,10 @@ func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		withTestCASProtocol(),
@@ -268,7 +271,10 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	// L2 cell, both nil, but publisher present → OK (demo mode with warning)
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -284,7 +290,10 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
@@ -365,7 +374,10 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 	emitter := outbox.NewNoopEmitter()
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithEmitter(emitter),
@@ -385,7 +397,10 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithEmitter(outbox.NewNoopEmitter()),
@@ -407,7 +422,10 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithCursorCodec(testCursorCodec),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -803,7 +821,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
-		WithSessionRepository(sessionRepo),
+		WithSessionStore(sessionRepo),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
@@ -870,10 +888,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	require.NoError(t, sidParseErr, "session id must be a canonical UUID (PR-A45)")
 
 	// Revoke the session.
-	sess, err := sessionRepo.GetByID(ctx, sid)
-	require.NoError(t, err)
-	sess.Revoke(time.Now())
-	require.NoError(t, sessionRepo.Update(ctx, sess))
+	require.NoError(t, sessionRepo.Revoke(ctx, sid))
 
 	// Verify same token again — should be rejected.
 	_, err = verifier.VerifyIntent(ctx, accessToken, auth.TokenIntentAccess)
@@ -891,7 +906,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
-		WithSessionRepository(sessionRepo),
+		WithSessionStore(sessionRepo),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
@@ -970,10 +985,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	require.NotEmpty(t, sid)
 
 	// Revoke the session.
-	sess, err := sessionRepo.GetByID(ctx, sid)
-	require.NoError(t, err)
-	sess.Revoke(time.Now())
-	require.NoError(t, sessionRepo.Update(ctx, sess))
+	require.NoError(t, sessionRepo.Revoke(ctx, sid))
 
 	// Refreshed token should now be rejected.
 	_, err = verifier.VerifyIntent(ctx, refreshedToken, auth.TokenIntentAccess)
@@ -1025,7 +1037,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
-		WithSessionRepository(testutil.RealSessionRepo(t)),
+		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
@@ -1074,7 +1086,10 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithInMemoryDefaults(),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),

@@ -86,13 +86,13 @@ func (w *pgSessionStoreWrapper) Create(ctx context.Context, s *session.Session) 
 	return w.inner.Create(ctx, &copy)
 }
 
-func (w *pgSessionStoreWrapper) Get(ctx context.Context, id string) (*session.Session, error) {
+func (w *pgSessionStoreWrapper) Get(ctx context.Context, id string) (*session.ValidateView, error) {
 	got, err := w.inner.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	// Map UUID subject_id back to the storetest string ID so suite assertions
-	// against Session.SubjectID match the original fixture value.
+	// against ValidateView.SubjectID match the original fixture value.
 	got.SubjectID = w.resolveSubjectName(got.SubjectID)
 	return got, nil
 }

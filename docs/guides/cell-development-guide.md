@@ -311,15 +311,36 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
 }
 ```
 
-对于开发和测试，可提供 `WithInMemoryDefaults()` 选项：
+对于开发和测试，显式注入各依赖（`WithInMemoryDefaults()` 已删除，S4a 起改为显式 wiring）：
 
 ```go
-func WithInMemoryDefaults() Option {
-    return func(c *MyCell) {
-        c.repo = mem.NewMyRepository()
+// 测试/开发模式下显式构造 in-memory 依赖并注入
+func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Option {
+    tb.Helper()
+    userStore := mem.NewStore(clk)
+    sessionProto := session.MustNewProtocol(
+        session.WithFingerprint(session.FingerprintJTIRef{}),
+        session.WithOrdering(session.OrderingAuthzEpoch{}),
+        session.WithRevokeOnAll(),
+    )
+    sessionStore, err := session.NewMemStore(sessionProto, clk)
+    if err != nil {
+        tb.Fatalf("session.NewMemStore: %v", err)
+    }
+    refreshStore, err := refreshmem.New(accesscore.DefaultRefreshPolicy(), clk, nil)
+    if err != nil {
+        tb.Fatalf("refreshmem.New: %v", err)
+    }
+    return []accesscore.Option{
+        accesscore.WithUserRepository(userStore.UserRepository()),
+        accesscore.WithRoleRepository(userStore.RoleRepository()),
+        accesscore.WithSessionStore(sessionStore),
+        accesscore.WithRefreshStore(refreshStore),
     }
 }
 ```
+
+`session.MustNewProtocol` 只能在 `cmd/*`（composition root）或 `runtime/auth/session/*` 中调用，受 SESSION-PROTOCOL-COMPOSITION-ROOT-01 archtest 守护。测试辅助函数中请通过 `sessiontest.Protocol()`（`runtime/auth/session/sessiontest` 包）获取标准测试 Protocol，而不是直接调用 `session.MustNewProtocol`。
 
 ## 测试
 

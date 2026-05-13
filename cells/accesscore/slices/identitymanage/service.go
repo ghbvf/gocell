@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // TokenIssuer is a narrow interface for issuing a new token pair after a
@@ -125,7 +126,7 @@ func WithLastAdminProtection(roleRepo ports.RoleRepository) Option {
 // Service implements identity management business logic.
 type Service struct {
 	repo                         ports.UserRepository
-	sessionRepo                  ports.SessionRepository
+	sessionStore                 session.Store
 	refreshStore                 refresh.Store
 	txRunner                     persistence.CellTxManager
 	emitter                      outbox.Emitter
@@ -143,7 +144,7 @@ type Service struct {
 // the same transaction as the session revoke.
 func NewService(
 	repo ports.UserRepository,
-	sessionRepo ports.SessionRepository,
+	sessionStore session.Store,
 	refreshStore refresh.Store,
 	logger *slog.Logger,
 	opts ...Option,
@@ -151,10 +152,10 @@ func NewService(
 	if repo == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: user repository is required")
 	}
-	if sessionRepo == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: session repository is required")
+	if validation.IsNilInterface(sessionStore) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: session store is required")
 	}
-	if refreshStore == nil {
+	if validation.IsNilInterface(refreshStore) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: refresh store is required")
 	}
 	if logger == nil {
@@ -162,7 +163,7 @@ func NewService(
 	}
 	s := &Service{
 		repo:         repo,
-		sessionRepo:  sessionRepo,
+		sessionStore: sessionStore,
 		refreshStore: refreshStore,
 		emitter:      outbox.NewNoopEmitter(),
 		logger:       logger,
@@ -391,7 +392,7 @@ func (s *Service) cascadeRevokeOnDemotion(ctx context.Context, userID string, de
 	if !demoted {
 		return nil
 	}
-	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
+	if err := s.sessionStore.RevokeForSubject(ctx, userID, session.CredentialEventLock); err != nil {
 		return fmt.Errorf("identity-manage: update revoke sessions: %w", err)
 	}
 	if err := s.refreshStore.RevokeUser(ctx, userID); err != nil {
@@ -471,7 +472,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
 			return err
 		}
-		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
+		if err := s.sessionStore.RevokeForSubject(txCtx, id, session.CredentialEventDelete); err != nil {
 			return fmt.Errorf("identity-manage: delete revoke sessions: %w", err)
 		}
 		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
@@ -533,7 +534,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		// the lock flag while leaving stolen access tokens able to call
 		// business endpoints until natural expiry — which is the exact attack
 		// vector "Lock" exists to prevent.
-		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
+		if err := s.sessionStore.RevokeForSubject(txCtx, id, session.CredentialEventLock); err != nil {
 			return fmt.Errorf("identity-manage: lock revoke sessions: %w", err)
 		}
 		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
@@ -646,7 +647,7 @@ type ChangePasswordInput struct {
 //
 // IssueForUser tx trade-off (F18): IssueForUser is intentionally called
 // OUTSIDE the write transaction. It creates a brand-new session that must not
-// be swept by the RevokeByUserID call inside the tx; including it in the tx
+// be swept by the RevokeForSubject call inside the tx; including it in the tx
 // would roll back a legitimate new session if token signing fails. The
 // observable trade-off is: if IssueForUser fails after the tx commits, the
 // password change is durable but the caller must re-login to obtain a token.
@@ -671,7 +672,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 
 	// Steps 3-5 run inside a single transaction so the password write, old-session
 	// sweep, and refresh revoke are atomic. IssueForUser stays outside the tx
-	// (F18: new session must not be caught by the RevokeByUserID sweep inside the
+	// (F18: new session must not be caught by the RevokeForSubject sweep inside the
 	// tx, and signing failure should not roll back a committed password change).
 	//
 	// CAS guard (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01): GetByID inside the tx
@@ -737,7 +738,7 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 
 	// Cascade revocations inside the same tx so that no old session survives
 	// the password change.
-	if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
+	if err := s.sessionStore.RevokeForSubject(txCtx, user.ID, session.CredentialEventPasswordReset); err != nil {
 		return "", fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
 	}
 	if err := s.refreshStore.RevokeUser(txCtx, user.ID); err != nil {

@@ -11,12 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 var (
@@ -35,39 +34,49 @@ func init() {
 // dNeg2h is the offset for seeding an expired session whose CreatedAt is 2h ago.
 const dNeg2h = -2 * time.Hour
 
+// testProtocol returns a Protocol suitable for in-memory session tests.
+// FingerprintJTIRef requires a non-empty JTI on every seeded Session.
+func testProtocol(t testing.TB) *session.Protocol {
+	t.Helper()
+	p, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	require.NoError(t, err)
+	return p
+}
+
+// newTestStore constructs a MemStore for tests.
+func newTestStore(t testing.TB) *session.MemStore {
+	t.Helper()
+	store, err := session.NewMemStore(testProtocol(t), clock.Real())
+	require.NoError(t, err)
+	return store
+}
+
 func TestService_VerifyIntent(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	store := newTestStore(t)
 
 	// Seed an active session for revocation tests.
-	activeSession := &domain.Session{
-		ID:          "sess-active",
-		UserID:      "usr-1",
-		AccessToken: "dummy",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
-	}
-	require.NoError(t, sessionRepo.Create(context.Background(), activeSession))
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:        "sess-active",
+		SubjectID: "usr-1",
+		JTI:       "jti-active",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+	}))
 
 	// Seed a revoked session.
-	revokedSession := &domain.Session{
-		ID:          "sess-revoked",
-		UserID:      "usr-2",
-		AccessToken: "dummy2",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
-	}
-	revokedSession.Revoke(time.Now())
-	require.NoError(t, sessionRepo.Create(context.Background(), revokedSession))
-
-	// Seed an expired session.
-	expiredSession := &domain.Session{
-		ID:          "sess-expired",
-		UserID:      "usr-3",
-		AccessToken: "dummy3",
-		ExpiresAt:   time.Now().Add(-time.Hour), // already expired
-		CreatedAt:   time.Now().Add(dNeg2h),
-	}
-	require.NoError(t, sessionRepo.Create(context.Background(), expiredSession))
+	revokedAt := time.Now()
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:        "sess-revoked",
+		SubjectID: "usr-2",
+		JTI:       "jti-revoked",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+		RevokedAt: &revokedAt,
+	}))
 
 	tests := []struct {
 		name    string
@@ -110,14 +119,6 @@ func TestService_VerifyIntent(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "token with expired session",
-			token: func() string {
-				tok, _ := IssueTestToken(testPrivKey, "usr-3", nil, time.Hour, "sess-expired")
-				return tok
-			},
-			wantErr: true,
-		},
-		{
 			name:    "empty token",
 			token:   func() string { return "" },
 			wantErr: true,
@@ -148,7 +149,7 @@ func TestService_VerifyIntent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(testVerifier, sessionRepo, slog.Default(), clock.Real())
+			svc := NewService(testVerifier, store, slog.Default())
 
 			claims, err := svc.VerifyIntent(context.Background(), tt.token(), auth.TokenIntentAccess)
 			if tt.wantErr {
@@ -165,9 +166,41 @@ func TestService_VerifyIntent(t *testing.T) {
 	}
 }
 
-func TestService_VerifyIntent_NilSessionRepo(t *testing.T) {
-	// When sessionRepo is nil (backward compatibility), sid claim is ignored.
-	svc := NewService(testVerifier, nil, slog.Default(), clock.Real())
+// TestService_VerifyIntent_PastSessionExpiresAt_StillValidates is the F1
+// regression guard: session row's ExpiresAt is GC eligibility (migration
+// 018 idx_sessions_expires), not a validate gate. JWT exp claim already
+// guards access-token lifetime; rejecting on sess.ExpiresAt was a dead
+// double-gate that fires after refresh keeps sid stable but doesn't
+// extend the session row's ExpiresAt — yielding a fresh JWT that any
+// refresh succeeded on but validate rejects.
+//
+// ref: ory/fosite handler/oauth2/strategy_jwt.go ValidateAccessToken
+// (JWT exp only); hashicorp/vault token_store.go lookupInternal
+// (lease ExpireTime not reachable from token lookup path).
+func TestService_VerifyIntent_PastSessionExpiresAt_StillValidates(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:        "sess-row-past",
+		SubjectID: "usr-row-past",
+		JTI:       "jti-row-past",
+		ExpiresAt: time.Now().Add(-time.Hour), // session row "past" — GC eligible
+		CreatedAt: time.Now().Add(dNeg2h),
+	}))
+
+	// Fresh JWT bound to the same sid — mirrors a refresh-issued token.
+	tok, err := IssueTestToken(testPrivKey, "usr-row-past", nil, time.Hour, "sess-row-past")
+	require.NoError(t, err)
+
+	svc := NewService(testVerifier, store, slog.Default())
+	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.NoError(t, err,
+		"F1: sessionvalidate must NOT reject on session-row ExpiresAt; JWT exp + RevokedAt are the validate gates")
+	assert.Equal(t, "usr-row-past", claims.Subject)
+}
+
+func TestService_VerifyIntent_NilSessionStore(t *testing.T) {
+	// When sessionStore is nil (backward compatibility), sid claim is ignored.
+	svc := NewService(testVerifier, nil, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
 	require.NoError(t, err)
@@ -177,23 +210,21 @@ func TestService_VerifyIntent_NilSessionRepo(t *testing.T) {
 	assert.Equal(t, "usr-1", claims.Subject)
 }
 
-// errorSessionRepo simulates infrastructure failures (DB timeout, connection reset).
-type errorSessionRepo struct{}
+// errorSessionStore simulates infrastructure failures (DB timeout, connection reset).
+type errorSessionStore struct{}
 
-func (errorSessionRepo) Create(_ context.Context, _ *domain.Session) error { return nil }
-func (errorSessionRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
+func (errorSessionStore) Create(_ context.Context, _ *session.Session) error { return nil }
+func (errorSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, fmt.Errorf("db connection timeout")
 }
-func (errorSessionRepo) Update(_ context.Context, _ *domain.Session) error { return nil }
-func (errorSessionRepo) Delete(_ context.Context, _ string) error          { return nil }
-func (errorSessionRepo) RevokeByUserID(_ context.Context, _ string) error  { return nil }
-func (errorSessionRepo) RevokeByIDAndOwner(_ context.Context, _, _ string) error {
+func (errorSessionStore) Revoke(_ context.Context, _ string) error { return nil }
+func (errorSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
 	return nil
 }
 
 func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
 	// Infrastructure errors (not just "not found") must also fail-closed.
-	svc := NewService(testVerifier, errorSessionRepo{}, slog.Default(), clock.Real())
+	svc := NewService(testVerifier, errorSessionStore{}, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-db-fail")
 	require.NoError(t, err)
@@ -203,9 +234,9 @@ func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
 }
 
-func TestService_VerifyIntent_NilSessionRepo_NoSid(t *testing.T) {
-	// When sessionRepo is nil (demo mode), tokens without sid are accepted.
-	svc := NewService(testVerifier, nil, slog.Default(), clock.Real())
+func TestService_VerifyIntent_NilSessionStore_NoSid(t *testing.T) {
+	// When sessionStore is nil (demo mode), tokens without sid are accepted.
+	svc := NewService(testVerifier, nil, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour)
 	require.NoError(t, err)
@@ -215,20 +246,20 @@ func TestService_VerifyIntent_NilSessionRepo_NoSid(t *testing.T) {
 	assert.Equal(t, "usr-1", claims.Subject)
 }
 
-// capturingRepo wraps a real or stub session repo and allows injecting errors
+// capturingStore wraps a real or stub session store and allows injecting errors
 // with specific errcode categories for logSessionLookupError tests.
-type capturingRepo struct {
-	getByIDErr error
+type capturingStore struct {
+	getErr error
 }
 
-func (r capturingRepo) Create(_ context.Context, _ *domain.Session) error { return nil }
-func (r capturingRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
-	return nil, r.getByIDErr
+func (r capturingStore) Create(_ context.Context, _ *session.Session) error { return nil }
+func (r capturingStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
+	return nil, r.getErr
 }
-func (r capturingRepo) Update(_ context.Context, _ *domain.Session) error       { return nil }
-func (r capturingRepo) Delete(_ context.Context, _ string) error                { return nil }
-func (r capturingRepo) RevokeByUserID(_ context.Context, _ string) error        { return nil }
-func (r capturingRepo) RevokeByIDAndOwner(_ context.Context, _, _ string) error { return nil }
+func (r capturingStore) Revoke(_ context.Context, _ string) error { return nil }
+func (r capturingStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
+	return nil
+}
 
 // TestLogSessionLookupError_LogLevel verifies S40: IsDomainNotFound whitelist
 // determines log level — only whitelisted domain not-found codes produce Warn;
@@ -236,35 +267,35 @@ func (r capturingRepo) RevokeByIDAndOwner(_ context.Context, _, _ string) error 
 func TestLogSessionLookupError_LogLevel(t *testing.T) {
 	tests := []struct {
 		name          string
-		repoErr       error
+		storeErr      error
 		wantLogLevel  slog.Level
 		wantLogSubstr string
 	}{
 		{
 			name:         "plain infra error logs at Error",
-			repoErr:      fmt.Errorf("db connection timeout"),
+			storeErr:     fmt.Errorf("db connection timeout"),
 			wantLogLevel: slog.LevelError,
 		},
 		{
 			name: "errcode ErrSessionNotFound (domain, whitelist) logs at Warn",
-			repoErr: errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+			storeErr: errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
 				errcode.WithCategory(errcode.CategoryDomain)),
 			wantLogLevel: slog.LevelWarn,
 		},
 		{
 			name: "non-whitelisted errcode domain logs at Error",
-			repoErr: errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound, "order not found",
+			storeErr: errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound, "order not found",
 				errcode.WithCategory(errcode.CategoryDomain)),
 			wantLogLevel: slog.LevelError,
 		},
 		{
 			name:         "errcode with CategoryInfra logs at Error",
-			repoErr:      errcode.New(errcode.KindInternal, errcode.ErrInternal, "db down"),
+			storeErr:     errcode.New(errcode.KindInternal, errcode.ErrInternal, "db down"),
 			wantLogLevel: slog.LevelError,
 		},
 		{
 			name:         "errcode with CategoryUnspecified (zero) logs at Error (fail-closed)",
-			repoErr:      errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "not found"),
+			storeErr:     errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "not found"),
 			wantLogLevel: slog.LevelError,
 		},
 	}
@@ -273,7 +304,7 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			svc := NewService(testVerifier, capturingRepo{getByIDErr: tt.repoErr}, logger, clock.Real())
+			svc := NewService(testVerifier, capturingStore{getErr: tt.storeErr}, logger)
 
 			tok, err := IssueTestToken(testPrivKey, "usr-log", nil, time.Hour, "sess-log-test")
 			require.NoError(t, err)

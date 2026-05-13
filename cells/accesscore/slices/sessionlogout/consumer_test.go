@@ -9,32 +9,32 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // --- stubs ---
 
-// trackingSessionRepo counts RevokeByUserID calls and delegates to ports.SessionRepository.
-type trackingSessionRepo struct {
-	ports.SessionRepository
+// trackingSessionStore counts RevokeForSubject calls and delegates to session.Store.
+type trackingSessionStore struct {
+	session.Store
 	revokeCalls int
 }
 
-func (r *trackingSessionRepo) RevokeByUserID(ctx context.Context, userID string) error {
-	r.revokeCalls++
-	return r.SessionRepository.RevokeByUserID(ctx, userID)
+func (s *trackingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
+	s.revokeCalls++
+	return s.Store.RevokeForSubject(ctx, subjectID, event)
 }
 
-// errorSessionRepo returns a configurable error from RevokeByUserID.
-type errorSessionRepo struct {
-	ports.SessionRepository
+// errorSessionStore returns a configurable error from RevokeForSubject.
+type errorSessionStore struct {
+	session.Store
 	err error
 }
 
-func (r *errorSessionRepo) RevokeByUserID(_ context.Context, _ string) error {
-	return r.err
+func (s *errorSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
+	return s.err
 }
 
 // --- helpers ---
@@ -54,20 +54,20 @@ func makeEntry(id string, payload []byte) outbox.Entry {
 // --- consumer tests ---
 
 func TestHandleRoleChanged_Ack(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
+	c := NewConsumer(store, slog.Default())
 
 	entry := makeEntry("evt-abc", validPayload("u1"))
 	result := c.HandleRoleChanged(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
-	assert.Equal(t, 1, repo.revokeCalls, "RevokeByUserID must be called exactly once")
+	assert.Equal(t, 1, store.revokeCalls, "RevokeForSubject must be called exactly once")
 }
 
 func TestHandleRoleChanged_PermErrReject_MalformedPayload(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
+	c := NewConsumer(store, slog.Default())
 
 	entry := makeEntry("evt-bad", []byte("not-json"))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -79,8 +79,8 @@ func TestHandleRoleChanged_PermErrReject_MalformedPayload(t *testing.T) {
 }
 
 func TestHandleRoleChanged_PermErrReject_EmptyUserID(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
+	c := NewConsumer(store, slog.Default())
 
 	entry := makeEntry("evt-empty", validPayload(""))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -93,8 +93,8 @@ func TestHandleRoleChanged_PermErrReject_EmptyUserID(t *testing.T) {
 
 func TestHandleRoleChanged_RepoErrRequeue(t *testing.T) {
 	dbErr := errors.New("db down")
-	repo := &errorSessionRepo{err: dbErr}
-	c := NewConsumer(repo, slog.Default())
+	store := &errorSessionStore{err: dbErr}
+	c := NewConsumer(store, slog.Default())
 
 	entry := makeEntry("evt-transient", validPayload("u1"))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -109,12 +109,12 @@ func TestHandleRoleChanged_RepoErrRequeue(t *testing.T) {
 
 // TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe verifies that calling the
 // handler twice with the same entry ID is safe. The handler itself is naturally idempotent
-// because RevokeByUserID is idempotent (revoking already-revoked sessions is a no-op).
+// because RevokeForSubject is idempotent (revoking already-revoked sessions is a no-op).
 // Infrastructure-level idempotency (Claimer dedup) is provided by ConsumerBase and is NOT
 // tested here — this test documents the handler's own idempotency contract.
 func TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
+	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
+	c := NewConsumer(store, slog.Default())
 
 	entry := makeEntry("evt-replay", validPayload("u1"))
 
@@ -126,6 +126,6 @@ func TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
 	result2 := c.HandleRoleChanged(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result2.Disposition)
 
-	// sessionRepo.RevokeByUserID is called twice — both are safe because the operation is idempotent.
-	assert.Equal(t, 2, repo.revokeCalls)
+	// sessionStore.RevokeForSubject is called twice — both are safe because the operation is idempotent.
+	assert.Equal(t, 2, store.revokeCalls)
 }

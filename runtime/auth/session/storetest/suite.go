@@ -153,8 +153,13 @@ const (
 	errFmtGet    = "Get %s: %v"
 )
 
-// runCreateGet — Create persists the record; Get returns a defensive copy
-// that round-trips every field through the store.
+// runCreateGet — Create persists the record; Get returns the narrow
+// ValidateView projection. Metadata persistence (JTI / AuthzEpochAtIssue /
+// CreatedAt / ExpiresAt) is intentionally NOT asserted here — Store.Get
+// returns *ValidateView (not *Session) so validate paths cannot reach the
+// GC-only metadata. Schema-level metadata round-trip is a backend concern
+// verified inside adapters/postgres (PG schema) and trivially holds for
+// MemStore (map-resident pointer).
 func runCreateGet(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
@@ -167,23 +172,11 @@ func runCreateGet(t *testing.T, factory Factory) {
 	if err != nil {
 		t.Fatalf("Get: unexpected error: %v", err)
 	}
-	if got == fixture {
-		t.Error("Get must return a defensive copy, not the original pointer")
-	}
-	if got.JTI != fixture.JTI {
-		t.Errorf("JTI: got %q, want %q", got.JTI, fixture.JTI)
+	if got.ID != fixture.ID {
+		t.Errorf("ID: got %q, want %q", got.ID, fixture.ID)
 	}
 	if got.SubjectID != fixture.SubjectID {
 		t.Errorf("SubjectID: got %q, want %q", got.SubjectID, fixture.SubjectID)
-	}
-	if got.AuthzEpochAtIssue != fixture.AuthzEpochAtIssue {
-		t.Errorf("AuthzEpochAtIssue: got %d, want %d", got.AuthzEpochAtIssue, fixture.AuthzEpochAtIssue)
-	}
-	if !got.CreatedAt.Equal(fixture.CreatedAt) {
-		t.Errorf("CreatedAt: got %s, want %s", got.CreatedAt, fixture.CreatedAt)
-	}
-	if !got.ExpiresAt.Equal(fixture.ExpiresAt) {
-		t.Errorf("ExpiresAt: got %s, want %s", got.ExpiresAt, fixture.ExpiresAt)
 	}
 	if got.RevokedAt != nil {
 		t.Errorf("RevokedAt: got %v, want nil", got.RevokedAt)
@@ -285,9 +278,11 @@ func runRevokeNotFoundNoop(t *testing.T, factory Factory) {
 	}
 }
 
-// runExpiredStillReturned — expired sessions are still returned by Get; the
-// store does not garbage-collect or hide them. Caller decides via
-// Session.ExpiresAt comparison.
+// runExpiredStillReturned — a session whose GC eligibility (ExpiresAt) is in
+// the past is still returned by Get with RevokedAt == nil. The store does
+// not auto-revoke on GC eligibility; revocation is an orthogonal axis.
+// ValidateView intentionally hides ExpiresAt — validate paths must not
+// gate on it (see Session.ExpiresAt godoc).
 func runExpiredStillReturned(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
@@ -296,17 +291,17 @@ func runExpiredStillReturned(t *testing.T, factory Factory) {
 	if err := store.Create(context.Background(), fixture); err != nil {
 		t.Fatalf(errFmtCreate, err)
 	}
-	fc.Advance(caseExpiryAdvance) // past expiry
+	fc.Advance(caseExpiryAdvance) // past GC eligibility
 
 	got, err := store.Get(context.Background(), fixture.ID)
 	if err != nil {
-		t.Fatalf("Get on expired must still succeed, got %v", err)
+		t.Fatalf("Get past GC eligibility must still succeed, got %v", err)
 	}
-	if !fc.Now().After(got.ExpiresAt) {
-		t.Error("clock did not advance past ExpiresAt; test setup wrong")
+	if got == nil {
+		t.Fatal("expected non-nil ValidateView past GC eligibility")
 	}
 	if got.RevokedAt != nil {
-		t.Error("expiry must not auto-revoke; RevokedAt should remain nil")
+		t.Error("GC eligibility must not auto-revoke; RevokedAt should remain nil")
 	}
 }
 

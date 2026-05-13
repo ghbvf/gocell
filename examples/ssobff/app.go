@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -22,6 +23,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/state/cas"
@@ -213,9 +217,31 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		rlLimiter,
 		ssobffBootstrapAuthFailLogger(cfg.logger),
 	)
+	ssobffSessionProto := session.MustNewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	ssobffUserMemStore := accessmem.NewStore(clock.Real())
+	ssobffSessionMemStore, err := session.NewMemStore(ssobffSessionProto, clock.Real())
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: session.NewMemStore: %w", err)
+	}
+	ssobffRefreshMemStore, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  2 * time.Second,
+		MaxAge:         7 * 24 * time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clock.Real(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: refreshmem.New: %w", err)
+	}
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
+		accesscore.WithUserRepository(ssobffUserMemStore.UserRepository()),
+		accesscore.WithRoleRepository(ssobffUserMemStore.RoleRepository()),
+		accesscore.WithSessionStore(ssobffSessionMemStore),
+		accesscore.WithRefreshStore(ssobffRefreshMemStore),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),

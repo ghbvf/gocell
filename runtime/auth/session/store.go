@@ -29,23 +29,56 @@ type Session struct {
 	// Mem store accepts any non-empty string.
 	SubjectID string
 
-	// JTI is the JWT jti claim reference (RFC 9068 §2.2.4) — the canonical
-	// fingerprint mode for FingerprintJTIRef (ADR-Session D1). The session
-	// row holds this reference; the JWT itself never lands in the store.
+	// JTI is a unique fingerprint stored on the session row; backends with
+	// FingerprintJTIRef require it non-empty on Create. It is currently a
+	// placeholder: JWTIssuer does not emit a jti claim, so callers populate
+	// JTI with any unique identifier (typically the session UUID). The
+	// target end state — JTI storing the actual JWT jti claim per RFC 9068
+	// §2.2.4 — applies once jti emission is wired into the JWT path.
 	JTI string
 
-	// AuthzEpochAtIssue is the user.authz_epoch snapshot captured at sign-in
-	// (ADR-Session D2). Validate paths reject when claim.epoch <
-	// user.authz_epoch (i.e. the user's epoch has been bumped since issue).
+	// AuthzEpochAtIssue snapshots an authorization-epoch value at sign-in.
+	// It is currently always 0: JWTIssuer does not emit an epoch claim and
+	// Store.Get does not expose the field, so it is wire-only. The target
+	// end state — validate paths rejecting JWTs whose epoch claim is older
+	// than the user's current authz_epoch — applies once the closed loop
+	// lands on the JWT path.
 	AuthzEpochAtIssue int64
 
-	// CreatedAt and ExpiresAt are the issue / expiry timestamps in UTC.
+	// CreatedAt is the issue timestamp in UTC.
 	CreatedAt time.Time
+
+	// ExpiresAt is the GC eligibility timestamp in UTC — when the row may be
+	// physically deleted by a sweep (migration 018 idx_sessions_expires).
+	// It is NOT a validate gate: Store.Get returns a *ValidateView that does
+	// not expose this field, so validate paths cannot reach it. JWT exp claim
+	// guards access-token lifetime; RevokedAt guards revocation.
+	//
+	// ref: ory/fosite handler/oauth2/strategy_jwt.go ValidateAccessToken
+	// (JWT exp only); hashicorp/vault expiration.go (leaseEntry.ExpireTime
+	// physically isolated from token lookup path).
 	ExpiresAt time.Time
 
 	// RevokedAt is non-nil iff Revoke / RevokeForSubject has marked this row
 	// dead. Once set it must never be cleared (append-only revoke semantics
 	// — ADR-Session D3 fail-closed).
+	RevokedAt *time.Time
+}
+
+// ValidateView is the narrow projection of a Session exposed by Store.Get.
+// It carries exactly the fields validate paths (sessionvalidate, sessionrefresh,
+// sessionlogout) need to make their decision: identity (ID, SubjectID) and
+// revocation (RevokedAt). Session.ExpiresAt is intentionally absent — it is
+// GC eligibility metadata, not a validate gate (see Session.ExpiresAt godoc).
+//
+// This type-level partition mirrors hashicorp/vault's barrier-view isolation:
+// token lookup paths physically cannot reach leaseEntry.ExpireTime, so the
+// "validate by time comparison" anti-pattern is unrepresentable. Here, the
+// equivalent guard is at the Go type level — sess.ExpiresAt is not a field
+// on ValidateView, so re-introducing the double-gate fails to compile.
+type ValidateView struct {
+	ID        string
+	SubjectID string
 	RevokedAt *time.Time
 }
 
@@ -62,8 +95,10 @@ type Session struct {
 //     FingerprintJTIRef) return ErrValidationFailed. Duplicate Session.ID
 //     returns ErrSessionConflict; the protocol does not mandate uniqueness
 //     on (SubjectID, JTI) — that is a backend decision (PG schema in S3+S5).
-//   - Get: fetch by Session.ID. Missing → ErrSessionNotFound; revoked /
-//     expired sessions are still returned (caller decides via fields).
+//   - Get: fetch validate projection by Session.ID. Missing →
+//     ErrSessionNotFound; revoked sessions are still returned (caller checks
+//     RevokedAt). Session.ExpiresAt (GC eligibility) is intentionally not
+//     exposed — validate paths must not gate on it.
 //   - Revoke: mark a single session dead. Idempotent: already-revoked or
 //     missing IDs are no-ops returning nil (防枚举 — must not leak existence).
 //     RevokedAt is set exactly once; subsequent Revoke calls do not re-stamp.
@@ -75,7 +110,7 @@ type Session struct {
 //     timestamp (append-only revoke per ADR-Session D3).
 type Store interface {
 	Create(ctx context.Context, s *Session) error
-	Get(ctx context.Context, id string) (*Session, error)
+	Get(ctx context.Context, id string) (*ValidateView, error)
 	Revoke(ctx context.Context, id string) error
 	RevokeForSubject(ctx context.Context, subjectID string, event CredentialEvent) error
 }

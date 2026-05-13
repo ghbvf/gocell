@@ -34,13 +34,13 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 // --- tests ---
 
 func TestService_WithEmitter(t *testing.T) {
-	repo := testutil.RealSessionRepo(t)
+	store := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
+	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
-	seedSession(repo, "sess-1", "usr-1")
+	seedSession(store, "sess-1", "usr-1")
 
 	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 
@@ -49,32 +49,26 @@ func TestService_WithEmitter(t *testing.T) {
 }
 
 func TestService_WithTxManager(t *testing.T) {
-	repo := testutil.RealSessionRepo(t)
+	store := testutil.RealSessionRepo(t)
 	tx := &stubTxRunner{}
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
+	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 
-	seedSession(repo, "sess-1", "usr-1")
+	seedSession(store, "sess-1", "usr-1")
 
 	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 	assert.Equal(t, 1, tx.calls)
 }
 
 func TestService_WithOutboxAndTx(t *testing.T) {
-	repo := testutil.RealSessionRepo(t)
+	store := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
+	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(tx)))
 
-	seedSession(repo, "sess-1", "usr-1")
+	seedSession(store, "sess-1", "usr-1")
 
 	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 	assert.Equal(t, 1, tx.calls)
 	require.Len(t, ow.entries, 1)
-}
-
-func TestService_LogoutUser_EmptyID(t *testing.T) {
-	svc, _ := newTestService(t)
-	err := svc.LogoutUser(context.Background(), "")
-	assert.Error(t, err)
 }

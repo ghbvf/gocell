@@ -82,9 +82,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(
+	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -93,7 +92,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		accesscore.WithBootstrapAuth(authBootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
@@ -308,9 +307,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(
+	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -319,7 +317,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		accesscore.WithBootstrapAuth(guardBootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
@@ -545,9 +543,8 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(
+	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -556,7 +553,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		accesscore.WithBootstrapAuth(healthBootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),

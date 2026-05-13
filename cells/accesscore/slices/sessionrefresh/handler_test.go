@@ -16,7 +16,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -33,12 +32,11 @@ const refreshPath = "/api/v1/access/sessions/refresh"
 // same code path cell_routes.go takes in production.
 func setup(t testing.TB) (http.Handler, string) {
 	t.Helper()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	refreshStore := newTestRefreshStore()
 
-	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour), time.Now())
-	sess.ID = "sess-1"
-	_ = sessionRepo.Create(context.Background(), sess)
+	sess := newTestSession("usr-1", "sess-1")
+	_ = sessionStore.Create(context.Background(), sess)
 
 	// Issue an opaque wire token for sess-1.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-1", "usr-1")
@@ -53,7 +51,7 @@ func setup(t testing.TB) (http.Handler, string) {
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 
-	svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
@@ -203,10 +201,10 @@ func TestHandleRefresh(t *testing.T) {
 }
 
 func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := newTestSessionStore(t)
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
-	svc := MustNewService(sessionRepo, mem.NewStore(clock.Real()).RoleRepository(), userRepo, store, testIssuer, slog.Default(),
+	svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {

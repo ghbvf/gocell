@@ -6,10 +6,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // errMsgAuthFailed is the uniform error message for all session validation
@@ -23,17 +22,14 @@ var _ auth.IntentTokenVerifier = (*Service)(nil)
 
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	verifier    auth.IntentTokenVerifier
-	sessionRepo ports.SessionRepository
-	logger      *slog.Logger
-	clock       clock.Clock
+	verifier     auth.IntentTokenVerifier
+	sessionStore session.Store
+	logger       *slog.Logger
 }
 
 // NewService creates a session-validate Service.
-// clk must not be nil; pass clock.Real() for production use.
-func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger, clk clock.Clock) *Service {
-	clock.MustHaveClock(clk, "sessionvalidate.NewService")
-	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger, clock: clk}
+func NewService(verifier auth.IntentTokenVerifier, sessionStore session.Store, logger *slog.Logger) *Service {
+	return &Service{verifier: verifier, sessionStore: sessionStore, logger: logger}
 }
 
 // VerifyIntent validates an access token. This service is intentionally
@@ -51,7 +47,7 @@ func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected au
 	if err != nil {
 		return auth.Claims{}, err
 	}
-	if s.sessionRepo == nil {
+	if s.sessionStore == nil {
 		return claims, nil
 	}
 	return s.enforceSessionState(ctx, claims)
@@ -72,7 +68,7 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 
 // enforceSessionState performs the session-revocation / expiry checks that
 // follow a successful JWT verification. Tokens missing the sid claim are
-// rejected when sessionRepo is configured (fail-closed).
+// rejected when sessionStore is configured (fail-closed).
 func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
 	sid := claims.SessionID
 	if sid == "" {
@@ -80,19 +76,13 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	session, err := s.sessionRepo.GetByID(ctx, sid)
+	view, err := s.sessionStore.Get(ctx, sid)
 	if err != nil {
 		s.logSessionLookupError(sid, claims.Subject, err)
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	if session.IsRevoked() {
+	if view.RevokedAt != nil {
 		s.logger.Warn("session-validate: revoked session used",
-			slog.String("sid", sid),
-			slog.String("subject", claims.Subject))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
-	}
-	if session.IsExpired(s.clock.Now()) {
-		s.logger.Warn("session-validate: expired session used",
 			slog.String("sid", sid),
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)

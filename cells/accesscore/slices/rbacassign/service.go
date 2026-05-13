@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // Service handles RBAC role assignment and revocation.
@@ -30,7 +31,7 @@ import (
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
 	roleRepo              ports.RoleRepository
-	sessionRepo           ports.SessionRepository
+	sessionStore          session.Store
 	txRunner              persistence.CellTxManager
 	emitter               outbox.Emitter
 	syncSessionRevocation bool
@@ -67,13 +68,13 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // path is used.
 func NewService(
 	roleRepo ports.RoleRepository,
-	sessionRepo ports.SessionRepository,
+	sessionStore session.Store,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
 	s := &Service{
 		roleRepo:              roleRepo,
-		sessionRepo:           sessionRepo,
+		sessionStore:          sessionStore,
 		emitter:               outbox.NewNoopEmitter(),
 		syncSessionRevocation: true,
 		logger:                logger,
@@ -132,7 +133,7 @@ func (s *Service) persistChange(
 	if !changed {
 		return false, nil
 	}
-	if err := s.sessionRepo.RevokeByUserID(ctx, evt.UserID); err != nil {
+	if err := s.sessionStore.RevokeForSubject(ctx, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
 		s.logger.Error("rbac-assign: partial commit — role change persisted but session revoke failed;"+
 			" client JWTs retain stale roles until re-login",
 			slog.String("user_id", evt.UserID),

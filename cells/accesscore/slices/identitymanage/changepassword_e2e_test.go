@@ -46,6 +46,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
@@ -87,16 +88,24 @@ func (ti *e2eTokenIssuer) IssueForUser(ctx context.Context, userID string) (dto.
 // key pair, loginService + identityService with TokenIssuer injection, and a
 // full-path HTTP mux.
 type e2eFixture struct {
-	mux         http.Handler
-	loginSvc    *sessionlogin.Service
-	userRepo    ports.UserRepository
-	sessionRepo ports.SessionRepository
-	roleRepo    ports.RoleRepository
+	mux          http.Handler
+	loginSvc     *sessionlogin.Service
+	userRepo     ports.UserRepository
+	sessionStore session.Store
+	roleRepo     ports.RoleRepository
 }
 
 func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	proto := session.MustNewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	sessionStore, err := session.NewMemStore(proto, clock.Real())
+	if err != nil {
+		panic("newE2EFixture: session store setup failed: " + err.Error())
+	}
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	refreshStore, err := refreshmem.New(
 		refresh.Policy{
@@ -117,12 +126,14 @@ func newE2EFixture() *e2eFixture {
 	tx := &stubTxRunner{}
 
 	loginSvc := sessionlogin.MustNewService(
-		userRepo, sessionRepo, roleRepo, refreshStore, e2eIssuer, slog.Default(),
+		userRepo, sessionStore, roleRepo, refreshStore, e2eIssuer, slog.Default(),
 		sessionlogin.WithClock(clock.Real()),
 		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
+		sessionlogin.WithSessionTTL(time.Hour),
 	)
 
-	idmSvc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
+	idmSvc, err := NewService(
+		userRepo, sessionStore, refreshStore, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(tx)),
@@ -144,11 +155,11 @@ func newE2EFixture() *e2eFixture {
 	})
 
 	return &e2eFixture{
-		mux:         mux,
-		loginSvc:    loginSvc,
-		userRepo:    userRepo,
-		sessionRepo: sessionRepo,
-		roleRepo:    roleRepo,
+		mux:          mux,
+		loginSvc:     loginSvc,
+		userRepo:     userRepo,
+		sessionStore: sessionStore,
+		roleRepo:     roleRepo,
 	}
 }
 

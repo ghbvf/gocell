@@ -10,18 +10,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
-// Refresh-cascade tests — verify that Logout and LogoutUser revoke the
-// associated refresh-token chains, not just the access sessions. Without
-// this cascade, a stolen refresh token survives logout.
+// Refresh-cascade tests — verify that Logout revokes the associated
+// refresh-token chains, not just the access sessions. Without this cascade,
+// a stolen refresh token survives logout.
 
 func newCascadeStore(t *testing.T) refresh.Store {
 	t.Helper()
@@ -40,63 +40,27 @@ func newCascadeStore(t *testing.T) refresh.Store {
 
 func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 	ctx := context.Background()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
 	sessionID := "sess-logout-1"
 	userID := "user-logout-1"
-	session := &domain.Session{
-		ID:          sessionID,
-		UserID:      userID,
-		AccessToken: "at",
-		ExpiresAt:   time.Now().Add(time.Hour),
-		CreatedAt:   time.Now(),
-	}
-	require.NoError(t, sessionRepo.Create(ctx, session))
+	require.NoError(t, sessionStore.Create(ctx, &session.Session{
+		ID:        sessionID,
+		SubjectID: userID,
+		JTI:       "jti-" + sessionID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
 
 	wire, _, err := refreshStore.Issue(ctx, sessionID, userID)
 	require.NoError(t, err)
 
-	svc := MustNewService(sessionRepo, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+	svc := MustNewService(sessionStore, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	require.NoError(t, svc.Logout(ctx, sessionID, userID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, refresh.ErrRejected),
 		"refresh token after Logout must be rejected")
-}
-
-func TestService_LogoutUser_RevokesAllRefreshChains(t *testing.T) {
-	ctx := context.Background()
-	sessionRepo := testutil.RealSessionRepo(t)
-	refreshStore := newCascadeStore(t)
-
-	userID := "user-multi-logout"
-	// Two distinct sessions for the same user.
-	for _, sid := range []string{"sess-a", "sess-b"} {
-		require.NoError(t, sessionRepo.Create(ctx, &domain.Session{
-			ID: sid, UserID: userID, AccessToken: "at-" + sid,
-			ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
-		}))
-	}
-	wire1, _, err := refreshStore.Issue(ctx, "sess-a", userID)
-	require.NoError(t, err)
-	wire2, _, err := refreshStore.Issue(ctx, "sess-b", userID)
-	require.NoError(t, err)
-
-	// Another user's chain must survive.
-	otherWire, _, err := refreshStore.Issue(ctx, "sess-other", "other-user")
-	require.NoError(t, err)
-
-	svc := MustNewService(sessionRepo, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
-	require.NoError(t, svc.LogoutUser(ctx, userID))
-
-	_, _, err = refreshStore.Rotate(ctx, wire1)
-	assert.True(t, errors.Is(err, refresh.ErrRejected), "session-a refresh must be rejected")
-	_, _, err = refreshStore.Rotate(ctx, wire2)
-	assert.True(t, errors.Is(err, refresh.ErrRejected), "session-b refresh must be rejected")
-
-	// Other user's refresh chain must still rotate successfully.
-	_, _, err = refreshStore.Rotate(ctx, otherWire)
-	assert.NoError(t, err, "other user's refresh chain must survive LogoutUser")
 }

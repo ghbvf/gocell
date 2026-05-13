@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // rbacFakeTxRunner is a test-only pass-through TxRunner (no real transaction).
@@ -32,13 +33,13 @@ var _ persistence.TxRunner = rbacFakeTxRunner{}
 func mustNewService(
 	t testing.TB,
 	roleRepo ports.RoleRepository,
-	sessionRepo ports.SessionRepository,
+	sessionStore session.Store,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
 	t.Helper()
 	opts = append([]Option{WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{}))}, opts...)
-	svc, err := NewService(roleRepo, sessionRepo, logger, opts...)
+	svc, err := NewService(roleRepo, sessionStore, logger, opts...)
 	require.NoError(t, err)
 	return svc
 }
@@ -47,7 +48,7 @@ func mustNewService(
 // rbacassign RemoveFromUserIfNotLast admin path can observe user.Status
 // (effective-admin invariant, S4.0). Returns the store so callers can seed
 // active user records when staging admin role assignments.
-func newTestService(t testing.TB) (*Service, *mem.Store, ports.SessionRepository) {
+func newTestService(t testing.TB) (*Service, *mem.Store, *session.MemStore) {
 	t.Helper()
 	store := mem.NewStore(clock.Real())
 	store.RoleRepository().SeedRole(&domain.Role{
@@ -58,8 +59,8 @@ func newTestService(t testing.TB) (*Service, *mem.Store, ports.SessionRepository
 		},
 	})
 	store.RoleRepository().SeedRole(&domain.Role{ID: "editor", Name: "editor"})
-	sessionRepo := testutil.RealSessionRepo(t)
-	return mustNewService(t, store.RoleRepository(), sessionRepo, slog.Default()), store, sessionRepo
+	sessionStore := testutil.RealSessionRepo(t)
+	return mustNewService(t, store.RoleRepository(), sessionStore, slog.Default()), store, sessionStore
 }
 
 // seedActiveUser registers an active user in store so it counts as an
@@ -87,8 +88,8 @@ func assignActiveAdmin(t testing.TB, store *mem.Store, userID string) {
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
-	_, err := NewService(roleRepo, sessionRepo, slog.Default() /* no WithTxManager */)
+	sessionStore := testutil.RealSessionRepo(t)
+	_, err := NewService(roleRepo, sessionStore, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -298,42 +299,56 @@ func TestService_Revoke(t *testing.T) {
 }
 
 func TestService_Revoke_InvalidatesSessions(t *testing.T) {
-	svc, store, sessionRepo := newTestService(t)
+	svc, store, sessionStore := newTestService(t)
 	ctx := context.Background()
 
 	// Two active admins so the effective-admin guard passes when revoking usr-1.
 	assignActiveAdmin(t, store, "usr-1")
 	assignActiveAdmin(t, store, "usr-2")
-	sess := &domain.Session{ID: "sess-1", UserID: "usr-1"}
-	require.NoError(t, sessionRepo.Create(ctx, sess))
+	sess := &session.Session{ID: "sess-1", SubjectID: "usr-1", JTI: "jti-sess-1"}
+	require.NoError(t, sessionStore.Create(ctx, sess))
 
 	require.NoError(t, svc.Revoke(ctx, "usr-1", "admin"))
 
-	s, err := sessionRepo.GetByID(ctx, "sess-1")
+	s, err := sessionStore.Get(ctx, "sess-1")
 	require.NoError(t, err)
-	assert.True(t, s.IsRevoked(), "session must be revoked after role change")
+	assert.True(t, s.RevokedAt != nil, "session must be revoked after role change")
 }
 
 func TestService_Assign_InvalidatesSessions(t *testing.T) {
-	svc, _, sessionRepo := newTestService(t)
+	svc, _, sessionStore := newTestService(t)
 	ctx := context.Background()
 
-	sess := &domain.Session{ID: "sess-2", UserID: "usr-2"}
-	require.NoError(t, sessionRepo.Create(ctx, sess))
+	sess := &session.Session{ID: "sess-2", SubjectID: "usr-2", JTI: "jti-sess-2"}
+	require.NoError(t, sessionStore.Create(ctx, sess))
 
 	require.NoError(t, svc.Assign(ctx, "usr-2", "admin"))
 
-	s, err := sessionRepo.GetByID(ctx, "sess-2")
+	s, err := sessionStore.Get(ctx, "sess-2")
 	require.NoError(t, err)
-	assert.True(t, s.IsRevoked(), "session must be revoked after role assignment")
+	assert.True(t, s.RevokedAt != nil, "session must be revoked after role assignment")
 }
 
-// failingSessionRepo returns an error on RevokeByUserID to test fail-closed behavior.
-type failingSessionRepo struct{ ports.SessionRepository }
+// failingSessionStore returns an error on RevokeForSubject to test fail-closed behavior.
+type failingSessionStore struct{}
 
-func (failingSessionRepo) RevokeByUserID(_ context.Context, _ string) error {
+func (failingSessionStore) Create(_ context.Context, _ *session.Session) error {
+	return nil
+}
+
+func (failingSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
+	return nil, fmt.Errorf("session store unavailable")
+}
+
+func (failingSessionStore) Revoke(_ context.Context, _ string) error {
+	return nil
+}
+
+func (failingSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
 	return fmt.Errorf("session store unavailable")
 }
+
+var _ session.Store = failingSessionStore{}
 
 func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
 	store := mem.NewStore(clock.Real())
@@ -342,7 +357,7 @@ func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
 	assignActiveAdmin(t, store, "usr-1")
 	assignActiveAdmin(t, store, "usr-2")
 
-	svc := mustNewService(t, store.RoleRepository(), failingSessionRepo{}, slog.Default())
+	svc := mustNewService(t, store.RoleRepository(), failingSessionStore{}, slog.Default())
 	err := svc.Revoke(context.Background(), "usr-1", "admin")
 	require.Error(t, err, "revoke must fail-closed when session revocation fails")
 	assert.Contains(t, err.Error(), "session revoke failed")
@@ -352,13 +367,13 @@ func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 
-	svc := mustNewService(t, roleRepo, failingSessionRepo{}, slog.Default())
+	svc := mustNewService(t, roleRepo, failingSessionStore{}, slog.Default())
 	err := svc.Assign(context.Background(), "usr-1", "admin")
 	require.Error(t, err, "assign must fail-closed when session revocation fails")
 	assert.Contains(t, err.Error(), "session revoke failed")
 }
 
-// TestService_Assign_CallsSessionRevoke proves that sessionRepo.RevokeByUserID
+// TestService_DemoMode_Assign_CallsSessionRevoke proves that sessionStore.RevokeForSubject
 // is called exactly once per Assign, invalidating the user's active sessions.
 func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 	tests := []struct {
@@ -378,17 +393,17 @@ func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 				Name:        "admin",
 				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 			})
-			sessionRepo := testutil.RealSessionRepo(t)
+			sessionStore := testutil.RealSessionRepo(t)
 			// Create a session for the user so we can verify revocation.
-			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
-			require.NoError(t, sessionRepo.Create(context.Background(), sess))
+			sess := &session.Session{ID: "sess-" + tc.userID, SubjectID: tc.userID, JTI: "jti-" + tc.userID}
+			require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-			svc := mustNewService(t, roleRepo, sessionRepo, slog.Default())
+			svc := mustNewService(t, roleRepo, sessionStore, slog.Default())
 			require.NoError(t, svc.Assign(context.Background(), tc.userID, tc.roleID))
 
-			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
+			s, err := sessionStore.Get(context.Background(), "sess-"+tc.userID)
 			require.NoError(t, err)
-			assert.True(t, s.IsRevoked(), "demo mode: session must be revoked after Assign")
+			assert.True(t, s.RevokedAt != nil, "demo mode: session must be revoked after Assign")
 		})
 	}
 }
@@ -414,16 +429,16 @@ func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
 			// revoking tc.userID.
 			assignActiveAdmin(t, store, tc.userID)
 			assignActiveAdmin(t, store, "usr-other")
-			sessionRepo := testutil.RealSessionRepo(t)
-			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
-			require.NoError(t, sessionRepo.Create(context.Background(), sess))
+			sessionStore := testutil.RealSessionRepo(t)
+			sess := &session.Session{ID: "sess-" + tc.userID, SubjectID: tc.userID, JTI: "jti-" + tc.userID}
+			require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-			svc := mustNewService(t, store.RoleRepository(), sessionRepo, slog.Default())
+			svc := mustNewService(t, store.RoleRepository(), sessionStore, slog.Default())
 			require.NoError(t, svc.Revoke(context.Background(), tc.userID, tc.roleID))
 
-			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
+			s, err := sessionStore.Get(context.Background(), "sess-"+tc.userID)
 			require.NoError(t, err)
-			assert.True(t, s.IsRevoked(), "demo mode: session must be revoked after Revoke")
+			assert.True(t, s.RevokedAt != nil, "demo mode: session must be revoked after Revoke")
 		})
 	}
 }

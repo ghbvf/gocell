@@ -15,7 +15,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -27,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	session "github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 func newTestRefreshStore() refresh.Store {
@@ -56,20 +56,21 @@ type typedNilRefreshStore struct {
 	refresh.Store
 }
 
-type trackingSessionRepo struct {
-	ports.SessionRepository
+// trackingSessionStore wraps session.Store and records Create and Revoke calls.
+type trackingSessionStore struct {
+	session.Store
 	created []string
-	deleted []string
+	revoked []string
 }
 
-func (r *trackingSessionRepo) Create(ctx context.Context, session *domain.Session) error {
-	r.created = append(r.created, session.ID)
-	return r.SessionRepository.Create(ctx, session)
+func (r *trackingSessionStore) Create(ctx context.Context, s *session.Session) error {
+	r.created = append(r.created, s.ID)
+	return r.Store.Create(ctx, s)
 }
 
-func (r *trackingSessionRepo) Delete(ctx context.Context, id string) error {
-	r.deleted = append(r.deleted, id)
-	return r.SessionRepository.Delete(ctx, id)
+func (r *trackingSessionStore) Revoke(ctx context.Context, id string) error {
+	r.revoked = append(r.revoked, id)
+	return r.Store.Revoke(ctx, id)
 }
 
 var (
@@ -114,18 +115,22 @@ func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
 	t.Helper()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	return MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(&stubTxRunner{}))), userRepo
+	return MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+		testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour),
+	), userRepo
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	refreshStore := newTestRefreshStore()
-	_, err := NewService(userRepo, sessionRepo, roleRepo, refreshStore, testIssuer,
+	_, err := NewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer,
 		slog.Default(), WithClock(clock.Real()) /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
@@ -136,7 +141,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	refreshStore := newTestRefreshStore()
 
@@ -148,13 +153,13 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil userRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.UserRepository
-				return NewService(typedNil, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+				return NewService(typedNil, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
 		{
-			name: "typed nil sessionRepo",
+			name: "typed nil sessionStore",
 			run: func() (*Service, error) {
-				var typedNil *mem.SessionRepository
+				var typedNil *session.MemStore
 				return NewService(userRepo, typedNil, roleRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
@@ -162,14 +167,14 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil roleRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.RoleRepository
-				return NewService(userRepo, sessionRepo, typedNil, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+				return NewService(userRepo, sessionStore, typedNil, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
 		{
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(userRepo, sessionRepo, roleRepo, typedNil, testIssuer, slog.Default(), WithClock(clock.Real()))
+				return NewService(userRepo, sessionStore, roleRepo, typedNil, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
 	}
@@ -263,13 +268,14 @@ func TestService_Login(t *testing.T) {
 
 func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
+	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "refresh-down", "pass123")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
@@ -278,10 +284,13 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
-	require.Len(t, sessionRepo.created, 1)
-	require.Equal(t, sessionRepo.created, sessionRepo.deleted)
-	_, lookupErr := sessionRepo.GetByID(context.Background(), sessionRepo.created[0])
-	require.Error(t, lookupErr, "failed refresh issue must not leave an orphan session in noop tx mode")
+	require.Len(t, sessionStore.created, 1)
+	require.Equal(t, sessionStore.created, sessionStore.revoked,
+		"revoked session IDs must match created session IDs after noop-tx refresh failure")
+	// The session must be marked revoked (not deleted), so Get still returns it but revoked.
+	got, lookupErr := sessionStore.Get(context.Background(), sessionStore.created[0])
+	require.NoError(t, lookupErr, "revoked session must still be Get-able (append-only revoke)")
+	assert.NotNil(t, got.RevokedAt, "failed refresh issue must leave session revoked in noop tx mode")
 }
 
 func TestService_Login_TokensContainSessionID(t *testing.T) {
@@ -376,11 +385,12 @@ func TestService_IssueForUser(t *testing.T) {
 
 func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
+	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "issue-persist", "pass123")
 
 	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
@@ -391,23 +401,25 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	require.NotEmpty(t, pair.SessionID)
 
 	// The session must be findable by its ID so sessionvalidate does not fail.
-	session, err := sessionRepo.GetByID(context.Background(), pair.SessionID)
+	// ValidateView intentionally hides GC-eligibility (ExpiresAt) — that lifetime
+	// is verified at the sessionlogin construction layer (WithSessionTTL).
+	sess, err := sessionStore.Get(context.Background(), pair.SessionID)
 	require.NoError(t, err, "session must be persisted after IssueForUser so sessionvalidate can look it up")
-	assert.Equal(t, pair.SessionID, session.ID)
-	assert.Equal(t, u.ID, session.UserID)
-	assert.False(t, session.IsRevoked(), "newly issued session must not be revoked")
-	assert.False(t, session.IsExpired(time.Now()), "newly issued session must not be expired")
+	assert.Equal(t, pair.SessionID, sess.ID)
+	assert.Equal(t, u.ID, sess.SubjectID, "SubjectID must match the issuing user ID")
+	assert.Nil(t, sess.RevokedAt, "newly issued session must not be revoked")
 }
 
 func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
+	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "issue-refresh-down", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
 	require.NoError(t, err)
@@ -418,8 +430,8 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
-	require.Len(t, sessionRepo.created, 1)
-	require.Equal(t, sessionRepo.created, sessionRepo.deleted)
+	require.Len(t, sessionStore.created, 1)
+	require.Equal(t, sessionStore.created, sessionStore.revoked)
 }
 
 // TestService_Login_BlankFieldsRejected verifies that RequireNotEmpty is
@@ -479,16 +491,16 @@ func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Rol
 	return nil, b.err
 }
 
-// countingSessionRepo wraps ports.SessionRepository and counts Create calls so
+// countingSessionStore wraps session.Store and counts Create calls so
 // fail-closed tests can assert the session write never happened.
-type countingSessionRepo struct {
-	ports.SessionRepository
+type countingSessionStore struct {
+	session.Store
 	creates int
 }
 
-func (c *countingSessionRepo) Create(ctx context.Context, s *domain.Session) error {
+func (c *countingSessionStore) Create(ctx context.Context, s *session.Session) error {
 	c.creates++
-	return c.SessionRepository.Create(ctx, s)
+	return c.Store.Create(ctx, s)
 }
 
 // countingEmitter counts Emit calls so the fail-closed test can prove the
@@ -510,13 +522,14 @@ func (c *countingEmitter) Emit(_ context.Context, _ outbox.Entry) error {
 // seemingly-authenticated user.
 func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &countingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &countingSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	seedUser(userRepo, "role-outage", "pass123")
 
 	emitter := &countingEmitter{}
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
+	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
@@ -527,7 +540,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthRoleFetchFailed, ec.Code,
 		"fail-closed: role fetch failure surfaces as ErrAuthRoleFetchFailed")
 
-	assert.Equal(t, 0, sessionRepo.creates, "no session must be persisted on fail-closed")
+	assert.Equal(t, 0, sessionStore.creates, "no session must be persisted on fail-closed")
 	assert.Equal(t, 0, emitter.count, "no session.created event on fail-closed")
 }
 
@@ -535,15 +548,16 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 // fail-closed contract for the IssueForUser path (change-password flow).
 func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &countingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &countingSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	seedUser(userRepo, "issue-outage", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
 	require.NoError(t, err)
 
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
+	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.Error(t, err, "IssueForUser must fail when role fetch fails")
@@ -553,7 +567,7 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRoleFetchFailed, ec.Code)
 
-	assert.Equal(t, 0, sessionRepo.creates, "no session must be persisted on fail-closed")
+	assert.Equal(t, 0, sessionStore.creates, "no session must be persisted on fail-closed")
 }
 
 // TestService_IssueForUser_GetByIDError verifies that when userRepo.GetByID
@@ -572,7 +586,7 @@ func TestService_IssueForUser_GetByIDError(t *testing.T) {
 
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	seedUser(userRepo, "pub-err", "pass123")
 
@@ -581,8 +595,9 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer,
-		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
+	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer,
+		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")
@@ -594,15 +609,16 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 // whether it is called from the Login or ChangePassword path.
 func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	seedUser(userRepo, "emit-user", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "emit-user")
 	require.NoError(t, err)
 
 	emitter := &countingEmitter{}
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
+	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.NoError(t, err)
@@ -618,14 +634,14 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 // returns false and the cleanup branch is skipped.
 func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
+	sessionStore := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 
 	// stubTxRunner (defined in outbox_test.go) is NOT a Nooper — isNoopTx returns false.
 	tx := &stubTxRunner{}
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
-		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()))
+	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
+		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()), WithSessionTTL(time.Hour))
 	seedUser(userRepo, "durable-refresh-fail", "pass123")
 
 	_, err := svc.Login(context.Background(), LoginInput{Username: "durable-refresh-fail", Password: "pass123"})
@@ -635,34 +651,32 @@ func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
 
-	// Durable tx: Create was called inside the tx, but no explicit Delete.
+	// Durable tx: Create was called inside the tx, but no explicit Revoke.
 	// The tx rollback would handle the cleanup atomically; no orphan cleanup needed.
-	require.Len(t, sessionRepo.created, 1, "session.Create was called inside the tx")
-	assert.Len(t, sessionRepo.deleted, 0,
+	require.Len(t, sessionStore.created, 1, "session.Create was called inside the tx")
+	assert.Len(t, sessionStore.revoked, 0,
 		"durable tx mode: explicit cleanup must NOT be called; tx rollback handles it")
 }
 
-// TestCleanupIssuedSession_NotFound_LogsDebug verifies that when
-// sessionRepo.Delete returns ErrSessionNotFound during cleanup, the error is
-// silently treated as a no-op (the session was already gone) and only a Debug
-// log is emitted — not an Error log that would page on-call.
-//
-// This matches the behavior in sessionrefresh/service.go and sessionvalidate/service.go.
-func TestCleanupIssuedSession_NotFound_LogsDebug(t *testing.T) {
-	// Use a session repo that always returns not-found on Delete.
+// TestCleanupIssuedSession_Revoke_IdempotentOnAbsent verifies that when the
+// session store is empty (session never persisted, or already cleaned up),
+// Revoke returns nil and the original refresh error is propagated unchanged.
+// This replaces the former "not-found logs Debug" test: session.Store.Revoke
+// is append-only idempotent — missing IDs are no-ops that return nil.
+func TestCleanupIssuedSession_Revoke_IdempotentOnAbsent(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionRepo := testutil.RealSessionRepo(t)
+	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
-	// A failingIssueRefreshStore causes cleanupIssuedSession to be called in
-	// Noop (demo) tx mode. Then we want sessionRepo.Delete to return NotFound.
-	notFoundSessionRepo := &notFoundOnDeleteSessionRepo{SessionRepository: sessionRepo}
+	// failingIssueRefreshStore causes cleanupIssuedSession to be called in
+	// Noop (demo) tx mode. The session WAS created before the refresh issue
+	// attempt, so Revoke will succeed silently — the important assertion is
+	// that the original refresh error propagates unchanged.
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
-	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path, exercising
-	// the not-found branch in cleanupIssuedSession.
-	svc := MustNewService(userRepo, notFoundSessionRepo, roleRepo, store, testIssuer, slog.Default(),
+	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "cleanup-not-found", "pass123")
 
 	// Should not panic or return an unexpected error — the original refresh issue error propagates.
@@ -671,17 +685,7 @@ func TestCleanupIssuedSession_NotFound_LogsDebug(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code,
-		"not-found on cleanup must not change the returned error; original refresh error propagates")
-}
-
-// notFoundOnDeleteSessionRepo returns ErrSessionNotFound when Delete is called.
-type notFoundOnDeleteSessionRepo struct {
-	ports.SessionRepository
-}
-
-func (r *notFoundOnDeleteSessionRepo) Delete(_ context.Context, _ string) error {
-	return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
-		errcode.WithCategory(errcode.CategoryDomain))
+		"Revoke idempotency must not change the returned error; original refresh error propagates")
 }
 
 // TestLogin_EmptyCredentials_AuthErrorCode verifies that the service returns

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,11 +54,6 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 	}
 
 	wg.Wait()
-}
-
-func TestSessionRepository_Health(t *testing.T) {
-	repo := NewSessionRepository(clock.Real())
-	assert.NoError(t, repo.Health(context.Background()), "in-memory session repo is always healthy")
 }
 
 func TestUserRepository_NotFoundErrors(t *testing.T) {
@@ -119,93 +113,6 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 			assert.Contains(t, ecErr.InternalMessage, tt.wantInternal)
 		})
 	}
-}
-
-func TestSessionRepository_NotFoundErrors(t *testing.T) {
-	repo := NewSessionRepository(clock.Real())
-	ctx := context.Background()
-
-	tests := []struct {
-		name string
-		call func() error
-	}{
-		{
-			name: "get by id",
-			call: func() error {
-				_, err := repo.GetByID(ctx, "sess-missing")
-				return err
-			},
-		},
-		{
-			name: "update",
-			call: func() error {
-				return repo.Update(ctx, &domain.Session{ID: "sess-missing"})
-			},
-		},
-		{
-			name: "revoke by owner",
-			call: func() error {
-				return repo.RevokeByIDAndOwner(ctx, "sess-missing", "usr-1")
-			},
-		},
-		{
-			name: "delete",
-			call: func() error {
-				return repo.Delete(ctx, "sess-missing")
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.call()
-			require.Error(t, err)
-			var ecErr *errcode.Error
-			require.ErrorAs(t, err, &ecErr)
-			assert.Equal(t, errcode.ErrSessionNotFound, ecErr.Code)
-			assert.Equal(t, msgSessionNotFound, ecErr.Message)
-			assert.Contains(t, ecErr.InternalMessage, "id=sess-missing")
-		})
-	}
-}
-
-// TestSessionRepository_ConcurrentCreateAndGet verifies that concurrent
-// Create and Get calls do not race. Run with -race to verify.
-func TestSessionRepository_ConcurrentCreateAndGet(t *testing.T) {
-	repo := NewSessionRepository(clock.Real())
-	ctx := context.Background()
-
-	const writers = 5
-	const readers = 10
-	const iterations = 50
-
-	var wg sync.WaitGroup
-
-	for w := range writers {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for i := range iterations {
-				_ = repo.Create(ctx, &domain.Session{
-					ID:        fmt.Sprintf("sid-w%d-i%d", id, i),
-					UserID:    fmt.Sprintf("uid-%d", id),
-					ExpiresAt: time.Now().Add(time.Hour),
-					CreatedAt: time.Now(),
-				})
-			}
-		}(w)
-	}
-
-	for r := range readers {
-		wg.Go(func() {
-			for range iterations {
-				_, _ = repo.GetByID(ctx, "sid-w0-i0")
-			}
-			_ = r
-		})
-	}
-
-	wg.Wait()
 }
 
 // TestRoleRepository_ConcurrentAssignAndGet verifies that concurrent
@@ -470,142 +377,6 @@ func TestRoleRepository_CountByRole_None(t *testing.T) {
 	count, err := repo.CountByRole(ctx, "nonexistent")
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
-}
-
-// TestSessionRepository_Update_VersionConflict verifies that updating a session
-// with a stale version returns ErrSessionConflict.
-func TestSessionRepository_Update_VersionConflict(t *testing.T) {
-	repo := NewSessionRepository(clock.Real())
-	ctx := context.Background()
-
-	sess := &domain.Session{
-		ID:        "sess-vc",
-		UserID:    "usr-1",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
-		Version:   1,
-	}
-	require.NoError(t, repo.Create(ctx, sess))
-
-	// Read twice — simulating two concurrent goroutines.
-	clone1, err := repo.GetByID(ctx, "sess-vc")
-	require.NoError(t, err)
-	clone2, err := repo.GetByID(ctx, "sess-vc")
-	require.NoError(t, err)
-
-	// First update succeeds.
-	require.NoError(t, repo.Update(ctx, clone1))
-
-	// Second update with stale version should fail.
-	err = repo.Update(ctx, clone2)
-	require.Error(t, err)
-
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrSessionConflict, ecErr.Code)
-}
-
-// TestSessionRepository_Update_VersionIncrement verifies that version is
-// incremented on each successful update.
-func TestSessionRepository_Update_VersionIncrement(t *testing.T) {
-	repo := NewSessionRepository(clock.Real())
-	ctx := context.Background()
-
-	sess := &domain.Session{
-		ID:        "sess-vi",
-		UserID:    "usr-1",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
-		Version:   1,
-	}
-	require.NoError(t, repo.Create(ctx, sess))
-
-	for i := 1; i <= 3; i++ {
-		s, err := repo.GetByID(ctx, "sess-vi")
-		require.NoError(t, err)
-		assert.Equal(t, int64(i), s.Version)
-		require.NoError(t, repo.Update(ctx, s))
-	}
-
-	final, err := repo.GetByID(ctx, "sess-vi")
-	require.NoError(t, err)
-	assert.Equal(t, int64(4), final.Version)
-}
-
-// TestSessionRepository_ConcurrentUpdate verifies that concurrent
-// updates to the same session result in exactly one success and the rest
-// returning ErrSessionConflict. Run with -race.
-func TestSessionRepository_ConcurrentUpdate(t *testing.T) {
-	repo := NewSessionRepository(clock.Real())
-	ctx := context.Background()
-
-	sess := &domain.Session{
-		ID:        "sess-cru",
-		UserID:    "usr-1",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
-		Version:   1,
-	}
-	require.NoError(t, repo.Create(ctx, sess))
-
-	const goroutines = 10
-	var (
-		wg        sync.WaitGroup
-		successes int64
-		conflicts int64
-		mu        sync.Mutex
-	)
-
-	// All goroutines read the same version, then try to update.
-	clones := make([]*domain.Session, goroutines)
-	for i := range goroutines {
-		clone, err := repo.GetByID(ctx, "sess-cru")
-		require.NoError(t, err)
-		clones[i] = clone
-	}
-
-	for i := range goroutines {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			err := repo.Update(ctx, clones[idx])
-			mu.Lock()
-			defer mu.Unlock()
-			if err == nil {
-				successes++
-			} else {
-				var ecErr *errcode.Error
-				if assert.ErrorAs(t, err, &ecErr) {
-					assert.Equal(t, errcode.ErrSessionConflict, ecErr.Code)
-				}
-				conflicts++
-			}
-		}(i)
-	}
-
-	wg.Wait()
-	assert.Equal(t, int64(1), successes, "exactly one goroutine should succeed")
-	assert.Equal(t, int64(goroutines-1), conflicts, "all others should get version conflict")
-}
-
-// TestSessionRepository_Create_SetsVersion verifies that Create initializes
-// Version to 1 even if the caller passes 0.
-func TestSessionRepository_Create_SetsVersion(t *testing.T) {
-	repo := NewSessionRepository(clock.Real())
-	ctx := context.Background()
-
-	sess := &domain.Session{
-		ID:        "sess-cv",
-		UserID:    "usr-1",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
-		// Version intentionally omitted (zero value)
-	}
-	require.NoError(t, repo.Create(ctx, sess))
-
-	stored, err := repo.GetByID(ctx, "sess-cv")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), stored.Version, "Version should be initialized to 1")
 }
 
 // --- S4.0 effective-admin invariant tests ---------------------------------

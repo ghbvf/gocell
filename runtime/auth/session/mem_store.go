@@ -92,18 +92,20 @@ func (m *MemStore) Create(_ context.Context, s *Session) error {
 	return nil
 }
 
-// Get returns a defensive copy of the session keyed by id. Revoked or expired
-// sessions are still returned; callers inspect Session.RevokedAt and
-// Session.ExpiresAt to make policy decisions.
-func (m *MemStore) Get(_ context.Context, id string) (*Session, error) {
+// Get returns the validate projection of the session keyed by id. Revoked
+// sessions are still returned (caller inspects RevokedAt); GC eligibility
+// (Session.ExpiresAt) is intentionally not exposed — validate paths must
+// not gate on it.
+func (m *MemStore) Get(_ context.Context, id string) (*ValidateView, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	s, ok := m.sessions[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
-			"session: not found")
+			"session: not found",
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
-	return copySession(s), nil
+	return toValidateView(s), nil
 }
 
 // Revoke marks the session keyed by id dead. Idempotent: missing IDs and
@@ -180,4 +182,19 @@ func copySession(s *Session) *Session {
 		out.RevokedAt = &stamp
 	}
 	return &out
+}
+
+// toValidateView projects a stored *Session onto the narrow ValidateView
+// returned by Store.Get. RevokedAt is pointer-chased so caller mutations
+// cannot bleed back into the stored Session.
+func toValidateView(s *Session) *ValidateView {
+	v := &ValidateView{
+		ID:        s.ID,
+		SubjectID: s.SubjectID,
+	}
+	if s.RevokedAt != nil {
+		stamp := *s.RevokedAt
+		v.RevokedAt = &stamp
+	}
+	return v
 }

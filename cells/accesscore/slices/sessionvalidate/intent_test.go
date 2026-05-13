@@ -23,7 +23,7 @@ func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(ks, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	svc := NewService(verifier, nil, slog.Default(), clock.Real())
+	svc := NewService(verifier, nil, slog.Default())
 
 	refreshTok, err := IssueLegacyRefreshJWT(priv, "usr-attacker", time.Hour)
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestService_VerifyIntent_AcceptsAccessIntentToken(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(ks, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	svc := NewService(verifier, nil, slog.Default(), clock.Real())
+	svc := NewService(verifier, nil, slog.Default())
 
 	accessTok, err := IssueTestTokenWithIntent(priv, auth.TokenIntentAccess,
 		"usr-legit", []string{"user"}, time.Hour)

@@ -34,6 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -46,6 +47,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/state/cas"
@@ -137,9 +140,23 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		callerCellAllowAllLimiter{},
 		nil,
 	)
+	acMemStore := accessmem.NewStore(clock.Real())
+	acSessionProto, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	require.NoError(t, err)
+	acSessionStore, err := session.NewMemStore(acSessionProto, clock.Real())
+	require.NoError(t, err)
+	acRefreshStore, err := refreshmem.New(accesscore.DefaultRefreshPolicy(), clock.Real(), nil)
+	require.NoError(t, err)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithInMemoryDefaults(),
+		accesscore.WithUserRepository(acMemStore.UserRepository()),
+		accesscore.WithRoleRepository(acMemStore.RoleRepository()),
+		accesscore.WithSessionStore(acSessionStore),
+		accesscore.WithRefreshStore(acRefreshStore),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
