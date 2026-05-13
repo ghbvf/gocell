@@ -42,7 +42,7 @@ func newContractHandler(t *testing.T) http.Handler {
 		require.NoError(t, err)
 	}
 
-	svc := mustNewService(t, store.RoleRepository(), testutil.RealSessionRepo(t), slog.Default())
+	svc := mustNewService(t, store.RoleRepository(), store.UserRepository(), testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {

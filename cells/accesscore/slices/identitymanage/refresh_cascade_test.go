@@ -48,7 +48,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
-	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
+	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionRepo, refreshStore), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
@@ -80,7 +80,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newCascadeStore(t)
 
-	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
+	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionRepo, refreshStore), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
@@ -118,7 +118,7 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
-	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
+	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionRepo, refreshStore), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 

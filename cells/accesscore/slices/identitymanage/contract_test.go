@@ -12,8 +12,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
@@ -26,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	sessionpkg "github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -41,6 +44,23 @@ func newIdentityRefreshStore() refresh.Store {
 		panic("test setup: " + err.Error())
 	}
 	return store
+}
+
+// newInvalidator constructs a real *credentialinvalidate.Invalidator from
+// test-double stores. Tests pass their own userRepo/sessionStore/refreshStore
+// so the Invalidator delegates through the same in-memory state.
+func newInvalidator(
+	t testing.TB,
+	userRepo ports.UserRepository,
+	sessionStore sessionpkg.Store,
+	refreshStore refresh.Store,
+) *credentialinvalidate.Invalidator {
+	t.Helper()
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	if err != nil {
+		t.Fatalf("newInvalidator: %v", err)
+	}
+	return inv
 }
 
 // testPassword is a deterministic credential used only in contract tests.
@@ -72,7 +92,10 @@ var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setupContractHandler(t testing.TB) http.Handler {
 	t.Helper()
-	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
 		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
@@ -82,9 +105,11 @@ func setupContractHandler(t testing.TB) http.Handler {
 
 func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecordingWriter) {
 	t.Helper()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
 	writer := &contractRecordingWriter{}
-	svc, err := NewService(mem.NewStore(clock.Real()).UserRepository(), testutil.RealSessionRepo(t),
-		newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(contractTxRunner{})),
 		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
 	if err != nil {
@@ -111,7 +136,9 @@ func buildMux(svc *Service) *celltest.TestMux {
 func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	t.Helper()
 	repo := mem.NewStore(clock.Real()).UserRepository()
-	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	svc, err := NewService(repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
 		WithTokenIssuer(issuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithIssuer: %v", err)

@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
@@ -132,8 +133,12 @@ func newE2EFixture() *e2eFixture {
 		sessionlogin.WithSessionTTL(time.Hour),
 	)
 
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	if err != nil {
+		panic("newE2EFixture: invalidator setup failed: " + err.Error())
+	}
 	idmSvc, err := NewService(
-		userRepo, sessionStore, refreshStore, slog.Default(),
+		userRepo, inv, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(tx)),

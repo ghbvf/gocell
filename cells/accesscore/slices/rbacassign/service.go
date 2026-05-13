@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -17,43 +18,41 @@ import (
 
 // Service handles RBAC role assignment and revocation.
 //
-// When the Cell injects an emitter for asynchronous role-change delivery, the
-// role mutation and event.role.{assigned,revoked}.v1 emission run in one
-// transaction and session revocation moves to the sessionlogout consumer.
+// Revoke routes credential invalidation through the credentialinvalidate funnel,
+// which atomically bumps the user's authz_epoch, revokes all active sessions, and
+// revokes all refresh chains in the same transaction.
 //
-// With the default noop emitter, the service preserves the in-process
-// role-change + session-revoke flow used by demo and in-memory wiring.
+// Assign does NOT call the funnel (HIGH-3 decision): granting a role is additive
+// and does not represent a credential-security event. The user's existing tokens
+// remain valid and reflect the new role after the next re-login.
 //
 // The role repository reports whether the call actually changed state. On a
-// no-op (repeat assign or revoke-non-member), no event is emitted and no
-// session revoke is triggered, preventing false role-change facts.
+// no-op (repeat assign or revoke-non-member), no event is emitted and the
+// funnel is not called, preventing false role-change facts.
 //
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
-	roleRepo              ports.RoleRepository
-	sessionStore          session.Store
-	txRunner              persistence.CellTxManager
-	emitter               outbox.Emitter
-	syncSessionRevocation bool
-	logger                *slog.Logger
+	roleRepo    ports.RoleRepository
+	invalidator *credentialinvalidate.Invalidator
+	txRunner    persistence.CellTxManager
+	emitter     outbox.Emitter
+	logger      *slog.Logger
 }
 
 // Option configures a rbac-assign Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter and disables in-process session revoke.
+// WithEmitter sets the event emitter used for role-change outbox entries.
 func WithEmitter(e outbox.Emitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
-			s.syncSessionRevocation = false
 		}
 	}
 }
 
-// WithTxManager sets the CellTxManager for L2 atomicity (must be paired with
-// WithEmitter). Callers obtain the sealed marker via persistence.WrapForCell
-// from a composition root.
+// WithTxManager sets the CellTxManager for L2 atomicity. Callers obtain the
+// sealed marker via persistence.WrapForCell from a composition root.
 func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) {
 		if tx != nil {
@@ -63,27 +62,27 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 }
 
 // NewService creates a new rbac-assign service.
-// When WithEmitter is provided, session revocation is delegated to the
-// sessionlogout consumer. With default options, the legacy in-process revoke
-// path is used.
+// The invalidator is required; it handles credential revocation for Revoke operations.
 func NewService(
 	roleRepo ports.RoleRepository,
-	sessionStore session.Store,
+	invalidator *credentialinvalidate.Invalidator,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
 	s := &Service{
-		roleRepo:              roleRepo,
-		sessionStore:          sessionStore,
-		emitter:               outbox.NewNoopEmitter(),
-		syncSessionRevocation: true,
-		logger:                logger,
+		roleRepo:    roleRepo,
+		invalidator: invalidator,
+		emitter:     outbox.NewNoopEmitter(),
+		logger:      logger,
 	}
 	for _, o := range opts {
 		o(s)
 	}
 	if s.txRunner == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: TxRunner required; use WithTxManager")
+	}
+	if validation.IsNilInterface(invalidator) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: invalidator is required")
 	}
 	return s, nil
 }
@@ -106,15 +105,16 @@ func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dt
 }
 
 // persistChange wraps a role mutation in the configured transaction runner.
-// When an async emitter is configured it also emits the role-change event; with
-// the default noop emitter it keeps the in-process session revoke path. writeFn
-// returns whether the repository actually mutated state, so no-op calls never
-// emit false role-change facts.
+// When callFunnel is true, the credentialinvalidate funnel is called inside the
+// same transaction to atomically revoke all credentials for the subject.
+// writeFn returns whether the repository actually mutated state, so no-op calls
+// never emit false role-change facts or trigger spurious credential revocations.
 func (s *Service) persistChange(
 	ctx context.Context,
 	writeFn func(ctx context.Context) (changed bool, err error),
 	evt dto.RoleChangedEvent,
 	topic string,
+	callFunnel bool,
 ) (changed bool, err error) {
 	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		var innerErr error
@@ -122,37 +122,24 @@ func (s *Service) persistChange(
 		if innerErr != nil {
 			return innerErr
 		}
-		if !changed || s.syncSessionRevocation {
+		if !changed {
 			return nil
+		}
+		if callFunnel {
+			if err := s.invalidator.Apply(txCtx, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
+				return fmt.Errorf("rbac-assign: invalidate credentials: %w", err)
+			}
 		}
 		return s.writeOutboxEntry(txCtx, topic, evt)
 	})
-	if err != nil || !s.syncSessionRevocation {
-		return changed, err
-	}
-	if !changed {
-		return false, nil
-	}
-	if err := s.sessionStore.RevokeForSubject(ctx, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
-		s.logger.Error("rbac-assign: partial commit — role change persisted but session revoke failed;"+
-			" client JWTs retain stale roles until re-login",
-			slog.String("user_id", evt.UserID),
-			slog.String("role_id", evt.RoleID),
-			slog.String("action", evt.Action),
-			slog.Any("error", err))
-		return true, fmt.Errorf("rbac-assign: %s succeeded but session revoke failed: %w", evt.Action, err)
-	}
-	return true, nil
+	return changed, err
 }
 
 // Assign assigns a role to a user. Idempotent: re-assignment is a no-op —
-// no outbox entry is written and no session is revoked.
+// no outbox entry is written and no credential revocation is triggered.
 //
-// Note: mirror-image of Revoke is intentional — independent public API + repo
-// method + topic; extracting a helper would parameterize 4 call sites and
-// obscure the per-action audit trail.
-//
-
+// HIGH-3 decision: granting a role is additive and not a credential-security
+// event. The funnel is intentionally NOT called on Assign.
 func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -170,28 +157,25 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 		return changed, nil
 	}
 
-	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleAssigned)
+	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleAssigned, false)
 	if err != nil {
 		return err
 	}
 
-	mode := "demo"
-	if !s.syncSessionRevocation {
-		mode = "durable"
-	}
 	s.logger.Info("role assigned",
 		slog.String("user_id", userID),
 		slog.String("role_id", roleID),
-		slog.String("mode", mode),
 		slog.Bool("changed", changed))
 	return nil
 }
 
 // Revoke removes a role from a user. Idempotent: revoking a non-assigned role
-// is a no-op — no outbox entry is written and no session is revoked. Last-admin
-// guard is enforced atomically by RemoveFromUserIfNotLast (no TOCTOU gap).
+// is a no-op — no outbox entry is written and no credential revocation is triggered.
+// Last-admin guard is enforced atomically by RemoveFromUserIfNotLast (no TOCTOU gap).
 //
-
+// When a state change occurs, the credentialinvalidate funnel runs inside the same
+// transaction, atomically bumping the authz_epoch and revoking all active sessions
+// and refresh chains.
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -210,19 +194,14 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 		return changed, nil
 	}
 
-	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleRevoked)
+	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleRevoked, true)
 	if err != nil {
 		return err
 	}
 
-	mode := "demo"
-	if !s.syncSessionRevocation {
-		mode = "durable"
-	}
 	s.logger.Info("role revoked",
 		slog.String("user_id", userID),
 		slog.String("role_id", roleID),
-		slog.String("mode", mode),
 		slog.Bool("changed", changed))
 	return nil
 }
