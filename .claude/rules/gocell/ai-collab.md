@@ -31,9 +31,11 @@
 3. **archtest 平铺兜底**，按规则真值类型选工具：
    - 路径级 import ban → `.golangci.yml` `depguard`
    - 跨包归属 / 传递闭包 → `kernel/depgraph`，复用 `tools/archtest/internal/typeseval.SharedResolver`
-   - 需要类型信息（receiver type / interface 实现 / const 值 / exported API 类型）→ 在 `tools/archtest/internal/typeseval` 加 helper
+   - 需要类型信息（receiver type / interface 实现 / exported API 类型 / 表达式求值结果，含 const 拼接、跨包 Ident、untyped const）→ 在 `tools/archtest/internal/typeseval` 加/复用 helper（`EvaluateConstString` 已覆盖 BasicLit/Ident/SelectorExpr/BinaryExpr；扩节点类型时在同包加 helper）
    - 纯 AST 模式 → `tools/archtest/internal/scanner`
    - 元数据 / YAML 派生 → `scanner.EachContentFile` + 解析
+
+**工具选定后强制盲区自检**：作者在 archtest 测试函数 godoc 列出所选工具 godoc 声明范围外的 AST 形态（与 package-doc `// INVARIANT:` 分离），并对每项添加反向自检测试，断言其在 production AST 不出现。盲区清单 + 反向自检测试是 Hard/Medium 评级的前置举证材料。
 
 **立项硬门槛**：≥ Medium。Soft 形态严禁立项。
 
@@ -44,11 +46,13 @@
 - hand-crafted fixture → real source AST capture
 
 
-**Hard 范本（已 ship 案例）**：
+**Hard 范本**：
 
-- **typed function choice for walk depth** — 当一个 API 同时承担多种语义（深度选择 / 早返模式 / 容器范围等）时，拆成多个 typed function 让"选错语义 = 选错 API 名"成为可检测层级。范例：`scanner.EachInSubtree[N]`（recursive，遍历以该节点为根的全树）vs `scanner.EachInChildren[N]`（depth=1，仅直接子节点）拆分——两个函数名语义不重叠。**保障层次分两级**：(1) **fixture-level**：`eachnode_test.go` 中 T1+T2 RED fixture 确保选错深度在测试中暴露；SCANNER-FRAMEWORK-USAGE-01 的 companion-index 精度测试也拦截；(2) **compile-level**：N 类型选错（接口而非 `*S`，例如 `EachInSubtree[ast.Expr]`）直接编译失败。注意：两个函数名都能 build，深度选错是 fixture-level 保障，不是 compile error；N 类型选错才是真正的 compile error。（PR #553/460，charter `docs/plans/202605101300-ai-first-governance-charter.md` §4 Wave 2 PR-Φ-HARD-EACHNODE-WALKDEPTH-01）
+- **typed function choice for walk depth** — 当一个 API 同时承担多种语义（深度选择 / 早返模式 / 容器范围等）时，拆成多个 typed function 让"选错语义 = 选错 API 名"成为可检测层级。范例：`scanner.EachInSubtree[N]`（recursive，遍历以该节点为根的全树）vs `scanner.EachInChildren[N]`（depth=1，仅直接子节点）拆分——两个函数名语义不重叠。**保障层次分两级**：(1) **fixture-level**：`eachnode_test.go` 中 T1+T2 RED fixture 确保选错深度在测试中暴露；SCANNER-FRAMEWORK-USAGE-01 的 companion-index 精度测试也拦截；(2) **compile-level**：N 类型选错（接口而非 `*S`，例如 `EachInSubtree[ast.Expr]`）直接编译失败。注意：两个函数名都能 build，深度选错是 fixture-level 保障，不是 compile error；N 类型选错才是真正的 compile error。
 
-- **typed function call as Hard funnel for unbounded operations** — when an operation accepts `any` at the Go type level (e.g., `panic(any)`), you can still reach Hard by routing every call site through a single typed-marker function. Range: `panic(panicregister.Approved(reason, value))` is the only approved panic shape in production GoCell code; archtest `PANIC-REGISTERED-01` enforces (a) panic arg = `*ast.CallExpr` with Fun resolving via `*types.Info` to `pkg/panicregister.Approved`, (b) reason = `*ast.BasicLit` STRING. Hard property comes from "form uniqueness": picking any other shape (bare panic, different callee name, non-literal reason) fails archtest in CI — there is no "looks like Approved but isn't" gray zone. Honest caveat: Go's `panic` keyword accepts `any` so `panic(rawValue)` compiles; the enforcement is archtest-bound, not compile-time. The charter §1 definition of "typed function call" Hard does not require compile-time blocking, only form uniqueness + archtest fail-on-deviation — which is the highest grade reachable in Go for this rule shape. (PR #467, charter §4 Wave 2 panic 单源 typed marker, ADR `docs/architecture/202604270030-architectural-panic-whitelist.md`.)
+- **typed function call as Hard funnel for unbounded operations** — when an operation accepts `any` at the Go type level (e.g., `panic(any)`), you can still reach Hard by routing every call site through a single typed-marker function. Range: `panic(panicregister.Approved(reason, value))` is the only approved panic shape in production GoCell code; archtest `PANIC-REGISTERED-01` enforces (a) panic arg = `*ast.CallExpr` with Fun resolving via `*types.Info` to `pkg/panicregister.Approved`, (b) reason = `*ast.BasicLit` STRING. Hard property comes from "form uniqueness": picking any other shape (bare panic, different callee name, non-literal reason) fails archtest in CI — there is no "looks like Approved but isn't" gray zone. Honest caveat: Go's `panic` keyword accepts `any` so `panic(rawValue)` compiles; the enforcement is archtest-bound, not compile-time. The charter §1 definition of "typed function call" Hard does not require compile-time blocking, only form uniqueness + archtest fail-on-deviation — which is the highest grade reachable in Go for this rule shape.
+
+- **string-typed concept funnel**（设计范本，GoCell 内尚无严格 ship 实例）— 字符串承载独立语义（rule code / error code / event topic 等）时：(1) `type FooCode string` 把语义类型化，API 签名收口；(2) 值定义集中在 `*codes.go`，archtest 守声明位置；(3) 构造/比较点用 `*types.Info` 检查实参 resolve 到声明集合。形态锁 vs 值求值依 §3 工具原则选。
 
 ## archtest 文件命名
 
