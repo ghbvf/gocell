@@ -249,6 +249,21 @@ func checkerNamesFromFunc(info *types.Info, fn *ast.FuncDecl) []string {
 		}
 		names = append(names, constant.StringVal(tv.Value))
 	})
+	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HealthToCheckers" || len(call.Args) == 0 {
+			return
+		}
+		obj, ok := info.Uses[sel.Sel].(*types.Func)
+		if !ok || !strings.HasSuffix(obj.Pkg().Path(), "adapters/adapterutil") {
+			return
+		}
+		name, ok := constStringValue(info, call.Args[0])
+		if !ok {
+			return
+		}
+		names = append(names, name)
+	})
 	return names
 }
 
