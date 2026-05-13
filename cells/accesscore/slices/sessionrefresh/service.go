@@ -264,7 +264,7 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 }
 
 func (s *Service) refreshStoreError(logMessage string, err error) error {
-	if errors.Is(err, refresh.ErrRejected) {
+	if errors.Is(err, refresh.ErrRejected) || errors.Is(err, refresh.ErrReused) {
 		return authRefreshRejected()
 	}
 	s.logger.Error(logMessage, slog.Any("error", err))

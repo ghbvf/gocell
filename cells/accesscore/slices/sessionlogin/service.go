@@ -211,12 +211,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 
 	now := s.clock.Now()
 	sess := &session.Session{
-		ID:                sessionID,
-		SubjectID:         user.ID,
-		JTI:               sessionID,
-		AuthzEpochAtIssue: 0,
-		CreatedAt:         now,
-		ExpiresAt:         now.Add(s.sessionTTL),
+		ID:        sessionID,
+		SubjectID: user.ID,
+		JTI:       sessionID,
+		CreatedAt: now,
+		ExpiresAt: now.Add(s.sessionTTL),
 	}
 
 	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, user.ID)
@@ -349,12 +348,11 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	// Persist the session so sessionvalidate can look it up by sid claim.
 	now := s.clock.Now()
 	sess := &session.Session{
-		ID:                sessionID,
-		SubjectID:         userID,
-		JTI:               sessionID,
-		AuthzEpochAtIssue: 0,
-		CreatedAt:         now,
-		ExpiresAt:         now.Add(s.sessionTTL),
+		ID:        sessionID,
+		SubjectID: userID,
+		JTI:       sessionID,
+		CreatedAt: now,
+		ExpiresAt: now.Add(s.sessionTTL),
 	}
 	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, userID)
 	if err != nil {

@@ -18,8 +18,9 @@ type FingerprintMode interface {
 }
 
 // FingerprintJTIRef stores the JWT jti claim reference (RFC 9068 §2.2.4) on
-// the server side. Session rows persist {sid, jti, authz_epoch_at_issue}; no
-// token plaintext or HMAC fingerprint is stored.
+// the server side. Session rows persist {sid, jti}; no token plaintext or HMAC
+// fingerprint is stored. The authz_epoch_at_issue column was removed in S4b
+// (migration 025); epoch ordering is now enforced via the JWT claim layer.
 type FingerprintJTIRef struct{}
 
 // fingerprintModeOK is the empty seal marker — its mere presence makes

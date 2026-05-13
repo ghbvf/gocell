@@ -571,8 +571,10 @@ const (
 //   - sessions table has exactly 1 row for the subject
 //   - revoked_at IS NULL (session is active)
 //   - jti is non-empty
-//   - authz_epoch_at_issue = 0 (S4a: epoch not yet wired; default 0)
 //   - refresh_tokens table has exactly 1 live row for that session_id
+//
+// Note: authz_epoch_at_issue column was dropped in S4b migration 025; epoch
+// ordering is now enforced via the JWT claim layer.
 func TestSessionLogin_PGGoldenPath(t *testing.T) {
 	ctx := context.Background()
 	h := newSessionPGHarness(t)
@@ -582,15 +584,13 @@ func TestSessionLogin_PGGoldenPath(t *testing.T) {
 	// Verify sessions row persisted correctly.
 	var jti string
 	var revokedAt *time.Time
-	var authzEpoch int64
 	err := h.pool.DB().QueryRow(ctx,
-		`SELECT jti, authz_epoch_at_issue, revoked_at FROM sessions WHERE id = $1`,
+		`SELECT jti, revoked_at FROM sessions WHERE id = $1`,
 		sessionID,
-	).Scan(&jti, &authzEpoch, &revokedAt)
+	).Scan(&jti, &revokedAt)
 	require.NoError(t, err, "session row must exist after login")
 	assert.NotEmpty(t, jti, "jti must be non-empty in sessions row")
 	assert.Nil(t, revokedAt, "revoked_at must be NULL for an active session")
-	assert.Equal(t, int64(0), authzEpoch, "authz_epoch_at_issue must be 0 (S4a scope: epoch wiring pending)")
 
 	// Verify refresh_token row exists for this session.
 	var rtCount int

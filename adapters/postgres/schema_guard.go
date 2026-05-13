@@ -29,6 +29,7 @@ import (
 //                                 + users_status_chk, users_creation_source_chk (023 CHECK)
 //                                 + effective_admin_invariant_on_users trigger (024)
 //   - sessions           (018)  accesscore session / JTI store
+//                                 - authz_epoch_at_issue dropped (025)
 //   - roles              (019)  accesscore role definitions
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
@@ -307,11 +308,10 @@ var expectedColumns = []expectedColumn{
 	// version column is asserted here (existence + type + NOT NULL).
 	{Table: "config_entries", Column: "version", Type: "integer", NotNull: true},
 	{Table: "feature_flags", Column: "version", Type: "integer", NotNull: true},
-	// sessions (018_sessions.sql)
+	// sessions (018_sessions.sql + 025_drop_sessions_authz_epoch_at_issue.sql)
 	{Table: "sessions", Column: "id", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "subject_id", Type: "uuid", NotNull: true},
 	{Table: "sessions", Column: "jti", Type: "text", NotNull: true},
-	{Table: "sessions", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
 	{Table: "sessions", Column: "expires_at", Type: "timestamp with time zone", NotNull: true},
 	{Table: "sessions", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
 	{Table: "sessions", Column: "revoked_at", Type: "timestamp with time zone", NotNull: false},
@@ -341,6 +341,9 @@ var expectedColumns = []expectedColumn{
 var forbiddenColumns = []requiredColumn{
 	// ADR-credential D1: plaintext token storage is forbidden.
 	{table: "sessions", column: "access_token"},
+	// S4b Batch 1C: authz_epoch_at_issue dropped by migration 025 — epoch is now
+	// carried in the JWT claim layer, not as a per-session snapshot column.
+	{table: "sessions", column: "authz_epoch_at_issue"},
 }
 
 // expectedPKs is the primary key registry.

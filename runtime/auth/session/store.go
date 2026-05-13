@@ -37,14 +37,6 @@ type Session struct {
 	// §2.2.4 — applies once jti emission is wired into the JWT path.
 	JTI string
 
-	// AuthzEpochAtIssue snapshots an authorization-epoch value at sign-in.
-	// It is currently always 0: JWTIssuer does not emit an epoch claim and
-	// Store.Get does not expose the field, so it is wire-only. The target
-	// end state — validate paths rejecting JWTs whose epoch claim is older
-	// than the user's current authz_epoch — applies once the closed loop
-	// lands on the JWT path.
-	AuthzEpochAtIssue int64
-
 	// CreatedAt is the issue timestamp in UTC.
 	CreatedAt time.Time
 

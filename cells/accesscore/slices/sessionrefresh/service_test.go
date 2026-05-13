@@ -85,12 +85,11 @@ func newTestSessionStore(t testing.TB) *session.MemStore {
 // must call sessionStore.Create to persist it.
 func newTestSession(subjectID, sessionID string) *session.Session {
 	return &session.Session{
-		ID:                sessionID,
-		SubjectID:         subjectID,
-		JTI:               sessionID,
-		AuthzEpochAtIssue: 0,
-		CreatedAt:         time.Now(),
-		ExpiresAt:         time.Now().Add(time.Hour),
+		ID:        sessionID,
+		SubjectID: subjectID,
+		JTI:       sessionID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
 	}
 }
 
