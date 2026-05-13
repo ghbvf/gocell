@@ -10,11 +10,15 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Compile-time assertion: Pool implements lifecycle.ContextCloser.
-var _ lifecycle.ContextCloser = (*Pool)(nil)
+// Compile-time assertions: Pool implements both lifecycle interfaces.
+var (
+	_ lifecycle.ContextCloser   = (*Pool)(nil)
+	_ lifecycle.ManagedResource = (*Pool)(nil)
+)
 
 // Default pool configuration values.
 const (
@@ -77,9 +81,15 @@ func (c *Config) applyDefaults() {
 }
 
 // Pool wraps a pgxpool.Pool with health checking and lifecycle management.
+// It implements lifecycle.ManagedResource directly, so callers can pass a
+// *Pool to bootstrap.WithManagedResource without a wrapper.
 type Pool struct {
 	inner  *pgxpool.Pool
 	config Config
+
+	// checkerHealthFnForTest is non-nil only in unit tests; it replaces
+	// Pool.Health in Checkers() so probes can be exercised without a real DB.
+	checkerHealthFnForTest func(ctx context.Context) error
 }
 
 // NewPool creates a new connection pool from the supplied Config.
@@ -159,6 +169,43 @@ func (p *Pool) Close(ctx context.Context) error {
 		p.inner.Close()
 		return nil
 	})
+}
+
+// Checkers returns two health probes that contribute to /readyz:
+//
+//  1. "postgres_ready" — pings the PG pool connection via Pool.Health.
+//  2. "postgres_indexes_valid_ready" — calls InvalidIndexCheck to surface
+//     any indexes left invalid by an interrupted CREATE INDEX CONCURRENTLY.
+//
+// Both probes cap their inner wait at adapterutil.DefaultProbeTimeout (5 s)
+// so a slow PG does not hold the /readyz response indefinitely.
+//
+// ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
+// ref: uber-go/fx app.go StopTimeout — shared shutdown budget via ctx.
+func (p *Pool) Checkers() map[string]func(context.Context) error {
+	healthFn := p.checkerHealthFnForTest
+	if healthFn == nil {
+		healthFn = p.Health
+	}
+	return map[string]func(context.Context) error{
+		"postgres_ready": func(ctx context.Context) error {
+			probeCtx, cancel := context.WithTimeout(ctx, adapterutil.DefaultProbeTimeout)
+			defer cancel()
+			return healthFn(probeCtx)
+		},
+		"postgres_indexes_valid_ready": func(ctx context.Context) error {
+			probeCtx, cancel := context.WithTimeout(ctx, adapterutil.DefaultProbeTimeout)
+			defer cancel()
+			return InvalidIndexCheck(probeCtx, p)
+		},
+	}
+}
+
+// Worker returns nil — Pool has no background goroutine. The outbox relay is
+// registered as a separate ManagedResource via bootstrap.WithManagedResource
+// so its lifecycle is independently managed.
+func (p *Pool) Worker() kworker.Worker {
+	return nil
 }
 
 // PoolStats holds structured connection pool statistics.

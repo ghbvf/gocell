@@ -109,9 +109,9 @@ func isManagedResource(s *typeMethodSet, qualified string) bool {
 // health-checking via Checkers() or the legacy HealthCheckers() spelling.
 //
 // Note: "Health(ctx)" (e.g. adapters/postgres.Pool.Health) is intentionally
-// NOT included. Pool.Health is a connectivity probe with different semantics;
-// Pool is wrapped by adapters/postgres.PGResource which carries the full
-// ManagedResource contract. Adding "Health" here would incorrectly flag Pool.
+// NOT included. Pool (adapters/postgres.Pool) now directly implements
+// ManagedResource; Pool.Health is a connectivity probe with different semantics
+// from Checkers(). Adding "Health" here would incorrectly flag Pool.
 func exposesHealthCheckerMethod(s *typeMethodSet, qualified string) bool {
 	return s.has(qualified, "Checkers") || s.has(qualified, "HealthCheckers")
 }
@@ -161,7 +161,7 @@ func TestHealthAggregation_FixtureRegression(t *testing.T) {
 
 	const promotedOkApp = "healthaggfixtures/promoted_ok.App"
 	require.True(t, exposesHealthCheckerMethod(s, promotedOkApp),
-		"App should expose Checkers() via promoted method from embedded *PGResource")
+		"App should expose Checkers() via promoted method from embedded *FakeResource")
 	assert.True(t, isManagedResource(s, promotedOkApp),
 		"App should be ManagedResource via promoted Worker/Close (proves go/types upgrade)")
 

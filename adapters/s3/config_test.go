@@ -1,9 +1,12 @@
 package s3
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 func TestEnvWithFallback_LegacyVar(t *testing.T) {
@@ -19,18 +22,22 @@ func TestEnvWithFallback_NoVars(t *testing.T) {
 }
 
 func TestNew_DefaultTimeout(t *testing.T) {
+	// New now requires a context (sync HeadBucket probe on construction).
+	// Use a mock to avoid real network I/O in this unit test.
+	mock := &mockHeadBucket{errFn: func(_ int64) error { return nil }}
 	cfg := Config{
 		Endpoint: "http://127.0.0.1:9000", Region: "us-east-1",
 		Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s",
+		Clock: clock.Real(), // required after KERNEL-CLOCK-LEAF-FALLBACK-01
 		// HTTPTimeout is 0 — should use default.
 	}
-	client, err := New(cfg)
+	client, err := newClientWithHead(context.Background(), cfg, mock)
 	assert.NoError(t, err)
 	assert.NotNil(t, client)
 }
 
 func TestNew_InvalidConfig(t *testing.T) {
-	_, err := New(Config{})
+	_, err := New(context.Background(), Config{})
 	assert.Error(t, err)
 }
 

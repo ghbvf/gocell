@@ -106,7 +106,7 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 	require.Len(t, cells, 3, "BuildApp must return exactly 3 cells")
 
 	// cellOpts is non-nil and contains at least one WithManagedResource option
-	// (the PGResource for configcore). We do not type-assert into the opaque
+	// (the PoolResource for configcore). We do not type-assert into the opaque
 	// functional option; the non-empty opts slice is the observable proxy.
 	assert.NotEmpty(t, cellOpts, "cellOpts must include at least one PG managed-resource option")
 }
@@ -115,9 +115,9 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 // ConfigCoreModule.Provide, when called after LoadSharedDepsFromEnv, returns
 // a non-nil provisional ManagedResource whose postgres_ready checker passes.
 //
-// This slim companion test isolates the Provide path so that the PGResource
-// type and its health check are verified independently of the full BuildApp
-// assembly.
+// This slim companion test isolates the Provide path so that the PoolResource
+// (adapterpg.Pool) and its health check are verified independently of the full
+// BuildApp assembly.
 func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
@@ -141,11 +141,11 @@ func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 	pgRes := provisional[0]
 
 	// Verify the ManagedResource exposes a "postgres_ready" checker (the name used by
-	// adapterpg.PGResource) and that it reports healthy against the live container
-	// started by setupPostgresForMain.
+	// adapterpg.Pool, which now directly implements ManagedResource) and that it
+	// reports healthy against the live container started by setupPostgresForMain.
 	checkers := pgRes.Checkers()
 	pgChecker, ok := checkers["postgres_ready"]
-	require.True(t, ok, "ManagedResource must expose a \"postgres_ready\" checker (adapterpg.PGResource default name)")
+	require.True(t, ok, "ManagedResource must expose a \"postgres_ready\" checker (adapterpg.Pool)")
 	require.NoError(t, pgChecker(ctx), "postgres_ready checker must pass for the live container DSN")
 
 	// Close the resource to avoid leaking the connection pool.
@@ -175,7 +175,7 @@ func (conflictingRenewalMetricsProvider) RenewalMetrics() []prom.Collector {
 	}
 }
 
-func TestConfigCoreModule_Provide_RollsBackPGResourceOnRenewalMetricError(t *testing.T) {
+func TestConfigCoreModule_Provide_RollsBackPoolResourceOnRenewalMetricError(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
 

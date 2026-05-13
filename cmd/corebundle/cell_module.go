@@ -10,7 +10,7 @@ import (
 
 // CellModule is the contract by which a Cell declares itself to BuildApp.
 // Each Cell has a single *_module.go file that implements this interface,
-// self-managing all Cell-specific dependency wiring (KeyProvider, PGResource,
+// self-managing all Cell-specific dependency wiring (KeyProvider, PoolResource,
 // cellOpts, etc.).
 //
 // CellModule is defined here (cmd/corebundle) rather than in runtime/bootstrap
@@ -29,7 +29,7 @@ type CellModule interface {
 	ID() string
 	// Provide resolves Cell-specific dependencies from the shared context and
 	// returns the constructed cell.Cell, any bootstrap.Options it requires
-	// (e.g. WithManagedResource for a PGResource), and the provisional
+	// (e.g. WithManagedResource for a PoolResource), and the provisional
 	// resources that must be closed if a subsequent module's Provide fails
 	// before bootstrap.Run activates the lifecycle. The caller (BuildApp)
 	// owns rollback: on any failure it calls Close(ctx) in reverse order on

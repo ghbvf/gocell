@@ -594,7 +594,7 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestPGRefreshStore_T22_ReadyzReportsInvalidIndex verifies that the
-// postgres_indexes_valid_ready checker in PGResource.Checkers returns a normal
+// postgres_indexes_valid_ready checker in Pool.Checkers returns a normal
 // errcode error when invalid indexes exist. It must not wrap cell.ErrDegraded:
 // invalid indexes are a schema fault, so runtime/http/health.runOneProbe must
 // classify the probe as unhealthy and /readyz must fail closed with HTTP 503.
@@ -623,10 +623,7 @@ func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 		)`)
 	require.NoError(t, err)
 
-	resource, err := NewPGResource(p)
-	require.NoError(t, err)
-
-	checkers := resource.Checkers()
+	checkers := p.Checkers()
 	invalidIdxChecker, ok := checkers["postgres_indexes_valid_ready"]
 	require.True(t, ok, "postgres_indexes_valid_ready checker must be present in Checkers()")
 

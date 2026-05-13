@@ -10,8 +10,15 @@ import (
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/secutil"
 )
+
+// Compile-time assertion: Adapter satisfies lifecycle.ManagedResource.
+var _ lifecycle.ManagedResource = (*Adapter)(nil)
 
 const (
 	// defaultOIDCHTTPTimeout is the default HTTP client timeout for OIDC
@@ -34,6 +41,10 @@ func (c Config) Validate() error {
 	if c.IssuerURL == "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterOIDCConfig, "oidc: issuer URL is required")
 	}
+	// SEC-FAIL-CLOSED: reject non-TLS issuer endpoints (loopback exempt).
+	if err := secutil.ValidateTLSEndpoint(c.IssuerURL); err != nil {
+		return err
+	}
 	if c.ClientID == "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterOIDCConfig, "oidc: client ID is required")
 	}
@@ -50,8 +61,12 @@ type Adapter struct {
 	provider *gooidc.Provider
 }
 
-// New creates an OIDC Adapter.
-func New(cfg Config) (*Adapter, error) {
+// New creates an OIDC Adapter and synchronously performs OIDC discovery.
+// An unreachable or misconfigured issuer causes construction to fail
+// immediately (fail-fast at boot, not at first request).
+//
+// ref: coreos/go-oidc — Provider.NewProvider semantics (sync HTTP round-trip).
+func New(ctx context.Context, cfg Config) (*Adapter, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -59,10 +74,14 @@ func New(cfg Config) (*Adapter, error) {
 	if timeout == 0 {
 		timeout = defaultOIDCHTTPTimeout
 	}
-	return &Adapter{
+	a := &Adapter{
 		config: cfg,
 		client: &http.Client{Timeout: timeout},
-	}, nil
+	}
+	if _, err := a.discover(ctx, true); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func (a *Adapter) oidcCtx(ctx context.Context) context.Context {
@@ -123,6 +142,31 @@ func (a *Adapter) Verifier(ctx context.Context) (*gooidc.IDTokenVerifier, error)
 		return nil, err
 	}
 	return p.Verifier(&gooidc.Config{ClientID: a.config.ClientID}), nil
+}
+
+// Checkers returns a readyz probe for the OIDC provider. The probe verifies
+// that the cached provider is populated without re-discovering.
+//
+// ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
+func (a *Adapter) Checkers() map[string]func(context.Context) error {
+	return adapterutil.HealthToCheckers("oidc_ready", a.healthProbe, adapterutil.DefaultProbeTimeout)
+}
+
+// Worker returns nil — no background goroutine is needed. The JWKS rotation
+// worker is deferred to PR-11/A-02.
+func (a *Adapter) Worker() worker.Worker { return nil }
+
+// Close is idempotent and currently a no-op. The go-oidc provider has no
+// managed connections to release; the HTTP client is ephemeral.
+func (a *Adapter) Close(_ context.Context) error { return nil }
+
+// healthProbe verifies the cached provider is populated. It does NOT
+// re-discover — Refresh() handles that. Provider(ctx) acquires a.mu.RLock();
+// the probe's inner 5s timeout (adapterutil.DefaultProbeTimeout) bounds the
+// worst case if the lock is briefly held by a concurrent Refresh().
+func (a *Adapter) healthProbe(ctx context.Context) error {
+	_, err := a.Provider(ctx)
+	return err
 }
 
 // OAuth2Config returns an oauth2.Config using the provider's endpoints.

@@ -135,12 +135,12 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
-	pgRes := modResult.PGResource
+	pgRes := modResult.PoolResource
 	cellAdapterOpts := modResult.CellOptions
 	relayBootstrapOpts := modResult.BootstrapOpts
 	require.NotNil(t, pgRes,
 		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil ManagedResource in PG mode")
-	// Relay is now registered via independent bootstrap opts, not via PGResource.Worker().
+	// Relay is now registered via independent bootstrap opts, not via PoolResource.Worker().
 	require.NotEmpty(t, relayBootstrapOpts,
 		"A11 regression guard: bootstrapOpts MUST carry relay ManagedResource in PG mode")
 	t.Cleanup(func() { _ = pgRes.Close(context.Background()) })
@@ -254,7 +254,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}
 	// A11 regression guard: relay is registered via relayBootstrapOpts from
 	// buildConfigCoreOpts so its Worker/Close/Checkers lifecycle is independently
-	// managed by bootstrap — not carried inside PGResource.Worker().
+	// managed by bootstrap — not carried inside PoolResource.Worker().
 	app := newBootstrapFromOptions(append(baseOpts, relayBootstrapOpts...))
 
 	appErrCh := make(chan error, 1)
@@ -453,10 +453,10 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
-	pgRes := modResult.PGResource
+	pgRes := modResult.PoolResource
 	cellAdapterOpts := modResult.CellOptions
 	relayBootstrapOpts := modResult.BootstrapOpts
-	require.NotNil(t, pgRes, "PGResource must be non-nil in postgres mode")
+	require.NotNil(t, pgRes, "PoolResource must be non-nil in postgres mode")
 	require.NotEmpty(t, relayBootstrapOpts, "relay bootstrap opts must be non-empty in postgres mode")
 	t.Cleanup(func() { _ = pgRes.Close(context.Background()) })
 

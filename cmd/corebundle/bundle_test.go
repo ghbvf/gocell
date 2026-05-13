@@ -143,7 +143,9 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared.RedisClient = new(adapterredis.Client)
 	withRedis := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 
-	assert.Len(t, withRedis, len(base)+2)
+	// PR-8 OIDC-MR-COMPLETENESS Group C: WithHealthChecker+WithManagedCloser collapsed
+	// into a single WithManagedResource, so redis adds exactly 1 option (not 2).
+	assert.Len(t, withRedis, len(base)+1)
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +174,7 @@ func TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError(t *testing.T) {
 	require.Error(t, err, "postgres mode with invalid DSN must return an error")
 	assert.Contains(t, err.Error(), "PG pool",
 		"error must mention 'PG pool' so operators know which subsystem failed")
-	assert.Nil(t, result.PGResource, "error path must not leak a ManagedResource")
+	assert.Nil(t, result.PoolResource, "error path must not leak a ManagedResource")
 }
 
 // fakeManagedResource implements lifecycle.ManagedResource for tests.
@@ -248,7 +250,7 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 // given topology. Test cases can mutate individual fields to assert that a
 // single missing field surfaces the expected error.
 //
-// Note: PGResource, cursor codecs, HMAC key, and KeyProvider are no longer
+// Note: PoolResource, cursor codecs, HMAC key, and KeyProvider are no longer
 // part of SharedDeps; they are built inside the respective CellModule.Provide.
 // The "prod baseline" topology is tested here without those fields — the cell
 // module gates are now in each module's Provide.
@@ -689,19 +691,19 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	}
 }
 
-// TestBuildBootstrap_PostgresTopology_FakePGResource verifies that a postgres
+// TestBuildBootstrap_PostgresTopology_FakePoolResource verifies that a postgres
 // topology with a fake ManagedResource wired via WithManagedResource option
 // attaches the PG health checker and calls Close on shutdown.
 //
 // In the new CellModule model, ConfigCoreModule.Provide would build the real
-// PGResource from env. This test injects a fake by passing it as an extra
+// PoolResource from env. This test injects a fake by passing it as an extra
 // bootstrap.Option, exercising the ManagedResource lifecycle path directly.
 //
 // Note: despite the name, this test does NOT exercise the Postgres code path —
 // StorageBackend is fixed to "memory". The test name is historical. Its sole
 // purpose is verifying the WithManagedResource lifecycle hooks
 // (Checkers / Worker / Close).
-func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
+func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
 	shared := buildTestSharedDeps(t)

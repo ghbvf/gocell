@@ -43,8 +43,10 @@ type ConfigCoreModuleConfig struct {
 //
 // ref: Uber fx fx.Out result struct pattern.
 type ConfigCoreModuleResult struct {
-	// PGResource is the ManagedResource for the PG pool. Nil in memory mode.
-	PGResource kernellifecycle.ManagedResource
+	// PoolResource is the ManagedResource for the PG pool. Nil in memory mode.
+	// Renamed from PGResource after adapters/postgres.PGResource was deleted;
+	// the field now holds a *adapterpg.Pool directly (which implements ManagedResource).
+	PoolResource kernellifecycle.ManagedResource
 	// PGPool is the raw PG pool opened in postgres mode. Nil in memory mode.
 	// ConfigCoreModule writes this to SharedDeps.SharedPGPool after a successful
 	// buildConfigCoreOpts call so AccessCoreModule + AuditCoreModule can read it.
@@ -64,8 +66,8 @@ type ConfigCoreModuleResult struct {
 // In postgres mode, cfg.PGConfig.DSN must be non-empty; an empty DSN causes a
 // fail-fast error with a message naming GOCELL_CONFIGCORE_DATABASE_URL.
 //
-// Relay worker is registered via BootstrapOpts independently of PGResource:
-// PGResource owns the pool health probe and pool shutdown (no background worker);
+// Relay worker is registered via BootstrapOpts independently of PoolResource:
+// PoolResource owns the pool health probe and pool shutdown (no background worker);
 // the relay is a separate ManagedResource with its own Worker/Close/Checkers.
 //
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
@@ -129,9 +131,9 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			configcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		}
 		// Relay is registered independently via bootstrap so its Worker()/Close()
-		// lifecycle is managed separately from the pool (PGResource.Worker() == nil).
+		// lifecycle is managed separately from the pool (PoolResource.Worker() == nil).
 		return ConfigCoreModuleResult{
-			PGResource:    pgRes,
+			PoolResource:  pgRes,
 			PGPool:        pool,
 			CellOptions:   cellOpts,
 			BootstrapOpts: []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)},
@@ -174,10 +176,6 @@ func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
 func buildConfigCorePGStorage(
 	pool *adapterpg.Pool, cfg ConfigCoreModuleConfig,
 ) (kernellifecycle.ManagedResource, configcore.Option, error) {
-	pgRes, err := adapterpg.NewPGResource(pool)
-	if err != nil {
-		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)
-	}
 	storageOpt, err := configpg.WithPool(pool.DB(), cfg.Clock,
 		configpg.WithValueTransformer(cfg.ValueTransformer),
 		configpg.WithOnStaleCipher(cfg.OnStaleCipher),
@@ -185,5 +183,5 @@ func buildConfigCorePGStorage(
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore PG repository wiring: %w", err)
 	}
-	return pgRes, storageOpt, nil
+	return pool, storageOpt, nil
 }

@@ -13,12 +13,13 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
-// Compile-time assertion: Client implements lifecycle.ContextCloser.
-var _ lifecycle.ContextCloser = (*Client)(nil)
+// Compile-time assertion: Client implements lifecycle.ManagedResource.
+var _ lifecycle.ManagedResource = (*Client)(nil)
 
 // Error codes for the Redis adapter.
 const (
@@ -669,6 +670,21 @@ func (c *Client) Health(ctx context.Context) error {
 			"redis: health check failed", err,
 			errcode.WithDetails(slog.String("mode", string(c.config.Mode))))
 	}
+	return nil
+}
+
+// Checkers returns the named health probe for /readyz. The single entry
+// "redis_ready" wraps Health with adapterutil.DefaultProbeTimeout so a slow
+// ping does not hold the readyz response indefinitely.
+//
+// ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
+func (c *Client) Checkers() map[string]func(context.Context) error {
+	return adapterutil.HealthToCheckers("redis_ready", c.Health, adapterutil.DefaultProbeTimeout)
+}
+
+// Worker returns nil — the Redis client has no background goroutine.
+// Bootstrap skips WithWorkers registration when nil is returned.
+func (c *Client) Worker() worker.Worker {
 	return nil
 }
 

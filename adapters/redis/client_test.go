@@ -11,9 +11,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// Compile-time assertion: Client implements lifecycle.ManagedResource.
+var _ lifecycle.ManagedResource = (*Client)(nil)
 
 func TestConfigDefaults(t *testing.T) {
 	cfg := Config{}
@@ -754,4 +758,48 @@ func TestBuildFailoverOptions_RejectsMixedSentinelAddressForms(t *testing.T) {
 	_, err := buildFailoverOptions(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot mix URL and host:port")
+}
+
+// ---------------------------------------------------------------------------
+// ManagedResource contract (PR-8 OIDC-MR-COMPLETENESS, Group C)
+// ---------------------------------------------------------------------------
+
+func TestClient_CheckersReturnsRedisReady(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+
+	checkers := client.Checkers()
+	require.Len(t, checkers, 1, "Checkers must return exactly one entry")
+	_, ok := checkers["redis_ready"]
+	assert.True(t, ok, "Checkers must contain key redis_ready")
+}
+
+func TestClient_WorkerReturnsNil(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+
+	assert.Nil(t, client.Worker(), "Worker must return nil — redis client has no background goroutine")
+}
+
+func TestClient_CheckerInvokesHealth(t *testing.T) {
+	t.Run("success path — probe returns nil when Health succeeds", func(t *testing.T) {
+		mock := newMockCmdable()
+		client := newClientFromCmdable(mock, Config{})
+
+		checker := client.Checkers()["redis_ready"]
+		require.NotNil(t, checker)
+		assert.NoError(t, checker(context.Background()))
+	})
+
+	t.Run("failure path — probe surfaces Health error", func(t *testing.T) {
+		mock := newMockCmdable()
+		mock.pingErr = errMock
+		client := newClientFromCmdable(mock, Config{})
+
+		checker := client.Checkers()["redis_ready"]
+		require.NotNil(t, checker)
+		err := checker(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
+	})
 }

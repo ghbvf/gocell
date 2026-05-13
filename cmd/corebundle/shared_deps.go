@@ -19,7 +19,7 @@ import (
 )
 
 // SharedDeps holds cross-cutting dependencies required by every Cell module.
-// Cell-specific dependencies (KeyProvider, PGResource, cursor codecs, HMAC key)
+// Cell-specific dependencies (KeyProvider, PoolResource, cursor codecs, HMAC key)
 // are managed by the corresponding *_module.go file.
 //
 // SharedDeps is passed directly to BuildApp and each CellModule.Provide,
