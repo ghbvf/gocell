@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -92,6 +93,15 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 				slog.String("path", r.URL.Path),
 				slog.String("remote_addr", r.RemoteAddr),
 			)
+		}
+		// KindUnavailable signals a transient infrastructure outage (e.g. JWT key
+		// provider sealed). Surface as 503 with a dedicated code so operators can
+		// route auth-infra outages separately from invalid-credential 401s.
+		var authErr *errcode.Error
+		if errors.As(err, &authErr) && authErr.Kind == errcode.KindUnavailable {
+			httputil.WriteError(r.Context(), w,
+				errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "authentication service unavailable"))
+			return
 		}
 		httputil.WriteError(r.Context(), w,
 			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token"))

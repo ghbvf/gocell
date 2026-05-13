@@ -358,6 +358,12 @@ type IssueOptions struct {
 	Audience              []string
 	SessionID             string
 	PasswordResetRequired bool
+	// JTI is the JWT ID ("jti" claim). When non-empty it is written into the
+	// token payload. Empty string omits the claim.
+	JTI string
+	// AuthzEpoch is the authorization epoch counter written as the
+	// "authz_epoch" claim. Zero is a valid value and is always written.
+	AuthzEpoch int64
 }
 
 // Issue creates a signed JWT token for the given subject and options.
@@ -409,6 +415,10 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	if opts.PasswordResetRequired {
 		claims["password_reset_required"] = true
 	}
+	if opts.JTI != "" {
+		claims["jti"] = opts.JTI
+	}
+	claims["authz_epoch"] = opts.AuthzEpoch
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = i.keys.SigningKeyID()
@@ -443,6 +453,10 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	if v, ok := mc["password_reset_required"].(bool); ok && v {
 		c.PasswordResetRequired = true
 	}
+	if jti, ok := mc["jti"].(string); ok {
+		c.JTI = jti
+	}
+	c.AuthzEpoch = numericFromAny(mc["authz_epoch"])
 	c.Extra = collectExtraClaims(mc)
 
 	return c
@@ -485,18 +499,37 @@ func parseUnixTime(v any) time.Time {
 	return time.Unix(int64(f), 0)
 }
 
-var standardClaims = map[string]bool{
-	"sub": true, "iss": true, "aud": true,
-	"exp": true, "iat": true, "nbf": true, "roles": true,
-	tokenUseClaim:             true,
-	"sid":                     true,
-	"password_reset_required": true,
+// numericFromAny converts a JWT numeric value (float64, int64, or
+// encoding/json.Number) to int64. Returns 0 when v is nil or an unrecognized
+// type. JWT libraries typically unmarshal JSON numbers as float64, but
+// encoding/json.Number and int64 are also acceptable forms.
+func numericFromAny(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+var standardClaims = map[string]struct{}{
+	"sub": {}, "iss": {}, "aud": {},
+	"exp": {}, "iat": {}, "nbf": {}, "roles": {},
+	tokenUseClaim:             {},
+	"sid":                     {},
+	"password_reset_required": {},
+	"jti":                     {},
+	"authz_epoch":             {},
 }
 
 func collectExtraClaims(mc jwt.MapClaims) map[string]any {
 	extra := make(map[string]any)
 	for k, v := range mc {
-		if !standardClaims[k] {
+		if _, isStandard := standardClaims[k]; !isStandard {
 			extra[k] = v
 		}
 	}

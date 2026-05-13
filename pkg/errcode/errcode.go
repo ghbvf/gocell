@@ -127,10 +127,17 @@ const (
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
 	ErrAuthRefreshUnavailable   Code = "ERR_AUTH_REFRESH_UNAVAILABLE"
-	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
-	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
-	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
-	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
+	// ErrAuthServiceUnavailable signals that the authentication service is
+	// temporarily unavailable — e.g. the JWT key provider is sealed, the
+	// idempotency store is unreachable, or a dependency required to verify
+	// credentials cannot be reached. Maps to HTTP 503 Service Unavailable.
+	// Distinct from ErrAuthUnauthorized (401) so operators can route transient
+	// infrastructure outages separately from invalid-credential rejections.
+	ErrAuthServiceUnavailable Code = "ERR_AUTH_SERVICE_UNAVAILABLE"
+	ErrAuthInvalidToken       Code = "ERR_AUTH_INVALID_TOKEN"
+	ErrAuthRBACInvalidInput   Code = "ERR_AUTH_RBAC_INVALID_INPUT"
+	ErrAuthKeyMissing         Code = "ERR_AUTH_KEY_MISSING"
+	ErrAuthSelfDelete         Code = "ERR_AUTH_SELF_DELETE"
 	// ErrAuthRoleFetchFailed signals that role-name resolution at the time of
 	// session-token issuance failed due to an infrastructure fault (RoleRepository
 	// unavailable, query error, etc.). Session minting is fail-closed: callers
@@ -321,6 +328,15 @@ const (
 	// side-channels. CategoryAuth — OAuth2 RFC 6749 §10.4 attack signal when
 	// reuse detected; handler maps to HTTP 401 regardless of internal reason.
 	ErrRefreshTokenRejected Code = "ERR_REFRESH_TOKEN_REJECTED"
+
+	// ErrRefreshTokenReused is a distinct sentinel emitted when a refresh token
+	// that has already been consumed (rotated_at IS NOT NULL) is re-presented
+	// beyond the grace window. It is separate from ErrRefreshTokenRejected so
+	// the sessionrefresh service (Batch 3) can trigger cascade revoke and epoch
+	// bump specifically on confirmed reuse attacks, while other reject causes
+	// (malformed, expired, revoked) remain plain HTTP 401 with no side-effects.
+	// CategoryAuth — maps to HTTP 401; does NOT wrap ErrRefreshTokenRejected.
+	ErrRefreshTokenReused Code = "ERR_REFRESH_TOKEN_REUSED"
 
 	// KeyProvider error codes.
 	// ErrKeyProviderKeyNotFound signals that the requested key ID is not
