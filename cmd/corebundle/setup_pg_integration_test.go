@@ -321,9 +321,14 @@ func TestSetupEndpoints_FirstRunFlow_PG_OutboxFailureRollsBack(t *testing.T) {
 // sessionPGHarness extends setupPGHarness with PG session + refresh stores
 // (S4a wiring). All four repositories are PG-backed; the harness provisions
 // a bootstrap admin so login/refresh/logout paths can be exercised.
+//
+// internalBase and ring are populated by newSessionPGHarnessWithWriter so that
+// tests making /internal/v1/* calls can generate valid service tokens.
 type sessionPGHarness struct {
-	pool *adapterpg.Pool
-	base string
+	pool         *adapterpg.Pool
+	base         string
+	internalBase string
+	ring         *auth.HMACKeyRing
 }
 
 // newSessionPGHarness boots a full PG-backed assembly: user/role/session/refresh
@@ -376,6 +381,18 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+
+	// Internal listener with its own ring so tests can generate service tokens.
+	internalLn := newCorebundleLocalListener(t)
+	internalRing, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	internalNonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	require.NoError(t, err)
+	internalGuardForHarness := &internalGuard{
+		ring:       internalRing,
+		nonceStore: internalNonceStore,
+		mw:         func(h http.Handler) http.Handler { return h },
+	}
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
@@ -451,7 +468,9 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
 			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(ln)),
-		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
+			buildInternalAuthChain(internalGuardForHarness),
+			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
@@ -496,7 +515,12 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "sessionPGHarness: admin provisioning must succeed")
 
-	return &sessionPGHarness{pool: pool, base: base}
+	return &sessionPGHarness{
+		pool:         pool,
+		base:         base,
+		internalBase: "http://" + internalLn.Addr().String(),
+		ring:         internalRing,
+	}
 }
 
 // sessionPGLogin calls POST /api/v1/access/sessions/login and returns the full
@@ -801,6 +825,387 @@ func TestSessionRefresh_TwoHops_PG(t *testing.T) {
 		`SELECT count(*) FROM sessions WHERE id = $1 AND revoked_at IS NULL`, sessionID).Scan(&sessionRowCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, sessionRowCount, "exactly 1 active session row after two refresh hops")
+}
+
+// sessionPGLockUser calls POST /api/v1/access/users/{userID}/lock with the
+// given admin access token and returns the HTTP status code.
+func sessionPGLockUser(t *testing.T, base, adminAccessToken, userID string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/access/users/"+userID+"/lock", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+adminAccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := setupHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// sessionPGQueryUserIDByUsername queries the users table for the UUID of the
+// given username. Used by S4b tests to obtain the userID for lock/unlock calls.
+func sessionPGQueryUserIDByUsername(t *testing.T, h *sessionPGHarness, username string) string {
+	t.Helper()
+	var userID string
+	err := h.pool.DB().QueryRow(context.Background(),
+		`SELECT id FROM users WHERE username = $1`, username).Scan(&userID)
+	require.NoError(t, err, "user row must exist for username=%s", username)
+	return userID
+}
+
+// afterFailOutboxWriter is an outbox.Writer that succeeds on the first N writes
+// and injects a failure on all subsequent writes. It also records all entries.
+type afterFailOutboxWriter struct {
+	mu        sync.Mutex
+	succeedN  int
+	failErr   error
+	callCount int
+	calls     []outbox.Entry
+}
+
+func (w *afterFailOutboxWriter) Write(_ context.Context, entry outbox.Entry) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.calls = append(w.calls, entry)
+	w.callCount++
+	if w.callCount <= w.succeedN {
+		return nil
+	}
+	return w.failErr
+}
+
+func (w *afterFailOutboxWriter) CallCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.callCount
+}
+
+// TestS4b_CredentialEvent_InvalidatesAccessJWT verifies the full S4b epoch
+// funnel path:
+//
+//  1. Login to obtain an access JWT at epoch=0.
+//  2. Call Lock on the user — credentialinvalidate funnel atomically bumps
+//     authz_epoch to 1, revokes sessions, and revokes refresh tokens.
+//  3. Assert PG: users.authz_epoch = 1.
+//  4. Assert PG: sessions.revoked_at IS NOT NULL for the subject.
+//  5. Replay the epoch=0 access JWT against any JWT-guarded endpoint → 401
+//     ERR_AUTH_INVALID_TOKEN (epoch mismatch detected in enforceSessionState).
+//  6. Close the PG pool to simulate a DB outage; replay same JWT → the session
+//     lookup fails with KindUnavailable, which the auth middleware converts to
+//     503 ERR_AUTH_SERVICE_UNAVAILABLE.
+func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
+	ctx := context.Background()
+	h := newSessionPGHarness(t)
+
+	// 1. Login — access JWT is issued at authz_epoch=0 (user just created).
+	accessTok, _, _ := sessionPGLogin(t, h.base, sessionPGAdminUsername, sessionPGAdminPassword)
+
+	// Obtain the admin's user ID for the lock call.
+	userID := sessionPGQueryUserIDByUsername(t, h, sessionPGAdminUsername)
+
+	// 2. Lock the user via POST /api/v1/access/users/{id}/lock (admin policy).
+	// Use the admin's own access token — admin can lock any user.
+	lockStatus := sessionPGLockUser(t, h.base, accessTok, userID)
+	assert.Equal(t, http.StatusOK, lockStatus,
+		"Lock must return 200; token issued before lock so epoch check passes")
+
+	// 3. PG assertion: authz_epoch must be exactly 1 after Lock.
+	var epoch int64
+	err := h.pool.DB().QueryRow(ctx,
+		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epoch)
+	require.NoError(t, err, "users row must exist")
+	assert.Equal(t, int64(1), epoch,
+		"authz_epoch must be 1 after Lock (credentialinvalidate funnel bumped exactly once)")
+
+	// 4. PG assertion: all sessions for the subject must be revoked.
+	var activeSessionCount int
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM sessions WHERE subject_id = $1 AND revoked_at IS NULL`, userID).
+		Scan(&activeSessionCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, activeSessionCount,
+		"all sessions must be revoked after Lock; active session count must be 0")
+
+	// 5. Replay the epoch=0 access JWT → 401 (epoch mismatch in enforceSessionState).
+	// Use GET /api/v1/access/users/{id} as the target — any JWT-guarded endpoint works.
+	replayReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+userID, nil)
+	replayReq.Header.Set("Authorization", "Bearer "+accessTok)
+	replayResp, err := setupHTTPClient.Do(replayReq)
+	require.NoError(t, err)
+	replayBody, _ := io.ReadAll(replayResp.Body)
+	replayResp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, replayResp.StatusCode,
+		"epoch=0 JWT replayed after epoch bump must be rejected with 401; body=%s", replayBody)
+	var replayEnvelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(replayBody, &replayEnvelope))
+	assert.Equal(t, "ERR_AUTH_INVALID_TOKEN", replayEnvelope.Error.Code,
+		"epoch mismatch must surface as ERR_AUTH_INVALID_TOKEN")
+
+	// 6. Close the PG pool (simulates DB outage) — session/user lookup returns
+	// KindUnavailable; auth middleware converts to 503 ERR_AUTH_SERVICE_UNAVAILABLE.
+	require.NoError(t, h.pool.Close(ctx), "pool.Close must not error")
+
+	dbDownReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+userID, nil)
+	dbDownReq.Header.Set("Authorization", "Bearer "+accessTok)
+	dbDownResp, err := setupHTTPClient.Do(dbDownReq)
+	require.NoError(t, err)
+	dbDownBody, _ := io.ReadAll(dbDownResp.Body)
+	dbDownResp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, dbDownResp.StatusCode,
+		"after DB outage session lookup must surface as 503; body=%s", dbDownBody)
+	var dbDownEnvelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(dbDownBody, &dbDownEnvelope))
+	assert.Equal(t, "ERR_AUTH_SERVICE_UNAVAILABLE", dbDownEnvelope.Error.Code,
+		"DB outage during session validate must surface as ERR_AUTH_SERVICE_UNAVAILABLE; body=%s", dbDownBody)
+	assert.Contains(t, dbDownEnvelope.Error.Message, "authentication service unavailable",
+		"error message wire text must match errMsgServiceUnavailable; body=%s", dbDownBody)
+}
+
+// TestS4b_RefreshReuse_CascadesEpochAndSession verifies that replaying a
+// consumed refresh token (reuse attack) atomically bumps the epoch and revokes
+// all sessions via the credentialinvalidate funnel:
+//
+//  1. Login → obtain access token A1, refresh token R1, session S1.
+//  2. Refresh R1 → obtain A2, R2 (R1 is now consumed / rotated).
+//  3. Replay R1 → 401 ERR_AUTH_REFRESH_FAILED (token already consumed).
+//  4. PG assertion: authz_epoch is bumped (reuse-cascade funnel ran).
+//  5. PG assertion: sessions.revoked_at IS NOT NULL for all subject sessions.
+func TestS4b_RefreshReuse_CascadesEpochAndSession(t *testing.T) {
+	ctx := context.Background()
+	h := newSessionPGHarness(t)
+
+	// 1. Login.
+	_, refreshTok1, sessionID := sessionPGLogin(t, h.base, sessionPGAdminUsername, sessionPGAdminPassword)
+	userID := sessionPGQueryUserIDByUsername(t, h, sessionPGAdminUsername)
+
+	// 2. First refresh — consumes R1, issues R2.
+	_, refreshTok2, _ := sessionPGRefresh(t, h.base, refreshTok1)
+	require.NotEmpty(t, refreshTok2, "first refresh must succeed")
+
+	// Snapshot epoch before reuse replay.
+	var epochBefore int64
+	err := h.pool.DB().QueryRow(ctx,
+		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochBefore)
+	require.NoError(t, err)
+
+	// 3. Replay R1 (already consumed) → 401.
+	reusedBody, _ := json.Marshal(map[string]string{"refreshToken": refreshTok1})
+	resp, err := setupHTTPClient.Post(h.base+"/api/v1/access/sessions/refresh",
+		"application/json", bytes.NewReader(reusedBody))
+	require.NoError(t, err)
+	reuseRespBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"replayed refresh token must be rejected with 401; body=%s", reuseRespBody)
+	var reuseEnvelope struct {
+		Error struct{ Code string `json:"code"` } `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(reuseRespBody, &reuseEnvelope))
+	assert.Equal(t, "ERR_AUTH_REFRESH_FAILED", reuseEnvelope.Error.Code,
+		"refresh reuse must return ERR_AUTH_REFRESH_FAILED")
+
+	// 4. PG assertion: authz_epoch must be bumped by the reuse-cascade funnel.
+	require.Eventually(t, func() bool {
+		var epoch int64
+		qErr := h.pool.DB().QueryRow(ctx,
+			`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epoch)
+		return qErr == nil && epoch > epochBefore
+	}, testtime.EventuallyDefault, testtime.D10ms,
+		"authz_epoch must be bumped after refresh reuse cascade (epochBefore=%d)", epochBefore)
+
+	// 5. PG assertion: all sessions for the subject revoked.
+	var activeSessionCount int
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM sessions WHERE subject_id = $1 AND revoked_at IS NULL`,
+		userID).Scan(&activeSessionCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, activeSessionCount,
+		"session %s and all peer sessions must be revoked after refresh reuse cascade", sessionID)
+}
+
+// TestS4b_RbacRevoke_SameTxAtomicity verifies that when the outbox Write fails
+// inside the rbacassign.Revoke transaction, the entire transaction rolls back:
+// the role assignment is NOT removed and the authz_epoch is NOT bumped.
+//
+//  1. Set up harness with an afterFailOutboxWriter that succeeds for admin
+//     provisioning writes and fails on the role.revoked outbox write.
+//  2. Login as admin; obtain user ID.
+//  3. Assign role "editor" to admin user.
+//  4. Attempt to revoke the role → outbox write fails → tx rollback → 500.
+//  5. PG assertion: role_assignments row for (userID, "editor") still present.
+//  6. PG assertion: authz_epoch unchanged (funnel did not commit).
+func TestS4b_RbacRevoke_SameTxAtomicity(t *testing.T) {
+	ctx := context.Background()
+
+	// Admin provisioning emits event.user.created.v1 + event.role.assigned.v1 = 2 writes.
+	// Role assign emits event.role.assigned.v1 = 1 write (write #3 — succeeds).
+	// Role revoke emits event.role.revoked.v1 = 1 write (write #4 — injected failure).
+	const adminProvisionWrites = 2
+	const roleAssignWrites = 1
+	const succeedN = adminProvisionWrites + roleAssignWrites
+
+	failWriter := &afterFailOutboxWriter{
+		succeedN: succeedN,
+		failErr:  errors.New("injected role.revoked outbox failure"),
+	}
+	h := newSessionPGHarnessWithWriter(t, failWriter)
+
+	// 2. Login as admin.
+	accessTok, _, _ := sessionPGLogin(t, h.base, sessionPGAdminUsername, sessionPGAdminPassword)
+	userID := sessionPGQueryUserIDByUsername(t, h, sessionPGAdminUsername)
+
+	// Snapshot epoch before operations.
+	var epochBefore int64
+	err := h.pool.DB().QueryRow(ctx,
+		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochBefore)
+	require.NoError(t, err)
+
+	// 3. Assign "editor" role via internal listener.
+	assignBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	assignToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
+	assignReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/assign",
+		bytes.NewReader(assignBody))
+	assignReq.Header.Set("Authorization", "ServiceToken "+assignToken)
+	assignReq.Header.Set("Content-Type", "application/json")
+	assignResp, err := setupHTTPClient.Do(assignReq)
+	require.NoError(t, err)
+	assignRespBody, _ := io.ReadAll(assignResp.Body)
+	assignResp.Body.Close()
+	require.Equal(t, http.StatusOK, assignResp.StatusCode,
+		"role assign must succeed (outbox write #3 is within succeedN=%d); body=%s",
+		succeedN, assignRespBody)
+
+	// Confirm role assignment is in PG before revoke.
+	var roleCount int
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM role_assignments WHERE user_id = $1 AND role_id = 'editor'`,
+		userID).Scan(&roleCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, roleCount, "editor role assignment must be present after assign")
+
+	// 4. Revoke "editor" role → outbox write fails → tx rollback → 500.
+	revokeBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	revokeToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
+	revokeReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
+		bytes.NewReader(revokeBody))
+	revokeReq.Header.Set("Authorization", "ServiceToken "+revokeToken)
+	revokeReq.Header.Set("Content-Type", "application/json")
+	revokeResp, err := setupHTTPClient.Do(revokeReq)
+	require.NoError(t, err)
+	revokeRespBody, _ := io.ReadAll(revokeResp.Body)
+	revokeResp.Body.Close()
+	assert.GreaterOrEqual(t, revokeResp.StatusCode, 500,
+		"role revoke with injected outbox failure must return 5xx; body=%s", revokeRespBody)
+
+	// 5. PG assertion: role assignment must still be present (tx rolled back).
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM role_assignments WHERE user_id = $1 AND role_id = 'editor'`,
+		userID).Scan(&roleCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, roleCount,
+		"editor role assignment must still be present after tx rollback (outbox failure)")
+
+	// 6. PG assertion: authz_epoch must not have advanced (funnel did not commit).
+	var epochAfter int64
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochAfter)
+	require.NoError(t, err)
+	assert.Equal(t, epochBefore, epochAfter,
+		"authz_epoch must be unchanged after aborted revoke tx (epochBefore=%d, epochAfter=%d)",
+		epochBefore, epochAfter)
+
+	// Confirm the injected failure was triggered at the expected write.
+	assert.Greater(t, failWriter.CallCount(), succeedN,
+		"afterFailOutboxWriter must have been triggered past succeedN=%d writes", succeedN)
+
+	_ = accessTok // used only for harness warmup; lock/revoke flow tested via internal listener
+}
+
+// TestS4b_RoleChangeConsumer_NoRedundantRevoke verifies that the
+// sessionlogout.Consumer does NOT call RevokeForSubject when it receives a
+// role.revoked event — the credential invalidation is already handled by
+// rbacassign.Revoke via the credentialinvalidate funnel in the same tx.
+//
+// Strategy: after a successful role revoke (funnel runs once → epoch bumped
+// once), wait for the in-memory eventbus to deliver the role.revoked outbox
+// event to the sessionlogout consumer. Then assert authz_epoch is still exactly
+// 1 — not 2 — proving the consumer did not call the funnel a second time.
+//
+// This is the anti-double-bump guard for S4b plan §3.2.
+func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
+	ctx := context.Background()
+	h := newSessionPGHarness(t)
+
+	accessTok, _, _ := sessionPGLogin(t, h.base, sessionPGAdminUsername, sessionPGAdminPassword)
+	userID := sessionPGQueryUserIDByUsername(t, h, sessionPGAdminUsername)
+
+	// Assign "editor" role so revoke has something to act on.
+	assignBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	assignToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
+	assignReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/assign",
+		bytes.NewReader(assignBody))
+	assignReq.Header.Set("Authorization", "ServiceToken "+assignToken)
+	assignReq.Header.Set("Content-Type", "application/json")
+	assignResp, err := setupHTTPClient.Do(assignReq)
+	require.NoError(t, err)
+	assignResp.Body.Close()
+	require.Equal(t, http.StatusOK, assignResp.StatusCode, "role assign must succeed")
+
+	// Snapshot epoch — must be 0 after assign (assign is additive, no bump).
+	var epochBeforeRevoke int64
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochBeforeRevoke)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), epochBeforeRevoke,
+		"authz_epoch must still be 0 after role assign (additive, no credential invalidation)")
+
+	// Revoke the role — funnel runs once: epoch bumped to 1.
+	revokeBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
+	revokeToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
+	revokeReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
+		bytes.NewReader(revokeBody))
+	revokeReq.Header.Set("Authorization", "ServiceToken "+revokeToken)
+	revokeReq.Header.Set("Content-Type", "application/json")
+	revokeResp, err := setupHTTPClient.Do(revokeReq)
+	require.NoError(t, err)
+	revokeRespBody, _ := io.ReadAll(revokeResp.Body)
+	revokeResp.Body.Close()
+	require.Equal(t, http.StatusOK, revokeResp.StatusCode,
+		"role revoke must succeed; body=%s", revokeRespBody)
+
+	// The funnel ran exactly once (inside rbacassign tx). Wait briefly for the
+	// in-memory eventbus to deliver the role.revoked event to the sessionlogout
+	// consumer. After consumer processing, epoch must be exactly 1 — not 2.
+	// The consumer only logs + Acks; it does NOT call the funnel again.
+	require.Eventually(t, func() bool {
+		var epoch int64
+		qErr := h.pool.DB().QueryRow(ctx,
+			`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epoch)
+		return qErr == nil && epoch >= 1
+	}, testtime.EventuallyDefault, testtime.D10ms,
+		"authz_epoch must be ≥ 1 after role revoke (funnel ran in rbacassign tx)")
+
+	// Small stabilization wait — if the consumer were to call the funnel a second
+	// time, epoch would become 2. We assert it stays exactly 1.
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep negative-assertion stabilization (no event to await — proving consumer does not double-bump epoch)
+
+	var epochFinal int64
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochFinal)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), epochFinal,
+		"authz_epoch must be exactly 1 after role revoke — consumer must NOT call funnel again "+
+			"(anti-double-bump guard, S4b plan §3.2); got %d", epochFinal)
+
+	_ = accessTok // used only to confirm login works before revoke
 }
 
 // TestSessionLogout_RevokesPGRow verifies that a Logout call sets revoked_at on

@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
@@ -308,13 +309,26 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	ctx := context.Background()
 
 	// Shared repos (simulates cell's single repo wiring).
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
+	refreshStore := testutil.RealRefreshStore(t)
 
 	// Seed "member" role.
 	roleRepo.SeedRole(&domain.Role{ID: "member", Name: "member"})
 	// Seed "admin" role so bob doesn't become the last admin.
 	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+
+	// Seed bob so userRepo.BumpAuthzEpoch (called via invalidator funnel)
+	// can find the row.
+	require.NoError(t, userRepo.Create(ctx, &domain.User{
+		ID:        "usr-bob",
+		Username:  "bob",
+		Status:    domain.StatusActive,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}))
 
 	// Assign bob and carol to "member" so last-holder guard doesn't block.
 	_, _ = roleRepo.AssignToUser(ctx, "usr-bob", "member")
@@ -330,18 +344,23 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	}
 	require.NoError(t, sessionRepo.Create(ctx, bobSession))
 
+	// S4b: rbacassign.Revoke now drives credential invalidation through the
+	// credentialinvalidate funnel (3-op same-tx: bump epoch + revoke sessions
+	// + revoke refresh chain). The sessionlogout consumer is audit/ack-only.
+	invalidator := credentialinvalidate.MustNew(userRepo, sessionRepo, refreshStore)
+
 	// Wire rbacassign with outbox stubs (durable mode).
 	stubWriter := &rbacStubOutboxWriter{}
 	stubTx := &rbacStubTxRunner{}
 	assignSvc, err := rbacassign.NewService(
-		roleRepo, sessionRepo, slog.Default(),
+		roleRepo, invalidator, slog.Default(),
 		rbacassign.WithEmitter(testoutbox.MustEmitter(t, stubWriter)),
 		rbacassign.WithTxManager(persistence.WrapForCell(stubTx)),
 	)
 	require.NoError(t, err)
 
-	// Wire the sessionlogout consumer.
-	consumer := sessionlogout.NewConsumer(sessionRepo, slog.Default())
+	// Wire the sessionlogout consumer (audit/ack-only after S4b funnel refactor).
+	consumer := sessionlogout.NewConsumer(slog.Default())
 
 	// Revoke bob's member role — should produce one outbox entry.
 	require.NoError(t, assignSvc.Revoke(ctx, "usr-bob", "member"))
