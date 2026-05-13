@@ -31,11 +31,11 @@
 3. **archtest 平铺兜底**，按规则真值类型选工具：
    - 路径级 import ban → `.golangci.yml` `depguard`
    - 跨包归属 / 传递闭包 → `kernel/depgraph`，复用 `tools/archtest/internal/typeseval.SharedResolver`
-   - 需要类型信息（receiver type / interface 实现 / exported API 类型 / 表达式求值结果，含 const 拼接、跨包 Ident、untyped const）→ 在 `tools/archtest/internal/typeseval` 加/复用 helper（基于 `types.Info.Types[expr].Value`）
+   - 需要类型信息（receiver type / interface 实现 / exported API 类型 / 表达式求值结果，含 const 拼接、跨包 Ident、untyped const）→ 在 `tools/archtest/internal/typeseval` 加/复用 helper（`EvaluateConstString` 已覆盖 BasicLit/Ident/SelectorExpr/BinaryExpr；扩节点类型时在同包加 helper）
    - 纯 AST 模式 → `tools/archtest/internal/scanner`
    - 元数据 / YAML 派生 → `scanner.EachContentFile` + 解析
 
-**工具选定后强制盲区自检**：作者在 archtest 文件头列出所选工具未覆盖的表达式形态，并对每项添加反向自检测试，断言其在 production AST 不出现。盲区清单 + 反向自检测试是 Hard/Medium 评级的前置举证材料。
+**工具选定后强制盲区自检**：作者在 archtest 测试函数 godoc 列出所选工具 godoc 声明范围外的 AST 形态（与 package-doc `// INVARIANT:` 分离），并对每项添加反向自检测试，断言其在 production AST 不出现。盲区清单 + 反向自检测试是 Hard/Medium 评级的前置举证材料。
 
 **立项硬门槛**：≥ Medium。Soft 形态严禁立项。
 
@@ -52,7 +52,7 @@
 
 - **typed function call as Hard funnel for unbounded operations** — when an operation accepts `any` at the Go type level (e.g., `panic(any)`), you can still reach Hard by routing every call site through a single typed-marker function. Range: `panic(panicregister.Approved(reason, value))` is the only approved panic shape in production GoCell code; archtest `PANIC-REGISTERED-01` enforces (a) panic arg = `*ast.CallExpr` with Fun resolving via `*types.Info` to `pkg/panicregister.Approved`, (b) reason = `*ast.BasicLit` STRING. Hard property comes from "form uniqueness": picking any other shape (bare panic, different callee name, non-literal reason) fails archtest in CI — there is no "looks like Approved but isn't" gray zone. Honest caveat: Go's `panic` keyword accepts `any` so `panic(rawValue)` compiles; the enforcement is archtest-bound, not compile-time. The charter §1 definition of "typed function call" Hard does not require compile-time blocking, only form uniqueness + archtest fail-on-deviation — which is the highest grade reachable in Go for this rule shape. (PR #467, charter §4 Wave 2 panic 单源 typed marker, ADR `docs/architecture/202604270030-architectural-panic-whitelist.md`.)
 
-- **string-typed concept funnel** — 字符串承载独立语义（rule code / error code / event topic 等）时：(1) `type FooCode string` 把语义类型化，API 签名收口；(2) 值定义集中在 `*codes.go`，archtest 守声明位置；(3) 构造/比较点用 `*types.Info` 检查实参 resolve 到声明集合。形态锁 vs 值求值依 §3 工具原则选。
+- **string-typed concept funnel** — 字符串承载独立语义（rule code / error code / event topic 等）时：(1) `type FooCode string` 把语义类型化，API 签名收口；(2) 值定义集中在 `*codes.go`，archtest 守声明位置；(3) 构造/比较点用 `*types.Info` 检查实参 resolve 到声明集合。形态锁 vs 值求值依 §3 工具原则选——已 ship 形态锁子例见上条 `panic Approved`（PR #467）；rule code / event topic 实例按本范本设计。
 
 ## archtest 文件命名
 
