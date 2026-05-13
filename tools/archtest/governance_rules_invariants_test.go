@@ -459,6 +459,67 @@ func testINV2ProductionSource(t *testing.T) {
 		"every rule code must come from a RuleCode-typed const in rulecodes.go")
 }
 
+// TestGovernanceRuleCodeConstSingleSource_FilenameGuard verifies that the
+// filename guard in collectRuleCodeConsts genuinely excludes a RuleCode const
+// declared outside rulecodes.go.
+//
+// The testdata package testdata/governance_rulecode_single_source_fixtures/
+// filename_bypass_red contains two files:
+//   - rulecodes.go — declares codeGood RuleCode = "FMT-99" (must be included)
+//   - fake_rules.go — declares codeBad  RuleCode = "FMT-98" (must be excluded)
+//
+// This test loads the package with full types and directly applies the
+// filename guard logic (without the governancePkgPath filter, which would
+// exclude all consts from a testdata package). The guard must return exactly
+// one const (codeGood) and exclude codeBad.
+func TestGovernanceRuleCodeConstSingleSource_FilenameGuard(t *testing.T) {
+	root := findModuleRoot(t)
+	const fixturePattern = "./tools/archtest/testdata/governance_rulecode_single_source_fixtures/filename_bypass_red"
+
+	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, fixturePattern)
+	require.NoError(t, err, "LoadPackages failed for filename_bypass_red fixture")
+	require.Empty(t, errs, "package load errors: %v", errs)
+	require.Len(t, pkgs, 1, "expected exactly one package loaded")
+
+	p := pkgs[0]
+	scope := p.Types.Scope()
+
+	// Apply the same filter logic as collectRuleCodeConsts but without the
+	// governancePkgPath check (the testdata package has a different import
+	// path). This isolates the filename guard specifically.
+	var included []string
+	var excluded []string
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		c, ok := obj.(*types.Const)
+		if !ok {
+			continue
+		}
+		named, ok := c.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		if named.Obj().Name() != "RuleCode" {
+			continue
+		}
+		// Apply filename guard — the key invariant under test.
+		pos := p.Fset.Position(c.Pos())
+		if filepath.Base(pos.Filename) == ruleCodesFile {
+			included = append(included, name)
+		} else {
+			excluded = append(excluded, name)
+		}
+	}
+
+	sort.Strings(included)
+	sort.Strings(excluded)
+
+	assert.Equal(t, []string{"codeGood"}, included,
+		"filename guard must include only the const declared in rulecodes.go")
+	assert.Equal(t, []string{"codeBad"}, excluded,
+		"filename guard must exclude the const declared in fake_rules.go (bypass attempt)")
+}
+
 // ruleCodeArgShapeIsValid returns true when expr is an *ast.Ident. All other
 // shapes (BasicLit, BinaryExpr, CallExpr, SelectorExpr, etc.) are invalid.
 // The pkgPath and typeName arguments are used for future extensibility but
@@ -513,6 +574,14 @@ func collectRuleCodeConsts(pkg *governancePackage) map[*types.Const]struct{} {
 			continue
 		}
 		if named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != governancePkgPath {
+			continue
+		}
+		// Filter by declaration filename: only consts declared in rulecodes.go
+		// are part of the single-source funnel. A const declared in any other
+		// file (e.g. rules_misc_strict.go) is excluded even if it has the
+		// correct RuleCode type and package path.
+		pos := pkg.rawPkg.Fset.Position(c.Pos())
+		if filepath.Base(pos.Filename) != ruleCodesFile {
 			continue
 		}
 		out[c] = struct{}{}
