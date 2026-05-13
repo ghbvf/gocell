@@ -50,14 +50,14 @@ func validProject() *metadata.ProjectMeta {
 				Dir:              "auditcore",
 				File:             "cells/auditcore/cell.yaml",
 			},
-			"shared-crypto": {
-				ID:               "shared-crypto",
+			"sharedcrypto": {
+				ID:               "sharedcrypto",
 				Type:             "support",
 				ConsistencyLevel: "L0",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.shared-crypto.startup"}},
-				Dir:              "shared-crypto",
-				File:             "cells/shared-crypto/cell.yaml",
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.sharedcrypto.startup"}},
+				Dir:              "sharedcrypto",
+				File:             "cells/sharedcrypto/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -179,7 +179,7 @@ func validProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:                  "corebundle",
-				Cells:               []string{"accesscore", "auditcore", "shared-crypto"},
+				Cells:               []string{"accesscore", "auditcore", "sharedcrypto"},
 				MaxConsistencyLevel: "L2", // derived: max of L2, L2, L0
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Build: metadata.BuildMeta{
@@ -538,7 +538,7 @@ func TestREF09(t *testing.T) {
 			name: "valid l0 dependency",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
-					{Cell: "shared-crypto", Reason: "hashing"},
+					{Cell: "sharedcrypto", Reason: "hashing"},
 				}
 			},
 			wantCount: 0,
@@ -841,7 +841,7 @@ func TestTOPO05(t *testing.T) {
 					ConsistencyLevel: "L0",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "shared-crypto", // L0 cell
+						Server:  "sharedcrypto", // L0 cell
 						Clients: []string{"accesscore"},
 					},
 				}
@@ -859,7 +859,7 @@ func TestTOPO05(t *testing.T) {
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
 						Server:  "accesscore",
-						Clients: []string{"shared-crypto"}, // L0 cell
+						Clients: []string{"sharedcrypto"}, // L0 cell
 					},
 				}
 			},
@@ -1155,7 +1155,7 @@ func TestVERIFY03(t *testing.T) {
 			name: "l0 dependency targets L0 cell",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
-					{Cell: "shared-crypto", Reason: "hashing"},
+					{Cell: "sharedcrypto", Reason: "hashing"},
 				}
 			},
 			wantCount: 0,
@@ -1990,7 +1990,7 @@ func TestFMT06(t *testing.T) {
 		{
 			name: "L0 cell without schema.primary is ok",
 			setup: func(pm *metadata.ProjectMeta) {
-				// shared-crypto is L0 with no schema.primary — should be fine
+				// sharedcrypto is L0 with no schema.primary — should be fine
 			},
 			wantCount: 0,
 		},
@@ -4712,10 +4712,10 @@ func TestOUTGUARD01(t *testing.T) {
 		{
 			name: "L0 cell without durabilityMode — no warning",
 			setup: func(pm *metadata.ProjectMeta) {
-				// shared-crypto is L0 — no durability declaration required.
+				// sharedcrypto is L0 — no durability declaration required.
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
-				pm.Cells["shared-crypto"].DurabilityMode = ""
+				pm.Cells["sharedcrypto"].DurabilityMode = ""
 			},
 			wantCount: 0,
 		},
@@ -4723,8 +4723,8 @@ func TestOUTGUARD01(t *testing.T) {
 			name: "mixed — only L2+ without durabilityMode warned",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].DurabilityMode = "durable"
-				pm.Cells["auditcore"].DurabilityMode = ""     // L2, should warn
-				pm.Cells["shared-crypto"].DurabilityMode = "" // L0, should not warn
+				pm.Cells["auditcore"].DurabilityMode = ""    // L2, should warn
+				pm.Cells["sharedcrypto"].DurabilityMode = "" // L0, should not warn
 			},
 			wantCount: 1,
 		},

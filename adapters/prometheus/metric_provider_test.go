@@ -2,7 +2,10 @@ package prometheus_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -11,6 +14,11 @@ import (
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 )
+
+// raceConcurrency mirrors the constant in hook_observer_test (50). Kept as
+// a separate const here because the two test files live in different
+// packages (prometheus_test vs prometheus).
+const raceConcurrency = 50
 
 func newTestProvider(t *testing.T) (metrics.Provider, *prom.Registry) {
 	t.Helper()
@@ -541,4 +549,101 @@ func (s singletonCounter) Describe(ch chan<- *prom.Desc) {
 
 func (s singletonCounter) Collect(ch chan<- prom.Metric) {
 	ch <- prom.MustNewConstMetric(prom.NewDesc("singleton", "test helper", nil, nil), prom.CounterValue, s.val)
+}
+
+// TestMetricProvider_ConcurrentCounterVec_RaceDetector verifies that N
+// goroutines concurrently calling CounterVec with the same opts is safe.
+// Exercises registerOrReuse's AlreadyRegisteredError branch under contention:
+// only the first call actually registers a new collector; subsequent calls
+// return the existing one. Both paths must be race-free.
+//
+// Run with `go test -race`. No t.Parallel() — see golden reference
+// adapters/redis/race_stress_integration_test.go.
+func TestMetricProvider_ConcurrentCounterVec_RaceDetector(t *testing.T) {
+	p, reg := newTestProvider(t)
+
+	opts := metrics.CounterOpts{
+		Name:       "race_total",
+		Help:       "race test counter",
+		LabelNames: []string{"k"},
+	}
+
+	var wg sync.WaitGroup
+	var firstErr atomic.Value // error
+	wg.Add(raceConcurrency)
+	for i := 0; i < raceConcurrency; i++ {
+		go func() {
+			defer wg.Done()
+			cv, err := p.CounterVec(opts)
+			if err != nil {
+				firstErr.CompareAndSwap(nil, err)
+				return
+			}
+			cv.With(metrics.Labels{"k": "v"}).Inc()
+		}()
+	}
+	wg.Wait()
+
+	if err := firstErr.Load(); err != nil {
+		t.Fatalf("concurrent CounterVec returned error: %v", err)
+	}
+
+	// The N concurrent .Inc() calls share the same underlying *prom.CounterVec
+	// (registerOrReuse idempotent path), so the sum is exactly N.
+	got := testutil.CollectAndCount(reg, "gocelltest_race_total")
+	if got != 1 {
+		t.Fatalf("expected exactly 1 series after concurrent register, got %d", got)
+	}
+}
+
+// TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector verifies
+// that interleaved CounterVec / Unregister calls do not race on the
+// provider's internal vecs map (the RWMutex contract). Each goroutine
+// registers a uniquely-named CounterVec and then unregisters it, with N
+// goroutines running concurrently. The race detector must observe no data
+// race on the vecs map's read/write boundary.
+//
+// Run with `go test -race`.
+func TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector(t *testing.T) {
+	p, reg := newTestProvider(t)
+
+	var wg sync.WaitGroup
+	var firstErr atomic.Value // error
+	wg.Add(raceConcurrency)
+	for i := 0; i < raceConcurrency; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			name := fmt.Sprintf("unique_total_%d", idx)
+			cv, err := p.CounterVec(metrics.CounterOpts{
+				Name:       name,
+				Help:       "h",
+				LabelNames: []string{"k"},
+			})
+			if err != nil {
+				firstErr.CompareAndSwap(nil, err)
+				return
+			}
+			cv.With(metrics.Labels{"k": "v"}).Inc()
+			if err := p.Unregister(cv); err != nil {
+				firstErr.CompareAndSwap(nil, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if err := firstErr.Load(); err != nil {
+		t.Fatalf("concurrent register/unregister returned error: %v", err)
+	}
+
+	// After all unregisters complete, Gather must succeed without panicking.
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather after concurrent unregister: %v", err)
+	}
+	// All unique_total_* series should be gone.
+	for _, mf := range families {
+		if strings.HasPrefix(mf.GetName(), "gocelltest_unique_total_") {
+			t.Fatalf("unique_total series leaked after unregister: %s", mf.GetName())
+		}
+	}
 }

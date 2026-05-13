@@ -41,12 +41,12 @@ import (
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
 //   - FMT-19: kernel/wrapper/*.go contains forbidden mutable package-level state
 //   - VERIFY-06: active journeys have at least one auto passCriteria checkRef
-//   - FMT-C1: cell.yaml id contains '-' (kebab-case cell id disallowed)
 //   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
 //
-// FMT-A1 (assembly id pattern) is unconditional inside Validate: it
-// mirrors schemas/assembly.schema.json id.pattern and must apply on every
-// validate path so schema-aware tooling and `gocell validate` agree.
+// FMT-A1 (assembly id pattern) and FMT-C1 (cell id pattern) are
+// unconditional inside Validate: they mirror schemas/{assembly,cell}.
+// schema.json properties.id.pattern and must apply on every validate path
+// so schema-aware tooling and `gocell validate` agree.
 //
 // FMT-18 (contractspec.ContractSpec literals in cells/** cross-check) was removed in
 // PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0 ContractSpec literals,
@@ -122,9 +122,9 @@ func (v *Validator) strictRules(ctx context.Context, strict bool) []func() []Val
 		// FMT-18 deleted in PR-V1-CODEGEN-FULL-MIGRATION W4 (replaced by archtest
 		// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 / NO-MANUAL-CONTRACTSPEC-LITERAL-01).
 		func() []ValidationResult { return v.validateFMT19(strict) },
-		func() []ValidationResult { return v.validateFMTC1(strict) },
-		// FMT-A1 is now registered in the default rules() pipeline (it
-		// mirrors a schema constraint and applies on every validate path).
+		// FMT-A1 and FMT-C1 are now registered in the default rules()
+		// pipeline (they mirror schema constraints and apply on every
+		// validate path).
 		func() []ValidationResult { return v.validateDOCNAME01(strict) },
 	}
 }
@@ -215,20 +215,31 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 	return results
 }
 
-// validateFMTC1 checks that no cell.yaml declares a kebab-case id (contains '-').
-// In strict mode this is a SeverityError; in non-strict mode it is silent.
+// validateFMTC1 checks that every cell.yaml id satisfies
+// metadata.CellIDPattern (^[a-z][a-z0-9]+$). It runs unconditionally:
+// the rule mirrors a schema-level constraint (schemas/cell.schema.json
+// properties.id.pattern, kept byte-equal by TestSchemaConstantsMatchSchema
+// Literals) and schema-aware tooling rejects the same values without a
+// strict toggle. Gating this check on --strict would leave default
+// `gocell validate` users on a different contract than the schema, mirroring
+// the single-gatekeeper model declared in docs/architecture/202605061800-
+// adr-assembly-yaml-minimal-derivation.md §"Schema 约束单源".
 //
-// This complements FMT-16: FMT-16 catches kebab filesystem directories, while
-// FMT-C1 catches kebab yaml ids even when the directory is already no-dash
-// (e.g. during a migration where id is fixed last). A clean project passes
-// both; a half-migrated project typically trips one of them.
-func (v *Validator) validateFMTC1(strict bool) []ValidationResult {
-	if !strict {
-		return nil
-	}
+// This is the same pattern as validateFMTA1 (assembly id) — both are
+// registered in the rules() pipeline at validate.go and accept the strict
+// param only for signature symmetry inside the strictRules dispatcher
+// (which no longer registers them).
+//
+// FMT-C1 complements FMT-16: FMT-16 catches kebab filesystem directories,
+// while FMT-C1 catches non-conforming yaml ids (kebab, uppercase, single
+// char, leading digit) even when the directory is already no-dash. A clean
+// project passes both.
+//
+// strict is accepted for signature symmetry but no longer changes behavior.
+func (v *Validator) validateFMTC1(_ bool) []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
-		if !strings.Contains(c.ID, "-") {
+		if metadata.MatchCellID(c.ID) {
 			continue
 		}
 		results = append(results, v.newResult(
@@ -236,8 +247,8 @@ func (v *Validator) validateFMTC1(strict bool) []ValidationResult {
 			cellFile(c),
 			"id",
 			fmt.Sprintf(
-				"cell id %q contains '-'; kebab-case cell ids are disallowed in strict mode (rename to %q)",
-				c.ID, strings.ReplaceAll(c.ID, "-", ""),
+				"cell id %q does not match %s; use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
+				c.ID, metadata.CellIDPattern,
 			),
 		))
 	}
@@ -255,9 +266,11 @@ func (v *Validator) validateFMTC1(strict bool) []ValidationResult {
 // declared in docs/architecture/202605061800-adr-assembly-yaml-minimal-
 // derivation.md §"Schema 约束单源".
 //
-// FMT-C1 / FMT-16 / FMT-17 stay strict-only because cell.schema.json id
-// pattern itself permits kebab (different schema design); those rules
-// remain stylistic strict-mode preferences, not schema mirrors.
+// FMT-16 / FMT-17 stay strict-only because they catch stylistic
+// concerns (kebab-case filesystem directories, allowedFiles drift) that
+// schemas do not directly mirror; FMT-C1 was migrated to the rules()
+// pipeline alongside cell.schema.json properties.id.pattern收紧 (PR-2
+// PR-PROM-HARDEN-3).
 //
 // strict is accepted for signature symmetry with the strictRules block but
 // no longer changes behavior.

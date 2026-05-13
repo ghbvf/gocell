@@ -234,11 +234,11 @@ func TestDEP03_SameAssembly(t *testing.T) {
 				ID:               "app-core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "shared-crypto", Reason: "hashing"},
+					{Cell: "sharedcrypto", Reason: "hashing"},
 				},
 			},
-			"shared-crypto": {
-				ID:               "shared-crypto",
+			"sharedcrypto": {
+				ID:               "sharedcrypto",
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -247,7 +247,7 @@ func TestDEP03_SameAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"main-bundle": {
 				ID:    "main-bundle",
-				Cells: []string{"app-core", "shared-crypto"},
+				Cells: []string{"app-core", "sharedcrypto"},
 			},
 		},
 	}
@@ -265,11 +265,11 @@ func TestDEP03_DifferentAssembly(t *testing.T) {
 				ID:               "app-core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "shared-crypto", Reason: "hashing"},
+					{Cell: "sharedcrypto", Reason: "hashing"},
 				},
 			},
-			"shared-crypto": {
-				ID:               "shared-crypto",
+			"sharedcrypto": {
+				ID:               "sharedcrypto",
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -282,7 +282,7 @@ func TestDEP03_DifferentAssembly(t *testing.T) {
 			},
 			"bundle-b": {
 				ID:    "bundle-b",
-				Cells: []string{"shared-crypto"},
+				Cells: []string{"sharedcrypto"},
 			},
 		},
 	}
@@ -302,11 +302,11 @@ func TestDEP03_NoAssemblies(t *testing.T) {
 				ID:               "app-core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "shared-crypto", Reason: "hashing"},
+					{Cell: "sharedcrypto", Reason: "hashing"},
 				},
 			},
-			"shared-crypto": {
-				ID:               "shared-crypto",
+			"sharedcrypto": {
+				ID:               "sharedcrypto",
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -384,11 +384,11 @@ func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 				ID:               "app-core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "shared-crypto", Reason: "hashing"},
+					{Cell: "sharedcrypto", Reason: "hashing"},
 				},
 			},
-			"shared-crypto": {
-				ID:               "shared-crypto",
+			"sharedcrypto": {
+				ID:               "sharedcrypto",
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -397,7 +397,7 @@ func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"bundle-a": {
 				ID:    "bundle-a",
-				Cells: []string{"shared-crypto"}, // app-core not in any assembly
+				Cells: []string{"sharedcrypto"}, // app-core not in any assembly
 			},
 		},
 	}
