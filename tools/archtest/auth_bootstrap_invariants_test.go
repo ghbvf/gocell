@@ -41,25 +41,37 @@
 //     credentials (FMT-28 limits the path range to /api/v1/*/setup/admin);
 //     Contract.Clients drives the 4-part service-token caller-cell allowlist
 //     (FMT-31 limits the path range to /internal/v1/*). The two authentication
-//     paths are mutually exclusive; the runtime fail-fast in
-//     runtime/auth/route.go validateBypassCompatibility is the second-layer
-//     defense, this archtest is the static (Hard) gate that fails CI before
-//     the misconfigured code can merge.
+//     paths are mutually exclusive; this archtest is the static (Hard) gate
+//     that fails CI before the misconfigured code can merge. The runtime
+//     fail-fast in runtime/auth/route.go validateBypassCompatibility is a
+//     depth-in-defense second layer, not a primary line of detection.
+//
+//     AI-rebust = Hard: detection runs over the full production package set
+//     with type-checked Defs/Uses, so a Contract field that resolves to a
+//     *types.Var (file-scope var, func-body `:=` local, or cross-package
+//     SelectorExpr) is compared against the same canonical key regardless of
+//     AST shape. The detector has 0 KNOWN-GAP cases — see the companion
+//     fixture under tools/archtest/internal/authroutemutexfixture/ which
+//     exercises all four reachable Contract-expression shapes.
 
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // TestCellsNoRouteMuxWrapper enforces CELLS-NO-ROUTEMUX-WRAPPER-01.
@@ -263,35 +275,41 @@ func isHTTPHandlerSelector(expr ast.Expr) bool {
 // only on /api/v1/*/setup/admin per FMT-28); Contract.Clients drives the
 // service-token caller-cell allowlist on /internal/v1/* (per FMT-31). The
 // two authentication paths are mutually exclusive at the path-range level
-// already (FMT-28 ∩ FMT-31 = ∅), and this archtest is the Go-source-code
-// second-source guard against the mutex being violated should either YAML
-// rule be weakened or bypassed by hand-written Mount calls.
+// already (FMT-28 ∩ FMT-31 = ∅); this archtest is the Go-source-code
+// primary guard against the mutex being violated should either YAML rule
+// be weakened or bypassed by hand-written Mount calls.
 //
-// Detection scheme — same-file resolution suffices because both the codegen
-// template (generated/contracts/*/handler_gen.go) and the documented
-// slice-handler pattern (runtime/auth/runtime-api.md "Slice handler")
-// declare the Contract var in the same file as the auth.Mount call. A
-// cross-file Contract reference (different .go file in the same package, or
-// a cross-package selector) is treated as "unresolvable" by this gate and
-// the Route literal is flagged as a violation requiring manual review — the
-// runtime guard in validateBypassCompatibility remains as the second-layer
-// fallback for such cases.
+// Detection scheme — type-aware: scanAuthRouteBootstrapClientsViolations
+// loads the production package set via typeseval.LoadProductionPackages and
+// walks every auth.Route composite literal under that universe. The Route
+// type and ContractSpec type are matched by canonical *types.Named (package
+// path + name), so import aliases cannot bypass detection. The Contract
+// field value is resolved via *types.Info.Uses / Defs to a *types.Var key,
+// then looked up against a pre-built map of every ContractSpec composite
+// literal in the module (both `var X = ...` and `X := ...` forms). This
+// closes the cross-package SelectorExpr / func-body-local := KNOWN-GAP that
+// the prior AST-only detector relied on the runtime guard to catch.
 //
-// AI-rebust: Hard. Any Route literal violating the mutex causes archtest to
-// fail CI before the code can merge; runtime fail-fast is the second layer
-// of defense at validateBypassCompatibility.
+// AI-rebust: Hard. Coverage is locked at the *types.Var key — picking a
+// different AST shape (file-scope var / inline literal / `:=` local /
+// cross-package SelectorExpr) does not change the resolved key, so an AI
+// co-author cannot pick a shape that bypasses the static gate. The runtime
+// fail-fast in runtime/auth/route.go validateBypassCompatibility remains as
+// depth-in-defense (e.g. for ContractSpec values constructed dynamically
+// from non-literal sources, which the static gate by design ignores).
 func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root,
-		[]string{"runtime", "cells", "cmd", "examples", "generated"},
-		scanner.IncludeGenerated())
+	modulePath := readModulePath(t, root)
 
-	var violations []string
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		violations = append(violations, detectBootstrapClientsViolations(fc.File, fc.Fset, fc.Rel)...)
-	})
+	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
+	require.NoError(t, err)
 
+	violations := scanAuthRouteBootstrapClientsViolations(root, modulePath, resolver.Production())
+
+	for _, v := range violations {
+		t.Log(v)
+	}
 	assert.Empty(t, violations,
 		"AUTH-BOOTSTRAP-CLIENTS-MUTEX-01: auth.Route literals must not declare "+
 			"BootstrapAuth alongside a Contract whose Clients field is non-empty. "+
@@ -302,180 +320,148 @@ func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 			"docs/architecture/202605061600-adr-bootstrap-admin-boundary.md.")
 }
 
-// detectBootstrapClientsViolations is the per-file detector kernel for
-// AUTH-BOOTSTRAP-CLIENTS-MUTEX-01. Factored out so the same logic powers both
-// the repo-wide static scan (TestAuthRouteBootstrapClientsMutex) and the
-// synthetic-source self-test (TestAuthRouteBootstrapClientsMutex_CoverageBoundary)
-// that locks the detection-coverage contract.
-func detectBootstrapClientsViolations(file *ast.File, fset *token.FileSet, rel string) []string {
-	// Pass 1: collect package-level (file-scope) vars whose value is a
-	// contractspec.ContractSpec composite literal, mapping var name to
-	// "Clients field is non-empty".
-	specClientsNonEmpty := collectFileContractSpecClients(file)
+// TestAuthRouteBootstrapClientsMutex_FixturePattern loads the build-tag-gated
+// authroutemutexfixture package and asserts the scanner reports every
+// reachable Contract-expression shape that binds non-empty Clients alongside
+// non-nil BootstrapAuth:
+//
+//  1. file-scope-var-DETECTED: `var spec = ContractSpec{... Clients}` +
+//     `auth.Route{BootstrapAuth: ..., Contract: spec}` (same package).
+//  2. inline-literal-DETECTED: inline ContractSpec composite literal embedded
+//     directly in the Route literal.
+//  3. funcbody-local-DETECTED: `spec := ContractSpec{... Clients}` inside a
+//     function body + `auth.Route{... Contract: spec}`.
+//  4. cross-package-SelectorExpr-DETECTED: ContractSpec var declared in a
+//     sibling package + `auth.Route{... Contract: siblingpkg.WithClients}`.
+//
+// The fixture also contains two clean shapes (BootstrapAuth-without-Clients
+// and Clients-without-BootstrapAuth) that must NOT trigger; the test asserts
+// the exact hit count is 4 to prevent false negatives in either direction.
+//
+// Per ai-collab.md §"Hard 范本": the fixture is a real Go package loaded via
+// packages.Load with the archtest_fixture build tag. Bypassing this test
+// requires modifying real source code; the detector cannot drift back to
+// AST-only without breaking the fixture assertions.
+func TestAuthRouteBootstrapClientsMutex_FixturePattern(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modulePath := readModulePath(t, root)
 
-	// Pass 2: scan every auth.Route composite literal in the file.
+	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
+		"./tools/archtest/internal/authroutemutexfixture/...")
+	require.NoError(t, err)
+
+	violations := scanAuthRouteBootstrapClientsViolations(root, modulePath, resolver.Packages())
+
+	for _, v := range violations {
+		t.Log(v)
+	}
+	require.Len(t, violations, 4,
+		"fixture must yield exactly 4 violations (file-scope-var / inline-literal / "+
+			"funcbody-local / cross-package-SelectorExpr); clean cases must not trigger")
+
+	wantSubstr := []string{
+		"Contract: specFileScope",
+		"Contract: <inline ContractSpec literal>",
+		"Contract: specLocal",
+		"Contract: spec.WithClients",
+	}
+	joined := ""
+	for _, v := range violations {
+		joined += v + "\n"
+	}
+	for _, want := range wantSubstr {
+		assert.Contains(t, joined, want, "fixture violations must include %q", want)
+	}
+}
+
+// scanAuthRouteBootstrapClientsViolations walks every auth.Route composite
+// literal in pkgs and reports those whose BootstrapAuth field is non-nil
+// while their Contract field resolves to a ContractSpec with non-empty
+// Clients. Resolution is type-aware:
+//
+//   - Route and ContractSpec are matched by *types.Named (package path +
+//     name), so import aliases do not bypass detection.
+//   - Contract field values that are *ast.Ident or *ast.SelectorExpr are
+//     resolved via *types.Info.Uses to a *types.Var; the var is looked up
+//     against a map built from a first-pass scan of every ContractSpec
+//     composite literal in pkgs (both ValueSpec and AssignStmt forms).
+//   - Inline *ast.CompositeLit Contract values are evaluated directly via
+//     compositeLitHasNonEmptyClients.
+//
+// Non-CompositeLit, non-Ident, non-SelectorExpr Contract expressions (e.g.
+// function call returning ContractSpec) are not statically reachable and
+// fall through to the runtime guard at validateBypassCompatibility.
+func scanAuthRouteBootstrapClientsViolations(root, modulePath string, pkgs []*packages.Package) []string {
+	routeTypePath := modulePath + "/runtime/auth"
+	specTypePath := modulePath + "/kernel/contractspec"
+
+	specVars := collectContractSpecVarsTyped(pkgs, specTypePath)
+
 	var violations []string
-	scanner.EachInSubtree[ast.CompositeLit](file, func(node *ast.CompositeLit) {
-		if !isAuthRouteLitType(node.Type) {
-			return
+	for _, pkg := range pkgs {
+		if pkg == nil || pkg.TypesInfo == nil {
+			continue
 		}
-		var (
-			hasBootstrapAuth      bool
-			contractRef           string
-			contractInlineClients bool
-			contractResolved      bool
-		)
-		scanner.EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
-			key, ok := kv.Key.(*ast.Ident)
-			if !ok {
-				return
+		for _, file := range pkg.Syntax {
+			absPath := pkg.Fset.Position(file.Pos()).Filename
+			rel, err := filepath.Rel(root, absPath)
+			if err != nil {
+				continue
 			}
-			switch key.Name {
-			case "BootstrapAuth":
-				if id, isIdent := kv.Value.(*ast.Ident); !isIdent || id.Name != "nil" {
-					hasBootstrapAuth = true
+			relSlash := filepath.ToSlash(rel)
+			scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+				if !isNamedCompositeLit(pkg.TypesInfo, cl, routeTypePath, "Route") {
+					return
 				}
-			case "Contract":
-				contractRef, contractInlineClients, contractResolved = resolveContractField(kv.Value, specClientsNonEmpty)
-			}
-		})
-		if !hasBootstrapAuth {
-			return
+				hasBootstrapAuth, contractExpr := authRouteBootstrapAndContract(cl)
+				if !hasBootstrapAuth || contractExpr == nil {
+					return
+				}
+				hasClients, desc := resolveContractClientsTyped(pkg.TypesInfo, contractExpr, specVars, specTypePath)
+				if !hasClients {
+					return
+				}
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d — auth.Route{BootstrapAuth: <non-nil>, Contract: %s} binds non-empty Clients (mutex violation)",
+					relSlash, pkg.Fset.Position(cl.Pos()).Line, desc))
+			})
 		}
-		if contractInlineClients || (contractResolved && specClientsNonEmpty[contractRef]) {
-			violations = append(violations,
-				rel+":"+fset.Position(node.Pos()).String()+
-					" — auth.Route{BootstrapAuth: <non-nil>, Contract: "+
-					describeContractRef(contractRef, contractInlineClients)+"} "+
-					"binds non-empty Clients (mutex violation)")
-		}
-	})
+	}
 	return violations
 }
 
-// TestAuthRouteBootstrapClientsMutex_CoverageBoundary locks the static
-// detector's coverage contract via synthetic source files parsed in memory.
-// Three coverage classes are exercised:
+// collectContractSpecVarsTyped scans pkgs for every contractspec.ContractSpec
+// composite literal that is bound to a variable (either `var X = ...` or
+// `X := ...`) and returns a map keyed by the canonical *types.Var, value
+// true iff the literal has a non-empty Clients field.
 //
-//  1. File-scope `var spec = contractspec.ContractSpec{... Clients: [...]}`
-//     referenced by `Contract: spec` → MUST be detected.
-//  2. Inline `Contract: contractspec.ContractSpec{... Clients: [...]}` literal
-//     embedded directly in the Route literal → MUST be detected.
-//  3. Func-body-local `spec := contractspec.ContractSpec{... Clients: [...]}`
-//     referenced by `Contract: spec` → KNOWN GAP, NOT detected; covered by
-//     the runtime guard in runtime/auth/route.go validateBypassCompatibility
-//     as the second layer. This case is locked here so any future widening
-//     of the static detector intentionally updates this assertion.
-//
-// The detector must also leave a clean (no violations) source clean and a
-// BootstrapAuth-without-Clients source clean.
-func TestAuthRouteBootstrapClientsMutex_CoverageBoundary(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name       string
-		src        string
-		wantHit    bool   // exactly one violation expected
-		wantSubstr string // substring required in the violation msg (when wantHit)
-		descr      string
-	}{
-		{
-			name: "filescope-var-DETECTED",
-			src: `package x
-import _ "stub"
-var spec = contractspec.ContractSpec{Method: "GET", Path: "/internal/v1/x", Clients: []string{"caller"}}
-func _f() { _ = auth.Route{BootstrapAuth: f, Contract: spec} }
-`,
-			wantHit:    true,
-			wantSubstr: "Contract: spec",
-			descr:      "package-level var pattern (codegen handler_gen.go)",
-		},
-		{
-			name: "inline-literal-DETECTED",
-			src: `package x
-import _ "stub"
-func _f() { _ = auth.Route{BootstrapAuth: f, Contract: contractspec.ContractSpec{Clients: []string{"c"}}} }
-`,
-			wantHit:    true,
-			wantSubstr: "Contract: <inline ContractSpec literal>",
-			descr:      "inline ContractSpec literal embedded in Route",
-		},
-		{
-			name: "funcbody-local-KNOWN-GAP",
-			src: `package x
-import _ "stub"
-func _f() {
-    spec := contractspec.ContractSpec{Clients: []string{"caller"}}
-    _ = auth.Route{BootstrapAuth: f, Contract: spec}
-}
-`,
-			wantHit: false,
-			descr:   "func-body-local := ContractSpec falls through to runtime guard",
-		},
-		{
-			name: "bootstrap-without-clients-CLEAN",
-			src: `package x
-import _ "stub"
-var spec = contractspec.ContractSpec{Method: "POST", Path: "/api/v1/x/setup/admin"}
-func _f() { _ = auth.Route{BootstrapAuth: f, Contract: spec} }
-`,
-			wantHit: false,
-			descr:   "BootstrapAuth alone with empty-Clients spec is legitimate (setup/admin pattern)",
-		},
-		{
-			name: "clients-without-bootstrap-CLEAN",
-			src: `package x
-import _ "stub"
-var spec = contractspec.ContractSpec{Method: "GET", Path: "/internal/v1/x", Clients: []string{"caller"}}
-func _f() { _ = auth.Route{Contract: spec, Public: true} }
-`,
-			wantHit: false,
-			descr:   "Clients alone without BootstrapAuth is legitimate (internal route pattern)",
-		},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, "synthetic.go", tc.src, parser.SkipObjectResolution)
-			require.NoError(t, err, tc.descr)
-			got := detectBootstrapClientsViolations(file, fset, "synthetic.go")
-			if !tc.wantHit {
-				assert.Empty(t, got, tc.descr+" (case "+tc.name+")")
-				return
-			}
-			require.Len(t, got, 1, tc.descr+" — expected exactly one violation")
-			assert.Contains(t, got[0], tc.wantSubstr, tc.descr)
-		})
-	}
-}
-
-// collectFileContractSpecClients walks file-scope ValueSpec entries and returns
-// a map keyed by the declared var name, whose value is true iff the underlying
-// composite literal is a contractspec.ContractSpec with a non-empty Clients
-// field. Only direct file-level var declarations are inspected; func-body
-// locals and cross-file references are out of scope (handled fail-closed by
-// the caller's resolution logic).
-func collectFileContractSpecClients(file *ast.File) map[string]bool {
-	out := map[string]bool{}
-	scanner.EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
-		if gd.Tok != token.VAR {
-			return
+// Both ValueSpec and AssignStmt forms produce *types.Var entries via
+// pkg.TypesInfo.Defs, so the same key shape is used regardless of AST
+// container. Cross-package references resolve to the same *types.Var via
+// pkg.TypesInfo.Uses on the consumer side.
+func collectContractSpecVarsTyped(pkgs []*packages.Package, specTypePath string) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	for _, pkg := range pkgs {
+		if pkg == nil || pkg.TypesInfo == nil {
+			continue
 		}
-		// ValueSpec is the direct child kind of GenDecl for `var` blocks;
-		// using the scanner funnel rather than for-range over gd.Specs
-		// satisfies SCANNER-FRAMEWORK-USAGE-01 (typed-child walk).
-		scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
-			recordContractSpecVars(vs, out)
-		})
-	})
+		for _, file := range pkg.Syntax {
+			scanner.EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
+				recordValueSpecContractVars(pkg.TypesInfo, vs, specTypePath, out)
+			})
+			scanner.EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+				if as.Tok != token.DEFINE {
+					return
+				}
+				recordAssignStmtContractVars(pkg.TypesInfo, as, specTypePath, out)
+			})
+		}
+	}
 	return out
 }
 
-// recordContractSpecVars inspects a single ValueSpec for ContractSpec
-// composite-literal bindings and records each (varName, has-non-empty-Clients)
-// pair into out. Names and Values are aligned positionally per the Go AST
-// invariant for value specs with explicit initializers.
-func recordContractSpecVars(vs *ast.ValueSpec, out map[string]bool) {
+func recordValueSpecContractVars(info *types.Info, vs *ast.ValueSpec, specTypePath string, out map[*types.Var]bool) {
 	for i, name := range vs.Names {
 		if i >= len(vs.Values) {
 			continue
@@ -484,82 +470,155 @@ func recordContractSpecVars(vs *ast.ValueSpec, out map[string]bool) {
 		if !ok {
 			continue
 		}
-		if !isContractSpecLitType(cl.Type) {
+		if !isNamedCompositeLit(info, cl, specTypePath, "ContractSpec") {
 			continue
 		}
-		out[name.Name] = compositeLitHasNonEmptyClients(cl)
+		obj := info.Defs[name]
+		v, ok := obj.(*types.Var)
+		if !ok || v == nil {
+			continue
+		}
+		out[v] = compositeLitHasNonEmptyClients(cl)
 	}
 }
 
-// resolveContractField interprets the value expression of an auth.Route
-// Contract field, returning:
-//
-//   - varName: the unqualified identifier name when the value is an Ident or
-//     SelectorExpr (e.g. "specSessionsLogin" or "auth.SetupAdmin" → "SetupAdmin").
-//   - inlineClients: true when the value is an inline composite literal of
-//     contractspec.ContractSpec with a non-empty Clients field.
-//   - resolved: true when same-file resolution succeeded (Ident in the
-//     specClients map). Cross-package SelectorExpr and same-file Ident
-//     not-in-map both return resolved=false, which causes the caller to skip
-//     flagging — the violation can only fire on a definitively-resolved
-//     non-empty Clients spec. The runtime guard in
-//     runtime/auth/route.go:validateBypassCompatibility remains the second
-//     layer for the unresolved cases (cross-package / cross-file / func-body
-//     local), so detection coverage is layered rather than archtest-only.
-//
-// Why SelectorExpr is treated as unresolved rather than checked:
-// cross-package ContractSpec refs live in their declaring package's file
-// scope, and the path ranges enforced by FMT-28 (BootstrapAuth →
-// /api/v1/*/setup/admin) and FMT-31 (Clients → /internal/v1/*) make their
-// coexistence structurally impossible at the YAML source. Flagging
-// cross-package refs without cross-package var resolution would require
-// loading multiple packages and is out of scope for this AST-only archtest;
-// the runtime guard handles the remaining surface.
-func resolveContractField(value ast.Expr, specClients map[string]bool) (varName string, inlineClients bool, resolved bool) {
-	switch v := value.(type) {
-	case *ast.Ident:
-		if _, ok := specClients[v.Name]; ok {
-			return v.Name, false, true
+func recordAssignStmtContractVars(info *types.Info, as *ast.AssignStmt, specTypePath string, out map[*types.Var]bool) {
+	// Paired-index form with companion index access on a different slice
+	// (`as.Lhs[i]` paired with `as.Rhs[i]`) — SCANNER-FRAMEWORK-USAGE-01 form
+	// (c) exempts this shape because the LHS/RHS pairing semantics cannot be
+	// expressed by scanner.EachInChildren. Type extraction is funneled
+	// through exprToIdent / exprToCompositeLit helpers so no TypeAssertExpr
+	// appears in the loop body (precedent: production_loader_funnel_test.go
+	// assignLhsHasIdentNamed).
+	for i := range as.Lhs {
+		if i >= len(as.Rhs) {
+			continue
 		}
-		return v.Name, false, false
+		cl := exprToCompositeLit(as.Rhs[i])
+		if cl == nil {
+			continue
+		}
+		if !isNamedCompositeLit(info, cl, specTypePath, "ContractSpec") {
+			continue
+		}
+		ident := exprToIdent(as.Lhs[i])
+		if ident == nil {
+			continue
+		}
+		obj := info.Defs[ident]
+		v, ok := obj.(*types.Var)
+		if !ok || v == nil {
+			continue
+		}
+		out[v] = compositeLitHasNonEmptyClients(cl)
+	}
+}
+
+// exprToCompositeLit casts e to *ast.CompositeLit, returning nil if not a
+// composite literal. Mirrors exprToIdent (security_defaults_test.go) so the
+// type assertion is funneled outside the loop body and the call site stays
+// compliant with SCANNER-FRAMEWORK-USAGE-01.
+func exprToCompositeLit(e ast.Expr) *ast.CompositeLit {
+	cl, _ := e.(*ast.CompositeLit)
+	return cl
+}
+
+// authRouteBootstrapAndContract extracts the BootstrapAuth presence flag and
+// the Contract field expression from an auth.Route composite literal.
+// Returns hasBootstrapAuth=false when the field is absent or set to literal
+// nil; returns contractExpr=nil when the field is absent.
+func authRouteBootstrapAndContract(cl *ast.CompositeLit) (hasBootstrapAuth bool, contractExpr ast.Expr) {
+	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			return
+		}
+		switch key.Name {
+		case "BootstrapAuth":
+			if id, isIdent := kv.Value.(*ast.Ident); !isIdent || id.Name != "nil" {
+				hasBootstrapAuth = true
+			}
+		case "Contract":
+			contractExpr = kv.Value
+		}
+	})
+	return hasBootstrapAuth, contractExpr
+}
+
+// resolveContractClientsTyped reports whether expr resolves to a
+// ContractSpec value (or composite literal) with non-empty Clients, and
+// returns a short human-readable description for the violation message.
+//
+// Handled shapes:
+//
+//   - *ast.CompositeLit of contractspec.ContractSpec: inspect directly.
+//   - *ast.Ident: lookup info.Uses → *types.Var in specVars map.
+//   - *ast.SelectorExpr: lookup info.Uses[sel.Sel] → *types.Var in specVars
+//     map (resolves cross-package package-level vars to their canonical
+//     *types.Var, so import aliases do not affect identity).
+//
+// Other shapes (function-call result, conversion expression, …) return
+// false — they fall through to the runtime guard at registration time.
+func resolveContractClientsTyped(info *types.Info, expr ast.Expr, specVars map[*types.Var]bool, specTypePath string) (bool, string) {
+	switch v := expr.(type) {
 	case *ast.CompositeLit:
-		if isContractSpecLitType(v.Type) {
-			return "", compositeLitHasNonEmptyClients(v), false
+		if !isNamedCompositeLit(info, v, specTypePath, "ContractSpec") {
+			return false, "<non-ContractSpec literal>"
 		}
-		return "", false, false
+		return compositeLitHasNonEmptyClients(v), "<inline ContractSpec literal>"
+	case *ast.Ident:
+		obj := info.Uses[v]
+		if obj == nil {
+			obj = info.Defs[v]
+		}
+		tv, ok := obj.(*types.Var)
+		if !ok || tv == nil {
+			return false, v.Name
+		}
+		return specVars[tv], v.Name
 	case *ast.SelectorExpr:
-		if v.Sel != nil {
-			return v.Sel.Name, false, false
+		if v.Sel == nil {
+			return false, "<malformed SelectorExpr>"
 		}
-		return "", false, false
+		obj := info.Uses[v.Sel]
+		if obj == nil {
+			obj = info.Defs[v.Sel]
+		}
+		tv, ok := obj.(*types.Var)
+		if !ok || tv == nil {
+			return false, v.Sel.Name
+		}
+		desc := v.Sel.Name
+		if x, ok := v.X.(*ast.Ident); ok {
+			desc = x.Name + "." + v.Sel.Name
+		}
+		return specVars[tv], desc
 	}
-	return "", false, false
+	return false, "<unrecognized Contract expression>"
 }
 
-// isAuthRouteLitType reports whether the composite-literal type expression
-// names auth.Route. Accepts either the qualified form `auth.Route` or the
-// bare `Route` (same-package usage from runtime/auth itself).
-func isAuthRouteLitType(expr ast.Expr) bool {
-	switch e := expr.(type) {
-	case *ast.SelectorExpr:
-		return e.Sel != nil && e.Sel.Name == "Route"
-	case *ast.Ident:
-		return e.Name == "Route"
+// isNamedCompositeLit reports whether cl's declared type resolves (via
+// pkg.TypesInfo) to a *types.Named whose owning package path equals
+// wantPkgPath and whose type name equals wantName. Matching by canonical
+// types path defeats import aliases (e.g. `import altauth "<module>/runtime/auth";
+// altauth.Route{...}` still resolves to the same *types.Named).
+func isNamedCompositeLit(info *types.Info, cl *ast.CompositeLit, wantPkgPath, wantName string) bool {
+	if info == nil || cl == nil || cl.Type == nil {
+		return false
 	}
-	return false
-}
-
-// isContractSpecLitType reports whether the composite-literal type expression
-// names contractspec.ContractSpec (or the bare ContractSpec, for same-package
-// usage from kernel/contractspec).
-func isContractSpecLitType(expr ast.Expr) bool {
-	switch e := expr.(type) {
-	case *ast.SelectorExpr:
-		return e.Sel != nil && e.Sel.Name == "ContractSpec"
-	case *ast.Ident:
-		return e.Name == "ContractSpec"
+	t := info.TypeOf(cl.Type)
+	if t == nil {
+		return false
 	}
-	return false
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	return obj.Pkg().Path() == wantPkgPath && obj.Name() == wantName
 }
 
 // compositeLitHasNonEmptyClients walks a ContractSpec composite literal's
@@ -578,16 +637,4 @@ func compositeLitHasNonEmptyClients(cl *ast.CompositeLit) bool {
 		}
 	})
 	return nonEmpty
-}
-
-// describeContractRef renders the Contract reference for inclusion in
-// archtest violation messages.
-func describeContractRef(varName string, inlineClients bool) string {
-	if inlineClients {
-		return "<inline ContractSpec literal>"
-	}
-	if varName == "" {
-		return "<unresolved>"
-	}
-	return varName
 }
