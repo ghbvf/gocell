@@ -103,7 +103,8 @@ func TestService_WithEmitter(t *testing.T) {
 		newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
-		WithClock(clock.Real()))
+		WithClock(clock.Real()),
+		WithSessionTTL(time.Hour))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))
@@ -119,7 +120,8 @@ func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	tx := &stubTxRunner{}
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
-		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()))
+		newOutboxRefreshStore(), testIssuer, slog.Default(),
+		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "bob", string(hash))
@@ -161,7 +163,8 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 	svc := MustNewService(userRepo, sessionStore, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(emitter),
 		WithTxManager(persistence.WrapForCell(tx)),
-		WithClock(clock.Real()))
+		WithClock(clock.Real()),
+		WithSessionTTL(time.Hour))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "durable-emit-fail", string(hash))
@@ -188,7 +191,8 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	// so the service runs explicit session cleanup on emit failure.
 	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
 	svc := MustNewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(),
-		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})), WithClock(clock.Real()))
+		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "noop-emit-fail", string(hash))

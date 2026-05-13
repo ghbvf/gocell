@@ -129,6 +129,7 @@ func newE2EFixture() *e2eFixture {
 		userRepo, sessionStore, roleRepo, refreshStore, e2eIssuer, slog.Default(),
 		sessionlogin.WithClock(clock.Real()),
 		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
+		sessionlogin.WithSessionTTL(time.Hour),
 	)
 
 	idmSvc, err := NewService(

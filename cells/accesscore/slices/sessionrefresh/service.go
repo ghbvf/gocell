@@ -278,7 +278,7 @@ func authRefreshRejected() *errcode.Error {
 // verifySession checks that the session backing a rotated token is live and
 // cascade-revokes the refresh chain if it is not. Extracted from Refresh to
 // stay within the cognitive-complexity budget (F4/F5).
-func (s *Service) verifySession(ctx context.Context, sessionID string) (*session.Session, error) {
+func (s *Service) verifySession(ctx context.Context, sessionID string) (*session.ValidateView, error) {
 	sess, err := s.sessionStore.Get(ctx, sessionID)
 	if err != nil {
 		if errcode.IsInfraError(err) {

@@ -178,6 +178,7 @@ func (c *AccessCore) initSlices() error {
 		sessionlogin.WithEmitter(c.emitter),
 		sessionlogin.WithTxManager(c.txRunner),
 		sessionlogin.WithClock(c.clk),
+		sessionlogin.WithSessionTTL(DefaultRefreshMaxAge),
 	}
 	loginSvc, err := sessionlogin.NewService(c.userRepo, c.sessionStore, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
 	if err != nil {
@@ -202,7 +203,7 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("identitymanage", "accesscore", cellvocab.L1))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
-	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.logger, c.clk)
+	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.logger)
 	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cellvocab.L0))
 
 	// session-refresh uses refresh.Store for token state validation and

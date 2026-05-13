@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -58,6 +59,23 @@ func WithClock(clk clock.Clock) Option {
 	}
 }
 
+// WithSessionTTL sets the session row's GC-eligibility lifetime. Session
+// rows should outlive the refresh chain so that revocation lookups remain
+// effective for the chain's entire lifetime; composition roots typically
+// inject accesscore.DefaultRefreshMaxAge here.
+//
+// This is NOT the access-token TTL (which is the JWT's exp claim, set by
+// sessionmint) and NOT a validate-time gate — Session.ExpiresAt is
+// projected out of Store.Get's *ValidateView return type so validate
+// paths cannot reach it.
+func WithSessionTTL(d time.Duration) Option {
+	return func(s *Service) {
+		if d > 0 {
+			s.sessionTTL = d
+		}
+	}
+}
+
 // Service implements password login with JWT issuance.
 type Service struct {
 	userRepo     ports.UserRepository
@@ -69,6 +87,7 @@ type Service struct {
 	issuer       *auth.JWTIssuer
 	logger       *slog.Logger
 	clock        clock.Clock
+	sessionTTL   time.Duration
 }
 
 // NewService creates a session-login Service. refreshStore issues the opaque
@@ -117,6 +136,10 @@ func NewService(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "sessionlogin: TxRunner required; use WithTxManager")
 	}
 	clock.MustHaveClock(s.clock, "sessionlogin.NewService: clock required — use WithClock(c.clk)")
+	if s.sessionTTL <= 0 {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionlogin: SessionTTL required; use WithSessionTTL (typically accesscore.DefaultRefreshMaxAge)")
+	}
 	return s, nil
 }
 
@@ -186,13 +209,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, err
 	}
 
+	now := s.clock.Now()
 	sess := &session.Session{
 		ID:                sessionID,
 		SubjectID:         user.ID,
-		JTI:               sessionID, // same UUID used as store ID and JWT jti claim
-		AuthzEpochAtIssue: 0,         // S4a placeholder; S4b will snapshot users.authz_epoch
-		CreatedAt:         s.clock.Now(),
-		ExpiresAt:         minted.ExpiresAt,
+		JTI:               sessionID,
+		AuthzEpochAtIssue: 0,
+		CreatedAt:         now,
+		ExpiresAt:         now.Add(s.sessionTTL),
 	}
 
 	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, user.ID)

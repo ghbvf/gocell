@@ -642,8 +642,6 @@ func TestService_Refresh_SessionRowIsImmutable(t *testing.T) {
 	const sessionID = "sess-imm"
 	sess := newTestSession("usr-imm", sessionID)
 	require.NoError(t, store.Create(context.Background(), sess))
-	original, err := store.Get(context.Background(), sessionID)
-	require.NoError(t, err)
 
 	wireToken, _, err := refreshStore.Issue(context.Background(), sessionID, "usr-imm")
 	require.NoError(t, err)
@@ -652,12 +650,15 @@ func TestService_Refresh_SessionRowIsImmutable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sessionID, pair.SessionID, "TokenPair.SessionID stable across refresh")
 
+	// Validate-visible state (ValidateView) must not flip — refresh never
+	// writes session.Store (SESSIONREFRESH-NO-SESSION-CREATE-01 archtest
+	// guards this statically). GC-only metadata (CreatedAt, ExpiresAt, JTI)
+	// is intentionally not exposed by Store.Get; round-trip of those
+	// fields is verified by backend-specific tests.
 	after, err := store.Get(context.Background(), sessionID)
 	require.NoError(t, err)
 	assert.Nil(t, after.RevokedAt, "session must NOT be revoked by refresh")
-	assert.Equal(t, original.CreatedAt, after.CreatedAt, "CreatedAt unchanged by refresh")
-	assert.Equal(t, original.ExpiresAt, after.ExpiresAt, "ExpiresAt unchanged by refresh (session lifecycle != access-token lifecycle)")
-	assert.Equal(t, original.JTI, after.JTI, "JTI unchanged by refresh (login-time fingerprint)")
+	assert.Equal(t, sessionID, after.ID, "session ID stable across refresh")
 
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
@@ -700,18 +701,22 @@ func TestService_Refresh_TwoHops_SecondRefreshSucceeds(t *testing.T) {
 	assert.Equal(t, sessionID, pair2.SessionID, "session ID stable after second refresh")
 }
 
-func TestService_Refresh_PreservesSessionExpiryAcrossRotation(t *testing.T) {
+// TestService_Refresh_PastGCEligibility_Succeeds proves that refresh succeeds
+// on a session row whose ExpiresAt (GC eligibility) is already in the past.
+// ExpiresAt is a GC-only field; refresh does not gate on it, and the
+// returned access JWT is fully valid. Paired with the sessionvalidate
+// regression test TestService_VerifyIntent_PastSessionExpiresAt_StillValidates
+// to cover the end-to-end F1 fix: past GC eligibility → fresh JWT → validate
+// must accept.
+func TestService_Refresh_PastGCEligibility_Succeeds(t *testing.T) {
 	svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-exp")
 
-	// Create a session with a past expiry — the refresh succeeds because
-	// session.Store.Get returns revoked/expired sessions and the refresh slice
-	// decides policy (only revocation is rejected, not expiry at this layer).
 	expiredSession := &session.Session{
 		ID:        "sess-exp",
 		SubjectID: "usr-exp",
 		JTI:       "sess-exp",
 		CreatedAt: time.Now().Add(expiredSessionCreatedOffset),
-		ExpiresAt: time.Now().Add(-time.Minute), // expired
+		ExpiresAt: time.Now().Add(-time.Minute), // past GC eligibility
 	}
 	require.NoError(t, store.Create(context.Background(), expiredSession))
 
@@ -722,17 +727,11 @@ func TestService_Refresh_PreservesSessionExpiryAcrossRotation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pair)
 
-	// Session row is immutable across refresh: ExpiresAt stays as the login
-	// time set it, RevokedAt remains nil. The pair.ExpiresAt is the access
-	// JWT's exp (minted fresh per refresh), not the session row's ExpiresAt.
 	persisted, err := store.Get(context.Background(), "sess-exp")
 	require.NoError(t, err)
 	assert.Nil(t, persisted.RevokedAt, "session must NOT be revoked by refresh")
-	assert.Equal(t, expiredSession.ExpiresAt.UTC(), persisted.ExpiresAt.UTC(),
-		"session.ExpiresAt unchanged by refresh (login-time value)")
 	assert.Equal(t, "sess-exp", pair.SessionID, "TokenPair.SessionID equals the original session ID")
 
-	// Verify the new access token is cryptographically valid.
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 	_, err = verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
@@ -872,7 +871,7 @@ type infraGetRepo struct {
 	infraErr error
 }
 
-func (r *infraGetRepo) Get(_ context.Context, _ string) (*session.Session, error) {
+func (r *infraGetRepo) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, r.infraErr
 }
 
@@ -952,7 +951,7 @@ func domainSessionNotFoundError() error {
 		errcode.WithCategory(errcode.CategoryDomain))
 }
 
-func (r *sessionNotFoundStore) Get(_ context.Context, _ string) (*session.Session, error) {
+func (r *sessionNotFoundStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, r.notFoundErr
 }
 

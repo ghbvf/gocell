@@ -33,8 +33,13 @@ const (
 INSERT INTO sessions (id, subject_id, jti, authz_epoch_at_issue, created_at, expires_at)
 VALUES ($1, $2::uuid, $3, $4, $5, $6)`
 
+	// selectSessionByIDSQL projects only the columns ValidateView exposes
+	// (ID, SubjectID, RevokedAt) — Store.Get is the validate path, and
+	// GC-only metadata (jti, authz_epoch_at_issue, created_at, expires_at)
+	// must not leak to validate callers. GC sweep / audit / metadata
+	// round-trip tests query the full row via store-internal SQL.
 	selectSessionByIDSQL = `
-SELECT id, subject_id::text, jti, authz_epoch_at_issue, created_at, expires_at, revoked_at
+SELECT id, subject_id::text, revoked_at
 FROM sessions
 WHERE id = $1`
 
@@ -182,19 +187,16 @@ func sessionCreateError(err error, sessionID, subjectID string) error {
 	return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: create", err)
 }
 
-// Get fetches the session by ID. Returns ErrSessionNotFound if the ID is not
-// present. Revoked and expired sessions are still returned — callers inspect
-// Session.RevokedAt and Session.ExpiresAt to make policy decisions.
-func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.Session, error) {
-	var sess session.Session
+// Get fetches the validate projection by ID. Returns ErrSessionNotFound when
+// the ID is not present. Revoked sessions are still returned (caller checks
+// RevokedAt). GC eligibility (expires_at) is intentionally not exposed —
+// validate paths must not gate on it.
+func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.ValidateView, error) {
+	var v session.ValidateView
 	err := s.db.QueryRow(ctx, selectSessionByIDSQL, id).Scan(
-		&sess.ID,
-		&sess.SubjectID,
-		&sess.JTI,
-		&sess.AuthzEpochAtIssue,
-		&sess.CreatedAt,
-		&sess.ExpiresAt,
-		&sess.RevokedAt,
+		&v.ID,
+		&v.SubjectID,
+		&v.RevokedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
@@ -205,15 +207,11 @@ func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.Session, 
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: get", err)
 	}
-	// Normalize timestamps to UTC for deterministic equality comparisons in
-	// storetest cases that use FakeClock.Now() (always UTC).
-	sess.CreatedAt = sess.CreatedAt.UTC()
-	sess.ExpiresAt = sess.ExpiresAt.UTC()
-	if sess.RevokedAt != nil {
-		t := sess.RevokedAt.UTC()
-		sess.RevokedAt = &t
+	if v.RevokedAt != nil {
+		t := v.RevokedAt.UTC()
+		v.RevokedAt = &t
 	}
-	return &sess, nil
+	return &v, nil
 }
 
 // Revoke marks the session dead. Idempotent: already-revoked or missing IDs

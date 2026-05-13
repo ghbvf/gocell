@@ -118,7 +118,11 @@ func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	return MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(&stubTxRunner{}))), userRepo
+		testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour),
+	), userRepo
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
@@ -270,7 +274,8 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
 	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "refresh-down", "pass123")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
@@ -384,7 +389,8 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "issue-persist", "pass123")
 
 	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
@@ -395,12 +401,13 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	require.NotEmpty(t, pair.SessionID)
 
 	// The session must be findable by its ID so sessionvalidate does not fail.
+	// ValidateView intentionally hides GC-eligibility (ExpiresAt) — that lifetime
+	// is verified at the sessionlogin construction layer (WithSessionTTL).
 	sess, err := sessionStore.Get(context.Background(), pair.SessionID)
 	require.NoError(t, err, "session must be persisted after IssueForUser so sessionvalidate can look it up")
 	assert.Equal(t, pair.SessionID, sess.ID)
 	assert.Equal(t, u.ID, sess.SubjectID, "SubjectID must match the issuing user ID")
 	assert.Nil(t, sess.RevokedAt, "newly issued session must not be revoked")
-	assert.True(t, sess.ExpiresAt.After(time.Now()), "newly issued session must not be expired")
 }
 
 func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
@@ -411,7 +418,8 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
 	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "issue-refresh-down", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
 	require.NoError(t, err)
@@ -520,7 +528,8 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 
 	emitter := &countingEmitter{}
 	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
+		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
@@ -547,7 +556,8 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 
 	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.Error(t, err, "IssueForUser must fail when role fetch fails")
@@ -586,7 +596,8 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer,
-		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
+		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")
@@ -606,7 +617,8 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 
 	emitter := &countingEmitter{}
 	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
+		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.NoError(t, err)
@@ -629,7 +641,7 @@ func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup
 	// stubTxRunner (defined in outbox_test.go) is NOT a Nooper — isNoopTx returns false.
 	tx := &stubTxRunner{}
 	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
-		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()))
+		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()), WithSessionTTL(time.Hour))
 	seedUser(userRepo, "durable-refresh-fail", "pass123")
 
 	_, err := svc.Login(context.Background(), LoginInput{Username: "durable-refresh-fail", Password: "pass123"})
@@ -663,7 +675,8 @@ func TestCleanupIssuedSession_Revoke_IdempotentOnAbsent(t *testing.T) {
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "cleanup-not-found", "pass123")
 
 	// Should not panic or return an unexpected error — the original refresh issue error propagates.

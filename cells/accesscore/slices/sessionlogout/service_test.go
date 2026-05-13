@@ -218,7 +218,7 @@ type infraFailingSessionStore struct {
 	err error
 }
 
-func (f *infraFailingSessionStore) Get(context.Context, string) (*session.Session, error) {
+func (f *infraFailingSessionStore) Get(context.Context, string) (*session.ValidateView, error) {
 	return nil, f.err
 }
 

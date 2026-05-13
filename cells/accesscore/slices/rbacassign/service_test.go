@@ -336,7 +336,7 @@ func (failingSessionStore) Create(_ context.Context, _ *session.Session) error {
 	return nil
 }
 
-func (failingSessionStore) Get(_ context.Context, _ string) (*session.Session, error) {
+func (failingSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, fmt.Errorf("session store unavailable")
 }
 
