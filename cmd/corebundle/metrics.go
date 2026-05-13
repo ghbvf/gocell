@@ -29,11 +29,15 @@ const (
 	// can send a clean 503 + "Exceeded configured timeout of {dur}.\n" before
 	// the TCP write deadline kicks in and forcibly closes the connection.
 	//
-	// Caveat: http.TimeoutHandler signals the response writer but does not
-	// cancel the Gather goroutine. All current GoCell collectors are pure
-	// in-memory reads (CounterVec/HistogramVec.Collect), so this is benign;
-	// introducing an IO collector in the future requires plumbing context
-	// through the Gatherer interface (upstream limitation).
+	// Caveat: promhttp's Timeout option implements scrape budget enforcement
+	// by spawning Gather() in a goroutine and racing it against a time.After
+	// channel — the prom.Gatherer interface carries no context, so an
+	// overrunning Gather call keeps executing in the background even after
+	// the 503 has been written. All current GoCell collectors are pure
+	// in-memory reads (CounterVec/HistogramVec.Collect), so a stranded
+	// Gather goroutine is benign; introducing an IO collector later requires
+	// either (a) a custom Gatherer that owns its own context-cancellable
+	// reads, or (b) upstream context plumbing in client_golang.
 	//
 	// ref: prometheus/client_golang prometheus/promhttp/http.go HandlerOpts.Timeout
 	metricsScrapeTimeout = 10 * time.Second

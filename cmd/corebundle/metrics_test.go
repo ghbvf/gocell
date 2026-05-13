@@ -126,10 +126,6 @@ const (
 	// promhttp.Timeout never fires before the test exits, isolating the
 	// MaxRequestsInFlight 503 path.
 	metricsInflightTestGatherTimeout = 5 * time.Second
-	// metricsInflightSettleDelay — short pause to let saturating goroutines
-	// enter Gather() and decrement the inflight semaphore before the test
-	// fires its limit-trip request.
-	metricsInflightSettleDelay = 20 * time.Millisecond
 )
 
 // slowGatherer is a prom.Gatherer that blocks for the configured duration on
@@ -189,11 +185,19 @@ func TestBuildMetricsHandler_TimeoutReturns503(t *testing.T) {
 func TestBuildMetricsHandler_MaxRequestsInFlight(t *testing.T) {
 	t.Parallel()
 
-	// Each inflight Gather blocks until release is closed.
+	// entered.Done() is called inside Gather, so entered.Wait() blocks
+	// until every saturating goroutine is actually inside the inflight
+	// semaphore. Coupling the saturation signal to the Gather body itself
+	// (rather than to goroutine launch) removes the race between
+	// "ServeHTTP started" and "promhttp inflight counter incremented" —
+	// a fixed sleep buffer would be flaky under CI load.
+	var entered sync.WaitGroup
+	entered.Add(metricsMaxRequestsInFlight)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 
 	gatherer := prom.GathererFunc(func() ([]*dto.MetricFamily, error) {
+		entered.Done()
 		<-release
 		return nil, nil
 	})
@@ -203,22 +207,16 @@ func TestBuildMetricsHandler_MaxRequestsInFlight(t *testing.T) {
 		MaxRequestsInFlight: metricsMaxRequestsInFlight,
 	})
 
-	// Saturate the inflight budget.
-	var saturated sync.WaitGroup
-	saturated.Add(metricsMaxRequestsInFlight)
 	for i := 0; i < metricsMaxRequestsInFlight; i++ {
 		go func() {
 			req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 			rec := httptest.NewRecorder()
-			saturated.Done()
 			h.ServeHTTP(rec, req)
 		}()
 	}
-	saturated.Wait()
-	// Give the goroutines a moment to enter Gather() and decrement the
-	// inflight semaphore. promhttp's limiter is preemptive — without a
-	// small sync delay the limit check can race against goroutine start.
-	time.Sleep(metricsInflightSettleDelay) //archtest:allow:test-sleep inflight semaphore decrement timing
+	// All N goroutines are now blocked inside Gather → inflight semaphore
+	// is saturated. The next request must trip the 503 path immediately.
+	entered.Wait()
 
 	// One more request must trip the 503 path.
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

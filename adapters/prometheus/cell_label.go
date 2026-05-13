@@ -1,6 +1,10 @@
-// INVARIANT: PROM-CELL-LABEL-FUNNEL-01 — every CounterVec/HistogramVec
-// WithLabelValues call in this package that emits a cell_id must route the
-// cell id through promCellLabel.
+// cell_label.go — single typed-function funnel for emitting cell_id labels.
+//
+// PROM-CELL-LABEL-FUNNEL-01 (defined in tools/archtest/prom_cell_label_funnel_test.go)
+// enforces that every CounterVec/HistogramVec WithLabelValues call inside
+// this package routes its cell_id argument through promCellLabel. The
+// archtest is the authoritative invariant declaration; this file holds the
+// implementation.
 
 package prometheus
 

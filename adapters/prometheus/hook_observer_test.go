@@ -230,8 +230,12 @@ func TestPromCellLabel_PanicsOnInvalid(t *testing.T) {
 				if r == nil {
 					t.Fatalf("promCellLabel(%q) did not panic on invalid input", id)
 				}
-				// The panic value is *errcode.Error (A-class) wrapped by
-				// panicregister.Approved — verify the payload type.
+				// The panic value is *errcode.Error directly:
+				// panicregister.Approved is a pass-through source-level marker
+				// (returns its value arg unchanged), so recover() observes the
+				// inner errcode.Assertion *errcode.Error. The reason kebab
+				// string is statically validated by archtest
+				// PANIC-REGISTERED-01 at compile/CI time, not at runtime.
 				ec, ok := r.(*errcode.Error)
 				if !ok {
 					t.Fatalf("panic value type = %T, want *errcode.Error (A-class assertion)", r)
