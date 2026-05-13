@@ -840,9 +840,9 @@ func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/rbac/check", nil)
-	// testHTTPContract auto-assigns Clients: []string{"test-caller"} for /internal/v1/* paths.
+	// testHTTPContract auto-assigns Clients: []string{"testcaller"} for /internal/v1/* paths.
 	// Inject a matching service principal so RequireCallerCell passes.
-	req = req.WithContext(auth.TestServiceContext("test-caller"))
+	req = req.WithContext(auth.TestServiceContext("testcaller"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
