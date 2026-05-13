@@ -36,7 +36,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -47,6 +46,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
@@ -131,7 +131,8 @@ func newE2EFixture() *e2eFixture {
 		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
 	)
 
-	idmSvc, err := NewService(userRepo, sessionStore, refreshStore, slog.Default(),
+	idmSvc, err := NewService(
+		userRepo, sessionStore, refreshStore, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(tx)),

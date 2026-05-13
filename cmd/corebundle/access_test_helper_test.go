@@ -5,9 +5,9 @@ package main
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/clock"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )

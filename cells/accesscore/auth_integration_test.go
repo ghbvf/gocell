@@ -32,7 +32,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout"
@@ -50,6 +49,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
@@ -334,7 +334,8 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	// Wire rbacassign with outbox stubs (durable mode).
 	stubWriter := &rbacStubOutboxWriter{}
 	stubTx := &rbacStubTxRunner{}
-	assignSvc, err := rbacassign.NewService(roleRepo, sessionRepo, slog.Default(),
+	assignSvc, err := rbacassign.NewService(
+		roleRepo, sessionRepo, slog.Default(),
 		rbacassign.WithEmitter(testoutbox.MustEmitter(t, stubWriter)),
 		rbacassign.WithTxManager(persistence.WrapForCell(stubTx)),
 	)
@@ -377,7 +378,8 @@ func TestAuthIntegration_LoginAccessTokenAudienceDrift(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			fx := loginAndGetPair(t,
+			fx := loginAndGetPair(
+				t,
 				withIssuerAuds(tc.issuerAuds...),
 				withVerifierAuds(tc.verifierAuds...),
 			)
