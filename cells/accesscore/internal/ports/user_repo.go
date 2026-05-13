@@ -36,4 +36,10 @@ type UserRepository interface {
 		resetRequired bool,
 		expectedPasswordVersion int64,
 	) (newVersion int64, err error)
+
+	// BumpAuthzEpoch atomically increments users.authz_epoch by 1 and returns
+	// the new value. It must be called inside an ambient transaction (the
+	// credential-invalidation funnel entry point guarantees this). Returns
+	// ErrAuthUserNotFound (KindNotFound) when no row matches userID.
+	BumpAuthzEpoch(ctx context.Context, userID string) (newEpoch int64, err error)
 }

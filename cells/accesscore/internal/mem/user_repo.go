@@ -142,6 +142,7 @@ func cloneUser(u *domain.User) *domain.User {
 		PasswordResetRequired: u.PasswordResetRequired,
 		Status:                u.Status,
 		CreationSource:        u.CreationSource,
+		AuthzEpoch:            u.AuthzEpoch,
 		CreatedAt:             u.CreatedAt,
 		UpdatedAt:             u.UpdatedAt,
 	}
@@ -176,6 +177,23 @@ func (r *UserRepository) UpdatePassword(
 	u.PasswordVersion++
 	u.UpdatedAt = r.store.clock.Now()
 	return u.PasswordVersion, nil
+}
+
+// BumpAuthzEpoch atomically increments the AuthzEpoch counter for the given
+// user and returns the new value. Returns ErrAuthUserNotFound when no user
+// matches userID.
+func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64, error) {
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
+
+	u, ok := r.store.usersByID[userID]
+	if !ok {
+		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+	}
+	u.AuthzEpoch++
+	return u.AuthzEpoch, nil
 }
 
 func (r *UserRepository) Delete(_ context.Context, id string) error {
