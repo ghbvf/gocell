@@ -111,7 +111,7 @@ func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.C
 	}
 	if closeErr := client.Close(ctx); closeErr != nil {
 		slog.Warn("corebundle: failed to close Redis client after startup validation failure",
-			slog.String("error", closeErr.Error()))
+			slog.Any("error", closeErr))
 	}
 }
 
