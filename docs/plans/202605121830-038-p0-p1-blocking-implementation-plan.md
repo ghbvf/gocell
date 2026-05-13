@@ -1,11 +1,20 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
+**最后更新**：2026-05-13（v2：Wave 1 半数 ship — PR-1/PR-2/PR-7/PR-8 全部 closed；PR-6 in review (PR #487)；PR-3/PR-4/PR-9 未启动；034 S4a 同期 ship as PR #482）
 **关系**：
-- [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md) 已覆盖 accesscore PG 链（S3+S5/S3F/S4.0 已 ship；S4a→S4b→S4c 串行推进）。**本计划不重复 accesscore 路线**，仅引用 034 S4a/S4b/S4c 作为下游闭环
+- [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md) 已覆盖 accesscore PG 链（S3+S5/S3F/S4.0/**S4a** 已 ship by PR #482；S4b→S4c 串行推进）。**本计划不重复 accesscore 路线**，仅引用 034 S4b/S4c 作为下游闭环
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
 
 **触发**：用户 2026-05-12 要求把 P0/P1/🔴 项整理成实施计划，要求给合并决策的依据，不能没分析就合并。
+
+**v2 进度同步（2026-05-13）**：自 baseline `8d213883` 起 develop 上 5 个 merge 中 4 个属本计划（5th 是 034 S4a）：
+- ✅ PR-1 → PR #486 (OTEL-HARDEN-4，4 of 5；B2-R-05 因 kernel `metrics.Counter/Histogram` 接口故意省略 ctx → 同 PR 内 split 出 `METRICS-CTX-FUNNEL-01` Cx4 跨层条目)
+- ✅ PR-2 → PR #484 (含 review 升 Hard funnel `PROM-CELL-LABEL-FUNNEL-01`)
+- ✅ PR-7 → PR #483 (含 review type-aware 升 Hard，覆盖 4 个 Contract-expression 形态)
+- ✅ PR-8 → PR #485 (4 adapters 直接 ManagedResource + adapterutil helper + archtest gate + s3 状态机)
+- 🚧 PR-6 → PR #487 open (573-governance-rules-registration-guard，非 draft)
+- ⏳ PR-3 / PR-4 / PR-5 / PR-9 / PR-11 / Wave 3 / Wave 4 未启动
 
 ---
 
@@ -48,17 +57,28 @@
 
 ### ✅ 合并 PR
 
-#### PR-1 PR-OTEL-HARDEN-5（合并 5 个 P1）
+#### PR-1 PR-OTEL-HARDEN-5（合并 5 个 P1）— ✅ shipped as PR #486 (PR-OTEL-HARDEN-4)
 
 **包含**：B2-R-05 / B2-R-06 / B2-R-07 / B2-R-08 / B2-R-09
 **依据**：5 文件全部在 `adapters/otel/`（metric_provider.go / tracer.go / pool_collector.go），同一 adapter 的 hardening 主题
 **Cx**：Cx3
+**ship 摘要（PR #486, 2026-05-13）**：
+- 实际 4 of 5 子项落地（B2-R-06/07/08/09）。**B2-R-05 在 PR 内 split 出 `METRICS-CTX-FUNNEL-01`**：原 backlog 提议「ctx 透传」无法在 adapters/otel 内独立实现，kernel `metrics.Counter/Histogram` 接口故意省略 ctx（Prom 形态 label-binding 覆盖 label 维度），对齐 OTel 原生 ctx-bearing 形态需要 Cx4 跨 adapters/prometheus + kernel/outbox + runtime/http + kernel/wrapper 接口重构 → 离开 adapter scope
+- B2-R-06: `NewTracer` 末尾注册全局 TracerProvider + CompositeTextMapPropagator(TraceContext, Baggage)；错误路径不污染全局
+- B2-R-07: `defaultShutdownTimeout=10s` + `shutdownTracerProvider(ctx, tp, timeout)` helper（rationale: 5s 初版在 BSP shutdown race，10s 稳定，仍小于 OTel BSP ExportTimeout 30s 默认）
+- B2-R-08: 删 public `RegisterPoolMetrics`，单一出口 `NewPoolMetricsResource(meter, statters) (lifecycle.ManagedResource, error)`；compile-time Hard 守卫 + Close → registration.Unregister
+- B2-R-09: `attrCache.maxSize=2000` cap-and-overflow（非 LRU）+ `overflowOpt` sentinel，包外类型系统不可达（AI-rebust Hard）
 
-#### PR-2 PR-PROM-HARDEN-3（合并 3 个 P1）
+#### PR-2 PR-PROM-HARDEN-3（合并 3 个 P1）— ✅ shipped as PR #484
 
 **包含**：B2-A-22 / B2-A-23 / B2-A-24
 **依据**：`cmd/corebundle/metrics.go` + `adapters/prometheus/{hook_observer.go,metric_provider_test.go}`，Prometheus 出口面 hardening
 **Cx**：Cx2
+**ship 摘要（PR #484, 2026-05-13）**：
+- B2-A-22: `/metrics` handler 加 `promhttp.HandlerOpts.Timeout(10s)` + `MaxRequestsInFlight(3)` + self-instrument Registry
+- B2-A-23: cell-id no-dash invariant 上提至 Hard — `cell.schema.json ^[a-z][a-z0-9]+$` + `metadata.CellIDPattern` 单源 + `MatchCellID` helper；新增 `adapters/prometheus/cell_label.go` `promCellLabel` typed-function funnel + archtest `PROM-CELL-LABEL-FUNNEL-01`
+- B2-A-24: MetricProvider/HookObserver race tests + `adapters/prometheus` 纳入 `.github/workflows/test-race.yml`
+- **review 升级**：archtest 由字符串名匹配升至 `*types.Info.Uses` 包路径解析（type-aware Hard，charter §4 Wave 2 范式）
 
 #### PR-3 PR-CLI-HARDEN（合并 3 个 P1）
 
@@ -79,26 +99,39 @@
 **依赖**：PR-6（G-13）先 ship；合并理由偏弱，PR-6 ship 后可回看是否拆
 **Cx**：Cx2
 
-#### PR-6 G-13 GOVERNANCE-RULES-REGISTRATION-GUARD（独立 P1）
+#### PR-6 G-13 GOVERNANCE-RULES-REGISTRATION-GUARD（独立 P1）— 🚧 in review as PR #487
 
 **包含**：仅 G-13 单条
 **依据**：元治理框架（archtest 反射枚举 + `ValidateStrict` 单入口 + 提取 `rulecodes.go`），PR-5 的前置
 **改动**：`kernel/governance/{rules.go,rulecodes.go(新)}` + `tools/archtest/`
 **Cx**：Cx2
+**状态（2026-05-13）**：PR #487 open（分支 `573-governance-rules-registration-guard`，非 draft），review 中。merge 后解除 PR-5 的 ship 阻塞
 
-#### PR-7 AUTH-BOOTSTRAP-CLIENTS-MUTEX-01（独立判断）
+#### PR-7 AUTH-BOOTSTRAP-CLIENTS-MUTEX-01（独立判断）— ✅ shipped as PR #483
 
 **包含**：仅 AUTH-BOOTSTRAP-CLIENTS-MUTEX-01
 **改动**：`runtime/auth/route.go:validateBypassCompatibility` + 测试矩阵
 **与 034 边界**：034 S4a 不动 route.go，无 file 冲突
 **Cx**：Cx2
+**ship 摘要（PR #483, 2026-05-13）**：
+- runtime: `validateBypassCompatibility` 加 4th mutex branch — BootstrapAuth (HTTP Basic Auth via env, FMT-28 `/api/v1/*/setup/admin`) 与 Contract.Clients (service-token caller-cell allowlist, FMT-31 `/internal/v1/*`) 互斥
+- archtest: `TestAuthRouteBootstrapClientsMutex` 静态扫描整仓 `auth.Route` composite literal（含 `generated/`）
+- 矩阵测试覆盖 `{Public, PasswordResetExempt, BootstrapAuth, Policy, Contract.Clients}` 全 pairwise + singleton + 触发顺序断言
+- **review 升级**：archtest type-aware Hard 全覆盖 4 个 Contract-expression 形态（file-scope var / inline literal / func-body-local := / cross-package SelectorExpr，0 KNOWN-GAP）
+- 文件重命名 `setup_admin_bootstrap_closure_test.go → auth_bootstrap_invariants_test.go`（ai-collab.md theme-file 范式，≥3 同主题 invariant）
 
-#### PR-8 PR-OIDC-MR-COMPLETENESS（A-01 含 A-07/A-08 束）
+#### PR-8 PR-OIDC-MR-COMPLETENESS（A-01 含 A-07/A-08 束）— ✅ shipped as PR #485
 
 **包含**：A-01 OIDC-FAILFAST-MR-COMPLETENESS（backlog cap-13 line 41 已聚合为束）
 **子项**：(1) OIDC 同步 discover；(2) 4 adapter (postgres/redis/s3/oidc) Checkers；(3) s3 状态机 + 后台 health-check；(4) archtest MANAGED-RESOURCE-COMPLETENESS-01；(5) postgres.Pool 升 ManagedResource；(6) `adapters/adapterutil/`(新) helper
 **依据**：backlog 已聚合束；4 adapter 同时升 MR 才能挂 archtest 完整性闸门，缺一不可
 **Cx**：Cx3-Cx4
+**ship 摘要（PR #485, 2026-05-13）**：
+- (1) `oidc.New(ctx, cfg)` 同步 discover (`force=true`)，unreachable issuer fail-fast at boot；OIDC Adapter 直接实现 lifecycle.ManagedResource
+- (2-5) 4 adapter 全部直接实现 ManagedResource：postgres (drop PGResource wrapper) / redis (collapse WithHealthChecker+WithManagedCloser to single WithManagedResource) / s3 (+250 行状态机 + 后台 health-check goroutine) / oidc (Refresh API 保留给 PR-11 worker)
+- (4) archtest `MANAGED-RESOURCE-COMPLETENESS-01`（rename from MANAGED-RESOURCE-CONTRACT-01）+ drop 4 opt-outs
+- (6) `adapters/adapterutil/health.go` `HealthToCheckers` helper 下沉 4 adapter 复用
+- **unblock**：PR-11 OIDC-JWKS-ROTATION-WORKER 前置依赖已达成（commit body 显式："auto-rotation worker is PR-11/A-02"）
 
 #### PR-9 PR-REPO-READYZ
 
@@ -111,26 +144,26 @@
 ## 3. 依赖图与执行 Wave
 
 ```
-Wave 1（独立并行，8 PR）：
-  PR-1 OTEL-HARDEN-5         独立  ──┐
-  PR-2 PROM-HARDEN-3         独立  ──┤
-  PR-3 CLI-HARDEN            独立  ──┤
-  PR-4 JOURNEY-LIFECYCLE-GOV 独立  ──┼── 全部并行，无内部依赖
-  PR-6 G-13 元治理 guard     独立  ──┤
-  PR-7 BOOTSTRAP-CLIENTS-MUTEX 独立 ──┤
-  PR-8 OIDC-MR-COMPLETENESS  独立 ──┤
-  PR-9 REPO-READYZ           独立 ──┘
+Wave 1（独立并行，8 PR） — 4/8 ship + 1/8 in review：
+  PR-1 OTEL-HARDEN-5         ✅ PR #486 (OTEL-HARDEN-4，B2-R-05 split)
+  PR-2 PROM-HARDEN-3         ✅ PR #484
+  PR-3 CLI-HARDEN            ⏳ 未启动
+  PR-4 JOURNEY-LIFECYCLE-GOV ⏳ 未启动
+  PR-6 G-13 元治理 guard     🚧 PR #487 open (in review)
+  PR-7 BOOTSTRAP-CLIENTS-MUTEX ✅ PR #483
+  PR-8 OIDC-MR-COMPLETENESS  ✅ PR #485
+  PR-9 REPO-READYZ           ⏳ 未启动
 
-Wave 2（依赖 Wave 1，2 PR）：
+Wave 2（依赖 Wave 1，2 PR） — 0/2 ship：
   PR-5 GOV-NEW-RULES (GOVERNANCE-AUTH-PUBLIC + V-A11)
-       ↑ 依赖 PR-6（G-13 注册框架）
+       ↑ 依赖 PR-6 (PR #487 in review)；PR-6 merge 后可起
   PR-11 OIDC-JWKS-ROTATION-WORKER-01
-       ↑ 依赖 PR-8（A-01 ManagedResource Worker 切口）
+       ↑ 依赖 PR-8 ✅；**前置已达成，可立即排期** (Refresh API 已落在 oidc Adapter)
 
 Wave 3（依赖 Wave 1）：
-  TEST-JOURNEY-ROOT-HARNESS-01      ← 依赖 PR-4（journey lifecycle 校验）
+  TEST-JOURNEY-ROOT-HARNESS-01      ← 依赖 PR-4（未启动）
 
-Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突）：
+Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 0/5 ship：
   R-01 + G-08 同 batch（分 PR review）
   C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE
   STARTUP-ROLLBACK-ERR-JOIN-01
@@ -143,7 +176,11 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
   BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE (3 子条)
 
 外部进行中（不在本计划内但相关）：
-  034 S4a → S4b → S4c     (accesscore PG 链，串行)
+  034 S4a ✅ PR #482 → S4b → S4c     (accesscore PG 链，串行；S4a 已 ship)
+
+新增条目（038 内 ship 衍生，不另开 backlog 主线）：
+  METRICS-CTX-FUNNEL-01  ← 由 PR #486 (PR-1) 同 PR split 出，Cx4 跨层；backlog cap-13 line 21 已登记
+                          (kernel metrics 接口 ctx-bearing 化，影响 prometheus + otel + outbox + http + wrapper)
 ```
 
 ### 文件冲突核查（Wave 1 真并行）
@@ -160,22 +197,27 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 
 ## 4. 工时粗估
 
-| PR | dev | review | 备注 |
-|---|---|---|---|
-| PR-1 OTEL-HARDEN-5 | 8h | 4h | 5 项 |
-| PR-2 PROM-HARDEN-3 | 4h | 2h | 3 项 |
-| PR-3 CLI-HARDEN | 4h | 2h | 3 项 |
-| PR-4 JOURNEY-LIFECYCLE-GOV | 6h | 3h | K-02 束 |
-| PR-6 G-13 元治理 guard | 6h | 3h | 注册框架 |
-| PR-7 BOOTSTRAP-CLIENTS-MUTEX | 3h | 1.5h | route.go |
-| PR-8 OIDC-MR-COMPLETENESS | 18h | 8h | A-01 + A-07 + A-08 束 |
-| PR-9 REPO-READYZ | 4h | 2h | 2 项 |
-| PR-5 GOV-NEW-RULES（依赖 PR-6） | 4h | 2h | 2 rule |
-| PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8） | 4h | 2h | 后台 worker |
-| Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | integration harness |
-| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | R-01+G-08 batch 10h+5h / C-02 4h+2h / STARTUP-ROLLBACK 3h+1.5h / ADAPTER-ERR-CLASS 6h+3h / ADAPTER-CONN-BUDGET 4h+2h |
-| Wave 5 架构重构 | 独立排期 | — | G-10 / SEALED / BOOTSTRAP 束 |
-| **本计划合计（Wave 1-3）** | **~69h** | **~33.5h** | 10 PR + 1 wave 3 |
+| PR | dev | review | 状态 | 备注 |
+|---|---|---|---|---|
+| PR-1 OTEL-HARDEN-5 | 8h | 4h | ✅ PR #486 | 实际 4 of 5（B2-R-05 split → METRICS-CTX-FUNNEL-01） |
+| PR-2 PROM-HARDEN-3 | 4h | 2h | ✅ PR #484 | +review Hard funnel 升级 |
+| PR-3 CLI-HARDEN | 4h | 2h | ⏳ 未启动 | 3 项 |
+| PR-4 JOURNEY-LIFECYCLE-GOV | 6h | 3h | ⏳ 未启动 | K-02 束 |
+| PR-6 G-13 元治理 guard | 6h | 3h | 🚧 PR #487 in review | 注册框架；PR-5 阻塞解除待 merge |
+| PR-7 BOOTSTRAP-CLIENTS-MUTEX | 3h | 1.5h | ✅ PR #483 | +review type-aware Hard 全形态覆盖 |
+| PR-8 OIDC-MR-COMPLETENESS | 18h | 8h | ✅ PR #485 | A-01 + A-07 + A-08 束 |
+| PR-9 REPO-READYZ | 4h | 2h | ⏳ 未启动 | 2 项 |
+| PR-5 GOV-NEW-RULES（依赖 PR-6） | 4h | 2h | ⏳ 阻塞 PR-6 | 2 rule |
+| PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ⏳ 可起 | 后台 worker；PR-8 unblock |
+| Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | ⏳ 依赖 PR-4 | integration harness |
+| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | ⏳ 0/5 | R-01+G-08 batch 10h+5h / C-02 4h+2h / STARTUP-ROLLBACK 3h+1.5h / ADAPTER-ERR-CLASS 6h+3h / ADAPTER-CONN-BUDGET 4h+2h |
+| Wave 5 架构重构 | 独立排期 | — | — | G-10 / SEALED / BOOTSTRAP 束 |
+
+**累计**：
+- ✅ shipped (4 PR): ~33h dev / ~15.5h review（PR-1/2/7/8）
+- 🚧 in review (1 PR): 6h dev / 3h review（PR-6）
+- ⏳ 待启动 (Wave 1 剩余 + Wave 2/3/4): ~63h dev / ~31.5h review（PR-3/4/5/9/11 + Wave 3 + Wave 4）
+- 进度：Wave 1 4/8 ship（50%）+ 1/8 in review；038 整体 dev 进度 33%（按原计划 102h 总分母）
 
 ---
 
@@ -185,6 +227,13 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 2. **PR-5 暂合并 GOVERNANCE-AUTH-PUBLIC + V-A11，PR-6 ship 后回看** — 合并理由偏弱时主动留再决定窗口
 3. **R-01 / G-08 不合并**，分 PR review；这是 wave 4 小 PR
 4. **架构重构 wave 5 独立排期**，不进本计划主线
+
+### v2 后续决策（2026-05-13）
+
+5. **下一波优先级**：PR-6 (PR #487) 等 review 期间，应起 PR-3 (CLI-HARDEN, 4h) + PR-9 (REPO-READYZ, 4h) — 两者文件域互斥（cmd/gocell/app/ vs cells/{configcore,auditcore}/cell.go），可双 worktree 并行
+6. **PR-11 可立即起**：PR-8 已 ship 且 commit body 显式 unblock，oidc Adapter `Refresh(ctx)` API 已保留切口；不必等到 PR-6/PR-5 收口
+7. **PR-4 排期等 PR-6 merge**：rules 注册框架 ship 前先启动会产生 rebase 成本，等 PR-6 出来再排
+8. **METRICS-CTX-FUNNEL-01 不纳入 038 收口范围**：Cx4 跨 5+ 包接口重构离开本计划「阻塞项 + 高密度可合并 P1」scope；走独立 plan 或长期 backlog 触发型
 
 ---
 

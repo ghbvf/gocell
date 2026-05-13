@@ -78,7 +78,7 @@
 | 10 | `appcatalog` | 新建 | L1 LocalTx | — | `catalog` / `signing` / `scriptlib` / `s3dispatch` | `apps`, `app_versions`, `scripts`, `dispatch_tasks` |
 | 11 | `devicelifecycle` | 新建 | L1 LocalTx | — | `tombstone` / `cronsweep` | `device_status_log`（unified_device_id 索引） |
 
-> **id 命名**：全部 no-dash concat 格式（FMT-16 / FMT-C1 强制），由 `gocell validate --strict` 拦截。
+> **id 命名**：全部 no-dash concat 格式。FMT-C1 / FMT-A1（schema-mirrored，default rules() pipeline 无需 `--strict`）拦截 yaml id 形态；FMT-16 / FMT-17（`--strict` 追加）覆盖目录命名 + allowedFiles 漂移。
 
 ### 2.2 关键 Cell 设计要点
 
