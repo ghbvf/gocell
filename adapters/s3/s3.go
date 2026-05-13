@@ -31,9 +31,9 @@ const (
 	defaultS3HealthInterval = 30 * time.Second
 )
 
-// s3HeadBucketAPI is the narrow interface used by the health state machine.
+// bucketHeader is the narrow interface used by the health state machine.
 // *awss3.Client satisfies it; tests inject a mock via newClientWithHead.
-type s3HeadBucketAPI interface {
+type bucketHeader interface {
 	HeadBucket(ctx context.Context, params *awss3.HeadBucketInput, optFns ...func(*awss3.Options)) (*awss3.HeadBucketOutput, error)
 }
 
@@ -116,9 +116,9 @@ func (c Config) Validate() error {
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 type Client struct {
 	config Config
-	clk    clock.Clock     // injected time source; required (validated via clock.MustHaveClock)
-	s3     *awss3.Client   // full SDK client; used for Upload, SDK(), and Health()
-	head   s3HeadBucketAPI // narrow interface for state-machine probes; equals s3 in production
+	clk    clock.Clock   // injected time source; required (validated via clock.MustHaveClock)
+	s3     *awss3.Client // full SDK client; used for Upload, SDK(), and Health()
+	head   bucketHeader  // narrow interface for state-machine probes; equals s3 in production
 
 	// state holds the latest HeadBucket result.
 	// nil pointer = healthy; non-nil pointer to non-nil error = unhealthy.
@@ -170,7 +170,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 }
 
 // newClientWithHead is the internal constructor shared by New and tests.
-// It accepts an explicit s3HeadBucketAPI so tests can inject mocks without
+// It accepts an explicit bucketHeader so tests can inject mocks without
 // going through the full AWS SDK setup. If head is a *awss3.Client, it is also
 // stored as c.s3 so SDK() and Upload() work; mock implementations leave c.s3 nil.
 //
@@ -179,7 +179,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 // inject clockmock.New(...).
 // ref: KERNEL-CLOCK-LEAF-FALLBACK-01 — production leaves must not fallback to
 // clock.Real(); only the composition root may construct it.
-func newClientWithHead(ctx context.Context, cfg Config, head s3HeadBucketAPI) (*Client, error) {
+func newClientWithHead(ctx context.Context, cfg Config, head bucketHeader) (*Client, error) {
 	clock.MustHaveClock(cfg.Clock, "s3.New")
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
