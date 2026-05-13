@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -34,14 +35,22 @@ type Service struct {
 }
 
 // NewService creates a session-validate Service. Returns an error when any
-// required dependency is nil.
+// required dependency is nil (including typed-nil via validation.IsNilInterface).
+//
+// sessionStore may be nil: when nil, session revocation and epoch checks are
+// skipped (demo / integration-test mode). If non-nil, it is used to verify
+// session liveness before accepting a token.
 func NewService(
 	verifier auth.IntentTokenVerifier,
 	sessionStore session.Store,
 	userRepo ports.UserRepository,
 	logger *slog.Logger,
 ) (*Service, error) {
-	if userRepo == nil {
+	if validation.IsNilInterface(verifier) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session-validate: IntentTokenVerifier required")
+	}
+	if validation.IsNilInterface(userRepo) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session-validate: UserRepository required")
 	}
@@ -117,7 +126,10 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
-	// 2) Epoch invariant: user.authz_epoch must not exceed claims.AuthzEpoch.
+	// 2) Epoch invariant: user.authz_epoch must exactly match claims.AuthzEpoch.
+	// Using != (not >) ensures fail-closed on any mismatch including "future epoch"
+	// tokens where claims.AuthzEpoch > user.AuthzEpoch — such tokens indicate a
+	// tampered or replayed claim and must be rejected. (Finding #2)
 	user, err := s.userRepo.GetByID(ctx, claims.Subject)
 	if err != nil {
 		if errcode.IsInfraError(err) {
@@ -132,7 +144,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	if user.AuthzEpoch > claims.AuthzEpoch {
+	if user.AuthzEpoch != claims.AuthzEpoch {
 		s.logger.Warn("session-validate: authz epoch mismatch",
 			slog.String("subject", claims.Subject),
 			slog.Int64("user_epoch", user.AuthzEpoch),

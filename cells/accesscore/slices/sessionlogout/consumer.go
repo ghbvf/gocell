@@ -11,13 +11,18 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Consumer handles role-change events.
+// Package sessionlogout consumes role-changed events for observability and
+// audit. Credential invalidation (epoch bump + session revoke + refresh chain
+// revoke) is performed upstream by rbacassign.Service.Revoke through the
+// credentialinvalidate.Invalidator funnel inside the same tx as the role
+// mutation. This consumer must NOT call sessionStore.RevokeForSubject —
+// doing so would (a) violate CREDENTIAL-INVALIDATE-FUNNEL-01 archtest and
+// (b) cause redundant epoch bumps wrongly invalidating unrelated access JWTs.
 //
-// PRIMARY credential invalidation (BumpAuthzEpoch + RevokeForSubject +
-// RevokeUser) is performed atomically by rbacassign.Service.Revoke via the
-// credentialinvalidate funnel in the same transaction as the role removal. This
-// consumer processes the downstream outbox fact for observability and audit
-// purposes — it does NOT call RevokeForSubject again.
+// Package name retained as "sessionlogout" for historical wiring continuity;
+// see backlog for proposed rename to "rbacaudit".
+
+// Consumer handles role-change events.
 //
 // HIGH-3: role assignment (ActionAssigned) is additive and does not invalidate
 // credentials. This consumer Ack's assigned events without further action.
@@ -33,7 +38,7 @@ import (
 // Disposition:
 //   - unmarshal fail / empty userID → DispositionReject (PermanentError) → DLX
 //   - unknown action               → DispositionReject (PermanentError) → DLX
-//   - assigned                     → DispositionAck (no-op, funnel already ran)
+//   - assigned                     → DispositionAck (no-op, additive role change)
 //   - revoked                      → DispositionAck (funnel ran in rbacassign tx)
 //
 // DLX: broker-native via DispositionReject → Nack(requeue=false).

@@ -93,12 +93,21 @@ var funnelAllowlistSuffixes = []string{
 
 // isAllowlisted reports whether a module-relative path is in the funnel
 // allowlist. Test files (*_test.go) are always allowed.
+//
+// Implementation note (Finding #1): this function previously used
+// strings.Contains(rel, "/"+suffix) as a fallback. That branch was removed
+// because it could match any path segment containing the suffix string, which
+// would incorrectly allowlist paths like "examples/cells/accesscore/" if
+// examples were ever added to the scan patterns. The scan patterns above
+// (cells/..., runtime/..., adapters/..., cmd/...) are relative paths that
+// typeseval.SharedResolver returns as module-relative strings; HasPrefix is
+// sufficient and does not have the Contains ambiguity.
 func isAllowlisted(rel string) bool {
 	if strings.HasSuffix(rel, "_test.go") {
 		return true
 	}
 	for _, suffix := range funnelAllowlistSuffixes {
-		if strings.HasPrefix(rel, suffix) || strings.Contains(rel, "/"+suffix) {
+		if strings.HasPrefix(rel, suffix) {
 			return true
 		}
 	}

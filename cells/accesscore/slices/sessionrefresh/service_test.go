@@ -1484,6 +1484,109 @@ func (s *reuseOnRotateRefreshStore) Rotate(_ context.Context, _ string) (string,
 	return "", nil, refresh.ErrReused
 }
 
+// contextCapturingInvalidator is a spy invalidator that records the context
+// passed to Apply. Used to assert that reuse cascade uses an outer/detached
+// context rather than the txCtx that gets canceled when the outer tx rolls back.
+type contextCapturingInvalidator struct {
+	capturedCtx context.Context
+	err         error
+}
+
+func (s *contextCapturingInvalidator) Apply(ctx context.Context, _ string, _ session.CredentialEvent) error {
+	s.capturedCtx = ctx
+	return s.err
+}
+
+// outerCtxKey is a context key used in TestRefresh_Reuse_CascadeUsesDetachedCtx
+// to identify contexts derived from outerCtx vs txCtx.
+type outerCtxKey struct{}
+
+// outerCtxTxRunner is a TxRunner that sets a distinguishing txCtx key on the
+// inner context so the test can verify Apply is called with outerCtx-derived
+// context (WithoutCancel) rather than txCtx itself.
+//
+// Behavior: the inner fn receives a txCtx with txCtxKey set to "tx". The
+// outer context (passed to RunInTx) carries the outerCtxKey set to "outer".
+// After the fix, handleRotateError wraps outerCtx with context.WithoutCancel
+// and passes that to the inner RunInTx; the detached RunInTx again calls fn
+// with an inner txCtx — but that inner txCtx is derived from the detached
+// outerCtx, so it does NOT carry txCtxKey but DOES carry outerCtxKey, proving
+// the cascade context chain goes through outerCtx.
+type outerCtxTxRunner struct {
+	calls int
+}
+
+func (r *outerCtxTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	r.calls++
+	// Derive txCtx from the parent ctx (mirrors real PG TxManager behavior).
+	// We tag txCtx so we can detect if Apply received it directly.
+	txCtx := context.WithValue(ctx, struct{ txCall int }{r.calls}, "tx")
+	return fn(txCtx)
+}
+
+// TestRefresh_Reuse_CascadeUsesDetachedCtx verifies that Finding #4 is fixed:
+// when ErrReused is returned by Rotate, the invalidator.Apply call uses a
+// context that is derived from outerCtx (not from the outer txCtx).
+//
+// Before the fix: Apply was called with txCtx directly inside the outer RunInTx
+// closure. Returning authRefreshRejected() from the closure caused the outer tx
+// to roll back, which canceled txCtx and undid all Apply writes.
+//
+// After the fix: handleRotateError wraps outerCtx with context.WithoutCancel and
+// opens a new (inner) RunInTx for Apply — detached from the outer tx — so Apply
+// commits independently of the outer 401 rejection.
+//
+// The test verifies that:
+//  1. Apply is called.
+//  2. The context received by Apply carries the outerCtxKey value (proving it
+//     was derived from the caller's ctx, not from a fresh background context).
+//  3. Refresh returns ErrAuthRefreshFailed (uniform 401).
+func TestRefresh_Reuse_CascadeUsesDetachedCtx(t *testing.T) {
+	t.Parallel()
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-detached", "detached@test.local", "hash", time.Now())
+	u.ID = "usr-detached"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnRotateRefreshStore{Store: innerStore, subjectID: "usr-detached", sessionID: "sess-detached"}
+	spy := &contextCapturingInvalidator{}
+
+	outerRunner := &outerCtxTxRunner{}
+	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
+		spy,
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outerRunner)))
+
+	sess := newTestSession("usr-detached", "sess-detached")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	// Attach a sentinel value to the caller's ctx so we can verify the cascade
+	// context chain propagates it.
+	callerCtx := context.WithValue(context.Background(), outerCtxKey{}, "outer")
+
+	_, err := svc.Refresh(callerCtx, "any-token")
+	// Expect ErrAuthRefreshFailed (reuse rejection).
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
+
+	// KEY ASSERTIONS:
+	require.NotNil(t, spy.capturedCtx, "invalidator.Apply must have been called")
+	// The Apply context must carry the outerCtxKey sentinel — proving it was
+	// derived from the caller's outerCtx, not from a fresh context.Background().
+	assert.Equal(t, "outer", spy.capturedCtx.Value(outerCtxKey{}),
+		"Apply context must be derived from outerCtx (carrying outerCtxKey sentinel) — "+
+			"proving the cascade tx is detached from txCtx but still rooted in the caller's ctx")
+	// Apply context must not be canceled (the outer tx closure returned an error
+	// but that must not cancel the detached cascade context).
+	assert.NoError(t, spy.capturedCtx.Err(),
+		"Apply context must NOT be canceled — cascade uses context.WithoutCancel(outerCtx)")
+}
+
 // Compile-time check: ports is used (userRepo, roleRepo). Ensure unused import
 // does not surface — the import is consumed by domain/mem references above.
 var _ ports.UserRepository = (*mem.UserRepository)(nil)

@@ -306,6 +306,50 @@ func newSvcWithUserRepo(t testing.TB, store session.Store, userRepo ports.UserRe
 	return svc
 }
 
+// TestNewService_NilGuards verifies that NewService fail-fasts on nil required deps.
+// Finding #3: verifier nil-check added alongside existing userRepo check.
+func TestNewService_NilGuards(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-1"}}
+
+	cases := []struct {
+		name     string
+		verifier auth.IntentTokenVerifier
+		userRepo ports.UserRepository
+	}{
+		{
+			name:     "nil verifier returns error",
+			verifier: nil,
+			userRepo: userRepo,
+		},
+		{
+			name:     "typed-nil verifier returns error",
+			verifier: (*auth.JWTVerifier)(nil),
+			userRepo: userRepo,
+		},
+		{
+			name:     "nil userRepo returns error",
+			verifier: testVerifier,
+			userRepo: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc, err := NewService(tc.verifier, store, tc.userRepo, slog.Default())
+			require.Error(t, err, "NewService must fail on nil dep: %s", tc.name)
+			assert.Nil(t, svc)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.KindInvalid, ec.Kind)
+			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+		})
+	}
+}
+
 // seedActiveSession seeds a session in store and returns its ID.
 func seedActiveSession(t testing.TB, store *session.MemStore, sid, subject string) {
 	t.Helper()
@@ -421,20 +465,24 @@ func TestEnforce_ZeroEpochCompat(t *testing.T) {
 	require.NoError(t, err, "zero epoch on both sides must pass (pre-S4b compat)")
 }
 
-// TestEnforce_HigherClaimEpoch_Accepted verifies that claim.AuthzEpoch > user.AuthzEpoch
-// passes (user has not been bumped, token is ahead — harmless per plan).
-func TestEnforce_HigherClaimEpoch_Accepted(t *testing.T) {
+// TestEnforce_HigherClaimEpoch_Rejected verifies that claim.AuthzEpoch > user.AuthzEpoch
+// is rejected with 401 (fail-closed: any epoch mismatch including "future epoch" is invalid).
+// Finding #2: > changed to != so claims with epoch ahead of user are also rejected.
+func TestEnforce_HigherClaimEpoch_Rejected(t *testing.T) {
 	store := newTestStore(t)
 	seedActiveSession(t, store, "sess-epoch-high", "usr-ep-high")
 
 	user := &domain.User{ID: "usr-ep-high", AuthzEpoch: 5}
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
+	// claim=10 > user=5: a "future epoch" token must be rejected (fail-closed).
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-ep-high", 10, time.Hour, "sess-epoch-high")
 	require.NoError(t, err)
 
 	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
-	require.NoError(t, err, "claim epoch ahead of user epoch must pass")
+	require.Error(t, err, "claim epoch ahead of user epoch must be rejected (fail-closed mismatch)")
+	assert.Contains(t, err.Error(), errMsgAuthFailed,
+		"future epoch mismatch must return uniform auth-failed message")
 }
 
 // TestEnforce_SessionInfraError_Returns503 verifies that an infra error from

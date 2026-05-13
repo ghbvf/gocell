@@ -18,6 +18,9 @@ package archtest
 //     AuthzEpoch, to tolerate minor refactors while keeping the invariant stable).
 //  2. Contain a call to a method named GetByID (user repo read to obtain the
 //     current server-side epoch for comparison).
+//  3. Contain a BinaryExpr with Op == token.NEQ (!=) that references AuthzEpoch
+//     on either side — enforcing that the epoch comparison is a strict inequality
+//     check and not a weaker operator like > (Finding #2 security fix).
 //
 // Blind-spot note (ai-collab.md §"工具选定后强制盲区自检"):
 // EachInSubtree[ast.FuncDecl] + EachInSubtree[ast.SelectorExpr] covers the
@@ -28,11 +31,18 @@ package archtest
 // structural change, not an accidental omission. The GREEN baseline test
 // (TestSessionvalidateEpochCompare_ServiceFileGreen) catches any such drift
 // at review time.
+//
+// Blind-spot for bodyContainsEpochInequality:
+// EachInSubtree[ast.BinaryExpr] covers inline BinaryExpr. If the != check
+// were extracted into a helper predicate called from enforceSessionState, the
+// body scan would miss the BinaryExpr (it would be in the helper's body).
+// This is covered by the existing TestSessionvalidateEpochCompare_BlindSpot_InlinedHelper
+// which asserts no epoch-named helper calls exist in enforceSessionState.
 
 import (
 	"go/ast"
 	"go/parser"
-	"go/token"
+	gotoken "go/token"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,19 +58,55 @@ const (
 	enforceFuncName            = "enforceSessionState"
 )
 
+// exprContainsSelectorName reports whether any SelectorExpr within expr
+// has Sel.Name == name. Used by bodyContainsEpochInequality to identify
+// which side of a BinaryExpr references AuthzEpoch.
+func exprContainsSelectorName(expr ast.Expr, name string) bool {
+	found := false
+	scanner.EachInSubtree[ast.SelectorExpr](expr, func(sel *ast.SelectorExpr) {
+		if sel.Sel != nil && sel.Sel.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+// bodyContainsEpochInequality reports whether the function body contains a
+// BinaryExpr with Op == token.NEQ (!=) where at least one side references
+// an AuthzEpoch selector. This enforces that the epoch comparison uses strict
+// inequality (!=) rather than a weaker operator like > (Finding #2).
+func bodyContainsEpochInequality(body *ast.BlockStmt) bool {
+	found := false
+	scanner.EachInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) {
+		if found {
+			return
+		}
+		if be.Op != gotoken.NEQ {
+			return
+		}
+		// Either side of the != must reference .AuthzEpoch.
+		if exprContainsSelectorName(be.X, "AuthzEpoch") || exprContainsSelectorName(be.Y, "AuthzEpoch") {
+			found = true
+		}
+	})
+	return found
+}
+
 // TestSessionvalidateEpochCompare_01 enforces SESSIONVALIDATE-EPOCH-COMPARE-01:
-// the enforceSessionState function in sessionvalidate/service.go must contain
-// both a reference to AuthzEpoch and a GetByID call. This prevents a future
-// refactor from silently removing the epoch-invariant check.
+// the enforceSessionState function in sessionvalidate/service.go must contain:
+//  1. A reference to AuthzEpoch (the epoch field exists in the check).
+//  2. A GetByID call (user repo is read to fetch the server-side epoch).
+//  3. A BinaryExpr with Op == token.NEQ (!=) referencing AuthzEpoch — the epoch
+//     comparison must be strict inequality, not a weaker operator like >.
 //
 // Scanning tool: pure AST (go/parser), no type info required — the invariant
-// is expressed entirely in terms of identifier names within the function body.
+// is expressed entirely in terms of identifier names and operator tokens.
 func TestSessionvalidateEpochCompare_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	targetFile := filepath.Join(root, sessionvalidateServiceFile)
 
-	fset := token.NewFileSet()
+	fset := gotoken.NewFileSet()
 	file, err := parser.ParseFile(fset, targetFile, nil, parser.SkipObjectResolution)
 	require.NoError(t, err, "parse %s", sessionvalidateServiceFile)
 
@@ -72,28 +118,35 @@ func TestSessionvalidateEpochCompare_01(t *testing.T) {
 
 	hasAuthzEpoch := bodyContainsSelectorName(body, "AuthzEpoch")
 	hasGetByID := bodyContainsMethodCall(body, "GetByID")
+	hasEpochInequality := bodyContainsEpochInequality(body)
 
 	assert.True(t, hasAuthzEpoch,
 		"SESSIONVALIDATE-EPOCH-COMPARE-01: %q in %s must reference 'AuthzEpoch' — "+
-			"epoch invariant check (user.AuthzEpoch > claims.AuthzEpoch) must not be removed",
+			"epoch invariant check (user.AuthzEpoch != claims.AuthzEpoch) must not be removed",
 		enforceFuncName, sessionvalidateServiceFile)
 	assert.True(t, hasGetByID,
 		"SESSIONVALIDATE-EPOCH-COMPARE-01: %q in %s must call a method named 'GetByID' — "+
 			"user repo read is required to obtain the server-side epoch for comparison",
 		enforceFuncName, sessionvalidateServiceFile)
+	assert.True(t, hasEpochInequality,
+		"SESSIONVALIDATE-EPOCH-COMPARE-01: %q in %s must compare AuthzEpoch with != (token.NEQ) — "+
+			"the epoch check must be fail-closed strict inequality, not a weaker operator like >. "+
+			"Finding #2: > was changed to != to reject any epoch mismatch including future-epoch tokens",
+		enforceFuncName, sessionvalidateServiceFile)
 }
 
-// TestSessionvalidateEpochCompare_RedFixtureMisses verifies the RED fixture
-// (testdata/sessionvalidate_no_epoch_compare_red/service.go) does NOT contain
-// the AuthzEpoch selector — proving the scanner can distinguish missing from present.
-// This is the "反向 RED 自检" (reverse RED self-check).
-func TestSessionvalidateEpochCompare_RedFixtureMisses(t *testing.T) {
+// TestSessionvalidateEpochCompare_RedFixtureDetected verifies the RED fixture
+// (testdata/sessionvalidate_no_epoch_compare_red/service.go) DOES contain AuthzEpoch
+// and GetByID (so those checks pass), but uses > instead of != — proving the
+// new bodyContainsEpochInequality check can detect the wrong operator.
+// This is the "反向 RED 自检" (reverse RED self-check) for the upgraded rule.
+func TestSessionvalidateEpochCompare_RedFixtureDetected(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	fixtureFile := filepath.Join(root,
 		"tools", "archtest", "testdata", "sessionvalidate_no_epoch_compare_red", "service.go")
 
-	fset := token.NewFileSet()
+	fset := gotoken.NewFileSet()
 	file, err := parser.ParseFile(fset, fixtureFile, nil, parser.SkipObjectResolution)
 	require.NoError(t, err, "parse RED fixture")
 
@@ -102,14 +155,17 @@ func TestSessionvalidateEpochCompare_RedFixtureMisses(t *testing.T) {
 
 	hasAuthzEpoch := bodyContainsSelectorName(body, "AuthzEpoch")
 	hasGetByID := bodyContainsMethodCall(body, "GetByID")
+	hasEpochInequality := bodyContainsEpochInequality(body)
 
-	// The RED fixture intentionally omits both — assert both are absent.
-	assert.False(t, hasAuthzEpoch,
-		"RED fixture self-check: fixture must NOT contain 'AuthzEpoch' — "+
-			"if it does, the GREEN scanner cannot distinguish the absent-epoch case")
-	assert.False(t, hasGetByID,
-		"RED fixture self-check: fixture must NOT contain 'GetByID' — "+
-			"if it does, the GREEN scanner cannot distinguish the missing-call case")
+	// The RED fixture has AuthzEpoch and GetByID — those checks pass.
+	assert.True(t, hasAuthzEpoch,
+		"RED fixture self-check: fixture must contain 'AuthzEpoch' selector (it uses >)")
+	assert.True(t, hasGetByID,
+		"RED fixture self-check: fixture must contain 'GetByID' call")
+	// But the fixture uses > not !=, so the inequality check must FAIL.
+	assert.False(t, hasEpochInequality,
+		"RED fixture self-check: fixture must NOT satisfy bodyContainsEpochInequality — "+
+			"it uses > (GT) not != (NEQ), so the new check must catch it as a violation")
 }
 
 // ─── AST helpers ────────────────────────────────────────────────────────
@@ -165,7 +221,7 @@ func TestSessionvalidateEpochCompare_BlindSpot_InlinedHelper(t *testing.T) {
 	root := findModuleRoot(t)
 	targetFile := filepath.Join(root, sessionvalidateServiceFile)
 
-	fset := token.NewFileSet()
+	fset := gotoken.NewFileSet()
 	file, err := parser.ParseFile(fset, targetFile, nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
