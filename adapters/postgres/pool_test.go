@@ -328,8 +328,7 @@ func TestPool_WorkerReturnsNil(t *testing.T) {
 }
 
 // TestPool_CloseDelegatesAndAcceptsCtx verifies that Close(ctx) delegates to
-// the underlying pool drain and that a pre-canceled context surfaces an error
-// (same behavior as the prior PGResource wrapper).
+// the underlying pool drain and that a pre-canceled context surfaces an error.
 func TestPool_CloseDelegatesAndAcceptsCtx(t *testing.T) {
 	// Pre-canceled context — Close must propagate ctx.Err().
 	canceledCtx, cancel := context.WithCancel(context.Background())
