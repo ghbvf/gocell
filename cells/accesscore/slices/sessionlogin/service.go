@@ -202,6 +202,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		UserID:                user.ID,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired,
+		AuthzEpoch:            user.AuthzEpoch,
 	})
 	if err != nil {
 		s.logger.Error("session-login: token issuance failed",
@@ -338,6 +339,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		UserID:                userID,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired,
+		AuthzEpoch:            user.AuthzEpoch,
 	})
 	if err != nil {
 		s.logger.Error("session-login: IssueForUser token issuance failed",

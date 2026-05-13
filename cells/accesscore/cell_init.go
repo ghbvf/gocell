@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
@@ -187,6 +188,16 @@ func (c *AccessCore) initSlices() error {
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cellvocab.L2))
 
+	// credentialinvalidate: shared invalidator for identity-manage, rbac-assign,
+	// and session-refresh. Atomically bumps authz_epoch, revokes all sessions, and
+	// revokes all refresh tokens for a subject when a credential-invalidating event
+	// (password change, role assignment, token reuse) is detected.
+	inv, err := credentialinvalidate.New(c.userRepo, c.sessionStore, c.refreshStore)
+	if err != nil {
+		return err
+	}
+	c.invalidator = inv
+
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
 	identityOpts := []identitymanage.Option{
 		identitymanage.WithEmitter(c.emitter),
@@ -195,7 +206,7 @@ func (c *AccessCore) initSlices() error {
 		identitymanage.WithLastAdminProtection(c.roleRepo),
 	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
-	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionStore, c.refreshStore, c.logger, identityOpts...)
+	identitySvc, err := identitymanage.NewService(c.userRepo, c.invalidator, c.logger, identityOpts...)
 	if err != nil {
 		return err
 	}
@@ -219,6 +230,7 @@ func (c *AccessCore) initSlices() error {
 		c.jwtIssuer, c.logger,
 		sessionrefresh.WithClock(c.clk),
 		sessionrefresh.WithTxManager(c.txRunner),
+		sessionrefresh.WithInvalidator(c.invalidator),
 	)
 	if err != nil {
 		return err
@@ -255,7 +267,7 @@ func (c *AccessCore) initSlices() error {
 	}
 
 	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
-	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionStore, c.logger)
+	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.logger)
 
 	// config-receive: subscribes to config state-sync events from configcore.
 	// WithConfigGetter is optional — nil disables the cross-cell GetEntry fetch.
@@ -304,7 +316,7 @@ func (c *AccessCore) initRbacAssign() error {
 	if c.rbacEmitterMode {
 		rbacOpts = append(rbacOpts, rbacassign.WithEmitter(c.emitter))
 	}
-	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.sessionStore, c.logger, rbacOpts...)
+	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.invalidator, c.logger, rbacOpts...)
 	if err != nil {
 		return err
 	}

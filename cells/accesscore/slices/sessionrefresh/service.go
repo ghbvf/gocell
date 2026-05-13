@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -49,6 +50,29 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	}
 }
 
+// invalidatorApply is the minimal interface sessionrefresh needs from the
+// credential-invalidation funnel. Using an interface (rather than a concrete
+// *credentialinvalidate.Invalidator field) keeps the slice unit-testable with a
+// spy and decouples it from the concrete invalidator package at the type level.
+// Production code injects *credentialinvalidate.Invalidator which satisfies
+// this interface by method set.
+type invalidatorApply interface {
+	Apply(ctx context.Context, subjectID string, event session.CredentialEvent) error
+}
+
+// WithInvalidator injects the credential-invalidation funnel used to
+// cascade epoch bump + session revoke + refresh chain revoke on refresh-token
+// reuse detection. Required — NewService fails fast when nil.
+// Nil is silently ignored to keep the option idempotent; final nil
+// enforcement is in NewService.
+func WithInvalidator(inv *credentialinvalidate.Invalidator) Option {
+	return func(s *Service) {
+		if inv != nil {
+			s.invalidator = inv
+		}
+	}
+}
+
 // Service implements token refresh logic.
 type Service struct {
 	sessionStore session.Store
@@ -56,9 +80,14 @@ type Service struct {
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
 	txRunner     persistence.CellTxManager
-	issuer       *auth.JWTIssuer
-	logger       *slog.Logger
-	clock        clock.Clock
+	// invalidator is the credential-revocation funnel. Required — NewService
+	// fails fast when nil. On refresh-token reuse detection, Apply is called
+	// inside the outer transaction to atomically bump authz_epoch, revoke all
+	// sessions, and revoke all refresh chains for the subject.
+	invalidator invalidatorApply
+	issuer      *auth.JWTIssuer
+	logger      *slog.Logger
+	clock       clock.Clock
 }
 
 // NewService creates a session-refresh Service.
@@ -112,6 +141,10 @@ func NewService(
 	if s.txRunner == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"sessionrefresh: TxRunner required; use WithTxManager")
+	}
+	if validation.IsNilInterface(s.invalidator) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionrefresh: Invalidator required; use WithInvalidator")
 	}
 	clock.MustHaveClock(s.clock, "sessionrefresh.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
@@ -231,6 +264,7 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 		UserID:                sess.SubjectID,
 		SessionID:             sess.ID,
 		PasswordResetRequired: passwordResetRequired,
+		AuthzEpoch:            user.AuthzEpoch,
 	})
 	if err != nil {
 		s.logger.Error("session-refresh: token issuance failed",
@@ -242,7 +276,7 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 
 	newWire, rotated, err := s.refreshStore.Rotate(ctx, refreshToken)
 	if err != nil {
-		return dto.TokenPair{}, s.refreshStoreError("session-refresh: refresh store rotate failed", err)
+		return dto.TokenPair{}, s.handleRotateError(ctx, err, sess.SubjectID, sess.ID)
 	}
 	// rotated.SessionID must match the verified session; defend against
 	// concurrent drift between Peek and Rotate.
@@ -261,6 +295,24 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 		UserID:                sess.SubjectID,
 		PasswordResetRequired: passwordResetRequired,
 	}, nil
+}
+
+// handleRotateError interprets a Rotate error and returns the appropriate
+// service-layer error. On ErrReused it atomically triggers the invalidator
+// cascade; on other errors it delegates to refreshStoreError.
+func (s *Service) handleRotateError(ctx context.Context, rotateErr error, subjectID, sessionID string) error {
+	if !errors.Is(rotateErr, refresh.ErrReused) {
+		return s.refreshStoreError("session-refresh: refresh store rotate failed", rotateErr)
+	}
+	// Reuse attack detected: atomically bump epoch + revoke sessions +
+	// revoke refresh chain via the funnel. Apply runs inside the outer
+	// tx so all three operations commit or roll back together.
+	if applyErr := s.invalidator.Apply(ctx, subjectID, session.CredentialEventRefreshReuse); applyErr != nil {
+		s.logger.Error("session-refresh: reuse cascade invalidator failed",
+			slog.Any("error", applyErr), slog.String("session_id", sessionID))
+		return applyErr
+	}
+	return authRefreshRejected()
 }
 
 func (s *Service) refreshStoreError(logMessage string, err error) error {
