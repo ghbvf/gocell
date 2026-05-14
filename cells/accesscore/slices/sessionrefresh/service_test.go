@@ -1475,6 +1475,55 @@ func TestRefresh_Reuse_TriggersInvalidatorApply(t *testing.T) {
 		"reuse path must not double-revoke through RevokeSession either")
 }
 
+// TestRefresh_Reuse_CascadeFailure_Returns401 verifies the security-critical
+// fail-closed property of handleReuseDetected: when the reuse-cascade
+// invalidator.Apply itself fails (e.g. DB transient outage, downstream
+// KindUnavailable), the wire response must remain 401 ErrAuthRefreshFailed —
+// not propagate the infra error as 503. Surfacing 503 here would leak a
+// side-channel signal that "the cascade tried but failed", letting an
+// attacker enumerate cascade-state by status code timing.
+func TestRefresh_Reuse_CascadeFailure_Returns401(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-cascade-fail", "cascade-fail@test.local", "hash", time.Now())
+	u.ID = "usr-cascade-fail"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnRotateRefreshStore{Store: innerStore, subjectID: "usr-cascade-fail", sessionID: "sess-cascade-fail"}
+	// spy invalidator returns KindUnavailable — without the fail-closed fix
+	// this would bubble up through the middleware as 503.
+	spy := &spyInvalidator{
+		err: errcode.New(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable,
+			"injected cascade DB outage"),
+	}
+
+	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
+		spy,
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+
+	sess := newTestSession("usr-cascade-fail", "sess-cascade-fail")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-cascade-fail", "usr-cascade-fail")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"reuse-cascade-failure path must surface uniform ErrAuthRefreshFailed (401), NOT the underlying ErrAuthRefreshUnavailable (503)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+		"Kind must collapse to KindUnauthenticated so middleware emits 401; KindUnavailable would emit 503 and leak a cascade-state side channel")
+
+	require.Len(t, spy.calls, 1, "invalidator.Apply must still be attempted on reuse path")
+}
+
 // reuseOnRotateRefreshStore wraps a refresh.Store and overrides Peek to
 // return a token that maps to the given session/subject, and Rotate to
 // return ErrReused so the reuse-cascade branch fires.

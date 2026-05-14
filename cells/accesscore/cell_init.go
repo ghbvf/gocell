@@ -249,7 +249,11 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("sessionlogout", "accesscore", cellvocab.L2))
 
 	// authorization-decide
-	c.authzSvc = authorizationdecide.NewService(c.roleRepo, c.logger)
+	authzSvc, err := authorizationdecide.NewService(c.roleRepo, c.logger)
+	if err != nil {
+		return err
+	}
+	c.authzSvc = authzSvc
 	c.AddSlice(cell.NewBaseSlice("authorizationdecide", "accesscore", cellvocab.L0))
 
 	// rbac-check

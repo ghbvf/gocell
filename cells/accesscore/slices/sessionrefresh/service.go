@@ -382,12 +382,19 @@ func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessi
 	if applyErr := s.txRunner.RunInTx(detachedCtx, func(txCtx context.Context) error {
 		return s.invalidator.Apply(txCtx, subjectID, session.CredentialEventRefreshReuse)
 	}); applyErr != nil {
+		// Reuse has already been identified as an attack — the wire response
+		// must be uniform 401 regardless of whether the cascade infrastructure
+		// (DB, dependent stores) is currently healthy. Surfacing applyErr here
+		// would let an infra KindUnavailable bubble through the middleware as
+		// 503, leaking a side-channel signal that "the cascade tried but
+		// failed". Log the cascade failure for operator follow-up, then
+		// fail-closed to the same uniform 401 rejection.
 		s.logger.Error("session-refresh: reuse cascade invalidator failed",
 			slog.Any("error", applyErr),
 			slog.String("stage", stage),
 			slog.String("subject_id", subjectID),
 			slog.String("session_id", sessionID))
-		return applyErr
+		return authRefreshRejected()
 	}
 	s.logger.Warn("session-refresh: reuse cascade applied",
 		slog.String("stage", stage),

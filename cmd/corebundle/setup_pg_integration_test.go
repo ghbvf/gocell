@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -357,6 +358,15 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 	require.NoError(t, adapterpg.VerifyExpectedShape(ctx, pool))
+
+	// Migration 019 creates the `roles` table but only seeds the "admin" role
+	// (via the adminprovision setup flow). RBAC tests assigning non-admin
+	// roles need the role row to exist or AssignToUser fails with FK
+	// violation → ErrAuthRoleNotFound (404). Seed "editor" so S4b RBAC tests
+	// have a non-admin role to assign and revoke.
+	_, err = pool.DB().Exec(ctx,
+		`INSERT INTO roles (id, name) VALUES ('editor', 'editor') ON CONFLICT (id) DO NOTHING`)
+	require.NoError(t, err, "seed editor role")
 
 	txMgr := adapterpg.NewTxManager(pool)
 
@@ -829,15 +839,19 @@ func TestSessionRefresh_TwoHops_PG(t *testing.T) {
 
 // sessionPGLockUser calls POST /api/v1/access/users/{userID}/lock with the
 // given admin access token and returns the HTTP status code.
+//
+// The Lock endpoint has an empty request schema but the generated handler
+// calls DecodeJSONStrict, which rejects nil bodies with 400. Send "{}" so the
+// decoder sees a valid empty object.
 func sessionPGLockUser(t *testing.T, base, adminAccessToken, userID string) int {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/access/users/"+userID+"/lock", nil)
+	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/access/users/"+userID+"/lock", bytes.NewReader([]byte("{}")))
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+adminAccessToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := setupHTTPClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
 }
 
@@ -897,67 +911,93 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 	ctx := context.Background()
 	h := newSessionPGHarness(t)
 
-	// 1. Login — access JWT is issued at authz_epoch=0 (user just created).
-	accessTok, _, _ := sessionPGLogin(t, h.base, sessionPGAdminUsername, sessionPGAdminPassword)
+	// 1. Login as admin — admin's JWT is used only to authorize the create+lock
+	// calls below. Locking the admin themselves would trip the
+	// effective_admin_invariant (403 ErrAuthLastAdminProtected) because the
+	// harness only provisions a single admin; the funnel-bump assertions need
+	// a non-admin victim, so we create a regular user first.
+	adminAccessTok, _, _ := sessionPGLogin(t, h.base, sessionPGAdminUsername, sessionPGAdminPassword)
 
-	// Obtain the admin's user ID for the lock call.
-	userID := sessionPGQueryUserIDByUsername(t, h, sessionPGAdminUsername)
+	// 2. Create a non-admin user via POST /api/v1/access/users (admin policy).
+	const victimUsername = "session-victim"
+	const victimPassword = "VictimPass!99"
+	createBody, _ := json.Marshal(map[string]string{
+		"username": victimUsername,
+		"email":    "victim@pg-test.local",
+		"password": victimPassword,
+	})
+	createReq, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/users", bytes.NewReader(createBody))
+	createReq.Header.Set("Authorization", "Bearer "+adminAccessTok)
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp, err := setupHTTPClient.Do(createReq)
+	require.NoError(t, err)
+	_ = createResp.Body.Close()
+	require.Equal(t, http.StatusCreated, createResp.StatusCode, "victim user creation must return 201")
 
-	// 2. Lock the user via POST /api/v1/access/users/{id}/lock (admin policy).
-	// Use the admin's own access token — admin can lock any user.
-	lockStatus := sessionPGLockUser(t, h.base, accessTok, userID)
+	// 3. Login as the victim user to obtain an epoch=0 access JWT.
+	victimAccessTok, _, _ := sessionPGLogin(t, h.base, victimUsername, victimPassword)
+	victimID := sessionPGQueryUserIDByUsername(t, h, victimUsername)
+
+	// 4. Lock the victim user via POST /api/v1/access/users/{id}/lock (admin policy).
+	// Admin token authorizes; victim is non-admin so last-admin invariant is not engaged.
+	lockStatus := sessionPGLockUser(t, h.base, adminAccessTok, victimID)
 	assert.Equal(t, http.StatusOK, lockStatus,
-		"Lock must return 200; token issued before lock so epoch check passes")
+		"Lock of non-admin victim must return 200")
 
-	// 3. PG assertion: authz_epoch must be exactly 1 after Lock.
+	// 5. PG assertion: victim.authz_epoch must be exactly 1 after Lock.
 	var epoch int64
-	err := h.pool.DB().QueryRow(ctx,
-		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epoch)
-	require.NoError(t, err, "users row must exist")
+	err = h.pool.DB().QueryRow(ctx,
+		`SELECT authz_epoch FROM users WHERE id = $1`, victimID).Scan(&epoch)
+	require.NoError(t, err, "victim users row must exist")
 	assert.Equal(t, int64(1), epoch,
-		"authz_epoch must be 1 after Lock (credentialinvalidate funnel bumped exactly once)")
+		"victim.authz_epoch must be 1 after Lock (credentialinvalidate funnel bumped exactly once)")
 
-	// 4. PG assertion: all sessions for the subject must be revoked.
+	// 6. PG assertion: all victim sessions must be revoked.
 	var activeSessionCount int
 	err = h.pool.DB().QueryRow(ctx,
-		`SELECT count(*) FROM sessions WHERE subject_id = $1 AND revoked_at IS NULL`, userID).
+		`SELECT count(*) FROM sessions WHERE subject_id = $1 AND revoked_at IS NULL`, victimID).
 		Scan(&activeSessionCount)
 	require.NoError(t, err)
 	assert.Equal(t, 0, activeSessionCount,
-		"all sessions must be revoked after Lock; active session count must be 0")
+		"all victim sessions must be revoked after Lock; active session count must be 0")
 
-	// 5. Replay the epoch=0 access JWT → 401 (epoch mismatch in enforceSessionState).
+	// 7. Replay the victim's epoch=0 access JWT → 401 (epoch mismatch in enforceSessionState).
 	// Use GET /api/v1/access/users/{id} as the target — any JWT-guarded endpoint works.
-	replayReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+userID, nil)
-	replayReq.Header.Set("Authorization", "Bearer "+accessTok)
+	replayReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+victimID, nil)
+	replayReq.Header.Set("Authorization", "Bearer "+victimAccessTok)
 	replayResp, err := setupHTTPClient.Do(replayReq)
 	require.NoError(t, err)
 	replayBody, _ := io.ReadAll(replayResp.Body)
-	replayResp.Body.Close()
+	_ = replayResp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, replayResp.StatusCode,
-		"epoch=0 JWT replayed after epoch bump must be rejected with 401; body=%s", replayBody)
+		"victim's epoch=0 JWT replayed after epoch bump must be rejected with 401; body=%s", replayBody)
 	var replayEnvelope struct {
 		Error struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(replayBody, &replayEnvelope))
-	assert.Equal(t, "ERR_AUTH_INVALID_TOKEN", replayEnvelope.Error.Code,
-		"epoch mismatch must surface as ERR_AUTH_INVALID_TOKEN")
+	// AuthMiddleware maps every JWT verification failure (signature / expiry /
+	// intent / epoch / session-state) to the generic ERR_AUTH_UNAUTHORIZED to
+	// prevent token-state enumeration. Granular failure reasons stay in slog
+	// and the auth_token_verify_total `reason` label only — see
+	// runtime/auth/middleware.go::handleAuthRequest godoc.
+	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", replayEnvelope.Error.Code,
+		"epoch mismatch must surface as the generic ERR_AUTH_UNAUTHORIZED (enumeration defense)")
 
-	// 6. Close the PG pool (simulates DB outage) — session/user lookup returns
+	// 8. Close the PG pool (simulates DB outage) — session/user lookup returns
 	// KindUnavailable. errcode.project() strips the granular source code on
 	// 5xx responses, so the wire code collapses to the Kind public code
 	// ERR_SERVICE_UNAVAILABLE; ErrAuthServiceUnavailable remains visible in
 	// structured server logs. See ADR 202605051730-adr-errcode-message-pii-safety.
 	require.NoError(t, h.pool.Close(ctx), "pool.Close must not error")
 
-	dbDownReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+userID, nil)
-	dbDownReq.Header.Set("Authorization", "Bearer "+accessTok)
+	dbDownReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+victimID, nil)
+	dbDownReq.Header.Set("Authorization", "Bearer "+victimAccessTok)
 	dbDownResp, err := setupHTTPClient.Do(dbDownReq)
 	require.NoError(t, err)
 	dbDownBody, _ := io.ReadAll(dbDownResp.Body)
-	dbDownResp.Body.Close()
+	_ = dbDownResp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, dbDownResp.StatusCode,
 		"after DB outage session lookup must surface as 503; body=%s", dbDownBody)
 	var dbDownEnvelope struct {
@@ -972,15 +1012,23 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 			"the granular ErrAuthServiceUnavailable source is stripped on wire and kept only in logs; body=%s", dbDownBody)
 }
 
-// TestS4b_RefreshReuse_CascadesEpochAndSession verifies that replaying a
-// consumed refresh token (reuse attack) atomically bumps the epoch and revokes
-// all sessions via the credentialinvalidate funnel:
+// TestS4b_RefreshReuse_CascadesEpochAndSession verifies that exhausting the
+// refresh grace window then replaying the consumed parent token triggers the
+// reuse cascade: atomic epoch bump + all-sessions revoke via the
+// credentialinvalidate funnel.
 //
 //  1. Login → obtain access token A1, refresh token R1, session S1.
-//  2. Refresh R1 → obtain A2, R2 (R1 is now consumed / rotated).
-//  3. Replay R1 → 401 ERR_AUTH_REFRESH_FAILED (token already consumed).
-//  4. PG assertion: authz_epoch is bumped (reuse-cascade funnel ran).
-//  5. PG assertion: sessions.revoked_at IS NOT NULL for all subject sessions.
+//  2. Refresh R1 → obtain A2, R2 (R1 is now rotated, parent of R2).
+//  3. Replay R1 GraceMaxReuses (=3) times — each replay is within the
+//     ReuseInterval grace window, so each succeeds with new child tokens
+//     while incrementing R1.used_times to 3. This models the "client retried
+//     because the previous refresh response was lost" scenario the grace
+//     window is designed to tolerate.
+//  4. Replay R1 a 4th time → used_times >= GraceMaxReuses → handleRotatedRow
+//     fires reuse_detected/grace_exhausted → 401 ERR_AUTH_REFRESH_FAILED and
+//     the cascade revoke runs.
+//  5. PG assertion: authz_epoch is bumped (reuse-cascade funnel ran).
+//  6. PG assertion: sessions.revoked_at IS NOT NULL for all subject sessions.
 func TestS4b_RefreshReuse_CascadesEpochAndSession(t *testing.T) {
 	ctx := context.Background()
 	h := newSessionPGHarness(t)
@@ -989,25 +1037,42 @@ func TestS4b_RefreshReuse_CascadesEpochAndSession(t *testing.T) {
 	_, refreshTok1, sessionID := sessionPGLogin(t, h.base, sessionPGAdminUsername, sessionPGAdminPassword)
 	userID := sessionPGQueryUserIDByUsername(t, h, sessionPGAdminUsername)
 
-	// 2. First refresh — consumes R1, issues R2.
+	// 2. First refresh — rotates R1, issues R2. R1.rotated_at is set; R1.used_times stays 0
+	// (handleRotatedRow's grace-counter increment only fires when row.rotated_at != nil at
+	// validation time, which happens on subsequent re-presentations of R1).
 	_, refreshTok2, _ := sessionPGRefresh(t, h.base, refreshTok1)
 	require.NotEmpty(t, refreshTok2, "first refresh must succeed")
 
-	// Snapshot epoch before reuse replay.
+	// Snapshot epoch before reuse cascade.
 	var epochBefore int64
 	err := h.pool.DB().QueryRow(ctx,
 		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochBefore)
 	require.NoError(t, err)
 
-	// 3. Replay R1 (already consumed) → 401.
+	// 3. Replay R1 GraceMaxReuses times — each succeeds with new child tokens
+	// (grace retry path: client thinks the previous refresh response was lost
+	// and retries with the same parent). Each iteration bumps R1.used_times.
+	for i := 0; i < refresh.DefaultGraceMaxReuses; i++ {
+		retryBody, _ := json.Marshal(map[string]string{"refreshToken": refreshTok1})
+		retryResp, retryErr := setupHTTPClient.Post(h.base+"/api/v1/access/sessions/refresh",
+			"application/json", bytes.NewReader(retryBody))
+		require.NoError(t, retryErr)
+		retryRespBody, _ := io.ReadAll(retryResp.Body)
+		_ = retryResp.Body.Close()
+		require.Equal(t, http.StatusOK, retryResp.StatusCode,
+			"grace retry %d must succeed (within ReuseInterval, used_times < GraceMaxReuses); body=%s",
+			i+1, retryRespBody)
+	}
+
+	// 4. (GraceMaxReuses+1)th replay of R1 → grace_exhausted → 401 + cascade.
 	reusedBody, _ := json.Marshal(map[string]string{"refreshToken": refreshTok1})
 	resp, err := setupHTTPClient.Post(h.base+"/api/v1/access/sessions/refresh",
 		"application/json", bytes.NewReader(reusedBody))
 	require.NoError(t, err)
 	reuseRespBody, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
-		"replayed refresh token must be rejected with 401; body=%s", reuseRespBody)
+		"grace-exhausted replay must be rejected with 401; body=%s", reuseRespBody)
 	var reuseEnvelope struct {
 		Error struct {
 			Code string `json:"code"`
@@ -1083,8 +1148,8 @@ func TestS4b_RbacRevoke_SameTxAtomicity(t *testing.T) {
 	assignResp, err := setupHTTPClient.Do(assignReq)
 	require.NoError(t, err)
 	assignRespBody, _ := io.ReadAll(assignResp.Body)
-	assignResp.Body.Close()
-	require.Equal(t, http.StatusOK, assignResp.StatusCode,
+	_ = assignResp.Body.Close()
+	require.Equal(t, http.StatusCreated, assignResp.StatusCode,
 		"role assign must succeed (outbox write #3 is within succeedN=%d); body=%s",
 		succeedN, assignRespBody)
 
@@ -1106,7 +1171,7 @@ func TestS4b_RbacRevoke_SameTxAtomicity(t *testing.T) {
 	revokeResp, err := setupHTTPClient.Do(revokeReq)
 	require.NoError(t, err)
 	revokeRespBody, _ := io.ReadAll(revokeResp.Body)
-	revokeResp.Body.Close()
+	_ = revokeResp.Body.Close()
 	assert.GreaterOrEqual(t, revokeResp.StatusCode, 500,
 		"role revoke with injected outbox failure must return 5xx; body=%s", revokeRespBody)
 
@@ -1161,8 +1226,8 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 	assignReq.Header.Set("Content-Type", "application/json")
 	assignResp, err := setupHTTPClient.Do(assignReq)
 	require.NoError(t, err)
-	assignResp.Body.Close()
-	require.Equal(t, http.StatusOK, assignResp.StatusCode, "role assign must succeed")
+	_ = assignResp.Body.Close()
+	require.Equal(t, http.StatusCreated, assignResp.StatusCode, "role assign must succeed")
 
 	// Snapshot epoch — must be 0 after assign (assign is additive, no bump).
 	var epochBeforeRevoke int64
@@ -1182,7 +1247,7 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 	revokeResp, err := setupHTTPClient.Do(revokeReq)
 	require.NoError(t, err)
 	revokeRespBody, _ := io.ReadAll(revokeResp.Body)
-	revokeResp.Body.Close()
+	_ = revokeResp.Body.Close()
 	require.Equal(t, http.StatusOK, revokeResp.StatusCode,
 		"role revoke must succeed; body=%s", revokeRespBody)
 
@@ -1198,9 +1263,11 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.D10ms,
 		"authz_epoch must be ≥ 1 after role revoke (funnel ran in rbacassign tx)")
 
-	// Small stabilization wait — if the consumer were to call the funnel a second
-	// time, epoch would become 2. We assert it stays exactly 1.
-	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep negative-assertion stabilization (no event to await — proving consumer does not double-bump epoch)
+	// Small stabilization wait — if the consumer were to call the funnel a
+	// second time, epoch would become 2. We assert it stays exactly 1. No
+	// observable signal exists for a "negative" event (consumer does not bump),
+	// so a bounded sleep is the only available stabilization primitive.
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep negative-assertion stabilization
 
 	var epochFinal int64
 	err = h.pool.DB().QueryRow(ctx,

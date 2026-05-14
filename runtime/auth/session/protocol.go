@@ -86,8 +86,12 @@ type OrderingModel interface {
 }
 
 // OrderingAuthzEpoch uses a per-user monotonic epoch column to invalidate
-// stale tokens (OAuth Security BCP §4.13.1). Session rows snapshot the epoch
-// at issuance; validate rejects when claim.epoch < user.authz_epoch.
+// stale tokens (OAuth Security BCP §4.13.1). The JWT access token carries
+// the authz_epoch claim at mint time; validate compares the JWT claim to the
+// live user.authz_epoch row and rejects on any inequality (`!=`, fail-closed:
+// catches both stale tokens with `claim < user` and tampered tokens with
+// `claim > user`). The legacy per-session snapshot column was dropped in S4b
+// migration 025 — see ADR 202605101400 §A1/§A3.
 type OrderingAuthzEpoch struct{}
 
 // orderingModelOK is the empty seal marker — its mere presence makes

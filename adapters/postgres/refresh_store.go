@@ -444,6 +444,12 @@ func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []
 		return row, nil
 	}
 	if err := s.handleRotatedRow(ctx, row, mutate); err != nil {
+		// refresh.Store contract: ErrReused must carry row identity (sessionID,
+		// subjectID) so the service layer can drive user-wide cascade. Other
+		// errors (wrapped SQL failures) have no row identity to convey.
+		if errors.Is(err, refresh.ErrReused) {
+			return row, err
+		}
 		return refreshRow{}, err
 	}
 	return row, nil

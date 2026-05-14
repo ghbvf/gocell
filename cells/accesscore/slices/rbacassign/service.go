@@ -69,6 +69,15 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	if validation.IsNilInterface(roleRepo) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: roleRepo is required")
+	}
+	if validation.IsNilInterface(invalidator) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: invalidator is required")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
 		roleRepo:    roleRepo,
 		invalidator: invalidator,
@@ -80,9 +89,6 @@ func NewService(
 	}
 	if s.txRunner == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: TxRunner required; use WithTxManager")
-	}
-	if validation.IsNilInterface(invalidator) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: invalidator is required")
 	}
 	return s, nil
 }
