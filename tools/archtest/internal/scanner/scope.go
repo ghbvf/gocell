@@ -33,10 +33,13 @@ var defaultSkipDirs = map[string]struct{}{
 	"node_modules": {},
 }
 
-// option is an unexported functional-option type. External callers can only
-// obtain options via [IncludeTests] and [ExcludeRels]; they cannot define their
-// own options. This matches the Go standard-library pattern for sealed option sets.
-type option func(*scopeConfig)
+// Option is the functional-option type accepted by [ModuleScope] and
+// [DirsScope]. The underlying [scopeConfig] is unexported, so external callers
+// can only obtain Options via the exported [IncludeTests] / [ExcludeRels] /
+// [MatchRels] / [IncludeTestdata] / [IncludeGenerated] constructors — they
+// cannot author new Option values. This matches the Go standard-library
+// pattern for sealed option sets.
+type Option func(*scopeConfig)
 
 type scopeConfig struct {
 	includeTests     bool
@@ -48,7 +51,7 @@ type scopeConfig struct {
 
 // IncludeTests returns an option that instructs [ModuleScope] and [DirsScope]
 // to include *_test.go files in the file set returned by [Scope.Files].
-func IncludeTests() option {
+func IncludeTests() Option {
 	return func(c *scopeConfig) { c.includeTests = true }
 }
 
@@ -59,7 +62,7 @@ func IncludeTests() option {
 // is not supported.
 // To add custom skip directories, extend the option set in the scanner package;
 // callers cannot define new options.
-func ExcludeRels(rels ...string) option {
+func ExcludeRels(rels ...string) Option {
 	return func(c *scopeConfig) {
 		c.excludeRels = append(c.excludeRels, rels...)
 	}
@@ -77,7 +80,7 @@ func ExcludeRels(rels ...string) option {
 // rel is in slash form on all platforms. Multiple MatchRels options are
 // chained (all predicates must return true). A nil predicate is silently
 // ignored.
-func MatchRels(pred func(rel string) bool) option {
+func MatchRels(pred func(rel string) bool) Option {
 	return func(c *scopeConfig) {
 		if pred == nil {
 			return
@@ -98,7 +101,7 @@ func MatchRels(pred func(rel string) bool) option {
 // [Scope.Files] returns an error. ModuleScope + IncludeTestdata always
 // errors — there is no legitimate use case for module-wide testdata
 // scanning, and that is precisely the regression the default skip prevents.
-func IncludeTestdata() option {
+func IncludeTestdata() Option {
 	return func(c *scopeConfig) { c.includeTestdata = true }
 }
 
@@ -111,7 +114,7 @@ func IncludeTestdata() option {
 // Unlike IncludeTestdata, no path-segment validation is required: any rule
 // that legitimately wants module-wide coverage including codegen output is
 // the use case. Combine with [ModuleScope] for repo-wide "anywhere" rules.
-func IncludeGenerated() option {
+func IncludeGenerated() Option {
 	return func(c *scopeConfig) { c.includeGenerated = true }
 }
 
@@ -140,7 +143,7 @@ type Scope struct {
 // ModuleScope creates a Scope rooted at modRoot that walks the entire module,
 // skipping the default directory set: vendor, testdata, worktrees, generated,
 // .git, node_modules.
-func ModuleScope(modRoot string, opts ...option) Scope {
+func ModuleScope(modRoot string, opts ...Option) Scope {
 	cfg := applyOptions(opts)
 	return newScope(modRoot, []string{modRoot}, cfg)
 }
@@ -153,7 +156,7 @@ func ModuleScope(modRoot string, opts ...option) Scope {
 //
 // Prefer DirsScope when the rule applies to specific layers (e.g., runtime/,
 // cells/); use [ModuleScope] when the rule must cover the entire repository.
-func DirsScope(modRoot string, dirs []string, opts ...option) Scope {
+func DirsScope(modRoot string, dirs []string, opts ...Option) Scope {
 	cfg := applyOptions(opts)
 	sep := string(os.PathSeparator)
 	cleanMod := filepath.Clean(modRoot)
@@ -175,7 +178,7 @@ func DirsScope(modRoot string, dirs []string, opts ...option) Scope {
 	return s
 }
 
-func applyOptions(opts []option) scopeConfig {
+func applyOptions(opts []Option) scopeConfig {
 	var cfg scopeConfig
 	for _, o := range opts {
 		o(&cfg)
@@ -253,6 +256,14 @@ var selfProtectRel = filepath.Join("tools", "archtest", "internal", "scanner")
 // or if any walk operation fails.
 func (s Scope) Files() ([]string, error) {
 	return s.collect(func(p string) bool { return isGoFile(p, s.includeTests) })
+}
+
+// ModRoot returns the module root (absolute, OS-native) the scope was
+// constructed against. Returns the empty string for a zero-value Scope.
+// Callers use this to derive module-relative paths for files discovered by
+// [Scope.Files] without re-running the walk.
+func (s Scope) ModRoot() string {
+	return s.modRoot
 }
 
 // contentFiles returns the sorted, deduplicated list of absolute file paths

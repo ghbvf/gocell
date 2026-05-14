@@ -397,6 +397,92 @@ linters:
                     (no root containment guarantee)
                 All paths above are still guarded by archtest SCAFFOLD-WRITE-FUNNEL-01
                 (Medium, method-level enforcement) for write operations.
+        archtest-no-direct-packages-load:
+          # ARCHTEST-PASS-FUNNEL Hard-line defense #2: bans tools/archtest/*_test.go
+          # from importing `golang.org/x/tools/go/packages` directly. The
+          # *packages.Package handle is the load-bearing piece needed to
+          # reconstruct INV-1 (pair AST nodes from one load with TypesInfo
+          # from another); banning the import at lint level closes that
+          # surface independently of the type-aware defense #3.
+          #
+          # Companion defenses (NOT in this depguard rule):
+          #   - Defense #1: archtest.Pass.Pkg is *types.Package, not
+          #     *packages.Package (compile-time, see tools/archtest/pass.go).
+          #   - Defense #3: type-aware PASS-FUNNEL-* meta-archtest in
+          #     tools/archtest/pass_funnel_test.go bans symbol-level usage of
+          #     scanner.EachFile / typeseval.LoadPackages / typeseval.SharedResolver
+          #     via *types.Info resolution. Path-level banning of
+          #     internal/scanner / internal/typeseval is NOT done at lint
+          #     level because those packages also export legitimate walk +
+          #     resolution helpers (EachInSubtree, ResolvePackageRef, etc.)
+          #     that archtest authors are encouraged to use.
+          #
+          # See docs/architecture/202605141519-adr-archtest-pass-funnel.md
+          # and docs/plans/202605141519-040-archtest-pass-funnel-plan.md.
+          #
+          # Migration exemption: negative globs below list every archtest
+          # file that imports packages directly as of stage-1 baseline (27
+          # files). These are a subset of archtestmeta.LegacyAllowlist
+          # (53 files) — the broader allowlist drives the symbol-level
+          # PASS-FUNNEL meta-archtest. Stage 2/3 PRs migrating a file MUST
+          # remove its entry from BOTH this depguard glob (if it imports
+          # packages) AND archtestmeta.LegacyAllowlist. The
+          # TestPassFunnelGuardListSync archtest cross-validates the two
+          # lists at test time (fail-loud on drift).
+          #
+          # pass_funnel_test.go is exempt PERMANENTLY (it implements the
+          # PASS-FUNNEL meta-archtest and must import the package it
+          # forbids; survives stage-4 cleanup).
+          list-mode: lax
+          files:
+            - "**/tools/archtest/*_test.go"
+            # Stage-1 migration exemption — every file below directly imports
+            # golang.org/x/tools/go/packages. Subset of archtestmeta.LegacyAllowlist.
+            - "!**/tools/archtest/archtest_test.go"
+            - "!**/tools/archtest/audit_ledger_composition_root_test.go"
+            - "!**/tools/archtest/auth_bootstrap_invariants_test.go"
+            - "!**/tools/archtest/cell_id_pattern_single_source_test.go"
+            - "!**/tools/archtest/cell_public_option_param_test.go"
+            - "!**/tools/archtest/clock_invariants_test.go"
+            - "!**/tools/archtest/credential_invalidate_funnel_invariants_test.go"
+            - "!**/tools/archtest/errcode_invariants_test.go"
+            - "!**/tools/archtest/exported_error_new_fixtures_test.go"
+            - "!**/tools/archtest/goose_session_locker_test.go"
+            - "!**/tools/archtest/governance_rules_invariants_test.go"
+            - "!**/tools/archtest/identitymanage_last_admin_protection_test.go"
+            - "!**/tools/archtest/managed_resource_contract_test.go"
+            - "!**/tools/archtest/outbox_invariants_test.go"
+            - "!**/tools/archtest/panic_invariants_test.go"
+            - "!**/tools/archtest/pg_repo_ambient_tx_test.go"
+            - "!**/tools/archtest/prod_clock_injection_fixtures_test.go"
+            - "!**/tools/archtest/prod_duration_fixtures_test.go"
+            - "!**/tools/archtest/prod_invariants_test.go"
+            - "!**/tools/archtest/prom_cell_label_funnel_test.go"
+            - "!**/tools/archtest/rmq_invariants_test.go"
+            - "!**/tools/archtest/scanner_framework_usage_test.go"
+            - "!**/tools/archtest/slowgate_allowlist_test.go"
+            - "!**/tools/archtest/test_sleep_discipline_test.go"
+            - "!**/tools/archtest/test_time_literal_fixtures_test.go"
+            - "!**/tools/archtest/test_time_literal_test.go"
+            - "!**/tools/archtest/wrapper_location_test.go"
+            # Permanent self-exemption — pass_funnel_test.go IMPLEMENTS the
+            # PASS-FUNNEL meta-archtest and therefore must import the very
+            # package it forbids. Survives stage-4 cleanup.
+            - "!**/tools/archtest/pass_funnel_test.go"
+            # Permanent self-exemption — pass_test.go unit-tests archtest.Pass,
+            # archtest.Run, archtest.RunTyped, and the internal helpers
+            # isPackageWithTestFiles / buildTypedPass / newPackageRel, all of
+            # which take or construct *packages.Package fixtures by necessity
+            # (Pass.Pkg is *types.Package, but buildTypedPass receives
+            # *packages.Package on the input side). Survives stage-4 cleanup.
+            - "!**/tools/archtest/pass_test.go"
+          deny:
+            - pkg: golang.org/x/tools/go/packages
+              desc: |
+                archtest *_test.go must use archtest.RunTyped (driver-constructed Pass).
+                Direct packages.Load access would allow reconstructing the INV-1 pattern
+                (pair AST nodes from one load with TypesInfo from another).
+                See ADR docs/architecture/202605141519-adr-archtest-pass-funnel.md.
 
     forbidigo:
       forbid:
