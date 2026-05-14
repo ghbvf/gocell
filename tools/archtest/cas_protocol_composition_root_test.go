@@ -3,14 +3,11 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // CAS-PROTOCOL-COMPOSITION-ROOT-01: cas.NewProtocol /
@@ -34,8 +31,8 @@ func TestCASProtocol_CompositionRootOnly(t *testing.T) {
 	root := findModuleRoot(t)
 	casPrefix := "runtime/state/cas/"
 
-	scope := scanner.DirsScope(root, []string{"cells", "runtime", "adapters"},
-		scanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{"cells", "runtime", "adapters"},
+		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			if !strings.HasSuffix(rel, ".go") {
 				return false
@@ -61,24 +58,27 @@ func TestCASProtocol_CompositionRootOnly(t *testing.T) {
 	}
 	var hits []hit
 
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return
-			}
-			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "cas" {
-				return
-			}
-			if forbidden[sel.Sel.Name] {
-				hits = append(hits, hit{
-					file: fc.Rel,
-					line: fc.Fset.Position(call.Pos()).Line,
-					name: sel.Sel.Name,
-				})
-			}
-		})
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || pkg.Name != "cas" {
+					return
+				}
+				if forbidden[sel.Sel.Name] {
+					hits = append(hits, hit{
+						file: p.Rel(file),
+						line: p.Fset.Position(call.Pos()).Line,
+						name: sel.Sel.Name,
+					})
+				}
+			})
+		}
+		return nil
 	})
 
 	for _, h := range hits {
