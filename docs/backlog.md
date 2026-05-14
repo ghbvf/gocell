@@ -4,7 +4,7 @@
 > 主轴权威源：[`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md) §1  
 > 历史归档：[`docs/backlog/archive/`](backlog/archive/)
 >
-> 基线：`origin/develop @ 8d213883`（2026-05-12）
+> 基线：`origin/develop @ c235abcc`（2026-05-14；含 PR #481/#482/#483/#484/#485/#486/#487/#488/#490/#492 + plan 040 阶段 1 ✅ shipped）
 
 ---
 

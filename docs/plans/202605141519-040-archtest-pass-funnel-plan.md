@@ -1,5 +1,47 @@
 # archtest 入口合并方案：Pass-Driver 范式 + 零二次返工迁移
 
+**最后更新**：2026-05-14（阶段 1 PR-1 ✅ shipped via PR #492，三轮 review 全部 in-PR 收口）
+
+## 进度状态
+
+| 阶段 | PR 数 | 状态 | 备注 |
+|------|------|------|------|
+| 1 — Pass 框架 + 三重 Hard 防线 | 1 | ✅ PR #492 (2026-05-14) | 业务文件 0 改动；LegacyAllowlist=53 文件；review 三轮 in-PR 收口（F1-F5 + round-2 F1-F6 + develop sync） |
+| 2 — A 类 EachFile 主题分批迁移 | 4 | ⏳ 未启动 | 可起；与阶段 3 并行 |
+| 3 — E 类 for-range 主题分批迁移 | 5 | ⏳ 未启动 | 可起；与阶段 2 并行 |
+| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ⏳ 等阶段 2+3 全部 ship | — |
+
+**阶段 1 PR-1 ship 摘要（PR #492，2026-05-14）**：
+
+- 新建 `tools/archtest/{pass,walk,scope,content,module_root}.go`（façade 重导出 + Run/RunTyped driver；`Pass.Pkg *types.Package`，**不暴露** `.Syntax`）
+- 新建 `tools/archtest/internal/archtestmeta/legacy_allowlist.go`（53 文件 + `FixtureBuildTag` const）
+- 新建 `tools/archtest/internal/passfunnelfixture/redfixture.go`（build-tag 隔离的 red fixture，覆盖 qualified-import / alias-import / dot-import 三路 + var-reference 形态）
+- 新建元治理 archtest `tools/archtest/pass_funnel_test.go`：5 条规则 (a) `PASS-FUNNEL-EACHFILE-01` / (b) `LOADPACKAGES-01` / (c) `PACKAGES-IMPORT-01` / (d) `FIXTURE-COVERAGE` 反向自检 / (e) `GUARD-LIST-SYNC`（解析 `.golangci.yml` 与 Go LegacyAllowlist 三向同步断言）
+- 新建 `tools/archtest/pass_test.go`：11 个单元测试覆盖 Run / RunTyped / buildTypedPass / newPackageRel / isPackageWithTestFiles，archtest 生产代码覆盖率 ~12% → ~71%
+- `.golangci.yml` 增 `archtest-no-direct-packages-load` depguard rule，仅 deny `golang.org/x/tools/go/packages`（符号级 scanner/typeseval 由元治理 archtest 拦截，避免 38 个仅用 walk helper 的合法文件误报）
+- 新建 ADR `docs/architecture/202605141519-adr-archtest-pass-funnel.md`：业界对标 + 三重 Hard 防线 + 迁移路径
+
+**Round-1 review follow-up（F1-F5，PR #492 round-1 in-PR）**：
+- F1：depguard 防线 #2 收窄至仅 `packages` 包（scanner/typeseval 符号级由防线 #3 元治理 archtest 通过 `*types.Info` resolve 精确拦截），消除 38 文件误报
+- F2：新增 `TestPassFunnelGuardListSync` 解析 `.golangci.yml` 在测试时断言三向不变式（`yaml-exempt ⊆ LegacyAllowlist ∪ {self}` / `packages-importers ⊆ yaml-exempt` / `yaml-exempt ∖ {self} ⊆ packages-importers`），消除阶段 2/3 迁移漂移盲点
+- F3：`Pass.TypesInfo` godoc 删除误导性链接
+- F4：`newPackageRel` 加 `abs == ""` synthetic file 守卫
+- F5：`scope.go` FileContext 重导出 godoc 标注 legacy 用途
+
+**Round-2 review follow-up（F1-F6，PR #492 round-2 in-PR）**：
+- F1：redfixture 扩 import 形态覆盖（qualified / aliased / dot-import 三路 × banned symbol 全交叉）；改用 var-reference 形态去除 testing 依赖
+- F2：`Pass.Files` 语义统一为 ONE Pass per package（与 RunTyped + go/analysis 一致），消除"per-file callback + `pass.Files[0]` 在 typed mode 静默丢文件"风险；引入 `collectASTFiles` + `scanner.Scope.ModRoot()` accessor
+- F3：`buildTypedPass` dedup 按"test-variant pkgs 优先"sort 保证确定性
+- F4：抽 `archtestmeta.FixtureBuildTag` const，消除 build-tag 字面量重复
+- F5：passfunnelfixture 删除 `testing` 依赖（var-reference only）
+- F6：补 `pass_test.go` 11 单元测试，archtest 生产代码覆盖 12% → 71%
+
+**Develop 同步**（最后一次 round in-PR）：
+- 把 PR #490 派生的两个新 archtest 加入 LegacyAllowlist：`credential_invalidate_funnel_invariants_test.go`（用 scanner.EachFile + typeseval.SharedResolver + 直接 import packages，三处都进 yaml/Go 双 allowlist）+ `sessionvalidate_epoch_compare_test.go`（不用 banned symbol，仅进 Go allowlist 不进 yaml）
+- `pass_test.go` 加 `// INVARIANT: ARCHTEST-PASS-DRIVER-UNIT-01` 合成 anchor（参 `helpers_test.go ARCHTEST-HELPERS-01` 范本）
+
+**当前 LegacyAllowlist 总数**：54 文件（53 baseline + 1 PR #490 派生），等阶段 2/3 PR 一一删除。
+
 ## Context
 
 GoCell 的 archtest 体系当前有两个并列入口：
@@ -78,7 +120,7 @@ type TypedOpts struct {
 
 ## 实施计划（4 阶段、~10 PR）
 
-### 阶段 1 — PR-1 落地 Pass 框架 + 三重 Hard 防线（Cx3，业务文件 0 改动）
+### 阶段 1 — PR-1 落地 Pass 框架 + 三重 Hard 防线（Cx3，业务文件 0 改动）— ✅ shipped as PR #492 (2026-05-14)
 
 **关键设计**：业务 *_test.go 在阶段 1 **完全不被 touch**。enforcement 推到 `Pass` 类型设计 + depguard 配置 + 元治理 archtest 三层，allowlist 临时豁免存量。阶段 3 每个迁移 PR 是对应业务文件的**首次 + 唯一**改写。
 
