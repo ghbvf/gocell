@@ -35,10 +35,11 @@ type Scope = scanner.Scope
 // [IncludeTestdata], [IncludeGenerated].
 type ScopeOption = scanner.Option
 
-// FileContext is the per-file payload supplied to AST-only callbacks (see
-// internal scanner FileContext). External rules should generally prefer the
-// [Pass]-driven API; FileContext is exposed for the small set of rules that
-// still iterate files one-at-a-time via [Run].
+// FileContext is the per-file payload type defined by the internal scanner.
+// New rules should consume [Pass.Files] / [Pass.Fset] / [Pass.Rel] instead;
+// FileContext is re-exported only so callers that already hold a
+// scanner.FileContext (e.g. unmigrated legacy archtests) can refer to the
+// type by the archtest-package name during the stage 2/3 migration window.
 type FileContext = scanner.FileContext
 
 // Diagnostic represents a single rule violation. Rules accumulate Diagnostics

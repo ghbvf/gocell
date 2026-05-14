@@ -41,10 +41,14 @@ Rule authors write `Rule` closures and let the driver (`Run` / `RunTyped`) const
 | # | Defense | Grade | Cost of violation |
 |---|---------|-------|-------------------|
 | 1 | `Pass.Pkg` is `*types.Package` (go/types stdlib), NOT `*packages.Package` (golang.org/x/tools/go/packages) | **Hard** — type system | Author cannot reach `.Syntax` from `*Pass`; INV-1 form is not expressible at the call site. Reconstructing INV-1 requires explicitly importing `golang.org/x/tools/go/packages` and calling `packages.Load`. |
-| 2 | depguard rule `archtest-no-direct-packages-load` denies `packages` / `internal/scanner` / `internal/typeseval` in `tools/archtest/*_test.go` | **Hard** — lint-blocking | Author must edit `.golangci.yml` (visible in diff, reviewer must approve). Negative-glob `files:` exemption synchronized line-for-line with `archtestmeta.LegacyAllowlist`. |
-| 3 | Meta-archtest `PASS-FUNNEL-EACHFILE-01` / `LOADPACKAGES-01` / `PACKAGES-IMPORT-01` re-detects bypass at test time via `*types.Info` resolution | **Hard** — type-aware | `typeseval.ResolvePackageRef` resolves call targets through go/types regardless of import alias / dot-import / vendor rewrites. Bypass requires editing `archtestmeta.LegacyAllowlist` (Go file, visible in diff). |
+| 2 | depguard rule `archtest-no-direct-packages-load` denies `golang.org/x/tools/go/packages` in `tools/archtest/*_test.go` (path-level import ban) | **Hard** — lint-blocking | Author must edit `.golangci.yml` to add their file to the negative-glob exemption (visible in diff, reviewer must approve). |
+| 3 | Meta-archtest `PASS-FUNNEL-EACHFILE-01` / `LOADPACKAGES-01` / `PACKAGES-IMPORT-01` re-detects bypass at test time via `*types.Info` resolution; symbol-level ban for `scanner.EachFile` / `typeseval.LoadPackages` / `typeseval.SharedResolver` plus packages-import path | **Hard** — type-aware | `typeseval.ResolvePackageRef` resolves call targets through go/types regardless of import alias / dot-import / vendor rewrites. Bypass requires editing `archtestmeta.LegacyAllowlist` (Go file, visible in diff). |
 
 Three independent failure modes: type system, lint, archtest. Bypassing all three requires editing three independent locations in a single PR — reviewer-detectable by construction.
+
+**Why depguard bans only the `packages` import path, not `internal/scanner` / `internal/typeseval`**: those internal packages also export legitimate non-INV-1 helpers (`EachInSubtree`, `EachInChildren`, `ResolvePackageRef`, `ResolveMethodCall`, `EvaluateConstString`) that archtest authors should use directly. Path-level banning would force every legitimate user of those helpers to migrate to a façade wrapper or be exempted — bloat without security gain. Symbol-level banning of `EachFile` / `LoadPackages` / `SharedResolver` is the precise enforcement, and it requires `*types.Info` resolution which only the archtest layer (defense #3) provides. Lint stays narrow and Hard for the one path (`packages`) that is the load-bearing INV-1 reconstruction primitive.
+
+**Cross-validation of allowlist drift**: `TestPassFunnelGuardListSync` archtest parses `.golangci.yml` at test time and asserts (a) every depguard negative-glob entry is a real archtest file present in `archtestmeta.LegacyAllowlist` or is `pass_funnel_test.go`, (b) every file directly importing `golang.org/x/tools/go/packages` is in the depguard negative-glob list. Manual synchronization drift is fail-loud at archtest-run time, not at PR-review attention.
 
 `pass_funnel_test.go` is **permanently** exempt from defense #2 and skips itself in defense #3 (basename `pass_funnel_test.go`). The rule implementation must import the very entry points it forbids; the type system cannot tell rule implementation from rule violator.
 
@@ -77,10 +81,10 @@ Strategic plan: `docs/plans/202605141519-040-archtest-pass-funnel-plan.md`. Summ
 The migration is complete when:
 
 1. `archtestmeta.LegacyAllowlist` map is empty (asserted statically in stage-4 PR).
-2. `.golangci.yml` `archtest-no-direct-packages-load.files` contains only the positive glob `**/tools/archtest/*_test.go` and the single permanent `!**/tools/archtest/pass_funnel_test.go` self-exemption.
+2. `.golangci.yml` `archtest-no-direct-packages-load.files` contains only the positive glob `**/tools/archtest/*_test.go` and the single permanent `!**/tools/archtest/pass_funnel_test.go` self-exemption. The depguard `deny` list reduces to a single entry: `golang.org/x/tools/go/packages`.
 3. No production archtest `*_test.go` imports `internal/scanner` / `internal/typeseval` / `golang.org/x/tools/go/packages` directly (verified by depguard + PASS-FUNNEL meta-archtest).
 
-After stage 4, `archtestmeta` is deleted entirely. `tools/archtest/internal/scanner` and `tools/archtest/internal/typeseval` retain their exported APIs (used by `archtest.Run` / `archtest.RunTyped` drivers), but external archtest authors cannot reach them due to depguard.
+After stage 4, `archtestmeta` is deleted entirely. `tools/archtest/internal/scanner` and `tools/archtest/internal/typeseval` retain their exported APIs — they are intentionally reachable from archtest test files for their non-INV-1 helpers (walk + go/types resolution). Symbol-level bans on `EachFile` / `LoadPackages` / `SharedResolver` are enforced by the PASS-FUNNEL meta-archtest (defense #3), not by lint.
 
 ## Rejected alternatives
 

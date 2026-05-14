@@ -48,8 +48,8 @@ type Pass struct {
 	Pkg *types.Package
 
 	// TypesInfo is the go/types resolution table bound to [Files] / [Pkg].
-	// Nil in AST-only mode. Pass to [typeseval]-style helpers (when re-exposed)
-	// for type-aware AST resolution.
+	// Nil in AST-only mode. Use with go/types-aware helpers (info.Types,
+	// info.Uses, info.Selections, etc.) for type-aware AST resolution.
 	TypesInfo *types.Info
 
 	// Rel returns the module-relative slash path for a file. The file pointer
@@ -188,6 +188,9 @@ func newPackageRel(root string, fset *token.FileSet) func(*ast.File) string {
 			return ""
 		}
 		abs := fset.Position(f.Pos()).Filename
+		if abs == "" {
+			return ""
+		}
 		rel, err := filepath.Rel(root, abs)
 		if err != nil {
 			return abs

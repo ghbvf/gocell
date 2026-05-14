@@ -13,9 +13,15 @@
 //
 // While the migration is in progress, the meta-archtest consults
 // [LegacyAllowlist] to skip files that have not yet been ported from the
-// scanner / typeseval direct entry points to archtest.Pass. Stage 2/3 PRs
-// remove one entry from this map AND one matching negative-glob line from
-// .golangci.yml per ported archtest file.
+// scanner / typeseval direct entry points to archtest.Pass.
+//
+// .golangci.yml's archtest-no-direct-packages-load rule carries a separate
+// (smaller) negative-glob list: only files that DIRECTLY import
+// golang.org/x/tools/go/packages need a depguard exemption, which is a
+// subset of this LegacyAllowlist. Stage 2/3 PRs porting a file MUST
+// remove its entry here AND — if the file imports packages directly —
+// the matching negative-glob in .golangci.yml. The
+// TestPassFunnelGuardListSync archtest cross-validates the two lists.
 package archtestmeta
 
 // LegacyAllowlist enumerates archtest *_test.go files (module-relative slash
@@ -26,10 +32,12 @@ package archtestmeta
 // Mutation rules:
 //
 //   - Stage 2/3 PRs remove exactly one entry as they port that file to
-//     archtest.Pass + Run/RunTyped. Each removal must be matched by the
-//     corresponding negative-glob deletion in .golangci.yml's
-//     archtest-no-direct-packages-load rule (the two lists are kept
-//     manually in sync; alphabetic order is the only ordering invariant).
+//     archtest.Pass + Run/RunTyped. If the file also directly imports
+//     golang.org/x/tools/go/packages, its negative-glob entry in
+//     .golangci.yml's archtest-no-direct-packages-load rule must be
+//     removed in the same commit. TestPassFunnelGuardListSync fail-loud
+//     enforces this — manual drift becomes a CI failure, not a silent
+//     reviewer-only check.
 //   - Stage 4 PR empties the map AND deletes this package entirely.
 //
 // Lookup is by module-relative slash path (e.g. "tools/archtest/foo_test.go").

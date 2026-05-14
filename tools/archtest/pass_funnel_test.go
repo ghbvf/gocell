@@ -22,12 +22,14 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/archtestmeta"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
@@ -202,6 +204,151 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 		diags = append(diags, diagsPackagesImport(tgt)...)
 	}
 	scanner.Report(t, "PASS-FUNNEL-PACKAGES-IMPORT-01", diags)
+}
+
+// TestPassFunnelGuardListSync — ARCHTEST-PASS-FUNNEL guards alignment.
+//
+// Cross-validates the three sources of truth that must stay aligned as the
+// stage 2/3 migration drains entries from the migration scaffold:
+//
+//   - archtestmeta.LegacyAllowlist (Go map, stage-1 baseline 53 entries)
+//   - .golangci.yml archtest-no-direct-packages-load negative globs
+//     (stage-1 baseline 27 + 1 self-exemption)
+//   - actual file system: tools/archtest/*_test.go files that directly
+//     import golang.org/x/tools/go/packages
+//
+// Invariants enforced (fail-loud on any drift):
+//
+//   - (A) every depguard yaml exemption (except pass_funnel_test.go self) is
+//     present in archtestmeta.LegacyAllowlist; otherwise the yaml carries a
+//     stale exemption for a file already migrated.
+//   - (B) every archtest *_test.go that imports packages directly has a
+//     matching depguard yaml exemption; otherwise lint will fail in CI on
+//     the full run (not the --new-from-rev mode masking pre-existing diags).
+//   - (C) every depguard yaml exemption (except pass_funnel_test.go self)
+//     actually imports packages; otherwise the yaml carries a redundant
+//     exemption that should have been removed when its file was ported.
+//
+// This guard replaces the previous "manual sync" contract from the ADR with
+// a Hard mechanical check. Drift is a test failure, not a reviewer
+// blind-spot.
+func TestPassFunnelGuardListSync(t *testing.T) {
+	root := findModuleRoot(t)
+	const self = "tools/archtest/pass_funnel_test.go"
+
+	yamlExempt := loadDepguardArchtestExemptions(t, root)
+	packagesImport := loadPackagesImporters(t)
+
+	// (A) yaml-exempt ∖ {self} ⊆ LegacyAllowlist
+	for rel := range yamlExempt {
+		if rel == self {
+			continue
+		}
+		if !archtestmeta.LegacyAllowlist[rel] {
+			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q is exempted in .golangci.yml "+
+				"archtest-no-direct-packages-load but absent from "+
+				"archtestmeta.LegacyAllowlist (stale exemption)", rel)
+		}
+	}
+
+	// (B) packages-import ⊆ yaml-exempt
+	for rel := range packagesImport {
+		if !yamlExempt[rel] {
+			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q imports "+
+				"golang.org/x/tools/go/packages directly but lacks a "+
+				".golangci.yml archtest-no-direct-packages-load exemption "+
+				"(full-repo golangci-lint will fail on this file)", rel)
+		}
+	}
+
+	// (C) yaml-exempt ∖ {self} ⊆ packages-import
+	for rel := range yamlExempt {
+		if rel == self {
+			continue
+		}
+		if !packagesImport[rel] {
+			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q is exempted in .golangci.yml "+
+				"but does not import golang.org/x/tools/go/packages "+
+				"(redundant exemption — drop the line)", rel)
+		}
+	}
+}
+
+// loadDepguardArchtestExemptions parses .golangci.yml and returns the set of
+// module-relative slash paths exempted from the archtest-no-direct-packages-load
+// depguard rule via "!**/<rel>" negative globs.
+func loadDepguardArchtestExemptions(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	// #nosec G304 -- root is from findModuleRoot (cwd ancestor with go.mod);
+	// the file name is a hard-coded constant. archtest reads checked-in repo
+	// configuration; treating this as user-controlled input would be a false
+	// positive (same pattern as scanner/content.go:53).
+	bytes, err := os.ReadFile(filepath.Join(root, ".golangci.yml"))
+	if err != nil {
+		t.Fatalf("read .golangci.yml: %v", err)
+	}
+	var cfg struct {
+		Linters struct {
+			Settings struct {
+				Depguard struct {
+					Rules map[string]struct {
+						Files []string `yaml:"files"`
+					} `yaml:"rules"`
+				} `yaml:"depguard"`
+			} `yaml:"settings"`
+		} `yaml:"linters"`
+	}
+	if err := yaml.Unmarshal(bytes, &cfg); err != nil {
+		t.Fatalf("parse .golangci.yml: %v", err)
+	}
+	rule, ok := cfg.Linters.Settings.Depguard.Rules["archtest-no-direct-packages-load"]
+	if !ok {
+		t.Fatalf(".golangci.yml: depguard rule archtest-no-direct-packages-load missing")
+	}
+	out := make(map[string]bool, len(rule.Files))
+	const prefix = "!**/tools/archtest/"
+	for _, glob := range rule.Files {
+		if !strings.HasPrefix(glob, prefix) {
+			continue
+		}
+		out["tools/archtest/"+strings.TrimPrefix(glob, prefix)] = true
+	}
+	return out
+}
+
+// loadPackagesImporters returns the set of module-relative slash paths of
+// tools/archtest/*_test.go files that directly import
+// golang.org/x/tools/go/packages, as resolved via SharedResolver.
+func loadPackagesImporters(t *testing.T) map[string]bool {
+	t.Helper()
+	root := findModuleRoot(t)
+	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
+	if err != nil {
+		t.Fatalf("typeseval.SharedResolver: %v", err)
+	}
+	out := make(map[string]bool)
+	bannedQuoted := strconv.Quote(packagesPkgPath)
+	for _, pkg := range resolver.Packages() {
+		if pkg == nil || pkg.Fset == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+				continue
+			}
+			if !strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			for _, imp := range file.Imports {
+				if imp != nil && imp.Path != nil && imp.Path.Value == bannedQuoted {
+					out[rel] = true
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // TestPassFunnel_FixtureCoverage is the AI-rebust "盲区自检" reverse test:
