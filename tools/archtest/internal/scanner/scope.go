@@ -258,6 +258,14 @@ func (s Scope) Files() ([]string, error) {
 	return s.collect(func(p string) bool { return isGoFile(p, s.includeTests) })
 }
 
+// ModRoot returns the module root (absolute, OS-native) the scope was
+// constructed against. Returns the empty string for a zero-value Scope.
+// Callers use this to derive module-relative paths for files discovered by
+// [Scope.Files] without re-running the walk.
+func (s Scope) ModRoot() string {
+	return s.modRoot
+}
+
 // contentFiles returns the sorted, deduplicated list of absolute file paths
 // in the scope whose path ends in any of suffixes. It mirrors [Scope.Files]
 // but with a content-suffix predicate instead of the .go filter, and is the

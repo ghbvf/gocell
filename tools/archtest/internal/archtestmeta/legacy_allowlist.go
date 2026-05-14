@@ -40,6 +40,23 @@ package archtestmeta
 //     reviewer-only check.
 //   - Stage 4 PR empties the map AND deletes this package entirely.
 //
+// FixtureBuildTag is the build-tag string shared by every archtest fixture
+// sub-package whose violation samples must remain invisible to the default
+// build context. Used by:
+//
+//   - tools/archtest/internal/passfunnelfixture/redfixture.go (`//go:build
+//     archtest_fixture` directive — kept as a literal, since Go's build
+//     directive syntax cannot reference Go constants).
+//   - tools/archtest/pass_funnel_test.go: TestPassFunnel_FixtureCoverage
+//     loads the fixture package with this tag passed to
+//     typeseval.SharedResolver.
+//
+// The two sites must agree. The build directive in redfixture.go carries a
+// godoc cross-reference to this constant; changing the value here without
+// updating the directive (or vice versa) leaves the fixture invisible to
+// the coverage test, which fails fast on "loaded with 0 files".
+const FixtureBuildTag = "archtest_fixture"
+
 // Lookup is by module-relative slash path (e.g. "tools/archtest/foo_test.go").
 var LegacyAllowlist = map[string]bool{
 	"tools/archtest/accesscore_facade_test.go":                    true,

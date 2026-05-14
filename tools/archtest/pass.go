@@ -6,11 +6,12 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -82,14 +83,27 @@ type TypedOpts struct {
 	Tags []string
 }
 
-// Run executes rule in AST-only mode over scope. Each parsed file in scope is
-// wrapped in a fresh Pass with [Pass.Pkg] and [Pass.TypesInfo] nil; the rule
-// returns its diagnostics, which are accumulated across files and returned to
-// the caller. Parse errors fail-loud via t.Fatalf.
+// Run executes rule in AST-only mode over scope. The driver parses every Go
+// file in scope into ONE shared [token.FileSet] and constructs ONE [Pass]
+// containing all parsed files; rule is invoked exactly once with that Pass
+// and returns its diagnostics. Pass.Pkg and Pass.TypesInfo are nil. Parse
+// errors fail-loud via t.Fatalf.
 //
-// Callers issue [Report] on the returned slice with a rule ID:
+// This one-Pass-per-scope shape is intentionally identical to [RunTyped]'s
+// one-Pass-per-package shape — Pass.Files is always the full file slice
+// the rule should iterate, never `Files[0]` with implicit length 1. Mode
+// disambiguation comes from Pass.Typed() / Pass.Pkg == nil, not from
+// Pass.Files length. Rule authors write:
 //
-//	diags := archtest.Run(t, archtest.ModuleScope(root), myRule)
+//	diags := archtest.Run(t, archtest.ModuleScope(root), func(p *archtest.Pass) []archtest.Diagnostic {
+//	    var d []archtest.Diagnostic
+//	    for _, file := range p.Files {
+//	        archtest.EachInSubtree[ast.CallExpr](file, func(c *ast.CallExpr) {
+//	            // … inspect c, append to d, optionally use p.Rel(file) for diag rel
+//	        })
+//	    }
+//	    return d
+//	})
 //	archtest.Report(t, "MY-RULE-01", diags)
 //
 // For rules that need go/types resolution, use [RunTyped] instead.
@@ -98,16 +112,54 @@ func Run(t *testing.T, scope Scope, rule Rule) []Diagnostic {
 	if rule == nil {
 		t.Fatalf("archtest.Run: nil rule")
 	}
-	var all []Diagnostic
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		pass := &Pass{
-			Fset:  fc.Fset,
-			Files: []*ast.File{fc.File},
-			Rel:   func(*ast.File) string { return fc.Rel },
+	files, fset, rel := collectASTFiles(t, scope)
+	if len(files) == 0 {
+		return nil
+	}
+	pass := &Pass{
+		Fset:  fset,
+		Files: files,
+		Rel:   rel,
+	}
+	return rule(pass)
+}
+
+// collectASTFiles enumerates Go files in scope, parses every file into a
+// single shared *token.FileSet, and returns the parsed *ast.File slice plus
+// a closure mapping any of those files back to its module-relative slash
+// path. Parse errors fail-loud via t.Fatalf, matching scanner.EachFile.
+//
+// Extracted from [Run] so the parse pass has a single, testable function
+// that owns FileSet sharing — the property that makes Pass.Files /
+// Pass.Fset internally consistent for AST-only rules.
+func collectASTFiles(t *testing.T, scope Scope) ([]*ast.File, *token.FileSet, func(*ast.File) string) {
+	t.Helper()
+	paths, err := scope.Files()
+	if err != nil {
+		t.Fatalf("archtest.Run: scope.Files: %v", err)
+	}
+	if len(paths) == 0 {
+		return nil, nil, func(*ast.File) string { return "" }
+	}
+	root := scope.ModRoot()
+	fset := token.NewFileSet()
+	files := make([]*ast.File, 0, len(paths))
+	rel := make(map[*ast.File]string, len(paths))
+	for _, abs := range paths {
+		f, parseErr := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("archtest.Run: parse %s: %v", abs, parseErr)
 		}
-		all = append(all, rule(pass)...)
-	})
-	return all
+		files = append(files, f)
+		if root != "" {
+			if r, relErr := filepath.Rel(root, abs); relErr == nil {
+				rel[f] = filepath.ToSlash(r)
+				continue
+			}
+		}
+		rel[f] = filepath.ToSlash(abs)
+	}
+	return files, fset, func(f *ast.File) string { return rel[f] }
 }
 
 // RunTyped executes rule in typed mode. It resolves the module root, loads
@@ -136,9 +188,28 @@ func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diag
 		t.Fatalf("archtest.RunTyped: SharedResolver: %v", err)
 	}
 
+	// Sort packages so test-variant packages are visited BEFORE their
+	// regular counterparts. The two variants share *_test.go file AST
+	// pointers (packages.Load reuses parses) AND share non-test files; we
+	// dedup by *ast.File pointer below. Without the sort, file-to-pkg
+	// assignment depends on packages.Load iteration order: a regular pkg
+	// visited first would claim every non-test file via dedup, leaving the
+	// .test pkg's Pass with only _test.go files plus a TypesInfo that has
+	// also seen the regular files (consistent — same load). With the sort,
+	// .test pkgs claim ALL their files (test + non-test) on first visit;
+	// regular pkgs are skipped wholly when their entire Syntax set is
+	// already seen. Either order is correctness-equivalent (Pass.Files,
+	// Pass.TypesInfo, Pass.Pkg come from one load), but the .test-first
+	// order is canonical: every Pass a typed rule receives is the maximal
+	// view (includes _test.go fixtures when opts.Tests==true).
+	pkgs := append([]*packages.Package(nil), resolver.Packages()...)
+	sort.SliceStable(pkgs, func(i, j int) bool {
+		return isPackageWithTestFiles(pkgs[i]) && !isPackageWithTestFiles(pkgs[j])
+	})
+
 	seen := make(map[*ast.File]bool)
 	var all []Diagnostic
-	for _, pkg := range resolver.Packages() {
+	for _, pkg := range pkgs {
 		pass := buildTypedPass(root, pkg, seen)
 		if pass == nil {
 			continue
@@ -146,6 +217,28 @@ func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diag
 		all = append(all, rule(pass)...)
 	}
 	return all
+}
+
+// isPackageWithTestFiles reports whether pkg's parsed Syntax contains at
+// least one *_test.go file (i.e. pkg is the test variant produced by
+// packages.Load when Tests=true). Used by RunTyped to order test variants
+// ahead of regular packages so dedup-by-*ast.File yields a deterministic
+// Pass distribution: the .test pkg receives every file it owns, the
+// regular pkg is wholly skipped if its files were all in the .test view.
+func isPackageWithTestFiles(pkg *packages.Package) bool {
+	if pkg == nil || pkg.Fset == nil {
+		return false
+	}
+	for _, f := range pkg.Syntax {
+		if f == nil {
+			continue
+		}
+		name := pkg.Fset.Position(f.Pos()).Filename
+		if strings.HasSuffix(name, "_test.go") {
+			return true
+		}
+	}
+	return false
 }
 
 // buildTypedPass returns a fully-populated typed *Pass for pkg, or nil when

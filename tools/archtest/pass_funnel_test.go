@@ -37,17 +37,28 @@ import (
 )
 
 const (
-	// passFunnelSelfBasename is the basename of THIS file. The three rules
-	// skip it explicitly: the rule definition uses the very entry points it
-	// forbids, and the type system has no way to distinguish "rule
-	// implementation" from "rule violator". Self-exemption is permanent —
-	// it survives stage 4 LegacyAllowlist deletion.
-	passFunnelSelfBasename = "pass_funnel_test.go"
-
 	scannerPkgPath   = "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	typesevalPkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	packagesPkgPath  = "golang.org/x/tools/go/packages"
 )
+
+// passFunnelPermanentExempt names archtest framework files that import or
+// call the banned entry points by structural necessity:
+//
+//   - pass_funnel_test.go: implements the PASS-FUNNEL meta-archtest, must
+//     reference the forbidden symbols.
+//   - pass_test.go: unit-tests archtest.Run / RunTyped / buildTypedPass /
+//     newPackageRel / isPackageWithTestFiles; the last three accept or
+//     construct *packages.Package fixtures by signature.
+//
+// These exemptions survive stage-4 cleanup. They are checked by both
+// the production PASS-FUNNEL detectors (skip these files entirely) AND
+// TestPassFunnelGuardListSync (treats them as "expected yaml exemptions
+// even though they are absent from archtestmeta.LegacyAllowlist").
+var passFunnelPermanentExempt = map[string]bool{
+	"tools/archtest/pass_funnel_test.go": true,
+	"tools/archtest/pass_test.go":        true,
+}
 
 // passFunnelTarget pairs a Pass-eligible scan target (file + rel-path + the
 // package fset+info it belongs to) for one of the three rules to consume.
@@ -83,7 +94,7 @@ func loadPassFunnelTargets(t *testing.T) []passFunnelTarget {
 			if !strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			if filepath.Base(rel) == passFunnelSelfBasename {
+			if passFunnelPermanentExempt[rel] {
 				continue
 			}
 			if archtestmeta.LegacyAllowlist[rel] {
@@ -234,14 +245,12 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 // blind-spot.
 func TestPassFunnelGuardListSync(t *testing.T) {
 	root := findModuleRoot(t)
-	const self = "tools/archtest/pass_funnel_test.go"
-
 	yamlExempt := loadDepguardArchtestExemptions(t, root)
 	packagesImport := loadPackagesImporters(t)
 
-	// (A) yaml-exempt ∖ {self} ⊆ LegacyAllowlist
+	// (A) yaml-exempt ∖ passFunnelPermanentExempt ⊆ LegacyAllowlist
 	for rel := range yamlExempt {
-		if rel == self {
+		if passFunnelPermanentExempt[rel] {
 			continue
 		}
 		if !archtestmeta.LegacyAllowlist[rel] {
@@ -261,9 +270,9 @@ func TestPassFunnelGuardListSync(t *testing.T) {
 		}
 	}
 
-	// (C) yaml-exempt ∖ {self} ⊆ packages-import
+	// (C) yaml-exempt ∖ passFunnelPermanentExempt ⊆ packages-import
 	for rel := range yamlExempt {
-		if rel == self {
+		if passFunnelPermanentExempt[rel] {
 			continue
 		}
 		if !packagesImport[rel] {
@@ -359,13 +368,35 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // level — analogous to SCANNER-FRAMEWORK-USAGE-01's
 // InspectorMethodBanLive coverage lock.
 //
-// The fixture is loaded with the archtest_fixture build tag (a sister
-// convention to inspectorredfixture etc.); without the tag the fixture
-// is invisible and packages.Load returns an empty *.Syntax slice.
+// # AST forms covered by the fixture
+//
+// redfixture.go exercises three import shapes for each banned symbol,
+// matching the resolution paths inside typeseval.ResolvePackageRef:
+//
+//   - qualified-import   (`scanner.EachFile`)
+//   - alias-import       (`sn.EachFile` after `import sn "…/scanner"`)
+//   - dot-import         (`EachFile` after `import . "…/scanner"`, bare Ident)
+//
+// # Known blind spots
+//
+// Value indirection through a local variable (`f := scanner.EachFile;
+// f(...)`) is NOT detected: ResolvePackageRef resolves the SelectorExpr
+// on the RHS of `:=` (caught as a value reference), but the subsequent
+// `f(...)` call site looks like a plain Ident bound to a local *types.Var,
+// not to a package member. Sister rule SCANNER-FRAMEWORK-USAGE-01 has the
+// same Soft escape; closing it Hard would require dataflow analysis
+// beyond the SelectorExpr / Ident scan vocabulary that the rest of the
+// archtest framework uses. We accept it here as an acknowledged Soft
+// escape — the typed initial assignment still trips the rule, so wrapping
+// in a variable is a no-op disguise rather than a true bypass.
+//
+// The fixture is loaded with the [archtestmeta.FixtureBuildTag] build tag
+// (a sister convention to inspectorredfixture etc.); without the tag the
+// fixture is invisible and packages.Load returns an empty *.Syntax slice.
 func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(
-		root, false, []string{"archtest_fixture"},
+		root, false, []string{archtestmeta.FixtureBuildTag},
 		"./tools/archtest/internal/passfunnelfixture")
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)

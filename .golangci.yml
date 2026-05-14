@@ -468,6 +468,13 @@ linters:
             # PASS-FUNNEL meta-archtest and therefore must import the very
             # package it forbids. Survives stage-4 cleanup.
             - "!**/tools/archtest/pass_funnel_test.go"
+            # Permanent self-exemption — pass_test.go unit-tests archtest.Pass,
+            # archtest.Run, archtest.RunTyped, and the internal helpers
+            # isPackageWithTestFiles / buildTypedPass / newPackageRel, all of
+            # which take or construct *packages.Package fixtures by necessity
+            # (Pass.Pkg is *types.Package, but buildTypedPass receives
+            # *packages.Package on the input side). Survives stage-4 cleanup.
+            - "!**/tools/archtest/pass_test.go"
           deny:
             - pkg: golang.org/x/tools/go/packages
               desc: |
