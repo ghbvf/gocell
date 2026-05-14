@@ -126,6 +126,20 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
+	// Defense-in-depth: confirm the live session row owner matches the JWT sub.
+	// Without this check, a signing-path bug that bound a sid to the wrong
+	// subject (e.g. sessionmint reuse-after-rotation regression) would let one
+	// subject's claims authenticate as another live sid's owner. The sid index
+	// is unique so SubjectID is authoritative; mismatch indicates a token
+	// reused across subjects and must be rejected uniformly (防枚举).
+	if view.SubjectID != claims.Subject {
+		s.logger.Warn("session-validate: sid/subject mismatch",
+			slog.String("sid", sid),
+			slog.String("claim_subject", claims.Subject),
+			slog.String("session_subject", view.SubjectID))
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
 	// 2) Epoch invariant: user.authz_epoch must exactly match claims.AuthzEpoch.
 	// Using != (not >) ensures fail-closed on any mismatch including "future epoch"
 	// tokens where claims.AuthzEpoch > user.AuthzEpoch — such tokens indicate a

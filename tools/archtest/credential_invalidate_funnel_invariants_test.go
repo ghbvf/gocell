@@ -223,7 +223,12 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 			"Route callers through credentialinvalidate.Invalidator.Apply instead.")
 
 	verifyRedFixtureDetected(t, root,
-		"./tools/archtest/testdata/credential_invalidate_fixtures/identitymanage_direct_bump_epoch_red",
+		// Internal-import workaround: ports.UserRepository lives under
+		// cells/accesscore/internal/, so the fixture must sit inside that tree
+		// to satisfy Go's internal-import rules. `testdata/` keeps it out of
+		// `go build ./...` while archtest loads it via explicit pattern. The
+		// previous tools/archtest/testdata location silently failed to load.
+		"./cells/accesscore/internal/credentialinvalidate/testdata/identitymanage_direct_bump_epoch_red",
 		userRepoPkg, userBumpMethod,
 		"USER-AUTHZ-EPOCH-BUMP-FUNNEL-01 RED fixture",
 	)
@@ -452,18 +457,23 @@ func scanFunnelViolations(
 // verifyRedFixtureDetected loads the given fixture pattern and asserts that
 // the scanner finds ≥ 1 violation — proving the rule is not permanently GREEN.
 // This is the "反向 RED 自检" (reverse RED self-check) mandated by ai-collab.md.
+//
+// Fixture load failure is now a hard fail (Finding #9 PR #490 review): the
+// previous silent t.Logf+return masked archtest regressions — a fixture that
+// stops type-checking would silently disable the RED self-check, leaving the
+// production scan permanently GREEN with no warning. The fixture is in-tree
+// (tools/archtest/testdata/...) and its build health is part of the archtest
+// contract, so a load failure must fail the test and surface in CI.
 func verifyRedFixtureDetected(
 	t *testing.T,
 	root, fixturePattern, targetPkg, targetMethod, label string,
 ) {
 	t.Helper()
 	resolver, err := typeseval.SharedResolver(root, false, nil, fixturePattern)
-	if err != nil {
-		// If the fixture can't be loaded (e.g. missing import), skip rather
-		// than fail — the fixture build error itself surfaces in go build.
-		t.Logf("RED fixture load error (%s): %v — skipping self-check", label, err)
-		return
-	}
+	require.NoError(t, err,
+		"RED fixture load FAILED (%s): %v — a broken fixture silently disables the reverse self-check. "+
+			"Repair the fixture or remove the rule; do not let this skip past.",
+		label, err)
 	var found int
 	for _, pkg := range resolver.Packages() {
 		if pkg == nil || pkg.TypesInfo == nil {

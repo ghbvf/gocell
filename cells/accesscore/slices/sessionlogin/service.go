@@ -214,7 +214,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	sess := &session.Session{
 		ID:        sessionID,
 		SubjectID: user.ID,
-		JTI:       sessionID,
+		// session.JTI persists the original login-time JWT jti claim per
+		// RFC 9068 §2.2.4. Refresh keeps session.ID stable but mints fresh
+		// jti per access token; the row stores the first one as the
+		// FingerprintJTIRef anchor (session.go godoc).
+		JTI:       minted.JTI,
 		CreatedAt: now,
 		ExpiresAt: now.Add(s.sessionTTL),
 	}
@@ -348,11 +352,13 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	// Persist the session so sessionvalidate can look it up by sid claim.
+	// session.JTI carries the original JWT jti claim (RFC 9068 §2.2.4) — see
+	// matching note in the login path above.
 	now := s.clock.Now()
 	sess := &session.Session{
 		ID:        sessionID,
 		SubjectID: userID,
-		JTI:       sessionID,
+		JTI:       minted.JTI,
 		CreatedAt: now,
 		ExpiresAt: now.Add(s.sessionTTL),
 	}

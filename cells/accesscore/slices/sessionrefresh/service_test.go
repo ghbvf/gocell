@@ -1463,8 +1463,16 @@ func TestRefresh_Reuse_TriggersInvalidatorApply(t *testing.T) {
 		"Apply must receive CredentialEventRefreshReuse")
 
 	// cascadeRevoke (RevokeSessionDetached) must NOT be called separately —
-	// funnel.Apply already owns the refresh chain revocation atomically.
-	_ = detachedSpy
+	// funnel.Apply already owns the refresh chain revocation atomically. The
+	// prior `_ = detachedSpy` was a silent no-op; assert the actual invariant.
+	detachedSpy.mu.Lock()
+	detachedN := detachedSpy.revokeSessionDetachedN
+	businessN := detachedSpy.revokeSessionN
+	detachedSpy.mu.Unlock()
+	assert.Equal(t, 0, detachedN,
+		"funnel.Apply owns refresh-chain revocation; cascade RevokeSessionDetached must not fire separately")
+	assert.Equal(t, 0, businessN,
+		"reuse path must not double-revoke through RevokeSession either")
 }
 
 // reuseOnRotateRefreshStore wraps a refresh.Store and overrides Peek to
@@ -1482,6 +1490,64 @@ func (s *reuseOnRotateRefreshStore) Peek(_ context.Context, _ string) (*refresh.
 
 func (s *reuseOnRotateRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
 	return "", nil, refresh.ErrReused
+}
+
+// reuseOnPeekRefreshStore simulates the refresh store detecting reuse during
+// Peek (grace-counter exhaustion or post-rotation reuse window). Peek returns
+// the carried subject/session alongside ErrReused so the service layer can
+// route into the unified invalidator cascade. Rotate is not exercised here.
+type reuseOnPeekRefreshStore struct {
+	refresh.Store
+	subjectID string
+	sessionID string
+}
+
+func (s *reuseOnPeekRefreshStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
+	return &refresh.Token{SessionID: s.sessionID, SubjectID: s.subjectID}, refresh.ErrReused
+}
+
+// TestRefresh_PeekDetectedReuse_TriggersInvalidatorApply verifies the
+// Finding #2 fix: a reuse signal surfaced from Peek (e.g. grace-counter
+// exhaustion or post-rotation reuse window) must route into the same
+// invalidator.Apply cascade as Rotate-detected reuse. Before the fix the Peek
+// path returned a bare 401 without triggering the funnel, leaving the user's
+// other sessions + refresh chains alive after a confirmed replay attack.
+func TestRefresh_PeekDetectedReuse_TriggersInvalidatorApply(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-peek-reuse", "peek-reuse@test.local", "hash", time.Now())
+	u.ID = "usr-peek-reuse"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnPeekRefreshStore{Store: innerStore, subjectID: "usr-peek-reuse", sessionID: "sess-peek-reuse"}
+	spy := &spyInvalidator{}
+
+	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
+		spy,
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+
+	sess := newTestSession("usr-peek-reuse", "sess-peek-reuse")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-peek-reuse", "usr-peek-reuse")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"Peek-detected reuse must surface as uniform ErrAuthRefreshFailed (401)")
+
+	require.Len(t, spy.calls, 1,
+		"Peek-detected reuse must trigger invalidator.Apply exactly once — same cascade as Rotate path")
+	assert.Equal(t, "usr-peek-reuse", spy.calls[0].subjectID)
+	assert.Equal(t, session.CredentialEventRefreshReuse, spy.calls[0].event,
+		"Apply must receive CredentialEventRefreshReuse for Peek path too")
 }
 
 // contextCapturingInvalidator is a spy invalidator that records the context
@@ -1503,15 +1569,16 @@ type outerCtxKey struct{}
 
 // outerCtxTxRunner is a TxRunner that sets a distinguishing txCtx key on the
 // inner context so the test can verify Apply is called with outerCtx-derived
-// context (WithoutCancel) rather than txCtx itself.
+// context (ctxutil.WithDetachedTimeout) rather than txCtx itself.
 //
-// Behavior: the inner fn receives a txCtx with txCtxKey set to "tx". The
-// outer context (passed to RunInTx) carries the outerCtxKey set to "outer".
-// After the fix, handleRotateError wraps outerCtx with context.WithoutCancel
+// Behavior: the inner fn receives a txCtx with a synthetic key set to "tx".
+// The outer context (passed to RunInTx) carries the outerCtxKey set to "outer".
+// After the fix, handleReuseDetected wraps outerCtx with
+// ctxutil.WithDetachedTimeout (which is context.WithoutCancel + WithTimeout)
 // and passes that to the inner RunInTx; the detached RunInTx again calls fn
 // with an inner txCtx — but that inner txCtx is derived from the detached
-// outerCtx, so it does NOT carry txCtxKey but DOES carry outerCtxKey, proving
-// the cascade context chain goes through outerCtx.
+// outerCtx, so it does NOT carry the synthetic tx key but DOES carry
+// outerCtxKey, proving the cascade context chain goes through outerCtx.
 type outerCtxTxRunner struct {
 	calls int
 }
@@ -1578,13 +1645,19 @@ func TestRefresh_Reuse_CascadeUsesDetachedCtx(t *testing.T) {
 	require.NotNil(t, spy.capturedCtx, "invalidator.Apply must have been called")
 	// The Apply context must carry the outerCtxKey sentinel — proving it was
 	// derived from the caller's outerCtx, not from a fresh context.Background().
+	// This is the critical invariant: handleReuseDetected uses
+	// ctxutil.WithDetachedTimeout(outerCtx, ...) which preserves Value lookup
+	// while breaking the cancel chain.
 	assert.Equal(t, "outer", spy.capturedCtx.Value(outerCtxKey{}),
 		"Apply context must be derived from outerCtx (carrying outerCtxKey sentinel) — "+
 			"proving the cascade tx is detached from txCtx but still rooted in the caller's ctx")
-	// Apply context must not be canceled (the outer tx closure returned an error
-	// but that must not cancel the detached cascade context).
-	assert.NoError(t, spy.capturedCtx.Err(),
-		"Apply context must NOT be canceled — cascade uses context.WithoutCancel(outerCtx)")
+	// NOTE: capturedCtx.Err() is intentionally NOT asserted here. With the new
+	// WithDetachedTimeout pattern handleReuseDetected calls cancel() via defer
+	// after RunInTx returns, so by the time the test reads capturedCtx the
+	// detached context has already been canceled (resource release is correct
+	// behavior). The semantic guarantee is "Apply ran *while* the ctx was live",
+	// which is enforced by the value-propagation check above plus the fact
+	// that the spy was invoked at all (Apply received a live ctx).
 }
 
 // Compile-time check: ports is used (userRepo, roleRepo). Ensure unused import

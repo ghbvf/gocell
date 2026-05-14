@@ -82,12 +82,14 @@ INSERT INTO users (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`
 
 	selectUserByIDSQL = `
-SELECT id, username, email, password_hash, password_version, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
 FROM users
 WHERE id = $1`
 
 	selectUserByUsernameSQL = `
-SELECT id, username, email, password_hash, password_version, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
 FROM users
 WHERE username = $1`
 
@@ -277,6 +279,11 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, 
 
 // scanUser scans a single Row into a domain.User.
 // Column order must match selectUserByIDSQL and selectUserByUsernameSQL.
+//
+// authz_epoch is included so that sessionvalidate's epoch invariant
+// (user.AuthzEpoch != claims.AuthzEpoch → 401) sees the post-bump value;
+// omitting it silently leaves AuthzEpoch=0 on every read and breaks the
+// credential-invalidation chain (Finding #1 / PR #490 review).
 func scanUser(row pgx.Row) (*domain.User, error) {
 	var u domain.User
 	var status, source string
@@ -289,6 +296,7 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		&u.PasswordResetRequired,
 		&status,
 		&source,
+		&u.AuthzEpoch,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)

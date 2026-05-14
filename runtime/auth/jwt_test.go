@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -444,6 +445,49 @@ func (s *stubVerificationKeyStore) PublicKeyByKID(kid string) (*rsa.PublicKey, e
 		return nil, fmt.Errorf("unknown kid: %s", kid)
 	}
 	return pub, nil
+}
+
+// infraFailingKeyStore returns a KindUnavailable errcode for every lookup,
+// simulating a JWKS endpoint outage or KMS unreachable condition.
+type infraFailingKeyStore struct{}
+
+func (infraFailingKeyStore) PublicKeyByKID(_ string) (*rsa.PublicKey, error) {
+	return nil, errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+		"jwks fetch failure",
+		errcode.WithCategory(errcode.CategoryInfra))
+}
+
+// TestJWTVerifier_InfraErrorPropagatesAs503 guards the Finding #4 fix: when
+// the SigningKeyProvider's PublicKeyByKID surfaces an errcode with
+// CategoryInfra (or KindUnavailable), the verifier must NOT collapse the
+// outage to ErrAuthUnauthorized (401) — the token may be valid but the
+// verifier can't reach the public-key material. Wire layer must see a 5xx
+// path so AuthMiddleware returns 503.
+func TestJWTVerifier_InfraErrorPropagatesAs503(t *testing.T) {
+	priv, _ := generateTestKeyPair(t)
+	// Issuer with the real key, verifier with the failing store: the token
+	// is well-formed and the kid is present, but key lookup fails with infra.
+	signing := &stubSigningKeyProvider{key: priv, kid: "test-kid-infra"}
+	issuer, err := NewJWTIssuer(signing, "gocell-infra", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(infraFailingKeyStore{}, clock.Real(),
+		WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec,
+		"infra key-fetch error must propagate as *errcode.Error (not bare wrap)")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+		"infra key-fetch error must surface as KindUnavailable (→ 503), not KindUnauthenticated (→ 401)")
+	assert.Equal(t, errcode.ErrAuthServiceUnavailable, ec.Code,
+		"source code must be ErrAuthServiceUnavailable; wire projection may collapse to Kind public code")
 }
 
 func TestJWTIssuer_AcceptsSigningKeyProvider(t *testing.T) {

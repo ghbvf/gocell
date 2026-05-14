@@ -80,6 +80,20 @@ DROP INDEX CONCURRENTLY <index_name>;
 **禁止**在 migration 文件中使用 `CREATE INDEX CONCURRENTLY IF NOT EXISTS` 而不通过
 `Migrator.Up` 执行（否则绕过 pre-check 防线）。
 
+## 规则 6：destructive forward migration 必须停 traffic + 写明 runbook
+
+如果一个 migration 在 Up 路径上 DROP 一个被运行中旧二进制 INSERT/UPDATE 的列、表，或修改 NOT NULL/类型/外键
+约束，使旧二进制写入立即失败，则该 migration 是 **destructive forward**。GoCell 不维持旧二进制
+向后兼容（项目宪法："不向后兼容时不留软回退"），所以这类 migration 没有滚动部署窗口：
+
+- 必须在文件顶部注释块写明 Up 部署 runbook：drain traffic → goose up → deploy 新二进制 → 恢复 traffic。
+- 必须同时写明 Down 的 GUC（`gocell.allow_destructive_down=true`）与回退顺序。
+- 必须加 `SET LOCAL lock_timeout = '5s'`（规则 4）。
+- 如果未来运行时拓扑需要无停机滚动 DDL，按"两阶段 migration"拆：(a) 先放宽约束 / 让二进制停止写该列；
+  (b) 等新二进制全量部署后再 DROP 列。当前 GoCell 仅 ship 自身，无外部 schema 消费方，单 PR + 计划停机更简单。
+
+已有示例：`025_drop_sessions_authz_epoch_at_issue.sql`（S4b Batch 1C）。
+
 ## 参考
 
 - [pressly/goose 官方文档](https://github.com/pressly/goose#transactions)：`-- +goose no transaction` 用法

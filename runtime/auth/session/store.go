@@ -30,11 +30,13 @@ type Session struct {
 	SubjectID string
 
 	// JTI is a unique fingerprint stored on the session row; backends with
-	// FingerprintJTIRef require it non-empty on Create. It is currently a
-	// placeholder: JWTIssuer does not emit a jti claim, so callers populate
-	// JTI with any unique identifier (typically the session UUID). The
-	// target end state — JTI storing the actual JWT jti claim per RFC 9068
-	// §2.2.4 — applies once jti emission is wired into the JWT path.
+	// FingerprintJTIRef require it non-empty on Create. It stores the access
+	// JWT's `jti` claim per RFC 9068 §2.2.4 — sessionmint.MintAccess generates
+	// a fresh UUIDv4 per token and returns it as Result.JTI so the caller
+	// (sessionlogin) can persist it on the session row at Create. Refresh
+	// keeps session.ID stable across rotations but each minted access token
+	// gets its own jti; the session row stores the *original* login-time jti
+	// as the fingerprint, not the latest rotation.
 	JTI string
 
 	// CreatedAt is the issue timestamp in UTC.

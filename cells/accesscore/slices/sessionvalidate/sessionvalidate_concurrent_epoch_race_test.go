@@ -49,14 +49,22 @@ import (
 
 // TestSessionvalidate_ConcurrentEpochBumpAndValidate verifies that:
 //  1. No data race occurs when a single goroutine bumps the user's authz_epoch
-//     while 50 goroutines concurrently validate an access JWT that was issued
-//     at epoch=0.
-//  2. After the bump commits, all subsequent validate calls reject the epoch=0
+//     while goroutines concurrently validate an access JWT issued at epoch=0.
+//  2. Before the bump commits, validate calls on a valid active session succeed.
+//  3. After the bump commits, all subsequent validate calls reject the epoch=0
 //     token (401).
-//  3. Before the bump commits, validate calls on a valid active session succeed.
 //  4. No panic occurs.
+//
+// The test deliberately splits validators into a "pre-bump" group that runs
+// to completion before BumpAuthzEpoch is called, and a "post-bump" group that
+// waits on a barrier and only runs once the bump has committed. Without the
+// pre-bump pass coverage the earlier version of this test could not detect a
+// regression that silently zeroed user.AuthzEpoch on read — the epoch check
+// would still "fail" on every validate (claim=0 vs read=0 → match), but for
+// the wrong reason. Asserting that pre-bump validators succeed plus post-bump
+// validators all reject is the complete contract (Finding #9 PR #490 review).
 func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
-	const validators = 50
+	const validatorsPre, validatorsPost = 25, 25
 
 	memStore := mem.NewStore(clock.Real())
 	userRepo := memStore.UserRepository()
@@ -92,53 +100,64 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 	tokenStr, err := IssueTestTokenWithEpoch(testPrivKey, userID, 0, time.Hour, sessionID)
 	require.NoError(t, err)
 
-	// bumpDone is closed when the bump goroutine commits the epoch increment.
-	bumpDone := make(chan struct{})
-	// validatorsStarted ensures all validators are running before the bump.
-	var validatorsStarted sync.WaitGroup
-	validatorsStarted.Add(validators)
-
-	var (
-		wg             sync.WaitGroup
-		passBeforeBump atomic.Int64
-		failAfterBump  atomic.Int64
-	)
-
-	// Start 50 validator goroutines.
-	for i := 0; i < validators; i++ {
-		wg.Add(1)
+	// Pre-bump phase: validators run to completion before any bump occurs.
+	// Each must succeed because user.AuthzEpoch (read from repo) == claim epoch (0).
+	var preWG sync.WaitGroup
+	var preBumpPass, preBumpFail atomic.Int64
+	for i := 0; i < validatorsPre; i++ {
+		preWG.Add(1)
 		go func() {
-			defer wg.Done()
-			// Signal we're ready, then wait for the bump to complete.
-			validatorsStarted.Done()
+			defer preWG.Done()
+			_, vErr := svc.VerifyIntent(context.Background(), tokenStr, auth.TokenIntentAccess)
+			if vErr == nil {
+				preBumpPass.Add(1)
+				return
+			}
+			preBumpFail.Add(1)
+		}()
+	}
+	preWG.Wait()
+	assert.Equal(t, int64(validatorsPre), preBumpPass.Load(),
+		"pre-bump validators must all PASS (claim epoch=0 matches user.AuthzEpoch=0); "+
+			"if any failed, the read path is silently dropping authz_epoch — see Finding #1")
+	assert.Equal(t, int64(0), preBumpFail.Load(), "no pre-bump validator should have failed")
+
+	// Post-bump phase: spin up validators that block on a barrier, then bump
+	// the epoch, then release them. All must reject the now-stale token.
+	bumpDone := make(chan struct{})
+	var postWG sync.WaitGroup
+	var postValidatorsReady sync.WaitGroup
+	postValidatorsReady.Add(validatorsPost)
+	var postBumpPass, postBumpFail atomic.Int64
+
+	for i := 0; i < validatorsPost; i++ {
+		postWG.Add(1)
+		go func() {
+			defer postWG.Done()
+			postValidatorsReady.Done()
 			<-bumpDone
 
-			// All validates after bump must fail (epoch=0 vs user.epoch=1).
 			_, vErr := svc.VerifyIntent(context.Background(), tokenStr, auth.TokenIntentAccess)
 			if vErr != nil {
-				failAfterBump.Add(1)
+				postBumpFail.Add(1)
 			} else {
-				passBeforeBump.Add(1)
+				postBumpPass.Add(1)
 			}
 		}()
 	}
-
-	// Wait for all validators to reach the barrier, then bump.
-	validatorsStarted.Wait()
+	postValidatorsReady.Wait()
 
 	// Bump the epoch directly (test-only; funnel not needed here — see package
 	// godoc for rationale).
 	_, err = userRepo.BumpAuthzEpoch(context.Background(), userID)
 	require.NoError(t, err, "BumpAuthzEpoch must succeed")
 
-	// Signal validators to proceed.
 	close(bumpDone)
-	wg.Wait()
+	postWG.Wait()
 
-	// After the bump, ALL validators should have seen the new epoch and rejected
-	// the epoch=0 token. No validator can "undo" the bump.
-	assert.Equal(t, int64(validators), failAfterBump.Load(),
-		"all %d validators after epoch bump must reject the epoch=0 token; "+
-			"passed=%d, failed=%d",
-		validators, passBeforeBump.Load(), failAfterBump.Load())
+	assert.Equal(t, int64(validatorsPost), postBumpFail.Load(),
+		"all %d post-bump validators must reject the epoch=0 token; "+
+			"passed=%d, failed=%d (a regression that drops authz_epoch from the read path "+
+			"would let claim=0 silently match user.AuthzEpoch=0 here too)",
+		validatorsPost, postBumpPass.Load(), postBumpFail.Load())
 }

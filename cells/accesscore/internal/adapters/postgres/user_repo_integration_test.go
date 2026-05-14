@@ -388,6 +388,70 @@ func TestPGUserRepo_Integration(t *testing.T) {
 	})
 }
 
+// TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible guards the SQL/scan contract:
+// after BumpAuthzEpoch increments users.authz_epoch, the next GetByID /
+// GetByUsername read MUST surface the new value. The original S4b SELECT list
+// omitted authz_epoch entirely (Finding #1 / PR #490 review), which left
+// sessionvalidate comparing user.AuthzEpoch=0 against the JWT claim — silently
+// breaking the credential-invalidation chain. This integration test fails
+// loudly the moment the column is dropped from either select query or from
+// scanUser's row.Scan ordering.
+func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
+	repo, txMgr, cleanup := setupUserRepoPG(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	u := newTestUser("authz_readback_" + uuid.NewString())
+	require.NoError(t, repo.Create(ctx, u))
+
+	// Baseline: freshly created user must have authz_epoch=0 from the INSERT.
+	got, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), got.AuthzEpoch,
+		"new user must have AuthzEpoch=0; got %d", got.AuthzEpoch)
+
+	// Bump epoch inside a tx (BumpAuthzEpoch contract requires ambient tx —
+	// funnel entry point guarantees this in production).
+	var bumped int64
+	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		v, err := repo.BumpAuthzEpoch(txCtx, u.ID)
+		if err != nil {
+			return err
+		}
+		bumped = v
+		return nil
+	}))
+	assert.Equal(t, int64(1), bumped, "BumpAuthzEpoch must return new value 1")
+
+	// Readback via GetByID — must reflect the post-bump value, not the cached zero.
+	gotByID, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), gotByID.AuthzEpoch,
+		"GetByID must return post-bump AuthzEpoch=1; got %d — SELECT list likely missing authz_epoch column",
+		gotByID.AuthzEpoch)
+
+	// Readback via GetByUsername — same invariant; both query paths share scanUser.
+	gotByName, err := repo.GetByUsername(ctx, u.Username)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), gotByName.AuthzEpoch,
+		"GetByUsername must return post-bump AuthzEpoch=1; got %d", gotByName.AuthzEpoch)
+
+	// Second bump confirms monotonicity through the read path.
+	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		v, err := repo.BumpAuthzEpoch(txCtx, u.ID)
+		if err != nil {
+			return err
+		}
+		bumped = v
+		return nil
+	}))
+	assert.Equal(t, int64(2), bumped)
+	got2, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), got2.AuthzEpoch,
+		"second bump must propagate through read path")
+}
+
 // ---------------------------------------------------------------------------
 // S3F: DB CHECK constraint enforcement tests (migration 023)
 // ---------------------------------------------------------------------------

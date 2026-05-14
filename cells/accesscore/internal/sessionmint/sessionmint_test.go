@@ -90,6 +90,31 @@ func TestMintAccess_Success(t *testing.T) {
 	assert.NotEmpty(t, res.AccessToken, "access token must be signed")
 	assert.Equal(t, []string{"admin", "auditor"}, res.Roles)
 	assert.WithinDuration(t, time.Now().Add(auth.DefaultAccessTokenTTL), res.ExpiresAt, time.Second)
+	assert.NotEmpty(t, res.JTI, "MintAccess must emit a non-empty jti per RFC 9068 §2.2.4")
+}
+
+// TestMintAccess_JTI_UniquePerCall verifies the ADR-credential D1 invariant:
+// every access JWT carries a fresh jti claim. Two consecutive MintAccess calls
+// — even with identical input — must produce distinct jti values, otherwise a
+// post-rotation refresh would reuse the prior token's identifier and break
+// the per-token uniqueness guarantee.
+func TestMintAccess_JTI_UniquePerCall(t *testing.T) {
+	issuer, _ := newTestIssuer(t)
+	deps := Deps{
+		Issuer:   issuer,
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "user"}}},
+		Clk:      clock.Real(),
+	}
+	req := Request{UserID: "usr-jti", SessionID: "sess-jti", AuthzEpoch: 0}
+
+	r1, err := MintAccess(context.Background(), deps, req)
+	require.NoError(t, err)
+	r2, err := MintAccess(context.Background(), deps, req)
+	require.NoError(t, err)
+	require.NotEmpty(t, r1.JTI)
+	require.NotEmpty(t, r2.JTI)
+	assert.NotEqual(t, r1.JTI, r2.JTI, "consecutive MintAccess calls must produce distinct jti values")
+	assert.NotEqual(t, r1.AccessToken, r2.AccessToken, "tokens with distinct jti must serialize distinctly")
 }
 
 func TestMintAccess_RoleFetchFailure_ReturnsErrAuthRoleFetchFailed(t *testing.T) {

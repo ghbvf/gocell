@@ -890,8 +890,9 @@ func (w *afterFailOutboxWriter) CallCount() int {
 //  5. Replay the epoch=0 access JWT against any JWT-guarded endpoint → 401
 //     ERR_AUTH_INVALID_TOKEN (epoch mismatch detected in enforceSessionState).
 //  6. Close the PG pool to simulate a DB outage; replay same JWT → the session
-//     lookup fails with KindUnavailable, which the auth middleware converts to
-//     503 ERR_AUTH_SERVICE_UNAVAILABLE.
+//     lookup fails with KindUnavailable, which the errcode projection collapses
+//     to the Kind public code ERR_SERVICE_UNAVAILABLE on wire (5xx strip rule —
+//     the source code ErrAuthServiceUnavailable is kept only in server logs).
 func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 	ctx := context.Background()
 	h := newSessionPGHarness(t)
@@ -945,7 +946,10 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 		"epoch mismatch must surface as ERR_AUTH_INVALID_TOKEN")
 
 	// 6. Close the PG pool (simulates DB outage) — session/user lookup returns
-	// KindUnavailable; auth middleware converts to 503 ERR_AUTH_SERVICE_UNAVAILABLE.
+	// KindUnavailable. errcode.project() strips the granular source code on
+	// 5xx responses, so the wire code collapses to the Kind public code
+	// ERR_SERVICE_UNAVAILABLE; ErrAuthServiceUnavailable remains visible in
+	// structured server logs. See ADR 202605051730-adr-errcode-message-pii-safety.
 	require.NoError(t, h.pool.Close(ctx), "pool.Close must not error")
 
 	dbDownReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+userID, nil)
@@ -963,10 +967,9 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(dbDownBody, &dbDownEnvelope))
-	assert.Equal(t, "ERR_AUTH_SERVICE_UNAVAILABLE", dbDownEnvelope.Error.Code,
-		"DB outage during session validate must surface as ERR_AUTH_SERVICE_UNAVAILABLE; body=%s", dbDownBody)
-	assert.Contains(t, dbDownEnvelope.Error.Message, "authentication service unavailable",
-		"error message wire text must match errMsgServiceUnavailable; body=%s", dbDownBody)
+	assert.Equal(t, "ERR_SERVICE_UNAVAILABLE", dbDownEnvelope.Error.Code,
+		"5xx wire code must be the Kind public code ERR_SERVICE_UNAVAILABLE; "+
+			"the granular ErrAuthServiceUnavailable source is stripped on wire and kept only in logs; body=%s", dbDownBody)
 }
 
 // TestS4b_RefreshReuse_CascadesEpochAndSession verifies that replaying a

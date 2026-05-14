@@ -277,6 +277,19 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return pub, nil
 	}, v.parserOpts...)
 	if err != nil {
+		// Infrastructure failure inside the keyfunc (JWKS fetch / KMS outage /
+		// signed-key cache backed by a downed store) must NOT collapse to 401 —
+		// the token itself may be valid, the verifier just couldn't reach the
+		// material to prove it. If the underlying SigningKeyProvider surfaced
+		// an errcode with KindUnavailable (or CategoryInfra), propagate as
+		// 503 ErrAuthServiceUnavailable so clients differentiate "wrong
+		// credentials" from "auth dependency degraded" and operators alert
+		// correctly (Finding #4 PR #490 review).
+		if errcode.IsInfraError(err) {
+			return Claims{}, nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				"authentication service unavailable", err,
+				errcode.WithCategory(errcode.CategoryInfra))
+		}
 		return Claims{}, nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token verification failed", err)
 	}
 	if !token.Valid {
