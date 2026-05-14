@@ -562,8 +562,16 @@ func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
 	childWire, _ := mustRotate(t, store, parentWire)
 	clock.Advance(testtime.D3s)
 
-	_, err = store.Peek(ctx, parentWire)
+	tok, err := store.Peek(ctx, parentWire)
 	assert.ErrorIs(t, err, refresh.ErrReused, "reuse Peek must return ErrReused")
+	// Store contract (runtime/auth/refresh/store.go godoc): ErrReused MUST
+	// carry the row metadata so the service layer can drive a user-wide
+	// invalidation cascade (authz_epoch bump + revoke other sessions +
+	// revoke other refresh chains). Returning (nil, ErrReused) is a contract
+	// violation — the slice would silently lose the cascade entry point.
+	require.NotNil(t, tok, "ErrReused contract: Peek must return non-nil *Token (sess/subject metadata for user-wide cascade)")
+	assert.Equal(t, "sess-20-reuse", tok.SessionID, "ErrReused token must carry SessionID")
+	assert.Equal(t, t20Subject, tok.SubjectID, "ErrReused token must carry SubjectID for the user-wide cascade")
 	_, _, err = store.Rotate(ctx, childWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must cascade revoke the session (child returns ErrRejected — revoked path)")
 }
@@ -660,11 +668,16 @@ func runT23RotateReuseReturnsErrReused(t *testing.T, factory Factory) {
 
 	clock.Advance(testtime.D10s) // > 2s — beyond grace window
 
-	_, _, err := store.Rotate(ctx, token1Wire)
+	_, tok, err := store.Rotate(ctx, token1Wire)
 	require.Error(t, err, "reuse-after-grace must return an error")
 	assert.ErrorIs(t, err, refresh.ErrReused, "reuse-after-grace must return ErrReused")
 	assert.False(t, errors.Is(err, refresh.ErrRejected),
 		"ErrReused must NOT satisfy errors.Is(err, ErrRejected): callers must branch separately")
+	// Store contract: Rotate's ErrReused branch must return token identity so
+	// the service layer can drive the user-wide invalidation cascade.
+	require.NotNil(t, tok, "ErrReused contract: Rotate must return non-nil *Token (sess/subject metadata for user-wide cascade)")
+	assert.Equal(t, "sess-23", tok.SessionID, "ErrReused token must carry SessionID")
+	assert.Equal(t, "user-23", tok.SubjectID, "ErrReused token must carry SubjectID for the user-wide cascade")
 }
 
 // Silence unused-imports guard when errcode isn't needed (defensive).

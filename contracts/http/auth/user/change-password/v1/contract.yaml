@@ -18,6 +18,8 @@ endpoints:
     noContent: false
     auth:
       passwordResetExempt: true
+      responses:
+        - 503
     responses:
       400:
         description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID), request body decode failure, or new password equals old password"

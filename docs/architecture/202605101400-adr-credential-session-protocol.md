@@ -1,12 +1,61 @@
 # ADR: Credential / Session 协议（typed Protocol primitive 决议）
 
 **Date**: 2026-05-10
-**Status**: Proposed
+**Status**: Accepted
 **Related plan**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` S1
 **Related ADRs**:
 
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`（typed-Go-heavy 范式锚点）
 - `docs/architecture/202605101400-adr-admin-invariant.md`（admin 不变量；同 PR）
+
+---
+
+## 0. Amendments（S4b 落地后修订；2026-05-14）
+
+S4b PR 落地后实际实现与 §2/§3 描述出现以下漂移。原文保留作历史脉络，**实际行为以本节为准**：
+
+### A1 删除 `sessions.authz_epoch_at_issue` 列（替代 §D2）
+
+- 迁移 `025_drop_sessions_authz_epoch_at_issue.sql` 已 DROP 该列。`schema_guard.forbiddenColumns` 静态守卫列再次出现会让 binary 启动失败。
+- AuthzEpoch 完全靠 JWT `authz_epoch` claim 携带；validate 时实时读取 `users.authz_epoch` 比对。行内 pin 提供的零额外防御不抵其同步开销 + migration 复杂度。
+- D2 中所有关于"`authz_epoch_at_issue` 快照"的描述（§D2 / §D1 SQL / §3 部署清单）现在**只读 `users.authz_epoch`**，不再有 per-session 快照列。
+
+### A2 sessionvalidate 按 `sid` 查 session，不按 `jti`（替代 §D1 SQL）
+
+- §D1 示例 `SELECT ... WHERE jti = $1` 描述的是早期设计。实际 sessionvalidate 用 `claims.SessionID` (sid) 查 session 行（`session.Store.Get(ctx, sid)`），与 OIDC Back-Channel Logout sid stability 一致。
+- session.JTI 列仍存 RFC 9068 §2.2.4 要求的 per-token jti（由 sessionmint.MintAccess 生成 UUID 写入 IssueOptions.JTI，登录时持久化）。
+- **但 validate 不比对 jti**：refresh 流程会保持 sid 不变 + 旋转 access token 的 jti，validate 期比对 jti 会把所有刷新后的 token 拒掉（错的）。jti 的真实用途固定为：(a) RFC 9068 合规 per-token uniqueness，(b) 日志/排障 token-level correlation 标识。
+- 未来若引入 explicit jti revoke list（如 logout-on-current-jti 精细控制），再行扩 validate 路径；本 ADR 范围下不做。
+
+### A3 Epoch 比对使用 `!=`，不是 `<`（替代 §D1 / §D2）
+
+- §D1 SQL "`if claim.epoch < user.authz_epoch → reject`" 是宽松等价语义；实际 sessionvalidate.enforceSessionState 用 `!=` 严格不等性比较（`if user.AuthzEpoch != claims.AuthzEpoch → reject`）。
+- 严格 `!=` 拒绝任何不匹配，包含 "claim.epoch > user.epoch"（未来 epoch token，必是篡改/重放/时钟漂移）的 fail-closed 边界。`<` 在该方向上是 false-pass。
+- archtest `SESSIONVALIDATE-EPOCH-COMPARE-01` 静态守卫 `!=` 形态。
+
+### A4 PG `users` SELECT 必带 `authz_epoch` 列
+
+- `adapters/postgres/user_repo.go` `selectUserByIDSQL` / `selectUserByUsernameSQL` / `scanUser` 必须包含 `authz_epoch`，否则 D2 整个 epoch invalidation 链路在生产路径上 silently 失效（PR #490 review Finding #1，已修）。
+- PG integration test `TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible` 把这条约束锁定。
+
+### A5 JWT 验证错误分类（补充 §D2）
+
+D2 epoch 比对是 401 路径（token claim 与 server state 不符）。但 JWT 验证还有两类错误：
+
+| 错误源 | 例子 | HTTP 状态 |
+|---|---|---|
+| Token-side | expired / unknown kid / wrong alg / malformed | 401 ErrAuthInvalidToken（伪枚举防御统一文案） |
+| Verifier-side infra | JWKS fetch / KMS unreachable | 503 ErrAuthServiceUnavailable（KindUnavailable，wire 投影为 ERR_SERVICE_UNAVAILABLE） |
+
+`runtime/auth/jwt.go::hasExplicitInfraSignal` 显式区分两类：只有底层错误链上有 `*errcode.Error` 且 `Kind=Unavailable` 或 `Category=Infra` 才升级 503。**绝不**用 fail-closed predicate（如 `errcode.IsInfraError`），那会把 jwt 库的 plain error 全升级。
+
+### A6 Refresh reuse 单一 funnel 入口（补充 §D5）
+
+`sessionrefresh.handleReuseDetected` 是 Peek/Rotate 检测 reuse 后的**唯一**入口，触发 `credentialinvalidate.Invalidator.Apply`：
+
+- `refresh.Store` 接口契约现在要求 ErrReused 返 `(*Token{SubjectID, SessionID, ...}, ErrReused)`，让 service 拿到 cascade 所需 metadata。空 SubjectID 命中 = 上游违约，service 走 `panicregister.Approved` panic（Recovery middleware 转 500 + audit）。
+- 接 `ctxutil.WithDetachedTimeout(outerCtx, 5s)`：cascade 不受外层 cancel 影响 + 不会因 DB 卡住泄漏 goroutine。
+- `runtime/auth/refresh/storetest` 的 T20 / T23 conformance 子测试断言任何新 Store impl 必返非空 token，否则编译之外的 CI 失败。
 
 ---
 

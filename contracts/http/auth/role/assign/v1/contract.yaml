@@ -13,6 +13,9 @@ endpoints:
     method: POST
     path: /internal/v1/access/roles/assign
     successStatus: 201
+    auth:
+      responses:
+        - 503
     responses:
       400:
         description: "Bad request — request body decode failure or userId/roleId blank (ErrAuthRBACInvalidInput)"

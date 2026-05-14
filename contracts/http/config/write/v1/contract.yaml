@@ -13,6 +13,9 @@ endpoints:
     method: POST
     path: /api/v1/config/
     successStatus: 201
+    auth:
+      responses:
+        - 503
     noContent: false
     responses:
       400:

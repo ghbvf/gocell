@@ -232,6 +232,12 @@ func (s *PGRefreshStore) idleDeadline(now time.Time) time.Time {
 // Callers MUST call Peek (and Rotate) within an ambient transaction created by
 // the injected TxRunner. PGRefreshStore no longer acquires its own transactions
 // (B2-A-08 ambient-only model).
+//
+// ErrReused contract: when the reuse branches inside validatePresentedInTx
+// fire, row is already loaded (selector_miss / verifier_miss reject paths
+// return earlier with ErrRejected, NOT ErrReused). The reuse return carries
+// the row metadata so the service layer can drive a user-wide credential
+// invalidation cascade — see refresh.Store godoc.
 func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
@@ -265,6 +271,11 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 		return nil, err
 	}
 	if rejectErr != nil {
+		if errors.Is(rejectErr, refresh.ErrReused) {
+			// row is populated for every ErrReused branch — selector_miss and
+			// verifier_miss return ErrRejected before reaching handleRotatedRow.
+			return row.toToken(), rejectErr
+		}
 		return nil, rejectErr
 	}
 	return row.toToken(), nil
@@ -272,10 +283,12 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 
 // Rotate advances the chain. See Store.Rotate contract for branch behavior.
 //
-// Non-happy paths funnel through rejectWithReason and return refresh.ErrRejected
-// so callers cannot enumerate cause via error shape or timing. The transaction
-// is committed uniformly on ErrRejected so that commit-vs-rollback latency is
-// not an oracle on whether a cascade-revoke happened.
+// Non-happy paths funnel through rejectWithReason. ErrRejected paths return
+// (nil, nil) alongside the error; the reuse branches (ErrReused) return the
+// row metadata so the service layer can drive the user-wide cascade — see
+// refresh.Store godoc. The transaction is committed uniformly on
+// ErrRejected/ErrReused so that commit-vs-rollback latency is not an oracle
+// on whether a cascade-revoke happened.
 //
 // Callers MUST call Rotate within an ambient transaction or with a standalone
 // context. PGRefreshStore delegates transaction management to the injected
@@ -288,10 +301,11 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 
 	var wire string
 	var tok *refresh.Token
+	var reuseRow refreshRow
 	var rejectErr error
 	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		var innerErr error
-		wire, tok, innerErr = s.rotateInTx(txCtx, sel, ver)
+		wire, tok, reuseRow, innerErr = s.rotateInTx(txCtx, sel, ver)
 		if innerErr == nil {
 			return nil
 		}
@@ -309,19 +323,31 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 		return "", nil, err
 	}
 	if rejectErr != nil {
+		if errors.Is(rejectErr, refresh.ErrReused) {
+			return "", reuseRow.toToken(), rejectErr
+		}
 		return "", nil, rejectErr
 	}
 	return wire, tok, nil
 }
 
 // rotateInTx orchestrates the Rotate branches within a transaction context.
-func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (string, *refresh.Token, error) {
+// On ErrReused, the row is returned alongside the error so the wrapping
+// Rotate method can convey row identity in the refresh.Token returned to
+// the service layer (refresh.Store contract).
+func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (string, *refresh.Token, refreshRow, error) {
 	// Rotate is the mutating path: pass mutate=true so the grace counter
 	// is incremented when the parent has already been rotated and is being
 	// re-presented within the grace window.
 	row, err := s.validatePresentedInTx(ctx, sel, ver, true)
 	if err != nil {
-		return "", nil, err
+		// row is populated on every ErrReused branch within validatePresentedInTx;
+		// selector_miss / verifier_miss return ErrRejected with zero row, which
+		// the Rotate caller treats as the (nil, ErrRejected) case.
+		if errors.Is(err, refresh.ErrReused) {
+			return "", nil, row, err
+		}
+		return "", nil, refreshRow{}, err
 	}
 
 	// Happy path or grace retry — INSERT a child whose parent_id points to
@@ -330,7 +356,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 	// (sliding window: each rotation extends the idle deadline).
 	newSel, newVer, err := s.generatePair()
 	if err != nil {
-		return "", nil, err
+		return "", nil, refreshRow{}, err
 	}
 	now := s.clock.Now()
 	newID := uuid.New()
@@ -342,12 +368,12 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 		newID, uuid.NullUUID{UUID: row.id, Valid: true},
 		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires, newIdleExpires,
 	); err != nil {
-		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: rotate insert child", err)
+		return "", nil, refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: rotate insert child", err)
 	}
 
 	if row.rotatedAt == nil {
 		if _, err := s.db.Exec(ctx, markRotatedSQL, now, row.id); err != nil {
-			return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
+			return "", nil, refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
 		}
 	}
 
@@ -357,7 +383,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 		SubjectID: row.subjectID,
 		CreatedAt: now,
 		ExpiresAt: newExpires,
-	}, nil
+	}, refreshRow{}, nil
 }
 
 // validatePresentedInTx validates the presented (selector, verifier) within

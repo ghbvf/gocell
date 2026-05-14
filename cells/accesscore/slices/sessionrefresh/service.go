@@ -364,14 +364,18 @@ func (s *Service) handleRotateError(outerCtx context.Context, rotateErr error, s
 // ref: ory/fosite handler/oauth2/flow_refresh.go — reuse cascade at the flow boundary
 func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessionID, stage string) error {
 	if subjectID == "" {
-		// Peek can return a nil/empty Token alongside ErrReused on malformed
-		// or selector-miss paths. Without subjectID we cannot run the funnel;
-		// the single-session revoke already issued by refresh.Store is the
-		// only available defense. Log so an operator can correlate.
-		s.logger.Error("session-refresh: reuse detected with empty subject — cross-session cascade skipped",
-			slog.String("stage", stage),
-			slog.String("session_id", sessionID))
-		return authRefreshRejected()
+		// refresh.Store contract (godoc on the Store interface) mandates a
+		// non-empty SubjectID alongside ErrReused so the service layer can
+		// drive the user-wide invalidation cascade. Reaching this branch in
+		// production means an upstream Store implementation violated the
+		// contract — silently 401ing here would let cross-session cascade
+		// regress unnoticed, exactly the trap that motivated this fix.
+		// Panic via the registered marker so the runtime Recovery
+		// middleware converts it to a 500 with a loud audit trail; the
+		// runtime/auth/refresh/storetest conformance suite catches the
+		// contract drift in CI before production sees it.
+		panic(panicregister.Approved("sessionrefresh-reuse-empty-subject",
+			errcode.Assertion("sessionrefresh.handleReuseDetected: refresh.Store violated contract — returned ErrReused with empty SubjectID")))
 	}
 	detachedCtx, cancel := ctxutil.WithDetachedTimeout(outerCtx, reuseCascadeTimeout)
 	defer cancel()

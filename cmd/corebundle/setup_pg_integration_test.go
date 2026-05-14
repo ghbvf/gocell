@@ -1009,7 +1009,9 @@ func TestS4b_RefreshReuse_CascadesEpochAndSession(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 		"replayed refresh token must be rejected with 401; body=%s", reuseRespBody)
 	var reuseEnvelope struct {
-		Error struct{ Code string `json:"code"` } `json:"error"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(reuseRespBody, &reuseEnvelope))
 	assert.Equal(t, "ERR_AUTH_REFRESH_FAILED", reuseEnvelope.Error.Code,

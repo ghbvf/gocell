@@ -108,6 +108,13 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 //
 // Two sequential reads are performed under READ COMMITTED isolation with no
 // snapshot guarantee (plan decision HIGH-4 — no read-only tx wrap).
+//
+// JTI is NOT compared. The JWT `jti` claim is per-token uniqueness for
+// RFC 9068 §2.2.4 compliance + observability/log correlation; refresh keeps
+// the session.ID stable across rotations but mints a fresh jti per access
+// token, so comparing claims.JTI against session.JTI (which stores the
+// original login-time jti) would reject every post-refresh token. See ADR
+// 202605101400-adr-credential-session-protocol §A2.
 func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
 	sid := claims.SessionID
 	if sid == "" {
