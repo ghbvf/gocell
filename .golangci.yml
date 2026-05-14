@@ -397,6 +397,104 @@ linters:
                     (no root containment guarantee)
                 All paths above are still guarded by archtest SCAFFOLD-WRITE-FUNNEL-01
                 (Medium, method-level enforcement) for write operations.
+        archtest-no-direct-packages-load:
+          # ARCHTEST-PASS-FUNNEL Hard-line defense #2 (paired with the
+          # *types.Package shape in archtest.Pass and the PASS-FUNNEL-*
+          # meta-archtest rules). Bans tools/archtest/*_test.go from
+          # importing packages, internal/scanner, or internal/typeseval
+          # directly. Authors must use archtest.Run / archtest.RunTyped
+          # (the Pass-Driver funnel).
+          #
+          # See docs/architecture/202605141519-adr-archtest-pass-funnel.md
+          # and docs/plans/202605141519-040-archtest-pass-funnel-plan.md.
+          #
+          # Migration exemption — negative globs below list every archtest
+          # file that has NOT yet been ported to archtest.Pass. Each entry
+          # MUST stay in lock-step with
+          # tools/archtest/internal/archtestmeta.LegacyAllowlist. Stage 2/3
+          # PRs remove one entry from each side AND port the corresponding
+          # archtest to archtest.Run / archtest.RunTyped. Stage 4 PR deletes
+          # the entire migration exemption block (deny stays permanent).
+          #
+          # pass_funnel_test.go is exempt PERMANENTLY (it implements the
+          # PASS-FUNNEL meta-archtest, and the type system cannot distinguish
+          # rule implementation from rule violator).
+          list-mode: lax
+          files:
+            - "**/tools/archtest/*_test.go"
+            # Stage-1 migration exemption — synchronized with archtestmeta.LegacyAllowlist.
+            - "!**/tools/archtest/accesscore_facade_test.go"
+            - "!**/tools/archtest/archtest_test.go"
+            - "!**/tools/archtest/archtest_verify_coverage_test.go"
+            - "!**/tools/archtest/assembly_invariants_test.go"
+            - "!**/tools/archtest/audit_ledger_composition_root_test.go"
+            - "!**/tools/archtest/auditcore_appender_single_source_test.go"
+            - "!**/tools/archtest/auth_bootstrap_invariants_test.go"
+            - "!**/tools/archtest/cas_protocol_composition_root_test.go"
+            - "!**/tools/archtest/cell_id_pattern_single_source_test.go"
+            - "!**/tools/archtest/cell_init_test.go"
+            - "!**/tools/archtest/cell_public_option_param_test.go"
+            - "!**/tools/archtest/cellgen_errcode_funnel_test.go"
+            - "!**/tools/archtest/cellmeta_single_source_test.go"
+            - "!**/tools/archtest/clock_invariants_test.go"
+            - "!**/tools/archtest/codegen_invariants_test.go"
+            - "!**/tools/archtest/errcode_invariants_test.go"
+            - "!**/tools/archtest/errcode_message_const_fixtures_test.go"
+            - "!**/tools/archtest/eval_predicate_centralization_test.go"
+            - "!**/tools/archtest/exported_error_new_fixtures_test.go"
+            - "!**/tools/archtest/goose_session_locker_fixtures_test.go"
+            - "!**/tools/archtest/goose_session_locker_test.go"
+            - "!**/tools/archtest/governance_rules_invariants_test.go"
+            - "!**/tools/archtest/health_aggregation_test.go"
+            - "!**/tools/archtest/httputil_invariants_test.go"
+            - "!**/tools/archtest/identitymanage_last_admin_protection_test.go"
+            - "!**/tools/archtest/inventory_anchor_required_test.go"
+            - "!**/tools/archtest/kernel_metadata_no_wire_test.go"
+            - "!**/tools/archtest/kernel_poolstats_location_test.go"
+            - "!**/tools/archtest/listener_dx_test.go"
+            - "!**/tools/archtest/managed_resource_contract_test.go"
+            - "!**/tools/archtest/outbox_invariants_test.go"
+            - "!**/tools/archtest/panic_invariants_test.go"
+            - "!**/tools/archtest/pg_repo_ambient_tx_test.go"
+            - "!**/tools/archtest/postgres_constructor_error_first_test.go"
+            - "!**/tools/archtest/prod_clock_injection_fixtures_test.go"
+            - "!**/tools/archtest/prod_duration_fixtures_test.go"
+            - "!**/tools/archtest/prod_invariants_test.go"
+            - "!**/tools/archtest/production_loader_funnel_test.go"
+            - "!**/tools/archtest/prom_cell_label_funnel_test.go"
+            - "!**/tools/archtest/provision_state_removed_test.go"
+            - "!**/tools/archtest/refresh_invariants_test.go"
+            - "!**/tools/archtest/rmq_invariants_test.go"
+            - "!**/tools/archtest/role_admin_literal_test.go"
+            - "!**/tools/archtest/scaffold_bundle_invariants_test.go"
+            - "!**/tools/archtest/scaffold_write_funnel_test.go"
+            - "!**/tools/archtest/scanner_framework_usage_test.go"
+            - "!**/tools/archtest/sessionrefresh_no_session_create_test.go"
+            - "!**/tools/archtest/slowgate_allowlist_test.go"
+            - "!**/tools/archtest/span_record_error_redact_test.go"
+            - "!**/tools/archtest/svctoken_caller_cell_test.go"
+            - "!**/tools/archtest/test_sleep_discipline_test.go"
+            - "!**/tools/archtest/test_time_literal_fixtures_test.go"
+            - "!**/tools/archtest/test_time_literal_test.go"
+            - "!**/tools/archtest/wrapper_location_test.go"
+            # Permanent self-exemption — pass_funnel_test.go IMPLEMENTS the
+            # PASS-FUNNEL meta-archtest and therefore must import the very
+            # packages it forbids. Survives stage-4 cleanup.
+            - "!**/tools/archtest/pass_funnel_test.go"
+          deny:
+            - pkg: golang.org/x/tools/go/packages
+              desc: |
+                archtest *_test.go must use archtest.RunTyped (driver-constructed Pass).
+                Direct packages.Load access would allow reconstructing the INV-1 pattern.
+                See ADR docs/architecture/202605141519-adr-archtest-pass-funnel.md.
+            - pkg: github.com/ghbvf/gocell/tools/archtest/internal/scanner
+              desc: |
+                archtest *_test.go must use the archtest package facade (Run, EachInSubtree,
+                Scope, etc.) — internal/scanner is driver-private.
+            - pkg: github.com/ghbvf/gocell/tools/archtest/internal/typeseval
+              desc: |
+                archtest *_test.go must use archtest.RunTyped — internal/typeseval is
+                driver-private.
 
     forbidigo:
       forbid:

@@ -460,20 +460,8 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 
 // --- go list integration ---
 
-// findModuleRoot walks up from cwd to find the directory containing go.mod.
-func findModuleRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	require.NoError(t, err)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		require.NotEqual(t, parent, dir, "go.mod not found")
-		dir = parent
-	}
-}
+// findModuleRoot is defined in module_root.go (single source shared by
+// archtest.RunTyped drivers and the go-list integration helpers below).
 
 // loadModule loads the entire module under root once via the
 // typeseval.LoadProductionPackages typed funnel, then folds the resulting
