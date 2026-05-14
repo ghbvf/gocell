@@ -72,9 +72,14 @@ const (
 	refreshRevokeMethod = "RevokeUser"
 )
 
-// funnelAllowlistSuffixes lists the relative path suffixes that are permitted
-// to call each banned method directly (store implementations and the funnel itself).
-var funnelAllowlistSuffixes = []string{
+// funnelAllowlistPathPrefixes lists the module-relative path prefixes that
+// are permitted to call each banned method directly (store implementations
+// and the funnel itself). Names like "cells/accesscore/internal/credentialinvalidate/"
+// are prefixes of every Go file under that directory subtree; matching uses
+// strings.HasPrefix in isAllowlisted below. (The earlier "Suffixes" name was
+// historic shorthand for "suffix of the Go import root"; the actual operation
+// is prefix matching on the module-relative path, so the name is now aligned.)
+var funnelAllowlistPathPrefixes = []string{
 	// The funnel itself is the only permitted non-impl caller.
 	"cells/accesscore/internal/credentialinvalidate/",
 	// session.Store implementations.
@@ -106,8 +111,8 @@ func isAllowlisted(rel string) bool {
 	if strings.HasSuffix(rel, "_test.go") {
 		return true
 	}
-	for _, suffix := range funnelAllowlistSuffixes {
-		if strings.HasPrefix(rel, suffix) {
+	for _, prefix := range funnelAllowlistPathPrefixes {
+		if strings.HasPrefix(rel, prefix) {
 			return true
 		}
 	}

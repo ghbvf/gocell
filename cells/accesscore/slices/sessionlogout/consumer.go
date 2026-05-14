@@ -11,16 +11,20 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Package sessionlogout consumes role-changed events for observability and
-// audit. Credential invalidation (epoch bump + session revoke + refresh chain
+// Package sessionlogout consumes role.assigned and role.revoked events for
+// observability and audit. The historical package name ("sessionlogout") is
+// retained for wiring continuity even though the consumer no longer handles
+// session-logout events directly; a clearer name like "rbacaudit" would fit
+// the current responsibility better but the rename is a cross-file refactor
+// (slice.yaml id + cell_init.go wiring + contract subscribers + archtest
+// fixtures) that is intentionally out of scope here.
+//
+// Credential invalidation (epoch bump + session revoke + refresh chain
 // revoke) is performed upstream by rbacassign.Service.Revoke through the
 // credentialinvalidate.Invalidator funnel inside the same tx as the role
 // mutation. This consumer must NOT call sessionStore.RevokeForSubject —
 // doing so would (a) violate CREDENTIAL-INVALIDATE-FUNNEL-01 archtest and
 // (b) cause redundant epoch bumps wrongly invalidating unrelated access JWTs.
-//
-// Package name retained as "sessionlogout" for historical wiring continuity;
-// see backlog for proposed rename to "rbacaudit".
 
 // Consumer handles role-change events.
 //
