@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -277,6 +278,28 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return pub, nil
 	}, v.parserOpts...)
 	if err != nil {
+		// Token-side errors (expired, unknown kid, wrong alg, malformed) are
+		// always 401. Verifier-side infra errors (JWKS down, KMS unreachable,
+		// signed-key cache miss with backing store failure) must surface as 503
+		// so clients distinguish "wrong credentials" from "auth dependency
+		// degraded" and operators alert correctly.
+		//
+		// IMPORTANT: do NOT use errcode.IsInfraError here. That predicate is
+		// fail-closed — it treats every unclassified plain error (including
+		// jwt.ErrTokenExpired, bare fmt.Errorf("invalid kid header"), and the
+		// wrapped "unexpected signing method ...") as infra. JWT lib errors
+		// arrive as plain errors by design (golang-jwt/jwt v5 exports them as
+		// sentinel values), so a fail-closed check would mis-classify the
+		// entire token-error surface as 503. Use an explicit Kind/Category
+		// check that only fires when the underlying SigningKeyProvider
+		// classified its own error as infra (Finding #1 PR #490 second review;
+		// matches keycloak KeyManagementException, ory/fosite server_error
+		// branch, zitadel caos_errs.IsInternal pattern).
+		if hasExplicitInfraSignal(err) {
+			return Claims{}, nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				"authentication service unavailable", err,
+				errcode.WithCategory(errcode.CategoryInfra))
+		}
 		return Claims{}, nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token verification failed", err)
 	}
 	if !token.Valid {
@@ -358,6 +381,12 @@ type IssueOptions struct {
 	Audience              []string
 	SessionID             string
 	PasswordResetRequired bool
+	// JTI is the JWT ID ("jti" claim). When non-empty it is written into the
+	// token payload. Empty string omits the claim.
+	JTI string
+	// AuthzEpoch is the authorization epoch counter written as the
+	// "authz_epoch" claim. Zero is a valid value and is always written.
+	AuthzEpoch int64
 }
 
 // Issue creates a signed JWT token for the given subject and options.
@@ -409,6 +438,10 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	if opts.PasswordResetRequired {
 		claims["password_reset_required"] = true
 	}
+	if opts.JTI != "" {
+		claims["jti"] = opts.JTI
+	}
+	claims["authz_epoch"] = opts.AuthzEpoch
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = i.keys.SigningKeyID()
@@ -443,6 +476,10 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	if v, ok := mc["password_reset_required"].(bool); ok && v {
 		c.PasswordResetRequired = true
 	}
+	if jti, ok := mc["jti"].(string); ok {
+		c.JTI = jti
+	}
+	c.AuthzEpoch = numericFromAny(mc["authz_epoch"])
 	c.Extra = collectExtraClaims(mc)
 
 	return c
@@ -485,20 +522,67 @@ func parseUnixTime(v any) time.Time {
 	return time.Unix(int64(f), 0)
 }
 
-var standardClaims = map[string]bool{
-	"sub": true, "iss": true, "aud": true,
-	"exp": true, "iat": true, "nbf": true, "roles": true,
-	tokenUseClaim:             true,
-	"sid":                     true,
-	"password_reset_required": true,
+// numericFromAny converts a JWT numeric value (float64, int64, or
+// encoding/json.Number) to int64. Returns 0 when v is nil or an unrecognized
+// type. JWT libraries typically unmarshal JSON numbers as float64, but
+// encoding/json.Number and int64 are also acceptable forms.
+func numericFromAny(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+var standardClaims = map[string]struct{}{
+	"sub": {}, "iss": {}, "aud": {},
+	"exp": {}, "iat": {}, "nbf": {}, "roles": {},
+	tokenUseClaim:             {},
+	"sid":                     {},
+	"password_reset_required": {},
+	"jti":                     {},
+	"authz_epoch":             {},
 }
 
 func collectExtraClaims(mc jwt.MapClaims) map[string]any {
 	extra := make(map[string]any)
 	for k, v := range mc {
-		if !standardClaims[k] {
+		if _, isStandard := standardClaims[k]; !isStandard {
 			extra[k] = v
 		}
 	}
 	return extra
+}
+
+// hasExplicitInfraSignal reports whether err carries an *errcode.Error in its
+// wrapped chain that the originator EXPLICITLY classified as infrastructure —
+// either by Kind = KindUnavailable or Category = CategoryInfra. This is the
+// explicit-only counterpart to errcode.IsInfraError, which is fail-closed
+// (any unclassified plain error → infra). The fail-closed semantics is wrong
+// at the JWT verification boundary: jwt-library errors are plain errors by
+// design (golang-jwt/jwt v5 returns sentinel jwt.ErrToken* and bare
+// fmt.Errorf from keyfunc), so a fail-closed check would mis-tag every
+// token-side validation error as 503.
+//
+// Scoped to package auth: kept local rather than promoted to pkg/errcode
+// because the only valid use case is "JWT validation boundary" (matches
+// keycloak's KeyManagementException isolation, ory/fosite Strategy interface
+// split, zitadel caos_errs.IsInternal — see ADR note in jwt.go:280 block).
+// Promoting it would create two near-identical predicates in pkg/errcode
+// (IsInfraError vs HasInfraSignal) whose differences only ai-collab.md savvy
+// AI co-authors would correctly pick — a Soft form to avoid per ai-collab.md.
+func hasExplicitInfraSignal(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		return false
+	}
+	return ec.Kind == errcode.KindUnavailable || ec.Category == errcode.CategoryInfra
 }

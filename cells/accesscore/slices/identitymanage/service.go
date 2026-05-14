@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -22,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -126,8 +126,7 @@ func WithLastAdminProtection(roleRepo ports.RoleRepository) Option {
 // Service implements identity management business logic.
 type Service struct {
 	repo                         ports.UserRepository
-	sessionStore                 session.Store
-	refreshStore                 refresh.Store
+	invalidator                  *credentialinvalidate.Invalidator
 	txRunner                     persistence.CellTxManager
 	emitter                      outbox.Emitter
 	logger                       *slog.Logger
@@ -139,34 +138,30 @@ type Service struct {
 }
 
 // NewService creates an identity-manage Service. tokenIssuer is required;
-// callers must supply it via WithTokenIssuer. refreshStore is required so
-// Lock / ChangePassword cascade-revoke the user's refresh-token chains in
-// the same transaction as the session revoke.
+// callers must supply it via WithTokenIssuer. invalidator is required so all
+// credential-revocation events (Lock / Delete / ChangePassword / suspension)
+// atomically bump authz_epoch + revoke sessions + revoke refresh chains via
+// the single funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
 func NewService(
 	repo ports.UserRepository,
-	sessionStore session.Store,
-	refreshStore refresh.Store,
+	invalidator *credentialinvalidate.Invalidator,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
 	if repo == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: user repository is required")
 	}
-	if validation.IsNilInterface(sessionStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: session store is required")
-	}
-	if validation.IsNilInterface(refreshStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: refresh store is required")
+	if validation.IsNilInterface(invalidator) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: invalidator is required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{
-		repo:         repo,
-		sessionStore: sessionStore,
-		refreshStore: refreshStore,
-		emitter:      outbox.NewNoopEmitter(),
-		logger:       logger,
+		repo:        repo,
+		invalidator: invalidator,
+		emitter:     outbox.NewNoopEmitter(),
+		logger:      logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -363,7 +358,7 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 		if err := s.repo.Update(txCtx, u); err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-		if err := s.cascadeRevokeOnDemotion(txCtx, u.ID, demotedFromActive); err != nil {
+		if err := s.cascadeInvalidateOnDemotion(txCtx, u.ID, demotedFromActive); err != nil {
 			return err
 		}
 		user = u
@@ -383,20 +378,20 @@ func isStatusDemotion(u *domain.User, input UpdateInput) bool {
 		*input.Status != string(domain.StatusActive)
 }
 
-// cascadeRevokeOnDemotion mirrors Lock's session+refresh revoke cascade for
-// the active→suspended Update path (S4.0 P1-A). Without this, a suspended
-// user keeps an unexpired access token + refresh chain and continues to
-// operate until natural expiry — defeating the suspend gesture. The boolean
-// gate keeps the no-op cost zero for non-status updates.
-func (s *Service) cascadeRevokeOnDemotion(ctx context.Context, userID string, demoted bool) error {
+// cascadeInvalidateOnDemotion fixes CRITICAL-1: the old helper only called
+// RevokeForSubject + RevokeUser but skipped BumpAuthzEpoch, leaving a
+// suspended user's access JWTs valid until natural exp. Now routes through
+// the invalidator funnel so authz_epoch bump + session revoke + refresh
+// revoke all happen atomically (CREDENTIAL-INVALIDATE-FUNNEL-01).
+// suspended semantics are equivalent to Lock.
+//
+// The boolean gate keeps the no-op cost zero for non-status updates.
+func (s *Service) cascadeInvalidateOnDemotion(ctx context.Context, userID string, demoted bool) error {
 	if !demoted {
 		return nil
 	}
-	if err := s.sessionStore.RevokeForSubject(ctx, userID, session.CredentialEventLock); err != nil {
-		return fmt.Errorf("identity-manage: update revoke sessions: %w", err)
-	}
-	if err := s.refreshStore.RevokeUser(ctx, userID); err != nil {
-		return fmt.Errorf("identity-manage: update revoke refresh chains: %w", err)
+	if err := s.invalidator.Apply(ctx, userID, session.CredentialEventLock); err != nil {
+		return fmt.Errorf("identity-manage: update invalidate credentials on demotion: %w", err)
 	}
 	return nil
 }
@@ -472,11 +467,10 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
 			return err
 		}
-		if err := s.sessionStore.RevokeForSubject(txCtx, id, session.CredentialEventDelete); err != nil {
-			return fmt.Errorf("identity-manage: delete revoke sessions: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
-			return fmt.Errorf("identity-manage: delete revoke refresh chains: %w", err)
+		// Bump authz_epoch + revoke sessions + revoke refresh chains atomically.
+		// Routed through funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
+		if err := s.invalidator.Apply(txCtx, id, session.CredentialEventDelete); err != nil {
+			return fmt.Errorf("identity-manage: delete invalidate credentials: %w", err)
 		}
 		if err := s.repo.Delete(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
@@ -529,16 +523,13 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		// F17: revoke all sessions for the locked user. Failure must abort the
-		// transaction (mirrors ChangePassword): silently logging would commit
-		// the lock flag while leaving stolen access tokens able to call
-		// business endpoints until natural expiry — which is the exact attack
-		// vector "Lock" exists to prevent.
-		if err := s.sessionStore.RevokeForSubject(txCtx, id, session.CredentialEventLock); err != nil {
-			return fmt.Errorf("identity-manage: lock revoke sessions: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
-			return fmt.Errorf("identity-manage: lock revoke refresh chains: %w", err)
+		// F17: bump authz_epoch + revoke all sessions + revoke refresh chains.
+		// Failure must abort the transaction: silently logging would commit the
+		// lock flag while leaving stolen access tokens able to call business
+		// endpoints until natural expiry — the exact attack vector "Lock" exists
+		// to prevent. Routed through funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
+		if err := s.invalidator.Apply(txCtx, id, session.CredentialEventLock); err != nil {
+			return fmt.Errorf("identity-manage: lock invalidate credentials: %w", err)
 		}
 		if err := s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor}); err != nil {
 			return err
@@ -736,13 +727,11 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 		return "", err // ErrVersionConflict on stale view
 	}
 
-	// Cascade revocations inside the same tx so that no old session survives
-	// the password change.
-	if err := s.sessionStore.RevokeForSubject(txCtx, user.ID, session.CredentialEventPasswordReset); err != nil {
+	// Bump authz_epoch + cascade revocations inside the same tx so that no
+	// old session survives the password change. Routed through funnel
+	// (CREDENTIAL-INVALIDATE-FUNNEL-01).
+	if err := s.invalidator.Apply(txCtx, user.ID, session.CredentialEventPasswordReset); err != nil {
 		return "", fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
-	}
-	if err := s.refreshStore.RevokeUser(txCtx, user.ID); err != nil {
-		return "", fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", err)
 	}
 
 	return user.ID, nil

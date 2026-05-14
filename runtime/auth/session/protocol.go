@@ -18,8 +18,9 @@ type FingerprintMode interface {
 }
 
 // FingerprintJTIRef stores the JWT jti claim reference (RFC 9068 §2.2.4) on
-// the server side. Session rows persist {sid, jti, authz_epoch_at_issue}; no
-// token plaintext or HMAC fingerprint is stored.
+// the server side. Session rows persist {sid, jti}; no token plaintext or HMAC
+// fingerprint is stored. The authz_epoch_at_issue column was removed in S4b
+// (migration 025); epoch ordering is now enforced via the JWT claim layer.
 type FingerprintJTIRef struct{}
 
 // fingerprintModeOK is the empty seal marker — its mere presence makes
@@ -45,6 +46,16 @@ const (
 	// CredentialEventRoleRevoke is emitted when any role assignment changes
 	// for the user (revoke, downgrade, or permission-set change).
 	CredentialEventRoleRevoke
+	// CredentialEventRefreshReuse is emitted when refresh-token reuse is
+	// detected beyond the reuse-grace window. The credentialinvalidate funnel
+	// passes this event to RevokeForSubject so the security response is
+	// identical to a full credential revocation.
+	//
+	// This event is NOT part of allCredentialEvents (and therefore not required
+	// by WithRevokeOnAll / NewProtocol's completeness check). It is a
+	// security-response event triggered by the refresh-store's reuse detection
+	// path, not a user-lifecycle credential-state transition.
+	CredentialEventRefreshReuse
 )
 
 // String returns a stable textual label suitable for diagnostics, storetest
@@ -59,6 +70,8 @@ func (e CredentialEvent) String() string {
 		return "Delete"
 	case CredentialEventRoleRevoke:
 		return "RoleRevoke"
+	case CredentialEventRefreshReuse:
+		return "RefreshReuse"
 	default:
 		return "Unknown"
 	}
@@ -73,8 +86,12 @@ type OrderingModel interface {
 }
 
 // OrderingAuthzEpoch uses a per-user monotonic epoch column to invalidate
-// stale tokens (OAuth Security BCP §4.13.1). Session rows snapshot the epoch
-// at issuance; validate rejects when claim.epoch < user.authz_epoch.
+// stale tokens (OAuth Security BCP §4.13.1). The JWT access token carries
+// the authz_epoch claim at mint time; validate compares the JWT claim to the
+// live user.authz_epoch row and rejects on any inequality (`!=`, fail-closed:
+// catches both stale tokens with `claim < user` and tampered tokens with
+// `claim > user`). The legacy per-session snapshot column was dropped in S4b
+// migration 025 — see ADR 202605101400 §A1/§A3.
 type OrderingAuthzEpoch struct{}
 
 // orderingModelOK is the empty seal marker — its mere presence makes
@@ -158,7 +175,8 @@ func ValidateCredentialEvent(e CredentialEvent) bool {
 	case CredentialEventPasswordReset,
 		CredentialEventLock,
 		CredentialEventDelete,
-		CredentialEventRoleRevoke:
+		CredentialEventRoleRevoke,
+		CredentialEventRefreshReuse:
 		return true
 	default:
 		return false

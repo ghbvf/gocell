@@ -15,6 +15,9 @@ endpoints:
         type: string
         format: uuid
     successStatus: 200
+    auth:
+      responses:
+        - 503
     noContent: false
     responses:
       400:

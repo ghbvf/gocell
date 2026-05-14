@@ -31,6 +31,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesspgrepo "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
@@ -164,10 +165,13 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, user))
 
 	stub := &pgStubTokenIssuer{pair: dto.TokenPair{AccessToken: "at-pg", RefreshToken: "rt-pg"}}
+	pgSessionStore := testutil.RealSessionRepo(t)
+	pgRefreshStore := newPGIntegRefreshStore()
+	inv, err := credentialinvalidate.New(repo, pgSessionStore, pgRefreshStore)
+	require.NoError(t, err)
 	svc, err := NewService(
 		repo,
-		testutil.RealSessionRepo(t),
-		newPGIntegRefreshStore(),
+		inv,
 		slog.Default(),
 		WithTokenIssuer(stub),
 		WithClock(clock.Real()),

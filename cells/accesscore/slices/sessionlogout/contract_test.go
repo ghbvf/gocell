@@ -143,8 +143,7 @@ func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
-	repo := testutil.RealSessionRepo(t)
-	consumer := NewConsumer(repo, slog.Default())
+	consumer := NewConsumer(slog.Default())
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"assigned"}`)
 	c.ValidatePayload(t, payload)
@@ -165,8 +164,7 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
-	repo := testutil.RealSessionRepo(t)
-	consumer := NewConsumer(repo, slog.Default())
+	consumer := NewConsumer(slog.Default())
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"revoked"}`)
 	c.ValidatePayload(t, payload)

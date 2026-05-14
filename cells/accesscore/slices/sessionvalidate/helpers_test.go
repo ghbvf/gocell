@@ -49,6 +49,30 @@ func IssueTestTokenWithIntent(
 	return token.SignedString(signingKey)
 }
 
+// IssueTestTokenWithEpoch creates a signed access JWT with an explicit
+// authz_epoch claim, a session ID, and any specified roles.
+func IssueTestTokenWithEpoch(
+	signingKey *rsa.PrivateKey, subject string, authzEpoch int64, ttl time.Duration, sessionID string,
+) (string, error) {
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"sub":         subject,
+		"iat":         jwt.NewNumericDate(now),
+		"exp":         jwt.NewNumericDate(now.Add(ttl)),
+		"iss":         "gocell-accesscore",
+		"aud":         jwt.ClaimStrings{"gocell"},
+		"token_use":   string(auth.TokenIntentAccess),
+		"authz_epoch": authzEpoch,
+	}
+	if sessionID != "" {
+		claims["sid"] = sessionID
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = auth.Thumbprint(&signingKey.PublicKey)
+	token.Header["typ"] = auth.TypHeaderForIntent(auth.TokenIntentAccess)
+	return token.SignedString(signingKey)
+}
+
 func IssueLegacyRefreshJWT(signingKey *rsa.PrivateKey, subject string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{

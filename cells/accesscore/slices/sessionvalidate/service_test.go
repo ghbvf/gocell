@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
@@ -147,9 +149,13 @@ func TestService_VerifyIntent(t *testing.T) {
 		},
 	}
 
+	// userRepo returns epoch 0 for both test subjects; tokens without
+	// authz_epoch claim also have epoch 0, so they all pass the epoch check.
+	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-1", AuthzEpoch: 0}}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(testVerifier, store, slog.Default())
+			svc := newSvcWithUserRepo(t, store, userRepo)
 
 			claims, err := svc.VerifyIntent(context.Background(), tt.token(), auth.TokenIntentAccess)
 			if tt.wantErr {
@@ -191,7 +197,8 @@ func TestService_VerifyIntent_PastSessionExpiresAt_StillValidates(t *testing.T) 
 	tok, err := IssueTestToken(testPrivKey, "usr-row-past", nil, time.Hour, "sess-row-past")
 	require.NoError(t, err)
 
-	svc := NewService(testVerifier, store, slog.Default())
+	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-row-past", AuthzEpoch: 0}}
+	svc := newSvcWithUserRepo(t, store, userRepo)
 	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.NoError(t, err,
 		"F1: sessionvalidate must NOT reject on session-row ExpiresAt; JWT exp + RevokedAt are the validate gates")
@@ -200,7 +207,8 @@ func TestService_VerifyIntent_PastSessionExpiresAt_StillValidates(t *testing.T) 
 
 func TestService_VerifyIntent_NilSessionStore(t *testing.T) {
 	// When sessionStore is nil (backward compatibility), sid claim is ignored.
-	svc := NewService(testVerifier, nil, slog.Default())
+	// userRepo is required by constructor but is never called when sessionStore is nil.
+	svc := newSvcWithUserRepo(t, nil, &stubUserRepo{})
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
 	require.NoError(t, err)
@@ -223,20 +231,25 @@ func (errorSessionStore) RevokeForSubject(_ context.Context, _ string, _ session
 }
 
 func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
-	// Infrastructure errors (not just "not found") must also fail-closed.
-	svc := NewService(testVerifier, errorSessionStore{}, slog.Default())
+	// Infrastructure errors from the session store are fail-closed: they surface
+	// as ERR_AUTH_SERVICE_UNAVAILABLE (503) so operators can distinguish transient
+	// infra outages from invalid-credential rejections (S4b Batch 3H).
+	// userRepo is never reached because errorSessionStore returns an error first.
+	svc := newSvcWithUserRepo(t, errorSessionStore{}, &stubUserRepo{})
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-db-fail")
 	require.NoError(t, err)
 
 	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.Error(t, err, "DB errors must cause verification failure (fail-closed)")
-	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
+	assert.Contains(t, err.Error(), "ERR_AUTH_SERVICE_UNAVAILABLE",
+		"session store infra error must surface as 503 ERR_AUTH_SERVICE_UNAVAILABLE")
 }
 
 func TestService_VerifyIntent_NilSessionStore_NoSid(t *testing.T) {
 	// When sessionStore is nil (demo mode), tokens without sid are accepted.
-	svc := NewService(testVerifier, nil, slog.Default())
+	// userRepo is required by constructor but is never called when sessionStore is nil.
+	svc := newSvcWithUserRepo(t, nil, &stubUserRepo{})
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour)
 	require.NoError(t, err)
@@ -244,6 +257,109 @@ func TestService_VerifyIntent_NilSessionStore_NoSid(t *testing.T) {
 	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-1", claims.Subject)
+}
+
+// stubUserRepo is a minimal ports.UserRepository for epoch tests.
+// Only GetByID is exercised by sessionvalidate; other methods panic so that
+// accidentally-invoked paths fail loudly in tests.
+type stubUserRepo struct {
+	// user is returned on GetByID when getErr is nil.
+	user *domain.User
+	// getErr, if non-nil, is returned from GetByID.
+	getErr error
+}
+
+var _ ports.UserRepository = (*stubUserRepo)(nil)
+
+func (r *stubUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	if r.user != nil {
+		return r.user, nil
+	}
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		errcode.WithCategory(errcode.CategoryDomain))
+}
+
+func (r *stubUserRepo) Create(_ context.Context, _ *domain.User) error { panic("not implemented") }
+func (r *stubUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+func (r *stubUserRepo) Update(_ context.Context, _ *domain.User) error { panic("not implemented") }
+func (r *stubUserRepo) Delete(_ context.Context, _ string) error       { panic("not implemented") }
+func (r *stubUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+	panic("not implemented")
+}
+
+func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+	panic("not implemented")
+}
+
+// newSvcWithUserRepo is a helper that builds a Service wired with both a
+// session store and a user repo. Existing tests that don't exercise epoch logic
+// use newTestSvc (nil userRepo) via the sessionStore-only path.
+func newSvcWithUserRepo(t testing.TB, store session.Store, userRepo ports.UserRepository) *Service {
+	t.Helper()
+	svc, err := NewService(testVerifier, store, userRepo, slog.Default())
+	require.NoError(t, err)
+	return svc
+}
+
+// TestNewService_NilGuards verifies that NewService fail-fasts on nil required deps.
+// Finding #3: verifier nil-check added alongside existing userRepo check.
+func TestNewService_NilGuards(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-1"}}
+
+	cases := []struct {
+		name     string
+		verifier auth.IntentTokenVerifier
+		userRepo ports.UserRepository
+	}{
+		{
+			name:     "nil verifier returns error",
+			verifier: nil,
+			userRepo: userRepo,
+		},
+		{
+			name:     "typed-nil verifier returns error",
+			verifier: (*auth.JWTVerifier)(nil),
+			userRepo: userRepo,
+		},
+		{
+			name:     "nil userRepo returns error",
+			verifier: testVerifier,
+			userRepo: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc, err := NewService(tc.verifier, store, tc.userRepo, slog.Default())
+			require.Error(t, err, "NewService must fail on nil dep: %s", tc.name)
+			assert.Nil(t, svc)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.KindInvalid, ec.Kind)
+			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+		})
+	}
+}
+
+// seedActiveSession seeds a session in store and returns its ID.
+func seedActiveSession(t testing.TB, store *session.MemStore, sid, subject string) {
+	t.Helper()
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:        sid,
+		SubjectID: subject,
+		JTI:       sid + "-jti",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+	}))
 }
 
 // capturingStore wraps a real or stub session store and allows injecting errors
@@ -261,42 +377,286 @@ func (r capturingStore) RevokeForSubject(_ context.Context, _ string, _ session.
 	return nil
 }
 
+// capturingUserRepo is a ports.UserRepository whose GetByID injects a
+// configurable error for infra-error-path tests.
+type capturingUserRepo struct {
+	getErr error
+	user   *domain.User
+}
+
+var _ ports.UserRepository = (*capturingUserRepo)(nil)
+
+func (r *capturingUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	if r.user != nil {
+		return r.user, nil
+	}
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		errcode.WithCategory(errcode.CategoryDomain))
+}
+func (r *capturingUserRepo) Create(_ context.Context, _ *domain.User) error { return nil }
+func (r *capturingUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not implemented",
+		errcode.WithCategory(errcode.CategoryDomain))
+}
+func (r *capturingUserRepo) Update(_ context.Context, _ *domain.User) error { return nil }
+func (r *capturingUserRepo) Delete(_ context.Context, _ string) error       { return nil }
+func (r *capturingUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+	return 0, nil
+}
+
+func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+
+// --- S4b Batch 3H: epoch-compare tests ---
+
+// TestEnforce_StaleEpoch_Rejected verifies that when user.AuthzEpoch (5) is
+// greater than claims.AuthzEpoch (3), the service rejects with 401 uniform body.
+func TestEnforce_StaleEpoch_Rejected(t *testing.T) {
+	store := newTestStore(t)
+	seedActiveSession(t, store, "sess-epoch-stale", "usr-epoch")
+
+	user := &domain.User{ID: "usr-epoch", AuthzEpoch: 5}
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-epoch", 3, time.Hour, "sess-epoch-stale")
+	require.NoError(t, err)
+
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, verifyErr)
+	assert.Contains(t, verifyErr.Error(), errMsgAuthFailed,
+		"stale epoch must return uniform auth-failed message")
+	assert.NotContains(t, verifyErr.Error(), "ERR_AUTH_SERVICE_UNAVAILABLE",
+		"stale epoch must not return 503 code")
+}
+
+// TestEnforce_EqualEpoch_Accepted verifies that equal epochs (claim=5, user=5) pass.
+func TestEnforce_EqualEpoch_Accepted(t *testing.T) {
+	store := newTestStore(t)
+	seedActiveSession(t, store, "sess-epoch-equal", "usr-ep-equal")
+
+	user := &domain.User{ID: "usr-ep-equal", AuthzEpoch: 5}
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-ep-equal", 5, time.Hour, "sess-epoch-equal")
+	require.NoError(t, err)
+
+	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, "usr-ep-equal", claims.Subject)
+}
+
+// TestEnforce_ZeroEpochCompat verifies that claim.AuthzEpoch=0 with user.AuthzEpoch=0
+// passes (fresh user / pre-S4b legacy token compat per plan §3.7).
+func TestEnforce_ZeroEpochCompat(t *testing.T) {
+	store := newTestStore(t)
+	seedActiveSession(t, store, "sess-epoch-zero", "usr-ep-zero")
+
+	user := &domain.User{ID: "usr-ep-zero", AuthzEpoch: 0}
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-ep-zero", 0, time.Hour, "sess-epoch-zero")
+	require.NoError(t, err)
+
+	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.NoError(t, err, "zero epoch on both sides must pass (pre-S4b compat)")
+}
+
+// TestEnforce_HigherClaimEpoch_Rejected verifies that claim.AuthzEpoch > user.AuthzEpoch
+// is rejected with 401 (fail-closed: any epoch mismatch including "future epoch" is invalid).
+// Finding #2: > changed to != so claims with epoch ahead of user are also rejected.
+func TestEnforce_HigherClaimEpoch_Rejected(t *testing.T) {
+	store := newTestStore(t)
+	seedActiveSession(t, store, "sess-epoch-high", "usr-ep-high")
+
+	user := &domain.User{ID: "usr-ep-high", AuthzEpoch: 5}
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	// claim=10 > user=5: a "future epoch" token must be rejected (fail-closed).
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-ep-high", 10, time.Hour, "sess-epoch-high")
+	require.NoError(t, err)
+
+	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, err, "claim epoch ahead of user epoch must be rejected (fail-closed mismatch)")
+	assert.Contains(t, err.Error(), errMsgAuthFailed,
+		"future epoch mismatch must return uniform auth-failed message")
+}
+
+// TestEnforce_SessionInfraError_Returns503 verifies that an infra error from
+// sessionStore.Get surfaces as KindUnavailable + ErrAuthServiceUnavailable.
+func TestEnforce_SessionInfraError_Returns503(t *testing.T) {
+	infraErr := errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "db down")
+	store := capturingStore{getErr: infraErr}
+	user := &domain.User{ID: "usr-infra", AuthzEpoch: 0}
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-infra", 0, time.Hour, "sess-infra")
+	require.NoError(t, err)
+
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, verifyErr)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, verifyErr, &ec, "error must be an errcode.Error")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind, "session infra error must surface as KindUnavailable")
+	assert.Equal(t, errcode.ErrAuthServiceUnavailable, ec.Code, "session infra error must have ErrAuthServiceUnavailable code")
+}
+
+// TestEnforce_UserRepoInfraError_Returns503 verifies that an infra error from
+// userRepo.GetByID surfaces as KindUnavailable + ErrAuthServiceUnavailable.
+func TestEnforce_UserRepoInfraError_Returns503(t *testing.T) {
+	store := newTestStore(t)
+	seedActiveSession(t, store, "sess-userrepo-infra", "usr-repo-infra")
+
+	infraErr := errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "user store down")
+	svc := newSvcWithUserRepo(t, store, &capturingUserRepo{getErr: infraErr})
+
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-repo-infra", 0, time.Hour, "sess-userrepo-infra")
+	require.NoError(t, err)
+
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, verifyErr)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, verifyErr, &ec, "error must be an errcode.Error")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind, "user repo infra error must surface as KindUnavailable")
+	assert.Equal(t, errcode.ErrAuthServiceUnavailable, ec.Code, "user repo infra error must have ErrAuthServiceUnavailable code")
+}
+
+// TestEnforce_DomainNotFound_Returns401 verifies that a domain not-found error
+// from sessionStore.Get returns a 401 uniform body, not a 503.
+func TestEnforce_DomainNotFound_Returns401(t *testing.T) {
+	domainNotFound := errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+		errcode.WithCategory(errcode.CategoryDomain))
+	store := capturingStore{getErr: domainNotFound}
+	user := &domain.User{ID: "usr-notfound", AuthzEpoch: 0}
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-notfound", 0, time.Hour, "sess-notfound")
+	require.NoError(t, err)
+
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, verifyErr)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, verifyErr, &ec, "error must be an errcode.Error")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+		"domain not-found from session store must map to 401, not 503")
+	assert.NotEqual(t, errcode.ErrAuthServiceUnavailable, ec.Code,
+		"domain not-found must not return ErrAuthServiceUnavailable")
+}
+
+// TestEnforce_UniformAuthFailedBody verifies that stale epoch, revoked session,
+// and user not-found all return the same errMsgAuthFailed message (anti-enumeration).
+func TestEnforce_UniformAuthFailedBody(t *testing.T) {
+	store := newTestStore(t)
+
+	// Seed an active session (for stale-epoch and user-not-found cases).
+	seedActiveSession(t, store, "sess-uniform", "usr-uniform")
+
+	// Seed a revoked session.
+	revokedAt := time.Now()
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:        "sess-revoked-uniform",
+		SubjectID: "usr-uniform",
+		JTI:       "jti-revoked-uniform",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+		RevokedAt: &revokedAt,
+	}))
+
+	tests := []struct {
+		name    string
+		tok     func() string
+		userRep ports.UserRepository
+	}{
+		{
+			name: "stale epoch",
+			tok: func() string {
+				tok, _ := IssueTestTokenWithEpoch(testPrivKey, "usr-uniform", 1, time.Hour, "sess-uniform")
+				return tok
+			},
+			userRep: &stubUserRepo{user: &domain.User{ID: "usr-uniform", AuthzEpoch: 5}},
+		},
+		{
+			name: "revoked session",
+			tok: func() string {
+				tok, _ := IssueTestTokenWithEpoch(testPrivKey, "usr-uniform", 5, time.Hour, "sess-revoked-uniform")
+				return tok
+			},
+			userRep: &stubUserRepo{user: &domain.User{ID: "usr-uniform", AuthzEpoch: 5}},
+		},
+		{
+			name: "user domain not found",
+			tok: func() string {
+				tok, _ := IssueTestTokenWithEpoch(testPrivKey, "usr-uniform", 0, time.Hour, "sess-uniform")
+				return tok
+			},
+			// stubUserRepo with nil user returns domain not-found.
+			userRep: &stubUserRepo{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newSvcWithUserRepo(t, store, tt.userRep)
+			_, err := svc.VerifyIntent(context.Background(), tt.tok(), auth.TokenIntentAccess)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), errMsgAuthFailed,
+				"all auth failures must return the uniform body to prevent enumeration")
+		})
+	}
+}
+
 // TestLogSessionLookupError_LogLevel verifies S40: IsDomainNotFound whitelist
 // determines log level — only whitelisted domain not-found codes produce Warn;
-// all other errors (infra, non-whitelisted errcode, plain) produce Error.
+// all infra, plain, or non-whitelisted domain errors produce Error.
+//
+// S4b Batch 3H update: infra errors from the session store now log at ERROR
+// with message "session store unavailable" (infra branch in enforceSessionState),
+// while non-whitelisted domain errors still go through logSessionLookupError
+// and emit "session repo unavailable".
 func TestLogSessionLookupError_LogLevel(t *testing.T) {
 	tests := []struct {
 		name          string
 		storeErr      error
 		wantLogLevel  slog.Level
-		wantLogSubstr string
+		wantLogSubstr string // substring of the expected log message to search for
 	}{
 		{
-			name:         "plain infra error logs at Error",
-			storeErr:     fmt.Errorf("db connection timeout"),
-			wantLogLevel: slog.LevelError,
+			name:          "plain infra error logs at Error",
+			storeErr:      fmt.Errorf("db connection timeout"),
+			wantLogLevel:  slog.LevelError,
+			wantLogSubstr: "session store unavailable",
 		},
 		{
 			name: "errcode ErrSessionNotFound (domain, whitelist) logs at Warn",
 			storeErr: errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
 				errcode.WithCategory(errcode.CategoryDomain)),
-			wantLogLevel: slog.LevelWarn,
+			wantLogLevel:  slog.LevelWarn,
+			wantLogSubstr: "session not found",
 		},
 		{
 			name: "non-whitelisted errcode domain logs at Error",
 			storeErr: errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound, "order not found",
 				errcode.WithCategory(errcode.CategoryDomain)),
-			wantLogLevel: slog.LevelError,
+			wantLogLevel:  slog.LevelError,
+			wantLogSubstr: "session repo unavailable",
 		},
 		{
-			name:         "errcode with CategoryInfra logs at Error",
-			storeErr:     errcode.New(errcode.KindInternal, errcode.ErrInternal, "db down"),
-			wantLogLevel: slog.LevelError,
+			name:          "errcode with CategoryInfra logs at Error",
+			storeErr:      errcode.New(errcode.KindInternal, errcode.ErrInternal, "db down"),
+			wantLogLevel:  slog.LevelError,
+			wantLogSubstr: "session store unavailable",
 		},
 		{
-			name:         "errcode with CategoryUnspecified (zero) logs at Error (fail-closed)",
-			storeErr:     errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "not found"),
-			wantLogLevel: slog.LevelError,
+			name:          "errcode with CategoryUnspecified (zero) logs at Error (fail-closed)",
+			storeErr:      errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "not found"),
+			wantLogLevel:  slog.LevelError,
+			wantLogSubstr: "session store unavailable",
 		},
 	}
 
@@ -304,7 +664,8 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			svc := NewService(testVerifier, capturingStore{getErr: tt.storeErr}, logger)
+			svc, svcErr := NewService(testVerifier, capturingStore{getErr: tt.storeErr}, &stubUserRepo{}, logger)
+			require.NoError(t, svcErr)
 
 			tok, err := IssueTestToken(testPrivKey, "usr-log", nil, time.Hour, "sess-log-test")
 			require.NoError(t, err)
@@ -314,26 +675,21 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 			logOutput := buf.String()
 			require.NotEmpty(t, logOutput, "expected at least one log line")
 
-			// P1-3: use precise JSON-line matching to avoid false positives from
-			// other log lines (e.g. JWT verification Warn). We locate the specific
-			// session-lookup log line by message substring before asserting level.
+			// Locate the specific session-lookup log line by expected message substring.
+			entry := sloghelper.FindLogEntry(logOutput, tt.wantLogSubstr)
+			require.NotNil(t, entry,
+				"expected a log line containing %q", tt.wantLogSubstr)
+
+			wantLevel := "ERROR"
 			if tt.wantLogLevel == slog.LevelWarn {
-				entry := sloghelper.FindLogEntry(logOutput, "session not found")
-				require.NotNil(t, entry,
-					"expected a log line containing 'session not found'")
-				assert.Equal(t, "WARN", entry["level"],
-					"domain not-found whitelisted error must log at WARN")
-				// Confirm no ERROR line for this specific lookup message.
-				errEntry := sloghelper.FindLogEntry(logOutput, "session repo unavailable")
+				wantLevel = "WARN"
+				// Also confirm no spurious ERROR line for session store failures.
+				errEntry := sloghelper.FindLogEntry(logOutput, "session store unavailable")
 				assert.Nil(t, errEntry,
-					"must not emit ERROR 'session repo unavailable' when domain not-found whitelist matches")
-			} else {
-				entry := sloghelper.FindLogEntry(logOutput, "session repo unavailable")
-				require.NotNil(t, entry,
-					"expected a log line containing 'session repo unavailable'")
-				assert.Equal(t, "ERROR", entry["level"],
-					"infra / non-whitelisted error must log at ERROR")
+					"must not emit ERROR 'session store unavailable' when domain not-found whitelist matches")
 			}
+			assert.Equal(t, wantLevel, entry["level"],
+				"log level mismatch for error: %v", tt.storeErr)
 		})
 	}
 }

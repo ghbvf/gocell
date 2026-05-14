@@ -6,13 +6,16 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -20,6 +23,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// reuseCascadeTimeout bounds the detached invalidator.Apply transaction so
+// a stalled DB cannot leak goroutines + pool connections indefinitely.
+// Mirrors the cascade-revoke bound used by refresh.Store.RevokeSessionDetached
+// (ADR 202605051800), keeping a single project-wide convention for
+// security-cascade writes.
+const reuseCascadeTimeout = 5 * time.Second
 
 const errMsgInvalidRefreshToken = "invalid refresh token"
 
@@ -49,6 +59,29 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	}
 }
 
+// invalidatorApply is the minimal interface sessionrefresh needs from the
+// credential-invalidation funnel. Using an interface (rather than a concrete
+// *credentialinvalidate.Invalidator field) keeps the slice unit-testable with a
+// spy and decouples it from the concrete invalidator package at the type level.
+// Production code injects *credentialinvalidate.Invalidator which satisfies
+// this interface by method set.
+type invalidatorApply interface {
+	Apply(ctx context.Context, subjectID string, event session.CredentialEvent) error
+}
+
+// WithInvalidator injects the credential-invalidation funnel used to
+// cascade epoch bump + session revoke + refresh chain revoke on refresh-token
+// reuse detection. Required — NewService fails fast when nil.
+// Nil is silently ignored to keep the option idempotent; final nil
+// enforcement is in NewService.
+func WithInvalidator(inv *credentialinvalidate.Invalidator) Option {
+	return func(s *Service) {
+		if inv != nil {
+			s.invalidator = inv
+		}
+	}
+}
+
 // Service implements token refresh logic.
 type Service struct {
 	sessionStore session.Store
@@ -56,9 +89,14 @@ type Service struct {
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
 	txRunner     persistence.CellTxManager
-	issuer       *auth.JWTIssuer
-	logger       *slog.Logger
-	clock        clock.Clock
+	// invalidator is the credential-revocation funnel. Required — NewService
+	// fails fast when nil. On refresh-token reuse detection, Apply is called
+	// inside the outer transaction to atomically bump authz_epoch, revoke all
+	// sessions, and revoke all refresh chains for the subject.
+	invalidator invalidatorApply
+	issuer      *auth.JWTIssuer
+	logger      *slog.Logger
+	clock       clock.Clock
 }
 
 // NewService creates a session-refresh Service.
@@ -113,6 +151,10 @@ func NewService(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"sessionrefresh: TxRunner required; use WithTxManager")
 	}
+	if validation.IsNilInterface(s.invalidator) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionrefresh: Invalidator required; use WithInvalidator")
+	}
 	clock.MustHaveClock(s.clock, "sessionrefresh.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
 }
@@ -166,10 +208,16 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 		return dto.TokenPair{}, err
 	}
 
+	// outerCtx is the caller's context, captured here so refreshInTx can pass
+	// it to handleRotateError. On reuse detection, Apply must run in a detached
+	// tx that is independent of the outer RunInTx boundary — otherwise the 401
+	// return causes the outer tx to roll back, undoing the cascade writes.
+	outerCtx := ctx
+
 	var pair dto.TokenPair
 	do := func(txCtx context.Context) error {
 		var err error
-		pair, err = s.refreshInTx(txCtx, refreshToken)
+		pair, err = s.refreshInTx(txCtx, outerCtx, refreshToken)
 		return err
 	}
 	if err := s.txRunner.RunInTx(ctx, do); err != nil {
@@ -188,12 +236,27 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 // TX semantics. Cascade-revoke calls intentionally bypass the outer TX
 // through RevokeSessionDetached (PR#395 detached-context invariant).
 //
+// outerCtx is the caller's context from Refresh (before RunInTx). It is
+// passed to handleRotateError so that the reuse-cascade Apply call uses a
+// detached tx independent of the outer RunInTx boundary (Finding #4).
+//
 // session.Store is read-only on this path: refresh keeps session.ID stable
 // across rotations (OAuth2 RFC 6749 §6 + OIDC Back-Channel Logout sid
 // stability). AuthzEpoch staleness is enforced by sessionvalidate (S4b).
-func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
+func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, refreshToken string) (dto.TokenPair, error) {
 	presented, err := s.refreshStore.Peek(ctx, refreshToken)
 	if err != nil {
+		// Reuse detected on Peek (grace-counter cap or post-rotation reuse
+		// window): the refresh store has already revoked the *single* presented
+		// session via revokeSessionDetachedAt, but cross-session credential
+		// invalidation (all sessions for the subject + all refresh chains +
+		// authz_epoch bump) only runs through invalidator.Apply. Route Peek's
+		// reuse signal to the same cascade entry point used by Rotate so the
+		// security response is identical regardless of which validation stage
+		// detected the attack (Finding #2 / PR #490 review).
+		if errors.Is(err, refresh.ErrReused) {
+			return dto.TokenPair{}, s.handleReuseDetected(outerCtx, presentedSubjectID(presented), presentedSessionID(presented), "peek")
+		}
 		return dto.TokenPair{}, s.refreshStoreError("session-refresh: refresh store peek failed", err)
 	}
 
@@ -231,6 +294,7 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 		UserID:                sess.SubjectID,
 		SessionID:             sess.ID,
 		PasswordResetRequired: passwordResetRequired,
+		AuthzEpoch:            user.AuthzEpoch,
 	})
 	if err != nil {
 		s.logger.Error("session-refresh: token issuance failed",
@@ -242,7 +306,7 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 
 	newWire, rotated, err := s.refreshStore.Rotate(ctx, refreshToken)
 	if err != nil {
-		return dto.TokenPair{}, s.refreshStoreError("session-refresh: refresh store rotate failed", err)
+		return dto.TokenPair{}, s.handleRotateError(outerCtx, err, sess.SubjectID, sess.ID)
 	}
 	// rotated.SessionID must match the verified session; defend against
 	// concurrent drift between Peek and Rotate.
@@ -263,8 +327,114 @@ func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.Tok
 	}, nil
 }
 
+// handleRotateError interprets a Rotate error and returns the appropriate
+// service-layer error. On ErrReused it triggers the invalidator cascade in a
+// detached, time-bounded tx; on other errors it delegates to refreshStoreError.
+//
+// outerCtx is the caller's context from Refresh (captured before RunInTx).
+// On reuse detection, Apply must run in a tx that is detached from the outer
+// RunInTx boundary — the same pattern as RevokeSessionDetached (cascadeRevoke).
+// Without detachment, the 401 return from this function causes the outer tx to
+// roll back, undoing the epoch bump + session revoke + refresh chain revoke
+// cascade writes (Finding #4 bug).
+//
+// ref: golang.org/pkg/context#WithoutCancel; hashicorp/vault token_store.go
+// quitContext; ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md.
+func (s *Service) handleRotateError(outerCtx context.Context, rotateErr error, subjectID, sessionID string) error {
+	if !errors.Is(rotateErr, refresh.ErrReused) {
+		return s.refreshStoreError("session-refresh: refresh store rotate failed", rotateErr)
+	}
+	return s.handleReuseDetected(outerCtx, subjectID, sessionID, "rotate")
+}
+
+// handleReuseDetected is the single entry point for refresh-reuse credential
+// invalidation. Both Peek (post-rotation reuse window / grace-cap exhaustion)
+// and Rotate (consumed-token replay) route their reuse signal here so the
+// security response — atomic authz_epoch bump + RevokeForSubject (all sessions)
+// + refresh chain revoke — is identical regardless of which validation stage
+// flagged the attack (Finding #2 PR #490 review).
+//
+// The cascade runs inside a detached, time-bounded context: outer cancellation
+// must not roll back the security write (the caller will return 401, which
+// would otherwise abort the outer RunInTx), and DB stalls must not leak
+// goroutines or pool connections (Finding #7 PR #490 review).
+//
+// ref: ADR 202605051800-adr-refresh-store-ambient-tx-and-idle-grace §"cascade detachment"
+// ref: keycloak TokenManager refresh path — reuse triggers full session revocation
+// ref: ory/fosite handler/oauth2/flow_refresh.go — reuse cascade at the flow boundary
+func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessionID, stage string) error {
+	if subjectID == "" {
+		// refresh.Store contract (godoc on the Store interface) mandates a
+		// non-empty SubjectID alongside ErrReused so the service layer can
+		// drive the user-wide invalidation cascade. Reaching this branch in
+		// production means an upstream Store implementation violated the
+		// contract — silently 401ing here would let cross-session cascade
+		// regress unnoticed, exactly the trap that motivated this fix.
+		// Panic via the registered marker so the runtime Recovery
+		// middleware converts it to a 500 with a loud audit trail; the
+		// runtime/auth/refresh/storetest conformance suite catches the
+		// contract drift in CI before production sees it.
+		panic(panicregister.Approved("sessionrefresh-reuse-empty-subject",
+			errcode.Assertion("sessionrefresh.handleReuseDetected: refresh.Store violated contract — returned ErrReused with empty SubjectID")))
+	}
+	detachedCtx, cancel := ctxutil.WithDetachedTimeout(outerCtx, reuseCascadeTimeout)
+	defer cancel()
+	if applyErr := s.txRunner.RunInTx(detachedCtx, func(txCtx context.Context) error {
+		return s.invalidator.Apply(txCtx, subjectID, session.CredentialEventRefreshReuse)
+	}); applyErr != nil {
+		// Reuse has already been identified as an attack — the wire response
+		// must be uniform 401 regardless of whether the cascade infrastructure
+		// (DB, dependent stores) is currently healthy. Surfacing applyErr here
+		// would let an infra KindUnavailable bubble through the middleware as
+		// 503, leaking a side-channel signal that "the cascade tried but
+		// failed". Log the cascade failure for operator follow-up, then
+		// fail-closed to the same uniform 401 rejection.
+		s.logger.Error("session-refresh: reuse cascade invalidator failed",
+			slog.Any("error", applyErr),
+			slog.String("stage", stage),
+			slog.String("subject_id", subjectID),
+			slog.String("session_id", sessionID))
+		return authRefreshRejected()
+	}
+	s.logger.Warn("session-refresh: reuse cascade applied",
+		slog.String("stage", stage),
+		slog.String("subject_id", subjectID),
+		slog.String("session_id", sessionID))
+	return authRefreshRejected()
+}
+
+// presentedSubjectID safely extracts SubjectID from a possibly-nil refresh.Token.
+// refresh.Store implementations may return (nil, ErrReused) on malformed paths;
+// downstream code must handle that case rather than panic.
+func presentedSubjectID(t *refresh.Token) string {
+	if t == nil {
+		return ""
+	}
+	return t.SubjectID
+}
+
+// presentedSessionID is the SessionID counterpart of presentedSubjectID.
+func presentedSessionID(t *refresh.Token) string {
+	if t == nil {
+		return ""
+	}
+	return t.SessionID
+}
+
+// refreshStoreError maps a refresh.Store error to the wire-layer error. Reuse
+// detection (refresh.ErrReused) must NOT reach this helper — it is handled by
+// handleReuseDetected so the cross-session cascade fires. A reuse error landing
+// here would silently 401 without triggering the funnel; treat it as a
+// programmer error and fall through to the unavailable branch with a loud log.
 func (s *Service) refreshStoreError(logMessage string, err error) error {
 	if errors.Is(err, refresh.ErrRejected) {
+		return authRefreshRejected()
+	}
+	if errors.Is(err, refresh.ErrReused) {
+		// Defensive: callers should have routed reuse to handleReuseDetected.
+		// Log loudly so a regression is visible in production traces.
+		s.logger.Error("session-refresh: ErrReused reached refreshStoreError — cascade NOT applied; check call site",
+			slog.Any("error", err))
 		return authRefreshRejected()
 	}
 	s.logger.Error(logMessage, slog.Any("error", err))

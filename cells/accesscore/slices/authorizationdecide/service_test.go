@@ -15,7 +15,11 @@ import (
 
 func newTestService() (*Service, *mem.RoleRepository) {
 	repo := mem.NewStore(clock.Real()).RoleRepository()
-	return NewService(repo, slog.Default()), repo
+	svc, err := NewService(repo, slog.Default())
+	if err != nil {
+		panic(err)
+	}
+	return svc, repo
 }
 
 func TestService_Authorize(t *testing.T) {

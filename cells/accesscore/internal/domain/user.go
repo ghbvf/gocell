@@ -68,8 +68,14 @@ type User struct {
 	PasswordResetRequired bool
 	Status                UserStatus
 	CreationSource        UserSource
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// AuthzEpoch is a monotonically increasing counter stored in
+	// users.authz_epoch. It is incremented atomically on every credential
+	// revocation event (role revoke, password reset, account lock, delete)
+	// so that access-token validators can detect stale grants without
+	// enumerating individual revocation records.
+	AuthzEpoch int64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // NewUser creates a new active User with the given timestamp.

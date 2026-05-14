@@ -4,9 +4,12 @@ package sessionvalidate
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -14,6 +17,10 @@ import (
 // errMsgAuthFailed is the uniform error message for all session validation
 // failures. Using a single message prevents session-state enumeration attacks.
 const errMsgAuthFailed = "invalid or expired authentication token"
+
+// errMsgServiceUnavailable is the uniform error message when an infrastructure
+// dependency (session store or user repo) is temporarily unreachable.
+const errMsgServiceUnavailable = "authentication service unavailable"
 
 // Compile-time check: Service satisfies runtime/auth.IntentTokenVerifier so it
 // can be plugged into AuthMiddleware (which now demands intent-aware verifiers
@@ -24,12 +31,31 @@ var _ auth.IntentTokenVerifier = (*Service)(nil)
 type Service struct {
 	verifier     auth.IntentTokenVerifier
 	sessionStore session.Store
+	userRepo     ports.UserRepository
 	logger       *slog.Logger
 }
 
-// NewService creates a session-validate Service.
-func NewService(verifier auth.IntentTokenVerifier, sessionStore session.Store, logger *slog.Logger) *Service {
-	return &Service{verifier: verifier, sessionStore: sessionStore, logger: logger}
+// NewService creates a session-validate Service. Returns an error when any
+// required dependency is nil (including typed-nil via validation.IsNilInterface).
+//
+// sessionStore may be nil: when nil, session revocation and epoch checks are
+// skipped (demo / integration-test mode). If non-nil, it is used to verify
+// session liveness before accepting a token.
+func NewService(
+	verifier auth.IntentTokenVerifier,
+	sessionStore session.Store,
+	userRepo ports.UserRepository,
+	logger *slog.Logger,
+) (*Service, error) {
+	if validation.IsNilInterface(verifier) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session-validate: IntentTokenVerifier required")
+	}
+	if validation.IsNilInterface(userRepo) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session-validate: UserRepository required")
+	}
+	return &Service{verifier: verifier, sessionStore: sessionStore, userRepo: userRepo, logger: logger}, nil
 }
 
 // VerifyIntent validates an access token. This service is intentionally
@@ -54,21 +80,41 @@ func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected au
 }
 
 // verifyJWTWithIntent runs the underlying verifier enforcing token_use=access
-// at both the claim and JOSE header level, mapping all failures to the uniform
-// ErrAuthInvalidToken response to prevent token-type enumeration.
+// at both the claim and JOSE header level. Token-side failures collapse to a
+// uniform ErrAuthInvalidToken (401) so token-type / kid / alg / expiry are not
+// enumerable from the wire response. Verifier-side infrastructure failures
+// (KindUnavailable) propagate unchanged so the auth middleware can surface
+// them as 503 — wrapping them as 401 here would mask outages as credential
+// failures and pollute SLO buckets (Finding #2 PR #490 second review).
 func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (auth.Claims, error) {
 	claims, err := s.verifier.VerifyIntent(ctx, tokenStr, auth.TokenIntentAccess)
 	if err != nil {
 		s.logger.Warn("session-validate: JWT verification failed",
 			slog.Any("error", err))
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
+			// Verifier already classified as infra (key provider outage).
+			// Propagate so middleware emits 503; do NOT downgrade to 401.
+			return auth.Claims{}, err
+		}
 		return auth.Claims{}, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
 	}
 	return claims, nil
 }
 
-// enforceSessionState performs the session-revocation / expiry checks that
-// follow a successful JWT verification. Tokens missing the sid claim are
+// enforceSessionState performs session-revocation and epoch-invariant checks
+// that follow a successful JWT verification. Tokens missing the sid claim are
 // rejected when sessionStore is configured (fail-closed).
+//
+// Two sequential reads are performed under READ COMMITTED isolation with no
+// snapshot guarantee (plan decision HIGH-4 — no read-only tx wrap).
+//
+// JTI is NOT compared. The JWT `jti` claim is per-token uniqueness for
+// RFC 9068 §2.2.4 compliance + observability/log correlation; refresh keeps
+// the session.ID stable across rotations but mints a fresh jti per access
+// token, so comparing claims.JTI against session.JTI (which stores the
+// original login-time jti) would reject every post-refresh token. See ADR
+// 202605101400-adr-credential-session-protocol §A2.
 func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
 	sid := claims.SessionID
 	if sid == "" {
@@ -76,8 +122,18 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
+
+	// 1) Session row exists and is not revoked.
 	view, err := s.sessionStore.Get(ctx, sid)
 	if err != nil {
+		if errcode.IsInfraError(err) {
+			s.logger.Error("session-validate: session store unavailable",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject),
+				slog.Any("error", err))
+			return auth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				errMsgServiceUnavailable, err)
+		}
 		s.logSessionLookupError(sid, claims.Subject, err)
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
@@ -87,6 +143,47 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
+
+	// Defense-in-depth: confirm the live session row owner matches the JWT sub.
+	// Without this check, a signing-path bug that bound a sid to the wrong
+	// subject (e.g. sessionmint reuse-after-rotation regression) would let one
+	// subject's claims authenticate as another live sid's owner. The sid index
+	// is unique so SubjectID is authoritative; mismatch indicates a token
+	// reused across subjects and must be rejected uniformly (防枚举).
+	if view.SubjectID != claims.Subject {
+		s.logger.Warn("session-validate: sid/subject mismatch",
+			slog.String("sid", sid),
+			slog.String("claim_subject", claims.Subject),
+			slog.String("session_subject", view.SubjectID))
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
+	// 2) Epoch invariant: user.authz_epoch must exactly match claims.AuthzEpoch.
+	// Using != (not >) ensures fail-closed on any mismatch including "future epoch"
+	// tokens where claims.AuthzEpoch > user.AuthzEpoch — such tokens indicate a
+	// tampered or replayed claim and must be rejected. (Finding #2)
+	user, err := s.userRepo.GetByID(ctx, claims.Subject)
+	if err != nil {
+		if errcode.IsInfraError(err) {
+			s.logger.Error("session-validate: user repo unavailable",
+				slog.String("subject", claims.Subject),
+				slog.Any("error", err))
+			return auth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+				errMsgServiceUnavailable, err)
+		}
+		// Domain not-found: subject deleted or never existed → uniform 401.
+		s.logger.Warn("session-validate: subject not found",
+			slog.String("subject", claims.Subject))
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+	if user.AuthzEpoch != claims.AuthzEpoch {
+		s.logger.Warn("session-validate: authz epoch mismatch",
+			slog.String("subject", claims.Subject),
+			slog.Int64("user_epoch", user.AuthzEpoch),
+			slog.Int64("claim_epoch", claims.AuthzEpoch))
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+
 	return claims, nil
 }
 

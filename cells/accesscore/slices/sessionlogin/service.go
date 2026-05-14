@@ -202,6 +202,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		UserID:                user.ID,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired,
+		AuthzEpoch:            user.AuthzEpoch,
 	})
 	if err != nil {
 		s.logger.Error("session-login: token issuance failed",
@@ -211,12 +212,15 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 
 	now := s.clock.Now()
 	sess := &session.Session{
-		ID:                sessionID,
-		SubjectID:         user.ID,
-		JTI:               sessionID,
-		AuthzEpochAtIssue: 0,
-		CreatedAt:         now,
-		ExpiresAt:         now.Add(s.sessionTTL),
+		ID:        sessionID,
+		SubjectID: user.ID,
+		// session.JTI persists the original login-time JWT jti claim per
+		// RFC 9068 §2.2.4. Refresh keeps session.ID stable but mints fresh
+		// jti per access token; the row stores the first one as the
+		// FingerprintJTIRef anchor (session.go godoc).
+		JTI:       minted.JTI,
+		CreatedAt: now,
+		ExpiresAt: now.Add(s.sessionTTL),
 	}
 
 	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, user.ID)
@@ -339,6 +343,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		UserID:                userID,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired,
+		AuthzEpoch:            user.AuthzEpoch,
 	})
 	if err != nil {
 		s.logger.Error("session-login: IssueForUser token issuance failed",
@@ -347,14 +352,15 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	// Persist the session so sessionvalidate can look it up by sid claim.
+	// session.JTI carries the original JWT jti claim (RFC 9068 §2.2.4) — see
+	// matching note in the login path above.
 	now := s.clock.Now()
 	sess := &session.Session{
-		ID:                sessionID,
-		SubjectID:         userID,
-		JTI:               sessionID,
-		AuthzEpochAtIssue: 0,
-		CreatedAt:         now,
-		ExpiresAt:         now.Add(s.sessionTTL),
+		ID:        sessionID,
+		SubjectID: userID,
+		JTI:       minted.JTI,
+		CreatedAt: now,
+		ExpiresAt: now.Add(s.sessionTTL),
 	}
 	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, userID)
 	if err != nil {

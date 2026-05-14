@@ -30,12 +30,12 @@ var (
 // revoked_at is a one-way flip — set exactly once, never cleared.
 const (
 	insertSessionSQL = `
-INSERT INTO sessions (id, subject_id, jti, authz_epoch_at_issue, created_at, expires_at)
-VALUES ($1, $2::uuid, $3, $4, $5, $6)`
+INSERT INTO sessions (id, subject_id, jti, created_at, expires_at)
+VALUES ($1, $2::uuid, $3, $4, $5)`
 
 	// selectSessionByIDSQL projects only the columns ValidateView exposes
 	// (ID, SubjectID, RevokedAt) — Store.Get is the validate path, and
-	// GC-only metadata (jti, authz_epoch_at_issue, created_at, expires_at)
+	// GC-only metadata (jti, created_at, expires_at)
 	// must not leak to validate callers. GC sweep / audit / metadata
 	// round-trip tests query the full row via store-internal SQL.
 	selectSessionByIDSQL = `
@@ -162,7 +162,6 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 		sess.ID,
 		sess.SubjectID,
 		sess.JTI,
-		sess.AuthzEpochAtIssue,
 		sess.CreatedAt.UTC(),
 		sess.ExpiresAt.UTC(),
 	)

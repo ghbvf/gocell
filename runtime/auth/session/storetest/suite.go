@@ -83,21 +83,24 @@ func validateFixtureInputs(subjectID, jti string, ttl time.Duration) error {
 }
 
 // NewSessionFixture constructs a Session with deterministic timestamps derived
-// from now + ttl. Callers control SubjectID / JTI / epoch explicitly so cases
-// can assert RevokeForSubject scoping precisely. ID is derived from JTI to
-// keep cases readable (Session.ID is opaque to the protocol).
-func NewSessionFixture(t *testing.T, subjectID, jti string, epoch int64, ttl time.Duration, now time.Time) *session.Session {
+// from now + ttl. Callers control SubjectID / JTI explicitly so cases can assert
+// RevokeForSubject scoping precisely. ID is derived from JTI to keep cases
+// readable (Session.ID is opaque to the protocol).
+//
+// The epoch parameter is accepted for backward-compatible call-site signatures
+// but is no longer stored on the Session struct (authz_epoch_at_issue was
+// removed in S4b migration 025; epoch ordering is now enforced via JWT claims).
+func NewSessionFixture(t *testing.T, subjectID, jti string, _ int64, ttl time.Duration, now time.Time) *session.Session {
 	t.Helper()
 	if err := validateFixtureInputs(subjectID, jti, ttl); err != nil {
 		t.Fatal(err)
 	}
 	return &session.Session{
-		ID:                "sess-" + jti,
-		SubjectID:         subjectID,
-		JTI:               jti,
-		AuthzEpochAtIssue: epoch,
-		CreatedAt:         now,
-		ExpiresAt:         now.Add(ttl),
+		ID:        "sess-" + jti,
+		SubjectID: subjectID,
+		JTI:       jti,
+		CreatedAt: now,
+		ExpiresAt: now.Add(ttl),
 	}
 }
 
@@ -154,12 +157,11 @@ const (
 )
 
 // runCreateGet — Create persists the record; Get returns the narrow
-// ValidateView projection. Metadata persistence (JTI / AuthzEpochAtIssue /
-// CreatedAt / ExpiresAt) is intentionally NOT asserted here — Store.Get
-// returns *ValidateView (not *Session) so validate paths cannot reach the
-// GC-only metadata. Schema-level metadata round-trip is a backend concern
-// verified inside adapters/postgres (PG schema) and trivially holds for
-// MemStore (map-resident pointer).
+// ValidateView projection. Metadata persistence (JTI / CreatedAt / ExpiresAt)
+// is intentionally NOT asserted here — Store.Get returns *ValidateView (not
+// *Session) so validate paths cannot reach the GC-only metadata. Schema-level
+// metadata round-trip is a backend concern verified inside adapters/postgres
+// (PG schema) and trivially holds for MemStore (map-resident pointer).
 func runCreateGet(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()

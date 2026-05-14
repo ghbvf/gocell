@@ -57,7 +57,9 @@ func (r *trackingSessionStore) RevokeForSubject(ctx context.Context, subjectID s
 	return r.Store.RevokeForSubject(ctx, subjectID, event)
 }
 
-// newDurableTestService creates a Service with emitter + txRunner injected (durable mode).
+// newDurableTestService creates a Service with emitter + txRunner injected.
+// The invalidator is backed by the tracking session store so tests can observe
+// RevokeForSubject calls through the funnel.
 // Returns the shared mem.Store so callers can seed active users for effective-admin
 // invariant tests (S4.0).
 func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *mem.Store, *trackingSessionStore) {
@@ -71,17 +73,17 @@ func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner)
 		},
 	})
 	sessionStore := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
-	svc := mustNewService(t, store.RoleRepository(), sessionStore, slog.Default(),
+	svc := mustNewService(t, store.RoleRepository(), store.UserRepository(), sessionStore, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(persistence.WrapForCell(tx)),
 	)
 	return svc, store, sessionStore
 }
 
-// TestService_Assign_Durable_WritesOutboxAtomically asserts that Assign in durable
-// mode writes exactly one outbox entry with the correct EventType and payload, runs
-// the operation inside a transaction, and does NOT call sessionStore.RevokeForSubject
-// (consumer handles that asynchronously).
+// TestService_Assign_Durable_WritesOutboxAtomically asserts that Assign writes
+// exactly one outbox entry with the correct EventType and payload, runs the
+// operation inside a transaction, and does NOT call sessionStore.RevokeForSubject
+// (HIGH-3: Assign is additive; the funnel is not called).
 func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
@@ -104,12 +106,14 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 	// Transaction invoked exactly once.
 	assert.Equal(t, 1, tx.calls)
 
-	// sessionStore.RevokeForSubject must NOT be called in durable mode — consumer takes over.
+	// HIGH-3: sessionStore.RevokeForSubject must NOT be called for Assign.
 	assert.Equal(t, 0, sessionStore.revokeCalls,
-		"durable mode: sessionStore.RevokeForSubject must not be called by rbacassign (consumer handles it)")
+		"HIGH-3: Assign is additive — funnel must not be called")
 }
 
-// TestService_Revoke_Durable_WritesOutboxAtomically is the symmetrical test for Revoke.
+// TestService_Revoke_Durable_WritesOutboxAtomically asserts that Revoke writes
+// exactly one outbox entry, runs inside a transaction, and calls the credential
+// invalidation funnel (which calls sessionStore.RevokeForSubject) atomically.
 func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
@@ -133,8 +137,9 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 
 	assert.Equal(t, 1, tx.calls)
 
-	assert.Equal(t, 0, sessionStore.revokeCalls,
-		"durable mode: sessionStore.RevokeForSubject must not be called by rbacassign (consumer handles it)")
+	// Funnel calls RevokeForSubject inside the same tx.
+	assert.Equal(t, 1, sessionStore.revokeCalls,
+		"Revoke: credential invalidation funnel must call RevokeForSubject once")
 }
 
 // TestService_Durable_OutboxWriteFailure_PropagatesError asserts that when the outbox
@@ -156,25 +161,18 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	assert.Empty(t, ow.entries)
 }
 
-// TestService_Durable_DoesNotCallSessionStoreDirectly asserts that in durable mode
-// sessionStore.RevokeForSubject is never called by Assign or Revoke (counter must remain 0).
-func TestService_Durable_DoesNotCallSessionStoreDirectly(t *testing.T) {
+// TestService_Assign_DoesNotCallFunnel asserts that Assign never calls
+// sessionStore.RevokeForSubject (HIGH-3: Assign is additive, funnel not called).
+// Revoke DOES call the funnel, so this test uses only Assign.
+func TestService_Assign_DoesNotCallFunnel(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, store, sessionStore := newDurableTestService(t, ow, tx)
+	svc, _, sessionStore := newDurableTestService(t, ow, tx)
 
-	// Seed u1 as an effective admin (active + admin role) so Assign re-assigns
-	// the existing holder idempotently and Revoke later has a real role row.
-	assignActiveAdmin(t, store, "u1")
-	// Idempotent re-assign for the Assign step (no-op since u1 already holds admin).
 	require.NoError(t, svc.Assign(context.Background(), "u1", "admin"))
 
-	// Revoke — needs a second effective admin to pass the guard.
-	assignActiveAdmin(t, store, "u2")
-	require.NoError(t, svc.Revoke(context.Background(), "u1", "admin"))
-
 	assert.Equal(t, 0, sessionStore.revokeCalls,
-		"durable mode: sessionStore.RevokeForSubject must never be called directly")
+		"HIGH-3: Assign must never call the credential invalidation funnel")
 }
 
 // TestService_Assign_Durable_RepeatIsNoop asserts that re-assigning a role the
@@ -217,11 +215,12 @@ func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 		"durable mode revoke of non-member must not call session revoke")
 }
 
-// TestService_Assign_Demo_RepeatIsNoop mirrors the durable no-op test for
-// demo/synchronous dual-write mode: repeat assign must NOT call sessionStore.RevokeForSubject.
-func TestService_Assign_Demo_RepeatIsNoop(t *testing.T) {
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	roleRepo.SeedRole(&domain.Role{
+// TestService_Assign_RepeatIsNoop_NeverCallsFunnel asserts that Assign is always
+// a no-op with respect to credential invalidation (HIGH-3): neither first nor
+// repeat Assign calls sessionStore.RevokeForSubject.
+func TestService_Assign_RepeatIsNoop_NeverCallsFunnel(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(&domain.Role{
 		ID:   "admin",
 		Name: "admin",
 		Permissions: []domain.Permission{
@@ -229,12 +228,13 @@ func TestService_Assign_Demo_RepeatIsNoop(t *testing.T) {
 		},
 	})
 	sessionStore := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
-	svc := mustNewService(t, roleRepo, sessionStore, slog.Default())
+	svc := mustNewService(t, store.RoleRepository(), store.UserRepository(), sessionStore, slog.Default())
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
-	assert.Equal(t, 1, sessionStore.revokeCalls, "first assign must revoke sessions once")
+	assert.Equal(t, 0, sessionStore.revokeCalls,
+		"HIGH-3: Assign must never call the credential funnel (first call)")
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
-	assert.Equal(t, 1, sessionStore.revokeCalls,
-		"repeat assign must not trigger a second session revoke")
+	assert.Equal(t, 0, sessionStore.revokeCalls,
+		"HIGH-3: Assign must never call the credential funnel (repeat call)")
 }

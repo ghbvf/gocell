@@ -17,8 +17,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// pastBackdateOffset is used by TestJWTVerifier_TokenSideErrors_Stay401 to
+// seed the issuer clock far enough behind the real wall clock that any
+// token minted under DefaultAccessTokenTTL (15m) is already expired by the
+// time VerifyIntent reads the real clock. Package-level const per
+// TEST-TIME-LITERAL-01.
+const pastBackdateOffset = -2 * time.Hour
 
 func TestDefaultAccessTokenTTL(t *testing.T) {
 	assert.Equal(t, testtime.D15min, DefaultAccessTokenTTL,
@@ -444,6 +453,112 @@ func (s *stubVerificationKeyStore) PublicKeyByKID(kid string) (*rsa.PublicKey, e
 		return nil, fmt.Errorf("unknown kid: %s", kid)
 	}
 	return pub, nil
+}
+
+// infraFailingKeyStore returns a KindUnavailable errcode for every lookup,
+// simulating a JWKS endpoint outage or KMS unreachable condition.
+type infraFailingKeyStore struct{}
+
+func (infraFailingKeyStore) PublicKeyByKID(_ string) (*rsa.PublicKey, error) {
+	return nil, errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+		"jwks fetch failure",
+		errcode.WithCategory(errcode.CategoryInfra))
+}
+
+// TestJWTVerifier_TokenSideErrors_Stay401 is the RED counterpart to
+// TestJWTVerifier_InfraErrorPropagatesAs503: every token-side failure
+// (expired / unknown-kid / wrong-alg / malformed) must surface as
+// KindUnauthenticated (401), never as KindUnavailable (503). The earlier
+// over-classification used errcode.IsInfraError which is fail-closed and
+// promoted every plain jwt-lib error to infra; this table locks the verifier
+// against the regression by enumerating each shape jwt.Parse emits.
+func TestJWTVerifier_TokenSideErrors_Stay401(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// Token issued with a working key — used as the baseline for expiry/alg cases.
+	validTok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	// Unknown-kid path: verifier configured with a different key set.
+	otherKS := mustTestKeySet(t)
+	verifierUnknownKID, err := NewJWTVerifier(otherKS, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// Expired token via a back-dated issuer; pastBackdateOffset is the
+	// package-level const (TEST-TIME-LITERAL-01).
+	pastClk := clockmock.New(time.Now().Add(pastBackdateOffset))
+	pastIssuer, err := NewJWTIssuer(ks, "gocell", time.Hour, pastClk)
+	require.NoError(t, err)
+	expiredTok, err := pastIssuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	cases := []struct {
+		name     string
+		verifier *JWTVerifier
+		token    string
+	}{
+		{"unknown_kid", verifierUnknownKID, validTok},
+		{"expired_token", verifier, expiredTok},
+		// Malformed token: triple "." but garbage payload.
+		{"malformed_token", verifier, "not-a-jwt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.verifier.VerifyIntent(context.Background(), tc.token, TokenIntentAccess)
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec,
+				"verifier must return *errcode.Error for token-side failure (%s)", tc.name)
+			assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+				"token-side failure (%s) must classify as KindUnauthenticated (401), got Kind=%q. "+
+					"This is the Finding #1 PR #490 second-review guard against using "+
+					"fail-closed errcode.IsInfraError at the JWT verification boundary.",
+				tc.name, ec.Kind)
+			assert.NotEqual(t, errcode.KindUnavailable, ec.Kind,
+				"token-side failure must NOT surface as 503; got %q for %s", ec.Kind, tc.name)
+		})
+	}
+}
+
+// TestJWTVerifier_InfraErrorPropagatesAs503 guards the Finding #4 fix: when
+// the SigningKeyProvider's PublicKeyByKID surfaces an errcode with
+// CategoryInfra (or KindUnavailable), the verifier must NOT collapse the
+// outage to ErrAuthUnauthorized (401) — the token may be valid but the
+// verifier can't reach the public-key material. Wire layer must see a 5xx
+// path so AuthMiddleware returns 503.
+func TestJWTVerifier_InfraErrorPropagatesAs503(t *testing.T) {
+	priv, _ := generateTestKeyPair(t)
+	// Issuer with the real key, verifier with the failing store: the token
+	// is well-formed and the kid is present, but key lookup fails with infra.
+	signing := &stubSigningKeyProvider{key: priv, kid: "test-kid-infra"}
+	issuer, err := NewJWTIssuer(signing, "gocell-infra", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(infraFailingKeyStore{}, clock.Real(),
+		WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec,
+		"infra key-fetch error must propagate as *errcode.Error (not bare wrap)")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+		"infra key-fetch error must surface as KindUnavailable (→ 503), not KindUnauthenticated (→ 401)")
+	assert.Equal(t, errcode.ErrAuthServiceUnavailable, ec.Code,
+		"source code must be ErrAuthServiceUnavailable; wire projection may collapse to Kind public code")
 }
 
 func TestJWTIssuer_AcceptsSigningKeyProvider(t *testing.T) {
