@@ -156,7 +156,7 @@ func writeServiceFile(t *testing.T, dir, content string) {
 func findResultByCode(results []ValidationResult) []ValidationResult {
 	var out []ValidationResult
 	for _, r := range results {
-		if r.Code == codeContractConsistencyEmit01 {
+		if r.Code == codeCONTRACTCONSISTENCYEMIT01 {
 			out = append(out, r)
 		}
 	}

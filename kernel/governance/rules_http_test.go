@@ -1196,7 +1196,7 @@ type List401ErrorResponse struct{}
 	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
 
 	require.Len(t, results, 1, "exactly one finding for missing 503 typed struct")
-	assert.Equal(t, CodeContractHealthTypedEnvelope, results[0].Code)
+	assert.Equal(t, codeCH06, results[0].Code)
 	assert.Equal(t, SeverityError, results[0].Severity)
 	assert.Contains(t, results[0].Message, "503")
 	assert.Contains(t, results[0].Message, "no matching typed response struct")
@@ -1239,7 +1239,7 @@ type Delete403ErrorResponse struct{} // orphan — contract.yaml has no 403
 	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
 
 	require.Len(t, results, 1, "exactly one finding for orphan 403 struct")
-	assert.Equal(t, CodeContractHealthTypedEnvelope, results[0].Code)
+	assert.Equal(t, codeCH06, results[0].Code)
 	assert.Equal(t, SeverityError, results[0].Severity)
 	assert.Contains(t, results[0].Message, "403")
 	assert.Contains(t, results[0].Message, "orphan struct")

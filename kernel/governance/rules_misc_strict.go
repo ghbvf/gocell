@@ -1,11 +1,11 @@
 package governance
 
-// rules_misc_strict.go consolidates two rule clusters that all hang off the
-// strict-mode pipeline:
+// rules_misc_strict.go consolidates two rule clusters tied to the strict
+// pipeline:
 //
-//   - strict-only orchestrator (ValidateStrict / ValidateStrictFailFast /
-//     strictRules) + the FMT-16 / FMT-17 / FMT-C1 / FMT-A1 rules they
-//     orchestrate (formerly rules_strict.go).
+//   - strict-only registry (strictRules + the FMT-16 / FMT-17 rules it
+//     points at, plus FMT-A1 / FMT-C1 unconditional rules registered in
+//     the base rules() pipeline alongside this file).
 //   - FMT-20 / FMT-21 / FMT-22 / FMT-23 / FMT-25 schema-walking rules
 //     (formerly rules_strict_extra.go) — registered in the base rules()
 //     pipeline but lineage-coupled to the strict scaffolding (FMT-20/25
@@ -14,7 +14,7 @@ package governance
 //
 // validateFMT19 (wrapper package-state, rules_misc_advisory.go) and
 // validateDOCNAME01 (doc literals, rules_misc_advisory.go) are referenced
-// from strictRules() above as cross-file calls within the same package.
+// from strictRules() as cross-file calls within the same package.
 
 import (
 	"context"
@@ -31,119 +31,61 @@ import (
 )
 
 // =============================================================================
-// strict-only orchestrator + FMT-16/17/C1/A1 (formerly rules_strict.go)
+// strict-only registry + FMT-16/17 + FMT-A1/C1 unconditional (formerly rules_strict.go)
 // =============================================================================
 
-// ValidateStrict runs all standard validation rules and, when strict is true,
-// additionally enforces the following strict-only checks as errors:
+// strictRules returns the strict-only rule pipeline. Entries appended after
+// rules() inside ValidateStrict when the caller requests strict mode:
 //
+//   - VERIFY-06: active journeys have at least one auto passCriteria checkRef
 //   - FMT-16: slice / cell / assembly directory contains '-' (kebab-case disallowed)
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
 //   - FMT-19: kernel/wrapper/*.go contains forbidden mutable package-level state
-//   - VERIFY-06: active journeys have at least one auto passCriteria checkRef
 //   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
 //
 // FMT-A1 (assembly id pattern) and FMT-C1 (cell id pattern) are
-// unconditional inside Validate: they mirror schemas/{assembly,cell}.
-// schema.json properties.id.pattern and must apply on every validate path
-// so schema-aware tooling and `gocell validate` agree.
+// unconditional inside Validate (registered in rules()): they mirror
+// schemas/{assembly,cell}.schema.json properties.id.pattern and must apply
+// on every validate path so schema-aware tooling and `gocell validate` agree.
 //
-// FMT-18 (contractspec.ContractSpec literals in cells/** cross-check) was removed in
-// PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0 ContractSpec literals,
-// enforced by archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
-// NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01.
-// The /internal/v1 caller-clients invariant FMT-18 also carried was later
-// reclaimed at the YAML governance layer by FMT-31 (rules_fmt.go).
+// FMT-18 (contractspec.ContractSpec literals in cells/** cross-check) was
+// removed in PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0
+// ContractSpec literals, enforced by archtest
+// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
+// NO-MANUAL-CONTRACTSPEC-LITERAL-01 /
+// EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01. The /internal/v1 caller-
+// clients invariant FMT-18 also carried was later reclaimed at the YAML
+// governance layer by FMT-31 (rules_fmt.go).
 //
-// When strict is false the method is equivalent to Validate(ctx) —
-// strict-only rules emit nothing (they are strict-only by design, there is
-// no warning severity to "upgrade" from). ctx flows into VERIFY-06 because
-// it shells out via verifyJourneyRef to run journey acceptance tests; the
-// remaining strict-only rules are pure-memory.
-//
-// ctx cancellation is checked between strict-only rules so a worker that
-// aborts the validate command unwinds the strict pass too — not just the
-// base Validate pipeline.
-func (v *Validator) ValidateStrict(ctx context.Context, strict bool) ([]ValidationResult, error) {
-	results, err := v.Validate(ctx)
-	if err != nil {
-		return results, err
-	}
-	for _, rule := range v.strictRules(ctx, strict) {
-		if cerr := ctx.Err(); cerr != nil {
-			return results, cerr
-		}
-		results = append(results, rule()...)
-	}
-	return results, nil
-}
-
-// ValidateStrictFailFast is equivalent to ValidateStrict(ctx, true) but uses
-// ValidateFailFast as its base pass instead of Validate. The base pass
-// short-circuits on the first SeverityError; strict-only rules are only
-// appended when the base pass finds no errors. Rules are appended
-// incrementally; as soon as any rule produces an error the accumulation
-// stops, matching --strict --fail-fast's single-error semantics.
-//
-// ctx cancellation is checked between strict-only rules so a CI worker that
-// aborts the validate command unwinds the strict pass too — not just the
-// base Validate pipeline.
-func (v *Validator) ValidateStrictFailFast(ctx context.Context) ([]ValidationResult, error) {
-	results, err := v.ValidateFailFast(ctx)
-	if err != nil {
-		return results, err
-	}
-	if HasErrors(results) {
-		return results, nil
-	}
-	for _, rule := range v.strictRules(ctx, true) {
-		if cerr := ctx.Err(); cerr != nil {
-			return results, cerr
-		}
-		r := rule()
-		results = append(results, r...)
-		if HasErrors(r) {
-			return results, nil
-		}
-	}
-	return results, nil
-}
-
-// strictRules returns the strict-only rule pipeline as zero-arg closures so
-// ValidateStrict and ValidateStrictFailFast share a single ctx.Err() loop.
-// VERIFY-06 binds ctx via the closure (it shells out via verifyJourneyRef);
-// the remaining FMT / DOC rules are pure-memory and accept only the strict
-// flag, so the closures are trivial.
-func (v *Validator) strictRules(ctx context.Context, strict bool) []func() []ValidationResult {
+// ctx is captured for VERIFY-06 (which shells out via verifyJourneyRef);
+// the remaining FMT / DOC rules are pure-memory and bound as bare method
+// values. ValidateStrict drains this list with a single ctx-cancel /
+// fail-fast loop, so ctx cancellation unwinds the strict pass too.
+func (v *Validator) strictRules(ctx context.Context) []func() []ValidationResult {
 	return []func() []ValidationResult{
-		func() []ValidationResult { return v.validateVERIFY06(ctx, strict) },
-		func() []ValidationResult { return v.validateFMT16(strict) },
-		func() []ValidationResult { return v.validateFMT17(strict) },
+		func() []ValidationResult { return v.validateVERIFY06(ctx) },
+		v.validateFMT16,
+		v.validateFMT17,
 		// FMT-18 deleted in PR-V1-CODEGEN-FULL-MIGRATION W4 (replaced by archtest
 		// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 / NO-MANUAL-CONTRACTSPEC-LITERAL-01).
-		func() []ValidationResult { return v.validateFMT19(strict) },
+		v.validateFMT19,
 		// FMT-A1 and FMT-C1 are now registered in the default rules()
 		// pipeline (they mirror schema constraints and apply on every
 		// validate path).
-		func() []ValidationResult { return v.validateDOCNAME01(strict) },
+		v.validateDOCNAME01,
 	}
 }
 
 // validateFMT16 checks that no slice, cell, or assembly directory contains
-// '-' (kebab-case). In strict mode this is a SeverityError; in non-strict
-// mode it is silent.
-//
-// The check reads the filesystem directory segment captured by the parser
-// (SliceMeta.Dir / CellMeta.Dir / AssemblyMeta.Dir), not the map key or
-// yaml id. This matters: a directory can live under a kebab name while
-// declaring a no-dash id in yaml, and pre-Dir implementations that read
-// only the id let kebab directories slip through. Entries synthesized in
-// tests without a Dir are skipped (Dir != "" is the "parsed from disk"
-// signal).
-func (v *Validator) validateFMT16(strict bool) []ValidationResult {
-	if !strict {
-		return nil
-	}
+// '-' (kebab-case). The check reads the filesystem directory segment
+// captured by the parser (SliceMeta.Dir / CellMeta.Dir / AssemblyMeta.Dir),
+// not the map key or yaml id. This matters: a directory can live under a
+// kebab name while declaring a no-dash id in yaml, and pre-Dir
+// implementations that read only the id let kebab directories slip
+// through. Entries synthesized in tests without a Dir are skipped
+// (Dir != "" is the "parsed from disk" signal). The rule is strict-only
+// (registered in strictRules) — ValidateStrict gates invocation.
+func (v *Validator) validateFMT16() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		results = append(results, v.checkKebabDir(s.Dir, s.ID, sliceFile(s), "slice")...)
@@ -164,25 +106,23 @@ func (v *Validator) checkKebabDir(dir, id, file, kind string) []ValidationResult
 		return nil
 	}
 	return []ValidationResult{v.newResult(
-		"FMT-16", SeverityError, IssueInvalid,
+		codeFMT16, SeverityError, IssueInvalid,
 		file,
 		"id",
 		fmt.Sprintf(
-			"%s %q uses kebab-case directory %q; kebab-case %s directories are disallowed in strict mode (rename to %q)",
+			"%s %q uses kebab-case directory %q; kebab-case %s directories are disallowed in strict mode"+
+				"; fix: rename the directory to %q",
 			kind, id, dir, kind, strings.ReplaceAll(dir, "-", ""),
 		),
 	)}
 }
 
 // validateFMT17 checks that the first entry in slice.yaml allowedFiles matches
-// the canonical slice directory path. In strict mode this is a SeverityError;
-// in non-strict mode it is silent. Expected path is derived from SliceMeta.Dir
-// / CellDir (filesystem truth) so a faked-path/faked-id pairing cannot slip
-// through.
-func (v *Validator) validateFMT17(strict bool) []ValidationResult {
-	if !strict {
-		return nil
-	}
+// the canonical slice directory path. Expected path is derived from
+// SliceMeta.Dir / CellDir (filesystem truth) so a faked-path/faked-id
+// pairing cannot slip through. Strict-only — ValidateStrict gates
+// invocation through strictRules.
+func (v *Validator) validateFMT17() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		if len(s.AllowedFiles) == 0 {
@@ -202,12 +142,13 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 		normalized = strings.TrimSuffix(normalized, "*")
 		if !strings.HasPrefix(normalized, expected) && normalized != expected {
 			results = append(results, v.newResult(
-				"FMT-17", SeverityError, IssueMismatch,
+				codeFMT17, SeverityError, IssueMismatch,
 				sliceFile(s),
 				"allowedFiles[0]",
 				fmt.Sprintf(
-					"slice %q allowedFiles first entry %q does not match slice directory %q (want prefix %q)",
-					s.ID, first, s.Dir, expected,
+					"slice %q allowedFiles first entry %q does not match slice directory %q (want prefix %q)"+
+						"; fix: set allowedFiles[0] to %q (or a glob rooted at it)",
+					s.ID, first, s.Dir, expected, expected,
 				),
 			))
 		}
@@ -226,28 +167,24 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 // adr-assembly-yaml-minimal-derivation.md §"Schema 约束单源".
 //
 // This is the same pattern as validateFMTA1 (assembly id) — both are
-// registered in the rules() pipeline at validate.go and accept the strict
-// param only for signature symmetry inside the strictRules dispatcher
-// (which no longer registers them).
+// registered in the rules() pipeline at validate.go.
 //
 // FMT-C1 complements FMT-16: FMT-16 catches kebab filesystem directories,
 // while FMT-C1 catches non-conforming yaml ids (kebab, uppercase, single
 // char, leading digit) even when the directory is already no-dash. A clean
 // project passes both.
-//
-// strict is accepted for signature symmetry but no longer changes behavior.
-func (v *Validator) validateFMTC1(_ bool) []ValidationResult {
+func (v *Validator) validateFMTC1() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
 		if metadata.MatchCellID(c.ID) {
 			continue
 		}
 		results = append(results, v.newResult(
-			"FMT-C1", SeverityError, IssueInvalid,
+			codeFMTC1, SeverityError, IssueInvalid,
 			cellFile(c),
 			"id",
 			fmt.Sprintf(
-				"cell id %q does not match %s; use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
+				"cell id %q does not match %s; fix: use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
 				c.ID, metadata.CellIDPattern,
 			),
 		))
@@ -256,36 +193,34 @@ func (v *Validator) validateFMTC1(_ bool) []ValidationResult {
 }
 
 // validateFMTA1 checks that every assembly.yaml id satisfies
-// metadata.AssemblyIDPattern (^[a-z][a-z0-9]+$). It runs unconditionally:
-// the rule mirrors a schema-level constraint (schemas/assembly.schema.json
-// properties.id.pattern, kept byte-equal by TestSchemaConstantsMatchSchema
-// Literals) and schema-aware tooling rejects the same values without a
-// strict toggle. Gating this check on --strict would leave default
-// `gocell validate` users on a different contract than the schema and
-// FMT-30 (deployTemplate enum), violating the single-gatekeeper model
-// declared in docs/architecture/202605061800-adr-assembly-yaml-minimal-
-// derivation.md §"Schema 约束单源".
+// metadata.AssemblyIDPattern (^[a-z][a-z0-9]+$). The rule mirrors a
+// schema-level constraint (schemas/assembly.schema.json properties.id.
+// pattern, kept byte-equal by TestSchemaConstantsMatchSchemaLiterals) and
+// schema-aware tooling rejects the same values without a strict toggle.
+// Gating this check on --strict would leave default `gocell validate`
+// users on a different contract than the schema and FMT-30 (deployTemplate
+// enum), violating the single-gatekeeper model declared in
+// docs/architecture/202605061800-adr-assembly-yaml-minimal-derivation.md
+// §"Schema 约束单源". Registered in rules() (base pipeline).
 //
 // FMT-16 / FMT-17 stay strict-only because they catch stylistic
 // concerns (kebab-case filesystem directories, allowedFiles drift) that
 // schemas do not directly mirror; FMT-C1 was migrated to the rules()
 // pipeline alongside cell.schema.json properties.id.pattern收紧 (PR-2
 // PR-PROM-HARDEN-3).
-//
-// strict is accepted for signature symmetry with the strictRules block but
-// no longer changes behavior.
-func (v *Validator) validateFMTA1(_ bool) []ValidationResult {
+func (v *Validator) validateFMTA1() []ValidationResult {
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
 		if metadata.MatchAssemblyID(a.ID) {
 			continue
 		}
 		results = append(results, v.newResult(
-			"FMT-A1", SeverityError, IssueInvalid,
+			codeFMTA1, SeverityError, IssueInvalid,
 			assemblyFile(a),
 			"id",
 			fmt.Sprintf(
-				"assembly id %q does not match %s; use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
+				"assembly id %q does not match %s;"+
+					" fix: rename to use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
 				a.ID, metadata.AssemblyIDPattern,
 			),
 		))
@@ -296,17 +231,6 @@ func (v *Validator) validateFMTA1(_ bool) []ValidationResult {
 // =============================================================================
 // FMT-20 / FMT-21 / FMT-22 / FMT-23 / FMT-25 (formerly rules_strict_extra.go)
 // =============================================================================
-
-// Rule ID constants for FMT-20..FMT-25. Extracted so that each rule ID string
-// is declared in exactly one place; Sonar code-smell rule S1192 (duplicate
-// string literals) no longer fires for these identifiers.
-const (
-	ruleFMT20 = "FMT-20"
-	ruleFMT21 = "FMT-21"
-	ruleFMT22 = "FMT-22"
-	ruleFMT23 = "FMT-23"
-	ruleFMT25 = "FMT-25"
-)
 
 // defaultDeprecationGracePeriod is the maximum allowed time between a contract's
 // deprecatedAt date and the validation run before FMT-23 fires a warning.
@@ -352,9 +276,11 @@ func (v *Validator) validateFMTRequestStrictRef(c *metadata.ContractMeta, ref me
 	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
 	if resolveErr != nil {
 		return []ValidationResult{v.newResult(
-			ruleFMT20, SeverityError, IssueInvalid,
+			codeFMT20, SeverityError, IssueInvalid,
 			contractFile(c), ref.Field,
-			fmt.Sprintf("contract %q schema %q failed to resolve: %v", c.ID, ref.Ref, resolveErr),
+			fmt.Sprintf("contract %q schema %q failed to resolve: %v;"+
+				" fix: ensure the schema path is correct and the file exists relative to the contract dir",
+				c.ID, ref.Ref, resolveErr),
 		)}
 	}
 	missing, err := scanSchemaForStrictMissing(resolved.AbsPath)
@@ -365,9 +291,11 @@ func (v *Validator) validateFMTRequestStrictRef(c *metadata.ContractMeta, ref me
 		}
 		// Parse/IO errors are definitive FMT-20 violations (fail-closed).
 		return []ValidationResult{v.newResult(
-			ruleFMT20, SeverityError, IssueInvalid,
+			codeFMT20, SeverityError, IssueInvalid,
 			resolved.ProjectRel, "$",
-			fmt.Sprintf("contract %q schema %q failed to parse: %v", c.ID, ref.Ref, err),
+			fmt.Sprintf("contract %q schema %q failed to parse: %v;"+
+				" fix: ensure the schema file is well-formed JSON Schema (Draft 2020-12)",
+				c.ID, ref.Ref, err),
 		)}
 	}
 	return v.fmt20MissingSchemaResults(c, resolved.ProjectRel, missing)
@@ -377,10 +305,12 @@ func (v *Validator) fmt20MissingSchemaResults(c *metadata.ContractMeta, rel stri
 	results := make([]ValidationResult, 0, len(missing))
 	for _, loc := range missing {
 		results = append(results, v.newResult(
-			ruleFMT20, SeverityError, IssueRequired,
+			codeFMT20, SeverityError, IssueRequired,
 			rel, loc,
 			fmt.Sprintf("contract %q request schema must declare additionalProperties:false at %s"+
-				" (strict per FMT-20 / ADR-202605031600)", c.ID, loc),
+				" (strict per FMT-20 / ADR-202605031600);"+
+				" fix: add \"additionalProperties\": false to the object at %s",
+				c.ID, loc, loc),
 		))
 	}
 	return results
@@ -604,18 +534,22 @@ func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 		if lastIdx < 0 {
 			// No "contracts" segment anywhere → definite mismatch.
 			results = append(results, v.newResult(
-				ruleFMT21, SeverityError, IssueMismatch,
+				codeFMT21, SeverityError, IssueMismatch,
 				contractFile(c), "id",
-				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
+				fmt.Sprintf("contract %q dir %q does not match derived %q;"+
+					" fix: move the contract under %q or update the contract id to match its directory layout",
+					c.ID, c.Dir, derived, derived),
 			))
 			continue
 		}
 		actualSuffix := filepath.Join(parts[lastIdx:]...) // "contracts/http/auth/login/v1"
 		if actualSuffix != derived {
 			results = append(results, v.newResult(
-				ruleFMT21, SeverityError, IssueMismatch,
+				codeFMT21, SeverityError, IssueMismatch,
 				contractFile(c), "id",
-				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
+				fmt.Sprintf("contract %q dir %q does not match derived %q;"+
+					" fix: align directory layout to %q (or update the contract id segments to match the dir)",
+					c.ID, c.Dir, derived, derived),
 			))
 		}
 	}
@@ -640,11 +574,12 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 	for i, e := range v.project.StatusBoard {
 		if !validStatusBoardStates[e.State] {
 			results = append(results, v.newResult(
-				ruleFMT22, SeverityError, IssueInvalid,
+				codeFMT22, SeverityError, IssueInvalid,
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].state", i),
 				fmt.Sprintf(
-					"status-board entry %q state %q must be one of {todo, doing, done}",
+					"status-board entry %q state %q must be one of {todo, doing, done};"+
+						" fix: set state to todo, doing, or done",
 					e.JourneyID, e.State,
 				),
 			))
@@ -671,27 +606,33 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 		}
 		if c.DeprecatedAt == "" {
 			results = append(results, v.newResult(
-				ruleFMT23, SeverityError, IssueRequired,
+				codeFMT23, SeverityError, IssueRequired,
 				contractFile(c), "deprecatedAt",
-				fmt.Sprintf("contract %q is deprecated but missing deprecatedAt", c.ID),
+				fmt.Sprintf("contract %q is deprecated but missing deprecatedAt;"+
+					" fix: add deprecatedAt: YYYY-MM-DD to contract.yaml (the day deprecation started)",
+					c.ID),
 			))
 			continue
 		}
 		ts, err := time.ParseInLocation("2006-01-02", c.DeprecatedAt, time.UTC)
 		if err != nil {
 			results = append(results, v.newResult(
-				ruleFMT23, SeverityError, IssueInvalid,
+				codeFMT23, SeverityError, IssueInvalid,
 				contractFile(c), "deprecatedAt",
-				fmt.Sprintf("contract %q deprecatedAt %q is not YYYY-MM-DD", c.ID, c.DeprecatedAt),
+				fmt.Sprintf("contract %q deprecatedAt %q is not YYYY-MM-DD;"+
+					" fix: reformat deprecatedAt as a four-digit-year ISO date (e.g. 2026-05-13)",
+					c.ID, c.DeprecatedAt),
 			))
 			continue
 		}
 		if now.UTC().Sub(ts) > defaultDeprecationGracePeriod {
 			results = append(results, v.newResult(
-				ruleFMT23, SeverityWarning, IssueForbidden,
+				codeFMT23, SeverityWarning, IssueForbidden,
 				contractFile(c), "lifecycle",
 				fmt.Sprintf(
-					"contract %q has been deprecated for >90d (since %s); remove or extend",
+					"contract %q has been deprecated for >90d (since %s);"+
+						" fix: delete the contract and migrate all consumers, or refresh deprecatedAt"+
+						" to today after re-evaluating the deprecation timeline",
 					c.ID, c.DeprecatedAt,
 				),
 			))
@@ -706,11 +647,22 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 // either a request schema (path = JSON-pointer) or a contract.yaml param
 // (path = "endpoints.http.queryParams.<name>.<facet>" /
 // "endpoints.http.pathParams.<name>.<facet>").
+//
+// Two violation shapes share this type:
+//
+//   - Missing-facet: `missing` is the facet name; `relMin` and `relMax`
+//     are empty.
+//   - Min > Max relation fault: `relMin` and `relMax` carry the facet
+//     names (e.g. minLength / maxLength); `missing` is empty. The
+//     producer (appendSchemaBoundRelationViolation) sets issueType to
+//     IssueInvalid; the FMT-25 emission site builds the full message
+//     inline (necessary for archtest INV-3 to resolve `; fix:`).
 type inputConstraintViolation struct {
 	location  string // JSON pointer or full metadata field path.
-	missing   string // "minLength" | "maxLength" | "minimum" | "maximum"
+	missing   string // "minLength" | "maxLength" | "minimum" | "maximum" — empty for relation faults.
+	relMin    string // non-empty when this is a relation fault; pairs with relMax.
+	relMax    string // non-empty when this is a relation fault; pairs with relMin.
 	issueType IssueType
-	message   string
 }
 
 type schemaWalkError struct {
@@ -773,9 +725,10 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
 	if resolveErr != nil {
 		return []ValidationResult{v.newResult(
-			ruleFMT25, SeverityError, IssueInvalid,
+			codeFMT25, SeverityError, IssueInvalid,
 			contractFile(c), ref.Field,
-			fmt.Sprintf("contract %q request schema %q failed to resolve: %v",
+			fmt.Sprintf("contract %q request schema %q failed to resolve: %v;"+
+				" fix: ensure schemaRefs.request points at an existing schema file under the contract dir",
 				c.ID, c.SchemaRefs.Request, resolveErr),
 		)}
 	}
@@ -783,9 +736,10 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []ValidationResult{v.newResult(
-				ruleFMT25, SeverityError, IssueRefNotFound,
+				codeFMT25, SeverityError, IssueRefNotFound,
 				contractFile(c), ref.Field,
-				fmt.Sprintf("contract %q request schema points to missing file %q",
+				fmt.Sprintf("contract %q request schema points to missing file %q;"+
+					" fix: create the schema file at the referenced path or correct schemaRefs.request",
 					c.ID, c.SchemaRefs.Request),
 			)}
 		}
@@ -795,9 +749,10 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 			field = walkErr.path
 		}
 		return []ValidationResult{v.newResult(
-			ruleFMT25, SeverityError, IssueInvalid,
+			codeFMT25, SeverityError, IssueInvalid,
 			resolved.ProjectRel, field,
-			fmt.Sprintf("contract %q request schema %q failed to parse: %v",
+			fmt.Sprintf("contract %q request schema %q failed to parse: %v;"+
+				" fix: ensure the schema is well-formed JSON Schema and all $ref targets resolve locally",
 				c.ID, c.SchemaRefs.Request, err),
 		)}
 	}
@@ -807,15 +762,22 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 		if issueType == "" {
 			issueType = IssueRequired
 		}
-		msg := viol.message
-		if msg == "" {
-			msg = fmt.Sprintf("contract %q request schema field %s missing %s",
-				c.ID, viol.location, viol.missing)
+		if viol.relMin != "" {
+			results = append(results, v.newResult(
+				codeFMT25, SeverityError, issueType,
+				resolved.ProjectRel, viol.location,
+				fmt.Sprintf("contract %q request schema field %s has %s > %s;"+
+					" fix: ensure %s <= %s on the schema node at %s",
+					c.ID, viol.location, viol.relMin, viol.relMax, viol.relMin, viol.relMax, viol.location),
+			))
+			continue
 		}
 		results = append(results, v.newResult(
-			ruleFMT25, SeverityError, issueType,
+			codeFMT25, SeverityError, issueType,
 			resolved.ProjectRel, viol.location,
-			msg,
+			fmt.Sprintf("contract %q request schema field %s missing %s;"+
+				" fix: declare %s on the schema node at %s",
+				c.ID, viol.location, viol.missing, viol.missing, viol.location),
 		))
 	}
 	return results
@@ -938,8 +900,9 @@ func appendSchemaBoundRelationViolation(node map[string]any, path, minKey, maxKe
 	}
 	*out = append(*out, inputConstraintViolation{
 		location:  path,
+		relMin:    minKey,
+		relMax:    maxKey,
 		issueType: IssueInvalid,
-		message:   fmt.Sprintf("request schema field %s has %s > %s", path, minKey, maxKey),
 	})
 }
 
@@ -1149,9 +1112,11 @@ func (v *Validator) emitMissingFacets(
 		}
 		field := fieldBase + "." + f.name
 		results = append(results, v.newResult(
-			ruleFMT25, SeverityError, IssueRequired,
+			codeFMT25, SeverityError, IssueRequired,
 			contractFile(c), field,
-			fmt.Sprintf("contract %q %s missing %s", c.ID, fieldBase, f.name),
+			fmt.Sprintf("contract %q %s missing %s;"+
+				" fix: declare %s on %s in contract.yaml (defends against unbounded inputs)",
+				c.ID, fieldBase, f.name, f.name, fieldBase),
 		))
 	}
 	return results
@@ -1164,8 +1129,10 @@ func (v *Validator) emitInvalidParamRelation(
 		return nil
 	}
 	return []ValidationResult{v.newResult(
-		ruleFMT25, SeverityError, IssueInvalid,
+		codeFMT25, SeverityError, IssueInvalid,
 		contractFile(c), fieldBase,
-		fmt.Sprintf("contract %q %s has %s > %s", c.ID, fieldBase, minName, maxName),
+		fmt.Sprintf("contract %q %s has %s > %s;"+
+			" fix: ensure %s <= %s on %s in contract.yaml",
+			c.ID, fieldBase, minName, maxName, minName, maxName, fieldBase),
 	)}
 }

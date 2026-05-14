@@ -102,7 +102,7 @@ func (p *JSONPrinter) Print(results []governance.ValidationResult) error {
 // strings so jq queries don't need to know about the typed enums.
 func toResultJSON(r governance.ValidationResult) resultJSON {
 	return resultJSON{
-		Code:      r.Code,
+		Code:      string(r.Code),
 		Severity:  string(r.Severity),
 		IssueType: string(r.IssueType),
 		File:      r.File,

@@ -48,7 +48,7 @@ const (
 //     avoid showing Scope with a "file:line:col" prefix because doing so
 //     would invite users to try (and fail) to jump to it.
 type ValidationResult struct {
-	Code      string // e.g., "REF-01", "TOPO-03"
+	Code      RuleCode // e.g., codeREF01, codeTOPO03
 	Severity  Severity
 	IssueType IssueType
 	File      string // YAML file path; empty when Scope is set
@@ -116,64 +116,65 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 	return validator
 }
 
-// Validate runs all rules and returns all findings. ctx cancellation
-// short-circuits the loop between rules. Every rule in the standard
-// pipeline is pure-memory; ctx-bound work (VERIFY-06's verifyJourneyRef
-// subprocess, runGit shell-outs) happens outside this list, so rule bodies
-// keep zero-arg signatures.
+// ValidateStrict is the single entry point for governance validation. strict
+// and failFast are orthogonal flags forming a 2x2 matrix:
+//
+//   - strict=false, failFast=false → run all base rules, collect every result
+//   - strict=false, failFast=true  → run base rules, stop at the first error
+//   - strict=true,  failFast=false → run base + strict-only rules, collect all
+//   - strict=true,  failFast=true  → run base + strict rules, stop on error
+//
+// rules() and strictRules(ctx) stay separate functions because their closure
+// shapes differ (strictRules captures ctx for VERIFY-06); ValidateStrict
+// concats them at the dispatch site so there is exactly one ctx-cancel /
+// fail-fast loop body covering both halves of the pipeline.
 //
 // The error return is non-nil only when ctx.Err() != nil at the time the
-// loop is interrupted; it carries the partial findings collected so far
-// so callers can distinguish "clean run" from "interrupted run".
+// loop is interrupted; it carries the partial findings collected so far so
+// callers can distinguish "clean run" from "interrupted run".
 //
-// Validator is not safe for concurrent Validate / ValidateFailFast calls.
-// Build one Validator per concurrent caller — same expectation as the
-// underlying locator and the verifyJourneyRef closure.
-func (v *Validator) Validate(ctx context.Context) ([]ValidationResult, error) {
-	var results []ValidationResult
-	for _, rule := range v.rules() {
-		if err := ctx.Err(); err != nil {
-			return results, err
-		}
-		results = append(results, rule()...)
+// Validator is not safe for concurrent ValidateStrict calls. Build one
+// Validator per concurrent caller — same expectation as the underlying
+// locator and the verifyJourneyRef closure.
+//
+// archtest GOVERNANCE-RULES-REGISTRATION-GUARD-01 (tools/archtest/
+// governance_rules_invariants_test.go) reflects over *Validator at build
+// time to confirm every validate* method with the rule signature is
+// reachable from rules() or strictRules(); forgetting to register a new
+// rule fails CI.
+func (v *Validator) ValidateStrict(ctx context.Context, strict, failFast bool) ([]ValidationResult, error) {
+	pipeline := v.rules()
+	if strict {
+		pipeline = append(pipeline, v.strictRules(ctx)...)
 	}
-	return results, nil
-}
-
-// ValidateFailFast runs the same rules as Validate but returns as soon as
-// any rule produces a SeverityError result. Warnings do not trigger the
-// bailout. This is the true short-circuit path for CI pipelines — unlike
-// a Validate caller that filters downstream, no subsequent rule runs.
-//
-// When no errors are found, the return value contains every rule's warnings
-// in the same order as Validate would. ctx cancellation also short-circuits.
-// The error return is non-nil only when ctx.Err() != nil.
-func (v *Validator) ValidateFailFast(ctx context.Context) ([]ValidationResult, error) {
 	var results []ValidationResult
-	for _, rule := range v.rules() {
+	for _, rule := range pipeline {
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
 		r := rule()
 		results = append(results, r...)
-		if HasErrors(r) {
+		if failFast && HasErrors(r) {
 			return results, nil
 		}
 	}
 	return results, nil
 }
 
-// rules returns the list of rule methods in the same order Validate runs
-// them. Used by both Validate (for full evaluation) and ValidateFailFast
-// (for short-circuit). Keeping this list in one place is what makes the
-// two entry points provably equivalent on the happy path.
+// rules returns the base rule pipeline in the order ValidateStrict runs them.
+// Every entry is a zero-arg closure; ctx-bound work (VERIFY-06's
+// verifyJourneyRef subprocess, runGit shell-outs) lives in strictRules,
+// which captures ctx, so this list keeps the pure-memory invariant.
 //
-// Every rule here is pure-memory; ctx-bound work (verifyJourneyRef in
-// VERIFY-06, runGit-using rules) lives in the strict-only path or via
-// helper packages and receives ctx through dedicated parameters, not
-// through this list. ref: kubernetes apimachinery validation/field/errors.go
-// (pure-memory rules with no ctx); opentofu internal/command/validate.go
-// (top-level aggregator threads ctx).
+// archtest GOVERNANCE-RULES-REGISTRATION-GUARD-01 reflects over *Validator's
+// method set and diffs against the names referenced here plus in
+// strictRules(); a validate* method that returns []ValidationResult but is
+// not referenced from either function fails CI immediately. The check is
+// the single source preventing "method exists but never runs" drift.
+//
+// ref: kubernetes apimachinery validation/field/errors.go (pure-memory rules
+// with no ctx); opentofu internal/command/validate.go (top-level aggregator
+// threads ctx).
 func (v *Validator) rules() []func() []ValidationResult {
 	return []func() []ValidationResult{
 		v.validateREF01, v.validateREF02, v.validateREF03, v.validateREF04,
@@ -191,8 +192,8 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateFMT09, v.validateFMT10, v.validateFMT11, v.validateFMT12,
 		v.validateFMT13, v.validateFMT14, v.validateFMT15, v.validateFMT24, v.validateFMT26,
 		v.validateFMT27, v.validateFMT28, v.validateFMT29, v.validateFMT30, v.validateFMT31,
-		func() []ValidationResult { return v.validateFMTA1(false) },
-		func() []ValidationResult { return v.validateFMTC1(false) },
+		v.validateFMTA1,
+		v.validateFMTC1,
 		v.validateADV01, v.validateADV03, v.validateADV04, v.validateADV05,
 		v.validateADV06,
 		v.validateOUTGUARD01,

@@ -1008,9 +1008,9 @@ func TestClassifyServiceTokenVerifyError(t *testing.T) {
 			wantReason: "missing_caller_cell",
 		},
 		{
-			name: "invalid caller cell — with actual value in message",
+			name: "invalid caller cell — matches current validateCallerCell message",
 			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-				`caller cell id "Bad-Cell" invalid (must match ^[a-z][a-z0-9-]*$)`),
+				"caller cell id invalid"),
 			wantReason: "invalid_caller_cell",
 		},
 		{
@@ -1060,8 +1060,8 @@ func TestServiceToken_EmptyCallerCell_MetricLabel(t *testing.T) {
 }
 
 // TestServiceToken_InvalidCallerCellPattern_MetricLabel verifies that a 4-part
-// token with a caller_cell not matching ^[a-z][a-z0-9-]*$ is rejected with 401
-// AND records the metric label "invalid_caller_cell".
+// token with a caller_cell not matching metadata.CellIDPattern (^[a-z][a-z0-9]+$)
+// is rejected with 401 AND records the metric label "invalid_caller_cell".
 func TestServiceToken_InvalidCallerCellPattern_MetricLabel(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Unix(1700000000, 0)

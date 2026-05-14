@@ -41,14 +41,19 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // table. Keys are the kernel sub-modules; values are sorted owner names
 // that the key may import. nil means leaf (no kernel→kernel out-edges).
 //
-// Two new leaves were added in this PR — `contractspec` (extracted from
+// Two leaves were added in an earlier PR — `contractspec` (extracted from
 // kernel/wrapper) and `cellvocab` (extracted from kernel/cell, absorbing
 // the existing kernel/cell/levelrank sub-package) — to break the
 // cell→wrapper, governance→cell, and metadata→cell (via levelrank)
-// reverse edges. After this PR the roadmap claim that wrapper is top-tier
+// reverse edges. After that PR the roadmap claim that wrapper is top-tier
 // and governance/metadata do not reach into runtime cell becomes literally
 // true; cellvocab becomes the single source of truth for the consistency
 // level / contract kind / role / lifecycle / cell type vocabulary.
+//
+// `contractspec` was initially leaf (→cellvocab only). It now also imports
+// `metadata` to use metadata.MatchCellID / metadata.CellIDPattern as the
+// single-source cell-id validator (PR #487 review finding: drop byte-wise
+// isCellIDLike duplicate).
 //
 // observability is a leaf imported by the upper-tier sub-modules
 // (assembly/cell/outbox) for their metrics provider; this is a structural
@@ -59,7 +64,7 @@ var allowedKernelEdges = map[string][]string{
 	"cellvocab":     nil,
 	"clock":         nil,
 	"command":       {"clock", "metautil"},
-	"contractspec":  {"cellvocab"},
+	"contractspec":  {"cellvocab", "metadata"},
 	"crypto":        nil,
 	"ctxkeys":       nil,
 	"depgraph":      nil,

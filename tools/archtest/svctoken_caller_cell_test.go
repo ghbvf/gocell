@@ -5,7 +5,7 @@
 // Invariant: every call expression `auth.GenerateServiceToken(...)` must
 // pass a non-empty string literal as its second argument (callerCell).
 // The literal must:
-//   - match the pattern ^[a-z][a-z0-9-]*$ (valid cell ID format)
+//   - match metadata.CellIDPattern (^[a-z][a-z0-9]+$, no dash, ≥2 chars)
 //   - be a known cell ID according to cells/ directory names OR actors.yaml
 //
 // This gate prevents callers from omitting the caller identity or using an

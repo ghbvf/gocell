@@ -197,7 +197,7 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts .
 //   - 4-part format: {timestamp}:{nonce}:{callerCell}:{hex_hmac}
 //   - 3-part format explicitly rejected: "legacy 3-part service token format rejected"
 //   - timestamp within ServiceTokenMaxAge
-//   - callerCell non-empty and matching [a-z][a-z0-9-]*
+//   - callerCell non-empty and matching metadata.MatchCellID (metadata.CellIDPattern)
 //   - HMAC valid for any key in ring
 //   - nonce not replayed via NonceStore.CheckAndMark (Noop/nil stores are
 //     rejected at construction time by NewServiceTokenAuthenticator)

@@ -1,21 +1,21 @@
 advHintADV05EmptySubscribers
 =====
-event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml
+event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml; fix: add subscribers to endpoints.subscribers or set lifecycle: deprecated
 -----
 
 advHintADV06ContractToSlice
 =====
-event contract %q lists cell %q as subscriber, but no slice in %q declares contractUsage{contract: %q, role: subscribe}; add this contractUsage to a slice in %q (e.g. cells/%s/slices/<slice>/slice.yaml) or remove %q from endpoints.subscribers
+event contract %q lists cell %q as subscriber, but no slice in %q declares contractUsage{contract: %q, role: subscribe}; add this contractUsage to a slice in %q (e.g. cells/%s/slices/<slice>/slice.yaml) or remove %q from endpoints.subscribers; fix: add the subscribe contractUsage to a slice or remove the cell from endpoints.subscribers
 -----
 
 advHintADV06SliceToContract
 =====
-slice %q declares contractUsage{contract: %q, role: subscribe}, but the contract's endpoints.subscribers does not list cell %q; add %q to the contract's endpoints.subscribers or remove the subscribe contractUsage from this slice
+slice %q declares contractUsage{contract: %q, role: subscribe}, but the contract's endpoints.subscribers does not list cell %q; add %q to the contract's endpoints.subscribers or remove the subscribe contractUsage from this slice; fix: add the cell to endpoints.subscribers in the contract or remove the subscribe contractUsage
 -----
 
 advHintCCE01OwnerMismatch
 =====
-contract %q declares trigger %q but event contract owner/publisher must both be %s
+contract %q declares trigger %q but event contract owner/publisher must both be %s; fix: set ownerCell and endpoints.publisher on the event contract to the trigger contract's owner cell
 -----
 
 advHintCCE01ReverseEmit
@@ -25,37 +25,37 @@ service emits topic %q in serving slice %s/%s but no HTTP contract served by tha
 
 advHintCCE01SliceNotPublish
 =====
-contract %q declares trigger %q but serving slice %s/%s does not declare role: publish for that event contract
+contract %q declares trigger %q but serving slice %s/%s does not declare role: publish for that event contract; fix: add contractUsages: {contract: <event id>, role: publish} to the serving slice's slice.yaml
 -----
 
 advHintCCE01TriggerNotEmitted
 =====
-contract %q declares trigger %q but no non-test Go file under %s emits it via outbox.Emit or *.Emitter.Emit; serving slice %s/%s must emit the trigger topic as a string literal or named constant
+contract %q declares trigger %q but no non-test Go file under %s emits it via outbox.Emit or *.Emitter.Emit; serving slice %s/%s must emit the trigger topic as a string literal or named constant; fix: add an outbox.Emit (or Emitter.Emit) call publishing the trigger topic in the slice's handler
 -----
 
 advHintCCE01TriggerNotEvent
 =====
-contract %q declares trigger %q but referenced contract kind=%s; triggers must reference kind:event contracts
+contract %q declares trigger %q but referenced contract kind=%s; triggers must reference kind:event contracts; fix: change the trigger to point at an existing kind:event contract id
 -----
 
 advHintCH04CorrelationFailed
 =====
-CH-04: contract %s served by handler file %s — auth.Mount correlation failed; cannot reliably extract handler status codes. Required: handler file must register routes via `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern with a resolvable spec var or inline ContractSpec literal.
+CH-04: contract %s served by handler file %s — auth.Mount correlation failed; cannot reliably extract handler status codes. Required: handler file must register routes via `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern with a resolvable spec var or inline ContractSpec literal; fix: ensure routes are registered via auth.Mount with a resolvable contract spec
 -----
 
 advHintCH05CorrelationFailed
 =====
-CH-05: contract %s with `pathParams.{name}.format: uuid` — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function. Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern.
+CH-05: contract %s with `pathParams.{name}.format: uuid` — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function. Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern; fix: register routes via auth.Mount with a resolvable contract spec
 -----
 
 advHintCH05MissingParseCall
 =====
-%s: pathParam %q has format:uuid but handler does not call httputil.ParseUUIDPathParam(w, r, %q)
+%s: pathParam %q has format:uuid but handler does not call httputil.ParseUUIDPathParam(w, r, %q); fix: add httputil.ParseUUIDPathParam call in the handler
 -----
 
 advHintFMT13MissingHTTP
 =====
-HTTP contract %q must declare endpoints.http; add to contract.yaml:
+HTTP contract %q must declare endpoints.http; fix: add endpoints.http to contract.yaml:
   http:
     method: GET                # GET|POST|PUT|PATCH|DELETE
     path: /api/v1/...
@@ -65,7 +65,7 @@ HTTP contract %q must declare endpoints.http; add to contract.yaml:
 
 advHintFMT13MissingPathParam
 =====
-http contract %q path placeholder %q has no pathParams declaration; add to contract.yaml:
+http contract %q path placeholder %q has no pathParams declaration; fix: add to contract.yaml:
   pathParams:
     %s:
       type: string

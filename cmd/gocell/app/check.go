@@ -231,7 +231,7 @@ func checkSliceCoverage(args []string) error {
 	if *cellID != "" {
 		if _, ok := project.Cells[*cellID]; !ok {
 			return printAndCheck(*format, []governance.ValidationResult{{
-				Code:      "CHECK-CELL-NOT-FOUND",
+				Code:      governance.RuleCode("CHECK-CELL-NOT-FOUND"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRequired,
 				Scope:     cmdSliceCoverage,
@@ -283,7 +283,7 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 			return nil // cell has no slices/ subdir — not a violation
 		}
 		return []governance.ValidationResult{{
-			Code:      "CHECK-SLICE-DIR-READ-ERROR",
+			Code:      governance.RuleCode("CHECK-SLICE-DIR-READ-ERROR"),
 			Severity:  governance.SeverityError,
 			IssueType: governance.IssueInvalid,
 			File:      filepath.ToSlash(filepath.Join("cells", cid, "slices")),
@@ -297,7 +297,7 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 		sliceYAML := filepath.Join(slicesDir, e.Name(), "slice.yaml")
 		if _, statErr := os.Stat(sliceYAML); statErr != nil {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-SLICE-EMPTY-DIR",
+				Code:      governance.RuleCode("CHECK-SLICE-EMPTY-DIR"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRequired,
 				Scope:     cmdSliceCoverage,
@@ -328,7 +328,7 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 		actualParent := filepath.ToSlash(filepath.Dir(sl.File))
 		if !strings.HasPrefix(actualParent, expectedSlicesParent) {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-SLICE-BELONGS-TO-MISMATCH",
+				Code:      governance.RuleCode("CHECK-SLICE-BELONGS-TO-MISMATCH"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueMismatch,
 				File:      sl.File,
@@ -340,7 +340,7 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 		}
 		if sl.Dir != sl.ID {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-SLICE-ID-MISMATCH",
+				Code:      governance.RuleCode("CHECK-SLICE-ID-MISMATCH"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueMismatch,
 				File:      sl.File,
@@ -388,7 +388,7 @@ func checkAssemblyCompleteness(args []string) error {
 	for _, cid := range asm.Cells {
 		if seen[cid] {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-ASSEMBLY-DUPLICATE-CELL",
+				Code:      governance.RuleCode("CHECK-ASSEMBLY-DUPLICATE-CELL"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueDuplicate,
 				File:      asm.File,
@@ -399,7 +399,7 @@ func checkAssemblyCompleteness(args []string) error {
 		seen[cid] = true
 		if _, exists := project.Cells[cid]; !exists {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-ASSEMBLY-MISSING-CELL",
+				Code:      governance.RuleCode("CHECK-ASSEMBLY-MISSING-CELL"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRefNotFound,
 				File:      asm.File,
@@ -484,7 +484,7 @@ func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []
 	switch {
 	case count == 0:
 		return []governance.ValidationResult{{
-			Code:      "CHECK-JOURNEY-NO-STATUS-ENTRY",
+			Code:      governance.RuleCode("CHECK-JOURNEY-NO-STATUS-ENTRY"),
 			Severity:  governance.SeverityError,
 			IssueType: governance.IssueRequired,
 			File:      jm.File,
@@ -492,7 +492,7 @@ func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []
 		}}
 	case count > 1:
 		return []governance.ValidationResult{{
-			Code:      "CHECK-JOURNEY-DUP-STATUS-ENTRY",
+			Code:      governance.RuleCode("CHECK-JOURNEY-DUP-STATUS-ENTRY"),
 			Severity:  governance.SeverityError,
 			IssueType: governance.IssueDuplicate,
 			Scope:     cmdJourneyReadiness,
@@ -508,7 +508,7 @@ func journeyContractCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMet
 	for _, contractID := range jm.Contracts {
 		if _, exists := project.Contracts[contractID]; !exists {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-JOURNEY-MISSING-CONTRACT",
+				Code:      governance.RuleCode("CHECK-JOURNEY-MISSING-CONTRACT"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRefNotFound,
 				File:      jm.File,
@@ -525,7 +525,7 @@ func journeyCellCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMeta) [
 	for _, cid := range jm.Cells {
 		if _, exists := project.Cells[cid]; !exists {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-JOURNEY-MISSING-CELL",
+				Code:      governance.RuleCode("CHECK-JOURNEY-MISSING-CELL"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRefNotFound,
 				File:      jm.File,
@@ -617,7 +617,7 @@ func l0ImportsForCell(root string, cm *metadata.CellMeta) []governance.Validatio
 
 	if len(declaredDeps) == 0 {
 		results = append(results, governance.ValidationResult{
-			Code:      "CHECK-L0-MISSING-L0DEPS",
+			Code:      governance.RuleCode("CHECK-L0-MISSING-L0DEPS"),
 			Severity:  governance.SeverityError,
 			IssueType: governance.IssueRequired,
 			File:      cm.File,
@@ -669,7 +669,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
 		return nil, []governance.ValidationResult{{
-			Code:      "CHECK-L0-LOAD-ERROR",
+			Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
 			Severity:  governance.SeverityError,
 			IssueType: governance.IssueInvalid,
 			File:      filepath.ToSlash(cm.File),
@@ -684,7 +684,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 		if len(pkg.Errors) > 0 {
 			for _, pe := range pkg.Errors {
 				loadErrs = append(loadErrs, governance.ValidationResult{
-					Code:      "CHECK-L0-LOAD-ERROR",
+					Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
 					Severity:  governance.SeverityError,
 					IssueType: governance.IssueInvalid,
 					File:      filepath.ToSlash(cm.File),
@@ -713,7 +713,7 @@ func l0UndeclaredImports(cm *metadata.CellMeta, imported, declared map[string]bo
 	for importedCellID := range imported {
 		if !declared[importedCellID] {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-L0-UNDECLARED-IMPORT",
+				Code:      governance.RuleCode("CHECK-L0-UNDECLARED-IMPORT"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueInvalid,
 				File:      cm.File,
@@ -730,7 +730,7 @@ func l0DanglingDeclarations(cm *metadata.CellMeta, imported, declared map[string
 	for declaredCellID := range declared {
 		if !imported[declaredCellID] {
 			results = append(results, governance.ValidationResult{
-				Code:      "CHECK-L0-DANGLING-DECLARATION",
+				Code:      governance.RuleCode("CHECK-L0-DANGLING-DECLARATION"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueInvalid,
 				File:      cm.File,
@@ -878,7 +878,7 @@ func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.
 		for _, diag := range act.Diagnostics {
 			pos := act.Package.Fset.Position(diag.Pos)
 			results = append(results, governance.ValidationResult{
-				Code:      "UNCONDITIONAL-SKIP-01",
+				Code:      governance.RuleCode("UNCONDITIONAL-SKIP-01"),
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueForbidden,
 				File:      relativeToRoot(root, pos.Filename),

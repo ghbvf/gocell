@@ -30,7 +30,7 @@ func TestValidateSliceConsistency(t *testing.T) {
 		cellLevel      string
 		sliceLevel     string
 		wantErrorCount int
-		wantCode       string
+		wantCode       RuleCode
 	}{
 		{
 			name:           "slice with no explicit level inherits cell - 0 findings",
@@ -340,7 +340,7 @@ func runFMT19Case(t *testing.T, source string, wantErrors int, wantText string) 
 	require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state_test.go"),
 		[]byte("package wrapper\nvar ignored Tracer = nil\n"), 0o644))
 
-	results := NewValidator(&metadata.ProjectMeta{}, root, clock.Real()).validateFMT19(true)
+	results := NewValidator(&metadata.ProjectMeta{}, root, clock.Real()).validateFMT19()
 	assert.Len(t, results, wantErrors, "got results: %v", results)
 	for _, r := range results {
 		assert.Equal(t, codeFMT19, r.Code)
@@ -372,11 +372,11 @@ func TestValidateDOCNAME01_StrictScansActiveDocs(t *testing.T) {
 	writeFile(t, root, "templates/adr.md", "Use ssobff here.\n")
 
 	v := NewValidator(validProject(), root, clock.Real())
-	results := v.validateDOCNAME01(true)
+	results := v.validateDOCNAME01()
 
 	require.Len(t, results, 1)
 	got := results[0]
-	assert.Equal(t, "DOC-NAME-01", got.Code)
+	assert.Equal(t, codeDOCNAME01, got.Code)
 	assert.Equal(t, SeverityError, got.Severity)
 	assert.Equal(t, IssueForbidden, got.IssueType)
 	assert.Equal(t, "README.md", got.File)
@@ -387,23 +387,14 @@ func TestValidateDOCNAME01_StrictScansActiveDocs(t *testing.T) {
 	assert.Contains(t, got.Message, `"ssobff"`)
 }
 
-func TestValidateDOCNAME01_NonStrictSilent(t *testing.T) {
-	root := t.TempDir()
-	writeDocNamingGuard(t, root)
-	writeFile(t, root, "README.md", "Use sso-bff here.\n")
-
-	v := NewValidator(validProject(), root, clock.Real())
-	assert.Empty(t, v.validateDOCNAME01(false))
-}
-
 func TestValidateDOCNAME01_MissingGuardIsStrictError(t *testing.T) {
 	root := t.TempDir()
 
 	v := NewValidator(validProject(), root, clock.Real())
-	results := v.validateDOCNAME01(true)
+	results := v.validateDOCNAME01()
 
 	require.Len(t, results, 1)
-	assert.Equal(t, "DOC-NAME-01", results[0].Code)
+	assert.Equal(t, codeDOCNAME01, results[0].Code)
 	assert.Equal(t, SeverityError, results[0].Severity)
 	assert.Equal(t, IssueRequired, results[0].IssueType)
 	assert.Equal(t, docNamingGuardRelPath, results[0].File)
@@ -423,7 +414,7 @@ replacements:
 	writeFile(t, root, "examples/ssobff/README.md", "todoorder is already clean.\n")
 
 	v := NewValidator(validProject(), root, clock.Real())
-	results := v.validateDOCNAME01(true)
+	results := v.validateDOCNAME01()
 
 	require.Len(t, results, 1)
 	assert.Equal(t, "examples/todoorder/README.md", results[0].File)
@@ -488,10 +479,10 @@ replacements:
 			writeFile(t, root, "docs/architecture/naming-guard.yaml", tt.config)
 
 			v := NewValidator(validProject(), root, clock.Real())
-			results := v.validateDOCNAME01(true)
+			results := v.validateDOCNAME01()
 
 			require.NotEmpty(t, results)
-			assert.Equal(t, "DOC-NAME-01", results[0].Code)
+			assert.Equal(t, codeDOCNAME01, results[0].Code)
 			assert.Equal(t, tt.wantIssue, results[0].IssueType)
 			assert.Equal(t, tt.wantField, results[0].Field)
 			assert.Contains(t, results[0].Message, tt.wantMessage)
@@ -512,7 +503,7 @@ replacements:
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 	v := NewValidator(validProject(), root, clock.Real())
 
-	results := v.validateDOCNAME01(true)
+	results := v.validateDOCNAME01()
 	require.Len(t, results, 1)
 	assert.Equal(t, IssueInvalid, results[0].IssueType)
 	assert.Contains(t, results[0].Message, "invalid document naming include pattern")
@@ -532,7 +523,7 @@ replacements:
 		return os.ReadFile(filepath.Clean(path))
 	}
 
-	results = v.validateDOCNAME01(true)
+	results = v.validateDOCNAME01()
 	require.Len(t, results, 1)
 	assert.Equal(t, "README.md", results[0].File)
 	assert.Equal(t, IssueInvalid, results[0].IssueType)
@@ -541,7 +532,7 @@ replacements:
 
 func TestValidateDOCNAME01_EmptyRootSilent(t *testing.T) {
 	v := NewValidator(validProject(), "", clock.Real())
-	assert.Empty(t, v.validateDOCNAME01(true))
+	assert.Empty(t, v.validateDOCNAME01())
 }
 
 func TestDocNamingPatternMatch(t *testing.T) {
@@ -558,7 +549,7 @@ func TestValidateStrict_IncludesDOCNAME01(t *testing.T) {
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 
 	v := NewValidator(emptyDocNamingProject(), root, clock.Real())
-	results, err := v.ValidateStrict(t.Context(), true)
+	results, err := v.ValidateStrict(t.Context(), true, false)
 	require.NoError(t, err)
 	assertDOCNAME01Present(t, results)
 }
@@ -569,7 +560,7 @@ func TestValidateStrictFailFast_IncludesDOCNAME01(t *testing.T) {
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 
 	v := NewValidator(emptyDocNamingProject(), root, clock.Real())
-	results, err := v.ValidateStrictFailFast(t.Context())
+	results, err := v.ValidateStrict(t.Context(), true, true)
 	require.NoError(t, err)
 
 	require.Len(t, results, 1)

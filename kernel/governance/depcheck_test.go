@@ -18,7 +18,7 @@ func TestDEP01(t *testing.T) {
 		name      string
 		project   *metadata.ProjectMeta
 		wantCount int
-		wantCode  string
+		wantCode  RuleCode
 	}{
 		{
 			name: "belongsToCell matches key cellID — no error",
@@ -62,7 +62,7 @@ func TestDEP01(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dc := NewDependencyChecker(tt.project)
 			results := dc.Check()
-			dep01 := findByCode(results, "DEP-01")
+			dep01 := findByCode(results, codeDEP01)
 			assert.Len(t, dep01, tt.wantCount)
 			if tt.wantCount > 0 {
 				assert.Equal(t, tt.wantCode, dep01[0].Code)

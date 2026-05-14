@@ -27,8 +27,6 @@ import (
 // ASCII-identifier scope).
 var pathPlaceholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-const codeFMT24 = "FMT-24"
-
 // Package-level lookup maps for validation rules, avoiding per-call allocation.
 var (
 	validLifecycles = map[string]bool{
@@ -80,10 +78,11 @@ func (v *Validator) validateFMT01() []ValidationResult {
 	for _, c := range v.project.Contracts {
 		if !validLifecycles[c.Lifecycle] {
 			results = append(results, v.newResult(
-				"FMT-01", SeverityError, IssueInvalid,
+				codeFMT01, SeverityError, IssueInvalid,
 				contractFile(c),
 				"lifecycle",
-				fmt.Sprintf("contract %q lifecycle %q is not valid (must be draft, active, or deprecated)", c.ID, c.Lifecycle),
+				fmt.Sprintf("contract %q lifecycle %q is not valid (must be draft, active, or deprecated);"+
+					" fix: set lifecycle to draft, active, or deprecated", c.ID, c.Lifecycle),
 			))
 		}
 	}
@@ -96,18 +95,23 @@ func (v *Validator) validateFMT24() []ValidationResult {
 	for _, j := range v.project.Journeys {
 		file := journeyFile(j)
 		if !validJourneyLifecycles[j.Lifecycle] {
-			issueType := IssueInvalid
-			message := fmt.Sprintf("journey %q lifecycle %q is not valid (must be active or experimental)", j.ID, j.Lifecycle)
 			if j.Lifecycle == "" {
-				issueType = IssueRequired
-				message = fmt.Sprintf("journey %q lifecycle is required (must be active or experimental)", j.ID)
+				results = append(results, v.newResult(
+					codeFMT24, SeverityError, IssueRequired,
+					file,
+					"lifecycle",
+					fmt.Sprintf("journey %q lifecycle is required (must be active or experimental);"+
+						" fix: add lifecycle: active or lifecycle: experimental to the journey", j.ID),
+				))
+			} else {
+				results = append(results, v.newResult(
+					codeFMT24, SeverityError, IssueInvalid,
+					file,
+					"lifecycle",
+					fmt.Sprintf("journey %q lifecycle %q is not valid (must be active or experimental);"+
+						" fix: set lifecycle to active or experimental", j.ID, j.Lifecycle),
+				))
 			}
-			results = append(results, v.newResult(
-				codeFMT24, SeverityError, issueType,
-				file,
-				"lifecycle",
-				message,
-			))
 		}
 
 		for i, pc := range j.PassCriteria {
@@ -129,7 +133,8 @@ func (v *Validator) validatePassCriterionFMT24(
 			codeFMT24, SeverityError, IssueInvalid,
 			file,
 			modeField,
-			fmt.Sprintf("journey %q passCriteria[%d].mode %q is not valid (must be auto or manual)", j.ID, i, pc.Mode),
+			fmt.Sprintf("journey %q passCriteria[%d].mode %q is not valid (must be auto or manual);"+
+				" fix: set mode to auto or manual", j.ID, i, pc.Mode),
 		)}
 	}
 	if pc.Mode == "auto" && strings.TrimSpace(pc.CheckRef) == "" {
@@ -137,7 +142,7 @@ func (v *Validator) validatePassCriterionFMT24(
 			codeFMT24, SeverityError, IssueRequired,
 			file,
 			fmt.Sprintf(fieldCritCheckRefTmpl, i),
-			fmt.Sprintf("journey %q auto passCriteria[%d] requires checkRef", j.ID, i),
+			fmt.Sprintf("journey %q auto passCriteria[%d] requires checkRef; fix: add a checkRef pointing to a test target", j.ID, i),
 		)}
 	}
 	if pc.Mode == "manual" && strings.TrimSpace(pc.CheckRef) != "" {
@@ -145,7 +150,8 @@ func (v *Validator) validatePassCriterionFMT24(
 			codeFMT24, SeverityError, IssueForbidden,
 			file,
 			fmt.Sprintf(fieldCritCheckRefTmpl, i),
-			fmt.Sprintf("journey %q manual passCriteria[%d] must not declare checkRef", j.ID, i),
+			fmt.Sprintf("journey %q manual passCriteria[%d] must not declare checkRef;"+
+				" fix: remove checkRef from this manual passCriteria entry", j.ID, i),
 		)}
 	}
 	return nil
@@ -157,10 +163,10 @@ func (v *Validator) validateFMT02() []ValidationResult {
 	for _, c := range v.project.Cells {
 		if !validCellTypes[c.Type] {
 			results = append(results, v.newResult(
-				"FMT-02", SeverityError, IssueInvalid,
+				codeFMT02, SeverityError, IssueInvalid,
 				cellFile(c),
 				"type",
-				fmt.Sprintf("cell %q type %q is not valid (must be core, edge, or support)", c.ID, c.Type),
+				fmt.Sprintf("cell %q type %q is not valid (must be core, edge, or support); fix: set type to core, edge, or support", c.ID, c.Type),
 			))
 		}
 	}
@@ -173,20 +179,22 @@ func (v *Validator) validateFMT03() []ValidationResult {
 	for _, c := range v.project.Cells {
 		if _, err := cellvocab.ParseLevel(c.ConsistencyLevel); err != nil {
 			results = append(results, v.newResult(
-				"FMT-03", SeverityError, IssueInvalid,
+				codeFMT03, SeverityError, IssueInvalid,
 				cellFile(c),
 				"consistencyLevel",
-				fmt.Sprintf("cell %q consistencyLevel %q is not valid (must be L0-L4)", c.ID, c.ConsistencyLevel),
+				fmt.Sprintf("cell %q consistencyLevel %q is not valid (must be L0-L4);"+
+					" fix: set consistencyLevel to L0, L1, L2, L3, or L4", c.ID, c.ConsistencyLevel),
 			))
 		}
 	}
 	for _, c := range v.project.Contracts {
 		if _, err := cellvocab.ParseLevel(c.ConsistencyLevel); err != nil {
 			results = append(results, v.newResult(
-				"FMT-03", SeverityError, IssueInvalid,
+				codeFMT03, SeverityError, IssueInvalid,
 				contractFile(c),
 				"consistencyLevel",
-				fmt.Sprintf("contract %q consistencyLevel %q is not valid (must be L0-L4)", c.ID, c.ConsistencyLevel),
+				fmt.Sprintf("contract %q consistencyLevel %q is not valid (must be L0-L4);"+
+					" fix: set consistencyLevel to L0, L1, L2, L3, or L4", c.ID, c.ConsistencyLevel),
 			))
 		}
 	}
@@ -204,10 +212,10 @@ func (v *Validator) validateFMT04() []ValidationResult {
 		if kind == cellvocab.ContractEvent || kind == cellvocab.ContractProjection {
 			if c.Replayable == nil {
 				results = append(results, v.newResult(
-					"FMT-04", SeverityError, IssueRequired,
+					codeFMT04, SeverityError, IssueRequired,
 					contractFile(c),
 					"replayable",
-					fmt.Sprintf("%s contract %q must specify replayable", c.Kind, c.ID),
+					fmt.Sprintf("%s contract %q must specify replayable; fix: add replayable: true or replayable: false to the contract", c.Kind, c.ID),
 				))
 			}
 		}
@@ -216,18 +224,18 @@ func (v *Validator) validateFMT04() []ValidationResult {
 		if kind == cellvocab.ContractEvent {
 			if c.IdempotencyKey == "" {
 				results = append(results, v.newResult(
-					"FMT-04", SeverityError, IssueRequired,
+					codeFMT04, SeverityError, IssueRequired,
 					contractFile(c),
 					"idempotencyKey",
-					fmt.Sprintf("event contract %q must specify idempotencyKey", c.ID),
+					fmt.Sprintf("event contract %q must specify idempotencyKey; fix: add an idempotencyKey field to the event contract", c.ID),
 				))
 			}
 			if c.DeliverySemantics == "" {
 				results = append(results, v.newResult(
-					"FMT-04", SeverityError, IssueRequired,
+					codeFMT04, SeverityError, IssueRequired,
 					contractFile(c),
 					"deliverySemantics",
-					fmt.Sprintf("event contract %q must specify deliverySemantics", c.ID),
+					fmt.Sprintf("event contract %q must specify deliverySemantics; fix: add deliverySemantics: at-least-once or at-most-once", c.ID),
 				))
 			}
 		}
@@ -242,10 +250,10 @@ func (v *Validator) validateFMT05() []ValidationResult {
 		for i, cu := range s.ContractUsages {
 			if !validRoles[cu.Role] {
 				results = append(results, v.newResult(
-					"FMT-05", SeverityError, IssueInvalid,
+					codeFMT05, SeverityError, IssueInvalid,
 					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].role", i),
-					fmt.Sprintf("role %q is not a valid contract role", cu.Role),
+					fmt.Sprintf("role %q is not a valid contract role; fix: use one of the valid contract roles", cu.Role),
 				))
 			}
 		}
@@ -263,10 +271,10 @@ func (v *Validator) validateFMT06() []ValidationResult {
 		}
 		if level != cellvocab.L0 && c.Schema.Primary == "" {
 			results = append(results, v.newResult(
-				"FMT-06", SeverityError, IssueRequired,
+				codeFMT06, SeverityError, IssueRequired,
 				cellFile(c),
 				"schema.primary",
-				fmt.Sprintf("non-L0 cell %q must have schema.primary", c.ID),
+				fmt.Sprintf("non-L0 cell %q must have schema.primary; fix: add schema.primary pointing to the primary schema file", c.ID),
 			))
 		}
 	}
@@ -293,10 +301,11 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				field = "endpoints"
 			}
 			results = append(results, v.newResult(
-				"FMT-07", SeverityError, IssueRequired,
+				codeFMT07, SeverityError, IssueRequired,
 				contractFile(c),
 				field,
-				fmt.Sprintf("contract %q (kind %q) must have a provider endpoint", c.ID, c.Kind),
+				fmt.Sprintf("contract %q (kind %q) must have a provider endpoint;"+
+					" fix: add the required endpoint (server/publisher/handler/provider)", c.ID, c.Kind),
 			))
 		}
 	}
@@ -309,10 +318,11 @@ func (v *Validator) validateFMT09() []ValidationResult {
 	for _, c := range v.project.Contracts {
 		if !validKinds[c.Kind] {
 			results = append(results, v.newResult(
-				"FMT-09", SeverityError, IssueInvalid,
+				codeFMT09, SeverityError, IssueInvalid,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection)", c.ID, c.Kind),
+				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection);"+
+					" fix: set kind to http, event, command, or projection", c.ID, c.Kind),
 			))
 		}
 	}
@@ -347,10 +357,11 @@ func (v *Validator) validateFMT10() []ValidationResult {
 	for _, c := range v.project.Cells {
 		if replacement, ok := bannedFieldNames[c.ID]; ok {
 			results = append(results, v.newResult(
-				"FMT-10", SeverityError, IssueForbidden,
+				codeFMT10, SeverityError, IssueForbidden,
 				cellFile(c),
 				"id",
-				fmt.Sprintf("cell ID %q is a banned legacy field name; use %q instead", c.ID, replacement),
+				fmt.Sprintf("cell ID %q is a banned legacy field name; use %q instead;"+
+					" fix: rename the cell to use the replacement field name", c.ID, replacement),
 			))
 		}
 	}
@@ -359,10 +370,11 @@ func (v *Validator) validateFMT10() []ValidationResult {
 	for _, c := range v.project.Contracts {
 		if strings.Contains(c.ID, "/") {
 			results = append(results, v.newResult(
-				"FMT-10", SeverityError, IssueInvalid,
+				codeFMT10, SeverityError, IssueInvalid,
 				contractFile(c),
 				"id",
-				fmt.Sprintf("contract ID %q uses slash separator; must use dot-separated format (e.g., kind.domain.version)", c.ID),
+				fmt.Sprintf("contract ID %q uses slash separator; must use dot-separated format (e.g., kind.domain.version);"+
+					" fix: rename the contract id to use dots as separators", c.ID),
 			))
 		}
 	}
@@ -378,20 +390,21 @@ func (v *Validator) validateFMT08() []ValidationResult {
 		parts := strings.SplitN(c.ID, ".", 2)
 		if len(parts) < 2 {
 			results = append(results, v.newResult(
-				"FMT-08", SeverityError, IssueInvalid,
+				codeFMT08, SeverityError, IssueInvalid,
 				contractFile(c),
 				"id",
-				fmt.Sprintf("contract ID %q format is invalid (missing '.' separator)", c.ID),
+				fmt.Sprintf("contract ID %q format is invalid (missing '.' separator); fix: use format kind.domain.version", c.ID),
 			))
 			continue
 		}
 		prefix := parts[0]
 		if prefix != c.Kind {
 			results = append(results, v.newResult(
-				"FMT-08", SeverityError, IssueMismatch,
+				codeFMT08, SeverityError, IssueMismatch,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q ID prefix %q does not match kind %q", c.ID, prefix, c.Kind),
+				fmt.Sprintf("contract %q ID prefix %q does not match kind %q;"+
+					" fix: ensure the contract id starts with the contract kind", c.ID, prefix, c.Kind),
 			))
 		}
 	}
@@ -406,26 +419,26 @@ func (v *Validator) validateFMT11() []ValidationResult {
 	for _, c := range v.project.Cells {
 		if c.Owner.Team == "" {
 			results = append(results, v.newResult(
-				"FMT-11", SeverityError, IssueRequired,
+				codeFMT11, SeverityError, IssueRequired,
 				cellFile(c),
 				"owner.team",
-				fmt.Sprintf("cell %q must have owner.team", c.ID),
+				fmt.Sprintf("cell %q must have owner.team; fix: add owner.team to the cell.yaml", c.ID),
 			))
 		}
 		if c.Owner.Role == "" {
 			results = append(results, v.newResult(
-				"FMT-11", SeverityError, IssueRequired,
+				codeFMT11, SeverityError, IssueRequired,
 				cellFile(c),
 				"owner.role",
-				fmt.Sprintf("cell %q must have owner.role", c.ID),
+				fmt.Sprintf("cell %q must have owner.role; fix: add owner.role to the cell.yaml", c.ID),
 			))
 		}
 		if len(c.Verify.Smoke) == 0 {
 			results = append(results, v.newResult(
-				"FMT-11", SeverityError, IssueRequired,
+				codeFMT11, SeverityError, IssueRequired,
 				cellFile(c),
 				"verify.smoke",
-				fmt.Sprintf("cell %q must have at least one verify.smoke entry", c.ID),
+				fmt.Sprintf("cell %q must have at least one verify.smoke entry; fix: add a verify.smoke entry pointing to a smoke test", c.ID),
 			))
 		}
 	}
@@ -439,10 +452,10 @@ func (v *Validator) validateFMT12() []ValidationResult {
 	for _, s := range v.project.Slices {
 		if len(s.Verify.Unit) == 0 {
 			results = append(results, v.newResult(
-				"FMT-12", SeverityError, IssueRequired,
+				codeFMT12, SeverityError, IssueRequired,
 				sliceFile(s),
 				"verify.unit",
-				fmt.Sprintf("slice %q must have at least one verify.unit entry", s.ID),
+				fmt.Sprintf("slice %q must have at least one verify.unit entry; fix: add a verify.unit entry pointing to a unit test", s.ID),
 			))
 		}
 	}
@@ -450,8 +463,6 @@ func (v *Validator) validateFMT12() []ValidationResult {
 }
 
 const (
-	// codeFMT13 is the rule code for HTTP transport metadata validation.
-	codeFMT13 = "FMT-13"
 	// fieldSchemaRefsResponse is the shared field path for response schema findings.
 	fieldSchemaRefsResponse = "schemaRefs.response"
 )
@@ -498,7 +509,8 @@ func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []Validat
 			codeFMT13, SeverityError, IssueInvalid,
 			file,
 			"endpoints.http",
-			fmt.Sprintf("contract %q can only declare endpoints.http when kind is http", c.ID),
+			fmt.Sprintf("contract %q can only declare endpoints.http when kind is http;"+
+				" fix: remove endpoints.http or change the contract kind to http", c.ID),
 		)}
 	}
 
@@ -590,7 +602,8 @@ func (v *Validator) validateFMT13PathParams(c *metadata.ContractMeta, h *metadat
 					codeFMT13, SeverityError, IssueInvalid,
 					file,
 					fmt.Sprintf("endpoints.http.pathParams.%s", name),
-					fmt.Sprintf("http contract %q declares pathParams.%s but path %q has no such placeholder", c.ID, name, h.Path),
+					fmt.Sprintf("http contract %q declares pathParams.%s but path %q has no such placeholder;"+
+						" fix: remove the undeclared pathParam or add the placeholder to the path", c.ID, name, h.Path),
 				))
 			}
 		}
@@ -634,14 +647,15 @@ func (v *Validator) validateFMT13ParamSchema(
 			codeFMT13, SeverityError, IssueRequired,
 			file,
 			fieldBase+".type",
-			fmt.Sprintf("http contract %q %s.%s must specify type", c.ID, kind, name),
+			fmt.Sprintf("http contract %q %s.%s must specify type; fix: add a type field (string, integer, boolean, number)", c.ID, kind, name),
 		))
 	} else if !metadata.ParamTypes[p.Type] {
 		results = append(results, v.newResult(
 			codeFMT13, SeverityError, IssueInvalid,
 			file,
 			fieldBase+".type",
-			fmt.Sprintf("http contract %q %s.%s type %q is not supported", c.ID, kind, name, p.Type),
+			fmt.Sprintf("http contract %q %s.%s type %q is not supported;"+
+				" fix: use one of string, integer, boolean, or number", c.ID, kind, name, p.Type),
 		))
 	}
 
@@ -650,7 +664,8 @@ func (v *Validator) validateFMT13ParamSchema(
 			codeFMT13, SeverityError, IssueMismatch,
 			file,
 			fieldBase+".required",
-			fmt.Sprintf("http contract %q pathParams.%s cannot be optional; path placeholders are required by definition", c.ID, name),
+			fmt.Sprintf("http contract %q pathParams.%s cannot be optional; path placeholders are required by definition;"+
+				" fix: remove the required: false field or leave required unset", c.ID, name),
 		))
 	}
 
@@ -663,7 +678,8 @@ func (v *Validator) validateFMT13Method(c *metadata.ContractMeta, h *metadata.HT
 			codeFMT13, SeverityError, IssueRequired,
 			file,
 			"endpoints.http.method",
-			fmt.Sprintf("http contract %q must specify endpoints.http.method once endpoints.http is present", c.ID),
+			fmt.Sprintf("http contract %q must specify endpoints.http.method once endpoints.http is present;"+
+				" fix: add method: GET/POST/PUT/PATCH/DELETE", c.ID),
 		)}
 	}
 	if !validHTTPMethods[strings.ToUpper(h.Method)] {
@@ -671,7 +687,7 @@ func (v *Validator) validateFMT13Method(c *metadata.ContractMeta, h *metadata.HT
 			codeFMT13, SeverityError, IssueInvalid,
 			file,
 			"endpoints.http.method",
-			fmt.Sprintf("http contract %q method %q is not supported", c.ID, h.Method),
+			fmt.Sprintf("http contract %q method %q is not supported; fix: use one of GET, POST, PUT, PATCH, DELETE", c.ID, h.Method),
 		)}
 	}
 	return nil
@@ -683,7 +699,7 @@ func (v *Validator) validateFMT13Path(c *metadata.ContractMeta, h *metadata.HTTP
 			codeFMT13, SeverityError, IssueRequired,
 			file,
 			"endpoints.http.path",
-			fmt.Sprintf("http contract %q must specify endpoints.http.path once endpoints.http is present", c.ID),
+			fmt.Sprintf("http contract %q must specify endpoints.http.path once endpoints.http is present; fix: add path starting with /", c.ID),
 		)}
 	}
 	if !strings.HasPrefix(h.Path, "/") {
@@ -691,7 +707,7 @@ func (v *Validator) validateFMT13Path(c *metadata.ContractMeta, h *metadata.HTTP
 			codeFMT13, SeverityError, IssueInvalid,
 			file,
 			"endpoints.http.path",
-			fmt.Sprintf("http contract %q path %q must start with '/'", c.ID, h.Path),
+			fmt.Sprintf("http contract %q path %q must start with '/'; fix: ensure the path begins with /", c.ID, h.Path),
 		)}
 	}
 	return nil
@@ -703,7 +719,8 @@ func (v *Validator) validateFMT13Status(c *metadata.ContractMeta, h *metadata.HT
 			codeFMT13, SeverityError, IssueRequired,
 			file,
 			"endpoints.http.successStatus",
-			fmt.Sprintf("http contract %q must specify endpoints.http.successStatus once endpoints.http is present", c.ID),
+			fmt.Sprintf("http contract %q must specify endpoints.http.successStatus once endpoints.http is present;"+
+				" fix: add successStatus: 200 or another 2xx code", c.ID),
 		)}
 	}
 	if h.SuccessStatus < 200 || h.SuccessStatus > 299 {
@@ -711,7 +728,7 @@ func (v *Validator) validateFMT13Status(c *metadata.ContractMeta, h *metadata.HT
 			codeFMT13, SeverityError, IssueInvalid,
 			file,
 			"endpoints.http.successStatus",
-			fmt.Sprintf("http contract %q successStatus %d must be a 2xx code", c.ID, h.SuccessStatus),
+			fmt.Sprintf("http contract %q successStatus %d must be a 2xx code; fix: use a status code in the range 200-299", c.ID, h.SuccessStatus),
 		)}
 	}
 	return nil
@@ -726,7 +743,8 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 				codeFMT13, SeverityError, IssueMismatch,
 				file,
 				"endpoints.http.noContent",
-				fmt.Sprintf("http contract %q with noContent=true must use successStatus 204", c.ID),
+				fmt.Sprintf("http contract %q with noContent=true must use successStatus 204;"+
+					" fix: change successStatus to 204 or remove noContent", c.ID),
 			))
 		}
 		if c.SchemaRefs.Response != "" {
@@ -734,7 +752,8 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 				codeFMT13, SeverityError, IssueForbidden,
 				file,
 				fieldSchemaRefsResponse,
-				fmt.Sprintf("http contract %q with noContent=true must not declare schemaRefs.response", c.ID),
+				fmt.Sprintf("http contract %q with noContent=true must not declare schemaRefs.response;"+
+					" fix: remove schemaRefs.response for no-content responses", c.ID),
 			))
 		}
 	} else if h.SuccessStatus == 204 {
@@ -742,7 +761,7 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 			codeFMT13, SeverityError, IssueMismatch,
 			file,
 			"endpoints.http.noContent",
-			fmt.Sprintf("http contract %q with successStatus 204 must set noContent=true", c.ID),
+			fmt.Sprintf("http contract %q with successStatus 204 must set noContent=true; fix: add noContent: true to the endpoint", c.ID),
 		))
 	}
 
@@ -758,8 +777,6 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 
 	return results
 }
-
-const codeFMT26 = "FMT-26"
 
 // validateFMT26 checks that auth.public and auth.passwordResetExempt are not
 // both true on the same HTTP endpoint. The two flags are semantically
@@ -789,7 +806,7 @@ func (v *Validator) validateFMT26() []ValidationResult {
 				fmt.Sprintf(
 					"contract %q declares both auth.public and auth.passwordResetExempt; "+
 						"they are mutually exclusive: public skips JWT entirely while "+
-						"passwordResetExempt requires a valid JWT",
+						"passwordResetExempt requires a valid JWT; fix: remove one of the conflicting auth flags",
 					c.ID,
 				),
 			))
@@ -804,11 +821,11 @@ func (v *Validator) validateFMT14() []ValidationResult {
 	for _, s := range v.project.Slices {
 		if len(s.AllowedFiles) == 0 {
 			results = append(results, v.newResult(
-				"FMT-14", SeverityError, IssueRequired,
+				codeFMT14, SeverityError, IssueRequired,
 				sliceFile(s),
 				"allowedFiles",
 				fmt.Sprintf(
-					"slice %q must declare explicit allowedFiles (e.g., [%q])",
+					"slice %q must declare explicit allowedFiles (e.g., [%q]); fix: add allowedFiles listing the files owned by this slice",
 					s.ID, allowedFilesExample(s),
 				),
 			))
@@ -829,9 +846,6 @@ func allowedFilesExample(s *metadata.SliceMeta) string {
 	}
 	return fmt.Sprintf("cells/%s/slices/%s/**", s.BelongsToCell, s.ID)
 }
-
-// codeFMT15 is the rule code for HTTP list response schema validation.
-const codeFMT15 = "FMT-15"
 
 // validateFMT15 checks that HTTP list-style response schemas:
 //   - include "hasMore" in required fields
@@ -865,7 +879,8 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 		return []ValidationResult{v.newResult(
 			codeFMT15, SeverityError, IssueInvalid,
 			contractFile(c), fieldSchemaRefsResponse,
-			fmt.Sprintf("cannot resolve response schema for contract %q: %v", c.ID, resolveErr),
+			fmt.Sprintf("cannot resolve response schema for contract %q: %v;"+
+				" fix: ensure schemaRefs.response points to a valid schema file", c.ID, resolveErr),
 		)}
 	}
 	data, err := v.readFile(resolved.AbsPath)
@@ -876,7 +891,7 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 		return []ValidationResult{v.newResult(
 			codeFMT15, SeverityError, IssueInvalid,
 			contractFile(c), fieldSchemaRefsResponse,
-			fmt.Sprintf("cannot read response schema for contract %q: %v", c.ID, err),
+			fmt.Sprintf("cannot read response schema for contract %q: %v; fix: ensure the response schema file exists and is readable", c.ID, err),
 		)}
 	}
 	info, err := parseListSchemaInfo(data)
@@ -884,7 +899,7 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 		return []ValidationResult{v.newResult(
 			codeFMT15, SeverityError, IssueInvalid,
 			contractFile(c), fieldSchemaRefsResponse,
-			fmt.Sprintf("response schema for contract %q is not valid JSON: %v", c.ID, err),
+			fmt.Sprintf("response schema for contract %q is not valid JSON: %v; fix: fix the JSON syntax in the response schema file", c.ID, err),
 		)}
 	}
 	if hasCombinator(info) && looksLikeListSchema(info) {
@@ -904,7 +919,8 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 			codeFMT15, SeverityError, IssueRequired,
 			contractFile(c),
 			fieldSchemaRefsResponse,
-			fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
+			fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields;"+
+				" fix: add \"hasMore\" to the required array in the response schema", c.ID),
 		))
 	}
 	if !hasNextCursorProperty(info) {
@@ -912,7 +928,8 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 			codeFMT15, SeverityError, IssueRequired,
 			contractFile(c),
 			fieldSchemaRefsResponse,
-			fmt.Sprintf("list response schema for contract %q must declare \"nextCursor\" property", c.ID),
+			fmt.Sprintf("list response schema for contract %q must declare \"nextCursor\" property;"+
+				" fix: add a \"nextCursor\" property to the response schema", c.ID),
 		))
 	}
 	if !hasNextCursorInRequired(info) {
@@ -920,7 +937,8 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 			codeFMT15, SeverityError, IssueRequired,
 			contractFile(c),
 			fieldSchemaRefsResponse,
-			fmt.Sprintf("list response schema for contract %q must include \"nextCursor\" in required fields", c.ID),
+			fmt.Sprintf("list response schema for contract %q must include \"nextCursor\" in required fields;"+
+				" fix: add \"nextCursor\" to the required array in the response schema", c.ID),
 		))
 	}
 	return results
@@ -989,14 +1007,6 @@ func hasNextCursorInRequired(info responseSchemaInfo) bool {
 	return slices.Contains(info.Required, "nextCursor")
 }
 
-const (
-	codeFMT27 = "FMT-27"
-	codeFMT28 = "FMT-28"
-	codeFMT29 = "FMT-29"
-	codeFMT30 = "FMT-30"
-	codeFMT31 = "FMT-31"
-)
-
 // validateFMT27 checks mutually exclusive HTTP auth metadata modes.
 //
 // These flags are semantically contradictory when combined:
@@ -1029,7 +1039,7 @@ func (v *Validator) validateFMT27() []ValidationResult {
 				"contract %q has incompatible auth mode combination: %s set to true. "+
 					"Set at most one of {auth.public, auth.bootstrap, "+
 					"auth.passwordResetExempt, auth.clientsOnly}; "+
-					"only auth.serviceOwned may pair with auth.passwordResetExempt",
+					"only auth.serviceOwned may pair with auth.passwordResetExempt; fix: remove the conflicting auth mode flags",
 				c.ID, formatTrueAuthFields(auth),
 			),
 		))
@@ -1093,7 +1103,7 @@ func (v *Validator) validateFMT30() []ValidationResult {
 			assemblyFile(asm),
 			"build.deployTemplate",
 			fmt.Sprintf(
-				"assembly %q build.deployTemplate=%q is not one of %v",
+				"assembly %q build.deployTemplate=%q is not one of %v; fix: set build.deployTemplate to one of the allowed values",
 				asm.ID, dt, metadata.DeployTemplateEnum,
 			),
 		))
@@ -1116,7 +1126,7 @@ func (v *Validator) validateFMT29() []ValidationResult {
 				codeFMT29, SeverityError, IssueRequired,
 				assemblyFile(asm),
 				"owner.team",
-				fmt.Sprintf("assembly %q must have owner.team", asm.ID),
+				fmt.Sprintf("assembly %q must have owner.team; fix: add owner.team to the assembly.yaml", asm.ID),
 			))
 		}
 		if asm.Owner.Role == "" {
@@ -1124,7 +1134,7 @@ func (v *Validator) validateFMT29() []ValidationResult {
 				codeFMT29, SeverityError, IssueRequired,
 				assemblyFile(asm),
 				"owner.role",
-				fmt.Sprintf("assembly %q must have owner.role", asm.ID),
+				fmt.Sprintf("assembly %q must have owner.role; fix: add owner.role to the assembly.yaml", asm.ID),
 			))
 		}
 	}
@@ -1153,7 +1163,7 @@ func (v *Validator) validateFMT28() []ValidationResult {
 				fmt.Sprintf(
 					"contract %q has auth.bootstrap:true on path %q; "+
 						"bootstrap auth is only permitted on setup/admin contracts "+
-						"(path must match IsBootstrapPath: /api/v{N}/{cell}/setup/admin)",
+						"(path must match IsBootstrapPath: /api/v{N}/{cell}/setup/admin); fix: use auth.bootstrap only on setup/admin paths",
 					c.ID, path,
 				),
 			))
@@ -1169,7 +1179,8 @@ func (v *Validator) validateFMT28() []ValidationResult {
 				fmt.Sprintf(
 					"contract %q has auth.clientsOnly:true on path %q; "+
 						"clientsOnly auth is only permitted on internal HTTP paths "+
-						"(path must match IsInternalHTTPPath: /internal/v1 or /internal/v1/...)",
+						"(path must match IsInternalHTTPPath: /internal/v1 or /internal/v1/...);"+
+						" fix: move the endpoint to an /internal/v1 path or remove auth.clientsOnly",
 					c.ID, path,
 				),
 			))
@@ -1181,7 +1192,7 @@ func (v *Validator) validateFMT28() []ValidationResult {
 				"endpoints.clients",
 				fmt.Sprintf(
 					"contract %q has auth.clientsOnly:true but endpoints.clients is empty; "+
-						"clientsOnly auth requires at least one declared client cell",
+						"clientsOnly auth requires at least one declared client cell; fix: add at least one cell id to endpoints.clients",
 					c.ID,
 				),
 			))
@@ -1240,7 +1251,7 @@ func (v *Validator) validateFMT31() []ValidationResult {
 			fmt.Sprintf(
 				"internal HTTP contract %q (path %q) has empty endpoints.clients; "+
 					"/internal/v1/ contracts must declare at least one caller cell "+
-					"so RequireCallerCell has an allowlist",
+					"so RequireCallerCell has an allowlist; fix: add caller cell ids to endpoints.clients",
 				c.ID, c.Endpoints.HTTP.Path,
 			),
 		))
@@ -1277,19 +1288,20 @@ func (v *Validator) checkREF12Contract(c *metadata.ContractMeta) []ValidationRes
 		resolved, err := metadata.ResolveContractSchemaRef(v.root, c, ref)
 		if err != nil {
 			results = append(results, v.newResult(
-				"REF-12", SeverityError, IssueInvalid,
+				codeREF12, SeverityError, IssueInvalid,
 				contractFile(c),
 				ref.Field,
-				fmt.Sprintf("contract %q %s %q: %v", c.ID, ref.Field, ref.Ref, err),
+				fmt.Sprintf("contract %q %s %q: %v; fix: ensure the schema ref path is valid and the file exists", c.ID, ref.Field, ref.Ref, err),
 			))
 			continue
 		}
 		if !v.fileExists(resolved.AbsPath) {
 			results = append(results, v.newResult(
-				"REF-12", SeverityError, IssueRefNotFound,
+				codeREF12, SeverityError, IssueRefNotFound,
 				contractFile(c),
 				ref.Field,
-				fmt.Sprintf("contract %q %s points to missing file %q", c.ID, ref.Field, ref.Ref),
+				fmt.Sprintf("contract %q %s points to missing file %q;"+
+					" fix: create the referenced schema file or correct the path", c.ID, ref.Field, ref.Ref),
 			))
 		}
 	}

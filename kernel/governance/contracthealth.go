@@ -7,16 +7,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// CH-XX rule codes — kept distinct from FMT/REF/TOPO so it's clear at a
-// glance whether a finding came from `gocell validate` (governance rules)
-// or `gocell check contract-health` (CI-blocking contract metadata
-// invariants).
-const (
-	CodeContractHealthOwner     = "CH-01"
-	CodeContractHealthLifecycle = "CH-02"
-	CodeContractHealthSchema    = "CH-03"
-)
-
 // CheckContractHealth runs CI-blocking contract metadata invariants:
 //
 //   - ownerCell must be set
@@ -32,16 +22,16 @@ func (v *Validator) CheckContractHealth(contracts []*metadata.ContractMeta) []Va
 	for _, c := range contracts {
 		if c.OwnerCell == "" {
 			results = append(results, v.newResult(
-				CodeContractHealthOwner, SeverityError, IssueRequired,
+				codeCH01, SeverityError, IssueRequired,
 				c.File, "ownerCell",
-				fmt.Sprintf("%s: missing ownerCell", c.ID),
+				fmt.Sprintf("%s: missing ownerCell; fix: set ownerCell to the cell id that owns this contract", c.ID),
 			))
 		}
 		if c.Lifecycle == "" {
 			results = append(results, v.newResult(
-				CodeContractHealthLifecycle, SeverityError, IssueRequired,
+				codeCH02, SeverityError, IssueRequired,
 				c.File, "lifecycle",
-				fmt.Sprintf("%s: missing lifecycle", c.ID),
+				fmt.Sprintf("%s: missing lifecycle; fix: set lifecycle to draft, active, or deprecated", c.ID),
 			))
 		}
 		if c.Kind == "http" {
@@ -64,9 +54,10 @@ func (v *Validator) checkHTTPSchemaRefs(c *metadata.ContractMeta) []ValidationRe
 
 	if c.SchemaRefs.Request == "" && c.SchemaRefs.Response == "" {
 		return []ValidationResult{v.newResult(
-			CodeContractHealthSchema, SeverityError, IssueRequired,
+			codeCH03, SeverityError, IssueRequired,
 			c.File, "schemaRefs",
-			fmt.Sprintf("%s: HTTP contract missing schemaRefs", c.ID),
+			fmt.Sprintf("%s: HTTP contract missing schemaRefs;"+
+				" fix: add schemaRefs.request and schemaRefs.response pointing to JSON schema files", c.ID),
 		)}
 	}
 
@@ -74,9 +65,9 @@ func (v *Validator) checkHTTPSchemaRefs(c *metadata.ContractMeta) []ValidationRe
 
 	if c.SchemaRefs.Response == "" {
 		results = append(results, v.newResult(
-			CodeContractHealthSchema, SeverityError, IssueRequired,
+			codeCH03, SeverityError, IssueRequired,
 			c.File, "schemaRefs.response",
-			fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID),
+			fmt.Sprintf("%s: HTTP contract missing response schemaRefs; fix: add schemaRefs.response pointing to a JSON schema file", c.ID),
 		))
 	}
 
@@ -93,9 +84,9 @@ func (v *Validator) checkHTTPMethodSchema(c *metadata.ContractMeta) []Validation
 	method := c.Endpoints.HTTP.Method
 	if (method == "PUT" || method == "PATCH") && c.SchemaRefs.Request == "" {
 		return []ValidationResult{v.newResult(
-			CodeContractHealthSchema, SeverityError, IssueRequired,
+			codeCH03, SeverityError, IssueRequired,
 			c.File, "schemaRefs.request",
-			fmt.Sprintf("%s: %s contract missing request schemaRefs", c.ID, method),
+			fmt.Sprintf("%s: %s contract missing request schemaRefs; fix: add schemaRefs.request pointing to a JSON schema file", c.ID, method),
 		)}
 	}
 	return nil
@@ -116,9 +107,10 @@ func (v *Validator) checkHTTPResponseEntries(c *metadata.ContractMeta) []Validat
 		resp := c.Endpoints.HTTP.Responses[status]
 		if resp.SchemaRef == "" {
 			results = append(results, v.newResult(
-				CodeContractHealthSchema, SeverityError, IssueRequired,
+				codeCH03, SeverityError, IssueRequired,
 				c.File, fmt.Sprintf("endpoints.http.responses[%d].schemaRef", status),
-				fmt.Sprintf("%s: responses[%d] declared but missing schemaRef", c.ID, status),
+				fmt.Sprintf("%s: responses[%d] declared but missing schemaRef;"+
+					" fix: add schemaRef pointing to a JSON schema file for status %d", c.ID, status, status),
 			))
 		}
 	}

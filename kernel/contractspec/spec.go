@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // ContractSpec is the runtime descriptor for one contract endpoint.
@@ -109,37 +110,12 @@ func (s ContractSpec) validateHTTP() error {
 		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)
 	}
 	for i, c := range s.Clients {
-		if !isCellIDLike(c) {
-			return fmt.Errorf("ContractSpec[%s]: Clients[%d] %q does not match cell ID pattern ^[a-z][a-z0-9-]*$",
-				s.ID, i, c)
+		if !metadata.MatchCellID(c) {
+			return fmt.Errorf("ContractSpec[%s]: Clients[%d] %q does not match cell ID pattern %s",
+				s.ID, i, c, metadata.CellIDPattern)
 		}
 	}
 	return nil
-}
-
-// isCellIDLike reports whether s matches the cell-ID pattern
-// `^[a-z][a-z0-9-]*$`. Implemented byte-wise so that kernel/contractspec
-// avoids a package-level regexp var (FMT-19 forbids initializer state in
-// kernel/). Mirrors runtime/auth.callerCellPattern semantics but adds no
-// runtime dependency.
-func isCellIDLike(s string) bool {
-	if s == "" {
-		return false
-	}
-	if s[0] < 'a' || s[0] > 'z' {
-		return false
-	}
-	for i := 1; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'a' && c <= 'z':
-		case c >= '0' && c <= '9':
-		case c == '-':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 func (s ContractSpec) validateEvent() error {

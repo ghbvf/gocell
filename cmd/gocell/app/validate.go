@@ -170,12 +170,9 @@ func emitFailFast(printer printers.Printer, format string, results []governance.
 	return printer.Print([]governance.ValidationResult{*firstError(results)})
 }
 
-// runValidatorFailFast selects the appropriate validator method for fail-fast mode.
+// runValidatorFailFast runs validation in fail-fast mode.
 func runValidatorFailFast(ctx context.Context, validator *governance.Validator, strict bool) ([]governance.ValidationResult, error) {
-	if strict {
-		return validator.ValidateStrictFailFast(ctx)
-	}
-	return validator.ValidateFailFast(ctx)
+	return validator.ValidateStrict(ctx, strict, true)
 }
 
 // runValidateFull runs all validation rules and emits via the configured printer.
@@ -211,12 +208,9 @@ func runValidateFull(
 	return nil
 }
 
-// runValidatorFull selects the appropriate validator method for full mode.
+// runValidatorFull runs all validation rules and returns all findings.
 func runValidatorFull(ctx context.Context, validator *governance.Validator, strict bool) ([]governance.ValidationResult, error) {
-	if strict {
-		return validator.ValidateStrict(ctx, true)
-	}
-	return validator.Validate(ctx)
+	return validator.ValidateStrict(ctx, strict, false)
 }
 
 // firstError returns the first result whose severity is error, or nil.

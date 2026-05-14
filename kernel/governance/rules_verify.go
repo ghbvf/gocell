@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	codeVERIFY06          = "VERIFY-06"
 	fieldCritCheckRefTmpl = "passCriteria[%d].checkRef"
 
 	// defaultWaiverExpiryTruncation is the granularity used when comparing a
@@ -48,11 +47,12 @@ func (v *Validator) validateSliceVERIFY01(s *metadata.SliceMeta) []ValidationRes
 		verifyKey := fmt.Sprintf("contract.%s.%s", cu.Contract, cu.Role)
 		if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
 			results = append(results, v.newResult(
-				"VERIFY-01", SeverityError, IssueRequired,
+				codeVERIFY01, SeverityError, IssueRequired,
 				sliceFile(s),
 				fmt.Sprintf("contractUsages[%d]", i),
 				fmt.Sprintf(
-					"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
+					"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver;"+
+						" fix: add verify.contract entry or create a waiver in the slice",
 					cu.Contract, cu.Role, s.ID,
 				),
 			))
@@ -98,53 +98,54 @@ func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.Waiver
 	var results []ValidationResult
 	if w.Contract == "" {
 		results = append(results, v.newResult(
-			"VERIFY-02", SeverityError, IssueRequired,
+			codeVERIFY02, SeverityError, IssueRequired,
 			file,
 			fmt.Sprintf("verify.waivers[%d].contract", i),
-			"waiver.contract is required",
+			"waiver.contract is required; fix: add a contract field to this waiver entry",
 		))
 	}
 	if w.Owner == "" {
 		results = append(results, v.newResult(
-			"VERIFY-02", SeverityError, IssueRequired,
+			codeVERIFY02, SeverityError, IssueRequired,
 			file,
 			fmt.Sprintf("verify.waivers[%d].owner", i),
-			fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
+			fmt.Sprintf("waiver.owner is required for contract %q; fix: add an owner field to this waiver entry", w.Contract),
 		))
 	}
 	if w.Reason == "" {
 		results = append(results, v.newResult(
-			"VERIFY-02", SeverityError, IssueRequired,
+			codeVERIFY02, SeverityError, IssueRequired,
 			file,
 			fmt.Sprintf("verify.waivers[%d].reason", i),
-			fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
+			fmt.Sprintf("waiver.reason is required for contract %q; fix: add a reason field to this waiver entry", w.Contract),
 		))
 	}
 	if w.ExpiresAt == "" {
 		results = append(results, v.newResult(
-			"VERIFY-02", SeverityError, IssueRequired,
+			codeVERIFY02, SeverityError, IssueRequired,
 			file,
 			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-			fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
+			fmt.Sprintf("waiver.expiresAt is required for contract %q; fix: add an expiresAt field (YYYY-MM-DD) to this waiver entry", w.Contract),
 		))
 		return results
 	}
 	t, err := time.Parse("2006-01-02", w.ExpiresAt)
 	if err != nil {
 		results = append(results, v.newResult(
-			"VERIFY-02", SeverityError, IssueInvalid,
+			codeVERIFY02, SeverityError, IssueInvalid,
 			file,
 			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-			fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD)", w.ExpiresAt),
+			fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD); fix: use a YYYY-MM-DD formatted date", w.ExpiresAt),
 		))
 		return results
 	}
 	if t.Before(v.clk.Now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
 		results = append(results, v.newResult(
-			"VERIFY-02", SeverityError, IssueInvalid,
+			codeVERIFY02, SeverityError, IssueInvalid,
 			file,
 			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-			fmt.Sprintf("waiver for contract %q expired on %s", w.Contract, w.ExpiresAt),
+			fmt.Sprintf("waiver for contract %q expired on %s;"+
+				" fix: extend the waiver expiresAt or add a proper verify.contract entry", w.Contract, w.ExpiresAt),
 		))
 	}
 	return results
@@ -165,11 +166,12 @@ func (v *Validator) validateVERIFY03() []ValidationResult {
 			}
 			if targetLevel != cellvocab.L0 {
 				results = append(results, v.newResult(
-					"VERIFY-03", SeverityError, IssueMismatch,
+					codeVERIFY03, SeverityError, IssueMismatch,
 					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
 					fmt.Sprintf(
-						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
+						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0);"+
+							" fix: only L0 cells may be listed in l0Dependencies",
 						c.ID, dep.Cell, target.ConsistencyLevel,
 					),
 				))
@@ -199,11 +201,12 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 		}
 		if !v.hasProviderSlice(c.ID, providerID) {
 			results = append(results, v.newResult(
-				"VERIFY-04", SeverityError, IssueRequired,
+				codeVERIFY04, SeverityError, IssueRequired,
 				contractFile(c),
 				"lifecycle",
 				fmt.Sprintf(
-					"active contract %q has no provider-role slice in cell %q",
+					"active contract %q has no provider-role slice in cell %q;"+
+						" fix: create a slice in the provider cell with a provider contractUsage for this contract",
 					c.ID, providerID,
 				),
 			))
@@ -244,11 +247,11 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 	parts := strings.SplitN(ref, ".", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		results = append(results, v.newResult(
-			"VERIFY-05", SeverityError, IssueInvalid,
+			codeVERIFY05, SeverityError, IssueInvalid,
 			file,
 			field,
 			fmt.Sprintf(
-				"ref %q must have at least 3 non-empty dot-separated segments", ref,
+				"ref %q must have at least 3 non-empty dot-separated segments; fix: use format {prefix}.{scope}.{suffix}", ref,
 			),
 		))
 		return results
@@ -257,11 +260,11 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 	prefix := parts[0]
 	if !validRefPrefixes[prefix] {
 		results = append(results, v.newResult(
-			"VERIFY-05", SeverityError, IssueInvalid,
+			codeVERIFY05, SeverityError, IssueInvalid,
 			file,
 			field,
 			fmt.Sprintf(
-				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract", ref, prefix,
+				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract; fix: use one of the allowed prefixes", ref, prefix,
 			),
 		))
 		return results
@@ -272,11 +275,11 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 		cellID := parts[1]
 		if _, ok := v.project.Cells[cellID]; !ok {
 			results = append(results, v.newResult(
-				"VERIFY-05", SeverityError, IssueRefNotFound,
+				codeVERIFY05, SeverityError, IssueRefNotFound,
 				file,
 				field,
 				fmt.Sprintf(
-					"smoke ref %q references non-existent cell %q", ref, cellID,
+					"smoke ref %q references non-existent cell %q; fix: use an existing cell id as the second segment", ref, cellID,
 				),
 			))
 		}
@@ -338,10 +341,7 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 // ctx flows through to verifyJourneyRef so a CI worker aborting `gocell
 // validate --strict` cancels the underlying `go test` subprocess; without
 // it the rule blocks indefinitely on slow filesystems (NFS / FUSE).
-func (v *Validator) validateVERIFY06(ctx context.Context, strict bool) []ValidationResult {
-	if !strict {
-		return nil
-	}
+func (v *Validator) validateVERIFY06(ctx context.Context) []ValidationResult {
 	var results []ValidationResult
 	for _, j := range v.project.Journeys {
 		results = append(results, v.validateVERIFY06Journey(ctx, j)...)
@@ -374,7 +374,8 @@ func (v *Validator) validateVERIFY06Journey(ctx context.Context, j *metadata.Jou
 			codeVERIFY06, SeverityError, IssueRequired,
 			journeyFile(j),
 			"passCriteria",
-			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef", j.ID),
+			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef;"+
+				" fix: add a passCriteria entry with mode: auto and a checkRef pointing to a test target", j.ID),
 		))
 	}
 	return results
@@ -392,7 +393,8 @@ func (v *Validator) validateVERIFY06CheckRef(
 			codeVERIFY06, SeverityError, IssueMismatch,
 			journeyFile(j),
 			fmt.Sprintf(fieldCritCheckRefTmpl, i),
-			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey", j.ID, pc.CheckRef),
+			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey;"+
+				" fix: use a checkRef in the format journey.{journeyID}.{suffix}", j.ID, pc.CheckRef),
 		)}
 	}
 	if v.verifyJourneyRef == nil {
@@ -410,6 +412,7 @@ func (v *Validator) validateVERIFY06CheckRef(
 		codeVERIFY06, SeverityError, IssueRefNotFound,
 		journeyFile(j),
 		fmt.Sprintf(fieldCritCheckRefTmpl, i),
-		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target", j.ID, pc.CheckRef),
+		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target;"+
+			" fix: ensure the referenced test package exists and has non-skipped matching tests", j.ID, pc.CheckRef),
 	)}
 }

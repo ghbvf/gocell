@@ -171,12 +171,12 @@ func buildSARIFRules(sorted []governance.ValidationResult) []sarifRule {
 	rules := make([]sarifRule, 0, len(sorted))
 	for i := range sorted {
 		r := sorted[i]
-		if seen[r.Code] {
+		if seen[string(r.Code)] {
 			continue
 		}
-		seen[r.Code] = true
+		seen[string(r.Code)] = true
 		rule := sarifRule{
-			ID:               r.Code,
+			ID:               string(r.Code),
 			ShortDescription: sarifMessage{Text: r.Message},
 			DefaultConfiguration: sarifRuleConfig{
 				Level: severityToSARIFLevel(r.Severity),
@@ -196,7 +196,7 @@ func buildSARIFRules(sorted []governance.ValidationResult) []sarifRule {
 // the message prefix to keep it visible.
 func toSARIFResult(r governance.ValidationResult) sarifResult {
 	res := sarifResult{
-		RuleID:  r.Code,
+		RuleID:  string(r.Code),
 		Level:   severityToSARIFLevel(r.Severity),
 		Message: sarifMessage{Text: composeSARIFMessage(r)},
 	}

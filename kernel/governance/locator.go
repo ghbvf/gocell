@@ -75,7 +75,7 @@ func (l *locator) locate(file, field string) (line, col int) {
 // newResult constructs a ValidationResult with Line/Column auto-populated
 // from the yaml.Node cache. Rule implementations should prefer this builder
 // over struct literals so locations stay consistent across all findings.
-func (l *locator) newResult(code string, sev Severity, typ IssueType, file, field, msg string) ValidationResult {
+func (l *locator) newResult(code RuleCode, sev Severity, typ IssueType, file, field, msg string) ValidationResult {
 	file = l.resolveFile(file)
 	line, col := l.locate(file, field)
 	return ValidationResult{
@@ -87,6 +87,32 @@ func (l *locator) newResult(code string, sev Severity, typ IssueType, file, fiel
 		Message:   msg,
 		Line:      line,
 		Column:    col,
+	}
+}
+
+// newResultAt constructs a ValidationResult with caller-supplied Line/Column.
+// Use this when the source position comes from content scanning (e.g. line-by-
+// line text scan) rather than the yaml.Node cache. The file argument is not
+// resolved through the canonical-file resolver because content scanning
+// already works with relative paths directly.
+//
+// unparam: code currently only receives codeDOCNAME01 because DOC-NAME-01 is
+// the only rule using content-scanning positions. The parameter is retained
+// for INV-2 (GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01) enforcement, which
+// requires every newResultAt call site to pass a RuleCode-typed const.
+func (l *locator) newResultAt(
+	code RuleCode, sev Severity, typ IssueType, //nolint:unparam // see comment above
+	file string, pos metadata.Position, field, msg string,
+) ValidationResult {
+	return ValidationResult{
+		Code:      code,
+		Severity:  sev,
+		IssueType: typ,
+		File:      file,
+		Field:     field,
+		Message:   msg,
+		Line:      pos.Line,
+		Column:    pos.Column,
 	}
 }
 
@@ -205,7 +231,7 @@ func canonicalAssemblyID(file string) (string, bool) {
 // of a file path; Line/Column are always zero because there is no single
 // location to point at. Renderers distinguish Scope from File so users do
 // not mistake the scope label for a jumpable path.
-func (l *locator) newScopedResult(code string, sev Severity, typ IssueType, scope, field, msg string) ValidationResult {
+func (l *locator) newScopedResult(code RuleCode, sev Severity, typ IssueType, scope, field, msg string) ValidationResult {
 	return ValidationResult{
 		Code:      code,
 		Severity:  sev,
