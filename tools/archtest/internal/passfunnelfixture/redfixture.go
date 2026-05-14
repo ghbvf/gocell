@@ -41,8 +41,8 @@ import (
 
 	// VIOLATION sources for PASS-FUNNEL-EACHFILE-01 — qualified + alias + dot forms.
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	sn "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	. "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	sn "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 
 	// VIOLATION sources for PASS-FUNNEL-LOADPACKAGES-01 — qualified + alias + dot forms.
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
