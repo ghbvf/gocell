@@ -1,3 +1,13 @@
+// INVARIANT: ARCHTEST-PASS-DRIVER-UNIT-01
+//
+// ARCHTEST-PASS-DRIVER-UNIT-01 — unit-test coverage for the archtest.Pass
+// driver surface: archtest.Run / archtest.RunTyped plus the unexported
+// helpers buildTypedPass / newPackageRel / isPackageWithTestFiles. Not a
+// meta-archtest enforcement rule — the anchor exists solely to satisfy
+// INVENTORY-ANCHOR-REQUIRED-01 ("No allowlist: helpers, fixtures,
+// negprobes, framework entries all carry an anchor"). Pairs with the
+// rule definitions in pass_funnel_test.go (PASS-FUNNEL-*-01) and the
+// surrounding façade source files pass.go / walk.go / scope.go.
 package archtest
 
 import (

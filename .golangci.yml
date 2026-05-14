@@ -444,6 +444,7 @@ linters:
             - "!**/tools/archtest/cell_id_pattern_single_source_test.go"
             - "!**/tools/archtest/cell_public_option_param_test.go"
             - "!**/tools/archtest/clock_invariants_test.go"
+            - "!**/tools/archtest/credential_invalidate_funnel_invariants_test.go"
             - "!**/tools/archtest/errcode_invariants_test.go"
             - "!**/tools/archtest/exported_error_new_fixtures_test.go"
             - "!**/tools/archtest/goose_session_locker_test.go"
