@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -277,15 +278,24 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return pub, nil
 	}, v.parserOpts...)
 	if err != nil {
-		// Infrastructure failure inside the keyfunc (JWKS fetch / KMS outage /
-		// signed-key cache backed by a downed store) must NOT collapse to 401 —
-		// the token itself may be valid, the verifier just couldn't reach the
-		// material to prove it. If the underlying SigningKeyProvider surfaced
-		// an errcode with KindUnavailable (or CategoryInfra), propagate as
-		// 503 ErrAuthServiceUnavailable so clients differentiate "wrong
-		// credentials" from "auth dependency degraded" and operators alert
-		// correctly (Finding #4 PR #490 review).
-		if errcode.IsInfraError(err) {
+		// Token-side errors (expired, unknown kid, wrong alg, malformed) are
+		// always 401. Verifier-side infra errors (JWKS down, KMS unreachable,
+		// signed-key cache miss with backing store failure) must surface as 503
+		// so clients distinguish "wrong credentials" from "auth dependency
+		// degraded" and operators alert correctly.
+		//
+		// IMPORTANT: do NOT use errcode.IsInfraError here. That predicate is
+		// fail-closed — it treats every unclassified plain error (including
+		// jwt.ErrTokenExpired, bare fmt.Errorf("invalid kid header"), and the
+		// wrapped "unexpected signing method ...") as infra. JWT lib errors
+		// arrive as plain errors by design (golang-jwt/jwt v5 exports them as
+		// sentinel values), so a fail-closed check would mis-classify the
+		// entire token-error surface as 503. Use an explicit Kind/Category
+		// check that only fires when the underlying SigningKeyProvider
+		// classified its own error as infra (Finding #1 PR #490 second review;
+		// matches keycloak KeyManagementException, ory/fosite server_error
+		// branch, zitadel caos_errs.IsInternal pattern).
+		if hasExplicitInfraSignal(err) {
 			return Claims{}, nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
 				"authentication service unavailable", err,
 				errcode.WithCategory(errcode.CategoryInfra))
@@ -547,4 +557,32 @@ func collectExtraClaims(mc jwt.MapClaims) map[string]any {
 		}
 	}
 	return extra
+}
+
+// hasExplicitInfraSignal reports whether err carries an *errcode.Error in its
+// wrapped chain that the originator EXPLICITLY classified as infrastructure —
+// either by Kind = KindUnavailable or Category = CategoryInfra. This is the
+// explicit-only counterpart to errcode.IsInfraError, which is fail-closed
+// (any unclassified plain error → infra). The fail-closed semantics is wrong
+// at the JWT verification boundary: jwt-library errors are plain errors by
+// design (golang-jwt/jwt v5 returns sentinel jwt.ErrToken* and bare
+// fmt.Errorf from keyfunc), so a fail-closed check would mis-tag every
+// token-side validation error as 503.
+//
+// Scoped to package auth: kept local rather than promoted to pkg/errcode
+// because the only valid use case is "JWT validation boundary" (matches
+// keycloak's KeyManagementException isolation, ory/fosite Strategy interface
+// split, zitadel caos_errs.IsInternal — see ADR note in jwt.go:280 block).
+// Promoting it would create two near-identical predicates in pkg/errcode
+// (IsInfraError vs HasInfraSignal) whose differences only ai-collab.md savvy
+// AI co-authors would correctly pick — a Soft form to avoid per ai-collab.md.
+func hasExplicitInfraSignal(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		return false
+	}
+	return ec.Kind == errcode.KindUnavailable || ec.Category == errcode.CategoryInfra
 }

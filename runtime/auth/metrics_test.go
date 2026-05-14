@@ -61,6 +61,20 @@ func TestClassifyTokenError(t *testing.T) {
 		{"wrong alg", fmt.Errorf("token verification failed: unexpected signing method: HS256"), "wrong_alg"},
 		{"other", fmt.Errorf("something unexpected"), "invalid_token"},
 		{"invalid_intent", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "x"), "invalid_intent"},
+		// Verifier-side infra failures must bucket into a dedicated reason so
+		// SLO dashboards can separate "credential failures" from "auth
+		// dependency degraded" (Finding #3 PR #490 second review).
+		{
+			"kind_unavailable",
+			errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "service unavailable"),
+			"service_unavailable",
+		},
+		{
+			"category_infra",
+			errcode.New(errcode.KindInternal, errcode.ErrInternal, "kms outage",
+				errcode.WithCategory(errcode.CategoryInfra)),
+			"service_unavailable",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

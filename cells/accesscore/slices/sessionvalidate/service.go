@@ -4,6 +4,7 @@ package sessionvalidate
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -79,13 +80,23 @@ func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected au
 }
 
 // verifyJWTWithIntent runs the underlying verifier enforcing token_use=access
-// at both the claim and JOSE header level, mapping all failures to the uniform
-// ErrAuthInvalidToken response to prevent token-type enumeration.
+// at both the claim and JOSE header level. Token-side failures collapse to a
+// uniform ErrAuthInvalidToken (401) so token-type / kid / alg / expiry are not
+// enumerable from the wire response. Verifier-side infrastructure failures
+// (KindUnavailable) propagate unchanged so the auth middleware can surface
+// them as 503 — wrapping them as 401 here would mask outages as credential
+// failures and pollute SLO buckets (Finding #2 PR #490 second review).
 func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (auth.Claims, error) {
 	claims, err := s.verifier.VerifyIntent(ctx, tokenStr, auth.TokenIntentAccess)
 	if err != nil {
 		s.logger.Warn("session-validate: JWT verification failed",
 			slog.Any("error", err))
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
+			// Verifier already classified as infra (key provider outage).
+			// Propagate so middleware emits 503; do NOT downgrade to 401.
+			return auth.Claims{}, err
+		}
 		return auth.Claims{}, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
 	}
 	return claims, nil

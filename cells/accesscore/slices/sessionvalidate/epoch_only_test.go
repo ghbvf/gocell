@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -144,4 +145,40 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.VerifyIntent(context.Background(), ownerTok, auth.TokenIntentAccess)
 	assert.NoError(t, err, "owner's token against owner's session must verify")
+}
+
+// infraOnlyVerifier always returns a KindUnavailable errcode regardless of
+// the token contents — simulating a downstream verifier whose key provider
+// is unreachable. Used by TestVerifyIntent_VerifierInfra_Preserves503.
+type infraOnlyVerifier struct{}
+
+func (infraOnlyVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
+	return auth.Claims{}, errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+		"jwks fetch failed",
+		errcode.WithCategory(errcode.CategoryInfra))
+}
+
+// Compile-time check: infraOnlyVerifier satisfies auth.IntentTokenVerifier.
+var _ auth.IntentTokenVerifier = infraOnlyVerifier{}
+
+// TestVerifyIntent_VerifierInfra_Preserves503 guards Finding #2 PR #490
+// second review: sessionvalidate.verifyJWTWithIntent previously wrapped every
+// verifier error as ErrAuthInvalidToken (401), silently downgrading the
+// underlying KindUnavailable to 401 and masking auth-dependency outages as
+// credential failures. The fixed path must propagate KindUnavailable so the
+// middleware layer can emit a 503.
+func TestVerifyIntent_VerifierInfra_Preserves503(t *testing.T) {
+	svc, err := NewService(infraOnlyVerifier{}, nil /*sessionStore*/, mem.NewStore(clock.Real()).UserRepository(), slog.Default())
+	require.NoError(t, err)
+
+	_, err = svc.VerifyIntent(context.Background(), "any-token", auth.TokenIntentAccess)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec,
+		"verifier infra error must arrive as *errcode.Error, not a bare wrapped string")
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+		"verifier KindUnavailable must propagate unchanged through verifyJWTWithIntent; "+
+			"downgrading to KindUnauthenticated masks an auth dependency outage as a credential failure (Finding #2)")
+	assert.Equal(t, errcode.ErrAuthServiceUnavailable, ec.Code,
+		"source code must be preserved so server logs / metrics can route the failure correctly")
 }
