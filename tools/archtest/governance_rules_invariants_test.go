@@ -53,6 +53,11 @@ const ruleCodesFile = "rulecodes.go"
 // Helper methods that take (*metadata.ContractMeta, ...) or similar arguments
 // fail the signature filter and are excluded.
 func TestGovernanceRulesRegistrationGuard(t *testing.T) {
+	t.Run("production_source_all_registered", testINV1ProductionSource)
+	t.Run("negative_fixture_shadow_receiver_rejected", testINV1ShadowReceiverFixture)
+}
+
+func testINV1ProductionSource(t *testing.T) {
 	root := findModuleRoot(t)
 	pkg := loadGovernancePackage(t, root)
 
@@ -69,6 +74,61 @@ func TestGovernanceRulesRegistrationGuard(t *testing.T) {
 		"validate* methods declared on *Validator but not registered in rules()/strictRules(): %v", missing)
 	assert.Empty(t, extra,
 		"names referenced in rules()/strictRules() but no matching validate* method on *Validator: %v", extra)
+}
+
+// testINV1ShadowReceiverFixture proves the receiver-type check is genuinely
+// active. The fixture rules() mixes a real *Validator method with a shadow
+// *OtherType method that has the same validate* name shape. The
+// receiver-type check must reject o.validateFOO; because extractFromCompositeLits
+// treats any unaccepted element as an unrecognized shape (refusing to silently
+// skip — the original loud-failure semantics), the rejection surfaces as a
+// non-empty fatal message anchored at the shadow line.
+//
+// Before the fail-closed fix, info.Types[sel.X] missed for every scanner-
+// parsed selector and the receiver check returned true unconditionally — both
+// methods would have been silently accepted, and the wrong receiver shadow
+// would not have triggered fatal.
+func testINV1ShadowReceiverFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	const fixturePattern = "./tools/archtest/testdata/governance_registration_guard_fixtures/shadow_receiver_red"
+
+	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, fixturePattern)
+	require.NoError(t, err, "LoadPackages failed for shadow_receiver_red fixture")
+	require.Empty(t, errs, "package load errors: %v", errs)
+	require.Len(t, pkgs, 1, "expected exactly one fixture package")
+
+	fixturePkg := pkgs[0]
+
+	validatorObj := fixturePkg.Types.Scope().Lookup("Validator")
+	require.NotNil(t, validatorObj, "fixture must declare Validator")
+	validatorTypeName, ok := validatorObj.(*types.TypeName)
+	require.True(t, ok, "Validator must be a type name")
+	validatorNamed, ok := validatorTypeName.Type().(*types.Named)
+	require.True(t, ok, "Validator must be a named type")
+
+	registered := map[string]struct{}{}
+	var fatal string
+	typeseval.EachFileInPackage(root, fixturePkg, true,
+		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
+			scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Name == nil || fd.Recv == nil {
+					return
+				}
+				if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
+					return
+				}
+				extractFromCompositeLits(fset, relPath, fd, info, validatorNamed, registered, &fatal)
+			})
+		})
+
+	_, hasLegit := registered["validateLegit"]
+	_, hasFOO := registered["validateFOO"]
+	assert.True(t, hasLegit, "v.validateLegit (real *Validator method) must be accepted before the shadow element triggers fatal")
+	assert.False(t, hasFOO, "o.validateFOO (OtherType receiver shadow) must be REJECTED by receiver-type check")
+	assert.NotEmpty(t, fatal,
+		"shadow receiver must surface as a non-empty fatal — silent skip would let the wrong method masquerade as registered")
+	assert.Contains(t, fatal, "shadow_receiver_red/violation.go",
+		"fatal must reference the fixture file so the violation is locatable")
 }
 
 // declaredRuleMethodNames returns the set of *Validator method names whose
@@ -154,39 +214,35 @@ func ruleShapeSignature(sig *types.Signature) bool {
 // Any composite-literal element with a different shape causes a fatal
 // message — silently skipping would let new closure forms bypass the check.
 //
-// INV-1 Medium upgrade: the receiver of each validate* selector is verified
-// to have type *governance.Validator via types.Info.Selections, so a local
-// variable named "v" with a different type cannot masquerade as a rule.
+// Iteration goes through typeseval.EachFileInPackage so the FuncDecl AST and
+// the *types.Info passed to registeredElementMethodName come from the same
+// packages.Load — info.Types[sel.X] therefore resolves on every selector.
+// Mixing scanner.EachFile with pkg.TypesInfo would silently fail open
+// (re-parsed nodes have distinct pointer identity from the type-checked AST).
 func extractRegisteredMethodNames(t *testing.T, root string, pkg *governancePackage) (map[string]struct{}, string) {
 	t.Helper()
-	// Look up the *Validator named type from the loaded package.
 	validatorNamed := lookupValidatorNamed(t, pkg)
 
-	scope := scanner.DirsScope(root, []string{"kernel/governance"},
-		scanner.MatchRels(func(rel string) bool {
-			base := filepath.Base(rel)
-			return !strings.HasSuffix(base, "_test.go")
-		}),
-	)
 	registered := map[string]struct{}{}
 	var fatal string
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		if fatal != "" {
-			return
-		}
-		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
+	typeseval.EachFileInPackage(root, pkg.rawPkg, true,
+		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
 			if fatal != "" {
 				return
 			}
-			if fd.Name == nil || fd.Recv == nil {
-				return
-			}
-			if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
-				return
-			}
-			extractFromCompositeLits(fc, fd, pkg.info, validatorNamed, registered, &fatal)
+			scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fatal != "" {
+					return
+				}
+				if fd.Name == nil || fd.Recv == nil {
+					return
+				}
+				if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
+					return
+				}
+				extractFromCompositeLits(fset, relPath, fd, info, validatorNamed, registered, &fatal)
+			})
 		})
-	})
 	return registered, fatal
 }
 
@@ -203,7 +259,7 @@ func lookupValidatorNamed(t *testing.T, pkg *governancePackage) *types.Named {
 }
 
 func extractFromCompositeLits(
-	fc scanner.FileContext, fd *ast.FuncDecl, info *types.Info,
+	fset *token.FileSet, relPath string, fd *ast.FuncDecl, info *types.Info,
 	validatorNamed *types.Named, out map[string]struct{}, fatal *string,
 ) {
 	scanner.EachInSubtree[ast.CompositeLit](fd.Body, func(cl *ast.CompositeLit) {
@@ -226,8 +282,8 @@ func extractFromCompositeLits(
 				out[name] = struct{}{}
 				continue
 			}
-			pos := fc.Fset.Position(elt.Pos())
-			*fatal = "unrecognized rules() element shape at " + fc.Rel + ":" +
+			pos := fset.Position(elt.Pos())
+			*fatal = "unrecognized rules() element shape at " + relPath + ":" +
 				strconv.Itoa(pos.Line) +
 				" — every element must be either v.validateXX or func() []VR { return v.validateXX(...) }"
 			return
@@ -268,40 +324,38 @@ func registeredElementMethodName(expr ast.Expr, info *types.Info, validatorNamed
 }
 
 // validateSelectorReceiverAndName verifies that sel.X has type *Validator
-// (via info.Selections, which maps SelectorExpr to Selection objects carrying
-// the receiver type) and that sel.Sel.Name has the "validate" prefix.
+// (via info.Types, which maps every type-checked expression to its
+// TypeAndValue) and that sel.Sel.Name has the "validate" prefix.
 // Returns ("", false) for any non-matching selector.
 //
-// info may be nil (when the file was parsed with SkipObjectResolution); in
-// that case the function falls back to the pre-Medium AST name-only check.
-// Production invocations pass a loaded *types.Info; nil only occurs in test
-// fixtures.
+// info must be the *types.Info from the same packages.Load call that produced
+// sel — see typeseval.EachFileInPackage's INVARIANT for why mixing scanner-
+// parsed AST with a loaded TypesInfo silently fails. Both production and
+// negative-fixture invocations satisfy this.
 func validateSelectorReceiverAndName(sel *ast.SelectorExpr, info *types.Info, validatorNamed *types.Named) (string, bool) {
 	if sel.Sel == nil || !strings.HasPrefix(sel.Sel.Name, "validate") {
 		return "", false
 	}
-	// When info is available, verify the receiver type via Selections.
-	if info != nil {
-		if !selectorReceiverIsValidator(sel, info, validatorNamed) {
-			return "", false
-		}
+	if !selectorReceiverIsValidator(sel, info, validatorNamed) {
+		return "", false
 	}
 	return sel.Sel.Name, true
 }
 
 // selectorReceiverIsValidator returns true when sel.X resolves to a value of
-// type *Validator (or Validator) via go/types Selections map.
+// type *Validator (or Validator) via go/types Types map.
+//
+// Fail-closed on lookup miss: a missing TypeAndValue means either info was
+// built from a different AST (caller violated the same-source invariant) or
+// the receiver expression is non-standard (e.g. assembled at runtime). Both
+// must be rejected — the previous "return true" fallback silently downgraded
+// the receiver-type check to a name-prefix match.
 func selectorReceiverIsValidator(sel *ast.SelectorExpr, info *types.Info, validatorNamed *types.Named) bool {
-	// Use Types map: sel.X must have type *Validator (pointer) or Validator (value).
-	// info.Types maps expressions to their TypeAndValue.
 	tv, ok := info.Types[sel.X]
 	if !ok {
-		// Not in the Types map — fall back to name-only check (should not happen
-		// for correctly parsed + type-checked source, but be defensive).
-		return true
+		return false
 	}
 	recvType := tv.Type
-	// Strip pointer if present.
 	if ptr, ok := recvType.(*types.Pointer); ok {
 		recvType = ptr.Elem()
 	}
@@ -309,7 +363,6 @@ func selectorReceiverIsValidator(sel *ast.SelectorExpr, info *types.Info, valida
 	if !ok {
 		return false
 	}
-	// Compare by identity: same *types.Named pointer means same type.
 	return named == validatorNamed
 }
 
@@ -331,6 +384,7 @@ func selectorReceiverIsValidator(sel *ast.SelectorExpr, info *types.Info, valida
 // checked; the violations are confirmed.
 func TestGovernanceRuleCodeConstSingleSource(t *testing.T) {
 	t.Run("negative_fixture_bare_literal_and_concat_caught", testINV2NegativeFixture)
+	t.Run("negative_fixture_composite_lit_violations", testINV2CompositeLitFixtures)
 	t.Run("production_source_all_pass", testINV2ProductionSource)
 }
 
@@ -373,6 +427,91 @@ func badSprintf()  string { return fmt.Sprintf("X-%d", 99) }
 	_ = f // parsed but not used beyond proving compilation
 }
 
+// testINV2CompositeLitFixtures proves the ValidationResult literal scan
+// genuinely catches the two shapes that bypass key-loop checks:
+//
+//   - composite_lit_no_code_red: Code: field absent — Code zero value would
+//     never resolve to a rulecodes.go const, but the legacy key loop simply
+//     observed "no Code key" and skipped.
+//   - composite_lit_positional_red: positional fields — even when Code is the
+//     first positional value, the legacy key loop iterates KeyValueExpr only
+//     and never inspects the position-1 expression.
+//
+// The fixture violations call scanINV2ViolationsInFile (the shared scan
+// helper used by production), so a regression in either path lights up here.
+func testINV2CompositeLitFixtures(t *testing.T) {
+	root := findModuleRoot(t)
+
+	cases := []struct {
+		pattern string
+		wantMin int
+		shape   string
+	}{
+		{
+			pattern: "./tools/archtest/testdata/governance_rulecode_single_source_fixtures/composite_lit_no_code_red",
+			wantMin: 1,
+			shape:   "ValidationResult literal omits Code: field",
+		},
+		{
+			pattern: "./tools/archtest/testdata/governance_rulecode_single_source_fixtures/composite_lit_positional_red",
+			wantMin: 1,
+			shape:   "ValidationResult literal uses positional fields",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.shape, func(t *testing.T) {
+			pkgs, errs, err := typeseval.LoadPackages(root, false, nil, tc.pattern)
+			require.NoError(t, err, "LoadPackages failed for %s", tc.pattern)
+			require.Empty(t, errs, "package load errors for %s: %v", tc.pattern, errs)
+			require.Len(t, pkgs, 1, "expected exactly one package for %s", tc.pattern)
+
+			fixturePkg := pkgs[0]
+
+			// Each fixture imports kernel/governance transitively; reuse its
+			// rulecodes.go const set so the Code-resolution branch behaves the
+			// same as in production. The fixture violations come from the
+			// CompositeLit scan path, not Code-identity, so even an empty
+			// const set would surface them — but matching production keeps
+			// the scan logic identical.
+			govPkg := findPackageInDeps(fixturePkg, governancePkgPath)
+			require.NotNil(t, govPkg, "kernel/governance must be a transitive dep")
+			govScope := govPkg.Types.Scope()
+			ruleCodeConsts := map[*types.Const]struct{}{}
+			for _, name := range govScope.Names() {
+				obj := govScope.Lookup(name)
+				c, ok := obj.(*types.Const)
+				if !ok {
+					continue
+				}
+				named, ok := c.Type().(*types.Named)
+				if !ok || named.Obj().Name() != "RuleCode" {
+					continue
+				}
+				if filepath.Base(govPkg.Fset.Position(c.Pos()).Filename) == ruleCodesFile {
+					ruleCodeConsts[c] = struct{}{}
+				}
+			}
+
+			var violations []string
+			for i, file := range fixturePkg.Syntax {
+				if i >= len(fixturePkg.GoFiles) {
+					continue
+				}
+				rel := fixturePkg.GoFiles[i]
+				violations = append(violations,
+					scanINV2ViolationsInFile(file, fixturePkg.Fset, fixturePkg.TypesInfo,
+						ruleCodeConsts, rel, governancePkgPath)...)
+			}
+
+			assert.GreaterOrEqual(t, len(violations), tc.wantMin,
+				"shape %q: expected at least %d INV-2 violation(s), got %d: %v",
+				tc.shape, tc.wantMin, len(violations), violations)
+		})
+	}
+}
+
 // testINV2ProductionSource verifies the production kernel/governance package
 // has no violations.
 //
@@ -390,73 +529,122 @@ func testINV2ProductionSource(t *testing.T) {
 	ruleCodeConsts := collectRuleCodeConsts(pkg)
 	require.NotEmpty(t, ruleCodeConsts, "rulecodes.go must declare at least one RuleCode const")
 
-	info := pkg.rawPkg.TypesInfo
-	fset := pkg.rawPkg.Fset
-
 	var violations []string
-	for i, file := range pkg.rawPkg.Syntax {
-		if i >= len(pkg.rawPkg.GoFiles) {
-			continue
-		}
-		absPath := pkg.rawPkg.GoFiles[i]
-		rel, err := filepath.Rel(root, absPath)
-		if err != nil {
-			rel = absPath
-		}
-		base := filepath.Base(rel)
-		// Skip test files, rulecodes.go itself, and locator.go (the constructor
-		// that assigns the RuleCode param to ValidationResult.Code — the Code:
-		// field there is a method parameter, not a call-site const reference).
-		if strings.HasSuffix(base, "_test.go") || base == ruleCodesFile || base == "locator.go" {
-			continue
-		}
-
-		scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil {
+	typeseval.EachFileInPackage(root, pkg.rawPkg, true,
+		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
+			base := filepath.Base(relPath)
+			// Skip rulecodes.go itself and locator.go (the constructor that
+			// assigns the RuleCode param to ValidationResult.Code — the
+			// Code: field there is a method parameter, not a call-site const
+			// reference).
+			if base == ruleCodesFile || base == "locator.go" {
 				return
 			}
-			name := sel.Sel.Name
-			if name != "newResult" && name != "newScopedResult" && name != "newResultAt" {
-				return
-			}
-			if len(call.Args) == 0 {
-				return
-			}
-			codeArg := call.Args[0]
-			if !ruleCodeArgShapeIsValid(codeArg, info, governancePkgPath, "RuleCode") ||
-				!ruleCodeArgResolvesToConst(codeArg, info, ruleCodeConsts) {
-				pos := fset.Position(codeArg.Pos())
-				violations = append(violations,
-					rel+":"+strconv.Itoa(pos.Line)+
-						": code arg to "+name+" must be a RuleCode-typed const from rulecodes.go — "+
-						"got AST shape "+astShapeName(codeArg))
-			}
+			violations = append(violations,
+				scanINV2ViolationsInFile(file, fset, info, ruleCodeConsts, relPath, governancePkgPath)...)
 		})
-		// Also check ValidationResult{} CompositeLit Code: fields.
-		scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
-			if !isValidationResultCompositeLit(cl, info, governancePkgPath) {
-				return
-			}
-			scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-				key, ok := kv.Key.(*ast.Ident)
-				if !ok || key.Name != "Code" {
-					return
-				}
-				if !ruleCodeArgShapeIsValid(kv.Value, info, governancePkgPath, "RuleCode") ||
-					!ruleCodeArgResolvesToConst(kv.Value, info, ruleCodeConsts) {
-					pos := fset.Position(kv.Value.Pos())
-					violations = append(violations,
-						rel+":"+strconv.Itoa(pos.Line)+
-							": ValidationResult.Code must be a RuleCode-typed const from rulecodes.go — "+
-							"got AST shape "+astShapeName(kv.Value))
-				}
-			})
-		})
-	}
 	sort.Strings(violations)
 	assert.Empty(t, violations,
 		"every rule code must come from a RuleCode-typed const in rulecodes.go")
+}
+
+// scanINV2ViolationsInFile reports all INV-2 violations in a single AST file.
+// Shared between testINV2ProductionSource and testINV2NegativeFixture so both
+// exercise identical scan logic — fixture validates the production path.
+//
+// Two scan paths:
+//  1. CallExpr: newResult / newScopedResult / newResultAt with code arg
+//     shape != Ident or not resolving to a RuleCode const in rulecodes.go.
+//  2. CompositeLit: ValidationResult{} literal with any of:
+//     (a) positional element (non-KeyValueExpr) — every field must be named;
+//     (b) Code: field absent — every literal must explicitly reference a
+//     RuleCode const (default-zero RuleCode("") would silently bypass);
+//     (c) Code: present but value is not a RuleCode const ident.
+func scanINV2ViolationsInFile(
+	file *ast.File,
+	fset *token.FileSet,
+	info *types.Info,
+	ruleCodeConsts map[*types.Const]struct{},
+	relPath string,
+	pkgPath string,
+) []string {
+	var violations []string
+
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil {
+			return
+		}
+		name := sel.Sel.Name
+		if name != "newResult" && name != "newScopedResult" && name != "newResultAt" {
+			return
+		}
+		if len(call.Args) == 0 {
+			return
+		}
+		codeArg := call.Args[0]
+		if !ruleCodeArgShapeIsValid(codeArg, info, pkgPath, "RuleCode") ||
+			!ruleCodeArgResolvesToConst(codeArg, info, ruleCodeConsts) {
+			pos := fset.Position(codeArg.Pos())
+			violations = append(violations,
+				relPath+":"+strconv.Itoa(pos.Line)+
+					": code arg to "+name+" must be a RuleCode-typed const from rulecodes.go — "+
+					"got AST shape "+astShapeName(codeArg))
+		}
+	})
+
+	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+		if !isValidationResultCompositeLit(cl, info, pkgPath) {
+			return
+		}
+		// (a) Positional ban: every element must be Key:Value. A positional
+		// element bypasses the Code: lookup entirely, even when Code is
+		// supplied positionally. Detect by comparing direct KeyValueExpr
+		// children count against total element count — count comparison
+		// avoids the for-range + type-assert form banned by
+		// SCANNER-FRAMEWORK-USAGE-01.
+		keyValueCount := 0
+		scanner.EachInChildren[ast.KeyValueExpr](cl, func(_ *ast.KeyValueExpr) {
+			keyValueCount++
+		})
+		if len(cl.Elts) > 0 && keyValueCount != len(cl.Elts) {
+			pos := fset.Position(cl.Pos())
+			violations = append(violations,
+				relPath+":"+strconv.Itoa(pos.Line)+
+					": ValidationResult literal must use named fields (Code:/Severity:/Message:/...) — "+
+					"positional element forbidden because it lets the Code: completeness check be skipped")
+			return
+		}
+		// (b)(c) Collect named keys, then enforce Code: presence + RuleCode shape.
+		var codeValue ast.Expr
+		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				return
+			}
+			if key.Name == "Code" {
+				codeValue = kv.Value
+			}
+		})
+		if codeValue == nil {
+			pos := fset.Position(cl.Pos())
+			violations = append(violations,
+				relPath+":"+strconv.Itoa(pos.Line)+
+					": ValidationResult literal omits Code: field — every result must reference a "+
+					"RuleCode const from rulecodes.go (zero RuleCode would silently pass the single-source check)")
+			return
+		}
+		if !ruleCodeArgShapeIsValid(codeValue, info, pkgPath, "RuleCode") ||
+			!ruleCodeArgResolvesToConst(codeValue, info, ruleCodeConsts) {
+			pos := fset.Position(codeValue.Pos())
+			violations = append(violations,
+				relPath+":"+strconv.Itoa(pos.Line)+
+					": ValidationResult.Code must be a RuleCode-typed const from rulecodes.go — "+
+					"got AST shape "+astShapeName(codeValue))
+		}
+	})
+
+	return violations
 }
 
 // TestGovernanceRuleCodeConstSingleSource_FilenameGuard verifies that the
@@ -696,6 +884,16 @@ func testINV3NegativeFixture(t *testing.T) {
 			wantMin: 1,
 			shape:   "newResultAt callsite with string literal missing '; fix:'",
 		},
+		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/composite_lit_no_message_red",
+			wantMin: 1,
+			shape:   "ValidationResult{SeverityError} omits Message: field",
+		},
+		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/composite_lit_positional_red",
+			wantMin: 1,
+			shape:   "ValidationResult literal uses positional fields with SeverityError",
+		},
 	}
 
 	for _, tc := range cases {
@@ -740,35 +938,22 @@ func testINV3NegativeFixture(t *testing.T) {
 // testINV3ProductionSource verifies the production kernel/governance package
 // has no SeverityError rules missing the "; fix:" anchor.
 //
-// Like testINV2ProductionSource, this function walks rawPkg.Syntax so that
-// isSeverityErrorArg can resolve *ast.Ident nodes via rawPkg.TypesInfo.Uses
-// (scanner-parsed node pointers are distinct and would always miss).
+// Iteration goes through typeseval.EachFileInPackage so isSeverityErrorArg
+// can resolve *ast.Ident nodes via the same TypesInfo that produced the
+// AST — see the helper's INVARIANT for why scanner.EachFile + a captured
+// pkg.TypesInfo would silently fail open.
 func testINV3ProductionSource(t *testing.T) {
 	root := findModuleRoot(t)
 	pkg := loadGovernancePackage(t, root)
 	consts := collectPackageStringConsts(pkg.scope)
 	severityErrorConst := lookupSeverityErrorConst(t, pkg.scope)
 
-	info := pkg.rawPkg.TypesInfo
-	fset := pkg.rawPkg.Fset
-
 	var violations []string
-	for i, file := range pkg.rawPkg.Syntax {
-		if i >= len(pkg.rawPkg.GoFiles) {
-			continue
-		}
-		absPath := pkg.rawPkg.GoFiles[i]
-		rel, err := filepath.Rel(root, absPath)
-		if err != nil {
-			rel = absPath
-		}
-		base := filepath.Base(rel)
-		if strings.HasSuffix(base, "_test.go") {
-			continue
-		}
-		violations = append(violations,
-			scanINV3ViolationsInFile(file, fset, info, consts, severityErrorConst, rel, governancePkgPath)...)
-	}
+	typeseval.EachFileInPackage(root, pkg.rawPkg, true,
+		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
+			violations = append(violations,
+				scanINV3ViolationsInFile(file, fset, info, consts, severityErrorConst, relPath, governancePkgPath)...)
+		})
 	sort.Strings(violations)
 	assert.Empty(t, violations)
 }
@@ -838,7 +1023,25 @@ func scanINV3ViolationsInFile(
 		if !isValidationResultCompositeLit(cl, info, pkgPath) {
 			return
 		}
+		// Positional ban — even when Severity / Message are present
+		// positionally, the KeyValueExpr loop below would not see them and
+		// the SeverityError fix-anchor rule would silently skip the literal.
+		// The anchor check requires named fields. Count-comparison avoids
+		// the for-range + type-assert form banned by SCANNER-FRAMEWORK-USAGE-01.
+		keyValueCount := 0
+		scanner.EachInChildren[ast.KeyValueExpr](cl, func(_ *ast.KeyValueExpr) {
+			keyValueCount++
+		})
+		if len(cl.Elts) > 0 && keyValueCount != len(cl.Elts) {
+			pos := fset.Position(cl.Pos())
+			violations = append(violations,
+				relPath+":"+strconv.Itoa(pos.Line)+
+					": ValidationResult literal must use named fields (Severity:/Message:/...) — "+
+					"positional element forbidden because it lets the SeverityError fix-anchor check be skipped")
+			return
+		}
 		var hasSeverityError bool
+		var hasMessageKey bool
 		var msgExpr ast.Expr
 		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 			key, ok := kv.Key.(*ast.Ident)
@@ -851,10 +1054,22 @@ func scanINV3ViolationsInFile(
 					hasSeverityError = true
 				}
 			case "Message":
+				hasMessageKey = true
 				msgExpr = kv.Value
 			}
 		})
-		if !hasSeverityError || msgExpr == nil {
+		if !hasSeverityError {
+			return
+		}
+		// SeverityError without an explicit Message: field — the legacy
+		// check returned early; the completeness gate now emits a violation
+		// because a missing Message can never carry the "; fix:" anchor.
+		if !hasMessageKey {
+			pos := fset.Position(cl.Pos())
+			violations = append(violations,
+				relPath+":"+strconv.Itoa(pos.Line)+
+					": ValidationResult{Severity: SeverityError} omits Message: field — every error "+
+					"result must declare a Message containing the \"; fix:\" anchor")
 			return
 		}
 		if messageContainsFixAnchor(msgExpr, consts, info) {
