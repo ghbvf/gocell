@@ -59,7 +59,6 @@ const FixtureBuildTag = "archtest_fixture"
 
 // Lookup is by module-relative slash path (e.g. "tools/archtest/foo_test.go").
 var LegacyAllowlist = map[string]bool{
-	"tools/archtest/accesscore_facade_test.go":                       true,
 	"tools/archtest/archtest_test.go":                                true,
 	"tools/archtest/archtest_verify_coverage_test.go":                true,
 	"tools/archtest/assembly_invariants_test.go":                     true,
