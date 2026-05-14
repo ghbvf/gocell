@@ -70,7 +70,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/cell_id_pattern_single_source_test.go":           true,
 	"tools/archtest/cell_init_test.go":                               true,
 	"tools/archtest/cell_public_option_param_test.go":                true,
-	"tools/archtest/cellgen_errcode_funnel_test.go":                  true,
 	"tools/archtest/cellmeta_single_source_test.go":                  true,
 	"tools/archtest/clock_invariants_test.go":                        true,
 	"tools/archtest/codegen_invariants_test.go":                      true,
