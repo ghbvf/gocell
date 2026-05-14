@@ -55,7 +55,9 @@ var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
 func setup(t testing.TB) http.Handler {
 	t.Helper()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newHandlerIdentityRefreshStore()
+	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
 		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setup: " + err.Error())
@@ -78,7 +80,9 @@ func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserR
 	if effectiveIssuer == nil {
 		effectiveIssuer = handlerStubIssuer
 	}
-	svc, err := NewService(repo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newHandlerIdentityRefreshStore()
+	svc, err := NewService(repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
 		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())
@@ -581,7 +585,9 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 		CreationSource: domain.UserSourceIdentity, CreatedAt: now, UpdatedAt: now,
 	}))
 
-	svc, err := NewService(repo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(),
+	handlerSessionStore := testutil.RealSessionRepo(t)
+	handlerRefreshStore := newHandlerIdentityRefreshStore()
+	svc, err := NewService(repo, newInvalidator(t, repo, handlerSessionStore, handlerRefreshStore),
 		slog.Default(), WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)

@@ -90,13 +90,26 @@ func (m *AuthMetrics) recordServiceVerify(result, reason string) {
 }
 
 // classifyTokenError maps a token verification error to a short reason label.
+//
+// The KindUnavailable / CategoryInfra branch must precede every token-side
+// branch: verifier-side infrastructure failures (JWKS down, KMS unreachable —
+// see jwt.go:hasExplicitInfraSignal) carry their own *errcode.Error and must
+// surface as a distinct "service_unavailable" reason so SLO dashboards and
+// alerts can separate "credential failures" from "auth dependency degraded".
+// Without this branch the 503 path collapsed into "invalid_token" and made
+// the failure mode invisible (Finding #3 PR #490 second review).
 func classifyTokenError(err error) string {
 	if err == nil {
 		return "ok"
 	}
 	var ec *errcode.Error
-	if errors.As(err, &ec) && ec.Code == errcode.ErrAuthInvalidTokenIntent {
-		return "invalid_intent"
+	if errors.As(err, &ec) {
+		if ec.Kind == errcode.KindUnavailable || ec.Category == errcode.CategoryInfra {
+			return "service_unavailable"
+		}
+		if ec.Code == errcode.ErrAuthInvalidTokenIntent {
+			return "invalid_intent"
+		}
 	}
 	switch {
 	case errors.Is(err, jwt.ErrTokenExpired) || errors.Is(err, jwt.ErrTokenNotValidYet):

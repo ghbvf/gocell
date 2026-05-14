@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -50,6 +52,15 @@ type Request struct {
 	UserID                string
 	SessionID             string
 	PasswordResetRequired bool
+	// AuthzEpoch is the user's current authz_epoch value written into the
+	// "authz_epoch" JWT claim. It must reflect the epoch at the time of
+	// issuance — typically the value returned by UserRepository.BumpAuthzEpoch
+	// (or the existing epoch when no credential invalidation occurred).
+	//
+	// F18 trade-off: ChangePassword calls IssueForUser after the tx commit;
+	// the new token therefore carries the post-commit epoch naturally, without
+	// a second BumpAuthzEpoch call.
+	AuthzEpoch int64
 }
 
 // Result is the MintAccess output.
@@ -58,15 +69,28 @@ type Request struct {
 // JWT's own exp claim is stamped independently inside the issuer a moment
 // later. Treat Result.ExpiresAt as the business-layer expiry (used for Session
 // persistence) — the authoritative wire value is the JWT exp claim.
+//
+// JTI is the per-token unique identifier embedded in the JWT `jti` claim
+// (RFC 9068 §2.2.4). It is generated fresh inside MintAccess so each access
+// token — including post-rotation tokens minted by Refresh — carries its own
+// jti, satisfying ADR-credential D1's per-token uniqueness invariant.
 type Result struct {
 	AccessToken string
 	Roles       []string
 	ExpiresAt   time.Time
+	JTI         string
 }
 
 // MintAccess fetches the user's role names and signs the access JWT. Role-
 // fetch failure propagates as ErrAuthRoleFetchFailed (HTTP 500) so the caller
 // aborts login / refresh / IssueForUser rather than issue an empty-role token.
+//
+// The jti claim is a fresh UUIDv4 per token (RFC 9068 §2.2.4); collision
+// probability is negligible and uuid.NewString never errors. Carrying jti
+// alongside sid/authz_epoch matches ADR-credential D1 (access JWT carries
+// {sid, jti, authz_epoch}) so observability + revocation diagnostics can
+// trace individual tokens. Result.JTI is returned for callers that persist
+// the value (e.g. session row fingerprint when FingerprintJTIRef is in use).
 func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 	roles, err := fetchRoleNames(ctx, deps.RoleRepo, req.UserID)
 	if err != nil {
@@ -79,10 +103,13 @@ func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 	clock.MustHaveClock(clk, "sessionmint.MintAccess")
 	expiresAt := clk.Now().Add(auth.DefaultAccessTokenTTL)
 
+	jti := uuid.NewString()
 	access, err := deps.Issuer.Issue(auth.TokenIntentAccess, req.UserID, auth.IssueOptions{
 		Roles:                 roles,
 		SessionID:             req.SessionID,
 		PasswordResetRequired: req.PasswordResetRequired,
+		AuthzEpoch:            req.AuthzEpoch,
+		JTI:                   jti,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("sessionmint: issue access token: %w", err)
@@ -92,6 +119,7 @@ func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 		AccessToken: access,
 		Roles:       roles,
 		ExpiresAt:   expiresAt,
+		JTI:         jti,
 	}, nil
 }
 

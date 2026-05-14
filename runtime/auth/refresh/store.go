@@ -10,12 +10,28 @@ import (
 // model: Issue and Rotate only INSERT rows; rotated_at and revoked_at are
 // one-way timestamp flips; verifier_hash is never updated in place.
 //
-// Every unhappy Peek/Rotate path returns ErrRejected. Internal diagnostic
-// reasons surface through the slog structured field "reason", not through
-// error shape (enumeration / timing side-channel defense).
+// Error vocabulary (Peek / Rotate):
+//
+//   - happy / grace-retry → (non-nil *Token, nil)
+//   - reuse detected     → (non-nil *Token, ErrReused) — Token MUST carry
+//     SubjectID and SessionID so callers can drive a user-wide
+//     credential-invalidation cascade (epoch bump + revoke other sessions +
+//     revoke other refresh chains). The single-session cascade-revoke is
+//     committed by the store before return; user-wide invalidation is the
+//     service layer's responsibility and depends on this metadata.
+//   - any other rejection (malformed / selector_miss / verifier_miss /
+//     revoked / expired / idle_expired) → (nil, ErrRejected). Internal
+//     diagnostic reasons surface through the slog structured field "reason",
+//     not through error shape (enumeration / timing side-channel defense).
+//
+// Returning (nil, ErrReused) is a contract violation — the service layer
+// would silently lose the cross-session cascade. The runtime/auth/refresh/
+// storetest conformance suite enforces this invariant against every
+// implementation.
 //
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + hmac.Equal)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS + grace + chain revoke)
+// ref: keycloak TokenManager — reuse → full session-scoped revocation
 type Store interface {
 	// Issue creates a new refresh chain for (sessionID, subjectID). The
 	// Store generates an opaque wire token of the form
@@ -30,37 +46,48 @@ type Store interface {
 	// rotated_at. Callers use this for no-side-effect preflight checks before
 	// deciding whether to commit a rotation.
 	//
-	// Branches and public error shape match Rotate exactly. Implementations
-	// MUST still cascade-revoke on reuse detection beyond Policy.ReuseInterval;
-	// that is a security response to an attack, not a successful state advance.
+	// Return shape matches the package-level vocabulary above:
+	//   - valid token            → (*Token{SubjectID, SessionID, ...}, nil)
+	//   - reuse detected         → (*Token{SubjectID, SessionID, ...}, ErrReused)
+	//   - any other rejection    → (nil, ErrRejected)
 	//
-	// Consistency: L1 LocalTx — read-only for valid tokens and non-reuse
-	// rejections; reuse-detection cascade revoke is committed before returning
-	// ErrRejected.
+	// Implementations MUST still commit the per-session cascade-revoke before
+	// returning ErrReused — that is a security response and persists
+	// regardless of caller transaction outcome. The token returned alongside
+	// ErrReused conveys *only* the row identity (SubjectID, SessionID, ID,
+	// CreatedAt, ExpiresAt); it is not a usable refresh credential.
+	//
+	// Consistency: L1 LocalTx — read-only for valid tokens; reuse-detection
+	// cascade revoke is committed before returning ErrReused.
 	Peek(ctx context.Context, presentedWire string) (tok *Token, err error)
 
 	// Rotate consumes the presented wire token and advances the chain by
 	// issuing a new child. Returns the new wire token alongside its
 	// metadata on success.
 	//
-	// Branches (all unhappy paths return ErrRejected with a diagnostic
-	// "reason" emitted via slog — callers MUST NOT distinguish):
+	// Branches (return shape matches the package-level vocabulary):
 	//
 	//   - active happy path: presented token is the current live row →
-	//     INSERT child, flip parent rotated_at, return new wire.
+	//     INSERT child, flip parent rotated_at, return new wire +
+	//     (*Token{...}, nil).
 	//   - grace retry: parent's rotated_at was already set but the retry
 	//     arrived within Policy.ReuseInterval → INSERT another child,
-	//     return a distinct new wire. Preserves idempotency for SPA
-	//     double-submit without weakening reuse detection.
+	//     return a distinct new wire + (*Token{...}, nil). Preserves
+	//     idempotency for SPA double-submit without weakening reuse
+	//     detection.
 	//   - reuse detection: parent's rotated_at was set beyond
-	//     Policy.ReuseInterval → cascade-revoke the entire session_id
-	//     lineage, emit slog Error "reuse_detected", return ErrRejected.
+	//     Policy.ReuseInterval, OR grace counter cap exhausted →
+	//     cascade-revoke the entire session_id lineage, emit slog Error
+	//     "reuse_detected", return ("", *Token{SubjectID, SessionID, ...},
+	//     ErrReused). The token conveys row identity for the service-layer
+	//     user-wide invalidation cascade.
 	//   - malformed / unknown selector / verifier mismatch / expired /
-	//     revoked: return ErrRejected with corresponding slog "reason".
+	//     revoked: return ("", nil, ErrRejected) with corresponding slog
+	//     "reason".
 	//
 	// Consistency: L1 LocalTx — INSERT child + UPDATE parent within one
 	// transaction; reuse-detection cascade revoke is committed before
-	// returning ErrRejected.
+	// returning ErrReused.
 	Rotate(ctx context.Context, presentedWire string) (wire string, tok *Token, err error)
 
 	// RevokeSession marks every row in the session_id lineage as revoked.

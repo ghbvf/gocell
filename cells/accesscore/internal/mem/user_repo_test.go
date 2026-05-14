@@ -2,6 +2,7 @@ package mem
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,4 +123,71 @@ func TestUserRepo_UpdatePassword_ResetRequiredFlag(t *testing.T) {
 	got, err := repo.GetByID(ctx, "usr-carol")
 	require.NoError(t, err)
 	assert.False(t, got.PasswordResetRequired, "UpdatePassword must apply the resetRequired argument")
+}
+
+// ---------------------------------------------------------------------------
+// BumpAuthzEpoch tests
+// ---------------------------------------------------------------------------
+
+func TestUserRepo_BumpAuthzEpoch_IncrementsAndReturns(t *testing.T) {
+	ctx := context.Background()
+	repo := NewStore(clock.Real()).UserRepository()
+
+	user, err := domain.NewUser("epoch_user", "epoch@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-epoch-001"
+	require.NoError(t, repo.Create(ctx, user))
+
+	// First bump: 0 → 1.
+	epoch1, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), epoch1, "first BumpAuthzEpoch must return 1")
+
+	// Second bump: 1 → 2.
+	epoch2, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), epoch2, "second BumpAuthzEpoch must return 2")
+
+	// GetByID must reflect the updated epoch.
+	got, err := repo.GetByID(ctx, "usr-epoch-001")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), got.AuthzEpoch, "GetByID must return updated AuthzEpoch")
+}
+
+func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
+	ctx := context.Background()
+	repo := NewStore(clock.Real()).UserRepository()
+
+	_, err := repo.BumpAuthzEpoch(ctx, "usr-nonexistent")
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindNotFound, ce.Kind)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, ce.Code)
+}
+
+func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
+	ctx := context.Background()
+	repo := NewStore(clock.Real()).UserRepository()
+
+	user, err := domain.NewUser("concurrent_epoch", "concurrent@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-concurrent-001"
+	require.NoError(t, repo.Create(ctx, user))
+
+	const goroutines = 100
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			_, _ = repo.BumpAuthzEpoch(ctx, "usr-concurrent-001")
+		}()
+	}
+	wg.Wait()
+
+	got, err := repo.GetByID(ctx, "usr-concurrent-001")
+	require.NoError(t, err)
+	assert.Equal(t, int64(goroutines), got.AuthzEpoch,
+		"100 concurrent BumpAuthzEpoch calls must result in epoch == 100")
 }

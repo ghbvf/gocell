@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"io"
 	"log/slog"
 	"slices"
@@ -127,6 +128,11 @@ func (s *store) idleDeadline(now time.Time) time.Time {
 }
 
 // Peek validates the presented wire token without advancing the lineage.
+//
+// Per refresh.Store contract: on ErrReused the row identity must be returned
+// alongside the error so the service layer can drive a user-wide credential
+// invalidation cascade. validatePresentedLocked preserves rec on the reuse
+// branches; this method propagates it.
 func (s *store) Peek(_ context.Context, presented string) (*refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
@@ -138,6 +144,9 @@ func (s *store) Peek(_ context.Context, presented string) (*refresh.Token, error
 
 	rec, err := s.validatePresentedLocked(sel, ver)
 	if err != nil {
+		if errors.Is(err, refresh.ErrReused) && rec != nil {
+			return rec.toToken(), err
+		}
 		return nil, err
 	}
 	return rec.toToken(), nil
@@ -145,6 +154,10 @@ func (s *store) Peek(_ context.Context, presented string) (*refresh.Token, error
 
 // Rotate advances the chain one generation by appending a child record.
 // See Store.Rotate contract for branch behavior.
+//
+// ErrReused contract: when reuse is detected the row identity must be
+// returned alongside the error so the service layer can drive the user-wide
+// cascade.
 func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
@@ -156,6 +169,9 @@ func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.To
 
 	rec, err := s.validatePresentedLocked(sel, ver)
 	if err != nil {
+		if errors.Is(err, refresh.ErrReused) && rec != nil {
+			return "", rec.toToken(), err
+		}
 		return "", nil, err
 	}
 	now := s.clock.Now()
@@ -226,7 +242,9 @@ func (s *store) validatePresentedLocked(sel, ver []byte) (*tokenRecord, error) {
 				slog.String("reason", "reuse_detected"),
 				slog.Int("used_times", rec.usedTimes),
 			)
-			return nil, refresh.ErrRejected
+			// Carry rec so callers can route the user-wide cascade — refresh.Store
+			// contract mandates non-nil *Token alongside ErrReused.
+			return rec, refresh.ErrReused
 		}
 
 		// Parent already rotated — either grace retry or reuse attack.
@@ -236,7 +254,7 @@ func (s *store) validatePresentedLocked(sel, ver []byte) (*tokenRecord, error) {
 				slog.String("session_id", rec.sessionID),
 				slog.String("reason", "reuse_detected"),
 			)
-			return nil, refresh.ErrRejected
+			return rec, refresh.ErrReused
 		}
 	}
 

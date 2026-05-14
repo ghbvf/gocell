@@ -82,12 +82,14 @@ INSERT INTO users (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`
 
 	selectUserByIDSQL = `
-SELECT id, username, email, password_hash, password_version, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
 FROM users
 WHERE id = $1`
 
 	selectUserByUsernameSQL = `
-SELECT id, username, email, password_hash, password_version, password_reset_required, status, creation_source, created_at, updated_at
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
 FROM users
 WHERE username = $1`
 
@@ -103,6 +105,10 @@ SET username = $2, email = $3, password_hash = $4, password_reset_required = $5,
 WHERE id = $1`
 
 	deleteUserSQL = `DELETE FROM users WHERE id = $1`
+
+	// bumpAuthzEpochSQL atomically increments authz_epoch and returns the new value.
+	// Must be called inside an ambient transaction provided by the credential-invalidation funnel.
+	bumpAuthzEpochSQL = `UPDATE users SET authz_epoch = authz_epoch + 1 WHERE id = $1 RETURNING authz_epoch`
 
 	// updatePasswordSQL is the CAS-guarded password write. WHERE id=$4 AND
 	// password_version=$5 ensures that a stale view (from a concurrent change)
@@ -253,27 +259,31 @@ func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// UpdateAuthzEpoch atomically sets authz_epoch for the given user to newEpoch.
-//
-// This method is a stub that will be wired in S4 when the credential-event
-// bump path is introduced. Its presence here makes the gap visible at compile
-// time: any S4 call site that needs to bump the epoch can import this method
-// directly rather than discovering the gap at review time.
-//
-// ADR-credential D2: authz_epoch must be bumped on every credential state
-// change (role revoke, password reset, lock, delete). The bump is a distinct
-// SQL operation, separate from Update(), and must happen inside the same
-// transaction as the credential event.
-//
-// Returns errcode.ErrInternal until S4 lands the real implementation.
-func (r *PGUserRepo) UpdateAuthzEpoch(_ context.Context, _ string, _ int64) error {
-	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-		"PGUserRepo.UpdateAuthzEpoch: S4 wiring not yet landed",
-		errcode.WithInternal("call site reached the bump stub before S4 cell rewiring"))
+// BumpAuthzEpoch atomically increments users.authz_epoch by 1 and returns the
+// new value. It must be called inside an ambient transaction — the
+// credential-invalidation funnel entry point guarantees this. Returns
+// ErrAuthUserNotFound (KindNotFound) when no row matches userID.
+func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
+	var newEpoch int64
+	err := r.db.QueryRow(ctx, bumpAuthzEpochSQL, userID).Scan(&newEpoch)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+		}
+		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: bump authz epoch", err)
+	}
+	return newEpoch, nil
 }
 
 // scanUser scans a single Row into a domain.User.
 // Column order must match selectUserByIDSQL and selectUserByUsernameSQL.
+//
+// authz_epoch is included so that sessionvalidate's epoch invariant
+// (user.AuthzEpoch != claims.AuthzEpoch → 401) sees the post-bump value;
+// omitting it silently leaves AuthzEpoch=0 on every read and breaks the
+// credential-invalidation chain (Finding #1 / PR #490 review).
 func scanUser(row pgx.Row) (*domain.User, error) {
 	var u domain.User
 	var status, source string
@@ -286,6 +296,7 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		&u.PasswordResetRequired,
 		&status,
 		&source,
+		&u.AuthzEpoch,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)

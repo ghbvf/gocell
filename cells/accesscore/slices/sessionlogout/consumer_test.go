@@ -9,38 +9,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/auth/session"
 )
-
-// --- stubs ---
-
-// trackingSessionStore counts RevokeForSubject calls and delegates to session.Store.
-type trackingSessionStore struct {
-	session.Store
-	revokeCalls int
-}
-
-func (s *trackingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
-	s.revokeCalls++
-	return s.Store.RevokeForSubject(ctx, subjectID, event)
-}
-
-// errorSessionStore returns a configurable error from RevokeForSubject.
-type errorSessionStore struct {
-	session.Store
-	err error
-}
-
-func (s *errorSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
-	return s.err
-}
 
 // --- helpers ---
 
-func validPayload(userID string) []byte {
-	return []byte(`{"userId":"` + userID + `","roleId":"admin","action":"revoked"}`)
+func validRevokedPayload(userID string) []byte {
+	return []byte(`{"userId":"` + userID + `","roleId":"admin","action":"` + dto.ActionRevoked + `"}`)
+}
+
+func validAssignedPayload(userID string) []byte {
+	return []byte(`{"userId":"` + userID + `","roleId":"admin","action":"` + dto.ActionAssigned + `"}`)
 }
 
 func makeEntry(id string, payload []byte) outbox.Entry {
@@ -53,21 +33,65 @@ func makeEntry(id string, payload []byte) outbox.Entry {
 
 // --- consumer tests ---
 
-func TestHandleRoleChanged_Ack(t *testing.T) {
-	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
-	c := NewConsumer(store, slog.Default())
+// TestHandleRoleChanged_Revoked_Ack asserts that a well-formed revoked event
+// Acks without error. Credential invalidation is performed by rbacassign in the
+// same transaction; this consumer only processes the downstream outbox fact.
+func TestHandleRoleChanged_Revoked_Ack(t *testing.T) {
+	c := NewConsumer(slog.Default())
 
-	entry := makeEntry("evt-abc", validPayload("u1"))
+	entry := makeEntry("evt-revoked", validRevokedPayload("u1"))
 	result := c.HandleRoleChanged(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
-	assert.Equal(t, 1, store.revokeCalls, "RevokeForSubject must be called exactly once")
+}
+
+// TestHandleRoleChanged_Assigned_Ack asserts that a well-formed assigned event
+// also Acks without error (HIGH-3: assignment is additive, no credential invalidation).
+func TestHandleRoleChanged_Assigned_Ack(t *testing.T) {
+	c := NewConsumer(slog.Default())
+
+	entry := makeEntry("evt-assigned", validAssignedPayload("u2"))
+	result := c.HandleRoleChanged(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+}
+
+// TestHandleRoleChanged_DoesNotCallRevokeForSubject verifies that the consumer
+// does not attempt to call session.Store.RevokeForSubject — credential
+// invalidation is done by rbacassign.Revoke in the same transaction.
+// This test is structural: the Consumer struct has no sessionStore field,
+// so the test simply confirms the consumer can handle a revoked event
+// without any session store configured.
+func TestHandleRoleChanged_DoesNotCallRevokeForSubject(t *testing.T) {
+	c := NewConsumer(slog.Default())
+	// If the consumer tried to call RevokeForSubject it would panic/NPE since
+	// there is no sessionStore — the fact that this returns Ack proves it doesn't.
+	entry := makeEntry("evt-no-revoke", validRevokedPayload("u3"))
+	result := c.HandleRoleChanged(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+}
+
+// TestHandleRoleChanged_UnknownAction_RejectsPermanent asserts that an event
+// with an unknown action value is Rejected with a PermanentError to prevent
+// silent data loss on future protocol extensions.
+func TestHandleRoleChanged_UnknownAction_RejectsPermanent(t *testing.T) {
+	c := NewConsumer(slog.Default())
+
+	payload := []byte(`{"userId":"u4","roleId":"admin","action":"suspended"}`)
+	entry := makeEntry("evt-unknown-action", payload)
+	result := c.HandleRoleChanged(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	require.Error(t, result.Err)
+	var permErr *outbox.PermanentError
+	assert.True(t, errors.As(result.Err, &permErr),
+		"unknown action must return PermanentError to route to DLX")
 }
 
 func TestHandleRoleChanged_PermErrReject_MalformedPayload(t *testing.T) {
-	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
-	c := NewConsumer(store, slog.Default())
+	c := NewConsumer(slog.Default())
 
 	entry := makeEntry("evt-bad", []byte("not-json"))
 	result := c.HandleRoleChanged(context.Background(), entry)
@@ -79,10 +103,9 @@ func TestHandleRoleChanged_PermErrReject_MalformedPayload(t *testing.T) {
 }
 
 func TestHandleRoleChanged_PermErrReject_EmptyUserID(t *testing.T) {
-	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
-	c := NewConsumer(store, slog.Default())
+	c := NewConsumer(slog.Default())
 
-	entry := makeEntry("evt-empty", validPayload(""))
+	entry := makeEntry("evt-empty", validRevokedPayload(""))
 	result := c.HandleRoleChanged(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -91,41 +114,18 @@ func TestHandleRoleChanged_PermErrReject_EmptyUserID(t *testing.T) {
 	assert.True(t, errors.As(result.Err, &permErr), "empty userId must return PermanentError")
 }
 
-func TestHandleRoleChanged_RepoErrRequeue(t *testing.T) {
-	dbErr := errors.New("db down")
-	store := &errorSessionStore{err: dbErr}
-	c := NewConsumer(store, slog.Default())
-
-	entry := makeEntry("evt-transient", validPayload("u1"))
-	result := c.HandleRoleChanged(context.Background(), entry)
-
-	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
-	require.Error(t, result.Err)
-	// Must NOT be a PermanentError — transient errors trigger Requeue.
-	var permErr *outbox.PermanentError
-	assert.False(t, errors.As(result.Err, &permErr), "transient DB error must NOT be PermanentError")
-	assert.ErrorIs(t, result.Err, dbErr)
-}
-
 // TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe verifies that calling the
-// handler twice with the same entry ID is safe. The handler itself is naturally idempotent
-// because RevokeForSubject is idempotent (revoking already-revoked sessions is a no-op).
-// Infrastructure-level idempotency (Claimer dedup) is provided by ConsumerBase and is NOT
-// tested here — this test documents the handler's own idempotency contract.
+// handler twice with the same entry ID is safe. Since the handler performs no
+// side effects (credential invalidation was already done in rbacassign), replay
+// is naturally idempotent.
 func TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
-	store := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
-	c := NewConsumer(store, slog.Default())
+	c := NewConsumer(slog.Default())
 
-	entry := makeEntry("evt-replay", validPayload("u1"))
+	entry := makeEntry("evt-replay", validRevokedPayload("u5"))
 
-	// First call.
 	result1 := c.HandleRoleChanged(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result1.Disposition)
 
-	// Second call — must also Ack (idempotent).
 	result2 := c.HandleRoleChanged(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result2.Disposition)
-
-	// sessionStore.RevokeForSubject is called twice — both are safe because the operation is idempotent.
-	assert.Equal(t, 2, store.revokeCalls)
 }

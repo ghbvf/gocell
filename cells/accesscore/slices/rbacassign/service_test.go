@@ -3,13 +3,13 @@ package rbacassign
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -29,17 +29,33 @@ func (rbacFakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) er
 
 var _ persistence.TxRunner = rbacFakeTxRunner{}
 
+// newTestInvalidator builds a real credentialinvalidate.Invalidator backed by
+// the given stores. Fails the test on error.
+func newTestInvalidator(
+	t testing.TB,
+	userRepo ports.UserRepository,
+	sessionStore session.Store,
+) *credentialinvalidate.Invalidator {
+	t.Helper()
+	refreshStore := testutil.RealRefreshStore(t)
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	require.NoError(t, err, "newTestInvalidator: construction failed")
+	return inv
+}
+
 // mustNewService creates a Service with a fake TxRunner, failing the test on error.
 func mustNewService(
 	t testing.TB,
 	roleRepo ports.RoleRepository,
+	userRepo ports.UserRepository,
 	sessionStore session.Store,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
 	t.Helper()
+	inv := newTestInvalidator(t, userRepo, sessionStore)
 	opts = append([]Option{WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{}))}, opts...)
-	svc, err := NewService(roleRepo, sessionStore, logger, opts...)
+	svc, err := NewService(roleRepo, inv, logger, opts...)
 	require.NoError(t, err)
 	return svc
 }
@@ -60,7 +76,7 @@ func newTestService(t testing.TB) (*Service, *mem.Store, *session.MemStore) {
 	})
 	store.RoleRepository().SeedRole(&domain.Role{ID: "editor", Name: "editor"})
 	sessionStore := testutil.RealSessionRepo(t)
-	return mustNewService(t, store.RoleRepository(), sessionStore, slog.Default()), store, sessionStore
+	return mustNewService(t, store.RoleRepository(), store.UserRepository(), sessionStore, slog.Default()), store, sessionStore
 }
 
 // seedActiveUser registers an active user in store so it counts as an
@@ -87,14 +103,27 @@ func assignActiveAdmin(t testing.TB, store *mem.Store, userID string) {
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	store := mem.NewStore(clock.Real())
 	sessionStore := testutil.RealSessionRepo(t)
-	_, err := NewService(roleRepo, sessionStore, slog.Default() /* no WithTxManager */)
+	inv := newTestInvalidator(t, store.UserRepository(), sessionStore)
+	// No WithTxManager — must fail.
+	_, err := NewService(store.RoleRepository(), inv, slog.Default())
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
+func TestNewService_InvalidatorRequired(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	_, err := NewService(store.RoleRepository(), nil, slog.Default(),
+		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "invalidator is required")
 }
 
 func TestService_Assign(t *testing.T) {
@@ -298,7 +327,10 @@ func TestService_Revoke(t *testing.T) {
 	}
 }
 
-func TestService_Revoke_InvalidatesSessions(t *testing.T) {
+// TestRevoke_CallsFunnel_InvalidatesSessions verifies that Revoke calls the
+// credentialinvalidate funnel in the same transaction, which revokes the user's
+// active sessions atomically with the role removal.
+func TestRevoke_CallsFunnel_InvalidatesSessions(t *testing.T) {
 	svc, store, sessionStore := newTestService(t)
 	ctx := context.Background()
 
@@ -312,10 +344,13 @@ func TestService_Revoke_InvalidatesSessions(t *testing.T) {
 
 	s, err := sessionStore.Get(ctx, "sess-1")
 	require.NoError(t, err)
-	assert.True(t, s.RevokedAt != nil, "session must be revoked after role change")
+	assert.True(t, s.RevokedAt != nil, "session must be revoked after role revocation (funnel)")
 }
 
-func TestService_Assign_InvalidatesSessions(t *testing.T) {
+// TestAssign_DoesNotInvalidateSessions verifies that Assign does NOT call the
+// credential invalidation funnel (HIGH-3 decision: granting a role is additive
+// and is not a credential-security event).
+func TestAssign_DoesNotInvalidateSessions(t *testing.T) {
 	svc, _, sessionStore := newTestService(t)
 	ctx := context.Background()
 
@@ -326,119 +361,72 @@ func TestService_Assign_InvalidatesSessions(t *testing.T) {
 
 	s, err := sessionStore.Get(ctx, "sess-2")
 	require.NoError(t, err)
-	assert.True(t, s.RevokedAt != nil, "session must be revoked after role assignment")
+	assert.Nil(t, s.RevokedAt, "session must NOT be revoked after role assignment (HIGH-3: Assign is additive)")
 }
 
-// failingSessionStore returns an error on RevokeForSubject to test fail-closed behavior.
-type failingSessionStore struct{}
+// TestRevoke_NoOp_DoesNotCallFunnel verifies that a no-op Revoke (user does not
+// hold the role) does not trigger credential invalidation.
+func TestRevoke_NoOp_DoesNotCallFunnel(t *testing.T) {
+	svc, _, sessionStore := newTestService(t)
+	ctx := context.Background()
 
-func (failingSessionStore) Create(_ context.Context, _ *session.Session) error {
-	return nil
+	sess := &session.Session{ID: "sess-noop-r", SubjectID: "usr-noop", JTI: "jti-noop-r"}
+	require.NoError(t, sessionStore.Create(ctx, sess))
+
+	// usr-noop does not hold admin role — Revoke is a no-op.
+	require.NoError(t, svc.Revoke(ctx, "usr-noop", "admin"))
+
+	s, err := sessionStore.Get(ctx, "sess-noop-r")
+	require.NoError(t, err)
+	assert.Nil(t, s.RevokedAt, "no-op Revoke must not invalidate sessions")
 }
 
-func (failingSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
-	return nil, fmt.Errorf("session store unavailable")
+// TestAssign_NoOp_DoesNotEmit verifies that a no-op Assign (already assigned)
+// does not emit an outbox entry. The session must also not be revoked.
+func TestAssign_NoOp_DoesNotEmit(t *testing.T) {
+	svc, store, sessionStore := newTestService(t)
+	ctx := context.Background()
+
+	// Pre-assign role so the second Assign is a no-op.
+	_, err := store.RoleRepository().AssignToUser(ctx, "usr-3", "admin")
+	require.NoError(t, err)
+
+	sess := &session.Session{ID: "sess-noop-a", SubjectID: "usr-3", JTI: "jti-noop-a"}
+	require.NoError(t, sessionStore.Create(ctx, sess))
+
+	require.NoError(t, svc.Assign(ctx, "usr-3", "admin"))
+
+	s, err := sessionStore.Get(ctx, "sess-noop-a")
+	require.NoError(t, err)
+	assert.Nil(t, s.RevokedAt, "no-op Assign must not revoke sessions")
 }
 
-func (failingSessionStore) Revoke(_ context.Context, _ string) error {
-	return nil
+// failingSessionStore returns an error on RevokeForSubject to test fail-closed
+// behavior when the credential funnel encounters a session-store failure.
+type failingSessionStore struct {
+	session.Store
 }
 
 func (failingSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
-	return fmt.Errorf("session store unavailable")
+	return errors.New("session store unavailable")
 }
 
-var _ session.Store = failingSessionStore{}
-
-func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
+func TestRevoke_FunnelFail_ReturnsError(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 	// Two active admins so the effective-admin guard passes when revoking usr-1.
 	assignActiveAdmin(t, store, "usr-1")
 	assignActiveAdmin(t, store, "usr-2")
 
-	svc := mustNewService(t, store.RoleRepository(), failingSessionStore{}, slog.Default())
-	err := svc.Revoke(context.Background(), "usr-1", "admin")
-	require.Error(t, err, "revoke must fail-closed when session revocation fails")
-	assert.Contains(t, err.Error(), "session revoke failed")
-}
+	realSession := testutil.RealSessionRepo(t)
+	failSession := failingSessionStore{Store: realSession}
+	inv, err := credentialinvalidate.New(store.UserRepository(), failSession, testutil.RealRefreshStore(t))
+	require.NoError(t, err)
+	svc, err := NewService(store.RoleRepository(), inv, slog.Default(),
+		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
+	require.NoError(t, err)
 
-func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-
-	svc := mustNewService(t, roleRepo, failingSessionStore{}, slog.Default())
-	err := svc.Assign(context.Background(), "usr-1", "admin")
-	require.Error(t, err, "assign must fail-closed when session revocation fails")
-	assert.Contains(t, err.Error(), "session revoke failed")
-}
-
-// TestService_DemoMode_Assign_CallsSessionRevoke proves that sessionStore.RevokeForSubject
-// is called exactly once per Assign, invalidating the user's active sessions.
-func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
-	tests := []struct {
-		name   string
-		userID string
-		roleID string
-	}{
-		{name: "demo assign calls session revoke", userID: "usr-demo", roleID: "admin"},
-		{name: "demo assign second user also calls session revoke", userID: "usr-demo-2", roleID: "admin"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-			roleRepo.SeedRole(&domain.Role{
-				ID:          "admin",
-				Name:        "admin",
-				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
-			})
-			sessionStore := testutil.RealSessionRepo(t)
-			// Create a session for the user so we can verify revocation.
-			sess := &session.Session{ID: "sess-" + tc.userID, SubjectID: tc.userID, JTI: "jti-" + tc.userID}
-			require.NoError(t, sessionStore.Create(context.Background(), sess))
-
-			svc := mustNewService(t, roleRepo, sessionStore, slog.Default())
-			require.NoError(t, svc.Assign(context.Background(), tc.userID, tc.roleID))
-
-			s, err := sessionStore.Get(context.Background(), "sess-"+tc.userID)
-			require.NoError(t, err)
-			assert.True(t, s.RevokedAt != nil, "demo mode: session must be revoked after Assign")
-		})
-	}
-}
-
-func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
-	tests := []struct {
-		name   string
-		userID string
-		roleID string
-	}{
-		{name: "demo revoke calls session revoke", userID: "usr-demo-r", roleID: "admin"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			store := mem.NewStore(clock.Real())
-			store.RoleRepository().SeedRole(&domain.Role{
-				ID:          "admin",
-				Name:        "admin",
-				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
-			})
-			// Two active admins so the effective-admin guard passes when
-			// revoking tc.userID.
-			assignActiveAdmin(t, store, tc.userID)
-			assignActiveAdmin(t, store, "usr-other")
-			sessionStore := testutil.RealSessionRepo(t)
-			sess := &session.Session{ID: "sess-" + tc.userID, SubjectID: tc.userID, JTI: "jti-" + tc.userID}
-			require.NoError(t, sessionStore.Create(context.Background(), sess))
-
-			svc := mustNewService(t, store.RoleRepository(), sessionStore, slog.Default())
-			require.NoError(t, svc.Revoke(context.Background(), tc.userID, tc.roleID))
-
-			s, err := sessionStore.Get(context.Background(), "sess-"+tc.userID)
-			require.NoError(t, err)
-			assert.True(t, s.RevokedAt != nil, "demo mode: session must be revoked after Revoke")
-		})
-	}
+	err = svc.Revoke(context.Background(), "usr-1", "admin")
+	require.Error(t, err, "Revoke must fail-closed when credential invalidation fails")
+	assert.Contains(t, err.Error(), "invalidate credentials")
 }

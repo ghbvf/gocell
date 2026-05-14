@@ -2,14 +2,14 @@
 // implementations. Backends (memstore, postgres) each run RunContractSuite
 // to prove they honor the same append-only + single-sentinel semantics.
 //
-// Test identifiers T1-T22 map to Store invariants: T1-T2 Issue, T3 Rotate
+// Test identifiers T1-T23 map to Store invariants: T1-T2 Issue, T3 Rotate
 // happy path, T4 grace window, T5 reuse-after-grace, T6-T8 fail-closed
 // rejection paths, T9 RevokeSession cascade, T10 concurrent Rotate CAS,
 // T11 ExpiresAt calculation, T12 errcode sentinel category, T13 GC cleanup,
 // T14 concurrent goroutine race model, T15 reuse-after-grace cascade,
 // T16 grace-inside-interval, T17 parse-failure uniformity, T18 RevokeUser,
 // T19-T20 Peek preflight/rejection, T21 Peek does not consume grace budget,
-// T22 detached session revoke.
+// T22 detached session revoke, T23 reuse-after-grace returns ErrReused.
 package storetest
 
 import (
@@ -97,7 +97,7 @@ func mustPeek(t *testing.T, store refresh.Store, wire string) *refresh.Token {
 	return tok
 }
 
-// RunContractSuite runs T1-T18 against factory. Each T is a t.Run sub-test.
+// RunContractSuite runs T1-T23 against factory. Each T is a t.Run sub-test.
 func RunContractSuite(t *testing.T, factory Factory) {
 	t.Helper()
 	t.Run("T1_Issue_Basic", func(t *testing.T) { t.Parallel(); runT1IssueBasic(t, factory) })
@@ -130,6 +130,10 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T22_RevokeSessionDetached_CascadeIgnoresCallerCancel", func(t *testing.T) {
 		t.Parallel()
 		runT22RevokeSessionDetachedIgnoresCallerCancel(t, factory)
+	})
+	t.Run("T23_Rotate_Reuse_ReturnsErrReused", func(t *testing.T) {
+		t.Parallel()
+		runT23RotateReuseReturnsErrReused(t, factory)
 	})
 }
 
@@ -193,7 +197,8 @@ func runT4GracePeriod(t *testing.T, factory Factory) {
 }
 
 // runT5ReuseDetection: parent presented beyond ReuseInterval triggers cascade
-// revocation and ErrRejected; subsequent Rotates on the chain also fail.
+// revocation and ErrReused; subsequent Rotates on the cascade-revoked child
+// return ErrRejected (revoked path, not a new reuse signal).
 func runT5ReuseDetection(t *testing.T, factory Factory) {
 	policy := refresh.Policy{
 		ReuseInterval:  testtime.D2s,
@@ -210,9 +215,9 @@ func runT5ReuseDetection(t *testing.T, factory Factory) {
 	clock.Advance(testtime.D10s) // > 2s — beyond grace
 
 	_, _, err := store.Rotate(ctx, parentWire)
-	require.ErrorIs(t, err, refresh.ErrRejected, "reuse-after-grace must yield ErrRejected")
+	require.ErrorIs(t, err, refresh.ErrReused, "reuse-after-grace must yield ErrReused")
 
-	// Lineage must be dead: current child also rejected.
+	// Lineage must be dead: current child also rejected (cascade-revoked, not reuse).
 	_, _, err = store.Rotate(ctx, childWire)
 	require.ErrorIs(t, err, refresh.ErrRejected, "current child must be revoked after reuse detection")
 }
@@ -557,10 +562,18 @@ func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
 	childWire, _ := mustRotate(t, store, parentWire)
 	clock.Advance(testtime.D3s)
 
-	_, err = store.Peek(ctx, parentWire)
-	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must reject")
+	tok, err := store.Peek(ctx, parentWire)
+	assert.ErrorIs(t, err, refresh.ErrReused, "reuse Peek must return ErrReused")
+	// Store contract (runtime/auth/refresh/store.go godoc): ErrReused MUST
+	// carry the row metadata so the service layer can drive a user-wide
+	// invalidation cascade (authz_epoch bump + revoke other sessions +
+	// revoke other refresh chains). Returning (nil, ErrReused) is a contract
+	// violation — the slice would silently lose the cascade entry point.
+	require.NotNil(t, tok, "ErrReused contract: Peek must return non-nil *Token (sess/subject metadata for user-wide cascade)")
+	assert.Equal(t, "sess-20-reuse", tok.SessionID, "ErrReused token must carry SessionID")
+	assert.Equal(t, t20Subject, tok.SubjectID, "ErrReused token must carry SubjectID for the user-wide cascade")
 	_, _, err = store.Rotate(ctx, childWire)
-	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must cascade revoke the session")
+	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must cascade revoke the session (child returns ErrRejected — revoked path)")
 }
 
 // runT21PeekDoesNotConsumeGraceBudget verifies that Peek (read-only by Store
@@ -612,7 +625,7 @@ func runT21PeekDoesNotConsumeGraceBudget(t *testing.T, factory Factory) {
 
 	// Now used_times == GraceMaxReuses. Next Rotate trips the cap.
 	_, _, err := store.Rotate(ctx, parentWire)
-	assert.ErrorIs(t, err, refresh.ErrRejected, "Rotate at used_times == GraceMaxReuses must trigger reuse_detected")
+	assert.ErrorIs(t, err, refresh.ErrReused, "Rotate at used_times == GraceMaxReuses must trigger reuse_detected (ErrReused)")
 }
 
 func runT22RevokeSessionDetachedIgnoresCallerCancel(t *testing.T, factory Factory) {
@@ -626,6 +639,45 @@ func runT22RevokeSessionDetachedIgnoresCallerCancel(t *testing.T, factory Factor
 
 	_, _, err := store.Rotate(context.Background(), wire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "detached revoke must kill the session chain")
+}
+
+// runT23RotateReuseReturnsErrReused: presenting a consumed token beyond the
+// grace window returns ErrReused (not ErrRejected). The distinction allows
+// callers (e.g. sessionrefresh service in Batch 3) to trigger cascade revoke
+// and epoch bump on confirmed reuse attacks, while non-reuse rejections (wrong
+// token, expired, revoked by logout) map to plain 401 without side-effects.
+//
+// Protocol:
+//   - Issue token1, rotate to token2 (parent = token1).
+//   - Advance clock past ReuseInterval.
+//   - Rotate token1 again → must return ErrReused.
+//   - errors.Is(err, ErrRejected) must be false: ErrReused does not wrap
+//     ErrRejected so callers cannot conflate the two paths.
+func runT23RotateReuseReturnsErrReused(t *testing.T, factory Factory) {
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
+	store, clock := factory(t, policy)
+	ctx := context.Background()
+
+	token1Wire, _ := mustIssue(t, store, "sess-23", "user-23")
+	_, _ = mustRotate(t, store, token1Wire)
+
+	clock.Advance(testtime.D10s) // > 2s — beyond grace window
+
+	_, tok, err := store.Rotate(ctx, token1Wire)
+	require.Error(t, err, "reuse-after-grace must return an error")
+	assert.ErrorIs(t, err, refresh.ErrReused, "reuse-after-grace must return ErrReused")
+	assert.False(t, errors.Is(err, refresh.ErrRejected),
+		"ErrReused must NOT satisfy errors.Is(err, ErrRejected): callers must branch separately")
+	// Store contract: Rotate's ErrReused branch must return token identity so
+	// the service layer can drive the user-wide invalidation cascade.
+	require.NotNil(t, tok, "ErrReused contract: Rotate must return non-nil *Token (sess/subject metadata for user-wide cascade)")
+	assert.Equal(t, "sess-23", tok.SessionID, "ErrReused token must carry SessionID")
+	assert.Equal(t, "user-23", tok.SubjectID, "ErrReused token must carry SubjectID for the user-wide cascade")
 }
 
 // Silence unused-imports guard when errcode isn't needed (defensive).

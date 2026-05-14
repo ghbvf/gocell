@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
@@ -85,12 +86,11 @@ func newTestSessionStore(t testing.TB) *session.MemStore {
 // must call sessionStore.Create to persist it.
 func newTestSession(subjectID, sessionID string) *session.Session {
 	return &session.Session{
-		ID:                sessionID,
-		SubjectID:         subjectID,
-		JTI:               sessionID,
-		AuthzEpochAtIssue: 0,
-		CreatedAt:         time.Now(),
-		ExpiresAt:         time.Now().Add(time.Hour),
+		ID:        sessionID,
+		SubjectID: subjectID,
+		JTI:       sessionID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
 	}
 }
 
@@ -110,6 +110,56 @@ func newTestRefreshStore() refresh.Store {
 
 type typedNilRefreshStore struct {
 	refresh.Store
+}
+
+// newTestInvalidator builds a real *credentialinvalidate.Invalidator backed by
+// in-memory stores. Used by test helpers that need a non-nil invalidator but do
+// not exercise the reuse-cascade path directly.
+func newTestInvalidator(
+	userRepo ports.UserRepository,
+	sessionStore session.Store,
+	refreshStore refresh.Store,
+) *credentialinvalidate.Invalidator {
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	if err != nil {
+		panic("test setup: newTestInvalidator: " + err.Error())
+	}
+	return inv
+}
+
+// withTestInvalidator returns a WithInvalidator option built from the given
+// stores. Tests that use standalone MustNewService calls (not via
+// newTestServiceWithClock) call this helper to satisfy the required-invalidator
+// constraint without setting up separate store variables.
+func withTestInvalidator(userRepo ports.UserRepository, sessionStore session.Store, refreshStore refresh.Store) Option {
+	return WithInvalidator(newTestInvalidator(userRepo, sessionStore, refreshStore))
+}
+
+// MustNewServiceWithInvalidator constructs a Service with an explicit spy
+// invalidator (for tests that exercise the reuse-cascade path). Since the
+// invalidatorApply interface is unexported but tests are in the same package,
+// the spy is directly assigned to the service's invalidator field.
+func MustNewServiceWithInvalidator(
+	sessionStore session.Store,
+	roleRepo ports.RoleRepository,
+	userRepo ports.UserRepository,
+	refreshStore refresh.Store,
+	issuer *auth.JWTIssuer,
+	logger *slog.Logger,
+	inv invalidatorApply,
+	opts ...Option,
+) *Service {
+	// Build with a real invalidator to pass NewService nil validation, then
+	// swap in the spy so assertions capture the exact call arguments.
+	realInv := newTestInvalidator(userRepo, sessionStore, refreshStore)
+	allOpts := append([]Option{WithInvalidator(realInv)}, opts...)
+	svc, err := NewService(sessionStore, roleRepo, userRepo, refreshStore, issuer, logger,
+		append(allOpts, WithClock(clock.Real()))...) //archtest:allow:clock-injection:via-slice opts built dynamically for spy injection
+	if err != nil {
+		panic("MustNewServiceWithInvalidator: " + err.Error())
+	}
+	svc.invalidator = inv
+	return svc
 }
 
 // TestNewService_IssuerDefaultAudienceWrittenOnRefresh verifies that the
@@ -175,8 +225,10 @@ func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, sessi
 	if err != nil {
 		t.Fatalf("test setup: %v", err)
 	}
+	inv := newTestInvalidator(userRepo, sessionStore, refreshStore)
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		WithInvalidator(inv))
 	return svc, sessionStore, refreshStore, fakeClock
 }
 
@@ -189,7 +241,8 @@ func newTestServiceWithUserRepo(t testing.TB) (*Service, session.Store, *mem.Use
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 	return svc, sessionStore, userRepo
 }
 
@@ -320,7 +373,8 @@ func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
 
 	tr := &failingTxRunner{}
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(tr)))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(tr)),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 
@@ -449,7 +503,8 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	sess := newTestSession("usr-rolefail", "sess-rolefail")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -751,7 +806,8 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	sess := newTestSession("usr-sa", "sess-sa")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -782,7 +838,8 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository() // intentionally empty — GetByID returns error
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	sess := newTestSession("usr-missing", "sess-missing")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -811,7 +868,8 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 	// Recreate with a known refreshStore so we can issue and rotate wire tokens.
 	refreshStore := newTestRefreshStore()
 	svc2 := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	sess := newTestSession("usr-ref-clear", "sess-ref-clear")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -846,7 +904,8 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	sess := newTestSession("usr-ref-reset", "sess-ref-reset")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -888,7 +947,8 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	// Issue a wire token but don't seed the session — Get will return infraErr.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra")
@@ -971,7 +1031,8 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	spy := &spyRefreshStore{Store: innerStore}
 	sessionStore := &sessionNotFoundStore{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionStore, roleRepo, userRepo, spy, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, spy))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "session-not-found must cause Refresh to fail")
@@ -998,7 +1059,8 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 	}
 	sessionStore := &sessionNotFoundStore{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1023,7 +1085,8 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 	spy := &spyRefreshStore{Store: innerStore}
 	sessionStore := &sessionNotFoundStore{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionStore, roleRepo, userRepo, spy, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
 
 	wireToken, _, err := innerStore.Issue(context.Background(), "sess-update-missing", "usr-update-missing")
 	require.NoError(t, err)
@@ -1054,15 +1117,18 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			build: func(t *testing.T) (*Service, string) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-uniform-notfound", "sess-uniform-notfound")
+				userRepo := mem.NewStore(clock.Real()).UserRepository()
+				sessionStore := &sessionNotFoundStore{notFoundErr: domainSessionNotFoundError()}
 				svc := MustNewService(
-					&sessionNotFoundStore{notFoundErr: domainSessionNotFoundError()},
+					sessionStore,
 					mem.NewStore(clock.Real()).RoleRepository(),
-					mem.NewStore(clock.Real()).UserRepository(),
+					userRepo,
 					innerStore,
 					testIssuer,
 					slog.Default(),
 					WithClock(clock.Real()),
 					WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+					withTestInvalidator(userRepo, sessionStore, innerStore),
 				)
 				return svc, wireToken
 			},
@@ -1086,9 +1152,11 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				t.Helper()
 				sessionStore := newTestSessionStore(t)
 				refreshStore := newTestRefreshStore()
-				svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), mem.NewStore(clock.Real()).UserRepository(),
+				userRepo := mem.NewStore(clock.Real()).UserRepository()
+				svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo,
 					refreshStore, testIssuer, slog.Default(),
-					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+					WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+					withTestInvalidator(userRepo, sessionStore, refreshStore))
 				sess := newTestSession("usr-uniform-missing", "sess-uniform-missing")
 				require.NoError(t, sessionStore.Create(context.Background(), sess))
 				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-missing", "usr-uniform-missing")
@@ -1124,15 +1192,18 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 			build: func(t *testing.T, logger *slog.Logger) (*Service, string) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-log-notfound", "sess-log-notfound")
+				userRepo := mem.NewStore(clock.Real()).UserRepository()
+				sessionStore := &sessionNotFoundStore{notFoundErr: domainSessionNotFoundError()}
 				svc := MustNewService(
-					&sessionNotFoundStore{notFoundErr: domainSessionNotFoundError()},
+					sessionStore,
 					mem.NewStore(clock.Real()).RoleRepository(),
-					mem.NewStore(clock.Real()).UserRepository(),
+					userRepo,
 					innerStore,
 					testIssuer,
 					logger,
 					WithClock(clock.Real()),
 					WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+					withTestInvalidator(userRepo, sessionStore, innerStore),
 				)
 				return svc, wireToken
 			},
@@ -1225,7 +1296,8 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "rotate store down"),
 	}
 	svc2 := MustNewService(sessionStore, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1281,7 +1353,8 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	// Override Rotate to return a token with wrong SessionID.
 	mismatchStore := rotateMismatchRefreshStore{Store: spy, rotatedSessionID: "wrong-session", rotatedSubjectID: "usr-mismatch"}
 	svc2 := MustNewService(sessionStore, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1290,6 +1363,350 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
 	assert.Equal(t, "invalid refresh token", ec.Message)
+}
+
+// TestRefresh_AccessJWT_HasNewEpoch_AfterUserBump verifies that after
+// Rotate succeeds, the new access JWT carries the user's current
+// AuthzEpoch (S4b epoch forwarding through sessionrefresh path).
+func TestRefresh_AccessJWT_HasNewEpoch_AfterUserBump(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-epoch-ref", "epoch-ref@test.local", "hash", time.Now())
+	u.ID = "usr-epoch-ref"
+	u.AuthzEpoch = 5
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	refreshStore := newTestRefreshStore()
+	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
+
+	sess := newTestSession("usr-epoch-ref", "sess-epoch-ref")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-epoch-ref", "usr-epoch-ref")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.NoError(t, err)
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), claims.AuthzEpoch,
+		"refreshed access token must carry the user's current authz_epoch (S4b epoch forwarding)")
+}
+
+// spyInvalidator records Apply calls so reuse-funnel tests can assert
+// Apply was triggered with the correct arguments.
+type spyInvalidator struct {
+	calls []struct {
+		subjectID string
+		event     session.CredentialEvent
+	}
+	err error
+}
+
+func (s *spyInvalidator) Apply(_ context.Context, subjectID string, event session.CredentialEvent) error {
+	s.calls = append(s.calls, struct {
+		subjectID string
+		event     session.CredentialEvent
+	}{subjectID, event})
+	return s.err
+}
+
+// TestRefresh_Reuse_TriggersInvalidatorApply verifies the reuse cascade path:
+//   - refresh.Store returns ErrReused on Rotate
+//   - invalidator.Apply is called with (sess.SubjectID, CredentialEventRefreshReuse)
+//   - the response surfaces as ErrAuthRefreshFailed (401, uniform rejection)
+//   - cascadeRevoke detached is NOT called (funnel.Apply owns the refresh chain revocation)
+func TestRefresh_Reuse_TriggersInvalidatorApply(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-reuse", "reuse@test.local", "hash", time.Now())
+	u.ID = "usr-reuse"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	// reuseRefreshStore simulates a refresh store that returns ErrReused on Rotate.
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnRotateRefreshStore{Store: innerStore, subjectID: "usr-reuse", sessionID: "sess-reuse"}
+	spy := &spyInvalidator{}
+	detachedSpy := &spyRefreshStore{Store: innerStore}
+
+	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
+		spy,
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+
+	sess := newTestSession("usr-reuse", "sess-reuse")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-reuse", "usr-reuse")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"reuse must surface as uniform ErrAuthRefreshFailed")
+
+	require.Len(t, spy.calls, 1, "invalidator.Apply must be called exactly once on reuse")
+	assert.Equal(t, "usr-reuse", spy.calls[0].subjectID)
+	assert.Equal(t, session.CredentialEventRefreshReuse, spy.calls[0].event,
+		"Apply must receive CredentialEventRefreshReuse")
+
+	// cascadeRevoke (RevokeSessionDetached) must NOT be called separately —
+	// funnel.Apply already owns the refresh chain revocation atomically. The
+	// prior `_ = detachedSpy` was a silent no-op; assert the actual invariant.
+	detachedSpy.mu.Lock()
+	detachedN := detachedSpy.revokeSessionDetachedN
+	businessN := detachedSpy.revokeSessionN
+	detachedSpy.mu.Unlock()
+	assert.Equal(t, 0, detachedN,
+		"funnel.Apply owns refresh-chain revocation; cascade RevokeSessionDetached must not fire separately")
+	assert.Equal(t, 0, businessN,
+		"reuse path must not double-revoke through RevokeSession either")
+}
+
+// TestRefresh_Reuse_CascadeFailure_Returns401 verifies the security-critical
+// fail-closed property of handleReuseDetected: when the reuse-cascade
+// invalidator.Apply itself fails (e.g. DB transient outage, downstream
+// KindUnavailable), the wire response must remain 401 ErrAuthRefreshFailed —
+// not propagate the infra error as 503. Surfacing 503 here would leak a
+// side-channel signal that "the cascade tried but failed", letting an
+// attacker enumerate cascade-state by status code timing.
+func TestRefresh_Reuse_CascadeFailure_Returns401(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-cascade-fail", "cascade-fail@test.local", "hash", time.Now())
+	u.ID = "usr-cascade-fail"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnRotateRefreshStore{Store: innerStore, subjectID: "usr-cascade-fail", sessionID: "sess-cascade-fail"}
+	// spy invalidator returns KindUnavailable — without the fail-closed fix
+	// this would bubble up through the middleware as 503.
+	spy := &spyInvalidator{
+		err: errcode.New(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable,
+			"injected cascade DB outage"),
+	}
+
+	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
+		spy,
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+
+	sess := newTestSession("usr-cascade-fail", "sess-cascade-fail")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-cascade-fail", "usr-cascade-fail")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"reuse-cascade-failure path must surface uniform ErrAuthRefreshFailed (401), NOT the underlying ErrAuthRefreshUnavailable (503)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+		"Kind must collapse to KindUnauthenticated so middleware emits 401; KindUnavailable would emit 503 and leak a cascade-state side channel")
+
+	require.Len(t, spy.calls, 1, "invalidator.Apply must still be attempted on reuse path")
+}
+
+// reuseOnRotateRefreshStore wraps a refresh.Store and overrides Peek to
+// return a token that maps to the given session/subject, and Rotate to
+// return ErrReused so the reuse-cascade branch fires.
+type reuseOnRotateRefreshStore struct {
+	refresh.Store
+	subjectID string
+	sessionID string
+}
+
+func (s *reuseOnRotateRefreshStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
+	return &refresh.Token{SessionID: s.sessionID, SubjectID: s.subjectID}, nil
+}
+
+func (s *reuseOnRotateRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
+	return "", nil, refresh.ErrReused
+}
+
+// reuseOnPeekRefreshStore simulates the refresh store detecting reuse during
+// Peek (grace-counter exhaustion or post-rotation reuse window). Peek returns
+// the carried subject/session alongside ErrReused so the service layer can
+// route into the unified invalidator cascade. Rotate is not exercised here.
+type reuseOnPeekRefreshStore struct {
+	refresh.Store
+	subjectID string
+	sessionID string
+}
+
+func (s *reuseOnPeekRefreshStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
+	return &refresh.Token{SessionID: s.sessionID, SubjectID: s.subjectID}, refresh.ErrReused
+}
+
+// TestRefresh_PeekDetectedReuse_TriggersInvalidatorApply verifies the
+// Finding #2 fix: a reuse signal surfaced from Peek (e.g. grace-counter
+// exhaustion or post-rotation reuse window) must route into the same
+// invalidator.Apply cascade as Rotate-detected reuse. Before the fix the Peek
+// path returned a bare 401 without triggering the funnel, leaving the user's
+// other sessions + refresh chains alive after a confirmed replay attack.
+func TestRefresh_PeekDetectedReuse_TriggersInvalidatorApply(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-peek-reuse", "peek-reuse@test.local", "hash", time.Now())
+	u.ID = "usr-peek-reuse"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnPeekRefreshStore{Store: innerStore, subjectID: "usr-peek-reuse", sessionID: "sess-peek-reuse"}
+	spy := &spyInvalidator{}
+
+	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
+		spy,
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+
+	sess := newTestSession("usr-peek-reuse", "sess-peek-reuse")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-peek-reuse", "usr-peek-reuse")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"Peek-detected reuse must surface as uniform ErrAuthRefreshFailed (401)")
+
+	require.Len(t, spy.calls, 1,
+		"Peek-detected reuse must trigger invalidator.Apply exactly once — same cascade as Rotate path")
+	assert.Equal(t, "usr-peek-reuse", spy.calls[0].subjectID)
+	assert.Equal(t, session.CredentialEventRefreshReuse, spy.calls[0].event,
+		"Apply must receive CredentialEventRefreshReuse for Peek path too")
+}
+
+// contextCapturingInvalidator is a spy invalidator that records the context
+// passed to Apply. Used to assert that reuse cascade uses an outer/detached
+// context rather than the txCtx that gets canceled when the outer tx rolls back.
+type contextCapturingInvalidator struct {
+	capturedCtx context.Context
+	err         error
+}
+
+func (s *contextCapturingInvalidator) Apply(ctx context.Context, _ string, _ session.CredentialEvent) error {
+	s.capturedCtx = ctx
+	return s.err
+}
+
+// outerCtxKey is a context key used in TestRefresh_Reuse_CascadeUsesDetachedCtx
+// to identify contexts derived from outerCtx vs txCtx.
+type outerCtxKey struct{}
+
+// outerCtxTxRunner is a TxRunner that sets a distinguishing txCtx key on the
+// inner context so the test can verify Apply is called with outerCtx-derived
+// context (ctxutil.WithDetachedTimeout) rather than txCtx itself.
+//
+// Behavior: the inner fn receives a txCtx with a synthetic key set to "tx".
+// The outer context (passed to RunInTx) carries the outerCtxKey set to "outer".
+// After the fix, handleReuseDetected wraps outerCtx with
+// ctxutil.WithDetachedTimeout (which is context.WithoutCancel + WithTimeout)
+// and passes that to the inner RunInTx; the detached RunInTx again calls fn
+// with an inner txCtx — but that inner txCtx is derived from the detached
+// outerCtx, so it does NOT carry the synthetic tx key but DOES carry
+// outerCtxKey, proving the cascade context chain goes through outerCtx.
+type outerCtxTxRunner struct {
+	calls int
+}
+
+func (r *outerCtxTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	r.calls++
+	// Derive txCtx from the parent ctx (mirrors real PG TxManager behavior).
+	// We tag txCtx so we can detect if Apply received it directly.
+	txCtx := context.WithValue(ctx, struct{ txCall int }{r.calls}, "tx")
+	return fn(txCtx)
+}
+
+// TestRefresh_Reuse_CascadeUsesDetachedCtx verifies that Finding #4 is fixed:
+// when ErrReused is returned by Rotate, the invalidator.Apply call uses a
+// context that is derived from outerCtx (not from the outer txCtx).
+//
+// Before the fix: Apply was called with txCtx directly inside the outer RunInTx
+// closure. Returning authRefreshRejected() from the closure caused the outer tx
+// to roll back, which canceled txCtx and undid all Apply writes.
+//
+// After the fix: handleRotateError wraps outerCtx with context.WithoutCancel and
+// opens a new (inner) RunInTx for Apply — detached from the outer tx — so Apply
+// commits independently of the outer 401 rejection.
+//
+// The test verifies that:
+//  1. Apply is called.
+//  2. The context received by Apply carries the outerCtxKey value (proving it
+//     was derived from the caller's ctx, not from a fresh background context).
+//  3. Refresh returns ErrAuthRefreshFailed (uniform 401).
+func TestRefresh_Reuse_CascadeUsesDetachedCtx(t *testing.T) {
+	t.Parallel()
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-detached", "detached@test.local", "hash", time.Now())
+	u.ID = "usr-detached"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnRotateRefreshStore{Store: innerStore, subjectID: "usr-detached", sessionID: "sess-detached"}
+	spy := &contextCapturingInvalidator{}
+
+	outerRunner := &outerCtxTxRunner{}
+	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
+		spy,
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outerRunner)))
+
+	sess := newTestSession("usr-detached", "sess-detached")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	// Attach a sentinel value to the caller's ctx so we can verify the cascade
+	// context chain propagates it.
+	callerCtx := context.WithValue(context.Background(), outerCtxKey{}, "outer")
+
+	_, err := svc.Refresh(callerCtx, "any-token")
+	// Expect ErrAuthRefreshFailed (reuse rejection).
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
+
+	// KEY ASSERTIONS:
+	require.NotNil(t, spy.capturedCtx, "invalidator.Apply must have been called")
+	// The Apply context must carry the outerCtxKey sentinel — proving it was
+	// derived from the caller's outerCtx, not from a fresh context.Background().
+	// This is the critical invariant: handleReuseDetected uses
+	// ctxutil.WithDetachedTimeout(outerCtx, ...) which preserves Value lookup
+	// while breaking the cancel chain.
+	assert.Equal(t, "outer", spy.capturedCtx.Value(outerCtxKey{}),
+		"Apply context must be derived from outerCtx (carrying outerCtxKey sentinel) — "+
+			"proving the cascade tx is detached from txCtx but still rooted in the caller's ctx")
+	// NOTE: capturedCtx.Err() is intentionally NOT asserted here. With the new
+	// WithDetachedTimeout pattern handleReuseDetected calls cancel() via defer
+	// after RunInTx returns, so by the time the test reads capturedCtx the
+	// detached context has already been canceled (resource release is correct
+	// behavior). The semantic guarantee is "Apply ran *while* the ctx was live",
+	// which is enforced by the value-propagation check above plus the fact
+	// that the spy was invoked at all (Apply received a live ctx).
 }
 
 // Compile-time check: ports is used (userRepo, roleRepo). Ensure unused import

@@ -1,7 +1,7 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-13（v2：Wave 1 半数 ship — PR-1/PR-2/PR-7/PR-8 全部 closed；PR-6 in review (PR #487)；PR-3/PR-4/PR-9 未启动；034 S4a 同期 ship as PR #482）
+**最后更新**：2026-05-14（v4：剩余 PR 按 040 依赖分流 — 7 PR 独立于 040 可立即起 / 3 PR 等 040 阶段 1 (PR-4/PR-5/Wave 4 ADAPTER-ERR-CLASS)；v3 #5/#7 决策过时已标注；PR-5 合并决策收口（保持合并）。Wave 1 5/8 ship — PR-1/PR-2/PR-6/PR-7/PR-8 全部 closed；PR #487 review 派生 plan 040 archtest Pass-Driver 范式）
 **关系**：
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md) 已覆盖 accesscore PG 链（S3+S5/S3F/S4.0/**S4a** 已 ship by PR #482；S4b→S4c 串行推进）。**本计划不重复 accesscore 路线**，仅引用 034 S4b/S4c 作为下游闭环
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
@@ -13,8 +13,8 @@
 - ✅ PR-2 → PR #484 (含 review 升 Hard funnel `PROM-CELL-LABEL-FUNNEL-01`)
 - ✅ PR-7 → PR #483 (含 review type-aware 升 Hard，覆盖 4 个 Contract-expression 形态)
 - ✅ PR-8 → PR #485 (4 adapters 直接 ManagedResource + adapterutil helper + archtest gate + s3 状态机)
-- 🚧 PR-6 → PR #487 open (573-governance-rules-registration-guard，非 draft)
-- ⏳ PR-3 / PR-4 / PR-5 / PR-9 / PR-11 / Wave 3 / Wave 4 未启动
+- ✅ PR-6 → PR #487 merged 2026-05-13 (archtest 反射枚举 + ValidateStrict 单入口 + rulecodes.go + `; fix:` 后缀 + INV-1/2/3 同源遍历 `typeseval.EachFileInPackage` helper + 4 follow-up entries 登记 cap-02)；review 派生 plan 040 archtest Pass-Driver 入口收口范式
+- ⏳ PR-3 / PR-4 / PR-5 / PR-9 / PR-11 / Wave 3 / Wave 4 未启动；PR-5 (GOV-NEW-RULES) 现解除 PR-6 阻塞，可起
 
 ---
 
@@ -90,22 +90,33 @@
 
 **包含**：K-02 + JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01 + JOURNEY-STATUS-BOARD-LIFECYCLE-CONSISTENCY-01
 **依据**：K-02 (c) 与 JOURNEY-CONTRACT-EXISTENCE 是同一规则的两种描述；3 项都改 `kernel/governance/rules_journey.go` + `journeys/J-*.yaml` + `kernel/verify/`
+**依赖**（v4 2026-05-14 复核）：
+- PR-6 (G-13) ✅ PR #487 已落：新 rule 注册直接走 `kernel/governance/rulecodes.go` 单源 + `validateJourney*()` 方法范式 + SeverityError `; fix:` 后缀（参照 ADV-06）；无 rebase 成本
+- **建议等 040 阶段 1**：journey YAML 完整性 / lifecycle 守护高概率新增 archtest 文件，等 Pass-Driver 范式落地后走新入口，避免新文件进 LegacyAllowlist 后再二次重写
 **Cx**：Cx2-Cx3
 
-#### PR-5 PR-GOV-NEW-RULES（合并 2 个 governance 新规则，依赖 PR-6）
+#### PR-5 PR-GOV-NEW-RULES（合并 2 个 governance 新规则，PR-6 ✅ 阻塞解除）
 
 **包含**：GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN + V-A11 GOVERNANCE-EXAMPLES-COVERAGE-01
-**依据**：都在 `kernel/governance/`（rules_fmt.go / rules_examples.go 兄弟文件），都是新增 rule，PR-6 注册框架落地后同时挂入
-**依赖**：PR-6（G-13）先 ship；合并理由偏弱，PR-6 ship 后可回看是否拆
+**依据**：都在 `kernel/governance/`（rules_fmt.go / rules_examples.go 兄弟文件），都是新增 rule，PR-6 注册框架已落
+**依赖**（v4 2026-05-14 复核）：
+- PR-6 (G-13) ✅ PR #487 已落：直接用 `rulecodes.go` + `validateXxx()` + `; fix:` 后缀范式
+- **建议等 040 阶段 1**：V-A11 EXAMPLES-COVERAGE 倾向新 archtest 文件守 examples cell/contract 完整性，走 Pass-Driver 入口避免二次返工
+**合并决策**（v4 2026-05-14 收口）：**保持合并**——两条 governance 兄弟规则（rules_fmt.go / rules_examples.go），文件物理重叠 + 同 ADR 概念（governance 规则注册框架），单 PR review 合理；PR-6 落后回看结论：注册框架 ship 后两条挂入路径完全一致，无拆分必要
 **Cx**：Cx2
 
-#### PR-6 G-13 GOVERNANCE-RULES-REGISTRATION-GUARD（独立 P1）— 🚧 in review as PR #487
+#### PR-6 G-13 GOVERNANCE-RULES-REGISTRATION-GUARD（独立 P1）— ✅ shipped as PR #487
 
 **包含**：仅 G-13 单条
 **依据**：元治理框架（archtest 反射枚举 + `ValidateStrict` 单入口 + 提取 `rulecodes.go`），PR-5 的前置
 **改动**：`kernel/governance/{rules.go,rulecodes.go(新)}` + `tools/archtest/`
 **Cx**：Cx2
-**状态（2026-05-13）**：PR #487 open（分支 `573-governance-rules-registration-guard`，非 draft），review 中。merge 后解除 PR-5 的 ship 阻塞
+**ship 摘要（PR #487, 2026-05-13）**：
+- governance: 抽 `kernel/governance/rulecodes.go` 单源 rule code + 138 行新文件；`ValidateStrict(strict, failFast bool)` 合并双入口；SeverityError 规则全部追加 `; fix: ...` 后缀（参照 ADV-06 范式）
+- archtest: `tools/archtest/governance_rules_invariants_test.go` 反射枚举注册一致性 (INV-1) + ValidationResult Code/Message 完整性 (INV-2) + SeverityError fix 后缀 (INV-3)，共 11 RED fixtures（governance_{registration_guard,rulecode_single_source,fix_anchor}_fixtures/）
+- review 派生：新增 `typeseval.EachFileInPackage(root, pkg, skipTestFiles, fn)` 同源遍历 helper（消除 scanner.EachFile + pkg.TypesInfo 混用入口，对标 go/analysis Pass）；4 follow-up 登记 cap-02（G-13-FU-INV1-SAMESOURCE ✅ / -H2 / -H3 / -H1-REJECTED）
+- 派生新 plan：`docs/plans/202605141519-040-archtest-pass-funnel-plan.md`（archtest.Pass + Run/RunTyped 范式收口 INV-1 双入口问题，4 阶段 ~10 PR）
+- merge 后解除 PR-5 ship 阻塞
 
 #### PR-7 AUTH-BOOTSTRAP-CLIENTS-MUTEX-01（独立判断）— ✅ shipped as PR #483
 
@@ -144,19 +155,19 @@
 ## 3. 依赖图与执行 Wave
 
 ```
-Wave 1（独立并行，8 PR） — 4/8 ship + 1/8 in review：
+Wave 1（独立并行，8 PR） — 5/8 ship：
   PR-1 OTEL-HARDEN-5         ✅ PR #486 (OTEL-HARDEN-4，B2-R-05 split)
   PR-2 PROM-HARDEN-3         ✅ PR #484
   PR-3 CLI-HARDEN            ⏳ 未启动
   PR-4 JOURNEY-LIFECYCLE-GOV ⏳ 未启动
-  PR-6 G-13 元治理 guard     🚧 PR #487 open (in review)
+  PR-6 G-13 元治理 guard     ✅ PR #487 merged 2026-05-13
   PR-7 BOOTSTRAP-CLIENTS-MUTEX ✅ PR #483
   PR-8 OIDC-MR-COMPLETENESS  ✅ PR #485
   PR-9 REPO-READYZ           ⏳ 未启动
 
 Wave 2（依赖 Wave 1，2 PR） — 0/2 ship：
   PR-5 GOV-NEW-RULES (GOVERNANCE-AUTH-PUBLIC + V-A11)
-       ↑ 依赖 PR-6 (PR #487 in review)；PR-6 merge 后可起
+       ↑ 依赖 PR-6 ✅；**前置已达成，可立即排期**
   PR-11 OIDC-JWKS-ROTATION-WORKER-01
        ↑ 依赖 PR-8 ✅；**前置已达成，可立即排期** (Refresh API 已落在 oidc Adapter)
 
@@ -177,6 +188,8 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 
 外部进行中（不在本计划内但相关）：
   034 S4a ✅ PR #482 → S4b → S4c     (accesscore PG 链，串行；S4a 已 ship)
+  040 archtest Pass-Driver           (PR #487 review 派生 plan，4 阶段 ~10 PR；阶段 1 建议
+                                      优先于 038 PR-4/PR-5/Wave 4 ADAPTER-ERR-CLASS ship)
 
 新增条目（038 内 ship 衍生，不另开 backlog 主线）：
   METRICS-CTX-FUNNEL-01  ← 由 PR #486 (PR-1) 同 PR split 出，Cx4 跨层；backlog cap-13 line 21 已登记
@@ -188,7 +201,8 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | PR pair | 共享路径 | 冲突 |
 |---|---|---|
 | PR-1 vs PR-2 | 都有 cmd/corebundle | PR-1 不动 corebundle；PR-2 仅 metrics.go → ✅ 不冲突 |
-| PR-4 vs PR-6 | 都有 kernel/governance | PR-4 加 rules_journey.go（新文件）；PR-6 改 rules.go 注册框架 → ⚠️ 注册框架变更可能要求 PR-4 用新 API；建议 PR-6 先 merge，PR-4 rebase |
+| PR-4 vs PR-6 ✅ | 都有 kernel/governance | PR-6 ✅ PR #487 已落（2026-05-13），PR-4 写 rules_journey.go 直接用新范式（rulecodes.go + validateJourney*() + ; fix: 后缀），无 rebase 成本 → ✅ 已解锁 |
+| PR-4 / PR-5 / Wave 4 ADAPTER-ERR-CLASS vs 040 阶段 1 | tools/archtest/* | 三者均高概率新增 archtest 文件；040 阶段 1 落 Pass-Driver 范式后业务 archtest 0 改动，新增 archtest 走 Pass-Driver → 建议三者等 040 阶段 1 ship 后再起，避免进 LegacyAllowlist 后二次重写 |
 | PR-4 vs PR-3 | 都可能涉 cmd/gocell | PR-4 不动 cmd/gocell；PR-3 仅 cmd/gocell/app → ✅ 不冲突 |
 | 所有 PR vs 034 S4a | 034 S4a 在 cmd/corebundle/access_module.go + cells/accesscore | 与本计划全部 PR 文件域互斥 → ✅ 不冲突 |
 | PR-7 vs 034 S4a | 都含 runtime/auth | PR-7 仅 route.go validateBypassCompatibility；034 S4a 不动 route.go → ✅ 不冲突 |
@@ -202,22 +216,21 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | PR-1 OTEL-HARDEN-5 | 8h | 4h | ✅ PR #486 | 实际 4 of 5（B2-R-05 split → METRICS-CTX-FUNNEL-01） |
 | PR-2 PROM-HARDEN-3 | 4h | 2h | ✅ PR #484 | +review Hard funnel 升级 |
 | PR-3 CLI-HARDEN | 4h | 2h | ⏳ 未启动 | 3 项 |
-| PR-4 JOURNEY-LIFECYCLE-GOV | 6h | 3h | ⏳ 未启动 | K-02 束 |
-| PR-6 G-13 元治理 guard | 6h | 3h | 🚧 PR #487 in review | 注册框架；PR-5 阻塞解除待 merge |
+| PR-4 JOURNEY-LIFECYCLE-GOV | 6h | 3h | ⏳ 等 040 阶段 1 | K-02 束；新 rule 走 PR-6 ✅ 范式；新增 archtest 走 040 Pass-Driver |
+| PR-6 G-13 元治理 guard | 6h | 3h | ✅ PR #487 | 注册框架；review 派生 plan 040 archtest Pass-Driver；4 follow-up 登记 cap-02 |
 | PR-7 BOOTSTRAP-CLIENTS-MUTEX | 3h | 1.5h | ✅ PR #483 | +review type-aware Hard 全形态覆盖 |
 | PR-8 OIDC-MR-COMPLETENESS | 18h | 8h | ✅ PR #485 | A-01 + A-07 + A-08 束 |
 | PR-9 REPO-READYZ | 4h | 2h | ⏳ 未启动 | 2 项 |
-| PR-5 GOV-NEW-RULES（依赖 PR-6） | 4h | 2h | ⏳ 阻塞 PR-6 | 2 rule |
+| PR-5 GOV-NEW-RULES | 4h | 2h | ⏳ 等 040 阶段 1 | PR-6 ✅；保持合并；V-A11 archtest 走 040 Pass-Driver |
 | PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ⏳ 可起 | 后台 worker；PR-8 unblock |
 | Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | ⏳ 依赖 PR-4 | integration harness |
-| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | ⏳ 0/5 | R-01+G-08 batch 10h+5h / C-02 4h+2h / STARTUP-ROLLBACK 3h+1.5h / ADAPTER-ERR-CLASS 6h+3h / ADAPTER-CONN-BUDGET 4h+2h |
+| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | ⏳ 0/5 | R-01+G-08 batch 10h+5h / C-02 4h+2h / STARTUP-ROLLBACK 3h+1.5h / **ADAPTER-ERR-CLASS 6h+3h（等 040 阶段 1，可能新增 archtest）** / ADAPTER-CONN-BUDGET 4h+2h |
 | Wave 5 架构重构 | 独立排期 | — | — | G-10 / SEALED / BOOTSTRAP 束 |
 
 **累计**：
-- ✅ shipped (4 PR): ~33h dev / ~15.5h review（PR-1/2/7/8）
-- 🚧 in review (1 PR): 6h dev / 3h review（PR-6）
+- ✅ shipped (5 PR): ~39h dev / ~18.5h review（PR-1/2/6/7/8）
 - ⏳ 待启动 (Wave 1 剩余 + Wave 2/3/4): ~63h dev / ~31.5h review（PR-3/4/5/9/11 + Wave 3 + Wave 4）
-- 进度：Wave 1 4/8 ship（50%）+ 1/8 in review；038 整体 dev 进度 33%（按原计划 102h 总分母）
+- 进度：Wave 1 5/8 ship（62.5%）；038 整体 dev 进度 38%（按原计划 102h 总分母）
 
 ---
 
@@ -234,6 +247,22 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 6. **PR-11 可立即起**：PR-8 已 ship 且 commit body 显式 unblock，oidc Adapter `Refresh(ctx)` API 已保留切口；不必等到 PR-6/PR-5 收口
 7. **PR-4 排期等 PR-6 merge**：rules 注册框架 ship 前先启动会产生 rebase 成本，等 PR-6 出来再排
 8. **METRICS-CTX-FUNNEL-01 不纳入 038 收口范围**：Cx4 跨 5+ 包接口重构离开本计划「阻塞项 + 高密度可合并 P1」scope；走独立 plan 或长期 backlog 触发型
+
+### v3 后续决策（2026-05-13）
+
+5. ~~**下一波优先级**：PR-6 (PR #487) 等 review 期间...~~ — 决策 #5 v3 写入时 PR-6 in review；2026-05-13 PR-6 ✅ 已 ship，背景过时但建议本身（PR-3 / PR-9 双 worktree 并行）仍有效（不依赖 040）
+6. **PR-11 可立即起**：PR-8 已 ship 且 commit body 显式 unblock，oidc Adapter `Refresh(ctx)` API 已保留切口；不必等到 PR-6/PR-5 收口
+7. ~~**PR-4 排期等 PR-6 merge**~~ — 决策 #7 已过时：PR-6 ✅ 已落，PR-4 当前阻塞改为 040 阶段 1（见 v4 #11）
+8. **METRICS-CTX-FUNNEL-01 不纳入 038 收口范围**：Cx4 跨 5+ 包接口重构离开本计划「阻塞项 + 高密度可合并 P1」scope；走独立 plan 或长期 backlog 触发型
+
+### v4 后续决策（2026-05-14，040 依赖分流）
+
+9. **PR-6 ✅ 已 ship (PR #487)**：注册新规则走 `kernel/governance/rulecodes.go` 单源 + `validateXxx()` 方法 + SeverityError `; fix:` 后缀范式；PR-4 / PR-5 阻塞解除（但叠加 040 依赖见 #11）
+10. **plan 040 (archtest Pass-Driver) 整体并行于 038**：PR #487 review 派生，4 阶段 ~10 PR；阶段 2/3 重写 `tools/archtest/*_test.go` 自身，与 038 剩余业务 PR 文件域完全互斥，可滚动并行推进
+11. **038 剩余 PR 按 040 依赖分流**（核心决策）：
+    - **独立于 040（可立即起）**：PR-3 CLI-HARDEN / PR-9 REPO-READYZ / PR-11 OIDC-JWKS-ROTATION-WORKER / Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 / Wave 4 R-01+G-08 / C-02 / STARTUP-ROLLBACK / ADAPTER-CONNECT-BUDGET（共 ~7 PR） — 均为 functional change，不新增 archtest 文件
+    - **建议等 040 阶段 1**：PR-4 JOURNEY-LIFECYCLE-GOV / PR-5 GOV-NEW-RULES / Wave 4 ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01（共 3 PR） — 三者均高概率新增 archtest 文件；等 Pass-Driver 范式落地后走新入口，避免新文件进 LegacyAllowlist 后被 040 阶段 2/3 二次重写
+12. **040 阶段 1 PR 优先级最高**：业务 archtest 0 改动（depguard + Pass struct 设计 + 元治理 archtest 三层 enforcement），不阻塞任何 038 剩余 PR，但 ship 后立即解锁 #11 第二组三个 PR；建议 040 阶段 1 与 038 PR-3 / PR-9 双 worktree 并行起
 
 ---
 

@@ -90,6 +90,31 @@ func TestMintAccess_Success(t *testing.T) {
 	assert.NotEmpty(t, res.AccessToken, "access token must be signed")
 	assert.Equal(t, []string{"admin", "auditor"}, res.Roles)
 	assert.WithinDuration(t, time.Now().Add(auth.DefaultAccessTokenTTL), res.ExpiresAt, time.Second)
+	assert.NotEmpty(t, res.JTI, "MintAccess must emit a non-empty jti per RFC 9068 §2.2.4")
+}
+
+// TestMintAccess_JTI_UniquePerCall verifies the ADR-credential D1 invariant:
+// every access JWT carries a fresh jti claim. Two consecutive MintAccess calls
+// — even with identical input — must produce distinct jti values, otherwise a
+// post-rotation refresh would reuse the prior token's identifier and break
+// the per-token uniqueness guarantee.
+func TestMintAccess_JTI_UniquePerCall(t *testing.T) {
+	issuer, _ := newTestIssuer(t)
+	deps := Deps{
+		Issuer:   issuer,
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "user"}}},
+		Clk:      clock.Real(),
+	}
+	req := Request{UserID: "usr-jti", SessionID: "sess-jti", AuthzEpoch: 0}
+
+	r1, err := MintAccess(context.Background(), deps, req)
+	require.NoError(t, err)
+	r2, err := MintAccess(context.Background(), deps, req)
+	require.NoError(t, err)
+	require.NotEmpty(t, r1.JTI)
+	require.NotEmpty(t, r2.JTI)
+	assert.NotEqual(t, r1.JTI, r2.JTI, "consecutive MintAccess calls must produce distinct jti values")
+	assert.NotEqual(t, r1.AccessToken, r2.AccessToken, "tokens with distinct jti must serialize distinctly")
 }
 
 func TestMintAccess_RoleFetchFailure_ReturnsErrAuthRoleFetchFailed(t *testing.T) {
@@ -165,6 +190,31 @@ func TestMintAccess_PasswordResetFlagPropagates(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, claims.PasswordResetRequired,
 		"access token must carry password_reset_required=true when requested")
+}
+
+// TestMintAccess_AuthzEpochPropagates verifies that Request.AuthzEpoch is forwarded
+// to IssueOptions.AuthzEpoch so the issued JWT carries the correct authz_epoch claim.
+// This covers the F18 trade-off: the epoch in the token reflects the user's
+// authz_epoch at the time MintAccess is called (inside or after the credential-
+// invalidation tx).
+func TestMintAccess_AuthzEpochPropagates(t *testing.T) {
+	issuer, keySet := newTestIssuer(t)
+	deps := Deps{
+		Issuer:   issuer,
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+		Clk:      clock.Real(),
+	}
+	req := Request{UserID: "usr-1", SessionID: "sess-1", AuthzEpoch: 42}
+
+	res, err := MintAccess(context.Background(), deps, req)
+	require.NoError(t, err)
+
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), claims.AuthzEpoch,
+		"access token must carry the AuthzEpoch from Request")
 }
 
 // TestMintAccess_AccessTokenIssueFailure asserts that when the Issuer's access-token

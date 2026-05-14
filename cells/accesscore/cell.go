@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
@@ -276,6 +277,10 @@ type AccessCore struct {
 	jwtIssuer   *auth.JWTIssuer
 	jwtVerifier *auth.JWTVerifier
 	cursorCodec *query.CursorCodec
+
+	// invalidator is constructed in initSlices and shared by identity-manage,
+	// rbac-assign, and session-refresh to atomically cascade credential revocation.
+	invalidator *credentialinvalidate.Invalidator
 
 	metricsProvider      metrics.Provider
 	configEventCollector obmetrics.ConfigEventCollector

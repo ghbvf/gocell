@@ -27,11 +27,17 @@ type Service struct {
 	runMode  query.RunMode
 }
 
-// NewService creates an rbac-check Service.
-// codec must be non-nil; cursor pagination cannot be served without it.
+// NewService creates an rbac-check Service. roleRepo and codec are required;
+// logger defaults to slog.Default() when nil.
 func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+	if validation.IsNilInterface(roleRepo) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbac-check: roleRepo is required")
+	}
 	if codec == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec, "rbac-check: cursor codec is required")
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 	return &Service{roleRepo: roleRepo, codec: codec, logger: logger, runMode: runMode}, nil
 }

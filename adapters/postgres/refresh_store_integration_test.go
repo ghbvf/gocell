@@ -350,7 +350,7 @@ func TestPGRefreshStore_PeekPlusRotate_RespectsGraceBudget(t *testing.T) {
 
 	// used_times == GraceMaxReuses now. Next Rotate must trip the cap.
 	_, _, err = store.Rotate(ctx, parentWire)
-	require.ErrorIs(t, err, refresh.ErrRejected,
+	require.ErrorIs(t, err, refresh.ErrReused,
 		"GraceMaxReuses+1th Rotate must trigger reuse_detected (cascade revoke)")
 }
 
@@ -382,11 +382,13 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 
 	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
 		_, peekErr := store.Peek(txCtx, parentWire)
-		require.ErrorIs(t, peekErr, refresh.ErrRejected)
+		require.ErrorIs(t, peekErr, refresh.ErrReused)
 		return fmt.Errorf("force outer rollback")
 	})
 	require.Error(t, err)
 
+	// childWire was issued by the first Rotate; after the cascade revoke
+	// commits, its row is marked revoked → checkBasicValidity path → ErrRejected.
 	_, _, err = store.Rotate(ctx, childWire)
 	require.ErrorIs(t, err, refresh.ErrRejected, "reuse cascade must commit independently of caller rollback")
 }
@@ -521,9 +523,11 @@ func TestPGRefreshStore_T20_GraceCounterCapTriggersReuse(t *testing.T) {
 		require.NoError(t, err, "grace retry %d should succeed", i+1)
 	}
 
-	// GraceMaxReuses exhausted — next re-present of parent triggers cascade revoke.
+	// GraceMaxReuses exhausted — next re-present of parent triggers cascade revoke
+	// and returns ErrReused (carrying row identity so the service layer can drive
+	// the user-wide credential invalidation cascade).
 	_, _, err = store.Rotate(ctx, parentWire)
-	require.ErrorIs(t, err, refresh.ErrRejected, "Rotate after grace exhausted must cascade revoke and return ErrRejected")
+	require.ErrorIs(t, err, refresh.ErrReused, "Rotate after grace exhausted must cascade revoke and return ErrReused")
 }
 
 // ---------------------------------------------------------------------------
@@ -531,12 +535,11 @@ func TestPGRefreshStore_T20_GraceCounterCapTriggersReuse(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestPGRefreshStore_T21_RejectPathsHaveUniformLogging verifies that every
-// non-reuse reject branch funnels through rejectWithReason by checking that
-// the store returns ErrRejected (not a wrapped internal error) for each
-// standard reject scenario.
+// non-reuse reject branch funnels through rejectWithReason → ErrRejected, and
+// that reuse branches (reuse_detected, grace_exhausted) return ErrReused so the
+// service layer can drive the user-wide credential invalidation cascade.
 // This is a behavioral contract test — the specific slog output is
-// implementation-detail; we assert uniform ErrRejected shape only.
-// RED in Wave 1 (passes once store uses uniform rejectWithReason for reuse_detected).
+// implementation-detail; we assert the wire-error sentinel only.
 func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 	base, cleanup := setupPostgres(t)
 	t.Cleanup(cleanup)
@@ -586,7 +589,7 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 	require.NoError(t, err)
 	clock.Advance(testtime.D3s) // past ReuseInterval
 	_, _, err = store.Rotate(ctx, wire3)
-	require.ErrorIs(t, err, refresh.ErrRejected, "reuse_detected must return ErrRejected")
+	require.ErrorIs(t, err, refresh.ErrReused, "reuse_detected must return ErrReused (carries row identity for cascade)")
 }
 
 // ---------------------------------------------------------------------------

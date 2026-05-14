@@ -824,6 +824,40 @@ func TestRequireRole_ReadsPrincipalFromContext(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestAuthMiddleware_KindUnavailable_Returns503 verifies that when the verifier
+// returns an error with KindUnavailable, the middleware responds with HTTP 503.
+// The wire code is ERR_SERVICE_UNAVAILABLE (KindUnavailable.PublicCode()) and
+// the message is the canonical "service unavailable" — the errcode framework
+// masks 5xx codes/messages to prevent internal detail leakage. The
+// ErrAuthServiceUnavailable source code is visible in structured server logs.
+func TestAuthMiddleware_KindUnavailable_Returns503(t *testing.T) {
+	unavailErr := errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "authentication service unavailable")
+	verifier := &mockVerifier{err: unavailErr}
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not reach handler on 503")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer some-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "KindUnavailable must produce HTTP 503")
+
+	var body map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&body)
+	require.NoError(t, err)
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "response must have an error object")
+	// KindUnavailable is a 5xx kind: errcode strips the source code and uses
+	// the public code for the Kind. The specific ErrAuthServiceUnavailable
+	// source code is observable in server-side structured logs.
+	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"],
+		"5xx wire code must be the public KindUnavailable code (ERR_SERVICE_UNAVAILABLE)")
+	assert.Equal(t, "service unavailable", errObj["message"],
+		"5xx message must be the canonical KindUnavailable public message")
+}
+
 // --- matchPathTemplate unit tests ---
 
 func TestMatchPathTemplate(t *testing.T) {

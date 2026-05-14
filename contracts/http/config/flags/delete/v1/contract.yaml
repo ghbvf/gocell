@@ -22,6 +22,9 @@ endpoints:
         minimum: 1
         maximum: 99999
     successStatus: 204
+    auth:
+      responses:
+        - 503
     noContent: true
     responses:
       400:
