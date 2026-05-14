@@ -4,15 +4,13 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
+	"go/token"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // auditcoreAppenderSlicePackages is the closed set of slice packages that
@@ -65,8 +63,8 @@ const allowedTypeAlias = "type Service = appender.Service"
 func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 	root := findModuleRoot(t)
 
-	scope := scanner.DirsScope(root, auditcoreAppenderSlicePackages,
-		scanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, auditcoreAppenderSlicePackages,
+		MatchRels(func(rel string) bool {
 			base := filepath.Base(rel)
 			// Skip generated files (own DO NOT EDIT guard) and tests.
 			if strings.HasSuffix(base, "_gen.go") || strings.HasSuffix(base, "_test.go") {
@@ -77,8 +75,11 @@ func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 	)
 
 	var violations []string
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		violations = append(violations, scanAuditcoreAppenderSliceFile(fc)...)
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			violations = append(violations, scanAuditcoreAppenderSliceFile(p.Rel(file), p.Fset, file)...)
+		}
+		return nil
 	})
 
 	sort.Strings(violations)
@@ -95,19 +96,19 @@ func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 	assert.Empty(t, violations, failMsg)
 }
 
-func scanAuditcoreAppenderSliceFile(fc scanner.FileContext) []string {
+func scanAuditcoreAppenderSliceFile(rel string, fset *token.FileSet, file *ast.File) []string {
 	var violations []string
 
 	// type Service must be a type alias (Assign valid), never a fresh struct
 	// or interface. ImportSpec / ValueSpec (var Spec = ...) are allowed and
 	// not inspected here (Spec's whitelist enforcement lives in
 	// appender.MustNewSpec).
-	scanner.EachInSubtree[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 		if ts.Name.Name == "Service" && !ts.Assign.IsValid() {
 			violations = append(violations, fmt.Sprintf(
 				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 					"forbidden `type Service` definition (must be `%s`)",
-				fc.Rel, fc.Fset.Position(ts.Pos()).Line, allowedTypeAlias))
+				rel, fset.Position(ts.Pos()).Line, allowedTypeAlias))
 		}
 	})
 
@@ -116,15 +117,15 @@ func scanAuditcoreAppenderSliceFile(fc scanner.FileContext) []string {
 	// NewService / With* / extractActorID re-fork behavior the appender
 	// package owns. EachInSubtree walks the whole file; slice packages have no
 	// nested function literals so every FuncDecl returned is top-level.
-	scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
-		violations = append(violations, scanAppenderFuncDecl(fc, fd)...)
+	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		violations = append(violations, scanAppenderFuncDecl(rel, fset, fd)...)
 	})
 
 	return violations
 }
 
-func scanAppenderFuncDecl(fc scanner.FileContext, d *ast.FuncDecl) []string {
-	pos := fc.Fset.Position(d.Pos()).Line
+func scanAppenderFuncDecl(rel string, fset *token.FileSet, d *ast.FuncDecl) []string {
+	pos := fset.Position(d.Pos()).Line
 
 	// Methods: any receiver named *Service or Service is forbidden — slice
 	// packages must not attach behavior to the (aliased) Service type. Go's
@@ -138,7 +139,7 @@ func scanAppenderFuncDecl(fc scanner.FileContext, d *ast.FuncDecl) []string {
 				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 					"forbidden method on Service "+
 					"(slice must not extend the appender.Service alias)",
-				fc.Rel, pos)}
+				rel, pos)}
 		}
 		// Methods on other types are allowed (none expected today, but
 		// not banned).
@@ -152,13 +153,13 @@ func scanAppenderFuncDecl(fc scanner.FileContext, d *ast.FuncDecl) []string {
 			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 				"forbidden `func NewService` "+
 				"(call appender.NewService directly from cell.go)",
-			fc.Rel, pos)}
+			rel, pos)}
 	case strings.HasPrefix(d.Name.Name, "With"):
 		return []string{fmt.Sprintf(
 			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 				"forbidden `func %s` "+
 				"(call appender.%s directly from cell.go)",
-			fc.Rel, pos, d.Name.Name, d.Name.Name)}
+			rel, pos, d.Name.Name, d.Name.Name)}
 	}
 	// Other top-level functions are flagged so the next reviewer notices —
 	// slice packages are metadata holders only.
@@ -166,7 +167,7 @@ func scanAppenderFuncDecl(fc scanner.FileContext, d *ast.FuncDecl) []string {
 		"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: unexpected top-level "+
 			"func %s; slice packages should hold only `type Service = "+
 			"appender.Service` + `var Spec = ...`",
-		fc.Rel, pos, d.Name.Name)}
+		rel, pos, d.Name.Name)}
 }
 
 // appenderReceiverTypeName extracts the named receiver type, unwrapping pointer

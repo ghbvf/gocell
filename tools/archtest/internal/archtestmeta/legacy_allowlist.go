@@ -63,7 +63,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/archtest_verify_coverage_test.go":                true,
 	"tools/archtest/assembly_invariants_test.go":                     true,
 	"tools/archtest/audit_ledger_composition_root_test.go":           true,
-	"tools/archtest/auditcore_appender_single_source_test.go":        true,
 	"tools/archtest/auth_bootstrap_invariants_test.go":               true,
 	"tools/archtest/cell_id_pattern_single_source_test.go":           true,
 	"tools/archtest/cell_init_test.go":                               true,
