@@ -256,6 +256,7 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		sessionrefresh.WithInvalidator(credentialinvalidate.MustNew(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)),
 	)
 
 	_, err := refreshSvc.Refresh(context.Background(), fx.AccessToken)
@@ -278,6 +279,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		sessionrefresh.WithInvalidator(credentialinvalidate.MustNew(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)),
 	)
 
 	newPair, err := refreshSvc.Refresh(context.Background(), fx.RefreshToken)
