@@ -34,12 +34,9 @@ func TestPGConstructorMustFree01(t *testing.T) {
 	}
 	var violations []violation
 
+	// DirsScope without IncludeTests() already excludes *_test.go files.
 	Run(t, scope, func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
-			abs := p.Fset.Position(file.Pos()).Filename
-			if strings.HasSuffix(abs, "_test.go") {
-				continue
-			}
 			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 				name := fd.Name.Name
 				// exported MustNew* at package level (no receiver)

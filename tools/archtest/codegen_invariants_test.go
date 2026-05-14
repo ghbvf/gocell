@@ -1289,12 +1289,13 @@ func findAllCellInitFiles(t *testing.T, root string) []string {
 				return name == "cell.go" || strings.HasPrefix(name, "cell_")
 			}),
 		)
-		Run(t, scope, func(p *Pass) []Diagnostic {
-			for _, file := range p.Files {
-				files = append(files, p.Fset.Position(file.Pos()).Filename)
-			}
-			return nil
-		})
+		// scope.Files() returns absolute paths without parsing — no AST work
+		// needed here, just path enumeration.
+		paths, err := scope.Files()
+		if err != nil {
+			t.Fatalf("findAllCellInitFiles: scope.Files: %v", err)
+		}
+		files = append(files, paths...)
 	}
 	sort.Strings(files)
 	return files

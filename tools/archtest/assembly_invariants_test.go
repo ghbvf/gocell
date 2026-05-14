@@ -490,6 +490,7 @@ func hasTopLevelTypeDecl(af *ast.File, name string) bool {
 const ruleAssemblySnapshotsLocked01 = "ASSEMBLY-SNAPSHOTS-LOCKED-01"
 
 func TestAssemblySnapshotsLocked(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
 	files, err := asnFindAssemblyProductionGoFiles(root)
 	if err != nil {
@@ -1093,6 +1094,7 @@ var expectedAssemblyRefMethods = map[string]string{
 }
 
 func TestAssemblyRefMethodSet(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
 	srcPath := filepath.Join(root, "kernel", "cell", "auth_plan.go")
 
