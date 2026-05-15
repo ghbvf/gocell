@@ -1,7 +1,7 @@
 package archtest
 
 //   - INVARIANT: SCANNER-FRAMEWORK-USAGE-01
-//   - INVARIANT: SCANNER-FRAMEWORK-USAGE-02-CLOSURE-DONE-SENTINEL-BAN
+//   - INVARIANT: SCANNER-FRAMEWORK-USAGE-02
 //
 // scanner_framework_usage_test.go — guard archtest tools/archtest/*_test.go
 // from bypassing the shared scanner framework at tools/archtest/internal/scanner.
@@ -1308,10 +1308,10 @@ func _(file *ast.File, other []ast.Decl) {
 }
 
 // ============================================================================
-// SCANNER-FRAMEWORK-USAGE-02-CLOSURE-DONE-SENTINEL-BAN
+// SCANNER-FRAMEWORK-USAGE-02
 // ============================================================================
 
-// INVARIANT: SCANNER-FRAMEWORK-USAGE-02-CLOSURE-DONE-SENTINEL-BAN
+// INVARIANT: SCANNER-FRAMEWORK-USAGE-02
 //
 // archtest *_test.go files at tools/archtest/<file>_test.go must not hand-roll
 // the closure+done/found sentinel idiom over scanner.EachInChildren to fake
@@ -1394,7 +1394,7 @@ func TestScannerFrameworkUsage02(t *testing.T) {
 			diags = append(diags, forbiddenClosureDoneSentinel(pkg.TypesInfo, pkg.Fset, file, rel)...)
 		}
 	}
-	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02-CLOSURE-DONE-SENTINEL-BAN", diags)
+	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
 }
 
 // scannerLocalName returns the local identifier bound to scannerPkgPath in
