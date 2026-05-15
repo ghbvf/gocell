@@ -85,8 +85,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/health_aggregation_test.go":                      true,
 	"tools/archtest/httputil_invariants_test.go":                     true,
 	"tools/archtest/identitymanage_last_admin_protection_test.go":    true,
-	"tools/archtest/inventory_anchor_required_test.go":               true,
-	"tools/archtest/kernel_metadata_no_wire_test.go":                 true,
 	"tools/archtest/kernel_poolstats_location_test.go":               true,
 	"tools/archtest/listener_dx_test.go":                             true,
 	"tools/archtest/managed_resource_contract_test.go":               true,
