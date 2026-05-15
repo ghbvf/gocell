@@ -16,6 +16,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -386,4 +387,65 @@ func TestConfigRepo_Integration_Encryption_RoundTrip(t *testing.T) {
 		assert.Equal(t, "rotated-token", got.Value)
 		assert.Equal(t, 2, got.Version)
 	})
+}
+
+// setupBrokenConfigPG spins up a PostgreSQL container, applies all migrations,
+// drops config_entries and feature_flags tables to simulate schema drift, and
+// returns a ConfigRepository backed by that broken database plus cleanup func.
+// The returned repo is used as the "broken" prober in RunRepoReadinessConformance.
+func setupBrokenConfigPG(t *testing.T) (*ConfigRepository, func()) {
+	t.Helper()
+	testutil.RequireDocker(t)
+
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err, "failed to start postgres container for broken repo")
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
+	require.NoError(t, err)
+
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly before table drop")
+
+	// Drop both tables to simulate schema drift / missing migration.
+	_, dropErr := pool.DB().Exec(ctx, "DROP TABLE config_entries CASCADE; DROP TABLE feature_flags CASCADE")
+	require.NoError(t, dropErr, "dropping tables to create broken repo")
+
+	session := NewSession(pool.DB())
+	repo := NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+
+	cleanup := func() {
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close (broken): %v", err)
+		}
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("WARN: failed to terminate postgres container (broken): %v", err)
+		}
+	}
+
+	return repo, cleanup
+}
+
+// TestConfigRepo_Integration_RepoReadiness exercises the differentiated repo
+// readiness probe against a real PostgreSQL instance.
+// healthy: full migrations applied — probe must return nil.
+// broken: config_entries and feature_flags dropped — probe must return an error.
+func TestConfigRepo_Integration_RepoReadiness(t *testing.T) {
+	healthy, _, cleanupHealthy := setupConfigPG(t)
+	defer cleanupHealthy()
+
+	broken, cleanupBroken := setupBrokenConfigPG(t)
+	defer cleanupBroken()
+
+	celltest.RunRepoReadinessConformance(t, "configcore-pg", healthy, broken)
 }

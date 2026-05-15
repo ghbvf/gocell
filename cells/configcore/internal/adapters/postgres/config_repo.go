@@ -788,6 +788,46 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 	return nil
 }
 
+// RepoReady implements cell.RepoHealthProber. It issues two cheap
+// non-transactional representative queries — SELECT 1 FROM config_entries WHERE
+// false and SELECT 1 FROM feature_flags WHERE false — so that missing tables,
+// dropped columns, or revoked table-level permissions are detected independently
+// of the pool-level postgres_ready probe. Neither query returns rows (WHERE
+// false short-circuits the scan), so there is no latency overhead from result
+// iteration. No transaction is opened.
+func (r *ConfigRepository) RepoReady(ctx context.Context) error {
+	db := r.resolveDB(ctx)
+	if err := r.probeTable(ctx, db, "config_entries"); err != nil {
+		return err
+	}
+	return r.probeTable(ctx, db, "feature_flags")
+}
+
+// probeTable issues SELECT 1 FROM <table> WHERE false against the given DBTX.
+// It surfaces table-level inaccessibility (missing relation, revoked permission)
+// independently of the pool-level postgres_ready probe.
+func (r *ConfigRepository) probeTable(ctx context.Context, db DBTX, table string) error {
+	rows, err := db.Query(ctx, "SELECT 1 FROM "+table+" WHERE false")
+	if err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
+			"config repo readiness check failed",
+			err,
+			errcode.WithInternal(table+" probe failed"),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
+			"config repo readiness check failed",
+			err,
+			errcode.WithInternal(table+" probe rows error"),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+	return nil
+}
+
 // GetVersion retrieves a specific config version with transparent decryption.
 func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error) {
 	const q = `SELECT id, config_id, version, value, sensitive, published_at,

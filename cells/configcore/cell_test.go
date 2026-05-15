@@ -676,8 +676,28 @@ func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
 
+// TestConfigCore_HealthCheckers_ConfigRepoReady verifies that after Init the
+// registry snapshot contains the differentiated config repo readiness probe
+// registered via cell.RegisterRepoReadiness and that the mem-backed probe
+// returns nil (always-ready MemStore convention).
+func TestConfigCore_HealthCheckers_ConfigRepoReady(t *testing.T) {
+	c := newTestCell()
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(context.Background(), recorder))
+
+	snap := recorder.Snapshot()
+	const probeKey = "config_repo_ready"
+	require.Contains(t, snap.HealthCheckers, probeKey,
+		"RegisterRepoReadiness must register config_repo_ready in the registry snapshot")
+	assert.NoError(t, snap.HealthCheckers[probeKey](context.Background()),
+		"mem-backed config_repo_ready must return nil (MemStore always-ready convention)")
+}
+
 // TestConfigCore_HealthCheckers_NilEmitter verifies that when the emitter does
-// not implement the health-checker interface, no health checkers are registered.
+// not implement the health-checker interface, no emitter-scoped health checkers
+// are registered. The config_repo_ready probe is always present (it is
+// unconditionally registered via cell.RegisterRepoReadiness); only the
+// outbox-failopen-rate probe is absent when the emitter has no HealthCheckers.
 func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(clock.Real()),
@@ -687,7 +707,10 @@ func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), recorder))
 	snap := recorder.Snapshot()
-	assert.Empty(t, snap.HealthCheckers, "WriterEmitter must produce empty health checkers map")
+	assert.NotContains(t, snap.HealthCheckers, "outbox-failopen-rate.configcore",
+		"WriterEmitter must not register outbox-failopen-rate probe")
+	assert.Contains(t, snap.HealthCheckers, "config_repo_ready",
+		"config_repo_ready must always be registered via RegisterRepoReadiness")
 }
 
 // ---------------------------------------------------------------------------
