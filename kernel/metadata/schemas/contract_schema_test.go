@@ -351,6 +351,22 @@ func TestContractSchemaOwnershipRequired(t *testing.T) {
 			),
 			expectValid: true,
 		},
+		{
+			// Schema only enforces structural presence (minLength on subjectPath /
+			// resourcePath) and the if/then ownership-required constraint. DSL
+			// validity (ctx.* / path.* prefix, camelCase segments, pathParams
+			// referential integrity) is NOT enforced by the JSON Schema — that is
+			// solely FMT-32's responsibility (single-source governance rule). This
+			// two-layer design is intentional: schema guards structure, FMT-32
+			// guards semantics. If both validated DSL, any DSL change would require
+			// updating two independent validators.
+			name: "serviceOwned=true with DSL-invalid path — schema accepts (minLength only), FMT-32 rejects",
+			doc: baseHTTP(
+				`, "auth": {"serviceOwned": true}`,
+				`, "ownership": {"subjectPath": "foo.bar", "resourcePath": "ctx.userID"}`,
+			),
+			expectValid: true,
+		},
 	}
 
 	for _, tc := range tests {

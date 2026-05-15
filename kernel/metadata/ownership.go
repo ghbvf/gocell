@@ -28,6 +28,19 @@ func OwnershipDeclarationRequired(auth HTTPAuthMeta) bool { return auth.ServiceO
 // and PascalCase are rejected). path.<param> referential integrity (the param must
 // be declared in the route's pathParams) is a governance-layer concern and is not
 // checked here.
+//
+// Single-segment forms:
+//   - "path.<param>" alone is valid — the path param value itself is the owner
+//     key (e.g. DELETE /users/{id} where {id} directly identifies the owned
+//     resource). "path.<param>.<field>" selects an owner field on the located
+//     resource (e.g. "path.id.userID" fetches the userID field of the session
+//     record at path param "id").
+//   - "ctx.<seg>" alone is valid — the caller context field itself is the owner
+//     key (e.g. "ctx.userID").
+//
+// Unicode chars are rejected by the ASCII character class — intentional
+// fail-closed. No length cap is enforced by this predicate; governance callers
+// reject absurd lengths if needed.
 func OwnershipPathValid(expr string) bool {
 	return ownershipPathRe.MatchString(expr)
 }

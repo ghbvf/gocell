@@ -1334,7 +1334,8 @@ func (v *Validator) checkOwnershipPath(c *metadata.ContractMeta, h *metadata.HTT
 		} else {
 			param = rest
 		}
-		if len(h.PathParams) == 0 || h.PathParams[param].Type == "" {
+		_, paramExists := h.PathParams[param]
+		if len(h.PathParams) == 0 || !paramExists {
 			return []ValidationResult{
 				v.newResult(codeFMT32, SeverityError, IssueInvalid, contractFile(c), fullField,
 					fmt.Sprintf(

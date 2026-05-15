@@ -28,8 +28,14 @@
 //     `ensureOwnership(sess, caller)` called from service.go, the guard-shaped
 //     IfStmt appears in a different scope and this rule will NOT detect it via
 //     direct file scan. The guard must appear directly in the scanned file.
-//     This is the primary residual escape and the motivation for the Hard-upgrade
-//     backlog entry (cross-function callgraph analysis → Hard).
+//     Distinction: inline closures (func literals assigned or invoked within the
+//     same function body, such as the named closure `revokeAndPublish` in
+//     sessionlogout/service.go) are detected by EachInSubtree because it
+//     recursively visits the full AST subtree including nested FuncLit bodies.
+//     Only extraction to a top-level named function (in the same file or a
+//     different file) constitutes a cross-function escape that EachInSubtree
+//     cannot reach. This is the primary residual escape and the motivation for
+//     the Hard-upgrade backlog entry (cross-function callgraph analysis → Hard).
 //
 //   - Service file location: the rule scans
 //     cells/<cellDir>/slices/<sliceDir>/service.go only. If a slice's ownership
@@ -136,6 +142,11 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 
 	// Load cells/ with full type info via archtest.RunTyped.
 	// archtest.FlatNonDefaultTags() ensures build-tagged files are included.
+	// seenRels accumulates all file paths observed during the RunTyped pass so
+	// we can cross-check that every target was actually loaded (i.e. not
+	// excluded by a build tag). Accumulated inside the single RunTyped closure
+	// to avoid a redundant packages.Load compilation pass.
+	seenRels := map[string]bool{}
 	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		[]string{"./cells/..."},
 		func(pass *Pass) []Diagnostic {
@@ -145,6 +156,7 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 			var d []Diagnostic
 			for _, file := range pass.Files {
 				rel := pass.Rel(file)
+				seenRels[rel] = true
 				// Only check service.go files that correspond to serviceOwned targets.
 				var matchedTarget *target
 				for i := range targets {
@@ -161,20 +173,8 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 			return d
 		})
 
-	// Cross-check: any target whose service.go was never seen by RunTyped
-	// (e.g. build-tag exclusion) needs an explicit diagnostic.
-	seenRels := map[string]bool{}
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./cells/..."},
-		func(pass *Pass) []Diagnostic {
-			if !pass.Typed() {
-				return nil
-			}
-			for _, file := range pass.Files {
-				seenRels[pass.Rel(file)] = true
-			}
-			return nil
-		})
+	// Cross-check: any target whose service.go was never seen by the RunTyped
+	// pass above (e.g. build-tag exclusion) needs an explicit diagnostic.
 	for i := range targets {
 		if !seenRels[targets[i].rel] {
 			diags = append(diags, Diagnostic{

@@ -1043,6 +1043,31 @@ func TestFMT32_OwnershipDeclarationRequired(t *testing.T) {
 			}(),
 			wantCount: 0,
 		},
+		{
+			// path.id single-segment: the path param value itself is the owner key
+			// (e.g. DELETE /users/{id} where {id} directly identifies the owned
+			// resource). The dotIdx<0 branch treats the entire rest string as the
+			// param name. pathParams contains "id" so referential integrity passes.
+			name: "resourcePath path.id single-segment valid",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "ctx.userID",
+				ResourcePath: "path.id",
+			}, sidParam),
+			wantCount: 0,
+		},
+		{
+			// path.missing single-segment: dotIdx<0 branch extracts "missing" as
+			// param name; pathParams does not contain "missing" so referential
+			// integrity fails with IssueInvalid.
+			name: "resourcePath path.missing single-segment not in pathParams",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "ctx.userID",
+				ResourcePath: "path.missing",
+			}, sidParam),
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "endpoints.http.ownership.resourcePath",
+		},
 	}
 
 	for _, tc := range tests {
