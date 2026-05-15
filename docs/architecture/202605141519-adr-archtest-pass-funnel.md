@@ -86,6 +86,39 @@ The migration is complete when:
 
 After stage 4, `archtestmeta` is deleted entirely. `tools/archtest/internal/scanner` and `tools/archtest/internal/typeseval` retain their exported APIs — they are intentionally reachable from archtest test files for their non-INV-1 helpers (walk + go/types resolution). Symbol-level bans on `EachFile` / `LoadPackages` / `SharedResolver` are enforced by the PASS-FUNNEL meta-archtest (defense #3), not by lint.
 
+## Stage 1.5 — Framework completion + single-path enforcement (2026-05-15)
+
+**Root cause addressed.** PR #492 froze the `Pass`/`Run`/`RunTyped`/façade API without a complete inventory of what every existing archtest (24 A-class + 32 E-class + 6 dual-class) actually extracts from source. A surface-level patch is L1 thinking: PR #493's contract/codegen migration was already forced to hand-write `parser.ParseFile(ParseComments)` inside `codegen_invariants`/`listener_dx` to work around the gap — guaranteed second-pass rework. Stage 1.5 fixes the framework end-state **once** and closes the legacy path in the same PR so Stage 2/3/dual-class become zero-framework-return mechanical migrations.
+
+**Verified facts (source-line, no "probably"):**
+
+- AST path (`archtest.Run` → `collectASTFiles`) parsed without comments. **Fixed**: parse mode now `parser.SkipObjectResolution | parser.ParseComments`.
+- Typed path (`RunTyped`/typeseval) **already carries comments** — `golang.org/x/tools/go/packages` default `ParseFile` is `parser.AllErrors | parser.ParseComments` and typeseval sets no custom `cfg.ParseFile`. **No typeseval change**; locked by `TestRunTyped_CommentsRegressionLock`.
+- `FileContext` exposes no `Bytes`; raw bytes live only on `ContentContext` via the already-re-exported `EachContentFile`. **Not a gap.**
+- Absolute path was internally computed (`fset.Position(f.Pos()).Filename`) but not exposed. **Fixed**: `Pass.Abs func(*ast.File) string`, single-sourced with `Rel`, zero new state.
+
+**Façade end-state (the import invariant).** Business archtest end-state import set is exactly `tools/archtest` — zero `internal/scanner` / `internal/typeseval` / `x/tools/go/packages`. The 14 typeseval symbols are partitioned:
+
+| Class | Symbols | End-state |
+|---|---|---|
+| Loader / load primitive | `LoadPackages` `SharedResolver` `LoadProductionPackages` `Resolver` `ProductionResolver` `EachFileInPackage` | **Never re-exported** — reachable only via `RunTyped` (this is the funnel Hard defense body) |
+| info-taking pure helper | `ResolvePackageRef` `ResolveMethodCall` `EvaluateConstString` | `resolve.go` free funcs (extends Alt-D rationale: helpers take `*types.Info`, not privatized) |
+| build-constraint | `ParseBuildConstraint` `BuildContextPredicate` `IsGeneratedRelPath` | `(*Pass).IsFileInScope` / `(*Pass).IsGenerated` methods (axis-4 ratified design, no parallel free funcs) |
+| tags preset | `FlatNonDefaultTags` `KnownNonDefaultTags` | `resolve.go` free funcs |
+
+Scanner side: only `scanner.ImportBan` was unexported (re-exported as `type ImportBan = scanner.ImportBan`); it does **not** collapse into depguard — depguard cannot express its file-local `AllowRels` semantics (§ Termination criteria reasoning).
+
+**Two-defense single-path closure (AI-rebust graded, ≥ Medium gating met):**
+
+| # | Mechanism | Grade | Blind-spot evidence |
+|---|---|---|---|
+| 1 | `TestFacadeDoesNotLeakLoaders` — static assertion that the façade exports none of the 6 loaders and no symbol whose signature mentions `*packages.Package` | **Hard** (violation = symbol absent at compile time; business cannot express INV-1 load) | reverse self-check enumerates façade exports, asserts loader-set ∩ export-set = ∅ |
+| 2 | `PASS-FUNNEL-RESOLVE-01` — type-aware (`*types.Info` via `typeseval.ResolvePackageRef`, reusing the `diagsLoadPackages` symbol-set machinery) ban on business archtest direct-calling the 8 helper symbols + `scanner.ImportBan`; legacy exempt via `LegacyAllowlist`, stage-4 zeroed | **Medium** (type-aware call interception + allowlist cross-validate; symmetric to the existing loader rule — not godoc Soft) | `diagsResolveHelpers` godoc lists blind-spot forms (value indirection / alias / dot-import / cross-pkg const); `TestPassFunnel_FixtureCoverage` reverse self-check asserts ≥1 diagnostic per form |
+
+The legacy `internal/typeseval` direct-import path is **closed in the same PR** (not deprecated-aliased): the allowlist is a terminating todo (stage-4 deletes it), consistent with Alt-C's rejection of deprecation aliases. This makes the "business imports only `archtest`" end-state Hard+Medium-enforced, not a godoc Soft convention.
+
+**Rejected noise (would violate elegance):** `TypedOpts.ParserMode` knob (always-ParseComments is additive and simpler); `Pass.FilePackage` closure (`RunTyped` is one-Pass-per-package; `pass.Pkg` already is the owner); re-exporting any loader (would defeat defense #1).
+
 ## Rejected alternatives
 
 ### Alt-A: Keep two entry points, add a "linting middleware" between them

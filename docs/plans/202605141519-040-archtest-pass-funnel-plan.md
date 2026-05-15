@@ -1,15 +1,32 @@
 # archtest 入口合并方案：Pass-Driver 范式 + 零二次返工迁移
 
-**最后更新**：2026-05-14（阶段 1 PR-1 ✅ shipped via PR #492，三轮 review 全部 in-PR 收口）
+**最后更新**：2026-05-15（阶段 1.5 框架完备化落地；阶段 2 PR-3 已 shipped via PR #493）
 
 ## 进度状态
 
 | 阶段 | PR 数 | 状态 | 备注 |
 |------|------|------|------|
-| 1 — Pass 框架 + 三重 Hard 防线 | 1 | ✅ PR #492 (2026-05-14) | 业务文件 0 改动；LegacyAllowlist=53 文件；review 三轮 in-PR 收口（F1-F5 + round-2 F1-F6 + develop sync） |
-| 2 — A 类 EachFile 主题分批迁移 | 4 | ⏳ 未启动 | 可起；与阶段 3 并行 |
-| 3 — E 类 for-range 主题分批迁移 | 5 | ⏳ 未启动 | 可起；与阶段 2 并行 |
+| 1 — Pass 框架 + 三重 Hard 防线 | 1 | ✅ PR #492 (2026-05-14) | 业务文件 0 改动；review 三轮 in-PR 收口 |
+| **1.5 — Pass 框架完备化 + 单路径 enforcement** | 1 | ✅ 本 PR (2026-05-15) | Stage 2/3/dual 全后续 PR 零框架返工前置；见下方摘要 |
+| 2 — A 类 EachFile 主题分批迁移 | 4 | 🔄 PR-3 ✅ PR #493 (contract/codegen)；余 PR-2/4/5 待起 | 与阶段 3 并行；前置 = 阶段 1.5 |
+| 3 — E 类 for-range 主题分批迁移 | 5 | ⏳ 未启动 | 与阶段 2 并行；前置 = 阶段 1.5 |
 | 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ⏳ 等阶段 2+3 全部 ship | — |
+
+**阶段 1.5 ship 摘要（本 PR，2026-05-15）**：
+
+> **根因**：PR #492 定型 `Pass`/`Run`/`RunTyped`/façade 时未基于全部存量 archtest（24 A-class + 32 E-class + 6 dual-class）真实取数需求完整盘点就定型 API。只补表面 gap 是 L1 补丁思维（PR #493 contract/codegen 迁移已被迫在 `codegen_invariants`/`listener_dx` 内手写 `parser.ParseFile(ParseComments)` 绕过，即将产生二次返工）。本阶段一次定型完备端态 + 同 PR 封死旧路径。
+
+- `archtest.Run`（AST 路径）`collectASTFiles` parse mode 增 `parser.ParseComments`；typed 路径**已带注释**（go/packages 默认 ParseFile = `parser.AllErrors|parser.ParseComments`，**不改 typeseval**，仅加 `TestRunTyped_CommentsRegressionLock` 回归锁定）
+- `Pass` 加 `Abs func(*ast.File) string`（与 `Rel` 同源 `fset.Position`，零新状态）+ `(*Pass).IsFileInScope` / `IsGenerated` 方法（收 typeseval build-constraint helper，对齐 plan 轴 4）
+- 新建 `tools/archtest/resolve.go`：`type ImportBan = scanner.ImportBan` + `ResolvePackageRef`/`ResolveMethodCall`/`EvaluateConstString`/`FlatNonDefaultTags`/`KnownNonDefaultTags` 薄委托；**6 个 loader 符号故意不重导出**——经 `RunTyped` 唯一可达（funnel Hard 防线本体）
+- 新增元治理 `PASS-FUNNEL-RESOLVE-01`（type-aware via `*types.Info`，复用 `diagsLoadPackages` 符号集机制，`// AI-rebust: Medium` + 盲区清单 + reverse self-check）：ban 业务 archtest 直引 8 个 typeseval helper + `scanner.ImportBan`；豁免存量（LegacyAllowlist +2 → `build_constraint_test.go` / `ci_integration_discovery_invariants_test.go`），Stage 4 清零
+- `TestFacadeDoesNotLeakLoaders`（防线 #1 Hard 反向盲区自检）：静态断言 façade 零 loader / 零 `*packages.Package` 暴露
+- 端态不变式：此后 24 A-class + 32 E-class + 6 dual-class 迁移**只需** import `tools/archtest`，零 `internal/*`/`x/tools/go/packages` 直引，零框架返工
+- 验证：`pass_test.go` +10 TDD（RED→GREEN）；verify-archtest.sh PASS（16 shard / 372 test）；golangci-lint 0 issues；build incl `-tags=integration` 绿
+
+**勘误（基于 develop@2fd2976e 复核）**：dual-class 实测 **6** 文件（auth_bootstrap / errcode_invariants / outbox_invariants / panic_invariants / production_loader_funnel / role_admin_literal），非原预估 ≤3，归后续单一 PR 整体迁移；LegacyAllowlist 当前 **47** 条目（PR #493 删 10 个已迁移 contract/codegen 文件后）。
+
+**后续迁移强制约定**：Stage 2/3 迁移后 Rule 必须返回 `[]Diagnostic` + `archtest.Report`（对标 go/analysis 端态，禁止保留 inline `t.Errorf` 形态，确保每文件一次到位 0 二次返工）。
 
 **阶段 1 PR-1 ship 摘要（PR #492，2026-05-14）**：
 
