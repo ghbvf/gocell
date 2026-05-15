@@ -3,7 +3,6 @@ package oidc
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"log/slog"
 	"sync/atomic"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -325,30 +325,6 @@ func TestRefreshWorker_RefreshInterval_DefaultAndExplicit(t *testing.T) {
 	})
 }
 
-// parseSlogLines parses all JSON log lines from buf and returns them as a
-// slice of maps, skipping lines that are not valid JSON.
-func parseSlogLines(buf *bytes.Buffer) []map[string]any {
-	var result []map[string]any
-	decoder := json.NewDecoder(buf)
-	for decoder.More() {
-		var entry map[string]any
-		if err := decoder.Decode(&entry); err == nil {
-			result = append(result, entry)
-		}
-	}
-	return result
-}
-
-// findLogEntry returns the first log entry with the given msg field, or nil.
-func findLogEntry(entries []map[string]any, msg string) map[string]any {
-	for _, e := range entries {
-		if e["msg"] == msg {
-			return e
-		}
-	}
-	return nil
-}
-
 // TestRefreshWorker_WarnLogFields verifies the slog.Warn call on failure
 // includes the required structured fields: issuer, error, consecutive_failures.
 func TestRefreshWorker_WarnLogFields(t *testing.T) {
@@ -385,11 +361,77 @@ func TestRefreshWorker_WarnLogFields(t *testing.T) {
 	cancel()
 	<-doneCh
 
-	entries := parseSlogLines(&logBuf)
-	warnEntry := findLogEntry(entries, "oidc: jwks refresh failed")
+	warnEntry := sloghelper.FindLogEntry(logBuf.String(), "oidc: jwks refresh failed")
 	require.NotNil(t, warnEntry, "warn log entry must be present")
 	assert.Equal(t, "WARN", warnEntry["level"])
-	assert.NotEmpty(t, warnEntry["issuer"], "log must include issuer field")
+	// F-4: assert exact issuer value and type-assert numeric consecutive_failures.
+	assert.Equal(t, srv.URL, warnEntry["issuer"])
 	assert.NotNil(t, warnEntry["error"], "log must include error field")
-	assert.NotNil(t, warnEntry["consecutive_failures"], "log must include consecutive_failures field")
+	assert.Greater(t, warnEntry["consecutive_failures"].(float64), float64(0))
+}
+
+// TestRefreshWorker_Stop_DrainAfterStarted verifies that Stop called after
+// Start waits for the worker goroutine to exit and returns nil.
+func TestRefreshWorker_Stop_DrainAfterStarted(t *testing.T) {
+	srv := mockOIDCServer(t)
+	defer srv.Close()
+
+	clk := clockmock.New(testEpoch)
+	col := &fakeRefreshCollector{}
+	a := newTestAdapter(t, srv.URL, clk, col)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = a.Worker().Start(ctx) }()
+
+	// Wait until the goroutine has registered the ticker before calling Stop.
+	require.Eventually(t, func() bool {
+		return clk.PendingTickers() >= 1
+	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Stop")
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer stopCancel()
+
+	require.NoError(t, a.Worker().Stop(stopCtx))
+
+	select {
+	case <-a.workerDone:
+		// worker exited cleanly
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("workerDone not closed after Stop returned")
+	}
+}
+
+// TestRefreshWorker_Close_DrainAfterStarted verifies that Close called after
+// Start waits for the worker goroutine to exit and returns nil.
+func TestRefreshWorker_Close_DrainAfterStarted(t *testing.T) {
+	srv := mockOIDCServer(t)
+	defer srv.Close()
+
+	clk := clockmock.New(testEpoch)
+	col := &fakeRefreshCollector{}
+	a := newTestAdapter(t, srv.URL, clk, col)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = a.Worker().Start(ctx) }()
+
+	// Wait until the goroutine has registered the ticker before calling Close.
+	require.Eventually(t, func() bool {
+		return clk.PendingTickers() >= 1
+	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Close")
+
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer closeCancel()
+
+	require.NoError(t, a.Close(closeCtx))
+
+	select {
+	case <-a.workerDone:
+		// worker exited cleanly
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("workerDone not closed after Close returned")
+	}
 }

@@ -176,6 +176,7 @@ func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, e
 		return a.provider, nil
 	}
 
+	isRediscovery := force && a.provider != nil
 	p, err := gooidc.NewProvider(a.oidcCtx(ctx), a.config.IssuerURL)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOIDCDiscovery,
@@ -183,7 +184,13 @@ func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, e
 			errcode.WithDetails(slog.String("issuer", a.config.IssuerURL)))
 	}
 	a.provider = p
-	slog.Info("oidc: provider discovered", slog.String("issuer", a.config.IssuerURL))
+	// Distinguish periodic re-discovery from first-time discovery so that ops
+	// alerts can filter out expected refresh noise (F-6: PR #504 review).
+	if isRediscovery {
+		slog.Info("oidc: provider re-discovered", slog.String("issuer", a.config.IssuerURL))
+	} else {
+		slog.Info("oidc: provider discovered", slog.String("issuer", a.config.IssuerURL))
+	}
 	return p, nil
 }
 

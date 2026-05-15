@@ -18,6 +18,19 @@
 //     time-based cacheUntil entirely. There is no Cache-Control logic to hook.
 //     This worker's purpose is full provider re-discovery (endpoints, alg),
 //     not JWKS cache management.
+//
+// (d) double-Start panics on close(workerDone) — runRefreshLoop calls
+//     close(a.workerDone) via defer; a second Start on the same Adapter will
+//     panic because closing an already-closed channel is undefined. WorkerGroup
+//     is responsible for single-Start enforcement; this adapter does not add a
+//     guard (see backlog CLOCK-INJECTION-STRUCT-FIELD-CTOR-01 for context).
+//
+// (e) clock enforcement — oidc.Adapter uses a struct-field Clock rather than a
+//     WithClock option, so CLOCK-INJECTION-TEST-CALLSITE-01 archtest (which
+//     covers WithClock-option constructors) does not cover oidc.New. Enforcement
+//     is instead the runtime clock.MustHaveClock panic in New(). See backlog
+//     entry CLOCK-INJECTION-STRUCT-FIELD-CTOR-01 for the pre-existing archtest
+//     coverage gap.
 
 package oidc
 
