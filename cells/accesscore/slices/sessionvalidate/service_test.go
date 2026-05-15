@@ -679,6 +679,107 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 	}
 }
 
+// mustBuildUserWithStatus creates a domain.User with the given status and epoch
+// via ReconstituteUser. Used for P1.3b CanAuthenticate gate tests.
+func mustBuildUserWithStatus(t testing.TB, id string, epoch int64, status domain.UserStatus) *domain.User {
+	t.Helper()
+	now := time.Now()
+	u, err := domain.ReconstituteUser(id, id, id+"@test.local", "$2a$12$hash",
+		0, false, status, domain.UserSourceIdentity, epoch, now, now)
+	require.NoError(t, err)
+	return u
+}
+
+// TestEnforce_NonActiveUser_Rejected_P1_3b is the P1.3b regression guard:
+// a session that exists and is NOT revoked, with epoch MATCHING
+// (user.AuthzEpoch == view.AuthzEpochAtIssue), but the user account became
+// non-active (suspended / locked) after the token was issued.
+// enforceSessionState must reject with the uniform 401 (KindUnauthenticated /
+// ErrAuthInvalidToken) — the CanAuthenticate gate runs AFTER epoch match,
+// closing the window where a valid epoch does not imply login eligibility.
+func TestEnforce_NonActiveUser_Rejected_P1_3b(t *testing.T) {
+	const (
+		epochAtIssue = int64(3) // deliberately non-1 to prove epoch match still checked
+	)
+
+	tests := []struct {
+		name   string
+		status domain.UserStatus
+	}{
+		{name: "suspended user rejected", status: domain.StatusSuspended},
+		{name: "locked user rejected", status: domain.StatusLocked},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t)
+			sid := "sess-noactive-" + string(tt.status)
+			sub := "usr-noactive-" + string(tt.status)
+
+			require.NoError(t, store.Create(context.Background(), &session.Session{
+				ID:                sid,
+				SubjectID:         sub,
+				JTI:               sid + "-jti",
+				AuthzEpochAtIssue: epochAtIssue, // epoch stored on row at issue time
+				ExpiresAt:         time.Now().Add(time.Hour),
+				CreatedAt:         time.Now(),
+			}))
+
+			// User with matching epoch but non-active status — the P1.3 attack window.
+			user := mustBuildUserWithStatus(t, sub, epochAtIssue, tt.status)
+			svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+			tok, err := IssueTestToken(testPrivKey, sub, nil, time.Hour, sid)
+			require.NoError(t, err)
+
+			_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+			require.Error(t, verifyErr, "non-active user must be rejected even when epoch matches")
+
+			var ec *errcode.Error
+			require.ErrorAs(t, verifyErr, &ec)
+			assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+				"must be KindUnauthenticated (uniform 401, not 403) —防枚举")
+			assert.Equal(t, errcode.ErrAuthInvalidToken, ec.Code,
+				"must be ErrAuthInvalidToken — same code as revoked-session / epoch-mismatch paths")
+			assert.Contains(t, verifyErr.Error(), errMsgAuthFailed,
+				"must return the uniform auth-failed message to prevent status enumeration")
+			assert.NotContains(t, verifyErr.Error(), string(tt.status),
+				"must NOT leak user status in the error message (防枚举)")
+		})
+	}
+}
+
+// TestEnforce_ActiveUser_EpochMatch_Allowed_P1_3b_Control is the control case
+// for the P1.3b test: same setup (session exists, not revoked, epoch matches)
+// but user is active — claims must be returned successfully.
+func TestEnforce_ActiveUser_EpochMatch_Allowed_P1_3b_Control(t *testing.T) {
+	const epochAtIssue = int64(3)
+
+	store := newTestStore(t)
+	sid := "sess-active-control"
+	sub := "usr-active-control"
+
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:                sid,
+		SubjectID:         sub,
+		JTI:               sid + "-jti",
+		AuthzEpochAtIssue: epochAtIssue,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
+	}))
+
+	user := mustBuildUser(t, sub, epochAtIssue)
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	tok, err := IssueTestToken(testPrivKey, sub, nil, time.Hour, sid)
+	require.NoError(t, err)
+
+	claims, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.NoError(t, verifyErr, "active user with matching epoch must be accepted")
+	assert.Equal(t, sub, claims.Subject)
+}
+
 // TestLogSessionLookupError_LogLevel verifies S40: IsDomainNotFound whitelist
 // determines log level — only whitelisted domain not-found codes produce Warn;
 // all infra, plain, or non-whitelisted domain errors produce Error.
