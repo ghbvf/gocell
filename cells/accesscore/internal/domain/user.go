@@ -96,8 +96,13 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 		PasswordHash:   passwordHash,
 		Status:         StatusActive,
 		CreationSource: UserSourceIdentity,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		// S4d: AuthzEpoch starts at 1 so the first login can store a valid
+		// session.AuthzEpochAtIssue (store rejects 0 as the unset sentinel).
+		// BumpAuthzEpoch increments from 1; sessions created at epoch=1 are
+		// invalidated after the first credential event.
+		AuthzEpoch: 1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}, nil
 }
 

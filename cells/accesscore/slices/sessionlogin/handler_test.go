@@ -57,6 +57,7 @@ func setup(t *testing.T) http.Handler {
 	user := &domain.User{
 		ID: "usr-1", Username: "alice", Email: "a@b.com",
 		PasswordHash: string(hash), Status: domain.StatusActive,
+		AuthzEpoch: 1,
 	}
 	_ = userRepo.Create(context.Background(), user)
 

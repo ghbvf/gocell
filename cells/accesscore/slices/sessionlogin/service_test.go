@@ -48,7 +48,7 @@ type failingIssueRefreshStore struct {
 	err error
 }
 
-func (s failingIssueRefreshStore) Issue(context.Context, string, string) (string, *refresh.Token, error) {
+func (s failingIssueRefreshStore) Issue(_ context.Context, _, _ string, _ int64) (string, *refresh.Token, error) {
 	return "", nil, s.err
 }
 
@@ -718,16 +718,12 @@ func TestLogin_EmptyCredentials_AuthErrorCode(t *testing.T) {
 	}
 }
 
-// TestLogin_AccessJWT_HasAuthzEpoch verifies that the access JWT issued by
-// Login carries an authz_epoch claim equal to the seeded user's AuthzEpoch.
-// This is the S4b epoch forwarding contract: sessionlogin reads the epoch
-// from the user record and passes it to sessionmint.Request.AuthzEpoch so
-// every issued token starts life with the correct epoch.
-func TestLogin_AccessJWT_HasAuthzEpoch(t *testing.T) {
+// TestLogin_AccessJWT_NoAuthzEpochClaim verifies that the access JWT issued by
+// Login does NOT carry an authz_epoch claim (S4d: epoch provenance moved to
+// session/refresh rows; the JWT claim is removed entirely).
+func TestLogin_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	svc, userRepo := newTestService(t)
 
-	// Seed a user with a non-zero AuthzEpoch to distinguish a forwarded epoch
-	// from the default zero value.
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
 	user, err := domain.NewUser("epoch-user", "epoch@test.com", string(hash), time.Now())
 	require.NoError(t, err)
@@ -743,8 +739,9 @@ func TestLogin_AccessJWT_HasAuthzEpoch(t *testing.T) {
 
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, int64(7), claims.AuthzEpoch,
-		"access token authz_epoch must equal user.AuthzEpoch at login time (S4b epoch forwarding)")
+	// S4d: authz_epoch removed from JWT; epoch lives in session.authz_epoch_at_issue row.
+	_, epochInExtra := claims.Extra["authz_epoch"]
+	assert.False(t, epochInExtra, "S4d: authz_epoch must not be present in JWT claims (including Extra)")
 }
 
 // TestLogin_NoLengthOracle verifies that the error message returned for a

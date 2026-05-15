@@ -46,6 +46,13 @@ type tokenRecord struct {
 	revokedAt     time.Time // zero means not revoked
 	firstUsedAt   time.Time // zero until first grace re-use
 	usedTimes     int       // grace re-use counter
+	// authzEpochAtIssue: snapshot of users.authz_epoch at Issue time. Children
+	// of the chain (created via Rotate) inherit the parent's value — refresh
+	// is the continuation of the original grant (OAuth2 §1.5 / ADR-D4.1), so
+	// the entire chain shares one issue-time epoch. Stale-grant detection is
+	// the service layer's job (sessionrefresh compares against current
+	// users.authz_epoch before Rotate).
+	authzEpochAtIssue int64
 }
 
 func (r *tokenRecord) isRotated() bool { return !r.rotatedAt.IsZero() }
@@ -53,11 +60,12 @@ func (r *tokenRecord) isRevoked() bool { return !r.revokedAt.IsZero() }
 
 func (r *tokenRecord) toToken() *refresh.Token {
 	return &refresh.Token{
-		ID:        r.id,
-		SessionID: r.sessionID,
-		SubjectID: r.subjectID,
-		CreatedAt: r.createdAt,
-		ExpiresAt: r.expiresAt,
+		ID:                r.id,
+		SessionID:         r.sessionID,
+		SubjectID:         r.subjectID,
+		CreatedAt:         r.createdAt,
+		ExpiresAt:         r.expiresAt,
+		AuthzEpochAtIssue: r.authzEpochAtIssue,
 	}
 }
 
@@ -96,22 +104,31 @@ func (s *store) generatePair() (selector []byte, verifier []byte, err error) {
 }
 
 // Issue creates a new refresh chain root. L1 LocalTx.
-func (s *store) Issue(_ context.Context, sessionID, subjectID string) (string, *refresh.Token, error) {
+//
+// authzEpochAtIssue must be > 0 (S4d): a zero value indicates the caller did
+// not snapshot the user's current authz_epoch, which would let stale grants
+// validate forever once users.authz_epoch is bumped.
+func (s *store) Issue(_ context.Context, sessionID, subjectID string, authzEpochAtIssue int64) (string, *refresh.Token, error) {
+	if authzEpochAtIssue == 0 {
+		return "", nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"refresh.Issue: authzEpochAtIssue required (non-zero)")
+	}
 	sel, ver, err := s.generatePair()
 	if err != nil {
 		return "", nil, err
 	}
 	now := s.clock.Now()
 	rec := &tokenRecord{
-		id:            uuid.New(),
-		parentID:      uuid.Nil,
-		sessionID:     sessionID,
-		subjectID:     subjectID,
-		selector:      sel,
-		verifierHash:  sha256.Sum256(ver),
-		createdAt:     now,
-		expiresAt:     now.Add(s.policy.MaxAge),
-		idleExpiresAt: s.idleDeadline(now),
+		id:                uuid.New(),
+		parentID:          uuid.Nil,
+		sessionID:         sessionID,
+		subjectID:         subjectID,
+		selector:          sel,
+		verifierHash:      sha256.Sum256(ver),
+		createdAt:         now,
+		expiresAt:         now.Add(s.policy.MaxAge),
+		idleExpiresAt:     s.idleDeadline(now),
+		authzEpochAtIssue: authzEpochAtIssue,
 	}
 
 	s.mu.Lock()
@@ -192,6 +209,10 @@ func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.To
 		createdAt:     now,
 		expiresAt:     now.Add(s.policy.MaxAge),
 		idleExpiresAt: s.idleDeadline(now),
+		// Refresh is the continuation of the original grant; child inherits
+		// the chain's issue-time epoch (ADR-D4.1 + S4d §A8). Stale-grant
+		// detection happens in sessionrefresh, not here.
+		authzEpochAtIssue: rec.authzEpochAtIssue,
 	}
 	s.rows = append(s.rows, child)
 

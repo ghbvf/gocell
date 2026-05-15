@@ -86,11 +86,12 @@ func newTestSessionStore(t testing.TB) *session.MemStore {
 // must call sessionStore.Create to persist it.
 func newTestSession(subjectID, sessionID string) *session.Session {
 	return &session.Session{
-		ID:        sessionID,
-		SubjectID: subjectID,
-		JTI:       sessionID,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                sessionID,
+		SubjectID:         subjectID,
+		JTI:               sessionID,
+		AuthzEpochAtIssue: 1, // placeholder; production uses live users.authz_epoch
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	}
 }
 
@@ -168,7 +169,7 @@ func MustNewServiceWithInvalidator(
 func TestNewService_IssuerDefaultAudienceWrittenOnRefresh(t *testing.T) {
 	svc, sessionStore, refreshStore := newTestServiceWithRefreshStore(t, "usr-aud-refresh")
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-aud-refresh", "usr-aud-refresh")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-aud-refresh", "usr-aud-refresh", int64(1))
 	require.NoError(t, err)
 
 	sess := newTestSession("usr-aud-refresh", "sess-aud-refresh")
@@ -368,7 +369,7 @@ func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 	sess := newTestSession("usr-runintx-fail", "sess-runintx-fail")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-runintx-fail", "usr-runintx-fail")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-runintx-fail", "usr-runintx-fail", int64(1))
 	require.NoError(t, err)
 
 	tr := &failingTxRunner{}
@@ -401,7 +402,7 @@ func issueTestWireToken(t *testing.T, userID, sessionID string) (*Service, sessi
 	sess := newTestSession(userID, sessionID)
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), sessionID, userID)
+	wireToken, _, err := refreshStore.Issue(context.Background(), sessionID, userID, int64(1))
 	require.NoError(t, err)
 
 	return svc, sessionStore, refreshStore, wireToken
@@ -463,7 +464,7 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 			// Wire the refresh-store side of the test directly via the service
 			// internals — newTestServiceWithUserRepo builds the refresh store
 			// inside MustNewService, so seed an entry through svc.refreshStore.
-			wireToken, _, issueErr := svc.refreshStore.Issue(context.Background(), sess.ID, u.ID)
+			wireToken, _, issueErr := svc.refreshStore.Issue(context.Background(), sess.ID, u.ID, int64(1))
 			require.NoError(t, issueErr)
 
 			_, err = svc.Refresh(context.Background(), wireToken)
@@ -512,7 +513,7 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	// creates during Refresh.
 	sessionStore.creates = 0
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-rolefail", "usr-rolefail")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-rolefail", "usr-rolefail", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -540,7 +541,7 @@ func TestService_Refresh(t *testing.T) {
 			setup: func(store session.Store, rs refresh.Store) string {
 				sess := newTestSession("usr-1", "sess-1")
 				_ = store.Create(context.Background(), sess)
-				wire, _, _ := rs.Issue(context.Background(), "sess-1", "usr-1")
+				wire, _, _ := rs.Issue(context.Background(), "sess-1", "usr-1", int64(1))
 				return wire
 			},
 			wantErr: false,
@@ -551,7 +552,7 @@ func TestService_Refresh(t *testing.T) {
 				sess := newTestSession("usr-2", "sess-2")
 				_ = store.Create(context.Background(), sess)
 				_ = store.Revoke(context.Background(), "sess-2")
-				wire, _, _ := rs.Issue(context.Background(), "sess-2", "usr-2")
+				wire, _, _ := rs.Issue(context.Background(), "sess-2", "usr-2", int64(1))
 				return wire
 			},
 			wantErr: true,
@@ -594,7 +595,7 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 	sess := newTestSession("usr-rot", "sess-rot")
 	require.NoError(t, store.Create(context.Background(), sess))
 
-	wire1, _, err := refreshStore.Issue(context.Background(), "sess-rot", "usr-rot")
+	wire1, _, err := refreshStore.Issue(context.Background(), "sess-rot", "usr-rot", int64(1))
 	require.NoError(t, err)
 
 	// First refresh should succeed and rotate the token.
@@ -618,7 +619,7 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 	sess := newTestSession("usr-conc", "sess-conc")
 	require.NoError(t, store.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-conc", "usr-conc")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-conc", "usr-conc", int64(1))
 	require.NoError(t, err)
 
 	const goroutines = 5
@@ -670,7 +671,7 @@ func TestService_Refresh_AccessTokenCarriesStableSessionID(t *testing.T) {
 	sess := newTestSession("usr-sid", "sess-r1")
 	require.NoError(t, store.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-r1", "usr-sid")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-r1", "usr-sid", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -698,7 +699,7 @@ func TestService_Refresh_SessionRowIsImmutable(t *testing.T) {
 	sess := newTestSession("usr-imm", sessionID)
 	require.NoError(t, store.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), sessionID, "usr-imm")
+	wireToken, _, err := refreshStore.Issue(context.Background(), sessionID, "usr-imm", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -737,7 +738,7 @@ func TestService_Refresh_TwoHops_SecondRefreshSucceeds(t *testing.T) {
 	sess := newTestSession("usr-two", sessionID)
 	require.NoError(t, store.Create(context.Background(), sess))
 
-	wire1, _, err := refreshStore.Issue(context.Background(), sessionID, "usr-two")
+	wire1, _, err := refreshStore.Issue(context.Background(), sessionID, "usr-two", int64(1))
 	require.NoError(t, err)
 
 	pair1, err := svc.Refresh(context.Background(), wire1)
@@ -767,15 +768,16 @@ func TestService_Refresh_PastGCEligibility_Succeeds(t *testing.T) {
 	svc, store, refreshStore := newTestServiceWithRefreshStore(t, "usr-exp")
 
 	expiredSession := &session.Session{
-		ID:        "sess-exp",
-		SubjectID: "usr-exp",
-		JTI:       "sess-exp",
-		CreatedAt: time.Now().Add(expiredSessionCreatedOffset),
-		ExpiresAt: time.Now().Add(-time.Minute), // past GC eligibility
+		ID:                "sess-exp",
+		SubjectID:         "usr-exp",
+		JTI:               "sess-exp",
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now().Add(expiredSessionCreatedOffset),
+		ExpiresAt:         time.Now().Add(-time.Minute), // past GC eligibility
 	}
 	require.NoError(t, store.Create(context.Background(), expiredSession))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-exp", "usr-exp")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-exp", "usr-exp", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -812,7 +814,7 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	sess := newTestSession("usr-sa", "sess-sa")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-sa", "usr-sa")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-sa", "usr-sa", int64(1))
 	require.NoError(t, err)
 
 	// Normal refresh should succeed.
@@ -844,7 +846,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 	sess := newTestSession("usr-missing", "sess-missing")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-missing", "usr-missing")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-missing", "usr-missing", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -874,7 +876,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 	sess := newTestSession("usr-ref-clear", "sess-ref-clear")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-ref-clear", "usr-ref-clear")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-ref-clear", "usr-ref-clear", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
@@ -910,7 +912,7 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	sess := newTestSession("usr-ref-reset", "sess-ref-reset")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-ref-reset", "usr-ref-reset")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-ref-reset", "usr-ref-reset", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -951,7 +953,7 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	// Issue a wire token but don't seed the session — Get will return infraErr.
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -1088,7 +1090,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, innerStore))
 
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-update-missing", "usr-update-missing")
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-update-missing", "usr-update-missing", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -1141,7 +1143,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				sess := newTestSession("usr-uniform-revoked", "sess-uniform-revoked")
 				require.NoError(t, store.Create(context.Background(), sess))
 				require.NoError(t, store.Revoke(context.Background(), "sess-uniform-revoked"))
-				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-revoked", "usr-uniform-revoked")
+				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-revoked", "usr-uniform-revoked", int64(1))
 				require.NoError(t, err)
 				return svc, wireToken
 			},
@@ -1159,7 +1161,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 					withTestInvalidator(userRepo, sessionStore, refreshStore))
 				sess := newTestSession("usr-uniform-missing", "sess-uniform-missing")
 				require.NoError(t, sessionStore.Create(context.Background(), sess))
-				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-missing", "usr-uniform-missing")
+				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-missing", "usr-uniform-missing", int64(1))
 				require.NoError(t, err)
 				return svc, wireToken
 			},
@@ -1218,7 +1220,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 				sess := newTestSession("usr-log-revoked", "sess-log-revoked")
 				require.NoError(t, store.Create(context.Background(), sess))
 				require.NoError(t, store.Revoke(context.Background(), "sess-log-revoked"))
-				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-log-revoked", "usr-log-revoked")
+				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-log-revoked", "usr-log-revoked", int64(1))
 				require.NoError(t, err)
 				return svc, wireToken
 			},
@@ -1281,7 +1283,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 	sess := newTestSession("usr-rotate-fail", "sess-rotate-fail")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-rotate-fail", "usr-rotate-fail")
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-rotate-fail", "usr-rotate-fail", int64(1))
 	require.NoError(t, err)
 
 	// Replace refreshStore with one that fails on Rotate.
@@ -1340,7 +1342,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	sess := newTestSession("usr-mismatch", "sess-mismatch")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-mismatch", "usr-mismatch")
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-mismatch", "usr-mismatch", int64(1))
 	require.NoError(t, err)
 
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
@@ -1365,10 +1367,10 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	assert.Equal(t, "invalid refresh token", ec.Message)
 }
 
-// TestRefresh_AccessJWT_HasNewEpoch_AfterUserBump verifies that after
-// Rotate succeeds, the new access JWT carries the user's current
-// AuthzEpoch (S4b epoch forwarding through sessionrefresh path).
-func TestRefresh_AccessJWT_HasNewEpoch_AfterUserBump(t *testing.T) {
+// TestRefresh_AccessJWT_NoAuthzEpochClaim verifies that after Rotate succeeds,
+// the new access JWT does NOT carry an authz_epoch claim (S4d: epoch provenance
+// moved to session/refresh rows; the JWT claim is removed entirely).
+func TestRefresh_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	sessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
@@ -1384,9 +1386,11 @@ func TestRefresh_AccessJWT_HasNewEpoch_AfterUserBump(t *testing.T) {
 		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	sess := newTestSession("usr-epoch-ref", "sess-epoch-ref")
+	sess.AuthzEpochAtIssue = u.AuthzEpoch // match user epoch so refresh succeeds; this test
+	// asserts JWT claim *shape* after refresh, not stale-epoch behavior.
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-epoch-ref", "usr-epoch-ref")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-epoch-ref", "usr-epoch-ref", u.AuthzEpoch)
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -1397,8 +1401,9 @@ func TestRefresh_AccessJWT_HasNewEpoch_AfterUserBump(t *testing.T) {
 
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, int64(5), claims.AuthzEpoch,
-		"refreshed access token must carry the user's current authz_epoch (S4b epoch forwarding)")
+	// S4d: authz_epoch removed from JWT; epoch lives in session.authz_epoch_at_issue row.
+	_, epochInExtra := claims.Extra["authz_epoch"]
+	assert.False(t, epochInExtra, "S4d: authz_epoch must not be present in JWT (including Extra)")
 }
 
 // spyInvalidator records Apply calls so reuse-funnel tests can assert
@@ -1446,7 +1451,7 @@ func TestRefresh_Reuse_TriggersInvalidatorApply(t *testing.T) {
 	sess := newTestSession("usr-reuse", "sess-reuse")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-reuse", "usr-reuse")
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-reuse", "usr-reuse", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -1507,7 +1512,7 @@ func TestRefresh_Reuse_CascadeFailure_Returns401(t *testing.T) {
 	sess := newTestSession("usr-cascade-fail", "sess-cascade-fail")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-cascade-fail", "usr-cascade-fail")
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-cascade-fail", "usr-cascade-fail", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
@@ -1534,7 +1539,10 @@ type reuseOnRotateRefreshStore struct {
 }
 
 func (s *reuseOnRotateRefreshStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
-	return &refresh.Token{SessionID: s.sessionID, SubjectID: s.subjectID}, nil
+	// AuthzEpochAtIssue must match the test user's AuthzEpoch (=1, set by
+	// domain.NewUser) so the stale-epoch guard in refreshInTx doesn't fire
+	// before the Rotate call we want to exercise.
+	return &refresh.Token{SessionID: s.sessionID, SubjectID: s.subjectID, AuthzEpochAtIssue: 1}, nil
 }
 
 func (s *reuseOnRotateRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
@@ -1552,7 +1560,7 @@ type reuseOnPeekRefreshStore struct {
 }
 
 func (s *reuseOnPeekRefreshStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
-	return &refresh.Token{SessionID: s.sessionID, SubjectID: s.subjectID}, refresh.ErrReused
+	return &refresh.Token{SessionID: s.sessionID, SubjectID: s.subjectID, AuthzEpochAtIssue: 1}, refresh.ErrReused
 }
 
 // TestRefresh_PeekDetectedReuse_TriggersInvalidatorApply verifies the
@@ -1581,7 +1589,7 @@ func TestRefresh_PeekDetectedReuse_TriggersInvalidatorApply(t *testing.T) {
 	sess := newTestSession("usr-peek-reuse", "sess-peek-reuse")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-peek-reuse", "usr-peek-reuse")
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-peek-reuse", "usr-peek-reuse", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)

@@ -1,11 +1,21 @@
 package archtest
 
-// credential_invalidate_funnel_invariants_test.go — three closed-caller-set
-// funnel rules for the S4b credential-invalidation trifecta.
+// credential_invalidate_funnel_invariants_test.go — four closed-caller-set
+// funnel rules covering both ends of the S4b/S4d credential-invalidation
+// pipeline. The first three guard the DOWNSTREAM (store implementations);
+// the fourth guards the UPSTREAM (the funnel's Apply entry point).
 //
 // INVARIANT: CREDENTIAL-INVALIDATE-FUNNEL-01
 // INVARIANT: USER-AUTHZ-EPOCH-BUMP-FUNNEL-01
 // INVARIANT: REFRESH-REVOKE-USER-FUNNEL-01
+// INVARIANT: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01
+//
+// S4d note (upstream rule): UPSTREAM-CALLER-01 is graded Medium —
+// `Invalidator.Apply`'s caller set is enforced by archtest, but the rule
+// catches "wrong call site" (the existing P1 patches handle the "missing
+// call site" hole at the identitymanage entry). Promoting to Hard requires
+// privatizing domain.User authz fields + sealed Mutation funnel; tracked
+// as S4e in backlog AUTHZ-MUTATION-FUNNEL-UPGRADE-01.
 //
 // AI-rebust grade: Hard (closed-caller-set enforced via typeseval.ResolveMethodCall;
 // form uniqueness = "call resolves to this exact *types.Func identity" — no gray zone).
@@ -70,7 +80,50 @@ const (
 	refreshStorePkg     = "github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshStoreType    = "Store"
 	refreshRevokeMethod = "RevokeUser"
+
+	// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (S4d).
+	invalidatorPkg    = "github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
+	invalidatorMethod = "Apply"
 )
+
+// upstreamCallerAllowlistPrefixes lists module-relative path prefixes whose
+// production code is permitted to invoke credentialinvalidate.Invalidator.Apply
+// directly. Every other caller is a violation: new authz-affecting state
+// transitions must route through one of these entry points.
+//
+// As of S4d:
+//   - identitymanage owns the user-state-mutation funnel (Update path:
+//     status demotion, RequirePasswordReset flip, ChangePassword, Delete).
+//   - sessionrefresh.handleReuseDetected owns the reuse / stale-epoch
+//     cascade entry.
+//   - rbacassign owns role-grant + role-revoke mutations.
+//   - setup owns first-admin provisioning + cleanup.
+//   - The funnel package itself is always allowed (Apply is defined here).
+//
+// S4e Hard upgrade will introduce a sealed authzmutate package and tighten
+// this list (removing identitymanage and rbacassign once they migrate).
+var upstreamCallerAllowlistPrefixes = []string{
+	"cells/accesscore/internal/credentialinvalidate/",
+	"cells/accesscore/slices/identitymanage/",
+	"cells/accesscore/slices/sessionrefresh/",
+	"cells/accesscore/slices/rbacassign/",
+	"cells/accesscore/slices/setup/",
+	"cells/accesscore/internal/adminprovision/",
+}
+
+// isUpstreamCallerAllowlisted reports whether a module-relative path is in
+// the upstream caller allowlist. Test files (*_test.go) always pass.
+func isUpstreamCallerAllowlisted(rel string) bool {
+	if strings.HasSuffix(rel, "_test.go") {
+		return true
+	}
+	for _, prefix := range upstreamCallerAllowlistPrefixes {
+		if strings.HasPrefix(rel, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // funnelAllowlistPathPrefixes lists the module-relative path prefixes that
 // are permitted to call each banned method directly (store implementations
@@ -291,6 +344,80 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 		"./tools/archtest/testdata/credential_invalidate_fixtures/identitymanage_direct_revoke_refresh_red",
 		refreshStorePkg, refreshRevokeMethod,
 		"REFRESH-REVOKE-USER-FUNNEL-01 RED fixture",
+	)
+}
+
+// ─── Rule 4: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (S4d, Medium) ─────
+
+// TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01 enforces
+// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: every call to
+// credentialinvalidate.(*Invalidator).Apply in production code must come
+// from one of the allowlisted upstream entry points (identitymanage,
+// sessionrefresh, rbacassign, setup, adminprovision) or the funnel package
+// itself. New callers must justify their addition via a PR that updates
+// upstreamCallerAllowlistPrefixes — this puts the funnel's surface area on
+// the review reviewer's radar instead of relying on string convention.
+//
+// AI-rebust grade: Medium. The rule catches "wrong caller" (cells outside
+// the allowlist invoking Apply directly) but NOT "missing caller" (a new
+// user-authz mutator forgetting to call Apply at all). The latter is what
+// P1-#1 in PR #490 review was — fixed in this PR by the identitymanage
+// service.go change. Hard upgrade lives in S4e (sealed authzmutate funnel +
+// domain.User field privatization) tracked as AUTHZ-MUTATION-FUNNEL-UPGRADE-01.
+//
+// RED fixture: tools/archtest/testdata/credential_invalidate_fixtures/
+// sessionlogin_direct_apply_red — the sessionlogin slice is NOT on the
+// allowlist; calling invalidator.Apply from there must be detected.
+func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	// Scan production packages where someone might plausibly add a new
+	// Invalidator.Apply call. We do NOT include runtime/auth/... or
+	// adapters/... — Apply is a cells/accesscore-internal funnel; calls
+	// from those layers would be a deeper architectural violation caught
+	// by the existing LAYER-* archtests.
+	patterns := []string{
+		"./cells/accesscore/...",
+		"./cmd/...",
+	}
+	resolver, err := typeseval.SharedResolver(root, false, nil, patterns...)
+	require.NoError(t, err, "typeseval.SharedResolver for production packages")
+
+	var violations []string
+	for _, pkg := range resolver.Packages() {
+		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			rel := pkgFileRel(root, pkg, file)
+			if isUpstreamCallerAllowlisted(rel) {
+				continue
+			}
+			violations = append(violations, scanFunnelViolations(
+				pkg, file, rel,
+				invalidatorPkg, invalidatorMethod,
+				"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01",
+			)...)
+		}
+	}
+
+	sort.Strings(violations)
+	for _, v := range violations {
+		t.Log(v)
+	}
+	assert.Empty(t, violations,
+		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: credentialinvalidate.Invalidator.Apply "+
+			"must only be called from the allowlisted upstream entry points "+
+			"(identitymanage, sessionrefresh, rbacassign, setup, adminprovision) "+
+			"or the funnel package itself. Adding a new caller requires updating "+
+			"upstreamCallerAllowlistPrefixes; this puts the funnel surface on the "+
+			"reviewer's radar instead of relying on string convention.")
+
+	verifyRedFixtureDetected(t, root,
+		"./cells/accesscore/internal/credentialinvalidate/testdata/sessionlogin_direct_apply_red",
+		invalidatorPkg, invalidatorMethod,
+		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 RED fixture",
 	)
 }
 

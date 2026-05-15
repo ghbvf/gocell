@@ -337,7 +337,7 @@ func TestRevoke_CallsFunnel_InvalidatesSessions(t *testing.T) {
 	// Two active admins so the effective-admin guard passes when revoking usr-1.
 	assignActiveAdmin(t, store, "usr-1")
 	assignActiveAdmin(t, store, "usr-2")
-	sess := &session.Session{ID: "sess-1", SubjectID: "usr-1", JTI: "jti-sess-1"}
+	sess := &session.Session{ID: "sess-1", SubjectID: "usr-1", JTI: "jti-sess-1", AuthzEpochAtIssue: 1}
 	require.NoError(t, sessionStore.Create(ctx, sess))
 
 	require.NoError(t, svc.Revoke(ctx, "usr-1", "admin"))
@@ -354,7 +354,7 @@ func TestAssign_DoesNotInvalidateSessions(t *testing.T) {
 	svc, _, sessionStore := newTestService(t)
 	ctx := context.Background()
 
-	sess := &session.Session{ID: "sess-2", SubjectID: "usr-2", JTI: "jti-sess-2"}
+	sess := &session.Session{ID: "sess-2", SubjectID: "usr-2", JTI: "jti-sess-2", AuthzEpochAtIssue: 1}
 	require.NoError(t, sessionStore.Create(ctx, sess))
 
 	require.NoError(t, svc.Assign(ctx, "usr-2", "admin"))
@@ -370,7 +370,7 @@ func TestRevoke_NoOp_DoesNotCallFunnel(t *testing.T) {
 	svc, _, sessionStore := newTestService(t)
 	ctx := context.Background()
 
-	sess := &session.Session{ID: "sess-noop-r", SubjectID: "usr-noop", JTI: "jti-noop-r"}
+	sess := &session.Session{ID: "sess-noop-r", SubjectID: "usr-noop", JTI: "jti-noop-r", AuthzEpochAtIssue: 1}
 	require.NoError(t, sessionStore.Create(ctx, sess))
 
 	// usr-noop does not hold admin role — Revoke is a no-op.
@@ -391,7 +391,7 @@ func TestAssign_NoOp_DoesNotEmit(t *testing.T) {
 	_, err := store.RoleRepository().AssignToUser(ctx, "usr-3", "admin")
 	require.NoError(t, err)
 
-	sess := &session.Session{ID: "sess-noop-a", SubjectID: "usr-3", JTI: "jti-noop-a"}
+	sess := &session.Session{ID: "sess-noop-a", SubjectID: "usr-3", JTI: "jti-noop-a", AuthzEpochAtIssue: 1}
 	require.NoError(t, sessionStore.Create(ctx, sess))
 
 	require.NoError(t, svc.Assign(ctx, "usr-3", "admin"))

@@ -111,7 +111,7 @@ func TestB5_OuterTxRollback_IssueRolledBack(t *testing.T) {
 
 	var capturedWire string
 	err := fx.txm.RunInTx(ctx, func(txCtx context.Context) error {
-		wire, _, ierr := fx.store.Issue(txCtx, sessionID, subjectID)
+		wire, _, ierr := fx.store.Issue(txCtx, sessionID, subjectID, int64(1))
 		if ierr != nil {
 			return ierr
 		}
@@ -147,7 +147,7 @@ func TestB5_OuterTxRollback_RotateRolledBack(t *testing.T) {
 	const sessionID = "sess-b5-rotate"
 	const subjectID = "usr-b5-rotate"
 
-	originalWire, _, err := fx.store.Issue(ctx, sessionID, subjectID)
+	originalWire, _, err := fx.store.Issue(ctx, sessionID, subjectID, int64(1))
 	require.NoError(t, err)
 
 	var rotatedWire string
@@ -194,7 +194,7 @@ func TestB5_RevokeSessionDetachedSurvivesOuterRollback(t *testing.T) {
 	const sessionID = "sess-b5-cascade"
 	const subjectID = "usr-b5-cascade"
 
-	wire, _, err := fx.store.Issue(ctx, sessionID, subjectID)
+	wire, _, err := fx.store.Issue(ctx, sessionID, subjectID, int64(1))
 	require.NoError(t, err)
 
 	// Sanity check: token is alive before the cascade.

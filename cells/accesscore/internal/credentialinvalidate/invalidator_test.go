@@ -58,6 +58,14 @@ func (s *stubUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ b
 	panic("stubUserRepo.UpdatePassword: unexpected call")
 }
 
+func (s *stubUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("stubUserRepo.GetByIDForUpdate: unexpected call")
+}
+
+func (s *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("stubUserRepo.GetByUsernameForUpdate: unexpected call")
+}
+
 var _ ports.UserRepository = (*stubUserRepo)(nil)
 
 // stubSessionStore stubs session.Store for testing. Only RevokeForSubject
@@ -93,7 +101,7 @@ type stubRefreshStore struct {
 	revokeUserCallsFor []string // captures subjectID args
 }
 
-func (s *stubRefreshStore) Issue(_ context.Context, _, _ string) (string, *refresh.Token, error) {
+func (s *stubRefreshStore) Issue(_ context.Context, _, _ string, _ int64) (string, *refresh.Token, error) {
 	panic("stubRefreshStore.Issue: unexpected call")
 }
 

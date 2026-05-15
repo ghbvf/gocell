@@ -42,7 +42,7 @@ func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
 	sess := newTestSession("usr-r1", "sess-r1")
 	require.NoError(t, store.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-r1", "usr-r1")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-r1", "usr-r1", int64(1))
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)

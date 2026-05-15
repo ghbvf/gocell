@@ -3,8 +3,13 @@ package sessionvalidate
 // epoch_only_test.go isolates the two security predicates that
 // enforceSessionState applies *after* the JWT signature + revocation checks:
 //
-//   1. user.AuthzEpoch != claims.AuthzEpoch  → 401 (Finding #1 / PR #490)
-//   2. view.SubjectID  != claims.Subject     → 401 (Finding #5 / PR #490)
+//  1. user.AuthzEpoch != view.AuthzEpochAtIssue → 401 (S4d row-provenance, Finding #1)
+//  2. view.SubjectID  != claims.Subject          → 401 (Finding #5 / PR #490)
+//
+// S4d change: epoch comparison source moved from JWT claim to session row.
+// The session row's AuthzEpochAtIssue captures the user's epoch at login time.
+// A credential event bumps user.AuthzEpoch; all sessions with the old epoch
+// mismatch and are rejected.
 //
 // The existing TestS4b_CredentialEvent_InvalidatesAccessJWT integration test
 // proves the bump + revoke funnel atomically does *both*, which means a
@@ -34,9 +39,15 @@ import (
 
 // TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke verifies
 // that the epoch predicate alone rejects a stale token, even when the session
-// row is still active. This guards against the "PG SELECT silently drops
-// authz_epoch column" regression (Finding #1) — without it, user.AuthzEpoch
-// would always read as 0 and the epoch check would be a no-op.
+// row is still active. S4d: comparison is user.AuthzEpoch vs view.AuthzEpochAtIssue.
+//
+// Scenario: session created at user.epoch=1 (AuthzEpochAtIssue=1). Credential
+// event bumps user.epoch to 2. The session row is still active (not revoked),
+// but the epoch comparison rejects because 2 != 1.
+//
+// This guards the "PG SELECT silently drops authz_epoch column" regression —
+// without epoch read, user.AuthzEpoch=0 and any session with AuthzEpochAtIssue=1
+// would fail constantly (0 != 1), making the regression visible.
 func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testing.T) {
 	memStore := mem.NewStore(clock.Real())
 	userRepo := memStore.UserRepository()
@@ -44,53 +55,55 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 
 	userID := "usr-epoch-only-" + uuid.NewString()[:8]
 	sessionID := "sess-epoch-only-" + uuid.NewString()[:8]
+	// S4d: user starts at epoch=1 (domain.NewUser sets AuthzEpoch=1).
 	user := &domain.User{
 		ID:         userID,
 		Username:   "epoch-only-user",
 		Email:      "epoch@only.test",
 		Status:     domain.StatusActive,
-		AuthzEpoch: 0,
+		AuthzEpoch: 1,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
-	// Seed an active session — RevokedAt deliberately stays nil so the epoch
-	// branch is the ONLY rejection path.
+	// Seed an active session — AuthzEpochAtIssue=1 matches user.epoch=1.
+	// RevokedAt deliberately stays nil so the epoch branch is the ONLY
+	// rejection path after the bump.
 	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
-		ID:        sessionID,
-		SubjectID: userID,
-		JTI:       "jti-epoch-" + sessionID,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                sessionID,
+		SubjectID:         userID,
+		JTI:               "jti-epoch-" + sessionID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	}))
 
 	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default())
 	require.NoError(t, err)
 
-	// Token issued at epoch=0; sanity check it validates before any bump.
-	tok0, err := IssueTestTokenWithEpoch(testPrivKey, userID, 0, time.Hour, sessionID)
+	// Token with active session: user.epoch=1 == session.AuthzEpochAtIssue=1 → ACCEPT.
+	tok, err := IssueTestToken(testPrivKey, userID, nil, time.Hour, sessionID)
 	require.NoError(t, err)
-	_, err = svc.VerifyIntent(context.Background(), tok0, auth.TokenIntentAccess)
-	require.NoError(t, err, "fresh epoch=0 token must verify before bump")
+	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.NoError(t, err, "before bump: user.epoch=1 matches session.epoch=1 → must accept")
 
 	// Bump epoch via the repo directly — funnel intentionally bypassed so the
 	// session row remains active and only the epoch predicate can reject.
-	_, err = userRepo.BumpAuthzEpoch(context.Background(), userID)
+	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID)
 	require.NoError(t, err)
+	require.Equal(t, int64(2), newEpoch, "first bump must advance epoch from 1 to 2")
 
-	// The same token must now be rejected. If the PG SELECT regression returns
-	// and user.AuthzEpoch reads as 0, this fails because token.epoch == 0 ==
-	// user.AuthzEpoch and validation accepts the stale token.
-	_, err = svc.VerifyIntent(context.Background(), tok0, auth.TokenIntentAccess)
-	require.Error(t, err, "post-bump epoch=0 token must be rejected purely on epoch mismatch")
+	// The same token must now be rejected: user.epoch=2 != session.epoch=1.
+	// If the PG SELECT regression returns and user.AuthzEpoch reads as 0,
+	// then 0 != 1 still fails — but for the wrong reason. The pre-bump ACCEPT
+	// above proves the read path is working (otherwise 1 != 1 would have failed).
+	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, err, "post-bump: user.epoch=2 != session.epoch=1 → must reject purely on epoch mismatch")
 
-	// A freshly minted token carrying the new epoch must accept again — the
-	// rejection is bound to the *claim*, not to a leftover state on the user.
-	tok1, err := IssueTestTokenWithEpoch(testPrivKey, userID, 1, time.Hour, sessionID)
-	require.NoError(t, err)
-	_, err = svc.VerifyIntent(context.Background(), tok1, auth.TokenIntentAccess)
-	assert.NoError(t, err, "post-bump epoch=1 token must verify against user.AuthzEpoch=1")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
 }
 
 // TestEnforceSessionState_SubjectMismatch_Rejects exercises the defense-in-depth
@@ -113,19 +126,20 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 			Username:   id,
 			Email:      id + "@test",
 			Status:     domain.StatusActive,
-			AuthzEpoch: 0,
+			AuthzEpoch: 1,
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}))
 	}
 
-	// Seed an active session owned by ownerID.
+	// Seed an active session owned by ownerID. AuthzEpochAtIssue=1 matches ownerID.epoch=1.
 	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
-		ID:        sessionID,
-		SubjectID: ownerID,
-		JTI:       "jti-mismatch-" + sessionID,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                sessionID,
+		SubjectID:         ownerID,
+		JTI:               "jti-mismatch-" + sessionID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	}))
 
 	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default())
@@ -134,14 +148,14 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 	// Forge a token whose sub is imposter but sid points at owner's session.
 	// In production this should never happen, but a signing-path regression
 	// could produce this shape; the defense-in-depth check must reject it.
-	imposterTok, err := IssueTestTokenWithEpoch(testPrivKey, imposterID, 0, time.Hour, sessionID)
+	imposterTok, err := IssueTestToken(testPrivKey, imposterID, nil, time.Hour, sessionID)
 	require.NoError(t, err)
 	_, err = svc.VerifyIntent(context.Background(), imposterTok, auth.TokenIntentAccess)
 	require.Error(t, err,
 		"sid pointing at a different subject's session must be rejected (Finding #5 defense-in-depth)")
 
 	// Sanity: owner's own token still passes.
-	ownerTok, err := IssueTestTokenWithEpoch(testPrivKey, ownerID, 0, time.Hour, sessionID)
+	ownerTok, err := IssueTestToken(testPrivKey, ownerID, nil, time.Hour, sessionID)
 	require.NoError(t, err)
 	_, err = svc.VerifyIntent(context.Background(), ownerTok, auth.TokenIntentAccess)
 	assert.NoError(t, err, "owner's token against owner's session must verify")

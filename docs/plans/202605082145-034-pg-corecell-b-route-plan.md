@@ -1,8 +1,8 @@
 # 034 PG / accesscore / auditcore / configcore B 路线实施计划
 
 **生成日期**: 2026-05-08
-**最后更新**: 2026-05-14（v6 状态同步：**S4b** ship by PR #490 — authz_epoch closed loop + credentialinvalidate 3-op funnel + JWT jti/authz_epoch claims + sessionvalidate 503 + refresh reuse cascade + S4a 遗留 FU-1/FU-2 一并修复；剩余 **S4c** 串行收口 cleanup / L2 e2e + S4a FU-3b archtest Soft → Medium 升级；**D4** docs/contracts sync 仍未起步，含 S4a FU-3a login/refresh contract 403 漂移；新登记 PR #490 review FU 两条 backlog 走单独触发：REQUIRED-DEP-NIL-GUARD-01（Soft → Hard，archtest 触发）+ ENFORCESESSIONSTATE-HOTPATH-OPT-01（QPS 阈值触发））
-**前一版**: 2026-05-13 v5（S4a ship by PR #482）
+**最后更新**: 2026-05-15（v7 — **S4d** 新增 correctness 单元修 PR #490 review 暴露的 P1/P2 + 根因。S4b 把 epoch 实现为 access JWT validation claim，未评估 refresh 升级 + 并发 login 串行化 + RequirePasswordReset funnel 上游路径。S4d 修复方向：撤回 migration 025（A1 RETRACTED）/ 删 access JWT epoch claim / sessionvalidate 改 row SoR (`view.AuthzEpochAtIssue`) / sessionlogin `SELECT ... FOR UPDATE` 行锁 / sessionrefresh row 比对 + stale/reuse 合并 cascade 入口 / identitymanage RequirePasswordReset 同 tx 调 invalidator。funnel 上游 Medium (`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` archtest caller allowlist)；Hard 升级走 backlog `AUTHZ-MUTATION-FUNNEL-UPGRADE-01` 单独 PR (S4e)。S4c (cleanup) 范围不变，与 S4d 并行。)
+**前一版**: 2026-05-14 v6（S4b ship by PR #490；后被 review 揭示 P1/P2 → S4d 单独 PR 闭环）
 **对接来源**:
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`（B 路线源）
 - `docs/plans/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代）
@@ -423,6 +423,36 @@ runtime/auth/session/
 - 并发 credential event 不产生 epoch 回退或 session 残留 ✅ （sessionvalidate_concurrent_epoch_race_test.go 覆盖）
 - PG session store / userRepo 注入故障（pool 断开 / query timeout）→ sessionvalidate 返回 503 `ErrAuthServiceUnavailable` ✅
 - 防枚举文案保持 `invalid or expired authentication token` ✅
+
+#### S4d credential row provenance + funnel 上游 Medium 收口（v7 新增）
+
+**触发**：PR #490 (S4b) ship 后六席审查暴露三个 P1 + 四个 P2，根因是 L3 概念模型把 `authz_epoch` 实现为 access JWT 的 validation field，不是 credential 的 provenance。
+
+**范围**（与 S4c 文件零重叠，可并行实施）：
+- migration 026 撤回 025 + migration 027 新增 `refresh_tokens.authz_epoch_at_issue`；`schema_guard.requiredColumns` 切换形态（A1 RETRACTED → A8 row provenance，详见 ADR §0）
+- `runtime/auth/session.Session` + `ValidateView` + `runtime/auth/refresh.Token` 加 `AuthzEpochAtIssue int64`；`session.Store.Create` / `refresh.Store.Issue` fail-fast on zero（storetest conformance T-S4D-1/T-S4D-2 守）
+- `ports.UserRepository` 加 `GetByIDForUpdate` / `GetByUsernameForUpdate`（mem store-wide Lock；PG `SELECT ... FOR UPDATE`）
+- `sessionlogin` 用 `GetByUsernameForUpdate` 在 RunInTx 闭包顶部读 user → session/refresh 行携带 `user.AuthzEpoch`（修 P1-#3 并发 login vs revoke 串行化）
+- `sessionvalidate` 改 row SoR：比对 `user.AuthzEpoch != view.AuthzEpochAtIssue`（删 claim 字段；A7）
+- `sessionrefresh.refreshInTx` 加 row != user 比对，stale 走 `handleReuseDetected("stale-epoch")` 统一 cascade 入口（A6 扩展；修 P1-#2 stale grant 升级）
+- `identitymanage.applyUserUpdate` 在 RequirePasswordReset false→true transition 同 tx 调 invalidator + 新 `CredentialEventPasswordResetRequired` 枚举值（A9；修 P1-#1）
+- access JWT 删 `authz_epoch` claim：`auth.Claims.AuthzEpoch` 字段删除 + `standardClaims` map 删 key + mint 路径不写（A7）
+- archtest：`JWT-CLAIMS-NO-AUTHZ-EPOCH-01` Hard 三 prong（struct field + standardClaims map + jwt.go literal scan）；`SESSIONVALIDATE-EPOCH-SOURCE-01` Hard（row != claim 锁源）；`SESSIONREFRESH-STALE-EPOCH-REJECT-01` Hard（row != user inequality + stale-epoch stage marker）；`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` Medium（`Invalidator.Apply` caller allowlist：identitymanage/sessionrefresh/rbacassign/setup/adminprovision/funnel itself）
+- ADR `202605101400-adr-credential-session-protocol.md` §0 A1 RETRACTED + A7/A8/A9/A10 新增 + §3 威胁矩阵整表重跑 + §D1/D2/D4.2 SQL 修订 + 原文与 amendment 矛盾段落同 PR 重写
+- rules `ai-collab.md` §Review checklist 加双向 funnel 评级 + ADR amendment 重跑威胁矩阵规则；`contract-fanout.md` 触发条件加 DROP COLUMN / schema_guard.forbiddenColumns 新 entry + Invariant inventory 行
+
+**验收**：
+- `make verify` 全绿；`hack/verify-archtest.sh` 全绿（四条 archtest 全 PASS，含 RED fixture 反向自检）
+- e2e 新增三条：(a) stale-refresh 升级拒绝；(b) PATCH RequirePasswordReset=true 立即生效；(c) 并发 login vs revoke FOR UPDATE 串行化
+- ADR §3 威胁矩阵 PR body 附完整新矩阵
+- 六席 review checklist 中 funnel 评级显式给出（下游 Hard + 上游 Medium → 指向 S4e）
+- backlog 加 `AUTHZ-MUTATION-FUNNEL-UPGRADE-01` 显式 S4e 跟进条目
+
+**功能不在 S4d 范围（推迟 S4e）**：
+- `domain.User` 字段私有化（status / passwordResetRequired / authzEpoch unexported）
+- 新建 `cells/accesscore/internal/authzmutate` 包 + sealed `Mutation` interface + `Apply` 唯一入口
+- archtest 升 Hard：`DOMAIN-AUTHZ-FIELD-PRIVATE-01` + `AUTHZ-MUTATION-APPLY-FUNNEL-01`
+- `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 收窄到 authzmutate + sessionrefresh
 
 #### S4c accesscore cleanup / race / L2 e2e
 

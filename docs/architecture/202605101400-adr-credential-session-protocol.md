@@ -10,15 +10,38 @@
 
 ---
 
-## 0. Amendments（S4b 落地后修订；2026-05-14）
+## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15）
 
-S4b PR 落地后实际实现与 §2/§3 描述出现以下漂移。原文保留作历史脉络，**实际行为以本节为准**：
+S4b PR 落地后实际实现与 §2/§3 描述出现漂移。**S4d (PR S4d) 之后实际行为以本节 +
+§A8 / §D1 / §D2 / §D4.2 同 PR 重写后的描述为准。** 与 amendment 矛盾的原文段落
+已在 S4d 同 PR 内重写（不再保留为"历史脉络"——见 ai-collab.md §"ADR amendment
+重跑威胁矩阵"规则）。
 
-### A1 删除 `sessions.authz_epoch_at_issue` 列（替代 §D2）
+### A1 RETRACTED — 2026-05-15（PR S4d）
 
-- 迁移 `025_drop_sessions_authz_epoch_at_issue.sql` 已 DROP 该列。`schema_guard.forbiddenColumns` 静态守卫列再次出现会让 binary 启动失败。
-- AuthzEpoch 完全靠 JWT `authz_epoch` claim 携带；validate 时实时读取 `users.authz_epoch` 比对。行内 pin 提供的零额外防御不抵其同步开销 + migration 复杂度。
-- D2 中所有关于"`authz_epoch_at_issue` 快照"的描述（§D2 / §D1 SQL / §3 部署清单）现在**只读 `users.authz_epoch`**，不再有 per-session 快照列。
+**原 amendment（撤回）**：声称 `sessions.authz_epoch_at_issue` 是 JWT claim 的
+冗余镜像，行内 pin 提供"零额外防御"，故 migration 025 DROP 该列，
+`schema_guard.forbiddenColumns` 守卫禁止该列再次出现。
+
+**为什么撤回**：A1 仅在 access JWT 单独存在的口径下成立，跨到 refresh 链路与并发
+login 串行化场景就不成立。具体盲点（PR #490 review 六席审查发现）：
+
+1. **refresh row 无 epoch_at_issue**：`sessionrefresh` 用 live `users.authz_epoch`
+   重铸 access claim，stale refresh grant 一次刷新即升级到当前 epoch（P1-#2）。
+2. **删除列时未评估 refresh 维度**：原 amendment 把"删 session 行 pin"论证为
+   "claim 的镜像"，但 refresh 是 opaque token + DB row，无 claim 可作 SoR。整个
+   refresh 维度没纳入 alternative analysis。
+3. **删除列同时也删了"login vs role-revoke"的 server-side 串行化路径**：原 §D2
+   SQL `INSERT INTO sessions (..., authz_epoch_at_issue=<read>)` 让 login tx 与
+   role-revoke tx 通过 user 行天然串行化；A1 删列后没有等价补偿，导致并发窗口
+   重新打开（P1-#3）。
+4. **ADR 自身不一致**：A1 删了列，但 §3 威胁矩阵未重跑（仍把 "Role downgrade 后
+   旧 token 仍持高权" 标 ✅），§D4.2 仍引用已删除的列描述。
+
+**S4d 决议**：恢复 row-level credential provenance（详见 §A8）；migration 026
+ADD COLUMN 恢复 `sessions.authz_epoch_at_issue`；migration 027 ADD COLUMN
+`refresh_tokens.authz_epoch_at_issue`；schema_guard 切换为 requiredColumns 守
+（保证列存在）。原 §D2 SQL 形态恢复（FOR UPDATE 行锁 + INSERT epoch snapshot）。
 
 ### A2 sessionvalidate 按 `sid` 查 session，不按 `jti`（替代 §D1 SQL）
 
@@ -64,6 +87,75 @@ D2 epoch 比对是 401 路径（token claim 与 server state 不符）。但 JWT
 - `refresh.Store` 接口契约现在要求 ErrReused 返 `(*Token{SubjectID, SessionID, ...}, ErrReused)`，让 service 拿到 cascade 所需 metadata。空 SubjectID 命中 = 上游违约，service 走 `panicregister.Approved` panic（Recovery middleware 转 500 + audit）。
 - 接 `ctxutil.WithDetachedTimeout(outerCtx, 5s)`：cascade 不受外层 cancel 影响 + 不会因 DB 卡住泄漏 goroutine。
 - `runtime/auth/refresh/storetest` 的 T20 / T23 conformance 子测试断言任何新 Store impl 必返非空 token，否则编译之外的 CI 失败。
+
+S4d 扩展：stale-epoch 走相同入口。`refreshInTx` 在 `fetchUserForRefresh` 后比对
+`presented.AuthzEpochAtIssue != user.AuthzEpoch`；不匹配统一调
+`handleReuseDetected(outerCtx, sess.SubjectID, sess.ID, "stale-epoch")` —
+reuse 与 stale-grant 共用 cascade 入口，避免分支。archtest
+`SESSIONREFRESH-STALE-EPOCH-REJECT-01` 静态守卫该形态。
+
+### A7 access JWT 删除 `authz_epoch` claim（S4d）
+
+S4b 把 epoch 写入 access JWT 的 `authz_epoch` claim，validate 时和
+`users.authz_epoch` 比对。S4d 撤销该决策：
+
+- **claim 不是 provenance**：refresh 流程会用 live `users.authz_epoch` 重铸 access
+  JWT，所以 claim 实际是 "validation cookie"，每次 refresh 都被刷新；它不承担
+  "此凭据在哪个 epoch issue" 的 provenance 语义。
+- **row 才是 SoR**：sessionvalidate 现在比对 `user.AuthzEpoch != view.AuthzEpochAtIssue`
+  （从 session 行读，不是 claim）。sessionrefresh 比对
+  `presented.AuthzEpochAtIssue != user.AuthzEpoch`（从 refresh 行读）。
+- access JWT payload 不再写入 `authz_epoch`；`auth.Claims` struct 不含 `AuthzEpoch`
+  字段；`standardClaims` map 不含 `"authz_epoch"` key。任何回归形态由 archtest
+  `JWT-CLAIMS-NO-AUTHZ-EPOCH-01` 静态拦截。
+
+### A8 Row-level credential provenance（S4d；替代 A1）
+
+- session / refresh 行都携带 `authz_epoch_at_issue BIGINT NOT NULL DEFAULT 0`。
+  DEFAULT 是 DDL-only 兼容性（rules/go-standards.md "新字段必须有默认值或允许 NULL"）；
+  应用层 `Store.Create` / `Store.Issue` 拒 zero（`ErrValidationFailed`），由
+  storetest conformance T-S4D-1 / T-S4D-2 守。
+- migration 026/027 同 PR 落地；schema_guard `requiredColumns` 加入两列、
+  `forbiddenColumns` 删除 session 列项（A1 的反操作）。
+- sessionlogin 用 `userRepo.GetByUsernameForUpdate`（PG `SELECT ... FOR UPDATE`；
+  mem store-wide Lock）在 RunInTx 闭包顶部读 user → 同 tx 写 session 行的
+  `AuthzEpochAtIssue = user.AuthzEpoch` → 同 tx 写 refresh chain 根行的
+  `authz_epoch_at_issue = user.AuthzEpoch`。Login tx 与 `Invalidator.Apply` 的
+  `BumpAuthzEpoch`（也持 user 行写锁）天然串行化（PG read-committed + row lock
+  原生语义）。
+- refresh chain 内 epoch 稳定：Rotate 创建 child 行时复制 parent
+  `authz_epoch_at_issue`，符合 OAuth2 §1.5 "refresh 是同一份 grant 的延续"
+  + ADR §D4.1。Stale-grant 检测在 service 层（A6 cascade 入口），不在 store 层。
+- archtest `SESSIONVALIDATE-EPOCH-SOURCE-01` 锁 sessionvalidate epoch 比对的
+  右值必须是 `view.AuthzEpochAtIssue`（而不是 deleted `claims.AuthzEpoch`）；
+  `SESSIONREFRESH-STALE-EPOCH-REJECT-01` 锁 sessionrefresh row != user 比对 +
+  `"stale-epoch"` cascade 入口；`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01`
+  (Medium) 锁 `Invalidator.Apply` 的 caller allowlist。
+
+### A9 identitymanage RequirePasswordReset 接入 funnel（S4d，P1-#1）
+
+- `identitymanage.Service.applyUserUpdate` 现在在 status demotion **或**
+  RequirePasswordReset false→true transition 时都同 tx 调
+  `credentialinvalidate.Invalidator.Apply`（事件 = `CredentialEventLock` 或
+  `CredentialEventPasswordResetRequired`，后者由 S4d 新增）。
+- 之前的实现只在 status demotion 时走 funnel，导致 PATCH
+  `requirePasswordReset=true` 不 bump epoch，强制改密门禁延迟到 token 自然 exp
+  才生效（PR #490 review P1-#1）。
+
+### A10 后续治理（S4e）— funnel 上游 Hard 化
+
+- 本 PR (S4d) 的 funnel 上游是 **Medium**：archtest
+  `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 锁 `Invalidator.Apply` 的 caller
+  allowlist，防"新 caller 在错误位置调"。但不防"新 authz-affecting 字段 setter
+  漏调"——这正是 PR #490 review P1-#1 的回归形态。
+- S4e 单独立项（backlog `AUTHZ-MUTATION-FUNNEL-UPGRADE-01`）做：
+  1. `domain.User` 的 `status` / `passwordResetRequired` / `authzEpoch` 字段私有化
+     + 删 setter（包外不可表达写入）。
+  2. 新建 `cells/accesscore/internal/authzmutate` 包 + sealed `Mutation` interface
+     + `Apply(ctx, txMgr, repo, inv, userID, m, now)` 唯一入口（compile 期强制
+     `inv` 非 nil 入参）。
+  3. archtest 升 Hard：`DOMAIN-AUTHZ-FIELD-PRIVATE-01` + `AUTHZ-MUTATION-APPLY-FUNNEL-01`；
+     `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 收窄到 authzmutate + sessionrefresh。
 
 ---
 
@@ -131,15 +223,20 @@ session row: {
 -- index: (jti) UNIQUE, (user_id, revoked_at)
 ```
 
-JWT validate 路径：
+JWT validate 路径（S4d 形态，A8 row SoR + A7 access JWT 不含 epoch claim）：
 
 ```
 parse JWT → verify signature
-SELECT id, revoked_at, authz_epoch_at_issue FROM sessions WHERE jti = $1
-if !found OR revoked_at IS NOT NULL OR expires_at < now → reject
-SELECT authz_epoch FROM users WHERE id = $1
-if claim.epoch < user.authz_epoch → reject (D2 stale token)
+SELECT id, subject_id, revoked_at, authz_epoch_at_issue FROM sessions WHERE id = sid
+if !found OR revoked_at IS NOT NULL → reject (uniform 401)
+if view.subject_id != claims.sub → reject (defense-in-depth)
+SELECT authz_epoch FROM users WHERE id = claims.sub
+if user.authz_epoch != view.authz_epoch_at_issue → reject (D2 stale token)
 ```
+
+注：sessionvalidate 按 `sid` (claims.SessionID) 查 session（A2），不按 jti。
+epoch 比对源是 `view.AuthzEpochAtIssue`（row），不是 `claims.AuthzEpoch`
+（已删，A7）。archtest `SESSIONVALIDATE-EPOCH-SOURCE-01` 锁定该形态。
 
 **Alternatives Considered**：
 
@@ -160,28 +257,47 @@ if claim.epoch < user.authz_epoch → reject (D2 stale token)
 - account lock / unlock
 - account delete
 
-login 时：
+login 时（S4d 形态，行锁 + epoch 快照）：
 
 ```
 BEGIN tx
-  SELECT authz_epoch FROM users WHERE id = $1
+  SELECT authz_epoch FROM users WHERE id = $1 FOR UPDATE   -- row lock blocks Invalidator.Apply
   INSERT INTO sessions (..., jti=$jti, authz_epoch_at_issue=<read>) ...
-  -- JWT payload:  { sub, jti, epoch:<read>, exp, ... }
+  INSERT INTO refresh_tokens (..., authz_epoch_at_issue=<read>) ...
+  -- access JWT payload (S4d 删 epoch claim):  { sub, jti, sid, exp, ... }
 COMMIT
 ```
 
-role revoke 时（同 tx 完成 D5）：
+role revoke 时（同 tx 完成 D5，Invalidator.Apply 三操作 atomic）：
 
 ```
 BEGIN tx
   DELETE FROM role_assignments WHERE ...
-  UPDATE users SET authz_epoch = authz_epoch + 1 WHERE id = $1
+  -- Invalidator.Apply trifecta (downstream Hard funnel; archtest 守):
+  UPDATE users SET authz_epoch = authz_epoch + 1 WHERE id = $1   -- 持 user 行写锁 → 阻塞并发 login
   UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL
+  UPDATE refresh_tokens SET revoked_at = NOW() WHERE subject_id = $1 AND revoked_at IS NULL
   INSERT INTO outbox (event=role.revoked, ...)
 COMMIT
 ```
 
-validate 路径已在 D1 描述（`if claim.epoch < user.authz_epoch → reject`）。**效果**：旧 token 含 `claim.epoch=5`，role revoke 后 `user.authz_epoch=6`，下一次 validate 立即拒。无需 sweep 已发 token——它们自动失效。
+validate 路径（S4d 形态）：
+
+```
+view, err := sessionStore.Get(ctx, sid)                            -- read session row (carries AuthzEpochAtIssue)
+user, err := userRepo.GetByID(ctx, claims.Subject)                 -- read live user.AuthzEpoch
+if user.AuthzEpoch != view.AuthzEpochAtIssue → 401 ErrAuthInvalidToken
+```
+
+**效果**：旧 session 行 `authz_epoch_at_issue=5`，role revoke 后
+`user.authz_epoch=6`，下一次 validate 立即拒。refresh 同理：refresh 行
+`authz_epoch_at_issue=5` 与 user.AuthzEpoch=6 不匹配，sessionrefresh 路由进
+`handleReuseDetected("stale-epoch")`。无需 sweep 已发 token——它们自动失效。
+
+**P1-③（并发 login vs revoke）的串行化机制**：S4d 用 PG row-level lock
+（SELECT ... FOR UPDATE on users）让 login tx 与 revoke tx 通过 user 行天然串行化。
+login 持 user 行写锁的窗口覆盖 session/refresh INSERT；revoke 期 BumpAuthzEpoch
+也持同一行写锁。无 advisory lock、无 application-side CAS。
 
 **Alternatives Considered**：
 
@@ -249,10 +365,15 @@ session.ID 从 login 时刻设定后保持稳定，直到 logout / `RevokeForSub
 任何重新引入该模式的尝试（`cells/accesscore/slices/sessionrefresh/` 包内禁止
 调用 `session.Store.Create / Revoke / RevokeForSubject`）。
 
-**AuthzEpoch / role snapshot 推进路径**：refresh 时通过 `users.authz_epoch` +
-`sessions.authz_epoch_at_issue` 比对实现 fail-closed（D2，由 S4b 闭环），不通过
-session UUID 轮换。访问令牌 claims 在 refresh 时按 user state 重新签发（password
-reset flag / role membership），但不写回 session 行。
+**AuthzEpoch / role snapshot 推进路径**（S4d 形态）：refresh 时通过
+`presented.AuthzEpochAtIssue`（从 refresh 行读，A8 引入）与 live
+`users.authz_epoch` 比对；不匹配走 A6 cascade 入口 `handleReuseDetected("stale-epoch")`。
+sessionvalidate 同源比对 `view.AuthzEpochAtIssue`（session 行，A8）与
+`users.authz_epoch`。Session UUID 不轮换（OAuth2 §1.5 + ADR §D4.1）；refresh
+child 继承 chain 的 `authz_epoch_at_issue`，refresh chain 内 epoch 稳定。
+访问令牌 claims 在 refresh 时按 user state 重新签发（password reset flag /
+role membership），但 access JWT 不再携带 `authz_epoch` claim（A7），不写回
+session/refresh 行。
 
 #### D4.2 Session 行 retention
 
@@ -300,15 +421,24 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 
 ## 3. Threat Model 覆盖矩阵
 
-| 威胁场景 | jti-only | AuthzEpoch | Fail-closed events | 同 tx |
-|---|---|---|---|---|
-| DB 泄露 → token 直接重放 | ✅ 不可重放（DB 无 token 明文也无 HMAC） | — | — | — |
-| Role downgrade 后旧 token 仍持高权 | — | ✅ epoch bump → 旧 token 自动 reject | ✅ session 同 tx 撤销 | ✅ 失效原子 |
-| Device theft（设备被偷） → user lock | ✅ session lookup 拒 | — | ✅ Lock event 触发全撤 | ✅ 失效原子 |
-| Password reset → 旧 access/refresh 仍可用 | — | — | ✅ PasswordReset event 触发全撤 | ✅ 失效原子 |
-| Account delete → 残留 session 攻击面 | — | — | ✅ Delete event 触发全撤 | ✅ 失效原子 |
-| 并发 login 与 role revoke | — | ✅ epoch 让顺序变成"已签发 vs current"判断 | ✅ session 同 tx 撤销 | ✅ 失效原子 |
-| JWT 签名密钥泄露 | ❌（jti-only 不解此场景） | — | — | — |
+> S4d 重跑（2026-05-15）：A1 RETRACTED + A8 row provenance + A9 RequirePasswordReset
+> funnel + A7 access JWT 删 epoch claim。每行重新评估（按 ai-collab.md §"ADR
+> amendment 重跑威胁矩阵" 规则）。`Row SoR` 列代替原 `AuthzEpoch` 列以反映
+> 实际 SoR 位置；`Funnel 上游` 列新增反映 P1-#1 修复。
+
+| 威胁场景 | jti-only | Row SoR (AuthzEpochAtIssue) | Fail-closed events | Funnel 上游 (S4d) | 同 tx |
+|---|---|---|---|---|---|
+| DB 泄露 → access token 直接重放 | ✅ DB 无明文/HMAC | — | — | — | — |
+| Role downgrade 后旧 access 仍持高权 | — | ✅ user.epoch != session.epoch_at_issue → validate reject | ✅ Invalidator.Apply 同 tx 撤 session | A9 rbacassign.Revoke 走 funnel | ✅ 失效原子 |
+| Role downgrade 后旧 refresh 升级到新 epoch (P1-#2) | — | ✅ user.epoch != refresh.epoch_at_issue → sessionrefresh cascade（A6 stale-epoch 入口） | ✅ Invalidator.Apply 撤所有 refresh chain | A9 同上 | ✅ 失效原子 |
+| Device theft → user lock | ✅ session lookup 拒 | ✅ row.epoch 同步 stale → validate 双层防 | ✅ Lock event 同 tx 撤 session+refresh | A9 identitymanage.Update 走 funnel | ✅ 失效原子 |
+| Password reset → 旧 access/refresh 仍可用 | — | ✅ epoch bump 让 row stale | ✅ ChangePassword event 同 tx 撤 session+refresh | A9 ChangePassword 走 funnel | ✅ 失效原子 |
+| PATCH RequirePasswordReset=true 不立即生效 (P1-#1) | — | ✅ epoch bump → row stale | ✅ S4d 新增 `CredentialEventPasswordResetRequired` event | **A9 identitymanage 在 false→true transition 调 invalidator** | ✅ 失效原子 |
+| Account delete → 残留 session 攻击面 | — | — | ✅ Delete event 同 tx 撤所有 | A9 走 funnel | ✅ 失效原子 |
+| 并发 login 与 role revoke (P1-#3) | — | ✅ login 持 user 行 FOR UPDATE 写锁，revoke 期 BumpAuthzEpoch 也持同行写锁 → PG read-committed + row lock 天然串行化 | — | — | ✅ 失效原子 |
+| stale refresh + reuse cascade 共用入口 (A6) | — | ✅ row.epoch != user.epoch 路由进 handleReuseDetected("stale-epoch") | ✅ 同 reuse cascade — 全 user 撤 | A6 sessionrefresh 走 funnel | ✅ 失效原子 |
+| 新增 user authz-affecting 字段漏调 invalidator (S4d funnel 上游 Medium) | — | — | — | ⚠️ Medium: archtest `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 锁 caller allowlist，**不防"漏调"**；S4e Hard 化（authzmutate sealed funnel）完关 | — |
+| JWT 签名密钥泄露 | ❌（jti-only 不解此场景） | — | — | — | — |
 | key rotation | ❌（不在本 ADR 范围；JWT issuer key rotation 是独立机制） | — | — | — |
 
 JWT 签名密钥泄露 / key rotation 由 `runtime/auth/jwt.go` issuer key management 独立处理，不在 session protocol 范畴。

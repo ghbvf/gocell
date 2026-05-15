@@ -338,11 +338,12 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 
 	// Give bob an active session.
 	bobSession := &session.Session{
-		ID:        "sess-bob",
-		SubjectID: "usr-bob",
-		JTI:       "sess-bob",
-		CreatedAt: time.Now().UTC(),
-		ExpiresAt: time.Now().Add(time.Hour).UTC(),
+		ID:                "sess-bob",
+		SubjectID:         "usr-bob",
+		JTI:               "sess-bob",
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now().UTC(),
+		ExpiresAt:         time.Now().Add(time.Hour).UTC(),
 	}
 	require.NoError(t, sessionRepo.Create(ctx, bobSession))
 

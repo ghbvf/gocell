@@ -398,6 +398,14 @@ func (r *duplicateUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, 
 	return 0, nil
 }
 
+func (r *duplicateUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("duplicateUserRepo.GetByIDForUpdate: unexpected call")
+}
+
+func (r *duplicateUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("duplicateUserRepo.GetByUsernameForUpdate: unexpected call")
+}
+
 // scriptedRoleRepo returns CountByRole values from a scripted sequence; tracks
 // whether AssignToUser / Create was called.
 type scriptedRoleRepo struct {
@@ -563,4 +571,12 @@ func (r *errUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bo
 
 func (r *errUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
 	return 0, nil
+}
+
+func (r *errUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("errUserRepo.GetByIDForUpdate: unexpected call")
+}
+
+func (r *errUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("errUserRepo.GetByUsernameForUpdate: unexpected call")
 }

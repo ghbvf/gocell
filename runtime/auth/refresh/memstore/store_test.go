@@ -152,7 +152,7 @@ func TestNewDefaultsTypedNilRandReader(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, store)
 
-	_, _, err = store.Issue(context.Background(), "session-1", "subject-1")
+	_, _, err = store.Issue(context.Background(), "session-1", "subject-1", int64(1))
 	require.NoError(t, err)
 }
 

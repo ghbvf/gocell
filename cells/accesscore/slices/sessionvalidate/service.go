@@ -158,10 +158,12 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
-	// 2) Epoch invariant: user.authz_epoch must exactly match claims.AuthzEpoch.
-	// Using != (not >) ensures fail-closed on any mismatch including "future epoch"
-	// tokens where claims.AuthzEpoch > user.AuthzEpoch — such tokens indicate a
-	// tampered or replayed claim and must be rejected. (Finding #2)
+	// 2) Epoch invariant: user.authz_epoch must exactly match the epoch stored on
+	// the session row (view.AuthzEpochAtIssue). S4d moves the epoch source of truth
+	// from the JWT claim to the session/refresh rows — the claim is no longer
+	// written. Using != ensures fail-closed on any mismatch: if a credential event
+	// bumped user.authz_epoch after this session was issued, the row captures the
+	// stale epoch and the comparison rejects. (Finding #2, S4d row provenance)
 	user, err := s.userRepo.GetByID(ctx, claims.Subject)
 	if err != nil {
 		if errcode.IsInfraError(err) {
@@ -176,11 +178,11 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	if user.AuthzEpoch != claims.AuthzEpoch {
+	if user.AuthzEpoch != view.AuthzEpochAtIssue {
 		s.logger.Warn("session-validate: authz epoch mismatch",
 			slog.String("subject", claims.Subject),
 			slog.Int64("user_epoch", user.AuthzEpoch),
-			slog.Int64("claim_epoch", claims.AuthzEpoch))
+			slog.Int64("row_epoch", view.AuthzEpochAtIssue))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 

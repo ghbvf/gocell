@@ -42,4 +42,22 @@ type UserRepository interface {
 	// credential-invalidation funnel entry point guarantees this). Returns
 	// ErrAuthUserNotFound (KindNotFound) when no row matches userID.
 	BumpAuthzEpoch(ctx context.Context, userID string) (newEpoch int64, err error)
+
+	// GetByIDForUpdate fetches a user by primary key inside an ambient
+	// transaction and acquires a row-level write lock (PG: SELECT ... FOR
+	// UPDATE; mem: serializes against concurrent writes via the store
+	// mutex). Required by S4d sessionlogin and authzmutate.Apply so that
+	// concurrent credential-invalidation (Invalidator.Apply) cannot interleave
+	// between user read and downstream session/refresh INSERT — without the
+	// row lock, login can mint tokens with a snapshot of users.authz_epoch
+	// that the in-flight Invalidator has already advanced (PR #490 review P1-#3).
+	// Caller MUST be inside an ambient transaction; otherwise the lock is
+	// released immediately and the guarantee is lost.
+	GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error)
+
+	// GetByUsernameForUpdate is the username-keyed counterpart to
+	// GetByIDForUpdate. Used by sessionlogin (which dispatches by username);
+	// callers from password / lock paths (which already have the userID) use
+	// GetByIDForUpdate.
+	GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error)
 }

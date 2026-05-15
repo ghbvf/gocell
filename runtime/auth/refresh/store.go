@@ -38,8 +38,14 @@ type Store interface {
 	// base64url(selector_16B) "." base64url(verifier_32B) and persists only
 	// (selector, sha256(verifier)). Token.ExpiresAt = now + Policy.MaxAge.
 	//
+	// authzEpochAtIssue is the snapshot of users.authz_epoch at issue time;
+	// it is persisted on the row and returned to validate paths so that
+	// sessionrefresh can reject stale grants (S4d). Zero is invalid:
+	// implementations return ErrValidationFailed (storetest conformance
+	// T-S4D-2 enforces).
+	//
 	// Consistency: L1 LocalTx — single INSERT, no outbox event.
-	Issue(ctx context.Context, sessionID, subjectID string) (wire string, tok *Token, err error)
+	Issue(ctx context.Context, sessionID, subjectID string, authzEpochAtIssue int64) (wire string, tok *Token, err error)
 
 	// Peek validates the presented wire token and returns the metadata for the
 	// currently-presented row without issuing a child and without flipping

@@ -63,6 +63,41 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 	return cloneUser(u), nil
 }
 
+// GetByIDForUpdate (S4d): mem implementation uses the store-wide Lock (RWMutex
+// in write mode), serializing against any concurrent write — including
+// Invalidator.Apply's BumpAuthzEpoch and RevokeForSubject. Because the mem
+// repo always vends from Store.UserRepository(), the shared mutex covers all
+// other writes for the duration of the ambient transaction's read-modify-write
+// cycle. Caller MUST be inside RunInTx; mem TxRunner serializes RunInTx body
+// to the same Store.mu so the lock semantics match PG SELECT FOR UPDATE in
+// practice.
+func (r *UserRepository) GetByIDForUpdate(_ context.Context, id string) (*domain.User, error) {
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
+
+	u, ok := r.store.usersByID[id]
+	if !ok {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+	}
+	return cloneUser(u), nil
+}
+
+// GetByUsernameForUpdate (S4d): same locking semantics as GetByIDForUpdate.
+func (r *UserRepository) GetByUsernameForUpdate(_ context.Context, username string) (*domain.User, error) {
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
+
+	u, ok := r.store.byName[username]
+	if !ok {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+	}
+	return cloneUser(u), nil
+}
+
 func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()

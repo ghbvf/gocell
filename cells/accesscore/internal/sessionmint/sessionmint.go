@@ -52,15 +52,6 @@ type Request struct {
 	UserID                string
 	SessionID             string
 	PasswordResetRequired bool
-	// AuthzEpoch is the user's current authz_epoch value written into the
-	// "authz_epoch" JWT claim. It must reflect the epoch at the time of
-	// issuance — typically the value returned by UserRepository.BumpAuthzEpoch
-	// (or the existing epoch when no credential invalidation occurred).
-	//
-	// F18 trade-off: ChangePassword calls IssueForUser after the tx commit;
-	// the new token therefore carries the post-commit epoch naturally, without
-	// a second BumpAuthzEpoch call.
-	AuthzEpoch int64
 }
 
 // Result is the MintAccess output.
@@ -87,10 +78,11 @@ type Result struct {
 //
 // The jti claim is a fresh UUIDv4 per token (RFC 9068 §2.2.4); collision
 // probability is negligible and uuid.NewString never errors. Carrying jti
-// alongside sid/authz_epoch matches ADR-credential D1 (access JWT carries
-// {sid, jti, authz_epoch}) so observability + revocation diagnostics can
-// trace individual tokens. Result.JTI is returned for callers that persist
-// the value (e.g. session row fingerprint when FingerprintJTIRef is in use).
+// alongside sid matches ADR-credential D1 so observability + revocation
+// diagnostics can trace individual tokens. Result.JTI is returned for callers
+// that persist the value (e.g. session row fingerprint when FingerprintJTIRef
+// is in use). The authz_epoch claim has been removed from the JWT in S4d —
+// epoch provenance is now stored exclusively in the session/refresh rows.
 func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 	roles, err := fetchRoleNames(ctx, deps.RoleRepo, req.UserID)
 	if err != nil {
@@ -108,7 +100,6 @@ func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 		Roles:                 roles,
 		SessionID:             req.SessionID,
 		PasswordResetRequired: req.PasswordResetRequired,
-		AuthzEpoch:            req.AuthzEpoch,
 		JTI:                   jti,
 	})
 	if err != nil {

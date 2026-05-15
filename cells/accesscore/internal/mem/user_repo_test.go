@@ -138,20 +138,20 @@ func TestUserRepo_BumpAuthzEpoch_IncrementsAndReturns(t *testing.T) {
 	user.ID = "usr-epoch-001"
 	require.NoError(t, repo.Create(ctx, user))
 
-	// First bump: 0 → 1.
+	// First bump: 1 → 2 (initial epoch is 1 per S4d design).
 	epoch1, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), epoch1, "first BumpAuthzEpoch must return 1")
+	assert.Equal(t, int64(2), epoch1, "first BumpAuthzEpoch must return 2 (initial=1)")
 
-	// Second bump: 1 → 2.
+	// Second bump: 2 → 3.
 	epoch2, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001")
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), epoch2, "second BumpAuthzEpoch must return 2")
+	assert.Equal(t, int64(3), epoch2, "second BumpAuthzEpoch must return 3")
 
 	// GetByID must reflect the updated epoch.
 	got, err := repo.GetByID(ctx, "usr-epoch-001")
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), got.AuthzEpoch, "GetByID must return updated AuthzEpoch")
+	assert.Equal(t, int64(3), got.AuthzEpoch, "GetByID must return updated AuthzEpoch")
 }
 
 func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
@@ -188,6 +188,6 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 
 	got, err := repo.GetByID(ctx, "usr-concurrent-001")
 	require.NoError(t, err)
-	assert.Equal(t, int64(goroutines), got.AuthzEpoch,
-		"100 concurrent BumpAuthzEpoch calls must result in epoch == 100")
+	assert.Equal(t, int64(goroutines)+1, got.AuthzEpoch,
+		"100 concurrent BumpAuthzEpoch calls starting from epoch=1 must result in epoch == 101")
 }

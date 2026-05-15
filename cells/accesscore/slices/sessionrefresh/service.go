@@ -243,21 +243,32 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 // session.Store is read-only on this path: refresh keeps session.ID stable
 // across rotations (OAuth2 RFC 6749 §6 + OIDC Back-Channel Logout sid
 // stability). AuthzEpoch staleness is enforced by sessionvalidate (S4b).
+// handlePeekError classifies a Peek error and produces the service-layer
+// error: ErrReused routes into the unified reuse cascade entry
+// (handleReuseDetected) using whatever row identity Peek conveyed; other
+// errors go through refreshStoreError. Extracted from refreshInTx to keep
+// refreshInTx within the cognitive-complexity budget (≤15) after S4d added
+// the stale-epoch branch.
+//
+// Reuse detected on Peek (grace-counter cap or post-rotation reuse window):
+// the refresh store has already revoked the *single* presented session via
+// revokeSessionDetachedAt, but cross-session credential invalidation (all
+// sessions for the subject + all refresh chains + authz_epoch bump) only
+// runs through invalidator.Apply. Route Peek's reuse signal to the same
+// cascade entry point used by Rotate / stale-epoch so the security response
+// is identical regardless of which validation stage detected the attack
+// (Finding #2 / PR #490 review).
+func (s *Service) handlePeekError(outerCtx context.Context, presented *refresh.Token, err error) error {
+	if errors.Is(err, refresh.ErrReused) {
+		return s.handleReuseDetected(outerCtx, presentedSubjectID(presented), presentedSessionID(presented), "peek")
+	}
+	return s.refreshStoreError("session-refresh: refresh store peek failed", err)
+}
+
 func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, refreshToken string) (dto.TokenPair, error) {
 	presented, err := s.refreshStore.Peek(ctx, refreshToken)
 	if err != nil {
-		// Reuse detected on Peek (grace-counter cap or post-rotation reuse
-		// window): the refresh store has already revoked the *single* presented
-		// session via revokeSessionDetachedAt, but cross-session credential
-		// invalidation (all sessions for the subject + all refresh chains +
-		// authz_epoch bump) only runs through invalidator.Apply. Route Peek's
-		// reuse signal to the same cascade entry point used by Rotate so the
-		// security response is identical regardless of which validation stage
-		// detected the attack (Finding #2 / PR #490 review).
-		if errors.Is(err, refresh.ErrReused) {
-			return dto.TokenPair{}, s.handleReuseDetected(outerCtx, presentedSubjectID(presented), presentedSessionID(presented), "peek")
-		}
-		return dto.TokenPair{}, s.refreshStoreError("session-refresh: refresh store peek failed", err)
+		return dto.TokenPair{}, s.handlePeekError(outerCtx, presented, err)
 	}
 
 	// Belt-and-braces: double-check the backing session has not been revoked
@@ -280,6 +291,21 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	if err := s.rejectIfUserNotActive(ctx, user, sess.ID); err != nil {
 		return dto.TokenPair{}, err
 	}
+
+	// S4d row-provenance: presented.AuthzEpochAtIssue captures the user's epoch at
+	// refresh-token issuance. If user.AuthzEpoch has since been bumped (by a
+	// credential event: password change, account lock, role revoke), the refresh
+	// chain is stale and must be invalidated via the same cascade as a reuse attack —
+	// credential event already fired; this refresh merely discovered the stale state.
+	if presented.AuthzEpochAtIssue != user.AuthzEpoch {
+		s.logger.Warn("session-refresh: stale authz epoch — triggering cascade",
+			slog.String("session_id", sess.ID),
+			slog.String("subject", sess.SubjectID),
+			slog.Int64("row_epoch", presented.AuthzEpochAtIssue),
+			slog.Int64("user_epoch", user.AuthzEpoch))
+		return dto.TokenPair{}, s.handleReuseDetected(outerCtx, sess.SubjectID, sess.ID, "stale-epoch")
+	}
+
 	passwordResetRequired := user.PasswordResetRequired
 
 	// session.ID is stable across refresh — the access JWT carries the same
@@ -294,7 +320,6 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 		UserID:                sess.SubjectID,
 		SessionID:             sess.ID,
 		PasswordResetRequired: passwordResetRequired,
-		AuthzEpoch:            user.AuthzEpoch,
 	})
 	if err != nil {
 		s.logger.Error("session-refresh: token issuance failed",

@@ -88,11 +88,12 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 	// Seed one active session so revocation assertions are meaningful.
 	seedSessionID := uuid.NewString()
 	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
-		ID:        seedSessionID,
-		SubjectID: userID,
-		JTI:       "race-jti-" + seedSessionID,
-		CreatedAt: clock.Real().Now(),
-		ExpiresAt: clock.Real().Now().Add(time.Hour),
+		ID:                seedSessionID,
+		SubjectID:         userID,
+		JTI:               "race-jti-" + seedSessionID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         clock.Real().Now(),
+		ExpiresAt:         clock.Real().Now().Add(time.Hour),
 	}))
 
 	var wg sync.WaitGroup
@@ -202,11 +203,11 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	finalUser, err := userRepo.GetByID(context.Background(), userID)
 	require.NoError(t, err)
 
-	// The epoch must reflect the number of successful changes.
+	// The epoch must reflect initial=1 plus the number of successful changes.
 	sc := successCount.Load()
-	assert.Equal(t, sc, finalUser.AuthzEpoch,
-		"authz_epoch must equal the number of successful ChangePassword calls (%d); got %d",
+	assert.Equal(t, int64(1)+sc, finalUser.AuthzEpoch,
+		"authz_epoch must equal 1 (initial) + successful ChangePassword calls (%d); got %d",
 		sc, finalUser.AuthzEpoch)
-	assert.GreaterOrEqual(t, finalUser.AuthzEpoch, int64(1),
-		"at least one ChangePassword must succeed under concurrent load")
+	assert.GreaterOrEqual(t, finalUser.AuthzEpoch, int64(2),
+		"at least one ChangePassword must succeed under concurrent load (epoch starts at 1)")
 }

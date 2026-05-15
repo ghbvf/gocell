@@ -170,11 +170,12 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 
 	// Seed a session for this user.
 	sess := &session.Session{
-		ID:        "sess-carol",
-		SubjectID: user.ID,
-		JTI:       "jti-carol",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
+		ID:                "sess-carol",
+		SubjectID:         user.ID,
+		JTI:               "jti-carol",
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
 
@@ -386,11 +387,12 @@ func TestService_Update_SuspendCascadeRevokesSessionsAndRefresh(t *testing.T) {
 	// marked revoked by sessionStore.RevokeForSubject.
 	sessID := "sess-suspend-" + user.ID
 	seedSess := &session.Session{
-		ID:        sessID,
-		SubjectID: user.ID,
-		JTI:       "jti-suspend-" + user.ID,
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
+		ID:                sessID,
+		SubjectID:         user.ID,
+		JTI:               "jti-suspend-" + user.ID,
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), seedSess))
 
@@ -425,11 +427,12 @@ func TestService_Update_StatusUnchanged_NoCascadeRevoke(t *testing.T) {
 
 	sessID := "sess-norevoke-" + user.ID
 	seedSess := &session.Session{
-		ID:        sessID,
-		SubjectID: user.ID,
-		JTI:       "jti-norevoke-" + user.ID,
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
+		ID:                sessID,
+		SubjectID:         user.ID,
+		JTI:               "jti-norevoke-" + user.ID,
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), seedSess))
 
@@ -640,11 +643,12 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	// Seed two active sessions for this user.
 	for i, sid := range []string{"sess-old-1", "sess-old-2"} {
 		sess := &session.Session{
-			ID:        sid,
-			SubjectID: "usr-cp-revoke",
-			JTI:       fmt.Sprintf("jti-cp-revoke-%d", i),
-			ExpiresAt: time.Now().Add(time.Hour),
-			CreatedAt: time.Now(),
+			ID:                sid,
+			SubjectID:         "usr-cp-revoke",
+			JTI:               fmt.Sprintf("jti-cp-revoke-%d", i),
+			AuthzEpochAtIssue: 1,
+			ExpiresAt:         time.Now().Add(time.Hour),
+			CreatedAt:         time.Now(),
 		}
 		require.NoError(t, sessionRepo.Create(context.Background(), sess))
 	}

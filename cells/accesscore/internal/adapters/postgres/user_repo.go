@@ -75,11 +75,15 @@ func NewPGUserRepo(
 }
 
 const (
+	// S4d: authz_epoch is sourced from the domain.User (NewUser sets it to 1
+	// — the unset sentinel is 0, which session/refresh stores reject).
+	// Bumping is still exclusive to UpdateAuthzEpoch / BumpAuthzEpoch; this
+	// INSERT only seeds the initial value from the in-memory aggregate.
 	insertUserSQL = `
 INSERT INTO users (
     id, username, email, password_hash, password_reset_required,
     status, creation_source, authz_epoch, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	selectUserByIDSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
@@ -92,6 +96,28 @@ SELECT id, username, email, password_hash, password_version, password_reset_requ
        status, creation_source, authz_epoch, created_at, updated_at
 FROM users
 WHERE username = $1`
+
+	// selectUserByIDForUpdateSQL / selectUserByUsernameForUpdateSQL (S4d): row-level
+	// write lock (FOR UPDATE) so sessionlogin's read-mint-INSERT cycle is
+	// serialized against any concurrent credentialinvalidate.Invalidator.Apply
+	// (which holds the same lock during BumpAuthzEpoch). Must run inside an
+	// ambient transaction; ambient executor joins it automatically.
+	//
+	// ref: PostgreSQL 13+ Row-Level Locks — SELECT ... FOR UPDATE blocks UPDATE on
+	// the locked row until COMMIT.
+	selectUserByIDForUpdateSQL = `
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
+FROM users
+WHERE id = $1
+FOR UPDATE`
+
+	selectUserByUsernameForUpdateSQL = `
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
+FROM users
+WHERE username = $1
+FOR UPDATE`
 
 	// updateUserSQL intentionally does NOT include authz_epoch in the SET list.
 	// Bumping the epoch is a separate, distinct operation per ADR-credential D2
@@ -137,6 +163,7 @@ func (r *PGUserRepo) Create(ctx context.Context, user *domain.User) error {
 		user.PasswordResetRequired,
 		string(user.Status),
 		string(user.CreationSource),
+		user.AuthzEpoch,
 		user.CreatedAt,
 		user.UpdatedAt,
 	)
@@ -189,6 +216,46 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 			return nil, err
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username", err)
+	}
+	return u, nil
+}
+
+// GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row
+// lock via SELECT ... FOR UPDATE; caller MUST be inside an ambient tx for
+// the lock to persist across the read-modify-write window.
+func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	row := r.db.QueryRow(ctx, selectUserByIDForUpdateSQL, id)
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-for-update", err)
+	}
+	return u, nil
+}
+
+// GetByUsernameForUpdate (S4d) — see ports.UserRepository godoc.
+func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	row := r.db.QueryRow(ctx, selectUserByUsernameForUpdateSQL, username)
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username-for-update", err)
 	}
 	return u, nil
 }
