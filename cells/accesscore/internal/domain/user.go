@@ -160,60 +160,69 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 	}, nil
 }
 
+// ReconstituteUserParams holds all fields required by ReconstituteUser.
+// Using a params struct avoids the 11-positional-argument footgun and allows
+// callers to name each field explicitly.
+type ReconstituteUserParams struct {
+	ID                    string
+	Username              string
+	Email                 string
+	PasswordHash          string
+	PasswordVersion       int64
+	PasswordResetRequired bool
+	Status                UserStatus
+	Source                UserSource
+	AuthzEpoch            int64
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
 // ReconstituteUser is the DDD rehydration constructor for the persistence
 // boundary (PG scanUser, mem store) and tests. It rebuilds a User aggregate
 // from authoritative storage values and is NOT a funnel hole — it constructs
 // a fresh aggregate, it does not mutate a live one.
 //
-// All four string identity fields (id, username, email, passwordHash) must be
-// non-empty; status and source must be ValidUserStatus / ValidUserSource;
-// authzEpoch must be > 0 (the unset sentinel 0 is rejected per S4d invariant).
-func ReconstituteUser(
-	id, username, email, passwordHash string,
-	passwordVersion int64,
-	passwordResetRequired bool,
-	status UserStatus,
-	source UserSource,
-	authzEpoch int64,
-	createdAt, updatedAt time.Time,
-) (*User, error) {
+// All four string identity fields (ID, Username, Email, PasswordHash) must be
+// non-empty; Status and Source must be ValidUserStatus / ValidUserSource;
+// AuthzEpoch must be > 0 (the unset sentinel 0 is rejected per S4d invariant).
+func ReconstituteUser(p ReconstituteUserParams) (*User, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthInvalidInput,
-		validation.F("id", id),
-		validation.F("username", username),
-		validation.F("email", email),
-		validation.F("passwordHash", passwordHash),
+		validation.F("id", p.ID),
+		validation.F("username", p.Username),
+		validation.F("email", p.Email),
+		validation.F("passwordHash", p.PasswordHash),
 	); err != nil {
 		return nil, err
 	}
-	if !ValidUserStatus(status) {
+	if !ValidUserStatus(p.Status) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
 			"ReconstituteUser: invalid status",
 			errcode.WithDetails(
-				slog.String("status", string(status)),
+				slog.String("status", string(p.Status)),
 			))
 	}
-	if !ValidUserSource(source) {
+	if !ValidUserSource(p.Source) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
 			"ReconstituteUser: invalid source",
 			errcode.WithDetails(
-				slog.String("source", string(source)),
+				slog.String("source", string(p.Source)),
 			))
 	}
-	if authzEpoch <= 0 {
+	if p.AuthzEpoch <= 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
 			"ReconstituteUser: authzEpoch must be > 0")
 	}
 	return &User{
-		ID:                    id,
-		Username:              username,
-		Email:                 email,
-		PasswordHash:          passwordHash,
-		PasswordVersion:       passwordVersion,
-		passwordResetRequired: passwordResetRequired,
-		status:                status,
-		CreationSource:        source,
-		authzEpoch:            authzEpoch,
-		CreatedAt:             createdAt,
-		UpdatedAt:             updatedAt,
+		ID:                    p.ID,
+		Username:              p.Username,
+		Email:                 p.Email,
+		PasswordHash:          p.PasswordHash,
+		PasswordVersion:       p.PasswordVersion,
+		passwordResetRequired: p.PasswordResetRequired,
+		status:                p.Status,
+		CreationSource:        p.Source,
+		authzEpoch:            p.AuthzEpoch,
+		CreatedAt:             p.CreatedAt,
+		UpdatedAt:             p.UpdatedAt,
 	}, nil
 }

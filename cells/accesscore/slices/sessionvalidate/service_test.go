@@ -41,8 +41,17 @@ const dNeg2h = -2 * time.Hour
 func mustBuildUser(t testing.TB, id string, epoch int64) *domain.User {
 	t.Helper()
 	now := time.Now()
-	u, err := domain.ReconstituteUser(id, id, id+"@test.local", "$2a$12$hash",
-		0, false, domain.StatusActive, domain.UserSourceIdentity, epoch, now, now)
+	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // G101: test fixture
+		ID:           id,
+		Username:     id,
+		Email:        id + "@test.local",
+		PasswordHash: "$2a$12$hash",
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   epoch,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 	require.NoError(t, err)
 	return u
 }
@@ -684,8 +693,17 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 func mustBuildUserWithStatus(t testing.TB, id string, epoch int64, status domain.UserStatus) *domain.User {
 	t.Helper()
 	now := time.Now()
-	u, err := domain.ReconstituteUser(id, id, id+"@test.local", "$2a$12$hash",
-		0, false, status, domain.UserSourceIdentity, epoch, now, now)
+	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // G101: test fixture
+		ID:           id,
+		Username:     id,
+		Email:        id + "@test.local",
+		PasswordHash: "$2a$12$hash",
+		Status:       status,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   epoch,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 	require.NoError(t, err)
 	return u
 }

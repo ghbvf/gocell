@@ -170,12 +170,19 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 // cloneUser creates a deep copy of a User to avoid sharing pointers across map entries.
 // Uses domain.ReconstituteUser so that private fields are faithfully copied.
 func cloneUser(u *domain.User) *domain.User {
-	clone, err := domain.ReconstituteUser(
-		u.ID, u.Username, u.Email, u.PasswordHash,
-		u.PasswordVersion, u.PasswordResetRequired(), u.Status(),
-		u.CreationSource, u.AuthzEpoch(),
-		u.CreatedAt, u.UpdatedAt,
-	)
+	clone, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		PasswordHash:          u.PasswordHash,
+		PasswordVersion:       u.PasswordVersion,
+		PasswordResetRequired: u.PasswordResetRequired(),
+		Status:                u.Status(),
+		Source:                u.CreationSource,
+		AuthzEpoch:            u.AuthzEpoch(),
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             u.UpdatedAt,
+	})
 	if err != nil {
 		// ReconstituteUser only fails on invalid values; a well-formed stored
 		// User cannot trigger this. Panic to surface corrupt store state early.
@@ -211,12 +218,19 @@ func (r *UserRepository) UpdatePassword(
 	}
 	// Rebuild via ReconstituteUser with updated fields so private fields are set correctly.
 	now := r.store.clock.Now()
-	updated, err := domain.ReconstituteUser(
-		u.ID, u.Username, u.Email, newHash,
-		u.PasswordVersion+1, resetRequired, u.Status(),
-		u.CreationSource, u.AuthzEpoch(),
-		u.CreatedAt, now,
-	)
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		PasswordHash:          newHash,
+		PasswordVersion:       u.PasswordVersion + 1,
+		PasswordResetRequired: resetRequired,
+		Status:                u.Status(),
+		Source:                u.CreationSource,
+		AuthzEpoch:            u.AuthzEpoch(),
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             now,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("mem: update-password reconstitute: %w", err)
 	}
@@ -240,12 +254,19 @@ func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64
 	}
 	newEpoch := u.AuthzEpoch() + 1
 	// Rebuild the stored user with the bumped epoch.
-	updated, err := domain.ReconstituteUser(
-		u.ID, u.Username, u.Email, u.PasswordHash,
-		u.PasswordVersion, u.PasswordResetRequired(), u.Status(),
-		u.CreationSource, newEpoch,
-		u.CreatedAt, u.UpdatedAt,
-	)
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		PasswordHash:          u.PasswordHash,
+		PasswordVersion:       u.PasswordVersion,
+		PasswordResetRequired: u.PasswordResetRequired(),
+		Status:                u.Status(),
+		Source:                u.CreationSource,
+		AuthzEpoch:            newEpoch,
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             u.UpdatedAt,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("mem: bump-authz-epoch reconstitute: %w", err)
 	}

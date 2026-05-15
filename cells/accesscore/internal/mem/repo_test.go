@@ -422,10 +422,17 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 		store := NewStore(clock.Real())
 		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 		now := time.Now()
-		lockedUser, err := domain.ReconstituteUser(
-			"locked-admin", "locked-admin", "la@test.local", "$2a$12$hash",
-			0, false, domain.StatusLocked, domain.UserSourceIdentity, 1, now, now,
-		)
+		lockedUser, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // G101: test fixture
+			ID:           "locked-admin",
+			Username:     "locked-admin",
+			Email:        "la@test.local",
+			PasswordHash: "$2a$12$hash",
+			Status:       domain.StatusLocked,
+			Source:       domain.UserSourceIdentity,
+			AuthzEpoch:   1,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
 		require.NoError(t, err)
 		store.mu.Lock()
 		store.usersByID["locked-admin"] = lockedUser

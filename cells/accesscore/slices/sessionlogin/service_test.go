@@ -817,21 +817,33 @@ func TestLogin_PasswordVersionRace_OldPasswordRejected(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("old-pass"), bcrypt.MinCost)
 
 	// preUser: PasswordVersion=1, PasswordHash=hash-of-old-pass (pre-bcrypt snapshot)
-	preUser, err := domain.ReconstituteUser(
-		"usr-race", "race-user", "race@test.com", string(hash),
-		1 /*passwordVersion*/, false, domain.StatusActive,
-		domain.UserSourceIdentity, 1, /*authzEpoch*/
-		time.Now(), time.Now(),
-	)
+	preUser, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:              "usr-race",
+		Username:        "race-user",
+		Email:           "race@test.com",
+		PasswordHash:    string(hash),
+		PasswordVersion: 1,
+		Status:          domain.StatusActive,
+		Source:          domain.UserSourceIdentity,
+		AuthzEpoch:      1,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	})
 	require.NoError(t, err)
 
 	// lockedUser: PasswordVersion=2 (concurrent ChangePassword committed in race window)
-	lockedUser, err := domain.ReconstituteUser(
-		"usr-race", "race-user", "race@test.com", string(hash),
-		2 /*passwordVersion — bumped by concurrent ChangePassword*/, false, domain.StatusActive,
-		domain.UserSourceIdentity, 1, /*authzEpoch*/
-		time.Now(), time.Now(),
-	)
+	lockedUser, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:              "usr-race",
+		Username:        "race-user",
+		Email:           "race@test.com",
+		PasswordHash:    string(hash),
+		PasswordVersion: 2, // bumped by concurrent ChangePassword
+		Status:          domain.StatusActive,
+		Source:          domain.UserSourceIdentity,
+		AuthzEpoch:      1,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	})
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -940,12 +952,18 @@ func TestIssueForUser_NonActiveUser_Rejected(t *testing.T) {
 			// Build a non-active user via ReconstituteUser (the only path that can set
 			// non-active status on an existing aggregate).
 			hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
-			u, err := domain.ReconstituteUser(
-				"usr-issue-gate", "issue-gate", "gate@test.com", string(hash),
-				1, false, tt.status,
-				domain.UserSourceIdentity, 1,
-				time.Now(), time.Now(),
-			)
+			u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+				ID:              "usr-issue-gate",
+				Username:        "issue-gate",
+				Email:           "gate@test.com",
+				PasswordHash:    string(hash),
+				PasswordVersion: 1,
+				Status:          tt.status,
+				Source:          domain.UserSourceIdentity,
+				AuthzEpoch:      1,
+				CreatedAt:       time.Now(),
+				UpdatedAt:       time.Now(),
+			})
 			require.NoError(t, err)
 			require.NoError(t, userRepo.Create(context.Background(), u))
 

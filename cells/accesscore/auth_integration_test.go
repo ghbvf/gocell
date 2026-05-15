@@ -325,11 +325,18 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	// Seed bob so userRepo.BumpAuthzEpoch (called via invalidator funnel)
 	// can find the row.
 	bobNow := time.Now().UTC()
-	bobUser, bobErr := domain.ReconstituteUser(
-		"usr-bob", "bob", "bob@gocell.local", "x",
-		1, false, domain.StatusActive, domain.UserSourceIdentity,
-		1, bobNow, bobNow,
-	)
+	bobUser, bobErr := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:              "usr-bob",
+		Username:        "bob",
+		Email:           "bob@gocell.local",
+		PasswordHash:    "x",
+		PasswordVersion: 1,
+		Status:          domain.StatusActive,
+		Source:          domain.UserSourceIdentity,
+		AuthzEpoch:      1,
+		CreatedAt:       bobNow,
+		UpdatedAt:       bobNow,
+	})
 	require.NoError(t, bobErr)
 	require.NoError(t, userRepo.Create(ctx, bobUser))
 

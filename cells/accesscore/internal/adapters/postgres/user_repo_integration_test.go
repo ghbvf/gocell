@@ -126,19 +126,17 @@ func setupUserRepoPG(t *testing.T) (*PGUserRepo, *adapterpg.TxManager, func()) {
 // this at the DB level; ReconstituteUser rejects 0 at the domain level).
 func newTestUser(suffix string) *domain.User {
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	u, err := domain.ReconstituteUser(
-		uuid.NewString(),
-		"user_"+suffix,
-		"user_"+suffix+"@example.com",
-		"$2a$12$fakehash_"+suffix,
-		0,     // passwordVersion
-		false, // passwordResetRequired
-		domain.StatusActive,
-		domain.UserSourceIdentity,
-		1, // authzEpoch >= 1 (migration 028 CHECK constraint)
-		now,
-		now,
-	)
+	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           uuid.NewString(),
+		Username:     "user_" + suffix,
+		Email:        "user_" + suffix + "@example.com",
+		PasswordHash: "$2a$12$fakehash_" + suffix,
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1, // authzEpoch >= 1 (migration 028 CHECK constraint)
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 	if err != nil {
 		panic("newTestUser: " + err.Error())
 	}
@@ -646,12 +644,17 @@ func TestUserRepo_CreationSource_BothValid(t *testing.T) {
 
 	mustReconstitute := func(id, username, email, hash string, source domain.UserSource) *domain.User {
 		t.Helper()
-		u, err := domain.ReconstituteUser(
-			id, username, email, hash,
-			0, false, domain.StatusActive, source,
-			1, // authzEpoch >= 1 (migration 028 CHECK constraint)
-			now, now,
-		)
+		u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+			ID:           id,
+			Username:     username,
+			Email:        email,
+			PasswordHash: hash,
+			Status:       domain.StatusActive,
+			Source:       source,
+			AuthzEpoch:   1, // authzEpoch >= 1 (migration 028 CHECK constraint)
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
 		require.NoError(t, err)
 		return u
 	}
