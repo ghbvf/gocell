@@ -135,11 +135,12 @@ func diagsLoadPackages(tgt passFunnelTarget) []scanner.Diagnostic {
 		tgt,
 		map[string]map[string]bool{
 			typesevalPkgPath: {
-				"LoadPackages":   true,
-				"SharedResolver": true,
+				"LoadPackages":           true,
+				"SharedResolver":         true,
+				"LoadProductionPackages": true,
 			},
 		},
-		"archtest.RunTyped",
+		"archtest.RunTyped / archtest.RunTypedProduction",
 	)
 }
 
@@ -296,11 +297,15 @@ func TestPassFunnelEachFile01(t *testing.T) {
 // TestPassFunnelLoadPackages01 — PASS-FUNNEL-LOADPACKAGES-01.
 //
 // Archtest tools/archtest/<file>_test.go must NOT call
-// tools/archtest/internal/typeseval.LoadPackages or
-// typeseval.SharedResolver directly. Use archtest.RunTyped which loads
+// tools/archtest/internal/typeseval.LoadPackages, typeseval.SharedResolver,
+// or typeseval.LoadProductionPackages directly. Use archtest.RunTyped (full
+// set) or archtest.RunTypedProduction (generated/-excluded set) — both load
 // packages once via the singleflight-cached SharedResolver underneath and
-// constructs Pass with *types.Package (not *packages.Package) so .Syntax
-// is unreachable.
+// construct Pass with *types.Package (not *packages.Package) so .Syntax is
+// unreachable. The funnel is widened to include the production loader (Stage
+// 1.7), not bypassed: RunTypedProduction is the only legitimate
+// production-load entry, preserving ProductionResolver's Hard grade in the
+// Pass model.
 //
 // Detection: same SelectorExpr / Ident walk as EACHFILE-01.
 func TestPassFunnelLoadPackages01(t *testing.T) {

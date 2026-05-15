@@ -256,6 +256,57 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 	return runTypedWithRoot(t, dir, opts, patterns, rule)
 }
 
+// RunTypedProduction executes rule in typed mode over the main module's
+// production package set ONLY — every package whose import path is under
+// <module>/generated/ is excluded. It resolves the module root via
+// [findModuleRoot], reads the module path from go.mod, and delegates to
+// [typeseval.LoadProductionPackages]; rule is invoked with one Pass per
+// production package (same dedup/ordering as [RunTyped]).
+//
+// Use this for rules that reason over hand-written source and must never
+// observe codegen output (false-positive risk + duplicated declarations).
+// It is the Pass-model successor of typeseval.LoadProductionPackages /
+// ProductionResolver: the generated/ filter is applied by the driver, NOT by
+// a per-callsite `if pass.IsGenerated(f) { continue }` discipline (which an
+// author can forget — a Hard→Soft regression).
+//
+// AI-rebust: Hard. Scanning generated/ output is NOT EXPRESSIBLE under this
+// entry — a Pass it yields never contains a generated/ file. Reaching codegen
+// output requires deliberately choosing a DIFFERENT entry ([RunTyped] with a
+// "./..." pattern), which names the trade-off at the call site. This
+// preserves ProductionResolver's Hard "violation-not-expressible" grade
+// (Production() vs All()) in the Pass model. The three-line Hard defense is
+// otherwise unchanged:
+//   - Defense #1: Pass.Pkg is *types.Package (not *packages.Package).
+//   - Defense #2: depguard bans archtest *_test.go from importing
+//     golang.org/x/tools/go/packages; this driver is the approved funnel.
+//   - Defense #3: meta-archtest PASS-FUNNEL-LOADPACKAGES-01 /
+//     PRODUCTION-LOADER-FUNNEL-01 ban direct typeseval.LoadProductionPackages
+//     / SharedResolver calls in business *_test.go; RunTypedProduction is the
+//     only legitimate production-load funnel (funnel widened, not bypassed).
+//
+// Failure modes (module-root not found, go.mod unreadable, load error)
+// fail-loud via t.Fatalf. For the full set including generated/, use
+// [RunTyped]; for standalone fixture modules, [RunTypedDir].
+//
+// ref: golang.org/x/tools/go/analysis Pass.Files driver-controlled scope
+func RunTypedProduction(t *testing.T, opts TypedOpts, rule Rule) []Diagnostic {
+	t.Helper()
+	if rule == nil {
+		t.Fatalf("archtest.RunTypedProduction: nil rule")
+	}
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	if err != nil {
+		t.Fatalf("archtest.RunTypedProduction: read module path: %v", err)
+	}
+	resolver, err := typeseval.LoadProductionPackages(root, modPath, opts.Tests, opts.Tags)
+	if err != nil {
+		t.Fatalf("archtest.RunTypedProduction: LoadProductionPackages: %v", err)
+	}
+	return runRulePasses(root, resolver.Production(), rule)
+}
+
 // runTypedWithRoot is the shared implementation for [RunTyped] and
 // [RunTypedDir]. It loads patterns relative to root (the module root
 // directory) through [typeseval.SharedResolver] and invokes rule with one
@@ -282,22 +333,26 @@ func runTypedWithRoot(t testing.TB, root string, opts TypedOpts, patterns []stri
 	if err != nil {
 		t.Fatalf("archtest.RunTyped/RunTypedDir: SharedResolver: %v", err)
 	}
+	return runRulePasses(root, resolver.Packages(), rule)
+}
 
-	// Sort packages so test-variant packages are visited BEFORE their
-	// regular counterparts. The two variants share *_test.go file AST
-	// pointers (packages.Load reuses parses) AND share non-test files; we
-	// dedup by *ast.File pointer below. Without the sort, file-to-pkg
-	// assignment depends on packages.Load iteration order: a regular pkg
-	// visited first would claim every non-test file via dedup, leaving the
-	// .test pkg's Pass with only _test.go files plus a TypesInfo that has
-	// also seen the regular files (consistent — same load). With the sort,
-	// .test pkgs claim ALL their files (test + non-test) on first visit;
-	// regular pkgs are skipped wholly when their entire Syntax set is
-	// already seen. Either order is correctness-equivalent (Pass.Files,
-	// Pass.TypesInfo, Pass.Pkg come from one load), but the .test-first
-	// order is canonical: every Pass a typed rule receives is the maximal
-	// view (includes _test.go fixtures when opts.Tests==true).
-	pkgs := append([]*packages.Package(nil), resolver.Packages()...)
+// runRulePasses is the shared Pass-construction loop for [runTypedWithRoot]
+// and [RunTypedProduction]. It sorts loaded so test-variant packages are
+// visited BEFORE their regular counterparts. The two variants share *_test.go
+// file AST pointers (packages.Load reuses parses) AND share non-test files; we
+// dedup by *ast.File pointer below. Without the sort, file-to-pkg assignment
+// depends on packages.Load iteration order: a regular pkg visited first would
+// claim every non-test file via dedup, leaving the .test pkg's Pass with only
+// _test.go files plus a TypesInfo that has also seen the regular files
+// (consistent — same load). With the sort, .test pkgs claim ALL their files
+// (test + non-test) on first visit; regular pkgs are skipped wholly when
+// their entire Syntax set is already seen. Either order is
+// correctness-equivalent (Pass.Files, Pass.TypesInfo, Pass.Pkg come from one
+// load), but the .test-first order is canonical: every Pass a typed rule
+// receives is the maximal view (includes _test.go fixtures when
+// opts.Tests==true).
+func runRulePasses(root string, loaded []*packages.Package, rule Rule) []Diagnostic {
+	pkgs := append([]*packages.Package(nil), loaded...)
 	sort.SliceStable(pkgs, func(i, j int) bool {
 		return isPackageWithTestFiles(pkgs[i]) && !isPackageWithTestFiles(pkgs[j])
 	})
