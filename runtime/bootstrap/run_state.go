@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -107,23 +108,55 @@ func (s *runState) addNamedTeardown(name string, fn func(context.Context) error)
 	s.teardowns = append(s.teardowns, namedTeardown{name: name, fn: fn})
 }
 
+// safeTeardown executes a single named teardown, recovering from any panic.
+// A panicking teardown is converted to an error so LIFO rollback continues
+// to the next step without the panic escaping.
+//
+// If the teardown's name is non-empty and an error is produced (from the fn
+// return or from a recovered panic), the error is wrapped in *phaseError
+// to preserve phase context for post-mortem diagnosis.
+//
+// ref: runtime/worker/periodic.go runSafe — recover→error, no re-panic.
+// ref: kernel/assembly/assembly.go — per-step recover in LIFO teardown loop.
+func safeTeardown(td namedTeardown, ctx context.Context) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			rerr, _ := r.(error)
+			if rerr == nil {
+				rerr = fmt.Errorf("panic: %v", r)
+			}
+			err = rerr
+		}
+	}()
+	err = td.fn(ctx)
+	return err
+}
+
 // rollback runs teardowns in LIFO order on startup failure (all in one budget),
-// cancels runCtx, and returns the original cause error.
-// ref: uber-go/fx app.go withRollback — every started component must be
-// torn down in reverse even when a later step never succeeded.
+// cancels runCtx, and returns cause joined with all teardown errors (including
+// those recovered from panicking teardowns). cause is always first in the
+// joined tree so errors.Is(result, cause) holds. Panicking teardowns do not
+// interrupt LIFO rollback — each step is protected by safeTeardown.
+//
+// ref: runtime/bootstrap/lifecycle.go:183 — errors.Join(append([]error{err}, rollbackErrs...)...).
+// ref: runtime/worker/periodic.go runSafe — recover→error, no re-panic.
+// ref: uber-go/fx app.go withRollback — every started component must be torn
+// down in reverse even when a later step never succeeded.
 func (s *runState) rollback(shutCtx context.Context, cause error) error {
 	slog.Error("bootstrap: startup failed, rolling back",
 		slog.String("error", cause.Error()),
 		slog.Int("teardowns_pending", len(s.teardowns)))
+	var rollbackErrs []error
 	for _, v := range slices.Backward(s.teardowns) {
 		td := v
-		if err := td.fn(shutCtx); err != nil {
+		if err := safeTeardown(td, shutCtx); err != nil {
 			if td.name != "" {
 				err = &phaseError{Phase: "teardown_" + td.name, Err: err}
 			}
 			slog.Warn("bootstrap: rollback step failed", slog.Any("error", err))
+			rollbackErrs = append(rollbackErrs, err)
 		}
 	}
 	s.runCancel()
-	return cause
+	return errors.Join(append([]error{cause}, rollbackErrs...)...)
 }

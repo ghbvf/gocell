@@ -591,7 +591,7 @@ func TestRunState_Rollback_ExecutesTeardownsLIFO(t *testing.T) {
 
 	cause := errors.New("startup failed")
 	err := s.rollback(context.Background(), cause)
-	assert.Equal(t, cause, err)
+	assert.ErrorIs(t, err, cause)
 	assert.Equal(t, []int{3, 2, 1}, order)
 }
 
@@ -609,19 +609,66 @@ func TestRunState_Rollback_CancelsRunCtx(t *testing.T) {
 func TestRunState_Rollback_ContinuesThroughTeardownErrors(t *testing.T) {
 	_, s := newRunState()
 	var executed []int
+	td2Err := errors.New("teardown 2 failed")
 	s.addTeardown(func(_ context.Context) error { executed = append(executed, 1); return nil })
 	s.addTeardown(func(_ context.Context) error {
 		executed = append(executed, 2)
-		return errors.New("teardown 2 failed")
+		return td2Err
 	})
 	s.addTeardown(func(_ context.Context) error { executed = append(executed, 3); return nil })
 
 	cause := errors.New("cause")
 	err := s.rollback(context.Background(), cause)
-	// rollback returns original cause, not teardown error.
-	assert.Equal(t, cause, err)
+	// cause is in the joined tree.
+	assert.ErrorIs(t, err, cause)
+	// teardown-2 error is surfaced in the joined tree.
+	assert.ErrorIs(t, err, td2Err)
 	// All three teardowns executed despite error in teardown 2.
 	assert.Equal(t, []int{3, 2, 1}, executed)
+}
+
+func TestRunState_Rollback_JoinsNamedTeardownErrorWithCause(t *testing.T) {
+	_, s := newRunState()
+	sentinel := errors.New("mydb failed")
+	s.addNamedTeardown("mydb", func(_ context.Context) error { return sentinel })
+
+	cause := errors.New("startup cause")
+	err := s.rollback(context.Background(), cause)
+
+	assert.ErrorIs(t, err, cause)
+	assert.ErrorIs(t, err, sentinel)
+
+	var pe *phaseError
+	require.True(t, errors.As(err, &pe), "expected *phaseError in joined tree; got %T: %v", err, err)
+	assert.Equal(t, "teardown_mydb", pe.Phase)
+}
+
+func TestRunState_Rollback_PanickingTeardownRecoveredAndContinues(t *testing.T) {
+	_, s := newRunState()
+	var executed []int
+	// Registration order: 1, 2, 3 → LIFO execution: 3, 2, 1.
+	// Let teardown-2 (execution-order middle) panic.
+	s.addTeardown(func(_ context.Context) error { executed = append(executed, 1); return nil })
+	s.addTeardown(func(_ context.Context) error {
+		executed = append(executed, 2)
+		panic(errors.New("boom"))
+	})
+	s.addTeardown(func(_ context.Context) error { executed = append(executed, 3); return nil })
+
+	cause := errors.New("startup cause")
+
+	// rollback must not panic out.
+	var err error
+	require.NotPanics(t, func() {
+		err = s.rollback(context.Background(), cause)
+	})
+
+	// All three teardowns ran (LIFO: 3, 2, 1 — 2 panicked but 1 still ran).
+	assert.Equal(t, []int{3, 2, 1}, executed)
+	// cause is in the joined tree.
+	assert.ErrorIs(t, err, cause)
+	// panic payload surfaced in joined tree.
+	assert.Contains(t, err.Error(), "boom")
 }
 
 // --- shutdownReason tests ---
