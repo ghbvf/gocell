@@ -86,7 +86,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/outbox_invariants_test.go":                       true,
 	"tools/archtest/panic_invariants_test.go":                        true,
 	"tools/archtest/pg_repo_ambient_tx_test.go":                      true,
-	"tools/archtest/prod_clock_injection_fixtures_test.go":           true,
 	"tools/archtest/prod_duration_fixtures_test.go":                  true,
 	"tools/archtest/prod_invariants_test.go":                         true,
 	"tools/archtest/production_loader_funnel_test.go":                true,

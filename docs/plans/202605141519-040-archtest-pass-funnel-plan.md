@@ -21,7 +21,7 @@
 - `RunTyped` 内部委托 `runTypedWithRoot(t, findModuleRoot(t), ...)`；`RunTypedDir` 委托 `runTypedWithRoot(t, dir, ...)`；单一构造路径 `runTypedWithRoot` 不变，双入口语义正交
 - 参数类型选 `testing.TB`（非 `*testing.T`），以支持 fatal-path spy 测试及 `TestMain` 场景，与 `analysistest` 的 `Testing` 接口对齐
 - AI-rebust **Hard**：三重防线逐条不变——①`Pass.Pkg` 仍 `*types.Package`，archtest 作者拿不到 `.Syntax`；②depguard 不变；③`PASS-FUNNEL-LOADPACKAGES-01` funnel **加宽**（`RunTypedDir` 是 fixture-module 扫描此后唯一合法入口，fixture-module 形态不构成新绕过面，仅把之前缺乏入口的形态纳入合法 funnel）
-- **后续 5 个 E-class fixture-module 文件**（`exported_error_new_fixtures_test.go` / `goose_session_locker_fixtures_test.go` / `prod_clock_injection_fixtures_test.go` / `prod_duration_fixtures_test.go` / `test_time_literal_fixtures_test.go`）此后只需 `RunTypedDir`，零框架返工
+- **后续 4 个 E-class fixture-module 文件**（`exported_error_new_fixtures_test.go` / `goose_session_locker_fixtures_test.go` / `prod_duration_fixtures_test.go` / `test_time_literal_fixtures_test.go`）此后只需 `RunTypedDir`，零框架返工（`prod_clock_injection_fixtures_test.go` 与 `clock_invariants_test.go` 共享 `scanProdClockInjectionAST`，PR-6 改 clock 必然连带改它，plan 原未预见此耦合，故并入 PR-6 一并迁移，消除半迁移二次返工）
 - **验证**：`RunTypedDir` 单元测试（`TestRunTypedDir_*`）TDD RED→GREEN；`clock_invariants_test.go` 全量 typed-load 迁移绿；`hack/verify-archtest.sh` 16 shard PASS；golangci-lint 0 issues
 
 **设计决策 D1（Stage 1.6）— 不收敛为单一 `RunTyped(t, dir, ...)` 入口**：

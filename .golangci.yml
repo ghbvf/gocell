@@ -453,7 +453,6 @@ linters:
             - "!**/tools/archtest/outbox_invariants_test.go"
             - "!**/tools/archtest/panic_invariants_test.go"
             - "!**/tools/archtest/pg_repo_ambient_tx_test.go"
-            - "!**/tools/archtest/prod_clock_injection_fixtures_test.go"
             - "!**/tools/archtest/prod_duration_fixtures_test.go"
             - "!**/tools/archtest/prod_invariants_test.go"
             - "!**/tools/archtest/prom_cell_label_funnel_test.go"
