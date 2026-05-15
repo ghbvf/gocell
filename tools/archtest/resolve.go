@@ -24,7 +24,10 @@
 //   - identify the *types.Func a method call resolves to — ResolveMethodCall;
 //   - evaluate a cross-package constant string — EvaluateConstString;
 //   - enumerate build-tag groups for multi-tag SharedResolver loops —
-//     FlatNonDefaultTags / KnownNonDefaultTags.
+//     FlatNonDefaultTags / KnownNonDefaultTags;
+//   - extract a file's build constraint expression for 3-way evaluation under
+//     custom tag sets — ParseBuildConstraint;
+//   - test whether a module-relative path is under generated/ — IsGeneratedRelPath.
 //
 // Hand-rolling these patterns via raw go/types in each rule is error-prone
 // (missed dot-import bare-Ident path, missed alias form, missed untyped const
@@ -42,6 +45,7 @@ package archtest
 
 import (
 	"go/ast"
+	"go/build/constraint"
 	"go/types"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
@@ -120,13 +124,60 @@ func KnownNonDefaultTags() [][]string {
 // evaluate a build constraint under a custom tag set such as "integration".
 // Pass.IsFileInScope uses the default (no extra tags) predicate; if you need
 // custom extra tags, call BuildContextPredicate("integration") and evaluate
-// the constraint expression directly via typeseval.ParseBuildConstraint.
+// the constraint expression directly via [archtest.ParseBuildConstraint]:
+//
+//	expr, err := archtest.ParseBuildConstraint(path)
+//	if err != nil || expr == nil { ... }
+//	withTag := expr.Eval(archtest.BuildContextPredicate("integration"))
+//	withoutTag := expr.Eval(archtest.BuildContextPredicate())
 //
 // Thin delegation to [typeseval.BuildContextPredicate]. See that function's
 // godoc for the full implicit-defaults catalog (GOOS/GOARCH/cgo/unix/gc/go1.X).
-//
-// info must come from the same packages.Load result that produced the AST nodes
-// you are inspecting — this is guaranteed when info is pass.TypesInfo.
 func BuildContextPredicate(extraTags ...string) func(string) bool {
 	return typeseval.BuildContextPredicate(extraTags...)
+}
+
+// ParseBuildConstraint extracts the file's build constraint expression so it
+// can be evaluated under a custom tag set. Returns (nil, nil) when the file
+// has no //go:build or // +build directive. Returns (nil, err) on parse
+// failure (fail-closed).
+//
+// Typical 3-way evaluation pattern (mirrors build_constraint_test.go and
+// ci_integration_discovery_invariants_test.go):
+//
+//	expr, err := archtest.ParseBuildConstraint(path)
+//	if err != nil || expr == nil { ... }
+//	withTag    := expr.Eval(archtest.BuildContextPredicate("integration"))
+//	withoutTag := expr.Eval(archtest.BuildContextPredicate())
+//	withNone   := expr.Eval(func(_ string) bool { return false })
+//
+// Use [Pass.IsFileInScope] when you only need the default-context (no extra
+// tags) boolean result — it is simpler and does not expose the raw
+// constraint.Expr. Use this function when you need the raw Expr for multi-
+// predicate evaluation.
+//
+// Thin delegation to [typeseval.ParseBuildConstraint]. filePath must be an
+// absolute OS-native path (pass.Abs(f) is a suitable source).
+func ParseBuildConstraint(filePath string) (constraint.Expr, error) {
+	return typeseval.ParseBuildConstraint(filePath)
+}
+
+// IsGeneratedRelPath reports whether rel is a codegen output path under the
+// repo's generated/ tree. rel must be a module-relative slash path (as
+// returned by pass.Rel(f) or pkgFileRel).
+//
+// Returns true when rel begins with "generated/" (top-level only). The repo
+// reserves exactly one generated/ directory at module root; a "generated/"
+// prefix inside a hand-written package would be a layout violation and is
+// intentionally not matched.
+//
+// Use [Pass.IsGenerated] when the path is derived from a *ast.File in
+// pass.Files — it calls pass.Rel(f) automatically. Use this function when
+// the module-relative path string is already available (e.g. iterating a
+// resolver's packages outside a Pass-Driver rule, as in the loader anchor
+// test TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3).
+//
+// Thin delegation to [typeseval.IsGeneratedRelPath].
+func IsGeneratedRelPath(rel string) bool {
+	return typeseval.IsGeneratedRelPath(rel)
 }

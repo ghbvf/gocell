@@ -103,7 +103,7 @@ After stage 4, `archtestmeta` is deleted entirely. `tools/archtest/internal/scan
 |---|---|---|
 | Loader / load primitive | `LoadPackages` `SharedResolver` `LoadProductionPackages` `Resolver` `ProductionResolver` `EachFileInPackage` | **Never re-exported** — reachable only via `RunTyped` (this is the funnel Hard defense body) |
 | info-taking pure helper | `ResolvePackageRef` `ResolveMethodCall` `EvaluateConstString` | `resolve.go` free funcs (extends Alt-D rationale: helpers take `*types.Info`, not privatized) |
-| build-constraint | `ParseBuildConstraint` `BuildContextPredicate` `IsGeneratedRelPath` | `(*Pass).IsFileInScope` / `(*Pass).IsGenerated` methods (axis-4 ratified design, no parallel free funcs) |
+| build-constraint | `ParseBuildConstraint` `BuildContextPredicate` `IsGeneratedRelPath` | `(*Pass).IsFileInScope` / `(*Pass).IsGenerated` methods for the default-predicate bool case; **plus** free funcs `archtest.ParseBuildConstraint` / `archtest.IsGeneratedRelPath` for call sites that need the raw `constraint.Expr` or a raw-string rel path (see erratum below) |
 | tags preset | `FlatNonDefaultTags` `KnownNonDefaultTags` | `resolve.go` free funcs |
 
 Scanner side: only `scanner.ImportBan` was unexported (re-exported as `type ImportBan = scanner.ImportBan`); it does **not** collapse into depguard — depguard cannot express its file-local `AllowRels` semantics (§ Termination criteria reasoning).
@@ -117,6 +117,15 @@ Scanner side: only `scanner.ImportBan` was unexported (re-exported as `type Impo
 | 2 | `PASS-FUNNEL-RESOLVE-01` — type-aware (`*types.Info` via `typeseval.ResolvePackageRef`, reusing the `diagsLoadPackages` symbol-set machinery) ban on business archtest direct-calling the 8 helper symbols + `scanner.ImportBan`; legacy exempt via `LegacyAllowlist`, stage-4 zeroed | **Medium** (type-aware call interception + allowlist cross-validate; symmetric to the existing loader rule — not godoc Soft) | `diagsResolveHelpers` godoc lists blind-spot forms (value indirection / cross-file indirection); `TestPassFunnel_FixtureCoverage` exact-count assertion (ImportBan == 3 for qualified+alias+dot-import) is the live regression lock; dot-import `ImportBan` is resolver-covered via `*types.TypeName` in `resolveBarePkgSymbol` AND fixtured at L125 |
 
 The legacy `internal/typeseval` direct-import path is **closed in the same PR** (not deprecated-aliased): the allowlist is a terminating todo (stage-4 deletes it), consistent with Alt-C's rejection of deprecation aliases. This makes the "business imports only `archtest`" end-state Hard+Medium-enforced, not a godoc Soft convention.
+
+**Erratum — dot-import TypeName fix (PR #492 patch):** The original Stage 1.5 description assumed `typeseval.ResolvePackageRef`'s dot-import resolution covered only `*types.Func` (functions). `scanner.ImportBan` is a struct type, resolved via `*types.TypeName`. The resolver's `resolveBarePkgSymbol` only handled the `*types.Func` branch, leaving bare-Ident `ImportBan{}` (dot-import form) undetected. Fixed by adding a `*types.TypeName` branch in `resolveBarePkgSymbol`; the `TestPassFunnel_FixtureCoverage` `== 3` exact-count assertion (qualified + alias + dot-import) would drop to 2 if this fix were reverted. Committed in `8f4123f5`.
+
+**Erratum — RESOLVE-01 façade-exit completeness (PR #495):** The RESOLVE-01 banned-set ↔ façade-exit mapping was not exhaustively verified at Stage 1.5 time. Two symbols had no adequate façade exit:
+
+- `ParseBuildConstraint`: `build_constraint_test.go` and `ci_integration_discovery_invariants_test.go` call it with a raw file path and use the returned `constraint.Expr` for 3-way evaluation under custom predicates. `Pass.IsFileInScope` returns only a single bool with the default predicate and cannot cover this use-case.
+- `IsGeneratedRelPath`: `outbox_invariants_test.go:TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3` calls it with a raw string `rel` derived from `pkgFileRel`, not from a `*ast.File` via `pass.Rel`. `Pass.IsGenerated(f *ast.File)` cannot cover a raw-string call site outside a Pass-Driver rule.
+
+Both gaps were closed in PR #495 by adding `func ParseBuildConstraint(filePath string) (constraint.Expr, error)` and `func IsGeneratedRelPath(rel string) bool` as thin-delegate free funcs in `resolve.go`. Both symbols remain in the RESOLVE-01 banned map (the ban targets `typeseval.`-qualified direct calls; business code uses the `archtest.` façade). The now-true invariant: **every RESOLVE-01 banned symbol has a façade exit semantically sufficient for all existing call sites**.
 
 **Rejected noise (would violate elegance):** `TypedOpts.ParserMode` knob (always-ParseComments is additive and simpler); `Pass.FilePackage` closure (`RunTyped` is one-Pass-per-package; `pass.Pkg` already is the owner); re-exporting any loader (would defeat defense #1).
 

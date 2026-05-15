@@ -357,7 +357,7 @@ func newPackageAbs(fset *token.FileSet) func(*ast.File) string {
 // project-specific tags (e.g. "integration", "e2e", "archtest_fixture").
 //
 // For files that need evaluation under a custom extra-tag set (e.g. "integration"),
-// use [archtest.BuildContextPredicate] with typeseval.ParseBuildConstraint
+// use [archtest.BuildContextPredicate] with [archtest.ParseBuildConstraint]
 // directly — IsFileInScope always uses the default (no-extra-tags) predicate.
 //
 // f must come from pass.Files; behavior is undefined for files from other Passes.

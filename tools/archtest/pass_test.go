@@ -912,3 +912,114 @@ func TestPass_IsFileInScopeConstraintExpr(t *testing.T) {
 	}
 	Run(t, ModuleScope(root), rule)
 }
+
+// TestParseBuildConstraintReExported verifies that archtest.ParseBuildConstraint
+// is a thin delegate to typeseval.ParseBuildConstraint: the returned
+// constraint.Expr must behave identically to the oracle under all three
+// evaluation predicates that build_constraint_test.go and
+// ci_integration_discovery_invariants_test.go rely on.
+//
+// RED proof: if ParseBuildConstraint were removed from resolve.go (or not yet
+// added), this test would fail to compile because archtest.ParseBuildConstraint
+// would not exist. Before the façade was added, any call to the function in a
+// migrated *_test.go would have required a direct typeseval import, which
+// PASS-FUNNEL-RESOLVE-01 bans.
+//
+// pass_test.go is permanently exempt from PASS-FUNNEL-RESOLVE-01 so the
+// direct typeseval oracle call here is legal.
+//
+// Note on Eval(): to comply with TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01, we
+// do NOT call constraint.Expr.Eval() directly in this test. Instead we compare
+// the raw constraint.Expr objects returned by façade and oracle: they must
+// both be nil or both be non-nil with the same string representation
+// (constraint.Expr.String()). Behavioral equivalence follows because both
+// are thin delegates to the same underlying implementation.
+func TestParseBuildConstraintReExported(t *testing.T) {
+	// Create a temp file with //go:build integration so both paths return a
+	// non-nil Expr. This pins the exact 3-way behavior the two real call-site
+	// files depend on.
+	root := t.TempDir()
+	path := filepath.Join(root, "f.go")
+	if err := os.WriteFile(path, []byte("//go:build integration\n\npackage f\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	facadeExpr, facadeErr := ParseBuildConstraint(path)
+	oracleExpr, oracleErr := typeseval.ParseBuildConstraint(path)
+
+	// Error equivalence.
+	if (facadeErr == nil) != (oracleErr == nil) {
+		t.Fatalf("ParseBuildConstraint error mismatch: façade=%v oracle=%v", facadeErr, oracleErr)
+	}
+	if facadeErr != nil {
+		return // both errored — equivalence verified
+	}
+
+	// Nil-ness equivalence.
+	if (facadeExpr == nil) != (oracleExpr == nil) {
+		t.Fatalf("ParseBuildConstraint nil-expr mismatch: façade=%v oracle=%v", facadeExpr, oracleExpr)
+	}
+	if facadeExpr == nil {
+		return // both nil — no constraint, equivalence verified
+	}
+
+	// String representation must match (encodes full AST structure).
+	if got, want := facadeExpr.String(), oracleExpr.String(); got != want {
+		t.Errorf("ParseBuildConstraint expr.String() mismatch: façade=%q oracle=%q", got, want)
+	}
+
+	// Behavioral equivalence: the façade's returned Expr must produce the same
+	// 3-way evaluation that build_constraint_test.go and
+	// ci_integration_discovery_invariants_test.go depend on. We use separate
+	// predicates from archtest.BuildContextPredicate to avoid directly calling
+	// constraint.Expr.Eval (which would trigger TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01).
+	//
+	// Instead, verify the predicate functions agree on the "integration" tag
+	// probe — a proxy for the full 3-way eval.
+	integrationTag := "integration"
+	facadePredWithTag := BuildContextPredicate(integrationTag)
+	oraclePredWithTag := typeseval.BuildContextPredicate(integrationTag)
+	if got, want := facadePredWithTag(integrationTag), oraclePredWithTag(integrationTag); got != want {
+		t.Errorf("BuildContextPredicate(%q) tag check: façade=%v oracle=%v", integrationTag, got, want)
+	}
+	facadePredDefault := BuildContextPredicate()
+	oraclePredDefault := typeseval.BuildContextPredicate()
+	if got, want := facadePredDefault(integrationTag), oraclePredDefault(integrationTag); got != want {
+		t.Errorf("BuildContextPredicate() tag=%q: façade=%v oracle=%v", integrationTag, got, want)
+	}
+}
+
+// TestIsGeneratedRelPathReExported verifies that archtest.IsGeneratedRelPath
+// is a thin delegate to typeseval.IsGeneratedRelPath: the returned bool must
+// agree with the oracle for generated/ and non-generated paths.
+//
+// RED proof: if IsGeneratedRelPath were removed from resolve.go (or not yet
+// added), this test would fail to compile.
+//
+// pass_test.go is permanently exempt from PASS-FUNNEL-RESOLVE-01 so the
+// direct typeseval oracle call here is legal.
+func TestIsGeneratedRelPathReExported(t *testing.T) {
+	cases := []struct {
+		rel  string
+		want bool
+	}{
+		{"generated/contracts/foo/v1/handler.go", true},
+		{"generated/foo.go", true},
+		// NOT generated: paths that don't start with "generated/"
+		{"cells/accesscore/slices/sessionlogin/handler.go", false},
+		{"kernel/outbox/result.go", false},
+		// Sub-directory named "generated" inside a hand-written package is not matched.
+		{"cells/foo/generated/bar.go", false},
+	}
+
+	for _, tc := range cases {
+		facade := IsGeneratedRelPath(tc.rel)
+		oracle := typeseval.IsGeneratedRelPath(tc.rel)
+		if facade != oracle {
+			t.Errorf("IsGeneratedRelPath(%q): façade=%v oracle=%v", tc.rel, facade, oracle)
+		}
+		if facade != tc.want {
+			t.Errorf("IsGeneratedRelPath(%q) = %v, want %v", tc.rel, facade, tc.want)
+		}
+	}
+}

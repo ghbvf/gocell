@@ -26,6 +26,8 @@
 
 **勘误（基于 develop@2fd2976e 复核）**：dual-class 实测 **6** 文件（auth_bootstrap / errcode_invariants / outbox_invariants / panic_invariants / production_loader_funnel / role_admin_literal），非原预估 ≤3，归后续单一 PR 整体迁移；LegacyAllowlist 当前 **47** 条目（PR #493 删 10 个已迁移 contract/codegen 文件后）。
 
+**勘误 — RESOLVE-01 façade 出口完备性（PR #495 补修）**：Stage 1.5 未对 RESOLVE-01 被禁 8 个 symbol 的 façade 出口作穷举验证，导致两处 gap：`ParseBuildConstraint` — `build_constraint_test.go` / `ci_integration_discovery_invariants_test.go` 两个文件调用时需获取原始 `constraint.Expr` 做三路求值，`Pass.IsFileInScope` 只返回单 bool、无法覆盖；`IsGeneratedRelPath` — `outbox_invariants_test.go::TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3` 传入 raw string rel，`Pass.IsGenerated(f *ast.File)` 无法覆盖。PR #495 在 `resolve.go` 补 `func ParseBuildConstraint(filePath string) (constraint.Expr, error)` 和 `func IsGeneratedRelPath(rel string) bool` 两个薄委托自由函数，两符号继续留在 RESOLVE-01 禁止映射（ban 的是 `typeseval.` 直调，业务侧改用 `archtest.` 门面）。当前不变式：**RESOLVE-01 每个被禁符号均有语义充分的门面出口，覆盖所有已知调用形态**。
+
 **后续迁移强制约定**：Stage 2/3 迁移后 Rule 必须返回 `[]Diagnostic` + `archtest.Report`（对标 go/analysis 端态，禁止保留 inline `t.Errorf` 形态，确保每文件一次到位 0 二次返工）。
 
 **阶段 1 PR-1 ship 摘要（PR #492，2026-05-14）**：
