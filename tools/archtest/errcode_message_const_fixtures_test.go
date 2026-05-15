@@ -23,10 +23,10 @@ import (
 // violations. The pure-AST mode requires no module resolution, no
 // `go/types` info, and works against fixture packages that declare a local
 // `errcode` package (see testdata/errcode_message_const/*).
-func runErrcodeMessageConstFixtureScan(t *testing.T, fixtureDir string) []string {
+func runErrcodeMessageConstFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
 	scope := DirsScope(fixtureDir, []string{"."})
-	var out []string
+	var out []Diagnostic
 	Run(t, scope, func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			absPath := p.Abs(file)
@@ -34,19 +34,24 @@ func runErrcodeMessageConstFixtureScan(t *testing.T, fixtureDir string) []string
 			if filepath.Base(filepath.Dir(absPath)) == "errcode" {
 				continue
 			}
-			out = append(out, scanErrcodeMessageASTNoTypes(p.Fset, file, p.Rel(file))...)
+			out = append(out, scanErrcodeMessageASTNoTypesDiags(p.Fset, file, p.Rel(file))...)
 		}
 		return nil
 	})
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		return out[i].Line < out[j].Line
+	})
 	return out
 }
 
-// scanErrcodeMessageASTNoTypes is the no-types entry point used by fixture
-// scanning; it delegates to scanErrcodeMessageAST with a nil TypesInfo so
+// scanErrcodeMessageASTNoTypesDiags is the no-types entry point used by fixture
+// scanning; it delegates to scanErrcodeMessageASTDiags with a nil TypesInfo so
 // the constructor-resolution helper falls back to local-name matching.
-func scanErrcodeMessageASTNoTypes(fset *token.FileSet, file *ast.File, rel string) []string {
-	return scanErrcodeMessageAST(fset, file, rel, nil)
+func scanErrcodeMessageASTNoTypesDiags(fset *token.FileSet, file *ast.File, rel string) []Diagnostic {
+	return scanErrcodeMessageASTDiags(fset, file, rel, nil)
 }
 
 // TestErrcodeMessageConstLiteralFixtures validates the MESSAGE-CONST-

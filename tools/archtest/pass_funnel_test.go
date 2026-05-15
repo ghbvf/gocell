@@ -130,6 +130,48 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 }
 
 // diagsLoadPackages is the pure detector for PASS-FUNNEL-LOADPACKAGES-01.
+// It bans business archtest *_test.go files from directly calling the three
+// typeseval package-load symbols: LoadPackages, SharedResolver, and
+// LoadProductionPackages (Stage 1.7 funnel widen). Detection is type-aware
+// via typeseval.ResolvePackageRef on all SelectorExpr / bare Ident nodes.
+//
+// # AI-rebust: Medium
+//
+// Detection is type-aware (typeseval.ResolvePackageRef via *types.Info) and
+// covers all three import forms (qualified, alias, dot-import). Not Hard
+// because Go allows arbitrary aliasing; the detector requires *types.Info
+// resolve rather than string-matching, so it cannot be bypassed by renaming
+// an import alias.
+//
+// # Blind spots (per ai-collab.md Medium evidence requirement)
+//
+//   - File-scope var escape: `var loader = typeseval.LoadProductionPackages`
+//     at file scope — the assignment SelectorExpr IS detected (trips the rule),
+//     but a subsequent call via the variable from a different function is not.
+//     This is the same Soft escape acknowledged in diagsResolveHelpers; accepted
+//     because the initial value reference trips the rule.
+//   - Cross-func Ident escape: an Ident whose name is bound to a loader in one
+//     function and called from another is not detected without inter-procedural
+//     analysis. No such pattern exists in production archtest today.
+//
+// # Per-form fixture coverage
+//
+// LoadPackages and SharedResolver are each fixtured in two qualified + alias
+// forms in redfixture.go (lines for typeseval.LoadPackages / te.LoadPackages
+// and typeseval.SharedResolver / te.SharedResolver).
+// LoadProductionPackages is fixtured in the same two forms (Stage 1.7 addition).
+// Dot-import of typeseval is infeasible in redfixture.go (conflicting imports).
+// TestPassFunnel_FixtureCoverage enforces ≥1 diagnostic per symbol, so
+// removing any of the three loader fixture lines fails the coverage lock.
+//
+// Note on productionLoaderFunnelAllowlist: the loader-anchor test
+// (TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3 in
+// production_loader_funnel_test.go) is allowlisted because it calls
+// SharedResolver with "./..." — not LoadProductionPackages — to prove that
+// SharedResolver loads generated/ packages. LoadProductionPackages therefore
+// needs no allowlist entry in productionLoaderFunnelAllowlist even though it
+// is in the same diagsLoadPackages banned symbol set: business *_test.go code
+// is banned from calling it directly, but the anchor test never does.
 func diagsLoadPackages(tgt passFunnelTarget) []scanner.Diagnostic {
 	return scanForForbiddenCallees(
 		tgt,
@@ -551,13 +593,12 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 		t.Fatalf("passfunnelfixture loaded with 0 files — archtest_fixture build tag missing or package empty")
 	}
 
-	// Basic ≥1 check for the first three rules.
+	// Basic ≥1 check for EACHFILE-01 and PACKAGES-IMPORT-01.
 	basicRules := []struct {
 		name string
 		fn   func(passFunnelTarget) []scanner.Diagnostic
 	}{
 		{"PASS-FUNNEL-EACHFILE-01", diagsEachFile},
-		{"PASS-FUNNEL-LOADPACKAGES-01", diagsLoadPackages},
 		{"PASS-FUNNEL-PACKAGES-IMPORT-01", diagsPackagesImport},
 	}
 	for _, r := range basicRules {
@@ -569,6 +610,41 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			t.Errorf("rule %s detector found 0 diagnostics on red fixture; "+
 				"detector likely regressed (or redfixture.go violation removed)",
 				r.name)
+		}
+	}
+
+	// Strengthened per-symbol check for PASS-FUNNEL-LOADPACKAGES-01.
+	//
+	// Each of the three banned load symbols (LoadPackages, SharedResolver,
+	// LoadProductionPackages) must generate ≥1 diagnostic independently.
+	// The ≥1 total check above (now removed from the basicRules loop) would
+	// pass even if the LoadProductionPackages fixture lines were deleted
+	// (the other two symbols still fire). The per-symbol assertion locks each
+	// symbol independently so removing any fixture line fails exactly that
+	// symbol's assertion.
+	{
+		var lpDiags []scanner.Diagnostic
+		for _, tgt := range fixtureTargets {
+			lpDiags = append(lpDiags, diagsLoadPackages(tgt)...)
+		}
+		perSymbol := map[string]int{
+			"LoadPackages":           0,
+			"SharedResolver":         0,
+			"LoadProductionPackages": 0,
+		}
+		for _, d := range lpDiags {
+			for sym := range perSymbol {
+				if strings.Contains(d.Message, sym) {
+					perSymbol[sym]++
+				}
+			}
+		}
+		for sym, count := range perSymbol {
+			if count == 0 {
+				t.Errorf("PASS-FUNNEL-LOADPACKAGES-01: symbol %q produced 0 diagnostics on red fixture; "+
+					"either the fixture line for this symbol was removed from redfixture.go "+
+					"or the detector regressed for this symbol", sym)
+			}
 		}
 	}
 

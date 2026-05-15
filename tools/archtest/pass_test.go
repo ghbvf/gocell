@@ -1210,7 +1210,14 @@ func TestRunTyped_delegatesToRunTypedDir(t *testing.T) {
 // using this entry cannot observe codegen output even by forgetting a
 // per-file skip, because the driver never constructs a Pass for a generated
 // package. Reaching generated/ requires deliberately switching to RunTyped.
+//
+// Contra-positive assertion: we also run RunTyped(./...) and assert it finds
+// ≥1 generated/ file. If it finds zero, the exclusion test is vacuous (there
+// is nothing to exclude, so RunTypedProduction's filter has no teeth).
 func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full-module packages.Load; skipped in -short")
+	}
 	var calls, files int
 	rule := func(p *Pass) []Diagnostic {
 		calls++
@@ -1237,6 +1244,23 @@ func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
 	if calls == 0 || files == 0 {
 		t.Errorf("RunTypedProduction invoked rule %d times over %d files; expected ≥ 1 of each", calls, files)
 	}
+
+	// Contra-positive: RunTyped(./...) must see ≥1 generated/ file so the
+	// exclusion above is non-vacuous (there is actually something to filter).
+	var generatedCount int
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./..."}, func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			if strings.HasPrefix(p.Rel(f), "generated/") {
+				generatedCount++
+			}
+		}
+		return nil
+	})
+	if generatedCount == 0 {
+		t.Errorf("contra-positive failed: RunTyped(./...) found 0 generated/ files — " +
+			"the module has no generated/ packages, so RunTypedProduction's exclusion " +
+			"filter is vacuous and the above assertions prove nothing")
+	}
 }
 
 // TestRunTypedProduction_matchesProductionResolverSet verifies parity: the
@@ -1245,7 +1269,16 @@ func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
 // buildTypedPass can construct a Pass for (≥1 syntax file + non-nil
 // TypesInfo). pass_test.go is permanently depguard/allowlist self-exempt, so
 // importing typeseval here is legitimate.
+//
+// Non-tautological probe: we also assert that resolver.All() contains ≥1
+// generated/-prefixed package path that is absent from resolver.Production().
+// This directly proves the Production filter is actively non-empty rather than
+// a no-op (if the module has no generated/ packages, the parity test above
+// would vacuously pass for the wrong reason).
 func TestRunTypedProduction_matchesProductionResolverSet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full-module packages.Load; skipped in -short")
+	}
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
 	if err != nil {
@@ -1255,6 +1288,33 @@ func TestRunTypedProduction_matchesProductionResolverSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProductionPackages: %v", err)
 	}
+
+	// Non-tautological probe: resolver.All() must have ≥1 generated/ package
+	// absent from resolver.Production(), proving the filter is active.
+	allPaths := make(map[string]bool)
+	for _, p := range resolver.All() {
+		if p != nil {
+			allPaths[p.PkgPath] = true
+		}
+	}
+	prodPaths := make(map[string]bool)
+	for _, p := range resolver.Production() {
+		if p != nil {
+			prodPaths[p.PkgPath] = true
+		}
+	}
+	var generatedInAllNotProd int
+	for path := range allPaths {
+		if strings.Contains(path, "/generated/") && !prodPaths[path] {
+			generatedInAllNotProd++
+		}
+	}
+	if generatedInAllNotProd == 0 {
+		t.Errorf("non-tautological probe failed: resolver.All() has no generated/ package " +
+			"absent from resolver.Production() — the Production filter is either inactive or " +
+			"the module has no generated/ packages (both make the parity check vacuous)")
+	}
+
 	want := map[string]bool{}
 	for _, p := range resolver.Production() {
 		if p == nil || p.Types == nil || p.TypesInfo == nil || len(p.Syntax) == 0 {

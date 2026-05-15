@@ -326,27 +326,6 @@ func TestErrcodeMessageConstLiteral(t *testing.T) {
 	Report(t, ruleMessageConstLiteral01, diags)
 }
 
-// scanErrcodeMessageAST returns violation strings for a single parsed file.
-// info may be nil; in that case the resolver and isAcceptableMessageExpr fall
-// back to pure-AST name matching (used by fixture scanning).
-//
-// The []string form is kept for backward compatibility with companion fixture
-// scanners (errcode_message_const_fixtures_test.go) that are not yet migrated
-// to the Pass-funnel API.
-func scanErrcodeMessageAST(
-	fset *token.FileSet,
-	file *ast.File,
-	rel string,
-	info *types.Info,
-) []string {
-	diags := scanErrcodeMessageASTDiags(fset, file, rel, info)
-	out := make([]string, 0, len(diags))
-	for _, d := range diags {
-		out = append(out, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
-	}
-	return out
-}
-
 // scanErrcodeMessageASTDiags is the Diagnostic-returning form used by the
 // TestErrcodeMessageConstLiteral Pass-funnel rule.
 func scanErrcodeMessageASTDiags(
@@ -597,6 +576,9 @@ func scanFileForErrorFirstViolations(fset *token.FileSet, file *ast.File, rel st
 // construction time (see ERROR-FIRST-API-01 for the companion panic-free
 // rule).
 func TestErrorFirstTypedNil01(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
 	root := findModuleRoot(t)
 
 	enforced := errorFirstEnforcedFileMap(root)
@@ -1250,9 +1232,11 @@ func TestExportedErrorNew(t *testing.T) {
 
 // scanExportedErrorNewAST returns violation strings for a single parsed file.
 //
-// The []string form is kept for backward compatibility with companion fixture
-// scanners (exported_error_new_fixtures_test.go) that are not yet migrated
-// to the Pass-funnel API.
+// The []string form is kept for backward compatibility with the one remaining
+// companion fixture scanner: exported_error_new_fixtures_test.go. That file
+// is in archtestmeta.LegacyAllowlist and imports golang.org/x/tools/go/packages
+// directly, making its migration out of PR-7 scope. It is the only caller of
+// this bridge; when it is migrated, this helper and the bridge can be deleted.
 func scanExportedErrorNewAST(
 	fset *token.FileSet,
 	file *ast.File,

@@ -121,7 +121,9 @@ type TypedOpts struct {
 //	})
 //	archtest.Report(t, "MY-RULE-01", diags)
 //
-// For rules that need go/types resolution, use [RunTyped] instead.
+// For rules that need go/types resolution, use [RunTyped] instead. For
+// production-only loads (generated/ excluded), use [RunTypedProduction]. For
+// standalone fixture modules with their own go.mod, use [RunTypedDir].
 func Run(t *testing.T, scope Scope, rule Rule) []Diagnostic {
 	t.Helper()
 	if rule == nil {
@@ -263,6 +265,10 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 // [typeseval.LoadProductionPackages]; rule is invoked with one Pass per
 // production package (same dedup/ordering as [RunTyped]).
 //
+// The t parameter is [*testing.T] (not [testing.TB]) because main-module
+// loads are never used in fatal-path spy scenarios (unlike [RunTypedDir],
+// which accepts [testing.TB] to enable tbFatalSpy unit tests).
+//
 // Use this for rules that reason over hand-written source and must never
 // observe codegen output (false-positive risk + duplicated declarations).
 // It is the Pass-model successor of typeseval.LoadProductionPackages /
@@ -270,20 +276,27 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 // a per-callsite `if pass.IsGenerated(f) { continue }` discipline (which an
 // author can forget — a Hard→Soft regression).
 //
-// AI-rebust: Hard. Scanning generated/ output is NOT EXPRESSIBLE under this
-// entry — a Pass it yields never contains a generated/ file. Reaching codegen
-// output requires deliberately choosing a DIFFERENT entry ([RunTyped] with a
-// "./..." pattern), which names the trade-off at the call site. This
-// preserves ProductionResolver's Hard "violation-not-expressible" grade
-// (Production() vs All()) in the Pass model. The three-line Hard defense is
-// otherwise unchanged:
-//   - Defense #1: Pass.Pkg is *types.Package (not *packages.Package).
-//   - Defense #2: depguard bans archtest *_test.go from importing
+// AI-rebust: downstream Hard / upstream Medium.
+//
+//   - Downstream Hard: scanning generated/ output is NOT EXPRESSIBLE through
+//     this entry — a Pass it yields never contains a generated/ file. The
+//     three-line Hard defense is unchanged:
+//     Defense #1: Pass.Pkg is *types.Package (not *packages.Package).
+//     Defense #2: depguard bans archtest *_test.go from importing
 //     golang.org/x/tools/go/packages; this driver is the approved funnel.
-//   - Defense #3: meta-archtest PASS-FUNNEL-LOADPACKAGES-01 /
+//     Defense #3: meta-archtest PASS-FUNNEL-LOADPACKAGES-01 /
 //     PRODUCTION-LOADER-FUNNEL-01 ban direct typeseval.LoadProductionPackages
 //     / SharedResolver calls in business *_test.go; RunTypedProduction is the
 //     only legitimate production-load funnel (funnel widened, not bypassed).
+//
+//   - Upstream Medium (honest caveat): a rule author can still write
+//     RunTyped(t, opts, []string{"./..."}, rule) + manual pass.IsGenerated(f)
+//     skip per file. That form compiles and runs; generated/ files are present
+//     in the Pass but skipped per-file. It is not enforced to route through
+//     RunTypedProduction. The Hard "upstream" property (violation unrepresentable
+//     at the call site) is not achievable without sealing the RunTyped API,
+//     which would break fixture-module and partial-scan rules. Tracked as
+//     backlog item PASS-PRODUCTION-UPSTREAM-HARD-01.
 //
 // Failure modes (module-root not found, go.mod unreadable, load error)
 // fail-loud via t.Fatalf. For the full set including generated/, use
