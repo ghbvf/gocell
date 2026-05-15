@@ -50,20 +50,22 @@ func setup(t testing.TB) http.Handler {
 	sessionRepo := testutil.RealSessionRepo(t)
 	sessID := testutil.TestID("sess-1")
 	_ = sessionRepo.Create(context.Background(), &session.Session{
-		ID:        sessID,
-		SubjectID: testutil.TestID("usr-1"),
-		JTI:       "jti-" + sessID,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                sessID,
+		SubjectID:         testutil.TestID("usr-1"),
+		JTI:               "jti-" + sessID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	})
 	// Victim session owned by a different user — used to prove IDOR guard.
 	victimID := testutil.TestID("sess-victim")
 	_ = sessionRepo.Create(context.Background(), &session.Session{
-		ID:        victimID,
-		SubjectID: testutil.TestID("usr-victim"),
-		JTI:       "jti-" + victimID,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                victimID,
+		SubjectID:         testutil.TestID("usr-victim"),
+		JTI:               "jti-" + victimID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	})
 
 	svc := MustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))

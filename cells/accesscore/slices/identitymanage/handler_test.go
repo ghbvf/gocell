@@ -124,11 +124,9 @@ func TestToUserResponseData_NilInput(t *testing.T) {
 
 func TestToUserResponseData_Fields(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	user := &domain.User{
-		ID: "u1", Username: "alice", Email: "a@b.com",
-		PasswordHash: "secret-hash-bcrypt", Status: domain.StatusActive,
-		CreatedAt: now, UpdatedAt: now,
-	}
+	user, err := domain.ReconstituteUser("u1", "alice", "a@b.com", "secret-hash-bcrypt",
+		0, false, domain.StatusActive, domain.UserSourceIdentity, 1, now, now)
+	require.NoError(t, err)
 	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
 
 	assert.Equal(t, "u1", id)
@@ -579,11 +577,10 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 	oldHash, hashErr := bcrypt.GenerateFromPassword([]byte("oldpass12"), domain.BcryptCost)
 	require.NoError(t, hashErr)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	require.NoError(t, repo.Create(context.Background(), &domain.User{
-		ID: userID, Username: "user-409", Email: "u409@example.com",
-		PasswordHash: string(oldHash), Status: domain.StatusActive,
-		CreationSource: domain.UserSourceIdentity, CreatedAt: now, UpdatedAt: now,
-	}))
+	u409, reconErr := domain.ReconstituteUser(userID, "user-409", "u409@example.com", string(oldHash),
+		0, false, domain.StatusActive, domain.UserSourceIdentity, 1, now, now)
+	require.NoError(t, reconErr)
+	require.NoError(t, repo.Create(context.Background(), u409))
 
 	handlerSessionStore := testutil.RealSessionRepo(t)
 	handlerRefreshStore := newHandlerIdentityRefreshStore()
@@ -667,7 +664,7 @@ func TestPatch_RequirePasswordResetFalse_Clears(t *testing.T) {
 	// Confirm the flag is set.
 	user, err := repo.GetByID(context.Background(), id)
 	require.NoError(t, err)
-	require.True(t, user.PasswordResetRequired, "flag should be set after create")
+	require.True(t, user.PasswordResetRequired(), "flag should be set after create")
 
 	// PATCH with {"requirePasswordReset": false} — must clear the flag.
 	w = httptest.NewRecorder()
@@ -681,7 +678,7 @@ func TestPatch_RequirePasswordResetFalse_Clears(t *testing.T) {
 	// After PATCH, flag must be cleared.
 	user, err = repo.GetByID(context.Background(), id)
 	require.NoError(t, err)
-	require.False(t, user.PasswordResetRequired, "PATCH false must clear the flag (not treat it as no-change)")
+	require.False(t, user.PasswordResetRequired(), "PATCH false must clear the flag (not treat it as no-change)")
 }
 
 // TestPatch_RequirePasswordResetTrue_Sets verifies that PATCH
@@ -708,7 +705,7 @@ func TestPatch_RequirePasswordResetTrue_Sets(t *testing.T) {
 
 	user, err := repo.GetByID(context.Background(), id)
 	require.NoError(t, err)
-	require.False(t, user.PasswordResetRequired, "flag should not be set after create without it")
+	require.False(t, user.PasswordResetRequired(), "flag should not be set after create without it")
 
 	// PATCH with {"requirePasswordReset": true} — must set the flag.
 	w = httptest.NewRecorder()
@@ -721,7 +718,7 @@ func TestPatch_RequirePasswordResetTrue_Sets(t *testing.T) {
 
 	user, err = repo.GetByID(context.Background(), id)
 	require.NoError(t, err)
-	require.True(t, user.PasswordResetRequired, "PATCH true must set the flag")
+	require.True(t, user.PasswordResetRequired(), "PATCH true must set the flag")
 }
 
 // TestPatch_RequirePasswordResetAbsent_NoChange verifies that PATCH {}
@@ -757,7 +754,7 @@ func TestPatch_RequirePasswordResetAbsent_NoChange(t *testing.T) {
 
 	user, err := repo.GetByID(context.Background(), id)
 	require.NoError(t, err)
-	require.True(t, user.PasswordResetRequired, "PATCH with absent field must not change the flag")
+	require.True(t, user.PasswordResetRequired(), "PATCH with absent field must not change the flag")
 }
 
 func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {

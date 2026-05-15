@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,12 +32,10 @@ func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 	// Seed usr-1 as an effective admin so the default Revoke test scenarios
 	// have a real admin to operate on. Additional active admins must be added
 	// by test setup hooks for the multi-holder cases.
-	require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
-		ID:       "usr-1",
-		Username: "usr-1",
-		Email:    "usr-1@test.local",
-		Status:   domain.StatusActive,
-	}))
+	u1, u1Err := domain.NewUser("usr-1", "usr-1@test.local", "$2a$12$hash", time.Now())
+	require.NoError(t, u1Err)
+	u1.ID = "usr-1"
+	require.NoError(t, store.UserRepository().Create(context.Background(), u1))
 	_, err := store.RoleRepository().AssignToUser(context.Background(), "usr-1", "admin")
 	require.NoError(t, err)
 
@@ -55,13 +54,11 @@ func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 // (service_test.go) that operates on the store returned by setupHandler.
 func seedActiveAdminInStore(t *testing.T, store *mem.Store, userID string) {
 	t.Helper()
-	require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
-		ID:       userID,
-		Username: userID,
-		Email:    userID + "@test.local",
-		Status:   domain.StatusActive,
-	}))
-	_, err := store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
+	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	u.ID = userID
+	require.NoError(t, store.UserRepository().Create(context.Background(), u))
+	_, err = store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
 	require.NoError(t, err)
 }
 

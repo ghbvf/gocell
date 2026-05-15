@@ -105,7 +105,7 @@ func TestMintAccess_JTI_UniquePerCall(t *testing.T) {
 		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "user"}}},
 		Clk:      clock.Real(),
 	}
-	req := Request{UserID: "usr-jti", SessionID: "sess-jti", AuthzEpoch: 0}
+	req := Request{UserID: "usr-jti", SessionID: "sess-jti"}
 
 	r1, err := MintAccess(context.Background(), deps, req)
 	require.NoError(t, err)
@@ -192,19 +192,16 @@ func TestMintAccess_PasswordResetFlagPropagates(t *testing.T) {
 		"access token must carry password_reset_required=true when requested")
 }
 
-// TestMintAccess_AuthzEpochPropagates verifies that Request.AuthzEpoch is forwarded
-// to IssueOptions.AuthzEpoch so the issued JWT carries the correct authz_epoch claim.
-// This covers the F18 trade-off: the epoch in the token reflects the user's
-// authz_epoch at the time MintAccess is called (inside or after the credential-
-// invalidation tx).
-func TestMintAccess_AuthzEpochPropagates(t *testing.T) {
+// TestMintAccess_JWT_NoAuthzEpochClaim verifies that the issued JWT does NOT carry
+// an authz_epoch claim (S4d: epoch provenance moved to session/refresh rows).
+func TestMintAccess_JWT_NoAuthzEpochClaim(t *testing.T) {
 	issuer, keySet := newTestIssuer(t)
 	deps := Deps{
 		Issuer:   issuer,
 		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
 		Clk:      clock.Real(),
 	}
-	req := Request{UserID: "usr-1", SessionID: "sess-1", AuthzEpoch: 42}
+	req := Request{UserID: "usr-1", SessionID: "sess-1"}
 
 	res, err := MintAccess(context.Background(), deps, req)
 	require.NoError(t, err)
@@ -213,8 +210,9 @@ func TestMintAccess_AuthzEpochPropagates(t *testing.T) {
 	require.NoError(t, err)
 	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, int64(42), claims.AuthzEpoch,
-		"access token must carry the AuthzEpoch from Request")
+	// authz_epoch must not appear in Extra either (it is not written at all).
+	_, epochInExtra := claims.Extra["authz_epoch"]
+	assert.False(t, epochInExtra, "S4d: authz_epoch must not be present in JWT (epoch lives in session row)")
 }
 
 // TestMintAccess_AccessTokenIssueFailure asserts that when the Issuer's access-token

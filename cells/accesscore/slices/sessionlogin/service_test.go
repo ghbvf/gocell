@@ -48,7 +48,7 @@ type failingIssueRefreshStore struct {
 	err error
 }
 
-func (s failingIssueRefreshStore) Issue(context.Context, string, string) (string, *refresh.Token, error) {
+func (s failingIssueRefreshStore) Issue(_ context.Context, _, _ string, _ int64) (string, *refresh.Token, error) {
 	return "", nil, s.err
 }
 
@@ -234,7 +234,7 @@ func TestService_Login(t *testing.T) {
 			setup: func(r *mem.UserRepository) {
 				seedUser(r, "locked", "pass")
 				u, _ := r.GetByUsername(context.Background(), "locked")
-				u.LockAccount(time.Now())
+				u.SetStatus(domain.StatusLocked, time.Now())
 				_ = r.Update(context.Background(), u)
 			},
 			input:   LoginInput{Username: "locked", Password: "pass"},
@@ -330,7 +330,7 @@ func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
 	user, _ := domain.NewUser("reset-user", "reset@test.com", string(hash), time.Now())
 	user.ID = "usr-reset"
-	user.MarkPasswordResetRequired(time.Now())
+	user.SetPasswordResetRequired(true, time.Now())
 	_ = userRepo.Create(context.Background(), user)
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "reset-user", Password: "pass123"})
@@ -718,21 +718,20 @@ func TestLogin_EmptyCredentials_AuthErrorCode(t *testing.T) {
 	}
 }
 
-// TestLogin_AccessJWT_HasAuthzEpoch verifies that the access JWT issued by
-// Login carries an authz_epoch claim equal to the seeded user's AuthzEpoch.
-// This is the S4b epoch forwarding contract: sessionlogin reads the epoch
-// from the user record and passes it to sessionmint.Request.AuthzEpoch so
-// every issued token starts life with the correct epoch.
-func TestLogin_AccessJWT_HasAuthzEpoch(t *testing.T) {
+// TestLogin_AccessJWT_NoAuthzEpochClaim verifies that the access JWT issued by
+// Login does NOT carry an authz_epoch claim (S4d: epoch provenance moved to
+// session/refresh rows; the JWT claim is removed entirely).
+func TestLogin_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	svc, userRepo := newTestService(t)
 
-	// Seed a user with a non-zero AuthzEpoch to distinguish a forwarded epoch
-	// from the default zero value.
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
 	user, err := domain.NewUser("epoch-user", "epoch@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-epoch"
-	user.AuthzEpoch = 7
+	// AuthzEpoch starts at 1 for new users (set by NewUser); we cannot directly
+	// set it to 7 via a field. Instead, create the user with epoch=1 and bump it
+	// 6 times (via BumpAuthzEpoch on the repo) or just create with epoch=1
+	// (epoch value does not affect the "no claim in JWT" assertion we're testing).
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
@@ -743,8 +742,9 @@ func TestLogin_AccessJWT_HasAuthzEpoch(t *testing.T) {
 
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, int64(7), claims.AuthzEpoch,
-		"access token authz_epoch must equal user.AuthzEpoch at login time (S4b epoch forwarding)")
+	// S4d: authz_epoch removed from JWT; epoch lives in session.authz_epoch_at_issue row.
+	_, epochInExtra := claims.Extra["authz_epoch"]
+	assert.False(t, epochInExtra, "S4d: authz_epoch must not be present in JWT claims (including Extra)")
 }
 
 // TestLogin_NoLengthOracle verifies that the error message returned for a
@@ -773,6 +773,209 @@ func TestLogin_NoLengthOracle(t *testing.T) {
 				"error message must not reveal length oracle")
 			assert.NotContains(t, msg, "value too long",
 				"error message must not reveal length oracle")
+		})
+	}
+}
+
+// --- P1.1: password-version-pin race tests ---
+
+// versionRacingUserRepo simulates a concurrent ChangePassword that commits
+// between the pre-bcrypt GetByUsername and the in-tx GetByUsernameForUpdate.
+// GetByUsername returns a user with PasswordVersion=N; GetByUsernameForUpdate
+// returns the same user but with PasswordVersion=N+1 (race window committed).
+type versionRacingUserRepo struct {
+	mem.UserRepository
+	preUser    *domain.User // returned by GetByUsername (stale snapshot)
+	lockedUser *domain.User // returned by GetByUsernameForUpdate (current row)
+}
+
+func (r *versionRacingUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+	return r.preUser, nil
+}
+
+func (r *versionRacingUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	return r.lockedUser, nil
+}
+
+// countingRefreshStore counts Issue calls to verify no token was minted.
+type countingRefreshStore struct {
+	refresh.Store
+	issued int
+}
+
+func (c *countingRefreshStore) Issue(ctx context.Context, sessID, userID string, authzEpoch int64) (string, *refresh.Token, error) {
+	c.issued++
+	return c.Store.Issue(ctx, sessID, userID, authzEpoch)
+}
+
+// TestLogin_PasswordVersionRace_OldPasswordRejected (P1.1) verifies that when a
+// concurrent ChangePassword commits between the pre-bcrypt snapshot and the
+// FOR UPDATE re-fetch, Login rejects the old password with ErrAuthLoginFailed
+// and mints NO session or refresh token. The control case (versions equal)
+// verifies the success path is unaffected.
+func TestLogin_PasswordVersionRace_OldPasswordRejected(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("old-pass"), bcrypt.MinCost)
+
+	// preUser: PasswordVersion=1, PasswordHash=hash-of-old-pass (pre-bcrypt snapshot)
+	preUser, err := domain.ReconstituteUser(
+		"usr-race", "race-user", "race@test.com", string(hash),
+		1 /*passwordVersion*/, false, domain.StatusActive,
+		domain.UserSourceIdentity, 1, /*authzEpoch*/
+		time.Now(), time.Now(),
+	)
+	require.NoError(t, err)
+
+	// lockedUser: PasswordVersion=2 (concurrent ChangePassword committed in race window)
+	lockedUser, err := domain.ReconstituteUser(
+		"usr-race", "race-user", "race@test.com", string(hash),
+		2 /*passwordVersion — bumped by concurrent ChangePassword*/, false, domain.StatusActive,
+		domain.UserSourceIdentity, 1, /*authzEpoch*/
+		time.Now(), time.Now(),
+	)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		lockedUser  *domain.User
+		wantErr     bool
+		wantErrCode errcode.Code
+	}{
+		{
+			name:        "race: locked row has newer PasswordVersion → old-password must be rejected",
+			lockedUser:  lockedUser, // version N+1 → race detected
+			wantErr:     true,
+			wantErrCode: errcode.ErrAuthLoginFailed,
+		},
+		{
+			name:       "control: PasswordVersion unchanged → login succeeds",
+			lockedUser: preUser, // same version → no race
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionStore := &countingSessionStore{Store: testutil.RealSessionRepo(t)}
+			refreshStore := &countingRefreshStore{Store: newTestRefreshStore()}
+
+			baseRepo := mem.NewStore(clock.Real()).UserRepository()
+			racingRepo := &versionRacingUserRepo{
+				UserRepository: *baseRepo,
+				preUser:        preUser,
+				lockedUser:     tt.lockedUser,
+			}
+
+			svc := MustNewService(
+				racingRepo,
+				sessionStore,
+				mem.NewStore(clock.Real()).RoleRepository(),
+				refreshStore,
+				testIssuer,
+				slog.Default(),
+				WithClock(clock.Real()),
+				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+				WithSessionTTL(time.Hour),
+			)
+
+			pair, loginErr := svc.Login(context.Background(), LoginInput{
+				Username: "race-user",
+				Password: "old-pass",
+			})
+
+			if tt.wantErr {
+				require.Error(t, loginErr)
+				var ec *errcode.Error
+				require.ErrorAs(t, loginErr, &ec)
+				assert.Equal(t, tt.wantErrCode, ec.Code,
+					"race-detected login must return ErrAuthLoginFailed (防枚举)")
+				assert.Empty(t, pair.AccessToken, "no token must be issued on race detection")
+				assert.Zero(t, sessionStore.creates,
+					"no session must be created when password-version race detected")
+				assert.Zero(t, refreshStore.issued,
+					"no refresh must be issued when password-version race detected")
+			} else {
+				require.NoError(t, loginErr)
+				assert.NotEmpty(t, pair.AccessToken, "control path must issue token")
+			}
+		})
+	}
+}
+
+// --- P1.3a: IssueForUser active-gate tests ---
+
+// TestIssueForUser_NonActiveUser_Rejected (P1.3a) verifies that IssueForUser
+// fail-closes for non-active users (suspended, locked), mirroring the Login
+// pre-check. The control (active user) must still succeed.
+func TestIssueForUser_NonActiveUser_Rejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      domain.UserStatus
+		wantErr     bool
+		wantErrCode errcode.Code
+	}{
+		{
+			name:        "suspended user must be rejected",
+			status:      domain.StatusSuspended,
+			wantErr:     true,
+			wantErrCode: errcode.ErrAuthUserNotActive,
+		},
+		{
+			name:        "locked user must be rejected",
+			status:      domain.StatusLocked,
+			wantErr:     true,
+			wantErrCode: errcode.ErrAuthUserNotActive,
+		},
+		{
+			name:    "active user must succeed (control)",
+			status:  domain.StatusActive,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userRepo := mem.NewStore(clock.Real()).UserRepository()
+			sessionStore := &countingSessionStore{Store: testutil.RealSessionRepo(t)}
+
+			// Build a non-active user via ReconstituteUser (the only path that can set
+			// non-active status on an existing aggregate).
+			hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
+			u, err := domain.ReconstituteUser(
+				"usr-issue-gate", "issue-gate", "gate@test.com", string(hash),
+				1, false, tt.status,
+				domain.UserSourceIdentity, 1,
+				time.Now(), time.Now(),
+			)
+			require.NoError(t, err)
+			require.NoError(t, userRepo.Create(context.Background(), u))
+
+			svc := MustNewService(
+				userRepo,
+				sessionStore,
+				mem.NewStore(clock.Real()).RoleRepository(),
+				newTestRefreshStore(),
+				testIssuer,
+				slog.Default(),
+				WithClock(clock.Real()),
+				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+				WithSessionTTL(time.Hour),
+			)
+
+			pair, issueErr := svc.IssueForUser(context.Background(), u.ID)
+
+			if tt.wantErr {
+				require.Error(t, issueErr)
+				var ec *errcode.Error
+				require.ErrorAs(t, issueErr, &ec)
+				assert.Equal(t, tt.wantErrCode, ec.Code,
+					"non-active user must yield ErrAuthUserNotActive")
+				assert.Empty(t, pair.AccessToken, "no token on non-active user")
+				assert.Zero(t, sessionStore.creates,
+					"no session must be created for non-active user")
+			} else {
+				require.NoError(t, issueErr)
+				assert.NotEmpty(t, pair.AccessToken, "active user must get token")
+			}
 		})
 	}
 }

@@ -30,6 +30,16 @@ type Token struct {
 	SubjectID string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// AuthzEpochAtIssue snapshots users.authz_epoch at the moment this
+	// refresh row was inserted (Issue / Rotate child). sessionrefresh rejects
+	// a presented token whose AuthzEpochAtIssue != current users.authz_epoch
+	// — the stale-grant cascade shares handleReuseDetected with reuse
+	// detection (PR S4d). Without this column, refresh re-mints access
+	// tokens with live user.epoch and stale grants "upgrade" to current
+	// epoch (PR #490 review P1-#2).
+	//
+	// ADR-credential §A8 — row-level credential provenance.
+	AuthzEpochAtIssue int64
 }
 
 // Default policy values. Callers must set these explicitly — Validate does not

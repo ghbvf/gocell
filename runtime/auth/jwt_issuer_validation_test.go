@@ -151,6 +151,8 @@ func TestJWTVerifier_VerifyIntent_IssuerCheckAfterAudience(t *testing.T) {
 
 // TestIssue_JTI_Written verifies that IssueOptions.JTI is written as the "jti"
 // JWT claim and appears in the raw token payload.
+// S4d: authz_epoch claim removed from JWT; epoch provenance is stored on
+// session/refresh rows only.
 func TestIssue_JTI_Written(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
@@ -159,47 +161,25 @@ func TestIssue_JTI_Written(t *testing.T) {
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
-		Audience:   []string{"gocell"},
-		JTI:        "j1",
-		AuthzEpoch: 7,
+		Audience: []string{"gocell"},
+		JTI:      "j1",
 	})
 	require.NoError(t, err)
 
-	// Raw payload must contain jti and authz_epoch.
+	// Raw payload must contain jti; authz_epoch must NOT be written (S4d).
 	payload := decodeJWTPayload(t, tokenStr)
 	assert.Equal(t, "j1", payload["jti"], "jti claim must be written when JTI is non-empty")
-	assert.Equal(t, float64(7), payload["authz_epoch"], "authz_epoch claim must always be written")
+	_, hasEpoch := payload["authz_epoch"]
+	assert.False(t, hasEpoch, "authz_epoch must not be written into JWT (S4d row-provenance)")
 
-	// Claims struct must map jti → JTI and authz_epoch → AuthzEpoch.
+	// Claims struct must map jti → JTI.
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "j1", claims.JTI, "Claims.JTI must be populated from jti claim")
-	assert.Equal(t, int64(7), claims.AuthzEpoch, "Claims.AuthzEpoch must be populated from authz_epoch claim")
 
-	// Neither jti nor authz_epoch must appear in Claims.Extra.
+	// jti must not appear in Claims.Extra.
 	_, jtiInExtra := claims.Extra["jti"]
 	assert.False(t, jtiInExtra, "jti must not leak into Claims.Extra")
-	_, epochInExtra := claims.Extra["authz_epoch"]
-	assert.False(t, epochInExtra, "authz_epoch must not leak into Claims.Extra")
-}
-
-// TestIssue_AuthzEpoch_Zero_AlwaysWritten verifies that AuthzEpoch=0 is still
-// written into the token payload (0 is a legitimate epoch value, not "absent").
-func TestIssue_AuthzEpoch_Zero_AlwaysWritten(t *testing.T) {
-	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
-	require.NoError(t, err)
-
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
-		Audience:   []string{"gocell"},
-		AuthzEpoch: 0,
-	})
-	require.NoError(t, err)
-
-	payload := decodeJWTPayload(t, tokenStr)
-	epochVal, hasEpoch := payload["authz_epoch"]
-	assert.True(t, hasEpoch, "authz_epoch must always be written even when zero")
-	assert.Equal(t, float64(0), epochVal, "authz_epoch must be 0 when IssueOptions.AuthzEpoch is 0")
 }
 
 // TestIssue_JTI_Empty_Omitted verifies that when JTI is empty, the jti claim is

@@ -69,10 +69,15 @@ const (
 	t20Subject       = "user-20"
 )
 
+// defaultEpoch is the placeholder authzEpochAtIssue used throughout storetest.
+// Production callsites supply the real users.authz_epoch; test fixtures use 1
+// to satisfy the non-zero contract (ErrValidationFailed on zero).
+const defaultEpoch int64 = 1
+
 // mustIssue asserts Issue succeeds and returns (wire, tok).
 func mustIssue(t *testing.T, store refresh.Store, sessionID, subjectID string) (string, *refresh.Token) {
 	t.Helper()
-	wire, tok, err := store.Issue(context.Background(), sessionID, subjectID)
+	wire, tok, err := store.Issue(context.Background(), sessionID, subjectID, defaultEpoch)
 	require.NoError(t, err, "Issue(%q,%q)", sessionID, subjectID)
 	require.NotNil(t, tok, "Issue returned nil token")
 	require.NotEmpty(t, wire, "Issue returned empty wire token")
@@ -134,6 +139,18 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T23_Rotate_Reuse_ReturnsErrReused", func(t *testing.T) {
 		t.Parallel()
 		runT23RotateReuseReturnsErrReused(t, factory)
+	})
+	t.Run("T-S4D-2_Issue_RejectsZeroEpoch", func(t *testing.T) {
+		t.Parallel()
+		runTS4D2IssueRejectsZeroEpoch(t, factory)
+	})
+	t.Run("T-S4D-2_Peek_RoundtripsEpoch", func(t *testing.T) {
+		t.Parallel()
+		runTS4D2PeekRoundtripsEpoch(t, factory)
+	})
+	t.Run("T-S4D-2_Rotate_ChildInheritsEpoch", func(t *testing.T) {
+		t.Parallel()
+		runTS4D2RotateChildInheritsEpoch(t, factory)
 	})
 }
 
@@ -228,7 +245,7 @@ func runT6UnknownToken(t *testing.T, factory Factory) {
 
 	// Generate a syntactically valid but DB-unknown wire.
 	other, _ := factory(t, defaultPolicy)
-	foreign, _, err := other.Issue(context.Background(), "other-sess", "other-user")
+	foreign, _, err := other.Issue(context.Background(), "other-sess", "other-user", defaultEpoch)
 	require.NoError(t, err)
 
 	_, _, err = store.Rotate(context.Background(), foreign)
@@ -351,7 +368,7 @@ func runT11ExpiresAtCalc(t *testing.T, factory Factory) {
 	store, clock := factory(t, policy)
 
 	now := clock.Now()
-	_, tok, err := store.Issue(context.Background(), "sess-11", "user-11")
+	_, tok, err := store.Issue(context.Background(), "sess-11", "user-11", defaultEpoch)
 	require.NoError(t, err)
 	require.NotNil(t, tok)
 	assert.True(t, tok.ExpiresAt.Equal(now.Add(policy.MaxAge)))
@@ -682,6 +699,71 @@ func runT23RotateReuseReturnsErrReused(t *testing.T, factory Factory) {
 
 // Silence unused-imports guard when errcode isn't needed (defensive).
 var _ = errors.Is
+
+// runTS4D2IssueRejectsZeroEpoch — T-S4D-2: Issue must reject authzEpochAtIssue==0
+// with ErrValidationFailed. Zero is invalid; all production callsites supply
+// the live users.authz_epoch (storetest conformance T-S4D-2 enforces).
+func runTS4D2IssueRejectsZeroEpoch(t *testing.T, factory Factory) {
+	store, _ := factory(t, defaultPolicy)
+	_, _, err := store.Issue(context.Background(), "sess-zero", "user-zero", 0)
+	require.Error(t, err, "Issue with zero epoch must return an error")
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded, "error must be *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, coded.Code, "error code must be ErrValidationFailed")
+}
+
+// runTS4D2PeekRoundtripsEpoch — T-S4D-2: Peek on a token issued with epoch N
+// must return Token.AuthzEpochAtIssue == N. This is the row-provenance contract:
+// sessionrefresh reads the stored epoch from Peek to compare against
+// users.authz_epoch (S4d stale-grant detection).
+func runTS4D2PeekRoundtripsEpoch(t *testing.T, factory Factory) {
+	store, _ := factory(t, defaultPolicy)
+	const wantEpoch int64 = 7
+	_, issued, err := store.Issue(context.Background(), "sess-pe", "user-pe", wantEpoch)
+	require.NoError(t, err)
+	require.NotNil(t, issued)
+
+	peeked, err := store.Peek(context.Background(), mustWireForSession(t, store, "sess-pe", "user-pe", wantEpoch))
+	// re-issue fresh to get the wire token we can peek
+	_ = issued
+	// Use the wire from a fresh Issue to Peek
+	wire2, _, err2 := store.Issue(context.Background(), "sess-pe2", "user-pe2", wantEpoch)
+	require.NoError(t, err2)
+	peeked2, err2 := store.Peek(context.Background(), wire2)
+	require.NoError(t, err2, "Peek on newly issued token must succeed")
+	require.NotNil(t, peeked2)
+	assert.Equal(t, wantEpoch, peeked2.AuthzEpochAtIssue, "Peek must return AuthzEpochAtIssue matching Issue input")
+	_ = peeked
+	_ = err
+}
+
+// mustWireForSession is a helper that issues a fresh token for (sessID, subjID)
+// and returns the wire. Used only when the caller discarded the wire from a
+// prior Issue call.
+func mustWireForSession(t *testing.T, store refresh.Store, sessID, subjID string, epoch int64) string {
+	t.Helper()
+	wire, _, err := store.Issue(context.Background(), sessID+"_peek", subjID, epoch)
+	require.NoError(t, err, "mustWireForSession Issue(%q,%q)", sessID, subjID)
+	return wire
+}
+
+// runTS4D2RotateChildInheritsEpoch — T-S4D-2: a child token produced by Rotate
+// must carry the same AuthzEpochAtIssue as its parent (refresh chain epoch
+// monotonicity invariant; ADR-credential D4.1). The epoch is part of the
+// credential provenance of the entire chain.
+func runTS4D2RotateChildInheritsEpoch(t *testing.T, factory Factory) {
+	store, _ := factory(t, defaultPolicy)
+	const wantEpoch int64 = 13
+	parentWire, _, err := store.Issue(context.Background(), "sess-ci", "user-ci", wantEpoch)
+	require.NoError(t, err)
+
+	childWire, childTok, err := store.Rotate(context.Background(), parentWire)
+	require.NoError(t, err)
+	require.NotNil(t, childTok)
+	require.NotEmpty(t, childWire)
+	assert.Equal(t, wantEpoch, childTok.AuthzEpochAtIssue,
+		"child Token.AuthzEpochAtIssue must equal parent epoch (chain provenance invariant)")
+}
 
 // RunIdleExpireContractSuite runs the idle-expiry sub-test against the given
 // factory. It stays separate from RunContractSuite so backend contract runners

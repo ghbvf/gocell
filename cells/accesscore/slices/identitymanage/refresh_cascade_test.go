@@ -55,11 +55,11 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "dave", Email: "d@e.f", Password: "hash"})
 	require.NoError(t, err)
 
-	wire, _, err := refreshStore.Issue(ctx, "sess-dave", user.ID)
+	wire, _, err := refreshStore.Issue(ctx, "sess-dave", user.ID, int64(1))
 	require.NoError(t, err)
 
 	// F13: issue a second user's wire token first — it must survive the Lock.
-	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-lock", "other-user-lock")
+	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-lock", "other-user-lock", int64(1))
 	require.NoError(t, err)
 
 	require.NoError(t, svc.Lock(auth.TestContext("test-admin", []string{"admin"}), user.ID))
@@ -88,11 +88,11 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "eve", Email: "e@f.g", Password: "old-P@ssw0rd!"})
 	require.NoError(t, err)
 
-	wire, _, err := refreshStore.Issue(ctx, "sess-eve", user.ID)
+	wire, _, err := refreshStore.Issue(ctx, "sess-eve", user.ID, int64(1))
 	require.NoError(t, err)
 
 	// F13: issue a second user's wire token first — it must survive the ChangePassword.
-	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-cp", "other-user-cp")
+	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-cp", "other-user-cp", int64(1))
 	require.NoError(t, err)
 
 	_, err = svc.ChangePassword(ctx, ChangePasswordInput{
@@ -125,11 +125,11 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "frank", Email: "f@g.h", Password: "pwd"})
 	require.NoError(t, err)
 
-	wire, _, err := refreshStore.Issue(ctx, "sess-frank", user.ID)
+	wire, _, err := refreshStore.Issue(ctx, "sess-frank", user.ID, int64(1))
 	require.NoError(t, err)
 
 	// F13: issue a second user's wire token first — it must survive the Delete.
-	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-del", "other-user-del")
+	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-del", "other-user-del", int64(1))
 	require.NoError(t, err)
 
 	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))

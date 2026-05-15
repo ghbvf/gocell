@@ -78,6 +78,15 @@ func (m *MemStore) Create(_ context.Context, s *Session) error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: Session.SubjectID required")
 	}
+	// S4d: credential provenance is mandatory. Zero is the unset sentinel —
+	// it can never equal a live users.authz_epoch after the first bump
+	// (which advances from 0 → 1), so accepting 0 here would let a session
+	// row exist that can never validate. Reject at the store boundary so the
+	// invariant is enforced uniformly across mem and PG.
+	if s.AuthzEpochAtIssue == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session: Session.AuthzEpochAtIssue required (non-zero)")
+	}
 	if err := m.validateFingerprintShape(s); err != nil {
 		return err
 	}
@@ -189,8 +198,9 @@ func copySession(s *Session) *Session {
 // cannot bleed back into the stored Session.
 func toValidateView(s *Session) *ValidateView {
 	v := &ValidateView{
-		ID:        s.ID,
-		SubjectID: s.SubjectID,
+		ID:                s.ID,
+		SubjectID:         s.SubjectID,
+		AuthzEpochAtIssue: s.AuthzEpochAtIssue,
 	}
 	if s.RevokedAt != nil {
 		stamp := *s.RevokedAt

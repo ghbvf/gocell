@@ -57,9 +57,6 @@ func TestNewUser(t *testing.T) {
 			user, err := NewUser(tt.username, tt.email, tt.passwordHash, time.Now())
 			if tt.wantErr {
 				require.Error(t, err)
-				// Lock errcode classification independently of the message
-				// format so future helper rewrites (e.g. localization) do
-				// not silently weaken the contract.
 				var coded *errcode.Error
 				require.ErrorAs(t, err, &coded, "expected an errcode.Error")
 				assert.Equal(t, errcode.ErrAuthInvalidInput, coded.Code,
@@ -81,7 +78,7 @@ func TestNewUser(t *testing.T) {
 			assert.Equal(t, tt.username, user.Username)
 			assert.Equal(t, tt.email, user.Email)
 			assert.Equal(t, tt.passwordHash, user.PasswordHash)
-			assert.Equal(t, StatusActive, user.Status)
+			assert.Equal(t, StatusActive, user.Status())
 			assert.Equal(t, UserSourceIdentity, user.CreationSource)
 			assert.False(t, user.CreatedAt.IsZero())
 			assert.False(t, user.UpdatedAt.IsZero())
@@ -102,22 +99,22 @@ func TestUser_LockUnlock(t *testing.T) {
 		},
 		{
 			name:       "lock sets locked",
-			action:     func(u *User) { u.LockAccount(time.Now()) },
+			action:     func(u *User) { u.SetStatus(StatusLocked, time.Now()) },
 			wantLocked: true,
 		},
 		{
 			name: "unlock after lock",
 			action: func(u *User) {
-				u.LockAccount(time.Now())
-				u.UnlockAccount(time.Now())
+				u.SetStatus(StatusLocked, time.Now())
+				u.SetStatus(StatusActive, time.Now())
 			},
 			wantLocked: false,
 		},
 		{
 			name: "double lock remains locked",
 			action: func(u *User) {
-				u.LockAccount(time.Now())
-				u.LockAccount(time.Now())
+				u.SetStatus(StatusLocked, time.Now())
+				u.SetStatus(StatusLocked, time.Now())
 			},
 			wantLocked: true,
 		},
@@ -140,39 +137,39 @@ func TestUser_Lock_UpdatesTimestamp(t *testing.T) {
 	require.NoError(t, err)
 
 	before := user.UpdatedAt
-	user.LockAccount(time.Now())
-	assert.True(t, !user.UpdatedAt.Before(before), "UpdatedAt should advance after Lock")
+	user.SetStatus(StatusLocked, time.Now())
+	assert.True(t, !user.UpdatedAt.Before(before), "UpdatedAt should advance after SetStatus(Locked)")
 }
 
 func TestUser_DefaultPasswordResetRequiredFalse(t *testing.T) {
 	user, err := NewUser("dave", "dave@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
-	assert.False(t, user.PasswordResetRequired, "NewUser must default PasswordResetRequired to false")
+	assert.False(t, user.PasswordResetRequired(), "NewUser must default PasswordResetRequired to false")
 }
 
 func TestUser_MarkPasswordResetRequiredSetsFlag(t *testing.T) {
 	user, err := NewUser("eve", "eve@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
-	require.False(t, user.PasswordResetRequired)
+	require.False(t, user.PasswordResetRequired())
 
 	before := user.UpdatedAt
-	user.MarkPasswordResetRequired(time.Now())
+	user.SetPasswordResetRequired(true, time.Now())
 
-	assert.True(t, user.PasswordResetRequired, "MarkPasswordResetRequired must set flag to true")
-	assert.True(t, !user.UpdatedAt.Before(before), "MarkPasswordResetRequired must advance UpdatedAt")
+	assert.True(t, user.PasswordResetRequired(), "SetPasswordResetRequired(true) must set flag to true")
+	assert.True(t, !user.UpdatedAt.Before(before), "SetPasswordResetRequired must advance UpdatedAt")
 }
 
 func TestUser_ClearPasswordResetRequiredUnsets(t *testing.T) {
 	user, err := NewUser("frank", "frank@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
-	user.MarkPasswordResetRequired(time.Now())
-	require.True(t, user.PasswordResetRequired)
+	user.SetPasswordResetRequired(true, time.Now())
+	require.True(t, user.PasswordResetRequired())
 
 	before := user.UpdatedAt
-	user.ClearPasswordResetRequired(time.Now())
+	user.SetPasswordResetRequired(false, time.Now())
 
-	assert.False(t, user.PasswordResetRequired, "ClearPasswordResetRequired must set flag to false")
-	assert.True(t, !user.UpdatedAt.Before(before), "ClearPasswordResetRequired must advance UpdatedAt")
+	assert.False(t, user.PasswordResetRequired(), "SetPasswordResetRequired(false) must set flag to false")
+	assert.True(t, !user.UpdatedAt.Before(before), "SetPasswordResetRequired must advance UpdatedAt")
 }
 
 func TestBumpPasswordVersion_AdvancesVersion(t *testing.T) {
@@ -257,8 +254,35 @@ func TestUser_CanAuthenticate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			u := &User{Status: tt.status}
-			assert.Equal(t, tt.want, u.CanAuthenticate())
+			// Use ReconstituteUser for locked/suspended; NewUser+SetStatus for the test.
+			// For invalid status values, build directly via ReconstituteUser (will fail),
+			// so use a different approach: reuse a valid user and mutate status in-package.
+			now := time.Now()
+			if tt.status == StatusActive {
+				u, err := NewUser("test", "test@example.com", "$2a$10$hash", now)
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, u.CanAuthenticate())
+			} else {
+				// Build with a reconstituted user using a valid status,
+				// then override if it's a known status.
+				var u *User
+				switch tt.status {
+				case StatusSuspended, StatusLocked:
+					var err error
+					u, err = ReconstituteUser("uid", "test", "test@example.com", "$2a$10$hash",
+						0, false, tt.status, UserSourceIdentity, 1, now, now)
+					require.NoError(t, err)
+				default:
+					// Invalid status: test CanAuthenticate via SetStatus from a valid base
+					base, err := NewUser("test", "test@example.com", "$2a$10$hash", now)
+					require.NoError(t, err)
+					// Force invalid status via the in-package private field directly
+					// (this test is in package domain, so we can access private fields)
+					base.status = tt.status
+					u = base
+				}
+				assert.Equal(t, tt.want, u.CanAuthenticate())
+			}
 		})
 	}
 }
@@ -279,4 +303,42 @@ func TestValidUserSource(t *testing.T) {
 			assert.Equal(t, tt.want, ValidUserSource(tt.in))
 		})
 	}
+}
+
+func TestReconstituteUser(t *testing.T) {
+	now := time.Now()
+	t.Run("valid", func(t *testing.T) {
+		u, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
+			3, true, StatusActive, UserSourceIdentity, 5, now, now)
+		require.NoError(t, err)
+		assert.Equal(t, "id1", u.ID)
+		assert.Equal(t, "alice", u.Username)
+		assert.Equal(t, StatusActive, u.Status())
+		assert.True(t, u.PasswordResetRequired())
+		assert.Equal(t, int64(5), u.AuthzEpoch())
+		assert.Equal(t, int64(3), u.PasswordVersion)
+	})
+	t.Run("zero_epoch_rejected", func(t *testing.T) {
+		_, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
+			0, false, StatusActive, UserSourceIdentity, 0, now, now)
+		require.Error(t, err)
+		var ce *errcode.Error
+		require.ErrorAs(t, err, &ce)
+		assert.Equal(t, errcode.ErrAuthInvalidInput, ce.Code)
+	})
+	t.Run("negative_epoch_rejected", func(t *testing.T) {
+		_, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
+			0, false, StatusActive, UserSourceIdentity, -1, now, now)
+		require.Error(t, err)
+	})
+	t.Run("invalid_status_rejected", func(t *testing.T) {
+		_, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
+			0, false, UserStatus("invalid"), UserSourceIdentity, 1, now, now)
+		require.Error(t, err)
+	})
+	t.Run("empty_id_rejected", func(t *testing.T) {
+		_, err := ReconstituteUser("", "alice", "alice@example.com", "$2a$10$hash",
+			0, false, StatusActive, UserSourceIdentity, 1, now, now)
+		require.Error(t, err)
+	})
 }

@@ -19,8 +19,11 @@ type FingerprintMode interface {
 
 // FingerprintJTIRef stores the JWT jti claim reference (RFC 9068 §2.2.4) on
 // the server side. Session rows persist {sid, jti}; no token plaintext or HMAC
-// fingerprint is stored. The authz_epoch_at_issue column was removed in S4b
-// (migration 025); epoch ordering is now enforced via the JWT claim layer.
+// fingerprint is stored. The authz_epoch_at_issue column was restored in S4d
+// (migration 026 for sessions, migration 027 for refresh_tokens) as the
+// row-level credential provenance source of truth; sessionvalidate compares
+// the live users.authz_epoch against the session row's authz_epoch_at_issue,
+// not against a JWT claim. See ADR 202605101400 §A8 (A1 RETRACTED).
 type FingerprintJTIRef struct{}
 
 // fingerprintModeOK is the empty seal marker — its mere presence makes
@@ -86,12 +89,16 @@ type OrderingModel interface {
 }
 
 // OrderingAuthzEpoch uses a per-user monotonic epoch column to invalidate
-// stale tokens (OAuth Security BCP §4.13.1). The JWT access token carries
-// the authz_epoch claim at mint time; validate compares the JWT claim to the
-// live user.authz_epoch row and rejects on any inequality (`!=`, fail-closed:
-// catches both stale tokens with `claim < user` and tampered tokens with
-// `claim > user`). The legacy per-session snapshot column was dropped in S4b
-// migration 025 — see ADR 202605101400 §A1/§A3.
+// stale tokens (OAuth Security BCP §4.13.1). In the S4d row-provenance model
+// (ADR 202605101400 §A8; §A1 RETRACTED), the access JWT does NOT carry an
+// authz_epoch claim. Instead, sessionvalidate.enforceSessionState compares the
+// live users.authz_epoch against the session row's authz_epoch_at_issue column
+// (restored by migration 026/027). Inequality (`!=`) is the comparison:
+// fail-closed against both stale grants (row_epoch < user_epoch, after a
+// credential event) and tampered grants (row_epoch > user_epoch). Session rows
+// are created with authz_epoch_at_issue = users.authz_epoch at login time;
+// refresh_tokens rows inherit the epoch from the parent session/token row on
+// Rotate. See ADR 202605101400 §A8 for the full row-provenance design.
 type OrderingAuthzEpoch struct{}
 
 // orderingModelOK is the empty seal marker — its mere presence makes

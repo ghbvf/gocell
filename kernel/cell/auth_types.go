@@ -58,11 +58,6 @@ type Claims struct {
 	// JTI is the JWT ID claim ("jti"), a unique identifier for the token.
 	// Empty string when the claim is absent.
 	JTI string
-	// AuthzEpoch is the authorization epoch counter ("authz_epoch"). When non-zero
-	// it carries a monotonically increasing version that authorization policy
-	// engines use to detect stale token caches. Zero is a valid epoch value
-	// (it is always present in tokens issued after S4b Batch 1A).
-	AuthzEpoch int64
 	// Extra holds additional claims not covered by the standard fields.
 	Extra map[string]any
 }

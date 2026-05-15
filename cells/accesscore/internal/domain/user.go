@@ -2,6 +2,7 @@
 package domain
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -59,23 +60,76 @@ func ValidUserSource(s UserSource) bool {
 }
 
 // User is the identity aggregate root for accesscore.
+//
+// Authz-sensitive fields (status, passwordResetRequired, authzEpoch) are
+// private to the domain package. External packages read them via accessors
+// and mutate them only through the authzmutate.Apply funnel
+// (DOMAIN-AUTHZ-FIELD-PRIVATE-01 / AUTHZ-MUTATION-APPLY-FUNNEL-01 archtest,
+// Wave 2). This makes "mutate authz state without epoch-bump+revoke"
+// unrepresentable across the package boundary.
 type User struct {
-	ID                    string
-	Username              string
-	Email                 string
-	PasswordHash          string
-	PasswordVersion       int64
-	PasswordResetRequired bool
-	Status                UserStatus
-	CreationSource        UserSource
-	// AuthzEpoch is a monotonically increasing counter stored in
-	// users.authz_epoch. It is incremented atomically on every credential
-	// revocation event (role revoke, password reset, account lock, delete)
-	// so that access-token validators can detect stale grants without
-	// enumerating individual revocation records.
-	AuthzEpoch int64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID              string
+	Username        string
+	Email           string
+	PasswordHash    string
+	PasswordVersion int64 // kept public: P1.1 reads it; not a revocation setter.
+	CreationSource  UserSource
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+
+	// private authz fields — mutated only via SetStatus / SetPasswordResetRequired
+	status                UserStatus
+	passwordResetRequired bool
+	authzEpoch            int64
+}
+
+// Status returns the user's current account status.
+func (u *User) Status() UserStatus { return u.status }
+
+// PasswordResetRequired returns whether the user must change their password
+// before using protected endpoints.
+func (u *User) PasswordResetRequired() bool { return u.passwordResetRequired }
+
+// AuthzEpoch returns the credential-invalidation epoch counter.
+func (u *User) AuthzEpoch() int64 { return u.authzEpoch }
+
+// IsLocked returns true if the user account is locked.
+func (u *User) IsLocked() bool { return u.status == StatusLocked }
+
+// CanAuthenticate returns true only when the account is currently active.
+// Any non-active status (locked, suspended, or unknown future state) MUST
+// fail-closed at every authentication surface: login, refresh, validate.
+// S4.0: suspended users were previously allowed to log in because the only
+// gate was IsLocked(); this method is the single source of truth that
+// closes that gap. Use this instead of `IsLocked()` for any code path that
+// decides whether a user may obtain or continue to use a session.
+func (u *User) CanAuthenticate() bool { return u.status == StatusActive }
+
+// SetStatus sets the user's account status and advances UpdatedAt.
+// This is a funnel-only mutator — call it exclusively via authzmutate.Apply
+// (or SetPasswordResetRequired for the reset-flag path).
+// Direct calls from outside the domain package are blocked by field
+// privatization; the authzmutate.Apply package is the only allowed caller
+// for live aggregates (AUTHZ-MUTATION-APPLY-FUNNEL-01, Wave 2 archtest).
+func (u *User) SetStatus(s UserStatus, now time.Time) {
+	u.status = s
+	u.UpdatedAt = now
+}
+
+// SetPasswordResetRequired sets the passwordResetRequired flag and advances
+// UpdatedAt. Funnel-only mutator — same invariant as SetStatus.
+func (u *User) SetPasswordResetRequired(v bool, now time.Time) {
+	u.passwordResetRequired = v
+	u.UpdatedAt = now
+}
+
+// BumpPasswordVersion advances the CAS counter that guards ChangePassword
+// from concurrent overwrites. Call after writing a new PasswordHash; the
+// repo's UpdatePassword SQL bumps the column via password_version+1, so this
+// in-memory bump keeps the domain object in sync after a successful CAS write.
+func (u *User) BumpPasswordVersion(now time.Time) {
+	u.PasswordVersion++
+	u.UpdatedAt = now
 }
 
 // NewUser creates a new active User with the given timestamp.
@@ -94,66 +148,72 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 		Username:       username,
 		Email:          email,
 		PasswordHash:   passwordHash,
-		Status:         StatusActive,
+		status:         StatusActive,
 		CreationSource: UserSourceIdentity,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		// S4d: AuthzEpoch starts at 1 so the first login can store a valid
+		// session.AuthzEpochAtIssue (store rejects 0 as the unset sentinel).
+		// BumpAuthzEpoch increments from 1; sessions created at epoch=1 are
+		// invalidated after the first credential event.
+		authzEpoch: 1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}, nil
 }
 
-// MarkPasswordResetRequired sets the PasswordResetRequired flag to true and
-// advances UpdatedAt. Call this when creating an admin-bootstrap user that
-// must change its password on first login.
-// now is the wall-clock instant provided by the caller's clock.Clock.
-func (u *User) MarkPasswordResetRequired(now time.Time) {
-	u.PasswordResetRequired = true
-	u.UpdatedAt = now
-}
-
-// ClearPasswordResetRequired unsets the PasswordResetRequired flag and
-// advances UpdatedAt. Call this after the user has successfully changed their
-// password.
-// now is the wall-clock instant provided by the caller's clock.Clock.
-func (u *User) ClearPasswordResetRequired(now time.Time) {
-	u.PasswordResetRequired = false
-	u.UpdatedAt = now
-}
-
-// LockAccount sets the user status to locked.
-// now is the wall-clock instant provided by the caller's clock.Clock.
-func (u *User) LockAccount(now time.Time) {
-	u.Status = StatusLocked
-	u.UpdatedAt = now
-}
-
-// UnlockAccount sets the user status to active.
-// now is the wall-clock instant provided by the caller's clock.Clock.
-func (u *User) UnlockAccount(now time.Time) {
-	u.Status = StatusActive
-	u.UpdatedAt = now
-}
-
-// IsLocked returns true if the user account is locked.
-func (u *User) IsLocked() bool {
-	return u.Status == StatusLocked
-}
-
-// CanAuthenticate returns true only when the account is currently active.
-// Any non-active status (locked, suspended, or unknown future state) MUST
-// fail-closed at every authentication surface: login, refresh, validate.
-// S4.0: suspended users were previously allowed to log in because the only
-// gate was IsLocked(); this method is the single source of truth that
-// closes that gap. Use this instead of `IsLocked()` for any code path that
-// decides whether a user may obtain or continue to use a session.
-func (u *User) CanAuthenticate() bool {
-	return u.Status == StatusActive
-}
-
-// BumpPasswordVersion advances the CAS counter that guards ChangePassword
-// from concurrent overwrites. Call after writing a new PasswordHash; the
-// repo's UpdatePassword SQL bumps the column via password_version+1, so this
-// in-memory bump keeps the domain object in sync after a successful CAS write.
-func (u *User) BumpPasswordVersion(now time.Time) {
-	u.PasswordVersion++
-	u.UpdatedAt = now
+// ReconstituteUser is the DDD rehydration constructor for the persistence
+// boundary (PG scanUser, mem store) and tests. It rebuilds a User aggregate
+// from authoritative storage values and is NOT a funnel hole — it constructs
+// a fresh aggregate, it does not mutate a live one.
+//
+// All four string identity fields (id, username, email, passwordHash) must be
+// non-empty; status and source must be ValidUserStatus / ValidUserSource;
+// authzEpoch must be > 0 (the unset sentinel 0 is rejected per S4d invariant).
+func ReconstituteUser(
+	id, username, email, passwordHash string,
+	passwordVersion int64,
+	passwordResetRequired bool,
+	status UserStatus,
+	source UserSource,
+	authzEpoch int64,
+	createdAt, updatedAt time.Time,
+) (*User, error) {
+	if err := validation.RequireNotEmpty(errcode.ErrAuthInvalidInput,
+		validation.F("id", id),
+		validation.F("username", username),
+		validation.F("email", email),
+		validation.F("passwordHash", passwordHash),
+	); err != nil {
+		return nil, err
+	}
+	if !ValidUserStatus(status) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
+			"ReconstituteUser: invalid status",
+			errcode.WithDetails(
+				slog.String("status", string(status)),
+			))
+	}
+	if !ValidUserSource(source) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
+			"ReconstituteUser: invalid source",
+			errcode.WithDetails(
+				slog.String("source", string(source)),
+			))
+	}
+	if authzEpoch <= 0 {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
+			"ReconstituteUser: authzEpoch must be > 0")
+	}
+	return &User{
+		ID:                    id,
+		Username:              username,
+		Email:                 email,
+		PasswordHash:          passwordHash,
+		PasswordVersion:       passwordVersion,
+		passwordResetRequired: passwordResetRequired,
+		status:                status,
+		CreationSource:        source,
+		authzEpoch:            authzEpoch,
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
+	}, nil
 }

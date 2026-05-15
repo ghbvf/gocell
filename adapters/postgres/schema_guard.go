@@ -29,7 +29,7 @@ import (
 //                                 + users_status_chk, users_creation_source_chk (023 CHECK)
 //                                 + effective_admin_invariant_on_users trigger (024)
 //   - sessions           (018)  accesscore session / JTI store
-//                                 - authz_epoch_at_issue dropped (025)
+//                                 + authz_epoch_at_issue restored (026; ADR §A8 — row is SoR, claim was retracted)
 //   - roles              (019)  accesscore role definitions
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
@@ -308,13 +308,24 @@ var expectedColumns = []expectedColumn{
 	// version column is asserted here (existence + type + NOT NULL).
 	{Table: "config_entries", Column: "version", Type: "integer", NotNull: true},
 	{Table: "feature_flags", Column: "version", Type: "integer", NotNull: true},
-	// sessions (018_sessions.sql + 025_drop_sessions_authz_epoch_at_issue.sql)
+	// sessions (018_sessions.sql + 026_restore_sessions_authz_epoch_at_issue.sql)
 	{Table: "sessions", Column: "id", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "subject_id", Type: "uuid", NotNull: true},
 	{Table: "sessions", Column: "jti", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "expires_at", Type: "timestamp with time zone", NotNull: true},
 	{Table: "sessions", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
 	{Table: "sessions", Column: "revoked_at", Type: "timestamp with time zone", NotNull: false},
+	// S4d: row-level credential provenance. ADR-credential §A8 — sessionvalidate
+	// compares user.authz_epoch with view.authz_epoch_at_issue, NOT JWT claim.
+	// Migration 028 adds CHECK(>0) as the hard DB guarantee; schema_guard
+	// asserts only type/NOT NULL here (no CHECK introspection added — migration
+	// is the single hard source for the positive-epoch invariant).
+	{Table: "sessions", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
+	// refresh_tokens (007_refresh_tokens.sql + 027_add_refresh_tokens_authz_epoch_at_issue.sql)
+	// Only the S4d-introduced column is registered here; the rest of the
+	// refresh_tokens schema predates schema_guard's requiredColumns coverage
+	// (treated as governance follow-up backlog item, not in S4d scope).
+	{Table: "refresh_tokens", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
 	// roles (019_roles.sql)
 	{Table: "roles", Column: "id", Type: "text", NotNull: true},
 	{Table: "roles", Column: "name", Type: "text", NotNull: true},
@@ -341,9 +352,9 @@ var expectedColumns = []expectedColumn{
 var forbiddenColumns = []requiredColumn{
 	// ADR-credential D1: plaintext token storage is forbidden.
 	{table: "sessions", column: "access_token"},
-	// S4b Batch 1C: authz_epoch_at_issue dropped by migration 025 — epoch is now
-	// carried in the JWT claim layer, not as a per-session snapshot column.
-	{table: "sessions", column: "authz_epoch_at_issue"},
+	// S4d (PR S4d) restored sessions.authz_epoch_at_issue via migration 026.
+	// ADR §0 A1 (the original "drop" justification) is RETRACTED — the row is
+	// credential provenance source-of-truth, not a JWT claim mirror. See ADR §A8.
 }
 
 // expectedPKs is the primary key registry.

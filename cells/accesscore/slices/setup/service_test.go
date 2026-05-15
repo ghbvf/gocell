@@ -222,7 +222,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	// Verify persisted user does NOT have PasswordResetRequired
 	persisted, err := userRepo.GetByID(context.Background(), out.ID)
 	require.NoError(t, err)
-	assert.False(t, persisted.PasswordResetRequired, "setup path creates with operator-chosen password")
+	assert.False(t, persisted.PasswordResetRequired(), "setup path creates with operator-chosen password")
 	// Verify password was hashed with bcrypt
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("SecretPass!23")))
 }

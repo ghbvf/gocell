@@ -384,9 +384,6 @@ type IssueOptions struct {
 	// JTI is the JWT ID ("jti" claim). When non-empty it is written into the
 	// token payload. Empty string omits the claim.
 	JTI string
-	// AuthzEpoch is the authorization epoch counter written as the
-	// "authz_epoch" claim. Zero is a valid value and is always written.
-	AuthzEpoch int64
 }
 
 // Issue creates a signed JWT token for the given subject and options.
@@ -441,8 +438,6 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	if opts.JTI != "" {
 		claims["jti"] = opts.JTI
 	}
-	claims["authz_epoch"] = opts.AuthzEpoch
-
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = i.keys.SigningKeyID()
 	token.Header["typ"] = jwtTypForIntent(intent)
@@ -479,7 +474,6 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	if jti, ok := mc["jti"].(string); ok {
 		c.JTI = jti
 	}
-	c.AuthzEpoch = numericFromAny(mc["authz_epoch"])
 	c.Extra = collectExtraClaims(mc)
 
 	return c
@@ -522,23 +516,6 @@ func parseUnixTime(v any) time.Time {
 	return time.Unix(int64(f), 0)
 }
 
-// numericFromAny converts a JWT numeric value (float64, int64, or
-// encoding/json.Number) to int64. Returns 0 when v is nil or an unrecognized
-// type. JWT libraries typically unmarshal JSON numbers as float64, but
-// encoding/json.Number and int64 are also acceptable forms.
-func numericFromAny(v any) int64 {
-	switch n := v.(type) {
-	case float64:
-		return int64(n)
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	default:
-		return 0
-	}
-}
-
 var standardClaims = map[string]struct{}{
 	"sub": {}, "iss": {}, "aud": {},
 	"exp": {}, "iat": {}, "nbf": {}, "roles": {},
@@ -546,7 +523,11 @@ var standardClaims = map[string]struct{}{
 	"sid":                     {},
 	"password_reset_required": {},
 	"jti":                     {},
-	"authz_epoch":             {},
+	// S4d: authz_epoch removed from standardClaims so that any token still
+	// carrying it (legacy / stray) surfaces in claims.Extra — making the
+	// regression visible to TestRefresh_AccessJWT_NoAuthzEpochClaim. The mint
+	// path no longer writes it; archtest JWT-CLAIMS-NO-AUTHZ-EPOCH-01
+	// statically enforces the absence at the source.
 }
 
 func collectExtraClaims(mc jwt.MapClaims) map[string]any {
