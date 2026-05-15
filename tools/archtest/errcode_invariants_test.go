@@ -210,9 +210,7 @@ func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 
 	diags := Run(t, ModuleScope(root, MatchRels(func(rel string) bool {
 		return !errcodeKindAllowedRel(rel)
-	})), func(p *Pass) []Diagnostic {
-		return findErrcodeErrorLiteralsPass(p)
-	})
+	})), findErrcodeErrorLiteralsPass)
 
 	Report(t, "ERRCODE-KIND-LITERAL-01", diags)
 }

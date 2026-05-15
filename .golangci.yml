@@ -440,11 +440,9 @@ linters:
             # golang.org/x/tools/go/packages. Subset of archtestmeta.LegacyAllowlist.
             - "!**/tools/archtest/archtest_test.go"
             - "!**/tools/archtest/audit_ledger_composition_root_test.go"
-            - "!**/tools/archtest/auth_bootstrap_invariants_test.go"
             - "!**/tools/archtest/cell_id_pattern_single_source_test.go"
             - "!**/tools/archtest/cell_public_option_param_test.go"
             - "!**/tools/archtest/credential_invalidate_funnel_invariants_test.go"
-            - "!**/tools/archtest/errcode_invariants_test.go"
             - "!**/tools/archtest/exported_error_new_fixtures_test.go"
             - "!**/tools/archtest/goose_session_locker_test.go"
             - "!**/tools/archtest/governance_rules_invariants_test.go"

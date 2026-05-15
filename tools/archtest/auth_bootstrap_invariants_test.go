@@ -95,9 +95,11 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 					}
 					if exprNamesRouteMux(field.Type) {
 						ds = append(ds, Diagnostic{
-							Rel:     rel,
-							Line:    p.Fset.Position(field.Pos()).Line,
-							Message: "CELLS-NO-ROUTEMUX-WRAPPER-01: cells/ must not embed cell.RouteMux. Use auth.Route.BootstrapAuth or auth.Mount middleware composition for per-route middleware needs.",
+							Rel:  rel,
+							Line: p.Fset.Position(field.Pos()).Line,
+							Message: "CELLS-NO-ROUTEMUX-WRAPPER-01: cells/ must not embed " +
+								"cell.RouteMux. Use auth.Route.BootstrapAuth or auth.Mount " +
+								"middleware composition for per-route middleware needs.",
 						})
 					}
 				}
@@ -632,4 +634,3 @@ func compositeLitHasNonEmptyClients(cl *ast.CompositeLit) bool {
 	})
 	return nonEmpty
 }
-
