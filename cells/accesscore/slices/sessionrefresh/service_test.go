@@ -1410,6 +1410,165 @@ func TestRefresh_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	assert.False(t, epochInExtra, "S4d: authz_epoch must not be present in JWT (including Extra)")
 }
 
+// staleEpochPeekStore is a refresh.Store whose Peek returns a token whose
+// AuthzEpochAtIssue is deliberately lower than the user's live authz_epoch,
+// simulating a stale refresh grant discovered after a credential event. Rotate
+// is intentionally not implemented — the stale-epoch guard must fire before Rotate.
+type staleEpochPeekStore struct {
+	refresh.Store
+	subjectID    string
+	sessionID    string
+	epochAtIssue int64 // stored epoch — lower than user's current epoch
+}
+
+func (s *staleEpochPeekStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
+	return &refresh.Token{
+		SessionID:         s.sessionID,
+		SubjectID:         s.subjectID,
+		AuthzEpochAtIssue: s.epochAtIssue,
+	}, nil
+}
+
+// freshEpochPeekStore is a refresh.Store whose Peek returns a token that
+// matches the user's current authz_epoch — used as the control arm in the
+// stale-epoch test to confirm normal rotation succeeds.
+type freshEpochPeekStore struct {
+	refresh.Store
+	subjectID    string
+	sessionID    string
+	epochAtIssue int64 // must equal user's current epoch
+}
+
+func (s *freshEpochPeekStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
+	return &refresh.Token{
+		SessionID:         s.sessionID,
+		SubjectID:         s.subjectID,
+		AuthzEpochAtIssue: s.epochAtIssue,
+	}, nil
+}
+
+// TestRefresh_StaleEpoch_CascadeRevokesSessionOnly verifies P2.b fix:
+// when presented.AuthzEpochAtIssue != user.AuthzEpoch() (stale grant after
+// a credential event), the service must:
+//
+//	(a) return a uniform 401 reject (ErrAuthRefreshFailed)
+//	(b) cascade-revoke THIS session's refresh chain via RevokeSessionDetached
+//	(c) NOT call invalidator.Apply with CredentialEventRefreshReuse — the
+//	    originating credential event already ran the user-wide trifecta;
+//	    a second cascade would double-bump authz_epoch and double-revoke.
+//
+// Control arm: matching epoch → normal rotation success.
+func TestRefresh_StaleEpoch_CascadeRevokesSessionOnly(t *testing.T) {
+	t.Run("stale_epoch_rejects_and_revokes_session_only", func(t *testing.T) {
+		sessionStore := newTestSessionStore(t)
+		roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+		userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+		// Create user with initial authz_epoch=1, then bump once → epoch=2.
+		u, err := domain.NewUser("usr-stale-epoch", "stale@test.local", "hash", time.Now())
+		require.NoError(t, err)
+		u.ID = "usr-stale-epoch"
+		require.NoError(t, userRepo.Create(context.Background(), u))
+		_, bumpErr := userRepo.BumpAuthzEpoch(context.Background(), "usr-stale-epoch")
+		require.NoError(t, bumpErr)
+		// Reload so u.AuthzEpoch() == 2.
+		u, err = userRepo.GetByID(context.Background(), "usr-stale-epoch")
+		require.NoError(t, err)
+		require.Equal(t, int64(2), u.AuthzEpoch(), "setup: user epoch must be 2 after bump")
+
+		// The refresh token was issued when epoch was 1 — stale.
+		innerStore := newTestRefreshStore()
+		staleStore := &staleEpochPeekStore{
+			Store:        innerStore,
+			subjectID:    "usr-stale-epoch",
+			sessionID:    "sess-stale-epoch",
+			epochAtIssue: 1, // stale: issued before the credential event bumped epoch
+		}
+
+		spyInv := &spyInvalidator{}
+		spyRev := &spyRefreshStore{Store: innerStore}
+
+		// Wire staleStore as the refresh store; wrap spyRev around innerStore for
+		// RevokeSessionDetached assertions. staleStore.Store is innerStore so
+		// cascadeRevoke's RevokeSessionDetached goes to spyRev.
+		staleStore.Store = spyRev
+
+		svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, staleStore, testIssuer, slog.Default(),
+			spyInv,
+			WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+
+		sess := newTestSession("usr-stale-epoch", "sess-stale-epoch")
+		require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+		_, err = svc.Refresh(context.Background(), "any-wire-token")
+		require.Error(t, err, "stale-epoch must cause Refresh to reject")
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+			"stale-epoch must surface as uniform ErrAuthRefreshFailed (401)")
+		assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+
+		// (b) cascadeRevoke must have fired for THIS session's refresh chain.
+		spyRev.mu.Lock()
+		detachedN := spyRev.revokeSessionDetachedN
+		detachedSID := spyRev.lastDetachedSessionID
+		spyRev.mu.Unlock()
+		assert.Equal(t, 1, detachedN,
+			"stale-epoch must revoke THIS session's refresh chain via RevokeSessionDetached exactly once")
+		assert.Equal(t, "sess-stale-epoch", detachedSID,
+			"RevokeSessionDetached must target the stale session, not any other")
+
+		// (c) invalidator.Apply must NOT have been called with CredentialEventRefreshReuse.
+		// The originating credential event already ran the user-wide trifecta;
+		// stale-epoch is benign churn, not a replay attack.
+		for _, call := range spyInv.calls {
+			assert.NotEqual(t, session.CredentialEventRefreshReuse, call.event,
+				"stale-epoch must NOT emit CredentialEventRefreshReuse — not a reuse attack")
+		}
+	})
+
+	t.Run("matching_epoch_succeeds", func(t *testing.T) {
+		// Control: when presented.AuthzEpochAtIssue == user.AuthzEpoch(), refresh
+		// must complete normally with a rotated token pair.
+		sessionStore := newTestSessionStore(t)
+		roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+		userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+		u, err := domain.NewUser("usr-fresh-epoch", "fresh@test.local", "hash", time.Now())
+		require.NoError(t, err)
+		u.ID = "usr-fresh-epoch"
+		require.NoError(t, userRepo.Create(context.Background(), u))
+		// No bump — epoch stays at 1.
+
+		innerStore := newTestRefreshStore()
+		freshStore := &freshEpochPeekStore{
+			Store:        innerStore,
+			subjectID:    "usr-fresh-epoch",
+			sessionID:    "sess-fresh-epoch",
+			epochAtIssue: 1, // matches user's current epoch=1
+		}
+
+		// freshEpochPeekStore.Peek returns the fresh token; Rotate goes to innerStore.
+		freshStore.Store = innerStore
+
+		svc := MustNewService(sessionStore, roleRepo, userRepo, freshStore, testIssuer, slog.Default(),
+			WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+			withTestInvalidator(userRepo, sessionStore, innerStore))
+
+		sess := newTestSession("usr-fresh-epoch", "sess-fresh-epoch")
+		require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+		// Issue a real wire token in innerStore so Rotate can find it.
+		wireToken, _, issueErr := innerStore.Issue(context.Background(), "sess-fresh-epoch", "usr-fresh-epoch", int64(1))
+		require.NoError(t, issueErr)
+
+		pair, err := svc.Refresh(context.Background(), wireToken)
+		require.NoError(t, err, "matching epoch must allow normal refresh")
+		assert.NotEmpty(t, pair.AccessToken, "rotated access token must be non-empty")
+		assert.NotEmpty(t, pair.RefreshToken, "rotated refresh token must be non-empty")
+	})
+}
+
 // spyInvalidator records Apply calls so reuse-funnel tests can assert
 // Apply was triggered with the correct arguments.
 type spyInvalidator struct {

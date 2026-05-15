@@ -242,7 +242,8 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 //
 // session.Store is read-only on this path: refresh keeps session.ID stable
 // across rotations (OAuth2 RFC 6749 §6 + OIDC Back-Channel Logout sid
-// stability). AuthzEpoch staleness is enforced by sessionvalidate (S4b).
+// stability). AuthzEpoch staleness is detected via rejectIfStaleEpoch (S4d
+// row-provenance: compares presented.AuthzEpochAtIssue to user.AuthzEpoch()).
 // handlePeekError classifies a Peek error and produces the service-layer
 // error: ErrReused routes into the unified reuse cascade entry
 // (handleReuseDetected) using whatever row identity Peek conveyed; other
@@ -255,9 +256,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 // revokeSessionDetachedAt, but cross-session credential invalidation (all
 // sessions for the subject + all refresh chains + authz_epoch bump) only
 // runs through invalidator.Apply. Route Peek's reuse signal to the same
-// cascade entry point used by Rotate / stale-epoch so the security response
-// is identical regardless of which validation stage detected the attack
-// (Finding #2 / PR #490 review).
+// cascade entry point used by Rotate so the security response is identical
+// regardless of which validation stage detected the attack (Finding #2 /
+// PR #490 review). Note: stale-epoch is NOT a reuse attack and routes through
+// rejectIfStaleEpoch (session-scoped revoke only, no RefreshReuse event).
 func (s *Service) handlePeekError(outerCtx context.Context, presented *refresh.Token, err error) error {
 	if errors.Is(err, refresh.ErrReused) {
 		return s.handleReuseDetected(outerCtx, presentedSubjectID(presented), presentedSessionID(presented), "peek")
@@ -292,18 +294,8 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 		return dto.TokenPair{}, err
 	}
 
-	// S4d row-provenance: presented.AuthzEpochAtIssue captures the user's epoch at
-	// refresh-token issuance. If user.AuthzEpoch has since been bumped (by a
-	// credential event: password change, account lock, role revoke), the refresh
-	// chain is stale and must be invalidated via the same cascade as a reuse attack —
-	// credential event already fired; this refresh merely discovered the stale state.
-	if presented.AuthzEpochAtIssue != user.AuthzEpoch() {
-		s.logger.Warn("session-refresh: stale authz epoch — triggering cascade",
-			slog.String("session_id", sess.ID),
-			slog.String("subject", sess.SubjectID),
-			slog.Int64("row_epoch", presented.AuthzEpochAtIssue),
-			slog.Int64("user_epoch", user.AuthzEpoch()))
-		return dto.TokenPair{}, s.handleReuseDetected(outerCtx, sess.SubjectID, sess.ID, "stale-epoch")
+	if err := s.rejectIfStaleEpoch(ctx, presented.AuthzEpochAtIssue, user.AuthzEpoch(), sess.ID, sess.SubjectID); err != nil {
+		return dto.TokenPair{}, err
 	}
 
 	passwordResetRequired := user.PasswordResetRequired()
@@ -538,6 +530,36 @@ func (s *Service) rejectIfUserNotActive(ctx context.Context, user *domain.User, 
 	}
 	return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 		"account is not active")
+}
+
+// rejectIfStaleEpoch detects a stale refresh grant: when
+// presented.AuthzEpochAtIssue != user.AuthzEpoch(), the originating credential
+// event (password change, account lock, role revoke) already ran the user-wide
+// trifecta (epoch bump + RevokeForSubject all sessions + revoke all refresh
+// chains). This refresh merely discovered the stale state after the fact.
+//
+// Stale epoch is NOT a reuse attack — routing it to handleReuseDetected would
+// (a) emit CredentialEventRefreshReuse (a security ATTACK audit event) for
+// benign post-credential-event churn, and (b) run a SECOND user-wide
+// invalidation cascade (redundant; the credential event already did it).
+// Instead, only defensively revoke THIS session's refresh chain and reject
+// uniformly; no RefreshReuse audit event, no second epoch bump.
+//
+// Extracted from refreshInTx to keep that function within the cognitive-
+// complexity budget (≤15) after S4d added the stale-epoch branch.
+func (s *Service) rejectIfStaleEpoch(ctx context.Context, rowEpoch, userEpoch int64, sessionID, subjectID string) error {
+	if rowEpoch == userEpoch {
+		return nil
+	}
+	s.logger.Warn("session-refresh: stale authz epoch",
+		slog.String("session_id", sessionID),
+		slog.String("subject", subjectID),
+		slog.Int64("row_epoch", rowEpoch),
+		slog.Int64("user_epoch", userEpoch))
+	if err := s.cascadeRevoke(ctx, sessionID, "stale-epoch"); err != nil {
+		return err
+	}
+	return authRefreshRejected()
 }
 
 // fetchUserForRefresh reads the session's owning user so the caller can
