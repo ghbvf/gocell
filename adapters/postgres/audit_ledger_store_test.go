@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
@@ -471,4 +472,45 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 	validB, _, err := storeB.Verify(ctx, 1, 2)
 	require.NoError(t, err)
 	assert.True(t, validB, "namespace B chain must be valid")
+}
+
+// ---------------------------------------------------------------------------
+// TestAuditLedgerStore_RepoReadiness_Conformance (cell.RepoHealthProber)
+// ---------------------------------------------------------------------------
+
+// TestAuditLedgerStore_RepoReadiness_Conformance runs the single-source
+// RepoHealthProber conformance harness against LedgerStore. It verifies that:
+//   - healthy: RepoReady returns nil when the audit_entries table is present.
+//   - broken: RepoReady returns a non-nil error when audit_entries is dropped,
+//     exercising a failure domain that a pool-level ping cannot detect.
+func TestAuditLedgerStore_RepoReadiness_Conformance(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	protocol := newTestLedgerProtocol(t, ns)
+	fc := clockmock.New(storetest.EpochAnchor())
+
+	// healthy: standard isolated schema with migrations applied.
+	healthyStore, healthyCleanup := newIsolatedLedgerStore(t, ctx, base, protocol, fc)
+	t.Cleanup(healthyCleanup)
+
+	// broken: isolated schema with audit_entries table dropped after migration.
+	brokenPool := isolatedSchemaPool(t, ctx, base)
+	t.Cleanup(func() { _ = brokenPool.Close(context.Background()) })
+	migrator, err := NewMigrator(brokenPool, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_readyz_broken_"))
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	// Drop audit_entries to simulate schema drift / missing migration.
+	_, execErr := brokenPool.DB().Exec(ctx, `DROP TABLE IF EXISTS audit_entries CASCADE`)
+	require.NoError(t, execErr, "drop audit_entries for broken scenario")
+
+	brokenTxm := NewTxManager(brokenPool)
+	brokenStore, err := NewLedgerStore(brokenPool.DB(), brokenTxm, protocol, clockmock.New(storetest.EpochAnchor()))
+	require.NoError(t, err)
+
+	celltest.RunRepoReadinessConformance(t, "ledger-pg", healthyStore, brokenStore)
 }

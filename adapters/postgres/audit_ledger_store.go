@@ -333,18 +333,15 @@ func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 	}, nil
 }
 
-// Probes returns a readiness probe for the audit ledger store.
-// The probe "audit_ledger_ready" calls Tail to verify PG connectivity.
-// This method satisfies the cell.HealthProber duck-type interface so that
-// cells/auditcore/cell.go can register it via type assertion without
-// importing kernel/cell in adapters/.
-func (s *LedgerStore) Probes() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		"audit_ledger_ready": func(ctx context.Context) error {
-			_, err := s.Tail(ctx)
-			return err
-		},
-	}
+// RepoReady implements cell.RepoHealthProber and ledger.Store.RepoReady. It
+// issues a Tail query against the audit_entries relation to verify that the
+// table is accessible and the schema/migration is in place. This is a
+// differentiated check distinct from the pool-level postgres_ready probe:
+// a pool ping succeeds even when audit_entries is dropped or permissions are
+// revoked, so a Tail-based check surfaces those failure modes independently.
+func (s *LedgerStore) RepoReady(ctx context.Context) error {
+	_, err := s.Tail(ctx)
+	return err
 }
 
 // GetBySeq fetches a single entry by sequence number.

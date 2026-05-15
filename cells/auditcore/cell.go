@@ -265,23 +265,25 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 }
 
 // registerHealthProbes registers all health probes from the emitter and the
-// ledger store (when the latter implements cell.HealthProber). Extracted from
-// initInternal to keep cognitive complexity ≤ 15.
+// ledger store. Extracted from initInternal to keep cognitive complexity ≤ 15.
+//
+// Two semantic categories are registered here:
+//   - Emitter fail-open-rate probe (cell.HealthProber): checks the ratio of
+//     dropped outbox publishes. Only present when the emitter is a DirectEmitter.
+//   - Ledger store readiness probe (cell.RepoHealthProber): checks audit_entries
+//     connectivity via cell.RegisterRepoReadiness typed funnel. ledger.Store
+//     always satisfies RepoHealthProber — MemStore returns nil (always ready),
+//     PG-backed store issues a Tail query against the relation.
 func (c *AuditCore) registerHealthProbes(reg cell.Registry) {
-	// Register health probes (emitter fail-open rate checker).
+	// Register emitter health probes (fail-open rate checker).
 	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}
 	}
-	// F6: Register ledger store readyz probe when the store implements HealthProber.
-	// The audit_ledger_ready probe calls Tail(ctx) to check PG connectivity.
-	// MemStore does not implement HealthProber — in-memory stores are always ready.
-	if hp, ok := c.ledgerStore.(cell.HealthProber); ok {
-		for k, v := range hp.Probes() {
-			reg.Health(k, v)
-		}
-	}
+	// Register ledger store readiness probe via the typed funnel.
+	// ledger.Store satisfies cell.RepoHealthProber (RepoReady method).
+	cell.RegisterRepoReadiness(reg, "audit_ledger_ready", c.ledgerStore)
 }
 
 // strictTailVerifyOnStartup implements the RestartRecoveryStrictTailVerify
