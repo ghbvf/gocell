@@ -3,14 +3,21 @@ package oidc
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// testEpoch is a fixed deterministic time used by test callsites that need
+// a clock but do not exercise time-sensitive logic. Using a named constant
+// avoids magic literals and satisfies CLOCK-INJECTION-TEST-CALLSITE-01.
+var testEpoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // Compile-time assertion: Adapter satisfies ManagedResource.
 var _ lifecycle.ManagedResource = (*Adapter)(nil)
@@ -36,7 +43,7 @@ func TestConfig_Validate(t *testing.T) {
 }
 
 func TestNew_InvalidConfig(t *testing.T) {
-	_, err := New(context.Background(), Config{})
+	_, err := New(context.Background(), Config{Clock: clockmock.New(testEpoch)})
 	require.Error(t, err)
 }
 
@@ -46,7 +53,7 @@ func TestNew_FailsSyncOnUnreachableIssuer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	_, err := New(ctx, Config{IssuerURL: "http://127.0.0.1:1", ClientID: "test-client"})
+	_, err := New(ctx, Config{IssuerURL: "http://127.0.0.1:1", ClientID: "test-client", Clock: clockmock.New(testEpoch)})
 	require.Error(t, err, "New must fail when issuer is unreachable")
 }
 
@@ -59,7 +66,7 @@ func TestNew_PopulatesProviderSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client"})
+	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
 	require.NoError(t, err)
 
 	// Close the server — if discover is called again it would fail.
@@ -80,7 +87,7 @@ func TestCheckers_OIDCReadyHealthyAfterConstruction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client"})
+	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
 	require.NoError(t, err)
 
 	checkers := adapter.Checkers()
@@ -93,19 +100,19 @@ func TestCheckers_OIDCReadyHealthyAfterConstruction(t *testing.T) {
 	require.NoError(t, err, "oidc_ready probe should pass after successful construction")
 }
 
-// TestWorker_ReturnsNil verifies that Worker returns nil (no background
-// goroutine; rotation worker is PR-11/A-02).
-func TestWorker_ReturnsNil(t *testing.T) {
+// TestWorker_ReturnsNonNil verifies that Worker returns a non-nil worker
+// after PR-11/A-02 (periodic JWKS refresh worker).
+func TestWorker_ReturnsNonNil(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client"})
+	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
 	require.NoError(t, err)
 
-	assert.Nil(t, adapter.Worker(), "Worker() must return nil until PR-11/A-02")
+	assert.NotNil(t, adapter.Worker(), "Worker() must return non-nil after PR-11/A-02")
 }
 
 // TestClose_Idempotent verifies that Close is safe to call multiple times.
@@ -116,7 +123,7 @@ func TestClose_Idempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client"})
+	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
 	require.NoError(t, err)
 
 	require.NoError(t, adapter.Close(context.Background()))
@@ -124,7 +131,7 @@ func TestClose_Idempotent(t *testing.T) {
 }
 
 // TestRefresh_StillCallableAfterConstruction verifies that Refresh remains
-// callable (PR-11/A-02 JWKS rotation worker will use it internally).
+// callable (PR-11/A-02 JWKS rotation worker uses it internally).
 func TestRefresh_StillCallableAfterConstruction(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
@@ -132,7 +139,7 @@ func TestRefresh_StillCallableAfterConstruction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client"})
+	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
 	require.NoError(t, err)
 
 	p, err := adapter.Refresh(context.Background())

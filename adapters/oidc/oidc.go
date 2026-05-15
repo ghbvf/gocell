@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -24,6 +26,12 @@ const (
 	// defaultOIDCHTTPTimeout is the default HTTP client timeout for OIDC
 	// provider discovery and token exchange requests.
 	defaultOIDCHTTPTimeout = 10 * time.Second
+
+	// defaultOIDCRefreshInterval is the default period between periodic
+	// full OIDC provider re-discovery runs. Configurable via Config.RefreshInterval.
+	// go-oidc v3.18 handles JWKS key rotation reactively (kid-miss refetch);
+	// this interval only refreshes discovery metadata (jwks_uri, endpoints, alg).
+	defaultOIDCRefreshInterval = 24 * time.Hour
 )
 
 // Config holds the OIDC provider configuration.
@@ -34,6 +42,19 @@ type Config struct {
 	RedirectURL  string
 	Scopes       []string      // default: [openid, profile, email]
 	HTTPTimeout  time.Duration // default: 10s
+
+	// Clock is the time source injected by the composition root or tests.
+	// Required: New panics via clock.MustHaveClock when Clock is nil.
+	// Production wiring: clock.Real(); tests: clockmock.New(t).
+	Clock clock.Clock
+
+	// RefreshInterval controls how often the worker re-discovers OIDC provider
+	// metadata. Zero means defaultOIDCRefreshInterval (24h).
+	RefreshInterval time.Duration
+
+	// RefreshCollector receives success/failure signals from the refresh worker.
+	// Optional: nil is replaced with NoopRefreshCollector{} in New().
+	RefreshCollector RefreshCollector
 }
 
 // Validate checks required fields.
@@ -54,19 +75,40 @@ func (c Config) Validate() error {
 // Adapter is a thin wrapper over go-oidc and oauth2. It manages provider
 // discovery and exposes the underlying go-oidc types directly.
 type Adapter struct {
-	config Config
-	client *http.Client
+	config           Config
+	client           *http.Client
+	clk              clock.Clock
+	refreshCollector RefreshCollector
 
 	mu       sync.RWMutex
 	provider *gooidc.Provider
+
+	// consecutiveFailures counts how many consecutive refresh attempts have
+	// failed since the last success. Reset to 0 on any successful refresh.
+	consecutiveFailures atomic.Int64
+
+	// started is set to true at the very beginning of runRefreshLoop so that
+	// Close and Stop can skip the workerDone drain when the worker goroutine
+	// was never started (e.g. bootstrap aborted before Worker.Start).
+	started atomic.Bool
+
+	stopOnce   sync.Once
+	stopCh     chan struct{} // signals the worker goroutine to exit
+	workerDone chan struct{} // closed when the worker goroutine returns
 }
 
 // New creates an OIDC Adapter and synchronously performs OIDC discovery.
 // An unreachable or misconfigured issuer causes construction to fail
 // immediately (fail-fast at boot, not at first request).
 //
+// Clock is required: New panics via clock.MustHaveClock when cfg.Clock is nil.
+// Use clock.Real() at the composition root; inject clockmock.New() in tests.
+//
 // ref: coreos/go-oidc — Provider.NewProvider semantics (sync HTTP round-trip).
+// ref: adapters/s3.New — same clock.MustHaveClock + state-machine field pattern.
 func New(ctx context.Context, cfg Config) (*Adapter, error) {
+	clock.MustHaveClock(cfg.Clock, "oidc.New")
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -74,9 +116,19 @@ func New(ctx context.Context, cfg Config) (*Adapter, error) {
 	if timeout == 0 {
 		timeout = defaultOIDCHTTPTimeout
 	}
+
+	rc := cfg.RefreshCollector
+	if rc == nil {
+		rc = NoopRefreshCollector{}
+	}
+
 	a := &Adapter{
-		config: cfg,
-		client: &http.Client{Timeout: timeout},
+		config:           cfg,
+		client:           &http.Client{Timeout: timeout},
+		clk:              cfg.Clock,
+		refreshCollector: rc,
+		stopCh:           make(chan struct{}),
+		workerDone:       make(chan struct{}),
 	}
 	if _, err := a.discover(ctx, true); err != nil {
 		return nil, err
@@ -152,13 +204,41 @@ func (a *Adapter) Checkers() map[string]func(context.Context) error {
 	return adapterutil.HealthToCheckers("oidc_ready", a.healthProbe, adapterutil.DefaultProbeTimeout)
 }
 
-// Worker returns nil — no background goroutine is needed. The JWKS rotation
-// worker is deferred to PR-11/A-02.
-func (a *Adapter) Worker() worker.Worker { return nil }
+// Worker returns a worker.Worker that drives the periodic OIDC re-discovery
+// loop. Bootstrap wires this via WorkerGroup so the loop starts with the
+// service lifecycle.
+//
+// ref: adapters/s3.Client.Worker — same worker-adapter pattern.
+func (a *Adapter) Worker() worker.Worker { return &oidcRefreshWorker{a: a} }
 
-// Close is idempotent and currently a no-op. The go-oidc provider has no
-// managed connections to release; the HTTP client is ephemeral.
-func (a *Adapter) Close(_ context.Context) error { return nil }
+// signalStop closes stopCh exactly once (idempotent via sync.Once).
+func (a *Adapter) signalStop() {
+	a.stopOnce.Do(func() { close(a.stopCh) })
+}
+
+// Close implements lifecycle.ManagedResource. It signals the worker to stop
+// and waits for the goroutine to drain, bounded by ctx. Idempotent — safe to
+// call from both Worker.Stop and ManagedResource.Close teardown paths.
+//
+// Fast path: if the worker goroutine was never started (e.g. bootstrap aborted
+// before Worker.Start was called), workerDone will never be closed. In that
+// case we skip the select so we do not burn the shutdown budget on a
+// non-existent drain.
+//
+// ref: adapters/s3.Client.Close — same idempotent + ctx-bounded pattern.
+func (a *Adapter) Close(ctx context.Context) error {
+	a.signalStop()
+	// Fast path: worker goroutine never started — nothing to drain.
+	if !a.started.Load() {
+		return nil
+	}
+	select {
+	case <-a.workerDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // healthProbe verifies the cached provider is populated. It does NOT
 // re-discover — Refresh() handles that. Provider(ctx) acquires a.mu.RLock();
