@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/aliased_validation_violates
+
+go 1.22

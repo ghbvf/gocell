@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/isnil_result_discarded_violates
+
+go 1.22

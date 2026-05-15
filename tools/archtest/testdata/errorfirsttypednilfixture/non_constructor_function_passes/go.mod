@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/non_constructor_function_passes
+
+go 1.22

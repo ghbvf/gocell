@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/if_cond_no_return_violates
+
+go 1.22
