@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ func TestRunScaffoldCell_Success(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/test\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir,
+	err := runScaffoldWithRoot(context.Background(), dir,
 		[]string{"cell", "--id=testcell", "--team=squad", "--role=cell-owner"})
 	require.NoError(t, err)
 
@@ -39,7 +40,7 @@ func TestRunScaffoldSlice_Success(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "testcell", "cell.yaml"),
 		[]byte("id: testcell\ntype: core\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir,
+	err := runScaffoldWithRoot(context.Background(), dir,
 		[]string{"slice", "--id=myslice", "--cell=testcell"})
 	require.NoError(t, err)
 }
@@ -50,7 +51,7 @@ func TestRunScaffoldContract_Success(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/test\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir,
+	err := runScaffoldWithRoot(context.Background(), dir,
 		[]string{"contract", "--id=http.test.v1", "--kind=http", "--owner=testcell"})
 	require.NoError(t, err)
 }
@@ -61,7 +62,7 @@ func TestRunScaffoldJourney_Success(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/test\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir,
+	err := runScaffoldWithRoot(context.Background(), dir,
 		[]string{"journey", "--id=J-test", "--goal=test goal", "--team=squad", "--cells=a,b"})
 	require.NoError(t, err)
 }
@@ -203,7 +204,7 @@ func TestNewVerifyPrinter_RejectsUnknown(t *testing.T) {
 }
 
 func TestRunGenerateAssembly_MissingID(t *testing.T) {
-	err := runGenerate([]string{"assembly"})
+	err := runGenerate(context.Background(), []string{"assembly"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "usage: gocell generate assembly")
 }
@@ -211,14 +212,14 @@ func TestRunGenerateAssembly_MissingID(t *testing.T) {
 func TestRunGenerateAssembly_WithModule(t *testing.T) {
 	// generateAssembly with a valid --id and --module exercises the full code
 	// path up to the point where project metadata or assembly lookup fails.
-	err := runGenerate([]string{"assembly", "--id=test", "--module=example.com/test"})
+	err := runGenerate(context.Background(), []string{"assembly", "--id=test", "--module=example.com/test"})
 	require.Error(t, err)
 	assert.Regexp(t, `metadata parse|project root|cannot find|generate entrypoint|assembly`,
 		err.Error(), "error should originate from the generate-assembly pipeline")
 }
 
 func TestRunVerifySlice_ValidID(t *testing.T) {
-	err := runVerify([]string{"slice", "--id=accesscore/identitymanage"})
+	err := runVerify(context.Background(), []string{"slice", "--id=accesscore/identitymanage"})
 	// verifySlice either passes or returns a verify error — never panics.
 	if err != nil {
 		assert.Contains(t, err.Error(), "verify slice",
@@ -227,7 +228,7 @@ func TestRunVerifySlice_ValidID(t *testing.T) {
 }
 
 func TestRunVerifyCell_ValidID(t *testing.T) {
-	err := runVerify([]string{"cell", "--id=accesscore"})
+	err := runVerify(context.Background(), []string{"cell", "--id=accesscore"})
 	if err != nil {
 		assert.Contains(t, err.Error(), "verify cell",
 			"error should come from the verify pipeline, not a crash")
@@ -235,7 +236,7 @@ func TestRunVerifyCell_ValidID(t *testing.T) {
 }
 
 func TestRunVerifyJourney_ValidID(t *testing.T) {
-	err := runVerify([]string{"journey", "--id=J-useronboarding"})
+	err := runVerify(context.Background(), []string{"journey", "--id=J-useronboarding"})
 	if err != nil {
 		assert.Contains(t, err.Error(), "verify journey",
 			"error should come from the verify pipeline, not a crash")
@@ -250,7 +251,7 @@ func TestRunVerifyJourney_ValidID(t *testing.T) {
 // any future regression that delays format validation past the runner
 // call will produce a different (verify-pipeline) error and trip this test.
 func TestRunVerify_RejectsSARIFBeforeExecution(t *testing.T) {
-	err := runVerify([]string{"slice", "--id=accesscore/identitymanage", "--format=sarif"})
+	err := runVerify(context.Background(), []string{"slice", "--id=accesscore/identitymanage", "--format=sarif"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SARIF not supported",
 		"format must be rejected before runner execution")

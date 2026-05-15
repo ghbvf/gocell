@@ -6,6 +6,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,7 +20,13 @@ import (
 // contract; tests in this package may reference it directly.
 // Black-box tests in the app_test package must go through Dispatch; direct
 // map mutation is not supported.
-var commands = map[string]func(args []string) error{
+//
+// The ctx parameter is the signal-aware context wired in main.go
+// (signal.NotifyContext); commands that have a cancelable downstream
+// (validate, verify, generate metrics-schema) thread it all the way to
+// the go test / go/packages subprocesses. The rest accept it for a
+// uniform dispatch signature.
+var commands = map[string]func(ctx context.Context, args []string) error{
 	"validate": runValidate,
 	"scaffold": runScaffold,
 	"generate": runGenerate,
@@ -32,9 +39,17 @@ var commands = map[string]func(args []string) error{
 // Exit codes. Follows the common POSIX convention used by tools like go
 // itself: usage/misuse errors are distinct from runtime failures so CI
 // scripts can tell "CLI was invoked wrong" apart from "validation failed".
+//
+// Signal interruption (SIGINT/SIGTERM → ctx canceled) intentionally maps to
+// ExitRuntime (1), NOT the shell convention 128+signo (130 for SIGINT).
+// gocell is a CI/dev tool whose callers branch on the three-way OK/Runtime/
+// Usage contract; a fourth "interrupted" code would force every wrapper
+// script to special-case it. Callers that must distinguish an interrupted
+// run from a genuine failure match the literal "interrupted" line on stderr
+// (emitted by Dispatch on context.Canceled), which is the stable contract.
 const (
 	ExitOK      = 0 // success
-	ExitRuntime = 1 // sub-command returned an error (validation failure, IO, etc.)
+	ExitRuntime = 1 // sub-command returned an error (validation failure, IO, signal interruption, etc.)
 	ExitUsage   = 2 // caller passed wrong / unknown / missing arguments
 )
 
@@ -44,9 +59,14 @@ const (
 // returns an error. Writes errors to stderr; does not call os.Exit so
 // callers keep control.
 //
+// ctx is the signal-aware context (main.go wires signal.NotifyContext for
+// SIGINT/SIGTERM); a sub-command whose ctx is canceled mid-run returns a
+// context.Canceled-wrapped error, which Dispatch reports as "interrupted"
+// and maps to ExitRuntime (the binary is shutting down, not a usage bug).
+//
 // Stability: internal. Used by cmd/gocell/main.go and in-tree smoke tests;
 // signature may change without notice.
-func Dispatch(args []string) int {
+func Dispatch(ctx context.Context, args []string) int {
 	if len(args) < 1 {
 		PrintUsage()
 		return ExitUsage
@@ -57,12 +77,19 @@ func Dispatch(args []string) int {
 		PrintUsage()
 		return ExitUsage
 	}
-	if err := cmd(args[1:]); err != nil {
+	if err := cmd(ctx, args[1:]); err != nil {
 		// `-h` lands here as flag.ErrHelp after the sub-command's flag.Parse
 		// already printed its own usage. Treat as a successful help request,
 		// not a runtime failure.
 		if errors.Is(err, flag.ErrHelp) {
 			return ExitOK
+		}
+		// SIGINT/SIGTERM cancels ctx; surface a readable "interrupted"
+		// line instead of "error: context canceled". Still ExitRuntime —
+		// the run did not complete successfully.
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, "interrupted")
+			return ExitRuntime
 		}
 		fmt.Fprintf(os.Stderr, "error: %s\n", errcode.OperatorString(err))
 		return ExitRuntime
@@ -87,7 +114,6 @@ func PrintUsage() {
 	fmt.Println("    assembly --id=<assemblyID> [--module=<module>]")
 	fmt.Println("    cell [<cellID>] [--dry-run | --verify]")
 	fmt.Println("    metrics-schema --id=<assemblyID>")
-	fmt.Println("    indexes")
 	fmt.Println("  check       Run targeted architecture analysis")
 	fmt.Println("    contract-health [--format text|json|sarif]")
 	fmt.Println("    slice-coverage --cell=<cellID>")

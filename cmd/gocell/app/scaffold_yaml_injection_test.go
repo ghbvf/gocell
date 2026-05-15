@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +39,7 @@ func TestScaffoldSlice_YAMLSafeQuote_ColonInCellID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"slice",
 		"--id=myslice",
 		"--cell=evil:abc",
@@ -93,7 +94,7 @@ func TestScaffoldContract_YAMLSafeQuote_BraceInOwner(t *testing.T) {
 
 	root := setupProject(t, "contracts")
 
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"contract",
 		"--id=http.test.brace.v1",
 		"--kind=http",
@@ -139,7 +140,7 @@ func TestScaffoldJourney_YAMLSafeQuote_ColonInGoal(t *testing.T) {
 	root := setupProject(t, "journeys")
 
 	goalWithColon := "ensure system: works correctly"
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"journey",
 		"--id=colon-goal",
 		"--goal=" + goalWithColon,
@@ -183,7 +184,7 @@ func TestScaffoldAssembly_YAMLSafeQuote_ColonInTeam(t *testing.T) {
 	root := setupAssemblyTestProject(t, "examplecell")
 
 	teamWithColon := "platform:backend"
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"assembly",
 		"--id=colonteamasm",
 		"--cells=examplecell",

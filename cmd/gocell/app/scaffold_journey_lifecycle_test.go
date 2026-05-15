@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,7 @@ func TestScaffoldJourney_DefaultsLifecycleExperimental(t *testing.T) {
 
 	root := setupProject(t, "journeys")
 
-	if err := runScaffoldWithRoot(root, []string{
+	if err := runScaffoldWithRoot(context.Background(), root, []string{
 		"journey",
 		"--id=lifecycle-check",
 		"--goal=verify lifecycle default",

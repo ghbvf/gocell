@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,7 +30,7 @@ func TestScaffoldSlice_SymlinkEscape(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	err := runScaffoldWithRoot(root, []string{"slice", "--id=foo", "--cell=examplecell"})
+	err := runScaffoldWithRoot(context.Background(), root, []string{"slice", "--id=foo", "--cell=examplecell"})
 	if err == nil {
 		t.Fatal("scaffold slice (symlink escape): want error, got nil")
 	}
@@ -62,7 +63,7 @@ func TestScaffoldContract_SymlinkEscape(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"contract",
 		"--id=http.foo.example.v1",
 		"--kind=http",
@@ -97,7 +98,7 @@ func TestScaffoldJourney_SymlinkEscape(t *testing.T) {
 		t.Fatalf("Symlink journeys → outside: %v", err)
 	}
 
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"journey",
 		"--id=J-myjourney",
 		"--goal=check things work",
@@ -140,7 +141,7 @@ func TestScaffoldCell_SymlinkEscape(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"cell",
 		"--id=symcell",
 		"--team=platform",
@@ -178,7 +179,7 @@ func TestScaffoldAssembly_SymlinkEscape(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	err := runScaffoldWithRoot(root, []string{
+	err := runScaffoldWithRoot(context.Background(), root, []string{
 		"assembly",
 		"--id=symasm",
 		"--cells=examplecell",

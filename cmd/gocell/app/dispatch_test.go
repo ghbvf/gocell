@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -14,7 +15,7 @@ import (
 
 // captureDispatch runs Dispatch with args while capturing stdout and stderr
 // separately, so contract tests can assert which stream each message lands on.
-func captureDispatch(t *testing.T, args []string) (exit int, stdout, stderr string) {
+func captureDispatch(t *testing.T, ctx context.Context, args []string) (exit int, stdout, stderr string) {
 	t.Helper()
 
 	origOut, origErr := os.Stdout, os.Stderr
@@ -28,7 +29,7 @@ func captureDispatch(t *testing.T, args []string) (exit int, stdout, stderr stri
 	go func() { _, _ = io.Copy(&bufOut, rOut); close(doneOut) }()
 	go func() { _, _ = io.Copy(&bufErr, rErr); close(doneErr) }()
 
-	exit = Dispatch(args)
+	exit = Dispatch(ctx, args)
 	_ = wOut.Close()
 	_ = wErr.Close()
 	<-doneOut
@@ -105,7 +106,7 @@ func TestDispatch_Contract(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			exit, stdout, stderr := captureDispatch(t, tt.args)
+			exit, stdout, stderr := captureDispatch(t, context.Background(), tt.args)
 			assert.Equal(t, tt.wantExit, exit,
 				"exit code mismatch\nstdout=%q\nstderr=%q", stdout, stderr)
 			for _, s := range tt.stdoutSub {
@@ -130,7 +131,7 @@ func TestDispatch_SuccessPath_ExitZero(t *testing.T) {
 		[]byte("module example.com/empty\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	exit, stdout, stderr := captureDispatch(t, []string{"validate", "--root", dir})
+	exit, stdout, stderr := captureDispatch(t, context.Background(), []string{"validate", "--root", dir})
 	assert.Equal(t, ExitOK, exit, "stderr=%q", stderr)
 	assert.Empty(t, strings.TrimSpace(stderr), "nothing on stderr for success")
 	assert.Contains(t, stdout, "Validation complete:", "summary line expected")
@@ -147,7 +148,7 @@ func TestDispatch_ValidateFormats(t *testing.T) {
 		[]byte("module example.com/empty\n"), 0o644))
 
 	t.Run("json on clean project", func(t *testing.T) {
-		exit, stdout, stderr := captureDispatch(t,
+		exit, stdout, stderr := captureDispatch(t, context.Background(),
 			[]string{"validate", "--root", dir, "--format=json"})
 		assert.Equal(t, ExitOK, exit, "stderr=%q", stderr)
 		assert.Empty(t, strings.TrimSpace(stderr))
@@ -166,7 +167,7 @@ func TestDispatch_ValidateFormats(t *testing.T) {
 	})
 
 	t.Run("sarif on clean project", func(t *testing.T) {
-		exit, stdout, stderr := captureDispatch(t,
+		exit, stdout, stderr := captureDispatch(t, context.Background(),
 			[]string{"validate", "--root", dir, "--format=sarif"})
 		assert.Equal(t, ExitOK, exit, "stderr=%q", stderr)
 
@@ -190,7 +191,7 @@ func TestDispatch_ValidateFormats(t *testing.T) {
 	})
 
 	t.Run("unknown format returns ExitRuntime with descriptive stderr", func(t *testing.T) {
-		exit, _, stderr := captureDispatch(t,
+		exit, _, stderr := captureDispatch(t, context.Background(),
 			[]string{"validate", "--root", dir, "--format=yaml"})
 		// Unknown format surfaces from runValidate -> printers.New, so the
 		// dispatcher categorizes it as a sub-command runtime error
@@ -202,4 +203,53 @@ func TestDispatch_ValidateFormats(t *testing.T) {
 		assert.Contains(t, stderr, "supported formats are",
 			"error must list valid formats so users self-correct")
 	})
+}
+
+// TestDispatch_CanceledContext pins B2-X-07's full contract: a context
+// canceled before a sub-command run propagates from main.go's
+// signal.NotifyContext through Dispatch into the sub-command and surfaces
+// as the exact operator-facing contract — ExitRuntime (not ExitOK, not
+// ExitUsage) AND the readable "interrupted" line on stderr (not
+// "error: context canceled" / "error: …: FAILED").
+//
+// Two paths are exercised because their ctx-cancel error shapes differ:
+//   - validate returns the bare ctx.Err() %w-wrapped (governance path);
+//   - verify folds a signal-killed `go test` into *exec.ExitError →
+//     Passed:false with no error, so cmd-layer verify.ctxInterrupted must
+//     restore the context.Canceled chain or the interruption is masked as
+//     "verify …: FAILED". Asserting "interrupted" on both guards that the
+//     verify masking gap (PR #502 review P1) stays closed.
+//
+// Pre-cancel pattern mirrors pkg/cmdrun/cmdrun_test.go and
+// kernel/verify/integration_test.go: a context canceled before the call
+// guarantees ctx.Err() != nil deterministically without timing flake.
+func TestDispatch_CanceledContext(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/go.mod",
+		[]byte("module example.com/empty\n"), 0o644))
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"validate", []string{"validate", "--root", dir}},
+		// verify slice resolves metadata then runs `go test`; a pre-canceled
+		// ctx must surface as "interrupted", not "verify slice …: FAILED".
+		{"verify-slice", []string{"verify", "slice", "--id=nocell/noslice"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // pre-cancel: ctx.Err() != nil before Dispatch enters
+
+			exit, _, stderr := captureDispatch(t, ctx, tc.args)
+			// Exact contract: a signal-canceled run is a runtime stop, not a
+			// usage error and never a success.
+			assert.Equal(t, ExitRuntime, exit,
+				"canceled ctx must map to ExitRuntime; stderr=%q", stderr)
+			assert.Contains(t, stderr, "interrupted",
+				"canceled run must print the readable interruption line, "+
+					"not a masked error/FAILED; stderr=%q", stderr)
+		})
+	}
 }

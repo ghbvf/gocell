@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -43,34 +44,79 @@ const (
 //	gocell check journey-readiness --journey=<journeyID>
 //	gocell check l0-imports --cell=<cellID>
 //	gocell check unconditional-skip [--format text|json|sarif]
-func runCheck(args []string) error {
+//
+// checkSubcommands is the single source of truth for `gocell check`
+// (see subcommand.go / CLI-UNIMPL-HIDE-01). Every check is metadata /
+// static analysis with no cancelable downstream (governance.Validator
+// methods take no ctx), so handlers discard ctx; it is threaded for
+// signature uniformity with the other verb trees.
+var checkSubcommands = []subcommand[func(ctx context.Context, args []string) error]{
+	{
+		name: "contract-health",
+		help: []string{
+			"Aggregate contract metadata health.",
+			"[--format text|json|sarif]",
+		},
+		run: func(_ context.Context, a []string) error { return checkContractHealth(a) },
+	},
+	{
+		name: cmdSliceCoverage,
+		help: []string{
+			"Slice coverage of a cell.",
+			"--cell=<cellID>",
+		},
+		run: func(_ context.Context, a []string) error { return checkSliceCoverage(a) },
+	},
+	{
+		name: "assembly-completeness",
+		help: []string{
+			"Assembly cell-set vs declared boundary.",
+			"--id=<assemblyID>",
+		},
+		run: func(_ context.Context, a []string) error { return checkAssemblyCompleteness(a) },
+	},
+	{
+		name: cmdJourneyReadiness,
+		help: []string{
+			"Journey readiness against status-board.",
+			"--journey=<journeyID>",
+		},
+		run: func(_ context.Context, a []string) error { return checkJourneyReadiness(a) },
+	},
+	{
+		name: cmdL0Imports,
+		help: []string{
+			"L0 dependency direction.",
+			"--cell=<cellID>",
+		},
+		run: func(_ context.Context, a []string) error { return checkL0Imports(a) },
+	},
+	{
+		name: "unconditional-skip",
+		help: []string{
+			"Static analysis for unconditional t.Skip.",
+			"[--format text|json|sarif]",
+		},
+		run: func(_ context.Context, a []string) error { return checkUnconditionalSkip(a) },
+	},
+}
+
+// runCheck dispatches `gocell check <type>` through the checkSubcommands
+// registry.
+func runCheck(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness" +
-			"|journey-readiness|l0-imports|unconditional-skip> [flags]")
+		return fmt.Errorf("usage: gocell check <%s> [flags]",
+			strings.Join(subNames(checkSubcommands), "|"))
 	}
 	if isHelpFlag(args[0]) {
-		return printCheckHelp()
+		return renderSubHelp("check", checkSubcommands)
 	}
-
-	subtype := args[0]
-	subArgs := args[1:]
-
-	switch subtype {
-	case "contract-health":
-		return checkContractHealth(subArgs)
-	case cmdSliceCoverage:
-		return checkSliceCoverage(subArgs)
-	case "assembly-completeness":
-		return checkAssemblyCompleteness(subArgs)
-	case cmdJourneyReadiness:
-		return checkJourneyReadiness(subArgs)
-	case cmdL0Imports:
-		return checkL0Imports(subArgs)
-	case "unconditional-skip":
-		return checkUnconditionalSkip(subArgs)
-	default:
-		return fmt.Errorf("unknown check type: %s", subtype)
+	run, ok := findSub(checkSubcommands, args[0])
+	if !ok {
+		return fmt.Errorf("unknown check type: %s (expected %s)",
+			args[0], strings.Join(subNames(checkSubcommands), ", "))
 	}
+	return run(ctx, args[1:])
 }
 
 func checkContractHealth(args []string) error {

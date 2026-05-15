@@ -25,7 +25,7 @@ import (
 // --format selects the output renderer. The default "text" format is
 // declared non-stable: scripts that need machine-parseable output should
 // use --format=json or --format=sarif.
-func runValidate(args []string) error {
+func runValidate(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
 	failFast := fs.Bool("fail-fast", false,
@@ -64,13 +64,10 @@ func runValidate(args []string) error {
 	validator := governance.NewValidator(project, rootDir, clock.Real())
 	depChecker := governance.NewDependencyChecker(project)
 
-	// Boundary: the gocell sub-command dispatcher passes args, not ctx, so
-	// each sub-command owns its own ctx lifetime. Declaring Background here
-	// is the cancellation source the entire validate path honors — runGit
-	// subprocesses and verifyJourneyRef both consume it. A future signal-
-	// aware ctx (signal.NotifyContext at process entry) would replace this
-	// declaration without touching the rest of the file.
-	ctx := context.Background()
+	// ctx is the signal-aware context wired in main.go
+	// (signal.NotifyContext) and threaded through Dispatch → runValidate.
+	// It is the cancellation source the entire validate path honors —
+	// runGit subprocesses and verifyJourneyRef both consume it.
 	if *failFast {
 		return runValidateFailFast(ctx, printer, *format, validator, depChecker, *strict)
 	}

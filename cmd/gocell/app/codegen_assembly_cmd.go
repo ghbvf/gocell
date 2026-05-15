@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -110,6 +111,8 @@ func processOneAssemblyModulesGen(
 
 // runVerifyCodegenAssembly implements `gocell verify codegen-assembly`.
 // Delegates to the shared codegenSpec[R] framework (runCodegenVerify).
-func runVerifyCodegenAssembly(args []string) error {
+// Runs in an ephemeral worktree with no cancelable downstream; ctx is
+// part of the uniform verifySubcommands handler signature.
+func runVerifyCodegenAssembly(_ context.Context, args []string) error {
 	return runCodegenVerify(assemblyCodegenSpec, args)
 }
