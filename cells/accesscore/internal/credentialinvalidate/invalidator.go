@@ -75,6 +75,9 @@ func MustNew(users ports.UserRepository, sessions session.Store, refreshStore re
 // Order is defined only for short-circuit predictability; correctness does not
 // depend on the order.
 func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event session.CredentialEvent) error {
+	// New epoch value is intentionally discarded: sessionvalidate re-reads
+	// authz_epoch from the DB on every request, so the caller does not need
+	// the bumped value here. The DB row is the single source of truth.
 	if _, err := i.users.BumpAuthzEpoch(txCtx, subjectID); err != nil {
 		return fmt.Errorf("credentialinvalidate: bump authz_epoch: %w", err)
 	}
