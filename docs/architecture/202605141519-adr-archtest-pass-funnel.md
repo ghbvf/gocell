@@ -31,7 +31,7 @@ type Pass struct {
 type Rule func(*Pass) []Diagnostic
 
 func Run(t *testing.T, scope Scope, rule Rule) []Diagnostic
-func RunTyped(t testing.TB, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
+func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
 func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
 ```
 

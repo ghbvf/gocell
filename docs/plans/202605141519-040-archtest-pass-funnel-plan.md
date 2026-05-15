@@ -122,7 +122,7 @@ type Rule func(*Pass) []Diagnostic
 
 // Driver entries — framework controls packages.Load / parser.ParseFile timing.
 func Run(t *testing.T, scope Scope, rule Rule)                       // AST-only
-func RunTyped(t testing.TB, opts TypedOpts, patterns []string, rule Rule) []Diagnostic  // Typed, main tree; 内部 = runTypedWithRoot(t, findModuleRoot(t), ...)
+func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diagnostic  // Typed, main tree; 内部 = runTypedWithRoot(t, findModuleRoot(t), ...)（frozen 签名不变）
 func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic // Typed, standalone fixture-module @ dir
 
 type TypedOpts struct {
