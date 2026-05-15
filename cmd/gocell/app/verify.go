@@ -17,9 +17,13 @@ import (
 // verifySubcommands is the single source of truth for `gocell verify`
 // (see subcommand.go / CLI-UNIMPL-HIDE-01). slice/cell/journey/generated
 // thread ctx into kernel/verify.Runner / generatedverify.Verify, whose
-// go test subprocesses honor cancellation (pkg/cmdrun process-group
-// kill); targets and the codegen-* sandbox checks have no cancelable
-// downstream and discard ctx.
+// go test subprocesses honor cancellation (pkg/cmdrun process-group kill)
+// and whose cmd-layer call sites carry an explicit ctxInterrupted guard so
+// a signal-killed run surfaces as "interrupted" rather than a masked
+// "FAILED". targets has no cancelable downstream; the codegen-* sandbox
+// checks discard ctx because codegen.VerifyInWorktree is not ctx-native —
+// for those, prompt Ctrl+C termination is provided by the main.go
+// signal watchdog (signalGraceWindow in signalrun.go), not by ctx.
 var verifySubcommands = []subcommand[func(ctx context.Context, args []string) error]{
 	{
 		name: "slice",
@@ -303,6 +307,9 @@ func verifyGenerated(ctx context.Context, args []string) error {
 	}
 
 	result, err := generatedverify.Verify(ctx, root, mod, project)
+	if cerr := ctxInterrupted(ctx, "generated"); cerr != nil {
+		return cerr
+	}
 	if err != nil {
 		return fmt.Errorf("verify generated: %w", err)
 	}
