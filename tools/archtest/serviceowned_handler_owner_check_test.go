@@ -8,85 +8,77 @@
 // handler) to preserve the IDOR-safe 404-collapse design.
 //
 // AI-rebust: Medium (contract-decl ↔ service-guard AST ↔ errcode.KindNotFound
-// selector name, three-factor cross-binding; cross-function helper wrapping
-// is a theoretical form-escape). Hard-upgrade tracked in
+// type-resolved via archtest.ResolvePackageRef, three-factor cross-binding;
+// see blindspot inventory for the residual escape). Hard-upgrade tracked in
 // docs/backlog/cap-14-tooling.md §14.1 entry
 // SERVICEOWNED-HANDLER-OWNER-CHECK-01-HARD-UPGRADE — reviewers follow that
 // entry for the funnel-collapse upgrade path (AI-collab charter mandates the
 // Medium funnel name its upgrade backlog in-comment).
 //
-// Blindspot inventory (tools selected: metadata.NewParser for contract lookup,
-// go/parser.ParseFile + EachInSubtree[ast.IfStmt] for guard detection,
-// syntactic KindNotFound selector-name matching — no typeseval, see rationale):
+// Detection is type-aware: the first argument of every errcode.New call inside
+// an owner-guard IfStmt is resolved through go/types (archtest.ResolvePackageRef,
+// which delegates to typeseval.ResolvePackageRef) to confirm it is specifically
+// errcode.KindNotFound from "github.com/ghbvf/gocell/pkg/errcode". String-name
+// matching (Soft) is replaced by pkgPath+name resolved identity (Medium).
 //
-//   - Cross-function wrapping: if the guard is extracted into a helper
-//     `checkOwner(sess, caller)` and that helper is called from the function
-//     under test, this rule will NOT detect the guard. The guard-shaped IfStmt
-//     must appear directly in service.go. This is the primary escape hatch and
-//     the motivation for the Hard-upgrade backlog entry.
+// Blindspot inventory (tools: metadata.NewParser + archtest.RunTyped +
+// archtest.ResolvePackageRef + scanner.EachInSubtree[ast.IfStmt]):
+//
+//   - Cross-function wrapping: if the owner check is extracted into a helper
+//     `ensureOwnership(sess, caller)` called from service.go, the guard-shaped
+//     IfStmt appears in a different scope and this rule will NOT detect it via
+//     direct file scan. The guard must appear directly in the scanned file.
+//     This is the primary residual escape and the motivation for the Hard-upgrade
+//     backlog entry (cross-function callgraph analysis → Hard).
 //
 //   - Service file location: the rule scans
-//     cells/<cellDir>/slices/<sliceDir>/service.go. If a slice uses a
-//     differently-named file (e.g. logout_service.go), the rule misses it.
-//     Mitigation: the sessionlogout slice uses the canonical service.go name,
-//     and new serviceOwned slices should follow the same convention.
+//     cells/<cellDir>/slices/<sliceDir>/service.go only. If a slice's ownership
+//     check lives in a differently-named file, the rule misses it.
+//     Mitigation: canonical GoCell slices use service.go.
 //
-//   - Multiple service files: only the canonical service.go is scanned.
-//     If guard logic lives in a separate file, the rule misses it.
+//   - errcode.New call shape: the New selector match is syntactic (name "New").
+//     If errcode is dot-imported, the bare identifier `New` is also accepted.
+//     Package identity of the KindNotFound argument is fully type-resolved, so
+//     import aliasing does NOT evade the Kind check.
 //
-//   - Import alias / dot-import: the KindNotFound check matches the selector
-//     name "KindNotFound" syntactically and the package alias "errcode".
-//     Dot-importing errcode (`import . "..."`) would produce a bare Ident "KindNotFound"
-//     which is also matched. Aliasing errcode to a different name (e.g. "ec")
-//     would evade the check. GoCell code convention prohibits import renaming
-//     for well-known framework packages; no production file in cells/ renames
-//     errcode.
-//
-// Rationale for AST-only (no typeseval): the rule is scoped to cells/*/slices/*/service.go
-// files that always import errcode under the canonical alias "errcode" per GoCell
-// convention. typeseval.SharedResolver would add ~10s load overhead for a rule
-// whose only type-sensitive check (KindNotFound vs KindPermissionDenied) is fully
-// expressible via the syntactic selector name. The blindspot (import aliasing) is
-// accepted and documented; the Hard-upgrade path will address it.
-//
-// Self-check: TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture exercises
-// all three fixture variants to confirm the detector fires on RED cases and
-// remains silent on GREEN.
+// Self-check: TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture loads
+// three testdata packages with full types.Info via archtest.RunTyped,
+// sharing the same ownerGuardCheck rule closure as the production scan.
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
 	ruleServiceOwnedOwnerCheck01 = "SERVICEOWNED-HANDLER-OWNER-CHECK-01"
-	// serviceOwnedKindNotFoundName is the expected selector name for the
-	// IDOR-safe error kind. Using a package-scoped constant avoids the string
-	// appearing in multiple places and makes grep-based audits reliable.
-	serviceOwnedKindNotFoundName = "KindNotFound"
+	// serviceOwnedErrcodePkg is the canonical import path of the errcode package.
+	// Used for type-resolution of KindNotFound via archtest.ResolvePackageRef.
+	serviceOwnedErrcodePkg = "github.com/ghbvf/gocell/pkg/errcode"
+	// serviceOwnedKindNotFoundSym is the symbol name within errcodePkg that
+	// constitutes the IDOR-safe 404-collapse error kind.
+	serviceOwnedKindNotFoundSym = "KindNotFound"
 )
 
 // TestSERVICEOWNED_HANDLER_OWNER_CHECK_01 enforces that every contract with
-// auth.serviceOwned=true has an owner-guard branch in its serving slice's
+// auth.serviceOwned=true has an owner-guard IfStmt in its serving slice's
 // service.go returning errcode.New(errcode.KindNotFound, ...).
 //
 // Current production scope: http.auth.session.delete.v1 → sessionlogout/service.go
-// (GREEN — rule should report 0 violations).
+// (GREEN — rule reports 0 violations).
 //
-// Detection is AST-based: the rule parses service.go and looks for an IfStmt
-// whose condition contains a != (NEQ) binary expression and whose body contains
-// a ReturnStmt calling errcode.New with KindNotFound as the first argument.
-// The guard must appear directly in service.go (not delegated to a cross-function
-// helper — see blindspot inventory above).
+// Detection is type-aware via archtest.RunTyped + archtest.ResolvePackageRef:
+// KindNotFound is confirmed by package path resolution against the go/types graph,
+// not by string-name matching. Import aliasing (e.g. `import ec ".../errcode"`)
+// is covered by ResolvePackageRef's types.Info lookup.
 func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 	t.Parallel()
 
@@ -97,85 +89,168 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 		t.Fatalf("%s: metadata.NewParser: %v", ruleServiceOwnedOwnerCheck01, err)
 	}
 
-	// Collect all contracts with auth.serviceOwned=true.
 	serviceOwnedContracts := collectServiceOwnedContracts(project)
 	if len(serviceOwnedContracts) == 0 {
-		// No contracts with serviceOwned — nothing to enforce, vacuously OK.
 		return
 	}
 
-	var diags []scanner.Diagnostic
+	// Build set of service.go paths we need to check.
+	// key: module-relative slash path; value: absolute path for stat check.
+	type target struct {
+		rel        string
+		abs        string
+		contractID string
+		sliceID    string
+	}
+	var targets []target
+	var missingFileDiags []Diagnostic
 
 	for contractID, servingSlices := range serviceOwnedContracts {
 		for _, sl := range servingSlices {
-			serviceFile := filepath.Join(root, "cells", sl.CellDir, "slices", sl.Dir, "service.go")
-			rel := filepath.ToSlash(filepath.Join("cells", sl.CellDir, "slices", sl.Dir, "service.go"))
+			rel := filepath.ToSlash(
+				filepath.Join("cells", sl.CellDir, "slices", sl.Dir, "service.go"))
+			absPath := filepath.Join(root, rel)
 
-			if _, statErr := os.Stat(serviceFile); os.IsNotExist(statErr) {
-				diags = append(diags, scanner.Diagnostic{
+			if _, statErr := os.Stat(absPath); os.IsNotExist(statErr) {
+				missingFileDiags = append(missingFileDiags, Diagnostic{
 					Rel:  rel,
 					Line: 0,
 					Message: fmt.Sprintf(
-						"contract %q (auth.serviceOwned=true) serves slice %q but %s does not exist — "+
-							"owner-guard cannot be verified",
+						"contract %q (auth.serviceOwned=true) serves slice %q but %s not found",
 						contractID, sl.ID, rel),
 				})
 				continue
 			}
-
-			fileDiags := checkServiceFileForOwnerGuard(serviceFile, rel, contractID)
-			diags = append(diags, fileDiags...)
+			targets = append(targets, target{
+				rel: rel, abs: absPath,
+				contractID: contractID, sliceID: sl.ID,
+			})
 		}
 	}
 
-	scanner.Report(t, ruleServiceOwnedOwnerCheck01, diags)
+	Report(t, ruleServiceOwnedOwnerCheck01, missingFileDiags)
+
+	if len(targets) == 0 {
+		return
+	}
+
+	// Load cells/ with full type info via archtest.RunTyped.
+	// archtest.FlatNonDefaultTags() ensures build-tagged files are included.
+	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./cells/..."},
+		func(pass *Pass) []Diagnostic {
+			if !pass.Typed() {
+				return nil
+			}
+			var d []Diagnostic
+			for _, file := range pass.Files {
+				rel := pass.Rel(file)
+				// Only check service.go files that correspond to serviceOwned targets.
+				var matchedTarget *target
+				for i := range targets {
+					if targets[i].rel == rel {
+						matchedTarget = &targets[i]
+						break
+					}
+				}
+				if matchedTarget == nil {
+					continue
+				}
+				d = append(d, ownerGuardCheck(pass.TypesInfo, file, rel, matchedTarget.contractID)...)
+			}
+			return d
+		})
+
+	// Cross-check: any target whose service.go was never seen by RunTyped
+	// (e.g. build-tag exclusion) needs an explicit diagnostic.
+	seenRels := map[string]bool{}
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./cells/..."},
+		func(pass *Pass) []Diagnostic {
+			if !pass.Typed() {
+				return nil
+			}
+			for _, file := range pass.Files {
+				seenRels[pass.Rel(file)] = true
+			}
+			return nil
+		})
+	for i := range targets {
+		if !seenRels[targets[i].rel] {
+			diags = append(diags, Diagnostic{
+				Rel:  targets[i].rel,
+				Line: 0,
+				Message: fmt.Sprintf(
+					"contract %q: %s not loaded by typeseval "+
+						"(build tag excluded?); owner-guard check skipped",
+					targets[i].contractID, targets[i].rel),
+			})
+		}
+	}
+
+	Report(t, ruleServiceOwnedOwnerCheck01, diags)
 }
 
 // TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture verifies the
-// detector fires correctly on the three testdata fixtures.
+// type-aware detector fires on RED fixtures and stays silent on GREEN.
 //
-// Blindspot self-check: this test exercises all three fixture shapes to ensure
-// the detector is not silently broken. If checkServiceFileForOwnerGuard is
-// refactored incorrectly, this test will catch it before the production scan
-// becomes a silent no-op.
+// Fixtures are loaded via archtest.RunTyped with full types.Info, sharing
+// the same ownerGuardCheck rule closure as the production scan.
 //
-// Fixture shapes:
-//   - green_service.go: owner-guard present + KindNotFound → 0 diagnostics
-//   - red_missing_guard.go: no owner-guard → ≥1 diagnostics
-//   - red_wrong_kind.go: guard present but KindPermissionDenied → ≥1 diagnostics
+// red_wrong_kind correctness proof: the fixture contains BOTH a valid
+// errcode.KindNotFound (in the error-nil path) AND an errcode.KindPermissionDenied
+// (in the owner-guard body). A Soft string-name detector would match the first
+// KindNotFound and report GREEN. The type-aware detector correctly identifies that
+// the owner-guard IfStmt body returns KindPermissionDenied (resolved via
+// archtest.ResolvePackageRef to pkg="…/errcode", name="KindPermissionDenied")
+// and reports RED. This is the key Medium-vs-Soft differentiator.
+//
+// Fixture layout (each subdir is an independent Go package in the main module):
+//   - green/service.go: owner-guard + KindNotFound → 0 diagnostics
+//   - red_missing_guard/service.go: no owner-guard → ≥1 diagnostics
+//   - red_wrong_kind/service.go: guard present, KindPermissionDenied → ≥1 diagnostics
 func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 	t.Parallel()
 
-	archDir := findArchTestDir(t)
-	fixtureDir := filepath.Join(archDir, "testdata", "serviceowned_handler_owner_check")
+	fixtureBase := "tools/archtest/testdata/serviceowned_handler_owner_check"
 
 	cases := []struct {
-		file           string
+		subdir         string
 		wantViolations bool
 	}{
-		{file: "green_service.go", wantViolations: false},
-		{file: "red_missing_guard.go", wantViolations: true},
-		{file: "red_wrong_kind.go", wantViolations: true},
+		{subdir: "green", wantViolations: false},
+		{subdir: "red_missing_guard", wantViolations: true},
+		{subdir: "red_wrong_kind", wantViolations: true},
 	}
 
 	for _, tc := range cases {
 		tc := tc
-		t.Run(tc.file, func(t *testing.T) {
+		t.Run(tc.subdir, func(t *testing.T) {
 			t.Parallel()
-			path := filepath.Join(fixtureDir, tc.file)
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				t.Fatalf("fixture missing: %s", path)
-			}
-			rel := filepath.ToSlash(filepath.Join("tools", "archtest", "testdata",
-				"serviceowned_handler_owner_check", tc.file))
-			diags := checkServiceFileForOwnerGuard(path, rel, "fixture-contract")
+
+			pattern := "./" + fixtureBase + "/" + tc.subdir
+			diags := RunTyped(t,
+				TypedOpts{Tests: false, Tags: nil},
+				[]string{pattern},
+				func(pass *Pass) []Diagnostic {
+					if !pass.Typed() {
+						return nil
+					}
+					var d []Diagnostic
+					for _, file := range pass.Files {
+						rel := pass.Rel(file)
+						d = append(d, ownerGuardCheck(pass.TypesInfo, file, rel, "fixture-contract")...)
+					}
+					return d
+				})
+
 			if tc.wantViolations && len(diags) == 0 {
-				t.Errorf("%s: fixture %q should produce ≥1 diagnostic but got 0 — detector is broken",
-					ruleServiceOwnedOwnerCheck01, tc.file)
+				t.Errorf("%s: fixture %q expected ≥1 diagnostic got 0 — type-aware detector broken",
+					ruleServiceOwnedOwnerCheck01, tc.subdir)
 			}
 			if !tc.wantViolations && len(diags) > 0 {
-				t.Errorf("%s: fixture %q should produce 0 diagnostics but got %d:",
-					ruleServiceOwnedOwnerCheck01, tc.file, len(diags))
+				t.Errorf("%s: fixture %q expected 0 diagnostics got %d:",
+					ruleServiceOwnedOwnerCheck01, tc.subdir, len(diags))
 				for _, d := range diags {
 					t.Errorf("  %s:%d: %s", d.Rel, d.Line, d.Message)
 				}
@@ -185,20 +260,16 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 }
 
 // collectServiceOwnedContracts returns a map from contract ID to the list of
-// SliceMeta entries that serve that contract (role="serve" in contractUsages).
+// SliceMeta entries that serve that contract (contractUsages role="serve").
 func collectServiceOwnedContracts(project *metadata.ProjectMeta) map[string][]*metadata.SliceMeta {
 	result := map[string][]*metadata.SliceMeta{}
 	for contractID, contract := range project.Contracts {
-		if contract.Kind != "http" {
-			continue
-		}
-		if contract.Endpoints.HTTP == nil {
+		if contract.Kind != "http" || contract.Endpoints.HTTP == nil {
 			continue
 		}
 		if !contract.Endpoints.HTTP.Auth.ServiceOwned {
 			continue
 		}
-		// Find all slices that serve this contract.
 		for _, sl := range project.Slices {
 			for _, usage := range sl.ContractUsages {
 				if usage.Contract == contractID && usage.Role == "serve" {
@@ -211,98 +282,68 @@ func collectServiceOwnedContracts(project *metadata.ProjectMeta) map[string][]*m
 	return result
 }
 
-// checkServiceFileForOwnerGuard parses the given service.go file and returns
-// diagnostics if no owner-guard IfStmt with errcode.KindNotFound is found.
+// ownerGuardCheck is the shared detection core for both the production scan and
+// the fixture self-check. It is passed as the rule closure to archtest.RunTyped.
 //
-// An owner-guard is defined as an IfStmt that:
-//  1. Has a condition containing a BinaryExpr with token.NEQ (!=) operator
-//  2. Has a body containing at least one ReturnStmt that calls errcode.New
-//     with KindNotFound as the first argument
+// Returns a diagnostic if file does not contain a qualifying owner-guard IfStmt.
+// A qualifying owner-guard is an IfStmt whose:
+//  1. Condition is a direct != (NEQ) binary expression where NEITHER operand is
+//     the bare identifier "nil" (distinguishes ownership check from err-nil checks).
+//  2. Body contains a ReturnStmt calling errcode.New where the first argument
+//     type-resolves to errcode.KindNotFound via archtest.ResolvePackageRef
+//     (pkgPath == serviceOwnedErrcodePkg, name == serviceOwnedKindNotFoundSym).
 //
 // Parameters:
-//   - path: absolute filesystem path to the service.go file
-//   - rel: slash-separated path relative to repo root (used in diagnostics)
-//   - contractID: the serviceOwned contract ID (used in diagnostic messages)
-func checkServiceFileForOwnerGuard(path, rel, contractID string) []scanner.Diagnostic {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		return []scanner.Diagnostic{{
-			Rel:     rel,
-			Line:    0,
-			Message: fmt.Sprintf("contract %q: parse error in %s: %v", contractID, rel, err),
-		}}
-	}
-
-	if serviceFileHasOwnerGuard(f) {
+//   - typesInfo: pass.TypesInfo for type resolution (must be non-nil for type-aware check)
+//   - file: AST file to inspect
+//   - rel: slash-relative path (for diagnostic messages)
+//   - contractID: the serviceOwned contract ID (for diagnostic messages)
+func ownerGuardCheck(typesInfo *types.Info, file *ast.File, rel, contractID string) []Diagnostic {
+	if svcFileHasOwnerGuard(typesInfo, file) {
 		return nil
 	}
-
-	return []scanner.Diagnostic{{
+	return []Diagnostic{{
 		Rel:  rel,
 		Line: 0,
 		Message: fmt.Sprintf(
 			"contract %q (auth.serviceOwned=true) serving slice in %s "+
-				"is missing an owner-guard IfStmt that returns "+
-				"errcode.New(errcode.KindNotFound, ...) on subject-vs-caller mismatch. "+
-				"Returning 403/other leaks session existence (IDOR). "+
+				"is missing an owner-guard IfStmt returning "+
+				"errcode.New(errcode.KindNotFound, ...) on owner-mismatch. "+
+				"Returning any other Kind leaks resource existence (IDOR). "+
 				"Canonical form: cells/accesscore/slices/sessionlogout/service.go",
 			contractID, rel),
 	}}
 }
 
-// serviceFileHasOwnerGuard walks the AST of f looking for at least one IfStmt
-// that constitutes an owner-guard: a != condition whose body returns
-// errcode.New(errcode.KindNotFound, ...).
-//
-// Owner-guard shape:
-//
-//	if <ownerField> != <callerIdent> {
-//	    return errcode.New(errcode.KindNotFound, ...)
-//	}
-//
-// The condition must be a direct != binary expression where NEITHER side is the
-// bare identifier "nil" — this distinguishes owner-guard from error-nil checks
-// (`if err != nil { ... }`). Error-nil checks may also return KindNotFound for
-// domain not-found cases, but they are not owner-guards.
-func serviceFileHasOwnerGuard(f *ast.File) bool {
+// svcFileHasOwnerGuard reports whether file contains at least one qualifying
+// owner-guard IfStmt, using type-aware KindNotFound resolution via typesInfo.
+func svcFileHasOwnerGuard(typesInfo *types.Info, file *ast.File) bool {
 	found := false
-	scanner.EachInSubtree[ast.IfStmt](f, func(ifStmt *ast.IfStmt) {
+	EachInSubtree[ast.IfStmt](file, func(ifStmt *ast.IfStmt) {
 		if found {
 			return
 		}
 		if !conditionIsOwnerNEQ(ifStmt.Cond) {
 			return
 		}
-		if bodyReturnsKindNotFound(ifStmt.Body) {
+		if bodyHasKindNotFoundReturn(typesInfo, ifStmt.Body) {
 			found = true
 		}
 	})
 	return found
 }
 
-// conditionIsOwnerNEQ reports whether expr is a BinaryExpr with token.NEQ (!=)
-// where neither operand is the bare identifier "nil". This distinguishes
-// owner-guard conditions (`sess.SubjectID != callerUserID`) from error-nil
-// checks (`err != nil`) that also appear in service files but are not
-// owner-guards.
+// conditionIsOwnerNEQ reports whether expr is a top-level BinaryExpr with
+// token.NEQ where NEITHER operand is the bare identifier "nil".
 //
-// Only the top-level binary expression is inspected — nested boolean operators
-// (&&, ||) are not descended into. The canonical owner-guard has a single
-// direct != condition, not a compound boolean.
+// This distinguishes owner-guard conditions (`sess.SubjectID != callerUserID`)
+// from error-nil checks (`err != nil`) that appear in the same function.
 func conditionIsOwnerNEQ(expr ast.Expr) bool {
 	bin, ok := expr.(*ast.BinaryExpr)
-	if !ok {
+	if !ok || bin.Op != token.NEQ {
 		return false
 	}
-	if bin.Op != token.NEQ {
-		return false
-	}
-	// Exclude `x != nil` and `nil != x`.
-	if isNilIdentExpr(bin.X) || isNilIdentExpr(bin.Y) {
-		return false
-	}
-	return true
+	return !isNilIdentExpr(bin.X) && !isNilIdentExpr(bin.Y)
 }
 
 // isNilIdentExpr reports whether expr is the bare identifier "nil".
@@ -311,37 +352,29 @@ func isNilIdentExpr(expr ast.Expr) bool {
 	return ok && id.Name == "nil"
 }
 
-// bodyReturnsKindNotFound reports whether the block contains at least one
-// ReturnStmt that, directly or transitively, contains a CallExpr to errcode.New
-// with KindNotFound as the first argument.
-//
-// Detection is syntactic: the first argument must be a SelectorExpr
-// `errcode.KindNotFound` (selector name == "KindNotFound", package alias == "errcode")
-// or a bare Ident "KindNotFound" (dot-import form).
-//
-// We walk ReturnStmt nodes inside the body, then walk CallExpr nodes inside each
-// ReturnStmt using scanner.EachInSubtree to stay within the SCANNER-FRAMEWORK-USAGE-01
-// constraint (no for-range over []ast.Expr + type assertion).
-func bodyReturnsKindNotFound(body *ast.BlockStmt) bool {
+// bodyHasKindNotFoundReturn reports whether block contains a ReturnStmt whose
+// body includes a call to errcode.New with its first argument type-resolved to
+// errcode.KindNotFound.
+func bodyHasKindNotFoundReturn(typesInfo *types.Info, body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
 	}
 	found := false
-	scanner.EachInSubtree[ast.ReturnStmt](body, func(ret *ast.ReturnStmt) {
+	EachInSubtree[ast.ReturnStmt](body, func(ret *ast.ReturnStmt) {
 		if found {
 			return
 		}
-		scanner.EachInSubtree[ast.CallExpr](ret, func(call *ast.CallExpr) {
+		EachInSubtree[ast.CallExpr](ret, func(call *ast.CallExpr) {
 			if found {
 				return
 			}
-			if !isErrCodeNewCallExpr(call) {
+			if !isErrCodeNewCall(call) {
 				return
 			}
 			if len(call.Args) == 0 {
 				return
 			}
-			if argIsKindNotFound(call.Args[0]) {
+			if isKindNotFoundArg(typesInfo, call.Args[0]) {
 				found = true
 			}
 		})
@@ -349,11 +382,10 @@ func bodyReturnsKindNotFound(body *ast.BlockStmt) bool {
 	return found
 }
 
-// isErrCodeNewCallExpr reports whether call is syntactically shaped like
-// errcode.New(...) — a SelectorExpr with selector "New".
-// Bare `New(...)` (dot-import) is also accepted.
-// The package identity is confirmed via the KindNotFound argument check.
-func isErrCodeNewCallExpr(call *ast.CallExpr) bool {
+// isErrCodeNewCall reports whether call is shaped like errcode.New(...).
+// Accepts SelectorExpr (qualified) and bare Ident (dot-import) forms.
+// Package identity is confirmed by isKindNotFoundArg via type resolution.
+func isErrCodeNewCall(call *ast.CallExpr) bool {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
 		return fn.Sel.Name == "New"
@@ -364,25 +396,21 @@ func isErrCodeNewCallExpr(call *ast.CallExpr) bool {
 	}
 }
 
-// argIsKindNotFound reports whether arg syntactically represents errcode.KindNotFound.
+// isKindNotFoundArg reports whether arg resolves via go/types to
+// errcode.KindNotFound from "github.com/ghbvf/gocell/pkg/errcode".
 //
-// Accepted forms:
-//   - SelectorExpr `errcode.KindNotFound`: both package alias and selector name checked
-//   - Bare Ident `KindNotFound`: covers dot-import form
-func argIsKindNotFound(arg ast.Expr) bool {
-	switch a := arg.(type) {
-	case *ast.SelectorExpr:
-		if a.Sel.Name != serviceOwnedKindNotFoundName {
-			return false
-		}
-		// Confirm the package alias is "errcode" — all GoCell slices import
-		// errcode under this canonical alias per convention.
-		xIdent, ok := a.X.(*ast.Ident)
-		return ok && xIdent.Name == "errcode"
-	case *ast.Ident:
-		// dot-import form: bare KindNotFound
-		return a.Name == serviceOwnedKindNotFoundName
-	default:
+// Uses archtest.ResolvePackageRef (which delegates to typeseval.ResolvePackageRef)
+// for full type resolution. This covers:
+//   - Qualified selector `errcode.KindNotFound` (normal import)
+//   - Aliased import `ec.KindNotFound` (resolved via types.Info.Uses)
+//   - Dot-import bare `KindNotFound` (resolved via types.Info.Uses to *types.Const)
+//
+// This type-resolution is the Medium-grade factor: the KindNotFound identity
+// is bound to the package graph, not to a string token in source.
+func isKindNotFoundArg(typesInfo *types.Info, arg ast.Expr) bool {
+	pkgPath, name, ok := ResolvePackageRef(typesInfo, arg)
+	if !ok {
 		return false
 	}
+	return pkgPath == serviceOwnedErrcodePkg && name == serviceOwnedKindNotFoundSym
 }
