@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -599,7 +600,7 @@ func TestSharedDeps_Validate(t *testing.T) {
 				errcode.ErrControlplaneVerboseTokenMissing:   {},
 				errcode.ErrControlplaneClaimerNotDistributed: {},
 			}
-			for _, sub := range allJoinedErrors(err) {
+			for _, sub := range errutil.FlattenJoined(err) {
 				var ec *errcode.Error
 				require.ErrorAs(t, sub, &ec, "joined error %v must be *errcode.Error", sub)
 				_, ok := allowedCodes[ec.Code]
@@ -631,20 +632,6 @@ func TestBuildApp_RejectsInvalidSharedDeps(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_READYZ_VERBOSE_TOKEN")
-}
-
-// allJoinedErrors walks an errors.Join tree and returns leaves that are not
-// themselves joined. Used to assert every leaf error is an *errcode.Error.
-func allJoinedErrors(err error) []error {
-	type unwrapper interface{ Unwrap() []error }
-	if u, ok := err.(unwrapper); ok {
-		var out []error
-		for _, e := range u.Unwrap() {
-			out = append(out, allJoinedErrors(e)...)
-		}
-		return out
-	}
-	return []error{err}
 }
 
 // TestBuildBootstrap_MemoryTopology verifies that a memory topology produces a

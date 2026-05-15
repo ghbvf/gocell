@@ -493,15 +493,15 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 	if bs, ok := c.(cell.BeforeStarter); ok {
 		slog.Info("lifecycle: BeforeStart", slog.String("cell", c.ID()))
 		if err := a.invokeHook(ctx, c.ID(), cell.HookBeforeStart, bs.BeforeStart); err != nil {
-			a.rollbackCells(i - 1)
-			return a.failStart(c.ID(), "BeforeStart", err)
+			rbErrs := a.rollbackCells(i - 1)
+			return a.failStart(c.ID(), "BeforeStart", err, rbErrs)
 		}
 	}
 
 	// Core Start.
 	if err := c.Start(ctx); err != nil {
-		a.rollbackCells(i - 1)
-		return a.failStart(c.ID(), "start", err)
+		rbErrs := a.rollbackCells(i - 1)
+		return a.failStart(c.ID(), "start", err, rbErrs)
 	}
 
 	// AfterStart hook (optional).
@@ -513,8 +513,8 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 	if as, ok := c.(cell.AfterStarter); ok {
 		slog.Info("lifecycle: AfterStart", slog.String("cell", c.ID()))
 		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStart, as.AfterStart); err != nil {
-			a.rollbackCells(i)
-			return a.failStart(c.ID(), "AfterStart", err)
+			rbErrs := a.rollbackCells(i)
+			return a.failStart(c.ID(), "AfterStart", err, rbErrs)
 		}
 	}
 	return nil
@@ -524,20 +524,29 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 // (since the assembly did not reach the Started state, the snapshot data is
 // no longer valid), and returns a wrapped error.
 //
+// rollbackErrs contains any errors collected during the LIFO rollback of
+// already-started cells (returned by rollbackCells). The cause (original
+// lifecycle failure) is placed first in the joined tree so that callers using
+// errors.Is/errors.As on the primary error still resolve correctly.
+//
 // Snapshots() documents this invariant: it returns nil when the
 // assembly is not in the running state.
-func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
+func (a *CoreAssembly) failStart(cellID, phase string, err error, rollbackErrs []error) error {
 	a.mu.Lock()
 	a.state = stateStopped
 	a.snapshots = make(map[string]cell.RegistrySnapshot)
 	a.mu.Unlock()
-	return errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
+	wrapped := errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 		"assembly: cell lifecycle phase failed", err,
 		errcode.WithInternal(fmt.Sprintf("phase=%s cell=%q", phase, cellID)))
+	return errors.Join(append([]error{wrapped}, rollbackErrs...)...)
 }
 
-// rollbackCells stops cells [0..upTo] in reverse order using stopCellWithHooks.
-// All errors are logged inside stopCellWithHooks (best-effort, never abort).
+// rollbackCells stops cells [0..upTo] in reverse order using stopCellWithHooks
+// and returns all accumulated stop errors. Errors are returned (not re-logged)
+// so the caller (failStart) can join them with the original cause and surface
+// them to the Start() caller. stopCellWithHooks already logs each error via
+// slog.Warn — callers must not log the returned errors again.
 //
 // Rollback derives its own ctx from context.Background() so a SIGTERM that
 // cancels the caller's startCtx does not also cancel teardown. fx's
@@ -550,16 +559,18 @@ func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
 // shrink this budget inside invokeHook.
 //
 // upTo < 0 means no cells were started yet (e.g. BeforeStart on cell index 0
-// failed) — return early to skip a no-op ctx allocation.
-func (a *CoreAssembly) rollbackCells(upTo int) {
+// failed) — return nil immediately to skip a no-op ctx allocation.
+func (a *CoreAssembly) rollbackCells(upTo int) []error {
 	if upTo < 0 {
-		return
+		return nil
 	}
 	ctx, cancel := a.newRollbackCtx()
 	defer cancel()
+	var errs []error
 	for j := upTo; j >= 0; j-- {
-		a.stopCellWithHooks(ctx, a.cells[j])
+		errs = append(errs, a.stopCellWithHooks(ctx, a.cells[j])...)
 	}
+	return errs
 }
 
 // newRollbackCtx returns a fresh ctx for rollback teardown, decoupled from any
