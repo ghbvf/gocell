@@ -896,12 +896,12 @@ func (w *afterFailOutboxWriter) CallCount() int {
 // TestS4b_CredentialEvent_InvalidatesAccessJWT verifies the full S4b epoch
 // funnel path:
 //
-//  1. Login to obtain an access JWT at epoch=0.
+//  1. Login to obtain an access JWT at epoch=1 (NewUser baseline, S4d).
 //  2. Call Lock on the user — credentialinvalidate funnel atomically bumps
-//     authz_epoch to 1, revokes sessions, and revokes refresh tokens.
-//  3. Assert PG: users.authz_epoch = 1.
+//     authz_epoch 1→2, revokes sessions, and revokes refresh tokens.
+//  3. Assert PG: users.authz_epoch = 2.
 //  4. Assert PG: sessions.revoked_at IS NOT NULL for the subject.
-//  5. Replay the epoch=0 access JWT against any JWT-guarded endpoint → 401
+//  5. Replay the epoch=1 access JWT against any JWT-guarded endpoint → 401
 //     ERR_AUTH_INVALID_TOKEN (epoch mismatch detected in enforceSessionState).
 //  6. Close the PG pool to simulate a DB outage; replay same JWT → the session
 //     lookup fails with KindUnavailable, which the errcode projection collapses
@@ -934,7 +934,7 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 	_ = createResp.Body.Close()
 	require.Equal(t, http.StatusCreated, createResp.StatusCode, "victim user creation must return 201")
 
-	// 3. Login as the victim user to obtain an epoch=0 access JWT.
+	// 3. Login as the victim user to obtain an access JWT (epoch=1, NewUser baseline).
 	victimAccessTok, _, _ := sessionPGLogin(t, h.base, victimUsername, victimPassword)
 	victimID := sessionPGQueryUserIDByUsername(t, h, victimUsername)
 
@@ -944,13 +944,14 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 	assert.Equal(t, http.StatusOK, lockStatus,
 		"Lock of non-admin victim must return 200")
 
-	// 5. PG assertion: victim.authz_epoch must be exactly 1 after Lock.
+	// 5. PG assertion: victim.authz_epoch must be exactly 2 after Lock.
+	// NewUser sets baseline epoch=1 (S4d); credentialinvalidate funnel bumps 1→2 on Lock.
 	var epoch int64
 	err = h.pool.DB().QueryRow(ctx,
 		`SELECT authz_epoch FROM users WHERE id = $1`, victimID).Scan(&epoch)
 	require.NoError(t, err, "victim users row must exist")
-	assert.Equal(t, int64(1), epoch,
-		"victim.authz_epoch must be 1 after Lock (credentialinvalidate funnel bumped exactly once)")
+	assert.Equal(t, int64(2), epoch,
+		"victim.authz_epoch must be 2 after Lock (NewUser baseline 1 + credentialinvalidate funnel bumped once)")
 
 	// 6. PG assertion: all victim sessions must be revoked.
 	var activeSessionCount int
@@ -961,7 +962,7 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 	assert.Equal(t, 0, activeSessionCount,
 		"all victim sessions must be revoked after Lock; active session count must be 0")
 
-	// 7. Replay the victim's epoch=0 access JWT → 401 (epoch mismatch in enforceSessionState).
+	// 7. Replay the victim's epoch=1 access JWT → 401 (epoch mismatch: user.authz_epoch=2 vs JWT epoch=1).
 	// Use GET /api/v1/access/users/{id} as the target — any JWT-guarded endpoint works.
 	replayReq, _ := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/users/"+victimID, nil)
 	replayReq.Header.Set("Authorization", "Bearer "+victimAccessTok)
@@ -970,7 +971,7 @@ func TestS4b_CredentialEvent_InvalidatesAccessJWT(t *testing.T) {
 	replayBody, _ := io.ReadAll(replayResp.Body)
 	_ = replayResp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, replayResp.StatusCode,
-		"victim's epoch=0 JWT replayed after epoch bump must be rejected with 401; body=%s", replayBody)
+		"victim's epoch=1 JWT replayed after epoch bump to 2 must be rejected with 401; body=%s", replayBody)
 	var replayEnvelope struct {
 		Error struct {
 			Code string `json:"code"`
@@ -1205,9 +1206,10 @@ func TestS4b_RbacRevoke_SameTxAtomicity(t *testing.T) {
 // rbacassign.Revoke via the credentialinvalidate funnel in the same tx.
 //
 // Strategy: after a successful role revoke (funnel runs once → epoch bumped
-// once), wait for the in-memory eventbus to deliver the role.revoked outbox
-// event to the sessionlogout consumer. Then assert authz_epoch is still exactly
-// 1 — not 2 — proving the consumer did not call the funnel a second time.
+// from baseline 1 to 2), wait for the in-memory eventbus to deliver the
+// role.revoked outbox event to the sessionlogout consumer. Then assert
+// authz_epoch is still exactly 2 — not 3 — proving the consumer did not call
+// the funnel a second time.
 //
 // This is the anti-double-bump guard for S4b plan §3.2.
 func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
@@ -1229,15 +1231,15 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 	_ = assignResp.Body.Close()
 	require.Equal(t, http.StatusCreated, assignResp.StatusCode, "role assign must succeed")
 
-	// Snapshot epoch — must be 0 after assign (assign is additive, no bump).
+	// Snapshot epoch — must be 1 after assign (NewUser baseline 1; assign is additive, no bump).
 	var epochBeforeRevoke int64
 	err = h.pool.DB().QueryRow(ctx,
 		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochBeforeRevoke)
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), epochBeforeRevoke,
-		"authz_epoch must still be 0 after role assign (additive, no credential invalidation)")
+	assert.Equal(t, int64(1), epochBeforeRevoke,
+		"authz_epoch must still be 1 after role assign (NewUser baseline 1; assign additive, no credential invalidation)")
 
-	// Revoke the role — funnel runs once: epoch bumped to 1.
+	// Revoke the role — funnel runs once: epoch bumped 1→2.
 	revokeBody, _ := json.Marshal(map[string]string{"userId": userID, "roleId": "editor"})
 	revokeToken := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
 	revokeReq, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
@@ -1253,18 +1255,18 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 
 	// The funnel ran exactly once (inside rbacassign tx). Wait briefly for the
 	// in-memory eventbus to deliver the role.revoked event to the sessionlogout
-	// consumer. After consumer processing, epoch must be exactly 1 — not 2.
+	// consumer. After consumer processing, epoch must be exactly 2 — not 3.
 	// The consumer only logs + Acks; it does NOT call the funnel again.
 	require.Eventually(t, func() bool {
 		var epoch int64
 		qErr := h.pool.DB().QueryRow(ctx,
 			`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epoch)
-		return qErr == nil && epoch >= 1
+		return qErr == nil && epoch >= 2
 	}, testtime.EventuallyDefault, testtime.D10ms,
-		"authz_epoch must be ≥ 1 after role revoke (funnel ran in rbacassign tx)")
+		"authz_epoch must be ≥ 2 after role revoke (baseline 1 + funnel bump)")
 
 	// Small stabilization wait — if the consumer were to call the funnel a
-	// second time, epoch would become 2. We assert it stays exactly 1. No
+	// second time, epoch would become 3. We assert it stays exactly 2. No
 	// observable signal exists for a "negative" event (consumer does not bump),
 	// so a bounded sleep is the only available stabilization primitive.
 	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep negative-assertion stabilization
@@ -1273,8 +1275,8 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 	err = h.pool.DB().QueryRow(ctx,
 		`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epochFinal)
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), epochFinal,
-		"authz_epoch must be exactly 1 after role revoke — consumer must NOT call funnel again "+
+	assert.Equal(t, int64(2), epochFinal,
+		"authz_epoch must be exactly 2 after role revoke — consumer must NOT call funnel again "+
 			"(anti-double-bump guard, S4b plan §3.2); got %d", epochFinal)
 
 	_ = accessTok // used only to confirm login works before revoke

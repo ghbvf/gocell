@@ -630,7 +630,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
 	// Confirm the status was NOT actually updated (trigger fired BEFORE UPDATE).
 	got, err := userRepo.GetByID(ctx, soloAdmin.ID)
 	require.NoError(t, err)
-	assert.Equal(t, domain.StatusActive, got.Status, "trigger must reject UPDATE before row is changed")
+	assert.Equal(t, domain.StatusActive, got.Status(), "trigger must reject UPDATE before row is changed")
 }
 
 // TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG
@@ -656,7 +656,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t
 
 	got, err := userRepo.GetByID(ctx, target.ID)
 	require.NoError(t, err)
-	assert.Equal(t, domain.StatusLocked, got.Status, "status must have been updated")
+	assert.Equal(t, domain.StatusLocked, got.Status(), "status must have been updated")
 }
 
 // TestCountEffectiveAdmins_LockedAdminExcluded_PG verifies the PG

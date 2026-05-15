@@ -217,9 +217,9 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, u.ID, got.ID)
 		assert.Equal(t, u.Username, got.Username)
 		assert.Equal(t, u.Email, got.Email)
-		assert.Equal(t, u.Status, got.Status)
+		assert.Equal(t, u.Status(), got.Status())
 		assert.Equal(t, u.CreationSource, got.CreationSource)
-		assert.Equal(t, u.PasswordResetRequired, got.PasswordResetRequired)
+		assert.Equal(t, u.PasswordResetRequired(), got.PasswordResetRequired())
 	})
 
 	t.Run("Create_duplicate_username_returns_ErrAuthUserDuplicate", func(t *testing.T) {
