@@ -50,6 +50,8 @@ carve-out 的完整清单、各条理由和升级路径统一维护在下方 `##
 
 违反是可表达的（例如编辑代码映射但忘记更新 ADR），但任何偏离均导致 CI 变红，没有灰色地带，没有注释豁免路径。按照 `.claude/rules/gocell/ai-collab.md` §Hard 范本（PANIC-REGISTERED-01 注解）的定义，这是 Go 语言中此类规则所能达到的最高评级；诚实声明：编译期不可阻止（Go 允许直接编辑 map 字面量），enforcement 依赖 archtest。
 
+**Funnel 双向锁评级**（依照 `.claude/rules/gocell/ai-collab.md` §Funnel 双向锁评级要求）：下游 Hard — ADR 表有记录但代码映射无对应条目时 CI 立即报红（archtest 严格等价断言）；上游 Hard — 代码映射有条目但 ADR 表无对应记录时同样 CI 报红；两侧均为 archtest-Hard，构成闭环 funnel。诚实声明：两侧均非编译期阻止，这是 Go 语言中此类 ADR↔code 等价规则可达到的最高评级。
+
 ## Carve-out registry
 
 以下表格是 `ERRCODE-KIND-LITERAL-01` 规则全部 carve-out 的权威清单。

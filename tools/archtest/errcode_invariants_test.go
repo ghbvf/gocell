@@ -404,6 +404,11 @@ func TestErrcodeCarveOutADRConsistency(t *testing.T) {
 
 // parseCarveOutADRRegistry reads the ADR file at path and extracts the
 // (File, Function) pairs from the CARVEOUT-REGISTRY table.
+//
+// It requires the <!-- CARVEOUT-REGISTRY:BEGIN --> and <!-- CARVEOUT-REGISTRY:END -->
+// markers to be present. Between them the first in-table line must be the header row
+// (starting with "| Rule") and the second must be the separator row (starting with
+// "|---"). Missing or mismatched structural rows are hard errors with diagnostics.
 func parseCarveOutADRRegistry(path string) (map[carveOut]struct{}, error) {
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
@@ -416,30 +421,44 @@ func parseCarveOutADRRegistry(path string) (map[carveOut]struct{}, error) {
 
 	result := make(map[carveOut]struct{})
 	inTable := false
-	headerSkipped := false
-	separatorSkipped := false
+	beginSeen := false
+	endSeen := false
+	headerValidated := false
+	separatorValidated := false
 
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.TrimSpace(line) == beginMarker {
 			inTable = true
+			beginSeen = true
 			continue
 		}
 		if strings.TrimSpace(line) == endMarker {
+			endSeen = true
 			break
 		}
 		if !inTable {
 			continue
 		}
-		// Skip header row: | Rule | File | Function | ...
-		if !headerSkipped {
-			headerSkipped = true
+		// Validate and skip header row: | Rule | File | Function | ...
+		if !headerValidated {
+			if !strings.HasPrefix(line, "| Rule") {
+				return nil, fmt.Errorf(
+					"parseCarveOutADRRegistry: %s: unexpected registry table structure at %q;"+
+						" expected header row then |---| separator", path, line)
+			}
+			headerValidated = true
 			continue
 		}
-		// Skip separator row: |---|---|...
-		if !separatorSkipped {
-			separatorSkipped = true
+		// Validate and skip separator row: |---|---|...
+		if !separatorValidated {
+			if !strings.HasPrefix(line, "|---") {
+				return nil, fmt.Errorf(
+					"parseCarveOutADRRegistry: %s: unexpected registry table structure at %q;"+
+						" expected header row then |---| separator", path, line)
+			}
+			separatorValidated = true
 			continue
 		}
 		// Parse data row: | Rule | File | Function | Reason |
@@ -458,7 +477,99 @@ func parseCarveOutADRRegistry(path string) (map[carveOut]struct{}, error) {
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("scan ADR: %w", err)
 	}
+	if !beginSeen {
+		return nil, fmt.Errorf("parseCarveOutADRRegistry: %s: CARVEOUT-REGISTRY:BEGIN marker not found", path)
+	}
+	if !endSeen {
+		return nil, fmt.Errorf("parseCarveOutADRRegistry: %s: CARVEOUT-REGISTRY:END marker not found", path)
+	}
 	return result, nil
+}
+
+// TestParseCarveOutADRRegistry is a table-driven unit test for parseCarveOutADRRegistry.
+// It verifies: well-formed table → entries parsed; missing BEGIN → error;
+// blank line where header expected → error; missing END marker → error.
+func TestParseCarveOutADRRegistry(t *testing.T) {
+	wellFormed := `# ADR
+<!-- CARVEOUT-REGISTRY:BEGIN -->
+| Rule | File | Function | Reason |
+|---|---|---|---|
+| R1 | pkg/a/a.go | FuncA | reason A |
+| R2 | pkg/b/b.go | FuncB | reason B |
+<!-- CARVEOUT-REGISTRY:END -->
+`
+	tests := []struct {
+		name     string
+		content  string
+		wantErr  string
+		wantKeys []carveOut
+	}{
+		{
+			name:    "well-formed table: 2 rows parsed",
+			content: wellFormed,
+			wantKeys: []carveOut{
+				{rel: "pkg/a/a.go", fn: "FuncA"},
+				{rel: "pkg/b/b.go", fn: "FuncB"},
+			},
+		},
+		{
+			name: "missing BEGIN marker: error",
+			content: `# ADR
+| Rule | File | Function | Reason |
+|---|---|---|---|
+<!-- CARVEOUT-REGISTRY:END -->
+`,
+			wantErr: "CARVEOUT-REGISTRY:BEGIN marker not found",
+		},
+		{
+			name: "blank line where header expected: error",
+			content: `# ADR
+<!-- CARVEOUT-REGISTRY:BEGIN -->
+
+| Rule | File | Function | Reason |
+|---|---|---|---|
+<!-- CARVEOUT-REGISTRY:END -->
+`,
+			wantErr: "unexpected registry table structure",
+		},
+		{
+			name: "missing END marker: error",
+			content: `# ADR
+<!-- CARVEOUT-REGISTRY:BEGIN -->
+| Rule | File | Function | Reason |
+|---|---|---|---|
+| R1 | pkg/a/a.go | FuncA | reason A |
+`,
+			wantErr: "CARVEOUT-REGISTRY:END marker not found",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Write content to a temp file so parseCarveOutADRRegistry can open it.
+			tmp, err := os.CreateTemp(t.TempDir(), "adr-*.md")
+			require.NoError(t, err)
+			_, err = tmp.WriteString(tc.content)
+			require.NoError(t, err)
+			require.NoError(t, tmp.Close())
+
+			got, err := parseCarveOutADRRegistry(tmp.Name())
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			gotSet := make(map[carveOut]struct{}, len(got))
+			for k := range got {
+				gotSet[k] = struct{}{}
+			}
+			for _, k := range tc.wantKeys {
+				assert.Contains(t, gotSet, k, "expected key %v in parsed result", k)
+			}
+			assert.Len(t, got, len(tc.wantKeys))
+		})
+	}
 }
 
 // TestFindErrcodeErrorLiteralsFunctionLevel is a table-driven unit test for
