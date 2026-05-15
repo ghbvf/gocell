@@ -10,55 +10,27 @@
 package archtest
 
 import (
-	"fmt"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 // runProdClockInjectionFixtureScan loads the fixture package at fixtureDir
-// and returns the sorted slice of violation strings using the same predicate
+// and returns the sorted slice of violation Diagnostics using the same predicate
 // as TestProdClockInjection (scanProdClockInjectionAST). Files outside the
-// fixture module root (stdlib, deps) are excluded via fileroles.Rel.
-func runProdClockInjectionFixtureScan(t *testing.T, fixtureDir string) []string {
+// fixture module root (stdlib, deps) are excluded via RunTypedDir's Rel filter.
+func runProdClockInjectionFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, nil, "./...")
-	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
-	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				d = append(d, scanProdClockInjectionAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(fixtureDir, abs)
-			if !ok {
-				continue
-			}
-
-			violations = append(violations,
-				scanProdClockInjectionAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
-	sort.Strings(violations)
-	return violations
+			return d
+		})
 }
 
 // TestProdClockInjectionFixtures runs the PROD-CLOCK-INJECTION-01 scanner
@@ -117,10 +89,12 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 				if i >= len(got) {
 					break
 				}
-				prefix := fmt.Sprintf("usage.go:%d:", line)
-				assert.Contains(t, got[i], prefix,
-					"fixture %s violation[%d]: expected prefix %q, got %q",
-					tc.pkg, i, prefix, got[i])
+				assert.Equal(t, "usage.go", got[i].Rel,
+					"fixture %s violation[%d]: expected Rel=usage.go, got %q",
+					tc.pkg, i, got[i].Rel)
+				assert.Equal(t, line, got[i].Line,
+					"fixture %s violation[%d]: expected Line=%d, got %d",
+					tc.pkg, i, line, got[i].Line)
 			}
 		})
 	}

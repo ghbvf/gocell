@@ -30,11 +30,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -80,88 +76,57 @@ type clockRequiredCtor struct {
 	withClockFullName string // key: withClock.FullName()
 }
 
-// collectClockRequiredCtors scans all loaded packages and collects constructors
-// (func name starting with "New", last param variadic) whose package also
-// exports a "WithClock" function.
+// collectClockRequiredCtorsFromPass scans a single package's types for
+// constructors (func name starting with "New", last param variadic) whose
+// package also exports a "WithClock" function. Returns entries to add to the
+// global ctors map.
 //
-// Returns a map keyed by constructor FullName() for pointer-stable lookup.
+// This is the per-Pass equivalent of the old collectClockRequiredCtors that
+// operated on []*packages.Package. RunTyped calls this once per package; the
+// caller accumulates results into a shared map keyed by FullName() strings.
+//
 // Using FullName() strings instead of *types.Func pointers avoids false
 // mismatches between the test-variant and non-test-variant of the same package
-// (packages.Load with Tests=true loads the package twice: the normal variant
-// and the "test variant" each get a distinct *types.Package, so two different
-// *types.Func pointers refer to the same logical function).
-func collectClockRequiredCtors(pkgs []*packages.Package) map[string]clockRequiredCtor {
-	// First pass: collect packages that export WithClock.
-	// Key: package path (may differ between normal/test variant, but path is same).
-	type pkgInfo struct {
-		withClockFullName string
+// (RunTyped's dedup-by-*ast.File ensures files are not double-counted, but the
+// same *types.Package may appear via two load variants; keying on path-stable
+// FullName() strings provides the same guarantee as the original).
+func collectClockRequiredCtorsFromPass(p *Pass) []clockRequiredCtor {
+	if p.Pkg == nil {
+		return nil
 	}
-	pkgWithClock := map[string]pkgInfo{} // keyed by pkg.Path()
-	visited := map[string]bool{}
+	scope := p.Pkg.Scope()
 
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		if p.Types == nil {
-			return
-		}
-		pkgPath := p.Types.Path()
-		if visited[pkgPath] {
-			return
-		}
-		visited[pkgPath] = true
+	// Check if this package exports WithClock.
+	obj := scope.Lookup("WithClock")
+	if obj == nil {
+		return nil
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return nil
+	}
+	withClockFullName := fn.FullName()
 
-		scope := p.Types.Scope()
-		obj := scope.Lookup("WithClock")
-		if obj == nil {
-			return
+	// Collect New* constructors from this package (variadic last param).
+	var result []clockRequiredCtor
+	for _, name := range scope.Names() {
+		if !strings.HasPrefix(name, "New") {
+			continue
 		}
-		fn, ok := obj.(*types.Func)
+		cobj := scope.Lookup(name)
+		cfn, ok := cobj.(*types.Func)
 		if !ok {
-			return
+			continue
 		}
-		pkgWithClock[pkgPath] = pkgInfo{withClockFullName: fn.FullName()}
-	})
-
-	// Second pass: collect New* constructors from packages that have WithClock.
-	result := map[string]clockRequiredCtor{}
-	visited = map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		if p.Types == nil {
-			return
+		sig, ok := cfn.Type().(*types.Signature)
+		if !ok || !sig.Variadic() {
+			continue
 		}
-		pkgPath := p.Types.Path()
-		if visited[pkgPath] {
-			return
-		}
-		visited[pkgPath] = true
-
-		info, hasWithClock := pkgWithClock[pkgPath]
-		if !hasWithClock {
-			return
-		}
-
-		scope := p.Types.Scope()
-		for _, name := range scope.Names() {
-			if !strings.HasPrefix(name, "New") {
-				continue
-			}
-			obj := scope.Lookup(name)
-			fn, ok := obj.(*types.Func)
-			if !ok {
-				continue
-			}
-			sig, ok := fn.Type().(*types.Signature)
-			if !ok || !sig.Variadic() {
-				continue
-			}
-			key := fn.FullName()
-			result[key] = clockRequiredCtor{
-				ctorFullName:      key,
-				withClockFullName: info.withClockFullName,
-			}
-		}
-	})
-
+		result = append(result, clockRequiredCtor{
+			ctorFullName:      cfn.FullName(),
+			withClockFullName: withClockFullName,
+		})
+	}
 	return result
 }
 
@@ -170,7 +135,7 @@ func collectClockRequiredCtors(pkgs []*packages.Package) map[string]clockRequire
 func callsWithClock(parent *ast.CallExpr, info *types.Info, withClockFullName string) bool {
 	found := false
 	for _, arg := range parent.Args {
-		scanner.EachInSubtree[ast.CallExpr](arg, func(call *ast.CallExpr) {
+		EachInSubtree[ast.CallExpr](arg, func(call *ast.CallExpr) {
 			if found {
 				return
 			}
@@ -218,12 +183,12 @@ func scanClockCallsiteAST(
 	rel string,
 	info *types.Info,
 	ctors map[string]clockRequiredCtor,
-) []string {
+) []Diagnostic {
 	allowedLines := clockCallsiteAllowedLines(fset, file)
-	var out []string
+	var out []Diagnostic
 	seen := map[string]bool{}
 
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		callee := resolvedFunc(call.Fun, info)
 		if callee == nil {
 			return
@@ -251,15 +216,24 @@ func scanClockCallsiteAST(
 		key := fmt.Sprintf("%s:%d:%s", rel, line, callee.Name())
 		if !seen[key] {
 			seen[key] = true
-			out = append(out, fmt.Sprintf(
-				"%s:%d: %s called without WithClock — "+
-					"must pass WithClock(clk) to satisfy the clock injection requirement. "+
-					"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
-				rel, line, callee.FullName()))
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"%s called without WithClock — "+
+						"must pass WithClock(clk) to satisfy the clock injection requirement. "+
+						"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
+					callee.FullName()),
+			})
 		}
 	})
 
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		return out[i].Line < out[j].Line
+	})
 	return out
 }
 
@@ -292,88 +266,66 @@ func TestClockInjectionCallsite(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	// Load with tests=true so *_test.go files are included in Syntax.
-	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	ctors := collectClockRequiredCtors(pkgs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	// Phase 1: collect all ctors from packages that have WithClock.
+	// Load with tests=true so we see every package variant.
+	// The rule func only populates ctors and always returns nil; _ = discards
+	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
+	ctors := make(map[string]clockRequiredCtor)
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			for _, c := range collectClockRequiredCtorsFromPass(p) {
+				ctors[c.ctorFullName] = c
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+			return nil
+		})
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok {
-				continue
+	// Phase 2: scan test files for callsite violations.
+	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				// Only scan test files.
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
 			}
-			// Only scan test files.
-			if !strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
+			return d
+		})
 
-			violations = append(violations,
-				scanClockCallsiteAST(p.Fset, file, rel, p.TypesInfo, ctors)...)
-		}
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"CLOCK-INJECTION-TEST-CALLSITE-01: test code must pass WithClock(clk) "+
-			"when calling constructors that enforce Clock injection. "+
-			"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md")
+	Report(t, "CLOCK-INJECTION-TEST-CALLSITE-01", diags)
 }
 
 // runClockCallsiteFixtureScan loads a fixture directory and returns violations.
-func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []string {
+func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, true, nil, "./...")
-	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
-	require.Empty(t, errs, "package load errors for %s: %v", fixtureDir, errs)
 
-	ctors := collectClockRequiredCtors(pkgs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	// Phase 1: collect ctors from the fixture module.
+	// The rule func only populates ctors and always returns nil; _ = discards
+	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
+	ctors := make(map[string]clockRequiredCtor)
+	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			for _, c := range collectClockRequiredCtorsFromPass(p) {
+				ctors[c.ctorFullName] = c
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+			return nil
+		})
 
-			rel, ok := fileroles.Rel(fixtureDir, abs)
-			if !ok {
-				continue
+	// Phase 2: scan test files for callsite violations.
+	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
 			}
-			if !strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			violations = append(violations,
-				scanClockCallsiteAST(p.Fset, file, rel, p.TypesInfo, ctors)...)
-		}
-	})
-
-	sort.Strings(violations)
-	return violations
+			return d
+		})
 }
 
 // TestClockInjectionCallsiteFixtures validates fixture-based regression cases.
@@ -482,50 +434,34 @@ func TestClockInjectionProdCallsite(t *testing.T) {
 	}
 
 	// Load without tests=true — composition root files are not test files.
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 
-	// Reuse collectClockRequiredCtors from the test-callsite gate — same
-	// detection logic (New* with variadic params + WithClock in same package).
-	ctors := collectClockRequiredCtors(pkgs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	// Phase 1: collect all ctors from packages that have WithClock.
+	// The rule func only populates ctors and always returns nil; _ = discards
+	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
+	ctors := make(map[string]clockRequiredCtor)
+	_ = RunTyped(t, TypedOpts{Tests: false}, patterns,
+		func(p *Pass) []Diagnostic {
+			for _, c := range collectClockRequiredCtorsFromPass(p) {
+				ctors[c.ctorFullName] = c
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+			return nil
+		})
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok {
-				continue
+	// Phase 2: scan composition-root files for callsite violations.
+	diags := RunTyped(t, TypedOpts{Tests: false}, patterns,
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !isCompositionRoot(rel) {
+					continue
+				}
+				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
 			}
-			if !isCompositionRoot(rel) {
-				continue
-			}
+			return d
+		})
 
-			violations = append(violations,
-				scanClockCallsiteAST(p.Fset, file, rel, p.TypesInfo, ctors)...)
-		}
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"CLOCK-INJECTION-PROD-CALLSITE-01: production composition-root files "+
-			"(cmd/ + examples/*/main.go) must pass WithClock(clk) when calling "+
-			"constructors that enforce Clock injection. "+
-			"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md")
+	Report(t, "CLOCK-INJECTION-PROD-CALLSITE-01", diags)
 }
 
 // ---------------------------------------------------------------------------
@@ -587,45 +523,23 @@ func TestKernelClockLeafFallback(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				if isAllowedRealCallerPath(rel) {
+					continue
+				}
+				d = append(d, scanLeafRealCallsAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+			return d
+		})
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsProductionCode(rel) {
-				continue
-			}
-			if isAllowedRealCallerPath(rel) {
-				continue
-			}
-
-			violations = append(violations, scanLeafRealCallsAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"KERNEL-CLOCK-LEAF-FALLBACK-01: production code outside the composition "+
-			"root must not call kernel/clock.Real(); receive a clock.Clock through "+
-			"the constructor and validate at the boundary via clock.MustHaveClock. "+
-			"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md")
+	Report(t, "KERNEL-CLOCK-LEAF-FALLBACK-01", diags)
 }
 
 // isAllowedRealCallerPath reports whether rel is exempt from the gate.
@@ -647,11 +561,11 @@ func isAllowedRealCallerPath(rel string) bool {
 }
 
 // scanLeafRealCallsAST walks file's AST and returns a sorted slice of
-// violation strings ("rel:line: detail") for every call to
-// kernel/clock.Real(). Detection is type-driven via info.ObjectOf so import
-// aliases and dot-imports are uniformly covered.
-func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []string {
-	var out []string
+// violation Diagnostics for every call to kernel/clock.Real(). Detection
+// is type-driven via info.ObjectOf so import aliases and dot-imports are
+// uniformly covered.
+func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	var out []Diagnostic
 	seen := map[string]bool{}
 
 	record := func(node ast.Node) {
@@ -661,25 +575,33 @@ func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info 
 			return
 		}
 		seen[key] = true
-		out = append(out, fmt.Sprintf(
-			"%s:%d: kernel/clock.Real() — accept clock.Clock as a constructor "+
-				"parameter and validate via clock.MustHaveClock", rel, line))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: "kernel/clock.Real() — accept clock.Clock as a constructor " +
+				"parameter and validate via clock.MustHaveClock",
+		})
 	}
 
-	scanner.EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
+	EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
 		// Standard form: clock.Real / c.Real (alias).
 		if matchedKernelClockReal(info, e.Sel) {
 			record(e)
 		}
 	})
-	scanner.EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
+	EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
 		// Dot-import form: `import . "…/kernel/clock"; Real()`.
 		if matchedKernelClockReal(info, e) {
 			record(e)
 		}
 	})
 
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		return out[i].Line < out[j].Line
+	})
 	return out
 }
 
@@ -707,42 +629,21 @@ func matchedKernelClockReal(info *types.Info, ident *ast.Ident) bool {
 }
 
 // runLeafFallbackFixtureScan loads the fixture package at fixtureDir and
-// returns the sorted slice of violation strings using the same predicate as
-// TestKernelClockLeafFallback (scanLeafRealCallsAST). The whitelist is
+// returns the sorted slice of violation Diagnostics using the same predicate
+// as TestKernelClockLeafFallback (scanLeafRealCallsAST). The whitelist is
 // intentionally NOT applied here — every fixture path is treated as
 // production code so the gate's detection logic is the only thing under test.
-func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []string {
+func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, nil, "./...")
-	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
-	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				d = append(d, scanLeafRealCallsAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(fixtureDir, abs)
-			if !ok {
-				continue
-			}
-
-			violations = append(violations,
-				scanLeafRealCallsAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
-	sort.Strings(violations)
-	return violations
+			return d
+		})
 }
 
 // TestKernelClockLeafFallbackFixtures runs the KERNEL-CLOCK-LEAF-FALLBACK-01
@@ -812,44 +713,23 @@ func TestKernelClockResetRelativeProd(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, typeseval.FlatNonDefaultTags(), patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	diags := RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				if isClockResetRelativeExempt(rel) {
+					continue
+				}
+				d = append(d, scanClockResetRelativeAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+			return d
+		})
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsProductionCode(rel) {
-				continue
-			}
-			if isClockResetRelativeExempt(rel) {
-				continue
-			}
-
-			violations = append(violations, scanClockResetRelativeAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"KERNEL-CLOCK-RESET-RELATIVE-PROD-01: prod code must use ResetAt(deadline time.Time) "+
-			"instead of Reset(d time.Duration) on clock.Timer values to avoid the read-then-act "+
-			"race; ref: docs/architecture/202605021500-adr-kernel-clock-injection.md")
+	Report(t, "KERNEL-CLOCK-RESET-RELATIVE-PROD-01", diags)
 }
 
 // isClockResetRelativeExempt reports whether rel is exempt from the gate.
@@ -863,15 +743,15 @@ func isClockResetRelativeExempt(rel string) bool {
 }
 
 // scanClockResetRelativeAST walks file's AST and returns a sorted slice of
-// violation strings for every call `<expr>.Reset(d)` where the receiver
+// violation Diagnostics for every call `<expr>.Reset(d)` where the receiver
 // structurally implements kernel/clock.Timer (has both Reset(Duration)bool and
 // ResetAt(Time)bool methods). This is the same predicate used by the fixture
 // regression tests.
-func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []string {
-	var out []string
+func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	var out []Diagnostic
 	seen := map[string]bool{}
 
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Reset" {
 			return
@@ -905,15 +785,22 @@ func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, 
 		key := fmt.Sprintf("%s:%d", rel, line)
 		if !seen[key] {
 			seen[key] = true
-			out = append(out, fmt.Sprintf(
-				"%s:%d: Timer.Reset(d time.Duration) — use ResetAt(deadline time.Time) instead "+
-					"to avoid read-then-act race; "+
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: "Timer.Reset(d time.Duration) — use ResetAt(deadline time.Time) instead " +
+					"to avoid read-then-act race; " +
 					"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
-				rel, line))
+			})
 		}
 	})
 
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		return out[i].Line < out[j].Line
+	})
 	return out
 }
 
@@ -1018,14 +905,16 @@ func TestKernelClockResetRelativeFixtures(t *testing.T) {
 				"fixture %s: expected %d violation(s), got %d: %v",
 				tc.dir, len(tc.wantViolLines), len(got), got)
 
-			for i, line := range tc.wantViolLines {
+			for i, wantLine := range tc.wantViolLines {
 				if i >= len(got) {
 					break
 				}
-				prefix := fmt.Sprintf("usage.go:%d:", line)
-				assert.Contains(t, got[i], prefix,
-					"fixture %s violation[%d]: expected prefix %q, got %q",
-					tc.dir, i, prefix, got[i])
+				assert.Equal(t, "usage.go", got[i].Rel,
+					"fixture %s violation[%d]: expected Rel=usage.go, got %q",
+					tc.dir, i, got[i].Rel)
+				assert.Equal(t, wantLine, got[i].Line,
+					"fixture %s violation[%d]: expected Line=%d, got %d",
+					tc.dir, i, wantLine, got[i].Line)
 			}
 		})
 	}
@@ -1033,38 +922,17 @@ func TestKernelClockResetRelativeFixtures(t *testing.T) {
 
 // runClockResetRelativeFixtureScan loads a standalone fixture module and runs
 // the same scanner as TestKernelClockResetRelativeProd.
-func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []string {
+func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, nil, "./...")
-	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
-	require.Empty(t, errs, "package load errors for %s: %v", fixtureDir, errs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				d = append(d, scanClockResetRelativeAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(fixtureDir, abs)
-			if !ok {
-				continue
-			}
-
-			violations = append(violations,
-				scanClockResetRelativeAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
-	sort.Strings(violations)
-	return violations
+			return d
+		})
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,46 +993,23 @@ func TestProdClockInjection(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				if isAllowedRealClockPath(rel) {
+					continue
+				}
+				d = append(d, scanProdClockInjectionAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+			return d
+		})
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsProductionCode(rel) {
-				continue
-			}
-			if isAllowedRealClockPath(rel) {
-				continue
-			}
-
-			violations = append(violations, scanProdClockInjectionAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"PROD-CLOCK-INJECTION-01: production code must call clk.Now / "+
-			"clk.Since / clk.Until / clk.NewTimerAt / clk.NewTicker / "+
-			"clk.AfterFunc / clk.Sleep on an injected kernel/clock.Clock; "+
-			"only kernel/clock itself may delegate to the stdlib time package. "+
-			"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md")
+	Report(t, "PROD-CLOCK-INJECTION-01", diags)
 }
 
 // isAllowedRealClockPath reports whether rel falls under one of the
@@ -1179,17 +1024,17 @@ func isAllowedRealClockPath(rel string) bool {
 }
 
 // scanProdClockInjectionAST walks file's AST and returns a sorted slice of
-// violation strings ("rel:line: detail") for every reference to one of the
-// forbidden stdlib time functions. Both call positions (time.Now()) and
-// function-value positions (now := time.Now, struct field assignment
-// `{now: time.Now}`) are detected. Detection is type-driven via
-// info.ObjectOf, so import aliases and dot-imports are covered uniformly.
+// violation Diagnostics for every reference to one of the forbidden stdlib
+// time functions. Both call positions (time.Now()) and function-value
+// positions (now := time.Now, struct field assignment `{now: time.Now}`) are
+// detected. Detection is type-driven via info.ObjectOf, so import aliases and
+// dot-imports are covered uniformly.
 //
 // scanProdClockInjectionAST is exported within the archtest package so the
 // fixture-based regression tests in prod_clock_injection_fixtures_test.go can
 // share the exact same predicate.
-func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []string {
-	var out []string
+func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	var out []Diagnostic
 	seen := map[string]bool{}
 
 	record := func(node ast.Node, name string) {
@@ -1199,12 +1044,16 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 			return
 		}
 		seen[key] = true
-		out = append(out, fmt.Sprintf(
-			"%s:%d: time.%s — must use injected %s instead",
-			rel, line, name, forbiddenTimeFns[name]))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"time.%s — must use injected %s instead",
+				name, forbiddenTimeFns[name]),
+		})
 	}
 
-	scanner.EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
+	EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
 		// Standard form: time.Now, t.Now (alias), pkg.Now (any pkg).
 		// Type info on .Sel resolves the actual function regardless of
 		// the receiver identifier name.
@@ -1212,7 +1061,7 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 			record(e, name)
 		}
 	})
-	scanner.EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
+	EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
 		// Dot-import form: `import . "time"; Now()`. The Ident is the
 		// call function reference itself — no SelectorExpr surrounds it.
 		if name, ok := matchedTimeFn(info, e); ok {
@@ -1220,7 +1069,15 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 		}
 	})
 
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		return out[i].Message < out[j].Message
+	})
 	return out
 }
 

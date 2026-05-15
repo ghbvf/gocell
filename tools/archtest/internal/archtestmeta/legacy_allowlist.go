@@ -72,7 +72,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/cell_init_test.go":                               true,
 	"tools/archtest/cell_public_option_param_test.go":                true,
 	"tools/archtest/ci_integration_discovery_invariants_test.go":     true, // Stage 1.5: uses ParseBuildConstraint/FlatNonDefaultTags
-	"tools/archtest/clock_invariants_test.go":                        true,
 	"tools/archtest/credential_invalidate_funnel_invariants_test.go": true,
 	"tools/archtest/domain_authz_mutation_funnel_invariants_test.go": true,
 	"tools/archtest/errcode_invariants_test.go":                      true,
@@ -87,7 +86,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/outbox_invariants_test.go":                       true,
 	"tools/archtest/panic_invariants_test.go":                        true,
 	"tools/archtest/pg_repo_ambient_tx_test.go":                      true,
-	"tools/archtest/prod_clock_injection_fixtures_test.go":           true,
 	"tools/archtest/prod_duration_fixtures_test.go":                  true,
 	"tools/archtest/prod_invariants_test.go":                         true,
 	"tools/archtest/production_loader_funnel_test.go":                true,
