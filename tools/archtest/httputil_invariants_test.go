@@ -14,15 +14,21 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
+
+// httputilResponseGoScope returns a DirsScope restricted to pkg/httputil/response.go.
+func httputilResponseGoScope(root string) Scope {
+	return DirsScope(root, []string{"pkg/httputil"},
+		MatchRels(func(rel string) bool {
+			return filepath.ToSlash(rel) == "pkg/httputil/response.go"
+		}),
+	)
+}
 
 // INVARIANT: HTTPUTIL-5XX-KIND-NORMALIZE-01
 //
@@ -44,77 +50,81 @@ import (
 func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	targetFile := filepath.Join(root, "pkg", "httputil", "response.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, targetFile, nil, 0)
-	if err != nil {
-		t.Fatalf("HTTPUTIL-5XX-KIND-NORMALIZE-01: parse %s: %v", targetFile, err)
-	}
 
 	targetFuncs := map[string]bool{
 		"WriteErrorWithStatus": true,
 		"writeErrcodeError":    true,
 	}
 
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-		if !targetFuncs[fn.Name.Name] {
-			return
+	diags := Run(t, httputilResponseGoScope(root), func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+				if !targetFuncs[fn.Name.Name] {
+					return
+				}
+				EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+					if len(call.Args) < 1 {
+						return
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					// Match errcode.New(...) calls only.
+					ident, ok := sel.X.(*ast.Ident)
+					if !ok || ident.Name != "errcode" || sel.Sel.Name != "New" {
+						return
+					}
+					// First argument must be an errcode.KindXxx selector expression,
+					// not ecErr.Kind or any .Kind field access.
+					firstArg := call.Args[0]
+					argSel, ok := firstArg.(*ast.SelectorExpr)
+					if !ok {
+						// First arg is not a selector — could be a variable. Only
+						// flag the specific anti-pattern of `.Kind` field access.
+						return
+					}
+					// Detect the anti-pattern: <anything>.Kind
+					if argSel.Sel.Name == "Kind" {
+						pos := p.Fset.Position(call.Pos())
+						argIdent, _ := argSel.X.(*ast.Ident)
+						argText := ""
+						if argIdent != nil {
+							argText = argIdent.Name + "." + argSel.Sel.Name
+						}
+						ds = append(ds, Diagnostic{
+							Rel:  p.Rel(f),
+							Line: pos.Line,
+							Message: "errcode.New() in " + fn.Name.Name + " passes " + argText + " as Kind; " +
+								"must use errcode.KindXxx constant, not a .Kind field access. " +
+								"Transparent Kind pass-through allows 4xx-Kind ecErr to bypass " +
+								"MarshalJSON's IsClient() Details-strip for 5xx wire bodies.",
+						})
+						return
+					}
+					// Verify positive form: must start with "errcode.Kind".
+					argPkgIdent, ok := argSel.X.(*ast.Ident)
+					if !ok {
+						return
+					}
+					argText := argPkgIdent.Name + "." + argSel.Sel.Name
+					if argPkgIdent.Name == "errcode" && strings.HasPrefix(argSel.Sel.Name, "Kind") {
+						return // OK, normalized constant
+					}
+					pos := p.Fset.Position(call.Pos())
+					ds = append(ds, Diagnostic{
+						Rel:  p.Rel(f),
+						Line: pos.Line,
+						Message: "errcode.New() in " + fn.Name.Name + " passes " + argText + " as Kind; " +
+							"must use an errcode.KindXxx constant.",
+					})
+				})
+			})
 		}
-		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-			if len(call.Args) < 1 {
-				return
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return
-			}
-			// Match errcode.New(...) calls only.
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok || ident.Name != "errcode" || sel.Sel.Name != "New" {
-				return
-			}
-			// First argument must be an errcode.KindXxx selector expression,
-			// not ecErr.Kind or any .Kind field access.
-			firstArg := call.Args[0]
-			argSel, ok := firstArg.(*ast.SelectorExpr)
-			if !ok {
-				// First arg is not a selector — could be a variable. Only
-				// flag the specific anti-pattern of `.Kind` field access.
-				return
-			}
-			// Detect the anti-pattern: <anything>.Kind
-			if argSel.Sel.Name == "Kind" {
-				pos := fset.Position(call.Pos())
-				t.Errorf(
-					"HTTPUTIL-5XX-KIND-NORMALIZE-01 violated at %s: "+
-						"errcode.New() in %s passes %q as Kind; "+
-						"must use errcode.KindXxx constant, not a .Kind field access. "+
-						"Transparent Kind pass-through allows 4xx-Kind ecErr to bypass "+
-						"MarshalJSON's IsClient() Details-strip for 5xx wire bodies.",
-					pos, fn.Name.Name,
-					argSel.X.(*ast.Ident).Name+"."+argSel.Sel.Name,
-				)
-				return
-			}
-			// Verify positive form: must start with "errcode.Kind".
-			argPkgIdent, ok := argSel.X.(*ast.Ident)
-			if !ok {
-				return
-			}
-			argText := argPkgIdent.Name + "." + argSel.Sel.Name
-			if argPkgIdent.Name == "errcode" && strings.HasPrefix(argSel.Sel.Name, "Kind") {
-				return // OK, normalized constant
-			}
-			pos := fset.Position(call.Pos())
-			t.Errorf(
-				"HTTPUTIL-5XX-KIND-NORMALIZE-01 violated at %s: "+
-					"errcode.New() in %s passes %q as Kind; "+
-					"must use an errcode.KindXxx constant.",
-				pos, fn.Name.Name, argText,
-			)
-		})
+		return ds
 	})
+	Report(t, "HTTPUTIL-5XX-KIND-NORMALIZE-01", diags)
 }
 
 // INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
@@ -130,47 +140,53 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	targetFile := filepath.Join(root, "pkg", "httputil", "response.go")
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, targetFile, nil, 0)
-	if err != nil {
-		t.Fatalf("HTTPUTIL-5XX-LOG-REDACT-01: parse %s: %v", targetFile, err)
-	}
+	diags := Run(t, httputilResponseGoScope(root), func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			var log5xxFn *ast.FuncDecl
+			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+				if log5xxFn == nil && fn.Name.Name == "log5xx" {
+					log5xxFn = fn
+				}
+			})
+			if log5xxFn == nil {
+				ds = append(ds, Diagnostic{
+					Rel:     p.Rel(f),
+					Line:    0,
+					Message: "log5xx function not found in pkg/httputil/response.go",
+				})
+				continue
+			}
 
-	var log5xxFn *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-		if log5xxFn == nil && fn.Name.Name == "log5xx" {
-			log5xxFn = fn
+			found := false
+			EachInSubtree[ast.CallExpr](log5xxFn.Body, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				ident, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return
+				}
+				if ident.Name == "redaction" && sel.Sel.Name == "RedactSlogAttr" {
+					found = true
+				}
+			})
+
+			if !found {
+				ds = append(ds, Diagnostic{
+					Rel:  p.Rel(f),
+					Line: 0,
+					Message: "log5xx must call redaction.RedactSlogAttr on ecErr.Details elements before " +
+						"appending to slog attrs. Transparent pass-through leaks " +
+						"runtime fields (dsn, token, etc.) to log backends.",
+				})
+			}
 		}
+		return ds
 	})
-	if log5xxFn == nil {
-		t.Fatal("HTTPUTIL-5XX-LOG-REDACT-01: log5xx function not found in pkg/httputil/response.go")
-	}
-
-	found := false
-	scanner.EachInSubtree[ast.CallExpr](log5xxFn.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return
-		}
-		if ident.Name == "redaction" && sel.Sel.Name == "RedactSlogAttr" {
-			found = true
-		}
-	})
-
-	if !found {
-		t.Errorf(
-			"HTTPUTIL-5XX-LOG-REDACT-01 violated: log5xx must call " +
-				"redaction.RedactSlogAttr on ecErr.Details elements before " +
-				"appending to slog attrs. Transparent pass-through leaks " +
-				"runtime fields (dsn, token, etc.) to log backends.",
-		)
-	}
+	Report(t, "HTTPUTIL-5XX-LOG-REDACT-01", diags)
 }
 
 // INVARIANT: HTTPUTIL-SURFACE-REGISTERED-01
@@ -188,7 +204,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 // allowlist — preventing silent drift between the documented API surface and
 // the actual exported surface.
 func TestHttputilExportedRegistry(t *testing.T) {
-	t.Helper()
+	t.Parallel()
 
 	root := findModuleRoot(t)
 	docGoPath := filepath.Join(root, "pkg", "httputil", "doc.go")
@@ -203,21 +219,22 @@ func TestHttputilExportedRegistry(t *testing.T) {
 	// 3. Collect names registered in governance maps (httpHelperWritesStatuses + knownNonWriters).
 	governanceRegistered := collectGovernanceRegistered(t, governancePath)
 
-	// 4. Assert every exported func is in at least one table.
-	var missing []string
+	// 4. Collect every unregistered exported func as a Diagnostic and report via Report.
+	var diags []Diagnostic
 	for fn := range exported {
 		inDoc := docRegistered[fn]
 		inGov := governanceRegistered[fn]
 		if !inDoc && !inGov {
-			missing = append(missing, fn)
+			diags = append(diags, Diagnostic{
+				Rel:  "pkg/httputil",
+				Line: 0,
+				Message: "exported function " + fn + " is not registered in " +
+					"pkg/httputil/doc.go Stable Surface OR kernel/governance maps — " +
+					"add it to pkg/httputil/doc.go and/or kernel/governance/rules_http.go",
+			})
 		}
 	}
-	if len(missing) > 0 {
-		t.Errorf("HTTPUTIL-SURFACE-REGISTERED-01: the following exported "+
-			"pkg/httputil functions are not registered in doc.go Stable Surface "+
-			"OR kernel/governance maps — add them to pkg/httputil/doc.go and/or "+
-			"kernel/governance/rules_http.go: %v", missing)
-	}
+	Report(t, "HTTPUTIL-SURFACE-REGISTERED-01", diags)
 }
 
 // collectExportedFuncs returns a set of top-level exported function names
@@ -225,24 +242,27 @@ func TestHttputilExportedRegistry(t *testing.T) {
 // into sub-packages — same shape as the original os.ReadDir loop).
 func collectExportedFuncs(t *testing.T, root, dirRel string) map[string]bool {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{dirRel},
-		scanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{dirRel},
+		MatchRels(func(rel string) bool {
 			// Single-dir semantics: only files directly under dirRel, no sub-pkgs.
 			return filepath.ToSlash(filepath.Dir(rel)) == filepath.ToSlash(dirRel)
 		}),
 	)
 	result := make(map[string]bool)
-	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fn *ast.FuncDecl) {
-			if fn.Recv != nil {
-				// skip methods — only top-level functions
-				return
-			}
-			name := fn.Name.Name
-			if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
-				result[name] = true
-			}
-		})
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Recv != nil {
+					// skip methods — only top-level functions
+					return
+				}
+				name := fn.Name.Name
+				if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
+					result[name] = true
+				}
+			})
+		}
+		return nil
 	})
 	return result
 }

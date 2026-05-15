@@ -38,11 +38,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const redactionImportPath = `"github.com/ghbvf/gocell/pkg/redaction"`
+
+// spanRedactViolMsg is the diagnostic message emitted when a RecordError call
+// does not wrap its argument with redaction.RedactError.
+const spanRedactViolMsg = "span.RecordError(...) first arg must be redaction.RedactError(...)" +
+	" — hardcoded fail-closed redaction has no caller-side opt-out (ADR §8)"
+
+// spanCoverageViolMsg is the diagnostic message emitted when a file calls
+// RecordError but its directory is not enrolled in spanRecordErrorScanDirs.
+const spanCoverageViolMsg = "production file calls span.RecordError(...) but its directory" +
+	" is not enrolled in spanRecordErrorScanDirs — add the directory or relocate the call"
 
 // spanRecordErrorScanDirs lists the directories whose non-test .go files
 // must route every RecordError call through redaction.RedactError.
@@ -113,7 +121,7 @@ func isRedactErrorCall(expr ast.Expr, redactionLocal string) bool {
 func fileHasNonImplRecordError(file *ast.File) bool {
 	implRanges := collectRecordErrorImplRanges(file)
 	found := false
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
 			return
@@ -131,7 +139,7 @@ func fileHasNonImplRecordError(file *ast.File) bool {
 // are start positions, odd indices are end positions.
 func collectRecordErrorImplRanges(file *ast.File) []token.Pos {
 	var ranges []token.Pos
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil || fn.Recv == nil || fn.Name == nil {
 			return
 		}
@@ -158,7 +166,7 @@ func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []
 	redactionLocal := redactionLocalName(file)
 
 	var out []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
 			return
@@ -172,29 +180,45 @@ func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []
 			return
 		}
 		line := fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: span.RecordError(...) first arg must be redaction.RedactError(...) "+
-				"— hardcoded fail-closed redaction has no caller-side opt-out (ADR §8)",
-			rel, line))
+		out = append(out, fmt.Sprintf("%s:%d: %s", rel, line, spanRedactViolMsg))
 	})
 	return out
 }
 
-// scanSpanRecordErrorDir scans every non-test .go file under root/dir and
-// returns SPAN-RECORD-ERROR-REDACT-01 violations.
+// spanRecordErrorDirDiags returns SPAN-RECORD-ERROR-REDACT-01 Diagnostics for dir.
 //
 // IncludeGenerated mirrors the option used by TestSpanRecordErrorScanDirsCoverage
 // so that a generated/ directory enrolled in spanRecordErrorScanDirs (for
 // instance generated/contracts emitting span.RecordError from handler_gen.go)
 // is actually enforced, not just covered.
-func scanSpanRecordErrorDir(t *testing.T, root, dir string) []string {
+func spanRecordErrorDirDiags(t *testing.T, root, dir string) []Diagnostic {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{dir}, scanner.IncludeGenerated())
-	var out []string
-	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		out = append(out, scanSpanRecordErrorFile(fc.Fset, fc.File, fc.Rel)...)
+	scope := DirsScope(root, []string{dir}, IncludeGenerated())
+	return Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			redactionLocal := redactionLocalName(file)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
+					return
+				}
+				if len(call.Args) == 0 {
+					return
+				}
+				if isRedactErrorCall(call.Args[0], redactionLocal) {
+					return
+				}
+				pos := p.Fset.Position(call.Pos())
+				ds = append(ds, Diagnostic{
+					Rel:     p.Rel(file),
+					Line:    pos.Line,
+					Message: spanRedactViolMsg,
+				})
+			})
+		}
+		return ds
 	})
-	return out
 }
 
 // TestSpanRecordErrorRedacted enforces SPAN-RECORD-ERROR-REDACT-01.
@@ -202,19 +226,11 @@ func TestSpanRecordErrorRedacted(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	var violations []string
+	var allDiags []Diagnostic
 	for _, dir := range spanRecordErrorScanDirs {
-		violations = append(violations, scanSpanRecordErrorDir(t, root, dir)...)
+		allDiags = append(allDiags, spanRecordErrorDirDiags(t, root, dir)...)
 	}
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"SPAN-RECORD-ERROR-REDACT-01: every span.RecordError(...) call in "+
-			"kernel/wrapper/ and runtime/http/middleware/ must wrap its first "+
-			"argument with pkg/redaction.RedactError(...). "+
-			"ref: docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md §8")
+	Report(t, "SPAN-RECORD-ERROR-REDACT-01", allDiags)
 }
 
 // TestSpanRecordErrorScanDirsCoverage is the fail-closed coverage gate for
@@ -227,47 +243,52 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	enrolled := make(map[string]struct{}, len(spanRecordErrorScanDirs))
+	enrolledDirs := make(map[string]struct{}, len(spanRecordErrorScanDirs))
 	for _, dir := range spanRecordErrorScanDirs {
-		enrolled[filepath.Clean(dir)] = struct{}{}
+		enrolledDirs[filepath.Clean(dir)] = struct{}{}
 	}
 
-	var unenrolled []string
 	// IncludeGenerated: SPAN-RECORD-ERROR-REDACT-01 covers every production
 	// .go file in the repo, including codegen output (handler_gen.go and
 	// similar may emit span.RecordError). Without this option ModuleScope's
 	// default skip set would silently shrink the coverage gate.
-	scope := scanner.ModuleScope(root, scanner.IncludeGenerated())
-	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		if !fileHasNonImplRecordError(fc.File) {
-			return
-		}
-		rel := filepath.ToSlash(fc.Rel)
-		dir := filepath.Dir(rel)
-		// Walk up looking for any enrolled prefix.
-		for d := dir; d != "." && d != "/"; d = filepath.Dir(d) {
-			if _, ok := enrolled[filepath.Clean(d)]; ok {
-				return
+	scope := ModuleScope(root, IncludeGenerated())
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			if !fileHasNonImplRecordError(file) {
+				continue
+			}
+			rel := filepath.ToSlash(p.Rel(file))
+			dir := filepath.Dir(rel)
+			enrolled := false
+			for d := dir; d != "." && d != "/"; d = filepath.Dir(d) {
+				if _, ok := enrolledDirs[filepath.Clean(d)]; ok {
+					enrolled = true
+					break
+				}
+			}
+			if !enrolled {
+				ds = append(ds, Diagnostic{
+					Rel:     rel,
+					Line:    0,
+					Message: spanCoverageViolMsg,
+				})
 			}
 		}
-		unenrolled = append(unenrolled, rel)
+		return ds
 	})
-	sort.Strings(unenrolled)
-	assert.Empty(t, unenrolled,
-		"SPAN-RECORD-ERROR-REDACT-01 coverage: production files calling "+
-			"span.RecordError(...) must live under a directory enrolled in "+
-			"spanRecordErrorScanDirs. New offenders found above — either add "+
-			"the directory to the enrollment list or relocate the call.")
+	Report(t, "SPAN-RECORD-ERROR-REDACT-01-COVERAGE", diags)
 }
 
 // runSpanRecordErrorFixtureScan parses fixture .go files (non-test) and reports
-// violations relative to fixtureDir. Uses scanner.DirsScope+IncludeTestdata to
+// violations relative to fixtureDir. Uses DirsScope+IncludeTestdata to
 // funnel through the framework even though fixtures live under testdata/
 // (the default skip set excludes testdata; IncludeTestdata is the authorized
 // opt-in).
 //
 // IncludeGenerated mirrors the option used by the production enforcement walk
-// scanSpanRecordErrorDir, so the violates_in_generated fixture (which buries
+// spanRecordErrorDirDiags, so the violates_in_generated fixture (which buries
 // the offending file under a "generated" subdirectory) actually reaches the
 // scanner. Without it the default skip set drops the file and the fixture
 // silently passes — making the production IncludeGenerated() a no-op.
@@ -275,13 +296,16 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 // fixtureDirRel is the module-relative slash path to the fixture directory.
 func runSpanRecordErrorFixtureScan(t *testing.T, root, fixtureDirRel string) []string {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{fixtureDirRel}, scanner.IncludeTestdata(), scanner.IncludeGenerated())
+	scope := DirsScope(root, []string{fixtureDirRel}, IncludeTestdata(), IncludeGenerated())
 	var out []string
-	scanner.EachFile(t, scope, parser.ParseComments, func(_ *testing.T, fc scanner.FileContext) {
-		if strings.HasSuffix(fc.AbsPath, "_test.go") {
-			return
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			if strings.HasSuffix(p.Abs(file), "_test.go") {
+				continue
+			}
+			out = append(out, scanSpanRecordErrorFile(p.Fset, file, filepath.Base(p.Abs(file)))...)
 		}
-		out = append(out, scanSpanRecordErrorFile(fc.Fset, fc.File, filepath.Base(fc.AbsPath))...)
+		return nil
 	})
 	sort.Strings(out)
 	return out
