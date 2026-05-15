@@ -110,3 +110,23 @@ func FlatNonDefaultTags() []string {
 func KnownNonDefaultTags() [][]string {
 	return typeseval.KnownNonDefaultTags()
 }
+
+// BuildContextPredicate returns a tag predicate suitable for
+// constraint.Expr.Eval. It returns true for any tag the Go toolchain sets
+// implicitly under a standard CI context, plus any extraTags supplied by
+// the caller.
+//
+// Use this when [Pass.IsFileInScope] is insufficient — e.g. when you need to
+// evaluate a build constraint under a custom tag set such as "integration".
+// Pass.IsFileInScope uses the default (no extra tags) predicate; if you need
+// custom extra tags, call BuildContextPredicate("integration") and evaluate
+// the constraint expression directly via typeseval.ParseBuildConstraint.
+//
+// Thin delegation to [typeseval.BuildContextPredicate]. See that function's
+// godoc for the full implicit-defaults catalog (GOOS/GOARCH/cgo/unix/gc/go1.X).
+//
+// info must come from the same packages.Load result that produced the AST nodes
+// you are inspecting — this is guaranteed when info is pass.TypesInfo.
+func BuildContextPredicate(extraTags ...string) func(string) bool {
+	return typeseval.BuildContextPredicate(extraTags...)
+}

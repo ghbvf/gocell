@@ -356,6 +356,10 @@ func newPackageAbs(fset *token.FileSet) func(*ast.File) string {
 // to true under the default predicate. Returns false for files gated by
 // project-specific tags (e.g. "integration", "e2e", "archtest_fixture").
 //
+// For files that need evaluation under a custom extra-tag set (e.g. "integration"),
+// use [archtest.BuildContextPredicate] with typeseval.ParseBuildConstraint
+// directly — IsFileInScope always uses the default (no-extra-tags) predicate.
+//
 // f must come from pass.Files; behavior is undefined for files from other Passes.
 func (p *Pass) IsFileInScope(f *ast.File) bool {
 	abs := p.Abs(f)
@@ -374,6 +378,10 @@ func (p *Pass) IsFileInScope(f *ast.File) bool {
 // generated/ tree. It delegates to typeseval.IsGeneratedRelPath on pass.Rel(f).
 //
 // Returns true when the file's module-relative path begins with "generated/".
+// Returns false (non-generated, conservative) when [Pass.Rel](f) yields the
+// absolute fallback path — i.e. when the file is outside the module root and
+// filepath.Rel returns the absolute path unchanged; IsGeneratedRelPath will
+// not match a "generated/" prefix on an absolute path.
 // f must come from pass.Files; behavior is undefined for files from other Passes.
 func (p *Pass) IsGenerated(f *ast.File) bool {
 	return typeseval.IsGeneratedRelPath(p.Rel(f))

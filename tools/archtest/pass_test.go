@@ -641,6 +641,49 @@ func TestResolveHelpersReExported(t *testing.T) {
 	}
 }
 
+// TestBuildContextPredicateReExported verifies that archtest.BuildContextPredicate
+// is a thin delegate to typeseval.BuildContextPredicate: the returned predicate
+// function must agree with the oracle for all probe tags.
+//
+// Uses "integration" as the extra tag because build_constraint_test.go and
+// ci_integration_discovery_invariants_test.go both need exactly this predicate.
+//
+// pass_test.go is permanently exempt from PASS-FUNNEL-RESOLVE-01 so the
+// direct typeseval call here is a legal oracle comparison.
+//
+// Note on Eval(): to comply with TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01, we
+// do NOT call constraint.Expr.Eval(BuildContextPredicate(...)). Instead we
+// compare the returned predicate functions directly on a set of probe tags,
+// avoiding the Eval() rule enforcement surface entirely.
+func TestBuildContextPredicateReExported(t *testing.T) {
+	// Probe tags: a known extra tag, known default tags, and an unknown tag.
+	probeTags := []string{"integration", "linux", "amd64", "go1.21", "cgo", "nonexistent_tag"}
+
+	// With extra tag "integration".
+	facadePredWithTag := BuildContextPredicate("integration")
+	oraclePredWithTag := typeseval.BuildContextPredicate("integration")
+	for _, tag := range probeTags {
+		got := facadePredWithTag(tag)
+		want := oraclePredWithTag(tag)
+		if got != want {
+			t.Errorf("BuildContextPredicate(\"integration\")(%q): façade=%v oracle=%v",
+				tag, got, want)
+		}
+	}
+
+	// Without extra tags (default context only).
+	facadePredDefault := BuildContextPredicate()
+	oraclePredDefault := typeseval.BuildContextPredicate()
+	for _, tag := range probeTags {
+		got := facadePredDefault(tag)
+		want := oraclePredDefault(tag)
+		if got != want {
+			t.Errorf("BuildContextPredicate()(%q): façade=%v oracle=%v",
+				tag, got, want)
+		}
+	}
+}
+
 // TestFacadeDoesNotLeakLoaders is the Hard defense #1 blind-spot self-check.
 // It statically parses the non-test archtest façade source files (pass.go,
 // scope.go, walk.go, content.go, and any future resolve.go) via go/parser and
@@ -693,6 +736,9 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 	// component is exactly "tools/archtest" (no slashes after that prefix).
 	scope := DirsScope(root, []string{"tools/archtest"}, MatchRels(func(rel string) bool {
 		slash := strings.LastIndex(rel, "/")
+		if slash < 0 {
+			return false
+		}
 		dir := rel[:slash]
 		base := rel[slash+1:]
 		return dir == "tools/archtest" &&
@@ -717,7 +763,8 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 							" is a banned loader symbol; must NOT appear in facade",
 					})
 				}
-				if fn.Type != nil && funcTypeContainsPackagesSel(fn.Type) {
+				if (fn.Type != nil && funcTypeContainsPackagesSel(fn.Type)) ||
+					funcFieldListContainsPackagesSel(fn.Recv) {
 					d = append(d, Diagnostic{
 						Rel:  rel,
 						Line: p.Fset.Position(fn.Name.Pos()).Line,
@@ -760,6 +807,10 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 // results contain a SelectorExpr with X.Name=="packages" and
 // Sel.Name=="Package". Catches *packages.Package, []*packages.Package, etc.
 // Uses EachInSubtree so the scanner-framework ban on ast.Inspect is respected.
+//
+// The receiver field list is intentionally excluded here; callers that also
+// need receiver coverage should additionally call [funcFieldListContainsPackagesSel]
+// with fn.Recv (the receiver lives on *ast.FuncDecl, not on *ast.FuncType).
 func funcTypeContainsPackagesSel(ft *ast.FuncType) bool {
 	found := false
 	checkField := func(fields *ast.FieldList) {
@@ -786,6 +837,36 @@ func funcTypeContainsPackagesSel(ft *ast.FuncType) bool {
 	}
 	checkField(ft.Params)
 	checkField(ft.Results)
+	return found
+}
+
+// funcFieldListContainsPackagesSel reports whether a FieldList (typically a
+// method receiver list) contains a SelectorExpr with X.Name=="packages" and
+// Sel.Name=="Package". Used to extend [funcTypeContainsPackagesSel]'s coverage
+// to method receivers, which live on *ast.FuncDecl.Recv rather than
+// *ast.FuncType.Params / .Results.
+func funcFieldListContainsPackagesSel(fields *ast.FieldList) bool {
+	if fields == nil {
+		return false
+	}
+	found := false
+	for _, field := range fields.List {
+		if found {
+			break
+		}
+		EachInSubtree[ast.SelectorExpr](field.Type, func(sel *ast.SelectorExpr) {
+			if found {
+				return
+			}
+			xIdent, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return
+			}
+			if xIdent.Name == "packages" && sel.Sel != nil && sel.Sel.Name == "Package" {
+				found = true
+			}
+		})
+	}
 	return found
 }
 

@@ -194,9 +194,25 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 //     *types.PkgName in both cases, so BOTH are detected correctly (CompositeLit
 //     uses the same SelectorExpr shape as a function call).
 //
-// Reverse self-check: TestPassFunnel_FixtureCoverage asserts diagsResolveHelpers
-// emits ≥ 1 diagnostic on the redfixture, locking the detector at live-AST
-// level rather than data level.
+// # Per-form fixture coverage
+//
+// The 8 typeseval helper symbols are fixtured in two import forms (qualified +
+// alias) only. A typeseval dot-import fixture is not present: conflicting imports
+// (a file can only dot-import a given package path once, but the package is
+// already imported under both a qualified and alias form in redfixture.go) make
+// a typeseval dot-import infeasible in the same file. This is NOT a detector gap:
+// the dot-import (bare-Ident) form is covered by *types.Info resolution inside
+// typeseval.ResolvePackageRef, as verified by typeseval's own test suite
+// (buildtag_predicate_test.go, call_target_test.go). scanner.ImportBan dot-import
+// IS fixtured (`. "…/scanner"` is present alongside the qualified/alias forms
+// because scanner is not otherwise conflicted in redfixture.go).
+//
+// TestPassFunnel_FixtureCoverage enforces per-form minimums:
+//   - typeseval-helper diagnostics ≥ 2 (qualified + alias forms fixtured)
+//   - scanner.ImportBan diagnostics ≥ 1 (dot-import form fixtured)
+//
+// Reverse self-check: TestPassFunnel_FixtureCoverage asserts per-form minimums
+// on the redfixture, locking the detector at live-AST level rather than data level.
 func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 	const replacement = "archtest.{ResolvePackageRef,ResolveMethodCall,EvaluateConstString," +
 		"FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
@@ -479,6 +495,16 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // escape — the typed initial assignment still trips the rule, so wrapping
 // in a variable is a no-op disguise rather than a true bypass.
 //
+// For PASS-FUNNEL-RESOLVE-01 specifically: the 8 typeseval helpers are
+// fixtured in qualified + alias form only (2 forms). A typeseval dot-import
+// form is infeasible in redfixture.go (conflicting imports — the package is
+// already imported under qualified + alias; Go allows only one dot-import
+// per package path per file). This is NOT a detector gap: the bare-Ident
+// dot-import form is covered by *types.Info resolution inside
+// typeseval.ResolvePackageRef as verified by typeseval's own test suite.
+// scanner.ImportBan dot-import IS fixtured (3 forms: qualified + alias + dot).
+// The per-form minimums below encode this distinction.
+//
 // The fixture is loaded with the [archtestmeta.FixtureBuildTag] build tag
 // (a sister convention to inspectorredfixture etc.); without the tag the
 // fixture is invisible and packages.Load returns an empty *.Syntax slice.
@@ -507,16 +533,16 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 		t.Fatalf("passfunnelfixture loaded with 0 files — archtest_fixture build tag missing or package empty")
 	}
 
-	rules := []struct {
+	// Basic ≥1 check for the first three rules.
+	basicRules := []struct {
 		name string
 		fn   func(passFunnelTarget) []scanner.Diagnostic
 	}{
 		{"PASS-FUNNEL-EACHFILE-01", diagsEachFile},
 		{"PASS-FUNNEL-LOADPACKAGES-01", diagsLoadPackages},
 		{"PASS-FUNNEL-PACKAGES-IMPORT-01", diagsPackagesImport},
-		{"PASS-FUNNEL-RESOLVE-01", diagsResolveHelpers},
 	}
-	for _, r := range rules {
+	for _, r := range basicRules {
 		var diags []scanner.Diagnostic
 		for _, tgt := range fixtureTargets {
 			diags = append(diags, r.fn(tgt)...)
@@ -526,6 +552,35 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 				"detector likely regressed (or redfixture.go violation removed)",
 				r.name)
 		}
+	}
+
+	// Strengthened per-form check for PASS-FUNNEL-RESOLVE-01:
+	//   - typeseval helpers: ≥ 2 diagnostics (qualified + alias forms fixtured)
+	//   - scanner.ImportBan: ≥ 1 diagnostic (dot-import form fixtured; qualified+alias also present)
+	// Each minimum is a distinct per-form regression trip-wire.
+	var resolveDiags []scanner.Diagnostic
+	for _, tgt := range fixtureTargets {
+		resolveDiags = append(resolveDiags, diagsResolveHelpers(tgt)...)
+	}
+	// Count diagnostics that reference typeseval package path vs scanner package path.
+	var typesevalCount, scannerImportBanCount int
+	for _, d := range resolveDiags {
+		switch {
+		case strings.Contains(d.Message, typesevalPkgPath):
+			typesevalCount++
+		case strings.Contains(d.Message, scannerPkgPath) && strings.Contains(d.Message, "ImportBan"):
+			scannerImportBanCount++
+		}
+	}
+	if typesevalCount < 2 {
+		t.Errorf("PASS-FUNNEL-RESOLVE-01: typeseval-helper diagnostics on red fixture = %d, want ≥ 2 "+
+			"(qualified + alias forms must each trip the detector; per-form regression lock)",
+			typesevalCount)
+	}
+	if scannerImportBanCount < 1 {
+		t.Errorf("PASS-FUNNEL-RESOLVE-01: scanner.ImportBan diagnostics on red fixture = %d, want ≥ 1 "+
+			"(dot-import form must trip the detector; per-form regression lock)",
+			scannerImportBanCount)
 	}
 }
 
