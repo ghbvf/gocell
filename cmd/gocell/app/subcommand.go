@@ -24,6 +24,18 @@ package app
 //     registry — a hand-written helpEntry literal carrying a string-literal
 //     type name fails archtest.
 //
+// Funnel scope (charter §Funnel 双向锁评级): this single-source funnel
+// covers ONLY the four help-bearing verb trees. The top-level `commands`
+// map (dispatch.go) ↔ `PrintUsage` free-form prose is a parallel,
+// NOT-yet-funneled surface of the same drift class — a new unimplemented
+// top-level command could appear in PrintUsage prose without an archtest
+// catching it. That gap is an explicitly registered, non-silent
+// follow-up: backlog cap-14 CLI-TOPLEVEL-HELP-REGISTRY-01 (single-source
+// the top-level command list the same way). Until then
+// tools/archtest/cli_unimpl_hide_test.go's
+// TestCLIUnimplHide01_PrintUsageNoStaleToken is the Medium compensating
+// guard (no stale "indexes"/"not implemented" token in PrintUsage).
+//
 // ref: go-zero goctl tools/goctl — sub-commands are registered, not
 // switch-dispatched; GoCell keeps the no-cobra map style but applies the
 // same "help derives from the registry" single-source principle.

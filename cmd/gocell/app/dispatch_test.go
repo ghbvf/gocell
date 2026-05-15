@@ -205,12 +205,20 @@ func TestDispatch_ValidateFormats(t *testing.T) {
 	})
 }
 
-// TestDispatch_CanceledContext pins B2-X-07: a context canceled before
-// (or during) a sub-command run propagates from main.go's
-// signal.NotifyContext through Dispatch into the sub-command, so a
-// SIGINT/SIGTERM does not silently produce a success exit. validate is
-// chosen because it exercises the full runValidate → governance → runGit
-// ctx chain (the path G-03 wired and this PR finishes plumbing).
+// TestDispatch_CanceledContext pins B2-X-07's full contract: a context
+// canceled before a sub-command run propagates from main.go's
+// signal.NotifyContext through Dispatch into the sub-command and surfaces
+// as the exact operator-facing contract — ExitRuntime (not ExitOK, not
+// ExitUsage) AND the readable "interrupted" line on stderr (not
+// "error: context canceled" / "error: …: FAILED").
+//
+// Two paths are exercised because their ctx-cancel error shapes differ:
+//   - validate returns the bare ctx.Err() %w-wrapped (governance path);
+//   - verify folds a signal-killed `go test` into *exec.ExitError →
+//     Passed:false with no error, so cmd-layer verify.ctxInterrupted must
+//     restore the context.Canceled chain or the interruption is masked as
+//     "verify …: FAILED". Asserting "interrupted" on both guards that the
+//     verify masking gap (PR #502 review P1) stays closed.
 //
 // Pre-cancel pattern mirrors pkg/cmdrun/cmdrun_test.go and
 // kernel/verify/integration_test.go: a context canceled before the call
@@ -220,12 +228,28 @@ func TestDispatch_CanceledContext(t *testing.T) {
 	require.NoError(t, os.WriteFile(dir+"/go.mod",
 		[]byte("module example.com/empty\n"), 0o644))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel: ctx.Err() != nil before Dispatch enters
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"validate", []string{"validate", "--root", dir}},
+		// verify slice resolves metadata then runs `go test`; a pre-canceled
+		// ctx must surface as "interrupted", not "verify slice …: FAILED".
+		{"verify-slice", []string{"verify", "slice", "--id=nocell/noslice"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // pre-cancel: ctx.Err() != nil before Dispatch enters
 
-	exit, _, _ := captureDispatch(t, ctx, []string{"validate", "--root", dir})
-	// A canceled run must never be reported as success. It is ExitRuntime
-	// (the binary is shutting down), not ExitOK and not ExitUsage.
-	assert.NotEqual(t, ExitOK, exit,
-		"canceled ctx must not produce a success exit")
+			exit, _, stderr := captureDispatch(t, ctx, tc.args)
+			// Exact contract: a signal-canceled run is a runtime stop, not a
+			// usage error and never a success.
+			assert.Equal(t, ExitRuntime, exit,
+				"canceled ctx must map to ExitRuntime; stderr=%q", stderr)
+			assert.Contains(t, stderr, "interrupted",
+				"canceled run must print the readable interruption line, "+
+					"not a masked error/FAILED; stderr=%q", stderr)
+		})
+	}
 }

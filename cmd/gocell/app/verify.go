@@ -155,6 +155,9 @@ func runVerifyResultCmd(ctx context.Context, args []string, spec verifyResultExe
 
 	runner := verify.NewRunner(project, root)
 	result, err := spec.exec(ctx, runner, *id)
+	if cerr := ctxInterrupted(ctx, spec.name); cerr != nil {
+		return cerr
+	}
 	if err != nil {
 		return fmt.Errorf("verify %s: %w", spec.name, err)
 	}
@@ -219,6 +222,9 @@ func verifyJourney(ctx context.Context, args []string) error {
 		result, err = runner.RunActiveJourneys(ctx)
 	} else {
 		result, err = runner.RunJourney(ctx, *id)
+	}
+	if cerr := ctxInterrupted(ctx, "journey"); cerr != nil {
+		return cerr
 	}
 	if err != nil {
 		return fmt.Errorf("verify journey: %w", err)
@@ -309,6 +315,24 @@ func verifyGenerated(ctx context.Context, args []string) error {
 			len(result.Drifts))
 	}
 	fmt.Printf("Generated artifacts verified: %d files\n", len(result.Artifacts))
+	return nil
+}
+
+// ctxInterrupted returns a context.Canceled-wrapping error when ctx was
+// canceled (SIGINT/SIGTERM via main.go signal.NotifyContext), else nil.
+//
+// Why this guard is needed: kernel/verify folds a signal-killed `go test`
+// into a *exec.ExitError → goTestResult{Passed:false} with NO error
+// (gotest.go run()). Without this check the cmd layer would surface that as
+// "verify <x>: FAILED" — masking the interruption as a test failure and
+// breaking the context.Canceled chain Dispatch relies on to print
+// "interrupted". Checking ctx.Err() restores B2-X-06 end-to-end transparency
+// so a Ctrl+C during `gocell verify` is reported as an interruption, not a
+// spurious test failure.
+func ctxInterrupted(ctx context.Context, label string) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("verify %s interrupted: %w", label, ctx.Err())
+	}
 	return nil
 }
 

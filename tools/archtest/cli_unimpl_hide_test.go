@@ -250,8 +250,20 @@ func parseFixture(t *testing.T, name string) (*Pass, *ast.File, string) {
 func TestCLIUnimplHide01_DetectsSwitchDispatch(t *testing.T) {
 	t.Parallel()
 	p, f, rel := parseFixture(t, "switch_dispatch.go")
-	if got := scanDispatchSwitchFree(p, f, rel); len(got) == 0 {
-		t.Fatal("expected switch-dispatch fixture to be flagged, got 0 diagnostics")
+	got := scanDispatchSwitchFree(p, f, rel)
+	// The fixture's runGenerate both has a switch AND never calls findSub,
+	// so the detector must emit exactly two distinct diagnostics. Asserting
+	// only "len > 0" would let the detector silently regress to reporting a
+	// single condition.
+	if len(got) != 2 {
+		t.Fatalf("expected exactly 2 diagnostics (switch present + findSub "+
+			"absent), got %d: %v", len(got), got)
+	}
+	if !containsMsg(got, "dispatches via switch") {
+		t.Errorf("missing the switch-present diagnostic; got %v", got)
+	}
+	if !containsMsg(got, "does not call findSub") {
+		t.Errorf("missing the findSub-absent diagnostic; got %v", got)
 	}
 }
 

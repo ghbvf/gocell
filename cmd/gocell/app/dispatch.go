@@ -39,9 +39,17 @@ var commands = map[string]func(ctx context.Context, args []string) error{
 // Exit codes. Follows the common POSIX convention used by tools like go
 // itself: usage/misuse errors are distinct from runtime failures so CI
 // scripts can tell "CLI was invoked wrong" apart from "validation failed".
+//
+// Signal interruption (SIGINT/SIGTERM → ctx canceled) intentionally maps to
+// ExitRuntime (1), NOT the shell convention 128+signo (130 for SIGINT).
+// gocell is a CI/dev tool whose callers branch on the three-way OK/Runtime/
+// Usage contract; a fourth "interrupted" code would force every wrapper
+// script to special-case it. Callers that must distinguish an interrupted
+// run from a genuine failure match the literal "interrupted" line on stderr
+// (emitted by Dispatch on context.Canceled), which is the stable contract.
 const (
 	ExitOK      = 0 // success
-	ExitRuntime = 1 // sub-command returned an error (validation failure, IO, etc.)
+	ExitRuntime = 1 // sub-command returned an error (validation failure, IO, signal interruption, etc.)
 	ExitUsage   = 2 // caller passed wrong / unknown / missing arguments
 )
 
