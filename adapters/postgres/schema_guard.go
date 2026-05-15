@@ -318,8 +318,7 @@ var expectedColumns = []expectedColumn{
 	// S4d: row-level credential provenance. ADR-credential §A8 — sessionvalidate
 	// compares user.authz_epoch with view.authz_epoch_at_issue, NOT JWT claim.
 	// Migration 028 adds CHECK(>0) as the hard DB guarantee; schema_guard
-	// asserts only type/NOT NULL here (no CHECK introspection added — migration
-	// is the single hard source for the positive-epoch invariant).
+	// asserts type/NOT NULL here and CHECK presence in expectedChecks.
 	{Table: "sessions", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
 	// refresh_tokens (007_refresh_tokens.sql + 027_add_refresh_tokens_authz_epoch_at_issue.sql)
 	// Only the S4d-introduced column is registered here; the rest of the
@@ -450,9 +449,15 @@ var expectedFunctions = []expectedFunction{
 
 // expectedChecks is the CHECK constraint registry.
 // users_status_chk and users_creation_source_chk are added by migration 023.
+// users_authz_epoch_positive, sessions_authz_epoch_at_issue_positive, and
+// refresh_tokens_authz_epoch_at_issue_positive are added by migration 028
+// (S4d P2.a — authz_epoch > 0 hard DB invariant).
 var expectedChecks = []expectedCheck{
 	{Table: "users", Name: "users_status_chk"},
 	{Table: "users", Name: "users_creation_source_chk"},
+	{Table: "users", Name: "users_authz_epoch_positive"},
+	{Table: "sessions", Name: "sessions_authz_epoch_at_issue_positive"},
+	{Table: "refresh_tokens", Name: "refresh_tokens_authz_epoch_at_issue_positive"},
 }
 
 // ---------------------------------------------------------------------------
