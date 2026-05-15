@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
@@ -28,6 +30,31 @@ func httputilResponseGoScope(root string) Scope {
 			return filepath.ToSlash(rel) == "pkg/httputil/response.go"
 		}),
 	)
+}
+
+// runHTTPUtilResponseRule runs rule against httputilResponseGoScope and guards
+// against silent-pass when pkg/httputil/response.go is absent (renamed, deleted,
+// or scope drift). Symmetric to the parser.ParseFile fail-loud behavior that
+// preceded the DirsScope migration.
+//
+// Pattern mirrors refresh_invariants_test.go TestRefreshCrossStoreTX01 /
+// TestRefreshAmbientTX01: foundFile flag set inside Run callback, require.True
+// asserted after Run, before Report.
+func runHTTPUtilResponseRule(t *testing.T, ruleID string, rule func(*Pass) []Diagnostic) []Diagnostic {
+	t.Helper()
+	root := findModuleRoot(t)
+	const targetRel = "pkg/httputil/response.go"
+	var foundFile bool
+	diags := Run(t, httputilResponseGoScope(root), func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			if filepath.ToSlash(p.Rel(f)) == targetRel {
+				foundFile = true
+			}
+		}
+		return rule(p)
+	})
+	require.True(t, foundFile, "%s: %s not found (renamed/deleted/scope drift)", ruleID, targetRel)
+	return diags
 }
 
 // INVARIANT: HTTPUTIL-5XX-KIND-NORMALIZE-01
@@ -49,14 +76,13 @@ func httputilResponseGoScope(root string) Scope {
 // 而非 ecErr.Kind（或任何形式的 .Kind 字段读取）。
 func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
 	targetFuncs := map[string]bool{
 		"WriteErrorWithStatus": true,
 		"writeErrcodeError":    true,
 	}
 
-	diags := Run(t, httputilResponseGoScope(root), func(p *Pass) []Diagnostic {
+	diags := runHTTPUtilResponseRule(t, "HTTPUTIL-5XX-KIND-NORMALIZE-01", func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
@@ -139,9 +165,8 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 // 断言函数体内存在至少一次 redaction.RedactSlogAttr 调用。
 func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
-	diags := Run(t, httputilResponseGoScope(root), func(p *Pass) []Diagnostic {
+	diags := runHTTPUtilResponseRule(t, "HTTPUTIL-5XX-LOG-REDACT-01", func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
 			var log5xxFn *ast.FuncDecl
