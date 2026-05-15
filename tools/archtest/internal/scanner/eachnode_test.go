@@ -429,3 +429,151 @@ func _() {}
 	//   scanner.EachInChildren[int](...)             // *int does not satisfy ast.Node
 	//   scanner.EachInSubtree[*ast.CallExpr](...)    // S is the value type, not the pointer; this would yield N=**ast.CallExpr
 }
+
+// -----------------------------------------------------------------------
+// FindFirstChild: depth-1 find-first-and-stop. Replaces the hand-written
+// closure+done/found sentinel idiom over EachInChildren. Same depth-1 /
+// nil-root / root-not-matched semantics as EachInChildren (it is built on
+// EachInChildren), plus: returns the matched node, stops invoking predicate
+// after the first match, and exposes ok instead of a caller-held flag.
+// -----------------------------------------------------------------------
+
+func TestFindFirstChild_FindsFirstMatchingDirectChild(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = Outer{ A: 1, B: 2, C: 3 }
+`)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	kv, found := scanner.FindFirstChild[ast.KeyValueExpr](outer, func(kv *ast.KeyValueExpr) bool {
+		id, ok := kv.Key.(*ast.Ident)
+		return ok && id.Name == "B"
+	})
+	if !found {
+		t.Fatal("FindFirstChild: expected to find KeyValueExpr with key B")
+	}
+	id, ok := kv.Key.(*ast.Ident)
+	if !ok || id.Name != "B" {
+		t.Errorf("FindFirstChild returned wrong node: key=%v, want Ident B", kv.Key)
+	}
+}
+
+func TestFindFirstChild_StopsAfterFirstMatch(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = Outer{ A: 1, B: 2, C: 3 }
+`)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	// Predicate matches every KeyValueExpr; it must be invoked exactly once
+	// because FindFirstChild stops at the first match (find-first semantics,
+	// no caller-held done flag).
+	calls := 0
+	kv, found := scanner.FindFirstChild[ast.KeyValueExpr](outer, func(*ast.KeyValueExpr) bool {
+		calls++
+		return true
+	})
+	if !found || kv == nil {
+		t.Fatal("FindFirstChild: expected a match")
+	}
+	if calls != 1 {
+		t.Errorf("predicate call count = %d, want 1 (must stop after first match)", calls)
+	}
+	// The returned node must be the FIRST direct child (Walk order = A).
+	id, ok := kv.Key.(*ast.Ident)
+	if !ok || id.Name != "A" {
+		t.Errorf("FindFirstChild returned %v, want first child A", kv.Key)
+	}
+}
+
+func TestFindFirstChild_NoMatchReturnsZeroFalse(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = Outer{ A: 1, B: 2 }
+`)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	kv, found := scanner.FindFirstChild[ast.KeyValueExpr](outer, func(*ast.KeyValueExpr) bool {
+		return false
+	})
+	if found {
+		t.Errorf("FindFirstChild: expected found=false when predicate never matches")
+	}
+	if kv != nil {
+		t.Errorf("FindFirstChild: expected zero value (nil) on no match, got %v", kv)
+	}
+}
+
+func TestFindFirstChild_NilRootReturnsZeroFalse(t *testing.T) {
+	t.Parallel()
+	called := false
+	kv, found := scanner.FindFirstChild[ast.KeyValueExpr](nil, func(*ast.KeyValueExpr) bool {
+		called = true
+		return true
+	})
+	if called {
+		t.Error("FindFirstChild with nil root must not invoke predicate")
+	}
+	if found || kv != nil {
+		t.Errorf("FindFirstChild(nil) = (%v, %v), want (nil, false)", kv, found)
+	}
+}
+
+func TestFindFirstChild_RootSelfNotMatched(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = SomeLit{}
+`)
+	cl, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: CompositeLit not found in fixture")
+	}
+	// Root is itself a CompositeLit; depth-1 must not match root.
+	got, found := scanner.FindFirstChild[ast.CompositeLit](cl, func(*ast.CompositeLit) bool {
+		return true
+	})
+	if found || got != nil {
+		t.Errorf("FindFirstChild must not match root itself; got (%v, %v), want (nil, false)", got, found)
+	}
+}
+
+func TestFindFirstChild_GrandchildNotMatched(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedCompositeLitSrc)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	// Outer has one direct KeyValueExpr (A); the inner B KeyValueExpr is a
+	// grandchild. A predicate that only accepts key "B" must NOT find it.
+	_, found := scanner.FindFirstChild[ast.KeyValueExpr](outer, func(kv *ast.KeyValueExpr) bool {
+		id, ok := kv.Key.(*ast.Ident)
+		return ok && id.Name == "B"
+	})
+	if found {
+		t.Error("FindFirstChild matched a grandchild (depth-1 contract violated)")
+	}
+}
+
+func TestFindFirstChild_TypeMismatchNoPanic(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+func _() {}
+`)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	got, found := scanner.FindFirstChild[ast.FuncDecl](fn.Body, func(*ast.FuncDecl) bool {
+		return true
+	})
+	if found || got != nil {
+		t.Errorf("BlockStmt has no FuncDecl children; got (%v, %v), want (nil, false)", got, found)
+	}
+}
