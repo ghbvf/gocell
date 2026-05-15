@@ -185,6 +185,34 @@ auth:
     - 429
 ```
 
+## serviceOwned ownership 声明与 owner-guard 规则
+
+`serviceOwned: true` 的 HTTP contract **必须**在 `endpoints.http` 下声明 `ownership` 块，包含 `subjectPath` 与 `resourcePath` 两个字段，由 governance rule FMT-32 `OWNERSHIP-DECLARATION-REQUIRED-01` fail-fast 强制（schema if/then 双层：if `auth.serviceOwned == true` then `ownership` 必填；缺失即 `gocell validate` 报 error 阻断 CI）。
+
+**路径 DSL**：
+
+- `ctx.<seg>`：caller 主体字段，段名 camelCase（如 `ctx.subjectID` = JWT principal subject）。
+- `path.<param>.<seg>`：先定位路径参数，再取资源 owner 字段，段名 camelCase（如 `path.id.userID` = 路径参数 `id` 指向的 session 记录的 `userID` 字段）。`<param>` 须在 `pathParams` 中已声明。
+
+**示例**（`contracts/http/auth/session/delete/v1/contract.yaml`）：
+
+```yaml
+  http:
+    auth:
+      serviceOwned: true
+    ownership:
+      subjectPath: ctx.subjectID
+      resourcePath: path.id.userID
+```
+
+**owner-guard 必须在 service 层，不可上移 handler**：
+
+owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB 查询得到），handler 层结构上不可达。强行上移 handler 会引入双重 DB 读（Get-for-auth + Get-for-business = TOCTOU 窗口）并产生 403 泄漏（向攻击者确认资源存在）。正确形态：service 层比对 `sess.SubjectID != subjectID` 时返回 `errcode.KindNotFound`，与"资源不存在"合并为同一错误（= IDOR-safe 404 collapse，防跨用户枚举）。
+
+archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` type-aware 守该形态：凡 contract.yaml 声明 `serviceOwned: true` 的 endpoint 对应的 handler，若在 handler 函数体内出现 owner 对比或 `KindNotFound` 的 `ErrNotFound` 返回，则 fail（owner-guard 只能在 service 调用链内，不应在 handler 层显式出现）。删除 service 层 guard 或写成 403/非 KindNotFound Kind 亦红。
+
+**升级路径**（触发型，见 `docs/backlog/cap-14-tooling.md` `SERVICEOWNED-HANDLER-OWNER-CHECK-01-HARD-UPGRADE`）：当前 Medium（跨函数 helper 封装形态存在理论逃逸空间）；serviceOwned endpoint ≥ 3 且形态收敛后，升级为 `auth.OwnerGuard[T]` typed funnel（Hard）。
+
 ## ADV-05 治理规则：active event 必须有 subscriber
 
 `kernel/governance` ADV-05 在 `gocell validate` 阶段对每个 `kind: event` 的 contract 强制：
