@@ -14,9 +14,14 @@
 --   - sessionrefresh rejects when row.authz_epoch_at_issue != user.authz_epoch
 --     (single cascade entry: stale + reuse share handleReuseDetected)
 --
--- DDL form: NOT NULL DEFAULT 0 (rules/go-standards.md). DEFAULT is for
--- DDL compatibility only; application-level Store.Issue requires non-zero
--- epoch in signature; storetest conformance enforces.
+-- DDL form: NOT NULL DEFAULT 0 (rules/go-standards.md). This project has no
+-- deployed environment and no historical data (project invariant — no
+-- production instances exist outside CI test runs, per CLAUDE.md
+-- "不考虑向后兼容"). The table is provably empty at deploy time, so the
+-- DEFAULT 0 is a DDL compatibility device only. Migration 028 drops this
+-- DEFAULT and adds a CHECK (> 0) constraint, making the invariant a hard
+-- DB guarantee immediately on a provably-empty table. Application-level
+-- Store.Issue requires non-zero epoch; storetest conformance enforces.
 
 -- +goose Up
 SET LOCAL lock_timeout = '5s';

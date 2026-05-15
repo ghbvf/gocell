@@ -23,13 +23,15 @@
 -- (storetest conformance enforces). archtest SESSIONVALIDATE-EPOCH-SOURCE-01
 -- pins read-path SoR to view.AuthzEpochAtIssue (not claim.AuthzEpoch).
 --
--- Forward (Up): adds column with NOT NULL DEFAULT 0. Pre-existing rows
--- (only in dev/test environments — no deployed envs per CLAUDE.md
--- "不考虑向后兼容") receive 0; those rows will never validate (epoch != 0
--- in users.authz_epoch after any bump) — equivalent to forcing re-login,
--- which is the expected behavior when schema semantics change. The accompanying
--- application code requires non-zero on Create, so all new sessions carry
--- a real epoch.
+-- Forward (Up): adds column with NOT NULL DEFAULT 0. This project has no
+-- deployed environment and no historical data (project invariant — no
+-- production instances exist outside CI test runs, per CLAUDE.md
+-- "不考虑向后兼容"). The table is provably empty at deploy time, so the
+-- DEFAULT 0 is a DDL compatibility device only (required by ALTER TABLE
+-- ADD COLUMN NOT NULL without re-writing the table). Migration 028 drops
+-- this DEFAULT and adds a CHECK (> 0) constraint; see 028 for the complete
+-- invariant narrative. Application code requires non-zero on Create, so all
+-- new sessions carry a real epoch from the moment 026 runs.
 --
 -- Rollback (Down): destructive — drops the column. The S4d binary's
 -- schema_guard registers this column in requiredColumns, so a binary that

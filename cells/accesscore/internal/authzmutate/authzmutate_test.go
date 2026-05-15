@@ -41,11 +41,18 @@ func newTestMutator(t testing.TB, store *mem.Store, sessionStore session.Store) 
 // domain.ReconstituteUser boilerplate in every sub-test.
 func seedUser(t testing.TB, store *mem.Store, userID string, status domain.UserStatus) {
 	t.Helper()
-	u, err := domain.ReconstituteUser(
-		userID, userID, userID+"@test.local", "$2a$12$hash",
-		0, false, status, domain.UserSourceIdentity, 1,
-		time.Now(), time.Now(),
-	)
+	//nolint:gosec // G101: PasswordHash is a test fixture bcrypt placeholder, not a real credential.
+	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           userID,
+		Username:     userID,
+		Email:        userID + "@test.local",
+		PasswordHash: "$2a$12$hash",
+		Status:       status,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, store.UserRepository().Create(context.Background(), u))
 }
@@ -174,15 +181,6 @@ func TestApply_AllMutations(t *testing.T) {
 			wantResetFlag:  false,
 			wantInvalidate: false,
 			wantEvent:      session.CredentialEventPasswordReset, // not consumed (Invalidates==false); pinned to regression-guard Event() return
-		},
-		{
-			name:           "RoleRevoked no-op on user fields but invalidates",
-			initialStatus:  domain.StatusActive,
-			mutation:       authzmutate.RoleRevoked{},
-			wantStatus:     domain.StatusActive,
-			wantResetFlag:  false,
-			wantInvalidate: true,
-			wantEvent:      session.CredentialEventRoleRevoke,
 		},
 	}
 

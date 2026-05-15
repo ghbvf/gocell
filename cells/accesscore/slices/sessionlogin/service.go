@@ -27,6 +27,31 @@ import (
 	session "github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// errMsgInvalidCredentials is the single public login error message used for
+// all credential-failure paths (missing user, bad password, inactive account,
+// epoch-version race). Using one const prevents account-status enumeration
+// via differing error messages on the unauthenticated public login endpoint.
+// ref: sessionvalidate const errMsgAuthFailed; sessionrefresh const errMsgInvalidRefreshToken.
+const errMsgInvalidCredentials = "invalid credentials"
+
+// passwordComparer is the signature of bcrypt.CompareHashAndPassword. It is
+// a field on Service so tests can inject a spy without importing bcrypt directly.
+// Production code uses bcrypt.CompareHashAndPassword (injected in NewService default).
+type passwordComparer func(hash, password []byte) error
+
+// dummyBcryptHash is a pre-computed bcrypt hash used when the user is not found.
+// Comparing against it normalises timing so callers cannot distinguish "user not
+// found" from "wrong password" via response latency. Cost=MinCost is sufficient
+// for timing normalisation (the real password comparison uses domain.BcryptCost).
+var dummyBcryptHash = func() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-normalization"), bcrypt.MinCost)
+	if err != nil {
+		panic(panicregister.Approved("sessionlogin-dummy-hash-init",
+			errcode.Assertion("sessionlogin: failed to pre-compute dummyBcryptHash: %v", err)))
+	}
+	return h
+}()
+
 // Option configures a session-login Service.
 type Option func(*Service)
 
@@ -59,6 +84,17 @@ func WithClock(clk clock.Clock) Option {
 	}
 }
 
+// withPasswordComparer overrides the bcrypt comparator used by Login. This
+// option is package-private (lowercase) and intended only for unit tests that
+// need to spy on or stub the password comparison step.
+func withPasswordComparer(fn passwordComparer) Option {
+	return func(s *Service) {
+		if fn != nil {
+			s.comparePassword = fn
+		}
+	}
+}
+
 // WithSessionTTL sets the session row's GC-eligibility lifetime. Session
 // rows should outlive the refresh chain so that revocation lookups remain
 // effective for the chain's entire lifetime; composition roots typically
@@ -78,16 +114,17 @@ func WithSessionTTL(d time.Duration) Option {
 
 // Service implements password login with JWT issuance.
 type Service struct {
-	userRepo     ports.UserRepository
-	sessionStore session.Store
-	roleRepo     ports.RoleRepository
-	refreshStore refresh.Store
-	txRunner     persistence.CellTxManager
-	emitter      outbox.Emitter
-	issuer       *auth.JWTIssuer
-	logger       *slog.Logger
-	clock        clock.Clock
-	sessionTTL   time.Duration
+	userRepo        ports.UserRepository
+	sessionStore    session.Store
+	roleRepo        ports.RoleRepository
+	refreshStore    refresh.Store
+	txRunner        persistence.CellTxManager
+	emitter         outbox.Emitter
+	issuer          *auth.JWTIssuer
+	logger          *slog.Logger
+	clock           clock.Clock
+	sessionTTL      time.Duration
+	comparePassword passwordComparer // defaults to bcrypt.CompareHashAndPassword
 }
 
 // NewService creates a session-login Service. refreshStore issues the opaque
@@ -121,13 +158,14 @@ func NewService(
 		logger = slog.Default()
 	}
 	s := &Service{
-		userRepo:     userRepo,
-		sessionStore: sessionStore,
-		roleRepo:     roleRepo,
-		refreshStore: refreshStore,
-		emitter:      outbox.NewNoopEmitter(),
-		issuer:       issuer,
-		logger:       logger,
+		userRepo:        userRepo,
+		sessionStore:    sessionStore,
+		roleRepo:        roleRepo,
+		refreshStore:    refreshStore,
+		emitter:         outbox.NewNoopEmitter(),
+		issuer:          issuer,
+		logger:          logger,
+		comparePassword: bcrypt.CompareHashAndPassword,
 	}
 	for _, o := range opts {
 		o(s)
@@ -193,17 +231,44 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	// Authenticate the password outside the tx (bcrypt is CPU-bound and must
 	// not hold a DB transaction open during the hash comparison). We re-fetch
 	// the user inside the tx with FOR UPDATE to get the authoritative epoch.
-	preUser, err := s.userRepo.GetByUsername(ctx, input.Username)
-	if err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+	//
+	// C1: All credential-failure paths (missing user, wrong password, inactive
+	// account) return the SAME error (ErrAuthLoginFailed / KindUnauthenticated /
+	// errMsgInvalidCredentials). This prevents account-existence enumeration and
+	// account-status enumeration via differing status codes or messages.
+	//
+	// Timing normalisation: bcrypt runs for every attempt regardless of whether
+	// the user exists or is active, so callers cannot distinguish "user not found"
+	// from "wrong password" via response latency (zitadel-style constant-time path).
+	preUser, userLookupErr := s.userRepo.GetByUsername(ctx, input.Username)
+
+	// Choose the hash to compare against. If the user does not exist we use
+	// dummyBcryptHash to maintain constant time; if found we use the real hash.
+	hashToCompare := dummyBcryptHash
+	if userLookupErr == nil {
+		hashToCompare = []byte(preUser.PasswordHash)
 	}
-	if !preUser.CanAuthenticate() {
-		// S4.0: fail-closed for any non-active user.
-		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
-			"account is not active")
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(preUser.PasswordHash), []byte(input.Password)); err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+
+	// Always run bcrypt — this is the constant-time anchor that prevents timing
+	// sidechannels regardless of user-lookup outcome or account status.
+	bcryptErr := s.comparePassword(hashToCompare, []byte(input.Password))
+
+	// Evaluate the unified failure condition. Internal reasons are logged via
+	// WithInternal only; they never appear in the 4xx response body.
+	switch {
+	case userLookupErr != nil:
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials,
+			errcode.WithInternal(fmt.Sprintf("user lookup failed: %v", userLookupErr)))
+	case !preUser.CanAuthenticate():
+		// C1: inactive account → same 401 as bad password. Real reason in WithInternal.
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials,
+			errcode.WithInternal(fmt.Sprintf("account not active (status=%v, bcrypt_ok=%v)",
+				preUser, bcryptErr == nil)))
+	case bcryptErr != nil:
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials)
 	}
 
 	// Pin the PasswordVersion from the pre-bcrypt snapshot. loginInTx will
@@ -249,16 +314,22 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 func (s *Service) loginInTx(txCtx context.Context, username, sessionID string, preVersion int64) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials)
 	}
+	// C1: concurrent deactivation race — account was active at pre-bcrypt check but
+	// was locked/suspended before the FOR UPDATE lock. Return the same 401 error as
+	// other failure paths to prevent account-status enumeration. Real reason in logs.
 	if !user.CanAuthenticate() {
-		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
-			"account is not active")
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials,
+			errcode.WithInternal(fmt.Sprintf("account deactivated in race window (in-tx check): user=%s", username)))
 	}
 	// P1.1: reject if a concurrent ChangePassword committed between the pre-bcrypt
 	// snapshot and this FOR UPDATE lock. Uniform message prevents version enumeration.
 	if user.PasswordVersion != preVersion {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials)
 	}
 
 	minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
