@@ -22,9 +22,9 @@ import (
 // Additive mutations (activate, clear-reset) persist the domain-field change
 // but skip the invalidation trifecta (ADR §A6).
 type Mutator struct {
-	inv     *credentialinvalidate.Invalidator
-	repo    ports.UserRepository
-	txMgr   persistence.CellTxManager
+	inv   *credentialinvalidate.Invalidator
+	repo  ports.UserRepository
+	txMgr persistence.CellTxManager
 }
 
 // New constructs a Mutator, fail-fasting on nil deps.

@@ -27,7 +27,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
-// keep session import used for CredentialEventDelete in deleteUserAndRevokeTokens
+// keep session import used for CredentialEventDelete in deleteUserAndRevokeTokens.
 var _ = session.CredentialEventDelete
 
 // TokenIssuer is a narrow interface for issuing a new token pair after a
@@ -198,28 +198,39 @@ func NewService(
 			"identity-manage: tokenIssuer is required; wire via WithTokenIssuer")
 	}
 	if s.lastAdminProtectionRequested {
-		if validation.IsNilInterface(s.lastAdminRoleRepo) {
-			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"identity-manage: last-admin protection requires a role repository")
-		}
-		// S4.0: the guard counts *effective* admins (status='active' AND admin
-		// role). RoleRepository.CountEffectiveAdmins is the canonical impl;
-		// WrapEffectiveAdminCounter produces the sealed
-		// domain.EffectiveAdminCounter wrapper that NewLastAdminGuard accepts.
-		// Sealed marker prevents structural mis-wiring with CountByRole or any
-		// other look-alike at compile time.
-		sealedCounter, wrapErr := domain.WrapEffectiveAdminCounter(s.lastAdminRoleRepo)
-		if wrapErr != nil {
-			return nil, fmt.Errorf("identity-manage: wrap effective-admin counter: %w", wrapErr)
-		}
-		guard, guardErr := domain.NewLastAdminGuard(sealedCounter)
-		if guardErr != nil {
-			return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
+		guard, err := buildLastAdminGuard(s.lastAdminRoleRepo)
+		if err != nil {
+			return nil, err
 		}
 		s.lastAdminGuard = guard
 	}
 	clock.MustHaveClock(s.clock, "identitymanage.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
+}
+
+// buildLastAdminGuard constructs the domain.LastAdminGuard from a role repository.
+// It validates the repo is non-nil, wraps it in the sealed EffectiveAdminCounter
+// marker, and constructs the guard.
+func buildLastAdminGuard(roleRepo ports.RoleRepository) (*domain.LastAdminGuard, error) {
+	if validation.IsNilInterface(roleRepo) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"identity-manage: last-admin protection requires a role repository")
+	}
+	// S4.0: the guard counts *effective* admins (status='active' AND admin
+	// role). RoleRepository.CountEffectiveAdmins is the canonical impl;
+	// WrapEffectiveAdminCounter produces the sealed
+	// domain.EffectiveAdminCounter wrapper that NewLastAdminGuard accepts.
+	// Sealed marker prevents structural mis-wiring with CountByRole or any
+	// other look-alike at compile time.
+	sealedCounter, wrapErr := domain.WrapEffectiveAdminCounter(roleRepo)
+	if wrapErr != nil {
+		return nil, fmt.Errorf("identity-manage: wrap effective-admin counter: %w", wrapErr)
+	}
+	guard, guardErr := domain.NewLastAdminGuard(sealedCounter)
+	if guardErr != nil {
+		return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
+	}
+	return guard, nil
 }
 
 // CreateInput holds parameters for creating a user.
@@ -383,7 +394,7 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 	now := s.clock.Now()
 
 	// Determine what credential mutation to apply (if any) before opening tx.
-	credMutation, err := s.resolveCredentialMutation(ctx, input)
+	credMut, err := s.resolveCredentialMutation(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -411,8 +422,8 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 
 	// Apply credential mutation via the funnel (after the main tx commits so
 	// the mutation's own RunInTx sees the committed state).
-	if credMutation != nil {
-		if err := s.authzmutator.Apply(ctx, input.ID, credMutation, now); err != nil {
+	if credMut.ok {
+		if err := s.authzmutator.Apply(ctx, input.ID, credMut.m, now); err != nil {
 			return nil, fmt.Errorf("identity-manage: update credential mutation: %w", err)
 		}
 		// Re-fetch user to get the updated epoch/status.
@@ -426,16 +437,26 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 	return user, nil
 }
 
-// resolveCredentialMutation inspects the UpdateInput and returns the authzmutate.Mutation
-// that should be applied, or nil if no credential mutation is needed.
-func (s *Service) resolveCredentialMutation(ctx context.Context, input UpdateInput) (authzmutate.Mutation, error) {
+// pendingCredMutation carries the result of resolveCredentialMutation.
+// ok == false means no credential mutation is needed for this update;
+// this struct avoids returning a nil authzmutate.Mutation interface (which
+// would trigger the nilnil linter).
+type pendingCredMutation struct {
+	m  authzmutate.Mutation
+	ok bool
+}
+
+// resolveCredentialMutation inspects the UpdateInput and returns the
+// authzmutate.Mutation that should be applied, wrapped in a pendingCredMutation.
+// When pendingCredMutation.ok is false no credential mutation is needed.
+func (s *Service) resolveCredentialMutation(ctx context.Context, input UpdateInput) (pendingCredMutation, error) {
 	// Check status change.
 	if input.Status != nil {
 		switch domain.UserStatus(*input.Status) {
 		case domain.StatusSuspended:
-			return authzmutate.SuspendUser{}, nil
+			return pendingCredMutation{m: authzmutate.SuspendUser{}, ok: true}, nil
 		case domain.StatusActive:
-			return authzmutate.ActivateUser{}, nil
+			return pendingCredMutation{m: authzmutate.ActivateUser{}, ok: true}, nil
 		}
 	}
 	// Check requirePasswordReset change.
@@ -444,16 +465,16 @@ func (s *Service) resolveCredentialMutation(ctx context.Context, input UpdateInp
 			// Check if already set (no-op if flag already true).
 			u, err := s.repo.GetByID(ctx, input.ID)
 			if err != nil {
-				return nil, fmt.Errorf("identity-manage: resolve mutation get user: %w", err)
+				return pendingCredMutation{}, fmt.Errorf("identity-manage: resolve mutation get user: %w", err)
 			}
 			if u.PasswordResetRequired() {
-				return nil, nil // already set, no mutation needed
+				return pendingCredMutation{}, nil // already set, no mutation needed
 			}
-			return authzmutate.RequirePasswordReset{}, nil
+			return pendingCredMutation{m: authzmutate.RequirePasswordReset{}, ok: true}, nil
 		}
-		return authzmutate.ClearPasswordReset{}, nil
+		return pendingCredMutation{m: authzmutate.ClearPasswordReset{}, ok: true}, nil
 	}
-	return nil, nil
+	return pendingCredMutation{}, nil // no credential fields changed
 }
 
 // applyNonAuthzFields applies non-credential field changes (name, email) to u.
@@ -611,7 +632,7 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, user
 	}
 	// Effective admin = active + admin role. Locked/suspended admins are not
 	// counted by the invariant and may be freely removed.
-	userIsActiveAdmin := hasAdminRole && userStatus == domain.StatusActive //nolint:govet
+	userIsActiveAdmin := hasAdminRole && userStatus == domain.StatusActive
 	if err := s.lastAdminGuard.CheckRemove(ctx, userID, userIsActiveAdmin); err != nil {
 		return fmt.Errorf("identity-manage: last-admin: %w", err)
 	}

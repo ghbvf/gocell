@@ -36,6 +36,9 @@ func newTestMutator(t testing.TB, store *mem.Store, sessionStore session.Store) 
 	return m
 }
 
+// seedUser creates a user with the given status and inserts it into store.
+// Used by TestApply_AllMutations and TestApply_UserNotFound to avoid inline
+// domain.ReconstituteUser boilerplate in every sub-test.
 func seedUser(t testing.TB, store *mem.Store, userID string, status domain.UserStatus) {
 	t.Helper()
 	u, err := domain.ReconstituteUser(
@@ -45,17 +48,6 @@ func seedUser(t testing.TB, store *mem.Store, userID string, status domain.UserS
 	)
 	require.NoError(t, err)
 	require.NoError(t, store.UserRepository().Create(context.Background(), u))
-}
-
-// trackingInvalidator wraps mem UserRepository and records Apply calls.
-type trackingInvalidator struct {
-	calls []session.CredentialEvent
-	inv   *credentialinvalidate.Invalidator
-}
-
-func (ti *trackingInvalidator) Apply(ctx context.Context, userID string, evt session.CredentialEvent) error {
-	ti.calls = append(ti.calls, evt)
-	return ti.inv.Apply(ctx, userID, evt)
 }
 
 func TestNew_NilDeps(t *testing.T) {
@@ -203,15 +195,11 @@ func TestApply_AllMutations(t *testing.T) {
 			require.NoError(t, err)
 
 			// Seed user with initial status and passwordResetRequired=false.
-			u, err := domain.ReconstituteUser(
-				"usr-1", "alice", "alice@test.local", "$2a$12$hash",
-				0, false, tt.initialStatus, domain.UserSourceIdentity, 1,
-				now, now,
-			)
-			require.NoError(t, err)
-			require.NoError(t, store.UserRepository().Create(context.Background(), u))
+			seedUser(t, store, "usr-1", tt.initialStatus)
 
 			// Track initial epoch.
+			u, err := store.UserRepository().GetByID(context.Background(), "usr-1")
+			require.NoError(t, err)
 			initialEpoch := u.AuthzEpoch()
 
 			// Apply mutation.

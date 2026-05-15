@@ -101,8 +101,10 @@ func (ActivateUser) mutationOK() {}
 // be revoked so the user is forced through the reset flow immediately).
 type RequirePasswordReset struct{}
 
-func (RequirePasswordReset) Event() session.CredentialEvent { return session.CredentialEventPasswordReset }
-func (RequirePasswordReset) Invalidates() bool              { return true }
+func (RequirePasswordReset) Event() session.CredentialEvent {
+	return session.CredentialEventPasswordReset
+}
+func (RequirePasswordReset) Invalidates() bool { return true }
 func (RequirePasswordReset) apply(u *domain.User, now time.Time) {
 	u.SetPasswordResetRequired(true, now)
 }
@@ -114,8 +116,10 @@ func (RequirePasswordReset) mutationOK() {}
 // this mutation only updates the domain flag.
 type ClearPasswordReset struct{}
 
-func (ClearPasswordReset) Event() session.CredentialEvent { return session.CredentialEventPasswordReset }
-func (ClearPasswordReset) Invalidates() bool              { return false }
+func (ClearPasswordReset) Event() session.CredentialEvent {
+	return session.CredentialEventPasswordReset
+}
+func (ClearPasswordReset) Invalidates() bool { return false }
 func (ClearPasswordReset) apply(u *domain.User, now time.Time) {
 	u.SetPasswordResetRequired(false, now)
 }
