@@ -1,7 +1,7 @@
 # 034 PG / accesscore / auditcore / configcore B 路线实施计划
 
 **生成日期**: 2026-05-08
-**最后更新**: 2026-05-15（v7 — **S4d** 新增 correctness 单元修 PR #490 review 暴露的 P1/P2 + 根因。S4b 把 epoch 实现为 access JWT validation claim，未评估 refresh 升级 + 并发 login 串行化 + RequirePasswordReset funnel 上游路径。S4d 修复方向：撤回 migration 025（A1 RETRACTED）/ 删 access JWT epoch claim / sessionvalidate 改 row SoR (`view.AuthzEpochAtIssue`) / sessionlogin `SELECT ... FOR UPDATE` 行锁 / sessionrefresh row 比对 + stale/reuse 合并 cascade 入口 / identitymanage RequirePasswordReset 同 tx 调 invalidator。funnel 上游 Medium (`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` archtest caller allowlist)；Hard 升级走 backlog `AUTHZ-MUTATION-FUNNEL-UPGRADE-01` 单独 PR (S4e)。S4c (cleanup) 范围不变，与 S4d 并行。)
+**最后更新**: 2026-05-15（v7 — **S4d** 新增 correctness 单元修 PR #490 review 暴露的 P1/P2 + 根因；**S4e mutation funnel 早期收口 LANDED PR #494（2026-05-15，S4d review-fix）**：domain.User authz 字段私有化 + authzmutate sealed funnel + Hard archtests；P2.b stale-epoch 路径修正（rejectIfStaleEpoch→cascadeRevoke）；read-side authority funnel 立即立项（S-next）。S4c (cleanup) 范围不变，与 S4d/S4e 并行。)
 **前一版**: 2026-05-14 v6（S4b ship by PR #490；后被 review 揭示 P1/P2 → S4d 单独 PR 闭环）
 **对接来源**:
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`（B 路线源）
@@ -434,10 +434,10 @@ runtime/auth/session/
 - `ports.UserRepository` 加 `GetByIDForUpdate` / `GetByUsernameForUpdate`（mem store-wide Lock；PG `SELECT ... FOR UPDATE`）
 - `sessionlogin` 用 `GetByUsernameForUpdate` 在 RunInTx 闭包顶部读 user → session/refresh 行携带 `user.AuthzEpoch`（修 P1-#3 并发 login vs revoke 串行化）
 - `sessionvalidate` 改 row SoR：比对 `user.AuthzEpoch != view.AuthzEpochAtIssue`（删 claim 字段；A7）
-- `sessionrefresh.refreshInTx` 加 row != user 比对，stale 走 `handleReuseDetected("stale-epoch")` 统一 cascade 入口（A6 扩展；修 P1-#2 stale grant 升级）
+- `sessionrefresh.refreshInTx` 加 row != user 比对，stale 走 `rejectIfStaleEpoch` → `cascadeRevoke("stale-epoch")`（S4e 修正；A6 扩展；修 P1-#2 stale grant 升级）
 - `identitymanage.applyUserUpdate` 在 RequirePasswordReset false→true transition 同 tx 调 invalidator + 新 `CredentialEventPasswordResetRequired` 枚举值（A9；修 P1-#1）
 - access JWT 删 `authz_epoch` claim：`auth.Claims.AuthzEpoch` 字段删除 + `standardClaims` map 删 key + mint 路径不写（A7）
-- archtest：`JWT-CLAIMS-NO-AUTHZ-EPOCH-01` Hard 三 prong（struct field + standardClaims map + jwt.go literal scan）；`SESSIONVALIDATE-EPOCH-SOURCE-01` Hard（row != claim 锁源）；`SESSIONREFRESH-STALE-EPOCH-REJECT-01` Hard（row != user inequality + stale-epoch stage marker）；`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` Medium（`Invalidator.Apply` caller allowlist：identitymanage/sessionrefresh/rbacassign/setup/adminprovision/funnel itself）
+- archtest：`JWT-CLAIMS-NO-AUTHZ-EPOCH-01` Hard 三 prong（struct field + standardClaims map + jwt.go literal scan）；`SESSIONVALIDATE-EPOCH-SOURCE-01` Hard（row != claim 锁源）；`SESSIONREFRESH-STALE-EPOCH-REJECT-01` Hard（rejectIfStaleEpoch form + prong 4 NEGATIVE cascadeRevoke，S4e 重写）；`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` Medium（`Invalidator.Apply` caller allowlist）
 - ADR `202605101400-adr-credential-session-protocol.md` §0 A1 RETRACTED + A7/A8/A9/A10 新增 + §3 威胁矩阵整表重跑 + §D1/D2/D4.2 SQL 修订 + 原文与 amendment 矛盾段落同 PR 重写
 - rules `ai-collab.md` §Review checklist 加双向 funnel 评级 + ADR amendment 重跑威胁矩阵规则；`contract-fanout.md` 触发条件加 DROP COLUMN / schema_guard.forbiddenColumns 新 entry + Invariant inventory 行
 
@@ -448,11 +448,31 @@ runtime/auth/session/
 - 六席 review checklist 中 funnel 评级显式给出（下游 Hard + 上游 Medium → 指向 S4e）
 - backlog 加 `AUTHZ-MUTATION-FUNNEL-UPGRADE-01` 显式 S4e 跟进条目
 
-**功能不在 S4d 范围（推迟 S4e）**：
-- `domain.User` 字段私有化（status / passwordResetRequired / authzEpoch unexported）
-- 新建 `cells/accesscore/internal/authzmutate` 包 + sealed `Mutation` interface + `Apply` 唯一入口
-- archtest 升 Hard：`DOMAIN-AUTHZ-FIELD-PRIVATE-01` + `AUTHZ-MUTATION-APPLY-FUNNEL-01`
-- `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 收窄到 authzmutate + sessionrefresh
+**S4e 早期收口（S4d review-fix，LANDED PR #494，2026-05-15）**：
+- ✅ `domain.User` 字段私有化（status / passwordResetRequired / authzEpoch unexported）
+- ✅ 新建 `cells/accesscore/internal/authzmutate` 包 + sealed `Mutation` interface + `Mutator.Apply` 唯一入口 + 6 个 variant
+- ✅ archtest Hard：`DOMAIN-AUTHZ-FIELD-PRIVATE-01` + `AUTHZ-MUTATION-APPLY-FUNNEL-01`
+- ⚠️ `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 未能收窄到 authzmutate + sessionrefresh（co-tx atomicity 约束，实际 allowlist 保持 5 个前缀）；write-side Hard 保证来自字段私有化（Rule a），不是 caller-set 收窄（Rule b）
+
+#### S-next: read-side credential-authority Hard funnel（立即立项，next PR）
+
+**触发**：S4e (PR #494) review 暴露 P1.1/P1.3 class：token issue 和 token validate 路径的
+"是否允许该用户凭据"判断散落在各 slice（sessionlogin/sessionrefresh/sessionvalidate），
+sessionrefresh 漏检 `CanAuthenticate()`，无单一 Hard 收口。
+
+**范围**（独立 PR，与 S4c 并行可行）：
+- 新建 `cells/accesscore/internal/credentialauthority` 包 + `Assert(ctx, user, opts...)` sealed function
+- 检查：(a) `user.CanAuthenticate()`，(b) password-version pin（issue 路径），(c) session row 未 revoked（validate 路径）
+- sessionlogin / sessionrefresh / sessionvalidate 三个 slice 统一经过 `credentialauthority.Assert`
+- archtest `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01` Hard（caller allowlist 锁 caller 身份）
+- 与 authzmutate.Mutator.Apply 对称（write-side / read-side 双向闭合）
+
+**验收**：
+- `make verify` + `hack/verify-archtest.sh` 全绿（含 RED fixture）
+- sessionrefresh 新增 unit test：锁状态用户无法 refresh（`CanAuthenticate()` false path）
+- ADR `202605101400-adr-credential-session-protocol.md` §A11 更新状态为 LANDED
+
+**backlog**: `CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01`（Cx2，S4e ship 后立即立项）
 
 #### S4c accesscore cleanup / race / L2 e2e
 

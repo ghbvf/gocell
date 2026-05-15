@@ -10,7 +10,7 @@
 
 ---
 
-## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15）
+## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15）
 
 S4b PR 落地后实际实现与 §2/§3 描述出现漂移。**S4d (PR S4d) 之后实际行为以本节 +
 §A8 / §D1 / §D2 / §D4.2 同 PR 重写后的描述为准。** 与 amendment 矛盾的原文段落
@@ -88,11 +88,11 @@ D2 epoch 比对是 401 路径（token claim 与 server state 不符）。但 JWT
 - 接 `ctxutil.WithDetachedTimeout(outerCtx, 5s)`：cascade 不受外层 cancel 影响 + 不会因 DB 卡住泄漏 goroutine。
 - `runtime/auth/refresh/storetest` 的 T20 / T23 conformance 子测试断言任何新 Store impl 必返非空 token，否则编译之外的 CI 失败。
 
-S4d 扩展：stale-epoch 走相同入口。`refreshInTx` 在 `fetchUserForRefresh` 后比对
-`presented.AuthzEpochAtIssue != user.AuthzEpoch`；不匹配统一调
-`handleReuseDetected(outerCtx, sess.SubjectID, sess.ID, "stale-epoch")` —
-reuse 与 stale-grant 共用 cascade 入口，避免分支。archtest
-`SESSIONREFRESH-STALE-EPOCH-REJECT-01` 静态守卫该形态。
+S4d 扩展（已被 S4e PR #494 修正）：`refreshInTx` 在 `fetchUserForRefresh` 后比对
+`presented.AuthzEpochAtIssue != user.AuthzEpoch`；不匹配路由进 `rejectIfStaleEpoch`，
+后者调 `cascadeRevoke("stale-epoch")`（session-scoped revoke，不触发 user-wide
+Invalidator.Apply）。stale-epoch 与 reuse-attack 拆分为不同路径，
+archtest `SESSIONREFRESH-STALE-EPOCH-REJECT-01` prong 4 NEGATIVE 静态守卫二者不混用。
 
 ### A7 access JWT 删除 `authz_epoch` claim（S4d）
 
@@ -142,20 +142,92 @@ S4b 把 epoch 写入 access JWT 的 `authz_epoch` claim，validate 时和
   `requirePasswordReset=true` 不 bump epoch，强制改密门禁延迟到 token 自然 exp
   才生效（PR #490 review P1-#1）。
 
-### A10 后续治理（S4e）— funnel 上游 Hard 化
+### A10 后续治理（S4e）— funnel 上游 Hard 化（LANDED PR #494；2026-05-15）
 
-- 本 PR (S4d) 的 funnel 上游是 **Medium**：archtest
-  `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 锁 `Invalidator.Apply` 的 caller
-  allowlist，防"新 caller 在错误位置调"。但不防"新 authz-affecting 字段 setter
-  漏调"——这正是 PR #490 review P1-#1 的回归形态。
-- S4e 单独立项（backlog `AUTHZ-MUTATION-FUNNEL-UPGRADE-01`）做：
-  1. `domain.User` 的 `status` / `passwordResetRequired` / `authzEpoch` 字段私有化
-     + 删 setter（包外不可表达写入）。
-  2. 新建 `cells/accesscore/internal/authzmutate` 包 + sealed `Mutation` interface
-     + `Apply(ctx, txMgr, repo, inv, userID, m, now)` 唯一入口（compile 期强制
-     `inv` 非 nil 入参）。
-  3. archtest 升 Hard：`DOMAIN-AUTHZ-FIELD-PRIVATE-01` + `AUTHZ-MUTATION-APPLY-FUNNEL-01`；
-     `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 收窄到 authzmutate + sessionrefresh。
+**AS-BUILT 实现（PR #494 落地）**
+
+#### 字段私有化 + setter 收口（Hard Rule a）
+
+`domain.User` 的 `status` / `passwordResetRequired` / `authzEpoch` 三个字段全部小写
+私有化。包外无法直接写入。唯二的 mutation 入口：
+
+- `user.SetStatus(s UserStatus, now time.Time)` — 仅 authzmutate 包调用
+- `user.SetPasswordResetRequired(v bool, now time.Time)` — 仅 authzmutate 包调用
+
+`ReconstituteUser(id, username, email, passwordHash string, passwordVersion int64,
+passwordResetRequired bool, status UserStatus, source UserSource, authzEpoch int64,
+createdAt, updatedAt time.Time) (*User, error)` 是 DDD rehydration 构造函数（repository
+层调用），持久化以外的业务层仍须走 authzmutate 的 `Mutator.Apply`。
+
+archtest `DOMAIN-AUTHZ-FIELD-PRIVATE-01` 静态守卫：production AST 内 `SetStatus` /
+`SetPasswordResetRequired` 的调用方身份必须在 allowlist 内。
+
+#### authzmutate sealed Mutation interface（Hard Rule a）
+
+`cells/accesscore/internal/authzmutate` 包：
+
+- sealed `Mutation` interface（含 unexported `mutationOK()` method，包外不可表达实现）
+- 6 个 Mutation variants：`LockUser` / `SuspendUser` / `ActivateUser` /
+  `RequirePasswordReset` / `ClearPasswordReset` / `RoleRevoked`
+- `Mutator.Apply(ctx, userID, m Mutation, now)` 唯一入口：`RunInTx` →
+  `GetByIDForUpdate` → `m.apply(user, now)` → `repo.Update` →
+  （若 `m.Invalidates()`）`inv.Apply`
+- `ActivateUser.Invalidates() == false`（additive，per OAuth Security BCP §4.13.2）
+- `ClearPasswordReset.Invalidates() == false`（clearing flag；实际密码变更由 changePasswordInTx 完成）
+
+archtest `AUTHZ-MUTATION-APPLY-FUNNEL-01` 静态守卫：production AST 内调用
+`Invalidator.Apply` 的 caller 前缀必须在 allowlist 内。
+
+#### 关键偏差：Invalidator caller-set 收窄未能实现
+
+§A10 原计划把 `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` allowlist 收窄到
+`{authzmutate, sessionrefresh}`。**实际 AS-BUILT 无法实现**，原因：
+
+- `identitymanage/` 的 `changePasswordInTx` 需要在同 tx 内原子调用 invalidator
+  （直接写 UserRepo + 直接调 Invalidator），不经 authzmutate；迁入 authzmutate
+  会引入跨 tx 的二次事务问题。
+- `credentialinvalidate/` 是 invalidator 实现本身，必须在 allowlist。
+- `rbacassign/` 的 `Revoke` 走 Mutator.Apply（`RoleRevoked.apply` 是 user field
+  no-op，role-row write 由 rbacassign 自身完成），但 rbacassign 仍在 allowlist
+  因为它的 `Revoke` 路径直接调 invalidator 的外部函数。
+
+实际 allowlist（`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01`，archtest 锁定）：
+
+```
+credentialinvalidate/, authzmutate/, identitymanage/, sessionrefresh/, rbacassign/
+```
+
+write-side Hard 保证来自 **Rule (a)**（字段私有化 + sealed interface）：包外无法
+在 authzmutate.Mutator.Apply 之外触及 authz-affecting 字段。Rule (b)（caller
+allowlist 收窄）因 co-tx atomicity 约束未能实现，仍保持 Medium（archtest 锁 caller
+身份，但不防"漏调"的 regression 形态）。
+
+### A11 读侧 credential-authority funnel（S-next，立即立项）
+
+**问题**：token issue（sessionlogin / sessionrefresh）和 token validate（sessionvalidate）
+路径均包含"是否允许该用户凭据"的判断逻辑，但实现散落在各 slice 内，无单一 Hard 收口：
+
+- `sessionlogin` 检查 `user.CanAuthenticate()` + password hash
+- `sessionvalidate` 检查 `user.CanAuthenticate()` + epoch 比对
+- `sessionrefresh` 检查 epoch 比对但不检查 `CanAuthenticate()`（P1.1/P1.3 class）
+
+任何新增 issue/validate 路径若遗漏其中任一检查，均构成 P1.x 级 regression。
+
+**设计（§A11 Hard funnel 目标）**：
+
+```go
+// credentialauthority.Assert(ctx context.Context, user domain.User, opts ...AssertOption) error
+// 唯一合法调用点：sessionlogin, sessionrefresh, sessionvalidate 三个 slice
+// 检查：(a) user.CanAuthenticate()，(b) password-version pin（可选，issue 路径），
+//       (c) session row 未 revoked（可选，validate 路径）
+// archtest: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01（Hard，caller allowlist）
+```
+
+- `user.CanAuthenticate() bool` 已存在（`return u.status == StatusActive`），是单源真理
+- Hard 化路径：`credentialauthority.Assert` sealed function + archtest 锁 caller allowlist，
+  与 authzmutate.Mutator.Apply 对称（write-side / read-side 双向闭合）
+- 当前状态：targeted-fix（各 slice 分别检查），Hard funnel 立即立项（backlog
+  `CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01`，Cx2，S-next PR）
 
 ---
 
@@ -292,7 +364,7 @@ if user.AuthzEpoch != view.AuthzEpochAtIssue → 401 ErrAuthInvalidToken
 **效果**：旧 session 行 `authz_epoch_at_issue=5`，role revoke 后
 `user.authz_epoch=6`，下一次 validate 立即拒。refresh 同理：refresh 行
 `authz_epoch_at_issue=5` 与 user.AuthzEpoch=6 不匹配，sessionrefresh 路由进
-`handleReuseDetected("stale-epoch")`。无需 sweep 已发 token——它们自动失效。
+`rejectIfStaleEpoch`，后者调 `cascadeRevoke("stale-epoch")`（session-scoped revoke；S4e 修正，见 §A6）。无需 sweep 已发 token——它们自动失效。
 
 **P1-③（并发 login vs revoke）的串行化机制**：S4d 用 PG row-level lock
 （SELECT ... FOR UPDATE on users）让 login tx 与 revoke tx 通过 user 行天然串行化。
@@ -367,7 +439,7 @@ session.ID 从 login 时刻设定后保持稳定，直到 logout / `RevokeForSub
 
 **AuthzEpoch / role snapshot 推进路径**（S4d 形态）：refresh 时通过
 `presented.AuthzEpochAtIssue`（从 refresh 行读，A8 引入）与 live
-`users.authz_epoch` 比对；不匹配走 A6 cascade 入口 `handleReuseDetected("stale-epoch")`。
+`users.authz_epoch` 比对；不匹配走 `rejectIfStaleEpoch` → `cascadeRevoke("stale-epoch")`（S4e 修正，§A6；非 user-wide invalidation）。
 sessionvalidate 同源比对 `view.AuthzEpochAtIssue`（session 行，A8）与
 `users.authz_epoch`。Session UUID 不轮换（OAuth2 §1.5 + ADR §D4.1）；refresh
 child 继承 chain 的 `authz_epoch_at_issue`，refresh chain 内 epoch 稳定。
@@ -422,9 +494,10 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 ## 3. Threat Model 覆盖矩阵
 
 > S4d 重跑（2026-05-15）：A1 RETRACTED + A8 row provenance + A9 RequirePasswordReset
-> funnel + A7 access JWT 删 epoch claim。每行重新评估（按 ai-collab.md §"ADR
-> amendment 重跑威胁矩阵" 规则）。`Row SoR` 列代替原 `AuthzEpoch` 列以反映
-> 实际 SoR 位置；`Funnel 上游` 列新增反映 P1-#1 修复。
+> funnel + A7 access JWT 删 epoch claim。S4e 重跑（PR #494，2026-05-15）：
+> authzmutate Hard funnel 闭合 + P2.b stale-epoch 路径修正。每行重新评估（按
+> ai-collab.md §"ADR amendment 重跑威胁矩阵" 规则）。`Row SoR` 列代替原 `AuthzEpoch`
+> 列以反映实际 SoR 位置；`Funnel 上游` 列新增反映 P1-#1 修复。
 
 | 威胁场景 | jti-only | Row SoR (AuthzEpochAtIssue) | Fail-closed events | Funnel 上游 (S4d) | 同 tx |
 |---|---|---|---|---|---|
@@ -436,8 +509,9 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 | PATCH RequirePasswordReset=true 不立即生效 (P1-#1) | — | ✅ epoch bump → row stale | ✅ S4d 新增 `CredentialEventPasswordResetRequired` event | **A9 identitymanage 在 false→true transition 调 invalidator** | ✅ 失效原子 |
 | Account delete → 残留 session 攻击面 | — | — | ✅ Delete event 同 tx 撤所有 | A9 走 funnel | ✅ 失效原子 |
 | 并发 login 与 role revoke (P1-#3) | — | ✅ login 持 user 行 FOR UPDATE 写锁，revoke 期 BumpAuthzEpoch 也持同行写锁 → PG read-committed + row lock 天然串行化 | — | — | ✅ 失效原子 |
-| stale refresh + reuse cascade 共用入口 (A6) | — | ✅ row.epoch != user.epoch 路由进 handleReuseDetected("stale-epoch") | ✅ 同 reuse cascade — 全 user 撤 | A6 sessionrefresh 走 funnel | ✅ 失效原子 |
-| 新增 user authz-affecting 字段漏调 invalidator (S4d funnel 上游 Medium) | — | — | — | ⚠️ Medium: archtest `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 锁 caller allowlist，**不防"漏调"**；S4e Hard 化（authzmutate sealed funnel）完关 | — |
+| stale refresh + epoch 不匹配（P2.b，S4e 修正）| — | ✅ row.epoch != user.epoch → `rejectIfStaleEpoch` → `cascadeRevoke("stale-epoch")`（session-scoped，非 user-wide） | ✅ session 失效原子（cascade revoke） | A9 sessionrefresh 走 funnel | ✅ 失效原子 |
+| 新增 user authz-affecting 字段漏调 invalidator（S4d → S4e 闭合）| — | — | — | ✅ S4e PR #494：domain.User authz 字段私有化（SetStatus/SetPasswordResetRequired caller-set ⊆ authzmutate） + archtest `AUTHZ-MUTATION-APPLY-FUNNEL-01` Hard 闭合；`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 仍 Medium（atomicity 约束，§A10） | — |
+| issue/validate authority predicate scatter（P1.1/P1.3 class）| — | — | — | ⚠️ Medium：各 slice 分别检查 `CanAuthenticate()` + epoch；§A11 Hard funnel 立即立项（`CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01`，S-next PR） | — |
 | JWT 签名密钥泄露 | ❌（jti-only 不解此场景） | — | — | — | — |
 | key rotation | ❌（不在本 ADR 范围；JWT issuer key rotation 是独立机制） | — | — | — |
 
