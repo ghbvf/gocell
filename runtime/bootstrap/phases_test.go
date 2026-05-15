@@ -671,6 +671,53 @@ func TestRunState_Rollback_PanickingTeardownRecoveredAndContinues(t *testing.T) 
 	assert.Contains(t, err.Error(), "boom")
 }
 
+// TestRunState_Rollback_NamedPanicWrappedInPhaseErrorAndContinues verifies that
+// when a named teardown panics during rollback:
+//   - the panic is recovered and converted to an error,
+//   - the error is wrapped in *phaseError with the correct Phase label,
+//   - errors.Is(result, cause) holds (cause is first in the joined tree),
+//   - other teardowns still execute (LIFO not interrupted).
+func TestRunState_Rollback_NamedPanicWrappedInPhaseErrorAndContinues(t *testing.T) {
+	_, s := newRunState()
+	var executed []string
+
+	boom := errors.New("boom")
+	// Registration order: ok1, mydb, ok2 → LIFO execution: ok2, mydb, ok1.
+	s.addNamedTeardown("ok1", func(_ context.Context) error {
+		executed = append(executed, "ok1")
+		return nil
+	})
+	s.addNamedTeardown("mydb", func(_ context.Context) error {
+		executed = append(executed, "mydb")
+		panic(boom)
+	})
+	s.addNamedTeardown("ok2", func(_ context.Context) error {
+		executed = append(executed, "ok2")
+		return nil
+	})
+
+	cause := errors.New("startup cause")
+
+	var err error
+	require.NotPanics(t, func() {
+		err = s.rollback(context.Background(), cause)
+	})
+
+	// All three teardowns executed in LIFO order despite mydb panicking.
+	assert.Equal(t, []string{"ok2", "mydb", "ok1"}, executed)
+
+	// cause is always first in the joined tree.
+	assert.ErrorIs(t, err, cause)
+
+	// The panic payload must be reachable via errors.Is.
+	assert.ErrorIs(t, err, boom)
+
+	// The panic error must be wrapped in *phaseError with the correct Phase.
+	var pe *phaseError
+	require.True(t, errors.As(err, &pe), "expected *phaseError in joined tree; got %T: %v", err, err)
+	assert.Equal(t, "teardown_mydb", pe.Phase)
+}
+
 // --- shutdownReason tests ---
 
 func TestShutdownReason_Values(t *testing.T) {
@@ -725,6 +772,73 @@ func TestPhase10LIFOTeardown_CollectsErrors(t *testing.T) {
 	errs := b.phase10LIFOTeardown(context.Background(), s)
 	// Both teardowns executed, both errors collected.
 	assert.Len(t, errs, 2)
+}
+
+// TestPhase10LIFOTeardown_PanickingTeardownRecoveredAndContinues verifies that
+// phase10LIFOTeardown has symmetric panic protection with rollback: a panicking
+// teardown is recovered via safeTeardown, wrapped in phaseError (if named),
+// and the remaining teardowns still execute in LIFO order.
+func TestPhase10LIFOTeardown_PanickingTeardownRecoveredAndContinues(t *testing.T) {
+	b := New(WithClock(clock.Real()))
+	_, s := newPhaseState()
+
+	var executed []string
+	boom := errors.New("boom-shutdown")
+
+	// Registration order: ok1, panic-db, ok2 → LIFO execution: ok2, panic-db, ok1.
+	s.addNamedTeardown("ok1", func(_ context.Context) error {
+		executed = append(executed, "ok1")
+		return nil
+	})
+	s.addNamedTeardown("panic-db", func(_ context.Context) error {
+		executed = append(executed, "panic-db")
+		panic(boom)
+	})
+	s.addNamedTeardown("ok2", func(_ context.Context) error {
+		executed = append(executed, "ok2")
+		return nil
+	})
+
+	var errs []error
+	require.NotPanics(t, func() {
+		errs = b.phase10LIFOTeardown(context.Background(), s)
+	})
+
+	// LIFO order: ok2 first, then panic-db, then ok1 — panic does not interrupt.
+	assert.Equal(t, []string{"ok2", "panic-db", "ok1"}, executed)
+
+	// Exactly one error collected (the panicking teardown).
+	require.Len(t, errs, 1)
+
+	// The error is wrapped in *phaseError with the correct Phase.
+	var pe *phaseError
+	require.True(t, errors.As(errs[0], &pe), "expected *phaseError; got %T: %v", errs[0], errs[0])
+	assert.Equal(t, "teardown_panic-db", pe.Phase)
+
+	// The original panic value is reachable via errors.Is.
+	assert.ErrorIs(t, errs[0], boom)
+}
+
+// TestPhase10LIFOTeardown_PanickingTeardownJoinedIntoFinalError verifies that
+// phase10OrchestrateShutdown surfaces panicking teardown errors in its return
+// value (they are joined into teardownErr).
+func TestPhase10LIFOTeardown_PanickingTeardownJoinedIntoFinalError(t *testing.T) {
+	// Use phase10LIFOTeardown directly: the panicking error must appear in the
+	// joined []error slice returned, confirming it is not silently swallowed.
+	b := New(WithClock(clock.Real()))
+	_, s := newPhaseState()
+
+	boom := errors.New("shutdown-panic")
+	s.addNamedTeardown("svc", func(_ context.Context) error { panic(boom) })
+	s.addTeardown(func(_ context.Context) error { return nil }) // survives
+
+	var errs []error
+	require.NotPanics(t, func() {
+		errs = b.phase10LIFOTeardown(context.Background(), s)
+	})
+
+	require.Len(t, errs, 1, "panicking teardown must contribute exactly one error")
+	assert.ErrorIs(t, errs[0], boom, "original panic error must be reachable via errors.Is")
 }
 
 // --- runCtx independence tests ---

@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	ecErr "github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -780,23 +781,6 @@ func (c *afterStartSentinelStopCell) Stop(_ context.Context) error {
 
 var _ cell.AfterStarter = (*afterStartSentinelStopCell)(nil)
 
-// walkJoinedErrors traverses the errors.Join tree and collects all leaf errors.
-func walkJoinedErrors(err error, collected *[]error) {
-	if err == nil {
-		return
-	}
-	type joinedUnwrap interface {
-		Unwrap() []error
-	}
-	if joined, ok := err.(joinedUnwrap); ok {
-		for _, e := range joined.Unwrap() {
-			walkJoinedErrors(e, collected)
-		}
-	} else {
-		*collected = append(*collected, err)
-	}
-}
-
 // sentinelStartCell starts with a fixed sentinel error from Start, used to
 // trigger rollback of previously-started cells.
 type sentinelStartCell struct {
@@ -843,8 +827,7 @@ func TestStartInternal_RollbackCellStopErrorsSurfaced(t *testing.T) {
 	assert.True(t, errors.Is(err, errStartB), "errors.Is(err, errStartB) must be true; got: %v", err)
 
 	// Rollback stop error: walk joined tree and find a *ecErr.Error that wraps errStopA.
-	var allErrs []error
-	walkJoinedErrors(err, &allErrs)
+	allErrs := errutil.FlattenJoined(err)
 
 	foundStopErr := false
 	for _, e := range allErrs {
@@ -881,8 +864,7 @@ func TestStartInternal_AfterStartFailRollbackIncludesFailingCell(t *testing.T) {
 	assert.True(t, errors.Is(err, errAfterStartA), "errors.Is(err, errAfterStartA) must be true; got: %v", err)
 
 	// The failing cell A's Stop error must also appear in the joined tree.
-	var allErrs []error
-	walkJoinedErrors(err, &allErrs)
+	allErrs := errutil.FlattenJoined(err)
 
 	foundStopErr := false
 	for _, e := range allErrs {

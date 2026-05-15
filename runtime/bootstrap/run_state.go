@@ -22,7 +22,7 @@ type phaseError struct {
 }
 
 func (e *phaseError) Error() string {
-	return fmt.Sprintf("teardown[%s]: %s", e.Phase, e.Err.Error())
+	return e.Phase + ": " + e.Err.Error()
 }
 func (e *phaseError) Unwrap() error { return e.Err }
 
@@ -109,16 +109,13 @@ func (s *runState) addNamedTeardown(name string, fn func(context.Context) error)
 }
 
 // safeTeardown executes a single named teardown, recovering from any panic.
-// A panicking teardown is converted to an error so LIFO rollback continues
-// to the next step without the panic escaping.
-//
-// If the teardown's name is non-empty and an error is produced (from the fn
-// return or from a recovered panic), the error is wrapped in *phaseError
-// to preserve phase context for post-mortem diagnosis.
+// A panicking teardown is converted to an error so LIFO execution continues
+// to the next step without the panic escaping. The caller is responsible for
+// wrapping the returned error in *phaseError when a phase label is required.
 //
 // ref: runtime/worker/periodic.go runSafe — recover→error, no re-panic.
 // ref: kernel/assembly/assembly.go — per-step recover in LIFO teardown loop.
-func safeTeardown(td namedTeardown, ctx context.Context) (err error) {
+func safeTeardown(ctx context.Context, td namedTeardown) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			rerr, _ := r.(error)
@@ -129,7 +126,7 @@ func safeTeardown(td namedTeardown, ctx context.Context) (err error) {
 		}
 	}()
 	err = td.fn(ctx)
-	return err
+	return
 }
 
 // rollback runs teardowns in LIFO order on startup failure (all in one budget),
@@ -149,7 +146,7 @@ func (s *runState) rollback(shutCtx context.Context, cause error) error {
 	var rollbackErrs []error
 	for _, v := range slices.Backward(s.teardowns) {
 		td := v
-		if err := safeTeardown(td, shutCtx); err != nil {
+		if err := safeTeardown(shutCtx, td); err != nil {
 			if td.name != "" {
 				err = &phaseError{Phase: "teardown_" + td.name, Err: err}
 			}

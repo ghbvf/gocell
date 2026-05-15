@@ -242,6 +242,7 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 
 // phase10LIFOTeardown runs all teardown functions in reverse registration order.
 // Errors are collected but do not abort remaining teardowns (best-effort cleanup).
+// Panicking teardowns are recovered via safeTeardown so that LIFO continues.
 // Each non-nil error is wrapped in a phaseError with the component name so that
 // post-mortem diagnosis can pinpoint the failing resource without trawling logs.
 //
@@ -250,7 +251,7 @@ func (b *Bootstrap) phase10LIFOTeardown(shutCtx context.Context, s *phaseState) 
 	var errs []error
 	for _, v := range slices.Backward(s.teardowns) {
 		td := v
-		if err := td.fn(shutCtx); err != nil {
+		if err := safeTeardown(shutCtx, td); err != nil {
 			if td.name != "" {
 				err = &phaseError{Phase: "teardown_" + td.name, Err: err}
 			}
