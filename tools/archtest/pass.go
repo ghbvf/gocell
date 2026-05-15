@@ -238,8 +238,9 @@ func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diag
 //   - Defense #2: depguard bans archtest *_test.go from directly importing
 //     golang.org/x/tools/go/packages; RunTypedDir is the approved funnel.
 //   - Defense #3: meta-archtest PASS-FUNNEL-LOADPACKAGES-01 bans direct
-//     typeseval.LoadPackages calls; RunTypedDir is the only new approved
-//     entry for fixture-module loads (funnel widened, not bypassed).
+//     typeseval.LoadPackages and typeseval.SharedResolver calls; RunTypedDir
+//     is the only new approved entry for fixture-module loads (funnel widened
+//     for both typeseval.LoadPackages and typeseval.SharedResolver, not bypassed).
 //
 // Failure modes (non-absolute dir, load error) fail-loud via t.Fatalf.
 // For main-module loads use [RunTyped].
@@ -260,6 +261,11 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 // directory) through [typeseval.SharedResolver] and invokes rule with one
 // Pass per loaded package.
 //
+// Precondition: root must be a non-empty absolute path. The caller is
+// responsible for this guarantee — RunTyped satisfies it via findModuleRoot,
+// and RunTypedDir satisfies it via the filepath.IsAbs guard. No runtime check
+// is performed here to avoid duplicating caller-side enforcement.
+//
 // Extracted to eliminate duplication: RunTyped supplies root via
 // findModuleRoot(t); RunTypedDir supplies root as its explicit dir argument.
 // The single driver construction path (buildTypedPass) is unchanged — both
@@ -267,14 +273,14 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 func runTypedWithRoot(t testing.TB, root string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
 	t.Helper()
 	if rule == nil {
-		t.Fatalf("archtest.RunTyped: nil rule")
+		t.Fatalf("archtest.RunTyped/RunTypedDir: nil rule")
 	}
 	if len(patterns) == 0 {
-		t.Fatalf("archtest.RunTyped: at least one pattern required")
+		t.Fatalf("archtest.RunTyped/RunTypedDir: at least one pattern required")
 	}
 	resolver, err := typeseval.SharedResolver(root, opts.Tests, opts.Tags, patterns...)
 	if err != nil {
-		t.Fatalf("archtest.RunTyped: SharedResolver: %v", err)
+		t.Fatalf("archtest.RunTyped/RunTypedDir: SharedResolver: %v", err)
 	}
 
 	// Sort packages so test-variant packages are visited BEFORE their

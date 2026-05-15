@@ -223,13 +223,11 @@ func TestRunTyped_dedupesAcrossPackageVariants(t *testing.T) {
 	}
 }
 
-// Nil-rule / empty-patterns guards are simple single-branch t.Fatalf calls
-// that cannot be exercised in a parent test (testing.T is a concrete type;
-// no shim can replace it without changing Run/RunTyped's public signature).
-// Coverage of those branches is < 1% of statements; the if-statements are
-// reviewable by inspection — testing them would require either a sub-process
-// indirection or an API change (TB-interface taken instead of *testing.T)
-// not warranted by this PR's scope.
+// The nil-rule and empty-patterns guards in runTypedWithRoot are now covered by
+// TestRunTypedDir_rejectsNilRule and TestRunTypedDir_rejectsEmptyPatterns below,
+// using the tbFatalSpy + goroutine + done-channel pattern established by
+// TestRunTypedDir_rejectsRelativeDir. RunTypedDir accepts a testing.TB interface
+// (unlike RunTyped which takes *testing.T), making the spy approach possible.
 
 // TestNewPackageRel_handlesEmptyFilename verifies the F4 fix: when fset
 // has no real filename for a node, the Rel closure returns "" rather than
@@ -1129,6 +1127,49 @@ func TestRunTypedDir_rejectsRelativeDir(t *testing.T) {
 	}
 	if !strings.Contains(spy.lastMsg, "absolute") {
 		t.Errorf("RunTypedDir fatal message %q does not mention \"absolute\"", spy.lastMsg)
+	}
+}
+
+// TestRunTypedDir_rejectsNilRule verifies that RunTypedDir calls t.Fatalf when
+// rule is nil, reaching the nil-rule guard in runTypedWithRoot. Uses tbFatalSpy
+// with an absolute dir so the filepath.IsAbs check is satisfied and execution
+// reaches the nil-rule branch.
+func TestRunTypedDir_rejectsNilRule(t *testing.T) {
+	root := findModuleRoot(t)
+	spy := &tbFatalSpy{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunTypedDir(spy, root, TypedOpts{Tests: false}, []string{"./..."}, nil)
+	}()
+	<-done
+	if !spy.fatal {
+		t.Errorf("RunTypedDir with nil rule: expected t.Fatalf to be called, got none")
+	}
+	if !strings.Contains(spy.lastMsg, "nil rule") {
+		t.Errorf("RunTypedDir fatal message %q does not mention \"nil rule\"", spy.lastMsg)
+	}
+}
+
+// TestRunTypedDir_rejectsEmptyPatterns verifies that RunTypedDir calls t.Fatalf
+// when patterns is nil/empty, reaching the empty-patterns guard in
+// runTypedWithRoot. Uses tbFatalSpy with an absolute dir so the filepath.IsAbs
+// check is satisfied and execution reaches the empty-patterns branch.
+func TestRunTypedDir_rejectsEmptyPatterns(t *testing.T) {
+	root := findModuleRoot(t)
+	spy := &tbFatalSpy{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunTypedDir(spy, root, TypedOpts{Tests: false}, nil,
+			func(*Pass) []Diagnostic { return nil })
+	}()
+	<-done
+	if !spy.fatal {
+		t.Errorf("RunTypedDir with nil patterns: expected t.Fatalf to be called, got none")
+	}
+	if !strings.Contains(spy.lastMsg, "pattern") {
+		t.Errorf("RunTypedDir fatal message %q does not mention \"pattern\"", spy.lastMsg)
 	}
 }
 

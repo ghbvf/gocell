@@ -268,6 +268,8 @@ func TestClockInjectionCallsite(t *testing.T) {
 
 	// Phase 1: collect all ctors from packages that have WithClock.
 	// Load with tests=true so we see every package variant.
+	// The rule func only populates ctors and always returns nil; _ = discards
+	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
 	ctors := make(map[string]clockRequiredCtor)
 	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
 		func(p *Pass) []Diagnostic {
@@ -300,6 +302,8 @@ func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
 
 	// Phase 1: collect ctors from the fixture module.
+	// The rule func only populates ctors and always returns nil; _ = discards
+	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
 	ctors := make(map[string]clockRequiredCtor)
 	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
 		func(p *Pass) []Diagnostic {
@@ -432,6 +436,8 @@ func TestClockInjectionProdCallsite(t *testing.T) {
 	// Load without tests=true — composition root files are not test files.
 
 	// Phase 1: collect all ctors from packages that have WithClock.
+	// The rule func only populates ctors and always returns nil; _ = discards
+	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
 	ctors := make(map[string]clockRequiredCtor)
 	_ = RunTyped(t, TypedOpts{Tests: false}, patterns,
 		func(p *Pass) []Diagnostic {
