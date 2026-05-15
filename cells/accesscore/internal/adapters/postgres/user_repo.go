@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,11 +76,15 @@ func NewPGUserRepo(
 }
 
 const (
+	// S4d: authz_epoch is sourced from the domain.User (NewUser sets it to 1
+	// — the unset sentinel is 0, which session/refresh stores reject).
+	// Bumping is still exclusive to UpdateAuthzEpoch / BumpAuthzEpoch; this
+	// INSERT only seeds the initial value from the in-memory aggregate.
 	insertUserSQL = `
 INSERT INTO users (
     id, username, email, password_hash, password_reset_required,
     status, creation_source, authz_epoch, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	selectUserByIDSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
@@ -92,6 +97,28 @@ SELECT id, username, email, password_hash, password_version, password_reset_requ
        status, creation_source, authz_epoch, created_at, updated_at
 FROM users
 WHERE username = $1`
+
+	// selectUserByIDForUpdateSQL / selectUserByUsernameForUpdateSQL (S4d): row-level
+	// write lock (FOR UPDATE) so sessionlogin's read-mint-INSERT cycle is
+	// serialized against any concurrent credentialinvalidate.Invalidator.Apply
+	// (which holds the same lock during BumpAuthzEpoch). Must run inside an
+	// ambient transaction; ambient executor joins it automatically.
+	//
+	// ref: PostgreSQL 13+ Row-Level Locks — SELECT ... FOR UPDATE blocks UPDATE on
+	// the locked row until COMMIT.
+	selectUserByIDForUpdateSQL = `
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
+FROM users
+WHERE id = $1
+FOR UPDATE`
+
+	selectUserByUsernameForUpdateSQL = `
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at
+FROM users
+WHERE username = $1
+FOR UPDATE`
 
 	// updateUserSQL intentionally does NOT include authz_epoch in the SET list.
 	// Bumping the epoch is a separate, distinct operation per ADR-credential D2
@@ -134,9 +161,10 @@ func (r *PGUserRepo) Create(ctx context.Context, user *domain.User) error {
 		user.Username,
 		user.Email,
 		user.PasswordHash,
-		user.PasswordResetRequired,
-		string(user.Status),
+		user.PasswordResetRequired(),
+		string(user.Status()),
 		string(user.CreationSource),
+		user.AuthzEpoch(),
 		user.CreatedAt,
 		user.UpdatedAt,
 	)
@@ -193,6 +221,61 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 	return u, nil
 }
 
+// GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row
+// lock via SELECT ... FOR UPDATE.
+//
+// fail-fast enforced: calling without an ambient transaction returns an error
+// (errcode.ErrInternal); the lock guarantee cannot silently degrade.
+// PG impl: fail-fasts on missing tx. Mem impl: serializes via store mutex
+// (no tx concept) — contract: PG fail-fasts, mem mutex-serialized.
+func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	if err := assertAmbientTx(ctx); err != nil {
+		return nil, err
+	}
+	row := r.db.QueryRow(ctx, selectUserByIDForUpdateSQL, id)
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-for-update", err)
+	}
+	return u, nil
+}
+
+// GetByUsernameForUpdate (S4d) — see ports.UserRepository godoc.
+//
+// fail-fast enforced: calling without an ambient transaction returns an error
+// (errcode.ErrInternal); the lock guarantee cannot silently degrade.
+// PG impl: fail-fasts on missing tx. Mem impl: serializes via store mutex
+// (no tx concept) — contract: PG fail-fasts, mem mutex-serialized.
+func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	if err := assertAmbientTx(ctx); err != nil {
+		return nil, err
+	}
+	row := r.db.QueryRow(ctx, selectUserByUsernameForUpdateSQL, username)
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username-for-update", err)
+	}
+	return u, nil
+}
+
 // Update overwrites the mutable fields of an existing user. Returns
 // ErrAuthUserNotFound when no row matched. Returns ErrAuthUserDuplicate (409)
 // when the updated username or email collides with an existing row. Returns
@@ -207,8 +290,8 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		user.Username,
 		user.Email,
 		user.PasswordHash,
-		user.PasswordResetRequired,
-		string(user.Status),
+		user.PasswordResetRequired(),
+		string(user.Status()),
 		string(user.CreationSource),
 		user.UpdatedAt,
 	)
@@ -217,7 +300,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
-				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", user.ID, string(user.Status))))
+				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", user.ID, string(user.Status()))))
 		}
 		if isUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
@@ -277,7 +360,7 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, 
 	return newEpoch, nil
 }
 
-// scanUser scans a single Row into a domain.User.
+// scanUser scans a single Row into a domain.User via domain.ReconstituteUser.
 // Column order must match selectUserByIDSQL and selectUserByUsernameSQL.
 //
 // authz_epoch is included so that sessionvalidate's epoch invariant
@@ -285,20 +368,26 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, 
 // omitting it silently leaves AuthzEpoch=0 on every read and breaks the
 // credential-invalidation chain (Finding #1 / PR #490 review).
 func scanUser(row pgx.Row) (*domain.User, error) {
-	var u domain.User
-	var status, source string
+	var (
+		id, username, email, passwordHash string
+		passwordVersion                   int64
+		passwordResetRequired             bool
+		status, source                    string
+		authzEpoch                        int64
+		createdAt, updatedAt              time.Time
+	)
 	err := row.Scan(
-		&u.ID,
-		&u.Username,
-		&u.Email,
-		&u.PasswordHash,
-		&u.PasswordVersion,
-		&u.PasswordResetRequired,
+		&id,
+		&username,
+		&email,
+		&passwordHash,
+		&passwordVersion,
+		&passwordResetRequired,
 		&status,
 		&source,
-		&u.AuthzEpoch,
-		&u.CreatedAt,
-		&u.UpdatedAt,
+		&authzEpoch,
+		&createdAt,
+		&updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -315,9 +404,17 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "creation_source")),
 			errcode.WithInternal(fmt.Sprintf("scanned source=%q", source)))
 	}
-	u.Status = domain.UserStatus(status)
-	u.CreationSource = domain.UserSource(source)
-	return &u, nil
+	u, reconErr := domain.ReconstituteUser(
+		id, username, email, passwordHash,
+		passwordVersion, passwordResetRequired,
+		domain.UserStatus(status), domain.UserSource(source),
+		authzEpoch, createdAt, updatedAt,
+	)
+	if reconErr != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrPGSchemaShape,
+			"scanUser: ReconstituteUser failed", reconErr)
+	}
+	return u, nil
 }
 
 // UpdatePassword applies a CAS-guarded password write.

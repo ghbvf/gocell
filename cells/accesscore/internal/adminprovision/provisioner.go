@@ -236,7 +236,10 @@ func (p *Provisioner) createAdminUser(ctx context.Context, in ProvisionInput) (P
 	user.ID = p.newID()
 	user.CreationSource = domain.UserSourceSetup
 	if in.RequireReset {
-		user.MarkPasswordResetRequired(now)
+		// Creation-time only: no live sessions exist for a brand-new user
+		// (epoch=1). This is an allowlisted non-funnel site — the authzmutate
+		// funnel is for mutating existing principals, not initial construction.
+		user.SetPasswordResetRequired(true, now)
 	}
 
 	createErr := p.userRepo.Create(ctx, user)

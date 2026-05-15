@@ -152,7 +152,7 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 		// migration-024 trigger's user_was_active_admin=false branch.
 		targetIsActive := false
 		if u, ok := r.store.usersByID[userID]; ok {
-			targetIsActive = u.Status == domain.StatusActive
+			targetIsActive = u.Status() == domain.StatusActive
 		}
 		if targetIsActive {
 			// Short-circuit 2: target IS effective admin — require at least
@@ -264,7 +264,7 @@ func (r *RoleRepository) CountEffectiveAdmins(_ context.Context) (int, error) {
 			// migration 019. Treat as not-effective to be conservative.
 			continue
 		}
-		if u.Status == domain.StatusActive {
+		if u.Status() == domain.StatusActive {
 			count++
 		}
 	}
@@ -285,7 +285,7 @@ func (r *RoleRepository) EffectiveAdminExists(_ context.Context) (bool, error) {
 		if !ok {
 			continue
 		}
-		if u.Status == domain.StatusActive {
+		if u.Status() == domain.StatusActive {
 			return true, nil
 		}
 	}
@@ -309,7 +309,7 @@ func (r *RoleRepository) countOtherEffectiveAdminsLocked(excludeUserID string) i
 		if !ok {
 			continue
 		}
-		if u.Status == domain.StatusActive {
+		if u.Status() == domain.StatusActive {
 			count++
 		}
 	}

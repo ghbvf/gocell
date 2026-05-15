@@ -46,14 +46,15 @@ func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 	sessionID := "sess-logout-1"
 	userID := "user-logout-1"
 	require.NoError(t, sessionStore.Create(ctx, &session.Session{
-		ID:        sessionID,
-		SubjectID: userID,
-		JTI:       "jti-" + sessionID,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                sessionID,
+		SubjectID:         userID,
+		JTI:               "jti-" + sessionID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	}))
 
-	wire, _, err := refreshStore.Issue(ctx, sessionID, userID)
+	wire, _, err := refreshStore.Issue(ctx, sessionID, userID, int64(1))
 	require.NoError(t, err)
 
 	svc := MustNewService(sessionStore, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))

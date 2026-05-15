@@ -30,16 +30,17 @@ var (
 // revoked_at is a one-way flip — set exactly once, never cleared.
 const (
 	insertSessionSQL = `
-INSERT INTO sessions (id, subject_id, jti, created_at, expires_at)
-VALUES ($1, $2::uuid, $3, $4, $5)`
+INSERT INTO sessions (id, subject_id, jti, created_at, expires_at, authz_epoch_at_issue)
+VALUES ($1, $2::uuid, $3, $4, $5, $6)`
 
-	// selectSessionByIDSQL projects only the columns ValidateView exposes
-	// (ID, SubjectID, RevokedAt) — Store.Get is the validate path, and
-	// GC-only metadata (jti, created_at, expires_at)
-	// must not leak to validate callers. GC sweep / audit / metadata
-	// round-trip tests query the full row via store-internal SQL.
+	// selectSessionByIDSQL projects the columns ValidateView exposes
+	// (ID, SubjectID, RevokedAt, AuthzEpochAtIssue). S4d adds
+	// authz_epoch_at_issue — sessionvalidate compares it with the live
+	// users.authz_epoch (not the JWT claim, which was removed). GC-only
+	// metadata (jti, created_at, expires_at) still doesn't leak to validate
+	// callers.
 	selectSessionByIDSQL = `
-SELECT id, subject_id::text, revoked_at
+SELECT id, subject_id::text, revoked_at, authz_epoch_at_issue
 FROM sessions
 WHERE id = $1`
 
@@ -153,6 +154,11 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 			"PG session store requires UUID-formatted SubjectID",
 			errcode.WithDetails(slog.String("subjectID", sess.SubjectID)))
 	}
+	// S4d: credential provenance is mandatory. See mem_store Create.
+	if sess.AuthzEpochAtIssue == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session: Session.AuthzEpochAtIssue required (non-zero)")
+	}
 	if err := s.validateFingerprintShape(sess); err != nil {
 		return err
 	}
@@ -164,6 +170,7 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 		sess.JTI,
 		sess.CreatedAt.UTC(),
 		sess.ExpiresAt.UTC(),
+		sess.AuthzEpochAtIssue,
 	)
 	if err != nil {
 		return sessionCreateError(err, sess.ID, sess.SubjectID)
@@ -196,6 +203,7 @@ func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.ValidateV
 		&v.ID,
 		&v.SubjectID,
 		&v.RevokedAt,
+		&v.AuthzEpochAtIssue,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,

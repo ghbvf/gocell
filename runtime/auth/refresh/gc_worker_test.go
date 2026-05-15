@@ -51,7 +51,7 @@ func newGCStoreSpy(removed int, err error) *gcStoreSpy {
 	return &gcStoreSpy{removed: removed, err: err, called: make(chan struct{}, 8)}
 }
 
-func (s *gcStoreSpy) Issue(context.Context, string, string) (string, *Token, error) {
+func (s *gcStoreSpy) Issue(context.Context, string, string, int64) (string, *Token, error) {
 	return "", nil, errors.New("not implemented")
 }
 

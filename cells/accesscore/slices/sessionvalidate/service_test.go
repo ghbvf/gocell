@@ -36,6 +36,17 @@ func init() {
 // dNeg2h is the offset for seeding an expired session whose CreatedAt is 2h ago.
 const dNeg2h = -2 * time.Hour
 
+// mustBuildUser creates a minimal domain.User for use in test stubs.
+// It uses ReconstituteUser so that the private authzEpoch field is set correctly.
+func mustBuildUser(t testing.TB, id string, epoch int64) *domain.User {
+	t.Helper()
+	now := time.Now()
+	u, err := domain.ReconstituteUser(id, id, id+"@test.local", "$2a$12$hash",
+		0, false, domain.StatusActive, domain.UserSourceIdentity, epoch, now, now)
+	require.NoError(t, err)
+	return u
+}
+
 // testProtocol returns a Protocol suitable for in-memory session tests.
 // FingerprintJTIRef requires a non-empty JTI on every seeded Session.
 func testProtocol(t testing.TB) *session.Protocol {
@@ -62,22 +73,24 @@ func TestService_VerifyIntent(t *testing.T) {
 
 	// Seed an active session for revocation tests.
 	require.NoError(t, store.Create(context.Background(), &session.Session{
-		ID:        "sess-active",
-		SubjectID: "usr-1",
-		JTI:       "jti-active",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
+		ID:                "sess-active",
+		SubjectID:         "usr-1",
+		JTI:               "jti-active",
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
 	}))
 
 	// Seed a revoked session.
 	revokedAt := time.Now()
 	require.NoError(t, store.Create(context.Background(), &session.Session{
-		ID:        "sess-revoked",
-		SubjectID: "usr-2",
-		JTI:       "jti-revoked",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
-		RevokedAt: &revokedAt,
+		ID:                "sess-revoked",
+		SubjectID:         "usr-2",
+		JTI:               "jti-revoked",
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
+		RevokedAt:         &revokedAt,
 	}))
 
 	tests := []struct {
@@ -149,9 +162,9 @@ func TestService_VerifyIntent(t *testing.T) {
 		},
 	}
 
-	// userRepo returns epoch 0 for both test subjects; tokens without
-	// authz_epoch claim also have epoch 0, so they all pass the epoch check.
-	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-1", AuthzEpoch: 0}}
+	// S4d: epoch comparison is user.AuthzEpoch vs view.AuthzEpochAtIssue (row-based).
+	// sess-active was seeded with AuthzEpochAtIssue=1; user must have AuthzEpoch=1 to pass.
+	userRepo := &stubUserRepo{user: mustBuildUser(t, "usr-1", 1)}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,18 +199,20 @@ func TestService_VerifyIntent(t *testing.T) {
 func TestService_VerifyIntent_PastSessionExpiresAt_StillValidates(t *testing.T) {
 	store := newTestStore(t)
 	require.NoError(t, store.Create(context.Background(), &session.Session{
-		ID:        "sess-row-past",
-		SubjectID: "usr-row-past",
-		JTI:       "jti-row-past",
-		ExpiresAt: time.Now().Add(-time.Hour), // session row "past" — GC eligible
-		CreatedAt: time.Now().Add(dNeg2h),
+		ID:                "sess-row-past",
+		SubjectID:         "usr-row-past",
+		JTI:               "jti-row-past",
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(-time.Hour), // session row "past" — GC eligible
+		CreatedAt:         time.Now().Add(dNeg2h),
 	}))
 
 	// Fresh JWT bound to the same sid — mirrors a refresh-issued token.
 	tok, err := IssueTestToken(testPrivKey, "usr-row-past", nil, time.Hour, "sess-row-past")
 	require.NoError(t, err)
 
-	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-row-past", AuthzEpoch: 0}}
+	// S4d: session has AuthzEpochAtIssue=1; user must match.
+	userRepo := &stubUserRepo{user: mustBuildUser(t, "usr-row-past", 1)}
 	svc := newSvcWithUserRepo(t, store, userRepo)
 	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.NoError(t, err,
@@ -296,6 +311,14 @@ func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error
 	panic("not implemented")
 }
 
+func (r *stubUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+
+func (r *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+
 // newSvcWithUserRepo is a helper that builds a Service wired with both a
 // session store and a user repo. Existing tests that don't exercise epoch logic
 // use newTestSvc (nil userRepo) via the sessionStore-only path.
@@ -354,11 +377,12 @@ func TestNewService_NilGuards(t *testing.T) {
 func seedActiveSession(t testing.TB, store *session.MemStore, sid, subject string) {
 	t.Helper()
 	require.NoError(t, store.Create(context.Background(), &session.Session{
-		ID:        sid,
-		SubjectID: subject,
-		JTI:       sid + "-jti",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
+		ID:                sid,
+		SubjectID:         subject,
+		JTI:               sid + "-jti",
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
 	}))
 }
 
@@ -411,18 +435,39 @@ func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, 
 	return 0, nil
 }
 
-// --- S4b Batch 3H: epoch-compare tests ---
+func (r *capturingUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
 
-// TestEnforce_StaleEpoch_Rejected verifies that when user.AuthzEpoch (5) is
-// greater than claims.AuthzEpoch (3), the service rejects with 401 uniform body.
+func (r *capturingUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+
+// --- S4d row-provenance epoch-compare tests ---
+//
+// S4d change: sessionvalidate now compares user.AuthzEpoch against
+// view.AuthzEpochAtIssue (the epoch stored on the session row at login time),
+// not the JWT claim. JWT carries no authz_epoch claim.
+//
+// Accept case: user.AuthzEpoch == view.AuthzEpochAtIssue (no credential event
+// since this session was created).
+// Reject case: user.AuthzEpoch != view.AuthzEpochAtIssue (credential event
+// bumped user epoch after this session was created, invalidating the session).
+
+// TestEnforce_StaleEpoch_Rejected verifies that when user.AuthzEpoch (5) differs
+// from session.AuthzEpochAtIssue (1), the service rejects with 401. This guards
+// the primary S4d credential-revocation path: a credential event bumps user.epoch,
+// making all sessions issued at the prior epoch stale.
 func TestEnforce_StaleEpoch_Rejected(t *testing.T) {
 	store := newTestStore(t)
+	// seedActiveSession seeds AuthzEpochAtIssue=1.
 	seedActiveSession(t, store, "sess-epoch-stale", "usr-epoch")
 
-	user := &domain.User{ID: "usr-epoch", AuthzEpoch: 5}
+	// user.epoch bumped to 5 (simulates credential event after session was created).
+	user := mustBuildUser(t, "usr-epoch", 5)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
-	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-epoch", 3, time.Hour, "sess-epoch-stale")
+	tok, err := IssueTestToken(testPrivKey, "usr-epoch", nil, time.Hour, "sess-epoch-stale")
 	require.NoError(t, err)
 
 	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
@@ -433,15 +478,24 @@ func TestEnforce_StaleEpoch_Rejected(t *testing.T) {
 		"stale epoch must not return 503 code")
 }
 
-// TestEnforce_EqualEpoch_Accepted verifies that equal epochs (claim=5, user=5) pass.
+// TestEnforce_EqualEpoch_Accepted verifies that user.AuthzEpoch == session.AuthzEpochAtIssue
+// accepts the token (no credential event since this session was created).
 func TestEnforce_EqualEpoch_Accepted(t *testing.T) {
 	store := newTestStore(t)
-	seedActiveSession(t, store, "sess-epoch-equal", "usr-ep-equal")
+	// Seed session with AuthzEpochAtIssue=5 to match user.AuthzEpoch=5.
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:                "sess-epoch-equal",
+		SubjectID:         "usr-ep-equal",
+		JTI:               "sess-epoch-equal-jti",
+		AuthzEpochAtIssue: 5,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
+	}))
 
-	user := &domain.User{ID: "usr-ep-equal", AuthzEpoch: 5}
+	user := mustBuildUser(t, "usr-ep-equal", 5)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
-	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-ep-equal", 5, time.Hour, "sess-epoch-equal")
+	tok, err := IssueTestToken(testPrivKey, "usr-ep-equal", nil, time.Hour, "sess-epoch-equal")
 	require.NoError(t, err)
 
 	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
@@ -449,40 +503,51 @@ func TestEnforce_EqualEpoch_Accepted(t *testing.T) {
 	assert.Equal(t, "usr-ep-equal", claims.Subject)
 }
 
-// TestEnforce_ZeroEpochCompat verifies that claim.AuthzEpoch=0 with user.AuthzEpoch=0
-// passes (fresh user / pre-S4b legacy token compat per plan §3.7).
-func TestEnforce_ZeroEpochCompat(t *testing.T) {
+// TestEnforce_InitialEpochCompat verifies that user.AuthzEpoch == session.AuthzEpochAtIssue == 1
+// passes (S4d initial state: domain.NewUser initializes AuthzEpoch=1; first session is issued
+// at epoch 1 via sessionlogin).
+func TestEnforce_InitialEpochCompat(t *testing.T) {
 	store := newTestStore(t)
-	seedActiveSession(t, store, "sess-epoch-zero", "usr-ep-zero")
+	// seedActiveSession seeds AuthzEpochAtIssue=1 — matches initial user epoch.
+	seedActiveSession(t, store, "sess-epoch-initial", "usr-ep-initial")
 
-	user := &domain.User{ID: "usr-ep-zero", AuthzEpoch: 0}
+	user := mustBuildUser(t, "usr-ep-initial", 1)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
-	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-ep-zero", 0, time.Hour, "sess-epoch-zero")
+	tok, err := IssueTestToken(testPrivKey, "usr-ep-initial", nil, time.Hour, "sess-epoch-initial")
 	require.NoError(t, err)
 
 	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
-	require.NoError(t, err, "zero epoch on both sides must pass (pre-S4b compat)")
+	require.NoError(t, err, "initial epoch=1 session must pass (S4d initial state)")
 }
 
-// TestEnforce_HigherClaimEpoch_Rejected verifies that claim.AuthzEpoch > user.AuthzEpoch
-// is rejected with 401 (fail-closed: any epoch mismatch including "future epoch" is invalid).
-// Finding #2: > changed to != so claims with epoch ahead of user are also rejected.
-func TestEnforce_HigherClaimEpoch_Rejected(t *testing.T) {
+// TestEnforce_RowEpochAheadOfUser_Rejected verifies that session.AuthzEpochAtIssue > user.AuthzEpoch
+// is rejected with 401 (fail-closed: any epoch mismatch is invalid regardless of direction).
+// Row epoch ahead of user epoch cannot occur normally (sessions are created with user's current
+// epoch), but defense-in-depth rejects any mismatch. Finding #2: != is used not >, so
+// future-epoch sessions (if somehow created) are also rejected.
+func TestEnforce_RowEpochAheadOfUser_Rejected(t *testing.T) {
 	store := newTestStore(t)
-	seedActiveSession(t, store, "sess-epoch-high", "usr-ep-high")
+	// Seed session with epoch=10, but user is at epoch=5.
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:                "sess-epoch-high",
+		SubjectID:         "usr-ep-high",
+		JTI:               "sess-epoch-high-jti",
+		AuthzEpochAtIssue: 10,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
+	}))
 
-	user := &domain.User{ID: "usr-ep-high", AuthzEpoch: 5}
+	user := mustBuildUser(t, "usr-ep-high", 5)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
-	// claim=10 > user=5: a "future epoch" token must be rejected (fail-closed).
-	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-ep-high", 10, time.Hour, "sess-epoch-high")
+	tok, err := IssueTestToken(testPrivKey, "usr-ep-high", nil, time.Hour, "sess-epoch-high")
 	require.NoError(t, err)
 
 	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
-	require.Error(t, err, "claim epoch ahead of user epoch must be rejected (fail-closed mismatch)")
+	require.Error(t, err, "row epoch ahead of user epoch must be rejected (fail-closed mismatch)")
 	assert.Contains(t, err.Error(), errMsgAuthFailed,
-		"future epoch mismatch must return uniform auth-failed message")
+		"epoch mismatch must return uniform auth-failed message")
 }
 
 // TestEnforce_SessionInfraError_Returns503 verifies that an infra error from
@@ -490,7 +555,8 @@ func TestEnforce_HigherClaimEpoch_Rejected(t *testing.T) {
 func TestEnforce_SessionInfraError_Returns503(t *testing.T) {
 	infraErr := errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "db down")
 	store := capturingStore{getErr: infraErr}
-	user := &domain.User{ID: "usr-infra", AuthzEpoch: 0}
+	// Session store will return infra error before user is fetched; epoch doesn't matter.
+	user := mustBuildUser(t, "usr-infra", 1)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-infra", 0, time.Hour, "sess-infra")
@@ -532,7 +598,8 @@ func TestEnforce_DomainNotFound_Returns401(t *testing.T) {
 	domainNotFound := errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
 		errcode.WithCategory(errcode.CategoryDomain))
 	store := capturingStore{getErr: domainNotFound}
-	user := &domain.User{ID: "usr-notfound", AuthzEpoch: 0}
+	// Session store returns domain not-found before user is fetched; epoch doesn't matter.
+	user := mustBuildUser(t, "usr-notfound", 1)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-notfound", 0, time.Hour, "sess-notfound")
@@ -560,12 +627,13 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 	// Seed a revoked session.
 	revokedAt := time.Now()
 	require.NoError(t, store.Create(context.Background(), &session.Session{
-		ID:        "sess-revoked-uniform",
-		SubjectID: "usr-uniform",
-		JTI:       "jti-revoked-uniform",
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
-		RevokedAt: &revokedAt,
+		ID:                "sess-revoked-uniform",
+		SubjectID:         "usr-uniform",
+		JTI:               "jti-revoked-uniform",
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
+		RevokedAt:         &revokedAt,
 	}))
 
 	tests := []struct {
@@ -579,7 +647,7 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 				tok, _ := IssueTestTokenWithEpoch(testPrivKey, "usr-uniform", 1, time.Hour, "sess-uniform")
 				return tok
 			},
-			userRep: &stubUserRepo{user: &domain.User{ID: "usr-uniform", AuthzEpoch: 5}},
+			userRep: &stubUserRepo{user: mustBuildUser(t, "usr-uniform", 5)},
 		},
 		{
 			name: "revoked session",
@@ -587,7 +655,7 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 				tok, _ := IssueTestTokenWithEpoch(testPrivKey, "usr-uniform", 5, time.Hour, "sess-revoked-uniform")
 				return tok
 			},
-			userRep: &stubUserRepo{user: &domain.User{ID: "usr-uniform", AuthzEpoch: 5}},
+			userRep: &stubUserRepo{user: mustBuildUser(t, "usr-uniform", 5)},
 		},
 		{
 			name: "user domain not found",
@@ -609,6 +677,107 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 				"all auth failures must return the uniform body to prevent enumeration")
 		})
 	}
+}
+
+// mustBuildUserWithStatus creates a domain.User with the given status and epoch
+// via ReconstituteUser. Used for P1.3b CanAuthenticate gate tests.
+func mustBuildUserWithStatus(t testing.TB, id string, epoch int64, status domain.UserStatus) *domain.User {
+	t.Helper()
+	now := time.Now()
+	u, err := domain.ReconstituteUser(id, id, id+"@test.local", "$2a$12$hash",
+		0, false, status, domain.UserSourceIdentity, epoch, now, now)
+	require.NoError(t, err)
+	return u
+}
+
+// TestEnforce_NonActiveUser_Rejected_P1_3b is the P1.3b regression guard:
+// a session that exists and is NOT revoked, with epoch MATCHING
+// (user.AuthzEpoch == view.AuthzEpochAtIssue), but the user account became
+// non-active (suspended / locked) after the token was issued.
+// enforceSessionState must reject with the uniform 401 (KindUnauthenticated /
+// ErrAuthInvalidToken) — the CanAuthenticate gate runs AFTER epoch match,
+// closing the window where a valid epoch does not imply login eligibility.
+func TestEnforce_NonActiveUser_Rejected_P1_3b(t *testing.T) {
+	const (
+		epochAtIssue = int64(3) // deliberately non-1 to prove epoch match still checked
+	)
+
+	tests := []struct {
+		name   string
+		status domain.UserStatus
+	}{
+		{name: "suspended user rejected", status: domain.StatusSuspended},
+		{name: "locked user rejected", status: domain.StatusLocked},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t)
+			sid := "sess-noactive-" + string(tt.status)
+			sub := "usr-noactive-" + string(tt.status)
+
+			require.NoError(t, store.Create(context.Background(), &session.Session{
+				ID:                sid,
+				SubjectID:         sub,
+				JTI:               sid + "-jti",
+				AuthzEpochAtIssue: epochAtIssue, // epoch stored on row at issue time
+				ExpiresAt:         time.Now().Add(time.Hour),
+				CreatedAt:         time.Now(),
+			}))
+
+			// User with matching epoch but non-active status — the P1.3 attack window.
+			user := mustBuildUserWithStatus(t, sub, epochAtIssue, tt.status)
+			svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+			tok, err := IssueTestToken(testPrivKey, sub, nil, time.Hour, sid)
+			require.NoError(t, err)
+
+			_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+			require.Error(t, verifyErr, "non-active user must be rejected even when epoch matches")
+
+			var ec *errcode.Error
+			require.ErrorAs(t, verifyErr, &ec)
+			assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+				"must be KindUnauthenticated (uniform 401, not 403) —防枚举")
+			assert.Equal(t, errcode.ErrAuthInvalidToken, ec.Code,
+				"must be ErrAuthInvalidToken — same code as revoked-session / epoch-mismatch paths")
+			assert.Contains(t, verifyErr.Error(), errMsgAuthFailed,
+				"must return the uniform auth-failed message to prevent status enumeration")
+			assert.NotContains(t, verifyErr.Error(), string(tt.status),
+				"must NOT leak user status in the error message (防枚举)")
+		})
+	}
+}
+
+// TestEnforce_ActiveUser_EpochMatch_Allowed_P1_3b_Control is the control case
+// for the P1.3b test: same setup (session exists, not revoked, epoch matches)
+// but user is active — claims must be returned successfully.
+func TestEnforce_ActiveUser_EpochMatch_Allowed_P1_3b_Control(t *testing.T) {
+	const epochAtIssue = int64(3)
+
+	store := newTestStore(t)
+	sid := "sess-active-control"
+	sub := "usr-active-control"
+
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:                sid,
+		SubjectID:         sub,
+		JTI:               sid + "-jti",
+		AuthzEpochAtIssue: epochAtIssue,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
+	}))
+
+	user := mustBuildUser(t, sub, epochAtIssue)
+	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
+
+	tok, err := IssueTestToken(testPrivKey, sub, nil, time.Hour, sid)
+	require.NoError(t, err)
+
+	claims, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.NoError(t, verifyErr, "active user with matching epoch must be accepted")
+	assert.Equal(t, sub, claims.Subject)
 }
 
 // TestLogSessionLookupError_LogLevel verifies S40: IsDomainNotFound whitelist

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -32,12 +33,10 @@ func newContractHandler(t *testing.T) http.Handler {
 	// Seed two effective admins so the contract revoke test passes the
 	// effective-admin guard.
 	for _, uid := range []string{"usr-seed", "usr-other-admin"} {
-		require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
-			ID:       uid,
-			Username: uid,
-			Email:    uid + "@test.local",
-			Status:   domain.StatusActive,
-		}))
+		cu, cuErr := domain.NewUser(uid, uid+"@test.local", "$2a$12$hash", time.Now())
+		require.NoError(t, cuErr)
+		cu.ID = uid
+		require.NoError(t, store.UserRepository().Create(context.Background(), cu))
 		_, err := store.RoleRepository().AssignToUser(context.Background(), uid, "admin")
 		require.NoError(t, err)
 	}

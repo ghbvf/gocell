@@ -87,20 +87,22 @@ func validateFixtureInputs(subjectID, jti string, ttl time.Duration) error {
 // RevokeForSubject scoping precisely. ID is derived from JTI to keep cases
 // readable (Session.ID is opaque to the protocol).
 //
-// The epoch parameter is accepted for backward-compatible call-site signatures
-// but is no longer stored on the Session struct (authz_epoch_at_issue was
-// removed in S4b migration 025; epoch ordering is now enforced via JWT claims).
-func NewSessionFixture(t *testing.T, subjectID, jti string, _ int64, ttl time.Duration, now time.Time) *session.Session {
+// The epoch parameter is persisted as AuthzEpochAtIssue (S4d: row-level
+// credential provenance; storetest conformance T-S4D-1 requires it non-zero
+// so Create does not reject the fixture). Existing call sites that pass
+// caseEpoch (7) continue to work; zero would trigger ErrValidationFailed.
+func NewSessionFixture(t *testing.T, subjectID, jti string, epoch int64, ttl time.Duration, now time.Time) *session.Session {
 	t.Helper()
 	if err := validateFixtureInputs(subjectID, jti, ttl); err != nil {
 		t.Fatal(err)
 	}
 	return &session.Session{
-		ID:        "sess-" + jti,
-		SubjectID: subjectID,
-		JTI:       jti,
-		CreatedAt: now,
-		ExpiresAt: now.Add(ttl),
+		ID:                "sess-" + jti,
+		SubjectID:         subjectID,
+		JTI:               jti,
+		AuthzEpochAtIssue: epoch,
+		CreatedAt:         now,
+		ExpiresAt:         now.Add(ttl),
 	}
 }
 
@@ -124,6 +126,8 @@ func Run(t *testing.T, factory Factory, protocol *session.Protocol) {
 	t.Run("Revoke_Idempotent", func(t *testing.T) { runRevokeIdempotent(t, factory) })
 	t.Run("Revoke_NotFound_Noop", func(t *testing.T) { runRevokeNotFoundNoop(t, factory) })
 	t.Run("Expired_StillReturned", func(t *testing.T) { runExpiredStillReturned(t, factory) })
+	t.Run("T-S4D-1_Create_RejectsZeroEpoch", func(t *testing.T) { runTS4D1CreateRejectsZeroEpoch(t, factory) })
+	t.Run("T-S4D-1_Get_RoundtripsEpoch", func(t *testing.T) { runTS4D1GetRoundtripsEpoch(t, factory) })
 	t.Run("RevokeForSubject_EmptySubject_Rejected", func(t *testing.T) {
 		runRevokeForSubjectEmptySubject(t, factory)
 	})
@@ -479,6 +483,48 @@ func auditFingerprintJTIShape(st reflect.Type) []string {
 		problems = append(problems, "Session.JTI must be string, got "+jtiField.Type.Kind().String())
 	}
 	return problems
+}
+
+// runTS4D1CreateRejectsZeroEpoch — T-S4D-1: Store.Create must reject a Session
+// whose AuthzEpochAtIssue is zero. Zero is invalid; production login paths
+// always supply the live users.authz_epoch (non-zero). Accepting zero silently
+// would undermine the row-provenance invariant (ADR-credential §A8).
+func runTS4D1CreateRejectsZeroEpoch(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	fixture := &session.Session{
+		ID:                "sess-zero-epoch",
+		SubjectID:         subjectA,
+		JTI:               "jti-zero-epoch",
+		AuthzEpochAtIssue: 0, // zero — must be rejected
+		CreatedAt:         fc.Now(),
+		ExpiresAt:         fc.Now().Add(caseTTL),
+	}
+	err := store.Create(context.Background(), fixture)
+	assertErrCode(t, err, errcode.ErrValidationFailed)
+}
+
+// runTS4D1GetRoundtripsEpoch — T-S4D-1: Store.Get must return a ValidateView
+// whose AuthzEpochAtIssue equals the value passed to Create. This is the
+// core row-provenance invariant: sessionvalidate reads view.AuthzEpochAtIssue
+// and compares it to the live users.authz_epoch (not a JWT claim).
+func runTS4D1GetRoundtripsEpoch(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	const wantEpoch int64 = 42
+	fixture := NewSessionFixture(t, subjectA, "jti-epoch-rt", wantEpoch, caseTTL, fc.Now())
+	if err := store.Create(context.Background(), fixture); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := store.Get(context.Background(), fixture.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.AuthzEpochAtIssue != wantEpoch {
+		t.Errorf("AuthzEpochAtIssue: got %d, want %d", got.AuthzEpochAtIssue, wantEpoch)
+	}
 }
 
 // assertErrCode asserts err wraps an *errcode.Error with the given Code.

@@ -43,7 +43,6 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -51,10 +50,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -75,7 +71,7 @@ var inventoryAnchorIDPattern = regexp.MustCompile(
 )
 
 // anchorRef is one parsed `// INVARIANT: <ID>` (or `// - INVARIANT: <ID>`)
-// occurrence. Line number is recovered separately via `fc.Fset.Position`
+// occurrence. Line number is recovered separately via `p.Fset.Position`
 // because the AST comment carries position via its parent group, not the
 // individual `*ast.Comment`.
 type anchorRef struct {
@@ -91,23 +87,26 @@ func TestInventoryAnchorRequired(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := archtestScope(t, root)
 
-	var violators []string
-	scanner.EachFile(t, scope, parser.ParseComments|parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		if !isTopLevelArchtestTestFile(fc) {
-			return
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			if !isTopLevelArchtestTestFileByPath(p.Rel(file), p.Abs(file)) {
+				continue
+			}
+			if !hasValidInventoryAnchorInHeader(file) {
+				ds = append(ds, Diagnostic{
+					Rel:     filepath.Base(p.Rel(file)),
+					Line:    1,
+					Message: "missing or malformed `// INVARIANT: <ID>` in file-header CommentGroup",
+				})
+			}
 		}
-		if !hasValidInventoryAnchorInHeader(fc.File) {
-			violators = append(violators, filepath.Base(fc.Rel))
-		}
+		return ds
 	})
 
-	sort.Strings(violators)
-	assert.Emptyf(t, violators,
-		"%s: every tools/archtest/*_test.go must declare at least one valid "+
-			"`// INVARIANT: <ID>` line in its file-header CommentGroup "+
-			"(the first ast.CommentGroup, regardless of position relative to "+
-			"the package clause). Missing or malformed in:\n  %s",
-		inventoryAnchorRequiredRule, strings.Join(violators, "\n  "))
+	// Sort by Rel for stable output before reporting.
+	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
+	Report(t, inventoryAnchorRequiredRule, diags)
 }
 
 // TestInventoryAnchorValidID enforces canonical grammar across all anchors —
@@ -122,61 +121,42 @@ func TestInventoryAnchorValidID(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := archtestScope(t, root)
 
-	type violation struct {
-		file  string
-		line  int
-		token string
-	}
-	var violations []violation
-	scanner.EachFile(t, scope, parser.ParseComments|parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		if !isTopLevelArchtestTestFile(fc) {
-			return
-		}
-		for _, group := range fc.File.Comments {
-			for _, c := range group.List {
-				ref, ok := parseInventoryAnchor(c.Text)
-				if !ok {
-					continue
-				}
-				if !inventoryAnchorIDPattern.MatchString(ref.id) {
-					line := fc.Fset.Position(c.Pos()).Line
-					violations = append(violations, violation{
-						file:  filepath.Base(fc.Rel),
-						line:  line,
-						token: ref.id,
-					})
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			if !isTopLevelArchtestTestFileByPath(p.Rel(file), p.Abs(file)) {
+				continue
+			}
+			for _, group := range file.Comments {
+				for _, c := range group.List {
+					ref, ok := parseInventoryAnchor(c.Text)
+					if !ok {
+						continue
+					}
+					if !inventoryAnchorIDPattern.MatchString(ref.id) {
+						line := p.Fset.Position(c.Pos()).Line
+						ds = append(ds, Diagnostic{
+							Rel:     filepath.Base(p.Rel(file)),
+							Line:    line,
+							Message: "non-canonical INVARIANT anchor " + ref.id + "; must match grammar " + inventoryAnchorIDPattern.String(),
+						})
+					}
 				}
 			}
 		}
+		return ds
 	})
-
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].line < violations[j].line
-	})
-
-	if len(violations) == 0 {
-		return
-	}
-	lines := make([]string, len(violations))
-	for i, v := range violations {
-		lines[i] = v.file + ":" + intToStr(v.line) + ": " + v.token
-	}
-	assert.Failf(t, "non-canonical INVARIANT anchor",
-		"%s: every `// INVARIANT: <ID>` line must match grammar %s. "+
-			"Offending tokens:\n  %s",
-		inventoryAnchorValidIDRule, inventoryAnchorIDPattern, strings.Join(lines, "\n  "))
+	Report(t, inventoryAnchorValidIDRule, diags)
 }
 
-// isTopLevelArchtestTestFile reports whether fc points at a tools/archtest/<name>_test.go
-// file directly (subpackages under tools/archtest/internal/ are out of scope).
-func isTopLevelArchtestTestFile(fc scanner.FileContext) bool {
-	if filepath.ToSlash(filepath.Dir(fc.Rel)) != "tools/archtest" {
+// isTopLevelArchtestTestFileByPath reports whether the given rel/abs paths
+// point at a tools/archtest/<name>_test.go file directly (subpackages under
+// tools/archtest/internal/ are out of scope).
+func isTopLevelArchtestTestFileByPath(rel, absPath string) bool {
+	if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
 		return false
 	}
-	return strings.HasSuffix(fc.AbsPath, "_test.go")
+	return strings.HasSuffix(absPath, "_test.go")
 }
 
 // archtestScope returns a Scope over tools/archtest/ that **matches the
@@ -190,12 +170,12 @@ func isTopLevelArchtestTestFile(fc scanner.FileContext) bool {
 // builds a string set of slash-paths, and feeds it to `MatchRels`. Local
 // editor swap files (`.foo_test.go.swp`) and other untracked artifacts are
 // silently skipped, matching the script's behavior.
-func archtestScope(t *testing.T, root string) scanner.Scope {
+func archtestScope(t *testing.T, root string) Scope {
 	t.Helper()
 	tracked := loadGitTrackedSet(t, root)
-	return scanner.DirsScope(root, []string{"tools/archtest"},
-		scanner.IncludeTests(),
-		scanner.MatchRels(func(rel string) bool {
+	return DirsScope(root, []string{"tools/archtest"},
+		IncludeTests(),
+		MatchRels(func(rel string) bool {
 			return tracked[filepath.ToSlash(rel)]
 		}),
 	)
@@ -272,28 +252,4 @@ func parseInventoryAnchor(commentText string) (anchorRef, bool) {
 	}
 	tok = strings.TrimSuffix(tok, ":")
 	return anchorRef{id: tok}, true
-}
-
-// intToStr is a tiny helper for diagnostic line numbers; avoids importing fmt
-// for a single Sprintf("%d") call.
-func intToStr(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	pos := len(buf)
-	negative := n < 0
-	if negative {
-		n = -n
-	}
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	if negative {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
 }

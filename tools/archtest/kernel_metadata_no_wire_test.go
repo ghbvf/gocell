@@ -17,13 +17,8 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"path/filepath"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleKernelMetadataNoWire = "KERNEL-METADATA-NO-WIRE-01"
@@ -52,73 +47,57 @@ var kernelMetadataWireSymbols = map[string]bool{
 	// defines contractspec.ContractSpec (a different type entirely).
 }
 
-type wireViolation struct {
-	File   string
-	Line   int
-	Symbol string
-}
-
 // TestKernelMetadataDoesNotContainWireSymbols enforces KERNEL-METADATA-NO-WIRE-01.
 // It parses all non-test .go files in kernel/metadata/ and fails if any of the
 // forbidden wire-format top-level declaration names are found.
 func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"kernel/metadata"},
-		scanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{"kernel/metadata"},
+		MatchRels(func(rel string) bool {
 			// Single-dir semantics: only files directly under kernel/metadata,
 			// no sub-packages.
 			return filepath.ToSlash(filepath.Dir(rel)) == "kernel/metadata"
 		}),
 	)
 
-	var violations []wireViolation
-
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		f := fc.File
-		rel := fc.Rel
-
-		scanner.EachInChildren[ast.FuncDecl](f, func(d *ast.FuncDecl) {
-			if kernelMetadataWireSymbols[d.Name.Name] {
-				violations = append(violations, wireViolation{
-					File:   rel,
-					Line:   fc.Fset.Position(d.Pos()).Line,
-					Symbol: d.Name.Name,
-				})
-			}
-		})
-		scanner.EachInChildren[ast.GenDecl](f, func(d *ast.GenDecl) {
-			scanner.EachInChildren[ast.TypeSpec](d, func(s *ast.TypeSpec) {
-				if kernelMetadataWireSymbols[s.Name.Name] {
-					violations = append(violations, wireViolation{
-						File:   rel,
-						Line:   fc.Fset.Position(s.Pos()).Line,
-						Symbol: s.Name.Name,
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInChildren[ast.FuncDecl](file, func(d *ast.FuncDecl) {
+				if kernelMetadataWireSymbols[d.Name.Name] {
+					ds = append(ds, Diagnostic{
+						Rel:     rel,
+						Line:    p.Fset.Position(d.Pos()).Line,
+						Message: "wire-format symbol " + d.Name.Name + " must not be declared in kernel/metadata; move to runtime/devtools/catalog/",
 					})
 				}
 			})
-			scanner.EachInChildren[ast.ValueSpec](d, func(s *ast.ValueSpec) {
-				for _, ident := range s.Names {
-					if kernelMetadataWireSymbols[ident.Name] {
-						violations = append(violations, wireViolation{
-							File:   rel,
-							Line:   fc.Fset.Position(ident.Pos()).Line,
-							Symbol: ident.Name,
+			EachInChildren[ast.GenDecl](file, func(d *ast.GenDecl) {
+				EachInChildren[ast.TypeSpec](d, func(s *ast.TypeSpec) {
+					if kernelMetadataWireSymbols[s.Name.Name] {
+						ds = append(ds, Diagnostic{
+							Rel:     rel,
+							Line:    p.Fset.Position(s.Pos()).Line,
+							Message: "wire-format symbol " + s.Name.Name + " must not be declared in kernel/metadata; move to runtime/devtools/catalog/",
 						})
 					}
-				}
+				})
+				EachInChildren[ast.ValueSpec](d, func(s *ast.ValueSpec) {
+					for _, ident := range s.Names {
+						if kernelMetadataWireSymbols[ident.Name] {
+							ds = append(ds, Diagnostic{
+								Rel:     rel,
+								Line:    p.Fset.Position(ident.Pos()).Line,
+								Message: "wire-format symbol " + ident.Name + " must not be declared in kernel/metadata; move to runtime/devtools/catalog/",
+							})
+						}
+					}
+				})
 			})
-		})
-	})
-
-	if len(violations) > 0 {
-		t.Logf("%s: found %d wire-symbol declaration(s) in kernel/metadata/:",
-			ruleKernelMetadataNoWire, len(violations))
-		for _, v := range violations {
-			t.Logf("  %s:%d  symbol: %s", v.File, v.Line, v.Symbol)
 		}
-	}
-
-	assert.Empty(t, violations,
-		"%s: kernel/metadata must not declare wire-format symbols; "+
-			"move them to runtime/devtools/catalog/", ruleKernelMetadataNoWire)
+		return ds
+	})
+	Report(t, ruleKernelMetadataNoWire, diags)
 }

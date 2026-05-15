@@ -115,6 +115,16 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 // token, so comparing claims.JTI against session.JTI (which stores the
 // original login-time jti) would reject every post-refresh token. See ADR
 // 202605101400-adr-credential-session-protocol §A2.
+//
+// Defense-in-depth: after the user is loaded, user.CanAuthenticate() is
+// checked before any epoch comparison. Epoch match alone is insufficient: a
+// token minted for an active user who is then suspended/locked would pass the
+// epoch gate (epoch coincidentally still matches) but must be rejected because
+// the account is no longer eligible. This closes the P1.3 attack window
+// (matching-epoch-but-non-active). Uniform 401 (ErrAuthInvalidToken) is
+// returned for all CanAuthenticate failures — same envelope as revoked-session
+// and epoch-mismatch paths (防枚举: status must not be distinguishable from
+// token invalidity).
 func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
 	sid := claims.SessionID
 	if sid == "" {
@@ -158,10 +168,12 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
-	// 2) Epoch invariant: user.authz_epoch must exactly match claims.AuthzEpoch.
-	// Using != (not >) ensures fail-closed on any mismatch including "future epoch"
-	// tokens where claims.AuthzEpoch > user.AuthzEpoch — such tokens indicate a
-	// tampered or replayed claim and must be rejected. (Finding #2)
+	// 2) Epoch invariant: user.authz_epoch must exactly match the epoch stored on
+	// the session row (view.AuthzEpochAtIssue). S4d moves the epoch source of truth
+	// from the JWT claim to the session/refresh rows — the claim is no longer
+	// written. Using != ensures fail-closed on any mismatch: if a credential event
+	// bumped user.authz_epoch after this session was issued, the row captures the
+	// stale epoch and the comparison rejects. (Finding #2, S4d row provenance)
 	user, err := s.userRepo.GetByID(ctx, claims.Subject)
 	if err != nil {
 		if errcode.IsInfraError(err) {
@@ -176,11 +188,22 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	if user.AuthzEpoch != claims.AuthzEpoch {
+	// P1.3 defense-in-depth: epoch match alone is insufficient when the user
+	// became non-active after the token was issued. CanAuthenticate fails closed
+	// for any non-active status (suspended, locked, or any future state).
+	// Uniform 401 — same envelope as all other enforceSessionState rejections
+	// (防枚举: account status must not be distinguishable from token invalidity).
+	if !user.CanAuthenticate() {
+		s.logger.Warn("session-validate: user not active",
+			slog.String("subject", claims.Subject),
+			slog.String("status", string(user.Status())))
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+	}
+	if user.AuthzEpoch() != view.AuthzEpochAtIssue {
 		s.logger.Warn("session-validate: authz epoch mismatch",
 			slog.String("subject", claims.Subject),
-			slog.Int64("user_epoch", user.AuthzEpoch),
-			slog.Int64("claim_epoch", claims.AuthzEpoch))
+			slog.Int64("user_epoch", user.AuthzEpoch()),
+			slog.Int64("row_epoch", view.AuthzEpochAtIssue))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 

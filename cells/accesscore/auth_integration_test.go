@@ -324,13 +324,14 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 
 	// Seed bob so userRepo.BumpAuthzEpoch (called via invalidator funnel)
 	// can find the row.
-	require.NoError(t, userRepo.Create(ctx, &domain.User{
-		ID:        "usr-bob",
-		Username:  "bob",
-		Status:    domain.StatusActive,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
-	}))
+	bobNow := time.Now().UTC()
+	bobUser, bobErr := domain.ReconstituteUser(
+		"usr-bob", "bob", "bob@gocell.local", "x",
+		1, false, domain.StatusActive, domain.UserSourceIdentity,
+		1, bobNow, bobNow,
+	)
+	require.NoError(t, bobErr)
+	require.NoError(t, userRepo.Create(ctx, bobUser))
 
 	// Assign bob and carol to "member" so last-holder guard doesn't block.
 	_, _ = roleRepo.AssignToUser(ctx, "usr-bob", "member")
@@ -338,11 +339,12 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 
 	// Give bob an active session.
 	bobSession := &session.Session{
-		ID:        "sess-bob",
-		SubjectID: "usr-bob",
-		JTI:       "sess-bob",
-		CreatedAt: time.Now().UTC(),
-		ExpiresAt: time.Now().Add(time.Hour).UTC(),
+		ID:                "sess-bob",
+		SubjectID:         "usr-bob",
+		JTI:               "sess-bob",
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now().UTC(),
+		ExpiresAt:         time.Now().Add(time.Hour).UTC(),
 	}
 	require.NoError(t, sessionRepo.Create(ctx, bobSession))
 

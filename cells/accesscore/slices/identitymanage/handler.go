@@ -27,7 +27,7 @@ func toUserResponseData(u *domain.User) (id, username, email, status, createdAt,
 	if u == nil {
 		return
 	}
-	return u.ID, u.Username, u.Email, string(u.Status),
+	return u.ID, u.Username, u.Email, string(u.Status()),
 		u.CreatedAt.UTC().Format(time.RFC3339),
 		u.UpdatedAt.UTC().Format(time.RFC3339)
 }

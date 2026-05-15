@@ -228,7 +228,7 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 	const subjectID = "usr-dml-state"
 
 	// Step 1: Issue — expect one row, rotated_at IS NULL, revoked_at IS NULL.
-	wire, tok, err := store.Issue(ctx, sessionID, subjectID)
+	wire, tok, err := store.Issue(ctx, sessionID, subjectID, int64(1))
 	require.NoError(t, err)
 	require.NotEmpty(t, wire)
 	require.NotNil(t, tok)
@@ -329,7 +329,7 @@ func TestPGRefreshStore_PeekPlusRotate_RespectsGraceBudget(t *testing.T) {
 	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
 	require.NoError(t, err)
 
-	parentWire, _, err := store.Issue(ctx, "sess-pg-grace", "usr-pg-grace")
+	parentWire, _, err := store.Issue(ctx, "sess-pg-grace", "usr-pg-grace", int64(1))
 	require.NoError(t, err)
 	// First Rotate: opens grace window. used_times stays at 0 because
 	// rotated_at was nil prior to this call (handleRotatedRow not entered).
@@ -374,7 +374,7 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 	}, clock, nil)
 	require.NoError(t, err)
 
-	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient")
+	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient", int64(1))
 	require.NoError(t, err)
 	childWire, _, err := store.Rotate(ctx, parentWire)
 	require.NoError(t, err)
@@ -413,7 +413,7 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 	}, clock, nil)
 	require.NoError(t, err)
 
-	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock")
+	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock", int64(1))
 	require.NoError(t, err)
 	childWire, _, err := store.Rotate(ctx, parentWire)
 	require.NoError(t, err)
@@ -469,7 +469,7 @@ func TestPGRefreshStore_T19_IdleExpireBlocksRotate(t *testing.T) {
 	}, clock, nil)
 	require.NoError(t, err)
 
-	wire, _, err := store.Issue(ctx, "sess-t19", "usr-t19")
+	wire, _, err := store.Issue(ctx, "sess-t19", "usr-t19", int64(1))
 	require.NoError(t, err)
 
 	// Advance past MaxIdle.
@@ -508,7 +508,7 @@ func TestPGRefreshStore_T20_GraceCounterCapTriggersReuse(t *testing.T) {
 	}, clock, nil)
 	require.NoError(t, err)
 
-	parentWire, _, err := store.Issue(ctx, "sess-t20", "usr-t20")
+	parentWire, _, err := store.Issue(ctx, "sess-t20", "usr-t20", int64(1))
 	require.NoError(t, err)
 
 	// Rotate once to set rotated_at on parent and get child.
@@ -569,21 +569,21 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 	require.ErrorIs(t, err, refresh.ErrRejected, "selector_miss must return ErrRejected")
 
 	// expired
-	wire, _, err := store.Issue(ctx, "sess-t21-exp", "usr-t21")
+	wire, _, err := store.Issue(ctx, "sess-t21-exp", "usr-t21", int64(1))
 	require.NoError(t, err)
 	clock.Advance(refreshTest2Hours)
 	_, err = store.Peek(ctx, wire)
 	require.ErrorIs(t, err, refresh.ErrRejected, "expired must return ErrRejected")
 
 	// revoked
-	wire2, _, err := store.Issue(ctx, "sess-t21-rev", "usr-t21")
+	wire2, _, err := store.Issue(ctx, "sess-t21-rev", "usr-t21", int64(1))
 	require.NoError(t, err)
 	require.NoError(t, store.RevokeSession(ctx, "sess-t21-rev"))
 	_, err = store.Peek(ctx, wire2)
 	require.ErrorIs(t, err, refresh.ErrRejected, "revoked must return ErrRejected")
 
 	// reuse_detected — rotate the parent, wait past reuseInterval, re-present parent
-	wire3, _, err := store.Issue(ctx, "sess-t21-reuse", "usr-t21")
+	wire3, _, err := store.Issue(ctx, "sess-t21-reuse", "usr-t21", int64(1))
 	require.NoError(t, err)
 	_, _, err = store.Rotate(ctx, wire3)
 	require.NoError(t, err)
@@ -675,7 +675,7 @@ func TestPGRefreshStore_T23_AmbientTxRollback(t *testing.T) {
 	}, clock, nil)
 	require.NoError(t, err)
 
-	wire, _, err := store.Issue(ctx, "sess-t23", "usr-t23")
+	wire, _, err := store.Issue(ctx, "sess-t23", "usr-t23", int64(1))
 	require.NoError(t, err)
 
 	// Count rows before the aborted Rotate.
@@ -719,9 +719,9 @@ func TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback(t *testing.
 	}, clock, nil)
 	require.NoError(t, err)
 
-	detachedWire, _, err := store.Issue(ctx, "sess-detached-revoke", "usr-detached-revoke")
+	detachedWire, _, err := store.Issue(ctx, "sess-detached-revoke", "usr-detached-revoke", int64(1))
 	require.NoError(t, err)
-	businessWire, _, err := store.Issue(ctx, "sess-business-revoke", "usr-business-revoke")
+	businessWire, _, err := store.Issue(ctx, "sess-business-revoke", "usr-business-revoke", int64(1))
 	require.NoError(t, err)
 
 	runErr := txm.RunInTx(ctx, func(txCtx context.Context) error {

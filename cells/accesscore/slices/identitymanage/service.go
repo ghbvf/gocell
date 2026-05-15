@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -25,6 +26,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// keep session import used for CredentialEventDelete in deleteUserAndRevokeTokens.
+var _ = session.CredentialEventDelete
 
 // TokenIssuer is a narrow interface for issuing a new token pair after a
 // password change. The implementation is sessionlogin.Service.IssueForUser,
@@ -123,10 +127,22 @@ func WithLastAdminProtection(roleRepo ports.RoleRepository) Option {
 	}
 }
 
+// WithAuthzMutator injects the authzmutate.Mutator for credential-weakening
+// domain mutations (Lock, Suspend, RequirePasswordReset, etc.). When nil the
+// service constructs one from the injected invalidator, repo, and txRunner.
+func WithAuthzMutator(m *authzmutate.Mutator) Option {
+	return func(s *Service) {
+		if m != nil {
+			s.authzmutator = m
+		}
+	}
+}
+
 // Service implements identity management business logic.
 type Service struct {
 	repo                         ports.UserRepository
 	invalidator                  *credentialinvalidate.Invalidator
+	authzmutator                 *authzmutate.Mutator
 	txRunner                     persistence.CellTxManager
 	emitter                      outbox.Emitter
 	logger                       *slog.Logger
@@ -142,6 +158,17 @@ type Service struct {
 // credential-revocation events (Lock / Delete / ChangePassword / suspension)
 // atomically bump authz_epoch + revoke sessions + revoke refresh chains via
 // the single funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
+//
+// authzmutator: when not injected via WithAuthzMutator, NewService constructs
+// one from (invalidator, repo, txRunner). This is intentional composition
+// convenience — all three deps are already validated non-nil at this point, so
+// the auto-construction cannot fail. The funnel safety is structural (routed
+// through authzmutate.Apply, which enforces epoch-bump + revoke), not
+// wiring-dependent; injecting a pre-built Mutator is only needed in tests that
+// want to substitute a different invalidator or repo. ref: runtime-api.md
+// §Option-范式 builder-noop (累加式 builder: nil入参 = no new data, final
+// nil resolved at factory; here the factory auto-constructs rather than
+// fail-fast because the inputs are provably valid).
 func NewService(
 	repo ports.UserRepository,
 	invalidator *credentialinvalidate.Invalidator,
@@ -169,33 +196,52 @@ func NewService(
 	if s.txRunner == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "identitymanage: TxRunner required; use WithTxManager")
 	}
+	// Build authzmutator from injected deps if not explicitly provided via WithAuthzMutator.
+	if s.authzmutator == nil {
+		m, mErr := authzmutate.New(s.invalidator, s.repo, s.txRunner)
+		if mErr != nil {
+			return nil, fmt.Errorf("identitymanage: build authzmutator: %w", mErr)
+		}
+		s.authzmutator = m
+	}
 	if s.tokenIssuer == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
 			"identity-manage: tokenIssuer is required; wire via WithTokenIssuer")
 	}
 	if s.lastAdminProtectionRequested {
-		if validation.IsNilInterface(s.lastAdminRoleRepo) {
-			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"identity-manage: last-admin protection requires a role repository")
-		}
-		// S4.0: the guard counts *effective* admins (status='active' AND admin
-		// role). RoleRepository.CountEffectiveAdmins is the canonical impl;
-		// WrapEffectiveAdminCounter produces the sealed
-		// domain.EffectiveAdminCounter wrapper that NewLastAdminGuard accepts.
-		// Sealed marker prevents structural mis-wiring with CountByRole or any
-		// other look-alike at compile time.
-		sealedCounter, wrapErr := domain.WrapEffectiveAdminCounter(s.lastAdminRoleRepo)
-		if wrapErr != nil {
-			return nil, fmt.Errorf("identity-manage: wrap effective-admin counter: %w", wrapErr)
-		}
-		guard, guardErr := domain.NewLastAdminGuard(sealedCounter)
-		if guardErr != nil {
-			return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
+		guard, err := buildLastAdminGuard(s.lastAdminRoleRepo)
+		if err != nil {
+			return nil, err
 		}
 		s.lastAdminGuard = guard
 	}
 	clock.MustHaveClock(s.clock, "identitymanage.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
+}
+
+// buildLastAdminGuard constructs the domain.LastAdminGuard from a role repository.
+// It validates the repo is non-nil, wraps it in the sealed EffectiveAdminCounter
+// marker, and constructs the guard.
+func buildLastAdminGuard(roleRepo ports.RoleRepository) (*domain.LastAdminGuard, error) {
+	if validation.IsNilInterface(roleRepo) {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"identity-manage: last-admin protection requires a role repository")
+	}
+	// S4.0: the guard counts *effective* admins (status='active' AND admin
+	// role). RoleRepository.CountEffectiveAdmins is the canonical impl;
+	// WrapEffectiveAdminCounter produces the sealed
+	// domain.EffectiveAdminCounter wrapper that NewLastAdminGuard accepts.
+	// Sealed marker prevents structural mis-wiring with CountByRole or any
+	// other look-alike at compile time.
+	sealedCounter, wrapErr := domain.WrapEffectiveAdminCounter(roleRepo)
+	if wrapErr != nil {
+		return nil, fmt.Errorf("identity-manage: wrap effective-admin counter: %w", wrapErr)
+	}
+	guard, guardErr := domain.NewLastAdminGuard(sealedCounter)
+	if guardErr != nil {
+		return nil, fmt.Errorf("identity-manage: last-admin guard: %w", guardErr)
+	}
+	return guard, nil
 }
 
 // CreateInput holds parameters for creating a user.
@@ -238,7 +284,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 
 	user.ID = uuid.NewString()
 	if input.RequirePasswordReset {
-		user.MarkPasswordResetRequired(s.clock.Now())
+		// Creation-time: no live sessions exist (epoch=1). This is an allowlisted
+		// non-funnel site — authzmutate.Apply is for mutating existing principals.
+		user.SetPasswordResetRequired(true, s.clock.Now())
 	}
 
 	eventPayload := dto.UserCreatedEvent{
@@ -338,13 +386,53 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	return user, nil
 }
 
-// applyUserUpdate runs the transactional body of Update: fetch, optionally
-// guard a status-demotion, apply patch fields, persist, cascade-revoke
-// sessions when status demotes from 'active', and publish. Split out to keep
-// Update's cognitive complexity within the CLAUDE.md ≤15 budget once the
-// S4.0 effective-admin guard + status-demotion cascade were added.
+// applyUserUpdate runs the body of Update. It handles non-authz field changes
+// (name, email) in a plain RunInTx and delegates credential-weakening status
+// changes and reset-flag mutations to authzmutate.Apply.
+//
+// Design: status and requirePasswordReset changes go through authzmutate.Apply
+// which opens its own RunInTx (nested via the same tx manager). Non-authz
+// fields (name, email) are applied first in a separate tx, then authzmutate
+// is called if needed. This keeps each operation atomic while avoiding mixing
+// non-credential and credential writes in the same closure.
+//
+// applyNonAuthzFields excludes status and passwordResetRequired — those fields
+// are routed exclusively through authzmutate.Apply (via resolveCredentialMutation).
+// Only name, email, and updatedAt are written in the first tx.
+//
+// TOCTOU trade-off (KNOWN, ACCEPTED): non-authz fields (name, email) are
+// written in tx1 and the credential mutation (status, passwordResetRequired)
+// is applied in tx2 via authzmutator.Apply. A concurrent write between tx1
+// and tx2 could observe a brief intermediate state where name/email have
+// changed but status/epoch have not yet been updated. This split is intentional:
+//
+//   - Non-authz writes are informational; the user remains fully operational
+//     in the intermediate window (status is unchanged until tx2 commits).
+//   - The security net for the status/epoch window is
+//     sessionvalidate.enforceSessionState's CanAuthenticate check (P1.3b
+//     defense-in-depth, added this PR): any request from a non-active user
+//     is fail-closed at the validate layer regardless of epoch.
+//   - Collapsing both writes into a single tx would require authzmutate.Apply
+//     to accept an existing tx context, coupling it to the outer tx and
+//     significantly raising complexity. The trade-off is accepted.
+//
+// For correctness the approach is: apply non-authz field changes first (or
+// together with name/email), then apply the credential-changing mutation.
+// The outer tx handles name/email + event publish; authzmutate handles the
+// credential trifecta.
 func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor string) (*domain.User, error) {
 	var user *domain.User
+	now := s.clock.Now()
+
+	// Determine what credential mutation to apply (if any) before opening tx.
+	credMut, err := s.resolveCredentialMutation(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply non-authz field changes (name, email) inside a transaction that
+	// also publishes the event. Status and resetRequired changes that go
+	// through authzmutate are applied below.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		u, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
@@ -353,81 +441,94 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 		if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
 			return err
 		}
-		demotedFromActive := isStatusDemotion(u, input)
-		applyUpdateFields(u, input, s.clock.Now())
+		applyNonAuthzFields(u, input, now)
 		if err := s.repo.Update(txCtx, u); err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
-		}
-		if err := s.cascadeInvalidateOnDemotion(txCtx, u.ID, demotedFromActive); err != nil {
-			return err
 		}
 		user = u
 		return s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor})
 	}); err != nil {
 		return nil, err
 	}
+
+	// Apply credential mutation via the funnel (after the main tx commits so
+	// the mutation's own RunInTx sees the committed state).
+	if credMut.ok {
+		if err := s.authzmutator.Apply(ctx, input.ID, credMut.m, now); err != nil {
+			return nil, fmt.Errorf("identity-manage: update credential mutation: %w", err)
+		}
+		// Re-fetch user to get the updated epoch/status.
+		updated, err := s.repo.GetByID(ctx, input.ID)
+		if err != nil {
+			return nil, fmt.Errorf("identity-manage: update re-fetch after mutation: %w", err)
+		}
+		user = updated
+	}
+
 	return user, nil
 }
 
-// isStatusDemotion reports whether input demotes u.Status away from 'active'.
-// 'locked' is rejected at the Update entrypoint, so this returns true exactly
-// for active→suspended.
-func isStatusDemotion(u *domain.User, input UpdateInput) bool {
-	return input.Status != nil &&
-		u.Status == domain.StatusActive &&
-		*input.Status != string(domain.StatusActive)
+// pendingCredMutation carries the result of resolveCredentialMutation.
+// ok == false means no credential mutation is needed for this update;
+// this struct avoids returning a nil authzmutate.Mutation interface (which
+// would trigger the nilnil linter).
+type pendingCredMutation struct {
+	m  authzmutate.Mutation
+	ok bool
 }
 
-// cascadeInvalidateOnDemotion fixes CRITICAL-1: the old helper only called
-// RevokeForSubject + RevokeUser but skipped BumpAuthzEpoch, leaving a
-// suspended user's access JWTs valid until natural exp. Now routes through
-// the invalidator funnel so authz_epoch bump + session revoke + refresh
-// revoke all happen atomically (CREDENTIAL-INVALIDATE-FUNNEL-01).
-// suspended semantics are equivalent to Lock.
-//
-// The boolean gate keeps the no-op cost zero for non-status updates.
-func (s *Service) cascadeInvalidateOnDemotion(ctx context.Context, userID string, demoted bool) error {
-	if !demoted {
-		return nil
+// resolveCredentialMutation inspects the UpdateInput and returns the
+// authzmutate.Mutation that should be applied, wrapped in a pendingCredMutation.
+// When pendingCredMutation.ok is false no credential mutation is needed.
+func (s *Service) resolveCredentialMutation(ctx context.Context, input UpdateInput) (pendingCredMutation, error) {
+	// Check status change.
+	if input.Status != nil {
+		switch domain.UserStatus(*input.Status) {
+		case domain.StatusSuspended:
+			return pendingCredMutation{m: authzmutate.SuspendUser{}, ok: true}, nil
+		case domain.StatusActive:
+			return pendingCredMutation{m: authzmutate.ActivateUser{}, ok: true}, nil
+		}
 	}
-	if err := s.invalidator.Apply(ctx, userID, session.CredentialEventLock); err != nil {
-		return fmt.Errorf("identity-manage: update invalidate credentials on demotion: %w", err)
+	// Check requirePasswordReset change.
+	if input.RequirePasswordReset != nil {
+		if *input.RequirePasswordReset {
+			// Check if already set (no-op if flag already true).
+			u, err := s.repo.GetByID(ctx, input.ID)
+			if err != nil {
+				return pendingCredMutation{}, fmt.Errorf("identity-manage: resolve mutation get user: %w", err)
+			}
+			if u.PasswordResetRequired() {
+				return pendingCredMutation{}, nil // already set, no mutation needed
+			}
+			return pendingCredMutation{m: authzmutate.RequirePasswordReset{}, ok: true}, nil
+		}
+		return pendingCredMutation{m: authzmutate.ClearPasswordReset{}, ok: true}, nil
 	}
-	return nil
+	return pendingCredMutation{}, nil // no credential fields changed
 }
 
-// guardUpdateStatusDemotion enforces the effective-admin invariant when an
-// Update would demote an active admin to suspended/locked. Returning a
-// precise 403 here avoids falling through to the DB trigger's P0001 (500).
-func (s *Service) guardUpdateStatusDemotion(ctx context.Context, u *domain.User, input UpdateInput) error {
-	if input.Status == nil || u.Status != domain.StatusActive || *input.Status == string(domain.StatusActive) {
-		return nil
-	}
-	return s.checkLastAdminRemoval(ctx, u.ID, u.Status)
-}
-
-// applyUpdateFields applies JSON-merge-patch semantics in-place on u: every
-// non-nil field in input overwrites the corresponding field on u. Pure
-// function — extracted from Update to keep that method's cognitive complexity
-// inside the 15-line CLAUDE.md budget once the RunInTx closure was added.
-func applyUpdateFields(u *domain.User, input UpdateInput, now time.Time) {
+// applyNonAuthzFields applies non-credential field changes (name, email) to u.
+// Status and requirePasswordReset are handled by authzmutate.Apply and are NOT
+// set here — they go through the funnel.
+func applyNonAuthzFields(u *domain.User, input UpdateInput, now time.Time) {
 	if input.Name != nil {
 		u.Username = *input.Name
 	}
 	if input.Email != nil {
 		u.Email = *input.Email
 	}
-	if input.Status != nil {
-		u.Status = domain.UserStatus(*input.Status)
-	}
-	if input.RequirePasswordReset != nil {
-		if *input.RequirePasswordReset {
-			u.MarkPasswordResetRequired(now)
-		} else {
-			u.ClearPasswordResetRequired(now)
-		}
-	}
 	u.UpdatedAt = now
+}
+
+// guardUpdateStatusDemotion enforces the effective-admin invariant when an
+// Update would demote an active admin to suspended. Returning a precise 403
+// here avoids falling through to the DB trigger's P0001 (500).
+func (s *Service) guardUpdateStatusDemotion(ctx context.Context, u *domain.User, input UpdateInput) error {
+	if input.Status == nil || u.Status() != domain.StatusActive || *input.Status == string(domain.StatusActive) {
+		return nil
+	}
+	return s.checkLastAdminRemoval(ctx, u.ID, u.Status())
 }
 
 // Delete removes a user. Before the user row is deleted, all sessions and
@@ -464,7 +565,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
-		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
+		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status()); err != nil {
 			return err
 		}
 		// Bump authz_epoch + revoke sessions + revoke refresh chains atomically.
@@ -510,31 +611,47 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 	return nil
 }
 
+// lockUserAndRevokeSessions runs the transactional body of Lock.
+//
+// TOCTOU trade-off (KNOWN, ACCEPTED): the last-admin guard runs in tx1
+// (GetByID + checkLastAdminRemoval) and the credential mutation runs in tx2
+// (authzmutator.Apply via RunInTx). A concurrent admin-status change between
+// tx1 and tx2 could in theory cause the guard to pass on a stale read. This
+// split is intentional:
+//
+//   - The last-admin guard is an operability/UX guard, NOT a security boundary.
+//     Its purpose is to prevent an admin from accidentally locking themselves
+//     out of the system. A concurrent bypass in this window has no security
+//     consequence: the locked user would simply need to be unlocked by another
+//     admin session.
+//   - The security net for any status/epoch intermediate window is
+//     sessionvalidate.enforceSessionState's CanAuthenticate check (P1.3b
+//     defense-in-depth, added in this PR): any request from a non-active user
+//     is fail-closed at the validate layer regardless of epoch, making the
+//     intermediate window safe from an authentication perspective.
+//
+// Changing this to a single-tx design would require passing the RunInTx
+// context through authzmutate, coupling the event-publish tx to the guard tx
+// and significantly raising cognitive complexity. The trade-off is accepted.
 func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor string) error {
-	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+	now := s.clock.Now()
+	// Guard: check last-admin protection before applying the mutation.
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		user, err := s.repo.GetByID(txCtx, id)
 		if err != nil {
-			return fmt.Errorf("identity-manage: lock: %w", err)
+			return fmt.Errorf("identity-manage: lock guard: %w", err)
 		}
-		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status); err != nil {
-			return err
-		}
-		user.LockAccount(s.clock.Now())
-		if err := s.repo.Update(txCtx, user); err != nil {
-			return fmt.Errorf("identity-manage: lock: %w", err)
-		}
-		// F17: bump authz_epoch + revoke all sessions + revoke refresh chains.
-		// Failure must abort the transaction: silently logging would commit the
-		// lock flag while leaving stolen access tokens able to call business
-		// endpoints until natural expiry — the exact attack vector "Lock" exists
-		// to prevent. Routed through funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
-		if err := s.invalidator.Apply(txCtx, id, session.CredentialEventLock); err != nil {
-			return fmt.Errorf("identity-manage: lock invalidate credentials: %w", err)
-		}
-		if err := s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor}); err != nil {
-			return err
-		}
-		return nil
+		return s.checkLastAdminRemoval(txCtx, user.ID, user.Status())
+	}); err != nil {
+		return err
+	}
+	// Apply via funnel: LockUser sets status=locked + bumps epoch + revokes sessions/refresh.
+	if err := s.authzmutator.Apply(ctx, id, authzmutate.LockUser{}, now); err != nil {
+		return fmt.Errorf("identity-manage: lock: %w", err)
+	}
+	// Publish event (outside the authzmutate tx — event is informational).
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		return s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
 	})
 }
 
@@ -592,19 +709,14 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Apply via funnel: ActivateUser sets status=active (Invalidates()==false,
+	// so no epoch-bump — re-activating is additive, ADR §A6).
+	if err := s.authzmutator.Apply(ctx, id, authzmutate.ActivateUser{}, s.clock.Now()); err != nil {
+		return fmt.Errorf("identity-manage: unlock: %w", err)
+	}
+	// Publish event.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		user, err := s.repo.GetByID(txCtx, id)
-		if err != nil {
-			return fmt.Errorf("identity-manage: unlock: %w", err)
-		}
-		user.UnlockAccount(s.clock.Now())
-		if err := s.repo.Update(txCtx, user); err != nil {
-			return fmt.Errorf("identity-manage: unlock: %w", err)
-		}
-		if err := s.publish(txCtx, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor}); err != nil {
-			return err
-		}
-		return nil
+		return s.publish(txCtx, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
 	}); err != nil {
 		return err
 	}

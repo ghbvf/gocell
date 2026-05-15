@@ -3,24 +3,18 @@ package sessionvalidate
 // sessionvalidate_concurrent_epoch_race_test.go — concurrent epoch-bump vs
 // validate race test.
 //
-// Historical context: S4b added authz_epoch claim verification in
-// enforceSessionState (user.AuthzEpoch > claims.AuthzEpoch → 401). This
-// test guards the race safety of that read-path: one goroutine bumps the
-// epoch directly via userRepo.BumpAuthzEpoch (bypassing the funnel to isolate
-// the test scope to sessionvalidate only), while 50 goroutines concurrently
-// validate the same access JWT.
+// S4d change: epoch comparison now uses user.AuthzEpoch vs view.AuthzEpochAtIssue
+// (session row), not the JWT claim. This test guards the race safety of that
+// read-path: one goroutine bumps the epoch directly via userRepo.BumpAuthzEpoch
+// (bypassing the funnel to isolate the test scope to sessionvalidate only),
+// while 50 goroutines concurrently validate an access JWT.
 //
 // Design:
-//  1. Issue an access JWT with authz_epoch=0 before the bump starts.
-//  2. Start 50 validator goroutines that each call VerifyIntent on the token.
-//  3. Start 1 goroutine that bumps the epoch to 1 via userRepo.BumpAuthzEpoch.
-//  4. After the bump goroutine completes, signal the validators.
-//  5. Drain all validator results.
-//
-// Expected invariant (PG READ COMMITTED semantics on the mem store):
-//   - Validators that observe the epoch BEFORE the bump return (claims, nil).
-//   - Validators that observe the epoch AFTER the bump return ("", 401 error).
-//   - No panic from concurrent reads.
+//  1. Create user with AuthzEpoch=1. Create session with AuthzEpochAtIssue=1.
+//  2. Pre-bump phase: 25 validators must PASS (user.epoch=1 == session.epoch=1).
+//  3. Bump user.epoch to 2 via userRepo.BumpAuthzEpoch.
+//  4. Post-bump phase: 25 validators must FAIL (user.epoch=2 != session.epoch=1).
+//  5. No panic from concurrent reads.
 //
 // Note: the bump goroutine uses userRepo.BumpAuthzEpoch directly, NOT the
 // credentialinvalidate funnel. This is intentional — the test is scoped to
@@ -40,7 +34,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -49,20 +42,19 @@ import (
 
 // TestSessionvalidate_ConcurrentEpochBumpAndValidate verifies that:
 //  1. No data race occurs when a single goroutine bumps the user's authz_epoch
-//     while goroutines concurrently validate an access JWT issued at epoch=0.
-//  2. Before the bump commits, validate calls on a valid active session succeed.
-//  3. After the bump commits, all subsequent validate calls reject the epoch=0
-//     token (401).
+//     while goroutines concurrently validate an access JWT.
+//  2. Before the bump commits, validate calls on a valid active session succeed
+//     (user.epoch=1 matches session.AuthzEpochAtIssue=1).
+//  3. After the bump commits, all subsequent validate calls reject the session
+//     (user.epoch=2 != session.AuthzEpochAtIssue=1).
 //  4. No panic occurs.
 //
 // The test deliberately splits validators into a "pre-bump" group that runs
 // to completion before BumpAuthzEpoch is called, and a "post-bump" group that
 // waits on a barrier and only runs once the bump has committed. Without the
-// pre-bump pass coverage the earlier version of this test could not detect a
-// regression that silently zeroed user.AuthzEpoch on read — the epoch check
-// would still "fail" on every validate (claim=0 vs read=0 → match), but for
-// the wrong reason. Asserting that pre-bump validators succeed plus post-bump
-// validators all reject is the complete contract (Finding #9 PR #490 review).
+// pre-bump pass coverage, a regression that silently zeroes user.AuthzEpoch
+// on read would cause pre-bump to fail (0 != 1) — making the regression
+// detectable via the pre-bump PASS assertion (Finding #9 PR #490 review).
 func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 	const validatorsPre, validatorsPost = 25, 25
 
@@ -70,38 +62,35 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 	userRepo := memStore.UserRepository()
 	sessionStore := newTestStore(t)
 
-	// Inject a user with authz_epoch=0.
+	// S4d: user starts at epoch=1 (domain.NewUser sets AuthzEpoch=1).
 	userID := "race-epoch-" + uuid.NewString()[:8]
 	sessionID := "race-sess-" + uuid.NewString()[:8]
-	initialUser := &domain.User{
-		ID:         userID,
-		Username:   "race-epoch-user",
-		Email:      "race@epoch.test",
-		Status:     domain.StatusActive,
-		AuthzEpoch: 0,
-		CreatedAt:  clock.Real().Now(),
-		UpdatedAt:  clock.Real().Now(),
-	}
+	initialUser := mustBuildUser(t, userID, 1)
+	initialUser.Username = "race-epoch-user"
+	initialUser.Email = "race@epoch.test"
 	require.NoError(t, userRepo.Create(context.Background(), initialUser))
 
-	// Seed an active session.
+	// Seed an active session with AuthzEpochAtIssue=1 — matches user.epoch=1.
 	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
-		ID:        sessionID,
-		SubjectID: userID,
-		JTI:       "race-jti-" + sessionID,
-		CreatedAt: clock.Real().Now(),
-		ExpiresAt: clock.Real().Now().Add(time.Hour),
+		ID:                sessionID,
+		SubjectID:         userID,
+		JTI:               "race-jti-" + sessionID,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         clock.Real().Now(),
+		ExpiresAt:         clock.Real().Now().Add(time.Hour),
 	}))
 
 	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default())
 	require.NoError(t, err)
 
-	// Issue an access token at epoch=0.
-	tokenStr, err := IssueTestTokenWithEpoch(testPrivKey, userID, 0, time.Hour, sessionID)
+	// Issue a token bound to the session.
+	tokenStr, err := IssueTestToken(testPrivKey, userID, nil, time.Hour, sessionID)
 	require.NoError(t, err)
 
 	// Pre-bump phase: validators run to completion before any bump occurs.
-	// Each must succeed because user.AuthzEpoch (read from repo) == claim epoch (0).
+	// Each must succeed: user.AuthzEpoch=1 == session.AuthzEpochAtIssue=1.
+	// If the read path silently drops AuthzEpoch (returning 0), then 0 != 1
+	// fails here — the regression is caught by the PASS assertion below.
 	var preWG sync.WaitGroup
 	var preBumpPass, preBumpFail atomic.Int64
 	for i := 0; i < validatorsPre; i++ {
@@ -118,12 +107,12 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 	}
 	preWG.Wait()
 	assert.Equal(t, int64(validatorsPre), preBumpPass.Load(),
-		"pre-bump validators must all PASS (claim epoch=0 matches user.AuthzEpoch=0); "+
+		"pre-bump validators must all PASS (user.AuthzEpoch=1 == session.AuthzEpochAtIssue=1); "+
 			"if any failed, the read path is silently dropping authz_epoch — see Finding #1")
 	assert.Equal(t, int64(0), preBumpFail.Load(), "no pre-bump validator should have failed")
 
 	// Post-bump phase: spin up validators that block on a barrier, then bump
-	// the epoch, then release them. All must reject the now-stale token.
+	// the epoch, then release them. All must reject: user.epoch=2 != session.epoch=1.
 	bumpDone := make(chan struct{})
 	var postWG sync.WaitGroup
 	var postValidatorsReady sync.WaitGroup
@@ -149,15 +138,16 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 
 	// Bump the epoch directly (test-only; funnel not needed here — see package
 	// godoc for rationale).
-	_, err = userRepo.BumpAuthzEpoch(context.Background(), userID)
+	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID)
 	require.NoError(t, err, "BumpAuthzEpoch must succeed")
+	require.Equal(t, int64(2), newEpoch, "bump from epoch=1 must yield epoch=2")
 
 	close(bumpDone)
 	postWG.Wait()
 
 	assert.Equal(t, int64(validatorsPost), postBumpFail.Load(),
-		"all %d post-bump validators must reject the epoch=0 token; "+
+		"all %d post-bump validators must reject (user.epoch=2 != session.epoch=1); "+
 			"passed=%d, failed=%d (a regression that drops authz_epoch from the read path "+
-			"would let claim=0 silently match user.AuthzEpoch=0 here too)",
+			"would let user.epoch=0 silently mismatch session.epoch=1 already in pre-bump)",
 		validatorsPost, postBumpPass.Load(), postBumpFail.Load())
 }

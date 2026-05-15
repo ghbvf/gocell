@@ -39,6 +39,23 @@ type Session struct {
 	// as the fingerprint, not the latest rotation.
 	JTI string
 
+	// AuthzEpochAtIssue is the snapshot of users.authz_epoch at the moment
+	// this session was created. It is the credential provenance source of
+	// truth — sessionvalidate compares it against the current users.authz_epoch
+	// (NOT against the JWT claim, which can be re-minted from live user state
+	// during refresh). A zero value is invalid: Store.Create rejects it with
+	// ErrValidationFailed (storetest conformance T-S4D-1 enforces).
+	//
+	// ADR-credential §A8 (S4d) — supersedes §A1 (retracted): row-level pin is
+	// not a JWT claim mirror, it is the only server-side source that survives
+	// refresh rotation. Without it, a stale refresh upgrades to live epoch on
+	// next use (PR #490 review P1).
+	//
+	// ref: PostgreSQL row-level locking — login flow uses SELECT ... FOR UPDATE
+	// on users to serialize against credentialinvalidate.Invalidator.Apply,
+	// making the snapshot read+write atomic with respect to epoch bumps.
+	AuthzEpochAtIssue int64
+
 	// CreatedAt is the issue timestamp in UTC.
 	CreatedAt time.Time
 
@@ -74,6 +91,12 @@ type ValidateView struct {
 	ID        string
 	SubjectID string
 	RevokedAt *time.Time
+	// AuthzEpochAtIssue exposes Session.AuthzEpochAtIssue to the validate
+	// path. sessionvalidate compares this with the live users.authz_epoch;
+	// mismatch → 401 (ADR-credential §A8). The JWT's authz_epoch claim is
+	// removed in S4d — view.AuthzEpochAtIssue is the only credential
+	// provenance source-of-truth.
+	AuthzEpochAtIssue int64
 }
 
 // Store persists session records. Implementations must obey the protocol
@@ -83,9 +106,11 @@ type ValidateView struct {
 // of which CredentialEvent triggered it (D3 fail-closed by default).
 //
 // Method semantics (ADR-Session §4.2):
-//   - Create: persist a new session. Nil session, empty Session.ID, or empty
-//     Session.SubjectID return ErrValidationFailed. Records violating the
-//     protocol-configured FingerprintMode (e.g. empty JTI under
+//   - Create: persist a new session. Nil session, empty Session.ID, empty
+//     Session.SubjectID, or zero Session.AuthzEpochAtIssue return
+//     ErrValidationFailed (S4d: epoch is required credential provenance —
+//     storetest conformance T-S4D-1 fixes the contract). Records violating
+//     the protocol-configured FingerprintMode (e.g. empty JTI under
 //     FingerprintJTIRef) return ErrValidationFailed. Duplicate Session.ID
 //     returns ErrSessionConflict; the protocol does not mandate uniqueness
 //     on (SubjectID, JTI) — that is a backend decision (PG schema in S3+S5).

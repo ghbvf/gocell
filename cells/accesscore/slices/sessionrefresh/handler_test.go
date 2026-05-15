@@ -39,7 +39,7 @@ func setup(t testing.TB) (http.Handler, string) {
 	_ = sessionStore.Create(context.Background(), sess)
 
 	// Issue an opaque wire token for sess-1.
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-1", "usr-1")
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-1", "usr-1", int64(1))
 	if err != nil {
 		panic("setup: issue refresh token: " + err.Error())
 	}

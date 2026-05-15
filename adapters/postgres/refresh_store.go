@@ -39,11 +39,16 @@ const gcBatchSize = 1000
 // Policy.MaxIdle is required (must be positive).
 const (
 	insertRowSQL = `
-INSERT INTO refresh_tokens (id, parent_id, session_id, subject_id, selector, verifier_hash, created_at, expires_at, idle_expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+INSERT INTO refresh_tokens (
+    id, parent_id, session_id, subject_id, selector, verifier_hash,
+    created_at, expires_at, idle_expires_at, authz_epoch_at_issue
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	selectBySelectorSQL = `
-SELECT id, session_id, subject_id, verifier_hash, created_at, expires_at, rotated_at, revoked_at, idle_expires_at, first_used_at, used_times
+SELECT id, session_id, subject_id, verifier_hash,
+       created_at, expires_at, rotated_at, revoked_at,
+       idle_expires_at, first_used_at, used_times, authz_epoch_at_issue
 FROM refresh_tokens
 WHERE selector = $1
 ORDER BY created_at DESC
@@ -119,26 +124,28 @@ type PGRefreshStore struct {
 }
 
 type refreshRow struct {
-	id            uuid.UUID
-	sessionID     string
-	subjectID     string
-	verifierHash  []byte
-	createdAt     time.Time
-	expiresAt     time.Time
-	rotatedAt     *time.Time
-	revokedAt     *time.Time
-	idleExpiresAt time.Time
-	firstUsedAt   *time.Time
-	usedTimes     int
+	id                uuid.UUID
+	sessionID         string
+	subjectID         string
+	verifierHash      []byte
+	createdAt         time.Time
+	expiresAt         time.Time
+	rotatedAt         *time.Time
+	revokedAt         *time.Time
+	idleExpiresAt     time.Time
+	firstUsedAt       *time.Time
+	usedTimes         int
+	authzEpochAtIssue int64
 }
 
 func (r refreshRow) toToken() *refresh.Token {
 	return &refresh.Token{
-		ID:        r.id,
-		SessionID: r.sessionID,
-		SubjectID: r.subjectID,
-		CreatedAt: r.createdAt,
-		ExpiresAt: r.expiresAt,
+		ID:                r.id,
+		SessionID:         r.sessionID,
+		SubjectID:         r.subjectID,
+		CreatedAt:         r.createdAt,
+		ExpiresAt:         r.expiresAt,
+		AuthzEpochAtIssue: r.authzEpochAtIssue,
 	}
 }
 
@@ -195,7 +202,15 @@ func (s *PGRefreshStore) generatePair() (selector []byte, verifier []byte, err e
 }
 
 // Issue creates a new refresh chain root. L1 LocalTx.
-func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string) (string, *refresh.Token, error) {
+//
+// authzEpochAtIssue must be > 0 (S4d): zero indicates the caller did not
+// snapshot users.authz_epoch; storing zero would let stale grants validate
+// forever once user.epoch is bumped (PR #490 review P1-#2).
+func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string, authzEpochAtIssue int64) (string, *refresh.Token, error) {
+	if authzEpochAtIssue == 0 {
+		return "", nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"refresh.Issue: authzEpochAtIssue required (non-zero)")
+	}
 	sel, ver, err := s.generatePair()
 	if err != nil {
 		return "", nil, err
@@ -207,17 +222,18 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	verHash := sha256.Sum256(ver)
 
 	if _, err := s.db.Exec(ctx, insertRowSQL,
-		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt, idleExpiresAt,
+		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt, idleExpiresAt, authzEpochAtIssue,
 	); err != nil {
 		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: issue", err)
 	}
 
 	return refresh.EncodeOpaque(sel, ver), &refresh.Token{
-		ID:        id,
-		SessionID: sessionID,
-		SubjectID: subjectID,
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
+		ID:                id,
+		SessionID:         sessionID,
+		SubjectID:         subjectID,
+		CreatedAt:         now,
+		ExpiresAt:         expiresAt,
+		AuthzEpochAtIssue: authzEpochAtIssue,
 	}, nil
 }
 
@@ -367,6 +383,10 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 	if _, err := s.db.Exec(ctx, insertRowSQL,
 		newID, uuid.NullUUID{UUID: row.id, Valid: true},
 		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires, newIdleExpires,
+		// Refresh is the continuation of the original grant: child inherits the
+		// chain's issue-time epoch (ADR-D4.1 + S4d §A8). Stale-grant detection
+		// happens in sessionrefresh before Rotate, not here.
+		row.authzEpochAtIssue,
 	); err != nil {
 		return "", nil, refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: rotate insert child", err)
 	}
@@ -378,11 +398,12 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 	}
 
 	return refresh.EncodeOpaque(newSel, newVer), &refresh.Token{
-		ID:        newID,
-		SessionID: row.sessionID,
-		SubjectID: row.subjectID,
-		CreatedAt: now,
-		ExpiresAt: newExpires,
+		ID:                newID,
+		SessionID:         row.sessionID,
+		SubjectID:         row.subjectID,
+		CreatedAt:         now,
+		ExpiresAt:         newExpires,
+		AuthzEpochAtIssue: row.authzEpochAtIssue,
 	}, refreshRow{}, nil
 }
 
@@ -417,7 +438,7 @@ func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, sel []byte) (
 	err := s.db.QueryRow(ctx, selectBySelectorSQL, sel).Scan(
 		&row.id, &row.sessionID, &row.subjectID,
 		&row.verifierHash, &row.createdAt, &row.expiresAt, &row.rotatedAt, &row.revokedAt,
-		&row.idleExpiresAt, &row.firstUsedAt, &row.usedTimes,
+		&row.idleExpiresAt, &row.firstUsedAt, &row.usedTimes, &row.authzEpochAtIssue,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return refreshRow{}, rejectWithReason("selector_miss", "")

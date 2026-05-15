@@ -97,11 +97,12 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 // JTI is set to a non-empty value so FingerprintJTIRef validation passes.
 func seedSession(store session.Store, id, userID string) {
 	_ = store.Create(context.Background(), &session.Session{
-		ID:        id,
-		SubjectID: userID,
-		JTI:       "jti-" + id,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                id,
+		SubjectID:         userID,
+		JTI:               "jti-" + id,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	})
 }
 

@@ -120,19 +120,29 @@ func setupUserRepoPG(t *testing.T) (*PGUserRepo, *adapterpg.TxManager, func()) {
 }
 
 // newTestUser builds a minimal domain.User with a unique username and email.
+// Uses domain.ReconstituteUser so that private authz fields (status,
+// passwordResetRequired, authzEpoch) are correctly populated, and authzEpoch
+// is seeded to 1 (the minimum valid value — migration 028 CHECK(>0) enforces
+// this at the DB level; ReconstituteUser rejects 0 at the domain level).
 func newTestUser(suffix string) *domain.User {
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	return &domain.User{
-		ID:                    uuid.NewString(),
-		Username:              "user_" + suffix,
-		Email:                 "user_" + suffix + "@example.com",
-		PasswordHash:          "$2a$12$fakehash_" + suffix,
-		PasswordResetRequired: false,
-		Status:                domain.StatusActive,
-		CreationSource:        domain.UserSourceIdentity,
-		CreatedAt:             now,
-		UpdatedAt:             now,
+	u, err := domain.ReconstituteUser(
+		uuid.NewString(),
+		"user_"+suffix,
+		"user_"+suffix+"@example.com",
+		"$2a$12$fakehash_"+suffix,
+		0,     // passwordVersion
+		false, // passwordResetRequired
+		domain.StatusActive,
+		domain.UserSourceIdentity,
+		1, // authzEpoch >= 1 (migration 028 CHECK constraint)
+		now,
+		now,
+	)
+	if err != nil {
+		panic("newTestUser: " + err.Error())
 	}
+	return u
 }
 
 // ---------------------------------------------------------------------------
@@ -207,9 +217,9 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, u.ID, got.ID)
 		assert.Equal(t, u.Username, got.Username)
 		assert.Equal(t, u.Email, got.Email)
-		assert.Equal(t, u.Status, got.Status)
+		assert.Equal(t, u.Status(), got.Status())
 		assert.Equal(t, u.CreationSource, got.CreationSource)
-		assert.Equal(t, u.PasswordResetRequired, got.PasswordResetRequired)
+		assert.Equal(t, u.PasswordResetRequired(), got.PasswordResetRequired())
 	})
 
 	t.Run("Create_duplicate_username_returns_ErrAuthUserDuplicate", func(t *testing.T) {
@@ -272,15 +282,15 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		u := newTestUser("upd1")
 		require.NoError(t, repo.Create(ctx, u))
 
-		u.Status = domain.StatusSuspended
-		u.PasswordResetRequired = true
-		u.UpdatedAt = u.UpdatedAt.Add(time.Second)
+		now := u.UpdatedAt.Add(time.Second)
+		u.SetStatus(domain.StatusSuspended, now)
+		u.SetPasswordResetRequired(true, now)
 		require.NoError(t, repo.Update(ctx, u))
 
 		got, err := repo.GetByID(ctx, u.ID)
 		require.NoError(t, err)
-		assert.Equal(t, domain.StatusSuspended, got.Status)
-		assert.True(t, got.PasswordResetRequired)
+		assert.Equal(t, domain.StatusSuspended, got.Status())
+		assert.True(t, got.PasswordResetRequired())
 		// updated_at must advance.
 		assert.True(t, got.UpdatedAt.After(got.CreatedAt) || got.UpdatedAt.Equal(got.CreatedAt))
 	})
@@ -404,11 +414,13 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 	u := newTestUser("authz_readback_" + uuid.NewString())
 	require.NoError(t, repo.Create(ctx, u))
 
-	// Baseline: freshly created user must have authz_epoch=0 from the INSERT.
+	// Baseline: freshly created user must have authz_epoch=1 from the INSERT.
+	// domain.NewUser seeds epoch=1; migration 028 enforces CHECK(>0) so epoch=0
+	// is rejected by the DB. ReconstituteUser also rejects authzEpoch<=0.
 	got, err := repo.GetByID(ctx, u.ID)
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), got.AuthzEpoch,
-		"new user must have AuthzEpoch=0; got %d", got.AuthzEpoch)
+	assert.Equal(t, int64(1), got.AuthzEpoch(),
+		"new user must have AuthzEpoch=1 (seeded by NewUser); got %d", got.AuthzEpoch())
 
 	// Bump epoch inside a tx (BumpAuthzEpoch contract requires ambient tx —
 	// funnel entry point guarantees this in production).
@@ -421,20 +433,21 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 		bumped = v
 		return nil
 	}))
-	assert.Equal(t, int64(1), bumped, "BumpAuthzEpoch must return new value 1")
+	// User starts at epoch=1 (domain.NewUser); first bump → 2.
+	assert.Equal(t, int64(2), bumped, "BumpAuthzEpoch must return new value 2 (user started at 1)")
 
-	// Readback via GetByID — must reflect the post-bump value, not the cached zero.
+	// Readback via GetByID — must reflect the post-bump value.
 	gotByID, err := repo.GetByID(ctx, u.ID)
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), gotByID.AuthzEpoch,
-		"GetByID must return post-bump AuthzEpoch=1; got %d — SELECT list likely missing authz_epoch column",
-		gotByID.AuthzEpoch)
+	assert.Equal(t, int64(2), gotByID.AuthzEpoch(),
+		"GetByID must return post-bump AuthzEpoch=2; got %d — SELECT list likely missing authz_epoch column",
+		gotByID.AuthzEpoch())
 
 	// Readback via GetByUsername — same invariant; both query paths share scanUser.
 	gotByName, err := repo.GetByUsername(ctx, u.Username)
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), gotByName.AuthzEpoch,
-		"GetByUsername must return post-bump AuthzEpoch=1; got %d", gotByName.AuthzEpoch)
+	assert.Equal(t, int64(2), gotByName.AuthzEpoch(),
+		"GetByUsername must return post-bump AuthzEpoch=2; got %d", gotByName.AuthzEpoch())
 
 	// Second bump confirms monotonicity through the read path.
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
@@ -445,10 +458,10 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 		bumped = v
 		return nil
 	}))
-	assert.Equal(t, int64(2), bumped)
+	assert.Equal(t, int64(3), bumped)
 	got2, err := repo.GetByID(ctx, u.ID)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), got2.AuthzEpoch,
+	assert.Equal(t, int64(3), got2.AuthzEpoch(),
 		"second bump must propagate through read path")
 }
 
@@ -465,12 +478,15 @@ func TestUserRepo_Create_RejectsInvalidStatus_DBCheck(t *testing.T) {
 	ctx := context.Background()
 
 	// Bypass domain/repo layer and INSERT directly with an invalid status.
+	// Use authz_epoch=1 so that the migration 028 CHECK(authz_epoch > 0) does
+	// not fire before the status constraint; we want the status CHECK to be
+	// what triggers the 23514.
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err := pool.DB().Exec(ctx, `
 		INSERT INTO users (id, username, email, password_hash, password_reset_required,
 		                   status, creation_source, authz_epoch, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, false, 'bogus', 'identity', 0, $5, $5)`,
+		VALUES ($1, $2, $3, $4, false, 'bogus', 'identity', 1, $5, $5)`,
 		id, "check_status_user", "check_status@example.com", "$2a$12$fakehash", now)
 
 	require.Error(t, err, "INSERT with invalid status must be rejected by DB CHECK constraint")
@@ -489,12 +505,14 @@ func TestUserRepo_Create_RejectsInvalidCreationSource_DBCheck(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
+	// Use authz_epoch=1 so that the migration 028 CHECK(authz_epoch > 0) does
+	// not fire before the creation_source constraint.
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err := pool.DB().Exec(ctx, `
 		INSERT INTO users (id, username, email, password_hash, password_reset_required,
 		                   status, creation_source, authz_epoch, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, false, 'active', 'bogus', 0, $5, $5)`,
+		VALUES ($1, $2, $3, $4, false, 'active', 'bogus', 1, $5, $5)`,
 		id, "check_source_user", "check_source@example.com", "$2a$12$fakehash", now)
 
 	require.Error(t, err, "INSERT with invalid creation_source must be rejected by DB CHECK constraint")
@@ -514,15 +532,17 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// Temporarily drop the CHECK constraint to allow writing an invalid status.
-	// This simulates the real-world scenario where the constraint is added later
-	// (by migration 023) over a table that may already contain pre-existing
-	// invalid rows from an earlier schema.
+	// Temporarily drop the CHECK constraints to allow writing an invalid status.
+	// Also drop the migration 028 epoch CHECK so authz_epoch=0 is accepted by
+	// the raw INSERT (we want to test the scan-side rejection for invalid status,
+	// not the DB CHECK that would prevent the row being written at all).
 	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
-	require.NoError(t, err, "must be able to drop constraint for test setup")
+	require.NoError(t, err, "must be able to drop status constraint for test setup")
+	_, err = pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive`)
+	require.NoError(t, err, "must be able to drop epoch constraint for test setup")
 	// Per-test container is fresh; no constraint restore needed and a NOT VALID
 	// restore would mask future scan-side regressions. Container teardown via
-	// cleanup() drops the entire schema, so leaving the constraint absent here
+	// cleanup() drops the entire schema, so leaving the constraints absent here
 	// has no cross-test side effect.
 
 	id := uuid.NewString()
@@ -532,7 +552,7 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 		                   status, creation_source, authz_epoch, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, false, 'invalid_status', 'identity', 0, $5, $5)`,
 		id, "scan_invalid_status_user", "scan_invalid@example.com", "$2a$12$fakehash", now)
-	require.NoError(t, err, "INSERT with constraint dropped must succeed")
+	require.NoError(t, err, "INSERT with constraints dropped must succeed")
 
 	// Now scanUser must reject the invalid status and GetByID must propagate
 	// ErrPGSchemaShape unchanged (no ErrInternal wrap) so operators can
@@ -561,6 +581,8 @@ func TestUserRepo_Scan_RejectsInvalidCreationSource(t *testing.T) {
 
 	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_creation_source_chk`)
 	require.NoError(t, err, "must be able to drop creation_source CHECK")
+	_, err = pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive`)
+	require.NoError(t, err, "must be able to drop epoch CHECK for test setup")
 
 	id := uuid.NewString()
 	now := time.Now().UTC()
@@ -590,6 +612,8 @@ func TestUserRepo_GetByUsername_RejectsInvalidStatus(t *testing.T) {
 
 	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
 	require.NoError(t, err)
+	_, err = pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive`)
+	require.NoError(t, err, "must be able to drop epoch CHECK for test setup")
 
 	id := uuid.NewString()
 	username := "scan_invalid_byname"
@@ -620,27 +644,27 @@ func TestUserRepo_CreationSource_BothValid(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	identityUser := &domain.User{
-		ID:             uuid.NewString(),
-		Username:       "src_identity_user",
-		Email:          "src_identity@example.com",
-		PasswordHash:   "$2a$12$fakehash_identity",
-		Status:         domain.StatusActive,
-		CreationSource: domain.UserSourceIdentity,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	mustReconstitute := func(id, username, email, hash string, source domain.UserSource) *domain.User {
+		t.Helper()
+		u, err := domain.ReconstituteUser(
+			id, username, email, hash,
+			0, false, domain.StatusActive, source,
+			1, // authzEpoch >= 1 (migration 028 CHECK constraint)
+			now, now,
+		)
+		require.NoError(t, err)
+		return u
 	}
 
-	setupUser := &domain.User{
-		ID:             uuid.NewString(),
-		Username:       "src_setup_user",
-		Email:          "src_setup@example.com",
-		PasswordHash:   "$2a$12$fakehash_setup",
-		Status:         domain.StatusActive,
-		CreationSource: domain.UserSourceSetup,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
+	identityUser := mustReconstitute(
+		uuid.NewString(), "src_identity_user", "src_identity@example.com",
+		"$2a$12$fakehash_identity", domain.UserSourceIdentity,
+	)
+
+	setupUser := mustReconstitute(
+		uuid.NewString(), "src_setup_user", "src_setup@example.com",
+		"$2a$12$fakehash_setup", domain.UserSourceSetup,
+	)
 
 	require.NoError(t, repo.Create(ctx, identityUser), "identity source user must be created")
 	require.NoError(t, repo.Create(ctx, setupUser), "setup source user must be created")

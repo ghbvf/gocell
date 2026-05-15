@@ -74,6 +74,7 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/ci_integration_discovery_invariants_test.go":     true, // Stage 1.5: uses ParseBuildConstraint/FlatNonDefaultTags
 	"tools/archtest/clock_invariants_test.go":                        true,
 	"tools/archtest/credential_invalidate_funnel_invariants_test.go": true,
+	"tools/archtest/domain_authz_mutation_funnel_invariants_test.go": true,
 	"tools/archtest/errcode_invariants_test.go":                      true,
 	"tools/archtest/eval_predicate_centralization_test.go":           true,
 	"tools/archtest/exported_error_new_fixtures_test.go":             true,
@@ -83,8 +84,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/health_aggregation_test.go":                      true,
 	"tools/archtest/httputil_invariants_test.go":                     true,
 	"tools/archtest/identitymanage_last_admin_protection_test.go":    true,
-	"tools/archtest/inventory_anchor_required_test.go":               true,
-	"tools/archtest/kernel_metadata_no_wire_test.go":                 true,
 	"tools/archtest/managed_resource_contract_test.go":               true,
 	"tools/archtest/outbox_invariants_test.go":                       true,
 	"tools/archtest/panic_invariants_test.go":                        true,

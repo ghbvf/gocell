@@ -66,11 +66,12 @@ var _ persistence.TxRunner = noopTxRunner{}
 func seedContractSession(store session.Store) string {
 	id := testutil.TestID("sess-1")
 	_ = store.Create(context.Background(), &session.Session{
-		ID:        id,
-		SubjectID: testutil.TestID("usr-1"),
-		JTI:       "jti-" + id,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ID:                id,
+		SubjectID:         testutil.TestID("usr-1"),
+		JTI:               "jti-" + id,
+		AuthzEpochAtIssue: 1,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(time.Hour),
 	})
 	return id
 }
