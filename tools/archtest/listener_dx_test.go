@@ -16,18 +16,13 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleListenerDXA52 = "LISTENER-DX-A52"
@@ -71,23 +66,33 @@ func TestListenerDXA52Guard(t *testing.T) {
 	root := findModuleRoot(t)
 
 	t.Run("deleted_listener_options_not_reintroduced", func(t *testing.T) {
-		files, err := listenerDXProductionGoFiles(root)
-		require.NoError(t, err)
+		diags := Run(t, ModuleScope(root), func(p *Pass) []Diagnostic {
+			var ds []Diagnostic
+			for _, file := range p.Files {
+				ds = append(ds, oldListenerAPIIdentViolationsPass(p, file)...)
+			}
+			return ds
+		})
 		var violations []string
-		for _, file := range files {
-			violations = append(violations, oldListenerAPIIdentViolations(t, root, file)...)
+		for _, d := range diags {
+			violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
 		}
 		assert.Empty(t, violations, "%s: deleted listener option APIs must not reappear:\n%s",
 			ruleListenerDXA52, strings.Join(violations, "\n"))
 	})
 
 	t.Run("delegated_route_surface_not_reintroduced", func(t *testing.T) {
-		files, err := listenerDXProductionGoFiles(root)
-		require.NoError(t, err)
+		diags := Run(t, ModuleScope(root), func(p *Pass) []Diagnostic {
+			var ds []Diagnostic
+			for _, file := range p.Files {
+				ds = append(ds, delegatedRouteFieldViolationsPass(p, file)...)
+				ds = append(ds, forbiddenProductionSurfaceViolationsPass(p, file)...)
+			}
+			return ds
+		})
 		var violations []string
-		for _, file := range files {
-			violations = append(violations, delegatedRouteFieldViolations(t, root, file)...)
-			violations = append(violations, forbiddenProductionSurfaceViolations(t, root, file)...)
+		for _, d := range diags {
+			violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
 		}
 		assert.Empty(t, violations, "%s: auth.Route Delegated surface must not reappear:\n%s",
 			ruleListenerDXA52, strings.Join(violations, "\n"))
@@ -102,70 +107,37 @@ func TestListenerDXA52Guard(t *testing.T) {
 	})
 
 	t.Run("active_docs_do_not_show_deleted_listener_surface", func(t *testing.T) {
-		files := listenerDXActiveDocs(t, root)
 		var violations []string
-		for _, file := range files {
-			violations = append(violations, activeDocTermViolations(t, root, file)...)
-		}
-		goFiles, err := listenerDXProductionGoFiles(root)
-		require.NoError(t, err)
-		for _, file := range goFiles {
-			violations = append(violations, activeGoCommentTermViolations(t, root, file)...)
-		}
+
+		// .md files via EachContentFile (non-Go content axis).
+		mdScope := ModuleScope(root)
+		EachContentFile(t, mdScope, []string{".md"}, func(_ *testing.T, fc ContentContext) {
+			if listenerDXDocExcluded(fc.Rel) {
+				return
+			}
+			violations = append(violations, activeDocTermViolations(t, root, fc.AbsPath)...)
+		})
+
+		// doc.go files and all production Go files via Run — comments need ParseComments.
+		goScope := ModuleScope(root)
+		Run(t, goScope, func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				isDocGo := filepath.Base(rel) == "doc.go"
+				if isDocGo {
+					if listenerDXDocExcluded(rel) {
+						continue
+					}
+					violations = append(violations, activeDocTermViolationsFromFile(p, file)...)
+				}
+				violations = append(violations, activeGoCommentTermViolationsPass(p, file)...)
+			}
+			return nil
+		})
+
 		assert.Empty(t, violations, "%s: active docs/godoc must not show deleted listener APIs or Delegated examples:\n%s",
 			ruleListenerDXA52, strings.Join(violations, "\n"))
 	})
-}
-
-func listenerDXProductionGoFiles(root string) ([]string, error) {
-	scope := scanner.ModuleScope(root)
-	files, err := scope.Files()
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(files)
-	return files, nil
-}
-
-// listenerDXActiveDocSkipDirs are directory base-names skipped when collecting
-// active doc files. Matches the scanner framework's defaultSkipDirs plus
-// the original walk's exclusions.
-// listenerDXActiveDocs collects absolute paths of "active" documentation
-// surfaces under root: every .md file plus every doc.go file, excluding
-// historical archives via listenerDXDocExcluded. .md is funneled through
-// scanner.EachContentFile (non-Go content), doc.go through scanner.EachFile
-// (Go AST scope; only the filename is needed but the file is still parsed,
-// which is fine — there's at most ~50 doc.go files repo-wide).
-//
-// Default scanner skipDirs (vendor / testdata / worktrees / generated /
-// .git / node_modules) supersede the previous custom set of {.git, vendor,
-// testdata, worktrees}; the additional generated/ + node_modules/ exclusions
-// are strict improvements (no doc.go or curated .md should live there).
-func listenerDXActiveDocs(t *testing.T, root string) []string {
-	t.Helper()
-	var files []string
-
-	mdScope := scanner.ModuleScope(root)
-	scanner.EachContentFile(t, mdScope, []string{".md"}, func(_ *testing.T, fc scanner.ContentContext) {
-		if listenerDXDocExcluded(fc.Rel) {
-			return
-		}
-		files = append(files, fc.AbsPath)
-	})
-
-	goScope := scanner.ModuleScope(root)
-	scanner.EachFile(t, goScope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		if filepath.Base(fc.AbsPath) != "doc.go" {
-			return
-		}
-		if listenerDXDocExcluded(fc.Rel) {
-			return
-		}
-		files = append(files, fc.AbsPath)
-	})
-
-	sort.Strings(files)
-	return files
 }
 
 func listenerDXDocExcluded(rel string) bool {
@@ -188,53 +160,55 @@ func listenerDXDocExcluded(rel string) bool {
 	return false
 }
 
-func oldListenerAPIIdentViolations(t *testing.T, root, path string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-	require.NoError(t, err)
-
-	var violations []string
-	scanner.EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+// oldListenerAPIIdentViolationsPass scans one *ast.File for forbidden idents.
+func oldListenerAPIIdentViolationsPass(p *Pass, file *ast.File) []Diagnostic {
+	var ds []Diagnostic
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
 		if _, forbidden := oldListenerAPIIdents[id.Name]; !forbidden {
 			return
 		}
-		violations = append(violations, listenerDXViolation(root, path, fset.Position(id.Pos()).Line,
-			fmt.Sprintf("deleted listener option identifier %q", id.Name)))
+		pos := p.Fset.Position(id.Pos())
+		ds = append(ds, Diagnostic{
+			Rel:     p.Rel(file),
+			Line:    pos.Line,
+			Message: fmt.Sprintf("deleted listener option identifier %q", id.Name),
+		})
 	})
-	return violations
+	return ds
 }
 
-func delegatedRouteFieldViolations(t *testing.T, root, path string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-	require.NoError(t, err)
-
-	var violations []string
-	scanner.EachInSubtree[ast.KeyValueExpr](file, func(kv *ast.KeyValueExpr) {
+// delegatedRouteFieldViolationsPass scans one *ast.File for Delegated composite-literal keys.
+func delegatedRouteFieldViolationsPass(p *Pass, file *ast.File) []Diagnostic {
+	var ds []Diagnostic
+	EachInSubtree[ast.KeyValueExpr](file, func(kv *ast.KeyValueExpr) {
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok || key.Name != "Delegated" {
 			return
 		}
-		violations = append(violations, listenerDXViolation(root, path, fset.Position(key.Pos()).Line,
-			"Delegated key in composite literal"))
+		pos := p.Fset.Position(key.Pos())
+		ds = append(ds, Diagnostic{
+			Rel:     p.Rel(file),
+			Line:    pos.Line,
+			Message: "Delegated key in composite literal",
+		})
 	})
-	return violations
+	return ds
 }
 
-func forbiddenProductionSurfaceViolations(t *testing.T, root, path string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
-	require.NoError(t, err)
-
-	var violations []string
-	scanner.EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+// forbiddenProductionSurfaceViolationsPass scans one *ast.File for forbidden
+// production surface identifiers and comments. Run always parses with
+// ParseComments so comment data is available in file.Comments.
+func forbiddenProductionSurfaceViolationsPass(p *Pass, file *ast.File) []Diagnostic {
+	var ds []Diagnostic
+	rel := p.Rel(file)
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
 		for _, term := range productionForbiddenSurfaceTerms {
 			if strings.Contains(id.Name, term) {
-				violations = append(violations, listenerDXViolation(root, path, fset.Position(id.Pos()).Line,
-					fmt.Sprintf("production identifier contains deleted surface %q", term)))
+				ds = append(ds, Diagnostic{
+					Rel:     rel,
+					Line:    p.Fset.Position(id.Pos()).Line,
+					Message: fmt.Sprintf("production identifier contains deleted surface %q", term),
+				})
 			}
 		}
 	})
@@ -242,52 +216,65 @@ func forbiddenProductionSurfaceViolations(t *testing.T, root, path string) []str
 		for _, comment := range group.List {
 			for _, term := range productionForbiddenSurfaceTerms {
 				if strings.Contains(comment.Text, term) {
-					violations = append(violations, listenerDXViolation(root, path, fset.Position(comment.Pos()).Line,
-						fmt.Sprintf("production comment contains deleted surface %q", term)))
+					ds = append(ds, Diagnostic{
+						Rel:     rel,
+						Line:    p.Fset.Position(comment.Pos()).Line,
+						Message: fmt.Sprintf("production comment contains deleted surface %q", term),
+					})
 				}
 			}
 		}
 	}
-	return violations
+	return ds
 }
 
 func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 	t.Helper()
 	// RouteGroup struct is defined in registry.go (merged in batch 1/4).
-	path := filepath.Join(root, "kernel", "cell", "registry.go")
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-	require.NoError(t, err)
+	const rel = "kernel/cell/registry.go"
+	path := filepath.Join(root, filepath.FromSlash(rel))
 
 	var result []string
 	found := false
-	scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-		if found || ts.Name.Name != "RouteGroup" {
-			return
-		}
-		found = true
-		st, ok := ts.Type.(*ast.StructType)
-		if !ok {
-			result = []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup is no longer a struct")}
-			return
-		}
-		for _, field := range st.Fields.List {
-			if len(field.Names) != 1 || field.Names[0].Name != "Register" {
+
+	scope := DirsScope(root, []string{filepath.Dir(rel)},
+		MatchRels(func(r string) bool { return r == rel }),
+	)
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			if p.Rel(file) != rel {
 				continue
 			}
-			fn, ok := field.Type.(*ast.FuncType)
-			if !ok {
-				result = []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line, "RouteGroup.Register is not a func")}
-				return
-			}
-			if !listenerDXFuncHasOneParam(fn, "RouteMux") || !listenerDXFuncReturnsOnlyError(fn) {
-				result = []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line,
-					"RouteGroup.Register must be func(mux RouteMux) error")}
-				return
-			}
-			return
+			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+				if found || ts.Name.Name != "RouteGroup" {
+					return
+				}
+				found = true
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok {
+					result = []string{listenerDXViolation(root, path, p.Fset.Position(ts.Pos()).Line, "RouteGroup is no longer a struct")}
+					return
+				}
+				for _, field := range st.Fields.List {
+					if len(field.Names) != 1 || field.Names[0].Name != "Register" {
+						continue
+					}
+					fn, ok := field.Type.(*ast.FuncType)
+					if !ok {
+						result = []string{listenerDXViolation(root, path, p.Fset.Position(field.Pos()).Line, "RouteGroup.Register is not a func")}
+						return
+					}
+					if !listenerDXFuncHasOneParam(fn, "RouteMux") || !listenerDXFuncReturnsOnlyError(fn) {
+						result = []string{listenerDXViolation(root, path, p.Fset.Position(field.Pos()).Line,
+							"RouteGroup.Register must be func(mux RouteMux) error")}
+						return
+					}
+					return
+				}
+				result = []string{listenerDXViolation(root, path, p.Fset.Position(ts.Pos()).Line, "RouteGroup.Register field missing")}
+			})
 		}
-		result = []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup.Register field missing")}
+		return nil
 	})
 	if !found {
 		return []string{listenerDXViolation(root, path, 1, "RouteGroup type missing")}
@@ -297,26 +284,36 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 
 func authMountSignatureViolations(t *testing.T, root string) []string {
 	t.Helper()
-	path := filepath.Join(root, "runtime", "auth", "route.go")
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-	require.NoError(t, err)
+	const rel = "runtime/auth/route.go"
+	path := filepath.Join(root, filepath.FromSlash(rel))
 
 	var result []string
 	found := false
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-		if found || fn.Name.Name != "Mount" {
-			return
+
+	scope := DirsScope(root, []string{filepath.Dir(rel)},
+		MatchRels(func(r string) bool { return r == rel }),
+	)
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			if p.Rel(file) != rel {
+				continue
+			}
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if found || fn.Name.Name != "Mount" {
+					return
+				}
+				found = true
+				if !listenerDXFuncHasParams(fn.Type, "cell.RouteHandler", "Route") {
+					result = []string{listenerDXViolation(root, path, p.Fset.Position(fn.Pos()).Line,
+						"auth.Mount must be func(mux cell.RouteHandler, r Route) error")}
+					return
+				}
+				if !listenerDXFuncReturnsOnlyError(fn.Type) {
+					result = []string{listenerDXViolation(root, path, p.Fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
+				}
+			})
 		}
-		found = true
-		if !listenerDXFuncHasParams(fn.Type, "cell.RouteHandler", "Route") {
-			result = []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line,
-				"auth.Mount must be func(mux cell.RouteHandler, r Route) error")}
-			return
-		}
-		if !listenerDXFuncReturnsOnlyError(fn.Type) {
-			result = []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
-		}
+		return nil
 	})
 	if !found {
 		return []string{listenerDXViolation(root, path, 1, "auth.Mount function missing")}
@@ -391,20 +388,40 @@ func activeDocTermViolations(t *testing.T, root, path string) []string {
 	return violations
 }
 
-func activeGoCommentTermViolations(t *testing.T, root, path string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
-	require.NoError(t, err)
+// activeDocTermViolationsFromFile reports forbidden terms in the doc.go text
+// by reading the file bytes directly (same logic as activeDocTermViolations but
+// driven from an already-parsed *ast.File whose abs path we have from Pass.Abs).
+func activeDocTermViolationsFromFile(p *Pass, file *ast.File) []string {
+	path := p.Abs(file)
+	rel := p.Rel(file)
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return []string{fmt.Sprintf("%s:0: cannot read file: %v", rel, err)}
+	}
+	lines := strings.Split(string(data), "\n")
+	var violations []string
+	terms := listenerDXForbiddenDocTerms()
+	for i, line := range lines {
+		for _, term := range terms {
+			if strings.Contains(line, term) {
+				violations = append(violations, fmt.Sprintf("%s:%d: active docs/godoc contains %q", rel, i+1, term))
+			}
+		}
+	}
+	return violations
+}
 
+// activeGoCommentTermViolationsPass scans one parsed *ast.File's comment groups
+// for forbidden terms. Run parses with ParseComments so file.Comments is populated.
+func activeGoCommentTermViolationsPass(p *Pass, file *ast.File) []string {
 	var violations []string
 	terms := listenerDXForbiddenDocTerms()
 	for _, group := range file.Comments {
 		for _, comment := range group.List {
 			for _, term := range terms {
 				if strings.Contains(comment.Text, term) {
-					violations = append(violations, listenerDXViolation(root, path, fset.Position(comment.Pos()).Line,
-						fmt.Sprintf("active godoc/comment contains %q", term)))
+					violations = append(violations, fmt.Sprintf("%s:%d: active godoc/comment contains %q",
+						p.Rel(file), p.Fset.Position(comment.Pos()).Line, term))
 				}
 			}
 		}
