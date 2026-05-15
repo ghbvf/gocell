@@ -222,9 +222,16 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 }
 
 // GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row
-// lock via SELECT ... FOR UPDATE; caller MUST be inside an ambient tx for
-// the lock to persist across the read-modify-write window.
+// lock via SELECT ... FOR UPDATE.
+//
+// fail-fast enforced: calling without an ambient transaction returns an error
+// (errcode.ErrInternal); the lock guarantee cannot silently degrade.
+// PG impl: fail-fasts on missing tx. Mem impl: serializes via store mutex
+// (no tx concept) — contract: PG fail-fasts, mem mutex-serialized.
 func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	if err := assertAmbientTx(ctx); err != nil {
+		return nil, err
+	}
 	row := r.db.QueryRow(ctx, selectUserByIDForUpdateSQL, id)
 	u, err := scanUser(row)
 	if err != nil {
@@ -243,7 +250,15 @@ func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.U
 }
 
 // GetByUsernameForUpdate (S4d) — see ports.UserRepository godoc.
+//
+// fail-fast enforced: calling without an ambient transaction returns an error
+// (errcode.ErrInternal); the lock guarantee cannot silently degrade.
+// PG impl: fail-fasts on missing tx. Mem impl: serializes via store mutex
+// (no tx concept) — contract: PG fail-fasts, mem mutex-serialized.
 func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	if err := assertAmbientTx(ctx); err != nil {
+		return nil, err
+	}
 	row := r.db.QueryRow(ctx, selectUserByUsernameForUpdateSQL, username)
 	u, err := scanUser(row)
 	if err != nil {

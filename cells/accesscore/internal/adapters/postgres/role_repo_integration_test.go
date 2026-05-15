@@ -79,20 +79,22 @@ func newTestRole(id, name string, perms ...domain.Permission) *domain.Role {
 }
 
 // createTestUserInDB inserts a test user into the DB and returns it.
+// Uses domain.ReconstituteUser to correctly populate private authz fields;
+// authzEpoch seeded to 1 (migration 028 CHECK(>0) constraint).
 func createTestUserInDB(t *testing.T, userRepo *PGUserRepo, suffix string) *domain.User {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	u := &domain.User{
-		ID:             uuid.NewString(),
-		Username:       "roletest_" + suffix,
-		Email:          "roletest_" + suffix + "@example.com",
-		PasswordHash:   "$2a$12$fakehash",
-		Status:         domain.StatusActive,
-		CreationSource: domain.UserSourceIdentity,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
+	u, err := domain.ReconstituteUser(
+		uuid.NewString(),
+		"roletest_"+suffix,
+		"roletest_"+suffix+"@example.com",
+		"$2a$12$fakehash",
+		0, false, domain.StatusActive, domain.UserSourceIdentity,
+		1, // authzEpoch >= 1 (migration 028 CHECK constraint)
+		now, now,
+	)
+	require.NoError(t, err)
 	require.NoError(t, userRepo.Create(ctx, u))
 	return u
 }
@@ -815,7 +817,7 @@ func TestPGUserRepo_Update_LastAdminProtected_Mapping_PG(t *testing.T) {
 	// Read-modify-write: demote status to locked. Trigger must block.
 	got, err := userRepo.GetByID(ctx, sole.ID)
 	require.NoError(t, err)
-	got.Status = domain.StatusLocked
+	got.SetStatus(domain.StatusLocked, time.Now().UTC())
 	err = userRepo.Update(ctx, got)
 	require.Error(t, err, "Update on sole effective admin status demotion must surface a typed error")
 

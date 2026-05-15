@@ -317,8 +317,9 @@ var expectedColumns = []expectedColumn{
 	{Table: "sessions", Column: "revoked_at", Type: "timestamp with time zone", NotNull: false},
 	// S4d: row-level credential provenance. ADR-credential §A8 — sessionvalidate
 	// compares user.authz_epoch with view.authz_epoch_at_issue, NOT JWT claim.
-	// DEFAULT 0 is DDL-only for ALTER compatibility; application Store.Create
-	// rejects zero-value AuthzEpochAtIssue (storetest conformance enforces).
+	// Migration 028 adds CHECK(>0) as the hard DB guarantee; schema_guard
+	// asserts only type/NOT NULL here (no CHECK introspection added — migration
+	// is the single hard source for the positive-epoch invariant).
 	{Table: "sessions", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
 	// refresh_tokens (007_refresh_tokens.sql + 027_add_refresh_tokens_authz_epoch_at_issue.sql)
 	// Only the S4d-introduced column is registered here; the rest of the
