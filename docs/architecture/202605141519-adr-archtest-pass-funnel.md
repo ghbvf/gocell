@@ -31,10 +31,21 @@ type Pass struct {
 type Rule func(*Pass) []Diagnostic
 
 func Run(t *testing.T, scope Scope, rule Rule) []Diagnostic
-func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
+func RunTyped(t testing.TB, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
+func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
 ```
 
-Rule authors write `Rule` closures and let the driver (`Run` / `RunTyped`) construct `*Pass` from a single load. The framework owns `packages.Load` / `parser.ParseFile` timing; rule authors receive only `*Pass`.
+Rule authors write `Rule` closures and let the driver (`Run` / `RunTyped` / `RunTypedDir`) construct `*Pass` from a single load. The framework owns `packages.Load` / `parser.ParseFile` timing; rule authors receive only `*Pass`.
+
+**`RunTypedDir` API surface:**
+
+- **Purpose**: load a standalone fixture module living under `testdata/` that carries its own `go.mod` + `replace` directives (intentional-violation isolation). This form is not addressable by `RunTyped` because `findModuleRoot` resolves the repo root, not the fixture subdirectory.
+- **Internals**: delegates to `runTypedWithRoot(t, dir, opts, patterns, rule)` — the same single construction path shared with `RunTyped` (which delegates to `runTypedWithRoot(t, findModuleRoot(t), opts, patterns, rule)`). No fork in the driver logic.
+- **`dir` constraint**: must be an absolute path; `filepath.IsAbs(dir)` is checked at entry with `t.Fatal` on violation.
+- **Parameter type**: `testing.TB` (not `*testing.T`) to support fatal-path spy tests and `TestMain` callsites; consistent with `analysistest.Run`'s `Testing` interface.
+- **Precedent**: `golang.org/x/tools/go/analysis/analysistest.Run(t, dir, analysers…)` feeds `dir` as `packages.Config.Dir`, allowing the loader to resolve imports relative to an arbitrary directory. `RunTypedDir` adopts the same position-parameter shape.
+
+ref: `golang.org/x/tools go/analysis/analysistest/analysistest.go` (`dir` position param → `packages.Config.Dir`)
 
 ## Hard-line three-defense (AI-rebust ≥ Medium gating)
 
@@ -45,6 +56,18 @@ Rule authors write `Rule` closures and let the driver (`Run` / `RunTyped`) const
 | 3 | Meta-archtest `PASS-FUNNEL-EACHFILE-01` / `LOADPACKAGES-01` / `PACKAGES-IMPORT-01` re-detects bypass at test time via `*types.Info` resolution; symbol-level ban for `scanner.EachFile` / `typeseval.LoadPackages` / `typeseval.SharedResolver` plus packages-import path | **Hard** — type-aware | `typeseval.ResolvePackageRef` resolves call targets through go/types regardless of import alias / dot-import / vendor rewrites. Bypass requires editing `archtestmeta.LegacyAllowlist` (Go file, visible in diff). |
 
 Three independent failure modes: type system, lint, archtest. Bypassing all three requires editing three independent locations in a single PR — reviewer-detectable by construction.
+
+**`RunTypedDir` AI-rebust grade: Hard — three defenses hold unchanged.**
+
+| # | Defense | Status after RunTypedDir |
+|---|---------|--------------------------|
+| 1 | `Pass.Pkg` is `*types.Package`, no `.Syntax` | **Unchanged** — `RunTypedDir` produces the same `*Pass` shape via `runTypedWithRoot`; authors still cannot reach `.Syntax`. |
+| 2 | depguard bans direct `packages` import in `*_test.go` | **Unchanged** — `RunTypedDir` is a façade in `tools/archtest/pass.go`; business `*_test.go` files call the façade, not `packages.Load` directly. |
+| 3 | `PASS-FUNNEL-LOADPACKAGES-01` funnel | **Widened (not weakened)** — `RunTypedDir` is the now-unique legitimate entry for fixture-module scanning. The banned set (`typeseval.LoadPackages` / `typeseval.SharedResolver`) is unchanged; `RunTypedDir` adds no new bypass surface because the fixture-module form previously had no approved entry point at all. Introducing `RunTypedDir` closes the gap rather than opening one. |
+
+**Design decision D1 (Stage 1.6) — dual entry RunTyped / RunTypedDir, not a single merged function.**
+
+Merging into `RunTyped(t, dir, …)` would force all call sites shipped in PR #492 / #493 / #496 and framework self-tests (`pass_test.go`) to update their signatures — violating the "0 second-pass rework" hard invariant. The two entries are semantically orthogonal: `RunTyped` = main tree via `findModuleRoot`; `RunTypedDir` = caller-specified absolute dir. Both delegate to the single `runTypedWithRoot` constructor — no logic fork. The five remaining E-class fixture-module files (`exported_error_new_fixtures_test.go` / `goose_session_locker_fixtures_test.go` / `prod_clock_injection_fixtures_test.go` / `prod_duration_fixtures_test.go` / `test_time_literal_fixtures_test.go`) use `RunTypedDir` with zero framework rework.
 
 **Why depguard bans only the `packages` import path, not `internal/scanner` / `internal/typeseval`**: those internal packages also export legitimate non-INV-1 helpers (`EachInSubtree`, `EachInChildren`, `ResolvePackageRef`, `ResolveMethodCall`, `EvaluateConstString`) that archtest authors should use directly. Path-level banning would force every legitimate user of those helpers to migrate to a façade wrapper or be exempted — bloat without security gain. Symbol-level banning of `EachFile` / `LoadPackages` / `SharedResolver` is the precise enforcement, and it requires `*types.Info` resolution which only the archtest layer (defense #3) provides. Lint stays narrow and Hard for the one path (`packages`) that is the load-bearing INV-1 reconstruction primitive.
 
@@ -65,6 +88,7 @@ Defense #1 is the only compile-time Hard. Defenses #2 and #3 are review-detectab
 | **golangci-lint** | Reuses `analysis.Pass` via the runner. | Same as go/analysis. |
 | **wire** | `*gen{ pkg *packages.Package }` single field of truth; every method accesses AST + TypesInfo through that one `pkg`. | Single source by struct shape. |
 | **ArchUnit (Java)** | `JavaClasses` physical representation (.class bytecode) — the dual-view problem is eliminated at the input layer. | N/A in Java. |
+| **analysistest** | `analysistest.Run(t, dir, analysers…)` feeds `dir` as `packages.Config.Dir`, enabling arbitrary-directory fixture module loading. | Same Pass-Driver invariant — test author writes `Analyzer.Run(pass)`. |
 
 The `*types.Package` (not `*packages.Package`) shape is the **load-bearing** detail: it is what makes `pass.Pkg.Syntax` a compile error rather than a runtime check.
 
@@ -73,8 +97,41 @@ The `*types.Package` (not `*packages.Package`) shape is the **load-bearing** det
 Strategic plan: `docs/plans/202605141519-040-archtest-pass-funnel-plan.md`. Summary:
 
 - **Stage 1** (this PR, refactor/574): Land the Pass framework + 3 Hard defenses + LegacyAllowlist of 53 existing archtests. Zero business archtest changes; the new framework coexists with the legacy entry points behind allowlist exemption.
+- **Stage 1.5** (PR #495): Framework completion — `Pass.Abs`, `IsFileInScope`, `IsGenerated`, `resolve.go` façade free funcs, `PASS-FUNNEL-RESOLVE-01` meta-archtest. Closes all known API gaps so Stages 2/3/dual become zero-framework-return mechanical migrations.
+- **Stage 1.6** (PR-6, concurrent with Stage 3 PR-6): `RunTypedDir` façade — closes the fixture-module scanning gap discovered during `clock_invariants_test.go` migration. See §Stage 1.6 below.
 - **Stages 2 / 3** (~9 PRs, parallelisable): Migrate the 53 legacy archtests theme-by-theme; each migration PR is the **first and only** edit to its target archtest (import + API + semantics in one commit), removes one entry from `LegacyAllowlist` AND the matching negative-glob in `.golangci.yml`.
 - **Stage 4**: Delete `archtestmeta` package entirely; delete the negative-glob exemption block from `.golangci.yml`; delete the LegacyAllowlist reference from `pass_funnel_test.go`. Defense #1 (`Pass.Pkg` shape) and defense #2 (depguard deny list) remain permanent; defense #3's self-exemption (basename `pass_funnel_test.go`) is the only remaining exemption.
+
+## Stage 1.6 — RunTypedDir fixture-module driver (2026-05-15, shipped with Stage 3 PR-6)
+
+**Root cause addressed.** Stage 1.5 froze the `RunTyped` API without inventorying the `testdata/`-local standalone fixture module form: some archtest fixture packages carry their own `go.mod` + `replace` directives to isolate intentional-violation code from the main module graph. `RunTyped` uses `findModuleRoot` which resolves the repository root, making these subdirectory modules unreachable. `clock_invariants_test.go` (Stage 3 PR-6) was the first of the 32 E-class files to hit this form; the framework gap is closed in the same PR rather than deferred.
+
+**API added:**
+
+```go
+// RunTypedDir loads the Go package(s) matching patterns rooted at dir
+// rather than the repository module root. Use this for testdata/ subdirectories
+// that carry their own go.mod (standalone fixture modules).
+//
+// dir must be an absolute path (filepath.IsAbs checked; t.Fatal on violation).
+// Internally delegates to runTypedWithRoot(t, dir, opts, patterns, rule) —
+// the same single construction path as RunTyped.
+//
+// ref: golang.org/x/tools go/analysis/analysistest/analysistest.go (dir → packages.Config.Dir)
+func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
+```
+
+**Single construction path invariant.** Both `RunTyped` and `RunTypedDir` delegate to the internal `runTypedWithRoot(t, root, opts, patterns, rule)` function. The two façade entries differ only in how `root` is obtained (`findModuleRoot(t)` vs the caller-supplied `dir`). No duplication of load logic; no new INV-1 surface.
+
+**AI-rebust grade: Hard — see §Hard-line three-defense `RunTypedDir` subsection above.**
+
+**Five remaining E-class fixture-module files** that will use `RunTypedDir` in subsequent Stage 3 PRs (zero framework rework required):
+
+- `exported_error_new_fixtures_test.go`
+- `goose_session_locker_fixtures_test.go`
+- `prod_clock_injection_fixtures_test.go`
+- `prod_duration_fixtures_test.go`
+- `test_time_literal_fixtures_test.go`
 
 ## Termination criteria
 
@@ -101,7 +158,7 @@ After stage 4, `archtestmeta` is deleted entirely. `tools/archtest/internal/scan
 
 | Class | Symbols | End-state |
 |---|---|---|
-| Loader / load primitive | `LoadPackages` `SharedResolver` `LoadProductionPackages` `Resolver` `ProductionResolver` `EachFileInPackage` | **Never re-exported** — reachable only via `RunTyped` (this is the funnel Hard defense body) |
+| Loader / load primitive | `LoadPackages` `SharedResolver` `LoadProductionPackages` `Resolver` `ProductionResolver` `EachFileInPackage` | **Never re-exported** — reachable only via `RunTyped` / `RunTypedDir` (this is the funnel Hard defense body) |
 | info-taking pure helper | `ResolvePackageRef` `ResolveMethodCall` `EvaluateConstString` | `resolve.go` free funcs (extends Alt-D rationale: helpers take `*types.Info`, not privatized) |
 | build-constraint | `ParseBuildConstraint` `BuildContextPredicate` `IsGeneratedRelPath` | `(*Pass).IsFileInScope` / `(*Pass).IsGenerated` methods for the default-predicate bool case; **plus** free funcs `archtest.ParseBuildConstraint` / `archtest.IsGeneratedRelPath` for call sites that need the raw `constraint.Expr` or a raw-string rel path (see erratum below) |
 | tags preset | `FlatNonDefaultTags` `KnownNonDefaultTags` | `resolve.go` free funcs |
@@ -147,6 +204,10 @@ Rejected per GoCell's "不向后兼容" principle: deprecated aliases create mig
 
 Would re-implement every typeseval helper (`ResolvePackageRef`, `ResolveMethodCall`, `EvaluateConstString` …) as `Pass` methods. Rejected: large API surface to maintain, and the type-aware INV-1 defense is already secured by the `Pass.Pkg *types.Package` shape (defense #1). `pass.TypesInfo` is a public field, consistent with `analysis.Pass.TypesInfo` upstream.
 
+### Alt-E (Stage 1.6): Merge RunTyped and RunTypedDir into a single `RunTyped(t, dir, …)` with optional dir
+
+Rejected: merging would force signature changes on all call sites shipped in PR #492 / #493 / #496 and the framework self-tests, violating the "0 second-pass rework" hard invariant. Dual-entry with shared `runTypedWithRoot` constructor achieves the same result without any existing call-site churn. See plan §D6.
+
 ## References
 
 - `docs/plans/202605141519-040-archtest-pass-funnel-plan.md` — strategic plan with 4-stage migration and parallelism analysis.
@@ -155,4 +216,4 @@ Would re-implement every typeseval helper (`ResolvePackageRef`, `ResolveMethodCa
 - `go/analysis.Pass` — upstream Pass shape ([pkg.go.dev/golang.org/x/tools/go/analysis](https://pkg.go.dev/golang.org/x/tools/go/analysis)).
 - `docs/architecture/202605120000-adr-archtest-process-isolation.md` — `hack/verify-archtest.sh` 16-shard CI infrastructure; pass_funnel_test.go is discovered automatically.
 
-ref: golang.org/x/tools `analysis.Pass.Pkg = *types.Package`; uber-go/wire `gen.pkg` single field of truth.
+ref: golang.org/x/tools `analysis.Pass.Pkg = *types.Package`; uber-go/wire `gen.pkg` single field of truth; golang.org/x/tools `go/analysis/analysistest/analysistest.go` (`dir` → `packages.Config.Dir` for fixture-module loading).
