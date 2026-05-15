@@ -58,14 +58,20 @@ package archtestmeta
 const FixtureBuildTag = "archtest_fixture"
 
 // Lookup is by module-relative slash path (e.g. "tools/archtest/foo_test.go").
+//
+// Stage 1.5 additions (PASS-FUNNEL-RESOLVE-01 baseline):
+//   - build_constraint_test.go: new file using typeseval.ParseBuildConstraint/BuildContextPredicate
+//   - ci_integration_discovery_invariants_test.go: new file using typeseval.ParseBuildConstraint/FlatNonDefaultTags
 var LegacyAllowlist = map[string]bool{
 	"tools/archtest/archtest_test.go":                                true,
 	"tools/archtest/archtest_verify_coverage_test.go":                true,
 	"tools/archtest/audit_ledger_composition_root_test.go":           true,
 	"tools/archtest/auth_bootstrap_invariants_test.go":               true,
+	"tools/archtest/build_constraint_test.go":                        true, // Stage 1.5: uses ParseBuildConstraint/BuildContextPredicate
 	"tools/archtest/cell_id_pattern_single_source_test.go":           true,
 	"tools/archtest/cell_init_test.go":                               true,
 	"tools/archtest/cell_public_option_param_test.go":                true,
+	"tools/archtest/ci_integration_discovery_invariants_test.go":     true, // Stage 1.5: uses ParseBuildConstraint/FlatNonDefaultTags
 	"tools/archtest/clock_invariants_test.go":                        true,
 	"tools/archtest/credential_invalidate_funnel_invariants_test.go": true,
 	"tools/archtest/errcode_invariants_test.go":                      true,

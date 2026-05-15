@@ -5,10 +5,15 @@ package archtest
 //   - INVARIANT: PASS-FUNNEL-EACHFILE-01
 //   - INVARIANT: PASS-FUNNEL-LOADPACKAGES-01
 //   - INVARIANT: PASS-FUNNEL-PACKAGES-IMPORT-01
+//   - INVARIANT: PASS-FUNNEL-RESOLVE-01
 //
-// All three rules forbid archtest tools/archtest/<file>_test.go from
+// All four rules forbid archtest tools/archtest/<file>_test.go from
 // reaching the legacy entry points directly. Authors must use archtest.Run
-// (AST-only) / archtest.RunTyped (typed) via the Pass-Driver paradigm.
+// (AST-only) / archtest.RunTyped (typed) via the Pass-Driver paradigm, and
+// must call the façade helper functions in archtest.ResolvePackageRef /
+// ResolveMethodCall / EvaluateConstString / FlatNonDefaultTags /
+// KnownNonDefaultTags / Pass.IsFileInScope / Pass.IsGenerated instead of
+// importing internal/typeseval directly.
 // See docs/architecture/202605141519-adr-archtest-pass-funnel.md.
 //
 // Migration: files listed in
@@ -158,6 +163,90 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 		})
 	}
 	return diags
+}
+
+// diagsResolveHelpers is the pure detector for PASS-FUNNEL-RESOLVE-01.
+// It bans business archtest *_test.go files from directly calling the 8
+// typeseval helper symbols and scanner.ImportBan (as value refs or calls),
+// covering qualified / alias / dot-import forms via typeseval.ResolvePackageRef.
+//
+// # AI-rebust: Medium
+//
+// Detection is type-aware (typeseval.ResolvePackageRef via *types.Info) and
+// covers all three import forms (qualified, alias, dot-import). The allowlist
+// is single-source (LegacyAllowlist) with cross-validation in
+// TestPassFunnelGuardListSync. Not Hard because Go allows arbitrary aliasing;
+// the detector requires *types.Info resolve rather than string-matching, so
+// it cannot be bypassed by renaming an import alias.
+//
+// # Blind spots (per ai-collab.md Medium evidence requirement)
+//
+//   - Value indirection via a local variable (`f := typeseval.ResolvePackageRef;
+//     f(...)`): the RHS SelectorExpr IS detected (trips the rule at assignment),
+//     but the subsequent call via the variable is not detected. This is the same
+//     Soft escape acknowledged in PASS-FUNNEL-EACHFILE-01; accepted because the
+//     initial value reference itself trips the rule.
+//   - Cross-file indirection (helper assigned in one file, called in another):
+//     not detected without inter-procedural analysis. No such pattern exists in
+//     production archtest today.
+//   - Struct literal `scanner.ImportBan{...}` vs function call `scanner.ImportBan(...)`:
+//     both produce SelectorExpr nodes; ResolvePackageRef resolves the X ident to
+//     *types.PkgName in both cases, so BOTH are detected correctly (CompositeLit
+//     uses the same SelectorExpr shape as a function call).
+//
+// Reverse self-check: TestPassFunnel_FixtureCoverage asserts diagsResolveHelpers
+// emits ≥ 1 diagnostic on the redfixture, locking the detector at live-AST
+// level rather than data level.
+func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
+	const replacement = "archtest.{ResolvePackageRef,ResolveMethodCall,EvaluateConstString," +
+		"FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
+	return scanForForbiddenCallees(
+		tgt,
+		map[string]map[string]bool{
+			typesevalPkgPath: {
+				"ResolvePackageRef":     true,
+				"ResolveMethodCall":     true,
+				"EvaluateConstString":   true,
+				"FlatNonDefaultTags":    true,
+				"KnownNonDefaultTags":   true,
+				"ParseBuildConstraint":  true,
+				"IsGeneratedRelPath":    true,
+				"BuildContextPredicate": true,
+			},
+			scannerPkgPath: {
+				"ImportBan": true,
+			},
+		},
+		replacement,
+	)
+}
+
+// TestPassFunnelResolve01 — PASS-FUNNEL-RESOLVE-01.
+//
+// Archtest tools/archtest/<file>_test.go must NOT call the 8 typeseval helper
+// symbols (ResolvePackageRef, ResolveMethodCall, EvaluateConstString,
+// FlatNonDefaultTags, KnownNonDefaultTags, ParseBuildConstraint,
+// IsGeneratedRelPath, BuildContextPredicate) or scanner.ImportBan directly.
+// Use the archtest façade instead:
+//   - typeseval helpers → archtest.ResolvePackageRef / .ResolveMethodCall /
+//     .EvaluateConstString / .FlatNonDefaultTags / .KnownNonDefaultTags
+//   - ParseBuildConstraint+BuildContextPredicate → pass.IsFileInScope(f)
+//   - IsGeneratedRelPath → pass.IsGenerated(f)
+//   - scanner.ImportBan → archtest.ImportBan (type alias, same struct API)
+//
+// Detection: SelectorExpr / bare Ident walk + typeseval.ResolvePackageRef
+// resolves call/value-ref targets via go/types (covers qualified, alias,
+// dot-import forms). Exempt: self file + pass_test.go (permanent) +
+// archtestmeta.LegacyAllowlist (stage 2/3 migration window).
+//
+// AI-rebust: Medium (see diagsResolveHelpers godoc for full evidence).
+func TestPassFunnelResolve01(t *testing.T) {
+	targets := loadPassFunnelTargets(t)
+	var diags []scanner.Diagnostic
+	for _, tgt := range targets {
+		diags = append(diags, diagsResolveHelpers(tgt)...)
+	}
+	scanner.Report(t, "PASS-FUNNEL-RESOLVE-01", diags)
 }
 
 // TestPassFunnelEachFile01 — PASS-FUNNEL-EACHFILE-01.
@@ -425,6 +514,7 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 		{"PASS-FUNNEL-EACHFILE-01", diagsEachFile},
 		{"PASS-FUNNEL-LOADPACKAGES-01", diagsLoadPackages},
 		{"PASS-FUNNEL-PACKAGES-IMPORT-01", diagsPackagesImport},
+		{"PASS-FUNNEL-RESOLVE-01", diagsResolveHelpers},
 	}
 	for _, r := range rules {
 		var diags []scanner.Diagnostic

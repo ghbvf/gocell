@@ -19,6 +19,12 @@ import (
 // passed to every [Rule]. It carries the AST file set, the parsed files, and
 // (in typed mode) the go/types Package + TypesInfo bound to those files.
 //
+// One-Pass-per-scope / one-Pass-per-package shape: [Run] delivers a single
+// Pass containing ALL files in scope; [RunTyped] delivers one Pass per loaded
+// package (test-variant packages are sorted first; dedup by *ast.File pointer
+// identity ensures no file appears in two Passes). Rule authors always iterate
+// pass.Files — never assume len(pass.Files)==1.
+//
 // Authors MUST NOT construct *Pass directly; the only legitimate construction
 // sites are the Run / RunTyped drivers in this file. This is enforced by:
 //
@@ -56,6 +62,15 @@ type Pass struct {
 	// Rel returns the module-relative slash path for a file. The file pointer
 	// must come from [Files]; behavior is undefined for files from other Passes.
 	Rel func(*ast.File) string
+
+	// Abs returns the module-absolute (OS-native) path for a file. The file
+	// pointer must come from [Files]; behavior is undefined for files from other
+	// Passes. The returned value always satisfies filepath.IsAbs and equals
+	// pass.Fset.Position(f.Pos()).Filename — it is the same physical path used
+	// when computing pass.Rel(f). In AST-only mode ([Run]) both Run and
+	// collectASTFiles set Abs from the same abs variable used to compute Rel,
+	// so the two accessors share a single source of truth with zero new state.
+	Abs func(*ast.File) string
 }
 
 // Typed reports whether this Pass carries go/types information (i.e. came from
@@ -112,7 +127,7 @@ func Run(t *testing.T, scope Scope, rule Rule) []Diagnostic {
 	if rule == nil {
 		t.Fatalf("archtest.Run: nil rule")
 	}
-	files, fset, rel := collectASTFiles(t, scope)
+	files, fset, rel, abs := collectASTFiles(t, scope)
 	if len(files) == 0 {
 		return nil
 	}
@@ -120,46 +135,66 @@ func Run(t *testing.T, scope Scope, rule Rule) []Diagnostic {
 		Fset:  fset,
 		Files: files,
 		Rel:   rel,
+		Abs:   abs,
 	}
 	return rule(pass)
 }
 
 // collectASTFiles enumerates Go files in scope, parses every file into a
 // single shared *token.FileSet, and returns the parsed *ast.File slice plus
-// a closure mapping any of those files back to its module-relative slash
-// path. Parse errors fail-loud via t.Fatalf, matching scanner.EachFile.
+// closures mapping any of those files back to its module-relative slash path
+// (rel) and its module-absolute OS-native path (abs). Parse errors fail-loud
+// via t.Fatalf, matching scanner.EachFile.
+//
+// The abs closure returns the same value as fset.Position(f.Pos()).Filename
+// (set by parser.ParseFile from the filename argument). Both rel and abs are
+// computed from the same abs variable inside the loop — single source of
+// truth, zero additional state.
+//
+// ParseComments is set (|parser.ParseComments) so that comment groups —
+// including // INVARIANT: anchors — are present in the returned File.Comments.
+// This matches go/packages' default ParseFile mode used by RunTyped, making
+// both AST-only and typed rules see the same comment data (gap #1 fix).
 //
 // Extracted from [Run] so the parse pass has a single, testable function
 // that owns FileSet sharing — the property that makes Pass.Files /
 // Pass.Fset internally consistent for AST-only rules.
-func collectASTFiles(t *testing.T, scope Scope) ([]*ast.File, *token.FileSet, func(*ast.File) string) {
+func collectASTFiles(t *testing.T, scope Scope) (
+	[]*ast.File, *token.FileSet, func(*ast.File) string, func(*ast.File) string,
+) {
 	t.Helper()
 	paths, err := scope.Files()
 	if err != nil {
 		t.Fatalf("archtest.Run: scope.Files: %v", err)
 	}
 	if len(paths) == 0 {
-		return nil, nil, func(*ast.File) string { return "" }
+		noop := func(*ast.File) string { return "" }
+		return nil, nil, noop, noop
 	}
 	root := scope.ModRoot()
 	fset := token.NewFileSet()
 	files := make([]*ast.File, 0, len(paths))
-	rel := make(map[*ast.File]string, len(paths))
-	for _, abs := range paths {
-		f, parseErr := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution)
+	relMap := make(map[*ast.File]string, len(paths))
+	absMap := make(map[*ast.File]string, len(paths))
+	for _, absPath := range paths {
+		f, parseErr := parser.ParseFile(fset, absPath, nil,
+			parser.SkipObjectResolution|parser.ParseComments)
 		if parseErr != nil {
-			t.Fatalf("archtest.Run: parse %s: %v", abs, parseErr)
+			t.Fatalf("archtest.Run: parse %s: %v", absPath, parseErr)
 		}
 		files = append(files, f)
+		absMap[f] = absPath
 		if root != "" {
-			if r, relErr := filepath.Rel(root, abs); relErr == nil {
-				rel[f] = filepath.ToSlash(r)
+			if r, relErr := filepath.Rel(root, absPath); relErr == nil {
+				relMap[f] = filepath.ToSlash(r)
 				continue
 			}
 		}
-		rel[f] = filepath.ToSlash(abs)
+		relMap[f] = filepath.ToSlash(absPath)
 	}
-	return files, fset, func(f *ast.File) string { return rel[f] }
+	return files, fset,
+		func(f *ast.File) string { return relMap[f] },
+		func(f *ast.File) string { return absMap[f] }
 }
 
 // RunTyped executes rule in typed mode. It resolves the module root, loads
@@ -246,6 +281,10 @@ func isPackageWithTestFiles(pkg *packages.Package) bool {
 // already consumed by an earlier pkg via seen). Extracted from [RunTyped]
 // to keep the driver's cognitive complexity below the project's gocognit
 // budget; behavior is unchanged.
+//
+// Pass.Abs is populated from fset.Position(f.Pos()).Filename — the same
+// physical path already used by newPackageRel to compute Pass.Rel. Both
+// accessors share a single source of truth with no additional maps or state.
 func buildTypedPass(root string, pkg *packages.Package, seen map[*ast.File]bool) *Pass {
 	if pkg == nil || pkg.Types == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
 		return nil
@@ -268,6 +307,7 @@ func buildTypedPass(root string, pkg *packages.Package, seen map[*ast.File]bool)
 		Pkg:       pkg.Types,
 		TypesInfo: pkg.TypesInfo,
 		Rel:       newPackageRel(root, fset),
+		Abs:       newPackageAbs(fset),
 	}
 }
 
@@ -290,4 +330,51 @@ func newPackageRel(root string, fset *token.FileSet) func(*ast.File) string {
 		}
 		return filepath.ToSlash(rel)
 	}
+}
+
+// newPackageAbs returns a Pass.Abs closure that returns the module-absolute
+// OS-native path for a file belonging to fset. The value is always
+// fset.Position(f.Pos()).Filename — the same source used by newPackageRel.
+// Both closures share the same fset; no additional map or state is created.
+func newPackageAbs(fset *token.FileSet) func(*ast.File) string {
+	return func(f *ast.File) string {
+		if f == nil {
+			return ""
+		}
+		return fset.Position(f.Pos()).Filename
+	}
+}
+
+// IsFileInScope reports whether f should be processed under the standard build
+// context (all GOOS/GOARCH + cgo + release tags, no project-private tags like
+// "integration" or "archtest_fixture"). It delegates to
+// typeseval.ParseBuildConstraint (extracts the //go:build / // +build directive
+// from the file at pass.Abs(f)) and typeseval.BuildContextPredicate (the
+// toolchain-default tag set).
+//
+// Returns true when f has no build constraint, or when its constraint evaluates
+// to true under the default predicate. Returns false for files gated by
+// project-specific tags (e.g. "integration", "e2e", "archtest_fixture").
+//
+// f must come from pass.Files; behavior is undefined for files from other Passes.
+func (p *Pass) IsFileInScope(f *ast.File) bool {
+	abs := p.Abs(f)
+	if abs == "" {
+		return true // no path info → treat as in-scope (conservative)
+	}
+	expr, err := typeseval.ParseBuildConstraint(abs)
+	if err != nil || expr == nil {
+		// No constraint or parse error → in scope.
+		return true
+	}
+	return expr.Eval(typeseval.BuildContextPredicate())
+}
+
+// IsGenerated reports whether f is a codegen output file under the repo's
+// generated/ tree. It delegates to typeseval.IsGeneratedRelPath on pass.Rel(f).
+//
+// Returns true when the file's module-relative path begins with "generated/".
+// f must come from pass.Files; behavior is undefined for files from other Passes.
+func (p *Pass) IsGenerated(f *ast.File) bool {
+	return typeseval.IsGeneratedRelPath(p.Rel(f))
 }
