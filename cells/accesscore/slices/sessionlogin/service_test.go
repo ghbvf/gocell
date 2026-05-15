@@ -776,3 +776,206 @@ func TestLogin_NoLengthOracle(t *testing.T) {
 		})
 	}
 }
+
+// --- P1.1: password-version-pin race tests ---
+
+// versionRacingUserRepo simulates a concurrent ChangePassword that commits
+// between the pre-bcrypt GetByUsername and the in-tx GetByUsernameForUpdate.
+// GetByUsername returns a user with PasswordVersion=N; GetByUsernameForUpdate
+// returns the same user but with PasswordVersion=N+1 (race window committed).
+type versionRacingUserRepo struct {
+	mem.UserRepository
+	preUser    *domain.User // returned by GetByUsername (stale snapshot)
+	lockedUser *domain.User // returned by GetByUsernameForUpdate (current row)
+}
+
+func (r *versionRacingUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+	return r.preUser, nil
+}
+
+func (r *versionRacingUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	return r.lockedUser, nil
+}
+
+// countingRefreshStore counts Issue calls to verify no token was minted.
+type countingRefreshStore struct {
+	refresh.Store
+	issued int
+}
+
+func (c *countingRefreshStore) Issue(ctx context.Context, sessID, userID string, authzEpoch int64) (string, *refresh.Token, error) {
+	c.issued++
+	return c.Store.Issue(ctx, sessID, userID, authzEpoch)
+}
+
+// TestLogin_PasswordVersionRace_OldPasswordRejected (P1.1) verifies that when a
+// concurrent ChangePassword commits between the pre-bcrypt snapshot and the
+// FOR UPDATE re-fetch, Login rejects the old password with ErrAuthLoginFailed
+// and mints NO session or refresh token. The control case (versions equal)
+// verifies the success path is unaffected.
+func TestLogin_PasswordVersionRace_OldPasswordRejected(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("old-pass"), bcrypt.MinCost)
+
+	// preUser: PasswordVersion=1, PasswordHash=hash-of-old-pass (pre-bcrypt snapshot)
+	preUser, err := domain.ReconstituteUser(
+		"usr-race", "race-user", "race@test.com", string(hash),
+		1 /*passwordVersion*/, false, domain.StatusActive,
+		domain.UserSourceIdentity, 1, /*authzEpoch*/
+		time.Now(), time.Now(),
+	)
+	require.NoError(t, err)
+
+	// lockedUser: PasswordVersion=2 (concurrent ChangePassword committed in race window)
+	lockedUser, err := domain.ReconstituteUser(
+		"usr-race", "race-user", "race@test.com", string(hash),
+		2 /*passwordVersion — bumped by concurrent ChangePassword*/, false, domain.StatusActive,
+		domain.UserSourceIdentity, 1, /*authzEpoch*/
+		time.Now(), time.Now(),
+	)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		lockedUser  *domain.User
+		wantErr     bool
+		wantErrCode errcode.Code
+	}{
+		{
+			name:        "race: locked row has newer PasswordVersion → old-password must be rejected",
+			lockedUser:  lockedUser, // version N+1 → race detected
+			wantErr:     true,
+			wantErrCode: errcode.ErrAuthLoginFailed,
+		},
+		{
+			name:       "control: PasswordVersion unchanged → login succeeds",
+			lockedUser: preUser, // same version → no race
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionStore := &countingSessionStore{Store: testutil.RealSessionRepo(t)}
+			refreshStore := &countingRefreshStore{Store: newTestRefreshStore()}
+
+			baseRepo := mem.NewStore(clock.Real()).UserRepository()
+			racingRepo := &versionRacingUserRepo{
+				UserRepository: *baseRepo,
+				preUser:        preUser,
+				lockedUser:     tt.lockedUser,
+			}
+
+			svc := MustNewService(
+				racingRepo,
+				sessionStore,
+				mem.NewStore(clock.Real()).RoleRepository(),
+				refreshStore,
+				testIssuer,
+				slog.Default(),
+				WithClock(clock.Real()),
+				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+				WithSessionTTL(time.Hour),
+			)
+
+			pair, loginErr := svc.Login(context.Background(), LoginInput{
+				Username: "race-user",
+				Password: "old-pass",
+			})
+
+			if tt.wantErr {
+				require.Error(t, loginErr)
+				var ec *errcode.Error
+				require.ErrorAs(t, loginErr, &ec)
+				assert.Equal(t, tt.wantErrCode, ec.Code,
+					"race-detected login must return ErrAuthLoginFailed (防枚举)")
+				assert.Empty(t, pair.AccessToken, "no token must be issued on race detection")
+				assert.Zero(t, sessionStore.creates,
+					"no session must be created when password-version race detected")
+				assert.Zero(t, refreshStore.issued,
+					"no refresh must be issued when password-version race detected")
+			} else {
+				require.NoError(t, loginErr)
+				assert.NotEmpty(t, pair.AccessToken, "control path must issue token")
+			}
+		})
+	}
+}
+
+// --- P1.3a: IssueForUser active-gate tests ---
+
+// TestIssueForUser_NonActiveUser_Rejected (P1.3a) verifies that IssueForUser
+// fail-closes for non-active users (suspended, locked), mirroring the Login
+// pre-check. The control (active user) must still succeed.
+func TestIssueForUser_NonActiveUser_Rejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      domain.UserStatus
+		wantErr     bool
+		wantErrCode errcode.Code
+	}{
+		{
+			name:        "suspended user must be rejected",
+			status:      domain.StatusSuspended,
+			wantErr:     true,
+			wantErrCode: errcode.ErrAuthUserNotActive,
+		},
+		{
+			name:        "locked user must be rejected",
+			status:      domain.StatusLocked,
+			wantErr:     true,
+			wantErrCode: errcode.ErrAuthUserNotActive,
+		},
+		{
+			name:    "active user must succeed (control)",
+			status:  domain.StatusActive,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userRepo := mem.NewStore(clock.Real()).UserRepository()
+			sessionStore := &countingSessionStore{Store: testutil.RealSessionRepo(t)}
+
+			// Build a non-active user via ReconstituteUser (the only path that can set
+			// non-active status on an existing aggregate).
+			hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
+			u, err := domain.ReconstituteUser(
+				"usr-issue-gate", "issue-gate", "gate@test.com", string(hash),
+				1, false, tt.status,
+				domain.UserSourceIdentity, 1,
+				time.Now(), time.Now(),
+			)
+			require.NoError(t, err)
+			require.NoError(t, userRepo.Create(context.Background(), u))
+
+			svc := MustNewService(
+				userRepo,
+				sessionStore,
+				mem.NewStore(clock.Real()).RoleRepository(),
+				newTestRefreshStore(),
+				testIssuer,
+				slog.Default(),
+				WithClock(clock.Real()),
+				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+				WithSessionTTL(time.Hour),
+			)
+
+			pair, issueErr := svc.IssueForUser(context.Background(), u.ID)
+
+			if tt.wantErr {
+				require.Error(t, issueErr)
+				var ec *errcode.Error
+				require.ErrorAs(t, issueErr, &ec)
+				assert.Equal(t, tt.wantErrCode, ec.Code,
+					"non-active user must yield ErrAuthUserNotActive")
+				assert.Empty(t, pair.AccessToken, "no token on non-active user")
+				assert.Zero(t, sessionStore.creates,
+					"no session must be created for non-active user")
+			} else {
+				require.NoError(t, issueErr)
+				assert.NotEmpty(t, pair.AccessToken, "active user must get token")
+			}
+		})
+	}
+}

@@ -175,6 +175,13 @@ type LoginInput struct {
 // users.authz_epoch between the snapshot read and the downstream INSERTs,
 // so session.AuthzEpochAtIssue is guaranteed to match the epoch that was
 // valid at the moment of INSERT.
+//
+// S4d P1.1 password-version-pin invariant: preVersion is captured from the
+// pre-bcrypt snapshot. The FOR UPDATE re-fetch inside loginInTx checks that
+// the locked row's PasswordVersion still matches preVersion. A concurrent
+// ChangePassword committing in the race window bumps PasswordVersion; this
+// mismatch causes loginInTx to return ErrAuthLoginFailed, closing the
+// old-password-mints-new-epoch-session race.
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
@@ -199,6 +206,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
+	// Pin the PasswordVersion from the pre-bcrypt snapshot. loginInTx will
+	// re-check this against the FOR UPDATE locked row to detect a concurrent
+	// ChangePassword committed in the race window (P1.1).
+	preVersion := preUser.PasswordVersion
+
 	// Re-fetch inside tx with FOR UPDATE to pin authz_epoch atomically.
 	// If the user was deactivated between the pre-check and the tx, the
 	// CanAuthenticate guard inside loginInTx rejects it — no silent
@@ -208,7 +220,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	sessionID := uuid.NewString()
 	var pair dto.TokenPair
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		p, err := s.loginInTx(txCtx, input.Username, sessionID)
+		p, err := s.loginInTx(txCtx, input.Username, sessionID, preVersion)
 		if err != nil {
 			return err
 		}
@@ -230,7 +242,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // while holding the row lock so concurrent Invalidator.Apply cannot advance
 // users.authz_epoch between the snapshot read and the session/refresh
 // INSERTs (S4d §D2; PR #490 review P1-#3 fix).
-func (s *Service) loginInTx(txCtx context.Context, username, sessionID string) (dto.TokenPair, error) {
+//
+// preVersion is the PasswordVersion captured from the pre-bcrypt snapshot.
+// If the locked row's PasswordVersion differs, a concurrent ChangePassword
+// committed in the race window — the old password must be rejected (P1.1).
+func (s *Service) loginInTx(txCtx context.Context, username, sessionID string, preVersion int64) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
@@ -238,6 +254,11 @@ func (s *Service) loginInTx(txCtx context.Context, username, sessionID string) (
 	if !user.CanAuthenticate() {
 		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 			"account is not active")
+	}
+	// P1.1: reject if a concurrent ChangePassword committed between the pre-bcrypt
+	// snapshot and this FOR UPDATE lock. Uniform message prevents version enumeration.
+	if user.PasswordVersion != preVersion {
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
 	minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
@@ -393,6 +414,10 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // it reuses the existing session record and updates only AccessToken/ExpiresAt,
 // so refresh flows do not double-emit.
 //
+// P1.3a active-gate: IssueForUser fail-closes for non-active users (suspended,
+// locked), consistent with Login and sessionrefresh. A non-active user must not
+// receive a fresh token pair even via the ChangePassword path.
+//
 // Returns dto.TokenPair (internal/dto, value not pointer) so this method
 // implements the identitymanage.TokenIssuer interface without a cross-slice
 // import (F-ARCH-1). Value type makes (nil, nil) unrepresentable.
@@ -400,6 +425,10 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser get user: %w", err)
+	}
+	if !user.CanAuthenticate() {
+		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			"account is not active")
 	}
 
 	sessionID := uuid.NewString()
