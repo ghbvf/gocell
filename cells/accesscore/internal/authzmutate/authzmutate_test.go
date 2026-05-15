@@ -155,6 +155,7 @@ func TestApply_AllMutations(t *testing.T) {
 			wantStatus:     domain.StatusActive,
 			wantResetFlag:  false,
 			wantInvalidate: false,
+			wantEvent:      session.CredentialEventLock, // not consumed (Invalidates==false); pinned to regression-guard Event() return
 		},
 		{
 			name:           "RequirePasswordReset sets flag and invalidates",
@@ -172,6 +173,7 @@ func TestApply_AllMutations(t *testing.T) {
 			wantStatus:     domain.StatusActive,
 			wantResetFlag:  false,
 			wantInvalidate: false,
+			wantEvent:      session.CredentialEventPasswordReset, // not consumed (Invalidates==false); pinned to regression-guard Event() return
 		},
 		{
 			name:           "RoleRevoked no-op on user fields but invalidates",
@@ -213,12 +215,22 @@ func TestApply_AllMutations(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, got.Status(), "Status mismatch")
 			assert.Equal(t, tt.wantResetFlag, got.PasswordResetRequired(), "PasswordResetRequired mismatch")
 
+			// Always assert Event() return value for regression-guard.
+			// For Invalidates()==false cases, Event() is a don't-care (never read
+			// by any code path), but pinning the value here catches accidental
+			// Event() return-value changes.
+			if tt.wantEvent != 0 {
+				assert.Equal(t, tt.wantEvent, tt.mutation.Event(), "Event() return value regression")
+			}
+
 			if tt.wantInvalidate {
 				// epoch must have been bumped by inv.Apply
 				assert.Greater(t, got.AuthzEpoch(), initialEpoch, "epoch must be bumped on invalidating mutation")
 			} else {
-				// epoch must not have changed
-				assert.Equal(t, initialEpoch, got.AuthzEpoch(), "epoch must NOT be bumped on additive mutation")
+				// epoch must NOT be bumped — proves inv.Apply was not called
+				// (Invalidates==false means Apply skips inv.Apply entirely)
+				assert.Equal(t, initialEpoch, got.AuthzEpoch(),
+					"epoch must NOT be bumped on additive mutation")
 			}
 		})
 	}

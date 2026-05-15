@@ -1,13 +1,19 @@
 package archtest
 
-// sessionrefresh_stale_epoch_reject_test.go — Hard guard that locks the
+// sessionrefresh_stale_epoch_reject_test.go — guard that locks the
 // corrected (post-P2.b) security model for the stale-epoch branch in
 // cells/accesscore/slices/sessionrefresh/service.go.
 //
 // INVARIANT: SESSIONREFRESH-STALE-EPOCH-REJECT-01
 //
-// AI-rebust grade: Hard.
-// Justification (4 independent anchors, incl. a negative-call assertion):
+// AI-rebust grade: Medium.
+// Justification: all four prongs use go/parser AST name/string anchors
+// (Sel.Name, Ident.Name, BasicLit value) — NOT typeseval type-identity
+// resolution. A helper rename breaks the test loudly (BS-1), but a
+// same-named re-implementation with different type identity would pass.
+// Upgrade path: backlog SESSIONREFRESH-STALE-EPOCH-REJECT-HARDEN-01.
+//
+// (4 independent anchors, incl. a negative-call assertion):
 //
 //  1. Operand-wiring anchor: detects the call site in refreshInTx —
 //     a CallExpr whose callee Sel.Name == "rejectIfStaleEpoch" with args

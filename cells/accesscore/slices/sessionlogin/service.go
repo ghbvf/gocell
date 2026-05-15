@@ -407,6 +407,29 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // this step, sessionvalidate.enforceSessionState fails with "not found" → 401
 // on the very next authenticated request (root cause of PR#183 round-2 CI failure).
 //
+// F18 — GetByID not GetByIDForUpdate (cross-slice; FOR UPDATE would span slices):
+// IssueForUser uses a plain GetByID (no SELECT FOR UPDATE) for the user fetch.
+// Using FOR UPDATE here would escalate a row-level lock across a cross-slice
+// boundary (sessionlogin ↔ identitymanage), coupling their transaction scopes
+// in a way that violates the Cell isolation model. The read is cross-slice by
+// contract (identitymanage calls IssueForUser via the TokenIssuer interface).
+//
+// Concurrency trade-off (KNOWN, ACCEPTED): a concurrent Lock/BumpAuthzEpoch
+// between the GetByID read and the session-persist write could issue a session
+// with the pre-bump epoch (stale AuthzEpochAtIssue). This window is defended
+// by two layers:
+//
+//  1. sessionvalidate epoch-mismatch check: the newly-issued stale-epoch
+//     session is rejected at first validate (session row epoch < user epoch),
+//     making the token useless before it can cause harm.
+//  2. P1.3b CanAuthenticate check (defense-in-depth, added this PR):
+//     sessionvalidate.enforceSessionState fail-closes any request from a
+//     non-active user regardless of epoch.
+//
+// The stale-epoch defense is covered by sessionvalidate unit tests (not
+// duplicated here — an integration test would require testcontainers unavailable
+// in sandbox). The window is documented as accepted.
+//
 // IMPORTANT (PR-CFG-G1): IssueForUser ALWAYS emits event.session.created.v1
 // — every successful call produces a session event with the new session ID.
 // Callers that do not want a session-creation event must avoid this method.

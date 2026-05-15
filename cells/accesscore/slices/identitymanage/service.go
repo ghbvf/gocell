@@ -158,6 +158,17 @@ type Service struct {
 // credential-revocation events (Lock / Delete / ChangePassword / suspension)
 // atomically bump authz_epoch + revoke sessions + revoke refresh chains via
 // the single funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
+//
+// authzmutator: when not injected via WithAuthzMutator, NewService constructs
+// one from (invalidator, repo, txRunner). This is intentional composition
+// convenience — all three deps are already validated non-nil at this point, so
+// the auto-construction cannot fail. The funnel safety is structural (routed
+// through authzmutate.Apply, which enforces epoch-bump + revoke), not
+// wiring-dependent; injecting a pre-built Mutator is only needed in tests that
+// want to substitute a different invalidator or repo. ref: runtime-api.md
+// §Option-范式 builder-noop (累加式 builder: nil入参 = no new data, final
+// nil resolved at factory; here the factory auto-constructs rather than
+// fail-fast because the inputs are provably valid).
 func NewService(
 	repo ports.UserRepository,
 	invalidator *credentialinvalidate.Invalidator,
@@ -385,6 +396,26 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 // is called if needed. This keeps each operation atomic while avoiding mixing
 // non-credential and credential writes in the same closure.
 //
+// applyNonAuthzFields excludes status and passwordResetRequired — those fields
+// are routed exclusively through authzmutate.Apply (via resolveCredentialMutation).
+// Only name, email, and updatedAt are written in the first tx.
+//
+// TOCTOU trade-off (KNOWN, ACCEPTED): non-authz fields (name, email) are
+// written in tx1 and the credential mutation (status, passwordResetRequired)
+// is applied in tx2 via authzmutator.Apply. A concurrent write between tx1
+// and tx2 could observe a brief intermediate state where name/email have
+// changed but status/epoch have not yet been updated. This split is intentional:
+//
+//   - Non-authz writes are informational; the user remains fully operational
+//     in the intermediate window (status is unchanged until tx2 commits).
+//   - The security net for the status/epoch window is
+//     sessionvalidate.enforceSessionState's CanAuthenticate check (P1.3b
+//     defense-in-depth, added this PR): any request from a non-active user
+//     is fail-closed at the validate layer regardless of epoch.
+//   - Collapsing both writes into a single tx would require authzmutate.Apply
+//     to accept an existing tx context, coupling it to the outer tx and
+//     significantly raising complexity. The trade-off is accepted.
+//
 // For correctness the approach is: apply non-authz field changes first (or
 // together with name/email), then apply the credential-changing mutation.
 // The outer tx handles name/email + event publish; authzmutate handles the
@@ -580,6 +611,28 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 	return nil
 }
 
+// lockUserAndRevokeSessions runs the transactional body of Lock.
+//
+// TOCTOU trade-off (KNOWN, ACCEPTED): the last-admin guard runs in tx1
+// (GetByID + checkLastAdminRemoval) and the credential mutation runs in tx2
+// (authzmutator.Apply via RunInTx). A concurrent admin-status change between
+// tx1 and tx2 could in theory cause the guard to pass on a stale read. This
+// split is intentional:
+//
+//   - The last-admin guard is an operability/UX guard, NOT a security boundary.
+//     Its purpose is to prevent an admin from accidentally locking themselves
+//     out of the system. A concurrent bypass in this window has no security
+//     consequence: the locked user would simply need to be unlocked by another
+//     admin session.
+//   - The security net for any status/epoch intermediate window is
+//     sessionvalidate.enforceSessionState's CanAuthenticate check (P1.3b
+//     defense-in-depth, added in this PR): any request from a non-active user
+//     is fail-closed at the validate layer regardless of epoch, making the
+//     intermediate window safe from an authentication perspective.
+//
+// Changing this to a single-tx design would require passing the RunInTx
+// context through authzmutate, coupling the event-publish tx to the guard tx
+// and significantly raising cognitive complexity. The trade-off is accepted.
 func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor string) error {
 	now := s.clock.Now()
 	// Guard: check last-admin protection before applying the mutation.

@@ -13,10 +13,14 @@
 --   sessions.authz_epoch_at_issue  — set to user.authz_epoch at session creation
 --   refresh_tokens.authz_epoch_at_issue — set to user.authz_epoch at token issue
 --
--- All three tables are empty at deploy (test / fresh install), or already
--- contain only valid rows (application enforces non-zero since S4d epoch-1
--- was introduced). The ADD CONSTRAINT ... CHECK (c > 0) is therefore safe
--- without NOT VALID; it validates in-place and is enforced immediately.
+-- All three tables are provably empty at deploy: this project has no deployed
+-- environment and no historical data (project invariant — no production
+-- instances exist outside CI test runs). Additionally, integration fixtures
+-- were synced in the same PR (S4d) to seed authz_epoch≥1 (see
+-- session_store_integration_test.go::upsertUser which writes epoch=1).
+-- Therefore there is provably no pre-existing zero-epoch data in any table.
+-- The ADD CONSTRAINT ... CHECK (c > 0) is validated in-place (NOT VALID is
+-- NOT used) and enforced immediately from the moment this migration runs.
 --
 -- The DEFAULT 0 that migration 026/027 used for DDL ALTER compatibility is
 -- dropped here so that any INSERT that omits the column value fails explicitly

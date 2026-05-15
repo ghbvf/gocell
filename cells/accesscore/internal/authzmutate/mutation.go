@@ -14,7 +14,16 @@
 // AUTHZ-MUTATION-APPLY-FUNNEL-01 — callers of domain.User.SetStatus /
 // SetPasswordResetRequired ⊆ {authzmutate/, domain _test.go};
 // callers of credentialinvalidate.Invalidator.Apply ⊆
-// {authzmutate/, sessionrefresh/}.
+// {credentialinvalidate/, authzmutate/, identitymanage/, sessionrefresh/, rbacassign/}.
+//
+// Rule (b) note: the broader caller set (vs the originally intended
+// {authzmutate/, sessionrefresh/}) is the §A10-documented co-tx-atomicity
+// deviation — identitymanage/ calls inv.Apply directly for Delete and
+// changePasswordInTx (user-row-delete + revoke must be one transaction;
+// routing through authzmutate would split those transactions); rbacassign/
+// similarly calls inv.Apply co-tx with the role-row write. The write-side
+// Hard guarantee comes from Rule (a) field privatization
+// (DOMAIN-AUTHZ-FIELD-PRIVATE-01), NOT from Rule (b) caller-set closure.
 //
 // Backlog: AUTHZ-MUTATION-FUNNEL-UPGRADE-01 (S4e, landed in PR #494).
 // ADR §A10 → §A10 status now "landed".
@@ -48,8 +57,17 @@ import (
 // on the invalidation side. Invalidates() == false for ClearPasswordReset.
 type Mutation interface {
 	// Event returns the CredentialEvent label carried by this mutation.
-	// For additive mutations (Invalidates==false) the event value is defined
-	// but inv.Apply is never called with it.
+	//
+	// Contract: Event() is consumed ONLY when Invalidates()==true. The value
+	// is passed to inv.Apply → audit/credential-event routing and must be a
+	// meaningful CredentialEvent for those callers.
+	//
+	// For additive mutations (Invalidates()==false: ActivateUser,
+	// ClearPasswordReset) the return value is NEVER READ by any code path —
+	// Mutator.Apply skips inv.Apply entirely when Invalidates()==false.
+	// These implementations return the nearest-domain event purely to satisfy
+	// the total interface; the value is a documented don't-care and will never
+	// reach an audit row or session-revocation path.
 	Event() session.CredentialEvent
 
 	// Invalidates returns true when this mutation is a credential-weakening
@@ -75,6 +93,17 @@ func (LockUser) apply(u *domain.User, now time.Time) {
 func (LockUser) mutationOK() {}
 
 // SuspendUser suspends the user account. Credential-weakening — Invalidates() == true.
+//
+// suspend≡lock for credential revocation (intentional, ADR-consistent):
+// Event() returns CredentialEventLock rather than a hypothetical
+// CredentialEventSuspend. This is not a bug — session.CredentialEvent is a
+// sealed, completeness-checked set (WithRevokeOnAll / NewProtocol /
+// ValidateCredentialEvent / String / all Store.RevokeForSubject impls) with
+// no Suspend member by design. The project canonically treats suspend as
+// equivalent to Lock for the purpose of session/refresh revocation: both
+// states make the user non-authenticable and must revoke all active tokens.
+// Precedent: identitymanage.cascadeInvalidateOnDemotion godoc explicitly
+// states "suspended semantics are equivalent to Lock".
 type SuspendUser struct{}
 
 func (SuspendUser) Event() session.CredentialEvent { return session.CredentialEventLock }
