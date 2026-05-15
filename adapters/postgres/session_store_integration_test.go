@@ -111,6 +111,13 @@ func (w *pgSessionStoreWrapper) RevokeForSubject(ctx context.Context, subjectID 
 	return w.inner.RevokeForSubject(ctx, uid.String(), event)
 }
 
+// RepoReady delegates to the inner PGSessionStore. The wrapper does not add
+// any translation for readiness probes — the inner store's sessions-table
+// query exercises the real failure domain.
+func (w *pgSessionStoreWrapper) RepoReady(ctx context.Context) error {
+	return w.inner.RepoReady(ctx)
+}
+
 // resolveSubjectName is the inverse of upsertUser: given a UUID string it
 // returns the canonical storetest name. We maintain the reverse map by
 // consulting the known storetest subjects (subject-A, subject-B, bench-subject).

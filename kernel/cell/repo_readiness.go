@@ -35,11 +35,18 @@ type RepoHealthProber interface {
 // verbatim to reg.Health; first-wins duplicate semantics and concurrent-call
 // safety are inherited from Registry.Health.
 //
-// AI-HARD: this funnel gives form uniqueness — archtest
-// CELL-REPO-READYZ-PROBE-01 makes any other repo-readiness registration shape
-// fail CI (range example: panic(panicregister.Approved(...))). Differentiated
-// behavior itself is enforced by the real-failure-injection conformance
-// harness (RunRepoReadinessConformance), not by this funnel.
+// AI-HARD funnel dual-lock (charter §"Funnel 双向锁评级"):
+//   - downstream Hard: form uniqueness — archtest CELL-REPO-READYZ-PROBE-01
+//     makes any other repo-readiness registration shape fail CI (range
+//     example: panic(panicregister.Approved(...))).
+//   - upstream Medium: the same archtest enforces every RepoHealthProber
+//     implementation is exercised by RunRepoReadinessConformance, but this is
+//     archtest-bound, not compile-time (Go cannot require a test to exist).
+//     Transitional form per charter; Hard-ization tracked by backlog
+//     REPO-READYZ-UPSTREAM-FUNNEL-HARD-01 (cap-13).
+//
+// Differentiated behavior itself is enforced by the real-failure-injection
+// conformance harness (RunRepoReadinessConformance), not by this funnel.
 func RegisterRepoReadiness(reg Registry, name string, p RepoHealthProber) {
 	reg.Health(name, p.RepoReady)
 }
