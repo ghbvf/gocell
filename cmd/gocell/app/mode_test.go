@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -224,7 +225,7 @@ func TestRunValidate_FailFast(t *testing.T) {
 
 			var gotErr error
 			stdout := captureStdout(t, func() {
-				gotErr = runValidate(args)
+				gotErr = runValidate(context.Background(), args)
 			})
 
 			if tc.wantErr {
@@ -326,7 +327,7 @@ func TestRunValidate_Strict_Full_ErrorsOnKebabDir(t *testing.T) {
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict"})
+		gotErr = runValidate(context.Background(), []string{"--root", dir, "--strict"})
 	})
 	require.Error(t, gotErr, "strict full must return error when FMT-16 fires")
 	assert.Contains(t, gotErr.Error(), "validation failed")
@@ -342,7 +343,7 @@ func TestRunValidate_StrictFailFast_StrictOnlyError(t *testing.T) {
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict", "--fail-fast"})
+		gotErr = runValidate(context.Background(), []string{"--root", dir, "--strict", "--fail-fast"})
 	})
 	require.Error(t, gotErr, "strict+fail-fast must surface FMT-16")
 	assert.Contains(t, gotErr.Error(), "validation failed: FMT-16")
@@ -366,7 +367,7 @@ func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict", "--fail-fast"})
+		gotErr = runValidate(context.Background(), []string{"--root", dir, "--strict", "--fail-fast"})
 	})
 	require.Error(t, gotErr, "strict+fail-fast must return error when base pass fails")
 	assert.NotContains(t, gotErr.Error(), "FMT-16",
@@ -444,7 +445,7 @@ func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict"})
+		gotErr = runValidate(context.Background(), []string{"--root", dir, "--strict"})
 	})
 	require.Error(t, gotErr, "strict must return error when FMT-C1 + FMT-16 fire on kebab cell id + dir")
 	assert.Contains(t, out, "FMT-C1", "FMT-C1 (unconditional) must report on kebab cell id")
@@ -460,7 +461,7 @@ func TestRunValidate_Strict_DetectsAllowedFilesMismatch(t *testing.T) {
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict"})
+		gotErr = runValidate(context.Background(), []string{"--root", dir, "--strict"})
 	})
 	require.Error(t, gotErr, "strict must return error when FMT-17 fires on allowedFiles mismatch")
 	assert.Contains(t, out, "FMT-17", "full-mode output must report FMT-17 code")
@@ -477,7 +478,7 @@ func TestRunValidate_DetectsKebabAssemblyID(t *testing.T) {
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir})
+		gotErr = runValidate(context.Background(), []string{"--root", dir})
 	})
 	require.Error(t, gotErr, "default validate must return error when FMT-A1 fires on kebab assembly id")
 	assert.Contains(t, out, "FMT-A1", "default-mode output must report FMT-A1 code")
@@ -493,7 +494,7 @@ func TestRunValidate_DetectsKebabCellID(t *testing.T) {
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir})
+		gotErr = runValidate(context.Background(), []string{"--root", dir})
 	})
 	require.Error(t, gotErr, "default validate must return error when FMT-C1 fires on invalid cell id")
 	assert.Contains(t, out, "FMT-C1", "default-mode output must report FMT-C1 code")
@@ -531,7 +532,7 @@ func TestRunValidate_Default_IgnoresStrictOnlyRules(t *testing.T) {
 			dir := tc.fix(t)
 
 			out := captureStdout(t, func() {
-				_ = runValidate([]string{"--root", dir})
+				_ = runValidate(context.Background(), []string{"--root", dir})
 			})
 			for _, code := range []string{"FMT-16", "FMT-17"} {
 				if assert.NotContains(t, out, code, "%s must stay silent under default mode", code) {
@@ -567,7 +568,7 @@ func TestRunScaffoldCell_DryRun_NoFileWritten(t *testing.T) {
 	dir := setupProject(t, "cells")
 
 	out := captureStdout(t, func() {
-		err := runScaffoldWithRoot(dir,
+		err := runScaffoldWithRoot(context.Background(), dir,
 			[]string{"cell", "--id=drycell", "--team=squad", "--role=cell-owner", "--dry-run"})
 		require.NoError(t, err)
 	})
@@ -587,7 +588,7 @@ func TestRunScaffoldSlice_DryRun_NoFileWritten(t *testing.T) {
 		[]byte("id: parentcell\ntype: core\n"), 0o644))
 
 	out := captureStdout(t, func() {
-		err := runScaffoldWithRoot(dir,
+		err := runScaffoldWithRoot(context.Background(), dir,
 			[]string{"slice", "--id=dryslice", "--cell=parentcell", "--dry-run"})
 		require.NoError(t, err)
 	})
@@ -602,7 +603,7 @@ func TestRunScaffoldContract_DryRun_NoFileWritten(t *testing.T) {
 	dir := setupProject(t, "contracts")
 
 	out := captureStdout(t, func() {
-		err := runScaffoldWithRoot(dir, []string{
+		err := runScaffoldWithRoot(context.Background(), dir, []string{
 			"contract",
 			"--id=http.dry.test.v1", "--kind=http", "--owner=some-cell", "--dry-run",
 		})
@@ -619,7 +620,7 @@ func TestRunScaffoldJourney_DryRun_NoFileWritten(t *testing.T) {
 	dir := setupProject(t, "journeys")
 
 	out := captureStdout(t, func() {
-		err := runScaffoldWithRoot(dir, []string{
+		err := runScaffoldWithRoot(context.Background(), dir, []string{
 			"journey",
 			"--id=J-dry", "--goal=test goal", "--team=squad", "--cells=a,b", "--dry-run",
 		})
@@ -667,7 +668,7 @@ passCriteria:
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict"})
+		gotErr = runValidate(context.Background(), []string{"--root", dir, "--strict"})
 	})
 	require.Error(t, gotErr)
 	assert.Contains(t, out, "VERIFY-06")
@@ -714,7 +715,7 @@ func TestOtherJourney(t *testing.T) {}
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--strict"})
+		gotErr = runValidate(context.Background(), []string{"--root", dir, "--strict"})
 	})
 	require.Error(t, gotErr)
 	assert.Contains(t, out, "VERIFY-06")
@@ -764,7 +765,7 @@ passCriteria:
 
 	var gotErr error
 	out := captureStdout(t, func() {
-		gotErr = runVerify([]string{"journey", "--active"})
+		gotErr = runVerify(context.Background(), []string{"journey", "--active"})
 	})
 	require.Error(t, gotErr)
 	assert.Contains(t, gotErr.Error(), "verify journey --active: FAILED")
@@ -778,7 +779,7 @@ passCriteria:
 func TestRunScaffoldCell_DryRun_StillValidatesOpts(t *testing.T) {
 	dir := setupProject(t, "cells")
 
-	err := runScaffoldWithRoot(dir,
+	err := runScaffoldWithRoot(context.Background(), dir,
 		[]string{"cell", "--id=no-team", "--dry-run"})
 	require.Error(t, err, "missing --team must fail even in dry-run")
 }
@@ -795,7 +796,7 @@ func TestRunScaffoldCell_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(target, "cell.yaml"),
 		[]byte("id: conflictcell\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{
+	err := runScaffoldWithRoot(context.Background(), dir, []string{
 		"cell",
 		"--id=conflictcell", "--team=squad", "--role=cell-owner", "--dry-run",
 	})
@@ -825,7 +826,7 @@ func TestRunScaffoldSlice_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "slice.yaml"),
 		[]byte("id: conflict-slice\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{
+	err := runScaffoldWithRoot(context.Background(), dir, []string{
 		"slice",
 		"--id=conflict-slice", "--cell=my-cell", "--dry-run",
 	})
@@ -839,7 +840,7 @@ func TestRunScaffoldContract_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(contractDir, "contract.yaml"),
 		[]byte("id: http.conflict.api.v1\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{
+	err := runScaffoldWithRoot(context.Background(), dir, []string{
 		"contract",
 		"--id=http.conflict.api.v1", "--kind=http", "--owner=some-cell", "--dry-run",
 	})
@@ -851,7 +852,7 @@ func TestRunScaffoldJourney_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "J-conflict.yaml"),
 		[]byte("id: J-conflict\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{
+	err := runScaffoldWithRoot(context.Background(), dir, []string{
 		"journey",
 		"--id=conflict", "--goal=test goal", "--team=squad", "--cells=a", "--dry-run",
 	})

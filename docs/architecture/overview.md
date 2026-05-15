@@ -259,6 +259,6 @@ Coordination 包括：outbox、consumed markers、replay checkpoints、job lease
 |------|------|
 | `gocell validate` | 校验全部元数据（blocking） |
 | `gocell scaffold cell\|slice\|contract\|journey` | 生成新 Cell/Slice/Contract/Journey 骨架 |
-| `gocell generate assembly\|indexes\|boundaries` | 生成 Go 代码和派生文件 |
+| `gocell generate assembly\|metrics-schema\|catalog\|cell\|contract` | 生成 Go 代码和派生文件 |
 | `gocell check contract-health\|slice-coverage\|...` | 针对性架构分析 |
 | `gocell verify slice\|cell\|journey\|targets` | 执行测试（go test 智能包装） |
