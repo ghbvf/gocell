@@ -33,7 +33,6 @@ import (
 	"go/token"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +43,20 @@ const redactionImportPath = `"github.com/ghbvf/gocell/pkg/redaction"`
 
 // spanRedactViolMsg is the diagnostic message emitted when a RecordError call
 // does not wrap its argument with redaction.RedactError.
+//
+// Serialization protocol — two paths share this constant with different
+// surrounding context:
+//
+//  1. Fixture scanner (scanSpanRecordErrorFile): emits position-prefixed
+//     strings of the form "<rel>:<line>: <spanRedactViolMsg>", used only in
+//     test assertions within TestSpanRecordErrorRedactedFixtures.
+//
+//  2. Production enforcement (spanRecordErrorDirDiags): populates
+//     Diagnostic.Message directly (no prefix); the Diagnostic struct carries
+//     Rel and Line as separate fields, and Report formats them independently.
+//
+// Callers must not strip or reformat the constant value; add position context
+// via the Diagnostic struct rather than by mutating the message text.
 const spanRedactViolMsg = "span.RecordError(...) first arg must be redaction.RedactError(...)" +
 	" — hardcoded fail-closed redaction has no caller-side opt-out (ADR §8)"
 
@@ -281,11 +294,19 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 	Report(t, "SPAN-RECORD-ERROR-REDACT-01-COVERAGE", diags)
 }
 
-// runSpanRecordErrorFixtureScan parses fixture .go files (non-test) and reports
+// runSpanRecordErrorFixtureScan parses fixture .go files and reports
 // violations relative to fixtureDir. Uses DirsScope+IncludeTestdata to
 // funnel through the framework even though fixtures live under testdata/
 // (the default skip set excludes testdata; IncludeTestdata is the authorized
 // opt-in).
+//
+// This is a fixture-only helper — it does not follow the production Diagnostic
+// path. Run(...) is invoked solely to walk p.Files via the framework; the
+// closure always returns nil (no Diagnostics). Violations are instead
+// accumulated into the outer `out []string` slice by scanSpanRecordErrorFile,
+// which returns position-prefixed strings rather than Diagnostic structs.
+// DirsScope without IncludeTests() never includes *_test.go files, so no
+// explicit test-file guard is needed here.
 //
 // IncludeGenerated mirrors the option used by the production enforcement walk
 // spanRecordErrorDirDiags, so the violates_in_generated fixture (which buries
@@ -300,9 +321,6 @@ func runSpanRecordErrorFixtureScan(t *testing.T, root, fixtureDirRel string) []s
 	var out []string
 	Run(t, scope, func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
-			if strings.HasSuffix(p.Abs(file), "_test.go") {
-				continue
-			}
 			out = append(out, scanSpanRecordErrorFile(p.Fset, file, filepath.Base(p.Abs(file)))...)
 		}
 		return nil
