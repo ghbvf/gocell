@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -278,7 +279,7 @@ func TestSharedDeps_Validate_RealMultiPodRejectsInMemoryClaimerCode(t *testing.T
 	err := deps.Validate()
 
 	require.Error(t, err)
-	leaves := allJoinedErrors(err)
+	leaves := errutil.FlattenJoined(err)
 	require.Len(t, leaves, 1)
 
 	var ec *errcode.Error
