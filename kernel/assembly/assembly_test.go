@@ -729,3 +729,198 @@ func (c *configMutatingCell) Init(ctx context.Context, reg cell.Registry) error 
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// STARTUP-ROLLBACK-ERR-JOIN-01: rollback cell-stop errors surfaced in Start
+// ---------------------------------------------------------------------------
+
+// sentinelStopCell starts OK but returns a fixed sentinel error from Stop.
+// This lets tests assert that the specific sentinel propagates through the
+// joined error tree returned by a.Start().
+type sentinelStopCell struct {
+	*cell.BaseCell
+	stopErr error // returned verbatim from Stop
+}
+
+func newSentinelStopCell(id string, stopErr error) *sentinelStopCell {
+	return &sentinelStopCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L1"}),
+		stopErr:  stopErr,
+	}
+}
+
+func (c *sentinelStopCell) Stop(_ context.Context) error {
+	return c.stopErr
+}
+
+// afterStartSentinelStopCell has an AfterStart hook that returns an error,
+// triggering the rollbackCells(i) branch (failing cell itself is rolled back).
+// Stop also returns a sentinel so the test can verify it surfaces in the joined tree.
+type afterStartSentinelStopCell struct {
+	*cell.BaseCell
+	afterStartErr error
+	stopErr       error
+}
+
+func newAfterStartSentinelStopCell(id string, afterStartErr, stopErr error) *afterStartSentinelStopCell {
+	return &afterStartSentinelStopCell{
+		BaseCell:      cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L1"}),
+		afterStartErr: afterStartErr,
+		stopErr:       stopErr,
+	}
+}
+
+func (c *afterStartSentinelStopCell) AfterStart(_ context.Context) error {
+	return c.afterStartErr
+}
+
+func (c *afterStartSentinelStopCell) Stop(_ context.Context) error {
+	return c.stopErr
+}
+
+var _ cell.AfterStarter = (*afterStartSentinelStopCell)(nil)
+
+// walkJoinedErrors traverses the errors.Join tree and collects all leaf errors.
+func walkJoinedErrors(err error, collected *[]error) {
+	if err == nil {
+		return
+	}
+	type joinedUnwrap interface {
+		Unwrap() []error
+	}
+	if joined, ok := err.(joinedUnwrap); ok {
+		for _, e := range joined.Unwrap() {
+			walkJoinedErrors(e, collected)
+		}
+	} else {
+		*collected = append(*collected, err)
+	}
+}
+
+// sentinelStartCell starts with a fixed sentinel error from Start, used to
+// trigger rollback of previously-started cells.
+type sentinelStartCell struct {
+	*cell.BaseCell
+	startErr error
+}
+
+func newSentinelStartCell(id string, startErr error) *sentinelStartCell {
+	return &sentinelStartCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L1"}),
+		startErr: startErr,
+	}
+}
+
+func (c *sentinelStartCell) Start(_ context.Context) error {
+	return c.startErr
+}
+
+// TestStartInternal_RollbackCellStopErrorsSurfaced verifies that when startup
+// rollback occurs (due to a cell's Start failing), stop errors from already-started
+// cells are surfaced in the returned error, not silently discarded.
+//
+// Cell A starts OK but Stop returns errStopA.
+// Cell B's Start returns errStartB, triggering rollback of A.
+// Start must return an error satisfying errors.Is(_, errStartB) AND the
+// joined tree must contain a *errcode.Error wrapping errStopA.
+func TestStartInternal_RollbackCellStopErrorsSurfaced(t *testing.T) {
+	t.Parallel()
+
+	errStopA := errors.New("sentinel-stop-a")
+	errStartB := errors.New("sentinel-start-b")
+
+	a := newTestAssembly(t, Config{ID: "rollback-stop-surfaced", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	cellA := newSentinelStopCell("A", errStopA)
+	cellBSentinel := newSentinelStartCell("B", errStartB)
+
+	require.NoError(t, a.Register(cellA))
+	require.NoError(t, a.Register(cellBSentinel))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+
+	// Cause: errStartB must be findable via errors.Is.
+	assert.True(t, errors.Is(err, errStartB), "errors.Is(err, errStartB) must be true; got: %v", err)
+
+	// Rollback stop error: walk joined tree and find a *ecErr.Error that wraps errStopA.
+	var allErrs []error
+	walkJoinedErrors(err, &allErrs)
+
+	foundStopErr := false
+	for _, e := range allErrs {
+		if errors.Is(e, errStopA) {
+			foundStopErr = true
+			var ec *ecErr.Error
+			if errors.As(e, &ec) {
+				assert.Equal(t, ecErr.ErrLifecycleInvalid, ec.Code,
+					"stop error must be wrapped as ErrLifecycleInvalid")
+			}
+			break
+		}
+	}
+	assert.True(t, foundStopErr, "rolled-back cell A's stop error must appear in joined tree; full err: %v", err)
+}
+
+// TestStartInternal_AfterStartFailRollbackIncludesFailingCell verifies that when
+// AfterStart fails, the rollbackCells(i) path (which includes the failing cell
+// itself) surfaces the failing cell's Stop error in the returned error.
+func TestStartInternal_AfterStartFailRollbackIncludesFailingCell(t *testing.T) {
+	t.Parallel()
+
+	errAfterStartA := errors.New("sentinel-afterstart-a")
+	errStopA := errors.New("sentinel-stop-a-after-rollback")
+
+	a := newTestAssembly(t, Config{ID: "rollback-afterstart-stopsurf", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	cellA := newAfterStartSentinelStopCell("A", errAfterStartA, errStopA)
+	require.NoError(t, a.Register(cellA))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+
+	// AfterStart error must be surfaced as the cause.
+	assert.True(t, errors.Is(err, errAfterStartA), "errors.Is(err, errAfterStartA) must be true; got: %v", err)
+
+	// The failing cell A's Stop error must also appear in the joined tree.
+	var allErrs []error
+	walkJoinedErrors(err, &allErrs)
+
+	foundStopErr := false
+	for _, e := range allErrs {
+		if errors.Is(e, errStopA) {
+			foundStopErr = true
+			break
+		}
+	}
+	assert.True(t, foundStopErr, "failing cell A's Stop error from rollbackCells(i) must appear in joined tree; full err: %v", err)
+}
+
+// TestRollbackCells_ReturnsCollectedErrorsInLIFO verifies that rollbackCells
+// returns the accumulated stop errors in LIFO order (cell[1] error first,
+// cell[0] error second) and that rollbackCells(-1) returns nil.
+func TestRollbackCells_ReturnsCollectedErrorsInLIFO(t *testing.T) {
+	t.Parallel()
+
+	errStop0 := errors.New("sentinel-stop-0")
+	errStop1 := errors.New("sentinel-stop-1")
+
+	a := newTestAssembly(t, Config{ID: "rollback-lifo-order", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	cell0 := newSentinelStopCell("cell0", errStop0)
+	cell1 := newSentinelStopCell("cell1", errStop1)
+	require.NoError(t, a.Register(cell0))
+	require.NoError(t, a.Register(cell1))
+
+	// rollbackCells(-1) must return nil immediately (no cells started yet).
+	errsNeg := a.rollbackCells(-1)
+	assert.Nil(t, errsNeg, "rollbackCells(-1) must return nil")
+
+	// rollbackCells(1) stops cells[1] then cells[0] (LIFO):
+	// cell1.Stop returns errStop1, cell0.Stop returns errStop0.
+	// Each is wrapped as *errcode.Error by stopCellWithHooks.
+	// We expect 2 errors, with errStop1 first (LIFO) and errStop0 second.
+	errs := a.rollbackCells(1)
+	assert.Len(t, errs, 2, "rollbackCells(1) must collect 2 stop errors")
+
+	// LIFO: cell1 was stopped first so its error appears at index 0.
+	assert.True(t, errors.Is(errs[0], errStop1), "first error must wrap errStop1 (LIFO); got: %v", errs[0])
+	assert.True(t, errors.Is(errs[1], errStop0), "second error must wrap errStop0 (LIFO); got: %v", errs[1])
+}
