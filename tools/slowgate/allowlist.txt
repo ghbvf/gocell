@@ -98,3 +98,9 @@ github.com/ghbvf/gocell/cmd/gocell/app	TestRunVerifySlice_ValidID
 
 # external-network-timeout: OTLP exporter dial unreachable collector
 github.com/ghbvf/gocell/adapters/otel	TestNewTracer_Insecure
+
+# type-graph-load: credential-invalidate funnel RevokeForSubject scan — SharedResolver
+# over ./cells/accesscore/... ./runtime/auth/... ./adapters/... ./cmd/...; Wave 2
+# added domain_authz_mutation funnel tests, shifting the 16-shard modulo split so
+# this test no longer co-locates with its sibling funnel tests'cached resolver.
+github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_RevokeForSubject_01

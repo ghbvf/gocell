@@ -45,7 +45,7 @@ func upsertUser(t testing.TB, pool *Pool, subjectID string) uuid.UUID {
 	id := subjectUUID(subjectID)
 	_, err := pool.DB().Exec(context.Background(), `
 INSERT INTO users (id, username, email, password_hash, status, creation_source, authz_epoch, created_at, updated_at)
-VALUES ($1, $2, $3, 'x', 'active', 'identity', 0, NOW(), NOW())
+VALUES ($1, $2, $3, 'x', 'active', 'identity', 1, NOW(), NOW())
 ON CONFLICT (id) DO NOTHING`,
 		id.String(),
 		"user-"+subjectID,
