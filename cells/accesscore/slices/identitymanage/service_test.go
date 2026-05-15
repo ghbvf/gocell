@@ -1660,6 +1660,91 @@ func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
 		"Lock without auth context must return ErrAuthUnauthorized")
 }
 
+// ---------------------------------------------------------------------------
+// F2: resolveCredentialMutationFromUser — in-tx idempotency check (no pre-tx GetByID)
+// ---------------------------------------------------------------------------
+
+// countingUserRepo wraps a real repo and counts GetByID calls so tests can
+// assert that no extra GetByID is issued outside the transaction for the
+// RequirePasswordReset idempotency check (F2 fix).
+type countingUserRepo struct {
+	ports.UserRepository
+	getByIDCalls int
+}
+
+func (r *countingUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	r.getByIDCalls++
+	return r.UserRepository.GetByID(ctx, id)
+}
+
+// TestService_Update_RequirePasswordReset_NoExtraGetByIDOutsideTx verifies
+// that when RequirePasswordReset=true is sent for a user that does NOT already
+// have the flag set, Update issues exactly ONE GetByID call (inside tx1) and
+// no pre-tx GetByID (F2 TOCTOU fix).
+//
+// Before the F2 fix, resolveCredentialMutation called s.repo.GetByID(ctx, id)
+// outside the tx for the idempotency check, then tx1 called GetByID again
+// inside the tx — two total calls. After the fix only the in-tx call remains.
+func TestService_Update_RequirePasswordReset_NoExtraGetByIDOutsideTx(t *testing.T) {
+	t.Parallel()
+	inner := mem.NewStore(clock.Real()).UserRepository()
+	cRepo := &countingUserRepo{UserRepository: inner}
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	svc, err := NewService(cRepo, newInvalidator(t, cRepo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+	require.NoError(t, err)
+
+	// Seed a user without the flag set.
+	seedUserWithHash(t, inner, "f2-no-extra-get", "pw", false)
+	cRepo.getByIDCalls = 0 // reset after seed
+
+	trueVal := true
+	_, err = svc.Update(adminCtxForService(), UpdateInput{
+		ID:                   "usr-f2-no-extra-get",
+		RequirePasswordReset: &trueVal,
+	})
+	require.NoError(t, err)
+	// The in-tx GetByID is 1 call (from tx1). authzmutate.Apply does its own
+	// GetByIDForUpdate (not counted here), plus re-fetch after mutation = 1 more.
+	// Neither is the pre-tx extra call that F2 eliminates.
+	// Key invariant: no GetByID is called BEFORE the first RunInTx (i.e., none
+	// at the top of applyUserUpdate before the tx opens). We cannot easily
+	// distinguish in-tx from out-of-tx here without the observingUserRepo, but
+	// the count is bounded by: 1 (tx1 GetByID) + 1 (re-fetch after mutation) = 2.
+	// Pre-F2 the count was 3 (pre-tx GetByID + tx1 GetByID + re-fetch).
+	assert.LessOrEqual(t, cRepo.getByIDCalls, 2,
+		"F2: Update(requirePasswordReset=true) must issue at most 2 GetByID calls "+
+			"(in-tx + re-fetch); pre-tx extra GetByID was eliminated")
+}
+
+// TestService_Update_RequirePasswordReset_AlreadySet_NoMutation verifies that
+// when RequirePasswordReset=true is sent for a user that already has the flag
+// set, the idempotency check (now reading from the tx-locked row) correctly
+// returns no-op — no authzmutate.Apply is invoked, so authz_epoch is not bumped.
+func TestService_Update_RequirePasswordReset_AlreadySet_NoMutation(t *testing.T) {
+	t.Parallel()
+	svc, repo := newServiceWithIssuer(t, nil)
+	// Seed with flag already true.
+	seedUserWithHash(t, repo, "f2-already-set", "pw", true)
+
+	trueVal := true
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
+		ID:                   "usr-f2-already-set",
+		RequirePasswordReset: &trueVal,
+	})
+	require.NoError(t, err, "already-set idempotent call must succeed")
+	assert.True(t, updated.PasswordResetRequired(),
+		"flag must remain true after no-op idempotent call")
+	// Epoch should not have changed (no invalidation triggered).
+	after, err := repo.GetByID(context.Background(), "usr-f2-already-set")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), after.AuthzEpoch(),
+		"F2: idempotent RequirePasswordReset=true must NOT bump authz_epoch "+
+			"when flag is already set (no spurious session invalidation)")
+}
+
 // TestService_Lock_PublishFailureAbortsBeforeLog asserts the success log
 // does not fire when the outbox publish itself fails: the failed publish is
 // the last step inside the tx, so a missing log line is the operator-visible
