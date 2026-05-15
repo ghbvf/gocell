@@ -201,18 +201,26 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // (a file can only dot-import a given package path once, but the package is
 // already imported under both a qualified and alias form in redfixture.go) make
 // a typeseval dot-import infeasible in the same file. This is NOT a detector gap:
-// the dot-import (bare-Ident) form is covered by *types.Info resolution inside
-// typeseval.ResolvePackageRef, as verified by typeseval's own test suite
-// (buildtag_predicate_test.go, call_target_test.go). scanner.ImportBan dot-import
-// IS fixtured (`. "…/scanner"` is present alongside the qualified/alias forms
-// because scanner is not otherwise conflicted in redfixture.go).
+// the dot-import (bare-Ident) form for functions is covered by *types.Func
+// resolution inside typeseval.ResolvePackageRef's resolveBarePkgSymbol helper
+// (the same path that always handled dot-imported functions), as verified by
+// typeseval's own test suite (call_target_test.go TestResolvePackageRef_DotImportBareIdent).
 //
-// TestPassFunnel_FixtureCoverage enforces per-form minimums:
+// scanner.ImportBan dot-import IS fixtured in all 3 forms (`. "…/scanner"` is
+// present alongside the qualified/alias forms in redfixture.go). Post-fix the
+// *types.TypeName branch in resolveBarePkgSymbol resolves the bare-Ident form
+// `ImportBan{}` to (scannerPkgPath, "ImportBan", true) — matching exactly what
+// the qualified SelectorExpr `scanner.ImportBan{}` returns.
+//
+// TestPassFunnel_FixtureCoverage enforces:
 //   - typeseval-helper diagnostics ≥ 2 (qualified + alias forms fixtured)
-//   - scanner.ImportBan diagnostics ≥ 1 (dot-import form fixtured)
+//   - scanner.ImportBan diagnostics == 3 (qualified + alias + dot-import; exact
+//     count locks out any single-form regression including the TypeName fix)
 //
-// Reverse self-check: TestPassFunnel_FixtureCoverage asserts per-form minimums
-// on the redfixture, locking the detector at live-AST level rather than data level.
+// Reverse self-check: TestPassFunnel_FixtureCoverage asserts exact count on
+// ImportBan and minimum on typeseval helpers, locking the detector at live-AST
+// level. Reverting the *types.TypeName fix in call_target.go drops
+// scannerImportBanCount from 3 to 2, failing the assertion.
 func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 	const replacement = "archtest.{ResolvePackageRef,ResolveMethodCall,EvaluateConstString," +
 		"FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
@@ -500,10 +508,15 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // form is infeasible in redfixture.go (conflicting imports — the package is
 // already imported under qualified + alias; Go allows only one dot-import
 // per package path per file). This is NOT a detector gap: the bare-Ident
-// dot-import form is covered by *types.Info resolution inside
-// typeseval.ResolvePackageRef as verified by typeseval's own test suite.
+// dot-import form for functions is covered by *types.Func resolution inside
+// typeseval.ResolvePackageRef's resolveBarePkgSymbol helper.
 // scanner.ImportBan dot-import IS fixtured (3 forms: qualified + alias + dot).
-// The per-form minimums below encode this distinction.
+// After the *types.TypeName fix, the dot-import form (bare Ident `ImportBan{}`)
+// is genuinely detected via *types.TypeName resolution, not just by proximity
+// to the qualified/alias diagnostics.
+//
+// The per-form assertions below encode this distinction with an exact count
+// for ImportBan (== 3) that would drop to 2 if the TypeName fix were reverted.
 //
 // The fixture is loaded with the [archtestmeta.FixtureBuildTag] build tag
 // (a sister convention to inspectorredfixture etc.); without the tag the
@@ -554,10 +567,22 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 		}
 	}
 
-	// Strengthened per-form check for PASS-FUNNEL-RESOLVE-01:
-	//   - typeseval helpers: ≥ 2 diagnostics (qualified + alias forms fixtured)
-	//   - scanner.ImportBan: ≥ 1 diagnostic (dot-import form fixtured; qualified+alias also present)
-	// Each minimum is a distinct per-form regression trip-wire.
+	// Strengthened per-form check for PASS-FUNNEL-RESOLVE-01.
+	//
+	// typeseval helpers: ≥ 2 diagnostics (qualified + alias forms fixtured;
+	// there are 8 helpers × 2 forms = 16 total, but we only require the
+	// minimum of 2 to tolerate future helper additions/removals without
+	// breaking this lock — the important invariant is both forms fire).
+	//
+	// scanner.ImportBan: exactly 3 diagnostics — qualified (L123) + alias
+	// (L124) + dot-import (L125). This is an exact-count check so that
+	// reverting the *types.TypeName fix in call_target.go causes this test
+	// to fail (the dot-import form produces 0 without the fix → count = 2,
+	// not 3). If new fixture lines are added, this count must be updated.
+	//
+	// Each assertion is a distinct per-form regression trip-wire that fails
+	// independently if any single import form is removed from the fixture or
+	// if the resolver regresses.
 	var resolveDiags []scanner.Diagnostic
 	for _, tgt := range fixtureTargets {
 		resolveDiags = append(resolveDiags, diagsResolveHelpers(tgt)...)
@@ -577,10 +602,15 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			"(qualified + alias forms must each trip the detector; per-form regression lock)",
 			typesevalCount)
 	}
-	if scannerImportBanCount < 1 {
-		t.Errorf("PASS-FUNNEL-RESOLVE-01: scanner.ImportBan diagnostics on red fixture = %d, want ≥ 1 "+
-			"(dot-import form must trip the detector; per-form regression lock)",
-			scannerImportBanCount)
+	// Exact-count assertion: 3 forms (qualified + alias + dot-import).
+	// Reverting the *types.TypeName fix in call_target.go drops this to 2
+	// (dot-import undetected) → test fails.
+	const wantImportBanCount = 3
+	if scannerImportBanCount != wantImportBanCount {
+		t.Errorf("PASS-FUNNEL-RESOLVE-01: scanner.ImportBan diagnostics on red fixture = %d, want %d "+
+			"(qualified L123 + alias L124 + dot-import L125 must each trip the detector; "+
+			"exact-count regression lock — reverting TypeName fix drops to 2)",
+			scannerImportBanCount, wantImportBanCount)
 	}
 }
 

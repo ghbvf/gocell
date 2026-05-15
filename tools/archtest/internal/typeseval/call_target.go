@@ -16,14 +16,17 @@ import (
 //     even when the imported package's symbols don't).
 //
 //   - Bare identifier `Name` — requires info.Uses[id] to resolve to *types.Func
-//     with a non-nil owning *types.Package. Used to identify dot-imported
-//     function references (where the syntactic Name carries no package info,
-//     so types.Info is the only source of truth).
+//     or *types.TypeName with a non-nil owning *types.Package. Covers both
+//     dot-imported function references (e.g. `Sleep` after `import . "time"`)
+//     and dot-imported type references (e.g. `ImportBan{}` after
+//     `import . ".../scanner"`). *types.TypeName is the object kind for struct
+//     types, interfaces, type aliases, and named types — all forms that appear
+//     at the bare-Ident position when a type is referenced from a dot-import.
 //
 // Returns ("", "", false) for:
 //
-//   - non-function objects (vars, types, consts, builtins, packages) at the
-//     bare-Ident position
+//   - vars, consts, builtins, and packages at the bare-Ident position
+//     (*types.Var / *types.Const / *types.Builtin / *types.PkgName are not handled)
 //   - method-position selectors (`receiver.Method` where sel.X is a value)
 //   - identifiers whose owning *types.Package is nil (universe builtins)
 //   - nil typesInfo or nil expr
@@ -35,7 +38,7 @@ import (
 //     gets ("", "", false)
 //
 // Callers are responsible for filtering by pkgPath / name. In particular,
-// bare-Ident matches for a locally-defined function return the current
+// bare-Ident matches for a locally-defined func or type return the current
 // package's path; matchers that only care about cross-package references must
 // check pkgPath explicitly.
 //
@@ -57,11 +60,29 @@ func ResolvePackageRef(typesInfo *types.Info, expr ast.Expr) (pkgPath, name stri
 		}
 		return pkgName.Imported().Path(), e.Sel.Name, true
 	case *ast.Ident:
-		fn, isFunc := typesInfo.Uses[e].(*types.Func)
-		if !isFunc || fn.Pkg() == nil {
+		return resolveBarePkgSymbol(typesInfo, e)
+	default:
+		return "", "", false
+	}
+}
+
+// resolveBarePkgSymbol resolves a bare *ast.Ident to (pkgPath, name) when the
+// ident refers to a package-level *types.Func or *types.TypeName. Returns
+// ("", "", false) for vars, consts, builtins, packages, and universe objects
+// (nil Pkg). Extracted to keep ResolvePackageRef's cognitive complexity ≤15.
+func resolveBarePkgSymbol(info *types.Info, id *ast.Ident) (pkgPath, name string, ok bool) {
+	obj := info.Uses[id]
+	switch sym := obj.(type) {
+	case *types.Func:
+		if sym.Pkg() == nil {
 			return "", "", false
 		}
-		return fn.Pkg().Path(), fn.Name(), true
+		return sym.Pkg().Path(), sym.Name(), true
+	case *types.TypeName:
+		if sym.Pkg() == nil {
+			return "", "", false
+		}
+		return sym.Pkg().Path(), sym.Name(), true
 	default:
 		return "", "", false
 	}
