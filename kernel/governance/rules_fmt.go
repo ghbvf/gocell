@@ -1291,7 +1291,7 @@ func (v *Validator) validateFMT32() []ValidationResult {
 				"endpoints.http.ownership",
 				fmt.Sprintf(
 					"contract %q has auth.serviceOwned=true but no ownership block; "+
-						"declare endpoints.http.ownership.subjectPath and resourcePath",
+						"fix: declare endpoints.http.ownership with subjectPath and resourcePath",
 					c.ID,
 				),
 			))
@@ -1312,13 +1312,15 @@ func (v *Validator) checkOwnershipPath(c *metadata.ContractMeta, h *metadata.HTT
 	if expr == "" {
 		return []ValidationResult{
 			v.newResult(codeFMT32, SeverityError, IssueRequired, contractFile(c), fullField,
-				fmt.Sprintf("contract %q has auth.serviceOwned=true but ownership.%s is empty", c.ID, field)),
+				fmt.Sprintf("contract %q has auth.serviceOwned=true but ownership.%s is empty; "+
+					"fix: set endpoints.http.ownership.%s to a ctx.* or path.* expression", c.ID, field, field)),
 		}
 	}
 	if !metadata.OwnershipPathValid(expr) {
 		return []ValidationResult{
 			v.newResult(codeFMT32, SeverityError, IssueInvalid, contractFile(c), fullField,
-				fmt.Sprintf("contract %q ownership.%s %q is not a valid DSL path expression (expected ctx.<seg> or path.<seg>...)", c.ID, field, expr)),
+				fmt.Sprintf("contract %q ownership.%s %q is not a valid DSL path expression; "+
+					"fix: use a valid path expression (ctx.<seg> or path.<param>.<seg>, camelCase segments)", c.ID, field, expr)),
 		}
 	}
 	// path.<param>.* — verify <param> is declared in pathParams.
@@ -1336,8 +1338,9 @@ func (v *Validator) checkOwnershipPath(c *metadata.ContractMeta, h *metadata.HTT
 			return []ValidationResult{
 				v.newResult(codeFMT32, SeverityError, IssueInvalid, contractFile(c), fullField,
 					fmt.Sprintf(
-						"contract %q ownership.%s %q references path param %q which is not declared in endpoints.http.pathParams",
-						c.ID, field, expr, param,
+						"contract %q ownership.%s %q references path param %q not declared in endpoints.http.pathParams; "+
+							"fix: declare %q under endpoints.http.pathParams or correct the path expression",
+						c.ID, field, expr, param, param,
 					)),
 			}
 		}
