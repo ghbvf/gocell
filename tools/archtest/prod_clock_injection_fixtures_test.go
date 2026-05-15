@@ -33,7 +33,7 @@ func runProdClockInjectionFixtureScan(t *testing.T, fixtureDir string) []string 
 	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
 	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
 
-	var violations []string
+	var diags []Diagnostic
 	visited := map[string]bool{}
 
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
@@ -52,11 +52,15 @@ func runProdClockInjectionFixtureScan(t *testing.T, fixtureDir string) []string 
 				continue
 			}
 
-			violations = append(violations,
+			diags = append(diags,
 				scanProdClockInjectionAST(p.Fset, file, rel, p.TypesInfo)...)
 		}
 	})
 
+	violations := make([]string, 0, len(diags))
+	for _, d := range diags {
+		violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
+	}
 	sort.Strings(violations)
 	return violations
 }
