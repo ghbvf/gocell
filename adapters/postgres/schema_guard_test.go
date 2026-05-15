@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 27 migrations (001-027, contiguous).
+	// Currently 28 migrations (001-028, contiguous).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
 	// 020 adds audit_entries table for the ledger.Store PG backend; 021 adds the
 	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
@@ -51,9 +51,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 024 installs the effective_admin_invariant trigger family (S4.0);
 	// 025 drops sessions.authz_epoch_at_issue (S4b Batch 1C);
 	// 026 restores sessions.authz_epoch_at_issue (S4d — ADR §0 A1 retracted, row is SoR);
-	// 027 adds refresh_tokens.authz_epoch_at_issue (S4d — credential provenance for refresh chain).
-	assert.Equal(t, int64(27), v,
-		"expected version should be exactly 27 (current migration max)")
+	// 027 adds refresh_tokens.authz_epoch_at_issue (S4d — credential provenance for refresh chain);
+	// 028 adds CHECK(authz_epoch>0) + DROP DEFAULT on the 3 epoch columns (S4d P2.a — '0=unset' hard DB invariant).
+	assert.Equal(t, int64(28), v,
+		"expected version should be exactly 28 (current migration max)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
