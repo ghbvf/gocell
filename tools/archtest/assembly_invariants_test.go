@@ -34,8 +34,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-
-	archscanner "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // ---- ASSEMBLY-MODULES-GEN-01 / ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02 /
@@ -72,8 +70,8 @@ func loadKnownCellIDs(t *testing.T) []string {
 	// filepath.Base check would also match nested fixtures (e.g.
 	// cells/<id>/sub/cell.yaml), letting future test scaffolding silently
 	// inflate the cell ID set.
-	scope := archscanner.DirsScope(root, []string{"cells"},
-		archscanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{"cells"},
+		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			return strings.HasPrefix(rel, "cells/") &&
 				strings.Count(rel, "/") == depth2SlashCount &&
@@ -82,7 +80,7 @@ func loadKnownCellIDs(t *testing.T) []string {
 	)
 
 	var ids []string
-	archscanner.EachContentFile(t, scope, []string{".yaml"}, func(_ *testing.T, fc archscanner.ContentContext) {
+	EachContentFile(t, scope, []string{".yaml"}, func(_ *testing.T, fc ContentContext) {
 		var doc struct {
 			ID string `yaml:"id"`
 		}
@@ -116,21 +114,25 @@ func loadKnownCellIDs(t *testing.T) []string {
 func TestAssemblyModulesGen_HasGeneratedMarker(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := archscanner.DirsScope(root, []string{"cmd"},
-		archscanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{"cmd"},
+		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			return filepath.Base(rel) == "modules_gen.go" && strings.Count(rel, "/") == depth2SlashCount
 		}),
 	)
 
 	hits := 0
-	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc archscanner.FileContext) {
-		hits++
-		path, rel := fc.AbsPath, fc.Rel
-		t.Run(rel, func(t *testing.T) {
-			t.Parallel()
-			checkModulesGenFile(t, path, rel)
-		})
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			hits++
+			path := p.Fset.Position(file.Pos()).Filename
+			rel := p.Rel(file)
+			t.Run(rel, func(t *testing.T) {
+				t.Parallel()
+				checkModulesGenFile(t, path, rel)
+			})
+		}
+		return nil
 	})
 	if hits == 0 {
 		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyModulesGen01)
@@ -176,7 +178,7 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 // function declaration `func generatedCellModules() []CellModule`.
 func hasGeneratedCellModulesFunc(af *ast.File) bool {
 	found := false
-	archscanner.EachInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) {
 		if found {
 			return
 		}
@@ -226,7 +228,7 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 		knownIDSet[id] = struct{}{}
 	}
 
-	scope := archscanner.DirsScope(root, []string{"cmd"})
+	scope := DirsScope(root, []string{"cmd"})
 
 	type violation struct {
 		file   string
@@ -235,29 +237,32 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 	}
 	var violations []violation
 
-	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc archscanner.FileContext) {
-		archscanner.EachInSubtree[ast.SwitchStmt](fc.File, func(sw *ast.SwitchStmt) {
-			archscanner.EachInChildren[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
-				for _, expr := range cc.List {
-					archscanner.EachInSubtree[ast.BasicLit](expr, func(lit *ast.BasicLit) {
-						if lit.Kind != token.STRING {
-							return
-						}
-						unquoted, err := strconv.Unquote(lit.Value)
-						if err != nil {
-							return
-						}
-						if _, found := knownIDSet[unquoted]; found {
-							violations = append(violations, violation{
-								file:   fc.Rel,
-								line:   fc.Fset.Position(lit.Pos()).Line,
-								cellID: unquoted,
-							})
-						}
-					})
-				}
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.SwitchStmt](file, func(sw *ast.SwitchStmt) {
+				EachInChildren[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
+					for _, expr := range cc.List {
+						EachInSubtree[ast.BasicLit](expr, func(lit *ast.BasicLit) {
+							if lit.Kind != token.STRING {
+								return
+							}
+							unquoted, err := strconv.Unquote(lit.Value)
+							if err != nil {
+								return
+							}
+							if _, found := knownIDSet[unquoted]; found {
+								violations = append(violations, violation{
+									file:   p.Rel(file),
+									line:   p.Fset.Position(lit.Pos()).Line,
+									cellID: unquoted,
+								})
+							}
+						})
+					}
+				})
 			})
-		})
+		}
+		return nil
 	})
 
 	for _, v := range violations {
@@ -353,7 +358,7 @@ func containsYAMLDashTag(rawTag string) bool {
 // af, or nil if not found.
 func findStructDecl(af *ast.File, name string) *ast.StructType {
 	var result *ast.StructType
-	archscanner.EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
 		if result != nil {
 			return
 		}
@@ -388,22 +393,25 @@ func findStructDecl(af *ast.File, name string) *ast.StructType {
 func TestAssemblyCellModuleTypePresent(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := archscanner.DirsScope(root, []string{"cmd"},
-		archscanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{"cmd"},
+		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			return filepath.Base(rel) == "modules_gen.go" && strings.Count(rel, "/") == depth2SlashCount
 		}),
 	)
 
 	hits := 0
-	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc archscanner.FileContext) {
-		hits++
-		cmdDir := filepath.Dir(fc.AbsPath)
-		cmdRel := filepath.ToSlash(filepath.Dir(fc.Rel))
-		t.Run(cmdRel, func(t *testing.T) {
-			t.Parallel()
-			checkCellModuleTypePresentInDir(t, root, cmdDir)
-		})
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			hits++
+			cmdDir := filepath.Dir(p.Fset.Position(file.Pos()).Filename)
+			cmdRel := filepath.ToSlash(filepath.Dir(p.Rel(file)))
+			t.Run(cmdRel, func(t *testing.T) {
+				t.Parallel()
+				checkCellModuleTypePresentInDir(t, root, cmdDir)
+			})
+		}
+		return nil
 	})
 	if hits == 0 {
 		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyCellModuleType04)
@@ -420,20 +428,23 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, cmdDir string) {
 	require.NoError(t, err, "%s: rel %s", ruleAssemblyCellModuleType04, cmdDir)
 	cmdDirRel = filepath.ToSlash(cmdDirRel)
 
-	scope := archscanner.DirsScope(root, []string{cmdDirRel},
-		archscanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{cmdDirRel},
+		MatchRels(func(rel string) bool {
 			return filepath.ToSlash(filepath.Dir(rel)) == cmdDirRel
 		}),
 	)
 
 	found := false
-	archscanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc archscanner.FileContext) {
-		if found {
-			return
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			if found {
+				return nil
+			}
+			if hasTopLevelTypeDecl(file, "CellModule") {
+				found = true
+			}
 		}
-		if hasTopLevelTypeDecl(fc.File, "CellModule") {
-			found = true
-		}
+		return nil
 	})
 	if found {
 		return
@@ -453,7 +464,7 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, cmdDir string) {
 // any other type kind.
 func hasTopLevelTypeDecl(af *ast.File, name string) bool {
 	found := false
-	archscanner.EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
 		if !found && ts.Name.Name == name {
 			found = true
 		}
@@ -479,6 +490,7 @@ func hasTopLevelTypeDecl(af *ast.File, name string) bool {
 const ruleAssemblySnapshotsLocked01 = "ASSEMBLY-SNAPSHOTS-LOCKED-01"
 
 func TestAssemblySnapshotsLocked(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
 	files, err := asnFindAssemblyProductionGoFiles(root)
 	if err != nil {
@@ -810,7 +822,7 @@ func asnCheckSource(label, src string) ([]string, error) {
 
 func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	var violations []string
-	archscanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -821,7 +833,7 @@ func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	// not inherit the caller's lockDepth, so each starts fresh at 0. The
 	// outer EachInSubtree[ast.FuncLit] catches FuncLits anywhere in the file
 	// (top-level decls, nested calls, struct field initializers, ...).
-	archscanner.EachInSubtree[ast.FuncLit](f, func(fl *ast.FuncLit) {
+	EachInSubtree[ast.FuncLit](f, func(fl *ast.FuncLit) {
 		if fl.Body == nil {
 			return
 		}
@@ -1035,7 +1047,7 @@ func asnViolation(file string, line int) string {
 // asnFindAssemblyProductionGoFiles returns all non-test .go files under
 // kernel/assembly/.
 func asnFindAssemblyProductionGoFiles(root string) ([]string, error) {
-	scope := archscanner.DirsScope(root, []string{"kernel/assembly"})
+	scope := DirsScope(root, []string{"kernel/assembly"})
 	files, err := scope.Files()
 	if err != nil {
 		return nil, err
@@ -1082,6 +1094,7 @@ var expectedAssemblyRefMethods = map[string]string{
 }
 
 func TestAssemblyRefMethodSet(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
 	srcPath := filepath.Join(root, "kernel", "cell", "auth_plan.go")
 
@@ -1113,7 +1126,7 @@ func TestAssemblyRefMethodSet(t *testing.T) {
 // interface { … }` in af, or nil if not found.
 func findInterfaceDecl(af *ast.File, name string) *ast.InterfaceType {
 	var result *ast.InterfaceType
-	archscanner.EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](af, func(ts *ast.TypeSpec) {
 		if result != nil {
 			return
 		}

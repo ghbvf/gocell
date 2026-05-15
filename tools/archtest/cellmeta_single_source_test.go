@@ -40,8 +40,6 @@ import (
 	"go/token"
 	"path/filepath"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestCellmetaSingleSource01_NoForbiddenTypes verifies CELLMETA-SINGLE-SOURCE-01.
@@ -56,18 +54,21 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 		"CellVerify":   true,
 		"L0Dep":        true,
 	}
-	scope := scanner.DirsScope(root, []string{"kernel/cell"})
-	scanner.EachFile(t, scope, 0, func(_ *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.TypeSpec](fc.File, func(ts *ast.TypeSpec) {
-			if forbidden[ts.Name.Name] {
-				t.Errorf(
-					"CELLMETA-SINGLE-SOURCE-01: %s declares type %s — "+
-						"moved to kernel/metadata (CellMeta / OwnerMeta / SchemaMeta / "+
-						"CellVerifyMeta / L0DepMeta); remove duplicate type",
-					fc.Rel, ts.Name.Name,
-				)
-			}
-		})
+	scope := DirsScope(root, []string{"kernel/cell"})
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+				if forbidden[ts.Name.Name] {
+					t.Errorf(
+						"CELLMETA-SINGLE-SOURCE-01: %s declares type %s — "+
+							"moved to kernel/metadata (CellMeta / OwnerMeta / SchemaMeta / "+
+							"CellVerifyMeta / L0DepMeta); remove duplicate type",
+						p.Rel(file), ts.Name.Name,
+					)
+				}
+			})
+		}
+		return nil
 	})
 }
 
@@ -83,7 +84,7 @@ func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 	var found *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if found != nil || fd.Recv != nil || fd.Name == nil {
 			return
 		}
@@ -119,7 +120,7 @@ func TestCellmetaSingleSource03_MetadataInterfaceReturn(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 	var inventoryIface *ast.InterfaceType
-	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if inventoryIface != nil || ts.Name.Name != "CellInventory" {
 			return
 		}

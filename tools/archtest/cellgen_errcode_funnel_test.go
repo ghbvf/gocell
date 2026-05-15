@@ -16,13 +16,10 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestCellgenScaffoldErrcodeFunnel enforces CELLGEN-SCAFFOLD-ERRCODE-FUNNEL-01:
@@ -39,7 +36,7 @@ func TestCellgenScaffoldErrcodeFunnel(t *testing.T) {
 
 	repoRoot := repoRootFromTestPath(t)
 
-	cellgenAllPred := scanner.MatchRels(func(rel string) bool {
+	cellgenAllPred := MatchRels(func(rel string) bool {
 		base := filepath.Base(rel)
 		// Exclude test files.
 		if strings.HasSuffix(base, "_test.go") {
@@ -49,28 +46,31 @@ func TestCellgenScaffoldErrcodeFunnel(t *testing.T) {
 		return strings.HasSuffix(base, ".go")
 	})
 
-	scope := scanner.DirsScope(repoRoot, []string{
+	scope := DirsScope(repoRoot, []string{
 		"tools/codegen/cellgen",
 	}, cellgenAllPred)
 
 	var violations []string
 
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return
-			}
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return
-			}
-			if ident.Name == "fmt" && sel.Sel.Name == "Errorf" {
-				pos := fc.Fset.Position(call.Lparen)
-				violations = append(violations,
-					fc.Rel+":"+strconv.Itoa(pos.Line)+": fmt.Errorf(...)")
-			}
-		})
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				ident, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return
+				}
+				if ident.Name == "fmt" && sel.Sel.Name == "Errorf" {
+					pos := p.Fset.Position(call.Lparen)
+					violations = append(violations,
+						p.Rel(file)+":"+strconv.Itoa(pos.Line)+": fmt.Errorf(...)")
+				}
+			})
+		}
+		return nil
 	})
 
 	if len(violations) > 0 {

@@ -13,13 +13,10 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const rulePGConstructorMustFree01 = "PG-CONSTRUCTOR-MUST-FREE-01"
@@ -28,7 +25,7 @@ const rulePGConstructorMustFree01 = "PG-CONSTRUCTOR-MUST-FREE-01"
 // reports any exported MustNew* function declaration.
 func TestPGConstructorMustFree01(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"adapters/postgres"})
+	scope := DirsScope(root, []string{"adapters/postgres"})
 
 	type violation struct {
 		file string
@@ -37,26 +34,27 @@ func TestPGConstructorMustFree01(t *testing.T) {
 	}
 	var violations []violation
 
-	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		if strings.HasSuffix(fc.AbsPath, "_test.go") {
-			return
-		}
-		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
-			name := fd.Name.Name
-			// exported MustNew* at package level (no receiver)
-			if fd.Recv != nil {
-				return
-			}
-			if !strings.HasPrefix(name, "MustNew") {
-				return
-			}
-			pos := fc.Fset.Position(fd.Pos())
-			violations = append(violations, violation{
-				file: fc.Rel,
-				line: pos.Line,
-				name: name,
+	// DirsScope without IncludeTests() already excludes *_test.go files.
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				name := fd.Name.Name
+				// exported MustNew* at package level (no receiver)
+				if fd.Recv != nil {
+					return
+				}
+				if !strings.HasPrefix(name, "MustNew") {
+					return
+				}
+				pos := p.Fset.Position(fd.Pos())
+				violations = append(violations, violation{
+					file: p.Rel(file),
+					line: pos.Line,
+					name: name,
+				})
 			})
-		})
+		}
+		return nil
 	})
 
 	if len(violations) > 0 {
