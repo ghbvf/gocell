@@ -99,11 +99,12 @@ type ValidateView struct {
 	AuthzEpochAtIssue int64
 }
 
-// Store persists session records. Implementations must obey the protocol
-// decisions encoded in *Protocol — Create rejects records that violate
-// FingerprintMode shape (e.g. empty JTI under FingerprintJTIRef), and
-// RevokeForSubject revokes every active session for the subject regardless
-// of which CredentialEvent triggered it (D3 fail-closed by default).
+// Store persists session records and exposes a differentiated repository
+// readiness check. Implementations must obey the protocol decisions encoded
+// in *Protocol — Create rejects records that violate FingerprintMode shape
+// (e.g. empty JTI under FingerprintJTIRef), and RevokeForSubject revokes
+// every active session for the subject regardless of which CredentialEvent
+// triggered it (D3 fail-closed by default).
 //
 // Method semantics (ADR-Session §4.2):
 //   - Create: persist a new session. Nil session, empty Session.ID, empty
@@ -127,9 +128,20 @@ type ValidateView struct {
 //     arguments, returns nil even when the subject has no sessions; pre-
 //     revoked sessions for the subject preserve their original RevokedAt
 //     timestamp (append-only revoke per ADR-Session D3).
+//   - RepoReady: differentiated readiness check for the sessions relation.
+//     SQL-backed implementations issue a representative query against the
+//     sessions table (e.g. SELECT 1 FROM sessions WHERE false) so the check
+//     exercises a distinct failure domain from the pool-level postgres_ready
+//     probe — it surfaces schema/migration drift and table-level permission
+//     loss that a connection ping cannot detect. In-memory implementations
+//     return nil (always ready, MemStore convention). Satisfies
+//     kernel/cell.RepoHealthProber; registered via cell.RegisterRepoReadiness.
 type Store interface {
 	Create(ctx context.Context, s *Session) error
 	Get(ctx context.Context, id string) (*ValidateView, error)
 	Revoke(ctx context.Context, id string) error
 	RevokeForSubject(ctx context.Context, subjectID string, event CredentialEvent) error
+	// RepoReady is a differentiated readiness check for the sessions relation.
+	// See Store godoc for full semantics.
+	RepoReady(ctx context.Context) error
 }

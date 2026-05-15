@@ -360,11 +360,10 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error 
 
 // registerHealthAndLifecycle registers health probes and lifecycle hooks into reg.
 func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) {
-	if hc, ok := c.sessionStore.(interface {
-		Health(context.Context) error
-	}); ok {
-		reg.Health("session_store_ready", hc.Health)
-	}
+	// session.Store satisfies cell.RepoHealthProber via its RepoReady method.
+	// Use the typed funnel instead of an anonymous duck-type assertion so
+	// CELL-REPO-READYZ-PROBE-01 archtest can enforce the canonical form.
+	cell.RegisterRepoReadiness(reg, "session_store_ready", c.sessionStore)
 	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
