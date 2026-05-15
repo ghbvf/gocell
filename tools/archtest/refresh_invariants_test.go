@@ -1,9 +1,9 @@
-package archtest
-
 // refresh_invariants_test.go consolidates refresh-theme invariants:
 //   - INVARIANT: REFRESH-CROSS-STORE-TX-01
 //   - INVARIANT: REFRESH-INVALID-INDEX-SINGLE-SOURCE-01
 //   - INVARIANT: REFRESH-AMBIENT-TX-01
+
+package archtest
 
 import (
 	"fmt"
@@ -357,13 +357,17 @@ func TestRefreshAmbientTX01(t *testing.T) {
 		line int
 		expr string
 	}
-	var violations []violation
+	var (
+		violations []violation
+		foundFile  bool
+	)
 
 	Run(t, scope, func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			if p.Rel(file) != rel {
 				continue
 			}
+			foundFile = true
 			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok || sel.Sel.Name != "Begin" {
@@ -378,6 +382,8 @@ func TestRefreshAmbientTX01(t *testing.T) {
 		}
 		return nil
 	})
+
+	require.True(t, foundFile, "%s: file not found: %s", ruleRefreshAmbientTX01, rel)
 
 	if len(violations) > 0 {
 		t.Logf("%s: %d violation(s) in %s:", ruleRefreshAmbientTX01, len(violations), rel)
