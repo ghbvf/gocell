@@ -197,11 +197,12 @@ func collectASTFiles(t *testing.T, scope Scope) (
 		func(f *ast.File) string { return absMap[f] }
 }
 
-// RunTyped executes rule in typed mode. It resolves the module root, loads
-// patterns once through the process-wide [typeseval.SharedResolver] cache,
-// then invokes rule with one Pass per loaded package — Files dedup'd via
-// *ast.File pointer identity across the regular and ".test" synthetic
-// variants (typeseval test-mode load returns both).
+// RunTyped executes rule in typed mode. It resolves the module root via
+// [findModuleRoot] and delegates to [runTypedWithRoot]. Patterns are loaded
+// once through the process-wide [typeseval.SharedResolver] cache, then rule
+// is invoked with one Pass per loaded package — Files dedup'd via *ast.File
+// pointer identity across the regular and ".test" synthetic variants
+// (typeseval test-mode load returns both).
 //
 // Failure modes (module-root not found, load error, no usable packages)
 // fail-loud via t.Fatalf. The returned slice is the union of every rule
@@ -209,7 +210,61 @@ func collectASTFiles(t *testing.T, scope Scope) (
 //
 // Typed rules read pass.TypesInfo (and pass.Pkg) for resolution; AST-only
 // helpers ([EachInSubtree] etc.) work unchanged on pass.Files.
+//
+// For loading a standalone testdata fixture module (one with its own go.mod),
+// use [RunTypedDir] instead.
 func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
+	t.Helper()
+	return runTypedWithRoot(t, findModuleRoot(t), opts, patterns, rule)
+}
+
+// RunTypedDir executes rule in typed mode, loading packages from the
+// standalone module rooted at dir. dir must be an absolute path to a
+// directory containing its own go.mod (a fixture module isolated from the
+// main module). Patterns are resolved relative to dir.
+//
+// This is the correct entry point for rules that target intentional-violation
+// fixtures in testdata/: those fixtures intentionally import or call
+// constructs that production archtest rules forbid, and must therefore live
+// in a separate module so they do not pollute the main module's build.
+//
+// Pass.Rel returns paths relative to dir (the fixture module root), not the
+// main module root — so "usage.go" rather than
+// "tools/archtest/testdata/.../usage.go".
+//
+// AI-rebust: Hard — three-line Hard defense is preserved unchanged:
+//   - Defense #1: Pass.Pkg is still *types.Package (not *packages.Package);
+//     rule authors cannot reach .Syntax or reconstruct INV-1 cross-load bugs.
+//   - Defense #2: depguard bans archtest *_test.go from directly importing
+//     golang.org/x/tools/go/packages; RunTypedDir is the approved funnel.
+//   - Defense #3: meta-archtest PASS-FUNNEL-LOADPACKAGES-01 bans direct
+//     typeseval.LoadPackages calls; RunTypedDir is the only new approved
+//     entry for fixture-module loads (funnel widened, not bypassed).
+//
+// Failure modes (non-absolute dir, load error) fail-loud via t.Fatalf.
+// For main-module loads use [RunTyped].
+//
+// ref: golang.org/x/tools go/analysis/analysistest/analysistest.go
+// (analysistest.Run receives dir string as the module root for the test
+// programs; same pattern applied here for isolated fixture modules).
+func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
+	t.Helper()
+	if !filepath.IsAbs(dir) {
+		t.Fatalf("archtest.RunTypedDir: dir must be absolute module root, got %q", dir)
+	}
+	return runTypedWithRoot(t, dir, opts, patterns, rule)
+}
+
+// runTypedWithRoot is the shared implementation for [RunTyped] and
+// [RunTypedDir]. It loads patterns relative to root (the module root
+// directory) through [typeseval.SharedResolver] and invokes rule with one
+// Pass per loaded package.
+//
+// Extracted to eliminate duplication: RunTyped supplies root via
+// findModuleRoot(t); RunTypedDir supplies root as its explicit dir argument.
+// The single driver construction path (buildTypedPass) is unchanged — both
+// callers produce the same Pass shape.
+func runTypedWithRoot(t testing.TB, root string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
 	t.Helper()
 	if rule == nil {
 		t.Fatalf("archtest.RunTyped: nil rule")
@@ -217,7 +272,6 @@ func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diag
 	if len(patterns) == 0 {
 		t.Fatalf("archtest.RunTyped: at least one pattern required")
 	}
-	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(root, opts.Tests, opts.Tags, patterns...)
 	if err != nil {
 		t.Fatalf("archtest.RunTyped: SharedResolver: %v", err)

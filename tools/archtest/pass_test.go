@@ -1,24 +1,28 @@
 // INVARIANT: ARCHTEST-PASS-DRIVER-UNIT-01
 //
 // ARCHTEST-PASS-DRIVER-UNIT-01 — unit-test coverage for the archtest.Pass
-// driver surface: archtest.Run / archtest.RunTyped plus the unexported
-// helpers buildTypedPass / newPackageRel / isPackageWithTestFiles. Also
-// covers the Stage 1.5 additions: Pass.Abs, Pass.IsFileInScope,
-// Pass.IsGenerated, the façade helpers (ResolvePackageRef, ResolveMethodCall,
-// EvaluateConstString, FlatNonDefaultTags, KnownNonDefaultTags), and the
-// ImportBan re-export. Not a meta-archtest enforcement rule — the anchor
-// exists solely to satisfy INVENTORY-ANCHOR-REQUIRED-01. Pairs with
-// pass_funnel_test.go (PASS-FUNNEL-*-01) and the façade source files
-// pass.go / walk.go / scope.go / resolve.go.
+// driver surface: archtest.Run / archtest.RunTyped / archtest.RunTypedDir
+// plus the unexported helpers buildTypedPass / newPackageRel /
+// isPackageWithTestFiles. Also covers the Stage 1.5 additions: Pass.Abs,
+// Pass.IsFileInScope, Pass.IsGenerated, the façade helpers (ResolvePackageRef,
+// ResolveMethodCall, EvaluateConstString, FlatNonDefaultTags,
+// KnownNonDefaultTags), and the ImportBan re-export. Stage 1.6 additions:
+// RunTypedDir (fixture-module driver) and runTypedWithRoot delegation.
+// Not a meta-archtest enforcement rule — the anchor exists solely to satisfy
+// INVENTORY-ANCHOR-REQUIRED-01. Pairs with pass_funnel_test.go
+// (PASS-FUNNEL-*-01) and the façade source files pass.go / walk.go /
+// scope.go / resolve.go.
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1021,5 +1025,138 @@ func TestIsGeneratedRelPathReExported(t *testing.T) {
 		if facade != tc.want {
 			t.Errorf("IsGeneratedRelPath(%q) = %v, want %v", tc.rel, facade, tc.want)
 		}
+	}
+}
+
+// ── Stage 1.6 additions ────────────────────────────────────────────────────
+
+// tbFatalSpy is a minimal testing.TB substitute that captures Fatalf/FailNow
+// calls without terminating the enclosing test goroutine. Used to verify
+// guards that call t.Fatalf on invalid inputs. It embeds testing.TB so all
+// other methods (Helper, Logf, etc.) delegate to the real *testing.T.
+//
+// Only Fatalf and FailNow are overridden: Fatalf records the message and marks
+// the spy as fatal; FailNow marks fatal and calls runtime.Goexit() to stop the
+// caller's goroutine (matching *testing.T semantics exactly — callers of
+// RunTypedDir depend on goroutine exit after Fatalf).
+type tbFatalSpy struct {
+	testing.TB
+	fatal   bool
+	lastMsg string
+}
+
+func (s *tbFatalSpy) Helper() {}
+
+func (s *tbFatalSpy) Fatalf(format string, args ...any) {
+	s.fatal = true
+	s.lastMsg = fmt.Sprintf(format, args...)
+	runtime.Goexit()
+}
+
+func (s *tbFatalSpy) FailNow() {
+	s.fatal = true
+	runtime.Goexit()
+}
+
+// TestRunTypedDir_loadsStandaloneFixtureModule verifies that RunTypedDir can
+// load a standalone fixture module (one with its own go.mod) that is isolated
+// from the main module. This is the primary motivation for RunTypedDir: rules
+// targeting intentional-violation fixtures can load them without polluting the
+// main module build.
+//
+// The fixture used is tools/archtest/testdata/clock_leaf_fallback_fixtures/compliant
+// (module: fixturetest/clock_leaf_fallback/compliant). Assertions:
+//   - rule is called ≥ 1 time
+//   - Pass.Typed() == true, Pass.Pkg != nil, Pass.TypesInfo != nil, len(Pass.Files) > 0
+//   - Pass.Rel(f) is non-empty and does NOT start with the main module prefix
+//     "tools/archtest/testdata/" (it is a module-relative path within the
+//     fixture module, e.g. "usage.go")
+func TestRunTypedDir_loadsStandaloneFixtureModule(t *testing.T) {
+	root := findModuleRoot(t)
+	dir := filepath.Join(root, "tools", "archtest", "testdata",
+		"clock_leaf_fallback_fixtures", "compliant")
+
+	var calls int
+	rule := func(p *Pass) []Diagnostic {
+		calls++
+		if !p.Typed() {
+			t.Errorf("RunTypedDir Pass: Typed()=false")
+		}
+		if p.Pkg == nil {
+			t.Errorf("RunTypedDir Pass: Pkg nil")
+		}
+		if p.TypesInfo == nil {
+			t.Errorf("RunTypedDir Pass: TypesInfo nil")
+		}
+		if len(p.Files) == 0 {
+			t.Errorf("RunTypedDir Pass: Files empty")
+		}
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			if rel == "" {
+				t.Errorf("RunTypedDir Pass.Rel: empty for file in fixture module")
+			}
+			// The rel path must not contain the main-module prefix; it should
+			// be module-relative within the fixture module (e.g. "usage.go").
+			if strings.HasPrefix(rel, "tools/archtest/testdata/") {
+				t.Errorf("RunTypedDir Pass.Rel(%q): contains main-module prefix; "+
+					"RunTypedDir must produce fixture-module-relative paths", rel)
+			}
+		}
+		return nil
+	}
+
+	RunTypedDir(t, dir, TypedOpts{Tests: false}, []string{"./..."}, rule)
+	if calls == 0 {
+		t.Errorf("RunTypedDir invoked rule 0 times; expected ≥ 1 (fixture module has at least one package)")
+	}
+}
+
+// TestRunTypedDir_rejectsRelativeDir verifies that RunTypedDir calls t.Fatalf
+// when given a relative (non-absolute) directory path. Uses tbFatalSpy to
+// capture the fatal without terminating the enclosing test goroutine.
+func TestRunTypedDir_rejectsRelativeDir(t *testing.T) {
+	spy := &tbFatalSpy{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunTypedDir(spy, "tools/archtest/testdata/clock_leaf_fallback_fixtures/compliant",
+			TypedOpts{Tests: false}, []string{"./..."}, func(*Pass) []Diagnostic { return nil })
+	}()
+	<-done
+	if !spy.fatal {
+		t.Errorf("RunTypedDir with relative dir: expected t.Fatalf to be called, got none")
+	}
+	if !strings.Contains(spy.lastMsg, "absolute") {
+		t.Errorf("RunTypedDir fatal message %q does not mention \"absolute\"", spy.lastMsg)
+	}
+}
+
+// TestRunTyped_delegatesToRunTypedDir verifies the regression contract for
+// RunTyped: it still loads the main module correctly after the Stage 1.6
+// refactor into runTypedWithRoot. Uses the same passfunnelfixture pattern as
+// TestRunTyped_typedPassShape to ensure the delegation path is covered.
+func TestRunTyped_delegatesToRunTypedDir(t *testing.T) {
+	var calls int
+	rule := func(p *Pass) []Diagnostic {
+		calls++
+		if !p.Typed() {
+			t.Errorf("RunTyped (delegation) Pass: Typed()=false")
+		}
+		if p.Pkg == nil {
+			t.Errorf("RunTyped (delegation) Pass: Pkg nil")
+		}
+		if p.TypesInfo == nil {
+			t.Errorf("RunTyped (delegation) Pass: TypesInfo nil")
+		}
+		if len(p.Files) == 0 {
+			t.Errorf("RunTyped (delegation) Pass: Files empty")
+		}
+		return nil
+	}
+	RunTyped(t, TypedOpts{Tests: false, Tags: []string{archtestmeta.FixtureBuildTag}},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	if calls == 0 {
+		t.Errorf("RunTyped (delegation) invoked rule 0 times; expected ≥ 1")
 	}
 }
