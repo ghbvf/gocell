@@ -24,7 +24,7 @@ package governance
 // part of any public API. RuleCode itself is exported so external consumers
 // (cmd/gocell, tools) can create ValidationResult values with the correct type.
 //
-// Total: 82 constants across 11 series, matching goldenRuleIDs() in
+// Total: 83 constants across 11 series, matching goldenRuleIDs() in
 // rule_inventory_test.go. FMT-18 and ADV-02 are retired; the numbering gaps
 // are intentional.
 
@@ -104,6 +104,7 @@ const (
 	codeFMT29 RuleCode = "FMT-29"
 	codeFMT30 RuleCode = "FMT-30"
 	codeFMT31 RuleCode = "FMT-31"
+	codeFMT32 RuleCode = "FMT-32"
 	codeFMTA1 RuleCode = "FMT-A1"
 	codeFMTC1 RuleCode = "FMT-C1"
 

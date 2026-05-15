@@ -185,6 +185,16 @@
                     },
                     "additionalProperties": false
                   },
+                  "ownership": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["subjectPath", "resourcePath"],
+                    "description": "Object-level authorization subject/resource paths. Required when auth.serviceOwned=true (schema if/then enforces; governance FMT-32 also enforces). DSL form oracle: metadata.OwnershipPathValid; FMT-32 enforces path.<param>.* referential integrity against pathParams.",
+                    "properties": {
+                      "subjectPath":  { "type": "string", "minLength": 1, "description": "Caller subject path expr (ctx.*/path.*). DSL form oracle: metadata.OwnershipPathValid; FMT-32 enforces." },
+                      "resourcePath": { "type": "string", "minLength": 1, "description": "Resource owner path expr. path.<param>.* param referential integrity is enforced by FMT-32 against pathParams." }
+                    }
+                  },
                   "auth": {
                     "type": "object",
                     "description": "Route-level authentication overrides for contractgen. Omit for standard authenticated routes. Mutex enforced by value-true (if/then const:true) so explicit `false` is equivalent to omission and never triggers conflict — see metadata.AuthComboLegal for the single oracle.",
@@ -287,7 +297,17 @@
                       }
                     ]
                   }
-                }
+                },
+                "allOf": [
+                  {
+                    "description": "When auth.serviceOwned=true, the ownership block is required. FMT-32 enforces path DSL and param referential integrity at the governance layer; schema enforces structural presence.",
+                    "if": {
+                      "properties": { "auth": { "properties": { "serviceOwned": { "const": true } }, "required": ["serviceOwned"] } },
+                      "required": ["auth"]
+                    },
+                    "then": { "required": ["ownership"] }
+                  }
+                ]
               }
             }
           }
