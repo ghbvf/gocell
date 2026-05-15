@@ -1,6 +1,6 @@
 # archtest 入口合并方案：Pass-Driver 范式 + 零二次返工迁移
 
-**最后更新**：2026-05-15（Stage 1.6 RunTypedDir 框架补全 + Stage 3 PR-6 随同 ship via 本 PR）
+**最后更新**：2026-05-15（Stage 2 全部 4 PR ship 完成 [PR-2 #496 / PR-3 #493 / PR-4 #498 / PR-5 #497]；Stage 1.6 + Stage 3 PR-6 随 PR #500 ship）
 
 ## 进度状态
 
@@ -8,10 +8,10 @@
 |------|------|------|------|
 | 1 — Pass 框架 + 三重 Hard 防线 | 1 | ✅ PR #492 (2026-05-14) | 业务文件 0 改动；review 三轮 in-PR 收口 |
 | **1.5 — Pass 框架完备化 + 单路径 enforcement** | 1 | ✅ PR #495 (2026-05-15) | Stage 2/3/dual 全后续 PR 零框架返工前置；见下方摘要 |
-| **1.6 — RunTypedDir fixture-module driver 补全** | 1 | 🔄 随 PR-6 | Stage-1.5 漏盘点 standalone fixture-module 扫描；本 PR 补完端态 |
-| 2 — A 类 EachFile 主题分批迁移 | 4 | 🔄 PR-3 ✅ PR #493 (contract/codegen)；余 PR-2/4/5 待起 | 与阶段 3 并行；前置 = 阶段 1.5 |
-| 3 — E 类 for-range 主题分批迁移 | 5 | 🔄 PR-6 进行中（含 Stage 1.6 框架补全） | 与阶段 2 并行；前置 = 阶段 1.5 |
-| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ⏳ 等阶段 2+3 全部 ship | — |
+| **1.6 — RunTypedDir fixture-module driver 补全** | 1 | ✅ PR #500 (2026-05-15) | Stage-1.5 漏盘点 standalone fixture-module 扫描；随 PR-6 同 ship |
+| 2 — A 类 EachFile 主题分批迁移 | 4 | ✅ 全部 ship | PR-2 ✅ #496 (metadata)；PR-3 ✅ #493 (contract/codegen)；PR-4 ✅ #498 (observability)；PR-5 ✅ #497 (lifecycle/errcode) |
+| 3 — E 类 for-range 主题分批迁移 | 5 | 🔄 PR-6 ✅ PR #500 (clock，含 Stage 1.6)；余 PR-7 ~ PR-10 待起 | 与阶段 2 并行；前置 = 阶段 1.5 |
+| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ⏳ 等阶段 3 全部 ship（阶段 2 已完成） | — |
 
 **阶段 1.6 ship 摘要（本 PR，2026-05-15，随 Stage 3 PR-6 同 ship）**：
 
@@ -210,14 +210,14 @@ linters-settings:
 - 元治理 archtest 三条规则全绿（allowlist 内文件被豁免，allowlist 外文件目前无违反）
 - 故意在新建 archtest 中调 `scanner.EachFile` → 三重防线（depguard + PASS-FUNNEL-EACHFILE-01 + Pass.Pkg 不暴露 .Syntax）任一触发 fail
 
-### 阶段 2 — PR-2 ~ PR-N：A 类 36 处 EachFile 主题分批迁移（Cx3 × 4 PR，可并行）
+### 阶段 2 — PR-2 ~ PR-5：A 类 36 处 EachFile 主题分批迁移（Cx3 × 4 PR，可并行）— ✅ 全部 shipped (2026-05-15)
 
 按 archtest 主题分批，每 PR 约 8-10 个文件，**与阶段 3 互相独立**（不同代码模式，可同期推进）：
 
-- **PR-2**: governance / metadata 主题
-- **PR-3**: contract / codegen 主题  
-- **PR-4**: observability / health 主题
-- **PR-5**: lifecycle / errcode / panic 等其余
+- **PR-2**: governance / metadata 主题 — ✅ shipped as PR #496
+- **PR-3**: contract / codegen 主题 — ✅ shipped as PR #493
+- **PR-4**: observability / health 主题 — ✅ shipped as PR #498
+- **PR-5**: lifecycle / errcode / panic 等其余 — ✅ shipped as PR #497
 
 **每个迁移 PR 的完整动作**（业务文件的首次 + 唯一改写）：
 
@@ -232,7 +232,7 @@ linters-settings:
 
 按 archtest 主题分批，每 PR 约 6-8 个文件：
 
-- **PR-6**: `clock_invariants_test.go`（8 typed-load site：5 主树 RunTyped + 3 fixture-scan RunTypedDir；含 Stage 1.6 框架补全，单 PR）
+- **PR-6**: `clock_invariants_test.go`（8 typed-load site：5 主树 RunTyped + 3 fixture-scan RunTypedDir；含 Stage 1.6 框架补全，单 PR）— ✅ shipped as PR #500
 - **PR-7**: `errcode_invariants_test.go` + `auth_bootstrap_invariants_test.go`
 - **PR-8 ~ PR-10**: 其余 27 个文件分 3 批
 

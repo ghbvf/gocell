@@ -4,7 +4,7 @@
 > 主轴权威源：[`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md) §1  
 > 历史归档：[`docs/backlog/archive/`](backlog/archive/)
 >
-> 基线：`origin/develop @ c235abcc`（2026-05-14；含 PR #481/#482/#483/#484/#485/#486/#487/#488/#490/#492 + plan 040 阶段 1 ✅ shipped）
+> 基线：`origin/develop @ 4079754b`（2026-05-15；含 PR #481/#482/#483/#484/#485/#486/#487/#488/#490/#492/#493/#494/#495/#496/#497/#498/#499/#500 + plan 034 S4d/S4e ✅ (PR #494) + plan 040 阶段 1 ✅ / 1.5 ✅ (#495) / 1.6 ✅ (#500) / 阶段 2 全部 ✅ (PR-2 #496 / PR-3 #493 / PR-4 #498 / PR-5 #497) / 阶段 3 PR-6 ✅ (#500) shipped）
 
 ---
 
@@ -222,7 +222,7 @@
 | PR252-F2 | **Sweeper 生产治理** — 现状: 单 replica 假设；修复: multi-replica command consumer 时落 | arch-opt | Cx4 | 🟠 | multi-replica command consumer | `runtime/command/` | PR#252 |
 | PR333-BOOTSTRAP-OPTION-CROSS-CONCERN | **Bootstrap option 跨 concern 拆分** — 现状: option 概念混杂；修复: 按 concern 拆 | arch-opt | Cx2 | 🟡 | — | `runtime/bootstrap/` | PR#333 |
 | PR448-BUDGET-ISOLATION-PARENT-CHAIN-GUARD | **PHASE10-TEARCTX-PARENT-CHAIN-GUARD-01** — 现状: TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx 只断言 ctx 未 done，无法检测未来若有人把 tearCtx 改成 `context.WithTimeout(drainCtx, ...)` 形成继承链导致 budget 隐性泄漏；修复: 加一断言用 `context.WithCancel(Background)` 包装 tearCtx parent，drain 期间主动 cancel 并验证 tearCtx 不传播 cancel | test | Cx1 | 🟡 | — | `runtime/bootstrap/shutdown_ordering_test.go` | PR#448 reviewer F4 |
-| STARTUP-ROLLBACK-ERR-JOIN-01 | **Startup rollback 错误聚合** — 现状: startup 失败时 rollbackErr 静默丢；修复: `errors.Join(startupErr, rollbackErr)` 或 `StartupRollbackError{Startup, Rollback}` 结构化。**未加 archtest**：errors.Join 因果顺序为业务语义，不可用 AST/type system 静态守卫（Soft，AI-collab 章程禁止 Soft 立项），已评估无 ≥Medium Hard 化路径，行为回归由单测闭环。 | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `runtime/bootstrap/run_state.go` | backlog1 §2.4 |
+| STARTUP-ROLLBACK-ERR-JOIN-01 | **Startup rollback 错误聚合** — ✅ closed by PR #499 (2026-05-15)：`rollback()` 用 `errors.Join`（cause first）聚合全部 teardown error，新 `safeTeardown` 在 deferred recover 内把 panicking teardown 转 error 不中断 LIFO；assembly `rollbackCells` 返回 `[]error` 经 `failStart` join；`phaseError.Error()` 统一 `"phase: err"` 格式；抽 `pkg/testutil/errutil.FlattenJoined` 共享 helper。**未加 archtest**：errors.Join 因果顺序为业务语义，不可用 AST/type system 静态守卫（Soft，AI-collab 章程禁止 Soft 立项），已评估无 ≥Medium Hard 化路径，行为回归由单测闭环（4 个新单测覆盖 named panic/LIFO continuity/joined error tree）。 | bug | P1/Cx2 | ✅ PR #499 | v1.0 GA 前 | `runtime/bootstrap/run_state.go` + `kernel/assembly/` + `pkg/testutil/errutil/` | backlog1 §2.4 |
 | COREBUNDLE-MAINTEST-FAIL-FAST-01 | **corebundle main_test fail-fast** — 现状: bind 错误被白名单吞掉；修复: 用 `net.Listen("tcp", "127.0.0.1:0")` 注入 + 断言关键装配里程碑 | test | Cx2 | 🟡 | — | `cmd/corebundle/main_test.go` | backlog1 §2.7 |
 | B2-R-01 | **HealthListener 缺失时静默回退** — 现状: bootstrap 找不到 HealthListener 时静默回退到 main listener；修复: fail-fast 或显式 opt-in fallback | bug | P2/Cx2 | 🟡 | — | `runtime/bootstrap/bootstrap_phases.go:583-596` | backlog2 §3 B2-R-01 |
 | B2-R-02 | **Readyz 缺少 repo probe** — 现状: configcore/auditcore HealthCheckers 仅接 outbox，repo 状态无 probe（与 cap-13 REPO-HEALTHCHECKER-01 协同）| bug | P1/Cx2 | 🟡 | 与 cap-13 REPO-HEALTHCHECKER-01 同 PR | `cells/configcore/cell.go:204` + `cells/auditcore/cell.go:191` | backlog2 §3 B2-R-02 |
