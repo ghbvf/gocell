@@ -28,21 +28,37 @@
 //   - Downstream Hard (N1/N2 form lock): banned forms detected via type-aware
 //     AST scan (RunTyped + *types.Info). The only two banned shapes are the
 //     anonymous-interface duck-type assert (N1) and the bare reg.Health string-
-//     literal call (N2). Any other shape compiles but fails CI immediately —
-//     no gray zone.
-//   - Upstream Hard: cell.RegisterRepoReadiness is the single typed funnel
-//     (kernel/cell/repo_readiness.go). Its signature enforces cell.RepoHealthProber
-//     at compile time. Using any other registration shape violates N1 or N2 and
-//     fails this archtest. The funnel achieves "form uniqueness + archtest fail-
-//     on-deviation" — equivalent grade to panic(panicregister.Approved(...)) per
-//     ai-collab.md §Hard范本.
+//     literal call (N2, including const-identifier first args resolved via
+//     EvaluateConstString). Any other shape compiles but fails CI
+//     immediately — no gray zone.
+//   - Upstream Medium (conformance auto-join): cell.RegisterRepoReadiness is the
+//     single typed funnel (kernel/cell/repo_readiness.go). Its signature enforces
+//     cell.RepoHealthProber at compile time, so the wrong type is a compile error.
+//     However, Go cannot require a test to exist: a new RepoHealthProber
+//     implementation that calls RegisterRepoReadiness but omits
+//     RunRepoReadinessConformance wiring is caught by archtest P1 at CI time,
+//     not compile time. This makes the upstream wiring-presence grade Medium
+//     (archtest-bound). Harness behavioral correctness is Hard: scenario 2
+//     (DROP TABLE → non-nil) cannot be satisfied by a no-op implementation; the
+//     concrete store must execute a real query. Per charter: "允许 Medium 上游 +
+//     Hard 下游过渡形态"; Hard-ization tracked by backlog
+//     REPO-READYZ-UPSTREAM-FUNNEL-HARD-01 (cap-13).
 //   - P1 = Medium backstop: ensures every RepoHealthProber implementation is
 //     wired into celltest.RunRepoReadinessConformance so the differentiated
 //     failure-domain property is exercised.
 //
+// N1/N2 scan scope: cells/ production files only. Registration is a cell-init
+// responsibility; adapters/ and runtime/ do not call cell.Registry.Health for
+// repo probes and are not scanned by N1/N2 (they are scanned by P1 for
+// RepoHealthProber implementations if any exist there).
+//
 // # Tool blind spots (forms RunTyped/TypesInfo cannot see)
 //
-// The following AST forms are outside *types.Info resolution and would bypass
+// N2 now resolves const-identifier first arguments (package-level const strings
+// passed as the probe name) via EvaluateConstString, in addition to
+// *ast.BasicLit string literals. The const-ident bypass is therefore covered.
+//
+// The following AST forms remain outside *types.Info resolution and would bypass
 // detection. Reverse self-check tests confirm they do NOT appear in current
 // production AST:
 //
@@ -53,11 +69,11 @@
 //
 //	B2. Cross-package helper indirection (non-funnel): wrapping reg.Health in a
 //	    non-RegisterRepoReadiness helper inside a cell package would hide the
-//	    string literal from N2.
+//	    string literal from N2 even after the const-ident extension.
 //	    Reverse self-check: TestCellRepoReadyzProbe_ReverseBlindSpot_NoLocalHealthWrapper
 //	    confirms no cells/ non-test file defines a local function whose name
-//	    contains "Health" AND whose body calls reg.Health with a string literal
-//	    (excluding RegisterRepoReadiness itself).
+//	    contains "Health" AND whose body calls reg.Health with a string-valued
+//	    first argument (excluding RegisterRepoReadiness itself).
 //
 // ref: kernel/cell/repo_readiness.go — RegisterRepoReadiness typed funnel
 // ref: kernel/cell/celltest/repo_readiness_conformance.go — RunRepoReadinessConformance
@@ -195,7 +211,10 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 				Message: fmt.Sprintf(
 					"%s implements kernel/cell.RepoHealthProber but has no "+
 						"celltest.RunRepoReadinessConformance call in the test corpus "+
-						"(CELL-REPO-READYZ-PROBE-01/P1)",
+						"(CELL-REPO-READYZ-PROBE-01/P1). Add a conformance test:\n"+
+						"  celltest.RunRepoReadinessConformance(t, \"x_ready\", impl, brokenOrNil)\n"+
+						"where impl is the healthy store and broken is the PG store after DROP TABLE "+
+						"(use nil for mem/in-memory stores that always return ready).",
 					impl),
 			})
 		}
@@ -308,7 +327,16 @@ func isRegistryHealthCall(call *ast.CallExpr, info *types.Info) bool {
 	return fn.Pkg() != nil && fn.Pkg().Path() == repoReadyzCellPkgPath && fn.Name() == "Health"
 }
 
-// scanRepoReadyzN2 walks file for reg.Health(stringLiteral, ...) calls.
+// scanRepoReadyzN2 walks file for reg.Health(stringArg, ...) calls where the
+// first argument evaluates to a compile-time string constant. This covers:
+//
+//   - *ast.BasicLit string literals: reg.Health("store_ready", fn)
+//   - package-level const identifiers: reg.Health(storeReadyName, fn)
+//     where storeReadyName is a const string, resolved via
+//     EvaluateConstString (handles Ident / SelectorExpr / BinaryExpr).
+//
+// Range-variable Idents used in emitter drain loops (reg.Health(k, v)) are NOT
+// flagged — they do not resolve to a constant string via types.Info.Types.
 func scanRepoReadyzN2(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	if info == nil {
 		return nil
@@ -323,9 +351,12 @@ func scanRepoReadyzN2(fset *token.FileSet, file *ast.File, rel string, info *typ
 		if len(call.Args) == 0 {
 			return
 		}
-		// Flag only string BasicLit first arguments.
-		// Range-variable Idents (emitter drain) are NOT flagged.
-		if _, isLit := call.Args[0].(*ast.BasicLit); !isLit {
+		// Flag if the first argument is a compile-time string constant:
+		// either a BasicLit or any Ident/SelectorExpr/BinaryExpr that resolves
+		// to a const string via types.Info (EvaluateConstString).
+		// Range-variable Idents in emitter drain loops do not resolve to a
+		// constant and are therefore not flagged.
+		if _, ok := EvaluateConstString(info, call.Args[0]); !ok {
 			return
 		}
 		line := fset.Position(call.Pos()).Line
@@ -335,8 +366,11 @@ func scanRepoReadyzN2(fset *token.FileSet, file *ast.File, rel string, info *typ
 			out = append(out, Diagnostic{
 				Rel:  rel,
 				Line: line,
-				Message: `reg.Health("name", fn) direct call forbidden for repo probes; ` +
-					"use cell.RegisterRepoReadiness(reg, name, p) (CELL-REPO-READYZ-PROBE-01/N2)",
+				Message: fmt.Sprintf(
+					`reg.Health(<const-string>, fn) direct call at %s:%d forbidden for repo probes; `+
+						"use cell.RegisterRepoReadiness(reg, name, p) "+
+						"(CELL-REPO-READYZ-PROBE-01/N2; import path: github.com/ghbvf/gocell/kernel/cell)",
+					rel, line),
 			})
 		}
 	})
@@ -540,6 +574,15 @@ func TestCellRepoReadyzProbeFixtures(t *testing.T) {
 			"N2 RED: expected 1 violation, got %d: %v", len(got), got)
 	})
 
+	// N2b RED: direct reg.Health with const-identifier first arg must be caught
+	// (EvaluateConstString resolution path).
+	t.Run("N2b_red_const_ident_reg_health", func(t *testing.T) {
+		t.Parallel()
+		got := runRepoReadyzN2Fixture(t, filepath.Join(base, "n2b_const_ident_reg_health"))
+		assert.Equal(t, 1, len(got),
+			"N2b RED: expected 1 violation for const-ident first arg, got %d: %v", len(got), got)
+	})
+
 	// N3 GREEN: emitter drain reg.Health(k, v) with range vars and named
 	// interface assertion must NOT be flagged.
 	t.Run("N3_green_emitter_drain_range", func(t *testing.T) {
@@ -620,7 +663,12 @@ func TestCellRepoReadyzProbe_ReverseBlindSpot_NoReflectHealth(t *testing.T) {
 // TestCellRepoReadyzProbe_ReverseBlindSpot_NoLocalHealthWrapper (blind spot B2)
 // asserts no cells/ non-test file has a local function whose name contains
 // "Health" (other than RegisterRepoReadiness) AND whose body calls reg.Health
-// with a string-literal first argument.
+// with a first argument that evaluates to a compile-time string constant
+// (BasicLit or Ident/SelectorExpr/BinaryExpr resolved via EvaluateConstString).
+// This covers the remaining blind spot after the N2 const-ident extension:
+// a cross-package helper that wraps reg.Health would hide the call from N2's
+// direct scan of cells/ files, but would itself need to contain "Health" in
+// its name to be detectable here.
 func TestCellRepoReadyzProbe_ReverseBlindSpot_NoLocalHealthWrapper(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -658,7 +706,10 @@ func TestCellRepoReadyzProbe_ReverseBlindSpot_NoLocalHealthWrapper(t *testing.T)
 						if len(call.Args) == 0 {
 							return
 						}
-						if _, isLit := call.Args[0].(*ast.BasicLit); !isLit {
+						// Check for any compile-time constant string first arg
+						// (BasicLit, Ident, SelectorExpr, BinaryExpr) via
+						// EvaluateConstString — mirrors N2's detection.
+						if _, ok := EvaluateConstString(p.TypesInfo, call.Args[0]); !ok {
 							return
 						}
 						line := p.Fset.Position(call.Pos()).Line
@@ -666,7 +717,7 @@ func TestCellRepoReadyzProbe_ReverseBlindSpot_NoLocalHealthWrapper(t *testing.T)
 							Rel:  rel,
 							Line: line,
 							Message: fmt.Sprintf(
-								"local function %q calls reg.Health(stringLiteral) — "+
+								"local function %q calls reg.Health(constString) — "+
 									"use cell.RegisterRepoReadiness (blind spot B2, "+
 									"CELL-REPO-READYZ-PROBE-01/N2)",
 								fn.Name.Name),

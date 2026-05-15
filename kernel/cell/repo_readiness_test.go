@@ -36,3 +36,38 @@ func TestRegisterRepoReadiness_ForwardsToHealth(t *testing.T) {
 		})
 	}
 }
+
+// mustRegisterRepoReadiness calls RegisterRepoReadiness and returns the
+// recovered panic value (nil if no panic occurred).
+func mustRegisterRepoReadiness(name string) (panicked any) {
+	defer func() { panicked = recover() }()
+	rec := NewRegistryRecorder(map[string]any{}, DurabilityDemo)
+	RegisterRepoReadiness(rec, name, fakeRepoProber{})
+	return nil
+}
+
+func TestRegisterRepoReadiness_NameSuffixEnforcement(t *testing.T) {
+	cases := []struct {
+		name      string
+		probeName string
+		wantPanic bool
+	}{
+		{"valid suffix", "config_repo_ready", false},
+		{"valid suffix session", "session_store_ready", false},
+		{"missing suffix", "config_repo", true},
+		{"empty name", "", true},
+		{"wrong suffix", "config_ready_x", true},
+		{"almost correct", "config_repo_readiness", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			panicked := mustRegisterRepoReadiness(tc.probeName)
+			if tc.wantPanic && panicked == nil {
+				t.Fatalf("RegisterRepoReadiness(%q): expected panic, got none", tc.probeName)
+			}
+			if !tc.wantPanic && panicked != nil {
+				t.Fatalf("RegisterRepoReadiness(%q): unexpected panic: %v", tc.probeName, panicked)
+			}
+		})
+	}
+}

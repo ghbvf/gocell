@@ -163,7 +163,7 @@
 ## 3. 依赖图与执行 Wave
 
 ```
-Wave 1（独立并行，8 PR） — 6/8 ship：
+Wave 1（独立并行，8 PR） — 7/8 ship：
   PR-1 OTEL-HARDEN-5         ✅ PR #486 (OTEL-HARDEN-4，B2-R-05 split)
   PR-2 PROM-HARDEN-3         ✅ PR #484
   PR-3 CLI-HARDEN            ✅ PR #502 (038 Wave 1, 2026-05-15) — +CLI-UNIMPL-HIDE-01 闭环 Hard 升级
@@ -171,7 +171,7 @@ Wave 1（独立并行，8 PR） — 6/8 ship：
   PR-6 G-13 元治理 guard     ✅ PR #487 merged 2026-05-13
   PR-7 BOOTSTRAP-CLIENTS-MUTEX ✅ PR #483
   PR-8 OIDC-MR-COMPLETENESS  ✅ PR #485
-  PR-9 REPO-READYZ           ✅ (fix/202-repo-readyz)
+  PR-9 REPO-READYZ           ✅ PR-REPO-READYZ fix/202-repo-readyz (2026-05-16) — +CELL-REPO-READYZ-PROBE-01 Hard funnel
 
 Wave 2（依赖 Wave 1，2 PR） — 0/2 ship：
   PR-5 GOV-NEW-RULES (GOVERNANCE-AUTH-PUBLIC + V-A11)
@@ -238,9 +238,9 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | Wave 5 架构重构 | 独立排期 | — | — | G-10 / SEALED / BOOTSTRAP 束 |
 
 **累计**：
-- ✅ shipped (6 PR): ~43h dev / ~20.5h review（PR-1/2/6/7/8/9）
-- ⏳ 待启动 (Wave 1 剩余 + Wave 2/3/4): ~59h dev / ~29.5h review（PR-3/4/5/11 + Wave 3 + Wave 4）
-- 进度：Wave 1 6/8 ship（75%）；038 整体 dev 进度 42%（按原计划 102h 总分母）
+- ✅ shipped (7 PR): ~51h dev / ~24.5h review（PR-1/2/3/6/7/8/9）
+- ⏳ 待启动 (Wave 1 剩余 + Wave 2/3/4): ~51h dev / ~25.5h review（PR-4/5/11 + Wave 3 + Wave 4）
+- 进度：Wave 1 7/8 ship（87.5%）；038 整体 dev 进度 50%（按原计划 102h 总分母）
 
 ---
 

@@ -266,28 +266,44 @@ func TestNewSessionStore_NilClock_Rejected(t *testing.T) {
 // shared RepoHealthProber conformance harness:
 //   - healthy: a fully migrated store returns nil from RepoReady.
 //   - broken: a store whose sessions table has been dropped returns non-nil.
+//
+// Each store uses an isolated schema pool so the DROP TABLE for the broken
+// scenario does not affect the healthy store's sessions table. The real
+// *PGSessionStore (not the pgSessionStoreWrapper) is passed to
+// RunRepoReadinessConformance so the archtest type-resolution still detects
+// coverage.
 func TestPGSessionStore_RepoReadinessConformance(t *testing.T) {
-	pool, teardown := setupPostgres(t)
-	t.Cleanup(teardown)
+	base, baseTeardown := setupPostgres(t)
+	t.Cleanup(baseTeardown)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
-	fc := clockmock.New(storetest.EpochAnchor())
-	txm := NewTxManager(pool)
 	proto := storetest.NewTestProtocol(t)
+	fc := clockmock.New(storetest.EpochAnchor())
 
-	// healthy: fully migrated — sessions table exists.
-	healthy, err := NewSessionStore(pool.DB(), txm, proto, fc)
+	// healthy: isolated schema with full migrations — sessions table intact.
+	healthyPool := isolatedSchemaPool(t, ctx, base)
+	t.Cleanup(func() { _ = healthyPool.Close(context.Background()) })
+	healthyMigrator, err := NewMigrator(healthyPool, testMigrationsFS(t), "schema_migrations_readyz_healthy")
+	require.NoError(t, err)
+	require.NoError(t, healthyMigrator.Up(ctx))
+
+	healthyTxm := NewTxManager(healthyPool)
+	healthy, err := NewSessionStore(healthyPool.DB(), healthyTxm, proto, fc)
 	require.NoError(t, err)
 
-	// broken: drop the sessions table to simulate schema/migration loss.
-	_, dropErr := pool.DB().Exec(ctx, "DROP TABLE IF EXISTS sessions CASCADE")
-	require.NoError(t, dropErr)
+	// broken: isolated schema with migrations applied, then sessions table dropped
+	// to simulate schema drift / missing migration.
+	brokenPool := isolatedSchemaPool(t, ctx, base)
+	t.Cleanup(func() { _ = brokenPool.Close(context.Background()) })
+	brokenMigrator, err := NewMigrator(brokenPool, testMigrationsFS(t), "schema_migrations_readyz_broken")
+	require.NoError(t, err)
+	require.NoError(t, brokenMigrator.Up(ctx))
 
-	broken, err := NewSessionStore(pool.DB(), txm, proto, fc)
+	_, dropErr := brokenPool.DB().Exec(ctx, "DROP TABLE IF EXISTS sessions CASCADE")
+	require.NoError(t, dropErr, "drop sessions table for broken scenario")
+
+	brokenTxm := NewTxManager(brokenPool)
+	broken, err := NewSessionStore(brokenPool.DB(), brokenTxm, proto, fc)
 	require.NoError(t, err)
 
 	celltest.RunRepoReadinessConformance(t, "session-pg", healthy, broken)

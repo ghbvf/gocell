@@ -123,8 +123,8 @@ verifiable by the compiler and by `RunRepoReadinessConformance`.
 
 | Dimension | Grade | Evidence |
 |-----------|-------|----------|
-| **Downstream Hard** — only `cell.RegisterRepoReadiness` may register a repo probe for a cell | **Hard** (form-uniqueness) | Archtest `CELL-REPO-READYZ-PROBE-01` enforces that every `reg.Health` call whose name matches `*_repo_ready` / `*_store_ready` / `*_ledger_ready` is routed through `cell.RegisterRepoReadiness`.  Any bypass (bare `reg.Health`, anonymous duck-type) fails archtest. |
-| **Upstream Hard** — every `RepoHealthProber` implementation must be exercised by `RunRepoReadinessConformance` | **Medium** (archtest wired-conformance backstop) | Archtest `CELL-REPO-READYZ-PROBE-01` also checks that each type implementing `RepoHealthProber` appears in a `RunRepoReadinessConformance` call in the test tree.  A new implementation that omits conformance will fail archtest.  Honest caveat: this is Medium (archtest-bound), not compile-time Hard — Go's type system cannot require a test to exist. |
+| **Downstream Hard** — only `cell.RegisterRepoReadiness` may register a repo probe for a cell | **Hard** (form-uniqueness) | Archtest `CELL-REPO-READYZ-PROBE-01` N1/N2 enforce that every `reg.Health` call with a const-string name in cells/ production files must be routed through `cell.RegisterRepoReadiness`.  Any bypass (bare `reg.Health`, anonymous duck-type, const-ident first arg) fails archtest.  Scope: cells/ only — registration is a cell-init responsibility. |
+| **Upstream (conformance auto-join)** — every `RepoHealthProber` implementation must be exercised by `RunRepoReadinessConformance` | **Medium** (archtest wired-conformance backstop) | Archtest `CELL-REPO-READYZ-PROBE-01` P1 checks that each type implementing `RepoHealthProber` appears in a `RunRepoReadinessConformance` call in the test tree.  A new implementation that omits conformance will fail archtest at CI time — not at compile time (Go cannot require a test to exist).  Note: harness **behavioral correctness** is Hard (scenario 2, DROP TABLE → non-nil, cannot be satisfied by a no-op); it is harness **wiring presence** that is Medium upstream. |
 
 **Combined posture**: Hard downstream + Medium upstream.  Per charter: "允许 Medium 上游 + Hard 下游的过渡形态，但必须同步登记 backlog 显式 Hard 化任务."  Backlog item `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` is registered to track the upgrade path (sealed interface or codegen marker forcing conformance wiring at compile time).
 
@@ -134,9 +134,12 @@ verifiable by the compiler and by `RunRepoReadinessConformance`.
 |-------|---------|-------|----------------------|
 | Typed funnel `cell.RegisterRepoReadiness` | Go type system — `RepoHealthProber` interface | **Hard** | Anonymous duck-type bypass (accesscore regression class) |
 | `RunRepoReadinessConformance` real-failure harness | Integration test + real PG DROP TABLE | **Hard** (behavioral max) | Trivial `return nil` implementation passing form check but not detecting schema drift |
-| Archtest `CELL-REPO-READYZ-PROBE-01` | AST + types.Info form lock | **Medium** (archtest backstop) | Bare `reg.Health` bypass; new implementation missing conformance wiring |
+| Archtest `CELL-REPO-READYZ-PROBE-01` N1/N2 (cells/ scope) | AST + types.Info form lock | **Medium** (archtest backstop) | Bare `reg.Health` bypass in cells/ (BasicLit or const-ident first arg); adapters/runtime not scanned (not cell-init callers) |
+| Archtest `CELL-REPO-READYZ-PROBE-01` P1 (cells/adapters/runtime scope) | types.Implements + test-corpus scan | **Medium** (archtest backstop) | New `RepoHealthProber` implementation missing conformance wiring |
 
 The conformance harness is rated **Hard (behavioral max)** because scenario 2 (DROP TABLE → non-nil) cannot be satisfied by a no-op implementation; it requires the concrete store to execute a real query against the test database.  This is the highest behavioral grade reachable for correctness properties that cannot be expressed as types.
+
+N1/N2 scope note: these rules scan `cells/` production files only.  Registration of repo probes is a cell-init responsibility; `adapters/` and `runtime/` packages do not call `cell.Registry.Health` for repo probes and are correctly excluded from N1/N2.  P1 scans the broader `cells/ + adapters/ + runtime/` corpus for `RepoHealthProber` implementations regardless.
 
 ### AI-rebust honest caveats
 
@@ -177,3 +180,25 @@ the wiring verifiable at compile time.
 Rejected.  Three divergent wiring shapes produce three archtest rules, three conformance
 harness shapes, and three onboarding docs.  The unified funnel is strictly simpler and
 reduces the probability of a future cell implementing a fourth divergent shape.
+
+### Alt-D: Separate optional interface not embedded in Store (ISP-pure design)
+
+Interface Segregation Principle (ISP) would suggest that `RepoReady(ctx) error` is a
+readiness-plane concern separate from domain store methods (`Get`, `Create`, etc.) and
+should live on a thin, optional adapter rather than being embedded in the broad `Store`
+interface.
+
+Rejected for two reasons:
+
+1. **Unified conformance completeness**: embedding `RepoHealthProber` in the broad store
+   interface means every concrete store (PG + mem) must implement the method at compile
+   time.  With a separate optional interface, new stores can forget to implement it, and
+   the omission is only caught when `cell.RegisterRepoReadiness` is called — or worse,
+   when the probe is registered against a wrong type via structural typing (the exact
+   regression class this ADR eliminates).  The accepted ISP cost (slightly wider
+   interfaces) buys a compile-time completeness guarantee.
+
+2. **Single conformance harness**: a separate optional interface would require a second
+   type assertion or discovery mechanism in `RunRepoReadinessConformance`, increasing
+   harness complexity.  The current uniform `RepoHealthProber` parameter keeps the
+   harness simple and its behavioral correctness grade Hard.

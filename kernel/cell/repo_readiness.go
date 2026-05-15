@@ -1,6 +1,12 @@
 package cell
 
-import "context"
+import (
+	"context"
+	"strings"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+)
 
 // RepoHealthProber is implemented by a Cell's primary repository/store to
 // expose a *differentiated* readiness check.
@@ -31,9 +37,12 @@ type RepoHealthProber interface {
 // docs/architecture/*-adr-cell-repo-readyz-probe.md and the accesscore
 // session_store_ready regression it caused).
 //
-// name MUST end in "_ready" (READYZ-PROBE-NAMING-01). The probe is forwarded
-// verbatim to reg.Health; first-wins duplicate semantics and concurrent-call
-// safety are inherited from Registry.Health.
+// name MUST end in "_ready" (READYZ-PROBE-NAMING-01). This is now
+// runtime-enforced: passing a name without the "_ready" suffix panics with a
+// B-class programmer-error (panicregister.Approved funnel, PANIC-REGISTERED-01
+// compliant). The probe is forwarded verbatim to reg.Health; first-wins
+// duplicate semantics and concurrent-call safety are inherited from
+// Registry.Health.
 //
 // AI-HARD funnel dual-lock (charter §"Funnel 双向锁评级"):
 //   - downstream Hard: form uniqueness — archtest CELL-REPO-READYZ-PROBE-01
@@ -48,5 +57,9 @@ type RepoHealthProber interface {
 // Differentiated behavior itself is enforced by the real-failure-injection
 // conformance harness (RunRepoReadinessConformance), not by this funnel.
 func RegisterRepoReadiness(reg Registry, name string, p RepoHealthProber) {
+	if !strings.HasSuffix(name, "_ready") {
+		panic(panicregister.Approved("repo-readiness-name-suffix",
+			errcode.Assertion("RegisterRepoReadiness: probe name must end in _ready (READYZ-PROBE-NAMING-01)")))
+	}
 	reg.Health(name, p.RepoReady)
 }
