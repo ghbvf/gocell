@@ -11,8 +11,8 @@ package archtest
 //     scanner.EachInChildren to fake find-first-and-stop; use the typed funnel
 //     scanner.FindFirstChild[N] instead (allowlist = 0).
 //
-// Two related SCANNER-* invariants share this theme file. Per CLAUDE.md
-// "新增 invariant 决策原则" file naming branch, promote to
+// Two related SCANNER-* invariants share this theme file. Per
+// .claude/rules/gocell/ai-collab.md "## archtest 文件命名", promote to
 // {theme}_invariants_test.go (scanner_framework_invariants_test.go) if a
 // third related SCANNER-* invariant accumulates.
 
@@ -1329,21 +1329,20 @@ func _(file *ast.File, other []ast.Decl) {
 // over the whole archtest tree must return zero diagnostics; this is
 // self-consistent with the migration (rule GREEN ⟺ all sites migrated).
 //
-// AI-rebust rating (honest, no phantom upgrade path):
-//   - The FindFirstChild funnel itself is Hard downstream (wrong N is a
-//     compile error via interface{*S; ast.Node}).
-//   - This rule is the upstream guard and is Medium — and Medium is the Go
-//     CEILING for this rule shape: you cannot sealed-interface your way out
-//     of "a user declares a bool and assigns it"; EachInChildren is a
-//     legitimate general iterator that must stay callable for pure
-//     iteration. archtest form-ban (allowlist 0) is the highest grade
-//     reachable in Go here, structurally identical to the PANIC-REGISTERED-01
-//     honest caveat in .claude/rules/gocell/ai-collab.md ("the enforcement
-//     is archtest-bound, not compile-time ... the highest grade reachable in
-//     Go for this rule shape"). No upstream-Hard backlog is opened because
-//     none is reachable. The FINDFIRSTINSUBTREE-API-01 backlog is an
-//     ORTHOGONAL coverage axis (subtree find-first), not this funnel's
-//     hardening path — do not conflate.
+// AI-rebust 双向锁评级:
+//
+//	下游 Hard: FindFirstChild — wrong N (interface vs *S) is a compile error
+//	  via interface{*S; ast.Node}.
+//	上游 Medium (= Go ceiling, terminal): archtest form-ban (allowlist 0).
+//	  Cannot sealed-interface around "a user declares a bool"; EachInChildren
+//	  must stay callable for pure iteration. Highest grade reachable in Go
+//	  for this rule shape (structurally identical to PANIC-REGISTERED-01's
+//	  honest caveat in .claude/rules/gocell/ai-collab.md: "the enforcement
+//	  is archtest-bound, not compile-time ... the highest grade reachable in
+//	  Go for this rule shape"). No upstream-Hard backlog opened (none
+//	  reachable). FINDFIRSTINSUBTREE-API-01 is an orthogonal coverage axis
+//	  (subtree find-first), not this funnel's hardening path — do not
+//	  conflate.
 //
 // Tool blind spots (godoc-declared scope of the chosen AST tooling —
 // scanner.EachInSubtree[ast.CallExpr/IfStmt/AssignStmt/Ident] + syntactic
@@ -1355,9 +1354,20 @@ func _(file *ast.File, other []ast.Decl) {
 //	     (`done = ok`, `done = x == 1`) while used as `if done { return }`.
 //	BS2: early-return expressed through the ELSE branch
 //	     (`if !done { ... } else { return }`) instead of `if done { return }`.
-//	BS3: sentinel declared in an outer function and the guard/assignment
-//	     split across nested closures (cross-FuncLit). The detector scopes to
-//	     a single EachInChildren callback FuncLit subtree by design.
+//	BS3: guard/assignment split such that the sentinel is initialized to false
+//	     before the EachInChildren call, the guard (`if <ident> { return }`)
+//	     is inside the callback, but the `= true` assignment is OUTSIDE the
+//	     callback FuncLit entirely (e.g. `done = true` appears after the
+//	     EachInChildren call in the enclosing function body). This is a
+//	     scoping limitation, not a real evasion: a functional find-first
+//	     sentinel MUST set the flag from inside the iterating callback (the
+//	     flag value depends on iteration); assignment outside the callback
+//	     cannot implement find-first and is therefore not a functional guard
+//	     shape. The BS3 reverse detector in closureDoneSentinelBlindSpots
+//	     actively checks for this split form and asserts it does not appear
+//	     in production; TestScannerFrameworkUsage02_BlindSpotForwardFixtures
+//	     documents that the MAIN detector (forbiddenClosureDoneSentinel) by
+//	     design returns 0 hits for the BS3 shape.
 //
 // Fixture vs live callee resolution: the live scan resolves the
 // scanner.EachInChildren callee through typeseval (alias-robust); the
@@ -1689,37 +1699,55 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 		}
 
 		// A blind-spot candidate must be a sentinel-shaped bool: initialized
-		// to false via `x := false` or `var x bool` somewhere reachable from
-		// the callback (the enclosing function's body — sentinels are
-		// declared just before the EachInChildren call). Anchoring on the
-		// false-init eliminates false positives from arbitrary local vars
-		// that merely happen to gate a return.
+		// to false via `x := false` or `var x bool` lexically BEFORE this
+		// specific call within the enclosing function body, OR inside cb.Body
+		// itself. Scoping to statements before call.Pos() prevents cross-call
+		// pollution: a `done:=false` near a different EachInChildren call in
+		// the same function does not bleed into this call's falseInit (F3 fix).
 		falseInit := map[string]bool{}
-		var initScope ast.Node = cb.Body
-		if fd := enclosingFuncBody(file, call); fd != nil {
-			initScope = fd
-		}
-		scanner.EachInSubtree[ast.AssignStmt](initScope, func(as *ast.AssignStmt) {
-			if as.Tok != token.DEFINE || len(as.Lhs) != len(as.Rhs) {
-				return
-			}
-			for i := range as.Lhs {
-				lhs, lok := as.Lhs[i].(*ast.Ident)
-				rhs, rok := as.Rhs[i].(*ast.Ident)
-				if lok && rok && rhs.Name == "false" {
-					falseInit[lhs.Name] = true
+		enclosing := enclosingFuncBody(file, call)
+
+		collectFalseInitAssign := func(scope ast.Node, requireBeforeCall bool) {
+			scanner.EachInSubtree[ast.AssignStmt](scope, func(as *ast.AssignStmt) {
+				if requireBeforeCall && as.End() > call.Pos() {
+					return
 				}
-			}
-		})
-		scanner.EachInSubtree[ast.ValueSpec](initScope, func(vs *ast.ValueSpec) {
-			tid, ok := vs.Type.(*ast.Ident)
-			if !ok || tid.Name != "bool" || len(vs.Values) != 0 {
-				return
-			}
-			for _, n := range vs.Names {
-				falseInit[n.Name] = true
-			}
-		})
+				if as.Tok != token.DEFINE || len(as.Lhs) != len(as.Rhs) {
+					return
+				}
+				for i := range as.Lhs {
+					lhs, lok := as.Lhs[i].(*ast.Ident)
+					rhs, rok := as.Rhs[i].(*ast.Ident)
+					if lok && rok && rhs.Name == "false" {
+						falseInit[lhs.Name] = true
+					}
+				}
+			})
+		}
+		collectFalseInitSpec := func(scope ast.Node, requireBeforeCall bool) {
+			scanner.EachInSubtree[ast.ValueSpec](scope, func(vs *ast.ValueSpec) {
+				if requireBeforeCall && vs.End() > call.Pos() {
+					return
+				}
+				tid, ok := vs.Type.(*ast.Ident)
+				if !ok || tid.Name != "bool" || len(vs.Values) != 0 {
+					return
+				}
+				for _, n := range vs.Names {
+					falseInit[n.Name] = true
+				}
+			})
+		}
+
+		// Collect from enclosing function body (only stmts before this call).
+		if enclosing != nil {
+			collectFalseInitAssign(enclosing, true)
+			collectFalseInitSpec(enclosing, true)
+		}
+		// Also collect from inside cb.Body itself (no position restriction).
+		collectFalseInitAssign(cb.Body, false)
+		collectFalseInitSpec(cb.Body, false)
+
 		if len(falseInit) == 0 {
 			return
 		}
@@ -1742,6 +1770,67 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 				}
 			}
 		})
+
+		// BS3: guard ident used in `if <ident>...{return}` inside the callback,
+		// NOT assigned `true` inside the callback, but IS assigned `true`
+		// somewhere in the enclosing function body (outside the callback). This
+		// is the split-across-callback-boundary shape. It cannot implement
+		// find-first (flag must be set during iteration) and is a scoping
+		// limitation, not a real evasion. Emit a diagnostic so the reverse test
+		// keeps it absent from production.
+		if enclosing != nil {
+			// Collect guard idents in cb.Body with direct-return ifs.
+			guardIdents := map[string]bool{}
+			scanner.EachInSubtree[ast.IfStmt](cb.Body, func(ifStmt *ast.IfStmt) {
+				if !ifBodyHasDirectReturn(ifStmt) {
+					return
+				}
+				for name := range condIdentNames(ifStmt.Cond) {
+					if falseInit[name] {
+						guardIdents[name] = true
+					}
+				}
+			})
+			// Collect idents assigned `true` outside cb.Body in enclosing scope.
+			assignedTrueOutside := map[string]bool{}
+			scanner.EachInSubtree[ast.AssignStmt](enclosing, func(as *ast.AssignStmt) {
+				// Skip assignments inside the callback itself.
+				if as.Pos() >= cb.Body.Pos() && as.End() <= cb.Body.End() {
+					return
+				}
+				if as.Tok != token.ASSIGN || len(as.Lhs) != len(as.Rhs) {
+					return
+				}
+				for i := range as.Lhs {
+					lhs, ok := as.Lhs[i].(*ast.Ident)
+					if !ok {
+						continue
+					}
+					if rhs, isID := as.Rhs[i].(*ast.Ident); isID && rhs.Name == "true" {
+						assignedTrueOutside[lhs.Name] = true
+					}
+				}
+			})
+			for name := range guardIdents {
+				if assignedTrueOutside[name] && !assignedTrue[name] {
+					// Find the IfStmt line to report.
+					scanner.EachInSubtree[ast.IfStmt](cb.Body, func(ifStmt *ast.IfStmt) {
+						if !ifBodyHasDirectReturn(ifStmt) {
+							return
+						}
+						if condIdentNames(ifStmt.Cond)[name] {
+							out = append(out, scanner.Diagnostic{
+								Rel: rel, Line: fset.Position(ifStmt.Pos()).Line,
+								Message: "BS3 blind-spot shape (guard ident \"" + name + "\" is used " +
+									"as if-return guard inside callback but `= true` is outside " +
+									"the callback — non-functional find-first, scoping limitation) " +
+									"in scanner.EachInChildren callback",
+							})
+						}
+					})
+				}
+			}
+		}
 
 		scanner.EachInSubtree[ast.IfStmt](cb.Body, func(ifStmt *ast.IfStmt) {
 			conds := condIdentNames(ifStmt.Cond)
@@ -1781,9 +1870,10 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 }
 
 // enclosingFuncBody returns the *ast.BlockStmt of the function (FuncDecl or
-// FuncLit) whose body lexically contains call, or nil. Used to widen the
-// false-init scope: a sentinel is typically declared in the enclosing
-// function just above the EachInChildren call, not inside its callback.
+// FuncLit) whose body lexically contains call, or nil. Used by
+// closureDoneSentinelBlindSpots to scope falseInit collection to statements
+// declared before the call (F3: per-call scoping prevents cross-call
+// pollution) and to search for BS3 assignments outside the callback.
 func enclosingFuncBody(file *ast.File, call *ast.CallExpr) ast.Node {
 	var best *ast.BlockStmt
 	bestSpan := int(^uint(0) >> 1)
@@ -1803,11 +1893,14 @@ func enclosingFuncBody(file *ast.File, call *ast.CallExpr) ast.Node {
 	return best
 }
 
-// TestScannerFrameworkUsage02_BlindSpotReverse asserts the documented BS1/BS2
-// evasion shapes do not exist in production archtest code. ai-collab.md
-// requires a reverse self-test per declared tool blind spot; this is the
-// 举证 material that the Medium rating is honest (the blind spots are empty
-// in practice, not merely unguarded).
+// TestScannerFrameworkUsage02_BlindSpotReverse asserts the documented BS1/BS2/BS3
+// shapes do not exist in production archtest code. ai-collab.md requires a
+// reverse self-test per declared tool blind spot; this is the 举证 material that
+// the Medium rating is honest (the blind spots are empty in practice, not merely
+// unguarded). BS3 is actively detected by closureDoneSentinelBlindSpots: a
+// guard ident inside the callback whose `= true` assignment is outside the
+// callback is a non-functional shape (cannot implement find-first) and is
+// reported as a BS3 diagnostic here.
 func TestScannerFrameworkUsage02_BlindSpotReverse(t *testing.T) {
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
@@ -1838,9 +1931,15 @@ func TestScannerFrameworkUsage02_BlindSpotReverse(t *testing.T) {
 }
 
 // TestScannerFrameworkUsage02_BlindSpotForwardFixtures documents that the
-// BS1/BS2 shapes are, by design, NOT caught by forbiddenClosureDoneSentinel
+// BS1/BS2/BS3 shapes are, by design, NOT caught by forbiddenClosureDoneSentinel
 // (the honest blind-spot declaration — the reverse test above is what keeps
 // them empty in production).
+//
+// BS3 note: the MAIN detector (forbiddenClosureDoneSentinel) returns 0 hits
+// because the `= true` assignment is outside the callback body, so the main
+// detector's (a) pass (assignedTrue) finds nothing inside the callback and
+// short-circuits. The reverse test (closureDoneSentinelBlindSpots) DOES detect
+// the BS3 shape and would go RED if it appeared in production.
 func TestScannerFrameworkUsage02_BlindSpotForwardFixtures(t *testing.T) {
 	t.Parallel()
 	bs1 := `package fake
@@ -1870,10 +1969,32 @@ func _(b *ast.BlockStmt) bool {
 	return done
 }
 `
+	// BS3: assignment OUTSIDE the callback — main detector returns 0 hits
+	// because `= true` is not inside the callback body (no assignedTrue inside
+	// cb.Body), so the functional find-first cannot work from inside the
+	// callback. This is the scoping-limitation shape documented in the BS3
+	// godoc.
+	bs3 := `package fake
+import (
+	"go/ast"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+)
+func _(b *ast.BlockStmt) bool {
+	done := false
+	scanner.EachInChildren[ast.IfStmt](b, func(*ast.IfStmt) {
+		if done { return }
+	})
+	done = true
+	return done
+}
+`
 	if d := parseFixture02(t, bs1); len(d) != 0 {
 		t.Errorf("BS1 expected to be a (documented) blind spot, got %d hits", len(d))
 	}
 	if d := parseFixture02(t, bs2); len(d) != 0 {
 		t.Errorf("BS2 expected to be a (documented) blind spot, got %d hits", len(d))
+	}
+	if d := parseFixture02(t, bs3); len(d) != 0 {
+		t.Errorf("BS3 expected to be a (documented) blind spot for the main detector, got %d hits", len(d))
 	}
 }
