@@ -6,6 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // signalGraceWindow bounds how long a ctx-ignoring sub-command may keep
@@ -34,13 +36,12 @@ const signalGraceWindow = 2 * time.Second
 
 // RunWithSignal is the cmd/gocell/main.go entry point. It wires
 // SIGINT/SIGTERM to ctx cancellation and the bounded-termination watchdog,
-// then dispatches args. See runWithSignal for the mechanism; the seam
-// exists so the three branches (no-signal / ctx-aware graceful /
-// ctx-ignoring watchdog) are deterministically unit-testable without real
-// signals or os.Exit.
+// then dispatches args. The clk/dispatch/forceExit seam exists so the
+// three branches (no-signal / ctx-aware graceful / ctx-ignoring watchdog)
+// are deterministically unit-testable without real signals or os.Exit.
 func RunWithSignal(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	return runWithSignal(ctx, stop, signalGraceWindow, args, Dispatch, os.Exit)
+	return runWithSignal(ctx, stop, clock.Real(), signalGraceWindow, args, Dispatch, os.Exit)
 }
 
 // runWithSignal runs dispatch(ctx, args) and guarantees the process
@@ -55,15 +56,18 @@ func RunWithSignal(args []string) int {
 //     the command's exit code (Dispatch maps context.Canceled to the
 //     "interrupted" line + ExitRuntime).
 //   - signal + ctx-ignoring command: the command does not return within
-//     grace → forceExit(130) terminates the process (128+SIGINT: the
-//     process is being signal-terminated).
+//     grace so the watchdog timer fires and forceExit(130) terminates the
+//     process (128+SIGINT: the process is being signal-terminated).
 //
-// forceExit is os.Exit in production; injected in tests. stop is
-// idempotent (signal.NotifyContext's CancelFunc), so the multiple calls
-// here are safe.
+// The grace timer is taken from the injected clock.Clock (clock.Real in
+// production), satisfying PROD-CLOCK-INJECTION-01 and letting unit tests
+// drive the watchdog without wall-clock waits. forceExit is os.Exit in
+// production. stop is idempotent (signal.NotifyContext's CancelFunc), so
+// the multiple calls here are safe.
 func runWithSignal(
 	ctx context.Context,
 	stop context.CancelFunc,
+	clk clock.Clock,
 	grace time.Duration,
 	args []string,
 	dispatch func(context.Context, []string) int,
@@ -78,8 +82,10 @@ func runWithSignal(
 			// Ctrl+C hard-kills immediately even if this command ignores
 			// ctx, then bound the first-signal wait.
 			stop()
+			timer := clk.NewTimerAt(clk.Now().Add(grace))
+			defer timer.Stop()
 			select {
-			case <-time.After(grace):
+			case <-timer.C():
 				forceExit(130)
 			case <-done:
 				// Command unwound within grace (ctx-aware) — no force kill.

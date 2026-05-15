@@ -1,8 +1,11 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -10,6 +13,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // Real-OS-signal end-to-end coverage for the signal wiring (PR #502
@@ -21,12 +27,18 @@ import (
 // gocell sub-command finishes in well under 2s, so a subprocess that runs
 // one and races a timed SIGINT is inherently flaky (the project forbids
 // fragile constructs). The child here instead enters the production signal
-// wiring with a dispatch that blocks until the signal arrives, so the
-// signal delivery is race-free regardless of machine speed. This is the
-// same self-re-exec pattern Go's own os/signal tests use.
-//
-// envSignalE2EMode selects child behavior; empty = parent (driver).
-const envSignalE2EMode = "GOCELL_SIGNAL_E2E_MODE"
+// wiring with a dispatch that blocks until the signal arrives, and prints
+// a readiness marker once its handler is installed so the parent delivers
+// the signal on a handshake (no sleep, race-free regardless of machine
+// speed). This is the same self-re-exec pattern Go's own os/signal tests
+// use.
+const (
+	envSignalE2EMode = "GOCELL_SIGNAL_E2E_MODE"
+	signalChildReady = "SIGNAL_CHILD_READY"
+	// childWatchdogGrace keeps the watchdog-mode child fast; a named const
+	// (not an inline duration literal) per the test-time-literal rule.
+	childWatchdogGrace = testtime.D500ms
+)
 
 // TestSignalRealE2E forks the test binary back into itself in "child"
 // mode, where the child runs the real signal.NotifyContext +
@@ -55,14 +67,40 @@ func TestSignalRealE2E(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.mode, func(t *testing.T) {
-			// os.Args[0] is this test binary (self re-exec, the Go
-			// stdlib os/signal test pattern); not user input.
+			// os.Args[0] is this test binary (self re-exec, the Go stdlib
+			// os/signal test pattern); not user input.
 			cmd := exec.Command(os.Args[0], //nolint:gosec // self re-exec of the test binary; args are literals
 				"-test.run=^TestSignalRealE2E$", "-test.count=1")
 			cmd.Env = append(os.Environ(), envSignalE2EMode+"="+tc.mode)
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatalf("stdout pipe: %v", err)
+			}
 			if err := cmd.Start(); err != nil {
 				t.Fatalf("re-exec child: %v", err)
 			}
+
+			// Drain child stdout; signal `ready` when the handshake marker
+			// is seen. Reading blocks on the pipe (no sleep) and continues
+			// to EOF so cmd.Wait never deadlocks on a full pipe.
+			ready := make(chan struct{})
+			go func() {
+				sc := bufio.NewScanner(stdout)
+				seen := false
+				for sc.Scan() {
+					if !seen && sc.Text() == signalChildReady {
+						seen = true
+						close(ready)
+					}
+				}
+				if !seen {
+					// Child died before printing the marker; unblock the
+					// parent so it fails on the exit-code assertion with
+					// context rather than hanging.
+					close(ready)
+				}
+				_, _ = io.Copy(io.Discard, stdout)
+			}()
 
 			var waitErr error
 			done := make(chan struct{})
@@ -74,19 +112,20 @@ func TestSignalRealE2E(t *testing.T) {
 				<-done
 			})
 
-			// The child's FIRST action is signal.NotifyContext, then it
-			// blocks. 1s is far past child process+test-framework startup
-			// and the child cannot finish early (it blocks until signaled),
-			// so this is race-free, not a timing guess.
-			time.Sleep(1 * time.Second)
+			select {
+			case <-ready:
+			case <-time.After(testtime.EventuallyExtraLong):
+				t.Fatalf("child never reported %q (mode=%s)", signalChildReady, tc.mode)
+			}
+
 			if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
 				t.Fatalf("send SIGINT to child: %v", err)
 			}
 
 			select {
 			case <-done:
-			case <-time.After(15 * time.Second):
-				t.Fatalf("child did not exit within 15s of SIGINT (mode=%s)", tc.mode)
+			case <-time.After(testtime.CtxLong):
+				t.Fatalf("child did not exit within timeout of SIGINT (mode=%s)", tc.mode)
 			}
 
 			code := exitCodeOf(waitErr)
@@ -100,7 +139,8 @@ func TestSignalRealE2E(t *testing.T) {
 
 // signalE2EChild runs the production signal wiring (real
 // signal.NotifyContext, real runWithSignal, real os.Exit) with a dispatch
-// chosen by mode, then exits. It never returns.
+// chosen by mode. It prints the readiness marker once the signal handler
+// is installed, then never returns.
 func signalE2EChild(mode string) {
 	ctx, stop := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)
@@ -110,9 +150,7 @@ func signalE2EChild(mode string) {
 	)
 	switch mode {
 	case "watchdog":
-		// Short grace keeps the test fast; the point is that a
-		// ctx-ignoring command (blocks forever) is force-terminated.
-		grace = 400 * time.Millisecond
+		grace = childWatchdogGrace
 		dispatch = func(context.Context, []string) int { select {} }
 	case "graceful":
 		dispatch = func(c context.Context, _ []string) int {
@@ -122,7 +160,10 @@ func signalE2EChild(mode string) {
 	default:
 		os.Exit(99) // unknown mode — fail loudly in the parent assertion
 	}
-	os.Exit(runWithSignal(ctx, stop, grace, nil, dispatch, os.Exit))
+	// Handshake: the handler is registered above; tell the parent it is
+	// safe to deliver the signal now (race-free, no sleep).
+	fmt.Println(signalChildReady)
+	os.Exit(runWithSignal(ctx, stop, clock.Real(), grace, nil, dispatch, os.Exit))
 }
 
 // exitCodeOf extracts a process exit code from cmd.Wait's error.
