@@ -191,3 +191,112 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 	assert.Equal(t, int64(goroutines)+1, got.AuthzEpoch(),
 		"100 concurrent BumpAuthzEpoch calls starting from epoch=1 must result in epoch == 101")
 }
+
+// ---------------------------------------------------------------------------
+// GetByIDForUpdate / GetByUsernameForUpdate fail-fast tests (E1)
+// ---------------------------------------------------------------------------
+
+// TestGetByIDForUpdate_NoAmbientTx is the RED conformance test for E1:
+// calling GetByIDForUpdate without a mem-tx sentinel must fail with ErrInternal.
+func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("forupdate", "forupdate@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-forupdate-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call WITHOUT a mem-tx sentinel → must fail with ErrInternal.
+	_, err = repo.GetByIDForUpdate(context.Background(), "usr-forupdate-001")
+	require.Error(t, err, "GetByIDForUpdate must error without a mem-tx context")
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindInternal, ce.Kind)
+	assert.Equal(t, errcode.ErrInternal, ce.Code)
+	assert.Contains(t, ce.Message, "FOR UPDATE")
+}
+
+// TestGetByIDForUpdate_InsideRunInTx verifies that GetByIDForUpdate succeeds
+// when called inside Store.TxRunner().RunInTx (the sentinel is injected).
+func TestGetByIDForUpdate_InsideRunInTx(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("intx", "intx@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-intx-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call INSIDE RunInTx → must succeed.
+	var got *domain.User
+	txErr := store.TxRunner().RunInTx(context.Background(), func(ctx context.Context) error {
+		got, err = repo.GetByIDForUpdate(ctx, "usr-intx-001")
+		return err
+	})
+	require.NoError(t, txErr)
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-intx-001", got.ID)
+}
+
+// TestGetByUsernameForUpdate_NoAmbientTx is the RED conformance test for E1:
+// calling GetByUsernameForUpdate without a mem-tx sentinel must fail with ErrInternal.
+func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("forupdate-un", "forupdate-un@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-forupdate-un-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call WITHOUT a mem-tx sentinel → must fail with ErrInternal.
+	_, err = repo.GetByUsernameForUpdate(context.Background(), "forupdate-un")
+	require.Error(t, err, "GetByUsernameForUpdate must error without a mem-tx context")
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindInternal, ce.Kind)
+	assert.Equal(t, errcode.ErrInternal, ce.Code)
+	assert.Contains(t, ce.Message, "FOR UPDATE")
+}
+
+// TestGetByUsernameForUpdate_InsideRunInTx verifies that GetByUsernameForUpdate
+// succeeds when called inside Store.TxRunner().RunInTx.
+func TestGetByUsernameForUpdate_InsideRunInTx(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("intx-un", "intx-un@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-intx-un-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call INSIDE RunInTx → must succeed.
+	var got *domain.User
+	txErr := store.TxRunner().RunInTx(context.Background(), func(ctx context.Context) error {
+		got, err = repo.GetByUsernameForUpdate(ctx, "intx-un")
+		return err
+	})
+	require.NoError(t, txErr)
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-intx-un-001", got.ID)
+}
+
+// TestGetByIDForUpdate_WithTxContext verifies that mem.WithTxContext can be
+// used by custom TxRunners to inject the sentinel for GetByIDForUpdate.
+func TestGetByIDForUpdate_WithTxContext(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("withctx", "withctx@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-withctx-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// WithTxContext must allow GetByIDForUpdate to succeed.
+	ctx := WithTxContext(context.Background())
+	got, err := repo.GetByIDForUpdate(ctx, "usr-withctx-001")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-withctx-001", got.ID)
+}

@@ -12,9 +12,23 @@ import (
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
+// assertMemTx returns an error when ctx does not carry the mem-tx sentinel
+// injected by Store.TxRunner. FOR-UPDATE semantics require an enclosing
+// RunInTx boundary — calling without one is a programming error.
+func assertMemTx(ctx context.Context) error {
+	if v, _ := ctx.Value(memTxKey{}).(bool); v {
+		return nil
+	}
+	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		"user_repo: FOR UPDATE requires a mem transaction context; call inside Store.TxRunner().RunInTx")
+}
+
 var _ ports.UserRepository = (*UserRepository)(nil)
 
-const msgUserNotFound = "user not found"
+const (
+	msgUserNotFound   = "user not found"
+	errMsgUsernameFmt = "username=%q"
+)
 
 // UserRepository is the in-memory implementation of ports.UserRepository.
 // It is always vended by Store.UserRepository() so the shared mutex covers
@@ -29,7 +43,7 @@ func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
 
 	if _, exists := r.store.byName[user.Username]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
-			errcode.WithInternal(fmt.Sprintf("username=%q", user.Username)))
+			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, user.Username)))
 	}
 
 	c := cloneUser(user)
@@ -59,20 +73,22 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, username)))
 	}
 	return cloneUser(u), nil
 }
 
-// GetByIDForUpdate (S4d): mem implementation uses the store-wide Lock (RWMutex
-// in write mode), serializing against any concurrent write — including
-// Invalidator.Apply's BumpAuthzEpoch and RevokeForSubject. Because the mem
-// repo always vends from Store.UserRepository(), the shared mutex covers all
-// other writes for the duration of the ambient transaction's read-modify-write
-// cycle. Caller MUST be inside RunInTx; mem TxRunner serializes RunInTx body
-// to the same Store.mu so the lock semantics match PG SELECT FOR UPDATE in
-// practice.
-func (r *UserRepository) GetByIDForUpdate(_ context.Context, id string) (*domain.User, error) {
+// GetByIDForUpdate (S4d): mem implementation fail-fasts when ctx does not
+// carry the mem-tx sentinel from Store.TxRunner — matching assertAmbientTx
+// in the PG adapter. When inside a valid RunInTx body it acquires the
+// store-wide write lock, serializing against concurrent writes (BumpAuthzEpoch,
+// RevokeForSubject, etc.) in the same way PG SELECT FOR UPDATE would.
+//
+// fail-fast enforced: calling without a mem-tx context returns errcode.ErrInternal.
+func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	if err := assertMemTx(ctx); err != nil {
+		return nil, err
+	}
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
 
@@ -85,8 +101,14 @@ func (r *UserRepository) GetByIDForUpdate(_ context.Context, id string) (*domain
 	return cloneUser(u), nil
 }
 
-// GetByUsernameForUpdate (S4d): same locking semantics as GetByIDForUpdate.
-func (r *UserRepository) GetByUsernameForUpdate(_ context.Context, username string) (*domain.User, error) {
+// GetByUsernameForUpdate (S4d): same fail-fast and locking semantics as
+// GetByIDForUpdate. Requires the mem-tx sentinel from Store.TxRunner.
+//
+// fail-fast enforced: calling without a mem-tx context returns errcode.ErrInternal.
+func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	if err := assertMemTx(ctx); err != nil {
+		return nil, err
+	}
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
 
@@ -94,7 +116,7 @@ func (r *UserRepository) GetByUsernameForUpdate(_ context.Context, username stri
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, username)))
 	}
 	return cloneUser(u), nil
 }

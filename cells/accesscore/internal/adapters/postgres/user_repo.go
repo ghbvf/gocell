@@ -346,7 +346,14 @@ func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 // new value. It must be called inside an ambient transaction — the
 // credential-invalidation funnel entry point guarantees this. Returns
 // ErrAuthUserNotFound (KindNotFound) when no row matches userID.
+//
+// fail-fast enforced: calling without an ambient transaction returns an error
+// (errcode.ErrInternal); without a transaction the row update is auto-committed
+// before the caller's surrounding atomic sequence completes.
 func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
+	if err := assertAmbientTx(ctx); err != nil {
+		return 0, err
+	}
 	var newEpoch int64
 	err := r.db.QueryRow(ctx, bumpAuthzEpochSQL, userID).Scan(&newEpoch)
 	if err != nil {

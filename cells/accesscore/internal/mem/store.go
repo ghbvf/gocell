@@ -15,11 +15,29 @@
 package mem
 
 import (
+	"context"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
+
+// memTxKey is the context key injected by Store.TxRunner when entering a
+// RunInTx body. GetByIDForUpdate and GetByUsernameForUpdate check for this
+// key to enforce that FOR-UPDATE semantics are only invoked inside a logical
+// transaction context — mirroring assertAmbientTx in the PG adapter.
+type memTxKey struct{}
+
+// memTxRunner is a simple synchronous TxRunner backed by a Store. It injects
+// memTxKey into ctx before calling the function body so that
+// GetByIDForUpdate / GetByUsernameForUpdate can fail-fast when called outside
+// a RunInTx boundary.
+type memTxRunner struct{}
+
+func (memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(context.WithValue(ctx, memTxKey{}, true))
+}
 
 // Store is the shared backing for an in-memory accesscore deployment. The
 // embedded mutex protects all maps; UserRepository and RoleRepository derived
@@ -59,4 +77,28 @@ func (s *Store) UserRepository() *UserRepository {
 // from a single Store share state.
 func (s *Store) RoleRepository() *RoleRepository {
 	return &RoleRepository{store: s}
+}
+
+// TxRunner returns a persistence.TxRunner that marks the context with a
+// mem-tx sentinel before invoking the callback. The repositories vended by
+// this Store detect the sentinel in GetByIDForUpdate /
+// GetByUsernameForUpdate and succeed; calls without the sentinel fail-fast
+// with errcode.ErrInternal — matching the PG assertAmbientTx contract.
+//
+// Usage: persistence.WrapForCell(store.TxRunner()) at the composition root
+// or in test helpers that exercise FOR-UPDATE paths.
+func (s *Store) TxRunner() persistence.TxRunner {
+	return memTxRunner{}
+}
+
+// WithTxContext returns ctx with the mem-tx sentinel injected. Test helpers
+// that use a custom TxRunner (e.g. recordingTxRunner, snapshotTxRunner) and
+// need to call GetByIDForUpdate / GetByUsernameForUpdate must wrap the
+// context they pass to fn with this function:
+//
+//	func (r *myTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+//	    return fn(mem.WithTxContext(ctx))
+//	}
+func WithTxContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, memTxKey{}, true)
 }

@@ -477,10 +477,33 @@ type pendingCredMutation struct {
 	ok bool
 }
 
+// msgCombinedAuthzFields is the deterministic error message returned when a
+// PATCH request sets both status and requirePasswordReset simultaneously.
+// Providing both in one request is ambiguous: the two mutations produce
+// different authz_epoch bumps and invalidation events that must be applied
+// sequentially, so requiring the client to split them into two requests makes
+// the ordering explicit.
+const msgCombinedAuthzFields = "status and requirePasswordReset cannot both be set in the same request; send two separate PATCH requests"
+
+// hasCombinedAuthzFields returns true when the input sets both status and
+// requirePasswordReset in the same call — an ambiguous combination that must
+// be rejected with HTTP 400 before any mutation is attempted.
+func hasCombinedAuthzFields(input UpdateInput) bool {
+	return input.Status != nil && input.RequirePasswordReset != nil
+}
+
 // resolveCredentialMutation inspects the UpdateInput and returns the
 // authzmutate.Mutation that should be applied, wrapped in a pendingCredMutation.
 // When pendingCredMutation.ok is false no credential mutation is needed.
+//
+// Precondition: hasCombinedAuthzFields(input) must be false — callers must
+// check and return HTTP 400 before calling this function.
 func (s *Service) resolveCredentialMutation(ctx context.Context, input UpdateInput) (pendingCredMutation, error) {
+	// Guard: both authz fields in one request is rejected before any mutation.
+	if hasCombinedAuthzFields(input) {
+		return pendingCredMutation{}, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			msgCombinedAuthzFields)
+	}
 	// Check status change.
 	if input.Status != nil {
 		switch domain.UserStatus(*input.Status) {

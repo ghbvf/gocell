@@ -38,10 +38,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
+// durableTxRunner is a test-only TxRunner that simulates a non-noop (real) tx
+// context. It injects the mem-tx sentinel so GetByUsernameForUpdate and
+// GetByIDForUpdate succeed when called through mem.Store repository paths.
 type durableTxRunner struct{}
 
 func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
+	return fn(mem.WithTxContext(ctx))
 }
 
 var _ persistence.TxRunner = durableTxRunner{}

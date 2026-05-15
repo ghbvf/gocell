@@ -45,16 +45,17 @@ type UserRepository interface {
 
 	// GetByIDForUpdate fetches a user by primary key inside an ambient
 	// transaction and acquires a row-level write lock (PG: SELECT ... FOR
-	// UPDATE; mem: serializes against concurrent writes via the store mutex).
-	// Required by S4d sessionlogin and authzmutate.Apply so that concurrent
-	// credential-invalidation (Invalidator.Apply) cannot interleave between
-	// user read and downstream session/refresh INSERT — without the row lock,
-	// login can mint tokens with a snapshot of users.authz_epoch that the
-	// in-flight Invalidator has already advanced (PR #490 review P1-#3).
+	// UPDATE; mem: acquires store write mutex). Required by S4d sessionlogin
+	// and authzmutate.Apply so that concurrent credential-invalidation
+	// (Invalidator.Apply) cannot interleave between user read and downstream
+	// session/refresh INSERT — without the row lock, login can mint tokens
+	// with a snapshot of users.authz_epoch that the in-flight Invalidator has
+	// already advanced (PR #490 review P1-#3).
 	//
-	// fail-fast enforced: calling without an ambient transaction returns an
-	// error (errcode.ErrInternal); the lock guarantee cannot silently degrade.
-	// PG impl fail-fasts; mem impl serializes via store mutex (no tx concept).
+	// fail-fast enforced: both PG and mem implementations return
+	// errcode.ErrInternal when called without an ambient transaction context.
+	// PG checks for a pgx.Tx under persistence.TxCtxKey; mem checks for the
+	// sentinel injected by Store.TxRunner().RunInTx.
 	GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error)
 
 	// GetByUsernameForUpdate is the username-keyed counterpart to
@@ -62,8 +63,7 @@ type UserRepository interface {
 	// callers from password / lock paths (which already have the userID) use
 	// GetByIDForUpdate.
 	//
-	// fail-fast enforced: calling without an ambient transaction returns an
-	// error (errcode.ErrInternal); the lock guarantee cannot silently degrade.
-	// PG impl fail-fasts; mem impl serializes via store mutex (no tx concept).
+	// fail-fast enforced: same contract as GetByIDForUpdate — both PG and mem
+	// return errcode.ErrInternal when called outside an ambient transaction.
 	GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error)
 }

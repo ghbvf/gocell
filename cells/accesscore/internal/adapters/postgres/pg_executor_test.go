@@ -70,6 +70,22 @@ func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
 	assert.Contains(t, ec.Message, "ambient transaction")
 }
 
+// TestBumpAuthzEpoch_NoAmbientTx verifies that PGUserRepo.BumpAuthzEpoch
+// returns errcode.ErrInternal when called without an ambient transaction,
+// before any DB call is made (pool can be nil — guard fires first).
+func TestBumpAuthzEpoch_NoAmbientTx(t *testing.T) {
+	repo := &PGUserRepo{db: pgExecutor{pool: nil}}
+
+	_, err := repo.BumpAuthzEpoch(context.Background(), "usr-test-001")
+	require.Error(t, err, "BumpAuthzEpoch must error without ambient tx")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindInternal, ec.Kind)
+	assert.Equal(t, errcode.ErrInternal, ec.Code)
+	assert.Contains(t, ec.Message, "ambient transaction")
+}
+
 // fakeTx is a minimal stub that satisfies pgx.Tx for type-assertion purposes.
 // Only the interface embedding is required; no method bodies are exercised.
 type fakeTx struct{ pgx.Tx }

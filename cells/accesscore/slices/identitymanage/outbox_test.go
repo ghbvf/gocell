@@ -41,7 +41,7 @@ type stubTxRunner struct{ calls int }
 
 func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
 	s.calls++
-	return fn(context.Background())
+	return fn(mem.WithTxContext(context.Background()))
 }
 
 // outboxStubIssuer is a minimal TokenIssuer stub used by outbox tests that do
