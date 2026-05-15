@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
@@ -41,10 +42,14 @@ type passwordComparer func(hash, password []byte) error
 
 // dummyBcryptHash is a pre-computed bcrypt hash used when the user is not found.
 // Comparing against it normalises timing so callers cannot distinguish "user not
-// found" from "wrong password" via response latency. Cost=MinCost is sufficient
-// for timing normalisation (the real password comparison uses domain.BcryptCost).
+// found" from "wrong password" via response latency.
+//
+// The hash is generated at domain.BcryptCost (=12) — identical to the cost used
+// for real user passwords. Using a lower cost (e.g. bcrypt.MinCost=4) would make
+// the "user not found" path ~256x faster than the "wrong password" path, exposing
+// a statistical timing oracle that can enumerate valid usernames.
 var dummyBcryptHash = func() []byte {
-	h, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-normalization"), bcrypt.MinCost)
+	h, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-normalization"), domain.BcryptCost)
 	if err != nil {
 		panic(panicregister.Approved("sessionlogin-dummy-hash-init",
 			errcode.Assertion("sessionlogin: failed to pre-compute dummyBcryptHash: %v", err)))

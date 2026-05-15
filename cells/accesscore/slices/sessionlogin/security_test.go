@@ -29,6 +29,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// securityTestBcryptCost is the bcrypt cost used for seeding test user hashes in
+// security tests. It mirrors domain.BcryptCost so that timing-normalization tests
+// reflect the same hash cost relationship as production: dummyBcryptHash (cost=12)
+// vs user hash (cost=12). Using a lower cost would invert the relative timing
+// (dummy slower than real hash), making the tests misleading about the actual
+// timing oracle risk.
+//
+// Accept the associated test slowdown (~250 ms per bcrypt call) as the correct
+// tradeoff: correctness of timing assertions outweighs test speed.
+const securityTestBcryptCost = domain.BcryptCost
+
 // countingComparer is a test-only passwordComparer that counts how many times
 // it is called and delegates to bcrypt.CompareHashAndPassword.
 type countingComparer struct {
@@ -43,7 +54,7 @@ func (c *countingComparer) compare(hash, password []byte) error {
 // seedInactiveUser creates a user with the given status and returns it.
 func seedInactiveUser(t *testing.T, repo *mem.UserRepository, username, password string, status domain.UserStatus) *domain.User {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), securityTestBcryptCost)
 	require.NoError(t, err)
 	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:           "usr-" + username,
@@ -221,7 +232,7 @@ func TestLogin_InactiveInTx_NoPublic403(t *testing.T) {
 
 	// Use a racing repo where GetByUsername returns active (for pre-bcrypt pass)
 	// but GetByUsernameForUpdate returns locked (concurrent deactivation race).
-	hash, err := bcrypt.GenerateFromPassword([]byte("correct"), bcrypt.MinCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct"), securityTestBcryptCost)
 	require.NoError(t, err)
 
 	activeUser, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
