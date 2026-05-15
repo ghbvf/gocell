@@ -1,8 +1,8 @@
 //go:build archtest_fixture
 
 // Package passfunnelfixture contains intentionally-violating archtest entry
-// point usages that exercise the three PASS-FUNNEL-* meta-archtest detectors
-// in pass_funnel_test.go. Gated by the archtest_fixture build tag (kept as
+// point usages that exercise the PASS-FUNNEL-* meta-archtest detectors in
+// pass_funnel_test.go. Gated by the archtest_fixture build tag (kept as
 // a literal here because Go's //go:build syntax cannot reference Go
 // constants — must agree with [archtestmeta.FixtureBuildTag]).
 //
@@ -33,6 +33,9 @@
 //     scan; sister rule SCANNER-FRAMEWORK-USAGE-01's Path A.1+A.3 shape)
 //
 // Plus a direct packages-import violation for PASS-FUNNEL-PACKAGES-IMPORT-01.
+//
+// PASS-FUNNEL-RESOLVE-01 violations are added below for the 8 typeseval
+// helpers and scanner.ImportBan, exercising the same three import forms.
 package passfunnelfixture
 
 import (
@@ -45,6 +48,7 @@ import (
 	sn "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 
 	// VIOLATION sources for PASS-FUNNEL-LOADPACKAGES-01 — qualified + alias + dot forms.
+	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — same package, different symbols.
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	te "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
@@ -71,4 +75,52 @@ var (
 	// type usage exists only to keep the import live; the import itself is
 	// the PASS-FUNNEL-PACKAGES-IMPORT-01 violation (path scan, not symbol).
 	_ packages.Config
+
+	// ── PASS-FUNNEL-RESOLVE-01 violations ─────────────────────────────────
+	// typeseval helper symbols banned from business *_test.go (8 symbols).
+	// Three import forms each (qualified / alias / dot-import where applicable).
+
+	// ResolvePackageRef
+	_ = typeseval.ResolvePackageRef // qualified
+	_ = te.ResolvePackageRef        // alias-import
+	// dot-import form: ResolvePackageRef is a *types.Func in typeseval pkg,
+	// but the dot import is already declared above (`. "…/typeseval"` is not
+	// valid Go — only one dot-import per package path per file). The dot-import
+	// of typeseval would conflict with the qualified import above.
+	// The dot-import shape is exercised via scanner.ImportBan below (dot-import
+	// of scanner is already present via `. "…/scanner"`).
+
+	// ResolveMethodCall
+	_ = typeseval.ResolveMethodCall // qualified
+	_ = te.ResolveMethodCall        // alias-import
+
+	// EvaluateConstString
+	_ = typeseval.EvaluateConstString // qualified
+	_ = te.EvaluateConstString        // alias-import
+
+	// FlatNonDefaultTags
+	_ = typeseval.FlatNonDefaultTags // qualified
+	_ = te.FlatNonDefaultTags        // alias-import
+
+	// KnownNonDefaultTags
+	_ = typeseval.KnownNonDefaultTags // qualified
+	_ = te.KnownNonDefaultTags        // alias-import
+
+	// ParseBuildConstraint
+	_ = typeseval.ParseBuildConstraint // qualified
+	_ = te.ParseBuildConstraint        // alias-import
+
+	// IsGeneratedRelPath
+	_ = typeseval.IsGeneratedRelPath // qualified
+	_ = te.IsGeneratedRelPath        // alias-import
+
+	// BuildContextPredicate
+	_ = typeseval.BuildContextPredicate // qualified
+	_ = te.BuildContextPredicate        // alias-import
+
+	// scanner.ImportBan — qualified and alias forms.
+	// The dot-import form is: `_ = ImportBan` (bare Ident after `. "…/scanner"`).
+	_ = scanner.ImportBan{} // qualified (value reference, zero-value struct literal)
+	_ = sn.ImportBan{}      // alias-import
+	_ = ImportBan{}         // dot-import (bare Ident from `. "…/scanner"` above)
 )

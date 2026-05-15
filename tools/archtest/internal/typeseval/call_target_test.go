@@ -46,6 +46,30 @@ func findFirstSelector(t *testing.T, file *ast.File, selName string) *ast.Select
 	return found
 }
 
+// findNthIdent returns the n-th *ast.Ident (1-based) with the given name
+// encountered in a left-to-right pre-order traversal. Use n>1 to skip
+// definition-site occurrences (which are in info.Defs, not info.Uses).
+func findNthIdent(t *testing.T, file *ast.File, name string, n int) *ast.Ident {
+	t.Helper()
+	var count int
+	var found *ast.Ident
+	ast.Inspect(file, func(node ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		if id, ok := node.(*ast.Ident); ok && id.Name == name {
+			count++
+			if count == n {
+				found = id
+				return false
+			}
+		}
+		return true
+	})
+	require.NotNilf(t, found, "ident %q occurrence %d not found in fixture", name, n)
+	return found
+}
+
 // findCallSiteIdent returns the *ast.Ident at CallExpr.Fun position for the
 // given name. Distinct from findFirstIdent because the FuncDecl name position
 // is in info.Defs (not Uses); we need the use-site ident.
@@ -222,10 +246,11 @@ func _() {
 	assert.False(t, ok, "ParenExpr boundary: helper does not unwrap")
 }
 
-func TestResolvePackageRef_DotImportNonFuncIdent(t *testing.T) {
-	// Helper-level coverage for "dot-imported non-Func identifier returns
-	// false" — decouples this contract from the fixture-layer
-	// `dot_import_type_reference_only` test in scanner_framework_usage_test.go.
+func TestResolvePackageRef_DotImportTypeNameIdent(t *testing.T) {
+	// After the *types.TypeName extension: a dot-imported package-level type
+	// (struct, interface, etc.) must resolve to (pkgPath, name, true).
+	// This is the root-cause fix for the ImportBan blind spot: bare Ident
+	// whose Uses[id] is *types.TypeName must be resolved just like *types.Func.
 	src := `package fixture
 import . "io/fs"
 var _ FS
@@ -233,8 +258,72 @@ var _ FS
 	pkg, file := buildFakePkg(t, src)
 	id := findFirstIdent(t, file, "FS")
 
+	path, name, ok := ResolvePackageRef(pkg.TypesInfo, id)
+	require.True(t, ok, "dot-imported TypeName ident must now resolve as package ref")
+	assert.Equal(t, "io/fs", path)
+	assert.Equal(t, "FS", name)
+}
+
+func TestResolvePackageRef_DotImportTypeAliasIdent(t *testing.T) {
+	// Specifically exercises the type ALIAS shape: the ImportBan fixture uses
+	// type ImportBan struct{} in scanner, accessed via dot-import as bare Ident.
+	// Uses[id] is *types.TypeName where IsAlias()=false (it's the canonical
+	// type in its declaring package). tn.Pkg().Path() returns the scanner
+	// package path; tn.Name() returns "ImportBan". This pinned tuple must
+	// match what the banned map keys on (the same path+name that the qualified
+	// SelectorExpr scanner.ImportBan returns).
+	//
+	// We simulate with net/http.Request (a stdlib struct, same shape as
+	// scanner.ImportBan): dot-imported, accessed as bare Ident.
+	src := `package fixture
+import . "net/http"
+var _ *Request
+`
+	pkg, file := buildFakePkg(t, src)
+	id := findFirstIdent(t, file, "Request")
+
+	path, name, ok := ResolvePackageRef(pkg.TypesInfo, id)
+	require.True(t, ok, "dot-imported struct TypeName ident must resolve as package ref")
+	assert.Equal(t, "net/http", path)
+	assert.Equal(t, "Request", name)
+}
+
+func TestResolvePackageRef_LocalTypeNameNotResolved(t *testing.T) {
+	// A locally-defined type used via bare Ident (TypeName in the current
+	// package) resolves with the current package path — callers must filter by
+	// pkgPath to distinguish cross-package vs local references. This is the
+	// same contract as TestResolvePackageRef_LocalFuncReturnsFixturePkg for
+	// *types.Func.
+	//
+	// The usage ident (second occurrence in `var _ MyType`) is in info.Uses;
+	// the first occurrence (in `type MyType struct{}`) is in info.Defs only.
+	// findNthIdent is used to skip the definition site.
+	src := `package fixture
+type MyType struct{}
+var _ MyType
+`
+	pkg, file := buildFakePkg(t, src)
+	id := findNthIdent(t, file, "MyType", 2)
+
+	path, name, ok := ResolvePackageRef(pkg.TypesInfo, id)
+	require.True(t, ok, "local TypeName use-site resolves; callers filter by pkgPath")
+	assert.Equal(t, "fixture", path)
+	assert.Equal(t, "MyType", name)
+}
+
+func TestResolvePackageRef_DotImportNonFuncNonTypeIdent(t *testing.T) {
+	// A dot-imported VAR (not Func, not TypeName) still returns ok=false.
+	// Only *types.Func and *types.TypeName are handled at the bare-Ident
+	// position; *types.Var (including package-level vars) is not.
+	src := `package fixture
+import . "os"
+var _ = Stderr
+`
+	pkg, file := buildFakePkg(t, src)
+	id := findFirstIdent(t, file, "Stderr")
+
 	_, _, ok := ResolvePackageRef(pkg.TypesInfo, id)
-	assert.False(t, ok, "dot-imported TypeName ident must not resolve as package ref")
+	assert.False(t, ok, "dot-imported *types.Var ident must not resolve as package ref")
 }
 
 // TestResolvePackageRef_PartialTypeInfoQualified models the fixture scenario
