@@ -4,10 +4,7 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01
@@ -34,25 +31,28 @@ func TestProvisionStateAndUserSourceBootstrapRemoved(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"cells/accesscore"},
-		scanner.IncludeTests(),
-		scanner.ExcludeRels("tools/archtest/provision_state_removed_test.go"),
+	scope := DirsScope(root, []string{"cells/accesscore"},
+		IncludeTests(),
+		ExcludeRels("tools/archtest/provision_state_removed_test.go"),
 	)
 
-	var diags []scanner.Diagnostic
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.Ident](fc.File, func(ident *ast.Ident) {
-			for _, banned := range bannedProvisionIdentifiers {
-				if ident.Name == banned {
-					diags = append(diags, scanner.Diagnostic{
-						Rel:     fc.Rel,
-						Line:    fc.Fset.Position(ident.Pos()).Line,
-						Message: banned,
-					})
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			EachInSubtree[ast.Ident](file, func(ident *ast.Ident) {
+				for _, banned := range bannedProvisionIdentifiers {
+					if ident.Name == banned {
+						ds = append(ds, Diagnostic{
+							Rel:     p.Rel(file),
+							Line:    p.Fset.Position(ident.Pos()).Line,
+							Message: banned,
+						})
+					}
 				}
-			}
-		})
+			})
+		}
+		return ds
 	})
 
-	scanner.Report(t, "PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01", diags)
+	Report(t, "PROVISION-STATE-AND-USERSOURCE-BOOTSTRAP-REMOVED-01", diags)
 }

@@ -22,11 +22,8 @@
 package archtest
 
 import (
-	"go/parser"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -40,12 +37,12 @@ const (
 func TestKERNEL_POOLSTATS_LOCATION_01a_NoLegacyImport(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scanner.ImportBan{
+	ImportBan{
 		RuleID:    "KERNEL-POOLSTATS-LOCATION-01a",
 		Forbidden: []string{poolstatsForbiddenImport},
 		AllowRels: []string{"tools/archtest/kernel_poolstats_location_test.go"},
 		Hint:      `descend to "github.com/ghbvf/gocell/` + poolstatsCanonicalDir + `"`,
-	}.Run(t, scanner.ModuleScope(root, scanner.IncludeTests()))
+	}.Run(t, ModuleScope(root, IncludeTests()))
 }
 
 // TestKERNEL_POOLSTATS_LOCATION_01b_ContractIsImportZero scans every
@@ -62,25 +59,28 @@ func TestKERNEL_POOLSTATS_LOCATION_01b_ContractIsImportZero(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	var diags []scanner.Diagnostic
-	scope := scanner.DirsScope(root, []string{poolstatsCanonicalDir})
-	scanner.EachFile(t, scope, parser.ImportsOnly, func(t *testing.T, fc scanner.FileContext) {
-		for _, imp := range fc.File.Imports {
-			if imp.Path == nil {
-				continue
+	scope := DirsScope(root, []string{poolstatsCanonicalDir})
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			for _, imp := range file.Imports {
+				if imp.Path == nil {
+					continue
+				}
+				imported := strings.Trim(imp.Path.Value, `"`)
+				if isPoolstatsStdlibImport(imported) {
+					continue
+				}
+				ds = append(ds, Diagnostic{
+					Rel:     p.Rel(file),
+					Line:    p.Fset.Position(imp.Path.Pos()).Line,
+					Message: `non-stdlib import "` + imported + `" — pool-stats contract must remain import-zero`,
+				})
 			}
-			imported := strings.Trim(imp.Path.Value, `"`)
-			if isPoolstatsStdlibImport(imported) {
-				continue
-			}
-			diags = append(diags, scanner.Diagnostic{
-				Rel:     fc.Rel,
-				Line:    fc.Fset.Position(imp.Path.Pos()).Line,
-				Message: `non-stdlib import "` + imported + `" — pool-stats contract must remain import-zero`,
-			})
 		}
+		return ds
 	})
-	scanner.Report(t, "KERNEL-POOLSTATS-LOCATION-01b", diags)
+	Report(t, "KERNEL-POOLSTATS-LOCATION-01b", diags)
 }
 
 // isPoolstatsStdlibImport returns true when imported has no domain segment —

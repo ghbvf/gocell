@@ -8,15 +8,12 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleRefreshCrossStoreTX01 = "REFRESH-CROSS-STORE-TX-01"
@@ -53,21 +50,37 @@ const ruleRefreshAmbientTX01 = "REFRESH-AMBIENT-TX-01"
 // outside the closure: PR#395 detached-context invariant requires them to
 // run on a context derived via ctxutil.WithDetachedTimeout.
 func TestRefreshCrossStoreTX01(t *testing.T) {
+	const rel = "cells/accesscore/slices/sessionrefresh/service.go"
 	root := findModuleRoot(t)
-	rel := "cells/accesscore/slices/sessionrefresh/service.go"
-	abs := filepath.Join(root, filepath.FromSlash(rel))
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution|parser.ParseComments)
-	require.NoError(t, err, "%s: parse failed", rel)
+	scope := DirsScope(root, []string{filepath.Dir(rel)},
+		MatchRels(func(r string) bool { return r == rel }),
+	)
 
-	var refreshFunc *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-		if refreshFunc != nil || fn.Recv == nil || fn.Name.Name != "Refresh" {
-			return
+	var (
+		fset        *token.FileSet
+		refreshFunc *ast.FuncDecl
+		foundFile   bool
+	)
+
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			if p.Rel(file) != rel {
+				continue
+			}
+			fset = p.Fset
+			foundFile = true
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if refreshFunc != nil || fn.Recv == nil || fn.Name.Name != "Refresh" {
+					return
+				}
+				refreshFunc = fn
+			})
 		}
-		refreshFunc = fn
+		return nil
 	})
+
+	require.True(t, foundFile, "%s: file not found: %s", ruleRefreshCrossStoreTX01, rel)
 	require.NotNil(t, refreshFunc, "%s: Refresh method not found in %s", ruleRefreshCrossStoreTX01, rel)
 
 	// Find s.txRunner.RunInTx call(s) at the top level of Refresh body. The
@@ -76,7 +89,7 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// `do := func(txCtx) error { ... }` pattern). Both are accepted.
 	var runInTxCalls []*ast.CallExpr
 	var closureArg ast.Expr
-	scanner.EachInSubtree[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
 		if !isTxRunnerRunInTxCall(call) {
 			return
 		}
@@ -101,7 +114,7 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// without actually doing work. The closure body must contain at least one
 	// method call on `s`.
 	var hasReceiverCall bool
-	scanner.EachInSubtree[ast.CallExpr](runInTxClosure.Body, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](runInTxClosure.Body, func(call *ast.CallExpr) {
 		if hasReceiverCall {
 			return
 		}
@@ -142,7 +155,7 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 	// closure body so we can skip calls that are inside the desired location.
 	closureLbrace := runInTxClosure.Body.Lbrace
 	closureRbrace := runInTxClosure.Body.Rbrace
-	scanner.EachInSubtree[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](refreshFunc.Body, func(call *ast.CallExpr) {
 		// Skip nodes inside the RunInTx closure body — those are the desired location.
 		if call.Pos() > closureLbrace && call.Pos() < closureRbrace {
 			return
@@ -205,10 +218,10 @@ func resolveClosureArg(body *ast.BlockStmt, arg ast.Expr) *ast.FuncLit {
 		return nil
 	}
 	var lastAssigned *ast.FuncLit
-	scanner.EachInSubtree[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
+	EachInSubtree[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
 		// Build an index map from Ident pointer to position in Lhs.
 		lhsIndex := make(map[*ast.Ident]int, len(assign.Lhs))
-		scanner.EachInSubtree[ast.Ident](assign, func(id *ast.Ident) {
+		EachInSubtree[ast.Ident](assign, func(id *ast.Ident) {
 			for i, lhs := range assign.Lhs {
 				if lhs == id {
 					lhsIndex[id] = i
@@ -275,22 +288,25 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 	}
 	var declarations []declarationSite
 
-	scope := scanner.ModuleScope(root)
-	scanner.EachFile(t, scope, parser.SkipObjectResolution|parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
-			if fd.Name.Name != "DetectInvalidIndexes" {
-				return
-			}
-			// Only top-level function declarations (no receiver).
-			if fd.Recv != nil {
-				return
-			}
-			pos := fc.Fset.Position(fd.Pos())
-			declarations = append(declarations, declarationSite{
-				rel:  filepath.ToSlash(fc.Rel),
-				line: pos.Line,
+	scope := ModuleScope(root)
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Name.Name != "DetectInvalidIndexes" {
+					return
+				}
+				// Only top-level function declarations (no receiver).
+				if fd.Recv != nil {
+					return
+				}
+				pos := p.Fset.Position(fd.Pos())
+				declarations = append(declarations, declarationSite{
+					rel:  filepath.ToSlash(p.Rel(file)),
+					line: pos.Line,
+				})
 			})
-		})
+		}
+		return nil
 	})
 
 	if len(declarations) == 0 {
@@ -330,13 +346,12 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 // method calls named "Begin" on any expression, since the only legitimate
 // Begin callers in refresh_store.go would be pool or tx variables.
 func TestRefreshAmbientTX01(t *testing.T) {
+	const rel = "adapters/postgres/refresh_store.go"
 	root := findModuleRoot(t)
-	rel := "adapters/postgres/refresh_store.go"
-	abs := filepath.Join(root, filepath.FromSlash(rel))
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution|parser.ParseComments)
-	require.NoError(t, err, "%s: parse failed", rel)
+	scope := DirsScope(root, []string{filepath.Dir(rel)},
+		MatchRels(func(r string) bool { return r == rel }),
+	)
 
 	type violation struct {
 		line int
@@ -344,16 +359,24 @@ func TestRefreshAmbientTX01(t *testing.T) {
 	}
 	var violations []violation
 
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Begin" {
-			return
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			if p.Rel(file) != rel {
+				continue
+			}
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Begin" {
+					return
+				}
+				pos := p.Fset.Position(call.Pos())
+				violations = append(violations, violation{
+					line: pos.Line,
+					expr: fmt.Sprintf("call to .Begin() at line %d", pos.Line),
+				})
+			})
 		}
-		pos := fset.Position(call.Pos())
-		violations = append(violations, violation{
-			line: pos.Line,
-			expr: fmt.Sprintf("call to .Begin() at line %d", pos.Line),
-		})
+		return nil
 	})
 
 	if len(violations) > 0 {

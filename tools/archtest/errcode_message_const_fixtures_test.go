@@ -10,15 +10,12 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // runErrcodeMessageConstFixtureScan parses every non-test .go file under
@@ -28,14 +25,18 @@ import (
 // `errcode` package (see testdata/errcode_message_const/*).
 func runErrcodeMessageConstFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
-	scope := scanner.DirsScope(fixtureDir, []string{"."})
+	scope := DirsScope(fixtureDir, []string{"."})
 	var out []string
-	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		// Skip the local stub errcode pkg; only scan the usage file in the parent.
-		if filepath.Base(filepath.Dir(fc.AbsPath)) == "errcode" {
-			return
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			absPath := p.Abs(file)
+			// Skip the local stub errcode pkg; only scan the usage file in the parent.
+			if filepath.Base(filepath.Dir(absPath)) == "errcode" {
+				continue
+			}
+			out = append(out, scanErrcodeMessageASTNoTypes(p.Fset, file, p.Rel(file))...)
 		}
-		out = append(out, scanErrcodeMessageASTNoTypes(fc.Fset, fc.File, fc.Rel)...)
+		return nil
 	})
 	sort.Strings(out)
 	return out
