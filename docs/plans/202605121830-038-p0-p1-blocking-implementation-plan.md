@@ -77,11 +77,11 @@
 **包含**：B2-X-05 / B2-X-06 / B2-X-07（+ root-cause 升级 CLI-UNIMPL-HIDE-01 闭环 Hard，+ 派生 follow-up CLI-TOPLEVEL-HELP-REGISTRY-01）
 **依据**：`cmd/gocell/app/{generate.go,verify.go,dispatch.go,main.go}`，CLI 入口治理（unimpl 隐藏 / verify ctx / signal ctx）
 **Cx**：Cx2-Cx3
-**ship 摘要（PR-3 CLI-HARDEN, 2026-05-15）**：
+**ship 摘要（PR #502 CLI-HARDEN, 2026-05-15）**：
 - **L3 根因升级（用户裁决）**：原计划仅 generate 单树 → 发现 4 棵子命令树（generate/verify/scaffold/check）同为 `switch args[0]` + 手写 `printXxxHelp` helpEntry 双源漂移结构；仅修 generate 是修实例不修根因类。统一为泛型 `subcommand[H]` typed registry 单源（`cmd/gocell/app/subcommand.go`），删 4 switch + 4 手写 helpEntry 列表；`subNames/findSub/renderSubHelp` 共享 dispatch/help 派生
 - B2-X-05：`generate indexes`（V2.1 C18 废弃概念，V3 由 export/graph 取代）彻底移除，无 `[experimental]` 软标签；落 unknown-type
 - B2-X-06：`runVerify(ctx)` + 4 处 `context.Background()`→形参；下层已 ctx-aware，全链路取消闭环
-- B2-X-07：(b) `main.go signal.NotifyContext` + `Dispatch(ctx,args)` + `commands` map ctx 化 + 7 子命令统一 ctx；`context.Canceled`→`interrupted`/ExitRuntime；`TestDispatch_CancelledContext` 回归
+- B2-X-07：(b) `main.go signal.NotifyContext` + `Dispatch(ctx,args)` + `commands` map ctx 化 + 7 子命令统一 ctx；`context.Canceled`→`interrupted`/ExitRuntime；`TestDispatch_CanceledContext` 回归
 - CLI-UNIMPL-HIDE-01：archtest `tools/archtest/cli_unimpl_hide_test.go`（Pass-Driver `archtest.Run`，不进 LegacyAllowlist）全 `cmd/gocell/app` 强制上游 Hard（4 dispatch 无 switch + 必 findSub）+ 下游 Hard（无 string-literal name helpEntry）+ 无 `not implemented` 字面量 + 4 项反向 fixture 自检；declared blind spot（顶层 PrintUsage prose）补偿断言 + 显式 backlog `CLI-TOPLEVEL-HELP-REGISTRY-01`（非 silent carryover）
 - ctx 透传逐个核实非假设：validate/verify/generate-metricschema 真透传；scaffold/check/graph/export 无 cancelable 下游（depgraph.Load 非 ctx-native 等），统一形参 + godoc 注明
 
@@ -157,7 +157,7 @@
 Wave 1（独立并行，8 PR） — 6/8 ship：
   PR-1 OTEL-HARDEN-5         ✅ PR #486 (OTEL-HARDEN-4，B2-R-05 split)
   PR-2 PROM-HARDEN-3         ✅ PR #484
-  PR-3 CLI-HARDEN            ✅ PR-3 (038 Wave 1, 2026-05-15) — +CLI-UNIMPL-HIDE-01 闭环 Hard 升级
+  PR-3 CLI-HARDEN            ✅ PR #502 (038 Wave 1, 2026-05-15) — +CLI-UNIMPL-HIDE-01 闭环 Hard 升级
   PR-4 JOURNEY-LIFECYCLE-GOV ⏳ 未启动
   PR-6 G-13 元治理 guard     ✅ PR #487 merged 2026-05-13
   PR-7 BOOTSTRAP-CLIENTS-MUTEX ✅ PR #483
@@ -216,7 +216,7 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 |---|---|---|---|---|
 | PR-1 OTEL-HARDEN-5 | 8h | 4h | ✅ PR #486 | 实际 4 of 5（B2-R-05 split → METRICS-CTX-FUNNEL-01） |
 | PR-2 PROM-HARDEN-3 | 4h | 2h | ✅ PR #484 | +review Hard funnel 升级 |
-| PR-3 CLI-HARDEN | 8h | 4h | ✅ PR-3 (2026-05-15) | 3 项 + L3 根因升级 CLI-UNIMPL-HIDE-01 闭环 Hard（4 树统一 registry）+ follow-up CLI-TOPLEVEL-HELP-REGISTRY-01 |
+| PR-3 CLI-HARDEN | 8h | 4h | ✅ PR #502 (2026-05-15) | 3 项 + L3 根因升级 CLI-UNIMPL-HIDE-01 闭环 Hard（4 树统一 registry）+ follow-up CLI-TOPLEVEL-HELP-REGISTRY-01 |
 | PR-4 JOURNEY-LIFECYCLE-GOV | 6h | 3h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| K-02 束；新 rule 走 PR-6 ✅ 范式；新增 archtest 走 `archtest.Run`/`RunTyped` |
 | PR-6 G-13 元治理 guard | 6h | 3h | ✅ PR #487 | 注册框架；review 派生 plan 040 archtest Pass-Driver；4 follow-up 登记 cap-02 |
 | PR-7 BOOTSTRAP-CLIENTS-MUTEX | 3h | 1.5h | ✅ PR #483 | +review type-aware Hard 全形态覆盖 |
