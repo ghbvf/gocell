@@ -115,8 +115,13 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		o(&cfg)
 	}
 
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// R2: Single Store instance — userRepo, roleRepo, and TxRunner must all
+	// derive from the same Store so the shared mutex and cross-repo invariants
+	// are consistent, and so Store.TxRunner() injects the correct sentinel into
+	// the RunInTx context (required by GetByUsernameForUpdate's assertMemTx).
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
 	ctx := context.Background()
 
 	// Pre-fill alice as admin via direct repo seeding (no bootstrap flow).
@@ -168,7 +173,10 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		WithJWTVerifier(verifier),
 		WithRefreshStore(intRefreshStore),
 		WithMetricsProvider(metrics.NopProvider{}),
-		// Demo mode: no tx+outbox required.
+		// R2: Wire the Store-bound TxRunner so GetByUsernameForUpdate's
+		// assertMemTx is satisfied inside loginInTx. Both userRepo and roleRepo
+		// must come from the same Store (guaranteed above).
+		WithTxManager(persistence.WrapForCell(store.TxRunner())),
 		withTestCASProtocol(),
 		withTestBootstrapAuth(),
 	)

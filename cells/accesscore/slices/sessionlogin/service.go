@@ -4,6 +4,7 @@ package sessionlogin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -267,10 +268,13 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 			errcode.WithInternal(fmt.Sprintf("user lookup failed: %v", userLookupErr)))
 	case !preUser.CanAuthenticate():
 		// C1: inactive account → same 401 as bad password. Real reason in WithInternal.
+		// R4: log only preUser.ID and preUser.Status() — NOT the full struct which
+		// contains PasswordHash. Using %v on *domain.User would leak the hash into
+		// slog/trace via errcode Internal (PR #501 RC-E, R4 fix).
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("account not active (status=%v, bcrypt_ok=%v)",
-				preUser, bcryptErr == nil)))
+			errcode.WithInternal(fmt.Sprintf("account not active (user_id=%s status=%v bcrypt_ok=%v)",
+				preUser.ID, preUser.Status(), bcryptErr == nil)))
 	case bcryptErr != nil:
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials)
@@ -316,11 +320,16 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // preVersion is the PasswordVersion captured from the pre-bcrypt snapshot.
 // If the locked row's PasswordVersion differs, a concurrent ChangePassword
 // committed in the race window — the old password must be rejected (P1.1).
+//
+// R3 error classification: only credential-domain errors (user not found:
+// KindNotFound) are collapsed into the opaque 401 ErrAuthLoginFailed.
+// Infrastructure errors (KindInternal, KindUnavailable, etc.) are passed
+// through as-is to preserve their HTTP status (5xx / 503), preventing
+// infra faults from being silently disguised as authentication failures.
 func (s *Service) loginInTx(txCtx context.Context, username, sessionID string, preVersion int64) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials)
+		return dto.TokenPair{}, classifyForUpdateErr(err)
 	}
 	// C1: concurrent deactivation race — account was active at pre-bcrypt check but
 	// was locked/suspended before the FOR UPDATE lock. Return the same 401 error as
@@ -448,6 +457,26 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.S
 		return "", err
 	}
 	return refreshWire, nil
+}
+
+// classifyForUpdateErr maps errors from GetByUsernameForUpdate / GetByIDForUpdate
+// to the appropriate caller-facing error:
+//
+//   - KindNotFound (user row absent) → opaque 401 ErrAuthLoginFailed.
+//     The user was found in the pre-bcrypt read but disappeared before the
+//     FOR UPDATE re-fetch — treat as a credential failure to prevent
+//     enumeration.
+//   - Everything else (KindInternal, KindUnavailable, infra errors) → pass
+//     through as-is. Infra failures must NOT be disguised as 401; callers
+//     must see the true 5xx / 503 so on-call can distinguish a transient
+//     infra outage from a credential attack (R3 fix, PR #501 RC-E).
+func classifyForUpdateErr(err error) error {
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Kind == errcode.KindNotFound {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials)
+	}
+	return err
 }
 
 // isNoopTx reports whether r is a demo/noop TxRunner (implements cell.Nooper and

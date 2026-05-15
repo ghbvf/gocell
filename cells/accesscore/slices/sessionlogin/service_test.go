@@ -913,6 +913,142 @@ func TestLogin_PasswordVersionRace_OldPasswordRejected(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// R3: Error classification in loginInTx — infra errors must NOT become 401
+// ---------------------------------------------------------------------------
+
+// infraErrUserRepo is a stub UserRepository whose GetByUsernameForUpdate
+// returns a configurable error, used to simulate infra faults inside loginInTx.
+// It delegates all other methods to the embedded *mem.UserRepository so the
+// pre-bcrypt GetByUsername and bcrypt path succeed normally.
+type infraErrUserRepo struct {
+	*mem.UserRepository
+	forUpdateErr error // error to return from GetByUsernameForUpdate
+}
+
+func (r *infraErrUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	return nil, r.forUpdateErr
+}
+
+// TestLoginInTx_InfraError_NotCollapsedTo401 (R3 RED→GREEN) verifies that an
+// infrastructure error returned by GetByUsernameForUpdate propagates with its
+// original Kind, not as a 401 ErrAuthLoginFailed. Before R3 this was silently
+// converted to 401, hiding infra outages from on-call operators.
+func TestLoginInTx_InfraError_NotCollapsedTo401(t *testing.T) {
+	infraErr := errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		"simulated db failure from GetByUsernameForUpdate")
+
+	// Wire a repo that returns the infra error on ForUpdate, but a real user on
+	// GetByUsername (so the pre-bcrypt lookup succeeds and bcrypt runs).
+	store := mem.NewStore(clock.Real())
+	baseRepo := store.UserRepository()
+	seedUser(baseRepo, "r3-user", "pass123")
+
+	hybridRepo := &infraErrUserRepo{
+		UserRepository: baseRepo,
+		forUpdateErr:   infraErr,
+	}
+
+	svc := MustNewService(
+		hybridRepo,
+		testutil.RealSessionRepo(t),
+		store.RoleRepository(),
+		newTestRefreshStore(),
+		testIssuer,
+		slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour),
+	)
+
+	_, err := svc.Login(context.Background(), LoginInput{Username: "r3-user", Password: "pass123"})
+	require.Error(t, err, "infra error must propagate, not silently succeed")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	// R3: infra KindInternal must NOT be collapsed into 401 KindUnauthenticated.
+	assert.Equal(t, errcode.KindInternal, ec.Kind,
+		"R3: GetByUsernameForUpdate KindInternal must propagate as 5xx, not be disguised as 401")
+	assert.NotEqual(t, errcode.ErrAuthLoginFailed, ec.Code,
+		"R3: infra error must not produce ErrAuthLoginFailed")
+}
+
+// TestLoginInTx_NotFound_CollapsedTo401 (R3 control) verifies that a
+// KindNotFound from GetByUsernameForUpdate IS collapsed into 401 (domain
+// credential failure), preserving the existing anti-enumeration behavior.
+func TestLoginInTx_NotFound_CollapsedTo401(t *testing.T) {
+	notFoundErr := errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		errcode.WithCategory(errcode.CategoryDomain))
+
+	store := mem.NewStore(clock.Real())
+	baseRepo := store.UserRepository()
+	seedUser(baseRepo, "r3-notfound", "pass123")
+
+	hybridRepo := &infraErrUserRepo{
+		UserRepository: baseRepo,
+		forUpdateErr:   notFoundErr,
+	}
+
+	svc := MustNewService(
+		hybridRepo,
+		testutil.RealSessionRepo(t),
+		store.RoleRepository(),
+		newTestRefreshStore(),
+		testIssuer,
+		slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour),
+	)
+
+	_, err := svc.Login(context.Background(), LoginInput{Username: "r3-notfound", Password: "pass123"})
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	// KindNotFound in ForUpdate → must map to 401 ErrAuthLoginFailed (anti-enumeration).
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+		"R3 control: KindNotFound from ForUpdate must become 401")
+	assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code,
+		"R3 control: KindNotFound must produce ErrAuthLoginFailed (防枚举)")
+}
+
+// TestLoginInTx_UnavailableError_NotCollapsedTo401 (R3) verifies KindUnavailable
+// (e.g. DB temporarily down) also propagates as-is, not as 401.
+func TestLoginInTx_UnavailableError_NotCollapsedTo401(t *testing.T) {
+	unavailErr := errcode.New(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable,
+		"db temporarily unavailable")
+
+	store := mem.NewStore(clock.Real())
+	baseRepo := store.UserRepository()
+	seedUser(baseRepo, "r3-unavail", "pass123")
+
+	hybridRepo := &infraErrUserRepo{
+		UserRepository: baseRepo,
+		forUpdateErr:   unavailErr,
+	}
+
+	svc := MustNewService(
+		hybridRepo,
+		testutil.RealSessionRepo(t),
+		store.RoleRepository(),
+		newTestRefreshStore(),
+		testIssuer,
+		slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour),
+	)
+
+	_, err := svc.Login(context.Background(), LoginInput{Username: "r3-unavail", Password: "pass123"})
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+		"R3: KindUnavailable from ForUpdate must propagate as 503, not 401")
+}
+
 // --- P1.3a: IssueForUser active-gate tests ---
 
 // TestIssueForUser_NonActiveUser_Rejected (P1.3a) verifies that IssueForUser

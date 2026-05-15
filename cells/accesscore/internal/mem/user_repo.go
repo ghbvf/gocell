@@ -13,10 +13,14 @@ import (
 )
 
 // assertMemTx returns an error when ctx does not carry the mem-tx sentinel
-// injected by Store.TxRunner. FOR-UPDATE semantics require an enclosing
+// injected by memTxRunner.RunInTx. FOR-UPDATE semantics require an enclosing
 // RunInTx boundary — calling without one is a programming error.
+//
+// Lock contract: assertMemTx only checks the sentinel; it does NOT acquire
+// store.mu. Callers that verify the sentinel may then read the maps directly
+// because RunInTx already holds store.mu for the entire tx closure.
 func assertMemTx(ctx context.Context) error {
-	if v, _ := ctx.Value(memTxKey{}).(bool); v {
+	if isInMemTx(ctx) {
 		return nil
 	}
 	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
@@ -33,13 +37,30 @@ const (
 // UserRepository is the in-memory implementation of ports.UserRepository.
 // It is always vended by Store.UserRepository() so the shared mutex covers
 // any cross-repo invariant (e.g. effective-admin checks in RoleRepository).
+//
+// # Lock contract
+//
+// Methods on UserRepository follow the single-lock rule (see store.go package
+// godoc). Each method checks isInMemTx(ctx):
+//
+//   - inside tx: store.mu is already held by memTxRunner.RunInTx on the
+//     calling goroutine — do NOT acquire store.mu (sync.Mutex is not reentrant;
+//     re-acquiring would deadlock).
+//   - outside tx: acquire store.mu for the duration of this method call.
+//
+// ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) are only valid
+// inside a tx; they call assertMemTx and never acquire store.mu themselves.
 type UserRepository struct {
 	store *Store
 }
 
-func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Create persists a new User. Safe to call both inside and outside a RunInTx
+// closure; see UserRepository lock contract.
+func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	if _, exists := r.store.byName[user.Username]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
@@ -52,9 +73,13 @@ func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
 	return nil
 }
 
-func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// GetByID returns the User with the given ID. Safe to call both inside and
+// outside a RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[id]
 	if !ok {
@@ -65,9 +90,13 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 	return cloneUser(u), nil
 }
 
-func (r *UserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// GetByUsername returns the User with the given username. Safe to call both
+// inside and outside a RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.byName[username]
 	if !ok {
@@ -78,20 +107,17 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 	return cloneUser(u), nil
 }
 
-// GetByIDForUpdate (S4d): mem implementation fail-fasts when ctx does not
-// carry the mem-tx sentinel from Store.TxRunner — matching assertAmbientTx
-// in the PG adapter. When inside a valid RunInTx body it acquires the
-// store-wide write lock, serializing against concurrent writes (BumpAuthzEpoch,
-// RevokeForSubject, etc.) in the same way PG SELECT FOR UPDATE would.
+// GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE semantics.
+// Must be called inside memTxRunner.RunInTx — assertMemTx enforces this.
 //
-// fail-fast enforced: calling without a mem-tx context returns errcode.ErrInternal.
+// Lock contract: does NOT acquire store.mu. memTxRunner.RunInTx holds store.mu
+// for the entire tx closure; re-acquiring here would deadlock. The map read is
+// safe because the tx lock serializes all concurrent writes.
 func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
 	if err := assertMemTx(ctx); err != nil {
 		return nil, err
 	}
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
-
+	// store.mu already held by RunInTx — bare map read is safe.
 	u, ok := r.store.usersByID[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
@@ -101,17 +127,17 @@ func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*doma
 	return cloneUser(u), nil
 }
 
-// GetByUsernameForUpdate (S4d): same fail-fast and locking semantics as
-// GetByIDForUpdate. Requires the mem-tx sentinel from Store.TxRunner.
+// GetByUsernameForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
+// semantics. Must be called inside memTxRunner.RunInTx — assertMemTx enforces this.
 //
-// fail-fast enforced: calling without a mem-tx context returns errcode.ErrInternal.
+// Lock contract: does NOT acquire store.mu. memTxRunner.RunInTx holds store.mu
+// for the entire tx closure; re-acquiring here would deadlock. The map read is
+// safe because the tx lock serializes all concurrent writes.
 func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
 	if err := assertMemTx(ctx); err != nil {
 		return nil, err
 	}
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
-
+	// store.mu already held by RunInTx — bare map read is safe.
 	u, ok := r.store.byName[username]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
@@ -121,9 +147,13 @@ func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username st
 	return cloneUser(u), nil
 }
 
-func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Update replaces the stored User. Safe to call both inside and outside a
+// RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	existing, exists := r.store.usersByID[user.ID]
 	if !exists {
@@ -153,8 +183,9 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 
 // guardEffectiveAdminRemovalLocked refuses the in-progress mutation when
 // removing/demoting userID would leave zero effective admins. Caller MUST
-// already hold r.store.mu (write lock). Returns nil if the user does not
-// hold the admin role at all.
+// already hold r.store.mu (either from the non-tx lock in Update, or because
+// RunInTx holds it for the tx). Returns nil if the user does not hold the
+// admin role at all.
 func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 	roles, hasRoles := r.store.userRoles[userID]
 	if !hasRoles {
@@ -214,20 +245,23 @@ func cloneUser(u *domain.User) *domain.User {
 	return clone
 }
 
-// UpdatePassword applies a CAS-guarded password update.
+// UpdatePassword applies a CAS-guarded password update. Safe to call both
+// inside and outside a RunInTx closure; see UserRepository lock contract.
 //
 // If the stored PasswordVersion does not match expectedPV, it returns
 // ErrVersionConflict (KindConflict / HTTP 409). On success it returns the new
 // PasswordVersion (= expectedPV + 1).
 func (r *UserRepository) UpdatePassword(
-	_ context.Context,
+	ctx context.Context,
 	userID string,
 	newHash string,
 	resetRequired bool,
 	expectedPV int64,
 ) (int64, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[userID]
 	if !ok {
@@ -262,11 +296,15 @@ func (r *UserRepository) UpdatePassword(
 }
 
 // BumpAuthzEpoch atomically increments the AuthzEpoch counter for the given
-// user and returns the new value. Returns ErrAuthUserNotFound when no user
-// matches userID.
-func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// user and returns the new value. Safe to call both inside and outside a
+// RunInTx closure; see UserRepository lock contract.
+//
+// Returns ErrAuthUserNotFound when no user matches userID.
+func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[userID]
 	if !ok {
@@ -297,9 +335,13 @@ func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64
 	return newEpoch, nil
 }
 
-func (r *UserRepository) Delete(_ context.Context, id string) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Delete removes the User with the given ID. Safe to call both inside and
+// outside a RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) Delete(ctx context.Context, id string) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[id]
 	if !ok {
