@@ -75,6 +75,7 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/clock_invariants_test.go":                        true,
 	"tools/archtest/codegen_invariants_test.go":                      true,
 	"tools/archtest/credential_invalidate_funnel_invariants_test.go": true,
+	"tools/archtest/domain_authz_mutation_funnel_invariants_test.go": true,
 	"tools/archtest/errcode_invariants_test.go":                      true,
 	"tools/archtest/errcode_message_const_fixtures_test.go":          true,
 	"tools/archtest/eval_predicate_centralization_test.go":           true,

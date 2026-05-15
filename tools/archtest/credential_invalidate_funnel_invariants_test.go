@@ -91,24 +91,31 @@ const (
 // directly. Every other caller is a violation: new authz-affecting state
 // transitions must route through one of these entry points.
 //
-// As of S4d:
-//   - identitymanage owns the user-state-mutation funnel (Update path:
-//     status demotion, RequirePasswordReset flip, ChangePassword, Delete).
-//   - sessionrefresh.handleReuseDetected owns the reuse / stale-epoch
-//     cascade entry.
-//   - rbacassign owns role-grant + role-revoke mutations.
-//   - setup owns first-admin provisioning + cleanup.
+// As of S4e (PR #494):
+//   - authzmutate/ owns all live-aggregate authz mutations (status demotion,
+//     RequirePasswordReset, role-revoke) via Mutator.Apply → inv.Apply.
+//   - identitymanage/ calls inv.Apply directly for two co-tx atomic operations:
+//     (a) Delete: user-row delete + revoke must be one transaction.
+//     (b) changePasswordInTx: password write + revoke must be one transaction.
+//     Routing through authzmutate would split these transactions; direct call is
+//     the intentional exception. Documented in service.go with
+//     "Routed through funnel (CREDENTIAL-INVALIDATE-FUNNEL-01)" comment.
+//   - sessionrefresh/ owns the reuse / stale-epoch cascade entry point.
+//   - rbacassign/ calls inv.Apply for role-revoke co-tx with the role-row write.
+//     Same atomicity reason as identitymanage.
 //   - The funnel package itself is always allowed (Apply is defined here).
 //
-// S4e Hard upgrade will introduce a sealed authzmutate package and tighten
-// this list (removing identitymanage and rbacassign once they migrate).
+// S4e note: setup/ and adminprovision/ were removed from this list. Neither
+// package calls credentialinvalidate.Invalidator.Apply in production code
+// (verified by grep; provisioner.go only calls SetPasswordResetRequired on a
+// freshly constructed aggregate at creation time). Removing them tightens the
+// rule. Wave 3 ADR author: §A10 should be updated to reflect this actual set.
 var upstreamCallerAllowlistPrefixes = []string{
 	"cells/accesscore/internal/credentialinvalidate/",
+	"cells/accesscore/internal/authzmutate/",
 	"cells/accesscore/slices/identitymanage/",
 	"cells/accesscore/slices/sessionrefresh/",
 	"cells/accesscore/slices/rbacassign/",
-	"cells/accesscore/slices/setup/",
-	"cells/accesscore/internal/adminprovision/",
 }
 
 // isUpstreamCallerAllowlisted reports whether a module-relative path is in
