@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
@@ -365,7 +366,7 @@ func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
 			_, _ = repo.BumpAuthzEpoch(txCtx, "usr-serial-001") // epoch: 1 → 2
 			close(locked)                                       // signal: lock held, proceed
 			// Hold the lock for a short duration to let tx-2 start blocking.
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(testtime.D20ms) //archtest:allow:test-sleep hold lock so tx-2 blocks (serialization proof)
 			return nil
 		})
 		close(done)
@@ -414,7 +415,7 @@ func TestRunInTx_NoDeadlock_GetByUsernameForUpdateAndBump(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err, "RunInTx with ForUpdate+BumpEpoch must not deadlock or fail")
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("DEADLOCK DETECTED: RunInTx with ForUpdate+BumpAuthzEpoch blocked for >2s")
 	}
 }
