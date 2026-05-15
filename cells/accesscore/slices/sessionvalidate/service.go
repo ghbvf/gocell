@@ -178,10 +178,10 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	if user.AuthzEpoch != view.AuthzEpochAtIssue {
+	if user.AuthzEpoch() != view.AuthzEpochAtIssue {
 		s.logger.Warn("session-validate: authz epoch mismatch",
 			slog.String("subject", claims.Subject),
-			slog.Int64("user_epoch", user.AuthzEpoch),
+			slog.Int64("user_epoch", user.AuthzEpoch()),
 			slog.Int64("row_epoch", view.AuthzEpochAtIssue))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
@@ -116,7 +117,7 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 	// remains. Kept inline so the mem path mirrors PG's atomic-with-mutation
 	// check; running it inside the same write lock as the map mutation
 	// matches the PG trigger's BEFORE-row semantics.
-	if existing.Status == domain.StatusActive && user.Status != domain.StatusActive {
+	if existing.Status() == domain.StatusActive && user.Status() != domain.StatusActive {
 		if err := r.guardEffectiveAdminRemovalLocked(user.ID); err != nil {
 			return err
 		}
@@ -153,7 +154,7 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 		if !ok {
 			continue
 		}
-		if u.Status == domain.StatusActive {
+		if u.Status() == domain.StatusActive {
 			other++
 		}
 	}
@@ -167,20 +168,21 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 }
 
 // cloneUser creates a deep copy of a User to avoid sharing pointers across map entries.
+// Uses domain.ReconstituteUser so that private fields are faithfully copied.
 func cloneUser(u *domain.User) *domain.User {
-	return &domain.User{
-		ID:                    u.ID,
-		Username:              u.Username,
-		Email:                 u.Email,
-		PasswordHash:          u.PasswordHash,
-		PasswordVersion:       u.PasswordVersion,
-		PasswordResetRequired: u.PasswordResetRequired,
-		Status:                u.Status,
-		CreationSource:        u.CreationSource,
-		AuthzEpoch:            u.AuthzEpoch,
-		CreatedAt:             u.CreatedAt,
-		UpdatedAt:             u.UpdatedAt,
+	clone, err := domain.ReconstituteUser(
+		u.ID, u.Username, u.Email, u.PasswordHash,
+		u.PasswordVersion, u.PasswordResetRequired(), u.Status(),
+		u.CreationSource, u.AuthzEpoch(),
+		u.CreatedAt, u.UpdatedAt,
+	)
+	if err != nil {
+		// ReconstituteUser only fails on invalid values; a well-formed stored
+		// User cannot trigger this. Panic to surface corrupt store state early.
+		panic(panicregister.Approved("mem-clone-user-invalid-stored",
+			errcode.Assertion("mem: cloneUser: unexpected invalid stored User: %v", err)))
 	}
+	return clone
 }
 
 // UpdatePassword applies a CAS-guarded password update.
@@ -207,11 +209,20 @@ func (r *UserRepository) UpdatePassword(
 	if u.PasswordVersion != expectedPV {
 		return 0, cas.CheckVersionMatch(0, "user", userID)
 	}
-	u.PasswordHash = newHash
-	u.PasswordResetRequired = resetRequired
-	u.PasswordVersion++
-	u.UpdatedAt = r.store.clock.Now()
-	return u.PasswordVersion, nil
+	// Rebuild via ReconstituteUser with updated fields so private fields are set correctly.
+	now := r.store.clock.Now()
+	updated, err := domain.ReconstituteUser(
+		u.ID, u.Username, u.Email, newHash,
+		u.PasswordVersion+1, resetRequired, u.Status(),
+		u.CreationSource, u.AuthzEpoch(),
+		u.CreatedAt, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("mem: update-password reconstitute: %w", err)
+	}
+	r.store.usersByID[userID] = updated
+	r.store.byName[updated.Username] = updated
+	return updated.PasswordVersion, nil
 }
 
 // BumpAuthzEpoch atomically increments the AuthzEpoch counter for the given
@@ -227,8 +238,20 @@ func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
 	}
-	u.AuthzEpoch++
-	return u.AuthzEpoch, nil
+	newEpoch := u.AuthzEpoch() + 1
+	// Rebuild the stored user with the bumped epoch.
+	updated, err := domain.ReconstituteUser(
+		u.ID, u.Username, u.Email, u.PasswordHash,
+		u.PasswordVersion, u.PasswordResetRequired(), u.Status(),
+		u.CreationSource, newEpoch,
+		u.CreatedAt, u.UpdatedAt,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("mem: bump-authz-epoch reconstitute: %w", err)
+	}
+	r.store.usersByID[userID] = updated
+	r.store.byName[updated.Username] = updated
+	return newEpoch, nil
 }
 
 func (r *UserRepository) Delete(_ context.Context, id string) error {
@@ -246,7 +269,7 @@ func (r *UserRepository) Delete(_ context.Context, id string) error {
 	// effective_admin_invariant_on_users BEFORE DELETE trigger). Deleting an
 	// active admin removes them from the effective-admin set; refuse if no
 	// other effective admin remains.
-	if u.Status == domain.StatusActive {
+	if u.Status() == domain.StatusActive {
 		if err := r.guardEffectiveAdminRemovalLocked(id); err != nil {
 			return err
 		}

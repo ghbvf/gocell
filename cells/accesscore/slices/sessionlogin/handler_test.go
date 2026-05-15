@@ -54,11 +54,8 @@ func setup(t *testing.T) http.Handler {
 	t.Helper()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
-	user := &domain.User{
-		ID: "usr-1", Username: "alice", Email: "a@b.com",
-		PasswordHash: string(hash), Status: domain.StatusActive,
-		AuthzEpoch: 1,
-	}
+	user, _ := domain.NewUser("alice", "a@b.com", string(hash), time.Now())
+	user.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), user)
 
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),

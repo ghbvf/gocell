@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -160,10 +161,10 @@ func (r *PGUserRepo) Create(ctx context.Context, user *domain.User) error {
 		user.Username,
 		user.Email,
 		user.PasswordHash,
-		user.PasswordResetRequired,
-		string(user.Status),
+		user.PasswordResetRequired(),
+		string(user.Status()),
 		string(user.CreationSource),
-		user.AuthzEpoch,
+		user.AuthzEpoch(),
 		user.CreatedAt,
 		user.UpdatedAt,
 	)
@@ -274,8 +275,8 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		user.Username,
 		user.Email,
 		user.PasswordHash,
-		user.PasswordResetRequired,
-		string(user.Status),
+		user.PasswordResetRequired(),
+		string(user.Status()),
 		string(user.CreationSource),
 		user.UpdatedAt,
 	)
@@ -284,7 +285,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
-				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", user.ID, string(user.Status))))
+				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", user.ID, string(user.Status()))))
 		}
 		if isUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
@@ -344,7 +345,7 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, 
 	return newEpoch, nil
 }
 
-// scanUser scans a single Row into a domain.User.
+// scanUser scans a single Row into a domain.User via domain.ReconstituteUser.
 // Column order must match selectUserByIDSQL and selectUserByUsernameSQL.
 //
 // authz_epoch is included so that sessionvalidate's epoch invariant
@@ -352,20 +353,26 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, 
 // omitting it silently leaves AuthzEpoch=0 on every read and breaks the
 // credential-invalidation chain (Finding #1 / PR #490 review).
 func scanUser(row pgx.Row) (*domain.User, error) {
-	var u domain.User
-	var status, source string
+	var (
+		id, username, email, passwordHash string
+		passwordVersion                   int64
+		passwordResetRequired             bool
+		status, source                    string
+		authzEpoch                        int64
+		createdAt, updatedAt              time.Time
+	)
 	err := row.Scan(
-		&u.ID,
-		&u.Username,
-		&u.Email,
-		&u.PasswordHash,
-		&u.PasswordVersion,
-		&u.PasswordResetRequired,
+		&id,
+		&username,
+		&email,
+		&passwordHash,
+		&passwordVersion,
+		&passwordResetRequired,
 		&status,
 		&source,
-		&u.AuthzEpoch,
-		&u.CreatedAt,
-		&u.UpdatedAt,
+		&authzEpoch,
+		&createdAt,
+		&updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -382,9 +389,17 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "creation_source")),
 			errcode.WithInternal(fmt.Sprintf("scanned source=%q", source)))
 	}
-	u.Status = domain.UserStatus(status)
-	u.CreationSource = domain.UserSource(source)
-	return &u, nil
+	u, reconErr := domain.ReconstituteUser(
+		id, username, email, passwordHash,
+		passwordVersion, passwordResetRequired,
+		domain.UserStatus(status), domain.UserSource(source),
+		authzEpoch, createdAt, updatedAt,
+	)
+	if reconErr != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrPGSchemaShape,
+			"scanUser: ReconstituteUser failed", reconErr)
+	}
+	return u, nil
 }
 
 // UpdatePassword applies a CAS-guarded password write.

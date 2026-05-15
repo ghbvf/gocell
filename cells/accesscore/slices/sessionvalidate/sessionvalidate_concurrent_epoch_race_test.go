@@ -34,7 +34,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -66,15 +65,9 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 	// S4d: user starts at epoch=1 (domain.NewUser sets AuthzEpoch=1).
 	userID := "race-epoch-" + uuid.NewString()[:8]
 	sessionID := "race-sess-" + uuid.NewString()[:8]
-	initialUser := &domain.User{
-		ID:         userID,
-		Username:   "race-epoch-user",
-		Email:      "race@epoch.test",
-		Status:     domain.StatusActive,
-		AuthzEpoch: 1,
-		CreatedAt:  clock.Real().Now(),
-		UpdatedAt:  clock.Real().Now(),
-	}
+	initialUser := mustBuildUser(t, userID, 1)
+	initialUser.Username = "race-epoch-user"
+	initialUser.Email = "race@epoch.test"
 	require.NoError(t, userRepo.Create(context.Background(), initialUser))
 
 	// Seed an active session with AuthzEpochAtIssue=1 — matches user.epoch=1.

@@ -283,7 +283,7 @@ func TestService_Update_LastAdminProtected_StatusDemotion(t *testing.T) {
 	assertLastAdminProtected(t, err)
 	persisted, getErr := userRepo.GetByID(context.Background(), user.ID)
 	require.NoError(t, getErr)
-	assert.Equal(t, domain.StatusActive, persisted.Status,
+	assert.Equal(t, domain.StatusActive, persisted.Status(),
 		"last-admin-protected update must not change the user's status")
 }
 
@@ -465,7 +465,7 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 	require.NoError(t, err)
 	user.ID = "usr-" + username
 	if markReset {
-		user.MarkPasswordResetRequired(time.Now())
+		user.SetPasswordResetRequired(true, time.Now())
 	}
 	require.NoError(t, repo.Create(context.Background(), user))
 	return user
@@ -489,7 +489,7 @@ func TestService_Update_PatchSemantics(t *testing.T) {
 	suspended := "suspended"
 	updated, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
 	require.NoError(t, err)
-	assert.Equal(t, "suspended", string(updated.Status))
+	assert.Equal(t, "suspended", string(updated.Status()))
 
 	// Invalid status should fail.
 	badStatus := "deleted"
@@ -534,7 +534,7 @@ func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
 	// Verify stored hash changed.
 	updated, _ := repo.GetByID(context.Background(), "usr-cp-ok")
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(updated.PasswordHash), []byte("newpass")))
-	assert.False(t, updated.PasswordResetRequired, "flag must be cleared after password change")
+	assert.False(t, updated.PasswordResetRequired(), "flag must be cleared after password change")
 }
 
 func TestService_ChangePassword_VerifyOldPasswordFail(t *testing.T) {
@@ -607,7 +607,7 @@ func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	updated, _ := repo.GetByID(context.Background(), "usr-cp-reset")
-	assert.False(t, updated.PasswordResetRequired, "flag must be cleared after password change")
+	assert.False(t, updated.PasswordResetRequired(), "flag must be cleared after password change")
 }
 
 func TestService_ChangePassword_IssuerError(t *testing.T) {
@@ -928,7 +928,7 @@ func TestService_Create_RequirePasswordResetTrue_UserMarked(t *testing.T) {
 		RequirePasswordReset: true,
 	})
 	require.NoError(t, err)
-	assert.True(t, user.PasswordResetRequired, "user must have PasswordResetRequired set when input flag is true")
+	assert.True(t, user.PasswordResetRequired(), "user must have PasswordResetRequired set when input flag is true")
 }
 
 func TestService_Create_DefaultFalse(t *testing.T) {
@@ -939,7 +939,7 @@ func TestService_Create_DefaultFalse(t *testing.T) {
 		Password: "pass",
 	})
 	require.NoError(t, err)
-	assert.False(t, user.PasswordResetRequired, "default user must not have PasswordResetRequired set")
+	assert.False(t, user.PasswordResetRequired(), "default user must not have PasswordResetRequired set")
 }
 
 // ---------------------------------------------------------------------------
@@ -956,7 +956,7 @@ func TestService_Update_SetRequirePasswordResetTrue(t *testing.T) {
 		RequirePasswordReset: &flagTrue,
 	})
 	require.NoError(t, err)
-	assert.True(t, updated.PasswordResetRequired)
+	assert.True(t, updated.PasswordResetRequired())
 }
 
 func TestService_Update_ClearRequirePasswordReset(t *testing.T) {
@@ -969,7 +969,7 @@ func TestService_Update_ClearRequirePasswordReset(t *testing.T) {
 		RequirePasswordReset: &flagFalse,
 	})
 	require.NoError(t, err)
-	assert.False(t, updated.PasswordResetRequired)
+	assert.False(t, updated.PasswordResetRequired())
 }
 
 func TestService_Update_OmittedFieldNoChange(t *testing.T) {
@@ -983,7 +983,7 @@ func TestService_Update_OmittedFieldNoChange(t *testing.T) {
 		Email: &newEmail,
 	})
 	require.NoError(t, err)
-	assert.True(t, updated.PasswordResetRequired, "omitted field must not change existing flag")
+	assert.True(t, updated.PasswordResetRequired(), "omitted field must not change existing flag")
 	assert.Equal(t, "new@omit.com", updated.Email)
 }
 
@@ -1061,6 +1061,11 @@ func (r *observingUserRepo) GetByID(ctx context.Context, id string) (*domain.Use
 	return r.UserRepository.GetByID(ctx, id)
 }
 
+func (r *observingUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	r.getInTx = r.runner.inTx
+	return r.UserRepository.GetByIDForUpdate(ctx, id)
+}
+
 func (r *observingUserRepo) Update(ctx context.Context, user *domain.User) error {
 	r.updInTx = r.runner.inTx
 	return r.UserRepository.Update(ctx, user)
@@ -1110,9 +1115,10 @@ func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
-	assert.Equal(t, 1, runner.runs, "Lock must run inside exactly one tx")
-	assert.True(t, repo.getInTx, "Lock.GetByID must be observed inside RunInTx (no TOCTOU window)")
-	assert.True(t, repo.updInTx, "Lock.Update must run inside the same tx")
+	// S4e: Lock runs 3 txs: (1) last-admin guard, (2) authzmutate.Apply, (3) publish.
+	assert.Equal(t, 3, runner.runs, "Lock must run 3 txs: guard + authzmutate + publish")
+	assert.True(t, repo.getInTx, "Lock.GetByID/GetByIDForUpdate must be observed inside RunInTx (no TOCTOU window)")
+	assert.True(t, repo.updInTx, "Lock.Update must run inside the authzmutate tx")
 }
 
 // TestService_Update_GetByIDAndUpdateInsideTx asserts Update's read-modify-
@@ -1156,9 +1162,11 @@ func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 	assert.Equal(t, 0, runner.runs, "invalid status must be rejected before opening a tx")
 }
 
-// TestService_Unlock_GetByIDAndUpdateInsideTx asserts Unlock now runs the
-// read-modify-write chain in a single RunInTx. Pre-fix, Unlock had no tx
-// wrapping at all; post-fix both repo calls observe inTx=true (audit S-3).
+// TestService_Unlock_GetByIDAndUpdateInsideTx asserts Unlock runs the
+// read-modify-write chain atomically via authzmutate.Apply (1 tx) + a separate
+// publish tx (1 tx) = 2 total RunInTx calls.
+// The mutation (GetByID + Update) occurs inside authzmutate.Apply's RunInTx,
+// ensuring no TOCTOU window between read and write (audit S-3).
 func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -1169,7 +1177,8 @@ func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
-	assert.Equal(t, 1, runner.runs, "Unlock must run inside exactly one tx")
+	// S4e: authzmutate.Apply opens 1 tx (mutation), publish opens 1 tx → 2 total.
+	assert.Equal(t, 2, runner.runs, "Unlock must run 2 txs: authzmutate + publish")
 	assert.True(t, repo.getInTx, "Unlock.GetByID must be observed inside RunInTx (no TOCTOU window)")
 	assert.True(t, repo.updInTx, "Unlock.Update must run inside the same tx")
 }
@@ -1183,7 +1192,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 	user, err := domain.NewUser("rb", "rb@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-rb"
-	user.LockAccount(time.Now())
+	user.SetStatus(domain.StatusLocked, time.Now())
 	require.NoError(t, innerRepo.Create(context.Background(), user))
 
 	failRepo := &failingUpdateRepo{UserRepository: innerRepo, updateErr: errors.New("disk full")}

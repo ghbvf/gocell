@@ -455,7 +455,7 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 			require.NoError(t, err)
 			u.ID = "usr-notactive-" + string(tc.status)
 			require.NoError(t, userRepo.Create(context.Background(), u))
-			u.Status = tc.status
+			u.SetStatus(tc.status, time.Now())
 			require.NoError(t, userRepo.Update(context.Background(), u))
 
 			sess := newTestSession(u.ID, "sess-"+u.ID)
@@ -901,7 +901,7 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
 	user, _ := domain.NewUser("ref-user-reset", "ref-reset@test.com", string(hash), time.Now())
 	user.ID = "usr-ref-reset"
-	user.MarkPasswordResetRequired(time.Now())
+	user.SetPasswordResetRequired(true, time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
@@ -1377,8 +1377,12 @@ func TestRefresh_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 
 	u, _ := domain.NewUser("usr-epoch-ref", "epoch-ref@test.local", "hash", time.Now())
 	u.ID = "usr-epoch-ref"
-	u.AuthzEpoch = 5
 	require.NoError(t, userRepo.Create(context.Background(), u))
+	// Bump epoch 4 times so it reaches 5 (initial=1).
+	for range 4 {
+		_, _ = userRepo.BumpAuthzEpoch(context.Background(), "usr-epoch-ref")
+	}
+	u, _ = userRepo.GetByID(context.Background(), "usr-epoch-ref")
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
@@ -1386,11 +1390,11 @@ func TestRefresh_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 		withTestInvalidator(userRepo, sessionStore, refreshStore))
 
 	sess := newTestSession("usr-epoch-ref", "sess-epoch-ref")
-	sess.AuthzEpochAtIssue = u.AuthzEpoch // match user epoch so refresh succeeds; this test
+	sess.AuthzEpochAtIssue = u.AuthzEpoch() // match user epoch so refresh succeeds; this test
 	// asserts JWT claim *shape* after refresh, not stale-epoch behavior.
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 
-	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-epoch-ref", "usr-epoch-ref", u.AuthzEpoch)
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-epoch-ref", "usr-epoch-ref", u.AuthzEpoch())
 	require.NoError(t, err)
 
 	pair, err := svc.Refresh(context.Background(), wireToken)

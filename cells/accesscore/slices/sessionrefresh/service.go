@@ -297,16 +297,16 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	// credential event: password change, account lock, role revoke), the refresh
 	// chain is stale and must be invalidated via the same cascade as a reuse attack —
 	// credential event already fired; this refresh merely discovered the stale state.
-	if presented.AuthzEpochAtIssue != user.AuthzEpoch {
+	if presented.AuthzEpochAtIssue != user.AuthzEpoch() {
 		s.logger.Warn("session-refresh: stale authz epoch — triggering cascade",
 			slog.String("session_id", sess.ID),
 			slog.String("subject", sess.SubjectID),
 			slog.Int64("row_epoch", presented.AuthzEpochAtIssue),
-			slog.Int64("user_epoch", user.AuthzEpoch))
+			slog.Int64("user_epoch", user.AuthzEpoch()))
 		return dto.TokenPair{}, s.handleReuseDetected(outerCtx, sess.SubjectID, sess.ID, "stale-epoch")
 	}
 
-	passwordResetRequired := user.PasswordResetRequired
+	passwordResetRequired := user.PasswordResetRequired()
 
 	// session.ID is stable across refresh — the access JWT carries the same
 	// sid claim as the original login. AuthzEpoch / password-reset state is

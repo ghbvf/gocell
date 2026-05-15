@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,12 +34,16 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for i := range iterations {
-				_ = repo.Create(ctx, &domain.User{
-					ID:       fmt.Sprintf("uid-w%d-i%d", id, i),
-					Username: fmt.Sprintf("user-w%d-i%d", id, i),
-					Email:    fmt.Sprintf("u%d-%d@test.com", id, i),
-					Status:   domain.StatusActive,
-				})
+				u, _ := domain.NewUser(
+					fmt.Sprintf("user-w%d-i%d", id, i),
+					fmt.Sprintf("u%d-%d@test.com", id, i),
+					"$2a$12$hash",
+					time.Now(),
+				)
+				if u != nil {
+					u.ID = fmt.Sprintf("uid-w%d-i%d", id, i)
+					_ = repo.Create(ctx, u)
+				}
 			}
 		}(w)
 	}
@@ -87,7 +92,13 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 		{
 			name: "update",
 			call: func() error {
-				return repo.Update(ctx, &domain.User{ID: "usr-missing", Username: "missing"})
+				// Build via NewUser+ID injection (struct literal not allowed outside package).
+				u, _ := domain.NewUser("missing", "missing@test.local", "$2a$12$hash", time.Now())
+				if u == nil {
+					return nil
+				}
+				u.ID = "usr-missing"
+				return repo.Update(ctx, u)
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
 			wantInternal: "id=usr-missing",
@@ -178,14 +189,12 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 	const holders = 8
 	for i := range holders {
 		id := fmt.Sprintf("uid-%d", i)
-		require.NoError(t, userRepo.Create(ctx, &domain.User{
-			ID:       id,
-			Username: id,
-			Email:    id + "@test.local",
-			Status:   domain.StatusActive,
-		}))
-		_, err := repo.AssignToUser(ctx, id, "admin")
-		require.NoError(t, err)
+		hu, huErr := domain.NewUser(id, id+"@test.local", "$2a$12$hash", time.Now())
+		require.NoError(t, huErr)
+		hu.ID = id
+		require.NoError(t, userRepo.Create(ctx, hu))
+		_, assignErr := repo.AssignToUser(ctx, id, "admin")
+		require.NoError(t, assignErr)
 	}
 
 	var wg sync.WaitGroup
@@ -385,13 +394,11 @@ func TestRoleRepository_CountByRole_None(t *testing.T) {
 // inside a single shared Store so the user is an effective admin.
 func seedActiveAdmin(t testing.TB, store *Store, userID string) {
 	t.Helper()
-	require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
-		ID:       userID,
-		Username: userID,
-		Email:    userID + "@test.local",
-		Status:   domain.StatusActive,
-	}))
-	_, err := store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
+	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	u.ID = userID
+	require.NoError(t, store.UserRepository().Create(context.Background(), u))
+	_, err = store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
 	require.NoError(t, err)
 }
 
@@ -414,12 +421,15 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 		// package mem and exercises the read-side predicate).
 		store := NewStore(clock.Real())
 		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+		now := time.Now()
+		lockedUser, err := domain.ReconstituteUser(
+			"locked-admin", "locked-admin", "la@test.local", "$2a$12$hash",
+			0, false, domain.StatusLocked, domain.UserSourceIdentity, 1, now, now,
+		)
+		require.NoError(t, err)
 		store.mu.Lock()
-		store.usersByID["locked-admin"] = &domain.User{
-			ID: "locked-admin", Username: "locked-admin",
-			Email: "la@test.local", Status: domain.StatusLocked,
-		}
-		store.byName["locked-admin"] = store.usersByID["locked-admin"]
+		store.usersByID["locked-admin"] = lockedUser
+		store.byName["locked-admin"] = lockedUser
 		store.userRoles["locked-admin"] = map[string]struct{}{"admin": {}}
 		store.mu.Unlock()
 
@@ -456,12 +466,12 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 		// must reject because the role-id filter ignores them.
 		store := NewStore(clock.Real())
 		store.RoleRepository().SeedRole(&domain.Role{ID: "viewer", Name: "viewer"})
-		require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
-			ID: "viewer-user", Username: "viewer-user",
-			Email: "vu@test.local", Status: domain.StatusActive,
-		}))
-		_, err := store.RoleRepository().AssignToUser(context.Background(), "viewer-user", "viewer")
-		require.NoError(t, err)
+		vu, vuErr := domain.NewUser("viewer-user", "vu@test.local", "$2a$12$hash", time.Now())
+		require.NoError(t, vuErr)
+		vu.ID = "viewer-user"
+		require.NoError(t, store.UserRepository().Create(context.Background(), vu))
+		_, assignErr := store.RoleRepository().AssignToUser(context.Background(), "viewer-user", "viewer")
+		require.NoError(t, assignErr)
 
 		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
 		require.NoError(t, err)
@@ -480,7 +490,7 @@ func TestRoleRepository_CountEffectiveAdmins_FiltersLocked(t *testing.T) {
 	// Lock one admin — now only one effective admin remains.
 	u, err := store.UserRepository().GetByID(context.Background(), "locked-admin")
 	require.NoError(t, err)
-	u.Status = domain.StatusLocked
+	u.SetStatus(domain.StatusLocked, time.Now())
 	require.NoError(t, store.UserRepository().Update(context.Background(), u))
 
 	count, err := store.RoleRepository().CountEffectiveAdmins(context.Background())
@@ -503,7 +513,7 @@ func TestRoleRepository_RemoveFromUserIfNotLast_LockedPeerDoesNotCount(t *testin
 	seedActiveAdmin(t, store, "locked-admin")
 	u, err := store.UserRepository().GetByID(context.Background(), "locked-admin")
 	require.NoError(t, err)
-	u.Status = domain.StatusLocked
+	u.SetStatus(domain.StatusLocked, time.Now())
 	require.NoError(t, store.UserRepository().Update(context.Background(), u))
 
 	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), "active-admin", "admin")
@@ -525,7 +535,7 @@ func TestRoleRepository_RemoveFromUserIfNotLast_LockedAdminCanBeRevoked(t *testi
 	seedActiveAdmin(t, store, "locked-admin")
 	u, err := store.UserRepository().GetByID(context.Background(), "locked-admin")
 	require.NoError(t, err)
-	u.Status = domain.StatusLocked
+	u.SetStatus(domain.StatusLocked, time.Now())
 	require.NoError(t, store.UserRepository().Update(context.Background(), u))
 
 	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), "locked-admin", "admin")
@@ -555,7 +565,7 @@ func TestStore_SharedMutex_AtomicityAcrossRepos(t *testing.T) {
 		defer wg.Done()
 		u, err := store.UserRepository().GetByID(context.Background(), "admin-b")
 		if err == nil {
-			u.Status = domain.StatusLocked
+			u.SetStatus(domain.StatusLocked, time.Now())
 			_ = store.UserRepository().Update(context.Background(), u)
 		}
 	}()

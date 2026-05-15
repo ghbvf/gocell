@@ -36,6 +36,17 @@ func init() {
 // dNeg2h is the offset for seeding an expired session whose CreatedAt is 2h ago.
 const dNeg2h = -2 * time.Hour
 
+// mustBuildUser creates a minimal domain.User for use in test stubs.
+// It uses ReconstituteUser so that the private authzEpoch field is set correctly.
+func mustBuildUser(t testing.TB, id string, epoch int64) *domain.User {
+	t.Helper()
+	now := time.Now()
+	u, err := domain.ReconstituteUser(id, id, id+"@test.local", "$2a$12$hash",
+		0, false, domain.StatusActive, domain.UserSourceIdentity, epoch, now, now)
+	require.NoError(t, err)
+	return u
+}
+
 // testProtocol returns a Protocol suitable for in-memory session tests.
 // FingerprintJTIRef requires a non-empty JTI on every seeded Session.
 func testProtocol(t testing.TB) *session.Protocol {
@@ -153,7 +164,7 @@ func TestService_VerifyIntent(t *testing.T) {
 
 	// S4d: epoch comparison is user.AuthzEpoch vs view.AuthzEpochAtIssue (row-based).
 	// sess-active was seeded with AuthzEpochAtIssue=1; user must have AuthzEpoch=1 to pass.
-	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-1", AuthzEpoch: 1}}
+	userRepo := &stubUserRepo{user: mustBuildUser(t, "usr-1", 1)}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -201,7 +212,7 @@ func TestService_VerifyIntent_PastSessionExpiresAt_StillValidates(t *testing.T) 
 	require.NoError(t, err)
 
 	// S4d: session has AuthzEpochAtIssue=1; user must match.
-	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-row-past", AuthzEpoch: 1}}
+	userRepo := &stubUserRepo{user: mustBuildUser(t, "usr-row-past", 1)}
 	svc := newSvcWithUserRepo(t, store, userRepo)
 	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.NoError(t, err,
@@ -453,7 +464,7 @@ func TestEnforce_StaleEpoch_Rejected(t *testing.T) {
 	seedActiveSession(t, store, "sess-epoch-stale", "usr-epoch")
 
 	// user.epoch bumped to 5 (simulates credential event after session was created).
-	user := &domain.User{ID: "usr-epoch", AuthzEpoch: 5}
+	user := mustBuildUser(t, "usr-epoch", 5)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestToken(testPrivKey, "usr-epoch", nil, time.Hour, "sess-epoch-stale")
@@ -481,7 +492,7 @@ func TestEnforce_EqualEpoch_Accepted(t *testing.T) {
 		CreatedAt:         time.Now(),
 	}))
 
-	user := &domain.User{ID: "usr-ep-equal", AuthzEpoch: 5}
+	user := mustBuildUser(t, "usr-ep-equal", 5)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestToken(testPrivKey, "usr-ep-equal", nil, time.Hour, "sess-epoch-equal")
@@ -500,7 +511,7 @@ func TestEnforce_InitialEpochCompat(t *testing.T) {
 	// seedActiveSession seeds AuthzEpochAtIssue=1 — matches initial user epoch.
 	seedActiveSession(t, store, "sess-epoch-initial", "usr-ep-initial")
 
-	user := &domain.User{ID: "usr-ep-initial", AuthzEpoch: 1}
+	user := mustBuildUser(t, "usr-ep-initial", 1)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestToken(testPrivKey, "usr-ep-initial", nil, time.Hour, "sess-epoch-initial")
@@ -527,7 +538,7 @@ func TestEnforce_RowEpochAheadOfUser_Rejected(t *testing.T) {
 		CreatedAt:         time.Now(),
 	}))
 
-	user := &domain.User{ID: "usr-ep-high", AuthzEpoch: 5}
+	user := mustBuildUser(t, "usr-ep-high", 5)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestToken(testPrivKey, "usr-ep-high", nil, time.Hour, "sess-epoch-high")
@@ -544,7 +555,8 @@ func TestEnforce_RowEpochAheadOfUser_Rejected(t *testing.T) {
 func TestEnforce_SessionInfraError_Returns503(t *testing.T) {
 	infraErr := errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "db down")
 	store := capturingStore{getErr: infraErr}
-	user := &domain.User{ID: "usr-infra", AuthzEpoch: 0}
+	// Session store will return infra error before user is fetched; epoch doesn't matter.
+	user := mustBuildUser(t, "usr-infra", 1)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-infra", 0, time.Hour, "sess-infra")
@@ -586,7 +598,8 @@ func TestEnforce_DomainNotFound_Returns401(t *testing.T) {
 	domainNotFound := errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
 		errcode.WithCategory(errcode.CategoryDomain))
 	store := capturingStore{getErr: domainNotFound}
-	user := &domain.User{ID: "usr-notfound", AuthzEpoch: 0}
+	// Session store returns domain not-found before user is fetched; epoch doesn't matter.
+	user := mustBuildUser(t, "usr-notfound", 1)
 	svc := newSvcWithUserRepo(t, store, &stubUserRepo{user: user})
 
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-notfound", 0, time.Hour, "sess-notfound")
@@ -634,7 +647,7 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 				tok, _ := IssueTestTokenWithEpoch(testPrivKey, "usr-uniform", 1, time.Hour, "sess-uniform")
 				return tok
 			},
-			userRep: &stubUserRepo{user: &domain.User{ID: "usr-uniform", AuthzEpoch: 5}},
+			userRep: &stubUserRepo{user: mustBuildUser(t, "usr-uniform", 5)},
 		},
 		{
 			name: "revoked session",
@@ -642,7 +655,7 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 				tok, _ := IssueTestTokenWithEpoch(testPrivKey, "usr-uniform", 5, time.Hour, "sess-revoked-uniform")
 				return tok
 			},
-			userRep: &stubUserRepo{user: &domain.User{ID: "usr-uniform", AuthzEpoch: 5}},
+			userRep: &stubUserRepo{user: mustBuildUser(t, "usr-uniform", 5)},
 		},
 		{
 			name: "user domain not found",

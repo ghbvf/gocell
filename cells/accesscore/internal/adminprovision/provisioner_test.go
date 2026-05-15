@@ -195,7 +195,7 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 	require.NotNil(t, user)
 	_, parseErr := uuid.Parse(user.ID)
 	assert.NoError(t, parseErr, "user ID must be a valid UUID")
-	assert.True(t, user.PasswordResetRequired)
+	assert.True(t, user.PasswordResetRequired())
 	assert.Equal(t, domain.UserSourceSetup, user.CreationSource)
 	// Role assigned
 	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)

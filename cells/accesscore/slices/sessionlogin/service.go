@@ -247,7 +247,7 @@ func (s *Service) loginInTx(txCtx context.Context, username, sessionID string) (
 	}, sessionmint.Request{
 		UserID:                user.ID,
 		SessionID:             sessionID,
-		PasswordResetRequired: user.PasswordResetRequired,
+		PasswordResetRequired: user.PasswordResetRequired(),
 	})
 	if err != nil {
 		s.logger.Error("session-login: token issuance failed",
@@ -267,7 +267,7 @@ func (s *Service) loginInTx(txCtx context.Context, username, sessionID string) (
 		// AuthzEpochAtIssue is snapshotted while holding the FOR UPDATE
 		// row lock — concurrent Invalidator.Apply cannot advance the epoch
 		// between this read and the session INSERT (S4d §D2).
-		AuthzEpochAtIssue: user.AuthzEpoch,
+		AuthzEpochAtIssue: user.AuthzEpoch(),
 		CreatedAt:         now,
 		ExpiresAt:         now.Add(s.sessionTTL),
 	}
@@ -275,7 +275,7 @@ func (s *Service) loginInTx(txCtx context.Context, username, sessionID string) (
 	if err := s.sessionStore.Create(txCtx, sess); err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: persist session: %w", err)
 	}
-	refreshWire, _, err := s.refreshStore.Issue(txCtx, sess.ID, user.ID, user.AuthzEpoch)
+	refreshWire, _, err := s.refreshStore.Issue(txCtx, sess.ID, user.ID, user.AuthzEpoch())
 	if err != nil {
 		s.logger.Error("session-login: refresh store issue failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
@@ -299,7 +299,7 @@ func (s *Service) loginInTx(txCtx context.Context, username, sessionID string) (
 		ExpiresAt:             minted.ExpiresAt,
 		SessionID:             sessionID,
 		UserID:                user.ID,
-		PasswordResetRequired: user.PasswordResetRequired,
+		PasswordResetRequired: user.PasswordResetRequired(),
 	}, nil
 }
 
@@ -410,7 +410,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}, sessionmint.Request{
 		UserID:                userID,
 		SessionID:             sessionID,
-		PasswordResetRequired: user.PasswordResetRequired,
+		PasswordResetRequired: user.PasswordResetRequired(),
 	})
 	if err != nil {
 		s.logger.Error("session-login: IssueForUser token issuance failed",
@@ -430,11 +430,11 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		ID:                sessionID,
 		SubjectID:         userID,
 		JTI:               minted.JTI,
-		AuthzEpochAtIssue: user.AuthzEpoch,
+		AuthzEpochAtIssue: user.AuthzEpoch(),
 		CreatedAt:         now,
 		ExpiresAt:         now.Add(s.sessionTTL),
 	}
-	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, userID, user.AuthzEpoch)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, userID, user.AuthzEpoch())
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -448,6 +448,6 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		ExpiresAt:             minted.ExpiresAt,
 		SessionID:             sessionID,
 		UserID:                userID,
-		PasswordResetRequired: user.PasswordResetRequired,
+		PasswordResetRequired: user.PasswordResetRequired(),
 	}, nil
 }

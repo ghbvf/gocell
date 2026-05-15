@@ -21,7 +21,7 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	user, err := domain.NewUser("testuser", "test@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-test-001"
-	user.MarkPasswordResetRequired(time.Now())
+	user.SetPasswordResetRequired(true, time.Now())
 	user.CreationSource = domain.UserSourceSetup
 
 	require.NoError(t, repo.Create(ctx, user))
@@ -29,22 +29,22 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	// GetByID should preserve the flag.
 	got, err := repo.GetByID(ctx, "usr-test-001")
 	require.NoError(t, err)
-	assert.True(t, got.PasswordResetRequired, "GetByID must preserve PasswordResetRequired")
+	assert.True(t, got.PasswordResetRequired(), "GetByID must preserve PasswordResetRequired")
 	assert.Equal(t, domain.UserSourceSetup, got.CreationSource, "GetByID must preserve CreationSource")
 
 	// GetByUsername should preserve the flag.
 	got2, err := repo.GetByUsername(ctx, "testuser")
 	require.NoError(t, err)
-	assert.True(t, got2.PasswordResetRequired, "GetByUsername must preserve PasswordResetRequired")
+	assert.True(t, got2.PasswordResetRequired(), "GetByUsername must preserve PasswordResetRequired")
 	assert.Equal(t, domain.UserSourceSetup, got2.CreationSource, "GetByUsername must preserve CreationSource")
 
 	// Update should persist changes to the flag.
-	got.ClearPasswordResetRequired(time.Now())
+	got.SetPasswordResetRequired(false, time.Now())
 	require.NoError(t, repo.Update(ctx, got))
 
 	got3, err := repo.GetByID(ctx, "usr-test-001")
 	require.NoError(t, err)
-	assert.False(t, got3.PasswordResetRequired, "Update must persist ClearPasswordResetRequired")
+	assert.False(t, got3.PasswordResetRequired(), "Update must persist SetPasswordResetRequired(false)")
 }
 
 func TestUserRepo_UpdatePassword_Match(t *testing.T) {
@@ -65,7 +65,7 @@ func TestUserRepo_UpdatePassword_Match(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "$2a$12$newhash", got.PasswordHash)
 	assert.Equal(t, int64(1), got.PasswordVersion)
-	assert.False(t, got.PasswordResetRequired)
+	assert.False(t, got.PasswordResetRequired())
 }
 
 func TestUserRepo_UpdatePassword_VersionMismatch(t *testing.T) {
@@ -113,7 +113,7 @@ func TestUserRepo_UpdatePassword_ResetRequiredFlag(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-carol"
 	user.PasswordVersion = 0
-	user.PasswordResetRequired = true
+	user.SetPasswordResetRequired(true, time.Now())
 	require.NoError(t, repo.Create(ctx, user))
 
 	// UpdatePassword with resetRequired=false must clear the flag.
@@ -122,7 +122,7 @@ func TestUserRepo_UpdatePassword_ResetRequiredFlag(t *testing.T) {
 
 	got, err := repo.GetByID(ctx, "usr-carol")
 	require.NoError(t, err)
-	assert.False(t, got.PasswordResetRequired, "UpdatePassword must apply the resetRequired argument")
+	assert.False(t, got.PasswordResetRequired(), "UpdatePassword must apply the resetRequired argument")
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +151,7 @@ func TestUserRepo_BumpAuthzEpoch_IncrementsAndReturns(t *testing.T) {
 	// GetByID must reflect the updated epoch.
 	got, err := repo.GetByID(ctx, "usr-epoch-001")
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), got.AuthzEpoch, "GetByID must return updated AuthzEpoch")
+	assert.Equal(t, int64(3), got.AuthzEpoch(), "GetByID must return updated AuthzEpoch")
 }
 
 func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
@@ -188,6 +188,6 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 
 	got, err := repo.GetByID(ctx, "usr-concurrent-001")
 	require.NoError(t, err)
-	assert.Equal(t, int64(goroutines)+1, got.AuthzEpoch,
+	assert.Equal(t, int64(goroutines)+1, got.AuthzEpoch(),
 		"100 concurrent BumpAuthzEpoch calls starting from epoch=1 must result in epoch == 101")
 }

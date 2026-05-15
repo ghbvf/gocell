@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -85,12 +86,10 @@ func newTestService(t testing.TB) (*Service, *mem.Store, *session.MemStore) {
 // user record results in CountEffectiveAdmins == 0 and revoke rejection.
 func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 	t.Helper()
-	require.NoError(t, store.UserRepository().Create(context.Background(), &domain.User{
-		ID:       userID,
-		Username: userID,
-		Email:    userID + "@test.local",
-		Status:   domain.StatusActive,
-	}))
+	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	u.ID = userID
+	require.NoError(t, store.UserRepository().Create(context.Background(), u))
 }
 
 // assignActiveAdmin seeds an active user AND assigns the admin role. Use
@@ -244,7 +243,7 @@ func TestService_Revoke(t *testing.T) {
 				// Lock usr-2 — now usr-1 is the sole effective admin.
 				u, err := s.UserRepository().GetByID(context.Background(), "usr-2")
 				require.NoError(t, err)
-				u.Status = domain.StatusLocked
+				u.SetStatus(domain.StatusLocked, time.Now())
 				require.NoError(t, s.UserRepository().Update(context.Background(), u))
 			},
 			wantErr:  true,
@@ -262,7 +261,7 @@ func TestService_Revoke(t *testing.T) {
 				assignActiveAdmin(t, s, "usr-locked")
 				u, err := s.UserRepository().GetByID(context.Background(), "usr-locked")
 				require.NoError(t, err)
-				u.Status = domain.StatusLocked
+				u.SetStatus(domain.StatusLocked, time.Now())
 				require.NoError(t, s.UserRepository().Update(context.Background(), u))
 			},
 			wantErr: false,

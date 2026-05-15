@@ -29,7 +29,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -56,15 +55,9 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 	userID := "usr-epoch-only-" + uuid.NewString()[:8]
 	sessionID := "sess-epoch-only-" + uuid.NewString()[:8]
 	// S4d: user starts at epoch=1 (domain.NewUser sets AuthzEpoch=1).
-	user := &domain.User{
-		ID:         userID,
-		Username:   "epoch-only-user",
-		Email:      "epoch@only.test",
-		Status:     domain.StatusActive,
-		AuthzEpoch: 1,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
+	user := mustBuildUser(t, userID, 1)
+	user.Username = "epoch-only-user"
+	user.Email = "epoch@only.test"
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	// Seed an active session — AuthzEpochAtIssue=1 matches user.epoch=1.
@@ -121,15 +114,9 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 	sessionID := "sess-mismatch-" + uuid.NewString()[:8]
 
 	for _, id := range []string{ownerID, imposterID} {
-		require.NoError(t, userRepo.Create(context.Background(), &domain.User{
-			ID:         id,
-			Username:   id,
-			Email:      id + "@test",
-			Status:     domain.StatusActive,
-			AuthzEpoch: 1,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-		}))
+		u := mustBuildUser(t, id, 1)
+		u.Email = id + "@test"
+		require.NoError(t, userRepo.Create(context.Background(), u))
 	}
 
 	// Seed an active session owned by ownerID. AuthzEpochAtIssue=1 matches ownerID.epoch=1.

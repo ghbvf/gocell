@@ -131,9 +131,9 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 	// authz_epoch: at least one credential event must have committed.
 	finalUser, err := userRepo.GetByID(context.Background(), userID)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, finalUser.AuthzEpoch, int64(1),
+	assert.GreaterOrEqual(t, finalUser.AuthzEpoch(), int64(1),
 		"authz_epoch must be ≥ 1 after concurrent credential events; got %d (successCount=%d)",
-		finalUser.AuthzEpoch, successCount.Load())
+		finalUser.AuthzEpoch(), successCount.Load())
 
 	// All sessions for the subject must be revoked after the concurrent storm.
 	require.Eventually(t, func() bool {
@@ -205,9 +205,9 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 
 	// The epoch must reflect initial=1 plus the number of successful changes.
 	sc := successCount.Load()
-	assert.Equal(t, int64(1)+sc, finalUser.AuthzEpoch,
+	assert.Equal(t, int64(1)+sc, finalUser.AuthzEpoch(),
 		"authz_epoch must equal 1 (initial) + successful ChangePassword calls (%d); got %d",
-		sc, finalUser.AuthzEpoch)
-	assert.GreaterOrEqual(t, finalUser.AuthzEpoch, int64(2),
+		sc, finalUser.AuthzEpoch())
+	assert.GreaterOrEqual(t, finalUser.AuthzEpoch(), int64(2),
 		"at least one ChangePassword must succeed under concurrent load (epoch starts at 1)")
 }

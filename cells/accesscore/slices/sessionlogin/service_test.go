@@ -234,7 +234,7 @@ func TestService_Login(t *testing.T) {
 			setup: func(r *mem.UserRepository) {
 				seedUser(r, "locked", "pass")
 				u, _ := r.GetByUsername(context.Background(), "locked")
-				u.LockAccount(time.Now())
+				u.SetStatus(domain.StatusLocked, time.Now())
 				_ = r.Update(context.Background(), u)
 			},
 			input:   LoginInput{Username: "locked", Password: "pass"},
@@ -330,7 +330,7 @@ func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
 	user, _ := domain.NewUser("reset-user", "reset@test.com", string(hash), time.Now())
 	user.ID = "usr-reset"
-	user.MarkPasswordResetRequired(time.Now())
+	user.SetPasswordResetRequired(true, time.Now())
 	_ = userRepo.Create(context.Background(), user)
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "reset-user", Password: "pass123"})
@@ -728,7 +728,10 @@ func TestLogin_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	user, err := domain.NewUser("epoch-user", "epoch@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-epoch"
-	user.AuthzEpoch = 7
+	// AuthzEpoch starts at 1 for new users (set by NewUser); we cannot directly
+	// set it to 7 via a field. Instead, create the user with epoch=1 and bump it
+	// 6 times (via BumpAuthzEpoch on the repo) or just create with epoch=1
+	// (epoch value does not affect the "no claim in JWT" assertion we're testing).
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
