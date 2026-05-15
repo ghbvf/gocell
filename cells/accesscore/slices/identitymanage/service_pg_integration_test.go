@@ -150,18 +150,13 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(oldPassword), bcrypt.MinCost)
 	require.NoError(t, err)
 
-	user := &domain.User{
-		ID:                    uuid.NewString(),
-		Username:              "pg-cas-race-user",
-		Email:                 "pg-cas-race@example.com",
-		PasswordHash:          string(hash),
-		PasswordVersion:       0,
-		PasswordResetRequired: false,
-		Status:                domain.StatusActive,
-		CreationSource:        domain.UserSourceIdentity,
-		CreatedAt:             time.Now().UTC().Truncate(time.Millisecond),
-		UpdatedAt:             time.Now().UTC().Truncate(time.Millisecond),
-	}
+	nowTS := time.Now().UTC().Truncate(time.Millisecond)
+	user, err := domain.ReconstituteUser(
+		uuid.NewString(), "pg-cas-race-user", "pg-cas-race@example.com", string(hash),
+		0, false, domain.StatusActive, domain.UserSourceIdentity,
+		1, nowTS, nowTS,
+	)
+	require.NoError(t, err)
 	require.NoError(t, repo.Create(ctx, user))
 
 	stub := &pgStubTokenIssuer{pair: dto.TokenPair{AccessToken: "at-pg", RefreshToken: "rt-pg"}}
