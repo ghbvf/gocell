@@ -35,6 +35,8 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/circuitbreaker.Counts":           "value-object: breaker statistics snapshot",
 	"adapters/circuitbreaker.State":            "value-object: breaker enum",
 	"adapters/oidc.Config":                     "config: construction input value",
+	"adapters/oidc.NoopRefreshCollector":       "stateless-collector: no-op observability sink, no owned lifecycle",
+	"adapters/oidc.RefreshCollector":           "interface: observability collector contract, not a resource",
 	"adapters/otel.MessagingChannelStatter":    "value-object: statter config for external metric collection",
 	"adapters/otel.MetricProvider":             "stateless-adapter: emits metrics through caller-owned SDK/provider",
 	"adapters/otel.Tracer":                     "stateless-adapter: tracer facade, provider lifecycle is caller-owned",

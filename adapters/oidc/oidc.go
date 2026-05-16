@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -24,6 +26,12 @@ const (
 	// defaultOIDCHTTPTimeout is the default HTTP client timeout for OIDC
 	// provider discovery and token exchange requests.
 	defaultOIDCHTTPTimeout = 10 * time.Second
+
+	// defaultOIDCRefreshInterval is the default period between periodic
+	// full OIDC provider re-discovery runs. Configurable via Config.RefreshInterval.
+	// go-oidc v3.18 handles JWKS key rotation reactively (kid-miss refetch);
+	// this interval only refreshes discovery metadata (jwks_uri, endpoints, alg).
+	defaultOIDCRefreshInterval = 24 * time.Hour
 )
 
 // Config holds the OIDC provider configuration.
@@ -34,6 +42,19 @@ type Config struct {
 	RedirectURL  string
 	Scopes       []string      // default: [openid, profile, email]
 	HTTPTimeout  time.Duration // default: 10s
+
+	// Clock is the time source injected by the composition root or tests.
+	// Required: New panics via clock.MustHaveClock when Clock is nil.
+	// Production wiring: clock.Real(); tests: clockmock.New(t).
+	Clock clock.Clock
+
+	// RefreshInterval controls how often the worker re-discovers OIDC provider
+	// metadata. Zero means defaultOIDCRefreshInterval (24h).
+	RefreshInterval time.Duration
+
+	// RefreshCollector receives success/failure signals from the refresh worker.
+	// Optional: nil is replaced with NoopRefreshCollector{} in New().
+	RefreshCollector RefreshCollector
 }
 
 // Validate checks required fields.
@@ -54,19 +75,44 @@ func (c Config) Validate() error {
 // Adapter is a thin wrapper over go-oidc and oauth2. It manages provider
 // discovery and exposes the underlying go-oidc types directly.
 type Adapter struct {
-	config Config
-	client *http.Client
+	config           Config
+	client           *http.Client
+	clk              clock.Clock
+	refreshCollector RefreshCollector
 
-	mu       sync.RWMutex
-	provider *gooidc.Provider
+	// provider is swapped atomically by discover(). Readers (Provider /
+	// Verifier / OAuth2Config / readyz) Load() lock-free, so a slow or hung
+	// refresh never blocks them — the network round-trip in discover() runs
+	// with no lock held and only the pointer swap is atomic (post-init
+	// fail-open availability). See refresh_worker.go invariant (a).
+	provider atomic.Pointer[gooidc.Provider]
+
+	// consecutiveFailures counts how many consecutive refresh attempts have
+	// failed since the last success. Reset to 0 on any successful refresh.
+	consecutiveFailures atomic.Int64
+
+	// started is set to true at the very beginning of runRefreshLoop so that
+	// Close and Stop can skip the workerDone drain when the worker goroutine
+	// was never started (e.g. bootstrap aborted before Worker.Start).
+	started atomic.Bool
+
+	stopOnce   sync.Once
+	stopCh     chan struct{} // signals the worker goroutine to exit
+	workerDone chan struct{} // closed when the worker goroutine returns
 }
 
 // New creates an OIDC Adapter and synchronously performs OIDC discovery.
 // An unreachable or misconfigured issuer causes construction to fail
 // immediately (fail-fast at boot, not at first request).
 //
+// Clock is required: New panics via clock.MustHaveClock when cfg.Clock is nil.
+// Use clock.Real() at the composition root; inject clockmock.New() in tests.
+//
 // ref: coreos/go-oidc — Provider.NewProvider semantics (sync HTTP round-trip).
+// ref: adapters/s3.New — same clock.MustHaveClock + state-machine field pattern.
 func New(ctx context.Context, cfg Config) (*Adapter, error) {
+	clock.MustHaveClock(cfg.Clock, "oidc.New")
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -74,11 +120,21 @@ func New(ctx context.Context, cfg Config) (*Adapter, error) {
 	if timeout == 0 {
 		timeout = defaultOIDCHTTPTimeout
 	}
-	a := &Adapter{
-		config: cfg,
-		client: &http.Client{Timeout: timeout},
+
+	rc := cfg.RefreshCollector
+	if rc == nil {
+		rc = NoopRefreshCollector{}
 	}
-	if _, err := a.discover(ctx, true); err != nil {
+
+	a := &Adapter{
+		config:           cfg,
+		client:           &http.Client{Timeout: timeout},
+		clk:              cfg.Clock,
+		refreshCollector: rc,
+		stopCh:           make(chan struct{}),
+		workerDone:       make(chan struct{}),
+	}
+	if _, err := a.discover(ctx); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -88,41 +144,42 @@ func (a *Adapter) oidcCtx(ctx context.Context) context.Context {
 	return gooidc.ClientContext(ctx, a.client)
 }
 
-// Provider returns the go-oidc Provider, performing discovery on first call.
-// Subsequent calls return the cached provider without re-fetching.
+// Provider returns the cached go-oidc Provider. Discovery runs synchronously
+// in New (fail-fast at boot), so a successfully constructed Adapter always
+// has a populated provider. This read is lock-free (atomic.Pointer.Load); the
+// refresh worker swaps the pointer atomically and never blocks readers, even
+// across a slow or hung re-discovery (post-init fail-open availability).
 //
-// IMPORTANT: The cached provider never expires automatically. For long-lived
-// processes, the caller (typically bootstrap/runtime) MUST call Refresh()
-// periodically to pick up OIDC metadata and JWKS key rotation. A common
-// pattern is a background goroutine with a 24h ticker.
-func (a *Adapter) Provider(ctx context.Context) (*gooidc.Provider, error) {
-	a.mu.RLock()
-	if a.provider != nil {
-		p := a.provider
-		a.mu.RUnlock()
+// IMPORTANT: The cached provider never expires automatically. The refresh
+// worker (Worker(), auto-wired by bootstrap.WithManagedResource) re-discovers
+// every refreshInterval to pick up OIDC metadata rotation.
+func (a *Adapter) Provider(_ context.Context) (*gooidc.Provider, error) {
+	if p := a.provider.Load(); p != nil {
 		return p, nil
 	}
-	a.mu.RUnlock()
-
-	return a.discover(ctx, false)
+	return nil, errcode.New(errcode.KindInternal, ErrAdapterOIDCDiscovery,
+		"oidc: provider not initialized")
 }
 
-// Refresh forces re-discovery of the OIDC provider metadata. Use this
-// periodically in long-lived processes to pick up JWKS/metadata rotation.
+// Refresh re-discovers the OIDC provider metadata and atomically swaps the
+// cached provider. The refresh worker calls this on each tick; it is also
+// safe to call manually.
 func (a *Adapter) Refresh(ctx context.Context) (*gooidc.Provider, error) {
-	return a.discover(ctx, true)
+	return a.discover(ctx)
 }
 
-// discover performs OIDC discovery. When force is false, it double-checks
-// whether another goroutine already completed initialization before making
-// a network call (cold-start thundering-herd protection).
-func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if !force && a.provider != nil {
-		return a.provider, nil
-	}
+// discover fetches provider metadata from the issuer and atomically swaps the
+// cached provider.
+//
+// The gooidc.NewProvider network round-trip runs with NO lock held, so
+// concurrent Provider()/Verifier()/OAuth2Config()/readyz keep serving the
+// previously discovered provider for the full duration of a slow or hung
+// refresh (post-init fail-open availability). The pointer is Stored only
+// after a successful fetch — a failed refresh returns early and leaves the
+// old provider untouched (fail-open correctness). Both properties are
+// test-guarded; see refresh_worker.go invariant (a).
+func (a *Adapter) discover(ctx context.Context) (*gooidc.Provider, error) {
+	hadProvider := a.provider.Load() != nil
 
 	p, err := gooidc.NewProvider(a.oidcCtx(ctx), a.config.IssuerURL)
 	if err != nil {
@@ -130,8 +187,14 @@ func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, e
 			"oidc: discovery failed", err,
 			errcode.WithDetails(slog.String("issuer", a.config.IssuerURL)))
 	}
-	a.provider = p
-	slog.Info("oidc: provider discovered", slog.String("issuer", a.config.IssuerURL))
+	a.provider.Store(p)
+	// Distinguish periodic re-discovery from first-time discovery so that ops
+	// alerts can filter out expected refresh noise (F-6: PR #504 review).
+	if hadProvider {
+		slog.Info("oidc: provider re-discovered", slog.String("issuer", a.config.IssuerURL))
+	} else {
+		slog.Info("oidc: provider discovered", slog.String("issuer", a.config.IssuerURL))
+	}
 	return p, nil
 }
 
@@ -152,13 +215,41 @@ func (a *Adapter) Checkers() map[string]func(context.Context) error {
 	return adapterutil.HealthToCheckers("oidc_ready", a.healthProbe, adapterutil.DefaultProbeTimeout)
 }
 
-// Worker returns nil — no background goroutine is needed. The JWKS rotation
-// worker is deferred to PR-11/A-02.
-func (a *Adapter) Worker() worker.Worker { return nil }
+// Worker returns a worker.Worker that drives the periodic OIDC re-discovery
+// loop. Bootstrap wires this via WorkerGroup so the loop starts with the
+// service lifecycle.
+//
+// ref: adapters/s3.Client.Worker — same worker-adapter pattern.
+func (a *Adapter) Worker() worker.Worker { return &oidcRefreshWorker{a: a} }
 
-// Close is idempotent and currently a no-op. The go-oidc provider has no
-// managed connections to release; the HTTP client is ephemeral.
-func (a *Adapter) Close(_ context.Context) error { return nil }
+// signalStop closes stopCh exactly once (idempotent via sync.Once).
+func (a *Adapter) signalStop() {
+	a.stopOnce.Do(func() { close(a.stopCh) })
+}
+
+// Close implements lifecycle.ManagedResource. It signals the worker to stop
+// and waits for the goroutine to drain, bounded by ctx. Idempotent — safe to
+// call from both Worker.Stop and ManagedResource.Close teardown paths.
+//
+// Fast path: if the worker goroutine was never started (e.g. bootstrap aborted
+// before Worker.Start was called), workerDone will never be closed. In that
+// case we skip the select so we do not burn the shutdown budget on a
+// non-existent drain.
+//
+// ref: adapters/s3.Client.Close — same idempotent + ctx-bounded pattern.
+func (a *Adapter) Close(ctx context.Context) error {
+	a.signalStop()
+	// Fast path: worker goroutine never started — nothing to drain.
+	if !a.started.Load() {
+		return nil
+	}
+	select {
+	case <-a.workerDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // healthProbe verifies the cached provider is populated. It does NOT
 // re-discover — Refresh() handles that. Provider(ctx) acquires a.mu.RLock();
