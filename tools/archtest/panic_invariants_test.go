@@ -367,10 +367,13 @@ func TestPanicRegistered(t *testing.T) {
 		if containsTag(tagGroup, "archtest_fixture") {
 			continue
 		}
-		// RunTyped with "./..." covers both hand-written and codegen-emitted
-		// panic sites (Wave 2 — single funnel). shouldSkipForPanicRegistered
-		// mirrors fileroles.IsProductionCode exclusions (generated/, examples/,
-		// tools/archtest/, testdata/, _test.go, etc.) at the file level.
+		// RunTyped with "./..." loads the whole module; the rule scans
+		// hand-written production panic sites only. shouldSkipForPanicRegistered
+		// excludes generated/, examples/, tools/archtest/, testdata/, _test.go
+		// (mirroring fileroles.IsProductionCode) at the file level. generated/
+		// is intentionally excluded — codegen templates are the single source
+		// guaranteeing emitted panics use panicregister.Approved, so scanning
+		// them would be redundant (no enforcement gap).
 		_ = RunTyped(t, TypedOpts{Tags: tagGroup}, []string{"./..."}, func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
