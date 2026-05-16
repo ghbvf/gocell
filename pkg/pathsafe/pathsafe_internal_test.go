@@ -16,6 +16,48 @@ import (
 	"testing"
 )
 
+// TestCollectMissingDirs_NormalChain exercises the happy path: all
+// intermediate dirs are absent (ENOENT) → the function returns the missing
+// chain leaf-first with nil err. The walk also stops when it hits an
+// existing ancestor (rolled into this test via the realRoot terminator).
+func TestCollectMissingDirs_NormalChain(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	leaf := filepath.Join(root, "a", "b", "c")
+	missing, err := collectMissingDirs(leaf, root)
+	if err != nil {
+		t.Fatalf("collectMissingDirs(normal chain): unexpected error: %v", err)
+	}
+	if len(missing) != 3 {
+		t.Fatalf("collectMissingDirs(normal chain): want 3 missing, got %d (%v)", len(missing), missing)
+	}
+	// Leaf-first order: innermost first → outermost last.
+	if missing[0] != leaf {
+		t.Errorf("missing[0] = %q, want leaf %q", missing[0], leaf)
+	}
+}
+
+// TestCollectMissingDirs_StopsAtExisting verifies the early-break behavior:
+// once the walk encounters an existing directory, it stops (no further
+// ancestor probing) — parents of an existing dir are implicitly present.
+func TestCollectMissingDirs_StopsAtExisting(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Pre-create root/a so the walk from root/a/b/c stops after recording b, c.
+	existing := filepath.Join(root, "a")
+	if err := os.MkdirAll(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(existing, "b", "c")
+	missing, err := collectMissingDirs(leaf, root)
+	if err != nil {
+		t.Fatalf("collectMissingDirs(partial chain): unexpected error: %v", err)
+	}
+	if len(missing) != 2 {
+		t.Fatalf("collectMissingDirs(partial chain): want 2 missing, got %d (%v)", len(missing), missing)
+	}
+}
+
 // EACCES on an intermediate dir must surface as an error, not be silently
 // dropped via the os.IsNotExist(err) check (the develop @ 41fc70074 bug).
 func TestCollectMissingDirs_EACCESReturnsError(t *testing.T) {

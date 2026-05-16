@@ -349,3 +349,100 @@ func TestWritePass_TOCTOURaceWindow_PostContainmentPreSwap(t *testing.T) {
 		t.Errorf("TOCTOU escape: outside dir has %d entries after swap, want 0: %v", len(entries), entries)
 	}
 }
+
+// =============================================================================
+// Coverage backfill — exported single-file APIs (WriteFile / WriteFileForce)
+// and lexical escape-root rejection at planContainmentPass.
+//
+// These were uncovered prior to Lane A because all existing tests used
+// WritePlannedFiles directly. The fd-walk rewrite changed the internals of
+// WriteFile / WriteFileForce so they need their own conformance coverage.
+// =============================================================================
+
+// TestWriteFile_HappyPath exercises the single-file shorthand: it must funnel
+// through WritePlannedFiles, create parent dirs, and write content with
+// O_EXCL|O_NOFOLLOW semantics.
+func TestWriteFile_HappyPath(t *testing.T) {
+	t.Parallel()
+	root := resolveRealRoot(t)
+	abs := filepath.Join(root, "cells", "wfcell", "cell.yaml")
+	if err := pathsafe.WriteFile(root, abs, []byte("id: wfcell\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(abs) //nolint:gosec // R2-approved: G304 — tempdir test fixture, path constructed in-test
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "id: wfcell\n" {
+		t.Errorf("WriteFile content = %q, want %q", data, "id: wfcell\n")
+	}
+}
+
+// TestWriteFileForce_OverwritesExisting exercises the codegen-regenerate
+// variant: an existing file at the target path is replaced (unlinkat at
+// parent fd + O_EXCL recreate), preserving root containment.
+func TestWriteFileForce_OverwritesExisting(t *testing.T) {
+	t.Parallel()
+	root := resolveRealRoot(t)
+	abs := filepath.Join(root, "generated", "stamp.go")
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, []byte("// old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pathsafe.WriteFileForce(root, abs, []byte("// regenerated\n"), 0o644); err != nil {
+		t.Fatalf("WriteFileForce: unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(abs) //nolint:gosec // R2-approved: G304 — tempdir test fixture, path constructed in-test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "// regenerated\n" {
+		t.Errorf("WriteFileForce content = %q, want %q", data, "// regenerated\n")
+	}
+}
+
+// TestWriteFileForce_RejectsEmptyRealRoot verifies the F10 invariant: empty
+// realRoot is no longer accepted (fd-walk requires an anchor; the previous
+// "caller-responsible" mode is gone).
+func TestWriteFileForce_RejectsEmptyRealRoot(t *testing.T) {
+	t.Parallel()
+	abs := filepath.Join(t.TempDir(), "stamp.go")
+	err := pathsafe.WriteFileForce("", abs, []byte("// data\n"), 0o644)
+	if err == nil {
+		t.Fatal("WriteFileForce(realRoot=\"\"): want error, got nil")
+	}
+}
+
+// TestWriteFileForce_EscapesRoot verifies containment is enforced: an absPath
+// outside realRoot is rejected before any write happens.
+func TestWriteFileForce_EscapesRoot(t *testing.T) {
+	t.Parallel()
+	root := resolveRealRoot(t)
+	outside := t.TempDir()
+	escapeAbs := filepath.Join(outside, "escape.go")
+	err := pathsafe.WriteFileForce(root, escapeAbs, []byte("// data\n"), 0o644)
+	if err == nil {
+		t.Fatal("WriteFileForce(absPath outside root): want error, got nil")
+	}
+	if _, statErr := os.Stat(escapeAbs); statErr == nil {
+		t.Error("escape: file written to outside root")
+	}
+}
+
+// TestWritePlannedFiles_PlanContainmentPass_EscapesRoot exercises the
+// lexical escape branch of planContainmentPass (separate from the existing
+// "absolute path" / "dotdot" cases handled via ContainPath).
+func TestWritePlannedFiles_PlanContainmentPass_EscapesRoot(t *testing.T) {
+	t.Parallel()
+	root := resolveRealRoot(t)
+	// An AbsPath that lies outside root → planContainmentPass returns
+	// "target escapes root" before the write funnel runs.
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: filepath.Join(t.TempDir(), "outside.yaml"), Content: []byte("id: x\n")},
+	}
+	if err := pathsafe.WritePlannedFiles(root, plan, false); err == nil {
+		t.Fatal("WritePlannedFiles(AbsPath escapes root): want error, got nil")
+	}
+}
