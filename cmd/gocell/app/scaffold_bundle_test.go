@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,4 +95,169 @@ func setupBundleTestProject(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// ---------------------------------------------------------------------------
+// D7 RED tests — SCAFFOLD-CELL-BUNDLE-CROSS-STAGE-PLAN-MERGE-01
+// ---------------------------------------------------------------------------
+
+// TestRunScaffoldCell_DryRun_PrintsDerivedPaths verifies that --dry-run prints
+// BOTH skeleton paths AND derived codegen paths (cell_gen.go, types_gen.go,
+// iface_gen.go, handler_gen.go), and writes ZERO files to disk.
+//
+// RED: current scaffoldCell returns early before autoGenerateCellBundleArtifacts,
+// so dry-run only prints skeleton paths and misses derived files.
+func TestRunScaffoldCell_DryRun_PrintsDerivedPaths(t *testing.T) {
+	t.Parallel()
+
+	root := setupBundleTestProject(t)
+
+	args := []string{
+		"--id=drycell",
+		"--type=core",
+		"--level=L2",
+		"--team=platform",
+		"--role=cell-owner",
+		"--with-http",
+		"--dry-run",
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = scaffoldCell(root, args)
+	})
+	if runErr != nil {
+		t.Fatalf("scaffoldCell dry-run: %v", runErr)
+	}
+
+	// Skeleton paths must appear.
+	skeletonPaths := []string{
+		"cells/drycell/cell.yaml",
+		"cells/drycell/cell.go",
+		"cells/drycell/slices/drycellexample/slice.yaml",
+	}
+	for _, rel := range skeletonPaths {
+		wantLine := fmt.Sprintf("(dry-run) Would create %s", rel)
+		if !strings.Contains(out, wantLine) {
+			t.Errorf("dry-run output missing skeleton path %q\nfull output:\n%s", wantLine, out)
+		}
+	}
+
+	// Derived codegen paths must also appear.
+	derivedPaths := []string{
+		"cells/drycell/cell_gen.go",
+		"generated/contracts/http/drycell/example/v1/types_gen.go",
+		"generated/contracts/http/drycell/example/v1/iface_gen.go",
+		"generated/contracts/http/drycell/example/v1/handler_gen.go",
+	}
+	for _, rel := range derivedPaths {
+		wantLine := fmt.Sprintf("(dry-run) Would create %s", rel)
+		if !strings.Contains(out, wantLine) {
+			t.Errorf("dry-run output missing derived path %q\nfull output:\n%s", wantLine, out)
+		}
+	}
+
+	// ZERO files written to disk — including no leftover staging dir.
+	if _, err := os.Stat(filepath.Join(root, "cells", "drycell")); err == nil {
+		t.Error("dry-run: cells/drycell must not exist on disk")
+	}
+	if _, err := os.Stat(filepath.Join(root, "generated")); err == nil {
+		t.Error("dry-run: generated/ must not exist on disk")
+	}
+}
+
+// TestRunScaffoldCell_LiveRollback_OnDerivedConflict verifies that when a derived
+// path pre-exists as a conflicting non-overwritable obstacle, the ENTIRE plan
+// (skeleton + derived) rolls back: both skeleton files and derived files are absent.
+//
+// RED: current code writes skeleton first then derived in a separate call;
+// derived failure leaves skeleton half-written.
+func TestRunScaffoldCell_LiveRollback_OnDerivedConflict(t *testing.T) {
+	t.Parallel()
+
+	root := setupBundleTestProject(t)
+
+	// Pre-place a non-ForceOverwrite conflicting directory at the types_gen.go path
+	// that will cause WritePlannedFiles to fail on the derived slot.
+	conflictDir := filepath.Join(root, "generated", "contracts", "http", "rollbackcell", "example", "v1", "types_gen.go")
+	if err := os.MkdirAll(conflictDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Now types_gen.go is a directory — writing a file at that path will fail.
+
+	args := []string{
+		"--id=rollbackcell",
+		"--type=core",
+		"--level=L2",
+		"--team=platform",
+		"--role=cell-owner",
+		"--with-http",
+	}
+	err := scaffoldCell(root, args)
+	if err == nil {
+		t.Fatal("scaffoldCell with conflicting derived path: want error, got nil")
+	}
+
+	// Skeleton files must not exist after rollback.
+	for _, rel := range []string{
+		"cells/rollbackcell/cell.yaml",
+		"cells/rollbackcell/cell.go",
+		"cells/rollbackcell/slices/rollbackcellexample/slice.yaml",
+	} {
+		if _, statErr := os.Stat(filepath.Join(root, rel)); statErr == nil {
+			t.Errorf("rollback: file must not exist: %s", rel)
+		}
+	}
+	// Derived files must not exist after rollback (except the pre-placed obstacle).
+	for _, rel := range []string{
+		"cells/rollbackcell/cell_gen.go",
+	} {
+		if _, statErr := os.Stat(filepath.Join(root, rel)); statErr == nil {
+			t.Errorf("rollback: derived file must not exist: %s", rel)
+		}
+	}
+}
+
+// TestRunScaffoldCell_SkipGenerate_NoDerived verifies that --skip-generate
+// produces only skeleton files and no derived codegen (*_gen.go) files.
+//
+// This tests the new SkipGenerate path in PlanCellBundleScaffold.
+func TestRunScaffoldCell_SkipGenerate_NoDerived(t *testing.T) {
+	t.Parallel()
+
+	root := setupBundleTestProject(t)
+
+	args := []string{
+		"--id=skipgencell",
+		"--type=core",
+		"--level=L2",
+		"--team=platform",
+		"--role=cell-owner",
+		"--with-http",
+		"--skip-generate",
+	}
+	if err := scaffoldCell(root, args); err != nil {
+		t.Fatalf("scaffoldCell --skip-generate: %v", err)
+	}
+
+	// Skeleton files must exist.
+	for _, rel := range []string{
+		"cells/skipgencell/cell.yaml",
+		"cells/skipgencell/cell.go",
+		"cells/skipgencell/slices/skipgencellexample/slice.yaml",
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("skip-generate: skeleton file missing %s: %v", rel, err)
+		}
+	}
+
+	// Derived codegen files must NOT exist.
+	for _, rel := range []string{
+		"cells/skipgencell/cell_gen.go",
+		"generated/contracts/http/skipgencell/example/v1/types_gen.go",
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
+			t.Errorf("skip-generate: derived file must not exist: %s", rel)
+		}
+	}
 }

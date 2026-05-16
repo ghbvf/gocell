@@ -12,6 +12,24 @@ import (
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
+// scaffoldBundleSkip is a test helper that calls PlanCellBundleScaffold
+// (with SkipGenerate forced true so no metadata parse is needed) and then
+// WritePlannedFiles(dryRun=false) to write skeleton files. Returns the first
+// error encountered (plan or write).
+func scaffoldBundleSkip(t *testing.T, root string, spec ScaffoldSpec) error {
+	t.Helper()
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return err
+	}
+	spec.SkipGenerate = true
+	plan, err := PlanCellBundleScaffold(realRoot, spec)
+	if err != nil {
+		return err
+	}
+	return pathsafe.WritePlannedFiles(realRoot, plan, false)
+}
+
 // TestScaffoldCellBundle_HTTP is a RED test for K#09 cellgen.ScaffoldCellBundle:
 // produces cell + 1 example slice + 1 HTTP contract bundle in one shot.
 //
@@ -41,8 +59,8 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 		WithHTTP:         true,
 	}
 
-	if err := ScaffoldCellBundle(dir, spec); err != nil {
-		t.Fatalf("ScaffoldCellBundle: %v", err)
+	if err := scaffoldBundleSkip(t, dir, spec); err != nil {
+		t.Fatalf("scaffoldBundleSkip: %v", err)
 	}
 
 	// Verify bundle file inventory.
@@ -95,8 +113,8 @@ func TestScaffoldCellBundle_Events(t *testing.T) {
 		WithEvents:       true,
 	}
 
-	if err := ScaffoldCellBundle(dir, spec); err != nil {
-		t.Fatalf("ScaffoldCellBundle: %v", err)
+	if err := scaffoldBundleSkip(t, dir, spec); err != nil {
+		t.Fatalf("scaffoldBundleSkip: %v", err)
 	}
 
 	wantFiles := []string{
@@ -117,7 +135,8 @@ func TestScaffoldCellBundle_Events(t *testing.T) {
 	}
 }
 
-// TestScaffoldCellBundle_DryRun verifies dry-run produces no files.
+// TestScaffoldCellBundle_DryRun verifies that PlanCellBundleScaffold (skeleton only)
+// followed by WritePlannedFiles(dryRun=true) produces no files.
 func TestScaffoldCellBundle_DryRun(t *testing.T) {
 	t.Parallel()
 
@@ -132,10 +151,18 @@ func TestScaffoldCellBundle_DryRun(t *testing.T) {
 		Type:             "core",
 		ConsistencyLevel: "L2",
 		WithHTTP:         true,
-		DryRun:           true,
+		SkipGenerate:     true, // skip codegen stage so no metadata parse needed
 	}
-	if err := ScaffoldCellBundle(dir, spec); err != nil {
-		t.Fatalf("dry-run ScaffoldCellBundle: %v", err)
+	realRoot, err := pathsafe.ResolveRoot(dir)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+	plan, err := PlanCellBundleScaffold(realRoot, spec)
+	if err != nil {
+		t.Fatalf("PlanCellBundleScaffold: %v", err)
+	}
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, true); err != nil {
+		t.Fatalf("WritePlannedFiles dry-run: %v", err)
 	}
 	// In dry-run, the cell directory must not exist.
 	if _, err := os.Stat(filepath.Join(dir, "cells", "drycell")); err == nil {
@@ -162,8 +189,8 @@ func TestScaffoldCellBundle_WithBoth(t *testing.T) {
 		WithBoth:         true,
 	}
 
-	if err := ScaffoldCellBundle(dir, spec); err != nil {
-		t.Fatalf("ScaffoldCellBundle WithBoth: %v", err)
+	if err := scaffoldBundleSkip(t, dir, spec); err != nil {
+		t.Fatalf("scaffoldBundleSkip WithBoth: %v", err)
 	}
 
 	// HTTP slice and contract must exist.
@@ -254,9 +281,9 @@ func TestScaffoldCellBundle_SymlinkEscape_Slice(t *testing.T) {
 		WithHTTP:         true,
 	}
 
-	err := ScaffoldCellBundle(root, spec)
+	err := scaffoldBundleSkip(t, root, spec)
 	if err == nil {
-		t.Fatal("ScaffoldCellBundle(slices symlink escape): want error, got nil")
+		t.Fatal("scaffoldBundleSkip(slices symlink escape): want error, got nil")
 	}
 	var ec *errcode.Error
 	if !errors.As(err, &ec) {
@@ -311,9 +338,9 @@ func TestScaffoldCellBundle_SymlinkEscape_Contract(t *testing.T) {
 		WithHTTP:         true,
 	}
 
-	err := ScaffoldCellBundle(root, spec)
+	err := scaffoldBundleSkip(t, root, spec)
 	if err == nil {
-		t.Fatal("ScaffoldCellBundle(contract symlink escape): want error, got nil")
+		t.Fatal("scaffoldBundleSkip(contract symlink escape): want error, got nil")
 	}
 
 	// outside 内不应有任何文件
@@ -351,9 +378,9 @@ func TestScaffoldCellBundle_AtomicRollback_OnContractConflict(t *testing.T) {
 		WithHTTP:         true,
 	}
 
-	err := ScaffoldCellBundle(root, spec)
+	err := scaffoldBundleSkip(t, root, spec)
 	if err == nil {
-		t.Fatal("ScaffoldCellBundle(contract conflict): want error, got nil")
+		t.Fatal("scaffoldBundleSkip(contract conflict): want error, got nil")
 	}
 
 	// atomic：cells/myhttpcell/cell.yaml、cell.go、slices/.../slice.yaml 全不存在
@@ -402,9 +429,9 @@ func TestScaffoldCellBundle_AtomicRollback_OnContainmentFail(t *testing.T) {
 		WithHTTP:         true,
 	}
 
-	err := ScaffoldCellBundle(root, spec)
+	err := scaffoldBundleSkip(t, root, spec)
 	if err == nil {
-		t.Fatal("ScaffoldCellBundle(containment fail): want error, got nil")
+		t.Fatal("scaffoldBundleSkip(containment fail): want error, got nil")
 	}
 
 	// atomic：cell.yaml 和 cell.go 均未写入
@@ -439,9 +466,9 @@ func TestScaffoldCellBundle_RejectKebabCellID(t *testing.T) {
 		ConsistencyLevel: "L1",
 		WithHTTP:         true,
 	}
-	err := ScaffoldCellBundle(dir, spec)
+	err := scaffoldBundleSkip(t, dir, spec)
 	if err == nil {
-		t.Fatal("ScaffoldCellBundle(kebab CellID): want error, got nil")
+		t.Fatal("scaffoldBundleSkip(kebab CellID): want error, got nil")
 	}
 	// Error must mention kebab or dash so the message is actionable.
 	msg := err.Error()
@@ -474,8 +501,8 @@ func TestScaffoldCellBundle_BundleDefaultIsHTTP(t *testing.T) {
 		Type:             "core",
 		ConsistencyLevel: "L2",
 	}
-	if err := ScaffoldCellBundle(dir, spec); err != nil {
-		t.Fatalf("ScaffoldCellBundle: %v", err)
+	if err := scaffoldBundleSkip(t, dir, spec); err != nil {
+		t.Fatalf("scaffoldBundleSkip: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "contracts", "http", "defcell", "example", "v1", "contract.yaml")); err != nil {
 		t.Errorf("default bundle should produce HTTP contract; got: %v", err)
@@ -554,7 +581,7 @@ func TestScaffoldSpec_Validate_RejectsL1WithEvents(t *testing.T) {
 		ConsistencyLevel: "L1",
 		WithEvents:       true,
 	}
-	err := ScaffoldCellBundle(dir, spec)
+	err := scaffoldBundleSkip(t, dir, spec)
 	if err == nil {
 		t.Fatal("expected validation error for L1+WithEvents, got nil")
 	}
@@ -581,7 +608,7 @@ func TestScaffoldSpec_Validate_AcceptsL2WithEvents(t *testing.T) {
 		ConsistencyLevel: "L2",
 		WithEvents:       true,
 	}
-	if err := ScaffoldCellBundle(dir, spec); err != nil {
+	if err := scaffoldBundleSkip(t, dir, spec); err != nil {
 		t.Fatalf("expected no error for L2+WithEvents, got: %v", err)
 	}
 }
@@ -650,6 +677,121 @@ func TestPlanEventExampleArtifacts_HTTPAndEvents_DistinctSliceID(t *testing.T) {
 	}
 }
 
+// TestPlanCellBundleScaffold_MergedPlan verifies that PlanCellBundleScaffold
+// returns a merged plan containing both skeleton files (ForceOverwrite=false)
+// and derived codegen files (ForceOverwrite=true), with no duplicate AbsPath.
+// Nothing is written to the project tree.
+//
+// RED: PlanCellBundleScaffold does not exist yet.
+func TestPlanCellBundleScaffold_MergedPlan(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Must have go.mod for metadata.NewParser to work.
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module github.com/ghbvf/gocell\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Must have the shared error schema for contractgen to work.
+	schemaDir := filepath.Join(dir, "contracts", "shared", "errors")
+	if err := os.MkdirAll(schemaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Read from real repo and write to staging root.
+	realSchemaPath := filepath.Join("..", "..", "..", "contracts", "shared", "errors", "error-response-v1.schema.json")
+	schemaContent, err := os.ReadFile(realSchemaPath) //nolint:gosec // test fixture from known path
+	if err != nil {
+		t.Skipf("cannot read shared error schema (not in expected location): %v", err)
+	}
+	schemaOut := filepath.Join(schemaDir, "error-response-v1.schema.json")
+	//nolint:gosec // tempdir test fixture
+	if err := os.WriteFile(schemaOut, schemaContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	realRoot, err := pathsafe.ResolveRoot(dir)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+
+	spec := ScaffoldSpec{
+		CellID:           "plantestcell",
+		StructName:       "PlanTestCell",
+		Package:          "plantestcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithHTTP:         true,
+	}
+
+	plan, err := PlanCellBundleScaffold(realRoot, spec)
+	if err != nil {
+		t.Fatalf("PlanCellBundleScaffold: %v", err)
+	}
+
+	// No duplicate AbsPath.
+	seen := make(map[string]int)
+	for _, f := range plan {
+		seen[f.AbsPath]++
+	}
+	for path, count := range seen {
+		if count > 1 {
+			t.Errorf("duplicate AbsPath in merged plan: %s (count=%d)", path, count)
+		}
+	}
+
+	// Skeleton files must exist with ForceOverwrite=false.
+	skeletonRels := []string{
+		"cells/plantestcell/cell.yaml",
+		"cells/plantestcell/cell.go",
+	}
+	for _, rel := range skeletonRels {
+		abs := filepath.Join(realRoot, filepath.FromSlash(rel))
+		found := false
+		for _, f := range plan {
+			if f.AbsPath == abs {
+				if f.ForceOverwrite {
+					t.Errorf("skeleton file %s must have ForceOverwrite=false", rel)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("skeleton file missing from merged plan: %s", rel)
+		}
+	}
+
+	// Derived files must exist with ForceOverwrite=true.
+	derivedRels := []string{
+		"cells/plantestcell/cell_gen.go",
+		"generated/contracts/http/plantestcell/example/v1/types_gen.go",
+	}
+	for _, rel := range derivedRels {
+		abs := filepath.Join(realRoot, filepath.FromSlash(rel))
+		found := false
+		for _, f := range plan {
+			if f.AbsPath == abs {
+				if !f.ForceOverwrite {
+					t.Errorf("derived file %s must have ForceOverwrite=true", rel)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("derived file missing from merged plan: %s", rel)
+		}
+	}
+
+	// Nothing written to project tree (plan is in-memory only).
+	if _, statErr := os.Stat(filepath.Join(realRoot, "cells", "plantestcell")); statErr == nil {
+		t.Error("PlanCellBundleScaffold must not write to project tree")
+	}
+}
+
 // TestScaffoldSpec_DefaultsToL2 asserts that an empty ConsistencyLevel is
 // defaulted to "L2" before validation, and that a bundle scaffold succeeds.
 func TestScaffoldSpec_DefaultsToL2(t *testing.T) {
@@ -667,7 +809,7 @@ func TestScaffoldSpec_DefaultsToL2(t *testing.T) {
 		// ConsistencyLevel intentionally empty — should default to L2
 		WithHTTP: true,
 	}
-	if err := ScaffoldCellBundle(dir, spec); err != nil {
+	if err := scaffoldBundleSkip(t, dir, spec); err != nil {
 		t.Fatalf("default ConsistencyLevel scaffold failed: %v", err)
 	}
 	// Verify the generated cell.yaml contains consistencyLevel: L2

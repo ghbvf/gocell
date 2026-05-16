@@ -354,6 +354,14 @@ func selectByContractList(p *metadata.ProjectMeta, ids []string) ([]string, erro
 	return out, nil
 }
 
+// ContractIDsForCell returns all Codegen=true contract IDs owned by cellID
+// (server or publisher). The returned slice is sorted for deterministic output.
+// Thin exported wrapper around selectByCellID for cross-package callers
+// (notably cellgen stage_render.go). No OS calls — safe in depguard scaffold-os-ban scope.
+func ContractIDsForCell(p *metadata.ProjectMeta, cellID string) ([]string, error) {
+	return selectByCellID(p, cellID)
+}
+
 // selectByCellID returns all Codegen=true contracts whose server/publisher
 // cell matches cellID.
 func selectByCellID(p *metadata.ProjectMeta, cellID string) ([]string, error) {

@@ -11,12 +11,10 @@ import (
 	"text/template"
 	"unicode"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/pkg/yamlsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
-	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 )
 
 // ErrScaffoldInvalidOpts is the public error code surfaced when scaffold
@@ -330,37 +328,48 @@ func buildScaffoldCellSpec(in scaffoldCellInputs) cellgen.ScaffoldSpec {
 	}
 }
 
-// printScaffoldCellDryRunPlan resolves the output plan and prints the paths
-// that would be created. Falls back to a minimal summary when plan derivation
-// fails (e.g. symlink resolution error in a restricted environment).
-func printScaffoldCellDryRunPlan(root string, spec cellgen.ScaffoldSpec) error {
-	realRoot, err := pathsafe.ResolveRoot(root)
-	if err == nil {
-		plan, planErr := cellgen.PlanCellBundleForDryRun(realRoot, spec)
-		if planErr == nil {
-			for _, absPath := range pathsafe.PlannedPaths(plan) {
-				rel, _ := filepath.Rel(root, absPath)
-				fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
-			}
-			return nil
-		}
+// validateScaffoldCellFlags enforces required-field, control-char, and no-dash
+// constraints on the parsed scaffold cell flags. Extracted from scaffoldCell to
+// keep the latter's cognitive complexity within the project budget (≤15).
+func validateScaffoldCellFlags(id, team, role string) error {
+	if id == "" {
+		return errors.New(errMsgIDRequired)
 	}
-	// Fallback: print minimal info when plan cannot be derived.
-	fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", spec.CellID, "cell.yaml")))
-	fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(filepath.Join("cells", spec.CellID, "cell.go")))
-	fmt.Printf("(dry-run) Would create cell bundle (slice + contract) under %s\n",
-		filepath.ToSlash(filepath.Join("cells", spec.CellID)))
+	if team == "" {
+		return fmt.Errorf("--team is required")
+	}
+	if role == "" {
+		return fmt.Errorf("--role is required")
+	}
+	// Round-7: control-char + path-traversal guard.
+	if err := validateScaffoldID(id, "--id"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(team, "--team"); err != nil {
+		return err
+	}
+	if err := validateScaffoldText(role, "--role"); err != nil {
+		return err
+	}
+	// F11: reject kebab-case cell IDs (aligned with scaffoldSlice behavior).
+	if strings.Contains(id, "-") {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold cell: --id must not contain '-'; use no-dash identifier",
+			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", id, strings.ReplaceAll(id, "-", ""))))
+	}
 	return nil
 }
 
-// scaffoldCell implements the K#09 SCAFFOLD-ONE-CMD bundle: a one-shot
-// command that produces cell + 1 example slice + 1 example contract +
-// JSON schemas, then auto-invokes cell + contract codegen so the bundle
-// is compilable and the example slice's unit test passes immediately.
+// scaffoldCell implements the K#09 SCAFFOLD-ONE-CMD bundle: a one-shot command
+// that produces cell + 1 example slice + 1 example contract + JSON schemas in
+// a single atomic pathsafe.WritePlannedFiles call. When --skip-generate is
+// false (default), derived codegen files (cell_gen.go, types_gen.go,
+// iface_gen.go, handler_gen.go) are merged into the same plan so the bundle is
+// compilable immediately on success, and the entire write is rolled back on any
+// conflict or error.
 //
-// --skip-generate skips the codegen step (useful for dry-run sanity checks
-// or pre-commit scaffold invocations); the resulting bundle is still a
-// compilable cell skeleton but lacks the generated handler glue.
+// Mirrors scaffold_assembly.go (assembly cross-stage pattern): ResolveRoot →
+// PlanCellBundleScaffold → WritePlannedFiles → dry-run print → reportScaffold.
 func scaffoldCell(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold cell", flag.ContinueOnError)
 	id := fs.String("id", "", "cell ID (required)")
@@ -377,43 +386,14 @@ func scaffoldCell(root string, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
-	if *id == "" {
-		return errors.New(errMsgIDRequired)
-	}
-	if *team == "" {
-		return fmt.Errorf("--team is required")
-	}
-	if *role == "" {
-		return fmt.Errorf("--role is required")
-	}
-
-	// Round-7: control-char + path-traversal guard. Round-2 added these guards
-	// to scaffoldSlice/Contract/Journey/Assembly but missed scaffold cell;
-	// closing the chain so `--id="evil\nextra: pwned"` cannot inject YAML keys.
-	if err := validateScaffoldID(*id, "--id"); err != nil {
-		return err
-	}
-	if err := validateScaffoldText(*team, "--team"); err != nil {
-		return err
-	}
-	if err := validateScaffoldText(*role, "--role"); err != nil {
+	if err := validateScaffoldCellFlags(*id, *team, *role); err != nil {
 		return err
 	}
 
-	// F11: reject kebab-case cell IDs (aligned with scaffoldSlice behavior).
-	if strings.Contains(*id, "-") {
-		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"scaffold cell: --id must not contain '-'; use no-dash identifier",
-			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", *id, strings.ReplaceAll(*id, "-", ""))))
-	}
-
-	// Resolve Go identifiers shared by both dry-run and live paths.
 	resolvedStruct := *structName
 	if resolvedStruct == "" {
 		resolvedStruct = cellIDToPascalCase(*id)
 	}
-	pkg := *id
 
 	mod, err := readModule(root)
 	if err != nil {
@@ -423,7 +403,7 @@ func scaffoldCell(root string, args []string) error {
 	spec := buildScaffoldCellSpec(scaffoldCellInputs{
 		ID:             *id,
 		ResolvedStruct: resolvedStruct,
-		Package:        pkg,
+		Package:        *id,
 		ModulePath:     mod,
 		OwnerTeam:      *team,
 		OwnerRole:      *role,
@@ -433,19 +413,28 @@ func scaffoldCell(root string, args []string) error {
 		WithEvents:     *withEvents,
 		WithBoth:       *withBoth,
 	})
+	spec.SkipGenerate = *skipGenerate
 
-	bundleSpec := spec
-	bundleSpec.DryRun = *dryRun
-	if err := cellgen.ScaffoldCellBundle(root, bundleSpec); err != nil {
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return fmt.Errorf("scaffold cell: resolve project root: %w", err)
+	}
+
+	plan, err := cellgen.PlanCellBundleScaffold(realRoot, spec)
+	if err != nil {
+		return err
+	}
+
+	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
 		return err
 	}
 
 	if *dryRun {
-		// F8: list the full plan so callers can see all paths that would be written.
-		// ScaffoldCellBundle already called WritePlannedFiles(dryRun=true) which
-		// validates and returns nil without writing. Re-derive paths from the spec
-		// for display purposes using root (already resolved by the caller).
-		return printScaffoldCellDryRunPlan(root, spec)
+		for _, p := range pathsafe.PlannedPaths(plan) {
+			rel, _ := filepath.Rel(realRoot, p)
+			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
+		}
+		return nil
 	}
 
 	reportScaffold(scaffoldReport{
@@ -458,29 +447,6 @@ func scaffoldCell(root string, args []string) error {
 		fmt.Printf("scaffold cell: skipped auto-generate (--skip-generate). "+
 			"Run `gocell generate cell %s` and `gocell generate contract --all` to materialize codegen output.\n",
 			*id)
-		return nil
-	}
-	return autoGenerateCellBundleArtifacts(root, *id)
-}
-
-// autoGenerateCellBundleArtifacts runs cellgen + contractgen for a freshly
-// scaffolded bundle. The just-written cell + contract yaml files are not in
-// the parser's in-memory state; re-parse from disk before generating.
-func autoGenerateCellBundleArtifacts(root, cellID string) error {
-	project, err := metadata.NewParser(root).Parse()
-	if err != nil {
-		return fmt.Errorf("scaffold cell: re-parse project for codegen: %w", err)
-	}
-	// Generate contracts first so generated DTO types are available when
-	// cell_gen.go is rendered. Restrict to contracts owned by the new cell
-	// so we don't re-scan the entire project on every scaffold invocation.
-	if _, err := contractgen.Generate(root, project, contractgen.Options{
-		Scope: contractgen.ScopeCell(cellID),
-	}); err != nil {
-		return fmt.Errorf("scaffold cell: generate contracts: %w", err)
-	}
-	if _, err := cellgen.Generate(root, project, cellgen.Options{OnlyCell: cellID}); err != nil {
-		return fmt.Errorf("scaffold cell: generate cell: %w", err)
 	}
 	return nil
 }
