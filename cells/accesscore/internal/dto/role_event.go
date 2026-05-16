@@ -24,4 +24,13 @@ type RoleChangedEvent struct {
 	RoleID string `json:"roleId"`
 	// Action is either ActionAssigned or ActionRevoked.
 	Action string `json:"action"`
+	// ActorID identifies the caller that drove the role mutation. For
+	// service-token callers (rbacassign is internal-listener-only, so this
+	// is always the call path in production) this is the CallerCellID
+	// extracted from the 4-part service token. Required by auditcore's
+	// role-event consumer (ActorRequireExplicit mode) — payloads with an
+	// empty ActorID are DLX-rejected and never enter the audit chain.
+	// Omitempty preserves wire-shape backward compatibility for callers
+	// that have not yet been migrated; production callers MUST populate it.
+	ActorID string `json:"actorId,omitempty"`
 }
