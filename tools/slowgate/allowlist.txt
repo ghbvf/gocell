@@ -128,3 +128,14 @@ github.com/ghbvf/gocell/tools/archtest	TestCellIDPatternSingleSourceLiterals
 # landed on a shard without the cached funnel resolver (22.3s > 20s budget
 # on shard 2). Pre-existing borderline test, not introduced by PR-b.
 github.com/ghbvf/gocell/tools/archtest	TestUserRepoConformanceEnrollment
+
+# type-graph-load: cell repo readyz probe scan — type-aware whole-module walk
+# enumerating cell.RegisterRepoReadiness call sites plus cross-package
+# *types.Func resolution against the readiness probe funnel. Same 16-shard
+# modulo resolver-cache-loss class as entries above; second CI shift triggered
+# by R2-P3 PR-b modulo redistribution (20.43s > 20s budget on shard 1, CI run
+# 25970175361). Pre-existing borderline test, not introduced by PR-b. The
+# repeating "single PR triggers ≥ 2 modulo-shift SLOW" pattern is the trigger
+# evidence for backlog ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01 (cap-14:14)
+# Hard upgrade — see that entry's Trigger column for cumulative count.
+github.com/ghbvf/gocell/tools/archtest	TestCellRepoReadyzProbe
