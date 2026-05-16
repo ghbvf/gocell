@@ -1,5 +1,6 @@
 id: auditappendsession
 belongsToCell: auditcore
+consistencyLevel: L2
 contractUsages:
   - contract: event.audit.appended.v1
     role: publish

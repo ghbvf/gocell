@@ -6,8 +6,45 @@ package auditappendrole
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
+
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
+
+// sliceMeta is the canonical metadata literal projected from slice.yaml.
+// SliceMetadata returns the package-scope pointer; the cell composition root
+// passes it to cell.MustNewBaseSliceFromMeta to construct *BaseSlice through
+// the typed funnel.
+var sliceMeta = &metadata.SliceMeta{
+	ID:               "auditappendrole",
+	BelongsToCell:    "auditcore",
+	ConsistencyLevel: "L2",
+	ContractUsages: []metadata.ContractUsage{
+		{Contract: "event.audit.appended.v1", Role: "publish"},
+		{Contract: "event.role.assigned.v1", Role: "subscribe"},
+		{Contract: "event.role.revoked.v1", Role: "subscribe"},
+	},
+	Verify: metadata.SliceVerifyMeta{
+		Unit: []string{
+			"unit.auditappendrole.service",
+		},
+		Contract: []string{
+			"contract.event.audit.appended.v1.publish",
+			"contract.event.role.assigned.v1.subscribe",
+			"contract.event.role.revoked.v1.subscribe",
+		},
+	},
+	AllowedFiles: []string{
+		"cells/auditcore/slices/auditappendrole/**",
+	},
+}
+
+// SliceMetadata returns the package-scope *metadata.SliceMeta projected
+// from slice.yaml. Composition roots consume this via
+// cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata()) — the typed
+// funnel that replaces the legacy `cell.NewBaseSlice(id, cellID, level)`
+// literal pattern.
+func SliceMetadata() *metadata.SliceMeta { return sliceMeta }
 
 // eventHandlerService documents the handler methods auditappendrole's service
 // must provide so that cell_gen.go's reg.Subscribe call is typed. The interface

@@ -72,7 +72,7 @@ func TestConfigCore_Metadata(t *testing.T) {
 
 	assert.Equal(t, "configcore", c.ID())
 	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
-	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.L3, c.ConsistencyLevel())
 	assert.Equal(t, "platform", c.Metadata().Owner.Team)
 }
 

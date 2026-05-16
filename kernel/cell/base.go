@@ -291,19 +291,6 @@ type BaseSlice struct {
 	journeys []string
 }
 
-// NewBaseSlice is retained ONLY during the Wave 0→Wave 2 transition window.
-// Production callers MUST use MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())
-// instead; the codegen funnel projecting slice.yaml is the SoR. Removal lands
-// in Wave 2 (T2). BASESLICE-CTOR-FUNNEL-01 archtest flags every remaining
-// call site to keep migration progress visible.
-func NewBaseSlice(id, cellID string, level cellvocab.Level) *BaseSlice {
-	return &BaseSlice{
-		id:     id,
-		cellID: cellID,
-		level:  level,
-	}
-}
-
 // NewBaseSliceFromMeta constructs a BaseSlice from parsed slice.yaml metadata,
 // which is the single source of truth for slice identity and consistency level.
 //

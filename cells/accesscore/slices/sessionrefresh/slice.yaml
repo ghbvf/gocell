@@ -1,5 +1,6 @@
 id: sessionrefresh
 belongsToCell: accesscore
+consistencyLevel: L1
 contractUsages:
   - contract: http.auth.refresh.v1
     role: serve

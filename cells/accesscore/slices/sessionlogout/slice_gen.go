@@ -6,8 +6,49 @@ package sessionlogout
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
+
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
+
+// sliceMeta is the canonical metadata literal projected from slice.yaml.
+// SliceMetadata returns the package-scope pointer; the cell composition root
+// passes it to cell.MustNewBaseSliceFromMeta to construct *BaseSlice through
+// the typed funnel.
+var sliceMeta = &metadata.SliceMeta{
+	ID:               "sessionlogout",
+	BelongsToCell:    "accesscore",
+	ConsistencyLevel: "L2",
+	ContractUsages: []metadata.ContractUsage{
+		{Contract: "http.auth.session.delete.v1", Role: "serve"},
+		{Contract: "event.session.revoked.v1", Role: "publish"},
+		{Contract: "event.role.assigned.v1", Role: "subscribe"},
+		{Contract: "event.role.revoked.v1", Role: "subscribe"},
+	},
+	Verify: metadata.SliceVerifyMeta{
+		Unit: []string{
+			"unit.sessionlogout.service",
+		},
+		Contract: []string{
+			"contract.http.auth.session.delete.v1.serve",
+			"contract.event.session.revoked.v1.publish",
+		},
+		Waivers: []metadata.WaiverMeta{
+			{Contract: "event.role.assigned.v1", Owner: "platform-team", Reason: "consumer contract test tracked under S8-FOLLOWUP; handler tested by consumer_test.go", ExpiresAt: "2026-07-01"},
+			{Contract: "event.role.revoked.v1", Owner: "platform-team", Reason: "consumer contract test tracked under S8-FOLLOWUP; handler tested by consumer_test.go", ExpiresAt: "2026-07-01"},
+		},
+	},
+	AllowedFiles: []string{
+		"cells/accesscore/slices/sessionlogout/**",
+	},
+}
+
+// SliceMetadata returns the package-scope *metadata.SliceMeta projected
+// from slice.yaml. Composition roots consume this via
+// cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata()) — the typed
+// funnel that replaces the legacy `cell.NewBaseSlice(id, cellID, level)`
+// literal pattern.
+func SliceMetadata() *metadata.SliceMeta { return sliceMeta }
 
 // eventHandlerService documents the handler methods sessionlogout's service
 // must provide so that cell_gen.go's reg.Subscribe call is typed. The interface

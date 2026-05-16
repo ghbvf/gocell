@@ -357,7 +357,7 @@ func isL2OrHigher(level string) bool {
 //
 // AI-rebust evaluation: Medium. Role values are kernel/cellvocab.ContractRole
 // const enum; the rule's string comparison is const-equivalent. New slices
-// with role=publish auto-enrol.
+// with role=publish auto-enroll.
 //
 // Other roles (serve / call / subscribe / handle / provide / read / invoke)
 // do NOT enforce a lower bound — empirically valid forms span L0..L3 (e.g.

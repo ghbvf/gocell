@@ -1,5 +1,6 @@
 id: devicestatus
 belongsToCell: devicecell
+consistencyLevel: L0
 contractUsages:
   - contract: http.device.status.v1
     role: serve

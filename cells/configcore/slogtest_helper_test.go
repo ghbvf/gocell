@@ -84,7 +84,7 @@ func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
 
 	clAttr, ok := findAttr(*warn, "consistency_level")
 	require.True(t, ok, "L2 warn must carry 'consistency_level' attribute")
-	require.Equal(t, int64(2), clAttr.Value.Int64(), "L2 = 2")
+	require.Equal(t, int64(3), clAttr.Value.Int64(), "configcore = L3 (raised from L2 in T2 to match configsubscribe L3 slice)")
 
 	dmAttr, ok := findAttr(*warn, "durability_mode")
 	require.True(t, ok, "L2 warn must carry 'durability_mode' attribute (Fix 7)")

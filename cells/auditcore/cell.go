@@ -16,8 +16,8 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappenduser"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditquery"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -372,13 +372,14 @@ func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 // the write side is L2 atomic — F3 correction.
 func (c *AuditCore) initSlices() error {
 	appenders := []struct {
-		spec   appender.Spec
-		target **appender.Service
+		spec     appender.Spec
+		target   **appender.Service
+		metadata func() *metadata.SliceMeta
 	}{
-		{auditappendsession.Spec, &c.appendSessionSvc},
-		{auditappenduser.Spec, &c.appendUserSvc},
-		{auditappendconfig.Spec, &c.appendConfigSvc},
-		{auditappendrole.Spec, &c.appendRoleSvc},
+		{auditappendsession.Spec, &c.appendSessionSvc, auditappendsession.SliceMetadata},
+		{auditappenduser.Spec, &c.appendUserSvc, auditappenduser.SliceMetadata},
+		{auditappendconfig.Spec, &c.appendConfigSvc, auditappendconfig.SliceMetadata},
+		{auditappendrole.Spec, &c.appendRoleSvc, auditappendrole.SliceMetadata},
 	}
 	for _, a := range appenders {
 		svc, err := appender.NewService(
@@ -390,7 +391,7 @@ func (c *AuditCore) initSlices() error {
 			return fmt.Errorf("%s: %w", a.spec.Name(), err)
 		}
 		*a.target = svc
-		c.AddSlice(cell.NewBaseSlice(a.spec.Name(), "auditcore", cellvocab.L2))
+		c.AddSlice(cell.MustNewBaseSliceFromMeta(a.metadata()))
 	}
 
 	return nil
@@ -405,7 +406,7 @@ func (c *AuditCore) initQuerySlice(mode cell.DurabilityMode) error {
 		return fmt.Errorf("audit-query: %w", err)
 	}
 	c.queryHandler = auditquery.NewHandler(querySvc)
-	c.AddSlice(cell.NewBaseSlice("auditquery", "auditcore", cellvocab.L0))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(auditquery.SliceMetadata()))
 	return nil
 }
 

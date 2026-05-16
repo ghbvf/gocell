@@ -311,7 +311,7 @@ func writeKebabSlice(t *testing.T) string {
 		[]byte(accCellYAML), 0o644))
 	sliceDir := filepath.Join(cellDir, "slices", "session-login") // kebab dir
 	require.NoError(t, os.MkdirAll(sliceDir, 0o755))
-	sessionSliceYAML := "id: session-login\nbelongsToCell: accesscore\n" +
+	sessionSliceYAML := "id: session-login\nbelongsToCell: accesscore\nconsistencyLevel: L1\n" +
 		"contractUsages: []\nverify:\n  unit:\n    - unit.session-login.service\n" +
 		"  contract: []\nallowedFiles:\n  - cells/accesscore/slices/session-login/**\n"
 	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "slice.yaml"),
@@ -410,7 +410,7 @@ func writeAllowedFilesMismatch(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "accesscore", "cell.yaml"),
 		[]byte(accCoreYAML), 0o644))
 	// allowedFiles points to a different slice directory ("wrongdir") — FMT-17 fires.
-	validDirYAML := "id: validdir\nbelongsToCell: accesscore\n" +
+	validDirYAML := "id: validdir\nbelongsToCell: accesscore\nconsistencyLevel: L1\n" +
 		"contractUsages: []\nverify:\n  unit:\n    - unit.validdir.service\n" +
 		"  contract: []\nallowedFiles:\n  - cells/accesscore/slices/wrongdir/**\n"
 	require.NoError(t, os.WriteFile(

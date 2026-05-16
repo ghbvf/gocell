@@ -44,13 +44,11 @@ package archtest
 import (
 	"go/ast"
 	"go/types"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // TestBASESLICE_CTOR_FUNNEL_01 fails if any production *.go file either calls
@@ -101,7 +99,7 @@ func appendIfNewBaseSliceCall(
 	diags []Diagnostic, p *Pass, file *ast.File, rel string,
 	call *ast.CallExpr, cellPkgPath string,
 ) []Diagnostic {
-	pkgPath, name, ok := typeseval.ResolvePackageRef(p.TypesInfo, call.Fun)
+	pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
 	if !ok {
 		return diags
 	}
@@ -156,42 +154,4 @@ func isBaseSliceType(info *types.Info, expr ast.Expr, cellPkgPath string) bool {
 		return false
 	}
 	return obj.Pkg().Path() == cellPkgPath && obj.Name() == "BaseSlice"
-}
-
-// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_NewBaseSliceCall confirms the
-// scanner flags a `cell.NewBaseSlice(...)` call in a synthetic production
-// package: this is the RED form that the funnel forbids.
-func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_NewBaseSliceCall(t *testing.T) {
-	t.Parallel()
-	// Synthetic AST string assertion: at least one diagnostic must contain
-	// "forbidden call cell.NewBaseSlice" when the production scan is run
-	// against the current tree, IF the production tree still contains a
-	// NewBaseSlice call. The RED commit retains NewBaseSlice on the legacy
-	// path; the test asserts the scanner sees it. GREEN commit removes
-	// every call and this test will flip semantics — replaced by a check
-	// that the scanner reports zero hits.
-	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	require.NoError(t, err, "read module path from go.mod")
-	cellPkgPath := modPath + "/kernel/cell"
-
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		return scanBaseSliceFunnel(p, cellPkgPath)
-	})
-
-	// In RED phase: at least one NewBaseSlice call must remain in production.
-	// (The legacy callers in cells/*/cell_init.go are deleted in Wave 2 GREEN.)
-	var seenCall bool
-	for _, d := range diags {
-		if strings.Contains(d.Message, "forbidden call cell.NewBaseSlice") {
-			seenCall = true
-			break
-		}
-	}
-	if !seenCall {
-		t.Skip(
-			"no cell.NewBaseSlice calls remaining in production — funnel already closed; " +
-				"this RED-phase fixture self-skips. Remove it once Wave 2 GREEN lands.",
-		)
-	}
 }

@@ -22,7 +22,7 @@ var _ cell.Cell = (*ConfigCore)(nil)
 var cellMeta = &metadata.CellMeta{
 	ID:               "configcore",
 	Type:             "core",
-	ConsistencyLevel: "L2",
+	ConsistencyLevel: "L3",
 	DurabilityMode:   "durable",
 	Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "cell_config_core"},

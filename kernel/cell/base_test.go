@@ -76,7 +76,7 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 	assert.Empty(t, c.ConsumedContracts())
 
 	// Add slice.
-	s := NewBaseSlice("s1", "test-cell", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s1", BelongsToCell: "test-cell", ConsistencyLevel: "L0"})
 	c.AddSlice(s)
 	require.Len(t, c.OwnedSlices(), 1)
 	assert.Equal(t, "s1", c.OwnedSlices()[0].ID())
@@ -96,7 +96,7 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 
 func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "copy-test"})
-	s := NewBaseSlice("s1", "copy-test", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s1", BelongsToCell: "copy-test", ConsistencyLevel: "L0"})
 	c.AddSlice(s)
 	pc := NewBaseContract("pc1", cellvocab.ContractHTTP, "copy-test", cellvocab.L1)
 	c.AddProducedContract(pc)
@@ -261,7 +261,7 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range n {
-			c.AddSlice(NewBaseSlice("s", "race-add", cellvocab.L0))
+			c.AddSlice(MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "race-add", ConsistencyLevel: "L0"}))
 			c.AddProducedContract(NewBaseContract("pc", cellvocab.ContractHTTP, "race-add", cellvocab.L1))
 			c.AddConsumedContract(NewBaseContract("cc", cellvocab.ContractEvent, "other", cellvocab.L2))
 		}
@@ -285,7 +285,7 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseSliceAccessors(t *testing.T) {
-	s := NewBaseSlice("login-slice", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login-slice", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 
 	assert.Equal(t, "login-slice", s.ID())
 	assert.Equal(t, "accesscore", s.BelongsToCell())
@@ -293,12 +293,12 @@ func TestBaseSliceAccessors(t *testing.T) {
 }
 
 func TestBaseSliceInit(t *testing.T) {
-	s := NewBaseSlice("s", "c", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L0"})
 	require.NoError(t, s.Init(context.Background()))
 }
 
 func TestBaseSliceVerify(t *testing.T) {
-	s := NewBaseSlice("s", "c", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L0"})
 
 	// Default empty.
 	assert.Empty(t, s.Verify().Unit)
@@ -315,19 +315,19 @@ func TestBaseSliceVerify(t *testing.T) {
 }
 
 func TestBaseSliceAllowedFilesNilWhenUnset(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 	assert.Nil(t, s.AllowedFiles(), "unset AllowedFiles returns nil — convention defaults are metadata-only (FMT-14)")
 }
 
 func TestBaseSliceAllowedFilesExplicit(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 	custom := []string{"cells/accesscore/slices/login/**"}
 	s.SetAllowedFiles(custom)
 	assert.Equal(t, custom, s.AllowedFiles())
 }
 
 func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 	s.SetAllowedFiles([]string{"a/**", "b/**"})
 	got := s.AllowedFiles()
 	got[0] = "mutated"
@@ -335,7 +335,7 @@ func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
 }
 
 func TestBaseSliceAffectedJourneys(t *testing.T) {
-	s := NewBaseSlice("s", "c", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L0"})
 
 	// Default empty.
 	assert.Empty(t, s.AffectedJourneys())

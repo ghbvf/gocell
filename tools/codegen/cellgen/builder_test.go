@@ -311,7 +311,7 @@ func TestBuildCellSpec_NoListenersWithRouteMountFails(t *testing.T) {
 }
 
 // TestBuildSliceSpec_NoSubscribesStillEmitsMeta asserts the new always-emit
-// behaviour: every slice produces a SliceGenSpec carrying the sliceMeta
+// behavior: every slice now produces a SliceGenSpec carrying the sliceMeta
 // literal (the SoR for cell.MustNewBaseSliceFromMeta), even when no event
 // subscriptions are declared. The handler interface block is rendered
 // conditionally by slice.tmpl when Handlers is non-empty.

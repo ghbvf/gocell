@@ -24,7 +24,7 @@ var _ cell.Cell = (*AccessCore)(nil)
 var cellMeta = &metadata.CellMeta{
 	ID:               "accesscore",
 	Type:             "core",
-	ConsistencyLevel: "L2",
+	ConsistencyLevel: "L3",
 	DurabilityMode:   "durable",
 	Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
