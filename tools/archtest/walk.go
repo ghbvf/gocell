@@ -56,3 +56,22 @@ func StringLitValue(lit *ast.BasicLit) (string, bool) {
 func ReceiverTypeName(expr ast.Expr) string {
 	return scanner.ReceiverTypeName(expr)
 }
+
+// FindFirstChild scans the DIRECT children of root and returns the first node
+// of kind N satisfying predicate. ok=false when no child matches.
+//
+// Compared to the manual `EachInChildren + done sentinel` idiom, FindFirstChild
+// internalizes the early-return state: there is no caller-held flag, the wrong
+// N is a compile error (interface{*S; ast.Node}), and the find-first semantic
+// is encoded in the function name itself. This is the only allowed depth-1
+// early-return shape in archtest rules — enforced by SCANNER-FRAMEWORK-USAGE-02.
+//
+// Wrapper around [scanner.FindFirstChild] — the only call path to scanner for
+// archtest authors. Pure delegation, no behavior change. After 040 Stage 4
+// seals internal/scanner, this façade is the only reachable path.
+func FindFirstChild[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, predicate func(N) bool) (N, bool) {
+	return scanner.FindFirstChild[S, N](root, predicate)
+}
