@@ -1,5 +1,6 @@
 id: rbacassign
 belongsToCell: accesscore
+consistencyLevel: L2
 contractUsages:
   - contract: http.auth.role.assign.v1
     role: serve

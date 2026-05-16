@@ -257,6 +257,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
 			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
 			"[--deploy=k8s|compose|binary] (default: k8s) [--skip-generate] [--dry-run]",
+			"Note: --id must not contain '-' (use nodash identifiers; min 2 chars).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldAssembly(root, a) },
 	},
@@ -510,6 +511,34 @@ func cellIDToPascalCase(id string) string {
 	return sb.String()
 }
 
+// validateSliceScaffoldFlags validates the --id, --cell, and --level flags
+// for `scaffold slice`. Extracted to keep scaffoldSlice cognitive complexity ≤ 15.
+func validateSliceScaffoldFlags(id, cellID, level string) error {
+	if id == "" {
+		return errors.New(errMsgIDRequired)
+	}
+	if cellID == "" {
+		return fmt.Errorf("--cell is required")
+	}
+	if err := validateScaffoldID(id, "--id"); err != nil {
+		return err
+	}
+	if err := validateScaffoldID(cellID, "--cell"); err != nil {
+		return err
+	}
+	if strings.Contains(id, "-") {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold slice: --id must not contain '-'; use no-dash identifier",
+			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", id, strings.ReplaceAll(id, "-", ""))))
+	}
+	if !validSliceLevels[level] {
+		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold slice: --level must be one of L0|L1|L2|L3|L4",
+			errcode.WithInternal(fmt.Sprintf("level=%q", level)))
+	}
+	return nil
+}
+
 // scaffoldSlice produces an empty slice skeleton (slice.yaml only) under
 // cells/{cellID}/slices/{sliceID}/. K#09 inline-template path replaces the
 // deleted kernel/scaffold package; the bundle path used by `scaffold cell`
@@ -522,27 +551,13 @@ func scaffoldSlice(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold slice", flag.ContinueOnError)
 	id := fs.String("id", "", "slice ID (required)")
 	cellID := fs.String("cell", "", "parent cell ID (required)")
+	level := fs.String("level", "L1", "consistency level for the slice: L0|L1|L2|L3|L4 (default L1)")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
-	if *id == "" {
-		return errors.New(errMsgIDRequired)
-	}
-	if *cellID == "" {
-		return fmt.Errorf("--cell is required")
-	}
-	if err := validateScaffoldID(*id, "--id"); err != nil {
+	if err := validateSliceScaffoldFlags(*id, *cellID, *level); err != nil {
 		return err
-	}
-	if err := validateScaffoldID(*cellID, "--cell"); err != nil {
-		return err
-	}
-	if strings.Contains(*id, "-") {
-		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"scaffold slice: --id must not contain '-'; use no-dash identifier",
-			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", *id, strings.ReplaceAll(*id, "-", ""))))
 	}
 
 	realRoot, err := pathsafe.ResolveRoot(root)
@@ -560,7 +575,7 @@ func scaffoldSlice(root string, args []string) error {
 			*cellID, *cellID)
 	}
 
-	content, err := renderInlineSliceYAML(*id, *cellID)
+	content, err := renderInlineSliceYAML(*id, *cellID, *level)
 	if err != nil {
 		return fmt.Errorf("scaffold slice: render: %w", err)
 	}
@@ -726,6 +741,7 @@ func scaffoldJourney(root string, args []string) error {
 // user input cannot inject extra fields or break scalar parsing.
 var inlineSliceYAMLTpl = template.Must(template.New("slice-yaml").Parse(`id: {{.ID}}
 belongsToCell: {{.CellID}}
+consistencyLevel: {{.Level}}
 contractUsages: []
 verify:
   unit: []
@@ -734,11 +750,20 @@ allowedFiles:
   - cells/{{.CellID}}/slices/{{.ID}}/**
 `))
 
-func renderInlineSliceYAML(id, cellID string) ([]byte, error) {
+// validSliceLevels is the set of accepted consistencyLevel values for scaffold slice.
+var validSliceLevels = map[string]bool{
+	"L0": true, "L1": true, "L2": true, "L3": true, "L4": true,
+}
+
+func renderInlineSliceYAML(id, cellID, level string) ([]byte, error) {
 	var buf strings.Builder
-	data := struct{ ID, CellID yamlsafe.Scalar }{
+	data := struct {
+		ID, CellID yamlsafe.Scalar
+		Level      string
+	}{
 		ID:     yamlsafe.Quote(id),
 		CellID: yamlsafe.Quote(cellID),
+		Level:  level,
 	}
 	if err := inlineSliceYAMLTpl.Execute(&buf, data); err != nil {
 		return nil, err

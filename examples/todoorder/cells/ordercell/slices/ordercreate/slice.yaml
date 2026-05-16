@@ -1,5 +1,6 @@
 id: ordercreate
 belongsToCell: ordercell
+consistencyLevel: L2
 contractUsages:
   - contract: http.order.create.v1
     role: serve

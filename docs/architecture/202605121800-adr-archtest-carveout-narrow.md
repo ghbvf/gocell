@@ -2,8 +2,8 @@
 
 > Status: Accepted
 > Date: 2026-05-12
-> Implementation: PR-A2 (037 plan §1.2)
-> ref: docs/plans/202605121750-037-wave4-advance-plan.md;
+> Implementation: PR #503 / commit 3fd2cbaf6（PR-A2；原规划 037 §1.2）
+> ref: docs/plans/archive/202605121750-037-wave4-advance-plan.md (已归档);
 >      docs/backlog/cap-14-tooling.md (ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL, B2-K-08-CARVEOUT-NARROW)
 
 ## Context
@@ -88,6 +88,6 @@ archtest `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 解析此表（`File` 与 `Functi
 
 ## References
 
-- 037 Wave 4 提前推进计划：[`docs/plans/202605121750-037-wave4-advance-plan.md`](../plans/202605121750-037-wave4-advance-plan.md) §1.2 PR-A2
+- 037 Wave 4 提前推进计划（已归档）：[`docs/plans/archive/202605121750-037-wave4-advance-plan.md`](../plans/archive/202605121750-037-wave4-advance-plan.md) §1.2 PR-A2；实现锚点 PR #503 / commit `3fd2cbaf6`
 - cap-14 backlog：[`docs/backlog/cap-14-tooling.md`](../backlog/cap-14-tooling.md) 条目 `ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL` + `B2-K-08-CARVEOUT-NARROW`
 - AI 协作章程：[`.claude/rules/gocell/ai-collab.md`](../../.claude/rules/gocell/ai-collab.md) §AI-rebust 三档分级、§Hard 范本

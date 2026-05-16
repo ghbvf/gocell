@@ -1,5 +1,5 @@
 // cell_init.go hosts ConfigCore.initInternal() and the initXxxSlice helpers that
-// construct the six slices during cell initialization. Constructor + options
+// construct the seven slices during cell initialization. Constructor + options
 // live in cell.go; Init() is generated in cell_gen.go.
 package configcore
 
@@ -8,15 +8,17 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/configcore/internal/configreader"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configread"
+	"github.com/ghbvf/gocell/cells/configcore/slices/configreadinternal"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configsubscribe"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configwrite"
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -95,7 +97,7 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error 
 	return nil
 }
 
-// initAllSlices constructs all 6 configcore slices.
+// initAllSlices constructs all 7 configcore slices.
 func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 	if err := c.initWriteSlice(); err != nil {
 		return err
@@ -192,17 +194,29 @@ func (c *ConfigCore) initWriteSlice() error {
 		return fmt.Errorf("configcore: init write slice: %w", err)
 	}
 	c.writeHandler = configwrite.NewHandler(writeSvc)
-	c.AddSlice(cell.NewBaseSlice("configwrite", "configcore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configwrite.SliceMetadata()))
 	return nil
 }
 
 func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
-	readSvc, err := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
+	// Two separate Service instances drive the public (configread) and the
+	// internal control-plane (configreadinternal) slices. Each instance carries
+	// its own sliceName so that observability labels (QueryContext endpoint tag,
+	// LogCursorError slice tag) can be attributed to the correct slice.
+	// The two instances share no mutable state — reads are stateless — so the
+	// per-instance overhead is negligible.
+	publicSvc, err := configreader.NewService(c.configRepo, c.cursorCodec, c.logger, "configread", runMode)
 	if err != nil {
 		return fmt.Errorf("config-read: %w", err)
 	}
-	c.readHandler = configread.NewHandler(readSvc)
-	c.AddSlice(cell.NewBaseSlice("configread", "configcore", cellvocab.L0))
+	internalSvc, err := configreader.NewService(c.configRepo, c.cursorCodec, c.logger, "configreadinternal", runMode)
+	if err != nil {
+		return fmt.Errorf("config-read-internal: %w", err)
+	}
+	c.readHandler = configread.NewHandler(publicSvc)
+	c.readInternalHandler = configreadinternal.NewHandler(internalSvc)
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configread.SliceMetadata()))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configreadinternal.SliceMetadata()))
 	return nil
 }
 
@@ -216,18 +230,19 @@ func (c *ConfigCore) initPublishSlice() error {
 		return fmt.Errorf("configcore: init publish slice: %w", err)
 	}
 	c.publishHandler = configpublish.NewHandler(publishSvc)
-	c.AddSlice(cell.NewBaseSlice("configpublish", "configcore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configpublish.SliceMetadata()))
 	return nil
 }
 
 func (c *ConfigCore) initSubscribeSlice() {
-	c.subscribeSvc = configsubscribe.NewService(c.logger,
+	c.subscribeSvc = configsubscribe.NewService(
+		c.logger,
 		configsubscribe.WithConfigEventCollector(c.configEventCollector),
 		configsubscribe.WithClock(c.clk),
 		configsubscribe.WithTombstoneTTL(c.tombstoneTTL),
 		configsubscribe.WithEventbusCacheCollector(c.cacheCollector),
 	)
-	c.AddSlice(cell.NewBaseSlice("configsubscribe", "configcore", cellvocab.L3))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configsubscribe.SliceMetadata()))
 }
 
 func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
@@ -236,7 +251,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 		return fmt.Errorf("feature-flag: %w", err)
 	}
 	c.flagHandler = featureflag.NewHandler(flagSvc)
-	c.AddSlice(cell.NewBaseSlice("featureflag", "configcore", cellvocab.L0))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(featureflag.SliceMetadata()))
 	return nil
 }
 
@@ -249,6 +264,6 @@ func (c *ConfigCore) initFlagWriteSlice() error {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)
 	}
 	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
-	c.AddSlice(cell.NewBaseSlice("flagwrite", "configcore", cellvocab.L1))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(flagwrite.SliceMetadata()))
 	return nil
 }

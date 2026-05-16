@@ -1,7 +1,7 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-16（Wave 1 8/8 ship — PR-3 CLI-HARDEN ✅ #502 + PR-9 REPO-READYZ ✅ fix/202 + PR-4 JOURNEY-LIFECYCLE-GOV ✅ fix/208（+JOURNEY-CONTRACT-EXISTENCE-01 + JOURNEY-STATUS-LIFECYCLE-01 + 2 Hard upgrade backlog 登记）；040 阶段 1 ✅ PR #492 → PR-5/Wave 4 ADAPTER-ERR-CLASS 阻塞解除）
+**最后更新**：2026-05-16（状态回灌：Wave 1 8/8 ship — PR-3 CLI-HARDEN ✅ #502 + PR-9 REPO-READYZ ✅ #506 + PR-4 JOURNEY-LIFECYCLE-GOV ✅ #520（+JOURNEY-CONTRACT-EXISTENCE-01 + JOURNEY-STATUS-LIFECYCLE-01 + 2 Hard upgrade backlog 登记）；**Wave 2 1/2 ship — PR-11 OIDC-JWKS-ROTATION-WORKER ✅ #504**，剩 PR-5 GOV-NEW-RULES ⏳；**Wave 4 3/5 ship — ADAPTER-ERR-CLASS ✅ #517 / C-02 ✅ #518 / STARTUP-ROLLBACK ✅ #499**，剩 R-01+G-08 batch / ADAPTER-CONN-BUDGET ⏳；040 阶段 1 ✅ PR #492 → PR-5 阻塞解除。修正 PR-4/PR-9 branch 占位符为实际编号 #520/#506，回灌 PR-11/Wave-4 漏标）
 **关系**：
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S3+S5/S3F/S4.0/S4a/S4b 已 ship；S4c 串行推进）。本计划不重复 accesscore 路线
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
@@ -85,7 +85,7 @@
 - CLI-UNIMPL-HIDE-01：archtest `tools/archtest/cli_unimpl_hide_test.go`（Pass-Driver `archtest.Run`，不进 LegacyAllowlist）全 `cmd/gocell/app` 强制上游 Hard（4 dispatch 无 switch + 必 findSub）+ 下游 Hard（无 string-literal name helpEntry）+ 无 `not implemented` 字面量 + 4 项反向 fixture 自检；declared blind spot（顶层 PrintUsage prose）补偿断言 + 显式 backlog `CLI-TOPLEVEL-HELP-REGISTRY-01`（非 silent carryover）
 - ctx 透传逐个核实非假设：validate/verify/generate-metricschema 真透传；scaffold/check/graph/export 无 cancelable 下游（depgraph.Load 非 ctx-native 等），统一形参 + godoc 注明
 
-#### PR-4 PR-JOURNEY-LIFECYCLE-GOV（合并 3 个 P0/🔴）— ✅ shipped as fix/208-journey-lifecycle-gov
+#### PR-4 PR-JOURNEY-LIFECYCLE-GOV（合并 3 个 P0/🔴）— ✅ shipped as PR #520
 
 **包含**：K-02 + JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01 + JOURNEY-STATUS-BOARD-LIFECYCLE-CONSISTENCY-01
 **依据**：K-02 (c) 与 JOURNEY-CONTRACT-EXISTENCE 是同一规则的两种描述；3 项都改 `kernel/governance/rules_journey.go` + `journeys/J-*.yaml` + `kernel/verify/`
@@ -93,7 +93,7 @@
 - PR-6 (G-13) ✅ PR #487 已落：新 rule 注册直接走 `kernel/governance/rulecodes.go` 单源 + `validateJourney*()` 方法范式 + SeverityError `; fix:` 后缀（参照 ADV-06）；无 rebase 成本
 - 040 阶段 1 ✅ PR #492 已落（2026-05-14）：journey YAML 完整性 / lifecycle 守护新增 archtest 走 `archtest.Run` / `archtest.RunTyped` 入口，**不进** LegacyAllowlist
 **Cx**：Cx2-Cx3
-**ship 摘要（branch fix/208-journey-lifecycle-gov，2026-05-16）**：
+**ship 摘要（PR #520，2026-05-16）**：
 - K-02 (a): `journeys/J-ssologin.yaml` lifecycle: experimental → active；新建 `tests/integration/journey_ssologin_session_db_test.go::TestJSsologinSessionDb`（in-memory session.MemStore + storetest 同源 fixture）实现 `journey.J-ssologin.session-db` checkRef 闭环
 - K-02 (b): `kernel/verify/runner.go::RunActiveJourneys` 非 nil project + activeCount=0 时 fail + `; fix:` 后缀；`TestRunActiveJourneys_SkipsInactiveJourneys` 重命名 `TestRunActiveJourneys_EmptyActiveSetFails` 并改断言为 Passed=false
 - K-02 (c) / JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01: 新建 `kernel/governance/rules_journey.go` `validateJOURNEYCONTRACTEXISTENCE01`（反向 REF-07，active 非 examples/ 平台 contract 必须被至少 1 个 journey.contracts[] 引用）；扇出 5 个平台 journey 扩 contracts[] 覆盖 37 个原孤立 active contract（user/role mgmt → J-useronboarding；lock/unlock → J-accountlockout；audit list → J-auditlogintrail；config CRUD + flags → J-confighotreload；config rollback → J-configrollback；setup admin/status + change-password → J-ssologin）
@@ -151,12 +151,12 @@
 - (6) `adapters/adapterutil/health.go` `HealthToCheckers` helper 下沉 4 adapter 复用
 - **unblock**：PR-11 OIDC-JWKS-ROTATION-WORKER 前置依赖已达成（commit body 显式："auto-rotation worker is PR-11/A-02"）
 
-#### PR-9 PR-REPO-READYZ — ✅ (fix/202-repo-readyz)
+#### PR-9 PR-REPO-READYZ — ✅ shipped as PR #506
 
 **包含**：REPO-HEALTHCHECKER-01 + B2-R-02
 **依据**：backlog 主表 cap-12 line 225 显式注「同 PR」；都改 `cells/{configcore,auditcore}/cell.go` HealthCheckers
 **Cx**：Cx2 → Cx3（范围扩展：typed funnel + real-failure conformance + archtest）
-**ship 摘要（branch fix/202-repo-readyz，2026-05-16）**：
+**ship 摘要（PR #506，2026-05-16）**：
 - 新增 `kernel/cell.RepoHealthProber` interface + `cell.RegisterRepoReadiness(reg, name, prober)` typed funnel（Hard form-uniqueness，对标 `panic(panicregister.Approved(...))` 范本）
 - 3 cell 统一注册：configcore `config_repo_ready`（queries `config_entries` + `feature_flags`）/ accesscore `session_store_ready`（queries `sessions`）/ auditcore `audit_ledger_ready`（复用 `Tail`，queries `audit_entries`）
 - accesscore dead-code duck-type probe 修复（匿名 `interface{ Health(context.Context) error }` 从未触发，本 PR 替换为有类型 funnel wiring）
@@ -175,27 +175,26 @@ Wave 1（独立并行，8 PR） — 8/8 ship：
   PR-1 OTEL-HARDEN-5         ✅ PR #486 (OTEL-HARDEN-4，B2-R-05 split)
   PR-2 PROM-HARDEN-3         ✅ PR #484
   PR-3 CLI-HARDEN            ✅ PR #502 (038 Wave 1, 2026-05-15) — +CLI-UNIMPL-HIDE-01 闭环 Hard 升级
-  PR-4 JOURNEY-LIFECYCLE-GOV ✅ fix/208-journey-lifecycle-gov (2026-05-16) — JOURNEY rule 系列新建 + Hard upgrade backlog 登记
+  PR-4 JOURNEY-LIFECYCLE-GOV ✅ PR #520 (2026-05-16) — JOURNEY rule 系列新建 + Hard upgrade backlog 登记
   PR-6 G-13 元治理 guard     ✅ PR #487 merged 2026-05-13
   PR-7 BOOTSTRAP-CLIENTS-MUTEX ✅ PR #483
   PR-8 OIDC-MR-COMPLETENESS  ✅ PR #485
-  PR-9 REPO-READYZ           ✅ PR-REPO-READYZ fix/202-repo-readyz (2026-05-16) — +CELL-REPO-READYZ-PROBE-01 Hard funnel
+  PR-9 REPO-READYZ           ✅ PR #506 (2026-05-16) — +CELL-REPO-READYZ-PROBE-01 Hard funnel
 
-Wave 2（依赖 Wave 1，2 PR） — 0/2 ship：
+Wave 2（依赖 Wave 1，2 PR） — 1/2 ship：
+  PR-11 OIDC-JWKS-ROTATION-WORKER-01 ✅ PR #504 (2026-05-16) — periodic re-discovery worker + refresh metric (A-02)
   PR-5 GOV-NEW-RULES (GOVERNANCE-AUTH-PUBLIC + V-A11)
-       ↑ 依赖 PR-6 ✅；**前置已达成，可立即排期**
-  PR-11 OIDC-JWKS-ROTATION-WORKER-01
-       ↑ 依赖 PR-8 ✅；**前置已达成，可立即排期** (Refresh API 已落在 oidc Adapter)
+       ↑ 依赖 PR-6 ✅；**前置已达成，可立即排期**（Wave 2 唯一遗留）
 
 Wave 3（依赖 Wave 1）：
-  TEST-JOURNEY-ROOT-HARNESS-01      ← 依赖 PR-4（未启动）
+  TEST-JOURNEY-ROOT-HARNESS-01      ← 依赖 PR-4 ✅ #520 → 前置已达成，可起（harness 本体未启动）
 
-Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 0/5 ship：
-  R-01 + G-08 同 batch（分 PR review）
-  C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE
-  STARTUP-ROLLBACK-ERR-JOIN-01
-  ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
-  ADAPTER-CONNECT-BUDGET-01
+Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 3/5 ship：
+  R-01 + G-08 同 batch（分 PR review）              ⏳ 未起
+  C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE              ✅ PR #518 (035 PR-CFG-CACHE-LIFECYCLE)
+  STARTUP-ROLLBACK-ERR-JOIN-01                      ✅ PR #499
+  ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01         ✅ PR #517
+  ADAPTER-CONNECT-BUDGET-01                         ⏳ 未起（🟡 P1，cap-x-cross）
 
 Wave 5（架构性重构，独立排期，不阻塞发布）：
   G-10 KERNEL-CELL-PACKAGE-DECOMPOSE
@@ -234,21 +233,21 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | PR-1 OTEL-HARDEN-5 | 8h | 4h | ✅ PR #486 | 实际 4 of 5（B2-R-05 split → METRICS-CTX-FUNNEL-01） |
 | PR-2 PROM-HARDEN-3 | 4h | 2h | ✅ PR #484 | +review Hard funnel 升级 |
 | PR-3 CLI-HARDEN | 8h | 4h | ✅ PR #502 (2026-05-15) | 3 项 + L3 根因升级 CLI-UNIMPL-HIDE-01 闭环 Hard（4 树统一 registry）+ follow-up CLI-TOPLEVEL-HELP-REGISTRY-01 |
-| PR-4 JOURNEY-LIFECYCLE-GOV | 10h | 4h | ✅ fix/208-journey-lifecycle-gov | K-02 三子项 (a)(b)(c) + 2 新 governance rule (JOURNEY-CONTRACT-EXISTENCE-01 + JOURNEY-STATUS-LIFECYCLE-01) + ADV-01 examples 豁免 + 5 journey 扇出扩 contracts[] + integration test for session-db checkRef + 2 Hard 升级 backlog 同 PR 登记 |
+| PR-4 JOURNEY-LIFECYCLE-GOV | 10h | 4h | ✅ PR #520 | K-02 三子项 (a)(b)(c) + 2 新 governance rule (JOURNEY-CONTRACT-EXISTENCE-01 + JOURNEY-STATUS-LIFECYCLE-01) + ADV-01 examples 豁免 + 5 journey 扇出扩 contracts[] + integration test for session-db checkRef + 2 Hard 升级 backlog 同 PR 登记 |
 | PR-6 G-13 元治理 guard | 6h | 3h | ✅ PR #487 | 注册框架；review 派生 plan 040 archtest Pass-Driver；4 follow-up 登记 cap-02 |
 | PR-7 BOOTSTRAP-CLIENTS-MUTEX | 3h | 1.5h | ✅ PR #483 | +review type-aware Hard 全形态覆盖 |
 | PR-8 OIDC-MR-COMPLETENESS | 18h | 8h | ✅ PR #485 | A-01 + A-07 + A-08 束 |
-| PR-9 REPO-READYZ | 4h | 2h | ✅ (fix/202-repo-readyz) | typed funnel + conformance harness + 3-cell unification；Cx2→Cx3 |
-| PR-5 GOV-NEW-RULES | 4h | 2h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| PR-6 ✅；保持合并；V-A11 archtest 走 `archtest.Run`/`RunTyped` |
-| PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ⏳ 可起 | 后台 worker；PR-8 unblock |
-| Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | ⏳ 依赖 PR-4 | integration harness |
-| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | ⏳ 0/5 | R-01+G-08 batch 10h+5h / C-02 4h+2h / STARTUP-ROLLBACK 3h+1.5h / **ADAPTER-ERR-CLASS 6h+3h（040 阶段 1 ✅ PR #492 解锁，新增 archtest 走 Pass-Driver）** / ADAPTER-CONN-BUDGET 4h+2h |
+| PR-9 REPO-READYZ | 4h | 2h | ✅ PR #506 | typed funnel + conformance harness + 3-cell unification；Cx2→Cx3 |
+| PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ✅ PR #504 | periodic re-discovery worker + refresh metric (A-02)；PR-8 unblock |
+| PR-5 GOV-NEW-RULES | 4h | 2h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| PR-6 ✅；保持合并；V-A11 archtest 走 `archtest.Run`/`RunTyped`（Wave 2 唯一遗留）|
+| Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | ⏳ 可起（PR-4 ✅ #520 解锁）| integration harness |
+| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | 🟡 3/5 | ✅ **ADAPTER-ERR-CLASS PR #517** / **C-02 PR #518**（035 PR-CFG-CACHE-LIFECYCLE）/ **STARTUP-ROLLBACK PR #499**；剩 2 项 ⏳：R-01+G-08 batch 10h+5h / ADAPTER-CONN-BUDGET 4h+2h |
 | Wave 5 架构重构 | 独立排期 | — | — | G-10 / SEALED / BOOTSTRAP 束 |
 
 **累计**：
-- ✅ shipped (7 PR): ~51h dev / ~24.5h review（PR-1/2/3/6/7/8/9）
-- ⏳ 待启动 (Wave 1 剩余 + Wave 2/3/4): ~51h dev / ~25.5h review（PR-4/5/11 + Wave 3 + Wave 4）
-- 进度：Wave 1 7/8 ship（87.5%）；038 整体 dev 进度 50%（按原计划 102h 总分母）
+- ✅ shipped (9 PR + Wave 4 3 项): ~78h dev / ~37h review（PR-1/2/3/4/6/7/8/9/11 + Wave 4: ADAPTER-ERR-CLASS #517 / C-02 #518 / STARTUP-ROLLBACK #499）
+- ⏳ 待启动 (Wave 2 剩余 + Wave 3 + Wave 4 剩余): ~26h dev / ~13h review（PR-5 + Wave 3 TEST-JOURNEY-ROOT-HARNESS + Wave 4: R-01+G-08 / ADAPTER-CONN-BUDGET）
+- 进度：Wave 1 8/8 ship（100%）；Wave 2 1/2 ship；Wave 4 3/5 ship；038 整体 dev 进度 ~76%（按原计划 102h 总分母）
 
 ---
 
@@ -259,7 +258,7 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 3. **R-01 / G-08 不合并**，分 PR review（Wave 4 小 PR）
 4. **架构重构 Wave 5 独立排期**，不进本计划主线
 5. **METRICS-CTX-FUNNEL-01 不纳入本计划**：Cx4 跨 5+ 包接口重构，登记 cap-13 走触发型
-6. **下一波双 worktree 并行建议**：PR-3 (CLI-HARDEN, cmd/gocell/app/) + PR-9 (REPO-READYZ, cells/{configcore,auditcore}/cell.go) 文件域互斥；PR-11 (OIDC-JWKS-ROTATION-WORKER) PR-8 ✅ 已 unblock 可立即起；PR-4 / PR-5（新 archtest 走 `archtest.Run`/`RunTyped`）随时可起
+6. **下一波建议（2026-05-16 回灌后）**：Wave 1 8/8 + Wave 2 PR-11 + Wave 4 3/5（#517/#518/#499）已 ship；剩 **PR-5 GOV-NEW-RULES**（Wave 2 唯一遗留，前置 PR-6 ✅ + 040 阶段 1 ✅ 全解锁，随时可起）+ **Wave 3 TEST-JOURNEY-ROOT-HARNESS-01**（PR-4 ✅ #520 解锁）+ **Wave 4 剩 2 项**（R-01+G-08 batch / ADAPTER-CONNECT-BUDGET-01，触发型小 PR）
 7. **plan 040 与 038 并行**：阶段 2/3 重写 `tools/archtest/*_test.go` 自身，与 038 业务 PR 文件域互斥
 
 ---
@@ -268,4 +267,4 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S4a/S4b/S4c 串行未 ship）
 - [`docs/backlog.md`](../backlog.md) + 4 子表：本计划承担项的 backlog 来源
-- [`docs/plans/202605121750-037-wave4-advance-plan.md`](202605121750-037-wave4-advance-plan.md)：036 charter wave 4 触发型 3 条提前推进（独立于本计划）
+- [`docs/plans/archive/202605121750-037-wave4-advance-plan.md`](archive/202605121750-037-wave4-advance-plan.md)：036 charter wave 4 触发型 3 条提前推进（独立于本计划，已归档）

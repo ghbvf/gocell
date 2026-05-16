@@ -83,14 +83,39 @@ type L0DepMeta struct {
 type SliceMeta struct {
 	ID            string `yaml:"id"`
 	BelongsToCell string `yaml:"belongsToCell"`
-	// ConsistencyLevel: "L0"-"L4"; if empty, inherits cell.ConsistencyLevel; if set, MUST be ≤ cell.ConsistencyLevel
-	ConsistencyLevel string          `yaml:"consistencyLevel,omitempty"`
+	// ConsistencyLevel: "L0"-"L4"; required (parser rejects empty);
+	// MUST be ≤ cell.ConsistencyLevel. slice.yaml is the SoR for slice
+	// level (codegen funnel projects to slice_gen.go.sliceMeta);
+	// inheritance from cell.consistencyLevel is no longer supported.
+	ConsistencyLevel string          `yaml:"consistencyLevel"`
 	ContractUsages   []ContractUsage `yaml:"contractUsages"`
 	Verify           SliceVerifyMeta `yaml:"verify"`
 	AllowedFiles     []string        `yaml:"allowedFiles,omitempty"`
 	Dir              string          `yaml:"-"` // slice directory segment, set by parser
 	CellDir          string          `yaml:"-"` // parent cell directory segment, set by parser
 	File             string          `yaml:"-"` // parsed slice.yaml path relative to project root
+}
+
+// Clone returns a deep copy of s, independently owning every slice and
+// nested struct. Used by tools/codegen-generated SliceMetadata() accessors and
+// by kernel/cell.NewBaseSliceFromMeta to prevent caller mutation from leaking
+// into shared state — mirroring the K8s zz_generated.deepcopy.go pattern.
+//
+// nil receiver returns nil.
+func (s *SliceMeta) Clone() *SliceMeta {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	// ContractUsages: independent copy
+	cp.ContractUsages = append([]ContractUsage(nil), s.ContractUsages...)
+	// Verify: deep copy nested slices
+	cp.Verify.Unit = append([]string(nil), s.Verify.Unit...)
+	cp.Verify.Contract = append([]string(nil), s.Verify.Contract...)
+	cp.Verify.Waivers = append([]WaiverMeta(nil), s.Verify.Waivers...)
+	// AllowedFiles: independent copy
+	cp.AllowedFiles = append([]string(nil), s.AllowedFiles...)
+	return &cp
 }
 
 // ContractUsage declares a Slice's participation in a Contract.

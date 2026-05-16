@@ -1,10 +1,30 @@
 {{template "header" .}}
 
 import (
+{{- if .Handlers }}
 	"context"
+{{- end }}
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+{{- if .Handlers }}
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+{{- end }}
 )
+
+// sliceMeta is the canonical metadata literal projected from slice.yaml.
+// SliceMetadata returns the package-scope pointer; the cell composition root
+// passes it to cell.MustNewBaseSliceFromMeta to construct *BaseSlice through
+// the typed funnel.
+var sliceMeta = {{ .RenderedMetaLiteral }}
+
+// SliceMetadata returns the package-scope *metadata.SliceMeta projected
+// from slice.yaml. Composition roots consume this via
+// cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata()) — the typed
+// funnel that replaces the legacy `cell.NewBaseSlice(id, cellID, level)`
+// literal pattern.
+func SliceMetadata() *metadata.SliceMeta { return sliceMeta.Clone() }
+{{- if .Handlers }}
 
 // eventHandlerService documents the handler methods {{ .SliceID }}'s service
 // must provide so that cell_gen.go's reg.Subscribe call is typed. The interface
@@ -17,3 +37,4 @@ type eventHandlerService interface {
 	{{ .MethodName }}(ctx context.Context, e outbox.Entry) outbox.HandleResult
 {{- end }}
 }
+{{- end }}

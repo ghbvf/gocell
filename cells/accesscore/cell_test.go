@@ -467,7 +467,7 @@ func TestAccessCore_Metadata(t *testing.T) {
 	c := newTestCell(t)
 	assert.Equal(t, "accesscore", c.ID())
 	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
-	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.L3, c.ConsistencyLevel())
 }
 
 func TestAccessCore_Startup(t *testing.T) {

@@ -1,5 +1,6 @@
 id: identitymanage
 belongsToCell: accesscore
+consistencyLevel: L2
 contractUsages:
   - contract: event.user.created.v1
     role: publish

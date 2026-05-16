@@ -30,6 +30,7 @@ verify:
 `)},
 		"cells/x/slices/s/slice.yaml": &fstest.MapFile{Data: []byte(`id: s
 belongsToCell: x
+consistencyLevel: L0
 contractUsages:
   - contract: http.foo.v1
     role: serve

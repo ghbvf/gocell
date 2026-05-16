@@ -7,7 +7,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	configget "github.com/ghbvf/gocell/generated/contracts/http/config/get/v1"
-	internalapig "github.com/ghbvf/gocell/generated/contracts/http/config/internalapi/get/v1"
 	configlist "github.com/ghbvf/gocell/generated/contracts/http/config/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -50,57 +49,31 @@ func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (configl
 	}, nil
 }
 
-// InternalGetAdapter wraps Service to implement internalapig.Service for
-// http.config.internal.get.v1. Same business logic as GetAdapter; mounted on
-// the InternalListener where service-token auth is enforced by the listener chain.
-type InternalGetAdapter struct{ S *Service }
-
-// Get implements internalapig.Service.
-func (a InternalGetAdapter) Get(ctx context.Context, req *internalapig.Request) (internalapig.GetResponseObject, error) {
-	entry, err := a.S.GetByKey(ctx, req.Key)
-	if err != nil {
-		return nil, err
-	}
-	return internalapig.Get200JSONResponse{Data: toInternalGetResponseData(entry)}, nil
-}
-
-// Handler is the composite route handler for the configread slice.
-// It holds three generated per-contract handlers and exposes RegisterRoutes
-// (primary: get + list) and RegisterInternalRoutes (internal: get).
+// Handler is the composite route handler for the public configread slice.
+// It holds the get + list generated handlers and exposes RegisterRoutes
+// (primary listener: get + list). The internal control-plane GET is owned
+// by the sibling configreadinternal slice.
 type Handler struct {
-	getH         *configget.Handler
-	listH        *configlist.Handler
-	internalGetH *internalapig.Handler
+	getH  *configget.Handler
+	listH *configlist.Handler
 }
 
-// NewHandler creates a configread Handler with generated per-contract handlers.
-// Primary endpoints are admin-only; the internal endpoint explicitly passes
-// auth.RequireCallerCell("accesscore") as defense-in-depth, complementing the
-// auto-injected caller-cell guard from the generated contractSpec's Clients field.
+// NewHandler creates a public configread Handler with generated per-contract
+// handlers. Both endpoints are admin-only (auth.AnyRole(auth.RoleAdmin)).
 func NewHandler(svc *Service) *Handler {
 	policy := auth.AnyRole(auth.RoleAdmin)
-	internalPolicy := auth.RequireCallerCell("accesscore")
 	return &Handler{
-		getH:         configget.NewHandler(GetAdapter{svc}, policy),
-		listH:        configlist.NewHandler(ListAdapter{svc}, policy),
-		internalGetH: internalapig.NewHandler(InternalGetAdapter{svc}, internalPolicy),
+		getH:  configget.NewHandler(GetAdapter{svc}, policy),
+		listH: configlist.NewHandler(ListAdapter{svc}, policy),
 	}
 }
 
-// RegisterRoutes mounts the primary config-read routes (get + list) on mux.
+// RegisterRoutes mounts the public config-read routes (get + list) on mux.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := h.getH.RegisterRoutes(mux); err != nil {
 		return err
 	}
 	return h.listH.RegisterRoutes(mux)
-}
-
-// RegisterInternalRoutes mounts the internal control-plane GET on mux.
-// The handler is constructed with an explicit RequireCallerCell("accesscore")
-// policy; auth.Mount also auto-injects the same guard from the contractSpec's
-// Clients field, providing defense-in-depth.
-func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) error {
-	return h.internalGetH.RegisterRoutes(mux)
 }
 
 // toGetResponseData converts a domain.ConfigEntry to configget.ResponseData.
@@ -127,23 +100,6 @@ func toListResponseDataItem(e *domain.ConfigEntry) *configlist.ResponseDataItem 
 		value = dto.RedactedValue
 	}
 	return &configlist.ResponseDataItem{
-		ID:        e.ID,
-		Key:       e.Key,
-		Value:     value,
-		Sensitive: e.Sensitive,
-		Version:   int64(e.Version),
-		CreatedAt: e.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: e.UpdatedAt.Format(time.RFC3339),
-	}
-}
-
-// toInternalGetResponseData converts a domain.ConfigEntry to internalapig.ResponseData.
-func toInternalGetResponseData(e *domain.ConfigEntry) *internalapig.ResponseData {
-	value := e.Value
-	if e.Sensitive {
-		value = dto.RedactedValue
-	}
-	return &internalapig.ResponseData{
 		ID:        e.ID,
 		Key:       e.Key,
 		Value:     value,

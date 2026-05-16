@@ -76,7 +76,7 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 	assert.Empty(t, c.ConsumedContracts())
 
 	// Add slice.
-	s := NewBaseSlice("s1", "test-cell", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s1", BelongsToCell: "test-cell", ConsistencyLevel: "L0"})
 	c.AddSlice(s)
 	require.Len(t, c.OwnedSlices(), 1)
 	assert.Equal(t, "s1", c.OwnedSlices()[0].ID())
@@ -96,7 +96,7 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 
 func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "copy-test"})
-	s := NewBaseSlice("s1", "copy-test", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s1", BelongsToCell: "copy-test", ConsistencyLevel: "L0"})
 	c.AddSlice(s)
 	pc := NewBaseContract("pc1", cellvocab.ContractHTTP, "copy-test", cellvocab.L1)
 	c.AddProducedContract(pc)
@@ -261,7 +261,7 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range n {
-			c.AddSlice(NewBaseSlice("s", "race-add", cellvocab.L0))
+			c.AddSlice(MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "race-add", ConsistencyLevel: "L0"}))
 			c.AddProducedContract(NewBaseContract("pc", cellvocab.ContractHTTP, "race-add", cellvocab.L1))
 			c.AddConsumedContract(NewBaseContract("cc", cellvocab.ContractEvent, "other", cellvocab.L2))
 		}
@@ -285,7 +285,7 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseSliceAccessors(t *testing.T) {
-	s := NewBaseSlice("login-slice", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login-slice", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 
 	assert.Equal(t, "login-slice", s.ID())
 	assert.Equal(t, "accesscore", s.BelongsToCell())
@@ -293,12 +293,12 @@ func TestBaseSliceAccessors(t *testing.T) {
 }
 
 func TestBaseSliceInit(t *testing.T) {
-	s := NewBaseSlice("s", "c", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L0"})
 	require.NoError(t, s.Init(context.Background()))
 }
 
 func TestBaseSliceVerify(t *testing.T) {
-	s := NewBaseSlice("s", "c", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L0"})
 
 	// Default empty.
 	assert.Empty(t, s.Verify().Unit)
@@ -315,19 +315,19 @@ func TestBaseSliceVerify(t *testing.T) {
 }
 
 func TestBaseSliceAllowedFilesNilWhenUnset(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 	assert.Nil(t, s.AllowedFiles(), "unset AllowedFiles returns nil — convention defaults are metadata-only (FMT-14)")
 }
 
 func TestBaseSliceAllowedFilesExplicit(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 	custom := []string{"cells/accesscore/slices/login/**"}
 	s.SetAllowedFiles(custom)
 	assert.Equal(t, custom, s.AllowedFiles())
 }
 
 func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
-	s := NewBaseSlice("login", "accesscore", cellvocab.L1)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "login", BelongsToCell: "accesscore", ConsistencyLevel: "L1"})
 	s.SetAllowedFiles([]string{"a/**", "b/**"})
 	got := s.AllowedFiles()
 	got[0] = "mutated"
@@ -335,7 +335,7 @@ func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
 }
 
 func TestBaseSliceAffectedJourneys(t *testing.T) {
-	s := NewBaseSlice("s", "c", cellvocab.L0)
+	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L0"})
 
 	// Default empty.
 	assert.Empty(t, s.AffectedJourneys())
@@ -425,7 +425,8 @@ func TestNewBaseCell_ErrorPaths(t *testing.T) {
 // with a "cell.MustNewBaseCell:" prefixed message.
 func TestMustNewBaseCell_PanicsOnError(t *testing.T) {
 	t.Parallel()
-	assertPanicsWithAssertionMessage(t,
+	assertPanicsWithAssertionMessage(
+		t,
 		"cell.MustNewBaseCell: [ERR_VALIDATION_FAILED] cell.NewBaseCell: meta is nil",
 		func() { MustNewBaseCell(nil) },
 	)
@@ -465,6 +466,156 @@ func TestBaseCell_Metadata_Isolation(t *testing.T) {
 	assert.Equal(t, "iso", c.ID(), "Metadata() mutation leaked into cell")
 	assert.Equal(t, "smoke.iso.startup", c.Metadata().Verify.Smoke[0])
 	assert.Equal(t, "shared", c.Metadata().L0Dependencies[0].Cell)
+}
+
+// TestNewBaseSliceFromMeta_ErrorPaths covers all error returns of
+// NewBaseSliceFromMeta. Reads slice.yaml metadata (the SoR) into a typed
+// BaseSlice; refuses any missing/invalid input (no inheritance fallback).
+func TestNewBaseSliceFromMeta_ErrorPaths(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		meta       *metadata.SliceMeta
+		wantSubstr string
+	}{
+		{"nil meta", nil, "meta is nil"},
+		{"empty id", &metadata.SliceMeta{BelongsToCell: "c", ConsistencyLevel: "L0"}, "meta.ID is empty"},
+		{"empty belongsToCell", &metadata.SliceMeta{ID: "s", ConsistencyLevel: "L0"}, "meta.BelongsToCell is empty"},
+		{"empty consistencyLevel", &metadata.SliceMeta{ID: "s", BelongsToCell: "c"}, "meta.ConsistencyLevel is empty"},
+		{"invalid level", &metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L9"}, "invalid consistency level"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := NewBaseSliceFromMeta(tt.meta)
+			require.Error(t, err)
+			require.Nil(t, s)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			require.Contains(t, ec.Message, tt.wantSubstr)
+		})
+	}
+}
+
+// TestNewBaseSliceFromMeta_HappyPath covers L0–L4 round-trip.
+func TestNewBaseSliceFromMeta_HappyPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		level     string
+		wantLevel cellvocab.Level
+	}{
+		{"L0", "L0", cellvocab.L0},
+		{"L1", "L1", cellvocab.L1},
+		{"L2", "L2", cellvocab.L2},
+		{"L3", "L3", cellvocab.L3},
+		{"L4", "L4", cellvocab.L4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := NewBaseSliceFromMeta(&metadata.SliceMeta{
+				ID:               "login",
+				BelongsToCell:    "accesscore",
+				ConsistencyLevel: tt.level,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, s)
+			assert.Equal(t, "login", s.ID())
+			assert.Equal(t, "accesscore", s.BelongsToCell())
+			assert.Equal(t, tt.wantLevel, s.ConsistencyLevel())
+		})
+	}
+}
+
+// TestMustNewBaseSliceFromMeta_PanicsOnError verifies the Must* wrapper panics
+// with a "cell.MustNewBaseSliceFromMeta:" prefixed message.
+func TestMustNewBaseSliceFromMeta_PanicsOnError(t *testing.T) {
+	t.Parallel()
+	assertPanicsWithAssertionMessage(
+		t,
+		"cell.MustNewBaseSliceFromMeta: [ERR_VALIDATION_FAILED] cell.NewBaseSliceFromMeta: meta is nil",
+		func() { MustNewBaseSliceFromMeta(nil) },
+	)
+	// Also verify the prefix on a non-nil but invalid case.
+	assert.Panics(t, func() {
+		MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "bad"})
+	})
+	// Verify that an invalid consistencyLevel (not L0-L4) also panics.
+	assert.Panics(t, func() {
+		MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L9"})
+	})
+}
+
+// TestNewBaseSliceFromMeta_ProjectsVerifyAndAllowedFiles asserts that
+// NewBaseSliceFromMeta projects Verify and AllowedFiles from metadata, and
+// that the projected values are defensively copied — caller mutation of the
+// original meta does not affect the constructed BaseSlice.
+func TestNewBaseSliceFromMeta_ProjectsVerifyAndAllowedFiles(t *testing.T) {
+	t.Parallel()
+
+	meta := &metadata.SliceMeta{
+		ID:               "sessionlogin",
+		BelongsToCell:    "accesscore",
+		ConsistencyLevel: "L2",
+		Verify: metadata.SliceVerifyMeta{
+			Unit:     []string{"unit.sessionlogin.service"},
+			Contract: []string{"contract.http.auth.login.v1.serve"},
+			Waivers: []metadata.WaiverMeta{
+				{
+					Contract: "http.config.get.v1", Owner: "platform-team",
+					Reason: "read-only config call", ExpiresAt: "2026-06-01",
+				},
+			},
+		},
+		AllowedFiles: []string{"cells/accesscore/slices/sessionlogin/**"},
+	}
+
+	s, err := NewBaseSliceFromMeta(meta)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	// --- Fields projected ---
+	v := s.Verify()
+	require.Equal(t, []string{"unit.sessionlogin.service"}, v.Unit)
+	require.Equal(t, []string{"contract.http.auth.login.v1.serve"}, v.Contract)
+	require.Len(t, v.Waivers, 1)
+	assert.Equal(t, "http.config.get.v1", v.Waivers[0].Contract)
+	assert.Equal(t, "platform-team", v.Waivers[0].Owner)
+
+	af := s.AllowedFiles()
+	require.Equal(t, []string{"cells/accesscore/slices/sessionlogin/**"}, af)
+
+	// --- Defensive copy: mutate meta, BaseSlice must be unaffected ---
+	meta.Verify.Unit[0] = "MUTATED"
+	meta.Verify.Contract[0] = "MUTATED"
+	meta.Verify.Waivers[0].Owner = "MUTATED"
+	meta.AllowedFiles[0] = "MUTATED"
+
+	v2 := s.Verify()
+	assert.Equal(t, "unit.sessionlogin.service", v2.Unit[0], "meta mutation must not affect BaseSlice.Verify.Unit")
+	assert.Equal(t, "contract.http.auth.login.v1.serve", v2.Contract[0], "meta mutation must not affect BaseSlice.Verify.Contract")
+	assert.Equal(t, "platform-team", v2.Waivers[0].Owner, "meta mutation must not affect BaseSlice.Verify.Waivers")
+	af2 := s.AllowedFiles()
+	assert.Equal(t, "cells/accesscore/slices/sessionlogin/**", af2[0], "meta mutation must not affect BaseSlice.AllowedFiles")
+}
+
+// TestNewBaseSliceFromMeta_EmptyVerifyAndAllowedFiles asserts that a meta with
+// empty Verify and AllowedFiles results in a valid BaseSlice with nil AllowedFiles.
+func TestNewBaseSliceFromMeta_EmptyVerifyAndAllowedFiles(t *testing.T) {
+	t.Parallel()
+
+	s, err := NewBaseSliceFromMeta(&metadata.SliceMeta{
+		ID:               "bare",
+		BelongsToCell:    "testcell",
+		ConsistencyLevel: "L0",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	v := s.Verify()
+	assert.Empty(t, v.Unit)
+	assert.Empty(t, v.Contract)
+	assert.Empty(t, v.Waivers)
+	assert.Nil(t, s.AllowedFiles(), "AllowedFiles must be nil when not set in meta")
 }
 
 // assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error

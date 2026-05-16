@@ -22,7 +22,7 @@ var _ cell.Cell = (*ConfigCore)(nil)
 var cellMeta = &metadata.CellMeta{
 	ID:               "configcore",
 	Type:             "core",
-	ConsistencyLevel: "L2",
+	ConsistencyLevel: "L3",
 	DurabilityMode:   "durable",
 	Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "cell_config_core"},
@@ -32,7 +32,7 @@ var cellMeta = &metadata.CellMeta{
 	GoStructName: metadata.MustNewGoIdentifier("ConfigCore"),
 }
 
-func loadCellMetadata() *metadata.CellMeta { return cellMeta }
+func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
@@ -78,7 +78,7 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 				}
 			}
 			mux.Route("/config", func(s cell.RouteMux) {
-				captureErr(c.readHandler.RegisterInternalRoutes(s))
+				captureErr(c.readInternalHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},

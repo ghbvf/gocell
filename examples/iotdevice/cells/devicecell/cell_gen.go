@@ -29,7 +29,7 @@ var cellMeta = &metadata.CellMeta{
 	GoStructName: metadata.MustNewGoIdentifier("DeviceCell"),
 }
 
-func loadCellMetadata() *metadata.CellMeta { return cellMeta }
+func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *DeviceCell) Init(ctx context.Context, reg cell.Registry) error {
@@ -53,11 +53,7 @@ func (c *DeviceCell) Init(ctx context.Context, reg cell.Registry) error {
 			}
 			mux.Route("/api/v1/devices", func(s cell.RouteMux) {
 				captureErr(c.registerHandler.RegisterRoutes(s))
-				captureErr(c.commandEnqueueHandler.RegisterRoutes(s))
-				captureErr(c.commandDequeueHandler.RegisterRoutes(s))
-				captureErr(c.commandReportHandler.RegisterRoutes(s))
-				captureErr(c.commandAckHandler.RegisterRoutes(s))
-				captureErr(c.commandExtendLeaseHandler.RegisterRoutes(s))
+				captureErr(c.commandHandler.RegisterRoutes(s))
 				captureErr(c.statusHandler.RegisterRoutes(s))
 				captureErr(c.listHandler.RegisterRoutes(s))
 			})

@@ -101,7 +101,7 @@ func goldenRuleIDs() []string {
 		// strict-mode orchestrator is in rules_misc_strict.go)
 		"DOC-NAME-01",
 
-		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..32
+		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..33
 		// + strict-mode FMT-16/17/19/A1/C1 + FMT-20..23/25 in
 		// rules_misc_strict.go; FMT-19 implementation in rules_misc_advisory.go).
 		"FMT-01", "FMT-02", "FMT-03", "FMT-04", "FMT-05",
@@ -115,7 +115,7 @@ func goldenRuleIDs() []string {
 		"FMT-16", "FMT-17", "FMT-19",
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
 		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30", "FMT-31",
-		"FMT-32",
+		"FMT-32", "FMT-33",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency
@@ -135,8 +135,9 @@ func goldenRuleIDs() []string {
 		"REF-11", "REF-12", "REF-13", "REF-14", "REF-15",
 		"REF-16", "REF-17",
 
-		// SLICE-CONSISTENCY — slice level vs parent cell (rules_misc_advisory.go)
+		// SLICE-CONSISTENCY — slice level vs parent cell + contractUsages role lower bound (rules_misc_advisory.go)
 		"SLICE-CONSISTENCY-01",
+		"SLICE-CONSISTENCY-02",
 
 		// TOPO — topology (rules_topo.go)
 		"TOPO-01", "TOPO-02", "TOPO-03", "TOPO-04", "TOPO-05",

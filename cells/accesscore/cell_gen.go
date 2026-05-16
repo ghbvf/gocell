@@ -24,7 +24,7 @@ var _ cell.Cell = (*AccessCore)(nil)
 var cellMeta = &metadata.CellMeta{
 	ID:               "accesscore",
 	Type:             "core",
-	ConsistencyLevel: "L2",
+	ConsistencyLevel: "L3",
 	DurabilityMode:   "durable",
 	Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
@@ -34,7 +34,7 @@ var cellMeta = &metadata.CellMeta{
 	GoStructName: metadata.MustNewGoIdentifier("AccessCore"),
 }
 
-func loadCellMetadata() *metadata.CellMeta { return cellMeta }
+func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {

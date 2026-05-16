@@ -1,7 +1,7 @@
 # archtest / governance 治理 Rollout 计划
 
 **生成日期**：2026-05-11
-**最近同步**：2026-05-12（origin/develop @ `8d213883`，Wave 2 panic 单源 + Phase 2.1/2.2/3.1/3.2/3.3/3.4/3.5/3.7/3.8/3.9 已 ship；Phase 0.1 ✅ done，Phase 3.6 ❌ cancelled by PR #435；剩余 Wave 2/3 = PR-MD1 follow-up `CELLGEN-LITERAL-FUNNEL-02`）
+**最近同步**：2026-05-16（origin/develop @ `41fc70074`，Wave 2 panic 单源 + Phase 2.1/2.2/3.1/3.2/3.3/3.4/3.5/3.7/3.8/3.9/**3.10** 已 ship；Phase 0.1 ✅ done，Phase 3.6 ❌ cancelled by PR #435；**Wave 2/3 实质工作 100% 收官**，剩余仅 §0 backlog 手动归档 + §4 触发型休眠待命。状态回灌：Phase 3.10 ✅ PR #480；§4 触发表 SERVICEOWNED ✅ PR #508 / CARVEOUT ✅ PR #503 / FINDFIRSTCHILD ✅ 037 PR-A1 #505）
 **关系**：本文件是 `docs/plans/202605101300-ai-first-governance-charter.md`（AI-first 章程）的 **PR 级 rollout 视角**。章程是第一性原理 + 决策原则视角不动；本文件按 PR #445 复盘教训（scope 失控、多维捆绑）把章程 Wave 1-4 翻译成"单 PR = 单维度"的可独立 ship 的 PR 序列，含 Phase 顺序、依赖图、优先级。冲突时以本文件的拆分为准，章程的判断/原则不变。
 
 **核心拆分规则**：新增/修改工程机制的 PR 不得跨维度捆绑。维度清单：
@@ -104,7 +104,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | `PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` | ✅ PR #474（caller）+ PR-TS2（helper） | §3 Phase 3.2 PR-SH1 |
 | `GENERATED-SKIP-CROSS-RULE-INVARIANT-01` | ✅ PR #471 | §3 Phase 3.3 PR-SH2 |
 | `INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01` | ✅ PR #470 | §3 Phase 3.4 PR-IC1 |
-| `PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01` | 🟢 触发型 | §4 trigger A3 |
+| `PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01` | ⊃ superseded by plan 040 | 040 Stage 4 deep-internal（三重防线 + Stage 4 已达成本条 unexport-loader Hard 目标；非独立 backlog 条目） |
 | `PR460-FU-FINDFIRSTCHILD-TYPED-API-01` | 🟡 触发型 | §4 trigger（FINDFIRSTCHILD-TYPED-API-01 行）|
 
 按维度拆 PR：
@@ -175,7 +175,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **工时**：实际 ~5h dev（reflect renderer ~3h + 任务二迁移 ~1h + 文档/inventory ~1h）/ 1-2h review
 - **依赖**：无
 - **证据**：PR-MD1 (feat/004-cellgen-reflect-literal-printer)
-- **Follow-up 立即开 next-up**：`CELLGEN-LITERAL-FUNNEL-02`（P1/Cx1，🟠，type-system 级 Hard funnel guard，关闭"AI 改回手写 cell.tmpl 字段枚举"漏洞窗口，工时 1.5-2h）
+- **Follow-up**：`CELLGEN-LITERAL-FUNNEL-02`（P1/Cx1，type-system 级 Hard funnel guard，关闭"AI 改回手写 cell.tmpl 字段枚举"漏洞窗口）✅ **closed by PR #480**（见 Phase 3.10）
 - **Follow-up 触发型**：`CATALOG-DTO-CODEGEN-DERIVE-01`（P3/Cx3，🟢，catalog 5 DTO codegen 派生 Hard 升级，工时 15-25h，触发条件：第 2 次 metadata 字段未同步 / DTO ≥ 6 / wire 漂移事故）
 
 ### Phase 3.9：PR450 治理升级束（PR-S7）✅ done
@@ -188,8 +188,9 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **工时**：实际 ~10h dev / 待 review（含 PR review 后追加的 ADR + archtest scope 扩展闭环修复）
 - **依赖**：无
 
-### Phase 3.10：cellgen literal funnel type-system Hard guard（PR-MD1 follow-up）
-> **执行顺序**：§6 next-up Rank 1（**先于 Phase 3.9**），数字编号承 3.9 之后仅为索引连续。
+### Phase 3.10：cellgen literal funnel type-system Hard guard（PR-MD1 follow-up）✅ done
+> **证据**：✅ closed by **PR #480**（`16a6e081a feat(cellgen): CELLGEN-LITERAL-FUNNEL-02 type-system Hard funnel`，2026-05-12，在 PR-MD1 #477 之后）。代码端态核对（develop@`41fc70074`）：`spec.go` 删 `MetadataLiteral` / 加 `RenderedMetaLiteral string`（line 47）；`builder.go:85 RenderedMetaLiteral: renderCellMetaLiteral(cell)`；`cell.tmpl:22 var cellMeta = {{ .RenderedMetaLiteral }}`、模板侧无 `renderCellMetaLiteral` FuncMap；回归守卫 `builder_test.go:610-640`（锁 re-expose *CellMeta + 断言等价）。backlog `docs/backlog/cap-14-tooling.md` 已标 ✅ PR #480。
+> **执行顺序**（历史）：§6 next-up Rank 1（**先于 Phase 3.9**），数字编号承 3.9 之后仅为索引连续。
 
 - **目标**：把 PR-MD1 的 L1（reflect renderer）+ L2（K#04 重生 diff）两层防线升级为 **type-system 级 Hard funnel guard**，关闭"AI 同 PR 改回手写 cell.tmpl 字段枚举 + 不加 CellMeta 字段"造成的 silent drift 漏洞窗口。
 
@@ -217,7 +218,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 
 - **工时**：1.5-2h dev / ~0.5h review
 - **依赖**：Phase 3.8 PR-MD1 ship ✅
-- **触发**：**next-up**（不等触发条件；silent-drift 漏洞窗口越早封越好，且工时极小不阻塞 Phase 3.9）
+- **触发**：~~next-up~~ → **✅ shipped PR #480**（提前收口，silent-drift 漏洞窗口已封）
 - **范围限制**：本 PR 仅做 CellGenSpec API 收窄 + cell.tmpl 改造 + 重生 0-diff 验证；**不**做 catalog DTO 派生（那是触发型 `CATALOG-DTO-CODEGEN-DERIVE-01`，工时 15-25h，不在本 PR scope）
 - **验证**：(1) `cellgen.CellGenSpec` 删字段后 grep `.MetadataLiteral` 在 cell.tmpl 0 命中；(2) 3 个 cell_gen.go 重生 0 diff；(3) K#04 verify GREEN；(4) 单测覆盖 `RenderedMetaLiteral` 字段被 BuildCellSpec 正确填充
 
@@ -225,26 +226,34 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 
 ## 4. Wave 4 触发型——保留 + 落地时按维度拆模板
 
-### 触发条件（charter §4 line 113-122 + 2026-05-12 backlog 同步）
-| 项 | trigger | backlog 锚点 |
-|---|---|---|
-| HANDLER-POLICY-TYPEAWARE-SCANNER-01 | scanner 误报/漏报触发 | charter §4 |
-| SERVICEOWNED-OWNERSHIP-GUARD-01 | `auth.serviceOwned` endpoint > 1 → **037 PR-A3（worktree 584 实现中）**：schema if/then + FMT-32（Batch-1/2a）+ archtest（Batch-2b）+ session/delete 迁移（Batch-3）已实现，待 merge | charter §4 |
-| B-FLOOR-FOLLOWUP §2.5/§4 | contract.yaml status ↔ adapter typed return 漂移事故首现 | charter §4 |
-| AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | `hasFMT27AuthModeConflict` 被重新 inline 化 | charter §4 |
-| TEST-POLLING-DETERMINISM typed marker | 第二次 race CI flake / 进入下一治理批 / 339 站点新增违反 | charter §4 |
-| FINDFIRSTCHILD-TYPED-API-01 | ✅ 已 ship → 037 PR-A1（提前收口；`scanner.FindFirstChild[N]` + SCANNER-FRAMEWORK-USAGE-02 allowlist=0；subtree 版拆出独立触发型 `FINDFIRSTINSUBTREE-API-01`） | charter §4 + `docs/backlog/cap-14-tooling.md` PR460-FU / 037 §1.1 |
-| FINDFIRSTINSUBTREE-API-01 | 第 N 处 EachInSubtree 早返 sentinel 触发（FindFirstChild 只覆盖 depth-1，正交轴） | `docs/backlog/cap-14-tooling.md` §14.1 + 037 §1.1 |
+> **2026-05-16 诚实重构**：原「触发条件 / 保留触发型」二表把「gate 未满足」与「真不可行」混为一谈。按 scope 是否已知重分为 **A 真 scope-blocker**（信号定义 scope，休眠）/ **B 优先级-决策 gate**（scope 已知，可主动推进 → [`037-R2`](202605162000-037r2-wave4-advance-round2.md)）/ **已 ship** 三类。
 
-### 保留触发型条目（trigger 是真事故/方案待定/量级未到，A + C 类筛选后 6 条）
-| 项 | trigger | backlog 锚点 |
+#### 已 ship（037 R1 + Wave 3 提前收口）
+| 项 | 去向 |
+|---|---|
+| SERVICEOWNED-OWNERSHIP-GUARD-01 | ✅ 037 PR-A3 / PR #508（schema if/then + FMT-32 + archtest + session/delete 迁移）；backlog cap-14 已标 ✅ |
+| FINDFIRSTCHILD-TYPED-API-01 | ✅ 037 PR-A1 / PR #505（`scanner.FindFirstChild[N]` + USAGE-02 allowlist=0；subtree 版拆 `FINDFIRSTINSUBTREE-API-01`）|
+| ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL + B2-K-08-CARVEOUT-NARROW | ✅ 037 PR-A2 / PR #503（function-level carve-out + ADR registry + ERRCODE-CARVEOUT-ADR-CONSISTENCY-01）|
+
+#### A 类 — 真 scope-blocker（触发信号定义正确 scope，保持休眠）
+| 项 | 为何信号未现即无法定 scope | 锚点 |
 |---|---|---|
-| **PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01**（A2）| (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要 sealed marker 范本时顺带建立 | `docs/backlog/cap-02-metadata-governance.md` |
-| **PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01**（A3）| 首次出现 cross-function file-scope `var pat = "./..."` 间接调用 escape，或新 archtest 规则需要绕过 funnel；unexport `typeseval.SharedResolver/LoadPackages` 为包内私有 + `LoadPackagesForFixtures` 显式入口 | `docs/backlog/cap-14-tooling.md` |
-| **CELLGEN-ERRCODE-FUNNEL-HARDEN**（C2）| depguard method-level rule 方案确定 OR typed wrapper 抽出；cellgen 包 errcode Hard 升级路径 | `docs/backlog/cap-14-tooling.md` |
-| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| ✅ 提前推进 → 037 PR-A2 (581-archtest-carveout-narrow)；function-level carve-out + ADR registry + ERRCODE-CARVEOUT-ADR-CONSISTENCY-01 Hard 守卫 | `docs/backlog/cap-14-tooling.md` + line 361 |
-| **PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01**（C6）| 第二次主题归属错误；`list-archtests.sh` grep → go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 `referenced_by` 列 | `docs/backlog/cap-02-metadata-governance.md` |
-| **POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01**（C8）| 第 2 次同类漂移；archtest 静态扫 `*_test.go`，`_NotFound` 后缀测试必须断言 typed `errcode.Error.Code` 等于 `Err*NotFound`，禁裸 `assert.AnError`（违反不可表达 → Hard）| `docs/backlog/cap-14-tooling.md` |
+| HANDLER-POLICY-TYPEAWARE-SCANNER-01 | 真值形态 = 修哪个 scanner 误报/漏报；无该案例则规则要拦什么不确定 | charter §4 |
+| AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | 第二道防线仅在第一道（`hasFMT27AuthModeConflict`）被 inline 回退后有意义，先做纯思辨 | charter §4 |
+| B-FLOOR-FOLLOWUP §2.5/§4 | contract status↔adapter typed return 漂移事故首现才定形态（反向触发=已晚），且 40h 大件 | charter §4 |
+
+#### B 类 — 优先级/决策 gate（scope 已知，主动推进，迁至 037-R2）
+| 项 | R2 阶段 | scope 已知证据 | backlog 锚点 |
+|---|---|---|---|
+| PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01 | **R2-P1** | cap-02 写死（unexported marker iface + `types.Implements` predicate） | `cap-02-metadata-governance.md` |
+| TYPESEVAL-IFACE-IMPL-HELPER-CONSOLIDATE-01 | **R2-P2** | cap-02 写死（`tools/typesutil/ImplementsInterface` + 10-case 单测） | `cap-02-metadata-governance.md` |
+| POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01 | **R2-P3** | cap-14 写死（扫 `_NotFound` 测试断言 typed `errcode.Error.Code`） | `cap-14-tooling.md` |
+| PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01 | **R2-P4** | cap-02 写死（grep→go/ast `Rule{ID:...}` + inventory `referenced_by`） | `cap-02-metadata-governance.md` |
+| CELLGEN-ERRCODE-FUNNEL-HARDEN | **R2-P5**（决策 gate） | 目标已知；depguard method-level vs typed wrapper 二选一是任务首步非外部依赖 | `cap-14-tooling.md` |
+| TEST-POLLING-DETERMINISM typed marker | 不进 R2 | scope 已知但 18-25h 三维 = PR #445 风险，留下方 Template-Wave4-3PR + flake-density gate | charter §4 |
+
+> ~~PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01~~ ⊃ superseded by plan 040 Stage 4（040 三重防线 #2/#3 + Stage 4 deep-internal 已达成 unexport-loader Hard 目标；不另立 backlog 条目）。
+> FINDFIRSTINSUBTREE-API-01：第 N 处 EachInSubtree 早返 sentinel 触发（FindFirstChild 仅 depth-1，正交轴），`cap-14-tooling.md` §14.1 + 037 §1.1，独立触发型不进 R2。
 
 ### 落地时统一按维度拆模板
 有 framework + bulk migration + enforcement 三维以上的项目（**TEST-POLLING-DETERMINISM** 和 **FINDFIRSTCHILD-TYPED-API-01** 都是），触发时按以下模板拆：
@@ -278,13 +287,13 @@ Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 
 | Rank | 项 | 工时 | 并行能力 |
 |---|---|---|---|
-| 1 | **`CELLGEN-LITERAL-FUNNEL-02`**（PR-MD1 follow-up，type-system Hard funnel guard，关闭"AI 改回手写 cell.tmpl 字段枚举"漏洞窗口）| 1.5-2h dev / ~0.5h review | ✅ 完全并行（仅改 cellgen spec.go/builder.go/cell.tmpl）|
+| ~~1~~ | ~~**`CELLGEN-LITERAL-FUNNEL-02`**~~ ✅ **shipped PR #480**（Phase 3.10，已收口） | — | — |
 
-**总剩余工时（Wave 2/3 范围）**：**1.5-2h dev / 0.5h review**
+**Wave 2/3 范围 next-up 清单已清空**——实质工作 100% 收官。剩余仅事务/待命两类：(a) §0 backlog ✅/WONTFIX 条目手动归档至 `docs/backlog/archive/202605121700-backlog-completed-2026q2.md`；(b) §4 Wave 4 触发型休眠待命（无 trigger 不立项）。
 
 ### 排期建议
 
-- **Now**：`CELLGEN-LITERAL-FUNNEL-02` 立刻 next-up（PR-MD1 留下的 silent-drift 漏洞窗口越早封越好，1.5-2h 工时不阻塞其他工作）
+- **Now**：无活跃实质任务。后续工程重心在 plan 040（archtest pass-funnel）Stage 3 PR-8~10 + Stage 4，与本 plan 无依赖。
 - **Wave 4 触发型**：保留 6 条触发型 + 7 条 charter Wave 4 触发清单，触发时按 Template-Wave4-3PR 拆分
 
 ---

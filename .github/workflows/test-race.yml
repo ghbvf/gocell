@@ -90,8 +90,39 @@ jobs:
       # session.Store conformance fan-out) was previously only exercised
       # without -race. The integration build tag opts in the testcontainer
       # PG path; the runner image carries Docker so containers come up.
-      - name: go test -race -tags=integration (postgres adapter + cell repos)
+      - name: go test -race -tags=integration (postgres adapter + cell repos + L2 atomicity e2e)
+        # Curated narrow scope — race-pg-integration is intentionally NOT a
+        # discovery-based lane (unlike _build-lint.yml::integration-test).
+        # The race detector adds ~3-5x runtime overhead, surfaces false
+        # positives on long e2e walkthroughs, and only carries unique
+        # signal for packages with concurrent goroutine boundaries:
+        #
+        #   - adapters/postgres/...                                   PG store ambient-tx + jti UNIQUE retries
+        #   - cells/accesscore/internal/adapters/postgres/...         accesscore PG store conformance
+        #   - tests/integration/l2atomicity/...                       producer→relay→publisher→subscriber goroutines
+        #
+        # Adding a non-PG / non-concurrent package here yields no race
+        # signal at significant CI cost. Each addition is a deliberate
+        # decision, not a discovery default.
+        #
+        # Governance: archtest CI-RACE-LANE-SUBSET-01 verifies every
+        # package listed here is also discovered by
+        # `go list -tags=integration` (preventing drift to non-integration
+        # paths or typos). archtest CI-INTEGRATION-DISCOVERY-01 separately
+        # guards _build-lint.yml::integration-test's discovery semantics.
+        # The two workflows have distinct purposes (broad correctness vs
+        # narrow race) and distinct invariants.
+        #
+        # ref: kubernetes/kubernetes — race detector in unit lanes only
+        # ref: etcd test_unit / test_e2e split — race not on e2e
+        # ref: watermill — pubsub tests skip -race, use ConsumerSpy
+        env:
+          # Ensures testutil.RequireDocker(t) calls t.Fatal (not t.Skip) when
+          # Docker is unavailable, preventing silent skip in CI where Docker
+          # is always expected. Mirrors _build-lint.yml::integration-test.
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
         run: |
           go test -race -count=1 -timeout 15m -tags=integration \
             ./adapters/postgres/... \
-            ./cells/accesscore/internal/adapters/postgres/...
+            ./cells/accesscore/internal/adapters/postgres/... \
+            ./tests/integration/l2atomicity/...

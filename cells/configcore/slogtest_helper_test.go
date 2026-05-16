@@ -50,11 +50,12 @@ func findAttr(r slog.Record, key string) (slog.Attr, bool) {
 	return found, ok
 }
 
-// TestConfigCore_InitDemoMode_EmitsL2DegradationWarn locks the cell_init.go
-// L2 degradation warn log, preventing silent deletion (Round-2 T-R1/T-R3
+// TestConfigCore_InitDemoMode_EmitsNonDurableDegradationWarn locks the cell_init.go
+// non-durable degradation warn log (triggered for cells with consistencyLevel >= L2
+// running in demo mode), preventing silent deletion (Round-2 T-R1/T-R3
 // mutation-survivor fix). Verifies the warn carries the expected structured
 // fields including the new durability_mode field added in Round-2 Fix 7.
-func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
+func TestConfigCore_InitDemoMode_EmitsNonDurableDegradationWarn(t *testing.T) {
 	cap := &captureHandler{}
 	logger := slog.New(cap)
 
@@ -76,17 +77,17 @@ func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, warn, "L2 degradation warn must be emitted in demo mode")
+	require.NotNil(t, warn, "non-durable degradation warn must be emitted in demo mode (triggered for consistency_level >= L2)")
 
 	cellAttr, ok := findAttr(*warn, "cell")
-	require.True(t, ok, "L2 warn must carry 'cell' attribute")
+	require.True(t, ok, "non-durable warn must carry 'cell' attribute")
 	require.Equal(t, "configcore", cellAttr.Value.String())
 
 	clAttr, ok := findAttr(*warn, "consistency_level")
-	require.True(t, ok, "L2 warn must carry 'consistency_level' attribute")
-	require.Equal(t, int64(2), clAttr.Value.Int64(), "L2 = 2")
+	require.True(t, ok, "non-durable warn must carry 'consistency_level' attribute")
+	require.Equal(t, int64(3), clAttr.Value.Int64(), "configcore = L3 (raised from L2 in T2 to match configsubscribe L3 slice)")
 
 	dmAttr, ok := findAttr(*warn, "durability_mode")
-	require.True(t, ok, "L2 warn must carry 'durability_mode' attribute (Fix 7)")
+	require.True(t, ok, "non-durable warn must carry 'durability_mode' attribute (Fix 7)")
 	require.Equal(t, "demo", dmAttr.Value.String())
 }

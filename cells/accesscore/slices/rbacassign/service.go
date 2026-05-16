@@ -13,8 +13,28 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// actorFromContext returns the caller identity to record in
+// RoleChangedEvent.ActorID. rbacassign is an internal-listener-only slice
+// reached exclusively through service-token authentication; the originating
+// cell is therefore the authoritative actor for audit purposes (auditcore's
+// role-event consumer uses ActorRequireExplicit mode and DLX-rejects
+// payloads with an empty ActorID). Returns "" when no principal is present
+// (unit-test path that constructs the service with context.Background) —
+// callers in that mode opt out of audit ledger evidence by construction.
+func actorFromContext(ctx context.Context) string {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p == nil {
+		return ""
+	}
+	if p.CallerCellID != "" {
+		return p.CallerCellID
+	}
+	return p.Subject
+}
 
 // Service handles RBAC role assignment and revocation.
 //
@@ -157,7 +177,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 		return err
 	}
 
-	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionAssigned}
+	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionAssigned, ActorID: actorFromContext(ctx)}
 	writeFn := func(txCtx context.Context) (bool, error) {
 		changed, err := s.roleRepo.AssignToUser(txCtx, userID, roleID)
 		if err != nil {
@@ -193,7 +213,7 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 		return err
 	}
 
-	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionRevoked}
+	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionRevoked, ActorID: actorFromContext(ctx)}
 	writeFn := func(txCtx context.Context) (bool, error) {
 		// Atomic count-check + removal eliminates TOCTOU race for last-admin guard.
 		changed, err := s.roleRepo.RemoveFromUserIfNotLast(txCtx, userID, roleID)

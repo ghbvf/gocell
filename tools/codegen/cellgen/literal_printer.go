@@ -326,3 +326,83 @@ func renderL0DepMetaSlice(fv reflect.Value, indent string) string {
 	sb.WriteString("}")
 	return sb.String()
 }
+
+// renderSliceMetaLiteral renders a *metadata.SliceMeta as a Go source literal
+// `&metadata.SliceMeta{...}`. slice.yaml is the single source of truth for
+// slice identity / consistency level — codegen projects every contract-bearing
+// field so that the typed sliceMeta in slice_gen.go is the funnel SoR.
+//
+// Mirrors renderCellMetaLiteral's structure. Zero-value / empty-slice fields
+// are omitted to keep regenerated output minimal.
+//
+// CELLGEN-LITERAL-FUNNEL-02 also applies: unexported. The sole caller is
+// BuildSliceSpec, which writes the result into SliceGenSpec.RenderedMetaLiteral.
+func renderSliceMetaLiteral(s *metadata.SliceMeta) string {
+	if s == nil {
+		return "&metadata.SliceMeta{}"
+	}
+	var sb strings.Builder
+	sb.WriteString("&metadata.SliceMeta{\n")
+	fmt.Fprintf(&sb, "\tID:               %q,\n", s.ID)
+	fmt.Fprintf(&sb, "\tBelongsToCell:    %q,\n", s.BelongsToCell)
+	fmt.Fprintf(&sb, "\tConsistencyLevel: %q,\n", s.ConsistencyLevel)
+	if len(s.ContractUsages) > 0 {
+		sb.WriteString("\tContractUsages: []metadata.ContractUsage{\n")
+		for _, u := range s.ContractUsages {
+			fmt.Fprintf(&sb, "\t\t{Contract: %q, Role: %q},\n", u.Contract, u.Role)
+		}
+		sb.WriteString("\t},\n")
+	}
+	if !isSliceVerifyMetaZero(s.Verify) {
+		sb.WriteString("\tVerify: ")
+		sb.WriteString(renderSliceVerifyMeta(s.Verify, "\t"))
+		sb.WriteString(",\n")
+	}
+	if len(s.AllowedFiles) > 0 {
+		sb.WriteString("\tAllowedFiles: []string{\n")
+		for _, p := range s.AllowedFiles {
+			fmt.Fprintf(&sb, "\t\t%q,\n", p)
+		}
+		sb.WriteString("\t},\n")
+	}
+	sb.WriteString("}")
+	return sb.String()
+}
+
+// isSliceVerifyMetaZero reports whether every field of v is zero (nil or empty).
+func isSliceVerifyMetaZero(v metadata.SliceVerifyMeta) bool {
+	return len(v.Unit) == 0 && len(v.Contract) == 0 && len(v.Waivers) == 0
+}
+
+// renderSliceVerifyMeta renders a metadata.SliceVerifyMeta inline at the given
+// indent. Empty fields are omitted.
+func renderSliceVerifyMeta(v metadata.SliceVerifyMeta, indent string) string {
+	inner := indent + "\t"
+	var sb strings.Builder
+	sb.WriteString("metadata.SliceVerifyMeta{\n")
+	if len(v.Unit) > 0 {
+		fmt.Fprintf(&sb, "%sUnit: []string{\n", inner)
+		for _, u := range v.Unit {
+			fmt.Fprintf(&sb, "%s\t%q,\n", inner, u)
+		}
+		fmt.Fprintf(&sb, "%s},\n", inner)
+	}
+	if len(v.Contract) > 0 {
+		fmt.Fprintf(&sb, "%sContract: []string{\n", inner)
+		for _, c := range v.Contract {
+			fmt.Fprintf(&sb, "%s\t%q,\n", inner, c)
+		}
+		fmt.Fprintf(&sb, "%s},\n", inner)
+	}
+	if len(v.Waivers) > 0 {
+		fmt.Fprintf(&sb, "%sWaivers: []metadata.WaiverMeta{\n", inner)
+		for _, w := range v.Waivers {
+			fmt.Fprintf(&sb, "%s\t{Contract: %q, Owner: %q, Reason: %q, ExpiresAt: %q},\n",
+				inner, w.Contract, w.Owner, w.Reason, w.ExpiresAt)
+		}
+		fmt.Fprintf(&sb, "%s},\n", inner)
+	}
+	sb.WriteString(indent)
+	sb.WriteString("}")
+	return sb.String()
+}

@@ -23,13 +23,13 @@
 | 4 | CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01 | ⚠️ 撤回主方案 | `cells/accesscore/slices/configreceive/service.go` 头部注释自承「Real consumers (JWT TTL refresh, key rotation interval) will land in a follow-up」——是为业务 reload 已搭好的接入骨架，单纯删除会返工 ~10h；改为业务触发型，参 §6 与 backlog `CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01` |
 | 5 | PR-CFG-A-DEFER-2 (L2 divergence) | ⚠️ 未实施 | 已有完整设计草案（参 `docs/bak/202605010354-backlog-pre-pr341-cleanup.md` L57） |
 | 6 | C-05 CELLS-CELLROUTES-PLACEHOLDER-DELETE | ✅ 已合（PR-CFG-CELL-ROUTES-CLEAN） | `cells/configcore/cell_routes.go` + `cells/accesscore/cell_routes.go` 同源 4 行占位均删除 |
-| 7 | PR320-FU-CONFIGCORE-CI-NOOP | ❌ 未解决 | 只有 `testutil.FailingPublisher`，无 noop publisher CI 路径覆盖 |
+| 7 | PR320-FU-CONFIGCORE-CI-NOOP | ✅ 已完成（代码端态核对 develop@67f5ce917）| `configpublish/service_test.go:37-43` godoc 明确 newTestService 用 NoopEmitter 覆盖 noop publisher CI 路径；fail-open WARN 由 `Test{Service_Publish,Service_Rollback}_FailOpen_PublisherError` 单独断言 |
 | 8 | PR-CFG-G1-FU6 | ✅ subsumed by FMT-21 (PR-CFG-G1-FU6-RECYCLE) | `kernel/governance/rules_misc_strict.go:551-602` (`validateFMTContractDirIDMatch01`) is the bijective inverse and already fires on the canonical regression. Regression test pinned at `rules_misc_strict_test.go::TestFMTContractDirIDMatch01_Mismatch` "dash-instead-of-slash regression"; docstring aliased. |
-| 9 | PR238-FU4 legacy NotFound 测试去重 | ❌ 未解决 | `cells/configcore/internal/adapters/postgres/config_repo_test.go:314` 与 `:665` 仍并存 |
-| 10 | PR238-FU8 UpdateForRollback op label 断言 | ❌ 未解决 | `:395-411` 仍无 `assert.Contains(InternalMessage, "UpdateForRollback")` |
-| 11 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | ❌ 未解决 | `cells/auditcore/slices/auditappend/slice.yaml` 仍 14 contractUsages；`cells/configcore/slices/configread/` 未拆 internal |
+| 9 | PR238-FU4 legacy NotFound 测试去重 | ✅ 已完成（代码端态核对 develop@67f5ce917）| legacy 命名函数已删；`config_repo_test.go` NotFound 与 OtherScanError 已分离（`TestGetByKey_NotFound_*`/`TestGetByKey_OtherScanError_*`、`TestGetVersion_*` 各一对），无旧重复对 |
+| 10 | PR238-FU8 UpdateForRollback op label 断言 | ✅ 已完成（代码端态核对 develop@67f5ce917）| `config_repo_test.go:408 assert.Contains(ec.InternalMessage, opUpdateForRollback)` + `:366 assert.NotContains`（Update 路径反向断言），与 fix spec 完全一致 |
+| 11 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | 🟡 部分完成（代码端态核对 develop@67f5ce917）| **auditappend ✅ 已 4 拆**（`auditappend{config,role,session,user}`，旧 `auditappend` slice 已删）——但**偏离设计**：各子 slice 独立 `service.go`，**未走 plan 要求的 `internal/dispatch.go` 共享 helper**（全仓无 dispatch.go）。**configread ❌ 未拆**：`configread/slice.yaml:8` 仍 `http.config.internal.get.v1` 与 public serve 同 slice，无 `configread-internal` slice → SLICE-DECOMP 第(2)项未达成 |
 
-**汇总**：已解决 5（#1/#2/#3 PR 207-cfg-cache-lifecycle；#6；#8 subsumed by FMT-21）/ 撤回主方案 1（#4，改业务触发）/ 信息已补全 11 / 实际未实施 5
+**汇总**（2026-05-16 代码端态回灌 develop@67f5ce917）：已解决 8（#1/#2/#3 PR 207-cfg-cache-lifecycle；#6；#7/#9/#10 测试硬化已落；#8 subsumed by FMT-21）/ 撤回主方案 1（#4，改业务触发）/ 部分完成 1（#11 auditappend 4 拆毕但偏离 dispatch 设计、configread 未拆）/ 实际未实施 1（#5 PR-CFG-L2-DIVERGENCE）
 
 ---
 
@@ -37,12 +37,12 @@
 
 | PR | 主题 | 条目 | Cx 上限 | 估时 | 触发/依赖 |
 |----|------|------|---------|------|-----------|
-| **PR-CFG-CACHE-LIFECYCLE** | configsubscribe 缓存生命周期统一治理 | #1, #2, #3 | Cx2 | 1-1.5d | 无 | ✅ 已实施（branch 207-cfg-cache-lifecycle）|
-| **PR-CFG-TEST-RESIDUALS** | configcore 测试补丁批 | #7, #9, #10 | Cx1 | 0.5d | 无（推荐先合） |
+| **PR-CFG-CACHE-LIFECYCLE** | configsubscribe 缓存生命周期统一治理 | #1, #2, #3 | Cx2 | 1-1.5d | 无 | ✅ shipped **PR #518**（含深度 review F1–F3：TTL clamp-up + GC 状态机）|
+| **PR-CFG-TEST-RESIDUALS** | configcore 测试补丁批 | #7, #9, #10 | Cx1 | 0.5d | ✅ 已完成（#7/#9/#10 代码端态核对落实，develop@67f5ce917）|
 | ~~**PR-CFG-PLACEHOLDER-CLEAN**~~ → **PR-CFG-CELL-ROUTES-CLEAN** | configcore + accesscore cell_routes.go 占位清理 | ~~#4,~~ #6 | Cx1 | 0.1d | 无（已合）|
 | **PR-CFG-L2-DIVERGENCE** | ConfigCore L2 与 memory 行为分歧治理 | #5 | Cx1（决策）+ Cx2（实施） | 1d 设计 + 4h 实施 | architect 评估 |
 | **PR-CFG-G1-FU6-RECYCLE** | ~~CONTRACT-PATH-ID-MAPPING-ARCHTEST~~ → **subsumed by FMT-21**; pin regression test + alias docstring | #8 | Cx1 | 0.5h | subsumed-by: FMT-21 (`validateFMTContractDirIDMatch01`) |
-| **PR-CFG-SLICE-DECOMPOSE** | auditappend / configread 多 verb 拆分 | #11 | Cx3 | 1.5-2d | 在 PR-CFG-CACHE-LIFECYCLE 后做 |
+| **PR-CFG-SLICE-DECOMPOSE** | auditappend / configread 多 verb 拆分 | #11 | Cx3 | 1.5-2d | 🟡 部分：auditappend 4 拆 ✅（偏离——无 internal/dispatch.go，各 slice 独立 service.go）；configread→configread-internal ❌ 未拆，仍需推进 |
 
 ---
 
@@ -67,9 +67,9 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| PR320-FU | **CONFIGCORE-NOOP-PUBLISHER-CI-COVERAGE-01** (Cx1, P3, 🟡): `cells/configcore/` noop publisher 路径在 CI 中未走通，回归会被静默吞掉。**修复**：在 `cells/configcore/slices/configpublish/service_test.go` 加一个 noop publisher 分支测试（不引入新 fixture，复用 `outboxtest.NoopWriter`），断言 publish 路径在 noop wiring 下走 fail-open WARN 而非 panic / 静默丢弃。 | 1.5h | `cells/configcore/slices/configpublish/service_test.go` | PR#320 / PR-A55 adapter integration skip gaps |
-| PR238-FU4 | **CONFIGREPO-LEGACY-NOTFOUND-TEST-DEDUP-01** (Cx1, P3, 🟡): `config_repo_test.go:314` `TestConfigRepository_GetByKey_NotFound` 与 `:665` `TestConfigRepository_GetVersion_NotFound` 用 `assert.AnError` 实际测的是 other-error 分支，与 `TestGetByKey_OtherScanError_ReturnsErrConfigRepoQuery` / `TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery` 重复，造成 mutation-test 误导。**修复**：删除两个 legacy 命名函数（直接 delete，不向后兼容）；如有 PR diff 需要可读性，把覆盖点合并到 OtherScanError 表驱动行内。 | 1h | `cells/configcore/internal/adapters/postgres/config_repo_test.go` | PR#238 L4 reviewer T-04 |
-| PR238-FU8 | **CONFIGREPO-UPDATE-ROLLBACK-OP-LABEL-TEST-01** (Cx1, P3, 🟡): `doUpdate` 通过 `op` 参数向 `scanConfigOrMapError` 传 `"Update"` / `"UpdateForRollback"`，`InternalMessage` 携带该 op，但 `TestConfigRepository_UpdateForRollback_NotFound:395-411` 与 `TestConfigRepository_UpdateForRollback` 都未断言 InternalMessage 含 `"UpdateForRollback"`——若有人把 op 硬编码回 `"Update"`，CI 不会 FAIL。**修复**：相关 NotFound 测试追加 `assert.Contains(t, ec.InternalMessage, "UpdateForRollback")` + `Contains(..., "Update")` 反向断言（`Update` 子串检查不区分两路径，要先取 InternalMessage 再 Contains 唯一关键词）。 | 1h | 同上 | PR#238 L4 round-2 reviewer T-R4 + 029 master roadmap §errcode W4 |
+| PR320-FU | **CONFIGCORE-NOOP-PUBLISHER-CI-COVERAGE-01** — ✅ **DONE**（代码端态核对 develop@67f5ce917：`configpublish/service_test.go:37-43` noop wiring 覆盖 + `Test*_FailOpen_PublisherError` fail-open WARN 断言）(Cx1, P3, 🟡): `cells/configcore/` noop publisher 路径在 CI 中未走通，回归会被静默吞掉。**修复**：在 `cells/configcore/slices/configpublish/service_test.go` 加一个 noop publisher 分支测试（不引入新 fixture，复用 `outboxtest.NoopWriter`），断言 publish 路径在 noop wiring 下走 fail-open WARN 而非 panic / 静默丢弃。 | 1.5h | `cells/configcore/slices/configpublish/service_test.go` | PR#320 / PR-A55 adapter integration skip gaps |
+| PR238-FU4 | **CONFIGREPO-LEGACY-NOTFOUND-TEST-DEDUP-01** — ✅ **DONE**（代码端态核对 develop@67f5ce917：legacy 命名函数已删，`config_repo_test.go` NotFound 与 OtherScanError 分离，无旧重复对）(Cx1, P3, 🟡): `config_repo_test.go:314` `TestConfigRepository_GetByKey_NotFound` 与 `:665` `TestConfigRepository_GetVersion_NotFound` 用 `assert.AnError` 实际测的是 other-error 分支，与 `TestGetByKey_OtherScanError_ReturnsErrConfigRepoQuery` / `TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery` 重复，造成 mutation-test 误导。**修复**：删除两个 legacy 命名函数（直接 delete，不向后兼容）；如有 PR diff 需要可读性，把覆盖点合并到 OtherScanError 表驱动行内。 | 1h | `cells/configcore/internal/adapters/postgres/config_repo_test.go` | PR#238 L4 reviewer T-04 |
+| PR238-FU8 | **CONFIGREPO-UPDATE-ROLLBACK-OP-LABEL-TEST-01** — ✅ **DONE**（代码端态核对 develop@67f5ce917：`config_repo_test.go:408 assert.Contains(InternalMessage, opUpdateForRollback)` + `:366 NotContains` 反向断言，与 fix spec 一致）(Cx1, P3, 🟡): `doUpdate` 通过 `op` 参数向 `scanConfigOrMapError` 传 `"Update"` / `"UpdateForRollback"`，`InternalMessage` 携带该 op，但 `TestConfigRepository_UpdateForRollback_NotFound:395-411` 与 `TestConfigRepository_UpdateForRollback` 都未断言 InternalMessage 含 `"UpdateForRollback"`——若有人把 op 硬编码回 `"Update"`，CI 不会 FAIL。**修复**：相关 NotFound 测试追加 `assert.Contains(t, ec.InternalMessage, "UpdateForRollback")` + `Contains(..., "Update")` 反向断言（`Update` 子串检查不区分两路径，要先取 InternalMessage 再 Contains 唯一关键词）。 | 1h | 同上 | PR#238 L4 round-2 reviewer T-R4 + 029 master roadmap §errcode W4 |
 
 ### PR-CFG-CELL-ROUTES-CLEAN — cell_routes.go 占位清理（已合）
 
@@ -94,7 +94,7 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| SLICE-DECOMP | **CELLS-SLICE-MULTI-VERB-DECOMPOSE-01** (Cx3, P1, 🟡): `cells/auditcore/slices/auditappend/slice.yaml` 14 contractUsages 单 slice 承载 13 topic（session/user/config/role 四类），违反 slice 单一 verb 原则；`cells/configcore/slices/configread/` 双 listener（public GET + internal-get）也不应同 slice。**修复**：(1) auditappend → `auditappend-{session,user,config,role}` 4 个子 slice 共享 dispatch helper（在 `internal/dispatch.go` 抽出）；(2) configread → 拆出 `configread-internal` 单独 slice（internal listener 独立 owner）；(3) 不留兼容包装（项目无外部消费方）；(4) 同步更新 contract.yaml `endpoints.subscribers`；(5) `gocell validate` 全量过。**反方观点**：拆分会增加 cell init.go 复杂度（4 子 slice register + dispatch helper）；有人会建议 fold 14 contractUsages 是 OK 的，因为 audit 本身就是「13 topic 单一处理」。**决策**：按现有 systems layer review 走拆分；review checklist 已签字。**注意**：与 PR-CFG-CACHE-LIFECYCLE 同动 `cells/configcore/slices/`，**必须在前者合并后再启**避免 merge conflict。 | 1.5-2d | `cells/auditcore/slices/auditappend/` 拆 4 + `cells/configcore/slices/configread/` 拆 2 + `cells/auditcore/slices/auditappend/internal/dispatch.go`（新） + 全部 contract.yaml endpoints.subscribers + cell_init.go | systems layer review + 030 §2 K-07 |
+| SLICE-DECOMP | **CELLS-SLICE-MULTI-VERB-DECOMPOSE-01** — 🟡 **PARTIAL**（代码端态核对 develop@67f5ce917：(1) auditappend ✅ 已拆 `auditappend{config,role,session,user}` 4 子 slice、旧 slice 已删，**但偏离设计——无 `internal/dispatch.go` 共享 helper，各 slice 独立 `service.go`**；(2) configread ❌ **未拆**，`configread/slice.yaml:8` 仍 `http.config.internal.get.v1`+public serve 同 slice，无 `configread-internal`。**剩余工作 = configread→configread-internal 拆分**，dispatch helper 偏离是否回补需 review 决策）(Cx3, P1, 🟡): `cells/auditcore/slices/auditappend/slice.yaml` 14 contractUsages 单 slice 承载 13 topic（session/user/config/role 四类），违反 slice 单一 verb 原则；`cells/configcore/slices/configread/` 双 listener（public GET + internal-get）也不应同 slice。**修复**：(1) auditappend → `auditappend-{session,user,config,role}` 4 个子 slice 共享 dispatch helper（在 `internal/dispatch.go` 抽出）；(2) configread → 拆出 `configread-internal` 单独 slice（internal listener 独立 owner）；(3) 不留兼容包装（项目无外部消费方）；(4) 同步更新 contract.yaml `endpoints.subscribers`；(5) `gocell validate` 全量过。**反方观点**：拆分会增加 cell init.go 复杂度（4 子 slice register + dispatch helper）；有人会建议 fold 14 contractUsages 是 OK 的，因为 audit 本身就是「13 topic 单一处理」。**决策**：按现有 systems layer review 走拆分；review checklist 已签字。**注意**：与 PR-CFG-CACHE-LIFECYCLE 同动 `cells/configcore/slices/`，**必须在前者合并后再启**避免 merge conflict。 | 1.5-2d | `cells/auditcore/slices/auditappend/` 拆 4 + `cells/configcore/slices/configread/` 拆 2 + `cells/auditcore/slices/auditappend/internal/dispatch.go`（新） + 全部 contract.yaml endpoints.subscribers + cell_init.go | systems layer review + 030 §2 K-07 |
 
 ---
 

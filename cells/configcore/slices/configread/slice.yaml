@@ -1,11 +1,10 @@
 id: configread
 belongsToCell: configcore
+consistencyLevel: L0
 contractUsages:
   - contract: http.config.get.v1
     role: serve
   - contract: http.config.list.v1
-    role: serve
-  - contract: http.config.internal.get.v1
     role: serve
 verify:
   unit:
@@ -13,7 +12,6 @@ verify:
   contract:
     - contract.http.config.get.v1.serve
     - contract.http.config.list.v1.serve
-    - contract.http.config.internal.get.v1.serve
   waivers: []
 
 allowedFiles:

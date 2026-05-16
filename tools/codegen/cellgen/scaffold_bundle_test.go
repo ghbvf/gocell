@@ -530,3 +530,88 @@ func TestPlanBundleFiles_ErrorCarriesKindLabelInDetails(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// P3: ScaffoldSpec.Validate — consistency level vs bundle variants (Wave 5)
+// ---------------------------------------------------------------------------
+
+// TestScaffoldSpec_Validate_RejectsL1WithEvents asserts that specifying
+// consistencyLevel=L1 with an event-publishing variant (withEvents=true)
+// returns a validation error — event slices require at least L2 (OutboxFact).
+func TestScaffoldSpec_Validate_RejectsL1WithEvents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:           "badevtcell",
+		StructName:       "BadEvtCell",
+		Package:          "badevtcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L1",
+		WithEvents:       true,
+	}
+	err := ScaffoldCellBundle(dir, spec)
+	if err == nil {
+		t.Fatal("expected validation error for L1+WithEvents, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+}
+
+// TestScaffoldSpec_Validate_AcceptsL2WithEvents asserts that L2+withEvents
+// passes validation without error.
+func TestScaffoldSpec_Validate_AcceptsL2WithEvents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:           "goodevtcell",
+		StructName:       "GoodEvtCell",
+		Package:          "goodevtcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithEvents:       true,
+	}
+	if err := ScaffoldCellBundle(dir, spec); err != nil {
+		t.Fatalf("expected no error for L2+WithEvents, got: %v", err)
+	}
+}
+
+// TestScaffoldSpec_DefaultsToL2 asserts that an empty ConsistencyLevel is
+// defaulted to "L2" before validation, and that a bundle scaffold succeeds.
+func TestScaffoldSpec_DefaultsToL2(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:     "defaultlvlcell",
+		StructName: "DefaultLvlCell",
+		Package:    "defaultlvlcell",
+		ModulePath: "github.com/ghbvf/gocell",
+		OwnerTeam:  "platform",
+		OwnerRole:  "cell-owner",
+		Type:       "core",
+		// ConsistencyLevel intentionally empty — should default to L2
+		WithHTTP: true,
+	}
+	if err := ScaffoldCellBundle(dir, spec); err != nil {
+		t.Fatalf("default ConsistencyLevel scaffold failed: %v", err)
+	}
+	// Verify the generated cell.yaml contains consistencyLevel: L2
+	cellYAMLPath := dir + "/cells/defaultlvlcell/cell.yaml"
+	data, err := os.ReadFile(cellYAMLPath) //nolint:gosec // tempdir test fixture
+	if err != nil {
+		t.Fatalf("read cell.yaml: %v", err)
+	}
+	if !strings.Contains(string(data), "consistencyLevel: L2") {
+		t.Errorf("expected cell.yaml to contain 'consistencyLevel: L2', got:\n%s", string(data))
+	}
+}

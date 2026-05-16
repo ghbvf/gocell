@@ -13,6 +13,25 @@ change to the driver.
   `gocell::log::error`).
 - `verify-*.sh` — individual gates. Each script is independently runnable
   (`bash hack/verify-X.sh`) and exits non-zero on failure.
+- `githooks/pre-push` — local fast-feedback hook (see below). Not part of
+  the `make verify` gate set; it runs at `git push` time, not in CI.
+
+## Local pre-push hook
+
+`make install-hooks` points `core.hooksPath` at `hack/githooks/` (per-repo
+config, shared across all worktrees of this repo). **Run it once after a
+fresh clone and after every `git worktree add`** — without it the hook is
+inert and there is no local protection.
+
+`hack/githooks/pre-push` runs the fast, deterministic, offline subset of CI
+that fresh-instance AI co-authors most often skip — gofumpt (scoped to the
+pushed `.go` files), `go build`/`vet` (incl. integration/e2e tags), and
+codegen staleness (`gocell verify generated`). Each tier only fires when
+the push actually touches the files it protects, so a docs-only push pays
+~0s. Honest scope: it checks the working tree (not the pushed commit) and
+`git push --no-verify` bypasses it — a fast feedback loop, not an
+unbypassable gate. See the header comment in `githooks/pre-push` for the
+full rationale and the deliberate CI-mirror deviations.
 
 ## Adding a new gate
 

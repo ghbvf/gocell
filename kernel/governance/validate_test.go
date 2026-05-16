@@ -62,8 +62,9 @@ func validProject() *metadata.ProjectMeta {
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
-				ID:            "session-login",
-				BelongsToCell: "accesscore",
+				ID:               "session-login",
+				BelongsToCell:    "accesscore",
+				ConsistencyLevel: "L2",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},

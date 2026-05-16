@@ -137,6 +137,112 @@ func TestValidateSliceConsistency_MissingParentCell(t *testing.T) {
 }
 
 // =============================================================================
+// SLICE-CONSISTENCY-02 — contractUsages role → minimum consistencyLevel
+// =============================================================================
+
+// TestValidateSliceConsistencyContractUsages asserts the lower-bound side of
+// the slice consistency contract: declaring role=publish in contractUsages
+// forces consistencyLevel ≥ L2 (OutboxFact). Non-publish roles do not enforce
+// a lower bound; subscribe-only slices live at L2 (auditcore) or L3
+// (configreceive) — both are valid forms.
+func TestValidateSliceConsistencyContractUsages(t *testing.T) {
+	tests := []struct {
+		name           string
+		sliceLevel     string
+		usages         []metadata.ContractUsage
+		wantErrorCount int
+	}{
+		{
+			name:           "publish + L0 — error",
+			sliceLevel:     "L0",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "publish"}},
+			wantErrorCount: 1,
+		},
+		{
+			name:           "publish + L1 — error",
+			sliceLevel:     "L1",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "publish"}},
+			wantErrorCount: 1,
+		},
+		{
+			name:           "publish + L2 — clean",
+			sliceLevel:     "L2",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "publish"}},
+			wantErrorCount: 0,
+		},
+		{
+			name:           "publish + L3 — clean",
+			sliceLevel:     "L3",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "publish"}},
+			wantErrorCount: 0,
+		},
+		{
+			name:           "publish + L4 — clean",
+			sliceLevel:     "L4",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "publish"}},
+			wantErrorCount: 0,
+		},
+		{
+			name:           "serve + L0 — clean (no lower bound)",
+			sliceLevel:     "L0",
+			usages:         []metadata.ContractUsage{{Contract: "http.x.v1", Role: "serve"}},
+			wantErrorCount: 0,
+		},
+		{
+			name:           "subscribe + L0 — clean (no lower bound)",
+			sliceLevel:     "L0",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "subscribe"}},
+			wantErrorCount: 0,
+		},
+		{
+			name:       "multiple usages with one publish + L0 — error",
+			sliceLevel: "L0",
+			usages: []metadata.ContractUsage{
+				{Contract: "http.x.v1", Role: "serve"},
+				{Contract: "event.x.v1", Role: "publish"},
+			},
+			wantErrorCount: 1,
+		},
+		{
+			name:           "publish + empty level — error",
+			sliceLevel:     "",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "publish"}},
+			wantErrorCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			project := &metadata.ProjectMeta{
+				Cells: map[string]*metadata.CellMeta{
+					"testcell": {ID: "testcell", ConsistencyLevel: "L4"},
+				},
+				Slices: map[string]*metadata.SliceMeta{
+					"testcell/testslice": {
+						ID:               "testslice",
+						BelongsToCell:    "testcell",
+						ConsistencyLevel: tt.sliceLevel,
+						ContractUsages:   tt.usages,
+					},
+				},
+				Contracts:  map[string]*metadata.ContractMeta{},
+				Journeys:   map[string]*metadata.JourneyMeta{},
+				Assemblies: map[string]*metadata.AssemblyMeta{},
+			}
+			v := NewValidator(project, ".", clock.Real())
+			results := v.validateSliceConsistencyContractUsages()
+			var errCount int
+			for _, r := range results {
+				if r.Severity == SeverityError {
+					errCount++
+					assert.Equal(t, codeSLICECONSISTENCY02, r.Code)
+				}
+			}
+			assert.Equal(t, tt.wantErrorCount, errCount, "unexpected error count")
+		})
+	}
+}
+
+// =============================================================================
 // FMT-19 wrapper package-state scanner (formerly rules_wrapper_test.go)
 // =============================================================================
 

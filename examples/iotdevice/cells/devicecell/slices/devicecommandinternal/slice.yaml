@@ -1,0 +1,15 @@
+id: devicecommandinternal
+belongsToCell: devicecell
+consistencyLevel: L4
+contractUsages:
+  - contract: http.internal.devicecommands.list.v1
+    role: serve
+verify:
+  unit:
+    - unit.devicecommandinternal.service
+  contract:
+    - contract.http.internal.devicecommands.list.v1.serve
+  waivers: []
+
+allowedFiles:
+  - examples/iotdevice/cells/devicecell/slices/devicecommandinternal/**

@@ -1,6 +1,6 @@
 id: accesscore
 type: core
-consistencyLevel: L2
+consistencyLevel: L3
 durabilityMode: durable
 owner:
   team: platform

@@ -31,10 +31,11 @@ func TestLocation_REF01_SliceBelongsToCell(t *testing.T) {
 		"cells/ghost/slices/s/slice.yaml": &fstest.MapFile{Data: []byte(
 			"id: s\n" + // line 1
 				"belongsToCell: ghost\n" + // line 2 — target of REF-01
-				"contractUsages: []\n" + // line 3
-				"verify: {unit: [], contract: []}\n" + // line 4
-				"allowedFiles:\n" + // line 5
-				"  - cells/ghost/slices/s/**\n", // line 6
+				"consistencyLevel: L0\n" + // line 3 (parser strict requires non-empty)
+				"contractUsages: []\n" + // line 4
+				"verify: {unit: [], contract: []}\n" + // line 5
+				"allowedFiles:\n" + // line 6
+				"  - cells/ghost/slices/s/**\n", // line 7
 		)},
 	}
 
@@ -77,11 +78,12 @@ func TestLocation_REF02_ContractUsageIndex(t *testing.T) {
 		"cells/x/slices/s/slice.yaml": &fstest.MapFile{Data: []byte(
 			"id: s\n" + // line 1
 				"belongsToCell: x\n" + // line 2
-				"contractUsages:\n" + // line 3
-				"  - contract: http.ghost.v1\n" + // line 4 — missing ref → REF-02
-				"    role: serve\n" + // line 5
-				"verify: {unit: [], contract: []}\n" + // line 6
-				"allowedFiles:\n  - foo/**\n", // line 7-8
+				"consistencyLevel: L0\n" + // line 3 (parser strict requires non-empty)
+				"contractUsages:\n" + // line 4
+				"  - contract: http.ghost.v1\n" + // line 5 — missing ref → REF-02
+				"    role: serve\n" + // line 6
+				"verify: {unit: [], contract: []}\n" + // line 7
+				"allowedFiles:\n  - foo/**\n", // line 8-9
 		)},
 	}
 
@@ -103,7 +105,7 @@ func TestLocation_REF02_ContractUsageIndex(t *testing.T) {
 	}
 	require.NotNil(t, ref02, "expected a REF-02 finding")
 	assert.Equal(t, "contractUsages[0].contract", ref02.Field)
-	assert.Equal(t, 4, ref02.Line, "contractUsages[0].contract should be on line 4")
+	assert.Equal(t, 5, ref02.Line, "contractUsages[0].contract should be on line 5")
 	assert.Positive(t, ref02.Column)
 }
 

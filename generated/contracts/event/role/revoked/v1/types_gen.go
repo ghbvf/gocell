@@ -5,9 +5,10 @@ package revoked
 
 // Payload — event.role.revoked.v1.payload
 type Payload struct {
-	UserId string `json:"userId"`
-	RoleId string `json:"roleId"`
-	Action string `json:"action"`
+	UserId  string `json:"userId"`
+	RoleId  string `json:"roleId"`
+	Action  string `json:"action"`
+	ActorId string `json:"actorId,omitempty"`
 }
 
 // Headers — event.role.revoked.v1.headers

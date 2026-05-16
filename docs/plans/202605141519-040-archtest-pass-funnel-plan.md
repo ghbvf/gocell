@@ -10,7 +10,7 @@
 | **1.5 — Pass 框架完备化 + 单路径 enforcement** | 1 | ✅ PR #495 (2026-05-15) | Stage 2/3/dual 全后续 PR 零框架返工前置；见下方摘要 |
 | **1.6 — RunTypedDir fixture-module driver 补全** | 1 | ✅ PR #500 (2026-05-15) | Stage-1.5 漏盘点 standalone fixture-module 扫描；随 PR-6 同 ship |
 | **1.7 — RunTypedProduction production-only façade** | 1 | ✅ PR #507 (2026-05-16) | auth_bootstrap 迁移需要 production-only package set；随 PR-7 同 ship |
-| **1.8 — FindFirstChild façade + USAGE-02 升 Hard** | 1 | 🔄 本 PR (2026-05-16) | 吸收 037 PR #505 治理产物；不计入 Stage 3 实质迁移进度 |
+| **1.8 — FindFirstChild façade + USAGE-02 升 Hard** | 1 | ✅ PR #511 (2026-05-16) | 吸收 037 PR #505 治理产物（含 F6 同包裸调用 post-merge review 闭环）；不计入 Stage 3 实质迁移进度 |
 | 2 — A 类 EachFile 主题分批迁移 | 4 | ✅ 全部 ship | PR-2 ✅ #496 (metadata)；PR-3 ✅ #493 (contract/codegen)；PR-4 ✅ #498 (observability)；PR-5 ✅ #497 (lifecycle/errcode) |
 | 3 — E 类 for-range 主题分批迁移 | 5→3 | ✅ PR-8~10 合并入 PR #522 consolidated-batch 交付（2026-05-16）| PR-6 ✅ #500；PR-7 ✅ #507；余 37 文件合并为单一 PR #522（实测文件数 37 > 原估 27；shared-helper 图谱强耦合导致 batch 非独立，consolidated 更可行）；LegacyAllowlist 已清零 |
 | 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ LegacyAllowlist 已清零（PR #522）；余 archtestmeta 包删除 + depguard yaml 收尾（独立 Stage 4 PR） | — |

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,26 +93,60 @@ func fileHasExclusivelyTag(path, tag string) (bool, error) {
 	return withTagCtx && !withoutTagCtx, nil
 }
 
-// readIntegrationTestStep reads _build-lint.yml and returns the
-// "Integration tests (testcontainers)" step from the integration-test job.
-// Step / job names are coupled to the workflow file by string; renaming
-// either is a coordinated change with this archtest.
-func readIntegrationTestStep(t *testing.T) workflowStep {
+// readWorkflowStep reads <workflowFile> under .github/workflows/ and returns
+// the named step from the named job. Step + job + workflow names are coupled
+// to the YAML by string; renaming any of them is a coordinated change with
+// this archtest.
+func readWorkflowStep(t *testing.T, workflowFile, jobName, stepNamePrefix string) workflowStep {
 	t.Helper()
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", workflowFile)))
 	require.NoError(t, err)
 
 	var cfg workflowConfig
 	require.NoError(t, yaml.NewDecoder(bytes.NewReader(body)).Decode(&cfg))
 
-	job, ok := cfg.Jobs["integration-test"]
-	require.True(t, ok, "integration-test job missing from _build-lint.yml")
+	job, ok := cfg.Jobs[jobName]
+	require.True(t, ok, "job %q missing from %s", jobName, workflowFile)
 
-	step, ok := findWorkflowStep(job.Steps, "Integration tests (testcontainers)")
-	require.True(t, ok, "Integration tests (testcontainers) step missing from integration-test job")
-	return step
+	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Name, stepNamePrefix) {
+			return step
+		}
+	}
+	require.FailNowf(t, "step missing", "step with name prefix %q missing from %s::%s", stepNamePrefix, workflowFile, jobName)
+	return workflowStep{}
 }
+
+// readIntegrationTestStep reads the integration-test step of _build-lint.yml.
+// Thin wrapper kept for clarity at the call site.
+func readIntegrationTestStep(t *testing.T) workflowStep {
+	return readWorkflowStep(t, "_build-lint.yml", "integration-test", "Integration tests (testcontainers)")
+}
+
+// readRaceIntegrationStep reads the go-test-race-integration step of
+// test-race.yml. The step name contains a long descriptive suffix listing
+// the package sets it covers; prefix match keeps this archtest stable when
+// that suffix evolves.
+func readRaceIntegrationStep(t *testing.T) workflowStep {
+	return readWorkflowStep(t, "test-race.yml", "race-pg-integration", "go test -race -tags=integration")
+}
+
+// CI-INTEGRATION-DISCOVERY-01 scope note:
+//
+// This archtest only covers _build-lint.yml::integration-test — the lane
+// whose purpose is broad integration coverage. The race-pg-integration step
+// of test-race.yml is intentionally a curated narrow list (race detector
+// adds ~3-5x runtime and yields false positives on long e2e walkthroughs;
+// it only carries unique signal on packages with concurrent goroutine
+// boundaries). Forcing race onto every discovered integration package is
+// a wrong fit for the race detector's value model.
+//
+// Race-lane drift protection is handled by a separate archtest
+// (CI-RACE-LANE-SUBSET-01) that asserts every package listed in
+// race-pg-integration is also discovered by `go list -tags=integration`,
+// preventing typos / non-integration paths in the curated list without
+// expanding the lane's scope.
 
 // TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages asserts
 // the walker discovers a non-empty set AND every package in a small
@@ -316,5 +351,51 @@ func TestArchtest_CIIntegrationDiscovery_FixtureMetaTest(t *testing.T) {
 		e2eHit := slices.Contains(e2ePkgs, fx.name)
 		assert.Equal(t, fx.wantInt, intHit, "integration discovery for fixture %s", fx.name)
 		assert.Equal(t, fx.wantE2E, e2eHit, "e2e discovery for fixture %s", fx.name)
+	}
+}
+
+// TestArchtest_CIRaceLaneSubset_01 — INVARIANT: CI-RACE-LANE-SUBSET-01
+//
+// The race-pg-integration step of test-race.yml uses a curated hardcoded
+// package list (not discovery — see scope note above). To prevent drift
+// to non-integration packages or typos, every package listed here must
+// also appear in the integration discovery set (`go list -tags=integration`).
+//
+// Detection: parse the run block, extract every `./<path>/...` glob token,
+// then verify each glob's root segment matches at least one package in the
+// integration discovery set under that prefix. A glob `./foo/...` matches
+// any discovered package whose path starts with `foo/`.
+//
+// This archtest deliberately does NOT require race-pg-integration to use
+// `go list` discovery (that would conflict with the curated narrowness
+// the race lane needs). It only guards against drift inside the curated
+// list — adding a non-integration package or mistyped path here fails CI.
+func TestArchtest_CIRaceLaneSubset_01(t *testing.T) {
+	step := readRaceIntegrationStep(t)
+	require.NotEmpty(t, step.Run, "race-pg-integration step run block missing")
+
+	pathGlobRE := regexp.MustCompile(`\./([a-z][a-zA-Z0-9_/-]*)/\.\.\.`)
+	matches := pathGlobRE.FindAllStringSubmatch(step.Run, -1)
+	require.NotEmpty(t, matches,
+		"race-pg-integration step must list at least one `./<path>/...` package glob; got run block:\n%s", step.Run)
+
+	root := findModuleRoot(t)
+	intPkgs, err := discoverPackagesUnderTag(root, "integration")
+	require.NoError(t, err)
+
+	for _, m := range matches {
+		glob := m[1] // e.g. "adapters/postgres"
+		matched := false
+		for _, pkg := range intPkgs {
+			if pkg == glob || strings.HasPrefix(pkg, glob+"/") {
+				matched = true
+				break
+			}
+		}
+		assert.True(t, matched,
+			"race-pg-integration package glob `./%s/...` matches no discovered integration package; "+
+				"either the path is typoed, the target package has no //go:build integration files, "+
+				"or a non-integration package was added to the race lane. "+
+				"See CI-RACE-LANE-SUBSET-01.", glob)
 	}
 }

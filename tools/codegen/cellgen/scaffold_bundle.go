@@ -100,8 +100,68 @@ func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
 // allowing callers (e.g. scaffoldCell dry-run in cmd/gocell/app) to enumerate
 // the full file list without writing anything. realRoot must be the output of
 // pathsafe.ResolveRoot.
+//
+// Applies the same default + consistency-level validation as ScaffoldCellBundle.
 func PlanCellBundleForDryRun(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
 	return planCellBundle(realRoot, spec)
+}
+
+// minCellConsistencyLevel returns the minimum cell consistency level required
+// for the given bundle variants. The mapping follows CLAUDE.md §一致性等级:
+//
+//   - withEvents (publish role) → slice at least L2 → cell at least L2
+//   - withHTTP only (serve role) → slice L1 → cell at least L1
+//   - neither → L0
+//
+// Returns the minimum level as a string (e.g. "L2").
+func minCellConsistencyLevel(withHTTP, withEvents bool) string {
+	if withEvents {
+		return "L2"
+	}
+	if withHTTP {
+		return "L1"
+	}
+	return "L0"
+}
+
+// consistencyLevelOrdinal maps a consistency level string to its ordinal for
+// comparison. Higher ordinal = higher consistency requirement.
+func consistencyLevelOrdinal(level string) int {
+	switch level {
+	case "L0":
+		return 0
+	case "L1":
+		return 1
+	case "L2":
+		return 2
+	case "L3":
+		return 3
+	case "L4":
+		return 4
+	default:
+		return -1
+	}
+}
+
+// validateBundleConsistencyLevel checks that spec.ConsistencyLevel is not
+// lower than the minimum required by the bundle variants (withHTTP/withEvents).
+// Returns an error if the declared level is below the minimum.
+func validateBundleConsistencyLevel(spec ScaffoldSpec) error {
+	withHTTP, withEvents := resolveBundleVariants(spec)
+	minLevel := minCellConsistencyLevel(withHTTP, withEvents)
+	declaredOrd := consistencyLevelOrdinal(spec.ConsistencyLevel)
+	minOrd := consistencyLevelOrdinal(minLevel)
+	if declaredOrd < minOrd {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold bundle: cell consistencyLevel is below minimum required by bundle variants",
+			errcode.WithDetails(
+				slog.String("declared", spec.ConsistencyLevel),
+				slog.String("minimum", minLevel),
+				slog.Bool("withHTTP", withHTTP),
+				slog.Bool("withEvents", withEvents),
+			))
+	}
+	return nil
 }
 
 // planCellBundle builds the full []pathsafe.PlannedFile for a cell bundle
@@ -113,7 +173,12 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 		spec.Type = "core"
 	}
 	if spec.ConsistencyLevel == "" {
-		spec.ConsistencyLevel = "L1"
+		spec.ConsistencyLevel = "L2"
+	}
+
+	// Fail-fast: validate that cell.consistencyLevel >= minimum required by bundle variants.
+	if err := validateBundleConsistencyLevel(spec); err != nil {
+		return nil, err
 	}
 
 	var plan []pathsafe.PlannedFile

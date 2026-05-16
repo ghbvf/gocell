@@ -1,5 +1,6 @@
 id: configwrite
 belongsToCell: configcore
+consistencyLevel: L2
 contractUsages:
   - contract: http.config.write.v1
     role: serve

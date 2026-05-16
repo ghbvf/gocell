@@ -19,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -185,7 +184,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
-	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogin.SliceMetadata()))
 
 	// credentialinvalidate: shared invalidator for identity-manage, rbac-assign,
 	// and session-refresh. Atomically bumps authz_epoch, revokes all sessions, and
@@ -210,7 +209,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
-	c.AddSlice(cell.NewBaseSlice("identitymanage", "accesscore", cellvocab.L1))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(identitymanage.SliceMetadata()))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
 	validateSvc, err := sessionvalidate.NewService(c.jwtVerifier, c.sessionStore, c.userRepo, c.logger)
@@ -218,7 +217,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.validateSvc = validateSvc
-	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cellvocab.L0))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionvalidate.SliceMetadata()))
 
 	// session-refresh uses refresh.Store for token state validation and
 	// rotation. No JWT verifier is needed — the opaque wire format is
@@ -235,7 +234,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
-	c.AddSlice(cell.NewBaseSlice("sessionrefresh", "accesscore", cellvocab.L1))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionrefresh.SliceMetadata()))
 
 	// session-logout — cascades revocation to refresh.Store so logout
 	// invalidates the full refresh chain, not just the access session.
@@ -245,7 +244,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
-	c.AddSlice(cell.NewBaseSlice("sessionlogout", "accesscore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogout.SliceMetadata()))
 
 	// authorization-decide
 	authzSvc, err := authorizationdecide.NewService(c.roleRepo, c.logger)
@@ -253,7 +252,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.authzSvc = authzSvc
-	c.AddSlice(cell.NewBaseSlice("authorizationdecide", "accesscore", cellvocab.L0))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(authorizationdecide.SliceMetadata()))
 
 	// rbac-check
 	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode)
@@ -261,10 +260,13 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
-	c.AddSlice(cell.NewBaseSlice("rbaccheck", "accesscore", cellvocab.L0))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(rbaccheck.SliceMetadata()))
 
-	// rbac-assign is always L2 OutboxFact (locked by RBACASSIGN-L2-STATIC-01 archtest);
-	// runtime emit fidelity depends on resolveEmitter output — see initRbacAssign godoc.
+	// rbac-assign is always L2 OutboxFact — the declaration lives in
+	// cells/accesscore/slices/rbacassign/slice.yaml (the SoR projected by
+	// codegen into slice_gen.go.sliceMeta). The constructor consumes the
+	// metadata through cell.MustNewBaseSliceFromMeta; runtime emit fidelity
+	// depends on resolveEmitter output — see initRbacAssign godoc.
 	if err := c.initRbacAssign(); err != nil {
 		return err
 	}
@@ -278,7 +280,7 @@ func (c *AccessCore) initSlices() error {
 		configreceive.WithConfigGetter(c.configGetter),
 		configreceive.WithConfigEventCollector(c.configEventCollector),
 	)
-	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cellvocab.L3))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configreceive.SliceMetadata()))
 
 	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
@@ -308,15 +310,16 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.setupHandler = setup.NewHandler(setupSvc, c.bootstrapAuth)
-	c.AddSlice(cell.NewBaseSlice("setup", "accesscore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(setup.SliceMetadata()))
 	return nil
 }
 
 // initRbacAssign constructs the rbac-assign slice. rbacassign is L2 OutboxFact:
 // the slice's behavioral contract is to emit role.assigned / role.revoked
-// outbox facts atomically inside RunInTx. The consistency level is declared
-// `cellvocab.L2` independent of runtime mode (RBACASSIGN-L2-STATIC-01 archtest
-// locks the literal).
+// outbox facts atomically inside RunInTx. The consistency level is the typed
+// projection of `cells/accesscore/slices/rbacassign/slice.yaml` —
+// `cell.MustNewBaseSliceFromMeta(rbacassign.SliceMetadata())` reads
+// `consistencyLevel: L2` from the codegen literal, independent of runtime mode.
 //
 // Runtime emit fidelity depends on cell.ResolveCellEmitter's output:
 //   - durable mode (publisher + writer + txRunner) → WriterEmitter writes a row
@@ -335,7 +338,7 @@ func (c *AccessCore) initRbacAssign() error {
 		return err
 	}
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
-	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(rbacassign.SliceMetadata()))
 	return nil
 }
 

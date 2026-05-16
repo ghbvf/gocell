@@ -45,6 +45,42 @@ func TestIsBootstrapPath(t *testing.T) {
 	}
 }
 
+func TestIsPublicHTTPPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path string
+		want bool
+	}{
+		// accept — exactly /api (root, no trailing slash)
+		{"/api", true},
+		// accept — /api/v1 prefix covers any path under v1
+		{"/api/v1/config/{key}", true},
+		// accept — /api/v2 is public surface, oracle is version-agnostic
+		{"/api/v2/users", true},
+		// accept — deep sub-path
+		{"/api/v1/access/sessions/login", true},
+		// reject — /apix is not a prefix match (/api/ required after /api)
+		{"/apix/v1/foo", false},
+		// reject — internal listener is not public
+		{"/internal/v1/config/{key}", false},
+		// reject — framework probe has no trust-boundary flag
+		{"/healthz", false},
+		// reject — empty string
+		{"", false},
+		// reject — missing leading slash
+		{"api/v1/foo", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			if got := IsPublicHTTPPath(tc.path); got != tc.want {
+				t.Errorf("IsPublicHTTPPath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsInternalHTTPPath(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

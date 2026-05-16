@@ -291,13 +291,97 @@ type BaseSlice struct {
 	journeys []string
 }
 
-// NewBaseSlice creates a BaseSlice with the given identity and consistency level.
-func NewBaseSlice(id, cellID string, level cellvocab.Level) *BaseSlice {
-	return &BaseSlice{
-		id:     id,
-		cellID: cellID,
+// NewBaseSliceFromMeta constructs a BaseSlice from parsed slice.yaml metadata,
+// which is the single source of truth for slice identity and consistency level.
+//
+// Projects all SliceMeta fields (ID / BelongsToCell / ConsistencyLevel / Verify /
+// AllowedFiles) into BaseSlice. Verify.Unit/Contract/Waivers and AllowedFiles slices
+// are deep-copied so subsequent caller mutations of meta do not affect the BaseSlice.
+//
+// The metadata projection lives in `<slicePkg>/slice_gen.go` as `var sliceMeta`
+// rendered by `gocell generate cell`; cell composition roots call
+// `cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())`. Hand-written
+// `cell.NewBaseSlice(id, cellID, level)` literals (the prior form) are
+// forbidden — see `tools/archtest/baseslice_ctor_funnel_test.go`
+// BASESLICE-CTOR-FUNNEL-01 and the codegen funnel in
+// `tools/codegen/cellgen/templates/slice.tmpl`.
+//
+// All four metadata invariants are validated:
+//   - meta must be non-nil
+//   - meta.ID must be non-empty
+//   - meta.BelongsToCell must be non-empty
+//   - meta.ConsistencyLevel must be non-empty and parse to a valid Level
+//
+// There is no fallback inheritance from cell.consistencyLevel — the strict
+// parser (`kernel/metadata.Parser`) rejects slice.yaml that omits the field.
+//
+// ref: kubernetes/kubernetes pkg/apis/core/validation/validation.go —
+// schema-driven validation pattern; meta is the typed projection of the
+// source-of-truth YAML.
+func NewBaseSliceFromMeta(meta *metadata.SliceMeta) (*BaseSlice, error) {
+	if meta == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta is nil")
+	}
+	if meta.ID == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta.ID is empty")
+	}
+	if meta.BelongsToCell == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta.BelongsToCell is empty",
+			errcode.WithInternal(fmt.Sprintf("slice=%q", meta.ID)))
+	}
+	if meta.ConsistencyLevel == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta.ConsistencyLevel is empty",
+			errcode.WithInternal(fmt.Sprintf("slice=%q", meta.ID)))
+	}
+	level, err := cellvocab.ParseLevel(meta.ConsistencyLevel)
+	if err != nil {
+		return nil, fmt.Errorf("cell.NewBaseSliceFromMeta: slice %q: %w", meta.ID, err)
+	}
+	s := &BaseSlice{
+		id:     meta.ID,
+		cellID: meta.BelongsToCell,
 		level:  level,
 	}
+	// Project Verify — deep copy slices so caller mutation of meta does not leak.
+	waivers := make([]Waiver, len(meta.Verify.Waivers))
+	for i, w := range meta.Verify.Waivers {
+		waivers[i] = Waiver{
+			Contract:  w.Contract,
+			Owner:     w.Owner,
+			Reason:    w.Reason,
+			ExpiresAt: w.ExpiresAt,
+		}
+	}
+	s.SetVerify(VerifySpec{
+		Unit:     append([]string(nil), meta.Verify.Unit...),
+		Contract: append([]string(nil), meta.Verify.Contract...),
+		Waivers:  waivers,
+	})
+	// Project AllowedFiles — deep copy.
+	if len(meta.AllowedFiles) > 0 {
+		s.SetAllowedFiles(meta.AllowedFiles)
+	}
+	return s, nil
+}
+
+// MustNewBaseSliceFromMeta is the panic-on-error twin of NewBaseSliceFromMeta,
+// intended for composition-root and test sites that build slices from static
+// metadata literals where a construction failure is a programmer error and
+// must abort startup. Mirrors MustNewBaseCell semantics.
+//
+// Do not call from request handlers, hot paths, or config-reload callbacks —
+// use NewBaseSliceFromMeta and propagate the error.
+func MustNewBaseSliceFromMeta(meta *metadata.SliceMeta) *BaseSlice {
+	s, err := NewBaseSliceFromMeta(meta)
+	if err != nil {
+		panic(panicregister.Approved("slice-base-init",
+			errcode.Assertion("cell.MustNewBaseSliceFromMeta: %v", err)))
+	}
+	return s
 }
 
 func (s *BaseSlice) ID() string                        { return s.id }

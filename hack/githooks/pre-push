@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# hack/githooks/pre-push — fast local approximation of the CI gates that AI
+# co-authors most often forget to run before pushing (fresh-instance, no
+# memory: ai-collab.md §1). It is NOT a full `make verify` — only the
+# subset that is (a) deterministic offline, (b) sub-10s on a warm build
+# cache, (c) high "forgot to run" rate. Slow / infra-bound gates (full
+# golangci-lint, go test, archtest, integration testcontainers) stay in CI.
+#
+# Not a 1:1 CI mirror — three deliberate deviations:
+#   - Tier 1 runs `go run mvdan.cc/gofumpt` (version resolved from the repo
+#     go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
+#     gofumpt drifts from the version the CI formatter gate enforces
+#     (golangci-lint's vendored copy — see hack/lib/golangci-lint.sh),
+#     producing "local hook passes / CI red" or the reverse. go.mod is the
+#     single source of truth; there is no hook-side version constant.
+#   - It checks the WORKING TREE, not the pushed commit snapshot. Git does
+#     not check out the push range; every tier (gofumpt / build / vet /
+#     verify-generated) inspects whatever is on disk now. Un-staged
+#     generated/ edits can therefore pass here but fail CI (which runs from
+#     a clean checkout). This is inherent to pre-push hooks, not a bug —
+#     stage your work before relying on the result.
+#   - `go build -tags=integration ./...` has no standalone CI step; CI
+#     compiles the integration tag transitively inside `go test
+#     -tags=integration` (integration-test job). It is added here as an
+#     extra local guard because the integration-tag build break is a
+#     repeatedly-forgotten failure mode (project memory: integration-tag
+#     build). The other three commands do mirror real CI steps
+#     (_build-lint.yml: go build ./... / go vet ./... / go vet -tags=e2e
+#     ./tests/e2e/...).
+#
+# Cost control: every tier is gated on whether this push actually touches
+# the files that tier protects. A docs-only push pays ~0; a .go push pays
+# ~6-9s (build/vet run in parallel on warm cache); a schema/contract push
+# additionally pays the codegen staleness probe.
+#
+# Honest scope (ai-collab grading): this is Medium AI-rebust — `git push
+# --no-verify` bypasses it and a fresh clone/worktree without
+# `make install-hooks` has no protection. It is a fast feedback loop, not
+# an unbypassable funnel.
+#
+# Bypass (humans, real emergencies only): git push --no-verify
+# Install / re-point after clone or new worktree: make install-hooks
+#
+# stdin protocol (githooks(5)): one line per pushed ref —
+#   <local ref> <local oid> <remote ref> <remote oid>
+# Deleted ref => local oid all-zero. New branch => remote oid all-zero.
+#
+# ref: kubernetes/kubernetes hack/verify-*.sh diff-mode pattern;
+#      git githooks(5) pre-push sample.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${ROOT}"
+
+ZERO="0000000000000000000000000000000000000000"
+BASE_BRANCH="origin/develop"
+
+note() { printf '  pre-push: %s\n' "$1" >&2; }
+
+# run_bg launches a command detached, capturing combined output to a temp
+# file; wait/collect happens in Tier 2. Defined at top level (not inside
+# the tier `if`) so it is declared once, alongside note().
+pids=() ; names=() ; logs=()
+run_bg() {
+    local name="$1"; shift
+    local log; log="$(mktemp "${TMPDIR:-/tmp}/prepush.XXXXXX")"
+    ( "$@" ) >"${log}" 2>&1 &
+    pids+=($!) ; names+=("${name}") ; logs+=("${log}")
+}
+
+# ---------------------------------------------------------------------------
+# Collect the changed-file set across every pushed ref.
+# ---------------------------------------------------------------------------
+ranges=()
+while read -r _local_ref local_oid _remote_ref remote_oid; do
+    [[ -z "${local_oid:-}" ]] && continue
+    [[ "${local_oid}" == "${ZERO}" ]] && continue   # branch deletion
+    if [[ "${remote_oid}" == "${ZERO}" ]]; then
+        # New branch on the remote: diff against the merge-base with the
+        # integration branch so we only inspect this branch's own work,
+        # not every commit since it forked.
+        if base="$(git merge-base "${BASE_BRANCH}" "${local_oid}" 2>/dev/null)"; then
+            ranges+=("${base}..${local_oid}")
+        else
+            # Can't resolve a base (no fetched develop): fall back to
+            # checking the whole tree — correctness over speed.
+            ranges+=("__ALL__")
+        fi
+    else
+        ranges+=("${remote_oid}..${local_oid}")
+    fi
+done
+
+# Nothing to push (e.g. delete-only) → let git proceed.
+[[ ${#ranges[@]} -eq 0 ]] && exit 0
+
+changed=""
+force_all=0
+for r in "${ranges[@]}"; do
+    if [[ "${r}" == "__ALL__" ]]; then
+        force_all=1
+        break
+    fi
+    changed+=$'\n'"$(git diff --name-only --diff-filter=ACMR "${r}" 2>/dev/null || true)"
+done
+
+if [[ ${force_all} -eq 1 ]]; then
+    go_files="$(git ls-files '*.go')"
+    go_changed=1
+    codegen_changed=1
+else
+    go_files="$(printf '%s\n' "${changed}" | grep -E '\.go$' || true)"
+    [[ -n "${go_files}" ]] && go_changed=1 || go_changed=0
+    # Codegen sources: schema / contract|cell|slice|assembly yaml / any
+    # template, plus the generators and the staleness verifier themselves
+    # (tools/codegen, tools/generatedverify, cmd/gocell). A miss here only
+    # degrades to "CI catches it" — the hook is an aid, not the SoT.
+    if printf '%s\n' "${changed}" | grep -qE '(\.schema\.json|/(cell|slice|assembly|contract)\.yaml|\.tmpl|tools/codegen/.*\.go|tools/generatedverify/.*\.go|cmd/gocell/.*\.go)$'; then
+        codegen_changed=1
+    else
+        codegen_changed=0
+    fi
+fi
+
+start=$(date +%s)
+fail=0
+
+# ---------------------------------------------------------------------------
+# Tier 1 — gofumpt, scoped to the changed .go files. Always when .go changed.
+# This is the exact gate that failed CI #525.
+#
+# `go run mvdan.cc/gofumpt` pins the version via go.mod (rationale: see the
+# first header deviation — go.mod is the only SoR, no PATH ambient).
+# Cost has two independent cache layers:
+#   - Go build cache (GOCACHE) warm  → ~200ms (module-graph load + cached
+#     binary dispatch; not literally sub-millisecond).
+#   - gofumpt binary not yet compiled → +~2-3s one-time compile.
+#   - GOMODCACHE missing the module   → +~1-2s source download (first ever).
+# Warm steady state is ~200ms; a cold gofumpt compile is still well under
+# the Tier 2 build/vet cost that dominates a cold-cache push.
+# ---------------------------------------------------------------------------
+if [[ ${go_changed} -eq 1 ]]; then
+    fmt_targets=()
+    while IFS= read -r f; do
+        [[ -n "${f}" && -f "${f}" ]] && fmt_targets+=("${f}")
+    done < <(printf '%s\n' "${go_files}" | grep -E '\.go$' || true)
+    if [[ ${#fmt_targets[@]} -gt 0 ]]; then
+        # Fail-closed: a non-zero exit from `go run` (go toolchain absent,
+        # module/build failure, gofumpt internal error) must block the push,
+        # not silently skip the gate (no-soft-fallback). gofumpt -l exits 0
+        # and lists drifting files on stdout; the `-f` existence pre-filter
+        # above guarantees no missing-file path reaches gofumpt, so a
+        # non-zero here is unambiguously a tooling failure, never "found
+        # drift".
+        if ! drift="$(go run mvdan.cc/gofumpt -l "${fmt_targets[@]}" 2>&1)"; then
+            note "gofumpt gate failed to run (go run mvdan.cc/gofumpt):"
+            printf '%s\n' "${drift}" | sed 's/^/    /' >&2
+            fail=1
+        elif [[ -n "${drift}" ]]; then
+            note "formatter drift (run: make fmt):"
+            printf '%s\n' "${drift}" | sed 's/^/    /' >&2
+            fail=1
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 2 — compile + vet. Whole-module (Go type-checks transitively), so
+# run the four in parallel. integration/e2e tags: see header note on the
+# deliberate deviation from CI step structure.
+# ---------------------------------------------------------------------------
+if [[ ${go_changed} -eq 1 ]]; then
+    run_bg "go build ./..."                        go build ./...
+    run_bg "go build -tags=integration ./..."      go build -tags=integration ./...
+    run_bg "go vet ./..."                          go vet ./...
+    run_bg "go vet -tags=e2e ./tests/e2e/..."      go vet -tags=e2e ./tests/e2e/...
+    for i in "${!pids[@]}"; do
+        if ! wait "${pids[$i]}"; then
+            note "FAIL: ${names[$i]}"
+            sed 's/^/    /' "${logs[$i]}" >&2
+            fail=1
+        fi
+        rm -f "${logs[$i]}"
+    done
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 3 — codegen staleness. Only when a codegen *source* changed
+# (schema/contract/cell/slice/assembly/tmpl/generator). "schema changed,
+# forgot make generate" class. Verifies the working tree (see header).
+# ---------------------------------------------------------------------------
+if [[ ${codegen_changed} -eq 1 ]]; then
+    if ! out="$(go run ./cmd/gocell verify generated 2>&1)"; then
+        note "stale codegen artifacts (run: make generate):"
+        printf '%s\n' "${out}" | sed 's/^/    /' >&2
+        fail=1
+    fi
+fi
+
+elapsed=$(( $(date +%s) - start ))
+if [[ ${fail} -ne 0 ]]; then
+    note "blocked (${elapsed}s). Fix above, then re-push."
+    note "AI agents: fix the cause — do NOT use 'git push --no-verify'; escalate to the human owner if blocked."
+    note "Humans, real emergencies only: git push --no-verify"
+    exit 1
+fi
+note "ok (${elapsed}s)"
+exit 0

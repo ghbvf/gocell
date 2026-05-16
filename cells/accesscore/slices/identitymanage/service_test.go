@@ -1213,8 +1213,9 @@ func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
-	// S4e: Lock runs 3 txs: (1) last-admin guard, (2) authzmutate.Apply, (3) publish.
-	assert.Equal(t, 3, runner.runs, "Lock must run 3 txs: guard + authzmutate + publish")
+	// Wave 5 P1-1: Lock now runs 2 txs: (1) last-admin guard, (2) ApplyInTx+publish
+	// co-committed in the same RunInTx (L2 OutboxFact guarantee).
+	assert.Equal(t, 2, runner.runs, "Lock must run 2 txs: guard + (ApplyInTx+publish co-committed)")
 	assert.True(t, repo.getInTx, "Lock.GetByID/GetByIDForUpdate must be observed inside RunInTx (no TOCTOU window)")
 	assert.True(t, repo.updInTx, "Lock.Update must run inside the authzmutate tx")
 }
@@ -1261,10 +1262,8 @@ func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 }
 
 // TestService_Unlock_GetByIDAndUpdateInsideTx asserts Unlock runs the
-// read-modify-write chain atomically via authzmutate.Apply (1 tx) + a separate
-// publish tx (1 tx) = 2 total RunInTx calls.
-// The mutation (GetByID + Update) occurs inside authzmutate.Apply's RunInTx,
-// ensuring no TOCTOU window between read and write (audit S-3).
+// read-modify-write chain atomically — Wave 5 P1-1: ApplyInTx+publish
+// co-commit in a single RunInTx (1 tx total, L2 OutboxFact guarantee).
 func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -1275,8 +1274,8 @@ func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
-	// S4e: authzmutate.Apply opens 1 tx (mutation), publish opens 1 tx → 2 total.
-	assert.Equal(t, 2, runner.runs, "Unlock must run 2 txs: authzmutate + publish")
+	// Wave 5 P1-1: ApplyInTx+publish co-committed in the same RunInTx → 1 tx.
+	assert.Equal(t, 1, runner.runs, "Unlock must run 1 tx: ApplyInTx+publish co-committed")
 	assert.True(t, repo.getInTx, "Unlock.GetByID must be observed inside RunInTx (no TOCTOU window)")
 	assert.True(t, repo.updInTx, "Unlock.Update must run inside the same tx")
 }

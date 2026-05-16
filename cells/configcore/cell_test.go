@@ -54,7 +54,7 @@ func TestConfigCore_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, recorder))
-	assert.Equal(t, 6, len(c.OwnedSlices()), "should have 6 slices")
+	assert.Equal(t, 7, len(c.OwnedSlices()), "should have 7 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -72,7 +72,7 @@ func TestConfigCore_Metadata(t *testing.T) {
 
 	assert.Equal(t, "configcore", c.ID())
 	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
-	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.L3, c.ConsistencyLevel())
 	assert.Equal(t, "platform", c.Metadata().Owner.Team)
 }
 

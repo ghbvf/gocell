@@ -1,79 +1,13 @@
-// Package configread implements the config-read slice: Get/List config entries.
+// Package configread implements the public config-read slice: GET + list of
+// config entries under /api/v1/config (admin-gated). The internal
+// control-plane GET (/internal/v1/config) lives in the sibling
+// configreadinternal slice; both share cells/configcore/internal/configreader.
+// Keeping public and internal HTTP surfaces in separate slices is enforced by
+// governance rule SLICE-HTTP-VISIBILITY-SEGREGATION-01 (FMT-33).
 package configread
 
-import (
-	"context"
-	"fmt"
-	"log/slog"
+import "github.com/ghbvf/gocell/cells/configcore/internal/configreader"
 
-	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
-)
-
-// configSort defines the default sort for config listings.
-var configSort = []query.SortColumn{
-	{Name: "key", Direction: query.SortASC},
-	{Name: "id", Direction: query.SortASC},
-}
-
-// Service implements config read business logic.
-type Service struct {
-	repo    ports.ConfigRepository
-	codec   *query.CursorCodec
-	logger  *slog.Logger
-	runMode query.RunMode
-}
-
-// NewService creates a config-read Service. runMode controls cursor
-// fail-open vs fail-closed semantics; pass query.RunModeProd unless the
-// assembly declares DurabilityDemo.
-//
-// codec must be non-nil — pagination cannot be served without a cursor codec.
-// Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
-// so the cell Init() can propagate a structured error instead of a runtime panic.
-func NewService(repo ports.ConfigRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"configread: cursor codec is required")
-	}
-	return &Service{
-		repo:    repo,
-		codec:   codec,
-		logger:  logger,
-		runMode: runMode,
-	}, nil
-}
-
-// GetByKey retrieves a config entry by key.
-func (s *Service) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
-	entry, err := s.repo.GetByKey(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("config-read: get: %w", err)
-	}
-	return entry, nil
-}
-
-// List returns a paginated page of config entries.
-func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.ConfigEntry], error) {
-	qctx := query.QueryContext("endpoint", "config-read")
-	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.ConfigEntry]{
-		Codec:      s.codec,
-		PageParams: pageReq,
-		Sort:       configSort,
-		QueryCtx:   qctx,
-		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
-			entries, err := s.repo.List(ctx, params)
-			if err != nil {
-				return nil, fmt.Errorf("config-read: list: %w", err)
-			}
-			return entries, nil
-		},
-		Extract: func(e *domain.ConfigEntry) []any {
-			return []any{e.Key, e.ID}
-		},
-		OnCursorErr: query.LogCursorError(s.logger, "configread"),
-		RunMode:     s.runMode,
-	})
-}
+// Service is the slice service type; the read logic is shared with the
+// internal slice via cells/configcore/internal/configreader.
+type Service = configreader.Service

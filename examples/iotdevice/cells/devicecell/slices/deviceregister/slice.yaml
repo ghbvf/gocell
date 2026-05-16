@@ -1,5 +1,6 @@
 id: deviceregister
 belongsToCell: devicecell
+consistencyLevel: L4
 contractUsages:
   - contract: http.device.register.v1
     role: serve

@@ -46,6 +46,7 @@ l0Dependencies: []
 		// --- slices ---
 		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: accesscore
+consistencyLevel: L0
 contractUsages:
   - contract: http.auth.login.v1
     role: serve
@@ -159,6 +160,7 @@ verify:
 `)},
 		"examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml": &fstest.MapFile{Data: []byte(`id: ordercreate
 belongsToCell: ordercell
+consistencyLevel: L0
 contractUsages:
   - contract: http.order.create.v1
     role: serve
@@ -499,6 +501,7 @@ func TestParseFS_MultipleSlicesSameCell(t *testing.T) {
 	fs := fstest.MapFS{
 		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: accesscore
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
@@ -506,6 +509,7 @@ verify:
 `)},
 		"cells/accesscore/slices/rbac-check/slice.yaml": &fstest.MapFile{Data: []byte(`id: rbac-check
 belongsToCell: accesscore
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
@@ -526,6 +530,7 @@ func TestParseFS_SliceWithWaivers(t *testing.T) {
 	fs := fstest.MapFS{
 		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: accesscore
+consistencyLevel: L0
 contractUsages:
   - contract: http.auth.login.v1
     role: serve
@@ -570,6 +575,7 @@ func TestParseFS_SliceBelongsToCellDerive(t *testing.T) {
 			name: "omitted belongsToCell is derived from path",
 			path: "cells/accesscore/slices/session-login/slice.yaml",
 			yaml: `id: session-login
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
@@ -583,6 +589,7 @@ verify:
 			path: "cells/auditcore/slices/write-log/slice.yaml",
 			yaml: `id: write-log
 belongsToCell: auditcore
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
@@ -595,6 +602,7 @@ verify:
 			name: "derived from path with simple cell name",
 			path: "cells/crypto/slices/hash/slice.yaml",
 			yaml: `id: hash
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
@@ -797,6 +805,7 @@ func TestParseFS_DuplicateSliceID(t *testing.T) {
 	fs := fstest.MapFS{
 		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
 belongsToCell: accesscore
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
@@ -804,6 +813,7 @@ verify:
 `)},
 		"cells/accesscore/slices/session-logout/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
 belongsToCell: accesscore
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
