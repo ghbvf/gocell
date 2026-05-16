@@ -134,9 +134,9 @@
 | T3 | **DEVICE-ENQUEUE-RBAC** — 现状: HandleEnqueue 无设备维度鉴权；修复: 加设备粒度策略 | feat | — | 🟠 | 多租户 operator | `cells/devicecell/` | T3 |
 | T11 | **ADMIN-ROLE-DEDUP** — 现状: admin role 字符串散在多处；修复: 抽 const 单源 | arch-opt | — | 🟠 | role 命名漂移出现 | `pkg/auth/` + `cells/` | T11 |
 | B2-C-06 | **SessionLogout consumer action 无验证** — 现状: consumer.go 接受任意 action 字段；修复: 加 action enum 校验 | bug | P1/Cx2 | 🟡 | — | `cells/accesscore/slices/sessionlogout/consumer.go:69` | backlog2 §4 B2-C-06 |
-| B2-T-02 | **RBACASSIGN event contract waiver expiry** — 现状: contract test waiver 已设置过期；修复: waiver 到期前补真实 contract 实现 | bug | P1/Cx2 | 🟠 | waiver 到期前 | `cells/accesscore/slices/rbacassign/contract_test.go:84,93` | backlog2 §8 B2-T-02 |
+| B2-T-02 | **RBACASSIGN event contract waiver expiry** — ✅ closed by S4c-T1 PR：`TestContract_EventRole{Assigned,Revoked}V1_Publish_PayloadValid` 重写为真实 `svc.Assign/Revoke` 经 `RecordingWriter` 捕获 payload + `c.ValidatePayload`/`c.ValidateHeaders`/`c.MustRejectPayload`/`c.MustRejectHeaders` 完整契约校验；waiver 注释删除 | bug | P1/Cx2 | ✅ S4c-T1 | — | `cells/accesscore/slices/rbacassign/contract_test.go` | backlog2 §8 B2-T-02 |
 | B2-T-05 | **Internal contract external actor drift** — 现状: contract 声明 external actor 但实际是 internal；修复: 校正 boundary.yaml | arch-opt | P1/Cx2 | 🟡 | — | `contracts/http/auth/role/{assign,revoke}/v1/contract.yaml` + `boundary.yaml` | backlog2 §8 B2-T-05 |
-| B2-T-07-FU-1 | **RBACASSIGN accesscore caller wiring** — 现状: production wiring 缺 caller；修复: 接入 caller (A5 follow-up) | arch-opt | Cx2 | 🟠 | production wiring 启动 | `cells/accesscore/slices/rbacassign/contract_test.go` | backlog2 §8 A5 follow-up |
+| B2-T-07-FU-1 | **RBACASSIGN accesscore caller wiring** — ✅ closed by S4c-T1 PR：`handler.go` 显式 `RequireCallerCell("accesscore")` policy + 自动 caller-cell guard 双重防线已就位；`handler_test.go::TestHandler_{Assign,Revoke}` 已覆盖 accesscore 200/201 / configcore 403 / empty caller 403 / no-auth 401 四象限 | arch-opt | Cx2 | ✅ S4c-T1 | — | `cells/accesscore/slices/rbacassign/{handler,handler_test}.go` | backlog2 §8 A5 follow-up |
 | B2-T-07-FU-2 | **BUILTIN-SERVICE-ROLES 删除 FU** — 现状: scope 派生 builtin role 还在 hard-code；修复: 完全派生（A5 follow-up） | arch-opt | Cx3 | 🟠 | scope 派生工具就绪 | `runtime/auth/principal.go` | backlog2 §8 A5 follow-up |
 
 ---
@@ -199,7 +199,7 @@
 |---|---|---|---|---|---|---|---|
 | ACCESSCORE-PG-USERS-MIGRATION-01 | **AccessCore PG repository + migration** — 现状: 仅内存；修复: users/roles/role_assignments 表 + UNIQUE on admin role | feat | P1/— | 🔴 | — | `adapters/postgres/accesscore/` | PR #392 v2 review |
 | PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | **TEST-RACE-COVERAGE-ADAPTERS-INTEGRATION-01** — 现状: PG concurrent Up CI 不带 -race；修复: test-race.yml 加 adapters/postgres 路径（评估） | test | P2/Cx3 | 🟡 | — | `.github/workflows/test-race.yml` | PR-V1-PG-STARTUP-HARDEN F5 |
-| X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE/SEED-ROLE-IFACE/AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
+| X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE ✅ closed by S4c-T1 (rbacassign 统一 L2 + RBACASSIGN-L2-STATIC-01 archtest 锁定字面量)/ SEED-ROLE-IFACE ✅ closed by S4c-T1 (adminprovision 重构隐性闭环 + SEED-ROLE-IFACE-01 Hard archtest 锁定生产代码零 `*mem.RoleRepository` 引用)/ AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
 | S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
 
 ---
