@@ -22,8 +22,9 @@ type sharedReplayDeps struct {
 }
 
 type sharedMetricsDeps struct {
-	PromStack            promStack
-	ConfigEventCollector obmetrics.ConfigEventCollector
+	PromStack              promStack
+	ConfigEventCollector   obmetrics.ConfigEventCollector
+	EventbusCacheCollector obmetrics.EventbusCacheCollector
 }
 
 func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
@@ -35,9 +36,14 @@ func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	if err != nil {
 		return sharedMetricsDeps{}, fmt.Errorf("build config event metrics collector: %w", err)
 	}
+	eventbusCacheCollector, err := obmetrics.NewProviderEventbusCacheCollector(ps.metricProvider)
+	if err != nil {
+		return sharedMetricsDeps{}, fmt.Errorf("build eventbus cache metrics collector: %w", err)
+	}
 	return sharedMetricsDeps{
-		PromStack:            ps,
-		ConfigEventCollector: configEventCollector,
+		PromStack:              ps,
+		ConfigEventCollector:   configEventCollector,
+		EventbusCacheCollector: eventbusCacheCollector,
 	}, nil
 }
 

@@ -17,9 +17,9 @@
 
 | # | 条目 | 状态 | 关键证据 |
 |---|------|------|---------|
-| 1 | CONFIGCORE-CACHE-LIFECYCLE-OWNER-01 | ❌ 未解决 | `cells/configcore/slices/configsubscribe/service.go` Cache 无 LifecycleHook、无 LRU、无 size cap |
-| 2 | C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE | ❌ 未解决 | 同 #1；无 `eventbus_cache_size` metric；entries map 无界 |
-| 3 | B2-C-11 Configsubscribe tombstone 无 TTL | ❌ 未解决 | service.go:30-34 注释自承"永久保留"；无 evict |
+| 1 | CONFIGCORE-CACHE-LIFECYCLE-OWNER-01 | ✅ 已解决（PR 207-cfg-cache-lifecycle） | Cache 确认 service-private；OWNER-01 收为 won't-do（见 §2 + §5） |
+| 2 | C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE | ✅ 已解决（PR 207-cfg-cache-lifecycle） | tombstone TTL GC + `eventbus_cache_tombstone_evicted_total` counter + `EventbusCacheCollector` wired into configcore |
+| 3 | B2-C-11 Configsubscribe tombstone 无 TTL | ✅ 已解决（PR 207-cfg-cache-lifecycle） | `WithTombstoneTTL` Option（24h default in configsubscribe.NewService）+ GC goroutine + eviction metric |
 | 4 | CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01 | ⚠️ 撤回主方案 | `cells/accesscore/slices/configreceive/service.go` 头部注释自承「Real consumers (JWT TTL refresh, key rotation interval) will land in a follow-up」——是为业务 reload 已搭好的接入骨架，单纯删除会返工 ~10h；改为业务触发型，参 §6 与 backlog `CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01` |
 | 5 | PR-CFG-A-DEFER-2 (L2 divergence) | ⚠️ 未实施 | 已有完整设计草案（参 `docs/bak/202605010354-backlog-pre-pr341-cleanup.md` L57） |
 | 6 | C-05 CELLS-CELLROUTES-PLACEHOLDER-DELETE | ✅ 已合（PR-CFG-CELL-ROUTES-CLEAN） | `cells/configcore/cell_routes.go` + `cells/accesscore/cell_routes.go` 同源 4 行占位均删除 |
@@ -29,7 +29,7 @@
 | 10 | PR238-FU8 UpdateForRollback op label 断言 | ❌ 未解决 | `:395-411` 仍无 `assert.Contains(InternalMessage, "UpdateForRollback")` |
 | 11 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | ❌ 未解决 | `cells/auditcore/slices/auditappend/slice.yaml` 仍 14 contractUsages；`cells/configcore/slices/configread/` 未拆 internal |
 
-**汇总**：已解决 2（#6, #8 subsumed by FMT-21）/ 撤回主方案 1（#4，改业务触发）/ 信息已补全 11 / 实际未实施 8
+**汇总**：已解决 5（#1/#2/#3 PR 207-cfg-cache-lifecycle；#6；#8 subsumed by FMT-21）/ 撤回主方案 1（#4，改业务触发）/ 信息已补全 11 / 实际未实施 5
 
 ---
 
@@ -37,7 +37,7 @@
 
 | PR | 主题 | 条目 | Cx 上限 | 估时 | 触发/依赖 |
 |----|------|------|---------|------|-----------|
-| **PR-CFG-CACHE-LIFECYCLE** | configsubscribe 缓存生命周期统一治理 | #1, #2, #3 | Cx2 | 1-1.5d | 无 |
+| **PR-CFG-CACHE-LIFECYCLE** | configsubscribe 缓存生命周期统一治理 | #1, #2, #3 | Cx2 | 1-1.5d | 无 | ✅ 已实施（branch 207-cfg-cache-lifecycle）|
 | **PR-CFG-TEST-RESIDUALS** | configcore 测试补丁批 | #7, #9, #10 | Cx1 | 0.5d | 无（推荐先合） |
 | ~~**PR-CFG-PLACEHOLDER-CLEAN**~~ → **PR-CFG-CELL-ROUTES-CLEAN** | configcore + accesscore cell_routes.go 占位清理 | ~~#4,~~ #6 | Cx1 | 0.1d | 无（已合）|
 | **PR-CFG-L2-DIVERGENCE** | ConfigCore L2 与 memory 行为分歧治理 | #5 | Cx1（决策）+ Cx2（实施） | 1d 设计 + 4h 实施 | architect 评估 |
@@ -53,8 +53,15 @@
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
 | C-02 | **CONFIGSUBSCRIBE-CACHE-LIFECYCLE-01** (Cx2, P1, 🟡): `configsubscribe.Cache` 进程内 map 无界 + 未挂 Lifecycle，长寿进程内存增长。**修复**：(1) Cache 实现挂 `kernel/cell.LifecycleHook`，OnStart hydrate / OnStop snapshot；(2) 改 LRU + 容量 cap（cap 由 cell.yaml `params.cacheMaxEntries` 注入，缺省 10000）；(3) 暴露 `eventbus_cache_size{slice="configsubscribe",cell="configcore"}` gauge。**对标**：Watermill `MessageMemoryCache` LRU + capacity；K8s `client-go/tools/cache.Store` 显式 lifecycle。 | 5h | `cells/configcore/slices/configsubscribe/service.go` + `cells/configcore/cell_init.go` + 新 `runtime/observability/metrics/eventbus_cache.go` | 030 §2 C-02 |
-| OWNER | **CONFIGCORE-CACHE-LIFECYCLE-OWNER-01** (Cx2, 🟠 触发条件：内存增长信号已出现 + C-02 落地后): C-02 落地时一并明确「Cache owner = configsubscribe slice」，禁止 cell 顶层或其他 slice 持有同一 Cache 实例；archtest 静态约束 Cache 字段只能挂在 `configsubscribe.Service` 上。**反方观点**：若 C-02 直接把 Cache 嵌进 service 体内（按 GoCell L0 helper 形态），owner 治理可省。**决策点**：implementation 阶段如发现 Cache 仅由 service 私有，本条收为 won't-do；如发现跨 slice 共享，则补 archtest。 | 1h（评估）+ 2h（archtest 实施，如需要） | 同上 + `tools/archtest/configcore_cache_owner_test.go`（如需要） | systems layer review |
+| OWNER | **CONFIGCORE-CACHE-LIFECYCLE-OWNER-01** — **won't-do（2026-05-16）**。实施阶段确认 Cache 仅由 `configsubscribe/service.go` 及其单元测试引用，无跨 slice 共享，满足本条自身决策准则（"如发现 Cache 仅由 service 私有，本条收为 won't-do"）。未引入 archtest 抽象。详见 §5。 | — | — | PR 207-cfg-cache-lifecycle |
 | B2-C-11 | **CONFIGSUBSCRIBE-TOMBSTONE-TTL-01** (Cx2, P2, 🟡): `service.go:29,169` tombstone 永久保留导致内存膨胀。**修复**：tombstone 增加 `expiresAt` 字段，TTL 从 `params.tombstoneTTL` 注入（缺省 24h）；OnStart 启动定期清理 goroutine（tick 间隔 1/10 TTL，跟 LifecycleHook OnStop 联动 stop）；evict 触发 metric `eventbus_cache_tombstone_evicted_total` counter 自增。**对标**：Cassandra `gc_grace_seconds`；CockroachDB MVCC GC。 | 3h | 同 service.go + cell_init.go + eventbus_cache.go | backlog2 §4 B2-C-11 |
+
+**PR 207-cfg-cache-lifecycle 实施范围决策（2026-05-16）**：
+
+- D1: 未实施 OnStart hydrate / OnStop snapshot — 无持久化后端，内存 map 重启即重建，正确性由版本单调性 + 事件回放保证；对标 Watermill `MapExpiringKeyRepository` / k8s informer / go-micro 均无跨重启 cache 持久化。
+- D2: TTL 通过 `configcore.WithTombstoneTTL` Option 注入（cell.yaml 无 params 模型）；composition root 注入，24h default 在 `configsubscribe.NewService` 内。
+- D3: `eventbus_cache_size` gauge → 单 counter `eventbus_cache_tombstone_evicted_total`（kernel Provider 无 Gauge by design；`shutdown_metrics.go` 先例）。
+- D5（自审）: 完全放弃 LRU/cap — LRU 驱逐活跃 entry 会静默破坏单调回放守护（与过早墓碑 GC 同类风险）；Watermill `MapExpiringKeyRepository` 原始码为纯 TTL 无 LRU/cap（原 §1 benchmark 引用不准确）；活跃 entry 由 live config keyspace 自然有界。内存治理 = tombstone TTL GC only。
 
 ### PR-CFG-TEST-RESIDUALS — configcore 测试补丁批
 
@@ -128,7 +135,7 @@ PR-CFG-SLICE-DECOMPOSE (~1.5-2d) — 在 PR-CFG-CACHE-LIFECYCLE 后做
 
 ## 5. 不立项条目
 
-无。11 项全部立项。
+- **CONFIGCORE-CACHE-LIFECYCLE-OWNER-01** → **won't-do（2026-05-16，PR 207-cfg-cache-lifecycle）**: 实施阶段确认 Cache 仅被 `cells/configcore/slices/configsubscribe/service.go` 及其单元测试引用，无跨 slice 共享实例。满足本条原始决策准则（"如发现 Cache 仅由 service 私有，本条收为 won't-do"）。未引入 archtest 抽象。同步登记于 `docs/backlog.md` cap-01 CONFIGCORE-CACHE-LIFECYCLE-OWNER-01 行。
 
 ---
 

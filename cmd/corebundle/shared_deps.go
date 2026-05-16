@@ -63,6 +63,11 @@ type SharedDeps struct {
 	// shared metrics provider and then injected into both Cells plus middleware.
 	ConfigEventCollector obmetrics.ConfigEventCollector
 
+	// EventbusCacheCollector records configsubscribe subscriber-cache tombstone
+	// GC evictions. Registered once against the shared metrics provider and
+	// injected into configcore (the only owner — Cache is service-private).
+	EventbusCacheCollector obmetrics.EventbusCacheCollector
+
 	// SharedPGPool is the postgres pool created by ConfigCoreModule when running
 	// in StorageBackend == "postgres" mode. AccessCoreModule + AuditCoreModule
 	// receive the same pointer to wire their TxManager / OutboxWriter without
@@ -246,25 +251,26 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 
 	deps := &SharedDeps{
-		Clock:                clk,
-		Topology:             topo,
-		JWTDeps:              jwt,
-		PromStack:            metricsDeps.PromStack,
-		EventBus:             eb,
-		ConfigEventCollector: metricsDeps.ConfigEventCollector,
-		RedisClient:          replay.RedisClient,
-		ConsumerClaimer:      replay.ConsumerClaimer,
-		ConsumerClaimerKind:  replay.ConsumerClaimerKind,
-		InternalGuard:        internalGuard,
-		PrimaryHTTPAddr:      primaryAddr,
-		InternalHTTPAddr:     internalAddr,
-		HealthHTTPAddr:       healthAddr,
-		HealthLocalOnly:      healthLocalOnly,
-		MetricsToken:         metricsToken,
-		VerboseToken:         verboseToken,
-		VerboseDisabled:      verboseDisabled,
-		metricsHandler:       metricsHandler,
-		ProjectRoot:          os.Getenv("GOCELL_PROJECT_ROOT"),
+		Clock:                  clk,
+		Topology:               topo,
+		JWTDeps:                jwt,
+		PromStack:              metricsDeps.PromStack,
+		EventBus:               eb,
+		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
+		EventbusCacheCollector: metricsDeps.EventbusCacheCollector,
+		RedisClient:            replay.RedisClient,
+		ConsumerClaimer:        replay.ConsumerClaimer,
+		ConsumerClaimerKind:    replay.ConsumerClaimerKind,
+		InternalGuard:          internalGuard,
+		PrimaryHTTPAddr:        primaryAddr,
+		InternalHTTPAddr:       internalAddr,
+		HealthHTTPAddr:         healthAddr,
+		HealthLocalOnly:        healthLocalOnly,
+		MetricsToken:           metricsToken,
+		VerboseToken:           verboseToken,
+		VerboseDisabled:        verboseDisabled,
+		metricsHandler:         metricsHandler,
+		ProjectRoot:            os.Getenv("GOCELL_PROJECT_ROOT"),
 	}
 
 	if err := deps.Validate(); err != nil {
