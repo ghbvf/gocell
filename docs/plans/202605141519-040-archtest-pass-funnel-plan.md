@@ -18,7 +18,7 @@
 
 > **根因**：`auth_bootstrap_invariants_test.go` 的 5 条规则（含 `AUTH-BOOTSTRAP-CLIENTS-MUTEX-01`）需要加载生产包集合（`Tests: false`），同时排除 `generated/` 下 codegen 产物，以防生成代码误触规则。直接使用 `RunTyped("./...")` + 手动 `pass.IsGenerated` 跳过是一种合法绕过（作者可以忘记调用 IsGenerated），等效于把 Hard 防线退化回 Soft。正确做法是封装 `RunTypedProduction` façade，将 production-only 语义收进单一入口，迁移期每条 auth_bootstrap 规则都自然经过该路径。
 
-- 新增 façade `RunTypedProduction(t testing.TB, opts TypedOpts, patterns []string, rule Rule) []Diagnostic`：内部以 `Tests: false` 加载（仅生产包），同时在 `runRulePasses` 共享循环内对每个 package 执行 `pass.IsGenerated` 过滤，`generated/` 包自动排除，caller 无需手动跳过
+- 新增 façade `RunTypedProduction(t *testing.T, opts TypedOpts, rule Rule) []Diagnostic`：内部经 `typeseval.LoadProductionPackages`（`Tests: false`，仅生产包）加载，`generated/` 在加载期由 `ProductionResolver` 排除（非 caller 手动 `pass.IsGenerated`），随后复用 `runRulePasses` 共享遍历；production-only 入口加载全量生产包，故无 `patterns []string` 参数（与 `RunTyped`/`RunTypedDir` 不同），并用 `*testing.T`（生产入口，无 `tbFatalSpy` 单测诉求）
 - 抽取 `runRulePasses(t, pkgs, rule)` 共享内部 helper，`RunTyped` / `RunTypedDir` / `RunTypedProduction` 三个入口共享同一 pass 构造和遍历逻辑，单一来源不分叉
 - 新增 `moduleImportPath(dir string) (string, error)` 读取所在目录的 `go.mod` module 声明，用于 `generated/` import path 前缀匹配（替代 hard-coded module path 字符串）
 - `PASS-FUNNEL-LOADPACKAGES-01` 禁止集合**加宽**：新增 `typeseval.LoadProductionPackages` 进入禁止列表；此后 production-only 扫描的唯一合法入口是 `RunTypedProduction`
@@ -151,7 +151,7 @@ type Rule func(*Pass) []Diagnostic
 func Run(t *testing.T, scope Scope, rule Rule)                       // AST-only
 func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diagnostic  // Typed, main tree; 内部 = runTypedWithRoot(t, findModuleRoot(t), ...)（frozen 签名不变）
 func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic // Typed, standalone fixture-module @ dir
-func RunTypedProduction(t testing.TB, opts TypedOpts, patterns []string, rule Rule) []Diagnostic // Typed, production-only (Tests: false, generated/ excluded)
+func RunTypedProduction(t *testing.T, opts TypedOpts, rule Rule) []Diagnostic // Typed, production-only (Tests: false, generated/ excluded); 无 patterns（全量生产包）
 
 type TypedOpts struct {
     Tests bool

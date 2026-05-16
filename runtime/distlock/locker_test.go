@@ -786,7 +786,7 @@ func TestLocker_LockCtxDeadlinePropagation(t *testing.T) {
 // panicregister.Approved on any construction error.
 func TestLocker_MustNew_PanicsOnNilDriver(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("MustNew(nil driver) should panic")
 		}
 	}()
@@ -804,6 +804,27 @@ func TestLocker_New_ReturnsErrorOnTypedNilDriver(t *testing.T) {
 	}
 }
 
+// assertNilClockRejected asserts that distlock.New rejected a nil / typed-nil
+// clock with a validation *errcode.Error and returned no Locker. Shared by
+// the bare_nil and typed_nil sub-cases so the assertion block lives once
+// (keeps TestLocker_New_ReturnsErrorOnNilClock under the gocognit budget).
+func assertNilClockRejected(t *testing.T, locker distlock.Locker, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("New(driver, nil clock) should return error, got nil")
+	}
+	if locker != nil {
+		t.Fatalf("New(driver, nil clock) locker = %T, want nil", locker)
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("error should be *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != errcode.ErrValidationFailed {
+		t.Errorf("error code = %q, want %q", ec.Code, errcode.ErrValidationFailed)
+	}
+}
+
 // TestLocker_New_ReturnsErrorOnNilClock verifies that New returns an error (not a panic)
 // when the clock argument is nil or a typed nil. This exercises the
 // validation.IsNilInterface guard introduced in PR #507.
@@ -816,39 +837,15 @@ func TestLocker_New_ReturnsErrorOnNilClock(t *testing.T) {
 
 	t.Run("bare_nil", func(t *testing.T) {
 		locker, err := distlock.New(fd, nil)
-		if err == nil {
-			t.Fatal("New(driver, nil clock) should return error, got nil")
-		}
-		if locker != nil {
-			t.Fatalf("New(driver, nil clock) locker = %T, want nil", locker)
-		}
-		var ec *errcode.Error
-		if !errors.As(err, &ec) {
-			t.Fatalf("error should be *errcode.Error, got %T: %v", err, err)
-		}
-		if ec.Code != errcode.ErrValidationFailed {
-			t.Errorf("error code = %q, want %q", ec.Code, errcode.ErrValidationFailed)
-		}
+		assertNilClockRejected(t, locker, err)
 	})
 
 	t.Run("typed_nil", func(t *testing.T) {
-		// A *clockmock.FakeClock that is nil wraps into a non-nil clock.Clock interface.
-		// validation.IsNilInterface must detect this typed-nil case.
+		// A *clockmock.FakeClock that is nil wraps into a non-nil clock.Clock
+		// interface. validation.IsNilInterface must detect this typed-nil case.
 		var c *clockmock.FakeClock
 		locker, err := distlock.New(fd, c)
-		if err == nil {
-			t.Fatal("New(driver, typed-nil clock) should return error, got nil")
-		}
-		if locker != nil {
-			t.Fatalf("New(driver, typed-nil clock) locker = %T, want nil", locker)
-		}
-		var ec *errcode.Error
-		if !errors.As(err, &ec) {
-			t.Fatalf("error should be *errcode.Error, got %T: %v", err, err)
-		}
-		if ec.Code != errcode.ErrValidationFailed {
-			t.Errorf("error code = %q, want %q", ec.Code, errcode.ErrValidationFailed)
-		}
+		assertNilClockRejected(t, locker, err)
 	})
 }
 
@@ -858,7 +855,7 @@ func TestLocker_New_ReturnsErrorOnNilClock(t *testing.T) {
 func TestLocker_MustNew_PanicsOnNilClock(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("MustNew(driver, nil clock) should panic")
 		}
 	}()
