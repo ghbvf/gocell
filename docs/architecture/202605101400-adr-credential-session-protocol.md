@@ -298,7 +298,7 @@ OutboxFact 保证实际上未生效。
 
 **backlog**：`IDENTITYMANAGE-LOCKUNLOCK-CO-TX-UPGRADE-01` ✅ closed（Wave 5 PR #525）。
 
-### A11 读侧 credential-authority funnel（S-next，立即立项）
+### A11 读侧 credential-authority funnel（S-next，LANDED）
 
 **问题**：token issue（sessionlogin / sessionrefresh）和 token validate（sessionvalidate）
 路径均包含"是否允许该用户凭据"的判断逻辑，但实现散落在各 slice 内，无单一 Hard 收口：
@@ -309,21 +309,69 @@ OutboxFact 保证实际上未生效。
 
 任何新增 issue/validate 路径若遗漏其中任一检查，均构成 P1.x 级 regression。
 
-**设计（§A11 Hard funnel 目标）**：
+**落地形态**（S-next PR 实际签名，2026-05-17）：
 
 ```go
-// credentialauthority.Assert(ctx context.Context, user domain.User, opts ...AssertOption) error
-// 唯一合法调用点：sessionlogin, sessionrefresh, sessionvalidate 三个 slice
-// 检查：(a) user.CanAuthenticate()，(b) password-version pin（可选，issue 路径），
-//       (c) session row 未 revoked（可选，validate 路径）
-// archtest: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01（Hard，caller allowlist）
+// credentialauthority.Assert(user *domain.User, checks ...Check) error
+//
+// baseline check (user.CanAuthenticate()) 始终在 Assert body 内联跑；
+// 调用方加入 Check 表达 issue / validate 路径附加要求：
+//   - WithPasswordVersionPin（issue 路径，sessionlogin 用）：通过工厂
+//     SnapshotPasswordVersion(*domain.User) 构造，funnel 包内部读
+//     User.PasswordVersion；slice 代码永不直接读字段。
+//   - WithSessionNotRevoked（validate/refresh 路径）：通过工厂
+//     SessionNotRevoked(*session.ValidateView) 构造，funnel 包内部读
+//     ValidateView.RevokedAt；slice 代码永不直接读字段。
+//
+// 三种失败统一返回 KindPermissionDenied + ErrAuthUserNotActive，具体 reason
+// 仅经 WithInternal 写入 slog；slice 必须按 "调用入口" 转换 wire-level
+// 错误，不可按 err 内容分支（防枚举 + "callers must not branch on err"）。
+//
+// 无 ctx 参数：funnel 不做 I/O，无 tracing 表面，加 ctx 等于为假设未来需求
+// 设计；与 write-side authzmutate.Mutator.ApplyInTx 的 ctx 差异由"读侧无副
+// 作用"决定。
 ```
 
-- `user.CanAuthenticate() bool` 已存在（`return u.status == StatusActive`），是单源真理
-- Hard 化路径：`credentialauthority.Assert` sealed function + archtest 锁 caller allowlist，
-  与 authzmutate.Mutator.Apply 对称（write-side / read-side 双向闭合）
-- 当前状态：targeted-fix（各 slice 分别检查），Hard funnel 立即立项（backlog
-  `CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01`，Cx2，S-next PR）
+**Hard funnel 实现**（`tools/archtest/credential_authority_assert_funnel_test.go`，
+INVARIANT: `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01`）：
+
+- 下游 Hard（caller allowlist）：`typeseval.ResolvePackageRef` 解析
+  `credentialauthority.Assert` 的 `*types.Func` 身份；caller 限定
+  `cells/accesscore/{internal/credentialauthority/, slices/sessionlogin/,
+   slices/sessionrefresh/, slices/sessionvalidate/}`。
+- 上游 Hard（mandatory funnel）：扫 3 slice 目录 production 文件，禁止任何
+  `domain.(*User).CanAuthenticate` typed method call、`domain.User.PasswordVersion`
+  / `session.{Session,ValidateView}.RevokedAt` typed field selector 在 funnel 外
+  出现；通过 `ResolveMethodCall` + `*types.Info.Selections` 双 prong。
+- Blind-spot 反向自检 5 件套：method-value 赋值、`reflect.MethodByName`、
+  `reflect.FieldByName`、`unsafe` 导入、slice 内 helper 间接（最后一项由
+  upstream prong 扫整 slice 目录隐式覆盖）。
+- 2 个 RED fixture：`testdata/outside_caller_red`（下游自检 ≥1 violation）、
+  `testdata/direct_canauth_skip_red`（上游自检 ≥1 violation）。
+
+**已知 caveat**（archtest pkg-doc 显式列出，不构成 Hard 等级下调）：
+
+- 跨包 helper 间接：若 slice 引入外部包 wrapper（如 `pkg/authcheck.X(user)`
+  内部读 CanAuthenticate），AST scope 是 slice 前缀，外包不可见。本仓库 slice
+  自含 service.go + handler.go + 包内 helpers，不引入外部 authz wrapper。
+- interface 间接：若 slice 通过 interface 读 *domain.User 等价物，`*types.Info`
+  解析到 interface method 而非 concrete *types.Func。当前 slice 直接持
+  *domain.User，不构成实际盲区。
+
+**评级**：下游 Hard + 上游 Hard，闭环 funnel；与 write-side
+`AUTHZ-MUTATION-APPLY-FUNNEL-01`（Rule a Hard 下游 + Medium-by-necessity 上游）
+对称达成 read-side / write-side 双向闭合。本 funnel 无 co-tx atomicity 约束，
+upstream Hard 无需 Medium ceiling。
+
+**与 §A8 / §A9 / §A10 正交**：funnel 范围限定 (a) baseline / (b) password-pin /
+(c) session-revoked；epoch 比对（§A8 row provenance）/ password-reset transition
+（§A9）/ co-tx atomicity（§A10）保持原位，**不**进 funnel。subject-binding
+（token integrity）也保持 slice 内，不属于 credential authority 范畴。
+
+**威胁矩阵更新**：本节落地后，§3 表"issue/validate authority predicate scatter
+(P1.1/P1.3 class)" 一行从 ⚠️ Medium 升 ✅ Hard。
+
+**backlog**：`CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01` ✅ closed by S-next PR。
 
 ---
 
@@ -609,7 +657,7 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 | 并发 login 与 role revoke (P1-#3) | — | ✅ login 持 user 行 FOR UPDATE 写锁，revoke 期 BumpAuthzEpoch 也持同行写锁 → PG read-committed + row lock 天然串行化 | — | — | ✅ 失效原子 |
 | stale refresh + epoch 不匹配（P2.b，S4e 修正）| — | ✅ row.epoch != user.epoch → `rejectIfStaleEpoch` → `cascadeRevoke("stale-epoch")`（session-scoped，非 user-wide） | ✅ session 失效原子（cascade revoke） | ✅ sessionrefresh 走 stale-epoch 路径（非 user-wide Invalidator.Apply） | ✅ 失效原子 |
 | 新增 user authz-affecting 字段漏调 invalidator（S4d → S4e 闭合）| — | — | — | ✅ S4e PR #494：domain.User authz 字段私有化（SetStatus/SetPasswordResetRequired caller-set ⊆ authzmutate）+ archtest `AUTHZ-MUTATION-APPLY-FUNNEL-01` Hard 闭合。RC-A：RoleRevoked 死代码删除，Mutation 目录精确到 5 个。`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` Medium-by-necessity（co-tx atomicity，§A10 天花板证明） | — |
-| issue/validate authority predicate scatter（P1.1/P1.3 class）| — | — | — | ⚠️ Medium：各 slice 分别检查 `CanAuthenticate()` + epoch；§A11 Hard funnel 立即立项（`CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01`，S-next PR） | — |
+| issue/validate authority predicate scatter（P1.1/P1.3 class）| — | — | — | ✅ Hard：read-side funnel `credentialauthority.Assert` 已落地（§A11），下游 caller allowlist + 上游 mandatory（双向 Hard archtest `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01`）；slice 通过 unexported-field + 工厂函数（SnapshotPasswordVersion / SessionNotRevoked）永不直接读 `CanAuthenticate` / `PasswordVersion` / `RevokedAt` | — |
 | 账号枚举（公开 login 端点回响是否存在）（PR #501 RC-C1）| — | — | — | ✅ sessionlogin missing-user / wrong-password / inactive 三态均返 401 `ErrAuthLoginFailed` + 同一 `errMsgInvalidCredentials`；wire shape 不可区分用户态 | — |
 | timing 旁路（公开 login 用响应耗时枚举用户）（PR #501 RC-C1）| — | — | — | ✅ missing-user 路径运行 `dummyBcryptHash` 校验（cost=12），耗时与真实 wrong-password / inactive 路径同阶；inactive 路径同样跑真 bcrypt 再返 401 | — |
 | JWT 签名密钥泄露 | ❌（jti-only 不解此场景） | — | — | — | — |

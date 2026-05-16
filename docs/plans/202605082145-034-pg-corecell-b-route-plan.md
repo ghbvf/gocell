@@ -454,25 +454,20 @@ runtime/auth/session/
 - ✅ archtest Hard：`DOMAIN-AUTHZ-FIELD-PRIVATE-01` + `AUTHZ-MUTATION-APPLY-FUNNEL-01`
 - ⚠️ `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 未能收窄到 authzmutate + sessionrefresh（co-tx atomicity 约束，实际 allowlist 保持 5 个前缀）；write-side Hard 保证来自字段私有化（Rule a），不是 caller-set 收窄（Rule b）
 
-#### S-next: read-side credential-authority Hard funnel（立即立项，next PR）
+#### S-next: read-side credential-authority Hard funnel ✅ shipped (S-next PR, 2026-05-17)
 
 **触发**：S4e (PR #494) review 暴露 P1.1/P1.3 class：token issue 和 token validate 路径的
 "是否允许该用户凭据"判断散落在各 slice（sessionlogin/sessionrefresh/sessionvalidate），
 sessionrefresh 漏检 `CanAuthenticate()`，无单一 Hard 收口。
 
-**范围**（独立 PR，与 S4c 并行可行）：
-- 新建 `cells/accesscore/internal/credentialauthority` 包 + `Assert(ctx, user, opts...)` sealed function
-- 检查：(a) `user.CanAuthenticate()`，(b) password-version pin（issue 路径），(c) session row 未 revoked（validate 路径）
-- sessionlogin / sessionrefresh / sessionvalidate 三个 slice 统一经过 `credentialauthority.Assert`
-- archtest `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01` Hard（caller allowlist 锁 caller 身份）
-- 与 authzmutate.Mutator.Apply 对称（write-side / read-side 双向闭合）
-
-**验收**：
-- `make verify` + `hack/verify-archtest.sh` 全绿（含 RED fixture）
-- sessionrefresh 新增 unit test：锁状态用户无法 refresh（`CanAuthenticate()` false path）
-- ADR `202605101400-adr-credential-session-protocol.md` §A11 更新状态为 LANDED
-
-**backlog**: `CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01`（Cx2，S4e ship 后立即立项）
+**落地形态**（与原计划差异）：
+- 包 + 函数：`cells/accesscore/internal/credentialauthority` + `Assert(user *domain.User, checks ...Check) error`（去 ctx，funnel 不做 I/O）
+- 三检查：baseline `CanAuthenticate` 内联；`WithPasswordVersionPin` / `WithSessionNotRevoked` 字段 unexport，强制走工厂 `SnapshotPasswordVersion(*domain.User)` / `SessionNotRevoked(*session.ValidateView)` —— slice 永不直接读 `PasswordVersion` / `RevokedAt`，这是与原计划比的强化点
+- archtest `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01`：下游 Hard（caller allowlist） + 上游 Hard（mandatory funnel：禁止 slice 直读三个真值源）+ 4 blind-spot 反向自检 + 2 RED fixture
+- 与 `authzmutate.Mutator.Apply` 对称达成 read-side / write-side 双向闭合；本 funnel 无 co-tx atomicity 约束，upstream 不需 Medium ceiling
+- sessionrefresh 用**两次 Assert 调用**区分 wire-level error（baseline-fail → 403 `ErrAuthUserNotActive` 保留既有契约；session-revoked → 401 `ErrAuthRefreshFailed`），按"调用入口"决定，slice 不按 err 分支
+- ADR §A11 翻 LANDED + §3 威胁矩阵升 ✅ Hard
+- backlog `CREDENTIAL-AUTHORITY-READSIDE-FUNNEL-01` ✅ closed
 
 #### S4c accesscore cleanup / race / L2 e2e
 
