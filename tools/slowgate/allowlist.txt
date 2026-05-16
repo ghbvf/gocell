@@ -118,3 +118,13 @@ github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_BumpAuthzE
 # resolver-cache-loss class as the credential funnel entries above. Borderline
 # pre-existing flake (~15.3s), surfaced on PR #504 verify-archtest CI.
 github.com/ghbvf/gocell/tools/archtest	TestCellIDPatternSingleSourceLiterals
+
+# type-graph-load: user-repo conformance enrollment scan — type-aware
+# types.Implements walk over the whole module to enumerate ports.UserRepository
+# implementers plus per-test conformance.RunUserRepoConformance callee
+# resolution. Same 16-shard modulo resolver-cache-loss class as the entries
+# above; R2-P3 PR-b (#530) added TestNotFoundTestStrict + 5 EachInSubtreeStopAt
+# tests + 4 RED fixtures, shifting the modulo distribution so this test
+# landed on a shard without the cached funnel resolver (22.3s > 20s budget
+# on shard 2). Pre-existing borderline test, not introduced by PR-b.
+github.com/ghbvf/gocell/tools/archtest	TestUserRepoConformanceEnrollment
