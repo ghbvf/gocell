@@ -210,6 +210,42 @@ first call. `WithVerboseDisabled()` is the only path that returns 200 for
 `?verbose` without a token — it is an explicit operator opt-out, not a
 fallback.
 
+## Cell-level repo readiness probes
+
+In addition to the adapter-level `postgres_ready` probe (a bare pool Ping), each
+platform Cell registers a cell-level repo readiness probe via
+`cell.RegisterRepoReadiness`. These probes represent a **distinct failure domain**:
+they execute a representative query against the Cell's own relation(s), surfacing
+schema/migration drift, missing tables, and table-level permission loss that a
+connection Ping cannot detect.
+
+| Probe name | Owning Cell | Probed relation(s) | Backend |
+|---|---|---|---|
+| `config_repo_ready` | configcore | `config_entries`, `feature_flags` | PG only; mem stores always return nil (ready) |
+| `session_store_ready` | accesscore | `sessions` | PG only; mem stores always return nil (ready) |
+| `audit_ledger_ready` | auditcore | `audit_entries` (via `Tail`) | PG only; mem stores always return nil (ready) |
+
+These probes are **not synonymous** with `postgres_ready`. A green `postgres_ready`
+and a failing `session_store_ready` means the PG connection is alive but the
+`sessions` table is inaccessible — a different remediation path (migration replay,
+permission grant) than a connection failure. Operators must monitor both probe
+families independently.
+
+Cell-level repo probe names appear in the verbose breakdown under `dependencies`:
+
+```json
+"dependencies": {
+  "postgres_ready":      { "status": "healthy", "duration_ms": 3 },
+  "config_repo_ready":   { "status": "healthy", "duration_ms": 2 },
+  "session_store_ready": { "status": "healthy", "duration_ms": 1 },
+  "audit_ledger_ready":  { "status": "healthy", "duration_ms": 2 }
+}
+```
+
+ref: `docs/architecture/202605161030-adr-cell-repo-readyz-probe.md` §D1 — differentiated
+failure domain rationale; `.claude/rules/gocell/observability.md` §Cell 级别 Repo
+Readiness Probe.
+
 ## Probe contract
 
 Every checker registered through `health.Handler.RegisterChecker` is

@@ -92,6 +92,8 @@ func (s *stubSessionStore) RevokeForSubject(_ context.Context, subjectID string,
 	return s.revokeErr
 }
 
+func (s *stubSessionStore) RepoReady(_ context.Context) error { return nil }
+
 var _ session.Store = (*stubSessionStore)(nil)
 
 // stubRefreshStore stubs refresh.Store for testing. Only RevokeUser is

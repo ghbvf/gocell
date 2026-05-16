@@ -9,6 +9,11 @@ import (
 )
 
 // ConfigRepository persists and retrieves ConfigEntry and ConfigVersion records.
+// It also implements cell.RepoHealthProber via RepoReady — a differentiated
+// readiness check that exercises the cell's own relations (config_entries and
+// feature_flags) rather than a bare connection ping, surfacing schema/migration
+// drift that the pool-level postgres_ready probe cannot detect. See
+// kernel/cell.RepoHealthProber for the full contract.
 type ConfigRepository interface {
 	Create(ctx context.Context, entry *domain.ConfigEntry) error
 	GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error)
@@ -31,4 +36,10 @@ type ConfigRepository interface {
 	List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error)
 	PublishVersion(ctx context.Context, version *domain.ConfigVersion) error
 	GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error)
+	// RepoReady implements cell.RepoHealthProber. It issues two cheap
+	// non-transactional representative queries — one against config_entries and
+	// one against feature_flags — so that missing tables or permission loss are
+	// detected independently of the pool-level postgres_ready probe. In-memory
+	// implementations return nil (always ready).
+	RepoReady(ctx context.Context) error
 }

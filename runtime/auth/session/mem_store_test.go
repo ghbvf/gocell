@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -130,4 +131,17 @@ func TestNewMemStore_OK(t *testing.T) {
 	if store == nil {
 		t.Fatal("expected non-nil store")
 	}
+}
+
+// TestMemStore_RepoReadinessConformance wires MemStore through the shared
+// RepoHealthProber conformance harness. broken=nil because MemStore has no
+// differentiated failure domain (in-memory always ready).
+func TestMemStore_RepoReadinessConformance(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(storetest.EpochAnchor())
+	store, err := session.NewMemStore(storetest.NewTestProtocol(t), fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	celltest.RunRepoReadinessConformance(t, "session-mem", store, nil)
 }

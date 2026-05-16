@@ -16,6 +16,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -386,4 +387,93 @@ func TestConfigRepo_Integration_Encryption_RoundTrip(t *testing.T) {
 		assert.Equal(t, "rotated-token", got.Value)
 		assert.Equal(t, 2, got.Version)
 	})
+}
+
+// dropBothProbeTablesSQL / dropFeatureFlagsOnlySQL drive setupBrokenConfigPG.
+// The both-tables form exercises the config_entries Exec branch (first probe
+// fails); the feature_flags-only form exercises the feature_flags Exec branch
+// (first probe succeeds, second fails) so RepoReady's two failure branches are
+// each covered by a real PG failure injection.
+const (
+	dropBothProbeTablesSQL  = "DROP TABLE config_entries CASCADE; DROP TABLE feature_flags CASCADE"
+	dropFeatureFlagsOnlySQL = "DROP TABLE feature_flags CASCADE"
+)
+
+// setupBrokenConfigPG spins up a PostgreSQL container, applies all migrations,
+// runs dropSQL to simulate schema drift, and returns a ConfigRepository backed
+// by that broken database plus cleanup func. The returned repo is used as the
+// "broken" prober in RunRepoReadinessConformance / targeted branch tests.
+func setupBrokenConfigPG(t *testing.T, dropSQL string) (*ConfigRepository, func()) {
+	t.Helper()
+	testutil.RequireDocker(t)
+
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err, "failed to start postgres container for broken repo")
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
+	require.NoError(t, err)
+
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly before table drop")
+
+	// Drop table(s) to simulate schema drift / missing migration.
+	_, dropErr := pool.DB().Exec(ctx, dropSQL)
+	require.NoError(t, dropErr, "dropping tables to create broken repo")
+
+	session := NewSession(pool.DB())
+	repo := NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+
+	cleanup := func() {
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close (broken): %v", err)
+		}
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("WARN: failed to terminate postgres container (broken): %v", err)
+		}
+	}
+
+	return repo, cleanup
+}
+
+// TestConfigRepo_Integration_RepoReadiness exercises the differentiated repo
+// readiness probe against a real PostgreSQL instance.
+// healthy: full migrations applied — probe must return nil.
+// broken: config_entries and feature_flags dropped — probe must return an error.
+func TestConfigRepo_Integration_RepoReadiness(t *testing.T) {
+	healthy, _, cleanupHealthy := setupConfigPG(t)
+	defer cleanupHealthy()
+
+	broken, cleanupBroken := setupBrokenConfigPG(t, dropBothProbeTablesSQL)
+	defer cleanupBroken()
+
+	celltest.RunRepoReadinessConformance(t, "configcore-pg", healthy, broken)
+}
+
+// TestConfigRepo_Integration_RepoReadiness_FeatureFlagsDrop covers RepoReady's
+// second failure branch: with config_entries intact but feature_flags dropped,
+// the first Exec probe succeeds and the second must fail. The both-tables
+// broken prober above only reaches the first branch (returns on config_entries
+// error), so this targeted injection is required for full branch coverage of
+// the differentiated probe.
+func TestConfigRepo_Integration_RepoReadiness_FeatureFlagsDrop(t *testing.T) {
+	repo, cleanup := setupBrokenConfigPG(t, dropFeatureFlagsOnlySQL)
+	defer cleanup()
+
+	err := repo.RepoReady(context.Background())
+	require.Error(t, err, "feature_flags dropped — RepoReady must surface the second-probe failure")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "RepoReady error must be an *errcode.Error")
+	require.Equal(t, errcode.ErrConfigRepoQuery, ec.Code,
+		"second-probe failure must carry ErrConfigRepoQuery")
 }

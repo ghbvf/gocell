@@ -234,6 +234,14 @@ func (m *MemStore) Verify(_ context.Context, fromSeq, toSeq int64) (valid bool, 
 	return true, -1, nil
 }
 
+// RepoReady implements cell.RepoHealthProber. The in-memory store has no
+// differentiated failure domain (it holds state entirely in process memory),
+// so this always returns nil — matching the MemStore convention documented in
+// kernel/cell.RepoHealthProber.
+func (m *MemStore) RepoReady(_ context.Context) error {
+	return nil
+}
+
 // MustTamperEntryHash directly modifies the Hash field of the stored entry at
 // the given seq_no (1-indexed). Used only by storetest for negative Verify cases.
 //

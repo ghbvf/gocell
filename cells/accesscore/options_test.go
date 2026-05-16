@@ -70,10 +70,10 @@ func TestWithInMemoryDefaults(t *testing.T) {
 }
 
 func TestHealthCheckers_InMemory(t *testing.T) {
-	// session.MemStore does not implement Health() — session_store_ready is only
-	// registered when the injected store implements the optional HealthCheckable
-	// interface (reserved for infrastructure stores like the PG adapter).
-	// In-memory mode deliberately has no external dependency to probe.
+	// session.Store now satisfies cell.RepoHealthProber via RepoReady. The
+	// session_store_ready probe is registered for ALL store implementations
+	// (including MemStore) through the typed RegisterRepoReadiness funnel.
+	// MemStore.RepoReady returns nil — in-memory always ready.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
@@ -90,14 +90,16 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	// MemStore does not implement HealthCheckable; no probe expected.
-	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
-		"session.MemStore does not implement Health(); probe must not be registered")
+	// session_store_ready is registered via cell.RegisterRepoReadiness (typed funnel).
+	require.Contains(t, snap.HealthCheckers, "session_store_ready",
+		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
+	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+		"MemStore.RepoReady must return nil (in-memory always ready)")
 }
 
 func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
-	// session.MemStore does not implement Health() — no session_store_ready probe
-	// is registered in pure in-memory mode. Init must succeed without it.
+	// session.Store satisfies cell.RepoHealthProber via RepoReady. The probe is
+	// registered unconditionally (including MemStore) through RegisterRepoReadiness.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
@@ -114,9 +116,11 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	// MemStore does not implement HealthCheckable; probe absent is correct.
-	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
-		"session.MemStore does not implement Health(); probe must not be registered")
+	// session_store_ready is now registered via the typed funnel for all Store impls.
+	require.Contains(t, snap.HealthCheckers, "session_store_ready",
+		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
+	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+		"MemStore.RepoReady must return nil (in-memory always ready)")
 }
 
 func TestRegisterSubscriptions(t *testing.T) {
@@ -222,9 +226,11 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), rec))
 
 	snap := rec.Snapshot()
-	// session.MemStore does not implement HealthCheckable; no session_store_ready probe expected.
-	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
-		"session.MemStore does not implement Health(); probe must not be registered")
+	// session_store_ready is registered via the typed funnel for all Store impls.
+	require.Contains(t, snap.HealthCheckers, "session_store_ready",
+		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
+	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+		"MemStore.RepoReady must return nil (in-memory always ready)")
 	const emitterKey = "outbox-failopen-rate.accesscore"
 	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
 	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
@@ -252,9 +258,11 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	// session.MemStore does not implement HealthCheckable; no session_store_ready probe expected.
-	assert.NotContains(t, snap.HealthCheckers, "session_store_ready",
-		"session.MemStore does not implement Health(); probe must not be registered")
+	// session_store_ready is registered via the typed funnel for all Store impls.
+	require.Contains(t, snap.HealthCheckers, "session_store_ready",
+		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
+	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+		"MemStore.RepoReady must return nil (in-memory always ready)")
 	for k := range snap.HealthCheckers {
 		assert.NotContains(t, k, "outbox-failopen-rate",
 			"nil emitter must not produce outbox checker: key=%s", k)

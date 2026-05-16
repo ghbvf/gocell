@@ -788,6 +788,43 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 	return nil
 }
 
+// configEntriesProbeSQL is a representative query for the config_entries table
+// that returns no rows (WHERE false short-circuits the scan) but fails if the
+// table is missing, dropped, or has revoked table-level permissions.
+const configEntriesProbeSQL = `SELECT 1 FROM config_entries WHERE false`
+
+// featureFlagsProbeSQL is the equivalent representative query for the
+// feature_flags table, providing a differentiated failure domain from
+// config_entries for the RepoReady probe.
+const featureFlagsProbeSQL = `SELECT 1 FROM feature_flags WHERE false`
+
+// RepoReady implements cell.RepoHealthProber. It issues two cheap
+// non-transactional representative Exec probes — SELECT 1 FROM config_entries
+// WHERE false and SELECT 1 FROM feature_flags WHERE false — so that missing
+// tables, dropped columns, or revoked table-level permissions are detected
+// independently of the pool-level postgres_ready probe. WHERE false
+// short-circuits the scan so there is no result-iteration overhead, and Exec
+// (matching PGSessionStore.RepoReady / LedgerStore.RepoReady) collapses each
+// table probe to a single failure branch — no transaction is opened.
+func (r *ConfigRepository) RepoReady(ctx context.Context) error {
+	db := r.resolveDB(ctx)
+
+	if _, err := db.Exec(ctx, configEntriesProbeSQL); err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
+			"config repo readiness check failed", err,
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+	if _, err := db.Exec(ctx, featureFlagsProbeSQL); err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
+			"config repo readiness check failed", err,
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+
+	return nil
+}
+
 // GetVersion retrieves a specific config version with transparent decryption.
 func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error) {
 	const q = `SELECT id, config_id, version, value, sensitive, published_at,

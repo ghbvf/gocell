@@ -1,7 +1,7 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-15（Wave 1 6/8 ship — PR-3 CLI-HARDEN ship，+CLI-UNIMPL-HIDE-01 闭环 Hard；040 阶段 1 ✅ PR #492 → PR-4/PR-5/Wave 4 ADAPTER-ERR-CLASS 阻塞解除）
+**最后更新**：2026-05-16（Wave 1 7/8 ship — PR-3 CLI-HARDEN ✅ #502（+CLI-UNIMPL-HIDE-01 Hard）+ PR-9 REPO-READYZ ✅ fix/202-repo-readyz（+CELL-REPO-READYZ-PROBE-01 Hard）；040 阶段 1 ✅ PR #492 → PR-4/PR-5/Wave 4 ADAPTER-ERR-CLASS 阻塞解除）
 **关系**：
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S3+S5/S3F/S4.0/S4a/S4b 已 ship；S4c 串行推进）。本计划不重复 accesscore 路线
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
@@ -143,18 +143,27 @@
 - (6) `adapters/adapterutil/health.go` `HealthToCheckers` helper 下沉 4 adapter 复用
 - **unblock**：PR-11 OIDC-JWKS-ROTATION-WORKER 前置依赖已达成（commit body 显式："auto-rotation worker is PR-11/A-02"）
 
-#### PR-9 PR-REPO-READYZ
+#### PR-9 PR-REPO-READYZ — ✅ (fix/202-repo-readyz)
 
 **包含**：REPO-HEALTHCHECKER-01 + B2-R-02
 **依据**：backlog 主表 cap-12 line 225 显式注「同 PR」；都改 `cells/{configcore,auditcore}/cell.go` HealthCheckers
-**Cx**：Cx2
+**Cx**：Cx2 → Cx3（范围扩展：typed funnel + real-failure conformance + archtest）
+**ship 摘要（branch fix/202-repo-readyz，2026-05-16）**：
+- 新增 `kernel/cell.RepoHealthProber` interface + `cell.RegisterRepoReadiness(reg, name, prober)` typed funnel（Hard form-uniqueness，对标 `panic(panicregister.Approved(...))` 范本）
+- 3 cell 统一注册：configcore `config_repo_ready`（queries `config_entries` + `feature_flags`）/ accesscore `session_store_ready`（queries `sessions`）/ auditcore `audit_ledger_ready`（复用 `Tail`，queries `audit_entries`）
+- accesscore dead-code duck-type probe 修复（匿名 `interface{ Health(context.Context) error }` 从未触发，本 PR 替换为有类型 funnel wiring）
+- auditcore `LedgerStore.Probes()` 特殊路径删除，统一到 funnel（PR #450 F6 部分覆盖已吸收）
+- `kernel/cell/celltest.RunRepoReadinessConformance` real-failure-injection harness（healthy→nil；PG DROP TABLE→non-nil；mem→skip）作为 differentiated probe 行为正确性的 Hard 载体
+- archtest `CELL-REPO-READYZ-PROBE-01`：funnel 形态锁 + conformance wiring Medium backstop
+- Cx2→Cx3 revision note：AI-rebust self-audit 发现需要三件套（typed funnel + conformance + archtest），不是原估的两项
+- ADR `docs/architecture/202605161030-adr-cell-repo-readyz-probe.md`
 
 ---
 
 ## 3. 依赖图与执行 Wave
 
 ```
-Wave 1（独立并行，8 PR） — 6/8 ship：
+Wave 1（独立并行，8 PR） — 7/8 ship：
   PR-1 OTEL-HARDEN-5         ✅ PR #486 (OTEL-HARDEN-4，B2-R-05 split)
   PR-2 PROM-HARDEN-3         ✅ PR #484
   PR-3 CLI-HARDEN            ✅ PR #502 (038 Wave 1, 2026-05-15) — +CLI-UNIMPL-HIDE-01 闭环 Hard 升级
@@ -162,7 +171,7 @@ Wave 1（独立并行，8 PR） — 6/8 ship：
   PR-6 G-13 元治理 guard     ✅ PR #487 merged 2026-05-13
   PR-7 BOOTSTRAP-CLIENTS-MUTEX ✅ PR #483
   PR-8 OIDC-MR-COMPLETENESS  ✅ PR #485
-  PR-9 REPO-READYZ           ⏳ 未启动
+  PR-9 REPO-READYZ           ✅ PR-REPO-READYZ fix/202-repo-readyz (2026-05-16) — +CELL-REPO-READYZ-PROBE-01 Hard funnel
 
 Wave 2（依赖 Wave 1，2 PR） — 0/2 ship：
   PR-5 GOV-NEW-RULES (GOVERNANCE-AUTH-PUBLIC + V-A11)
@@ -221,7 +230,7 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | PR-6 G-13 元治理 guard | 6h | 3h | ✅ PR #487 | 注册框架；review 派生 plan 040 archtest Pass-Driver；4 follow-up 登记 cap-02 |
 | PR-7 BOOTSTRAP-CLIENTS-MUTEX | 3h | 1.5h | ✅ PR #483 | +review type-aware Hard 全形态覆盖 |
 | PR-8 OIDC-MR-COMPLETENESS | 18h | 8h | ✅ PR #485 | A-01 + A-07 + A-08 束 |
-| PR-9 REPO-READYZ | 4h | 2h | ⏳ 未启动 | 2 项 |
+| PR-9 REPO-READYZ | 4h | 2h | ✅ (fix/202-repo-readyz) | typed funnel + conformance harness + 3-cell unification；Cx2→Cx3 |
 | PR-5 GOV-NEW-RULES | 4h | 2h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| PR-6 ✅；保持合并；V-A11 archtest 走 `archtest.Run`/`RunTyped` |
 | PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ⏳ 可起 | 后台 worker；PR-8 unblock |
 | Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | ⏳ 依赖 PR-4 | integration harness |
@@ -229,9 +238,9 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | Wave 5 架构重构 | 独立排期 | — | — | G-10 / SEALED / BOOTSTRAP 束 |
 
 **累计**：
-- ✅ shipped (5 PR): ~39h dev / ~18.5h review（PR-1/2/6/7/8）
-- ⏳ 待启动 (Wave 1 剩余 + Wave 2/3/4): ~63h dev / ~31.5h review（PR-3/4/5/9/11 + Wave 3 + Wave 4）
-- 进度：Wave 1 5/8 ship（62.5%）；038 整体 dev 进度 38%（按原计划 102h 总分母）
+- ✅ shipped (7 PR): ~51h dev / ~24.5h review（PR-1/2/3/6/7/8/9）
+- ⏳ 待启动 (Wave 1 剩余 + Wave 2/3/4): ~51h dev / ~25.5h review（PR-4/5/11 + Wave 3 + Wave 4）
+- 进度：Wave 1 7/8 ship（87.5%）；038 整体 dev 进度 50%（按原计划 102h 总分母）
 
 ---
 

@@ -167,6 +167,13 @@ func (m *MemStore) RevokeForSubject(_ context.Context, subjectID string, event C
 	return nil
 }
 
+// RepoReady implements cell.RepoHealthProber. In-memory store is always ready
+// — there is no external relation or schema that can go missing. Returns nil
+// unconditionally (MemStore convention per kernel/cell.RepoHealthProber godoc).
+func (m *MemStore) RepoReady(_ context.Context) error {
+	return nil
+}
+
 // validateFingerprintShape enforces the per-FingerprintMode invariants on a
 // Session record. Sealed Protocol.Fingerprint() values are exhaustive; future
 // modes register here when added (the if-chain grows with each new sibling
