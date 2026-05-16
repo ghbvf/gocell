@@ -1,6 +1,7 @@
 // Package wrong_callee_red proves that a _NotFound test calling a similarly
-// named non-funnel helper (e.g. testify.assert.Equal) is rejected even when it
-// references the right errcode constant. Line 13 is flagged.
+// named non-funnel helper (e.g. testify.assert.Equal) is rejected even when
+// it references the right errcode constant.
+// fn at line 15; violation emitted at fn.Pos().
 package wrong_callee_red
 
 import (

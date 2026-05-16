@@ -41,13 +41,6 @@ package archtest
 //     only via ADR-tracked PR.
 //   - Panic-based NotFound tests: out of scope. NotFound is an
 //     error-return semantic; panic shape is governed by PANIC-REGISTERED-01.
-//   - Non-testing.T `.Run` methods: `isTRunCall` matches any `*.Run(...)`
-//     selector by name. Custom types with a `Run(string, fn) bool/error`
-//     signature whose first arg is a `_NotFound` string literal would be
-//     flagged as if they were `t.Run`. The current corpus has no such
-//     type; if a future PR adds one, either rename the method to avoid
-//     collision or extend isTRunCall to type-resolve the receiver to
-//     testing.TB via *types.Info.
 
 import (
 	"fmt"
@@ -267,9 +260,13 @@ func callSatisfiesFunnelRule(info *types.Info, call *ast.CallExpr) bool {
 // violations of POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01.
 //
 // Two selection paths:
-//  1. FuncDecl whose name matches ^Test[A-Za-z][A-Za-z0-9_]*_NotFound$.
+//  1. FuncDecl whose name matches notFoundFuncNamePattern
+//     (^Test[A-Za-z][A-Za-z0-9_]*_NotFound$).
 //  2. t.Run("..._NotFound", func(t *testing.T) { ... }) where the literal
-//     case name matches ^[A-Za-z0-9_]+_NotFound$.
+//     case name passes tRunCaseNameMatches (suffix "_NotFound" with a
+//     non-empty prefix; Go's testing package allows any non-empty string
+//     as a subtest name, so the suffix predicate accepts every name the
+//     test runtime accepts).
 //
 // For each selected body, at least one CallExpr must satisfy
 // callSatisfiesFunnelRule. Failing that, a single violation is emitted at
@@ -318,7 +315,7 @@ func scanFileForNotFoundViolations(
 	})
 
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !isTRunCall(call) || len(call.Args) < 2 {
+		if !isTRunCall(call, info) || len(call.Args) < 2 {
 			return
 		}
 		nameLit, ok := call.Args[0].(*ast.BasicLit)
@@ -358,14 +355,49 @@ func scanFileForNotFoundViolations(
 	return violations
 }
 
-// isTRunCall reports whether call is `t.Run(name, body)`. The receiver
-// identifier is not constrained (commonly `t`, but could be aliased).
-func isTRunCall(call *ast.CallExpr) bool {
+// isTRunCall reports whether call is `t.Run(name, body)` on a Go testing
+// receiver — *testing.T, *testing.B, or *testing.F. The receiver
+// identifier is not constrained at the AST level (commonly `t`, but could
+// be aliased); identity is established via *types.Info if available.
+//
+// Type resolution path (when info != nil): the selector base must resolve
+// to a Named type in the standard `testing` package with name T, B, or F.
+// testing.TB is an interface that does NOT declare Run — Run is owned by
+// T / B / F concretely — so this rejects `TB.Run(...)` synthetic calls
+// (none exist in the corpus, but the predicate must reject in principle
+// to be type-aware Hard).
+//
+// Pure-AST fallback (info == nil, fixture mode): accepts any `.Run`
+// selector by name. Documented as a known fixture-mode relaxation;
+// production scan is the type-aware path.
+func isTRunCall(call *ast.CallExpr, info *types.Info) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil {
+	if !ok || sel.Sel == nil || sel.Sel.Name != "Run" {
 		return false
 	}
-	return sel.Sel.Name == "Run"
+	if info == nil {
+		// Fixture pure-AST mode: name-only match.
+		return true
+	}
+	recvType := info.TypeOf(sel.X)
+	if recvType == nil {
+		return false
+	}
+	if ptr, ok := recvType.(*types.Pointer); ok {
+		recvType = ptr.Elem()
+	}
+	named, ok := recvType.(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	if named.Obj().Pkg().Path() != "testing" {
+		return false
+	}
+	switch named.Obj().Name() {
+	case "T", "B", "F":
+		return true
+	}
+	return false
 }
 
 // shouldSkipForNotFoundStrict returns true for paths excluded from the
@@ -499,8 +531,8 @@ func TestNotFoundTestStrictFixtures(t *testing.T) {
 		// RED — no funnel call. fn at line 12.
 		{"missing_funnel_red", []int{12}},
 		// RED — funnel-shaped name but wrong callee (assert.Equal not
-		// errcodetest). fn at line 14.
-		{"wrong_callee_red", []int{14}},
+		// errcodetest). fn at line 15.
+		{"wrong_callee_red", []int{15}},
 		// RED — right funnel, but expected resolves to non-NotFound errcode.
 		// In pure-AST mode the AST fallback only checks the selector Sel
 		// name pattern (Err*NotFound); ErrValidationFailed fails that
