@@ -4,6 +4,7 @@
 //   - INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
 //   - INVARIANT: KERNEL-CLOCK-RESET-RELATIVE-PROD-01
 //   - INVARIANT: PROD-CLOCK-INJECTION-01
+//   - INVARIANT: CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01
 //
 // Package archtest — clock injection invariants.
 //
@@ -21,6 +22,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
@@ -1324,4 +1326,159 @@ func matchedTimeFn(info *types.Info, ident *ast.Ident) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// ---------------------------------------------------------------------------
+// CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01
+// ---------------------------------------------------------------------------
+
+// INVARIANT: CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01
+//
+// TestControlPlaneClockCarveOutAllowlistIsLive asserts that every entry in
+// controlPlaneClockCarveOut is live — i.e. not orphaned by a rename or deletion:
+//
+//	(a) The file at the module-relative path parses without error.
+//	(b) Each listed function name exists as a top-level *ast.FuncDecl in that file.
+//	(c) The FuncDecl's doc comment carries a valid clockControlPlaneAllowMarker
+//	    with a non-empty reason.
+//
+// Without this guard, a rename of controlPlaneTicker or controlPlaneProbeTimer
+// silently orphans the allowlist entry: enforcement keeps working (unknown names
+// are never exempt), but the allowlist stops being a trustworthy record of what
+// is actually exempt, violating ai-collab.md §"ADR amendment 落地必查" Medium
+// anchor integrity.
+//
+// Detection strategy: pure go/parser AST scan (no types loading needed).
+// EachInChildren[ast.FuncDecl](file, ...) at depth=1 finds top-level FuncDecls,
+// which are direct children of *ast.File — correct and sufficient.
+//
+// Blind spots (AST-based, no type resolution):
+//   - A method (receiver FuncDecl) could share the same name as a top-level
+//     FuncDecl; EachInChildren[ast.FuncDecl] only reaches top-level declarations
+//     (direct children of *ast.File), so receiver methods are never matched —
+//     the check is correct by depth=1 constraint.
+//   - The marker is required in the doc comment (fd.Doc), not an inline comment
+//     inside the body. A function whose marker appears only in a body comment
+//     would pass the carve-out allowlist check but fail PROD-CLOCK-INJECTION-01
+//     (which uses the same doc-comment predicate). This test validates the same
+//     predicate, so both sides agree.
+//
+// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
+// ref: PROD-CLOCK-INJECTION-01 (clock_invariants_test.go clockControlPlaneAllowedFuncs)
+func TestControlPlaneClockCarveOutAllowlistIsLive(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+
+	// Collect sorted keys for deterministic error ordering.
+	rels := make([]string, 0, len(controlPlaneClockCarveOut))
+	for rel := range controlPlaneClockCarveOut {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
+
+	for _, rel := range rels {
+		funcNames := controlPlaneClockCarveOut[rel]
+		rel := rel // capture for t.Run
+		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
+			absPath := filepath.Join(root, filepath.FromSlash(rel))
+
+			file, fset, err := parseCarveOutFile(absPath)
+			assert.NoError(t, err,
+				"CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01: %s: file must exist and parse; "+
+					"update controlPlaneClockCarveOut if the file was renamed or deleted", rel)
+			if err != nil {
+				return
+			}
+
+			// Sort func names for deterministic sub-test order.
+			names := sortedKeys(funcNames)
+			for _, name := range names {
+				name := name
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					checkCarveOutFuncDecl(t, fset, file, rel, name)
+				})
+			}
+		})
+	}
+}
+
+// parseCarveOutFile parses the Go source file at absPath using go/parser and
+// returns the *ast.File and its *token.FileSet. It does not load type
+// information — a pure AST parse is sufficient for allowlist liveness checks.
+func parseCarveOutFile(absPath string) (*ast.File, *token.FileSet, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, absPath, nil, parser.ParseComments)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s: %w", absPath, err)
+	}
+	return file, fset, nil
+}
+
+// checkCarveOutFuncDecl asserts that funcName exists as a top-level *ast.FuncDecl
+// in file AND that its doc comment carries a valid clockControlPlaneAllowMarker
+// with a non-empty reason.
+func checkCarveOutFuncDecl(t *testing.T, fset *token.FileSet, file *ast.File, rel, funcName string) {
+	t.Helper()
+
+	fd, found := findTopLevelFuncDecl(file, funcName)
+	assert.True(t, found,
+		"CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01: %s: top-level func %q not found; "+
+			"update controlPlaneClockCarveOut or rename the allowlist entry", rel, funcName)
+	if !found {
+		return
+	}
+
+	hasMarker := funcDeclHasAllowMarker(fset, fd)
+	assert.True(t, hasMarker,
+		"CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01: %s: func %q exists but its doc comment "+
+			"does not carry a valid %q marker with a non-empty reason; "+
+			"add the marker or remove the allowlist entry",
+		rel, funcName, clockControlPlaneAllowMarker)
+}
+
+// findTopLevelFuncDecl returns the top-level *ast.FuncDecl named funcName and
+// true if found; otherwise nil and false.
+// Uses EachInChildren[ast.FuncDecl] (depth=1) because top-level FuncDecls are
+// direct children of *ast.File — the same depth used by clockControlPlaneAllowedFuncs.
+func findTopLevelFuncDecl(file *ast.File, funcName string) (*ast.FuncDecl, bool) {
+	var result *ast.FuncDecl
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name != nil && fd.Name.Name == funcName {
+			result = fd
+		}
+	})
+	return result, result != nil
+}
+
+// funcDeclHasAllowMarker reports whether fd's doc comment contains a valid
+// clockControlPlaneAllowMarker with a non-empty reason. Mirrors the predicate
+// in clockControlPlaneAllowedFuncs so both sides stay in sync.
+func funcDeclHasAllowMarker(_ *token.FileSet, fd *ast.FuncDecl) bool {
+	if fd.Doc == nil {
+		return false
+	}
+	for _, c := range fd.Doc.List {
+		text := strings.TrimSpace(c.Text)
+		if !strings.HasPrefix(text, clockControlPlaneAllowMarker) {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(text, clockControlPlaneAllowMarker))
+		if rest != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// sortedKeys returns the keys of m sorted lexicographically.
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
