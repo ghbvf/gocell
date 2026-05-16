@@ -4,6 +4,7 @@ package sessionlogin
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -49,8 +50,18 @@ type passwordComparer func(hash, password []byte) error
 // for real user passwords. Using a lower cost (e.g. bcrypt.MinCost=4) would make
 // the "user not found" path ~256x faster than the "wrong password" path, exposing
 // a statistical timing oracle that can enumerate valid usernames.
+//
+// The input is crypto/rand bytes, not a fixed literal: the dummy input value is
+// irrelevant (it must only never equal a real password — random guarantees
+// that) and a hardcoded string would be a meaningless known-plaintext that
+// secret scanners flag. Nothing authenticates against this; there is no secret.
 var dummyBcryptHash = func() []byte {
-	h, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-normalization"), domain.BcryptCost)
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		panic(panicregister.Approved("sessionlogin-dummy-hash-seed",
+			errcode.Assertion("sessionlogin: failed to seed dummyBcryptHash: %v", err)))
+	}
+	h, err := bcrypt.GenerateFromPassword(seed, domain.BcryptCost)
 	if err != nil {
 		panic(panicregister.Approved("sessionlogin-dummy-hash-init",
 			errcode.Assertion("sessionlogin: failed to pre-compute dummyBcryptHash: %v", err)))

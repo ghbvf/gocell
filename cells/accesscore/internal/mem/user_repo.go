@@ -97,41 +97,22 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*d
 	return cloneUser(u), nil
 }
 
-// GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE semantics.
-//
-// Lock contract: inside memTxRunner.RunInTx the tx already holds store.mu for
-// the whole closure (full FOR-UPDATE-until-commit serialization); re-acquiring
-// would deadlock, so skip. Outside a mem tx (foreign CellTxManager) acquire
-// store.mu for this read — functional per-call locking, see UserRepository doc.
+// GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
+// semantics. The mem store has no per-row lock distinct from GetByID — its
+// serialization unit is the whole memTxRunner.RunInTx closure holding store.mu
+// (full FOR-UPDATE-until-commit), or a per-call store.mu read under a foreign
+// CellTxManager. Both behaviors are exactly GetByID's lock contract, so this
+// is a deliberate, documented delegation: the ForUpdate vs plain distinction
+// is a PG-only concept the port preserves; mem cannot and need not differ.
 func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
-	if !isInMemTx(ctx) {
-		r.store.mu.Lock()
-		defer r.store.mu.Unlock()
-	}
-	u, ok := r.store.usersByID[id]
-	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
-	}
-	return cloneUser(u), nil
+	return r.GetByID(ctx, id)
 }
 
-// GetByUsernameForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
-// semantics. Same lock contract as GetByIDForUpdate: full serialization inside
-// memTxRunner.RunInTx; per-call store.mu read lock under a foreign CellTxManager.
+// GetByUsernameForUpdate (S4d): username-keyed counterpart to
+// GetByIDForUpdate. Delegates to GetByUsername for the same reason — mem has
+// no row lock distinct from the plain read (see GetByIDForUpdate doc).
 func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
-	if !isInMemTx(ctx) {
-		r.store.mu.Lock()
-		defer r.store.mu.Unlock()
-	}
-	u, ok := r.store.byName[username]
-	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, username)))
-	}
-	return cloneUser(u), nil
+	return r.GetByUsername(ctx, username)
 }
 
 // Update replaces the stored User. Safe to call both inside and outside a
