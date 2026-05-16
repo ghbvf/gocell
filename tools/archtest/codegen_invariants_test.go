@@ -265,12 +265,14 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 // ============================================================
 //
 // Gates protect the generator's contract on contracts that have opted into
-// codegen (codegen: true in contract.yaml).
+// codegen. Contracts opt in by default; declare `codegen: false` in
+// contract.yaml to opt out.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#06
 
 // TestCodegenContractGen01_OptedInHasGen verifies CODEGEN-CONTRACT-GEN-01.
-// A contract opts into codegen by setting `codegen: true` in contract.yaml.
+// Contracts are opted into codegen by default; `codegen: false` in
+// contract.yaml is the only way to opt out.
 // For every opted-in contract:
 //   - generated/<kind>/<...>/v<N>/types_gen.go must exist
 //   - generated/<kind>/<...>/v<N>/iface_gen.go must exist
