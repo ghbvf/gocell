@@ -153,6 +153,7 @@ Create `cells/mycell/slices/myhello/slice.yaml`:
 ```yaml
 id: myhello
 belongsToCell: mycell
+consistencyLevel: L1
 contractUsages:
   - contract: http.mycell.hello.v1
     role: serve

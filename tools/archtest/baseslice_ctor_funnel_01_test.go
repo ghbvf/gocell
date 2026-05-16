@@ -204,23 +204,26 @@ func appendIfBaseSliceLiteral(
 	return diags
 }
 
-// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_DotImport verifies that the scanner
-// catches `NewBaseSlice(...)` when called via a dot-import of kernel/cell.
+// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral asserts that the
+// scanner catches the forbidden `&cell.BaseSlice{}` composite literal shape
+// (Shape 2) as defined in the fixture at
+// tools/archtest/internal/basesliceredfixture/base_slice_literal.go.
 //
-// Under a dot-import (`import . ".../kernel/cell"`), `NewBaseSlice` appears as
-// a bare *ast.Ident rather than a SelectorExpr. ResolvePackageRef handles this
-// via the resolveBarePkgSymbol path (info.Uses[id] → *types.Func → Pkg().Path()),
-// so the funnel still fires. This test uses scanBaseSliceFunnel against the
-// real codebase; since no production file dot-imports kernel/cell today, the
-// scanner finds zero violations — confirming the safe state rather than the
-// detection path.
+// # Why a RED fixture is required
 //
-// Detecting dot-import would require injecting a synthetic package with a real
-// go/packages.Load result (high complexity, brittle in CI). Instead this comment
-// documents the theoretical coverage via resolveBarePkgSymbol, and the reflection
-// form (reflect.New) is explicitly acknowledged as out of scope (theoretical;
-// see blind-spot inventory above).
-func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_DotImport(t *testing.T) {
+// The production scan (TestBASESLICE_CTOR_FUNNEL_01) asserts zero violations.
+// Without a known-positive counterpart, a broken scanner silently passes
+// everything. This test loads the fixture package under the archtest_fixture
+// build tag — which contains a deliberate &cell.BaseSlice{} literal — and
+// asserts the scanner fires at least once, proving the detection path works.
+//
+// # Fixture shape
+//
+//	var redBaseSliceLiteral = &cell.BaseSlice{}  // in base_slice_literal.go
+//
+// This is a *ast.CompositeLit with type resolving to (kernel/cell, "BaseSlice").
+// The scanner must hit appendIfBaseSliceLiteral and emit a diagnostic.
+func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
@@ -229,15 +232,112 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_DotImport(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	// Confirm no production file currently dot-imports kernel/cell and calls
-	// NewBaseSlice. Zero violations is the expected GREEN state; any future
-	// dot-import callsite would appear here immediately.
+	diags := RunTyped(t,
+		TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+		func(p *Pass) []Diagnostic {
+			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
+		},
+	)
+
+	for _, d := range diags {
+		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
+	}
+
+	var hitCount int
+	for _, d := range diags {
+		if d.Message == "forbidden composite literal cell.BaseSlice{...} — construct via cell.MustNewBaseSliceFromMeta(...)" {
+			hitCount++
+		}
+	}
+	if hitCount == 0 {
+		t.Errorf("BASESLICE-CTOR-FUNNEL-01 RED fixture (BaseSlice literal): " +
+			"scanner found 0 hits; expected ≥ 1 from base_slice_literal.go — " +
+			"the detector appendIfBaseSliceLiteral may be broken")
+	}
+}
+
+// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral asserts that the
+// scanner catches the forbidden `metadata.SliceMeta{...}` composite literal
+// shape (Shape 3) as defined in the fixture at
+// tools/archtest/internal/basesliceredfixture/slice_meta_literal.go.
+//
+// # Why a RED fixture is required
+//
+// The production scan (TestBASESLICE_CTOR_FUNNEL_01) asserts zero violations.
+// Without a known-positive counterpart, a broken scanner silently passes
+// everything. This test loads the fixture package under the archtest_fixture
+// build tag — which contains a deliberate metadata.SliceMeta{...} literal in a
+// non-gen file — and asserts the scanner fires at least once.
+//
+// # Fixture shape
+//
+//	var redSliceMetaLiteral = metadata.SliceMeta{
+//	    ID: "red-fixture-slice", BelongsToCell: "red-fixture-cell", ConsistencyLevel: "L1",
+//	}  // in slice_meta_literal.go (not a *_gen.go file, so not exempt)
+//
+// This is a *ast.CompositeLit with type resolving to (kernel/metadata, "SliceMeta")
+// in a non-gen file. The scanner must hit appendIfSliceMetaLiteral.
+func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+
+	cellPkgPath := modPath + "/kernel/cell"
+	metaPkgPath := modPath + "/kernel/metadata"
+
+	diags := RunTyped(t,
+		TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+		func(p *Pass) []Diagnostic {
+			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
+		},
+	)
+
+	for _, d := range diags {
+		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
+	}
+
+	var hitCount int
+	for _, d := range diags {
+		if d.Message == sliceMetaLiteralMsg {
+			hitCount++
+		}
+	}
+	if hitCount == 0 {
+		t.Errorf("BASESLICE-CTOR-FUNNEL-01 RED fixture (SliceMeta literal): " +
+			"scanner found 0 hits; expected ≥ 1 from slice_meta_literal.go — " +
+			"the detector appendIfSliceMetaLiteral may be broken")
+	}
+}
+
+// TestBASESLICE_CTOR_FUNNEL_01_GreenProduction asserts that the production
+// codebase currently has zero BASESLICE-CTOR-FUNNEL-01 violations.
+//
+// This is the canonical GREEN baseline. It is separate from
+// TestBASESLICE_CTOR_FUNNEL_01 (which uses RunTypedProduction) so the two RED
+// fixture tests above (which use RunTyped with archtest_fixture tags) share the
+// same test file and make the RED+GREEN coverage pair easy to review together.
+//
+// A pass here + a fail in the RED fixture tests above means the scanner is
+// broken. A fail here means a new violation was introduced.
+func TestBASESLICE_CTOR_FUNNEL_01_GreenProduction(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+
+	cellPkgPath := modPath + "/kernel/cell"
+	metaPkgPath := modPath + "/kernel/metadata"
+
 	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 	})
 
 	if len(diags) > 0 {
-		t.Errorf("BASESLICE-CTOR-FUNNEL-01 dot-import RED fixture: unexpected violations:\n%v", diags)
+		t.Errorf("BASESLICE-CTOR-FUNNEL-01 production GREEN: expected 0 violations, got %d:\n%v",
+			len(diags), diags)
 	}
 }
 
@@ -279,84 +379,4 @@ func isSliceMetaType(info *types.Info, expr ast.Expr, metaPkgPath string) bool {
 		return false
 	}
 	return obj.Pkg().Path() == metaPkgPath && obj.Name() == "SliceMeta"
-}
-
-// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_NewBaseSliceCall verifies that the
-// scanner detects the forbidden `cell.NewBaseSlice(...)` call shape.
-//
-// This test exercises scanBaseSliceFunnel against the real production codebase.
-// Since NewBaseSlice was removed in Wave 0 GREEN and no production file calls it,
-// zero violations is the expected result — confirming the safe state rather than
-// the detection path. Any reintroduction would appear here immediately.
-func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_NewBaseSliceCall(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	require.NoError(t, err)
-
-	cellPkgPath := modPath + "/kernel/cell"
-	metaPkgPath := modPath + "/kernel/metadata"
-
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
-	})
-
-	// The scanner must flag zero violations in the current clean codebase.
-	// Any violation here means a forbidden NewBaseSlice call was reintroduced.
-	for _, d := range diags {
-		if d.Message == "forbidden call cell.NewBaseSlice — use cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata()) instead" {
-			t.Errorf("BASESLICE-CTOR-FUNNEL-01 RED fixture (NewBaseSlice): unexpected violation at %s:%d", d.Rel, d.Line)
-		}
-	}
-}
-
-// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral verifies that the
-// scanner detects the forbidden `&cell.BaseSlice{...}` composite literal shape.
-//
-// Since no production file constructs BaseSlice directly (the funnel is enforced),
-// zero violations is expected — confirming safe state. Any reintroduction would appear.
-func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	require.NoError(t, err)
-
-	cellPkgPath := modPath + "/kernel/cell"
-	metaPkgPath := modPath + "/kernel/metadata"
-
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
-	})
-
-	for _, d := range diags {
-		if d.Message == "forbidden composite literal cell.BaseSlice{...} — construct via cell.MustNewBaseSliceFromMeta(...)" {
-			t.Errorf("BASESLICE-CTOR-FUNNEL-01 RED fixture (BaseSlice literal): unexpected violation at %s:%d", d.Rel, d.Line)
-		}
-	}
-}
-
-// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral verifies that the
-// scanner detects the forbidden `metadata.SliceMeta{...}` composite literal shape
-// in non-generated production files.
-//
-// Since production code must use slicePkg.SliceMetadata() (or _gen.go files),
-// zero violations is expected in the current codebase.
-func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	require.NoError(t, err)
-
-	cellPkgPath := modPath + "/kernel/cell"
-	metaPkgPath := modPath + "/kernel/metadata"
-
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
-	})
-
-	for _, d := range diags {
-		if d.Message == sliceMetaLiteralMsg {
-			t.Errorf("BASESLICE-CTOR-FUNNEL-01 RED fixture (SliceMeta literal): unexpected violation at %s:%d", d.Rel, d.Line)
-		}
-	}
 }
