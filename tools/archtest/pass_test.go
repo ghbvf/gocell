@@ -24,6 +24,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -1344,5 +1345,66 @@ func TestRunTypedProduction_matchesProductionResolverSet(t *testing.T) {
 	}
 	if len(got) == 0 {
 		t.Errorf("RunTypedProduction delivered zero packages")
+	}
+}
+
+// TestRunTypedFixture_LoadsRedfixture verifies that RunTypedFixture with
+// Tests=false delivers at least one Pass for the passfunnelfixture package
+// (which is gated by the archtest_fixture build tag).
+//
+// RED until RunTypedFixture and FixtureOpts are defined in tools/archtest.
+func TestRunTypedFixture_LoadsRedfixture(t *testing.T) {
+	calls := 0
+	rule := func(p *Pass) []Diagnostic {
+		calls++
+		return nil
+	}
+	RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	if calls == 0 {
+		t.Errorf("RunTypedFixture(Tests=false) invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
+	}
+}
+
+// TestRunTypedFixture_TestVariantLoad verifies that RunTypedFixture with
+// Tests=true also loads the passfunnelfixture package successfully.
+//
+// RED until RunTypedFixture and FixtureOpts are defined in tools/archtest.
+func TestRunTypedFixture_TestVariantLoad(t *testing.T) {
+	seen := make(map[*ast.File]int)
+	rule := func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			seen[f]++
+		}
+		return nil
+	}
+	RunTypedFixture(t, FixtureOpts{Tests: true},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	if len(seen) == 0 {
+		t.Errorf("RunTypedFixture(Tests=true) delivered zero files; expected ≥ 1")
+	}
+}
+
+// TestRunTypedFixture_FixtureOptsLacksTagsField asserts that FixtureOpts has
+// exactly one field named "Tests" of kind bool. This is the Hard-form struct
+// field-set constraint: business callers cannot express "load fixture with
+// custom tag" at the type level because Tags is absent from FixtureOpts.
+//
+// RED until FixtureOpts struct is defined; after definition, fails if the
+// struct grows a Tags field or any other extra field.
+func TestRunTypedFixture_FixtureOptsLacksTagsField(t *testing.T) {
+	rt := reflect.TypeOf(FixtureOpts{})
+	if rt.NumField() != 1 {
+		t.Errorf("FixtureOpts has %d fields, want exactly 1 (Tests bool); "+
+			"adding Tags or any other field breaks the Hard typed-struct constraint",
+			rt.NumField())
+		return
+	}
+	f := rt.Field(0)
+	if f.Name != "Tests" {
+		t.Errorf("FixtureOpts field[0] name = %q, want %q", f.Name, "Tests")
+	}
+	if f.Type.Kind() != reflect.Bool {
+		t.Errorf("FixtureOpts.Tests kind = %v, want bool", f.Type.Kind())
 	}
 }

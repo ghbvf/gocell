@@ -24,6 +24,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 	"testing"
 
 	"golang.org/x/tools/go/packages"
+	cmp "github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/archtestmeta"
@@ -400,67 +402,38 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 
 // TestPassFunnelGuardListSync — ARCHTEST-PASS-FUNNEL guards alignment.
 //
-// Cross-validates the three sources of truth that must stay aligned as the
-// stage 2/3 migration drains entries from the migration scaffold:
+// Cross-validates the three sources of truth that must stay in exact
+// alignment after Stage 4 cleanup:
 //
-//   - archtestmeta.LegacyAllowlist (Go map, stage-1 baseline 53 entries)
 //   - .golangci.yml archtest-no-direct-packages-load negative globs
-//     (stage-1 baseline 27 + 1 self-exemption)
+//     (must equal passFunnelPermanentExempt exactly — no migration remnants)
 //   - actual file system: tools/archtest/*_test.go files that directly
-//     import golang.org/x/tools/go/packages
+//     import golang.org/x/tools/go/packages (must also equal
+//     passFunnelPermanentExempt exactly)
 //
-// Invariants enforced (fail-loud on any drift):
+// Invariants (single equality assertions, fail-loud on any drift):
 //
-//   - (A) every depguard yaml exemption (except pass_funnel_test.go self) is
-//     present in archtestmeta.LegacyAllowlist; otherwise the yaml carries a
-//     stale exemption for a file already migrated.
-//   - (B) every archtest *_test.go that imports packages directly has a
-//     matching depguard yaml exemption; otherwise lint will fail in CI on
-//     the full run (not the --new-from-rev mode masking pre-existing diags).
-//   - (C) every depguard yaml exemption (except pass_funnel_test.go self)
-//     actually imports packages; otherwise the yaml carries a redundant
-//     exemption that should have been removed when its file was ported.
+//   - yaml-exempt == passFunnelPermanentExempt: no stale migration exemptions
+//     remain in .golangci.yml, and no new permanent exemptions were added
+//     without updating passFunnelPermanentExempt.
+//   - packages-import == passFunnelPermanentExempt: no files outside the 3
+//     permanent framework files import golang.org/x/tools/go/packages directly.
 //
-// This guard replaces the previous "manual sync" contract from the ADR with
-// a Hard mechanical check. Drift is a test failure, not a reviewer
-// blind-spot.
+// This guard prevents Stage 4 regression: if archtestmeta is accidentally
+// re-introduced or a new file starts importing packages directly, exactly
+// one of these assertions fails with a cmp.Diff showing the drift.
 func TestPassFunnelGuardListSync(t *testing.T) {
 	root := findModuleRoot(t)
 	yamlExempt := loadDepguardArchtestExemptions(t, root)
 	packagesImport := loadPackagesImporters(t)
 
-	// (A) yaml-exempt ∖ passFunnelPermanentExempt ⊆ LegacyAllowlist
-	for rel := range yamlExempt {
-		if passFunnelPermanentExempt[rel] {
-			continue
-		}
-		if !archtestmeta.LegacyAllowlist[rel] {
-			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q is exempted in .golangci.yml "+
-				"archtest-no-direct-packages-load but absent from "+
-				"archtestmeta.LegacyAllowlist (stale exemption)", rel)
-		}
+	if !maps.Equal(yamlExempt, passFunnelPermanentExempt) {
+		t.Errorf("PASS-FUNNEL-GUARD-SYNC: yamlExempt != passFunnelPermanentExempt\n%s",
+			cmp.Diff(passFunnelPermanentExempt, yamlExempt))
 	}
-
-	// (B) packages-import ⊆ yaml-exempt
-	for rel := range packagesImport {
-		if !yamlExempt[rel] {
-			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q imports "+
-				"golang.org/x/tools/go/packages directly but lacks a "+
-				".golangci.yml archtest-no-direct-packages-load exemption "+
-				"(full-repo golangci-lint will fail on this file)", rel)
-		}
-	}
-
-	// (C) yaml-exempt ∖ passFunnelPermanentExempt ⊆ packages-import
-	for rel := range yamlExempt {
-		if passFunnelPermanentExempt[rel] {
-			continue
-		}
-		if !packagesImport[rel] {
-			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q is exempted in .golangci.yml "+
-				"but does not import golang.org/x/tools/go/packages "+
-				"(redundant exemption — drop the line)", rel)
-		}
+	if !maps.Equal(packagesImport, passFunnelPermanentExempt) {
+		t.Errorf("PASS-FUNNEL-GUARD-SYNC: packagesImport != passFunnelPermanentExempt\n%s",
+			cmp.Diff(passFunnelPermanentExempt, packagesImport))
 	}
 }
 
@@ -819,4 +792,23 @@ func pkgFileRel(modRoot string, pkg *packages.Package, file *ast.File) string {
 		return filepath.ToSlash(abs)
 	}
 	return filepath.ToSlash(rel)
+}
+
+// TestArchtestmetaPackageDeleted is a static reverse-lock that fails while
+// tools/archtest/internal/archtestmeta/ still exists on disk. Once Stage 4
+// deletes the package, the test passes permanently and prevents regression
+// (accidental re-introduction of the scaffold directory).
+//
+// RED until the archtestmeta directory is deleted in Wave 2.
+func TestArchtestmetaPackageDeleted(t *testing.T) {
+	root := findModuleRoot(t)
+	archtestmetaDir := filepath.Join(root, "tools", "archtest", "internal", "archtestmeta")
+	_, err := os.Stat(archtestmetaDir)
+	if err == nil {
+		t.Errorf("TestArchtestmetaPackageDeleted: directory %q still exists; "+
+			"Stage 4 must delete tools/archtest/internal/archtestmeta/ entirely",
+			archtestmetaDir)
+	} else if !os.IsNotExist(err) {
+		t.Errorf("TestArchtestmetaPackageDeleted: unexpected Stat error: %v", err)
+	}
 }
