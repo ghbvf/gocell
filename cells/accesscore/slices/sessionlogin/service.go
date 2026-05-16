@@ -239,7 +239,8 @@ type LoginInput struct {
 // mismatch causes loginInTx to return ErrAuthLoginFailed, closing the
 // old-password-mints-new-epoch-session race.
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthLoginInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("password", input.Password),
 	); err != nil {
@@ -343,7 +344,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // Infrastructure errors (KindInternal, KindUnavailable, etc.) are passed
 // through as-is to preserve their HTTP status (5xx / 503), preventing
 // infra faults from being silently disguised as authentication failures.
-func (s *Service) loginInTx(txCtx context.Context, username, sessionID string, pwVersionPin credentialauthority.WithPasswordVersionPin) (dto.TokenPair, error) {
+func (s *Service) loginInTx(
+	txCtx context.Context,
+	username, sessionID string,
+	pwVersionPin credentialauthority.WithPasswordVersionPin,
+) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
 		return dto.TokenPair{}, classifyForUpdateErr(err)

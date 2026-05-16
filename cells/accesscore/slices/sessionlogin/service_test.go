@@ -117,7 +117,8 @@ func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	return MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+	return MustNewService(
+		userRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
@@ -593,7 +594,8 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
-		outbox.WithLogger(slog.Default()))
+		outbox.WithLogger(slog.Default()),
+	)
 	require.NoError(t, err)
 	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer,
 		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),

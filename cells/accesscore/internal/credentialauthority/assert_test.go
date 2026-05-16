@@ -53,12 +53,12 @@ func TestAssert(t *testing.T) {
 	now := time.Now().UTC()
 
 	tests := []struct {
-		name      string
-		user      func(t *testing.T) *domain.User
-		checks    func() []credentialauthority.Check
-		wantKind  errcode.Kind
-		wantCode  errcode.Code
-		wantNil   bool
+		name     string
+		user     func(t *testing.T) *domain.User
+		checks   func() []credentialauthority.Check
+		wantKind errcode.Kind
+		wantCode errcode.Code
+		wantNil  bool
 	}{
 		{
 			name:    "baseline_pass_active_user",
@@ -101,7 +101,8 @@ func TestAssert(t *testing.T) {
 			name: "not_revoked_pass_nil",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(&session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: nil, AuthzEpochAtIssue: 1})}
+				view := &session.ValidateView{ID: "s1", SubjectID: "u1", AuthzEpochAtIssue: 1}
+				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
 			},
 			wantNil: true,
 		},
@@ -110,7 +111,8 @@ func TestAssert(t *testing.T) {
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
 			checks: func() []credentialauthority.Check {
 				ts := now
-				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(&session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: &ts, AuthzEpochAtIssue: 1})}
+				view := &session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: &ts, AuthzEpochAtIssue: 1}
+				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
 			},
 			wantKind: errcode.KindPermissionDenied,
 			wantCode: errcode.ErrAuthUserNotActive,
@@ -127,7 +129,8 @@ func TestAssert(t *testing.T) {
 			name: "compose_validate_path_baseline_plus_not_revoked",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(&session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: nil, AuthzEpochAtIssue: 1})}
+				view := &session.ValidateView{ID: "s1", SubjectID: "u1", AuthzEpochAtIssue: 1}
+				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
 			},
 			wantNil: true,
 		},

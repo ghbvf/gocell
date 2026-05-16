@@ -97,14 +97,14 @@ import (
 // ─── package path / symbol constants ────────────────────────────────────
 
 const (
-	credAuthorityPkgPath   = "github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
-	credAuthorityFnName    = "Assert"
-	credSessionPkgPath     = "github.com/ghbvf/gocell/runtime/auth/session"
-	credSessionType        = "Session"
-	credSessionViewType    = "ValidateView"
-	credCanAuthenticate    = "CanAuthenticate"
-	credPasswordVersion    = "PasswordVersion"
-	credRevokedAt          = "RevokedAt"
+	credAuthorityPkgPath = "github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
+	credAuthorityFnName  = "Assert"
+	credSessionPkgPath   = "github.com/ghbvf/gocell/runtime/auth/session"
+	credSessionType      = "Session"
+	credSessionViewType  = "ValidateView"
+	credCanAuthenticate  = "CanAuthenticate"
+	credPasswordVersion  = "PasswordVersion"
+	credRevokedAt        = "RevokedAt"
 )
 
 // assertCallerAllowlist limits callers of credentialauthority.Assert to
@@ -125,27 +125,13 @@ var sliceFunnelScopes = []string{
 	"cells/accesscore/slices/sessionvalidate/",
 }
 
-// directReadAllowlist enumerates the production paths that legitimately read
-// CanAuthenticate / PasswordVersion / RevokedAt outside the slice scopes:
-//
-//   - credentialauthority/ itself — the funnel reads these to implement the
-//     checks (Check.apply bodies).
-//   - domain/ — the methods and field definitions live here.
-//   - runtime/auth/session/ — RevokedAt is a struct field in this package.
-//   - cells/accesscore/internal/authzmutate/ — write-side mutator may inspect
-//     user state pre-/post-mutation in a co-tx scope.
-//   - cells/accesscore/internal/credentialinvalidate/ — invalidator may
-//     inspect state during credential-event handling.
-//
-// The point of the upstream prong is to lock the *slice* call sites, not to
-// forbid the underlying methods/fields from existing.
-var directReadAllowlist = []string{
-	"cells/accesscore/internal/credentialauthority/",
-	"cells/accesscore/internal/domain/",
-	"runtime/auth/session/",
-	"cells/accesscore/internal/authzmutate/",
-	"cells/accesscore/internal/credentialinvalidate/",
-}
+// The upstream prong scans only the three slice prefixes (sliceFunnelScopes),
+// so no broader "directReadAllowlist" enumeration is needed — packages outside
+// those scopes (credentialauthority, domain, runtime/auth/session, authzmutate,
+// credentialinvalidate) legitimately read CanAuthenticate / PasswordVersion /
+// RevokedAt because they are the field-defining or write-side-aggregate paths.
+// Confining the scan to sliceFunnelScopes makes the allowlist implicit and
+// avoids drift between two parallel lists.
 
 // isAssertCallerAllowlisted reports whether a module-relative path may call
 // credentialauthority.Assert directly. Test files always pass.
@@ -210,7 +196,8 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 			"must only be called from sessionlogin/, sessionrefresh/, sessionvalidate/, "+
 			"or the funnel package itself. Any other call site is a funnel breach.")
 
-	verifyAssertCallerRedFixtureDetected(t,
+	verifyAssertCallerRedFixtureDetected(
+		t,
 		"./cells/accesscore/internal/credentialauthority/testdata/outside_caller_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 downstream RED fixture",
 	)
@@ -232,7 +219,8 @@ func scanAssertCallSites(p *Pass, file *ast.File, rel string) []string {
 		out = append(out, fmt.Sprintf(
 			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: call to %s.%s "+
 				"outside slice allowlist (sessionlogin/, sessionrefresh/, sessionvalidate/)",
-			rel, line, credAuthorityPkgPath, credAuthorityFnName))
+			rel, line, credAuthorityPkgPath, credAuthorityFnName,
+		))
 	})
 	return out
 }
@@ -302,7 +290,8 @@ func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 			"session.{Session,ValidateView}.RevokedAt outside Assert. Route "+
 			"through credentialauthority.Assert with the appropriate Check.")
 
-	verifyDirectReadRedFixtureDetected(t,
+	verifyDirectReadRedFixtureDetected(
+		t,
 		"./cells/accesscore/internal/credentialauthority/testdata/direct_canauth_skip_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream RED fixture",
 	)
@@ -328,7 +317,8 @@ func scanDirectCanAuthCalls(p *Pass, file *ast.File, rel string) []string {
 		out = append(out, fmt.Sprintf(
 			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: direct call to "+
 				"domain.(*User).CanAuthenticate outside credentialauthority.Assert",
-			rel, line))
+			rel, line,
+		))
 	})
 	return out
 }
@@ -384,7 +374,8 @@ func scanDirectFieldReads(p *Pass, file *ast.File, rel string) []string {
 		out = append(out, fmt.Sprintf(
 			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: direct read of "+
 				"%s.%s.%s outside credentialauthority.Assert",
-			rel, line, ownerPkg.Path(), owner.Name(), name))
+			rel, line, ownerPkg.Path(), owner.Name(), name,
+		))
 	})
 	return out
 }
@@ -452,7 +443,8 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_MethodValueAssignment(t *test
 						violations = append(violations, fmt.Sprintf(
 							"%s:%d: method-value assignment of CanAuthenticate "+
 								"blind spot detected — archtest would miss the deferred call",
-							rel, line))
+							rel, line,
+						))
 					}
 				})
 			})
@@ -506,7 +498,8 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
 							"archtest cannot see reflect-based invocations",
-						rel, line, name))
+						rel, line, name,
+					))
 				}
 			})
 		}
@@ -565,7 +558,8 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
 							"archtest cannot see reflect-based field reads",
-						rel, line, name))
+						rel, line, name,
+					))
 				}
 			})
 		}
@@ -614,7 +608,8 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead(t *testing.
 						"%s:%d: imports \"unsafe\" — potential offset read of "+
 							"domain.User / session.{Session,ValidateView} could bypass "+
 							"credentialauthority funnel",
-						rel, line))
+						rel, line,
+					))
 				}
 			}
 		}
