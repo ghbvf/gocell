@@ -366,6 +366,9 @@ func (g *Generator) appendGeneratedFiles(
 // component (cmd/{spec.ID}/main.go); Build.DeployTemplate mirrors
 // spec.Deploy (empty for the k8s default, just as the rendered yaml omits
 // the block).
+//
+// Entrypoint is always derived as "cmd/{spec.ID}/main.go" — the scaffold
+// template writes main.go at that path, so the synthesized meta stays aligned.
 func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 	deployTemplate := spec.Deploy
 	if deployTemplate == "k8s" {
@@ -514,7 +517,7 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 	if !metadata.IsValidMetadataText(spec.OwnerTeam) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerTeam contains forbidden control characters",
-			errcode.WithInternal("field=OwnerTeam"))
+			errcode.WithInternal(fmt.Sprintf("field=OwnerTeam value=%q", spec.OwnerTeam)))
 	}
 	if spec.OwnerRole == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -523,12 +526,9 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 	if !metadata.IsValidMetadataText(spec.OwnerRole) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerRole contains forbidden control characters",
-			errcode.WithInternal("field=OwnerRole"))
+			errcode.WithInternal(fmt.Sprintf("field=OwnerRole value=%q", spec.OwnerRole)))
 	}
-	switch spec.Deploy {
-	case "", "k8s", "compose", "binary":
-		// ok — empty defaults to k8s
-	default:
+	if spec.Deploy != "" && !metadata.IsKnownDeployTemplate(spec.Deploy) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: --deploy must be one of [k8s compose binary]",
 			errcode.WithInternal(fmt.Sprintf("deploy=%q", spec.Deploy)))

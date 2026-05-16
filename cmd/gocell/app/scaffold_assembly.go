@@ -10,6 +10,7 @@ package app
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -132,18 +133,22 @@ func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
 	if !metadata.MatchAssemblyID(id) {
 		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--id does not match metadata AssemblyIDPattern",
+			errcode.WithDetails(
+				slog.String("flag", "--id"),
+				slog.String("pattern", metadata.AssemblyIDPattern),
+			),
 			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
 				id, metadata.AssemblyIDPattern)))
 	}
 	if !metadata.IsValidMetadataText(team) {
 		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--team contains forbidden control characters",
-			errcode.WithInternal("flag=--team"))
+			errcode.WithInternal(fmt.Sprintf("flag=--team value=%q", team)))
 	}
 	if !metadata.IsValidMetadataText(role) {
 		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--role contains forbidden control characters",
-			errcode.WithInternal("flag=--role"))
+			errcode.WithInternal(fmt.Sprintf("flag=--role value=%q", role)))
 	}
 	cellList := splitAndTrim(cells, ",")
 	if len(cellList) == 0 {
@@ -153,6 +158,10 @@ func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
 		if !metadata.MatchCellID(c) {
 			return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 				"--cells[] entry does not match metadata CellIDPattern",
+				errcode.WithDetails(
+					slog.String("flag", "--cells[]"),
+					slog.String("pattern", metadata.CellIDPattern),
+				),
 				errcode.WithInternal(fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
 					c, metadata.CellIDPattern)))
 		}

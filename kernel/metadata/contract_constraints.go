@@ -70,6 +70,10 @@ func MatchGoStructName(s string) bool { return goStructNameRe.MatchString(s) }
 // layer; full YAML scalar safety (quoting / escaping) is the responsibility
 // of pkg/yamlsafe.Quote at the rendering boundary.
 //
+// Predicate convention: Match* for pattern-bound checks (regex compliance);
+// Is* for semantic free-text checks. Both return bool so callers wrap with
+// their own errcode.
+//
 // Predicate-style API mirrors MatchAssemblyID / MatchCellID — callers
 // (kernel scaffold validation, cmd flag validation) compose their own
 // errcode wrapping, so no errcode sentinel is introduced here.
