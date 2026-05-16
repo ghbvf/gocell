@@ -363,18 +363,27 @@ func (g *Generator) appendGeneratedFiles(
 // fails CI.
 //
 // Build.Binary defaults to spec.ID, matching the entrypoint path's ID
-// component (cmd/{spec.ID}/main.go); Build.DeployTemplate mirrors
-// spec.Deploy (empty for the k8s default, just as the rendered yaml omits
-// the block).
+// component (cmd/{spec.ID}/main.go). Build.DeployTemplate mirrors
+// kernel/metadata.deriveAssembly: an empty spec.Deploy (or "k8s") derives
+// to "k8s" — the same value the parser fills in when reading the on-disk
+// assembly.yaml where the build block is omitted for the k8s default. This
+// keeps scaffold-time in-memory AssemblyMeta byte-equal to parse-time output,
+// which the boundary sourceFingerprint depends on.
+//
+// Note: buildScaffoldContext keeps its own empty-sentinel for DeployTemplate
+// (zero yamlsafe.Scalar signals "omit block from yaml via {{if .DeployTemplate}}"),
+// which is a template-render-side concern and is unaffected by this change.
 //
 // Entrypoint is always derived as "cmd/{spec.ID}/main.go" — the scaffold
 // template writes main.go at that path, so the synthesized meta stays aligned.
 func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 	deployTemplate := spec.Deploy
-	if deployTemplate == "k8s" {
-		// Mirror buildScaffoldContext: k8s default is omitted from yaml,
-		// so the in-memory metadata also leaves the field empty for parity.
-		deployTemplate = ""
+	if deployTemplate == "" || deployTemplate == "k8s" {
+		// Mirror kernel/metadata.deriveAssembly: an unset or explicit "k8s"
+		// deployTemplate derives to "k8s" at parse time. Synthesizing the same
+		// default keeps scaffold-time and parse-time AssemblyMeta byte-equal,
+		// which the boundary sourceFingerprint depends on.
+		deployTemplate = "k8s"
 	}
 	return &metadata.AssemblyMeta{
 		ID:    spec.ID,
@@ -666,7 +675,12 @@ func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []st
 }
 
 // hashAssemblyIdentity writes the assembly's stable identity fields into h:
-// build config, runtime cell order, and per-cell structural metadata.
+// assembly ID, build config (entrypoint / binary / deployTemplate), runtime
+// cell order, and per-cell structural metadata.
+//
+// All three Build fields are included so that a --deploy=k8s → --deploy=compose
+// switch changes the sourceFingerprint and signals that the boundary.yaml needs
+// regeneration.
 func (g *Generator) hashAssemblyIdentity(h io.Writer, asm *metadata.AssemblyMeta) error {
 	if err := writeHash(h, "assembly:%s\n", asm.ID); err != nil {
 		return err
@@ -675,6 +689,9 @@ func (g *Generator) hashAssemblyIdentity(h io.Writer, asm *metadata.AssemblyMeta
 		return err
 	}
 	if err := writeHash(h, "build.binary:%s\n", asm.Build.Binary); err != nil {
+		return err
+	}
+	if err := writeHash(h, "build.deployTemplate:%s\n", asm.Build.DeployTemplate); err != nil {
 		return err
 	}
 	for i, c := range asm.Cells {

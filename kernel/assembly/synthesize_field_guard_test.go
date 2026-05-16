@@ -138,6 +138,36 @@ func TestAssemblyMetaSynthesisFieldGuard_DetectsViolation(t *testing.T) {
 	})
 }
 
+// TestAssemblyMetaSynthesisFieldGuard_DefaultK8sDerivation asserts that
+// synthesizeAssemblyMeta with an empty Deploy field produces
+// Build.DeployTemplate == "k8s", mirroring the parser's deriveAssembly
+// default. Without this parity, scaffold-time (in-memory) and parse-time
+// (reparsed from disk) AssemblyMeta carry different DeployTemplate values,
+// causing the boundary sourceFingerprint to diverge between the two paths.
+func TestAssemblyMetaSynthesisFieldGuard_DefaultK8sDerivation(t *testing.T) {
+	t.Parallel()
+
+	spec := AssemblyScaffoldSpec{
+		ID:        "myasm",
+		Cells:     []string{"mycell"},
+		OwnerTeam: "platform",
+		OwnerRole: "maintainer",
+		Deploy:    "", // empty → must derive to "k8s" mirroring parser
+	}
+	meta := synthesizeAssemblyMeta(spec)
+	if meta == nil {
+		t.Fatal("synthesizeAssemblyMeta returned nil")
+	}
+	if got := meta.Build.DeployTemplate; got != "k8s" {
+		t.Fatalf("empty Deploy must synthesize to k8s default (parser parity); got %q", got)
+	}
+	// The field walker must not surface any missing fields for this spec.
+	missing := findMissingYAMLFields(reflect.ValueOf(*meta), "", synthesisFieldExemptions)
+	if len(missing) > 0 {
+		t.Errorf("default-k8s synthesis still missing fields: %v", missing)
+	}
+}
+
 // findMissingYAMLFields recursively walks v (a struct) and returns the
 // dotted yaml field paths whose values are zero AND not exempted. yaml:"-"
 // fields are skipped; nested structs recurse into. Slices are treated as
