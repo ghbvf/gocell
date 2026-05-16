@@ -104,3 +104,17 @@ github.com/ghbvf/gocell/adapters/otel	TestNewTracer_Insecure
 # added domain_authz_mutation funnel tests, shifting the 16-shard modulo split so
 # this test no longer co-locates with its sibling funnel tests'cached resolver.
 github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_RevokeForSubject_01
+
+# type-graph-load: credential-invalidate funnel BumpAuthzEpoch scan — same
+# SharedResolver whole-repo profile as the RevokeForSubject sibling above;
+# 16-shard modulo split places it on a shard without the cached funnel
+# resolver. Sibling already allowlisted above; this variant was omitted when
+# the S4d epoch funnel family grew (PR #494) — pre-existing gap, surfaced on
+# PR #504 verify-archtest shard 14 (15.94s > 15s budget).
+github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_BumpAuthzEpoch_01
+
+# type-graph-load: cell-id-pattern single-source literal scan — whole-repo
+# typeseval load over cells/ + runtime/ + adapters/; same 16-shard modulo
+# resolver-cache-loss class as the credential funnel entries above. Borderline
+# pre-existing flake (~15.3s), surfaced on PR #504 verify-archtest CI.
+github.com/ghbvf/gocell/tools/archtest	TestCellIDPatternSingleSourceLiterals
