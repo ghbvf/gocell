@@ -38,7 +38,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
@@ -110,15 +109,6 @@ func TestScaffoldCell_CellMarkerEmbedded(t *testing.T) {
 func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-
-	// Load cellgen package with full type information.
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./tools/codegen/cellgen/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
 	const wantMarker = "// +cell:listener:"
 	const wantConst = "ListenerMarker"
 	const cellgenPkgPath = "github.com/ghbvf/gocell/tools/codegen/cellgen"
@@ -126,29 +116,29 @@ func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 	// Locate the exported ListenerMarker const in the cellgen package.
 	var constFound bool
 	var constValue string
-	for _, pkg := range resolver.Packages() {
-		if pkg.Types == nil || pkg.PkgPath != cellgenPkgPath {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{"./tools/codegen/cellgen/..."}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != cellgenPkgPath {
+			return nil
 		}
-		obj := pkg.Types.Scope().Lookup(wantConst)
+		obj := p.Pkg.Scope().Lookup(wantConst)
 		if obj == nil {
-			continue
+			return nil
 		}
 		c, ok := obj.(*types.Const)
 		if !ok {
 			t.Errorf("INVARIANT SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01 violated: "+
 				"cellgen.%s is not a const (got %T)", wantConst, obj)
-			return
+			return nil
 		}
 		if c.Val().Kind() != constant.String {
 			t.Errorf("INVARIANT SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01 violated: "+
 				"cellgen.%s is not a string const", wantConst)
-			return
+			return nil
 		}
 		constFound = true
 		constValue = constant.StringVal(c.Val())
-		break
-	}
+		return nil
+	})
 
 	if !constFound {
 		t.Errorf("INVARIANT SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01 violated: "+
@@ -166,6 +156,7 @@ func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 	//   (a) references {{.ListenerMarker}} (confirming the typed-const funnel is wired)
 	//   (b) does NOT contain the bare literal string outside of a template action
 	//       (e.g. hand-typed "// +cell:listener:" without {{.ListenerMarker}})
+	root := findModuleRoot(t)
 	tmplPath := filepath.Join(root, "tools", "codegen", "cellgen", "templates", "scaffold-cell.tmpl")
 	tmplContent, err := os.ReadFile(tmplPath) //nolint:gosec // repo-relative path, not user-supplied
 	require.NoError(t, err, "read scaffold-cell.tmpl")

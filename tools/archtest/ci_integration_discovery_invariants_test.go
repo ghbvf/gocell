@@ -13,9 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // discoverPackagesUnderTag walks rootDir via the scanner framework and
@@ -32,7 +29,7 @@ import (
 // worktrees, generated, .git, node_modules) is enforced uniformly with
 // every other archtest walk per SCANNER-FRAMEWORK-USAGE-01.
 func discoverPackagesUnderTag(rootDir, tag string) ([]string, error) {
-	files, err := scanner.ModuleScope(rootDir, scanner.IncludeTests()).Files()
+	files, err := ModuleScope(rootDir, IncludeTests()).Files()
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +77,7 @@ func discoverPackagesUnderTag(rootDir, tag string) ([]string, error) {
 //
 // Legacy plus-build form is honored via typeseval.ParseBuildConstraint.
 func fileHasExclusivelyTag(path, tag string) (bool, error) {
-	expr, err := typeseval.ParseBuildConstraint(path)
+	expr, err := ParseBuildConstraint(path)
 	if err != nil {
 		return false, err
 	}
@@ -90,8 +87,8 @@ func fileHasExclusivelyTag(path, tag string) (bool, error) {
 	// "Exclusively gated on <tag>": CI workflow runs in a default Linux context
 	// with -tags=<tag>. The file must be discovered iff that tag is set on top
 	// of the toolchain defaults.
-	withTagCtx := expr.Eval(typeseval.BuildContextPredicate(tag))
-	withoutTagCtx := expr.Eval(typeseval.BuildContextPredicate())
+	withTagCtx := expr.Eval(BuildContextPredicate(tag))
+	withoutTagCtx := expr.Eval(BuildContextPredicate())
 	return withTagCtx && !withoutTagCtx, nil
 }
 

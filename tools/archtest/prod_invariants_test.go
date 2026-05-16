@@ -24,10 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -58,32 +55,18 @@ func TestProdDurationConst(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, []string{"e2e", "integration", "pg"}, patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
 	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	RunTyped(t, TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}}, patterns,
+		func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				violations = append(violations, scanProdDurationAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsProductionCode(rel) {
-				continue
-			}
-
-			violations = append(violations, scanProdDurationAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -99,7 +82,7 @@ func TestProdDurationConst(t *testing.T) {
 // inspects every sub-expression. An expression that (a) has static type
 // time.Duration and (b) whose subtree contains a BasicLit is a violation.
 //
-// Implementation: scanner.EachInSubtree is preorder-only (no proceed-bool), so
+// Implementation: EachInSubtree is preorder-only (no proceed-bool), so
 // we collect candidate hits across every concrete Expr kind that
 // isLiteralDurationExpr can recognize standalone (BinaryExpr/CallExpr/
 // UnaryExpr/ParenExpr/BasicLit), sort by start position, and drop any hit
@@ -135,11 +118,11 @@ func scanProdDurationAST(
 		// recognize: BasicLit (var x time.Duration = 5), BinaryExpr
 		// (5*time.Second), CallExpr (time.Duration(5)), UnaryExpr
 		// (-5*time.Second), ParenExpr ((5*time.Second)).
-		scanner.EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
-		scanner.EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
-		scanner.EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
-		scanner.EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
-		scanner.EachInSubtree[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
+		EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		EachInSubtree[ast.BasicLit](root, func(e *ast.BasicLit) { consider(e) })
 
 		// Outer-wins dedup: sort by start ascending, then drop any hit fully
 		// contained inside the most recent retained hit's [pos,end] range.
@@ -162,14 +145,14 @@ func scanProdDurationAST(
 
 	// Only top-level Decls are scanned; nested decls inside a func body /
 	// spec value belong to other passes.
-	scanner.EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
+	EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
 		if gd.Tok == token.CONST {
 			// Package-level const blocks are the unique compliant position — skip.
 			return
 		}
 		checkExpr(gd)
 	})
-	scanner.EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		checkExpr(fd)
 	})
 
@@ -540,10 +523,10 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 				hits = append(hits, hit{pos: expr.Pos(), end: expr.End()})
 			}
 		}
-		scanner.EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
-		scanner.EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
-		scanner.EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
-		scanner.EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
+		EachInSubtree[ast.BinaryExpr](root, func(e *ast.BinaryExpr) { consider(e) })
+		EachInSubtree[ast.CallExpr](root, func(e *ast.CallExpr) { consider(e) })
+		EachInSubtree[ast.UnaryExpr](root, func(e *ast.UnaryExpr) { consider(e) })
+		EachInSubtree[ast.ParenExpr](root, func(e *ast.ParenExpr) { consider(e) })
 		sort.Slice(hits, func(i, j int) bool {
 			if hits[i].pos != hits[j].pos {
 				return hits[i].pos < hits[j].pos
@@ -565,14 +548,14 @@ func countDurationLiteralsInFile(t *testing.T, src string) int {
 	count := 0
 	// Only top-level decls contribute to the count (nested decls inside func
 	// bodies do not).
-	scanner.EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+	EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
 		if gd.Tok == token.CONST {
 			// Package-level const blocks are the unique compliant position — skip.
 			return
 		}
 		count += countInRoot(gd)
 	})
-	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		count += countInRoot(fd)
 	})
 	return count

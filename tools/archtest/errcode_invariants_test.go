@@ -1839,27 +1839,6 @@ func TestExportedErrorNew(t *testing.T) {
 	Report(t, ruleExportedErrorNew01, diags)
 }
 
-// scanExportedErrorNewAST returns violation strings for a single parsed file.
-//
-// The []string form is kept for backward compatibility with the one remaining
-// companion fixture scanner: exported_error_new_fixtures_test.go. That file
-// is in archtestmeta.LegacyAllowlist and imports golang.org/x/tools/go/packages
-// directly, making its migration out of PR-7 scope. It is the only caller of
-// this bridge; when it is migrated, this helper and the bridge can be deleted.
-func scanExportedErrorNewAST(
-	fset *token.FileSet,
-	file *ast.File,
-	rel string,
-	info *types.Info,
-) []string {
-	diags := scanExportedErrorNewASTDiags(fset, file, rel, info)
-	out := make([]string, 0, len(diags))
-	for _, d := range diags {
-		out = append(out, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
-	}
-	return out
-}
-
 // scanExportedErrorNewASTDiags is the Diagnostic-returning form used by the
 // TestExportedErrorNew Pass-funnel rule.
 func scanExportedErrorNewASTDiags(

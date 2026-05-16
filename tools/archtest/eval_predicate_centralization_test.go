@@ -5,9 +5,11 @@ package archtest
 // eval_predicate_centralization_test.go — every go/build/constraint.Expr.Eval
 // callsite in tools/archtest/*_test.go (top-level package, excluding
 // internal/ subpackages) must pass either typeseval.BuildContextPredicate(...)
-// or an inline `func(_ string) bool { return false }` sentinel. Hand-written
-// tag predicates drift past go-toolchain default tag additions; this funnel
-// makes the wrong shape archtest-detectable.
+// (or equivalently the archtest facade BuildContextPredicate(...) which is a
+// thin delegation to the same function) or an inline
+// `func(_ string) bool { return false }` sentinel. Hand-written tag predicates
+// drift past go-toolchain default tag additions; this funnel makes the wrong
+// shape archtest-detectable.
 //
 // Single-rule file per ai-collab.md "archtest 文件命名" branch (single rule →
 // {rule}_test.go). Promote to {theme}_invariants_test.go if related TYPESEVAL-*
@@ -22,19 +24,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 const (
-	buildContextPredicatePkg  = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	buildContextPredicateFunc = "BuildContextPredicate"
-	constraintExprPkgPath     = "go/build/constraint"
-	constraintExprEvalMethod  = "Eval"
+	// buildContextPredicatePkg is the canonical typeseval package; imports from
+	// external packages (outside tools/archtest) must use this qualified form.
+	buildContextPredicatePkg = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	// buildContextPredicateFacadePkg is the archtest package itself — same-package
+	// test files (package archtest) call the unqualified facade wrapper
+	// BuildContextPredicate which resolves here, not to typeseval. Both are
+	// accepted canonical forms because the facade is a thin delegation.
+	buildContextPredicateFacadePkg = "github.com/ghbvf/gocell/tools/archtest"
+	buildContextPredicateFunc      = "BuildContextPredicate"
+	constraintExprPkgPath          = "go/build/constraint"
+	constraintExprEvalMethod       = "Eval"
 )
 
 // INVARIANT: TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01
@@ -42,9 +46,12 @@ const (
 // Every constraint.Expr.Eval(arg) callsite in tools/archtest/*_test.go (top-
 // level package, excluding internal/ subpackages) MUST pass either:
 //
-//	Form A — a *ast.CallExpr whose callee resolves to
+//	Form A — a *ast.CallExpr whose callee resolves to either
 //	         tools/archtest/internal/typeseval.BuildContextPredicate
-//	         (any extraTags arguments are fine; the funnel is the call form).
+//	         (qualified cross-package form) OR
+//	         tools/archtest.BuildContextPredicate (same-package bare form,
+//	         which is a thin delegation to typeseval.BuildContextPredicate).
+//	         Any extraTags arguments are fine; the funnel is the call form.
 //	Form B — an inline *ast.FuncLit of shape  func(_ string) bool { return false }
 //	         — the all-false sentinel — body must be exactly one ReturnStmt
 //	         whose single result is the identifier `false`. Indirection via a
@@ -89,39 +96,31 @@ func TestEvalPredicateCentralization01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	// SharedResolver with tests=true loads *_test.go files so the rule can
+	// RunTyped with tests=true loads *_test.go files so the rule can
 	// inspect archtest tests themselves. Pattern is scoped to ./tools/archtest/...
 	// — not the real-repo "./..." that PRODUCTION-LOADER-FUNNEL-01 polices —
 	// so this is the canonical narrow-scope archtest-self load shape, same
 	// as scanner_framework_usage_test.go.
-	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
-	require.NoError(t, err, "typeseval.SharedResolver")
-
 	var violations []evalPredicateViolation
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil {
-			t.Fatalf("typeseval.SharedResolver returned nil package " +
-				"(SharedResolver invariant broken)")
-		}
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			t.Fatalf("package %q loaded without TypesInfo/Fset "+
-				"(SharedResolver misconfigured — full type info is required "+
-				"to resolve constraint.Expr.Eval callsites)", pkg.PkgPath)
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			// Scope: tools/archtest/*_test.go only (subpackages under
-			// tools/archtest/internal/ are out of scope — see header doc).
-			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
-				continue
+	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				// Scope: tools/archtest/*_test.go only (subpackages under
+				// tools/archtest/internal/ are out of scope — see header doc).
+				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+					continue
+				}
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				violations = append(violations,
+					scanFileForEvalPredicateViolations(p.Fset, file, p.TypesInfo, rel)...)
 			}
-			if !strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			violations = append(violations,
-				scanFileForEvalPredicateViolations(pkg.Fset, file, pkg.TypesInfo, rel)...)
-		}
-	}
+			return nil
+		})
+
+	_ = root
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Rel != violations[j].Rel {
@@ -161,7 +160,7 @@ func scanFileForEvalPredicateViolations(
 ) []evalPredicateViolation {
 	var violations []evalPredicateViolation
 
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isConstraintExprEvalCall(call, info) {
 			return
 		}
@@ -234,7 +233,7 @@ func isConstraintExprEvalCall(call *ast.CallExpr, info *types.Info) bool {
 	if sel.Sel.Name != constraintExprEvalMethod {
 		return false
 	}
-	fn, ok := typeseval.ResolveMethodCall(info, sel)
+	fn, ok := ResolveMethodCall(info, sel)
 	if !ok {
 		return false
 	}
@@ -244,20 +243,30 @@ func isConstraintExprEvalCall(call *ast.CallExpr, info *types.Info) bool {
 	return fn.Pkg().Path() == constraintExprPkgPath && fn.Name() == constraintExprEvalMethod
 }
 
-// isBuildContextPredicateCallee reports whether funExpr refers to
-// typeseval.BuildContextPredicate. Uses types.Info via
-// typeseval.ResolvePackageRef (handles both qualified `typeseval.X` and
-// dot-imported bare `X` forms); falls back to AST-only `typeseval.X`
-// selector matching when info is nil. Mirrors panic_invariants_test.go::
-// isApprovedCallee structure.
+// isBuildContextPredicateCallee reports whether funExpr refers to either
+// typeseval.BuildContextPredicate (qualified, from external packages) or the
+// archtest facade BuildContextPredicate (bare Ident, from same-package test
+// files in package archtest). Uses types.Info via typeseval.ResolvePackageRef
+// (handles both qualified `typeseval.X` and dot-imported bare `X` / same-pkg
+// bare `X` forms); falls back to AST-only `typeseval.X` selector matching when
+// info is nil. Mirrors panic_invariants_test.go::isApprovedCallee structure.
+//
+// Both accepted packages are canonical: buildContextPredicateFacadePkg wraps
+// buildContextPredicatePkg as a thin delegation (archtest.BuildContextPredicate
+// → typeseval.BuildContextPredicate). Same-package test files call the facade
+// form and both resolve to the same semantic guarantee.
 func isBuildContextPredicateCallee(funExpr ast.Expr, info *types.Info) bool {
+	isCanonicalPkg := func(pkgPath string) bool {
+		return pkgPath == buildContextPredicatePkg || pkgPath == buildContextPredicateFacadePkg
+	}
+
 	sel, ok := funExpr.(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil {
-		// Bare Ident is also possible under dot-import; ResolvePackageRef
-		// handles both *ast.SelectorExpr and *ast.Ident.
+		// Bare Ident is also possible under dot-import or same-package call;
+		// ResolvePackageRef handles both *ast.SelectorExpr and *ast.Ident.
 		if info != nil {
-			if pkgPath, name, ok := typeseval.ResolvePackageRef(info, funExpr); ok {
-				return pkgPath == buildContextPredicatePkg && name == buildContextPredicateFunc
+			if pkgPath, name, ok := ResolvePackageRef(info, funExpr); ok {
+				return isCanonicalPkg(pkgPath) && name == buildContextPredicateFunc
 			}
 		}
 		return false
@@ -266,8 +275,8 @@ func isBuildContextPredicateCallee(funExpr ast.Expr, info *types.Info) bool {
 		return false
 	}
 	if info != nil {
-		if pkgPath, name, ok := typeseval.ResolvePackageRef(info, sel); ok {
-			return pkgPath == buildContextPredicatePkg && name == buildContextPredicateFunc
+		if pkgPath, name, ok := ResolvePackageRef(info, sel); ok {
+			return isCanonicalPkg(pkgPath) && name == buildContextPredicateFunc
 		}
 		// info is non-nil but ResolvePackageRef declined: sel.X is not a
 		// package qualifier (e.g. method-position selector on a value with
@@ -334,7 +343,7 @@ func isAllFalseSentinelFuncLit(fl *ast.FuncLit) bool {
 // is a synthetic single-file Go package that demonstrates one canonical
 // shape (GREEN, 0 violations expected) or one violation shape (RED, the
 // expected violation line(s) listed in the table below). Loading goes
-// through typeseval.LoadPackages with full types.Info so the type-aware
+// through RunTyped with full types.Info so the type-aware
 // detection paths (isConstraintExprEvalCall via ResolveMethodCall;
 // isBuildContextPredicateCallee via ResolvePackageRef) are exercised the
 // same way as the main test.
@@ -370,27 +379,16 @@ func TestEvalPredicateCentralizationFixtures(t *testing.T) {
 			t.Parallel()
 
 			fixtureDir := filepath.Join(fixtureBase, tc.dir)
-			pkgs, errs, err := typeseval.LoadPackages(root, false, nil,
-				"./tools/archtest/testdata/eval_predicate_centralization_fixtures/"+tc.dir)
-			require.NoError(t, err, "LoadPackages failed for fixture %s", tc.dir)
-			require.Empty(t, errs, "package load errors for fixture %s: %v", tc.dir, errs)
-			require.NotEmpty(t, pkgs, "no packages loaded for fixture %s", tc.dir)
-
 			var violations []evalPredicateViolation
-			for _, p := range pkgs {
-				for i, file := range p.Syntax {
-					if i >= len(p.GoFiles) {
-						continue
+			RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+				func(p *Pass) []Diagnostic {
+					for _, f := range p.Files {
+						rel := p.Rel(f)
+						violations = append(violations,
+							scanFileForEvalPredicateViolations(p.Fset, f, p.TypesInfo, rel)...)
 					}
-					abs := p.GoFiles[i]
-					rel, ok := fileroles.Rel(fixtureDir, abs)
-					if !ok {
-						continue
-					}
-					violations = append(violations,
-						scanFileForEvalPredicateViolations(p.Fset, file, p.TypesInfo, rel)...)
-				}
-			}
+					return nil
+				})
 
 			var gotLines []int
 			for _, v := range violations {
@@ -401,7 +399,7 @@ func TestEvalPredicateCentralizationFixtures(t *testing.T) {
 			wantLines := append([]int(nil), tc.wantLines...)
 			sort.Ints(wantLines)
 
-			assert.Equal(t, wantLines, gotLines,
+			require.Equal(t, wantLines, gotLines,
 				"fixture %s: violation lines mismatch (got: %+v)", tc.dir, violations)
 		})
 	}

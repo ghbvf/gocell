@@ -40,11 +40,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -74,47 +69,31 @@ func TestTestTimeLiteralConst(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
 	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		// Tests=true returns three variants per package: the production
-		// package, the in-package test variant (which has *_test.go in
-		// GoFiles), and an external "_test" package. We only need to walk
-		// each absolute file path once.
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsTestCode(rel) {
+					continue
+				}
+				violations = append(violations,
+					scanProdDurationAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsTestCode(rel) {
-				continue
-			}
-
-			violations = append(violations,
-				scanProdDurationAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
 		t.Log(v)
 	}
-	assert.Empty(t, violations,
-		"TEST-TIME-LITERAL-01: extract test-time durations to a package-level const "+
+	if len(violations) > 0 {
+		t.Errorf("TEST-TIME-LITERAL-01: extract test-time durations to a package-level const "+
 			"(prefer pkg/testutil/testtime.* for cross-cutting timeouts; declare a "+
 			"file-local package-level const for site-specific deadlines). "+
-			"ref: docs/plans/202605011500-029-master-roadmap.md G6")
+			"ref: docs/plans/202605011500-029-master-roadmap.md G6\n"+
+			"%d violation(s) found", len(violations))
+	}
 }
 
 // File-role classification is delegated to tools/internal/fileroles; see that

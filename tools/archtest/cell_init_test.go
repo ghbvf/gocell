@@ -16,8 +16,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const kernelCellPattern = "github.com/ghbvf/gocell/kernel/cell"
@@ -26,20 +24,21 @@ const kernelCellPattern = "github.com/ghbvf/gocell/kernel/cell"
 // imports a package under runtime/* or adapters/*. This enforces the GoCell
 // layering rule: kernel/ must not depend on runtime/ or adapters/.
 func TestKernelCell_DoesNotImportRuntime(t *testing.T) {
-	root := findModuleRoot(t)
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, "./kernel/cell")
-	require.NoError(t, err, "packages.Load kernel/cell")
-	require.Empty(t, errs, "kernel/cell load errors: %v", errs)
-	require.Len(t, pkgs, 1, "expected exactly one kernel/cell package")
+	t.Parallel()
 
-	pkg := pkgs[0]
 	var violations []string
-	for _, imp := range pkg.Imports {
-		path := imp.PkgPath
-		if strings.Contains(path, "runtime/") || strings.Contains(path, "adapters/") {
-			violations = append(violations, path)
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/cell"}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
 		}
-	}
+		for _, imp := range p.Pkg.Imports() {
+			path := imp.Path()
+			if strings.Contains(path, "runtime/") || strings.Contains(path, "adapters/") {
+				violations = append(violations, path)
+			}
+		}
+		return nil
+	})
 
 	assert.Empty(t, violations,
 		"kernel/cell must not import runtime/* or adapters/*; found: %v", violations)
@@ -49,29 +48,44 @@ func TestKernelCell_DoesNotImportRuntime(t *testing.T) {
 // is declared in kernel/cell (not aliased from another package). This prevents
 // the interface from migrating out of the canonical layer boundary.
 func TestKernelCell_RegistryDefinedHere(t *testing.T) {
-	root := findModuleRoot(t)
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, "./kernel/cell")
-	require.NoError(t, err, "packages.Load kernel/cell")
-	require.Empty(t, errs, "kernel/cell load errors: %v", errs)
-	require.Len(t, pkgs, 1, "expected exactly one kernel/cell package")
+	t.Parallel()
 
-	pkg := pkgs[0]
-	scope := pkg.Types.Scope()
+	var (
+		found      bool
+		isTypeName bool
+		isIface    bool
+		pkgPath    string
+	)
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/cell"}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		scope := p.Pkg.Scope()
+		obj := scope.Lookup("Registry")
+		if obj == nil {
+			return nil
+		}
+		found = true
+		tn, ok := obj.(*types.TypeName)
+		if !ok {
+			return nil
+		}
+		isTypeName = true
+		named, ok := tn.Type().(*types.Named)
+		if !ok {
+			return nil
+		}
+		_, ok = named.Underlying().(*types.Interface)
+		isIface = ok
+		if obj.Pkg() != nil {
+			pkgPath = obj.Pkg().Path()
+		}
+		return nil
+	})
 
-	obj := scope.Lookup("Registry")
-	require.NotNil(t, obj, "Registry must be defined in kernel/cell")
-
-	tn, ok := obj.(*types.TypeName)
-	require.True(t, ok, "Registry must be a type name")
-
-	// Must be an interface declared in this package (not a type alias pointing elsewhere).
-	named, ok := tn.Type().(*types.Named)
-	require.True(t, ok, "Registry must be a named type")
-
-	_, isIface := named.Underlying().(*types.Interface)
+	require.True(t, found, "Registry must be defined in kernel/cell")
+	require.True(t, isTypeName, "Registry must be a type name")
 	assert.True(t, isIface, "Registry must be an interface type")
-
-	// The package path of the type's object must be kernel/cell.
-	assert.Equal(t, kernelCellPattern, obj.Pkg().Path(),
+	assert.Equal(t, kernelCellPattern, pkgPath,
 		"Registry must be defined in %s", kernelCellPattern)
 }

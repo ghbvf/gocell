@@ -27,10 +27,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // governancePkgPath is the import path of the package whose rules() and
@@ -63,7 +61,7 @@ func testINV1ProductionSource(t *testing.T) {
 
 	declared := declaredRuleMethodNames(t, pkg)
 
-	registered, fatal := extractRegisteredMethodNames(t, root, pkg)
+	registered, fatal := extractRegisteredMethodNames(t, pkg)
 	if fatal != "" {
 		t.Fatal(fatal)
 	}
@@ -89,38 +87,47 @@ func testINV1ProductionSource(t *testing.T) {
 // methods would have been silently accepted, and the wrong receiver shadow
 // would not have triggered fatal.
 func testINV1ShadowReceiverFixture(t *testing.T) {
-	root := findModuleRoot(t)
 	const fixturePattern = "./tools/archtest/testdata/governance_registration_guard_fixtures/shadow_receiver_red"
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, fixturePattern)
-	require.NoError(t, err, "LoadPackages failed for shadow_receiver_red fixture")
-	require.Empty(t, errs, "package load errors: %v", errs)
-	require.Len(t, pkgs, 1, "expected exactly one fixture package")
-
-	fixturePkg := pkgs[0]
-
-	validatorObj := fixturePkg.Types.Scope().Lookup("Validator")
-	require.NotNil(t, validatorObj, "fixture must declare Validator")
-	validatorTypeName, ok := validatorObj.(*types.TypeName)
-	require.True(t, ok, "Validator must be a type name")
-	validatorNamed, ok := validatorTypeName.Type().(*types.Named)
-	require.True(t, ok, "Validator must be a named type")
-
+	var validatorNamed *types.Named
 	registered := map[string]struct{}{}
 	var fatal string
-	typeseval.EachFileInPackage(root, fixturePkg, true,
-		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
-			scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Name == nil || fd.Recv == nil {
-					return
-				}
-				if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
-					return
-				}
-				extractFromCompositeLits(fset, relPath, fd, info, validatorNamed, registered, &fatal)
-			})
+
+	RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+		func(p *Pass) []Diagnostic {
+			// Retrieve Validator type from the fixture package scope.
+			validatorObj := p.Pkg.Scope().Lookup("Validator")
+			if validatorObj == nil {
+				t.Errorf("fixture must declare Validator")
+				return nil
+			}
+			validatorTypeName, ok := validatorObj.(*types.TypeName)
+			if !ok {
+				t.Errorf("Validator must be a type name")
+				return nil
+			}
+			validatorNamed, ok = validatorTypeName.Type().(*types.Named)
+			if !ok {
+				t.Errorf("Validator must be a named type")
+				return nil
+			}
+
+			for _, file := range p.Files {
+				relPath := p.Rel(file)
+				scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+					if fd.Name == nil || fd.Recv == nil {
+						return
+					}
+					if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
+						return
+					}
+					extractFromCompositeLits(p.Fset, relPath, fd, p.TypesInfo, validatorNamed, registered, &fatal)
+				})
+			}
+			return nil
 		})
 
+	require.NotNil(t, validatorNamed, "fixture package must be loadable with type info")
 	_, hasLegit := registered["validateLegit"]
 	_, hasFOO := registered["validateFOO"]
 	assert.True(t, hasLegit, "v.validateLegit (real *Validator method) must be accepted before the shadow element triggers fatal")
@@ -214,35 +221,38 @@ func ruleShapeSignature(sig *types.Signature) bool {
 // Any composite-literal element with a different shape causes a fatal
 // message — silently skipping would let new closure forms bypass the check.
 //
-// Iteration goes through typeseval.EachFileInPackage so the FuncDecl AST and
-// the *types.Info passed to registeredElementMethodName come from the same
-// packages.Load — info.Types[sel.X] therefore resolves on every selector.
-// Mixing scanner.EachFile with pkg.TypesInfo would silently fail open
-// (re-parsed nodes have distinct pointer identity from the type-checked AST).
-func extractRegisteredMethodNames(t *testing.T, root string, pkg *governancePackage) (map[string]struct{}, string) {
+// Same-source guarantee: gp.files, gp.info, and gp.fset are the three fields
+// of a governancePackage populated by loadGovernancePackage from a single
+// RunTyped Pass. RunTyped constructs the Pass via the packages.Load driver
+// (buildTypedPass), which co-derives Files, TypesInfo, and Fset from the same
+// load invocation. As a result info.Types[sel.X] resolves on every selector in
+// these files — the same-source property is guaranteed by the Pass funnel
+// driver, not by direct Pass field access (the governancePackage wrapper
+// transfers the three fields, not the *Pass itself).
+func extractRegisteredMethodNames(t *testing.T, pkg *governancePackage) (map[string]struct{}, string) {
 	t.Helper()
 	validatorNamed := lookupValidatorNamed(t, pkg)
 
 	registered := map[string]struct{}{}
 	var fatal string
-	typeseval.EachFileInPackage(root, pkg.rawPkg, true,
-		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
+	for _, file := range pkg.files {
+		if fatal != "" {
+			break
+		}
+		relPath := pkg.fileRel(file)
+		scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fatal != "" {
 				return
 			}
-			scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fatal != "" {
-					return
-				}
-				if fd.Name == nil || fd.Recv == nil {
-					return
-				}
-				if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
-					return
-				}
-				extractFromCompositeLits(fset, relPath, fd, info, validatorNamed, registered, &fatal)
-			})
+			if fd.Name == nil || fd.Recv == nil {
+				return
+			}
+			if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
+				return
+			}
+			extractFromCompositeLits(pkg.fset, relPath, fd, pkg.info, validatorNamed, registered, &fatal)
 		})
+	}
 	return registered, fatal
 }
 
@@ -328,10 +338,9 @@ func registeredElementMethodName(expr ast.Expr, info *types.Info, validatorNamed
 // TypeAndValue) and that sel.Sel.Name has the "validate" prefix.
 // Returns ("", false) for any non-matching selector.
 //
-// info must be the *types.Info from the same packages.Load call that produced
-// sel — see typeseval.EachFileInPackage's INVARIANT for why mixing scanner-
-// parsed AST with a loaded TypesInfo silently fails. Both production and
-// negative-fixture invocations satisfy this.
+// info must be the *types.Info from the same Pass that provided the AST file
+// containing sel — Pass guarantees this by design (Files and TypesInfo are
+// populated from the same packages.Load invocation in the driver).
 func validateSelectorReceiverAndName(sel *ast.SelectorExpr, info *types.Info, validatorNamed *types.Named) (string, bool) {
 	if sel.Sel == nil || !strings.HasPrefix(sel.Sel.Name, "validate") {
 		return "", false
@@ -440,8 +449,6 @@ func badSprintf()  string { return fmt.Sprintf("X-%d", 99) }
 // The fixture violations call scanINV2ViolationsInFile (the shared scan
 // helper used by production), so a regression in either path lights up here.
 func testINV2CompositeLitFixtures(t *testing.T) {
-	root := findModuleRoot(t)
-
 	cases := []struct {
 		pattern string
 		wantMin int
@@ -462,48 +469,44 @@ func testINV2CompositeLitFixtures(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.shape, func(t *testing.T) {
-			pkgs, errs, err := typeseval.LoadPackages(root, false, nil, tc.pattern)
-			require.NoError(t, err, "LoadPackages failed for %s", tc.pattern)
-			require.Empty(t, errs, "package load errors for %s: %v", tc.pattern, errs)
-			require.Len(t, pkgs, 1, "expected exactly one package for %s", tc.pattern)
-
-			fixturePkg := pkgs[0]
-
-			// Each fixture imports kernel/governance transitively; reuse its
-			// rulecodes.go const set so the Code-resolution branch behaves the
-			// same as in production. The fixture violations come from the
-			// CompositeLit scan path, not Code-identity, so even an empty
-			// const set would surface them — but matching production keeps
-			// the scan logic identical.
-			govPkg := findPackageInDeps(fixturePkg, governancePkgPath)
-			require.NotNil(t, govPkg, "kernel/governance must be a transitive dep")
-			govScope := govPkg.Types.Scope()
-			ruleCodeConsts := map[*types.Const]struct{}{}
-			for _, name := range govScope.Names() {
-				obj := govScope.Lookup(name)
-				c, ok := obj.(*types.Const)
-				if !ok {
-					continue
-				}
-				named, ok := c.Type().(*types.Named)
-				if !ok || named.Obj().Name() != "RuleCode" {
-					continue
-				}
-				if filepath.Base(govPkg.Fset.Position(c.Pos()).Filename) == ruleCodesFile {
-					ruleCodeConsts[c] = struct{}{}
-				}
-			}
-
 			var violations []string
-			for i, file := range fixturePkg.Syntax {
-				if i >= len(fixturePkg.GoFiles) {
-					continue
-				}
-				rel := fixturePkg.GoFiles[i]
-				violations = append(violations,
-					scanINV2ViolationsInFile(file, fixturePkg.Fset, fixturePkg.TypesInfo,
-						ruleCodeConsts, rel, governancePkgPath)...)
-			}
+			RunTyped(t, TypedOpts{Tests: false}, []string{tc.pattern},
+				func(p *Pass) []Diagnostic {
+					// Find kernel/governance in the transitive *types.Package graph
+					// to get the RuleCode const set with position-resolvable Fset.
+					// Since all packages in a single RunTyped invocation share the
+					// same *token.FileSet, p.Fset resolves positions for governance
+					// consts loaded transitively.
+					govTypesPkg := findTypesPackageByPath(p.Pkg, governancePkgPath)
+					if govTypesPkg == nil {
+						t.Errorf("kernel/governance not found in transitive deps of fixture %s", tc.pattern)
+						return nil
+					}
+					govScope := govTypesPkg.Scope()
+					ruleCodeConsts := map[*types.Const]struct{}{}
+					for _, name := range govScope.Names() {
+						obj := govScope.Lookup(name)
+						c, ok := obj.(*types.Const)
+						if !ok {
+							continue
+						}
+						named, ok := c.Type().(*types.Named)
+						if !ok || named.Obj().Name() != "RuleCode" {
+							continue
+						}
+						if filepath.Base(p.Fset.Position(c.Pos()).Filename) == ruleCodesFile {
+							ruleCodeConsts[c] = struct{}{}
+						}
+					}
+
+					for _, file := range p.Files {
+						rel := p.Rel(file)
+						violations = append(violations,
+							scanINV2ViolationsInFile(file, p.Fset, p.TypesInfo,
+								ruleCodeConsts, rel, governancePkgPath)...)
+					}
+					return nil
+				})
 
 			assert.GreaterOrEqual(t, len(violations), tc.wantMin,
 				"shape %q: expected at least %d INV-2 violation(s), got %d: %v",
@@ -515,11 +518,11 @@ func testINV2CompositeLitFixtures(t *testing.T) {
 // testINV2ProductionSource verifies the production kernel/governance package
 // has no violations.
 //
-// This function walks rawPkg.Syntax — the type-checked AST files that
-// rawPkg.TypesInfo.Uses was built from — rather than re-parsing with the
-// scanner. Only scanner-parsed AST node pointers are distinct from loaded-
-// package node pointers; using the loaded AST ensures info.Uses lookups
-// succeed and the Hard property (const-identity check) is exercised.
+// This function walks gp.files — the type-checked AST files that
+// gp.info.Uses was built from — rather than re-parsing with the
+// scanner. The Pass guarantee (Files and TypesInfo from the same driver load)
+// ensures info.Uses lookups succeed and the Hard property (const-identity
+// check) is exercised.
 func testINV2ProductionSource(t *testing.T) {
 	root := findModuleRoot(t)
 	pkg := loadGovernancePackage(t, root)
@@ -530,19 +533,18 @@ func testINV2ProductionSource(t *testing.T) {
 	require.NotEmpty(t, ruleCodeConsts, "rulecodes.go must declare at least one RuleCode const")
 
 	var violations []string
-	typeseval.EachFileInPackage(root, pkg.rawPkg, true,
-		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
-			base := filepath.Base(relPath)
-			// Skip rulecodes.go itself and locator.go (the constructor that
-			// assigns the RuleCode param to ValidationResult.Code — the
-			// Code: field there is a method parameter, not a call-site const
-			// reference).
-			if base == ruleCodesFile || base == "locator.go" {
-				return
-			}
-			violations = append(violations,
-				scanINV2ViolationsInFile(file, fset, info, ruleCodeConsts, relPath, governancePkgPath)...)
-		})
+	for _, file := range pkg.files {
+		base := filepath.Base(pkg.fileRel(file))
+		// Skip rulecodes.go itself and locator.go (the constructor that
+		// assigns the RuleCode param to ValidationResult.Code — the
+		// Code: field there is a method parameter, not a call-site const
+		// reference).
+		if base == ruleCodesFile || base == "locator.go" {
+			continue
+		}
+		violations = append(violations,
+			scanINV2ViolationsInFile(file, pkg.fset, pkg.info, ruleCodeConsts, pkg.fileRel(file), governancePkgPath)...)
+	}
 	sort.Strings(violations)
 	assert.Empty(t, violations,
 		"every rule code must come from a RuleCode-typed const in rulecodes.go")
@@ -661,43 +663,41 @@ func scanINV2ViolationsInFile(
 // exclude all consts from a testdata package). The guard must return exactly
 // one const (codeGood) and exclude codeBad.
 func TestGovernanceRuleCodeConstSingleSource_FilenameGuard(t *testing.T) {
-	root := findModuleRoot(t)
 	const fixturePattern = "./tools/archtest/testdata/governance_rulecode_single_source_fixtures/filename_bypass_red"
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, fixturePattern)
-	require.NoError(t, err, "LoadPackages failed for filename_bypass_red fixture")
-	require.Empty(t, errs, "package load errors: %v", errs)
-	require.Len(t, pkgs, 1, "expected exactly one package loaded")
-
-	p := pkgs[0]
-	scope := p.Types.Scope()
-
-	// Apply the same filter logic as collectRuleCodeConsts but without the
-	// governancePkgPath check (the testdata package has a different import
-	// path). This isolates the filename guard specifically.
 	var included []string
 	var excluded []string
-	for _, name := range scope.Names() {
-		obj := scope.Lookup(name)
-		c, ok := obj.(*types.Const)
-		if !ok {
-			continue
-		}
-		named, ok := c.Type().(*types.Named)
-		if !ok {
-			continue
-		}
-		if named.Obj().Name() != "RuleCode" {
-			continue
-		}
-		// Apply filename guard — the key invariant under test.
-		pos := p.Fset.Position(c.Pos())
-		if filepath.Base(pos.Filename) == ruleCodesFile {
-			included = append(included, name)
-		} else {
-			excluded = append(excluded, name)
-		}
-	}
+
+	RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+		func(p *Pass) []Diagnostic {
+			scope := p.Pkg.Scope()
+
+			// Apply the same filter logic as collectRuleCodeConsts but without the
+			// governancePkgPath check (the testdata package has a different import
+			// path). This isolates the filename guard specifically.
+			for _, name := range scope.Names() {
+				obj := scope.Lookup(name)
+				c, ok := obj.(*types.Const)
+				if !ok {
+					continue
+				}
+				named, ok := c.Type().(*types.Named)
+				if !ok {
+					continue
+				}
+				if named.Obj().Name() != "RuleCode" {
+					continue
+				}
+				// Apply filename guard — the key invariant under test.
+				pos := p.Fset.Position(c.Pos())
+				if filepath.Base(pos.Filename) == ruleCodesFile {
+					included = append(included, name)
+				} else {
+					excluded = append(excluded, name)
+				}
+			}
+			return nil
+		})
 
 	sort.Strings(included)
 	sort.Strings(excluded)
@@ -768,7 +768,10 @@ func collectRuleCodeConsts(pkg *governancePackage) map[*types.Const]struct{} {
 		// are part of the single-source funnel. A const declared in any other
 		// file (e.g. rules_misc_strict.go) is excluded even if it has the
 		// correct RuleCode type and package path.
-		pos := pkg.rawPkg.Fset.Position(c.Pos())
+		//
+		// pkg.fset is the token.FileSet from the same Pass that loaded the
+		// governance package, ensuring position resolution is valid.
+		pos := pkg.fset.Position(c.Pos())
 		if filepath.Base(pos.Filename) != ruleCodesFile {
 			continue
 		}
@@ -861,8 +864,6 @@ func TestGovernanceRuleErrorMessageFixSuffix(t *testing.T) {
 //
 //	where the message is a plain literal lacking "; fix:".
 func testINV3NegativeFixture(t *testing.T) {
-	root := findModuleRoot(t)
-
 	// Fixture sub-directories and the expected violation count for each shape.
 	cases := []struct {
 		pattern string
@@ -902,31 +903,25 @@ func testINV3NegativeFixture(t *testing.T) {
 			// Load the fixture package. NeedDeps ensures kernel/governance is
 			// loaded as a transitive dependency so isSeverityErrorArg can compare
 			// *types.Const identity across the shared dependency graph.
-			pkgs, errs, err := typeseval.LoadPackages(root, false, nil, tc.pattern)
-			require.NoError(t, err, "LoadPackages failed for fixture %s", tc.pattern)
-			require.Empty(t, errs, "package load errors for %s: %v", tc.pattern, errs)
-			require.Len(t, pkgs, 1, "expected exactly one package for %s", tc.pattern)
-
-			fixturePkg := pkgs[0]
-
-			// Extract severityErrorConst from the kernel/governance package that
-			// was loaded transitively. All packages within a single LoadPackages
-			// call share the same *types.Const pointers for their common deps.
-			govSeverityErrorConst := lookupSeverityErrorConstFromDeps(t, fixturePkg)
-
-			consts := collectPackageStringConsts(fixturePkg.Types.Scope())
-			info := fixturePkg.TypesInfo
-			fset := fixturePkg.Fset
-
 			var violations []string
-			for i, file := range fixturePkg.Syntax {
-				if i >= len(fixturePkg.GoFiles) {
-					continue
-				}
-				relPath := fixturePkg.GoFiles[i]
-				violations = append(violations,
-					scanINV3ViolationsInFile(file, fset, info, consts, govSeverityErrorConst, relPath, governancePkgPath)...)
-			}
+			RunTyped(t, TypedOpts{Tests: false}, []string{tc.pattern},
+				func(p *Pass) []Diagnostic {
+					// Find SeverityError from the governance package in the
+					// transitive *types.Package graph.
+					govSeverityErrorConst := lookupSeverityErrorConstFromTypesGraph(p, governancePkgPath)
+					if govSeverityErrorConst == nil {
+						t.Errorf("SeverityError not found in transitive deps for fixture %s", tc.pattern)
+						return nil
+					}
+
+					consts := collectPackageStringConsts(p.Pkg.Scope())
+					for _, file := range p.Files {
+						relPath := p.Rel(file)
+						violations = append(violations,
+							scanINV3ViolationsInFile(file, p.Fset, p.TypesInfo, consts, govSeverityErrorConst, relPath, governancePkgPath)...)
+					}
+					return nil
+				})
 
 			assert.GreaterOrEqual(t, len(violations), tc.wantMin,
 				"shape %q: expected at least %d INV-3 violation(s), got %d: %v",
@@ -938,10 +933,10 @@ func testINV3NegativeFixture(t *testing.T) {
 // testINV3ProductionSource verifies the production kernel/governance package
 // has no SeverityError rules missing the "; fix:" anchor.
 //
-// Iteration goes through typeseval.EachFileInPackage so isSeverityErrorArg
-// can resolve *ast.Ident nodes via the same TypesInfo that produced the
-// AST — see the helper's INVARIANT for why scanner.EachFile + a captured
-// pkg.TypesInfo would silently fail open.
+// Iteration uses gp.files — the type-checked AST files whose node pointers
+// match gp.info.Uses entries — so isSeverityErrorArg can resolve *ast.Ident
+// nodes via the same TypesInfo that produced the AST. Pass guarantees
+// Files/TypesInfo/Fset are same-source by driver construction.
 func testINV3ProductionSource(t *testing.T) {
 	root := findModuleRoot(t)
 	pkg := loadGovernancePackage(t, root)
@@ -949,11 +944,10 @@ func testINV3ProductionSource(t *testing.T) {
 	severityErrorConst := lookupSeverityErrorConst(t, pkg.scope)
 
 	var violations []string
-	typeseval.EachFileInPackage(root, pkg.rawPkg, true,
-		func(file *ast.File, relPath string, info *types.Info, fset *token.FileSet) {
-			violations = append(violations,
-				scanINV3ViolationsInFile(file, fset, info, consts, severityErrorConst, relPath, governancePkgPath)...)
-		})
+	for _, file := range pkg.files {
+		violations = append(violations,
+			scanINV3ViolationsInFile(file, pkg.fset, pkg.info, consts, severityErrorConst, pkg.fileRel(file), governancePkgPath)...)
+	}
 	sort.Strings(violations)
 	assert.Empty(t, violations)
 }
@@ -1084,45 +1078,59 @@ func scanINV3ViolationsInFile(
 	return violations
 }
 
-// lookupSeverityErrorConstFromDeps walks the transitive imports of pkg to find
-// the kernel/governance package and returns its SeverityError const. This is
-// used by testINV3NegativeFixture when a testdata fixture package has imported
-// kernel/governance as a dependency — within a single LoadPackages call all
-// packages share *types.Const pointers, so the returned const is
-// pointer-identical to the ones referenced in the fixture's TypesInfo.Uses.
-func lookupSeverityErrorConstFromDeps(t *testing.T, pkg *packages.Package) *types.Const {
-	t.Helper()
-	govPkg := findPackageInDeps(pkg, governancePkgPath)
-	require.NotNil(t, govPkg, "kernel/governance not found in transitive deps of fixture package")
-	obj := govPkg.Types.Scope().Lookup("SeverityError")
-	require.NotNil(t, obj, "SeverityError not found in kernel/governance scope")
+// lookupSeverityErrorConstFromTypesGraph finds the SeverityError const in the
+// kernel/governance package by traversing the *types.Package import graph from
+// p.Pkg. Since all packages in a single RunTyped invocation share the same
+// *token.FileSet, the returned *types.Const's position is resolvable via p.Fset.
+func lookupSeverityErrorConstFromTypesGraph(p *Pass, govPkgPath string) *types.Const {
+	govPkg := findTypesPackageByPath(p.Pkg, govPkgPath)
+	if govPkg == nil {
+		return nil
+	}
+	obj := govPkg.Scope().Lookup("SeverityError")
+	if obj == nil {
+		return nil
+	}
 	c, ok := obj.(*types.Const)
-	require.True(t, ok, "SeverityError must be a *types.Const")
+	if !ok {
+		return nil
+	}
 	return c
 }
 
-// findPackageInDeps performs a breadth-first search through pkg's transitive
-// imports to find the package with the given import path.
-func findPackageInDeps(pkg *packages.Package, importPath string) *packages.Package {
+// findTypesPackageByPath performs a depth-first search through pkg's
+// transitive *types.Package import graph to find the package with the given
+// import path. Returns nil if pkg is nil or the path is not found.
+//
+// (*types.Package).Imports() returns only the DIRECT imports of a package —
+// unlike the flat map in (*packages.Package).Imports which (when NeedDeps is
+// set) contains the full transitive closure. The DFS below restores
+// transitive reachability by recursively descending into each direct import.
+// The visited map prevents infinite loops on import cycles (rare in Go but
+// structurally possible with the go/types graph) and avoids redundant work
+// when the same package is reachable via multiple paths.
+func findTypesPackageByPath(pkg *types.Package, importPath string) *types.Package {
+	if pkg == nil {
+		return nil
+	}
 	visited := map[string]bool{}
-	queue := []*packages.Package{pkg}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if visited[cur.PkgPath] {
-			continue
+	var search func(*types.Package) *types.Package
+	search = func(p *types.Package) *types.Package {
+		if p == nil || visited[p.Path()] {
+			return nil
 		}
-		visited[cur.PkgPath] = true
-		if cur.PkgPath == importPath {
-			return cur
+		visited[p.Path()] = true
+		if p.Path() == importPath {
+			return p
 		}
-		for _, imp := range cur.Imports {
-			if !visited[imp.PkgPath] {
-				queue = append(queue, imp)
+		for _, imp := range p.Imports() {
+			if found := search(imp); found != nil {
+				return found
 			}
 		}
+		return nil
 	}
-	return nil
+	return search(pkg)
 }
 
 // lookupSeverityErrorConst resolves the package-scope SeverityError const
@@ -1188,7 +1196,7 @@ func resolveStringFragments(expr ast.Expr, consts map[string]string, info *types
 		if v, ok := consts[e.Name]; ok {
 			return []string{v}
 		}
-		if v, ok := typeseval.EvaluateConstString(info, e); ok {
+		if v, ok := EvaluateConstString(info, e); ok {
 			return []string{v}
 		}
 		return nil
@@ -1205,7 +1213,7 @@ func resolveStringFragments(expr ast.Expr, consts map[string]string, info *types
 	case *ast.ParenExpr:
 		return resolveStringFragments(e.X, consts, info)
 	default:
-		if v, ok := typeseval.EvaluateConstString(info, expr); ok {
+		if v, ok := EvaluateConstString(info, expr); ok {
 			return []string{v}
 		}
 		return nil
@@ -1224,22 +1232,123 @@ func isSprintfCall(call *ast.CallExpr) bool {
 	return id.Name == "fmt"
 }
 
-// governancePackage is a thin wrapper around the loaded *packages.Package
-// data the three invariants share.
+// governancePackage is a thin wrapper around the Pass-loaded kernel/governance
+// package data the three invariants share.
+//
+// Pass guarantees that files, info, and fset all come from the same
+// packages.Load invocation in the driver — this is the INV-1 same-source
+// property that typeseval.EachFileInPackage previously provided, now
+// guaranteed structurally by the Pass funnel.
 type governancePackage struct {
-	scope  *types.Scope
-	info   *types.Info
-	rawPkg *packages.Package // loaded package with Syntax + Fset + TypesInfo
+	scope *types.Scope
+	info  *types.Info
+	fset  *token.FileSet
+	files []*ast.File
+	// fileRelFn maps an *ast.File to its module-relative slash path.
+	// Populated during loadGovernancePackage from the Pass.
+	fileRelFn func(*ast.File) string
 }
 
+// fileRel returns the module-relative slash path of the given file.
+func (gp *governancePackage) fileRel(f *ast.File) string {
+	if gp.fileRelFn != nil {
+		return gp.fileRelFn(f)
+	}
+	return ""
+}
+
+// loadGovernancePackage loads kernel/governance via RunTyped and returns a
+// governancePackage holding the Pass-provided Files/TypesInfo/Fset.
+//
+// RunTyped drives packages.Load once and passes a fully constructed Pass —
+// Files, TypesInfo, and Fset are co-derived from a single load, satisfying
+// the same-source invariant that EachFileInPackage previously provided.
 func loadGovernancePackage(t *testing.T, root string) *governancePackage {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, "./kernel/governance")
-	require.NoError(t, err)
-	require.Empty(t, errs, "kernel/governance load errors: %v", errs)
-	require.Len(t, pkgs, 1)
-	pkg := pkgs[0]
-	return &governancePackage{scope: pkg.Types.Scope(), info: pkg.TypesInfo, rawPkg: pkg}
+	var gp *governancePackage
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/governance"},
+		func(p *Pass) []Diagnostic {
+			gp = &governancePackage{
+				scope:     p.Pkg.Scope(),
+				info:      p.TypesInfo,
+				fset:      p.Fset,
+				files:     p.Files,
+				fileRelFn: p.Rel,
+			}
+			return nil
+		})
+	require.NotNil(t, gp, "RunTyped must visit kernel/governance package")
+	_ = root
+	return gp
+}
+
+// TestFindTypesPackageByPath validates findTypesPackageByPath and
+// lookupSeverityErrorConstFromTypesGraph with table-driven sub-tests.
+//
+// The kernel/governance package is a known transitive dependency of the
+// governance fixtures, so loadGovernancePackage's typed pkg provides a
+// *types.Package whose import graph includes at least kernel/governance itself.
+// We exercise:
+//
+//	(a) known path "github.com/ghbvf/gocell/kernel/governance" — DFS must find non-nil.
+//	(b) non-existent path "github.com/ghbvf/gocell/does/not/exist" — must return nil.
+//	(c) nil pkg input — must safely return nil without panic.
+//
+// lookupSeverityErrorConstFromTypesGraph is exercised via a minimal Pass
+// constructed from the governance package load; it must find SeverityError
+// in the transitive graph.
+func TestFindTypesPackageByPath(t *testing.T) {
+	root := findModuleRoot(t)
+	gp := loadGovernancePackage(t, root)
+
+	// The governancePackage.scope belongs to gp.info which was loaded via
+	// RunTyped with ./kernel/governance. We can obtain the *types.Package
+	// directly from the scope's package reference. Since governancePackage
+	// does not expose the *types.Package directly, we resolve it via scope
+	// — the scope belongs to the governance *types.Package itself.
+	govPkg := gp.scope.Lookup("Validator")
+	require.NotNil(t, govPkg, "Validator must exist in kernel/governance")
+	govTypedPkg := govPkg.Pkg()
+	require.NotNil(t, govTypedPkg, "Validator.Pkg() must be non-nil")
+
+	t.Run("known_path_found", func(t *testing.T) {
+		got := findTypesPackageByPath(govTypedPkg, governancePkgPath)
+		require.NotNil(t, got, "findTypesPackageByPath must find kernel/governance by its own path")
+		assert.Equal(t, governancePkgPath, got.Path(), "returned package path must match the requested import path")
+	})
+
+	t.Run("nonexistent_path_returns_nil", func(t *testing.T) {
+		got := findTypesPackageByPath(govTypedPkg, "github.com/ghbvf/gocell/does/not/exist")
+		assert.Nil(t, got, "findTypesPackageByPath must return nil for a non-existent import path")
+	})
+
+	t.Run("nil_pkg_input_returns_nil", func(t *testing.T) {
+		got := findTypesPackageByPath(nil, governancePkgPath)
+		assert.Nil(t, got, "findTypesPackageByPath must return nil safely for nil input")
+	})
+}
+
+// TestLookupSeverityErrorConstFromTypesGraph validates that
+// lookupSeverityErrorConstFromTypesGraph finds SeverityError via the
+// transitive *types.Package graph exposed through the Pass.
+//
+// The kernel/governance package declares SeverityError as a const; any Pass
+// that loads a package importing kernel/governance must be able to find it.
+// We load kernel/governance directly so p.Pkg IS the governance package,
+// making the DFS find it in the first step (no traversal needed).
+func TestLookupSeverityErrorConstFromTypesGraph(t *testing.T) {
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/governance"},
+		func(p *Pass) []Diagnostic {
+			got := lookupSeverityErrorConstFromTypesGraph(p, governancePkgPath)
+			if got == nil {
+				t.Errorf("lookupSeverityErrorConstFromTypesGraph: SeverityError not found in transitive graph for kernel/governance load")
+				return nil
+			}
+			if got.Name() != "SeverityError" {
+				t.Errorf("lookupSeverityErrorConstFromTypesGraph: got const name %q, want %q", got.Name(), "SeverityError")
+			}
+			return nil
+		})
 }
 
 // collectPackageStringConsts walks scope's names and returns a map from

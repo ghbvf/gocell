@@ -28,30 +28,14 @@ package archtest
 import (
 	"go/ast"
 	"go/types"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const (
 	identityManageNewServiceFn = "github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.NewService"
 	withLastAdminProtectionFn  = "github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.WithLastAdminProtection"
 )
-
-// identitymanageNewServiceCallSite records a production-file occurrence of
-// identitymanage.NewService(...). The companion WithLastAdminProtection
-// presence is computed at the file granularity (Boolean).
-type identitymanageNewServiceCallSite struct {
-	File                string
-	Line                int
-	HasProtectionInFile bool
-}
 
 // canonicalCalledFuncForLastAdmin resolves a CallExpr Fun ident to its
 // canonical "<pkg-path>.<func-name>" string via *types.Info, with the same
@@ -86,26 +70,28 @@ func canonicalCalledFuncForLastAdmin(info *types.Info, call *ast.CallExpr) strin
 	return pkg.Path() + "." + fn.Name()
 }
 
-func scanLastAdminProtectionViolations(root string, pkgs []*packages.Package) []identitymanageNewServiceCallSite {
-	var out []identitymanageNewServiceCallSite
-	for _, pkg := range pkgs {
-		if pkg.TypesInfo == nil {
-			continue
+// INVARIANT: IDENTITYMANAGE-LAST-ADMIN-PROTECTION-WIRING-01
+//
+// TestIdentitymanageLastAdminProtectionWiring01_RealRepoClean verifies that
+// no production wiring of identitymanage.NewService omits
+// WithLastAdminProtection (file-scoped co-existence check).
+func TestIdentitymanageLastAdminProtectionWiring01_RealRepoClean(t *testing.T) {
+	t.Parallel()
+
+	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			absPath := pkg.Fset.Position(file.Pos()).Filename
-			rel, err := filepath.Rel(root, absPath)
-			if err != nil {
-				continue
-			}
-			relSlash := filepath.ToSlash(rel)
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			// Skip test files + the identitymanage package itself (the
 			// rule does not apply to the implementation of NewService or
 			// its in-package tests).
-			if strings.HasSuffix(relSlash, "_test.go") {
+			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			if strings.Contains(relSlash, "cells/accesscore/slices/identitymanage/") {
+			if strings.Contains(rel, "cells/accesscore/slices/identitymanage/") {
 				continue
 			}
 
@@ -113,8 +99,8 @@ func scanLastAdminProtectionViolations(root string, pkgs []*packages.Package) []
 			var newServiceCalls []*ast.CallExpr
 			// Second pass: detect identitymanage.WithLastAdminProtection(...) anywhere in the file.
 			hasProtection := false
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				canon := canonicalCalledFuncForLastAdmin(pkg.TypesInfo, call)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				canon := canonicalCalledFuncForLastAdmin(p.TypesInfo, call)
 				switch canon {
 				case identityManageNewServiceFn:
 					newServiceCalls = append(newServiceCalls, call)
@@ -125,38 +111,23 @@ func scanLastAdminProtectionViolations(root string, pkgs []*packages.Package) []
 			if len(newServiceCalls) == 0 {
 				continue
 			}
+			if hasProtection {
+				continue
+			}
 			for _, call := range newServiceCalls {
-				out = append(out, identitymanageNewServiceCallSite{
-					File:                relSlash,
-					Line:                pkg.Fset.Position(call.Pos()).Line,
-					HasProtectionInFile: hasProtection,
+				line := p.Fset.Position(call.Pos()).Line
+				ds = append(ds, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: "IDENTITYMANAGE-LAST-ADMIN-PROTECTION-WIRING-01: calls identitymanage.NewService without " +
+						"identitymanage.WithLastAdminProtection(roleRepo) anywhere in the same file — every production wiring " +
+						"MUST install the at-least-one-effective-admin guard (S4.0; see " +
+						"docs/architecture/202605101400-adr-admin-invariant.md).",
 				})
 			}
 		}
-	}
-	return out
-}
+		return ds
+	})
 
-// INVARIANT: IDENTITYMANAGE-LAST-ADMIN-PROTECTION-WIRING-01
-//
-// TestIdentitymanageLastAdminProtectionWiring01_RealRepoClean verifies that
-// no production wiring of identitymanage.NewService omits
-// WithLastAdminProtection (file-scoped co-existence check).
-func TestIdentitymanageLastAdminProtectionWiring01_RealRepoClean(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	modulePath := readModulePath(t, root)
-	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
-	require.NoError(t, err)
-
-	for _, site := range scanLastAdminProtectionViolations(root, resolver.Production()) {
-		if site.HasProtectionInFile {
-			continue
-		}
-		t.Errorf("IDENTITYMANAGE-LAST-ADMIN-PROTECTION-WIRING-01: %s:%d calls identitymanage.NewService without "+
-			"identitymanage.WithLastAdminProtection(roleRepo) anywhere in the same file — every production wiring "+
-			"MUST install the at-least-one-effective-admin guard (S4.0; see "+
-			"docs/architecture/202605101400-adr-admin-invariant.md).",
-			site.File, site.Line)
-	}
+	Report(t, "IDENTITYMANAGE-LAST-ADMIN-PROTECTION-WIRING-01", diags)
 }

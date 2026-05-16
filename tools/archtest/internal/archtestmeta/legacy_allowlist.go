@@ -57,48 +57,10 @@ package archtestmeta
 // the coverage test, which fails fast on "loaded with 0 files".
 const FixtureBuildTag = "archtest_fixture"
 
-// Lookup is by module-relative slash path (e.g. "tools/archtest/foo_test.go").
+// LegacyAllowlist is now empty — all migration-period entries have been
+// ported to archtest.Pass (Stage 2/3 complete). Stage 4 will delete this
+// package entirely; the empty map is retained until then so the
+// TestPassFunnelGuardListSync cross-validator continues to compile.
 //
-// Stage 1.5 additions (PASS-FUNNEL-RESOLVE-01 baseline):
-//   - build_constraint_test.go: new file using typeseval.ParseBuildConstraint/BuildContextPredicate
-//   - ci_integration_discovery_invariants_test.go: new file using typeseval.ParseBuildConstraint/FlatNonDefaultTags
-var LegacyAllowlist = map[string]bool{
-	"tools/archtest/archtest_test.go":                                true,
-	"tools/archtest/archtest_verify_coverage_test.go":                true,
-	"tools/archtest/audit_ledger_composition_root_test.go":           true,
-	"tools/archtest/build_constraint_test.go":                        true, // Stage 1.5: uses ParseBuildConstraint/BuildContextPredicate
-	"tools/archtest/cell_id_pattern_single_source_test.go":           true,
-	"tools/archtest/cell_init_test.go":                               true,
-	"tools/archtest/cell_public_option_param_test.go":                true,
-	"tools/archtest/ci_integration_discovery_invariants_test.go":     true, // Stage 1.5: uses ParseBuildConstraint/FlatNonDefaultTags
-	"tools/archtest/credential_invalidate_funnel_invariants_test.go": true,
-	"tools/archtest/domain_authz_mutation_funnel_invariants_test.go": true,
-	"tools/archtest/reconstitute_user_caller_allowlist_test.go":      true,
-	"tools/archtest/eval_predicate_centralization_test.go":           true,
-	"tools/archtest/exported_error_new_fixtures_test.go":             true,
-	"tools/archtest/goose_session_locker_fixtures_test.go":           true,
-	"tools/archtest/goose_session_locker_test.go":                    true,
-	"tools/archtest/governance_rules_invariants_test.go":             true,
-	"tools/archtest/health_aggregation_test.go":                      true,
-	"tools/archtest/identitymanage_last_admin_protection_test.go":    true,
-	"tools/archtest/managed_resource_contract_test.go":               true,
-	"tools/archtest/outbox_invariants_test.go":                       true,
-	"tools/archtest/panic_invariants_test.go":                        true,
-	"tools/archtest/pg_repo_ambient_tx_test.go":                      true,
-	"tools/archtest/prod_duration_fixtures_test.go":                  true,
-	"tools/archtest/prod_invariants_test.go":                         true,
-	"tools/archtest/production_loader_funnel_test.go":                true,
-	"tools/archtest/prom_cell_label_funnel_test.go":                  true,
-	"tools/archtest/rmq_invariants_test.go":                          true,
-	"tools/archtest/role_admin_literal_test.go":                      true,
-	"tools/archtest/scaffold_bundle_invariants_test.go":              true,
-	"tools/archtest/scaffold_write_funnel_test.go":                   true,
-	"tools/archtest/scanner_framework_usage_test.go":                 true,
-	"tools/archtest/sessionrefresh_no_session_create_test.go":        true,
-	"tools/archtest/slowgate_allowlist_test.go":                      true,
-	"tools/archtest/svctoken_caller_cell_test.go":                    true,
-	"tools/archtest/test_sleep_discipline_test.go":                   true,
-	"tools/archtest/test_time_literal_fixtures_test.go":              true,
-	"tools/archtest/test_time_literal_test.go":                       true,
-	"tools/archtest/wrapper_location_test.go":                        true,
-}
+// Lookup is by module-relative slash path (e.g. "tools/archtest/foo_test.go").
+var LegacyAllowlist = map[string]bool{}

@@ -73,12 +73,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 const (
@@ -121,22 +117,14 @@ func bannedPatterns() map[string]struct{} {
 
 // TestCellIDPatternSingleSource enforces CELL-ID-PATTERN-SINGLE-SOURCE-01.
 //
-// Loads the production package set via the typed funnel
-// typeseval.LoadProductionPackages (PRODUCTION-LOADER-FUNNEL-01 — the
-// raw SharedResolver(_, _, _, "./...") form is banned in archtest test
+// Loads the production package set via RunTypedProduction (PRODUCTION-LOADER-FUNNEL-01 —
+// the raw SharedResolver(_, _, _, "./...") form is banned in archtest test
 // files) and walks every regexp.MustCompile family call. Records a
 // violation when the first arg is a banned string literal and the file
 // is not in the allowlist. Test files are also scanned (tests=true) so
 // stray cell-id regex declared in *_test.go is caught.
 func TestCellIDPatternSingleSource(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	module := readModulePath(t, root)
-
-	resolver, err := typeseval.LoadProductionPackages(
-		root, module, true /* tests */, typeseval.FlatNonDefaultTags())
-	require.NoError(t, err, "LoadProductionPackages failed")
 
 	allowFiles := map[string]struct{}{
 		cellIDPatternAllowFile:     {},
@@ -145,26 +133,20 @@ func TestCellIDPatternSingleSource(t *testing.T) {
 	banned := bannedPatterns()
 
 	var violations []string
-	for _, p := range resolver.Production() {
-		if p == nil || p.TypesInfo == nil {
-			continue
+	_ = RunTypedProduction(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
 		}
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok {
-				continue
-			}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if _, ok := allowFiles[rel]; ok {
 				continue
 			}
 			violations = append(violations,
 				scanCellIDPatternCalls(p, file, rel, banned)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	violations = dedupSortedStrings(violations)
@@ -180,10 +162,10 @@ func TestCellIDPatternSingleSource(t *testing.T) {
 // scanCellIDPatternCalls walks file's AST for regexp.MustCompile-family
 // calls and returns one violation per banned-literal first arg.
 func scanCellIDPatternCalls(
-	p *packages.Package, file *ast.File, rel string, banned map[string]struct{},
+	p *Pass, file *ast.File, rel string, banned map[string]struct{},
 ) []string {
 	var out []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isRegexpCompileCall(p.TypesInfo, call.Fun) {
 			return
 		}
@@ -284,7 +266,7 @@ func dedupSortedStrings(in []string) []string {
 // TestCellIDPatternSingleSourceLiterals enforces the BasicLit STRING half of
 // CELL-ID-PATTERN-SINGLE-SOURCE-01.
 //
-// Walks every .go file in the module (tests=true) via packages.Visit and
+// Walks every .go file in the module (tests=true) via RunTypedProduction and
 // inspects every *ast.BasicLit of token.STRING. If the unquoted value equals
 // any entry in bannedPatterns(), and the file is not in the allowlist, the
 // test records a violation.
@@ -303,13 +285,6 @@ func dedupSortedStrings(in []string) []string {
 func TestCellIDPatternSingleSourceLiterals(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	module := readModulePath(t, root)
-
-	resolver, err := typeseval.LoadProductionPackages(
-		root, module, true /* tests */, typeseval.FlatNonDefaultTags())
-	require.NoError(t, err, "LoadProductionPackages failed")
-
 	allowFiles := map[string]struct{}{
 		cellIDPatternAllowFile:     {},
 		cellIDPatternAllowSelfFile: {},
@@ -317,26 +292,17 @@ func TestCellIDPatternSingleSourceLiterals(t *testing.T) {
 	banned := bannedPatterns()
 
 	var violations []string
-	for _, p := range resolver.Production() {
-		if p == nil {
-			continue
-		}
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok {
-				continue
-			}
+	_ = RunTypedProduction(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if _, ok := allowFiles[rel]; ok {
 				continue
 			}
 			violations = append(violations,
 				scanCellIDPatternLiterals(p.Fset, file, rel, banned)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	violations = dedupSortedStrings(violations)
@@ -357,7 +323,7 @@ func scanCellIDPatternLiterals(
 	fset *token.FileSet, file *ast.File, rel string, banned map[string]struct{},
 ) []string {
 	var out []string
-	scanner.EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
+	EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
 		if lit.Kind != token.STRING {
 			return
 		}
@@ -407,11 +373,10 @@ const legacyPattern = "^[a-z][a-z0-9-]*$"
 	banned := bannedPatterns()
 	violations := scanCellIDPatternLiterals(fset, file, "fake/fake.go", banned)
 
-	if len(violations) == 0 {
-		t.Fatal("RED fixture: expected scanCellIDPatternLiterals to report a " +
-			"violation for the legacy '^[a-z][a-z0-9-]*$' literal, got none; " +
+	require.NotEmpty(t, violations,
+		"RED fixture: expected scanCellIDPatternLiterals to report a "+
+			"violation for the legacy '^[a-z][a-z0-9-]*$' literal, got none; "+
 			"the BasicLit scan is broken")
-	}
 	// Positive assertion: the violation message must reference the banned string.
 	if !strings.Contains(violations[0], legacyCallerCellRegexString) {
 		t.Fatalf("RED fixture: violation message does not contain the banned "+

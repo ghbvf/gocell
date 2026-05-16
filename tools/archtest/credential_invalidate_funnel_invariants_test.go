@@ -17,7 +17,7 @@ package archtest
 // privatizing domain.User authz fields + sealed Mutation funnel; tracked
 // as S4e in backlog AUTHZ-MUTATION-FUNNEL-UPGRADE-01.
 //
-// AI-rebust grade: Hard (closed-caller-set enforced via typeseval.ResolveMethodCall;
+// AI-rebust grade: Hard (closed-caller-set enforced via ResolveMethodCall;
 // form uniqueness = "call resolves to this exact *types.Func identity" — no gray zone).
 //
 // Hard property: any direct call to session.Store.RevokeForSubject /
@@ -26,7 +26,7 @@ package archtest
 // The honesty caveat (matching SESSIONREFRESH-NO-SESSION-CREATE-01):
 // Go does not prevent the calls at compile time; enforcement is archtest-bound.
 //
-// Scanning tool: typeseval.ResolveMethodCall + EachInSubtree[ast.CallExpr].
+// Scanning tool: ResolveMethodCall + EachInSubtree[ast.CallExpr].
 // Resolver scope: targeted package trees (not full module ./...) to keep RAM
 // bounded while still covering every non-test, non-store-impl call site.
 //
@@ -60,10 +60,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // ─── package path constants ────────────────────────────────────────────────
@@ -171,7 +167,7 @@ var funnelAllowlistPathPrefixes = []string{
 // would incorrectly allowlist paths like "examples/cells/accesscore/" if
 // examples were ever added to the scan patterns. The scan patterns above
 // (cells/..., runtime/..., adapters/..., cmd/...) are relative paths that
-// typeseval.SharedResolver returns as module-relative strings; HasPrefix is
+// SharedResolver returns as module-relative strings; HasPrefix is
 // sufficient and does not have the Contains ambiguity.
 func isAllowlisted(rel string) bool {
 	if strings.HasSuffix(rel, "_test.go") {
@@ -198,7 +194,6 @@ func isAllowlisted(rel string) bool {
 // is not a permanently-passing no-op.
 func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
 	// Scan production packages that could plausibly call RevokeForSubject.
 	patterns := []string{
@@ -207,26 +202,25 @@ func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 		"./adapters/...",
 		"./cmd/...",
 	}
-	resolver, err := typeseval.SharedResolver(root, false, nil, patterns...)
-	require.NoError(t, err, "typeseval.SharedResolver for production packages")
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if isAllowlisted(rel) {
 				continue
 			}
-			violations = append(violations, scanFunnelViolations(
-				pkg, file, rel,
+			violations = append(violations, scanFunnelViolationsPass(
+				p, file, rel,
 				sessionStorePkg, sessionRevokeMethod,
 				"CREDENTIAL-INVALIDATE-FUNNEL-01",
 			)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -239,7 +233,7 @@ func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 
 	// RED fixture verification: the scanner must detect ≥ 1 violation in the
 	// rbacassign_direct_revoke_for_subject_red fixture package.
-	verifyRedFixtureDetected(t, root,
+	verifyRedFixtureDetectedPass(t,
 		"./tools/archtest/testdata/credential_invalidate_fixtures/rbacassign_direct_revoke_for_subject_red",
 		sessionStorePkg, sessionRevokeMethod,
 		"CREDENTIAL-INVALIDATE-FUNNEL-01 RED fixture",
@@ -256,33 +250,31 @@ func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 // RED fixture: testdata/credential_invalidate_fixtures/identitymanage_direct_bump_epoch_red.
 func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
 	patterns := []string{
 		"./cells/accesscore/...",
 		"./adapters/...",
 		"./cmd/...",
 	}
-	resolver, err := typeseval.SharedResolver(root, false, nil, patterns...)
-	require.NoError(t, err, "typeseval.SharedResolver for production packages")
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if isAllowlisted(rel) {
 				continue
 			}
-			violations = append(violations, scanFunnelViolations(
-				pkg, file, rel,
+			violations = append(violations, scanFunnelViolationsPass(
+				p, file, rel,
 				userRepoPkg, userBumpMethod,
 				"USER-AUTHZ-EPOCH-BUMP-FUNNEL-01",
 			)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -293,7 +285,7 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 			"from cells/accesscore/internal/credentialinvalidate/ or repository implementations. "+
 			"Route callers through credentialinvalidate.Invalidator.Apply instead.")
 
-	verifyRedFixtureDetected(t, root,
+	verifyRedFixtureDetectedPass(t,
 		// Internal-import workaround: ports.UserRepository lives under
 		// cells/accesscore/internal/, so the fixture must sit inside that tree
 		// to satisfy Go's internal-import rules. `testdata/` keeps it out of
@@ -315,7 +307,6 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 // RED fixture: testdata/credential_invalidate_fixtures/identitymanage_direct_revoke_refresh_red.
 func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
 	patterns := []string{
 		"./cells/accesscore/...",
@@ -323,26 +314,25 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 		"./adapters/...",
 		"./cmd/...",
 	}
-	resolver, err := typeseval.SharedResolver(root, false, nil, patterns...)
-	require.NoError(t, err, "typeseval.SharedResolver for production packages")
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if isAllowlisted(rel) {
 				continue
 			}
-			violations = append(violations, scanFunnelViolations(
-				pkg, file, rel,
+			violations = append(violations, scanFunnelViolationsPass(
+				p, file, rel,
 				refreshStorePkg, refreshRevokeMethod,
 				"REFRESH-REVOKE-USER-FUNNEL-01",
 			)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -353,7 +343,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 			"from cells/accesscore/internal/credentialinvalidate/ or store implementations. "+
 			"Route callers through credentialinvalidate.Invalidator.Apply instead.")
 
-	verifyRedFixtureDetected(t, root,
+	verifyRedFixtureDetectedPass(t,
 		"./tools/archtest/testdata/credential_invalidate_fixtures/identitymanage_direct_revoke_refresh_red",
 		refreshStorePkg, refreshRevokeMethod,
 		"REFRESH-REVOKE-USER-FUNNEL-01 RED fixture",
@@ -384,7 +374,6 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // allowlist; calling invalidator.Apply from there must be detected.
 func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
 	// Scan production packages where someone might plausibly add a new
 	// Invalidator.Apply call. We do NOT include runtime/auth/... or
@@ -395,26 +384,25 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}
-	resolver, err := typeseval.SharedResolver(root, false, nil, patterns...)
-	require.NoError(t, err, "typeseval.SharedResolver for production packages")
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if isUpstreamCallerAllowlisted(rel) {
 				continue
 			}
-			violations = append(violations, scanFunnelViolations(
-				pkg, file, rel,
+			violations = append(violations, scanFunnelViolationsPass(
+				p, file, rel,
 				invalidatorPkg, invalidatorMethod,
 				"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01",
 			)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -429,7 +417,7 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 			"reviewer's radar instead of relying on string convention. "+
 			"See ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A10.")
 
-	verifyRedFixtureDetected(t, root,
+	verifyRedFixtureDetectedPass(t,
 		"./cells/accesscore/internal/credentialinvalidate/testdata/sessionlogin_direct_apply_red",
 		invalidatorPkg, invalidatorMethod,
 		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 RED fixture",
@@ -450,12 +438,6 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 // positives.
 func TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	// Load production code (no tests).
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/...")
-	require.NoError(t, err)
 
 	bannedMethodNames := map[string]string{
 		"RevokeForSubject": "CREDENTIAL-INVALIDATE-FUNNEL-01",
@@ -464,30 +446,34 @@ func TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment(t *testing.T) 
 	}
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	// Load production code (no tests).
+	_ = RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
 			}
-			if isAllowlisted(rel) {
-				continue
-			}
-			scanner.EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-				scanner.EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-					if rule, banned := bannedMethodNames[sel.Sel.Name]; banned {
-						line := pkg.Fset.Position(assign.Pos()).Line
-						violations = append(violations, fmt.Sprintf(
-							"%s:%d: %s function-value assignment blind spot detected (%s)",
-							rel, line, sel.Sel.Name, rule))
-					}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				if isAllowlisted(rel) {
+					continue
+				}
+				EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+					EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
+						if rule, banned := bannedMethodNames[sel.Sel.Name]; banned {
+							line := p.Fset.Position(assign.Pos()).Line
+							violations = append(violations, fmt.Sprintf(
+								"%s:%d: %s function-value assignment blind spot detected (%s)",
+								rel, line, sel.Sel.Name, rule))
+						}
+					})
 				})
-			})
-		}
-	}
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -507,11 +493,6 @@ func TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment(t *testing.T) 
 // as arguments to MethodByName calls.
 func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/...")
-	require.NoError(t, err)
 
 	bannedNames := map[string]bool{
 		"RevokeForSubject": true,
@@ -520,38 +501,41 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 	}
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	_ = RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
 			}
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "MethodByName" {
-					return
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
 				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				// Strip surrounding quotes from the string literal.
-				name := strings.Trim(lit.Value, `"`)
-				if bannedNames[name] {
-					line := pkg.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.MethodByName(%q) blind spot detected — archtest would miss this",
-						rel, line, name))
-				}
-			})
-		}
-	}
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != "MethodByName" {
+						return
+					}
+					if len(call.Args) != 1 {
+						return
+					}
+					lit, ok := call.Args[0].(*ast.BasicLit)
+					if !ok {
+						return
+					}
+					// Strip surrounding quotes from the string literal.
+					name := strings.Trim(lit.Value, `"`)
+					if bannedNames[name] {
+						line := p.Fset.Position(call.Pos()).Line
+						violations = append(violations, fmt.Sprintf(
+							"%s:%d: reflect.MethodByName(%q) blind spot detected — archtest would miss this",
+							rel, line, name))
+					}
+				})
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -564,21 +548,21 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 
 // ─── shared helpers ──────────────────────────────────────────────────────
 
-// scanFunnelViolations walks a single file's AST for CallExpr nodes where the
-// method receiver resolves to the interface at (targetPkg, targetMethod). It
-// returns a slice of violation strings for any call found.
+// scanFunnelViolationsPass walks a single file's AST for CallExpr nodes where
+// the method receiver resolves to the interface at (targetPkg, targetMethod).
+// It returns a slice of violation strings for any call found.
 //
 // Receiver type check: we verify fn.Pkg().Path() == targetPkg AND that the
 // Selection receiver is the named interface type. This is the same pattern as
 // in sessionrefresh_no_session_create_test.go (which guards session.Store methods).
-func scanFunnelViolations(
-	pkg *packages.Package,
+func scanFunnelViolationsPass(
+	p *Pass,
 	file *ast.File,
 	rel string,
 	targetPkg, targetMethod, ruleID string,
 ) []string {
 	var out []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil {
 			return
@@ -586,14 +570,14 @@ func scanFunnelViolations(
 		if sel.Sel.Name != targetMethod {
 			return
 		}
-		fn, ok := typeseval.ResolveMethodCall(pkg.TypesInfo, sel)
+		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
 		if !ok {
 			return
 		}
 		if fn.Pkg() == nil || fn.Pkg().Path() != targetPkg {
 			return
 		}
-		line := pkg.Fset.Position(call.Pos()).Line
+		line := p.Fset.Position(call.Pos()).Line
 		out = append(out, fmt.Sprintf(
 			"%s:%d: %s: direct call to %s.%s bypasses credentialinvalidate funnel",
 			rel, line, ruleID, filepath.Base(targetPkg), targetMethod))
@@ -601,36 +585,35 @@ func scanFunnelViolations(
 	return out
 }
 
-// verifyRedFixtureDetected loads the given fixture pattern and asserts that
-// the scanner finds ≥ 1 violation — proving the rule is not permanently GREEN.
-// This is the "反向 RED 自检" (reverse RED self-check) mandated by ai-collab.md.
+// verifyRedFixtureDetectedPass loads the given fixture pattern via RunTyped
+// and asserts that the scanner finds ≥ 1 violation — proving the rule is
+// not permanently GREEN. This is the "反向 RED 自检" (reverse RED self-check)
+// mandated by ai-collab.md.
 //
-// Fixture load failure is now a hard fail (Finding #9 PR #490 review): the
-// previous silent t.Logf+return masked archtest regressions — a fixture that
-// stops type-checking would silently disable the RED self-check, leaving the
-// production scan permanently GREEN with no warning. The fixture is in-tree
-// (tools/archtest/testdata/...) and its build health is part of the archtest
-// contract, so a load failure must fail the test and surface in CI.
-func verifyRedFixtureDetected(
+// Fixture load failure is a hard fail: the previous silent t.Logf+return
+// masked archtest regressions — a fixture that stops type-checking would
+// silently disable the RED self-check, leaving the production scan
+// permanently GREEN with no warning. The fixture is in-tree and its build
+// health is part of the archtest contract, so a load failure must fail the
+// test and surface in CI.
+func verifyRedFixtureDetectedPass(
 	t *testing.T,
-	root, fixturePattern, targetPkg, targetMethod, label string,
+	fixturePattern, targetPkg, targetMethod, label string,
 ) {
 	t.Helper()
-	resolver, err := typeseval.SharedResolver(root, false, nil, fixturePattern)
-	require.NoError(t, err,
-		"RED fixture load FAILED (%s): %v — a broken fixture silently disables the reverse self-check. "+
-			"Repair the fixture or remove the rule; do not let this skip past.",
-		label, err)
+
 	var found int
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil {
-			continue
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			found += len(scanFunnelViolations(pkg, file, label, targetPkg, targetMethod, label))
+		for _, file := range p.Files {
+			found += len(scanFunnelViolationsPass(p, file, label, targetPkg, targetMethod, label))
 		}
-	}
-	assert.GreaterOrEqual(t, found, 1,
+		return nil
+	})
+	_ = diags
+	require.GreaterOrEqual(t, found, 1,
 		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
 			"This means the production scanner is permanently GREEN and would miss real violations. "+
 			"Check that the fixture file actually calls the banned method and is type-checkable.",

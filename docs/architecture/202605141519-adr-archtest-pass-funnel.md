@@ -67,17 +67,39 @@ Three independent failure modes: type system, lint, archtest. Bypassing all thre
 
 **Design decision D1 (Stage 1.6) — dual entry RunTyped / RunTypedDir, not a single merged function.**
 
-Merging into `RunTyped(t, dir, …)` would force all call sites shipped in PR #492 / #493 / #496 and framework self-tests (`pass_test.go`) to update their signatures — violating the "0 second-pass rework" hard invariant. The two entries are semantically orthogonal: `RunTyped` = main tree via `findModuleRoot`; `RunTypedDir` = caller-specified absolute dir. Both delegate to the single `runTypedWithRoot` constructor — no logic fork. The five remaining E-class fixture-module files (`exported_error_new_fixtures_test.go` / `goose_session_locker_fixtures_test.go` / `prod_clock_injection_fixtures_test.go` / `prod_duration_fixtures_test.go` / `test_time_literal_fixtures_test.go`) use `RunTypedDir` with zero framework rework.
+Merging into `RunTyped(t, dir, …)` would force all call sites shipped in PR #492 / #493 / #496 and framework self-tests (`pass_test.go`) to update their signatures — violating the "0 second-pass rework" hard invariant. The two entries are semantically orthogonal: `RunTyped` = main tree via `findModuleRoot`; `RunTypedDir` = caller-specified absolute dir. Both delegate to the single `runTypedWithRoot` constructor — no logic fork. The E-class fixture-module files (`exported_error_new_fixtures_test.go` / `goose_session_locker_fixtures_test.go` / `prod_clock_injection_fixtures_test.go` / `prod_duration_fixtures_test.go` / `test_time_literal_fixtures_test.go`) used `RunTypedDir` with zero framework rework, as predicted — all migrated in PR #522.
 
 **Why depguard bans only the `packages` import path, not `internal/scanner` / `internal/typeseval`**: those internal packages also export legitimate non-INV-1 helpers (`EachInSubtree`, `EachInChildren`, `ResolvePackageRef`, `ResolveMethodCall`, `EvaluateConstString`) that archtest authors should use directly. Path-level banning would force every legitimate user of those helpers to migrate to a façade wrapper or be exempted — bloat without security gain. Symbol-level banning of `EachFile` / `LoadPackages` / `SharedResolver` is the precise enforcement, and it requires `*types.Info` resolution which only the archtest layer (defense #3) provides. Lint stays narrow and Hard for the one path (`packages`) that is the load-bearing INV-1 reconstruction primitive.
 
-**Cross-validation of allowlist drift**: `TestPassFunnelGuardListSync` archtest parses `.golangci.yml` at test time and asserts (a) every depguard negative-glob entry is a real archtest file present in `archtestmeta.LegacyAllowlist` or is `pass_funnel_test.go`, (b) every file directly importing `golang.org/x/tools/go/packages` is in the depguard negative-glob list. Manual synchronization drift is fail-loud at archtest-run time, not at PR-review attention.
+**Cross-validation of allowlist drift**: `TestPassFunnelGuardListSync` archtest parses `.golangci.yml` at test time and asserts (a) every depguard negative-glob entry is a real archtest file present in `archtestmeta.LegacyAllowlist` or is a member of `passFunnelPermanentExempt` (`pass_funnel_test.go` / `pass_test.go` / `archtest_test.go`), (b) every file directly importing `golang.org/x/tools/go/packages` is in the depguard negative-glob list. Manual synchronization drift is fail-loud at archtest-run time, not at PR-review attention.
 
-`pass_funnel_test.go` is **permanently** exempt from defense #2 and skips itself in defense #3 (basename `pass_funnel_test.go`). The rule implementation must import the very entry points it forbids; the type system cannot tell rule implementation from rule violator.
+Three archtest framework files are **permanently** exempt — they form `passFunnelPermanentExempt` and survive stage-4 cleanup:
+
+| File | Structural reason |
+|------|-------------------|
+| `pass_funnel_test.go` | Implements the PASS-FUNNEL meta-archtest itself; must reference the forbidden symbols. The type system cannot tell rule implementation from rule violator. |
+| `pass_test.go` | Unit-tests `archtest.Run` / `RunTyped` / `buildTypedPass` / `newPackageRel` / `isPackageWithTestFiles`; the latter three accept or construct `*packages.Package` fixtures by signature. |
+| `archtest_test.go` | Driver self-tests (LAYER-05..10 + PGQUERY-01) using `depgraph.FromPackages([]*packages.Package)` — this is the depgraph constructor, not a consumer archtest. Legitimate `*packages.Package` use is structurally identical to `pass_test.go`'s `buildTypedPass` input side. The `checkCellPublicAPIAdapterTypes` rule (LAYER-10) specifically requires `[]*packages.Package` to feed `tools/depgraph.FromPackages`; the Pass funnel deliberately hides `.Syntax` so the depgraph-based check is structurally inexpressible via the funnel — permanent exemption, tracked as backlog `ARCHTEST-LAYER10-PASS-MIGRATION-01`. |
+
+These files are exempt from defense #2 (depguard yaml allowlist) and are skipped by defense #3's scanner (path matching against `passFunnelPermanentExempt`).
 
 ### AI-rebust honest caveats
 
 Defense #1 is the only compile-time Hard. Defenses #2 and #3 are review-detectable Hards — the rule cannot police modifications to its own configuration / allowlist. The combined three-layer design accepts that elementary meta-governance boundary: the AI-rebust charter §"meta-governance" notes that "fault-redundant defenses in production code are over-engineering, in meta-governance are correct" — every additional meta layer has diminishing return because reviewers must always backstop the topmost layer.
+
+### PR #522 amendment — threat matrix re-evaluation (2026-05-16)
+
+PR #522 cleared `LegacyAllowlist` to zero via consolidated batch migration (37 remaining files). This **tightens** the funnel — every business archtest is now type-aware enforced with no allowlist escape hatch. The three permanent exemptions are funnel implementation/input files, not consumer archtests; they do not expand the upstream escape surface.
+
+| Defense | Before PR #522 | After PR #522 | Status change |
+|---------|----------------|---------------|---------------|
+| #1 `Pass.Pkg *types.Package` (compile-time) | Active, no allowlist dependency | Unchanged | ✅ Unchanged Hard |
+| #2 depguard `packages` import ban | Active; ~37 yaml negative-glob exemptions (LegacyAllowlist files) | Active; only 3 yaml negative-glob exemptions (permanent framework files) | ✅ Tightened — escape surface reduced from 37 to 3 |
+| #3 PASS-FUNNEL meta-archtest (type-aware) | Active; 37 LegacyAllowlist runtime exemptions | Active; 0 LegacyAllowlist exemptions. 3 `passFunnelPermanentExempt` files skipped by path | ✅ Tightened — no business archtest can bypass via allowlist |
+| LegacyAllowlist bypass surface | 37 files could use legacy entry points by declaration | 0 files | ✅ Eliminated |
+| Permanent exemption escape surface | 1 file (`pass_funnel_test.go`) | 3 files (`pass_funnel_test.go` / `pass_test.go` / `archtest_test.go`) | ⚠️ Widened by 2 — mitigated: all 3 are framework internals, not consumer archtests; structural reasons documented in `passFunnelPermanentExempt` godoc; backlog `ARCHTEST-LAYER10-PASS-MIGRATION-01` tracks the `archtest_test.go` exemption follow-up |
+
+**Conclusion**: LegacyAllowlist clearing makes the funnel strictly tighter for business archtests. The +2 permanent exemptions (`pass_test.go` + `archtest_test.go`) existed in practice since Stage 1 (they were depguard-exempted from the start) but were not formally named in the ADR. PR #522 makes them explicit in `passFunnelPermanentExempt`. No previously-clean defense row becomes ⚠️/❌ post-amendment.
 
 ## Industry precedent
 
@@ -99,8 +121,8 @@ Strategic plan: `docs/plans/202605141519-040-archtest-pass-funnel-plan.md`. Summ
 - **Stage 1** (this PR, refactor/574): Land the Pass framework + 3 Hard defenses + LegacyAllowlist of 53 existing archtests. Zero business archtest changes; the new framework coexists with the legacy entry points behind allowlist exemption.
 - **Stage 1.5** (PR #495): Framework completion — `Pass.Abs`, `IsFileInScope`, `IsGenerated`, `resolve.go` façade free funcs, `PASS-FUNNEL-RESOLVE-01` meta-archtest. Closes all known API gaps so Stages 2/3/dual become zero-framework-return mechanical migrations.
 - **Stage 1.6** (PR-6, concurrent with Stage 3 PR-6): `RunTypedDir` façade — closes the fixture-module scanning gap discovered during `clock_invariants_test.go` migration. See §Stage 1.6 below.
-- **Stages 2 / 3** (~9 PRs, parallelisable): Migrate the 53 legacy archtests theme-by-theme; each migration PR is the **first and only** edit to its target archtest (import + API + semantics in one commit), removes one entry from `LegacyAllowlist` AND the matching negative-glob in `.golangci.yml`.
-- **Stage 4**: Delete `archtestmeta` package entirely; delete the negative-glob exemption block from `.golangci.yml`; delete the LegacyAllowlist reference from `pass_funnel_test.go`. Defense #1 (`Pass.Pkg` shape) and defense #2 (depguard deny list) remain permanent; defense #3's self-exemption (basename `pass_funnel_test.go`) is the only remaining exemption.
+- **Stages 2 / 3** (~9 PRs planned, delivered as ~7 PRs + 1 consolidated): Migrate the 53 legacy archtests theme-by-theme. Stage 2 was completed in PR-2..PR-5 (#492/#493/#496/#497/#498). Stage 3 PR-6 (#500) and PR-7 (#507) shipped; the remaining 37 files were consolidated into PR #522 (2026-05-16) — batch migration proved more tractable than three separate PRs due to shared-helper graph coupling. Each migration PR is the **first and only** edit to its target archtest (import + API + semantics in one commit), removes entries from `LegacyAllowlist` AND the matching negative-glob in `.golangci.yml`. PR #522 cleared `LegacyAllowlist` to zero.
+- **Stage 4**: Delete `archtestmeta` package entirely; collapse the negative-glob exemption block in `.golangci.yml` to retain only the three `passFunnelPermanentExempt` entries (`!**/tools/archtest/pass_funnel_test.go`, `!**/tools/archtest/pass_test.go`, `!**/tools/archtest/archtest_test.go`); delete the LegacyAllowlist reference from `pass_funnel_test.go`. Defense #1 (`Pass.Pkg` shape) and defense #2 (depguard deny list) remain permanent; defense #3 retains the three permanent framework-file exemptions. **Note**: PR #522 (2026-05-16) already cleared `LegacyAllowlist` via consolidated batch migration; Stage 4 work remaining is the `archtestmeta` package deletion and yaml cleanup.
 
 ## Stage 1.6 — RunTypedDir fixture-module driver (2026-05-15, shipped with Stage 3 PR-6)
 
@@ -125,21 +147,18 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 
 **AI-rebust grade: Hard — see §Hard-line three-defense `RunTypedDir` subsection above.**
 
-**Five remaining E-class fixture-module files** that will use `RunTypedDir` in subsequent Stage 3 PRs (zero framework rework required):
-
-- `exported_error_new_fixtures_test.go`
-- `goose_session_locker_fixtures_test.go`
-- `prod_clock_injection_fixtures_test.go`
-- `prod_duration_fixtures_test.go`
-- `test_time_literal_fixtures_test.go`
+**E-class fixture-module files using `RunTypedDir`:** `exported_error_new_fixtures_test.go`, `goose_session_locker_fixtures_test.go`, `prod_clock_injection_fixtures_test.go`, `prod_duration_fixtures_test.go`, and `test_time_literal_fixtures_test.go` — all migrated as part of PR #522 (2026-05-16) consolidated batch. Zero framework rework was required as predicted.
 
 ## Termination criteria
 
 The migration is complete when:
 
-1. `archtestmeta.LegacyAllowlist` map is empty (asserted statically in stage-4 PR).
-2. `.golangci.yml` `archtest-no-direct-packages-load.files` contains only the positive glob `**/tools/archtest/*_test.go` and the single permanent `!**/tools/archtest/pass_funnel_test.go` self-exemption. The depguard `deny` list reduces to a single entry: `golang.org/x/tools/go/packages`.
-3. No production archtest `*_test.go` imports `internal/scanner` / `internal/typeseval` / `golang.org/x/tools/go/packages` directly (verified by depguard + PASS-FUNNEL meta-archtest).
+1. `archtestmeta.LegacyAllowlist` map is empty (asserted statically in stage-4 PR). **This was achieved in PR #522 (2026-05-16) via consolidated batch migration of all remaining 37 files.**
+2. `.golangci.yml` `archtest-no-direct-packages-load.files` contains only the positive glob `**/tools/archtest/*_test.go` and the three permanent `passFunnelPermanentExempt` self-exemptions (`!**/tools/archtest/pass_funnel_test.go`, `!**/tools/archtest/pass_test.go`, `!**/tools/archtest/archtest_test.go`). The depguard `deny` list retains a single entry: `golang.org/x/tools/go/packages`.
+3. The true end-state constraints are:
+   - (a) `archtestmeta.LegacyAllowlist` is empty (criterion #1 above).
+   - (b) No production archtest `*_test.go` imports `golang.org/x/tools/go/packages` directly — enforced by depguard, except the three `passFunnelPermanentExempt` files.
+   - (c) No production archtest `*_test.go` directly calls `scanner.EachFile` / `typeseval.LoadPackages` / `typeseval.SharedResolver` / `typeseval.LoadProductionPackages` / `typeseval.EachFileInPackage` — enforced by PASS-FUNNEL meta-archtest via `*types.Info` resolution. **Note**: direct `import` of `internal/scanner` or `internal/typeseval` for their walk/resolve helpers (`EachInSubtree`, `EachInChildren`, `ResolvePackageRef`, `EvaluateConstString`, etc.) remains **allowed** — path-level banning of these packages is NOT done (see §Why-depguard). The funnel bans specific high-risk symbols, not the package paths.
 
 After stage 4, `archtestmeta` is deleted entirely. `tools/archtest/internal/scanner` and `tools/archtest/internal/typeseval` retain their exported APIs — they are intentionally reachable from archtest test files for their non-INV-1 helpers (walk + go/types resolution). Symbol-level bans on `EachFile` / `LoadPackages` / `SharedResolver` are enforced by the PASS-FUNNEL meta-archtest (defense #3), not by lint.
 

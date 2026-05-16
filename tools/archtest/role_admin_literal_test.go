@@ -32,13 +32,9 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const (
@@ -73,54 +69,57 @@ func TestRoleAdminLiteralIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, searchDirsRoleAdmin,
-		scanner.ExcludeRels(roleAdminAllowRels...),
+	scope := DirsScope(root, searchDirsRoleAdmin,
+		ExcludeRels(roleAdminAllowRels...),
 	)
 
-	var diags []scanner.Diagnostic
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.GenDecl](fc.File, func(genDecl *ast.GenDecl) {
-			if genDecl.Tok != token.CONST {
-				return
-			}
-			// Go spec: a ValueSpec inside a const GenDecl with no Values
-			// inherits the previous spec's expression list (iota carry).
-			// Track the most recent non-empty Values within this GenDecl so
-			// that `const ( AdminRole = "admin"; OtherRole )` flags OtherRole.
-			var lastValues []ast.Expr
-			scanner.EachInChildren[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
-				values := vs.Values
-				if values == nil {
-					values = lastValues
-				} else {
-					lastValues = values
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var out []Diagnostic
+		for _, f := range p.Files {
+			EachInSubtree[ast.GenDecl](f, func(genDecl *ast.GenDecl) {
+				if genDecl.Tok != token.CONST {
+					return
 				}
-				for i, name := range vs.Names {
-					if !isAdminIdent(name.Name) {
-						continue
+				// Go spec: a ValueSpec inside a const GenDecl with no Values
+				// inherits the previous spec's expression list (iota carry).
+				// Track the most recent non-empty Values within this GenDecl so
+				// that `const ( AdminRole = "admin"; OtherRole )` flags OtherRole.
+				var lastValues []ast.Expr
+				EachInChildren[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
+					values := vs.Values
+					if values == nil {
+						values = lastValues
+					} else {
+						lastValues = values
 					}
-					if i >= len(values) {
-						continue
+					for i, name := range vs.Names {
+						if !isAdminIdent(name.Name) {
+							continue
+						}
+						if i >= len(values) {
+							continue
+						}
+						lit, ok := values[i].(*ast.BasicLit)
+						if !ok {
+							continue
+						}
+						value, ok := StringLitValue(lit)
+						if !ok || value != "admin" {
+							continue
+						}
+						out = append(out, Diagnostic{
+							Rel:  p.Rel(f),
+							Line: p.Fset.Position(name.Pos()).Line,
+							Message: `duplicate const *Admin* = "admin" violates ` + ruleRoleAdminLiteral01 +
+								`; use auth.RoleAdmin from runtime/auth`,
+						})
 					}
-					lit, ok := values[i].(*ast.BasicLit)
-					if !ok {
-						continue
-					}
-					value, ok := scanner.StringLitValue(lit)
-					if !ok || value != "admin" {
-						continue
-					}
-					diags = append(diags, scanner.Diagnostic{
-						Rel:  fc.Rel,
-						Line: fc.Fset.Position(name.Pos()).Line,
-						Message: `duplicate const *Admin* = "admin" violates ` + ruleRoleAdminLiteral01 +
-							`; use auth.RoleAdmin from runtime/auth`,
-					})
-				}
+				})
 			})
-		})
+		}
+		return out
 	})
-	scanner.Report(t, ruleRoleAdminLiteral01, diags)
+	Report(t, ruleRoleAdminLiteral01, diags)
 }
 
 // isAdminIdent reports whether name is a role-admin style identifier:
@@ -159,42 +158,37 @@ var authCallSiteFuncNames = map[string]struct{}{
 func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
 	// tests=false matches the original DirsScope(searchDirsRoleAdmin) which
 	// excluded *_test.go by default.
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./runtime/...", "./cells/...", "./adapters/...", "./cmd/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
-	var diags []scanner.Diagnostic
-	for _, pkg := range resolver.Packages() {
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	diags := RunTyped(t, TypedOpts{}, []string{
+		"./runtime/...", "./cells/...", "./adapters/...", "./cmd/...",
+	}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			// typeseval.ResolvePackageRef accepts both *ast.SelectorExpr (path A.2
+		var out []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			// ResolvePackageRef accepts both *ast.SelectorExpr (path A.2
 			// qualified `auth.Func(...)`) and *ast.Ident (path A.3 dot-imported
 			// bare `Func(...)` after `import . ".../runtime/auth"`); closes the
 			// dot-import bypass that the prior PkgName-only matcher missed.
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				path, name, ok := typeseval.ResolvePackageRef(pkg.TypesInfo, call.Fun)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				path, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
 				if !ok || path != authRuntimeImportPath {
 					return
 				}
 				if _, matched := authCallSiteFuncNames[name]; !matched {
 					return
 				}
-				scanner.EachInSubtree[ast.BasicLit](call, func(lit *ast.BasicLit) {
-					value, ok := scanner.StringLitValue(lit)
+				EachInSubtree[ast.BasicLit](call, func(lit *ast.BasicLit) {
+					value, ok := StringLitValue(lit)
 					if !ok || value != "admin" {
 						return
 					}
-					diags = append(diags, scanner.Diagnostic{
+					out = append(out, Diagnostic{
 						Rel:  rel,
-						Line: pkg.Fset.Position(lit.Pos()).Line,
+						Line: p.Fset.Position(lit.Pos()).Line,
 						Message: `string literal "admin" passed to auth.` + name +
 							` violates ` + ruleRoleAdminLiteral02 +
 							`; use auth.RoleAdmin constant instead`,
@@ -202,6 +196,7 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 				})
 			})
 		}
-	}
-	scanner.Report(t, ruleRoleAdminLiteral02, diags)
+		return out
+	})
+	Report(t, ruleRoleAdminLiteral02, diags)
 }

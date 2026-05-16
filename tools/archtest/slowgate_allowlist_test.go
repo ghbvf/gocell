@@ -39,10 +39,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // slowgateAllowlistPath is module-relative.
@@ -76,27 +72,42 @@ func TestSlowgateAllowlist(t *testing.T) {
 	}
 	sort.Strings(patterns)
 
-	// We reuse typeseval.FlatNonDefaultTags() (the same build-tag set used by
+	// We reuse FlatNonDefaultTags() (the same build-tag set used by
 	// TEST-TIME-LITERAL-01) because the slowgate allowlist contains
 	// integration- and pg-tagged tests (e.g. kernel/verify integration
 	// tests that exec subprocess go-toolchain) that would otherwise be
 	// invisible to packages.Load and falsely flagged as "orphan entries".
 	// Any new build tag introduced repo-wide must be added there; the two
 	// gates inherit the same scope by construction.
-	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
+	loaded := map[string]bool{}           // pkgPath → found
+	funcs := map[string]map[string]bool{} // pkgPath → funcName → true
 
-	loaded := map[string]*packages.Package{}
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		loaded[p.PkgPath] = p
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		pkgPath := p.Pkg.Path()
+		loaded[pkgPath] = true
+		if funcs[pkgPath] == nil {
+			funcs[pkgPath] = map[string]bool{}
+		}
+		for _, file := range p.Files {
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Recv != nil {
+					return
+				}
+				if strings.HasPrefix(fn.Name.Name, "Test") {
+					funcs[pkgPath][fn.Name.Name] = true
+				}
+			})
+		}
+		return nil
 	})
 
 	var violations []string
 
 	for _, pkgPath := range patterns {
-		p, ok := loaded[pkgPath]
-		if !ok {
+		if !loaded[pkgPath] {
 			violations = append(violations, fmt.Sprintf(
 				"%s: package %q not found by packages.Load (orphan allowlist entry?)",
 				slowgateAllowlistPath, pkgPath,
@@ -104,20 +115,8 @@ func TestSlowgateAllowlist(t *testing.T) {
 			continue
 		}
 
-		funcs := map[string]bool{}
-		for _, file := range p.Syntax {
-			scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-				if fn.Recv != nil {
-					return
-				}
-				if strings.HasPrefix(fn.Name.Name, "Test") {
-					funcs[fn.Name.Name] = true
-				}
-			})
-		}
-
 		for _, testName := range byPkg[pkgPath] {
-			if !funcs[testName] {
+			if !funcs[pkgPath][testName] {
 				violations = append(violations, fmt.Sprintf(
 					"%s: %s.%s — no top-level func with that name found (test renamed or deleted?)",
 					slowgateAllowlistPath, pkgPath, testName,

@@ -7,20 +7,13 @@
 package archtest
 
 import (
-	"go/ast"
-	"go/constant"
 	"go/types"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 type adapterExportedType struct {
@@ -97,12 +90,58 @@ var adapterManagedResourceOptOut = map[string]string{
 func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	_, resolver := loadModule(t, root)
-	pkgs := filterPkgsByPathPrefix(resolver.Production(),
-		modulePath+"/kernel/lifecycle",
-		modulePath+"/adapters/")
-	managedResource := managedResourceInterface(t, pkgs, modulePath)
-	adapterTypes := collectAdapterExportedTypes(pkgs, modulePath)
+	adapterPrefix := modulePath + "/adapters/"
+	lifecyclePkg := modulePath + "/kernel/lifecycle"
+
+	var managedResource *types.Interface
+	var adapterTypes []adapterExportedType
+
+	RunTypedProduction(t, TypedOpts{Tests: false},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			pkgPath := p.Pkg.Path()
+
+			// Capture kernel/lifecycle.ManagedResource interface.
+			if pkgPath == lifecyclePkg {
+				obj := p.Pkg.Scope().Lookup("ManagedResource")
+				if obj != nil {
+					named, ok := obj.Type().(*types.Named)
+					if ok {
+						iface, ok := named.Underlying().(*types.Interface)
+						if ok {
+							managedResource = iface.Complete()
+						}
+					}
+				}
+				return nil
+			}
+
+			// Collect exported adapter types (direct sub-packages of adapters/ only).
+			adapterPkg, ok := strings.CutPrefix(pkgPath, adapterPrefix)
+			if !ok || strings.Contains(adapterPkg, "/") {
+				return nil
+			}
+			scope := p.Pkg.Scope()
+			for _, name := range scope.Names() {
+				obj, ok := scope.Lookup(name).(*types.TypeName)
+				if !ok || !obj.Exported() {
+					continue
+				}
+				adapterTypes = append(adapterTypes, adapterExportedType{
+					ID:   "adapters/" + adapterPkg + "." + name,
+					Name: name,
+					Type: obj.Type(),
+				})
+			}
+			return nil
+		})
+
+	require.NotNil(t, managedResource, "kernel/lifecycle.ManagedResource not found in production packages")
+	sort.Slice(adapterTypes, func(i, j int) bool {
+		return adapterTypes[i].ID < adapterTypes[j].ID
+	})
 
 	var violations []string
 	for _, typ := range adapterTypes {
@@ -121,22 +160,29 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	_, resolver := loadModule(t, root)
-	pkgs := filterPkgsByPathPrefix(resolver.Production(),
-		modulePath+"/adapters/",
-		modulePath+"/cmd/corebundle")
+	adapterPrefix := modulePath + "/adapters/"
+	coreBundlePkg := modulePath + "/cmd/corebundle"
 
 	var violations []string
-	for _, pkg := range pkgs {
-		adapterPkg, ok := strings.CutPrefix(pkg.PkgPath, modulePath+"/adapters/")
-		if !ok || strings.Contains(adapterPkg, "/") {
-			if pkg.PkgPath == modulePath+"/cmd/corebundle" {
-				violations = append(violations, healthCheckerCallNameViolations(pkg, "cmd/corebundle")...)
+	RunTypedProduction(t, TypedOpts{Tests: false},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
 			}
-			continue
-		}
-		violations = append(violations, adapterCheckerNameViolations(pkg, "adapters/"+adapterPkg)...)
-	}
+			pkgPath := p.Pkg.Path()
+
+			adapterPkg, ok := strings.CutPrefix(pkgPath, adapterPrefix)
+			if ok && !strings.Contains(adapterPkg, "/") {
+				violations = append(violations,
+					adapterCheckerNameViolationsFromPass(p.Fset, p.Files, p.TypesInfo, "adapters/"+adapterPkg)...)
+				return nil
+			}
+			if pkgPath == coreBundlePkg {
+				violations = append(violations,
+					healthCheckerCallNameViolationsFromPass(p.Fset, p.Files, p.TypesInfo, "cmd/corebundle")...)
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	assert.Empty(t, violations, "adapter ManagedResource ready probes must use stable snake_case names ending in _ready")
@@ -152,64 +198,21 @@ func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
 func TestRuntimeWebsocketCheckerNamesUseReadySuffix(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	_, resolver := loadModule(t, root)
-	pkgs := filterPkgsByPathPrefix(resolver.Production(), modulePath+"/runtime/websocket")
+	websocketPkg := modulePath + "/runtime/websocket"
 
 	var violations []string
-	for _, pkg := range pkgs {
-		if pkg.PkgPath != modulePath+"/runtime/websocket" {
-			continue
-		}
-		violations = append(violations, adapterCheckerNameViolations(pkg, "runtime/websocket")...)
-	}
+	RunTypedProduction(t, TypedOpts{Tests: false},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != websocketPkg {
+				return nil
+			}
+			violations = append(violations,
+				adapterCheckerNameViolationsFromPass(p.Fset, p.Files, p.TypesInfo, "runtime/websocket")...)
+			return nil
+		})
 
 	sort.Strings(violations)
 	assert.Empty(t, violations, "runtime/websocket ManagedResource probe names must be snake_case and end with _ready")
-}
-
-func collectAdapterExportedTypes(pkgs []*packages.Package, modulePath string) []adapterExportedType {
-	adapterPrefix := modulePath + "/adapters/"
-	var out []adapterExportedType
-	for _, pkg := range pkgs {
-		adapterPkg, ok := strings.CutPrefix(pkg.PkgPath, adapterPrefix)
-		if !ok || strings.Contains(adapterPkg, "/") {
-			continue
-		}
-		scope := pkg.Types.Scope()
-		for _, name := range scope.Names() {
-			obj, ok := scope.Lookup(name).(*types.TypeName)
-			if !ok || !obj.Exported() {
-				continue
-			}
-			out = append(out, adapterExportedType{
-				ID:   "adapters/" + adapterPkg + "." + name,
-				Name: name,
-				Type: obj.Type(),
-			})
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].ID < out[j].ID
-	})
-	return out
-}
-
-func managedResourceInterface(t *testing.T, pkgs []*packages.Package, modulePath string) *types.Interface {
-	t.Helper()
-	for _, pkg := range pkgs {
-		if pkg.PkgPath != modulePath+"/kernel/lifecycle" {
-			continue
-		}
-		obj := pkg.Types.Scope().Lookup("ManagedResource")
-		require.NotNil(t, obj, "kernel/lifecycle.ManagedResource not found")
-		named, ok := obj.Type().(*types.Named)
-		require.True(t, ok, "ManagedResource type = %T, want *types.Named", obj.Type())
-		iface, ok := named.Underlying().(*types.Interface)
-		require.True(t, ok, "ManagedResource underlying type = %T, want *types.Interface", named.Underlying())
-		return iface.Complete()
-	}
-	require.FailNow(t, "kernel/lifecycle package not loaded")
-	return nil
 }
 
 func implementsManagedResource(typ types.Type, managedResource *types.Interface) bool {
@@ -217,81 +220,4 @@ func implementsManagedResource(typ types.Type, managedResource *types.Interface)
 		return true
 	}
 	return types.Implements(types.NewPointer(typ), managedResource)
-}
-
-var adapterReadyProbeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_ready$`)
-
-func adapterCheckerNameViolations(pkg *packages.Package, rel string) []string {
-	var violations []string
-	for _, file := range pkg.Syntax {
-		scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-			if fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 {
-				return
-			}
-			recv := scanner.ReceiverTypeName(fn.Recv.List[0].Type)
-			if recv == "" || !ast.IsExported(recv) {
-				return
-			}
-			for _, name := range checkerNamesFromFunc(pkg.TypesInfo, fn) {
-				if !adapterReadyProbeNamePattern.MatchString(name) {
-					violations = append(violations, rel+"."+recv+" Checkers probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
-				}
-			}
-		})
-	}
-	return violations
-}
-
-func checkerNamesFromFunc(info *types.Info, fn *ast.FuncDecl) []string {
-	var names []string
-	scanner.EachInSubtree[ast.KeyValueExpr](fn.Body, func(kv *ast.KeyValueExpr) {
-		tv, ok := info.Types[kv.Key]
-		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
-			return
-		}
-		names = append(names, constant.StringVal(tv.Value))
-	})
-	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "HealthToCheckers" || len(call.Args) == 0 {
-			return
-		}
-		obj, ok := info.Uses[sel.Sel].(*types.Func)
-		if !ok || !strings.HasSuffix(obj.Pkg().Path(), "adapters/adapterutil") {
-			return
-		}
-		name, ok := constStringValue(info, call.Args[0])
-		if !ok {
-			return
-		}
-		names = append(names, name)
-	})
-	return names
-}
-
-func healthCheckerCallNameViolations(pkg *packages.Package, rel string) []string {
-	var violations []string
-	for _, file := range pkg.Syntax {
-		scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			if selectorName(call.Fun) != "WithHealthChecker" || len(call.Args) == 0 {
-				return
-			}
-			name, ok := constStringValue(pkg.TypesInfo, call.Args[0])
-			if !ok {
-				return
-			}
-			if !adapterReadyProbeNamePattern.MatchString(name) {
-				violations = append(violations, rel+" bootstrap.WithHealthChecker probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
-			}
-		})
-	}
-	return violations
-}
-
-func constStringValue(info *types.Info, expr ast.Expr) (string, bool) {
-	tv, ok := info.Types[expr]
-	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
-		return "", false
-	}
-	return constant.StringVal(tv.Value), true
 }

@@ -16,13 +16,10 @@ package archtest
 // importing internal/typeseval directly.
 // See docs/architecture/202605141519-adr-archtest-pass-funnel.md.
 //
-// Migration: files listed in
-// tools/archtest/internal/archtestmeta.LegacyAllowlist are exempt for the
-// duration of stage 2/3. Each stage 2/3 PR removes one entry from the
-// allowlist AND ports the corresponding archtest to archtest.Pass.
-// Stage 4 deletes the allowlist entirely; only this file's self-reference
-// remains permanently exempt (basename match) because the rule cannot police
-// the implementation that enforces it.
+// Stage 2/3 migration completed in PR #522; LegacyAllowlist is now empty.
+// The archtestmeta package is retained to support the TestPassFunnelGuardListSync
+// cross-validation logic; Stage-4 cleanup (package deletion) is a separate
+// follow-up task once all downstream references are removed.
 
 import (
 	"fmt"
@@ -57,6 +54,26 @@ const (
 //   - pass_test.go: unit-tests archtest.Run / RunTyped / buildTypedPass /
 //     newPackageRel / isPackageWithTestFiles; the last three accept or
 //     construct *packages.Package fixtures by signature.
+//   - archtest_test.go: archtest driver self-tests (LAYER-05..10 + PGQUERY-01)
+//     that cannot be expressed through the *Pass funnel for three structural
+//     reasons:
+//     (a) depgraph.FromPackages([]*packages.Package) — the depgraph constructor
+//     reads only structural fields (PkgPath / Imports on *packages.Package),
+//     not Syntax or TypesInfo, so it does not trigger the INV-1 cross-load
+//     pairing risk; the Pass funnel intentionally hides .Syntax to prevent
+//     INV-1, but depgraph.FromPackages is safe without that guard.
+//     (b) checkCellPublicAPIAdapterTypes (LAYER-10) accesses pkg.Syntax and
+//     pkg.TypesInfo on the same *packages.Package (single-package pairing —
+//     not cross-load INV-1), but Pass.Pkg is *types.Package which intentionally
+//     hides .Syntax; this file cannot express that access pattern via *Pass.
+//     (c) This file calls typeseval.SharedResolver directly to obtain the full
+//     *packages.Package slice for depgraph and LAYER-10 — a usage axis that
+//     differs from business archtest authors who scan rule violations; it is
+//     the framework's own integration test, structurally equivalent to
+//     pass_test.go's buildTypedPass input side.
+//     Backlog item ARCHTEST-LAYER10-PASS-MIGRATION-01 tracks a future
+//     migration of (b)+(c) to the Pass model when a typed-field accessor
+//     is available.
 //
 // These exemptions survive stage-4 cleanup. They are checked by both
 // the production PASS-FUNNEL detectors (skip these files entirely) AND
@@ -65,6 +82,7 @@ const (
 var passFunnelPermanentExempt = map[string]bool{
 	"tools/archtest/pass_funnel_test.go": true,
 	"tools/archtest/pass_test.go":        true,
+	"tools/archtest/archtest_test.go":    true,
 }
 
 // passFunnelTarget pairs a Pass-eligible scan target (file + rel-path + the
@@ -650,12 +668,13 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 		}
 	}
 
-	// Strengthened per-form check for PASS-FUNNEL-RESOLVE-01.
+	// Strengthened per-symbol + per-form check for PASS-FUNNEL-RESOLVE-01.
 	//
-	// typeseval helpers: ≥ 2 diagnostics (qualified + alias forms fixtured;
-	// there are 8 helpers × 2 forms = 16 total, but we only require the
-	// minimum of 2 to tolerate future helper additions/removals without
-	// breaking this lock — the important invariant is both forms fire).
+	// typeseval helpers: each of the 8 banned symbols must produce ≥ 1
+	// diagnostic independently. The previous ≥ 2 total allowed removing the
+	// fixture lines for a single helper without failure (the remaining 7 × 2
+	// forms still exceed 2). Per-symbol ≥ 1 ensures removing any single
+	// helper's fixture lines fails exactly that symbol's assertion.
 	//
 	// scanner.ImportBan: exactly 3 diagnostics — qualified (L123) + alias
 	// (L124) + dot-import (L125). This is an exact-count check so that
@@ -663,27 +682,45 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	// to fail (the dot-import form produces 0 without the fix → count = 2,
 	// not 3). If new fixture lines are added, this count must be updated.
 	//
-	// Each assertion is a distinct per-form regression trip-wire that fails
-	// independently if any single import form is removed from the fixture or
-	// if the resolver regresses.
+	// Each assertion is a distinct per-symbol / per-form regression trip-wire
+	// that fails independently.
 	var resolveDiags []scanner.Diagnostic
 	for _, tgt := range fixtureTargets {
 		resolveDiags = append(resolveDiags, diagsResolveHelpers(tgt)...)
 	}
-	// Count diagnostics that reference typeseval package path vs scanner package path.
-	var typesevalCount, scannerImportBanCount int
+	// Per-symbol ≥1 assertion for the 8 typeseval helpers.
+	// Diagnostic messages have the form "use X instead of <typesevalPkgPath>.<SymbolName>".
+	typesevalHelpers := []string{
+		"ResolvePackageRef",
+		"ResolveMethodCall",
+		"EvaluateConstString",
+		"FlatNonDefaultTags",
+		"KnownNonDefaultTags",
+		"ParseBuildConstraint",
+		"IsGeneratedRelPath",
+		"BuildContextPredicate",
+	}
+	perHelperCount := make(map[string]int, len(typesevalHelpers))
+	var scannerImportBanCount int
 	for _, d := range resolveDiags {
 		switch {
 		case strings.Contains(d.Message, typesevalPkgPath):
-			typesevalCount++
+			for _, sym := range typesevalHelpers {
+				if strings.Contains(d.Message, sym) {
+					perHelperCount[sym]++
+				}
+			}
 		case strings.Contains(d.Message, scannerPkgPath) && strings.Contains(d.Message, "ImportBan"):
 			scannerImportBanCount++
 		}
 	}
-	if typesevalCount < 2 {
-		t.Errorf("PASS-FUNNEL-RESOLVE-01: typeseval-helper diagnostics on red fixture = %d, want ≥ 2 "+
-			"(qualified + alias forms must each trip the detector; per-form regression lock)",
-			typesevalCount)
+	for _, sym := range typesevalHelpers {
+		if perHelperCount[sym] == 0 {
+			t.Errorf("PASS-FUNNEL-RESOLVE-01: typeseval helper %q produced 0 diagnostics on red fixture; "+
+				"either the fixture lines for this symbol were removed from redfixture.go "+
+				"or the detector regressed for this symbol (per-symbol regression lock)",
+				sym)
+		}
 	}
 	// Exact-count assertion: 3 forms (qualified + alias + dot-import).
 	// Reverting the *types.TypeName fix in call_target.go drops this to 2
@@ -761,4 +798,23 @@ func scanForForbiddenCallees(
 	})
 
 	return diags
+}
+
+// pkgFileRel returns the file path relative to modRoot for a *ast.File whose
+// position is owned by pkg.Fset. Used by pass_funnel_test.go which loads
+// packages directly via typeseval.SharedResolver (permanent self-exemption).
+func pkgFileRel(modRoot string, pkg *packages.Package, file *ast.File) string {
+	pos := pkg.Fset.Position(file.Pos())
+	if pos.Filename == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(pos.Filename)
+	if err != nil {
+		return filepath.ToSlash(pos.Filename)
+	}
+	rel, err := filepath.Rel(modRoot, abs)
+	if err != nil {
+		return filepath.ToSlash(abs)
+	}
+	return filepath.ToSlash(rel)
 }

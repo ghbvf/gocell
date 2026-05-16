@@ -118,11 +118,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // ─── package path / name constants ───────────────────────────────────────
@@ -239,22 +234,15 @@ func isSetMutatorAllowlisted(rel string) bool {
 // AuthzEpoch fields and a SetStatusPublic method. The scanner must flag ≥ 1.
 func TestDomainAuthzFieldPrivate_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/internal/domain")
-	require.NoError(t, err, "typeseval.SharedResolver for domain package")
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Types == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{"./cells/accesscore/internal/domain"}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != domainUserPkg {
+			return nil
 		}
-		if pkg.Types.Path() != domainUserPkg {
-			continue
-		}
-		violations = append(violations, scanDomainUserViolations(pkg.Types)...)
-	}
+		violations = append(violations, scanDomainUserViolations(p.Pkg)...)
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -267,6 +255,7 @@ func TestDomainAuthzFieldPrivate_01(t *testing.T) {
 			"mutate only through authzmutate.Mutator.Apply.")
 
 	// RED fixture verification.
+	root := findModuleRoot(t)
 	verifyDomainFieldRedFixtureDetected(t, root,
 		"./tools/archtest/testdata/authz_mutation_fixtures/domain_exported_authz_field_red",
 		"DOMAIN-AUTHZ-FIELD-PRIVATE-01 RED fixture",
@@ -332,19 +321,15 @@ func scanDomainUserViolations(pkg *types.Package) []string {
 // permanently GREEN.
 func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, label string) {
 	t.Helper()
-	resolver, err := typeseval.SharedResolver(root, false, nil, fixturePattern)
-	require.NoError(t, err,
-		"RED fixture load FAILED (%s): a broken fixture silently disables the reverse self-check. "+
-			"Repair the fixture or remove the rule; do not let this skip past.",
-		label)
-
+	_ = root // root is the module root; RunTyped resolves it via findModuleRoot internally
 	var found int
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Types == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
 		}
-		found += len(scanDomainUserViolations(pkg.Types))
-	}
+		found += len(scanDomainUserViolations(p.Pkg))
+		return nil
+	})
 	assert.GreaterOrEqual(t, found, 1,
 		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
 			"Check that the fixture actually exports authz fields or unauthorized setters.",
@@ -368,31 +353,27 @@ func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, lab
 // simulates an rbacassign caller invoking SetStatus directly — must detect ≥ 1.
 func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	patterns := []string{
-		"./cells/accesscore/...",
-		"./cmd/...",
-	}
-	resolver, err := typeseval.SharedResolver(root, false, nil, patterns...)
-	require.NoError(t, err, "typeseval.SharedResolver for production packages")
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/...",
+		"./cmd/...",
+	}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if isSetMutatorAllowlisted(rel) {
 				continue
 			}
 			violations = append(violations,
-				scanSetMutatorViolations(pkg, file, rel, domainSetStatusMethod)...)
+				scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
 			violations = append(violations,
-				scanSetMutatorViolations(pkg, file, rel, domainSetPasswordResetRequiredMethod)...)
+				scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -408,28 +389,28 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 	// LOCATION: cells/accesscore/internal/domain/testdata/ because domain is an
 	// internal package; the fixture must live under cells/accesscore/ to satisfy
 	// Go's internal-import rule, and testdata/ keeps it out of go build ./...
-	verifySetMutatorRedFixtureDetected(t, root,
+	verifySetMutatorRedFixtureDetected(t,
 		"./cells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red",
 		domainSetStatusMethod,
 		"AUTHZ-MUTATION-APPLY-FUNNEL-01 Rule (a) RED fixture",
 	)
 }
 
-// scanSetMutatorViolations walks a single file's AST for CallExpr nodes where
+// scanSetMutatorViolationsPass walks a single file's AST for CallExpr nodes where
 // the method receiver resolves to domain.User.SetStatus or
 // domain.User.SetPasswordResetRequired. It returns a slice of violation strings.
 //
 // This reuses the same ResolveMethodCall + EachInSubtree[ast.CallExpr] pattern
 // as scanFunnelViolations in credential_invalidate_funnel_invariants_test.go,
 // but targets domain.User methods rather than store interface methods.
-func scanSetMutatorViolations(
-	pkg *packages.Package,
+func scanSetMutatorViolationsPass(
+	p *Pass,
 	file *ast.File,
 	rel string,
 	targetMethod string,
 ) []string {
 	var out []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil {
 			return
@@ -437,14 +418,14 @@ func scanSetMutatorViolations(
 		if sel.Sel.Name != targetMethod {
 			return
 		}
-		fn, ok := typeseval.ResolveMethodCall(pkg.TypesInfo, sel)
+		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
 		if !ok {
 			return
 		}
 		if fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg {
 			return
 		}
-		line := pkg.Fset.Position(call.Pos()).Line
+		line := p.Fset.Position(call.Pos()).Line
 		out = append(out, fmt.Sprintf(
 			"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: direct call to domain.User.%s "+
 				"outside allowed funnel packages",
@@ -457,23 +438,19 @@ func scanSetMutatorViolations(
 // that the scanner finds ≥ 1 violation — proving the rule is not permanently GREEN.
 func verifySetMutatorRedFixtureDetected(
 	t *testing.T,
-	root, fixturePattern, targetMethod, label string,
+	fixturePattern, targetMethod, label string,
 ) {
 	t.Helper()
-	resolver, err := typeseval.SharedResolver(root, false, nil, fixturePattern)
-	require.NoError(t, err,
-		"RED fixture load FAILED (%s): a broken fixture silently disables the reverse self-check.",
-		label)
-
 	var found int
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			found += len(scanSetMutatorViolations(pkg, file, label, targetMethod))
+		for _, file := range p.Files {
+			found += len(scanSetMutatorViolationsPass(p, file, label, targetMethod))
 		}
-	}
+		return nil
+	})
 	assert.GreaterOrEqual(t, found, 1,
 		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
 			"Check that the fixture calls the banned method and is type-checkable.",
@@ -493,11 +470,6 @@ func verifySetMutatorRedFixtureDetected(
 // to avoid false positives.
 func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/...", "./cmd/...")
-	require.NoError(t, err)
 
 	bannedNames := map[string]bool{
 		domainSetStatusMethod:                true,
@@ -505,22 +477,24 @@ func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
 	}
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/...", "./cmd/...",
+	}, func(p *Pass) []Diagnostic {
+		if p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
 			if isSetMutatorAllowlisted(rel) {
 				continue
 			}
-			scanner.EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-				scanner.EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
+			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+				EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
 					if bannedNames[sel.Sel.Name] {
-						line := pkg.Fset.Position(assign.Pos()).Line
+						line := p.Fset.Position(assign.Pos()).Line
 						violations = append(violations, fmt.Sprintf(
 							"%s:%d: method-value assignment of %s blind spot detected — "+
 								"archtest would miss the second call site",
@@ -529,7 +503,8 @@ func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
 				})
 			})
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -547,11 +522,6 @@ func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
 // spot is not exercised.
 func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/...", "./cmd/...")
-	require.NoError(t, err)
 
 	bannedNames := map[string]bool{
 		domainSetStatusMethod:                true,
@@ -559,16 +529,18 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 	}
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/...", "./cmd/...",
+	}, func(p *Pass) []Diagnostic {
+		if p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok || sel.Sel.Name != "MethodByName" {
 					return
@@ -582,7 +554,7 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 				}
 				name := strings.Trim(lit.Value, `"`)
 				if bannedNames[name] {
-					line := pkg.Fset.Position(call.Pos()).Line
+					line := p.Fset.Position(call.Pos()).Line
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
 							"archtest cannot see reflect-based invocations of authz setters",
@@ -590,7 +562,8 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 				}
 			})
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -614,19 +587,16 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 // flags packages that import "unsafe" outside the allowlist.
 func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/...", "./cmd/...")
-	require.NoError(t, err)
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/...", "./cmd/...",
+	}, func(p *Pass) []Diagnostic {
+		if p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
@@ -636,7 +606,7 @@ func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 				}
 				impPath := strings.Trim(imp.Path.Value, `"`)
 				if impPath == "unsafe" {
-					line := pkg.Fset.Position(imp.Pos()).Line
+					line := p.Fset.Position(imp.Pos()).Line
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: imports \"unsafe\" — potential unsafe.Pointer write "+
 							"could bypass domain.User authz field privatization "+
@@ -645,7 +615,8 @@ func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 				}
 			}
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -662,11 +633,6 @@ func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 // and be invisible to the type-definition check.
 func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/...", "./cmd/...")
-	require.NoError(t, err)
 
 	// Check both private field names (actual names) and potential exported regressions.
 	bannedFieldNames := map[string]bool{
@@ -679,16 +645,18 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 	}
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/...", "./cmd/...",
+	}, func(p *Pass) []Diagnostic {
+		if p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok || sel.Sel.Name != "FieldByName" {
 					return
@@ -702,7 +670,7 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 				}
 				name := strings.Trim(lit.Value, `"`)
 				if bannedFieldNames[name] {
-					line := pkg.Fset.Position(call.Pos()).Line
+					line := p.Fset.Position(call.Pos()).Line
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
 							"archtest cannot see reflect-based writes to domain.User authz fields",
@@ -710,7 +678,8 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 				}
 			})
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {

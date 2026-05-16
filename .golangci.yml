@@ -437,33 +437,6 @@ linters:
           list-mode: lax
           files:
             - "**/tools/archtest/*_test.go"
-            # Stage-1 migration exemption — every file below directly imports
-            # golang.org/x/tools/go/packages. Subset of archtestmeta.LegacyAllowlist.
-            - "!**/tools/archtest/archtest_test.go"
-            - "!**/tools/archtest/audit_ledger_composition_root_test.go"
-            - "!**/tools/archtest/cell_id_pattern_single_source_test.go"
-            - "!**/tools/archtest/cell_public_option_param_test.go"
-            - "!**/tools/archtest/credential_invalidate_funnel_invariants_test.go"
-            - "!**/tools/archtest/exported_error_new_fixtures_test.go"
-            - "!**/tools/archtest/goose_session_locker_test.go"
-            - "!**/tools/archtest/governance_rules_invariants_test.go"
-            - "!**/tools/archtest/identitymanage_last_admin_protection_test.go"
-            - "!**/tools/archtest/managed_resource_contract_test.go"
-            - "!**/tools/archtest/outbox_invariants_test.go"
-            - "!**/tools/archtest/panic_invariants_test.go"
-            - "!**/tools/archtest/pg_repo_ambient_tx_test.go"
-            - "!**/tools/archtest/prod_duration_fixtures_test.go"
-            - "!**/tools/archtest/prod_invariants_test.go"
-            - "!**/tools/archtest/prom_cell_label_funnel_test.go"
-            - "!**/tools/archtest/rmq_invariants_test.go"
-            - "!**/tools/archtest/scanner_framework_usage_test.go"
-            - "!**/tools/archtest/slowgate_allowlist_test.go"
-            - "!**/tools/archtest/test_sleep_discipline_test.go"
-            - "!**/tools/archtest/test_time_literal_fixtures_test.go"
-            - "!**/tools/archtest/test_time_literal_test.go"
-            - "!**/tools/archtest/wrapper_location_test.go"
-            - "!**/tools/archtest/domain_authz_mutation_funnel_invariants_test.go"
-            - "!**/tools/archtest/reconstitute_user_caller_allowlist_test.go"
             # Permanent self-exemption — pass_funnel_test.go IMPLEMENTS the
             # PASS-FUNNEL meta-archtest and therefore must import the very
             # package it forbids. Survives stage-4 cleanup.
@@ -475,6 +448,14 @@ linters:
             # (Pass.Pkg is *types.Package, but buildTypedPass receives
             # *packages.Package on the input side). Survives stage-4 cleanup.
             - "!**/tools/archtest/pass_test.go"
+            # Permanent self-exemption — archtest_test.go is the archtest driver
+            # self-test (LAYER-05..10 + PGQUERY-01) that calls
+            # depgraph.FromPackages([]*packages.Package). The function is the
+            # depgraph constructor (not a governance consumer archtest): it
+            # accepts *packages.Package on the input side by structural necessity,
+            # mirroring pass_test.go's buildTypedPass input. Survives stage-4.
+            # See passFunnelPermanentExempt in pass_funnel_test.go.
+            - "!**/tools/archtest/archtest_test.go"
           deny:
             - pkg: golang.org/x/tools/go/packages
               desc: |

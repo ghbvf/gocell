@@ -14,7 +14,7 @@
 // by ADR 202605101900 Amendment 2026-05-12 (PR #481 / PR-S7); the previous
 // `isCellPackageRootFile` predicate is now `isCellSubtreeFile`.
 //
-// AI-rebust 评级：Medium (archtest type-aware via typeseval.SharedResolver
+// AI-rebust 评级：Medium (archtest type-aware via RunTypedProduction
 // + types.Unalias). The kernel sealed marker is the AI-HARD primary
 // defense — it prevents writing a cell.go field typed `persistence.TxRunner`
 // and routing assignment via WrapForCell from a non-allowlisted location.
@@ -44,10 +44,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // expectedRawParamFixtureViolations is the number of CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01
@@ -252,14 +248,12 @@ func hasUnexportedExplicitMethod(iface *types.Interface) bool {
 	return false
 }
 
-// loadForbiddenIfaces resolves rawPublicOptionForbidden canonicals into
-// *types.Interface values from the loaded packages — needed by
-// canonicalFromType's method-set fall-through (types.Implements). Performed
-// once per scan; uses packages.Visit so transitively-imported packages
-// (e.g. kernel/persistence loaded as a dep when the resolver only points
-// at fixture packages) are visible. Missing entries are silently skipped
-// — the embed-walk path still covers them by canonical name.
-func loadForbiddenIfaces(pkgs []*packages.Package) map[string]*types.Interface {
+// loadForbiddenIfacesFromPkg resolves rawPublicOptionForbidden canonicals
+// into *types.Interface values by walking the import graph reachable from
+// pkg. Uses pkg.Imports() transitively to visit all dependency packages.
+// Performed once per Pass; missing entries are silently skipped — the
+// embed-walk path still covers them by canonical name.
+func loadForbiddenIfacesFromPkg(pkg *types.Package) map[string]*types.Interface {
 	out := make(map[string]*types.Interface, len(rawPublicOptionForbidden))
 	wantByPath := make(map[string][]string, len(rawPublicOptionForbidden))
 	for canonical := range rawPublicOptionForbidden {
@@ -269,89 +263,93 @@ func loadForbiddenIfaces(pkgs []*packages.Package) map[string]*types.Interface {
 		}
 		wantByPath[canonical[:dot]] = append(wantByPath[canonical[:dot]], canonical)
 	}
-	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
-		if pkg.Types == nil {
-			return
+
+	// Walk transitively reachable imports via BFS.
+	visited := make(map[string]bool)
+	queue := []*types.Package{pkg}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == nil || visited[cur.Path()] {
+			continue
 		}
-		canonicals, ok := wantByPath[pkg.PkgPath]
-		if !ok {
-			return
+		visited[cur.Path()] = true
+
+		canonicals, ok := wantByPath[cur.Path()]
+		if ok {
+			for _, canonical := range canonicals {
+				if _, already := out[canonical]; already {
+					continue
+				}
+				dot := strings.LastIndex(canonical, ".")
+				typeName := canonical[dot+1:]
+				obj := cur.Scope().Lookup(typeName)
+				if obj == nil {
+					continue
+				}
+				if iface, ok := obj.Type().Underlying().(*types.Interface); ok {
+					out[canonical] = iface
+				}
+			}
 		}
-		for _, canonical := range canonicals {
-			if _, already := out[canonical]; already {
-				continue
-			}
-			dot := strings.LastIndex(canonical, ".")
-			typeName := canonical[dot+1:]
-			obj := pkg.Types.Scope().Lookup(typeName)
-			if obj == nil {
-				continue
-			}
-			if iface, ok := obj.Type().Underlying().(*types.Interface); ok {
-				out[canonical] = iface
+
+		for _, imp := range cur.Imports() {
+			if !visited[imp.Path()] {
+				queue = append(queue, imp)
 			}
 		}
-	})
+	}
 	return out
 }
 
-// scanPackagesForRawPublicOption is the inner walker used by both the
-// real-repo scan and the fixture detection test. When restrictToCellRoots
-// is true, only files matching isCellSubtreeFile are scanned (the
-// real-repo invariant, covering the full cell subtree per ADR 202605101900
-// Amendment 2026-05-12); when false, all files in supplied packages are
-// scanned (the fixture detection test, where the fixture lives outside
-// real cell paths).
-func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restrictToCellRoots bool) []rawPublicOptionViolation {
-	var out []rawPublicOptionViolation
-	// Lazy-load the forbidden interface types once per scan so the
+// scanPassForRawPublicOption is the inner walker for a single Pass. When
+// restrictToCellRoots is true, only files matching isCellSubtreeFile are
+// scanned (the real-repo invariant); when false, all files in the Pass are
+// scanned (the fixture detection test).
+func scanPassForRawPublicOption(p *Pass, restrictToCellRoots bool) []rawPublicOptionViolation {
+	if p.Pkg == nil || p.TypesInfo == nil {
+		return nil
+	}
+	// Lazy-load the forbidden interface types once per Pass so the
 	// method-set fall-through (types.Implements) and named-underlying
 	// recursion can detect anonymous and named local-interface bypasses.
-	forbiddenIfaces := loadForbiddenIfaces(pkgs)
-	for _, pkg := range pkgs {
-		if pkg.TypesInfo == nil {
+	forbiddenIfaces := loadForbiddenIfacesFromPkg(p.Pkg)
+
+	var out []rawPublicOptionViolation
+	for _, file := range p.Files {
+		relSlash := p.Rel(file)
+		if restrictToCellRoots && !isCellSubtreeFile(relSlash) {
 			continue
 		}
-		for _, file := range pkg.Syntax {
-			absPath := pkg.Fset.Position(file.Pos()).Filename
-			rel, err := filepath.Rel(root, absPath)
-			if err != nil {
-				continue
+		EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			if fn.Recv != nil || !fn.Name.IsExported() ||
+				!strings.HasPrefix(fn.Name.Name, "With") {
+				return
 			}
-			relSlash := filepath.ToSlash(rel)
-			if restrictToCellRoots && !isCellSubtreeFile(relSlash) {
-				continue
+			if fn.Type.Params == nil {
+				return
 			}
-			scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-				if fn.Recv != nil || !fn.Name.IsExported() ||
-					!strings.HasPrefix(fn.Name.Name, "With") {
-					return
+			idx := 0
+			for _, field := range fn.Type.Params.List {
+				canonical := publicOptionParamCanonical(p.TypesInfo, field.Type, forbiddenIfaces)
+				count := len(field.Names)
+				if count == 0 {
+					count = 1
 				}
-				if fn.Type.Params == nil {
-					return
-				}
-				idx := 0
-				for _, field := range fn.Type.Params.List {
-					canonical := publicOptionParamCanonical(pkg.TypesInfo, field.Type, forbiddenIfaces)
-					count := len(field.Names)
-					if count == 0 {
-						count = 1
+				for k := 0; k < count; k++ {
+					if rawPublicOptionForbidden[canonical] {
+						out = append(out, rawPublicOptionViolation{
+							File:       relSlash,
+							Line:       p.Fset.Position(field.Pos()).Line,
+							FuncName:   fn.Name.Name,
+							ParamType:  canonical,
+							ParamIndex: idx,
+						})
 					}
-					for k := 0; k < count; k++ {
-						if rawPublicOptionForbidden[canonical] {
-							out = append(out, rawPublicOptionViolation{
-								File:       relSlash,
-								Line:       pkg.Fset.Position(field.Pos()).Line,
-								FuncName:   fn.Name.Name,
-								ParamType:  canonical,
-								ParamIndex: idx,
-							})
-						}
-						idx++
-					}
+					idx++
 				}
-			})
-		}
+			}
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -373,12 +371,13 @@ func scanPackagesForRawPublicOption(root string, pkgs []*packages.Package, restr
 // is verified by the sibling ScannerCatchesViolation test.
 func TestCellRawInfraPublicOptionParam01_RealRepoClean(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	modulePath := readModulePath(t, root)
-	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
-	require.NoError(t, err)
 
-	violations := scanPackagesForRawPublicOption(root, resolver.Production(), true)
+	var violations []rawPublicOptionViolation
+	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		violations = append(violations, scanPassForRawPublicOption(p, true)...)
+		return nil
+	})
+
 	for _, v := range violations {
 		t.Errorf("CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01: %s:%d func %s(...) param[%d] type=%s — "+
 			"public Option must accept sealed marker (persistence.CellTxManager / outbox.Cell{Publisher,Writer}) "+
@@ -399,12 +398,15 @@ func TestCellRawInfraPublicOptionParam01_RealRepoClean(t *testing.T) {
 // build tag. Bypassing this test requires modifying real source code.
 func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
-		"./tools/archtest/internal/rawparamfixture")
-	require.NoError(t, err)
 
-	violations := scanPackagesForRawPublicOption(root, resolver.Packages(), false)
+	var violations []rawPublicOptionViolation
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/rawparamfixture"},
+		func(p *Pass) []Diagnostic {
+			violations = append(violations, scanPassForRawPublicOption(p, false)...)
+			return nil
+		})
+
 	require.Len(t, violations, expectedRawParamFixtureViolations,
 		"fixture must yield 10 violations: WithBadTxRunner / WithBadPublisher / "+
 			"WithBadWriter / WithAliasedBadTxRunner (4 baseline) + "+
