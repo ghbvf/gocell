@@ -3,18 +3,13 @@
 package l2_atomicity
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestL2_RbacRevokeRevokesSessions verifies the cross-cell L2 cascade path:
@@ -43,7 +38,7 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 	victimID := httpCreateUser(t, h.base, adminLogin.AccessToken, victimUsername, "revoke@l2.local", victimPassword)
 
 	// Assign "editor" role to victim (admin authority, internal listener).
-	assignRole(t, h, "accesscore", victimID, "editor")
+	assignRole(t, h, victimID, "editor")
 
 	// Confirm assignment landed in PG.
 	var roleCount int
@@ -62,17 +57,17 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 
 	// Revoke "editor" via internal listener — triggers same-tx
 	// credentialinvalidate funnel.
-	revokeRole(t, h, "accesscore", victimID, "editor")
+	revokeRole(t, h, victimID, "editor")
 
 	// Eventual terminal state: authz_epoch advanced + all victim sessions revoked.
 	require.Eventually(t, func() bool {
 		return queryUserAuthzEpoch(t, h, victimID) > epochBefore
-	}, 5*time.Second, 50*time.Millisecond,
+	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"users.authz_epoch must advance after role revoke cascade (epochBefore=%d)", epochBefore)
 
 	require.Eventually(t, func() bool {
 		return countLiveSessions(t, h, victimID) == 0
-	}, 5*time.Second, 50*time.Millisecond,
+	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"all victim sessions must be revoked after role revoke cascade")
 
 	// PG confirmation: role_assignments row is gone.
@@ -82,38 +77,3 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 	assert.Equal(t, 0, roleCount, "editor role assignment must be removed after revoke")
 }
 
-// assignRole calls POST /internal/v1/access/roles/assign with a service token.
-func assignRole(t *testing.T, h *l2Harness, callerCell, userID, roleID string) {
-	t.Helper()
-	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
-	token := auth.GenerateServiceToken(h.ring, callerCell, http.MethodPost,
-		"/internal/v1/access/roles/assign", "", time.Now())
-	req, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/assign",
-		bytes.NewReader(body))
-	req.Header.Set("Authorization", "ServiceToken "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	require.Equal(t, http.StatusCreated, resp.StatusCode,
-		"role assign must return 201; body=%s", respBody)
-}
-
-// revokeRole calls POST /internal/v1/access/roles/revoke with a service token.
-func revokeRole(t *testing.T, h *l2Harness, callerCell, userID, roleID string) {
-	t.Helper()
-	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
-	token := auth.GenerateServiceToken(h.ring, callerCell, http.MethodPost,
-		"/internal/v1/access/roles/revoke", "", time.Now())
-	req, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
-		bytes.NewReader(body))
-	req.Header.Set("Authorization", "ServiceToken "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	require.Equal(t, http.StatusOK, resp.StatusCode,
-		"role revoke must return 200; body=%s", respBody)
-}

@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // loginResult holds the parsed login/refresh response fields.
@@ -227,10 +230,22 @@ func httpChangePasswordExpect(t *testing.T, base, accessToken, userID, oldPass, 
 	return env
 }
 
-// httpGetUserExpect calls GET /api/v1/access/users/{userID} and asserts the
-// given status; used by tests to validate that a stale access token is rejected
-// after credential mutation events.
-func httpGetUserExpect(t *testing.T, base, accessToken, userID string, expectStatus int) errorEnvelope {
+// httpGetUser calls GET /api/v1/access/users/{userID} and asserts 200.
+func httpGetUser(t *testing.T, base, accessToken, userID string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/api/v1/access/users/"+userID, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "GET user expected 200; body=%s", respBody)
+}
+
+// httpGetUserExpectError calls GET /api/v1/access/users/{userID}, asserts the given
+// non-2xx status, and returns the parsed error envelope.
+func httpGetUserExpectError(t *testing.T, base, accessToken, userID string, expectStatus int) errorEnvelope {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, base+"/api/v1/access/users/"+userID, nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
@@ -241,12 +256,23 @@ func httpGetUserExpect(t *testing.T, base, accessToken, userID string, expectSta
 	respBody, _ := io.ReadAll(resp.Body)
 	require.Equal(t, expectStatus, resp.StatusCode, "GET user expected %d; body=%s", expectStatus, respBody)
 
-	if expectStatus >= 200 && expectStatus < 300 {
-		return errorEnvelope{}
-	}
 	var env errorEnvelope
 	require.NoError(t, json.Unmarshal(respBody, &env))
 	return env
+}
+
+// httpLogout calls DELETE /api/v1/access/sessions/{sessionID} with the given
+// bearer token and expects 204.
+func httpLogout(t *testing.T, base, accessToken, sessionID string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete, base+"/api/v1/access/sessions/"+sessionID, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode, "logout must return 204; body=%s", respBody)
 }
 
 // errorEnvelope is the standard error response shape from
@@ -280,16 +306,6 @@ func decodeJWTClaims(t *testing.T, token string) jwtClaims {
 	return c
 }
 
-// queryUserIDByUsername returns the users.id for the given username.
-func queryUserIDByUsername(t *testing.T, h *l2Harness, username string) string {
-	t.Helper()
-	var id string
-	err := h.pool.DB().QueryRow(context.Background(),
-		`SELECT id FROM users WHERE username = $1`, username).Scan(&id)
-	require.NoError(t, err, "user %q must exist", username)
-	return id
-}
-
 // queryUserAuthzEpoch returns users.authz_epoch for the given user ID.
 func queryUserAuthzEpoch(t *testing.T, h *l2Harness, userID string) int64 {
 	t.Helper()
@@ -308,14 +324,6 @@ func queryUserStatus(t *testing.T, h *l2Harness, userID string) string {
 		`SELECT status FROM users WHERE id = $1`, userID).Scan(&status)
 	require.NoError(t, err)
 	return status
-}
-
-// setUserStatus directly updates users.status (used to simulate inactive accounts).
-func setUserStatus(t *testing.T, h *l2Harness, userID, status string) {
-	t.Helper()
-	_, err := h.pool.DB().Exec(context.Background(),
-		`UPDATE users SET status = $1 WHERE id = $2`, status, userID)
-	require.NoError(t, err)
 }
 
 // bumpUserAuthzEpoch increments users.authz_epoch directly.
@@ -348,13 +356,45 @@ func countLiveRefreshTokens(t *testing.T, h *l2Harness, sessionID string) int {
 	return n
 }
 
-// sessionRevoked returns true if sessions.revoked_at IS NOT NULL.
-func sessionRevoked(t *testing.T, h *l2Harness, sessionID string) bool {
+// assignRole calls POST /internal/v1/access/roles/assign with a service token
+// signed for the "accesscore" caller cell. Inlined literal is required by the
+// SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest: every GenerateServiceToken call
+// must pass a string literal in the callerCell position so the caller-cell
+// allowlist can be statically verified.
+func assignRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	t.Helper()
-	var revoked *string
-	err := h.pool.DB().QueryRow(context.Background(),
-		`SELECT to_char(revoked_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM sessions WHERE id = $1`,
-		sessionID).Scan(&revoked)
+	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
+	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
+		"/internal/v1/access/roles/assign", "", time.Now())
+	req, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/assign",
+		bytes.NewReader(body))
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
 	require.NoError(t, err)
-	return revoked != nil
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusCreated, resp.StatusCode,
+		"role assign must return 201; body=%s", respBody)
 }
+
+// revokeRole calls POST /internal/v1/access/roles/revoke with a service token
+// signed for the "accesscore" caller cell. See assignRole for why the caller
+// cell is an inlined literal rather than a parameter.
+func revokeRole(t *testing.T, h *l2Harness, userID, roleID string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
+	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
+		"/internal/v1/access/roles/revoke", "", time.Now())
+	req, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
+		bytes.NewReader(body))
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"role revoke must return 200; body=%s", respBody)
+}
+

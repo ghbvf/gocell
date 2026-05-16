@@ -205,6 +205,7 @@ func collectGenerateServiceTokenDiags(
 //
 //   - examples/ssobff/walkthrough_test.go  (//go:build integration)
 //   - tests/integration/internal_rpc_caller_cell_test.go  (//go:build integration)
+//   - tests/integration/l2_atomicity/helpers_test.go  (//go:build integration)
 //
 // Wave 5 introduces typeseval.FlatNonDefaultTags() — the union of every
 // tag tracked in KnownNonDefaultTags() — and the production rule loads
@@ -250,6 +251,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *t
 	expectedScanned := []string{
 		"examples/ssobff/walkthrough_test.go",
 		"tests/integration/internal_rpc_caller_cell_test.go",
+		"tests/integration/l2_atomicity/helpers_test.go",
 	}
 
 	var missing []string

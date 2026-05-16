@@ -3,13 +3,12 @@
 package l2_atomicity
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -33,7 +32,6 @@ import (
 //   - count(sessions WHERE subject = victim AND revoked_at IS NULL) == 0
 func TestL2_RefreshReuseTriggersCascade(t *testing.T) {
 	h := newL2Harness(t)
-	ctx := context.Background()
 
 	const victimUsername = "l2-reuse-user"
 	const victimPassword = "VictimPass!99"
@@ -53,7 +51,9 @@ func TestL2_RefreshReuseTriggersCascade(t *testing.T) {
 
 	// Grace retry: replay R1 GraceMaxReuses times, each succeeds.
 	for i := 0; i < refresh.DefaultGraceMaxReuses; i++ {
-		_ = httpRefresh(t, h.base, first.RefreshToken)
+		t.Logf("grace retry %d", i)
+		got := httpRefresh(t, h.base, first.RefreshToken)
+		require.NotEmpty(t, got.AccessToken, "grace retry %d must succeed", i)
 	}
 
 	// One more replay → grace exhausted → 401 + cascade.
@@ -63,17 +63,12 @@ func TestL2_RefreshReuseTriggersCascade(t *testing.T) {
 
 	// PG terminal state: epoch bumped + all victim sessions revoked.
 	require.Eventually(t, func() bool {
-		var epoch int64
-		if qErr := h.pool.DB().QueryRow(ctx,
-			`SELECT authz_epoch FROM users WHERE id = $1`, victimID).Scan(&epoch); qErr != nil {
-			return false
-		}
-		return epoch > epochBefore
-	}, 5*time.Second, 50*time.Millisecond,
+		return queryUserAuthzEpoch(t, h, victimID) > epochBefore
+	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"users.authz_epoch must advance after reuse cascade (epochBefore=%d)", epochBefore)
 
 	require.Eventually(t, func() bool {
 		return countLiveSessions(t, h, victimID) == 0
-	}, 5*time.Second, 50*time.Millisecond,
+	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"all victim sessions must be revoked after reuse cascade")
 }

@@ -98,6 +98,18 @@ jobs:
         # consumer → invalidator), giving the race detector real coverage of
         # the L2 cross-cell flow that race-pg-integration's adapter / store
         # scope does not reach.
+        #
+        # NOTE: This step uses a hardcoded package list (not `go list -tags=integration`
+        # discovery) — this differs from _build-lint.yml::integration-test which uses
+        # dynamic discovery. The current CI-INTEGRATION-DISCOVERY-01 archtest only
+        # guards _build-lint.yml; it does not cover this step. A backlog item tracks
+        # extending the archtest to close this gap:
+        # see CI-RACE-INTEGRATION-DISCOVERY-ARCHTEST-01 in docs/backlog/cap-14-tooling.md
+        env:
+          # Ensures testutil.RequireDocker(t) calls t.Fatal (not t.Skip) when
+          # Docker is unavailable, preventing silent skip in CI where Docker
+          # is always expected. Mirrors _build-lint.yml::integration-test.
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
         run: |
           go test -race -count=1 -timeout 15m -tags=integration \
             ./adapters/postgres/... \

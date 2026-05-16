@@ -36,7 +36,7 @@ func TestL2_ValidateEpochMismatch(t *testing.T) {
 	require.NotEmpty(t, victimLogin.AccessToken)
 
 	// Baseline: a fresh access token can read the user's own profile.
-	_ = httpGetUserExpect(t, h.base, victimLogin.AccessToken, victimID, http.StatusOK)
+	httpGetUser(t, h.base, victimLogin.AccessToken, victimID)
 
 	epochBefore := queryUserAuthzEpoch(t, h, victimID)
 	bumpUserAuthzEpoch(t, h, victimID)
@@ -47,7 +47,7 @@ func TestL2_ValidateEpochMismatch(t *testing.T) {
 	// The previously-issued access JWT carries authz_epoch=epochBefore in its
 	// claim, which is now < users.authz_epoch. sessionvalidate.enforceSessionState
 	// must reject the token.
-	env := httpGetUserExpect(t, h.base, victimLogin.AccessToken, victimID, http.StatusUnauthorized)
+	env := httpGetUserExpectError(t, h.base, victimLogin.AccessToken, victimID, http.StatusUnauthorized)
 	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", env.Error.Code,
 		"epoch-mismatch JWT must surface as the generic ERR_AUTH_UNAUTHORIZED (enumeration defense)")
 }

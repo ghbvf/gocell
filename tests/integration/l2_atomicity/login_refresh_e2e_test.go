@@ -4,7 +4,6 @@ package l2_atomicity
 
 import (
 	"context"
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -83,7 +82,7 @@ func TestL2_LoginRefreshValidate_HappyPath(t *testing.T) {
 		"sessions.authz_epoch_at_issue must equal users.authz_epoch at login time (S4d row provenance)")
 
 	// 4. Validate fresh access token via JWT-guarded endpoint.
-	_ = httpGetUserExpect(t, h.base, res.AccessToken, userID, http.StatusOK)
+	httpGetUser(t, h.base, res.AccessToken, userID)
 
 	// 5. Refresh: 200 + same sid (OAuth2/OIDC sid stable invariant).
 	refreshed := httpRefresh(t, h.base, res.RefreshToken)
@@ -104,5 +103,5 @@ func TestL2_LoginRefreshValidate_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, refreshedClaims.JTI, "refreshed JWT must carry jti claim")
 
 	// 7. Validate refreshed access token via JWT-guarded endpoint.
-	_ = httpGetUserExpect(t, h.base, refreshed.AccessToken, userID, http.StatusOK)
+	httpGetUser(t, h.base, refreshed.AccessToken, userID)
 }

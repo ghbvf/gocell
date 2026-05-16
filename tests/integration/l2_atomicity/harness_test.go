@@ -18,11 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
-	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -38,6 +33,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/state/cas"
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
+	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -60,7 +60,7 @@ const (
 // and login requests past 30s in pathological cases (observed up to ~3s
 // per request × cascading retries). 60s gives CI plenty of headroom while
 // remaining well within the 15-minute race-pg-integration job budget.
-var httpClient = &http.Client{Timeout: 60 * time.Second}
+var httpClient = &http.Client{Timeout: testtime.D60s}
 
 // l2Harness boots a full PG-backed assembly (accesscore + configcore + auditcore)
 // with three listeners (primary + internal + health-via-fallback). Provisions
@@ -72,8 +72,8 @@ type l2Harness struct {
 	ring         *auth.HMACKeyRing
 }
 
-// noopTxRunner executes fn directly without a real transaction; used for
-// configcore + auditcore which do not exercise PG persistence in this harness.
+// noopTxRunner executes fn directly without a real transaction.
+// Used for configcore and auditcore which hold no PG state in this harness; accesscore uses the real adapterpg.TxManager.
 type noopTxRunner struct{}
 
 func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
@@ -87,8 +87,9 @@ type allowAllLimiter struct{}
 
 func (allowAllLimiter) Allow(string) bool { return true }
 
-// startPostgresContainer launches a PG testcontainer and returns the DSN and cleanup.
-func startPostgresContainer(t *testing.T) (string, func()) {
+// startPostgresContainer launches a PG testcontainer, registers termination via
+// t.Cleanup, and returns the DSN.
+func startPostgresContainer(t *testing.T) string {
 	t.Helper()
 	testutil.RequireDocker(t)
 
@@ -104,12 +105,14 @@ func startPostgresContainer(t *testing.T) (string, func()) {
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err, "failed to get connection string")
 
-	cleanup := func() {
-		if terr := container.Terminate(ctx); terr != nil {
+	t.Cleanup(func() {
+		tctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
+		defer cancel()
+		if terr := container.Terminate(tctx); terr != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", terr)
 		}
-	}
-	return dsn, cleanup
+	})
+	return dsn
 }
 
 // migrationsFS returns the canonical adapter migrations FS.
@@ -163,6 +166,9 @@ func buildAuditcoreLedgerOpts(t testing.TB, hmacKey []byte) []auditcore.Option {
 
 // newL2Harness boots the full assembly. PG-backed user/role/session/refresh
 // stores; in-memory configcore/auditcore. Seeds a single admin via setup/admin.
+// Each test calls this fresh rather than sharing via TestMain; race-detector +
+// PG container time budget is acceptable at the current 7-test scale and
+// per-test isolation simplifies state reset.
 func newL2Harness(t *testing.T) *l2Harness {
 	return newL2HarnessWithWriter(t, nil)
 }
@@ -172,8 +178,7 @@ func newL2Harness(t *testing.T) *l2Harness {
 func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	t.Helper()
 
-	dsn, dsnCleanup := startPostgresContainer(t)
-	t.Cleanup(dsnCleanup)
+	dsn := startPostgresContainer(t)
 
 	ctx := context.Background()
 
@@ -288,6 +293,8 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	}, buildAuditcoreLedgerOpts(t, []byte("l2-test-hmac-key-32-bytes-pad!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
+	// DurabilityDemo: uses in-process eventbus instead of PG outbox relay, which
+	// is sufficient to cover L2 cross-cell cascade in this integration harness.
 	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
@@ -308,7 +315,7 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		// shutdown timeout must be ≥ httpClient.Timeout so the last in-flight
 		// request can finish before forced close. 20s gives the longest
 		// observed (~17s) request a safety margin without bloating CI time.
-		bootstrap.WithShutdownTimeout(20*time.Second),
+		bootstrap.WithShutdownTimeout(testtime.D20s),
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -322,7 +329,7 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		// Cleanup window must exceed bootstrap WithShutdownTimeout so we
 		// observe the graceful-drain outcome (success or its error) rather
 		// than time out the harness before bootstrap reports.
-		case <-time.After(30 * time.Second):
+		case <-time.After(testtime.D30s):
 			t.Fatal("bootstrap did not shut down in time")
 		}
 	})
@@ -335,7 +342,7 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		}
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+	}, testtime.EventuallyLong, testtime.MediumPoll, "HTTP server did not become ready")
 
 	base := "http://" + addr
 

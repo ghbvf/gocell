@@ -68,11 +68,11 @@ func TestL2_ChangePasswordOldPasswordIncorrect(t *testing.T) {
 		// AuthMiddleware collapses every JWT verification failure (signature /
 		// expiry / intent / epoch / session-state) to ERR_AUTH_UNAUTHORIZED to
 		// prevent token-state enumeration.
-		stale := httpGetUserExpect(t, h.base, fresh.AccessToken, victimID, http.StatusUnauthorized)
+		stale := httpGetUserExpectError(t, h.base, fresh.AccessToken, victimID, http.StatusUnauthorized)
 		assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", stale.Error.Code,
 			"stale access token must be rejected with the generic ERR_AUTH_UNAUTHORIZED (enumeration defense)")
 
 		// The freshly-returned token must work.
-		_ = httpGetUserExpect(t, h.base, res.AccessToken, victimID, http.StatusOK)
+		httpGetUser(t, h.base, res.AccessToken, victimID)
 	})
 }

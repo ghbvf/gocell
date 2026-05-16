@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package l2_atomicity is the L2 (OutboxFact) e2e harness for accesscore
 // session/refresh/revoke/validate fail-closed regression coverage. It boots
 // a full PG + RabbitMQ-free in-process eventbus assembly and exercises:
@@ -29,4 +31,13 @@
 // wiring (~250 lines) follows the same shape as the corebundle test harness;
 // future extraction to tests/testutil/corebundle/ remains possible once the
 // package main constraint is lifted.
+//
+// Wire-shape coverage scope: this harness asserts the programmatic integration
+// shape (Go test). The declarative journey-YAML coverage (J-accountlockout /
+// J-ssologin uniform-401 reverse assertion) is owned by FU-4 in plan §S4-FU;
+// see docs/plans/202605082145-034-pg-corecell-b-route-plan.md §T4 ↔ FU-4.
+//
+// Running locally: `go test -tags=integration -count=1 ./tests/integration/l2_atomicity/...`
+// (requires Docker for testcontainer Postgres; bcrypt cost=12 takes ~5-15s under `-race`).
+// Race lane: `go test -race -tags=integration -count=1 -timeout=15m ./tests/integration/l2_atomicity/...`.
 package l2_atomicity
