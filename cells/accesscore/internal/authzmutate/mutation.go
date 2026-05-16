@@ -3,8 +3,8 @@
 //
 //	"mutate authz state without epoch-bump+revoke" is unrepresentable.
 //
-// Every caller that needs to change a user's status, passwordResetRequired, or
-// trigger a role-revoke credential event MUST go through Mutator.Apply.
+// Every caller that needs to change a user's status or passwordResetRequired
+// MUST go through Mutator.Apply.
 //
 // # Archtest enforcement (Wave 2)
 //
@@ -18,15 +18,19 @@
 //
 // Rule (b) note: the broader caller set (vs the originally intended
 // {authzmutate/, sessionrefresh/}) is the §A10-documented co-tx-atomicity
-// deviation — identitymanage/ calls inv.Apply directly for Delete and
+// necessity — identitymanage/ calls inv.Apply directly for Delete and
 // changePasswordInTx (user-row-delete + revoke must be one transaction;
 // routing through authzmutate would split those transactions); rbacassign/
-// similarly calls inv.Apply co-tx with the role-row write. The write-side
-// Hard guarantee comes from Rule (a) field privatization
+// similarly calls inv.Apply co-tx with the role-row write. These callers are
+// NOT routable through authzmutate without introducing cross-tx correctness
+// problems — see ADR §A10 "Co-tx atomicity constraint" for the proof.
+// The write-side Hard guarantee comes from Rule (a) field privatization
 // (DOMAIN-AUTHZ-FIELD-PRIVATE-01), NOT from Rule (b) caller-set closure.
+// Rule (b) upper bound (Medium-by-necessity) is the Go type-system ceiling
+// for tx-bound side-effect funnels; see ADR §A10 for ent/kratos evidence.
 //
-// Backlog: AUTHZ-MUTATION-FUNNEL-UPGRADE-01 (S4e, landed in PR #494).
-// ADR §A10 → §A10 status now "landed".
+// ADR §A10 → status "landed" (PR #494). RoleRevoked variant deleted (dead
+// code — rbacassign.Revoke calls inv.Apply directly, never via this funnel).
 package authzmutate
 
 import (
@@ -153,17 +157,3 @@ func (ClearPasswordReset) apply(u *domain.User, now time.Time) {
 	u.SetPasswordResetRequired(false, now)
 }
 func (ClearPasswordReset) mutationOK() {}
-
-// RoleRevoked signals that a role was revoked from the user. The apply method
-// is a no-op on user fields — the role-row write is handled by rbacassign's
-// own transaction logic. The mutation carries CredentialEventRoleRevoke so the
-// trifecta (epoch-bump + session-revoke + refresh-revoke) is triggered.
-// Credential-weakening — Invalidates() == true.
-type RoleRevoked struct{}
-
-func (RoleRevoked) Event() session.CredentialEvent { return session.CredentialEventRoleRevoke }
-func (RoleRevoked) Invalidates() bool              { return true }
-func (RoleRevoked) apply(_ *domain.User, _ time.Time) {
-	// no-op: role-row write handled by rbacassign; epoch-bump done via inv.Apply.
-}
-func (RoleRevoked) mutationOK() {}

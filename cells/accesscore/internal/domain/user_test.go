@@ -269,8 +269,17 @@ func TestUser_CanAuthenticate(t *testing.T) {
 				switch tt.status {
 				case StatusSuspended, StatusLocked:
 					var err error
-					u, err = ReconstituteUser("uid", "test", "test@example.com", "$2a$10$hash",
-						0, false, tt.status, UserSourceIdentity, 1, now, now)
+					u, err = ReconstituteUser(ReconstituteUserParams{
+						ID:           "uid",
+						Username:     "test",
+						Email:        "test@example.com",
+						PasswordHash: "$2a$10$hash",
+						Status:       tt.status,
+						Source:       UserSourceIdentity,
+						AuthzEpoch:   1,
+						CreatedAt:    now,
+						UpdatedAt:    now,
+					})
 					require.NoError(t, err)
 				default:
 					// Invalid status: test CanAuthenticate via SetStatus from a valid base
@@ -308,8 +317,19 @@ func TestValidUserSource(t *testing.T) {
 func TestReconstituteUser(t *testing.T) {
 	now := time.Now()
 	t.Run("valid", func(t *testing.T) {
-		u, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
-			3, true, StatusActive, UserSourceIdentity, 5, now, now)
+		u, err := ReconstituteUser(ReconstituteUserParams{
+			ID:                    "id1",
+			Username:              "alice",
+			Email:                 "alice@example.com",
+			PasswordHash:          "$2a$10$hash",
+			PasswordVersion:       3,
+			PasswordResetRequired: true,
+			Status:                StatusActive,
+			Source:                UserSourceIdentity,
+			AuthzEpoch:            5,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		})
 		require.NoError(t, err)
 		assert.Equal(t, "id1", u.ID)
 		assert.Equal(t, "alice", u.Username)
@@ -319,26 +339,62 @@ func TestReconstituteUser(t *testing.T) {
 		assert.Equal(t, int64(3), u.PasswordVersion)
 	})
 	t.Run("zero_epoch_rejected", func(t *testing.T) {
-		_, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
-			0, false, StatusActive, UserSourceIdentity, 0, now, now)
+		_, err := ReconstituteUser(ReconstituteUserParams{
+			ID:           "id1",
+			Username:     "alice",
+			Email:        "alice@example.com",
+			PasswordHash: "$2a$10$hash",
+			Status:       StatusActive,
+			Source:       UserSourceIdentity,
+			AuthzEpoch:   0,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
 		require.Error(t, err)
 		var ce *errcode.Error
 		require.ErrorAs(t, err, &ce)
 		assert.Equal(t, errcode.ErrAuthInvalidInput, ce.Code)
 	})
 	t.Run("negative_epoch_rejected", func(t *testing.T) {
-		_, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
-			0, false, StatusActive, UserSourceIdentity, -1, now, now)
+		_, err := ReconstituteUser(ReconstituteUserParams{
+			ID:           "id1",
+			Username:     "alice",
+			Email:        "alice@example.com",
+			PasswordHash: "$2a$10$hash",
+			Status:       StatusActive,
+			Source:       UserSourceIdentity,
+			AuthzEpoch:   -1,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
 		require.Error(t, err)
 	})
 	t.Run("invalid_status_rejected", func(t *testing.T) {
-		_, err := ReconstituteUser("id1", "alice", "alice@example.com", "$2a$10$hash",
-			0, false, UserStatus("invalid"), UserSourceIdentity, 1, now, now)
+		_, err := ReconstituteUser(ReconstituteUserParams{
+			ID:           "id1",
+			Username:     "alice",
+			Email:        "alice@example.com",
+			PasswordHash: "$2a$10$hash",
+			Status:       UserStatus("invalid"),
+			Source:       UserSourceIdentity,
+			AuthzEpoch:   1,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
 		require.Error(t, err)
 	})
 	t.Run("empty_id_rejected", func(t *testing.T) {
-		_, err := ReconstituteUser("", "alice", "alice@example.com", "$2a$10$hash",
-			0, false, StatusActive, UserSourceIdentity, 1, now, now)
+		_, err := ReconstituteUser(ReconstituteUserParams{
+			ID:           "",
+			Username:     "alice",
+			Email:        "alice@example.com",
+			PasswordHash: "$2a$10$hash",
+			Status:       StatusActive,
+			Source:       UserSourceIdentity,
+			AuthzEpoch:   1,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
 		require.Error(t, err)
 	})
 }

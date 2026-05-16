@@ -420,19 +420,33 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 // together with name/email), then apply the credential-changing mutation.
 // The outer tx handles name/email + event publish; authzmutate handles the
 // credential trifecta.
+//
+// F2 fix: resolveCredentialMutation is invoked inside tx1 using the user row
+// already fetched (and FOR-UPDATE-locked on PG) by GetByID within the tx.
+// Previously the RequirePasswordReset idempotency pre-check called GetByID
+// outside any transaction, creating an undocumented TOCTOU window: a
+// concurrent BumpAuthzEpoch between the pre-check read and tx1's FOR UPDATE
+// could cause a spurious "no-op" return, skipping the needed epoch bump and
+// leaving live sessions unrevoked. Reusing the tx1-locked row eliminates
+// the window without adding an extra DB round-trip.
+//
+// hasCombinedAuthzFields produces a deterministic 400 and is still evaluated
+// before tx1 — it is a pure-input check that requires no DB read.
 func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor string) (*domain.User, error) {
 	var user *domain.User
+	var credMut pendingCredMutation
 	now := s.clock.Now()
 
-	// Determine what credential mutation to apply (if any) before opening tx.
-	credMut, err := s.resolveCredentialMutation(ctx, input)
-	if err != nil {
-		return nil, err
+	// hasCombinedAuthzFields is a pure input check — 400 before any DB access.
+	if hasCombinedAuthzFields(input) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			msgCombinedAuthzFields)
 	}
 
 	// Apply non-authz field changes (name, email) inside a transaction that
-	// also publishes the event. Status and resetRequired changes that go
-	// through authzmutate are applied below.
+	// also publishes the event. resolveCredentialMutation is called inside the
+	// tx so the RequirePasswordReset idempotency read uses the tx-locked user
+	// row — no separate pre-tx GetByID (F2: eliminates TOCTOU window).
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		u, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
@@ -441,6 +455,9 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 		if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
 			return err
 		}
+		// Resolve the credential mutation inside the tx using the already-fetched
+		// locked row, avoiding a separate pre-tx GetByID (F2).
+		credMut = resolveCredentialMutationFromUser(u, input)
 		applyNonAuthzFields(u, input, now)
 		if err := s.repo.Update(txCtx, u); err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
@@ -477,35 +494,57 @@ type pendingCredMutation struct {
 	ok bool
 }
 
-// resolveCredentialMutation inspects the UpdateInput and returns the
-// authzmutate.Mutation that should be applied, wrapped in a pendingCredMutation.
-// When pendingCredMutation.ok is false no credential mutation is needed.
-func (s *Service) resolveCredentialMutation(ctx context.Context, input UpdateInput) (pendingCredMutation, error) {
+// msgCombinedAuthzFields is the deterministic error message returned when a
+// PATCH request sets both status and requirePasswordReset simultaneously.
+// Providing both in one request is ambiguous: the two mutations produce
+// different authz_epoch bumps and invalidation events that must be applied
+// sequentially, so requiring the client to split them into two requests makes
+// the ordering explicit.
+const msgCombinedAuthzFields = "status and requirePasswordReset cannot both be set in the same request; send two separate PATCH requests"
+
+// hasCombinedAuthzFields returns true when the input sets both status and
+// requirePasswordReset in the same call — an ambiguous combination that must
+// be rejected with HTTP 400 before any mutation is attempted.
+func hasCombinedAuthzFields(input UpdateInput) bool {
+	return input.Status != nil && input.RequirePasswordReset != nil
+}
+
+// resolveCredentialMutationFromUser inspects the UpdateInput and the already-
+// fetched user row and returns the authzmutate.Mutation that should be applied,
+// wrapped in a pendingCredMutation. When pendingCredMutation.ok is false no
+// credential mutation is needed.
+//
+// Precondition: hasCombinedAuthzFields(input) must be false — callers must
+// check and return HTTP 400 before calling this function.
+//
+// The caller passes the user row fetched (and FOR-UPDATE-locked) inside the
+// active transaction. This eliminates the previous pre-tx GetByID call for the
+// RequirePasswordReset idempotency check, which was an undocumented TOCTOU
+// window (F2 fix; see applyUserUpdate godoc for details).
+func resolveCredentialMutationFromUser(u *domain.User, input UpdateInput) pendingCredMutation {
 	// Check status change.
 	if input.Status != nil {
 		switch domain.UserStatus(*input.Status) {
 		case domain.StatusSuspended:
-			return pendingCredMutation{m: authzmutate.SuspendUser{}, ok: true}, nil
+			return pendingCredMutation{m: authzmutate.SuspendUser{}, ok: true}
 		case domain.StatusActive:
-			return pendingCredMutation{m: authzmutate.ActivateUser{}, ok: true}, nil
+			return pendingCredMutation{m: authzmutate.ActivateUser{}, ok: true}
 		}
 	}
 	// Check requirePasswordReset change.
 	if input.RequirePasswordReset != nil {
 		if *input.RequirePasswordReset {
-			// Check if already set (no-op if flag already true).
-			u, err := s.repo.GetByID(ctx, input.ID)
-			if err != nil {
-				return pendingCredMutation{}, fmt.Errorf("identity-manage: resolve mutation get user: %w", err)
-			}
+			// Idempotency: if the flag is already set on the tx-locked row, skip
+			// the mutation to avoid a spurious authz_epoch bump (which would
+			// invalidate all live sessions unnecessarily).
 			if u.PasswordResetRequired() {
-				return pendingCredMutation{}, nil // already set, no mutation needed
+				return pendingCredMutation{} // already set, no mutation needed
 			}
-			return pendingCredMutation{m: authzmutate.RequirePasswordReset{}, ok: true}, nil
+			return pendingCredMutation{m: authzmutate.RequirePasswordReset{}, ok: true}
 		}
-		return pendingCredMutation{m: authzmutate.ClearPasswordReset{}, ok: true}, nil
+		return pendingCredMutation{m: authzmutate.ClearPasswordReset{}, ok: true}
 	}
-	return pendingCredMutation{}, nil // no credential fields changed
+	return pendingCredMutation{} // no credential fields changed
 }
 
 // applyNonAuthzFields applies non-credential field changes (name, email) to u.

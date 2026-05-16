@@ -19,10 +19,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
-// fakeTxRunner is a simple synchronous TxRunner for unit tests.
-type fakeTxRunner struct{}
+// nilTxRunner is a pass-through TxRunner used only for nil-dep construction
+// tests that do not exercise ForUpdate paths.
+type nilTxRunner struct{}
 
-func (f fakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+func (nilTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
 }
 
@@ -31,7 +32,8 @@ func newTestMutator(t testing.TB, store *mem.Store, sessionStore session.Store) 
 	refreshStore := testutil.RealRefreshStore(t)
 	inv, err := credentialinvalidate.New(store.UserRepository(), sessionStore, refreshStore)
 	require.NoError(t, err)
-	m, err := authzmutate.New(inv, store.UserRepository(), persistence.WrapForCell(fakeTxRunner{}))
+	// Use store.TxRunner() so that GetByIDForUpdate receives the mem-tx sentinel.
+	m, err := authzmutate.New(inv, store.UserRepository(), persistence.WrapForCell(store.TxRunner()))
 	require.NoError(t, err)
 	return m
 }
@@ -41,11 +43,18 @@ func newTestMutator(t testing.TB, store *mem.Store, sessionStore session.Store) 
 // domain.ReconstituteUser boilerplate in every sub-test.
 func seedUser(t testing.TB, store *mem.Store, userID string, status domain.UserStatus) {
 	t.Helper()
-	u, err := domain.ReconstituteUser(
-		userID, userID, userID+"@test.local", "$2a$12$hash",
-		0, false, status, domain.UserSourceIdentity, 1,
-		time.Now(), time.Now(),
-	)
+	//nolint:gosec // G101: PasswordHash is a test fixture bcrypt placeholder, not a real credential.
+	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           userID,
+		Username:     userID,
+		Email:        userID + "@test.local",
+		PasswordHash: "$2a$12$hash",
+		Status:       status,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, store.UserRepository().Create(context.Background(), u))
 }
@@ -64,7 +73,7 @@ func TestNew_NilDeps(t *testing.T) {
 		txMgr   interface{}
 		wantErr string
 	}{
-		{"nil invalidator", nil, store.UserRepository(), persistence.WrapForCell(fakeTxRunner{}), "Invalidator required"},
+		{"nil invalidator", nil, store.UserRepository(), persistence.WrapForCell(nilTxRunner{}), "Invalidator required"},
 		{"nil txMgr", inv, store.UserRepository(), nil, "CellTxManager required"},
 	}
 
@@ -76,12 +85,12 @@ func TestNew_NilDeps(t *testing.T) {
 	}
 
 	// nil invalidator
-	_, err = authzmutate.New(nil, store.UserRepository(), persistence.WrapForCell(fakeTxRunner{}))
+	_, err = authzmutate.New(nil, store.UserRepository(), persistence.WrapForCell(nilTxRunner{}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Invalidator required")
 
 	// nil repo passed as interface — use nil UserRepository
-	_, err = authzmutate.New(inv, nil, persistence.WrapForCell(fakeTxRunner{}))
+	_, err = authzmutate.New(inv, nil, persistence.WrapForCell(nilTxRunner{}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "UserRepository required")
 
@@ -175,15 +184,6 @@ func TestApply_AllMutations(t *testing.T) {
 			wantInvalidate: false,
 			wantEvent:      session.CredentialEventPasswordReset, // not consumed (Invalidates==false); pinned to regression-guard Event() return
 		},
-		{
-			name:           "RoleRevoked no-op on user fields but invalidates",
-			initialStatus:  domain.StatusActive,
-			mutation:       authzmutate.RoleRevoked{},
-			wantStatus:     domain.StatusActive,
-			wantResetFlag:  false,
-			wantInvalidate: true,
-			wantEvent:      session.CredentialEventRoleRevoke,
-		},
 	}
 
 	for _, tt := range tests {
@@ -193,7 +193,7 @@ func TestApply_AllMutations(t *testing.T) {
 			refreshStore := testutil.RealRefreshStore(t)
 			inv, err := credentialinvalidate.New(store.UserRepository(), sessionStore, refreshStore)
 			require.NoError(t, err)
-			mutator, err := authzmutate.New(inv, store.UserRepository(), persistence.WrapForCell(fakeTxRunner{}))
+			mutator, err := authzmutate.New(inv, store.UserRepository(), persistence.WrapForCell(store.TxRunner()))
 			require.NoError(t, err)
 
 			// Seed user with initial status and passwordResetRequired=false.

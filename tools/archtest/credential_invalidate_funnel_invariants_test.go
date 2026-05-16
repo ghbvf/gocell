@@ -109,7 +109,8 @@ const (
 // package calls credentialinvalidate.Invalidator.Apply in production code
 // (verified by grep; provisioner.go only calls SetPasswordResetRequired on a
 // freshly constructed aggregate at creation time). Removing them tightens the
-// rule. Wave 3 ADR author: §A10 should be updated to reflect this actual set.
+// rule. The canonical allowlist is documented in ADR §A10 and is now in sync
+// with this set.
 var upstreamCallerAllowlistPrefixes = []string{
 	"cells/accesscore/internal/credentialinvalidate/",
 	"cells/accesscore/internal/authzmutate/",
@@ -359,11 +360,12 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01 enforces
 // CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: every call to
 // credentialinvalidate.(*Invalidator).Apply in production code must come
-// from one of the allowlisted upstream entry points (identitymanage,
-// sessionrefresh, rbacassign, setup, adminprovision) or the funnel package
+// from one of the allowlisted upstream entry points (authzmutate,
+// identitymanage, sessionrefresh, rbacassign) or the funnel package
 // itself. New callers must justify their addition via a PR that updates
 // upstreamCallerAllowlistPrefixes — this puts the funnel's surface area on
-// the review reviewer's radar instead of relying on string convention.
+// the reviewer's radar instead of relying on string convention.
+// See ADR §A10 for the canonical allowlist and co-tx atomicity rationale.
 //
 // AI-rebust grade: Medium. The rule catches "wrong caller" (cells outside
 // the allowlist invoking Apply directly) but NOT "missing caller" (a new
@@ -416,10 +418,11 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 	assert.Empty(t, violations,
 		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: credentialinvalidate.Invalidator.Apply "+
 			"must only be called from the allowlisted upstream entry points "+
-			"(identitymanage, sessionrefresh, rbacassign, setup, adminprovision) "+
+			"(authzmutate, identitymanage, sessionrefresh, rbacassign) "+
 			"or the funnel package itself. Adding a new caller requires updating "+
 			"upstreamCallerAllowlistPrefixes; this puts the funnel surface on the "+
-			"reviewer's radar instead of relying on string convention.")
+			"reviewer's radar instead of relying on string convention. "+
+			"See ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A10.")
 
 	verifyRedFixtureDetected(t, root,
 		"./cells/accesscore/internal/credentialinvalidate/testdata/sessionlogin_direct_apply_red",

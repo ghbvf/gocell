@@ -266,3 +266,53 @@ func TestVerifyExpectedShape_RequiresFeatureFlagsVersion(t *testing.T) {
 	assert.True(t, containsColumn("feature_flags", "version"),
 		"expectedColumns must include feature_flags.version (migration 008 carry-over)")
 }
+
+// ---------------------------------------------------------------------------
+// TestVerifyExpectedShape_RequiredChecks028 — migration 028 CHECK constraints
+// ---------------------------------------------------------------------------
+
+// containsCheck returns true when expectedChecks contains an entry with the
+// given table and constraint name.
+func containsCheck(table, name string) bool {
+	for _, c := range expectedChecks {
+		if c.Table == table && c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// TestVerifyExpectedShape_RequiresAuthzEpochPositiveChecks verifies that all
+// three CHECK constraints added by migration 028 are declared in expectedChecks.
+// Each constraint enforces authz_epoch > 0 at the DB level as a hard invariant
+// so that any application path that bypasses the domain layer is caught at the
+// storage level (migration 028 / S4d P2.a).
+func TestVerifyExpectedShape_RequiresAuthzEpochPositiveChecks(t *testing.T) {
+	tests := []struct {
+		table      string
+		constraint string
+	}{
+		{
+			table:      "users",
+			constraint: "users_authz_epoch_positive",
+		},
+		{
+			table:      "sessions",
+			constraint: "sessions_authz_epoch_at_issue_positive",
+		},
+		{
+			table:      "refresh_tokens",
+			constraint: "refresh_tokens_authz_epoch_at_issue_positive",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.table+"/"+tc.constraint, func(t *testing.T) {
+			assert.True(t,
+				containsCheck(tc.table, tc.constraint),
+				"expectedChecks must include %s.%s (migration 028 authz_epoch positive invariant)",
+				tc.table, tc.constraint,
+			)
+		})
+	}
+}

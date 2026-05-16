@@ -45,16 +45,23 @@ type UserRepository interface {
 
 	// GetByIDForUpdate fetches a user by primary key inside an ambient
 	// transaction and acquires a row-level write lock (PG: SELECT ... FOR
-	// UPDATE; mem: serializes against concurrent writes via the store mutex).
-	// Required by S4d sessionlogin and authzmutate.Apply so that concurrent
-	// credential-invalidation (Invalidator.Apply) cannot interleave between
-	// user read and downstream session/refresh INSERT — without the row lock,
-	// login can mint tokens with a snapshot of users.authz_epoch that the
-	// in-flight Invalidator has already advanced (PR #490 review P1-#3).
+	// UPDATE; mem: acquires store write mutex). Required by S4d sessionlogin
+	// and authzmutate.Apply so that concurrent credential-invalidation
+	// (Invalidator.Apply) cannot interleave between user read and downstream
+	// session/refresh INSERT — without the row lock, login can mint tokens
+	// with a snapshot of users.authz_epoch that the in-flight Invalidator has
+	// already advanced (PR #490 review P1-#3).
 	//
-	// fail-fast enforced: calling without an ambient transaction returns an
-	// error (errcode.ErrInternal); the lock guarantee cannot silently degrade.
-	// PG impl fail-fasts; mem impl serializes via store mutex (no tx concept).
+	// Serialization contract differs by implementation:
+	//   - PG: fail-fast — returns errcode.ErrInternal without a pgx.Tx under
+	//     persistence.TxCtxKey (FOR UPDATE is meaningless outside a tx). This
+	//     is the production hard guarantee.
+	//   - mem: under the Store's own TxRunner the tx holds store.mu for the
+	//     whole closure → full FOR-UPDATE-until-commit serialization. Driven
+	//     by a foreign CellTxManager (corebundle PG-outbox topology,
+	//     ssobff/demo) it takes store.mu per call — functional; cross-statement
+	//     serialization holds only on the Store-TxRunner path. mem never
+	//     hard-fails on TxRunner pairing (that broke real composition roots, #501).
 	GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error)
 
 	// GetByUsernameForUpdate is the username-keyed counterpart to
@@ -62,8 +69,8 @@ type UserRepository interface {
 	// callers from password / lock paths (which already have the userID) use
 	// GetByIDForUpdate.
 	//
-	// fail-fast enforced: calling without an ambient transaction returns an
-	// error (errcode.ErrInternal); the lock guarantee cannot silently degrade.
-	// PG impl fail-fasts; mem impl serializes via store mutex (no tx concept).
+	// Serialization contract: same as GetByIDForUpdate (PG fail-fast hard
+	// guarantee; mem full serialization on Store-TxRunner, per-call lock under
+	// a foreign CellTxManager, never hard-fails on pairing).
 	GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error)
 }

@@ -124,8 +124,17 @@ func TestToUserResponseData_NilInput(t *testing.T) {
 
 func TestToUserResponseData_Fields(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	user, err := domain.ReconstituteUser("u1", "alice", "a@b.com", "secret-hash-bcrypt",
-		0, false, domain.StatusActive, domain.UserSourceIdentity, 1, now, now)
+	user, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           "u1",
+		Username:     "alice",
+		Email:        "a@b.com",
+		PasswordHash: "secret-hash-bcrypt",
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 	require.NoError(t, err)
 	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
 
@@ -577,8 +586,17 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 	oldHash, hashErr := bcrypt.GenerateFromPassword([]byte("oldpass12"), domain.BcryptCost)
 	require.NoError(t, hashErr)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	u409, reconErr := domain.ReconstituteUser(userID, "user-409", "u409@example.com", string(oldHash),
-		0, false, domain.StatusActive, domain.UserSourceIdentity, 1, now, now)
+	u409, reconErr := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           userID,
+		Username:     "user-409",
+		Email:        "u409@example.com",
+		PasswordHash: string(oldHash),
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 	require.NoError(t, reconErr)
 	require.NoError(t, repo.Create(context.Background(), u409))
 

@@ -70,16 +70,17 @@ type stubTxRunner struct{ calls int }
 
 func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
 	s.calls++
-	return fn(context.Background())
+	return fn(mem.WithTxContext(context.Background()))
 }
 
 // noopTxRunner is a pass-through TxRunner that implements cell.Nooper (Noop()==true),
 // signaling to the service that no real transaction is available (demo/test mode).
 // The service uses isNoopTx to decide whether to run explicit session cleanup on failure.
+// It injects the mem-tx sentinel so GetByUsernameForUpdate succeeds in the non-PG path.
 type noopTxRunner struct{}
 
 func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
+	return fn(mem.WithTxContext(ctx))
 }
 
 func (noopTxRunner) Noop() bool { return true }

@@ -85,15 +85,17 @@ func createTestUserInDB(t *testing.T, userRepo *PGUserRepo, suffix string) *doma
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	u, err := domain.ReconstituteUser(
-		uuid.NewString(),
-		"roletest_"+suffix,
-		"roletest_"+suffix+"@example.com",
-		"$2a$12$fakehash",
-		0, false, domain.StatusActive, domain.UserSourceIdentity,
-		1, // authzEpoch >= 1 (migration 028 CHECK constraint)
-		now, now,
-	)
+	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           uuid.NewString(),
+		Username:     "roletest_" + suffix,
+		Email:        "roletest_" + suffix + "@example.com",
+		PasswordHash: "$2a$12$fakehash",
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1, // authzEpoch >= 1 (migration 028 CHECK constraint)
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 	require.NoError(t, err)
 	require.NoError(t, userRepo.Create(ctx, u))
 	return u

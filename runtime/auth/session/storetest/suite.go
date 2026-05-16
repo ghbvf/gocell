@@ -156,8 +156,9 @@ const (
 	subjectA                = "subject-A"
 	subjectB                = "subject-B"
 	// fatal-format strings used by ≥3 cases — go-standards.md "同义字符串 ≥3 次抽常量".
-	errFmtCreate = "Create: %v"
-	errFmtGet    = "Get %s: %v"
+	errFmtCreate   = "Create: %v"
+	errFmtGet      = "Get %s: %v"
+	errFmtGetPlain = "Get: %v"
 )
 
 // runCreateGet — Create persists the record; Get returns the narrow
@@ -231,7 +232,7 @@ func runRevokeDirect(t *testing.T, factory Factory) {
 	}
 	got, err := store.Get(context.Background(), fixture.ID)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf(errFmtGetPlain, err)
 	}
 	if got.RevokedAt == nil {
 		t.Fatal("RevokedAt: expected non-nil after Revoke")
@@ -263,7 +264,7 @@ func runRevokeIdempotent(t *testing.T, factory Factory) {
 	}
 	got, err := store.Get(context.Background(), fixture.ID)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf(errFmtGetPlain, err)
 	}
 	if got.RevokedAt == nil {
 		t.Fatal("RevokedAt: expected non-nil after Revoke")
@@ -520,7 +521,7 @@ func runTS4D1GetRoundtripsEpoch(t *testing.T, factory Factory) {
 	}
 	got, err := store.Get(context.Background(), fixture.ID)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf(errFmtGetPlain, err)
 	}
 	if got.AuthzEpochAtIssue != wantEpoch {
 		t.Errorf("AuthzEpochAtIssue: got %d, want %d", got.AuthzEpochAtIssue, wantEpoch)

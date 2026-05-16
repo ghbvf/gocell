@@ -14,22 +14,47 @@ import (
 
 var _ ports.UserRepository = (*UserRepository)(nil)
 
-const msgUserNotFound = "user not found"
+const (
+	msgUserNotFound   = "user not found"
+	errMsgUsernameFmt = "username=%q"
+)
 
 // UserRepository is the in-memory implementation of ports.UserRepository.
 // It is always vended by Store.UserRepository() so the shared mutex covers
 // any cross-repo invariant (e.g. effective-admin checks in RoleRepository).
+//
+// # Lock contract
+//
+// Methods on UserRepository follow the single-lock rule (see store.go package
+// godoc). Each method checks isInMemTx(ctx):
+//
+//   - inside tx: store.mu is already held by memTxRunner.RunInTx on the
+//     calling goroutine — do NOT acquire store.mu (sync.Mutex is not reentrant;
+//     re-acquiring would deadlock).
+//   - outside tx: acquire store.mu for the duration of this method call.
+//
+// ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the same
+// rule: inside memTxRunner.RunInTx they read under the held store.mu and deliver
+// SELECT FOR UPDATE-until-commit serialization; driven by a foreign CellTxManager
+// (corebundle PG-outbox topology, ssobff/demo) they fall back to a per-call
+// store.mu read lock — functional, but the cross-statement serialization
+// guarantee holds only when the mem Store's own TxRunner drives the tx. PG is
+// the production path that provides the hard guarantee unconditionally.
 type UserRepository struct {
 	store *Store
 }
 
-func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Create persists a new User. Safe to call both inside and outside a RunInTx
+// closure; see UserRepository lock contract.
+func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	if _, exists := r.store.byName[user.Username]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
-			errcode.WithInternal(fmt.Sprintf("username=%q", user.Username)))
+			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, user.Username)))
 	}
 
 	c := cloneUser(user)
@@ -38,9 +63,13 @@ func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
 	return nil
 }
 
-func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// GetByID returns the User with the given ID. Safe to call both inside and
+// outside a RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[id]
 	if !ok {
@@ -51,57 +80,48 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 	return cloneUser(u), nil
 }
 
-func (r *UserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// GetByUsername returns the User with the given username. Safe to call both
+// inside and outside a RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.byName[username]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, username)))
 	}
 	return cloneUser(u), nil
 }
 
-// GetByIDForUpdate (S4d): mem implementation uses the store-wide Lock (RWMutex
-// in write mode), serializing against any concurrent write — including
-// Invalidator.Apply's BumpAuthzEpoch and RevokeForSubject. Because the mem
-// repo always vends from Store.UserRepository(), the shared mutex covers all
-// other writes for the duration of the ambient transaction's read-modify-write
-// cycle. Caller MUST be inside RunInTx; mem TxRunner serializes RunInTx body
-// to the same Store.mu so the lock semantics match PG SELECT FOR UPDATE in
-// practice.
-func (r *UserRepository) GetByIDForUpdate(_ context.Context, id string) (*domain.User, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
-
-	u, ok := r.store.usersByID[id]
-	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
-	}
-	return cloneUser(u), nil
+// GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
+// semantics. The mem store has no per-row lock distinct from GetByID — its
+// serialization unit is the whole memTxRunner.RunInTx closure holding store.mu
+// (full FOR-UPDATE-until-commit), or a per-call store.mu read under a foreign
+// CellTxManager. Both behaviors are exactly GetByID's lock contract, so this
+// is a deliberate, documented delegation: the ForUpdate vs plain distinction
+// is a PG-only concept the port preserves; mem cannot and need not differ.
+func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	return r.GetByID(ctx, id)
 }
 
-// GetByUsernameForUpdate (S4d): same locking semantics as GetByIDForUpdate.
-func (r *UserRepository) GetByUsernameForUpdate(_ context.Context, username string) (*domain.User, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
-
-	u, ok := r.store.byName[username]
-	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("username=%q", username)))
-	}
-	return cloneUser(u), nil
+// GetByUsernameForUpdate (S4d): username-keyed counterpart to
+// GetByIDForUpdate. Delegates to GetByUsername for the same reason — mem has
+// no row lock distinct from the plain read (see GetByIDForUpdate doc).
+func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
+	return r.GetByUsername(ctx, username)
 }
 
-func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Update replaces the stored User. Safe to call both inside and outside a
+// RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	existing, exists := r.store.usersByID[user.ID]
 	if !exists {
@@ -131,8 +151,9 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 
 // guardEffectiveAdminRemovalLocked refuses the in-progress mutation when
 // removing/demoting userID would leave zero effective admins. Caller MUST
-// already hold r.store.mu (write lock). Returns nil if the user does not
-// hold the admin role at all.
+// already hold r.store.mu (either from the non-tx lock in Update, or because
+// RunInTx holds it for the tx). Returns nil if the user does not hold the
+// admin role at all.
 func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 	roles, hasRoles := r.store.userRoles[userID]
 	if !hasRoles {
@@ -170,12 +191,19 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 // cloneUser creates a deep copy of a User to avoid sharing pointers across map entries.
 // Uses domain.ReconstituteUser so that private fields are faithfully copied.
 func cloneUser(u *domain.User) *domain.User {
-	clone, err := domain.ReconstituteUser(
-		u.ID, u.Username, u.Email, u.PasswordHash,
-		u.PasswordVersion, u.PasswordResetRequired(), u.Status(),
-		u.CreationSource, u.AuthzEpoch(),
-		u.CreatedAt, u.UpdatedAt,
-	)
+	clone, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		PasswordHash:          u.PasswordHash,
+		PasswordVersion:       u.PasswordVersion,
+		PasswordResetRequired: u.PasswordResetRequired(),
+		Status:                u.Status(),
+		Source:                u.CreationSource,
+		AuthzEpoch:            u.AuthzEpoch(),
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             u.UpdatedAt,
+	})
 	if err != nil {
 		// ReconstituteUser only fails on invalid values; a well-formed stored
 		// User cannot trigger this. Panic to surface corrupt store state early.
@@ -185,20 +213,23 @@ func cloneUser(u *domain.User) *domain.User {
 	return clone
 }
 
-// UpdatePassword applies a CAS-guarded password update.
+// UpdatePassword applies a CAS-guarded password update. Safe to call both
+// inside and outside a RunInTx closure; see UserRepository lock contract.
 //
 // If the stored PasswordVersion does not match expectedPV, it returns
 // ErrVersionConflict (KindConflict / HTTP 409). On success it returns the new
 // PasswordVersion (= expectedPV + 1).
 func (r *UserRepository) UpdatePassword(
-	_ context.Context,
+	ctx context.Context,
 	userID string,
 	newHash string,
 	resetRequired bool,
 	expectedPV int64,
 ) (int64, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[userID]
 	if !ok {
@@ -211,12 +242,19 @@ func (r *UserRepository) UpdatePassword(
 	}
 	// Rebuild via ReconstituteUser with updated fields so private fields are set correctly.
 	now := r.store.clock.Now()
-	updated, err := domain.ReconstituteUser(
-		u.ID, u.Username, u.Email, newHash,
-		u.PasswordVersion+1, resetRequired, u.Status(),
-		u.CreationSource, u.AuthzEpoch(),
-		u.CreatedAt, now,
-	)
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		PasswordHash:          newHash,
+		PasswordVersion:       u.PasswordVersion + 1,
+		PasswordResetRequired: resetRequired,
+		Status:                u.Status(),
+		Source:                u.CreationSource,
+		AuthzEpoch:            u.AuthzEpoch(),
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             now,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("mem: update-password reconstitute: %w", err)
 	}
@@ -226,11 +264,15 @@ func (r *UserRepository) UpdatePassword(
 }
 
 // BumpAuthzEpoch atomically increments the AuthzEpoch counter for the given
-// user and returns the new value. Returns ErrAuthUserNotFound when no user
-// matches userID.
-func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// user and returns the new value. Safe to call both inside and outside a
+// RunInTx closure; see UserRepository lock contract.
+//
+// Returns ErrAuthUserNotFound when no user matches userID.
+func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[userID]
 	if !ok {
@@ -240,12 +282,19 @@ func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64
 	}
 	newEpoch := u.AuthzEpoch() + 1
 	// Rebuild the stored user with the bumped epoch.
-	updated, err := domain.ReconstituteUser(
-		u.ID, u.Username, u.Email, u.PasswordHash,
-		u.PasswordVersion, u.PasswordResetRequired(), u.Status(),
-		u.CreationSource, newEpoch,
-		u.CreatedAt, u.UpdatedAt,
-	)
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		PasswordHash:          u.PasswordHash,
+		PasswordVersion:       u.PasswordVersion,
+		PasswordResetRequired: u.PasswordResetRequired(),
+		Status:                u.Status(),
+		Source:                u.CreationSource,
+		AuthzEpoch:            newEpoch,
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             u.UpdatedAt,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("mem: bump-authz-epoch reconstitute: %w", err)
 	}
@@ -254,9 +303,13 @@ func (r *UserRepository) BumpAuthzEpoch(_ context.Context, userID string) (int64
 	return newEpoch, nil
 }
 
-func (r *UserRepository) Delete(_ context.Context, id string) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Delete removes the User with the given ID. Safe to call both inside and
+// outside a RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) Delete(ctx context.Context, id string) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	u, ok := r.store.usersByID[id]
 	if !ok {

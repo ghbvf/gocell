@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
@@ -190,4 +191,247 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(goroutines)+1, got.AuthzEpoch(),
 		"100 concurrent BumpAuthzEpoch calls starting from epoch=1 must result in epoch == 101")
+}
+
+// ---------------------------------------------------------------------------
+// GetByIDForUpdate / GetByUsernameForUpdate graceful-fallback tests
+//
+// Regression guard (#501): the mem user repo is legitimately wired with a
+// FOREIGN CellTxManager in real composition roots — cmd/corebundle PGMode
+// pairs the mem user repo with the PG outbox tx manager in one cell tx, and
+// ssobff/demo use cell.DemoTxRunner. A hard fail-fast here returned 500 on
+// every such login. ForUpdate must therefore stay FUNCTIONAL outside a mem
+// tx (acquire store.mu per call), not error. Full FOR-UPDATE-until-commit
+// serialization is delivered only when driven by the Store's own TxRunner
+// (the InsideRunInTx tests below); PG is the production hard-guarantee path.
+// ---------------------------------------------------------------------------
+
+// TestGetByIDForUpdate_NoMemTx_StillFunctional: outside a mem tx (foreign
+// CellTxManager topology) GetByIDForUpdate must NOT error — it acquires
+// store.mu for the call and returns the row.
+func TestGetByIDForUpdate_NoMemTx_StillFunctional(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("forupdate", "forupdate@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-forupdate-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call WITHOUT a mem-tx sentinel → must succeed (per-call store.mu lock).
+	got, err := repo.GetByIDForUpdate(context.Background(), "usr-forupdate-001")
+	require.NoError(t, err, "GetByIDForUpdate must stay functional outside a mem tx (foreign TxRunner topology)")
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-forupdate-001", got.ID)
+
+	// Absent row → domain NotFound (not an infra error).
+	_, err = repo.GetByIDForUpdate(context.Background(), "nope")
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindNotFound, ce.Kind)
+}
+
+// TestGetByIDForUpdate_InsideRunInTx verifies that GetByIDForUpdate succeeds
+// when called inside Store.TxRunner().RunInTx (the sentinel is injected).
+func TestGetByIDForUpdate_InsideRunInTx(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("intx", "intx@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-intx-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call INSIDE RunInTx → must succeed.
+	var got *domain.User
+	txErr := store.TxRunner().RunInTx(context.Background(), func(ctx context.Context) error {
+		got, err = repo.GetByIDForUpdate(ctx, "usr-intx-001")
+		return err
+	})
+	require.NoError(t, txErr)
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-intx-001", got.ID)
+}
+
+// TestGetByUsernameForUpdate_NoMemTx_StillFunctional: same regression guard as
+// the ID variant — username-keyed ForUpdate must stay functional outside a
+// mem tx (this is the exact path that returned 500 on corebundle/ssobff login).
+func TestGetByUsernameForUpdate_NoMemTx_StillFunctional(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("forupdate-un", "forupdate-un@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-forupdate-un-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call WITHOUT a mem-tx sentinel → must succeed.
+	got, err := repo.GetByUsernameForUpdate(context.Background(), "forupdate-un")
+	require.NoError(t, err, "GetByUsernameForUpdate must stay functional outside a mem tx")
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-forupdate-un-001", got.ID)
+
+	_, err = repo.GetByUsernameForUpdate(context.Background(), "absent")
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindNotFound, ce.Kind)
+}
+
+// TestGetByUsernameForUpdate_InsideRunInTx verifies that GetByUsernameForUpdate
+// succeeds when called inside Store.TxRunner().RunInTx.
+func TestGetByUsernameForUpdate_InsideRunInTx(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("intx-un", "intx-un@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-intx-un-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// Call INSIDE RunInTx → must succeed.
+	var got *domain.User
+	txErr := store.TxRunner().RunInTx(context.Background(), func(ctx context.Context) error {
+		got, err = repo.GetByUsernameForUpdate(ctx, "intx-un")
+		return err
+	})
+	require.NoError(t, txErr)
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-intx-un-001", got.ID)
+}
+
+// TestGetByIDForUpdate_WithTxContext verifies that mem.WithTxContext can be
+// used by custom TxRunners to inject the sentinel for GetByIDForUpdate.
+func TestGetByIDForUpdate_WithTxContext(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("withctx", "withctx@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-withctx-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// WithTxContext must allow GetByIDForUpdate to succeed.
+	ctx := WithTxContext(context.Background())
+	got, err := repo.GetByIDForUpdate(ctx, "usr-withctx-001")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-withctx-001", got.ID)
+}
+
+// ---------------------------------------------------------------------------
+// R1: Single-lock model — no deadlock, serialization proof
+// ---------------------------------------------------------------------------
+
+// TestRunInTx_BumpAuthzEpoch_InsideTx verifies that BumpAuthzEpoch can be
+// called inside a RunInTx closure without deadlocking. This is the critical
+// case for credentialinvalidate.Apply (which calls BumpAuthzEpoch inside an
+// ambient tx produced by rbacassign / identitymanage).
+//
+// Before the R1 fix, RunInTx held store.mu and BumpAuthzEpoch re-acquired it,
+// causing an instant deadlock on sync.Mutex. This test would hang / fail with
+// -timeout if the deadlock is reintroduced.
+func TestRunInTx_BumpAuthzEpoch_InsideTx(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("epoch-intx", "epoch-intx@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-epoch-intx-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	var newEpoch int64
+	txErr := store.TxRunner().RunInTx(context.Background(), func(txCtx context.Context) error {
+		// GetByUsernameForUpdate + BumpAuthzEpoch both inside tx — must not deadlock.
+		_, err := repo.GetByUsernameForUpdate(txCtx, "epoch-intx")
+		if err != nil {
+			return err
+		}
+		newEpoch, err = repo.BumpAuthzEpoch(txCtx, "usr-epoch-intx-001")
+		return err
+	})
+	require.NoError(t, txErr)
+	assert.Equal(t, int64(2), newEpoch, "epoch must be 2 after one bump (initial=1)")
+}
+
+// TestRunInTx_Serialization_ConcurrentBumpEpochBlocked verifies that the
+// RunInTx write lock serializes concurrent BumpAuthzEpoch calls: one tx holds
+// the lock while the second is blocked. After tx-1 commits, tx-2 sees the
+// updated state. This proves the FOR-UPDATE-until-commit semantics.
+//
+// Specifically: tx-1 reads the user, bumps epoch to 2, sleeps, then commits.
+// A concurrent BumpAuthzEpoch (outside tx) must block during the sleep and
+// observe epoch=2 when it eventually acquires the lock (not epoch=1 which it
+// would see if the lock were not held for the duration).
+func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("serial-user", "serial@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-serial-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	// tx-1 signals that it has locked and is sleeping.
+	locked := make(chan struct{})
+	// tx-1 signals when it is done so the test can synchronize.
+	done := make(chan struct{})
+
+	// tx-1: hold the lock, bump epoch to 2, then signal.
+	go func() {
+		_ = store.TxRunner().RunInTx(context.Background(), func(txCtx context.Context) error {
+			_, _ = repo.BumpAuthzEpoch(txCtx, "usr-serial-001") // epoch: 1 → 2
+			close(locked)                                       // signal: lock held, proceed
+			// Hold the lock for a short duration to let tx-2 start blocking.
+			time.Sleep(testtime.D20ms) //archtest:allow:test-sleep hold lock so tx-2 blocks (serialization proof)
+			return nil
+		})
+		close(done)
+	}()
+
+	// Wait until tx-1 has the lock and has bumped the epoch.
+	<-locked
+
+	// tx-2 (outside RunInTx) calls BumpAuthzEpoch — must block until tx-1 releases.
+	epoch2, err := repo.BumpAuthzEpoch(context.Background(), "usr-serial-001")
+	<-done // tx-1 must have finished before us or concurrently with us
+
+	require.NoError(t, err)
+	// If serialization holds, tx-2 saw epoch=2 (set by tx-1) and bumped to 3.
+	// Without the lock, tx-2 could have raced and produced epoch=2 too (duplicate).
+	assert.Equal(t, int64(3), epoch2,
+		"tx-2 BumpAuthzEpoch must see tx-1's committed epoch (2) and produce epoch=3, proving serialization")
+}
+
+// TestRunInTx_NoDeadlock_GetByUsernameForUpdateAndBump verifies that calling
+// both GetByUsernameForUpdate AND BumpAuthzEpoch inside the same RunInTx
+// closure does not deadlock. This is the exact pattern used in loginInTx.
+func TestRunInTx_NoDeadlock_GetByUsernameForUpdateAndBump(t *testing.T) {
+	store := NewStore(clock.Real())
+	repo := store.UserRepository()
+
+	user, err := domain.NewUser("nodeadlock", "nodeadlock@example.com", "$2a$12$hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-nodeadlock-001"
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	done := make(chan error, 1)
+	go func() {
+		err := store.TxRunner().RunInTx(context.Background(), func(txCtx context.Context) error {
+			// Mimic loginInTx: ForUpdate read then subsequent write.
+			_, err := repo.GetByUsernameForUpdate(txCtx, "nodeadlock")
+			if err != nil {
+				return err
+			}
+			_, err = repo.BumpAuthzEpoch(txCtx, "usr-nodeadlock-001")
+			return err
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "RunInTx with ForUpdate+BumpEpoch must not deadlock or fail")
+	case <-time.After(testtime.D2s):
+		t.Fatal("DEADLOCK DETECTED: RunInTx with ForUpdate+BumpAuthzEpoch blocked for >2s")
+	}
 }

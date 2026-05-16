@@ -1,30 +1,43 @@
 package archtest
 
-// domain_authz_mutation_funnel_invariants_test.go — two Hard invariants
-// completing the S4e authz-mutation funnel closure.
+// domain_authz_mutation_funnel_invariants_test.go — two invariants completing
+// the S4e authz-mutation funnel closure.
 //
 // INVARIANT: DOMAIN-AUTHZ-FIELD-PRIVATE-01
 // INVARIANT: AUTHZ-MUTATION-APPLY-FUNNEL-01
 //
-// AI-rebust grade: Hard (both rules).
+// Funnel 双向锁评级 (ai-collab.md §"Funnel 双向锁评级"):
 //
-// Hard property for DOMAIN-AUTHZ-FIELD-PRIVATE-01:
-//   Cross-package write of domain.User authz fields (status,
-//   passwordResetRequired, authzEpoch) is ALREADY a compile error because the
-//   fields are unexported. This archtest's primary job is to prevent regression
-//   via re-export (someone changing `status` to `Status`), the addition of a new
-//   public setter beyond the two sanctioned ones (SetStatus /
-//   SetPasswordResetRequired), or reflection-based writes. The compile-time
-//   privatization guarantee is primary; this test is the regression net.
+//   Downstream Hard (DOMAIN-AUTHZ-FIELD-PRIVATE-01):
+//     Cross-package write of domain.User authz fields (status,
+//     passwordResetRequired, authzEpoch) is a compile error because the fields
+//     are unexported — this is the compile-time privatization Hard guarantee.
+//     This archtest is the regression net: it fires before a re-export ever
+//     reaches a build. Addition of a new public setter beyond the two
+//     sanctioned ones, or a reflection-based write, would be caught here.
 //
-// Hard property for AUTHZ-MUTATION-APPLY-FUNNEL-01 (Rule a — SetStatus /
-// SetPasswordResetRequired caller set):
-//   "Form uniqueness" = "call resolves to this exact *types.Func identity via
-//   typeseval.ResolveMethodCall". Any call site outside the allowlist fails
-//   archtest in CI with no gray zone. Honest caveat: Go does not prevent the
-//   calls at compile time (the methods are exported and accessible to any
-//   package that can import domain); enforcement is archtest-bound. This is the
-//   highest Hard grade reachable in Go for exported-method caller restriction.
+//   Downstream Hard (AUTHZ-MUTATION-APPLY-FUNNEL-01, Rule a — SetStatus /
+//   SetPasswordResetRequired caller set):
+//     "Form uniqueness" = "call resolves to this exact *types.Func identity via
+//     typeseval.ResolveMethodCall". Any call site outside the narrowed file-level
+//     allowlist fails archtest in CI with no gray zone. Honest caveat: Go does
+//     not prevent the calls at compile time (the methods are exported); enforcement
+//     is archtest-bound. This is the highest Hard grade reachable in Go for
+//     exported-method caller restriction.
+//
+//   Upstream Medium-by-necessity (caller-set upper-bound):
+//     The upstream guarantee — that all live-aggregate authz mutations MUST go
+//     through authzmutate.Mutator.Apply — is Medium, not Hard, because:
+//     (a) identitymanage/service.go and adminprovision/provisioner.go legitimately
+//     call SetPasswordResetRequired at creation time (no live sessions yet);
+//     routing through authzmutate would be semantically wrong.
+//     (b) sealed interfaces or codegen cannot express "creation-time-only" as a
+//     compile-time invariant without redesigning the domain model.
+//     The Medium ceiling is an accepted architectural trade-off; the file-level
+//     allowlist (not package-level) is the tightest achievable restriction:
+//     only the exact files that contain creation-time calls are allowlisted.
+//     See backlog item AUTHZ-MUTATION-FUNNEL-UPSTREAM-HARD-01 for future Hard
+//     upgrade path via domain model redesign.
 //
 // Relationship to CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (Rule b):
 //   The Hard closure of the P1.2 / P1-#1 regression class is Rule (a) above —
@@ -42,6 +55,14 @@ package archtest
 //   rbacassign/, sessionrefresh/} + the funnel package itself.
 //   Wave 3 ADR author: the P1 regression class is closed at Rule (a), not at
 //   Rule (b). §A10 should be updated to reflect the actual caller set.
+//
+// Allowlist precision (D1 RC-D hardening):
+//   The allowlist was narrowed from package-level prefixes to file-level paths
+//   for the two creation-time call sites (identitymanage/service.go and
+//   adminprovision/provisioner.go). Any new file in those packages that adds a
+//   direct setter call will fail the archtest immediately, without requiring a
+//   separate allowlist entry. This is the tightest achievable restriction given
+//   the Medium upstream ceiling.
 //
 // Scanning tool: typeseval.SharedResolver + typeseval.ResolveMethodCall +
 // scanner.EachInSubtree[ast.CallExpr] for Rule (a);
@@ -135,41 +156,61 @@ var sanctionedSetters = map[string]bool{
 // sanctionedSetters are flagged.
 var authzSetterPrefixes = []string{"Set", "Mark", "Clear", "Lock", "Unlock"}
 
-// setMutatorAllowlistPrefixes lists the module-relative path prefixes whose
-// production code is permitted to call domain.User.SetStatus or
+// setMutatorAllowlist lists the module-relative paths whose production code is
+// permitted to call domain.User.SetStatus or
 // domain.User.SetPasswordResetRequired directly.
 //
+// Entries ending in "/" are package-level prefixes (all files in the package).
+// Entries ending in ".go" are exact file paths (only that file).
+//
 // Allowlist rationale:
-//   - cells/accesscore/internal/authzmutate/ — the primary funnel. All
-//     live-aggregate authz mutations route through Mutator.Apply which
-//     calls mutation.apply() which calls SetStatus / SetPasswordResetRequired.
-//   - cells/accesscore/internal/adminprovision/ — creation-time only. No live
-//     sessions exist for a brand-new user (epoch=1). SetPasswordResetRequired
-//     is called on a freshly constructed aggregate before any session exists.
-//     authzmutate.Apply is for mutating existing principals, not initial
-//     construction. Allowlisted per provisioner.go createAdminUser comment.
-//   - cells/accesscore/internal/domain/ — the methods' own package.
-//   - cells/accesscore/slices/identitymanage/ — creation-time only. service.go
-//     calls SetPasswordResetRequired on a freshly constructed user aggregate.
-//     Allowlisted per service.go "Creation-time: no live sessions exist" comment.
+//   - cells/accesscore/internal/authzmutate/ — the primary funnel (package
+//     prefix). All live-aggregate authz mutations route through Mutator.Apply
+//     which calls mutation.apply() → SetStatus / SetPasswordResetRequired.
+//     The entire package is allowlisted because any future mutation type
+//     added here is legitimate funnel code.
+//   - cells/accesscore/internal/adminprovision/provisioner.go — creation-time
+//     only (exact file). No live sessions exist for a brand-new user (epoch=1).
+//     SetPasswordResetRequired is called on a freshly constructed aggregate
+//     before any session exists. authzmutate.Apply is for mutating existing
+//     principals, not initial construction. Any NEW file in adminprovision/
+//     that adds a direct setter call MUST be reviewed and explicitly added here.
+//   - cells/accesscore/internal/domain/ — the methods' own package (package
+//     prefix). SetStatus and SetPasswordResetRequired are defined here.
+//   - cells/accesscore/slices/identitymanage/service.go — creation-time only
+//     (exact file). service.go calls SetPasswordResetRequired on a freshly
+//     constructed user aggregate (identitymanage create path). Any NEW file in
+//     identitymanage/ that adds a direct setter call MUST be reviewed and
+//     explicitly added here.
 //
 // _test.go files are always allowed.
-var setMutatorAllowlistPrefixes = []string{
+var setMutatorAllowlist = []string{
 	"cells/accesscore/internal/authzmutate/",
-	"cells/accesscore/internal/adminprovision/",
+	"cells/accesscore/internal/adminprovision/provisioner.go",
 	"cells/accesscore/internal/domain/",
-	"cells/accesscore/slices/identitymanage/",
+	"cells/accesscore/slices/identitymanage/service.go",
 }
 
 // isSetMutatorAllowlisted reports whether a module-relative path is in the
 // set-mutator allowlist. Test files (*_test.go) always pass.
+//
+// Entries ending in "/" match any file under that directory prefix.
+// Entries ending in ".go" match only that exact file.
 func isSetMutatorAllowlisted(rel string) bool {
 	if strings.HasSuffix(rel, "_test.go") {
 		return true
 	}
-	for _, prefix := range setMutatorAllowlistPrefixes {
-		if strings.HasPrefix(rel, prefix) {
-			return true
+	for _, entry := range setMutatorAllowlist {
+		if strings.HasSuffix(entry, "/") {
+			// Package-level prefix: match any file under this directory.
+			if strings.HasPrefix(rel, entry) {
+				return true
+			}
+		} else {
+			// Exact file path.
+			if rel == entry {
+				return true
+			}
 		}
 	}
 	return false
@@ -315,13 +356,13 @@ func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, lab
 // TestAuthzMutationApplyFunnel_SetStatus_01 enforces Rule (a) of
 // AUTHZ-MUTATION-APPLY-FUNNEL-01: every call to domain.User.SetStatus or
 // domain.User.SetPasswordResetRequired in non-test production code must
-// originate from the allowlisted packages.
+// originate from an entry in setMutatorAllowlist.
 //
-// Allowlist (see setMutatorAllowlistPrefixes for rationale):
-//   - cells/accesscore/internal/authzmutate/ — primary funnel
-//   - cells/accesscore/internal/adminprovision/ — creation-time only
-//   - cells/accesscore/internal/domain/ — methods' own package
-//   - cells/accesscore/slices/identitymanage/ — creation-time only
+// Allowlist (see setMutatorAllowlist for rationale):
+//   - cells/accesscore/internal/authzmutate/ — primary funnel (package prefix)
+//   - cells/accesscore/internal/adminprovision/provisioner.go — creation-time only (exact file)
+//   - cells/accesscore/internal/domain/ — methods' own package (package prefix)
+//   - cells/accesscore/slices/identitymanage/service.go — creation-time only (exact file)
 //
 // RED fixture: cells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red
 // simulates an rbacassign caller invoking SetStatus directly — must detect ≥ 1.

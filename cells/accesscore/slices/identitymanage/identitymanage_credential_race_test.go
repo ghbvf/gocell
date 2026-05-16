@@ -67,10 +67,13 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 
 	// Stub issuer — ChangePassword needs IssueForUser after the tx. The stub
 	// returns an empty token pair (sufficient for race testing).
+	// Use the store-bound TxRunner so concurrent goroutines are serialized via
+	// the store mutex (simpleTxRunner injects the sentinel without holding the
+	// lock, which causes concurrent map writes under -race).
 	svc, err := NewService(userRepo, inv, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(simpleTxRunner{})),
+		WithTxManager(persistence.WrapForCell(memStore.TxRunner())),
 	)
 	require.NoError(t, err)
 
@@ -162,10 +165,13 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	refreshStore := newIdentityRefreshStore()
 	inv := newInvalidator(t, userRepo, sessionStore, refreshStore)
 
+	// Use the store-bound TxRunner to serialize concurrent mutations via the
+	// store mutex (simpleTxRunner does not hold the lock, which races under
+	// concurrent access).
 	svc, err := NewService(userRepo, inv, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(simpleTxRunner{})),
+		WithTxManager(persistence.WrapForCell(memStore.TxRunner())),
 	)
 	require.NoError(t, err)
 

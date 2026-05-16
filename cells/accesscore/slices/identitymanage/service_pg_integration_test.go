@@ -151,11 +151,17 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 	require.NoError(t, err)
 
 	nowTS := time.Now().UTC().Truncate(time.Millisecond)
-	user, err := domain.ReconstituteUser(
-		uuid.NewString(), "pg-cas-race-user", "pg-cas-race@example.com", string(hash),
-		0, false, domain.StatusActive, domain.UserSourceIdentity,
-		1, nowTS, nowTS,
-	)
+	user, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           uuid.NewString(),
+		Username:     "pg-cas-race-user",
+		Email:        "pg-cas-race@example.com",
+		PasswordHash: string(hash),
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    nowTS,
+		UpdatedAt:    nowTS,
+	})
 	require.NoError(t, err)
 	require.NoError(t, repo.Create(ctx, user))
 

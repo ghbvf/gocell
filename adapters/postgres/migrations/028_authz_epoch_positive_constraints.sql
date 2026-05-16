@@ -28,9 +28,9 @@
 -- the epoch value explicitly (insertUserSQL sets $8=user.AuthzEpoch(); session
 -- and refresh stores set the value in their INSERT statements).
 --
--- schema_guard.go continues to assert only column type / NOT NULL (no CHECK
--- introspection is added). Migration 028 is the single hard source for the
--- CHECK constraint. Any future schema_guard upgrade should look here.
+-- schema_guard.go asserts column type / NOT NULL and registers each CHECK
+-- constraint name in expectedChecks (verifyChecks path). Both this migration
+-- and schema_guard.expectedChecks are authoritative — they must remain in sync.
 --
 -- ref: ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A8
 

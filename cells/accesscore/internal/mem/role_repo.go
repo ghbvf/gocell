@@ -24,7 +24,8 @@ type RoleRepository struct {
 	store *Store
 }
 
-// SeedRole adds a role for testing purposes.
+// SeedRole adds a role directly into the store for testing purposes. It
+// always acquires the lock because seed calls are never inside a RunInTx.
 func (r *RoleRepository) SeedRole(role *domain.Role) {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
@@ -36,9 +37,13 @@ func (r *RoleRepository) SeedRole(role *domain.Role) {
 
 // Create persists a new role. Idempotent: if a role with the same ID already
 // exists, it is silently overwritten (upsert semantics for seed/bootstrap).
-func (r *RoleRepository) Create(_ context.Context, role *domain.Role) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Safe to call both inside and outside a RunInTx closure; see the lock
+// contract on UserRepository (same rules apply here).
+func (r *RoleRepository) Create(ctx context.Context, role *domain.Role) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 	clone := *role
 	clone.Permissions = make([]domain.Permission, len(role.Permissions))
 	copy(clone.Permissions, role.Permissions)
@@ -46,9 +51,13 @@ func (r *RoleRepository) Create(_ context.Context, role *domain.Role) error {
 	return nil
 }
 
-func (r *RoleRepository) GetByID(_ context.Context, id string) (*domain.Role, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// GetByID returns the Role with the given ID. Safe to call both inside and
+// outside a RunInTx closure; see the lock contract on UserRepository.
+func (r *RoleRepository) GetByID(ctx context.Context, id string) (*domain.Role, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	role, ok := r.store.roles[id]
 	if !ok {
@@ -60,9 +69,13 @@ func (r *RoleRepository) GetByID(_ context.Context, id string) (*domain.Role, er
 	return &clone, nil
 }
 
-func (r *RoleRepository) GetByUserID(_ context.Context, userID string) ([]*domain.Role, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// GetByUserID returns all roles assigned to userID. Safe to call both inside
+// and outside a RunInTx closure; see the lock contract on UserRepository.
+func (r *RoleRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	roleIDs, ok := r.store.userRoles[userID]
 	if !ok {
@@ -79,9 +92,13 @@ func (r *RoleRepository) GetByUserID(_ context.Context, userID string) ([]*domai
 	return result, nil
 }
 
-func (r *RoleRepository) AssignToUser(_ context.Context, userID, roleID string) (bool, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// AssignToUser assigns roleID to userID. Safe to call both inside and outside
+// a RunInTx closure; see the lock contract on UserRepository.
+func (r *RoleRepository) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	if _, ok := r.store.roles[roleID]; !ok {
 		return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
@@ -99,9 +116,14 @@ func (r *RoleRepository) AssignToUser(_ context.Context, userID, roleID string) 
 	return true, nil
 }
 
-func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string) error {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// RemoveFromUser removes roleID from userID unconditionally. Safe to call
+// both inside and outside a RunInTx closure; see the lock contract on
+// UserRepository.
+func (r *RoleRepository) RemoveFromUser(ctx context.Context, userID, roleID string) error {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	if roles, ok := r.store.userRoles[userID]; ok {
 		delete(roles, roleID)
@@ -128,12 +150,15 @@ func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string
 // Non-admin roles are removed unconditionally (matches the trigger scope
 // `IF OLD.role_id <> 'admin' THEN RETURN OLD;`).
 //
-// Holds the store write lock for both the read and the removal so the check
-// is TOCTOU-free across users + role_assignments — mirrors the PG
-// advisory-lock + FOR UPDATE OF u serialization.
-func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) (bool, error) {
-	r.store.mu.Lock()
-	defer r.store.mu.Unlock()
+// Acquires the store write lock when called outside a RunInTx (making the
+// check TOCTOU-free) — mirrors the PG advisory-lock + FOR UPDATE OF u
+// serialization. Safe to call both inside and outside a RunInTx closure; see
+// the lock contract on UserRepository.
+func (r *RoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 
 	// Check if user actually holds the role.
 	userHoldsRole := false
@@ -172,9 +197,11 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 	return true, nil
 }
 
-// ListByUserID returns paginated roles for userID sorted per params.
-func (r *RoleRepository) ListByUserID(_ context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
-	roles := r.rolesByUserSnapshot(userID)
+// ListByUserID returns paginated roles for userID sorted per params. Safe to
+// call both inside and outside a RunInTx closure; see the lock contract on
+// UserRepository.
+func (r *RoleRepository) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
+	roles := r.rolesByUserSnapshot(ctx, userID)
 
 	query.Sort(roles, params.Sort, compareRoleField)
 	result, err := query.ApplyCursor(roles, params, roleFieldValue)
@@ -184,9 +211,11 @@ func (r *RoleRepository) ListByUserID(_ context.Context, userID string, params q
 	return result, nil
 }
 
-func (r *RoleRepository) rolesByUserSnapshot(userID string) []*domain.Role {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+func (r *RoleRepository) rolesByUserSnapshot(ctx context.Context, userID string) []*domain.Role {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 	roleIDs, ok := r.store.userRoles[userID]
 	if !ok {
 		return []*domain.Role{}
@@ -229,10 +258,13 @@ func roleFieldValue(r *domain.Role, field string) any {
 // CountByRole returns the total count of role_assignments for roleID,
 // regardless of user status. Used for bootstrap idempotency
 // (adminprovision); MUST NOT be used as the last-admin invariant counter —
-// see CountEffectiveAdmins.
-func (r *RoleRepository) CountByRole(_ context.Context, roleID string) (int, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// see CountEffectiveAdmins. Safe to call both inside and outside a RunInTx
+// closure; see the lock contract on UserRepository.
+func (r *RoleRepository) CountByRole(ctx context.Context, roleID string) (int, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 	count := 0
 	for _, roleIDs := range r.store.userRoles {
 		if _, ok := roleIDs[roleID]; ok {
@@ -244,14 +276,14 @@ func (r *RoleRepository) CountByRole(_ context.Context, roleID string) (int, err
 
 // CountEffectiveAdmins returns the number of users that are simultaneously
 // status='active' AND hold the admin role. Satisfies the domain.
-// EffectiveAdminCounter sealed interface (S4.0 invariant counter).
-//
-// Held under the shared store RLock so the user.status read and the
-// role_assignments read are atomic — mirrors PG's advisory xact lock +
-// FOR UPDATE OF u serialization.
-func (r *RoleRepository) CountEffectiveAdmins(_ context.Context) (int, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// EffectiveAdminCounter sealed interface (S4.0 invariant counter). Safe to
+// call both inside and outside a RunInTx closure; see the lock contract on
+// UserRepository.
+func (r *RoleRepository) CountEffectiveAdmins(ctx context.Context) (int, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 	count := 0
 	for userID, roleIDs := range r.store.userRoles {
 		if _, hasAdmin := roleIDs[auth.RoleAdmin]; !hasAdmin {
@@ -272,11 +304,14 @@ func (r *RoleRepository) CountEffectiveAdmins(_ context.Context) (int, error) {
 }
 
 // EffectiveAdminExists implements ports.RoleRepository — see the port godoc
-// for fast-path semantics. RLock-only, returns true on the first match
-// (constant-time-ish for typical small user sets).
-func (r *RoleRepository) EffectiveAdminExists(_ context.Context) (bool, error) {
-	r.store.mu.RLock()
-	defer r.store.mu.RUnlock()
+// for fast-path semantics. Returns true on the first match (constant-time-ish
+// for typical small user sets). Safe to call both inside and outside a
+// RunInTx closure; see the lock contract on UserRepository.
+func (r *RoleRepository) EffectiveAdminExists(ctx context.Context) (bool, error) {
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
 	for userID, roleIDs := range r.store.userRoles {
 		if _, hasAdmin := roleIDs[auth.RoleAdmin]; !hasAdmin {
 			continue

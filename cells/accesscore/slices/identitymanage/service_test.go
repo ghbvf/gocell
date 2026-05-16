@@ -42,11 +42,13 @@ func adminCtxForService() context.Context {
 // care about the token pair content.
 var minimalStubIssuer TokenIssuer = &stubTokenIssuer{}
 
-// simpleTxRunner is a test-only pass-through TxRunner (no real transaction).
+// simpleTxRunner is a test-only pass-through TxRunner. It injects the mem-tx
+// sentinel so GetByIDForUpdate / GetByUsernameForUpdate succeed when called
+// through authzmutate paths that use a mem.Store repository.
 type simpleTxRunner struct{}
 
 func (simpleTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
+	return fn(mem.WithTxContext(ctx))
 }
 
 var _ persistence.TxRunner = simpleTxRunner{}
@@ -987,6 +989,100 @@ func TestService_Update_OmittedFieldNoChange(t *testing.T) {
 	assert.Equal(t, "new@omit.com", updated.Email)
 }
 
+// ---------------------------------------------------------------------------
+// A1: resolveCredentialMutation combined-authz-fields conflict detection
+// ---------------------------------------------------------------------------
+
+// TestService_Update_CombinedAuthzFields_Rejected is the RED→GREEN table-driven
+// test for A1: a PATCH that provides both status and requirePasswordReset in a
+// single request must be rejected deterministically with HTTP 400
+// (KindInvalid / ErrAuthIdentityInvalidInput). Pre-fix the call silently
+// discarded requirePasswordReset; post-fix both are rejected.
+func TestService_Update_CombinedAuthzFields_Rejected(t *testing.T) {
+	trueVal := true
+	falseVal := false
+	suspended := "suspended"
+	active := "active"
+
+	tests := []struct {
+		name                 string
+		status               *string
+		requirePasswordReset *bool
+	}{
+		{
+			name:                 "suspended+require=true",
+			status:               &suspended,
+			requirePasswordReset: &trueVal,
+		},
+		{
+			name:                 "suspended+require=false",
+			status:               &suspended,
+			requirePasswordReset: &falseVal,
+		},
+		{
+			name:                 "active+require=true",
+			status:               &active,
+			requirePasswordReset: &trueVal,
+		},
+		{
+			name:                 "active+require=false",
+			status:               &active,
+			requirePasswordReset: &falseVal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, repo := newServiceWithIssuer(t, nil)
+			seedUserWithHash(t, repo, "combined-authz-"+tt.name, "pass", false)
+			userID := "usr-combined-authz-" + tt.name
+
+			_, err := svc.Update(adminCtxForService(), UpdateInput{
+				ID:                   userID,
+				Status:               tt.status,
+				RequirePasswordReset: tt.requirePasswordReset,
+			})
+			require.Error(t, err, "combined status+requirePasswordReset must be rejected")
+			var ce *errcode.Error
+			require.ErrorAs(t, err, &ce)
+			assert.Equal(t, errcode.KindInvalid, ce.Kind, "must be HTTP 400")
+			assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ce.Code)
+			assert.Contains(t, ce.Message, "cannot both be set")
+		})
+	}
+}
+
+// TestService_Update_StatusAlone_NotRejected asserts that providing only status
+// (no requirePasswordReset) still succeeds — confirming the guard is additive
+// and does not break the happy path.
+func TestService_Update_StatusAlone_NotRejected(t *testing.T) {
+	svc, repo := newServiceWithIssuer(t, nil)
+	seedUserWithHash(t, repo, "status-alone", "pass", false)
+
+	suspended := "suspended"
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
+		ID:     "usr-status-alone",
+		Status: &suspended,
+	})
+	require.NoError(t, err, "status-only update must still succeed")
+	assert.Equal(t, domain.StatusSuspended, updated.Status())
+}
+
+// TestService_Update_RequirePasswordResetAlone_NotRejected asserts that
+// providing only requirePasswordReset (no status) still succeeds.
+func TestService_Update_RequirePasswordResetAlone_NotRejected(t *testing.T) {
+	svc, repo := newServiceWithIssuer(t, nil)
+	seedUserWithHash(t, repo, "flag-alone", "pass", false)
+
+	trueVal := true
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
+		ID:                   "usr-flag-alone",
+		RequirePasswordReset: &trueVal,
+	})
+	require.NoError(t, err, "requirePasswordReset-only update must still succeed")
+	assert.True(t, updated.PasswordResetRequired())
+}
+
 // failingPublisher returns an error on every Publish call, used to drive the
 // publisher-error warn-log branch in Service.publish (demo mode).
 type failingPublisher struct{ err error }
@@ -1027,6 +1123,8 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 // recordingTxRunner observes whether the wrapped repository call happened
 // inside RunInTx. inTx is true only between RunInTx invocation and the
 // closure's return. runs counts how many times RunInTx was invoked.
+// It injects the mem-tx sentinel so GetByIDForUpdate / GetByUsernameForUpdate
+// succeed when called through authzmutate paths that use a mem.Store repository.
 type recordingTxRunner struct {
 	inTx bool
 	runs int
@@ -1036,7 +1134,7 @@ func (r *recordingTxRunner) RunInTx(ctx context.Context, fn func(context.Context
 	r.runs++
 	r.inTx = true
 	defer func() { r.inTx = false }()
-	return fn(ctx)
+	return fn(mem.WithTxContext(ctx))
 }
 
 // observingUserRepo snapshots `runner.inTx` at the moment GetByID / Update
@@ -1560,6 +1658,91 @@ func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthUnauthorized, ec.Code,
 		"Lock without auth context must return ErrAuthUnauthorized")
+}
+
+// ---------------------------------------------------------------------------
+// F2: resolveCredentialMutationFromUser — in-tx idempotency check (no pre-tx GetByID)
+// ---------------------------------------------------------------------------
+
+// countingUserRepo wraps a real repo and counts GetByID calls so tests can
+// assert that no extra GetByID is issued outside the transaction for the
+// RequirePasswordReset idempotency check (F2 fix).
+type countingUserRepo struct {
+	ports.UserRepository
+	getByIDCalls int
+}
+
+func (r *countingUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	r.getByIDCalls++
+	return r.UserRepository.GetByID(ctx, id)
+}
+
+// TestService_Update_RequirePasswordReset_NoExtraGetByIDOutsideTx verifies
+// that when RequirePasswordReset=true is sent for a user that does NOT already
+// have the flag set, Update issues exactly ONE GetByID call (inside tx1) and
+// no pre-tx GetByID (F2 TOCTOU fix).
+//
+// Before the F2 fix, resolveCredentialMutation called s.repo.GetByID(ctx, id)
+// outside the tx for the idempotency check, then tx1 called GetByID again
+// inside the tx — two total calls. After the fix only the in-tx call remains.
+func TestService_Update_RequirePasswordReset_NoExtraGetByIDOutsideTx(t *testing.T) {
+	t.Parallel()
+	inner := mem.NewStore(clock.Real()).UserRepository()
+	cRepo := &countingUserRepo{UserRepository: inner}
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	svc, err := NewService(cRepo, newInvalidator(t, cRepo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+	require.NoError(t, err)
+
+	// Seed a user without the flag set.
+	seedUserWithHash(t, inner, "f2-no-extra-get", "pw", false)
+	cRepo.getByIDCalls = 0 // reset after seed
+
+	trueVal := true
+	_, err = svc.Update(adminCtxForService(), UpdateInput{
+		ID:                   "usr-f2-no-extra-get",
+		RequirePasswordReset: &trueVal,
+	})
+	require.NoError(t, err)
+	// The in-tx GetByID is 1 call (from tx1). authzmutate.Apply does its own
+	// GetByIDForUpdate (not counted here), plus re-fetch after mutation = 1 more.
+	// Neither is the pre-tx extra call that F2 eliminates.
+	// Key invariant: no GetByID is called BEFORE the first RunInTx (i.e., none
+	// at the top of applyUserUpdate before the tx opens). We cannot easily
+	// distinguish in-tx from out-of-tx here without the observingUserRepo, but
+	// the count is bounded by: 1 (tx1 GetByID) + 1 (re-fetch after mutation) = 2.
+	// Pre-F2 the count was 3 (pre-tx GetByID + tx1 GetByID + re-fetch).
+	assert.LessOrEqual(t, cRepo.getByIDCalls, 2,
+		"F2: Update(requirePasswordReset=true) must issue at most 2 GetByID calls "+
+			"(in-tx + re-fetch); pre-tx extra GetByID was eliminated")
+}
+
+// TestService_Update_RequirePasswordReset_AlreadySet_NoMutation verifies that
+// when RequirePasswordReset=true is sent for a user that already has the flag
+// set, the idempotency check (now reading from the tx-locked row) correctly
+// returns no-op — no authzmutate.Apply is invoked, so authz_epoch is not bumped.
+func TestService_Update_RequirePasswordReset_AlreadySet_NoMutation(t *testing.T) {
+	t.Parallel()
+	svc, repo := newServiceWithIssuer(t, nil)
+	// Seed with flag already true.
+	seedUserWithHash(t, repo, "f2-already-set", "pw", true)
+
+	trueVal := true
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
+		ID:                   "usr-f2-already-set",
+		RequirePasswordReset: &trueVal,
+	})
+	require.NoError(t, err, "already-set idempotent call must succeed")
+	assert.True(t, updated.PasswordResetRequired(),
+		"flag must remain true after no-op idempotent call")
+	// Epoch should not have changed (no invalidation triggered).
+	after, err := repo.GetByID(context.Background(), "usr-f2-already-set")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), after.AuthzEpoch(),
+		"F2: idempotent RequirePasswordReset=true must NOT bump authz_epoch "+
+			"when flag is already set (no spurious session invalidation)")
 }
 
 // TestService_Lock_PublishFailureAbortsBeforeLog asserts the success log
