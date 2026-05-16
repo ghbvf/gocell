@@ -451,56 +451,30 @@ func (g *Generator) renderAssemblyScaffoldFiles(
 	return plan, nil
 }
 
-// validateAssemblyPathComponent rejects path traversal sequences, path
-// separators, AND newline / carriage-return / NUL control characters in
-// identifier fields. Identifiers are written verbatim into both filesystem
-// paths (defending traversal) and inline YAML scalars (defending newline
-// injection). The control-char branch is a strict superset of
-// validateAssemblyTextComponent so all ID call sites get newline rejection.
+// validateAssemblyScaffoldSpec checks required fields, syntactic identifier
+// rules, and verifies that every cell in spec.Cells exists in the parsed
+// project. Identifier and free-text rules are routed through kernel/metadata
+// single-source helpers (MatchAssemblyID, MatchCellID, IsValidMetadataText)
+// — there is no kernel-internal mirror; the metadata package is the sole
+// declaration site.
 //
-// It does NOT reject empty values; the caller is responsible for empty-string
-// guards so that error messages can carry field-specific wording (e.g.
-// "ID is required"). This is a kernel-side mirror of
-// cmd/gocell/app.validateScaffoldID — duplicated rather than shared because
-// kernel/ may not import cmd/. Rule must stay synchronized.
-func validateAssemblyPathComponent(value, field string) error {
-	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"assembly scaffold: field contains path traversal or separator",
-			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
-	}
-	if strings.ContainsAny(value, "\n\r\x00") {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"assembly scaffold: field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
-	}
-	return nil
-}
-
-// validateAssemblyTextComponent rejects newline / carriage-return / NUL in
-// free-text fields (OwnerTeam, OwnerRole) so user values cannot inject extra
-// YAML fields or break scalar quoting in the inline templates.
-// Kernel-side mirror of cmd/gocell/app.validateScaffoldText.
-func validateAssemblyTextComponent(value, field string) error {
-	if strings.ContainsAny(value, "\n\r\x00") {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"assembly scaffold: field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf("field=%s", field)))
-	}
-	return nil
-}
-
-// validateAssemblyScaffoldSpec checks required fields and verifies that every
-// cell in spec.Cells exists in the parsed project. Unknown cell IDs are
-// rejected with KindInvalid so `gocell scaffold assembly --cells=...` cannot
-// silently produce an assembly that points at non-existent cells.
+// AssemblyIDPattern / CellIDPattern (`^[a-z][a-z0-9]+$`) physically exclude
+// path separators (`/`, `\`), traversal sequences (`.`, `..`), and control
+// characters (`\n`, `\r`, `\x00`) — the legacy validateAssemblyPathComponent
+// defensive layer was redundant and has been removed.
+//
+// ref: kubernetes/apimachinery pkg/util/validation/validation.go —
+// IsDNS1123Label single-helper validation; same pattern applied here.
 func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error {
 	if spec.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: ID is required")
 	}
-	if err := validateAssemblyPathComponent(spec.ID, "ID"); err != nil {
-		return err
+	if !metadata.MatchAssemblyID(spec.ID) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: ID does not match metadata AssemblyIDPattern",
+			errcode.WithInternal(fmt.Sprintf("field=ID value=%q pattern=%s",
+				spec.ID, metadata.AssemblyIDPattern)))
 	}
 	if len(spec.Cells) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -510,15 +484,19 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerTeam is required")
 	}
-	if err := validateAssemblyTextComponent(spec.OwnerTeam, "OwnerTeam"); err != nil {
-		return err
+	if !metadata.IsValidMetadataText(spec.OwnerTeam) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: OwnerTeam contains forbidden control characters",
+			errcode.WithInternal("field=OwnerTeam"))
 	}
 	if spec.OwnerRole == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerRole is required")
 	}
-	if err := validateAssemblyTextComponent(spec.OwnerRole, "OwnerRole"); err != nil {
-		return err
+	if !metadata.IsValidMetadataText(spec.OwnerRole) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"assembly scaffold: OwnerRole contains forbidden control characters",
+			errcode.WithInternal("field=OwnerRole"))
 	}
 	switch spec.Deploy {
 	case "", "k8s", "compose", "binary":
@@ -529,8 +507,11 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 			errcode.WithInternal(fmt.Sprintf("deploy=%q", spec.Deploy)))
 	}
 	for _, cellID := range spec.Cells {
-		if err := validateAssemblyPathComponent(cellID, "Cells[]"); err != nil {
-			return err
+		if !metadata.MatchCellID(cellID) {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"assembly scaffold: Cells[] entry does not match metadata CellIDPattern",
+				errcode.WithInternal(fmt.Sprintf("field=Cells[] value=%q pattern=%s",
+					cellID, metadata.CellIDPattern)))
 		}
 		if g.cells.Get(cellID) == nil {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

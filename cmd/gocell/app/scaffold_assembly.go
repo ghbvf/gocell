@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
@@ -102,10 +103,19 @@ func scaffoldAssembly(root string, args []string) error {
 	return nil
 }
 
-// validateAssemblyFlags consolidates the required-field + path/control-char
-// checks for `gocell scaffold assembly` flags. Returns the parsed cell list
-// on success. Lifted out of scaffoldAssembly to keep cognitive complexity
-// inside the project budget.
+// validateAssemblyFlags consolidates the required-field + identifier-pattern
+// + free-text control-char checks for `gocell scaffold assembly` flags.
+// Returns the parsed cell list on success. Lifted out of scaffoldAssembly to
+// keep cognitive complexity inside the project budget.
+//
+// Routes through kernel/metadata single-source helpers: MatchAssemblyID (--id),
+// MatchCellID (--cells[] elements), IsValidMetadataText (--team / --role).
+// AssemblyIDPattern / CellIDPattern character set physically excludes path
+// separators and control characters, so the legacy validateScaffoldID
+// defensive layer is not needed on this flag path.
+//
+// ref: kubernetes/apimachinery pkg/util/validation/validation.go — single
+// exported helper IsDNS1123Label invoked from CLI, scaffold, and admission.
 func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
 	if id == "" {
 		return nil, fmt.Errorf("--id is required")
@@ -119,22 +129,32 @@ func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
 	if role == "" {
 		return nil, fmt.Errorf("--role is required")
 	}
-	if err := validateScaffoldID(id, "--id"); err != nil {
-		return nil, err
+	if !metadata.MatchAssemblyID(id) {
+		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--id does not match metadata AssemblyIDPattern",
+			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
+				id, metadata.AssemblyIDPattern)))
 	}
-	if err := validateScaffoldText(team, "--team"); err != nil {
-		return nil, err
+	if !metadata.IsValidMetadataText(team) {
+		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--team contains forbidden control characters",
+			errcode.WithInternal("flag=--team"))
 	}
-	if err := validateScaffoldText(role, "--role"); err != nil {
-		return nil, err
+	if !metadata.IsValidMetadataText(role) {
+		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--role contains forbidden control characters",
+			errcode.WithInternal("flag=--role"))
 	}
 	cellList := splitAndTrim(cells, ",")
 	if len(cellList) == 0 {
 		return nil, fmt.Errorf("--cells must list at least one cell")
 	}
 	for _, c := range cellList {
-		if err := validateScaffoldID(c, "--cells[]"); err != nil {
-			return nil, err
+		if !metadata.MatchCellID(c) {
+			return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+				"--cells[] entry does not match metadata CellIDPattern",
+				errcode.WithInternal(fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
+					c, metadata.CellIDPattern)))
 		}
 	}
 	return cellList, nil
