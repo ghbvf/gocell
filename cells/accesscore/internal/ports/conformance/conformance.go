@@ -41,6 +41,12 @@ const quickGracePeriod = 50 * time.Millisecond
 // rather than hanging the whole `go test` invocation.
 const holderTimeout = 3 * time.Second
 
+// deadlockGracePeriod is the small extra wall-time allowed for
+// conformConcurrentNoDeadlock's goroutines to observe ctx.Done and unwind
+// after the context deadline fires. Without this watchdog grace, a real
+// deadlock would block wg.Wait() until the `go test -timeout` global limit.
+const deadlockGracePeriod = 2 * time.Second
+
 // UserRepoFactory constructs a fresh ports.UserRepository, its paired
 // persistence.TxRunner, and a cleanup func for use in a single test sub-case.
 // The factory is called once per sub-test; the cleanup func is registered via
@@ -424,7 +430,14 @@ func conformNotFoundPropagates(t *testing.T, factory UserRepoFactory) {
 }
 
 // conformConcurrentNoDeadlock: 50 goroutines making mixed reads/writes within a
-// 30-second deadline — no deadlock, no panic.
+// 30-second context deadline. The test fails if:
+//   - any goroutine is still running waitBudget after the context deadline
+//     fires (real deadlock — wg.Wait() would otherwise block until the
+//     `go test -timeout` global timeout, hiding the bug);
+//   - any goroutine returns an error other than context.DeadlineExceeded /
+//     context.Canceled / KindConflict (the latter two are expected under
+//     contention; an impl that returns "always succeeds" with deadline ignored
+//     would also surface here when the deadline expires on a real op).
 func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 	t.Helper()
 	repo, txRunner, cleanup := factory(t)
@@ -433,30 +446,70 @@ func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 	u := seedActive(t, txRunner, repo, uuid.NewString(), "concurrent_"+uuid.NewString())
 
 	const goroutines = 50
-	deadline := time.Now().Add(concurrencyDeadlineBudget)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	ctx, cancel := context.WithTimeout(context.Background(), concurrencyDeadlineBudget)
 	t.Cleanup(cancel)
+
+	type goroutineResult struct {
+		idx int
+		err error
+	}
+	results := make(chan goroutineResult, goroutines)
 
 	var wg sync.WaitGroup
 	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
+			var err error
 			switch idx % 3 {
 			case 0:
-				_, _ = repo.GetByID(ctx, u.ID)
+				_, err = repo.GetByID(ctx, u.ID)
 			case 1:
-				// Intentionally stale version — conflict is expected and ignored.
-				_, _ = repo.UpdatePassword(ctx, u.ID, "$2a$12$concurrent", false, 0)
+				// Intentionally stale version — conflict is expected (and tolerated below).
+				_, err = repo.UpdatePassword(ctx, u.ID, "$2a$12$concurrent", false, 0)
 			case 2:
-				_ = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-					_, err := repo.BumpAuthzEpoch(txCtx, u.ID)
-					return err
+				err = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+					_, e := repo.BumpAuthzEpoch(txCtx, u.ID)
+					return e
 				})
 			}
+			results <- goroutineResult{idx: idx, err: err}
 		}(i)
 	}
-	wg.Wait()
+
+	// Bound wg.Wait() with a deadlock watchdog: deadline budget + small grace
+	// for in-flight goroutines to observe ctx.Done and unwind.
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		// All goroutines returned within the budget; proceed to error inspection.
+	case <-time.After(concurrencyDeadlineBudget + deadlockGracePeriod):
+		t.Fatalf("Concurrent_NoDeadlock: goroutines did not finish within %v after deadline; "+
+			"likely deadlock (impl ignored ctx.Done)",
+			concurrencyDeadlineBudget+deadlockGracePeriod)
+	}
+	close(results)
+
+	// Inspect goroutine errors. Tolerate context cancellation (contention under
+	// deadline) and KindConflict (CAS losers); any other error signals an impl
+	// bug.
+	for r := range results {
+		if r.err == nil {
+			continue
+		}
+		if errors.Is(r.err, context.DeadlineExceeded) || errors.Is(r.err, context.Canceled) {
+			continue
+		}
+		if isConflictErr(r.err) {
+			continue
+		}
+		t.Errorf("Concurrent_NoDeadlock: goroutine %d returned unexpected error: %v", r.idx, r.err)
+	}
 }
 
 // conformGetByIDForUpdateLockContention verifies the lock-hold guarantee shared
