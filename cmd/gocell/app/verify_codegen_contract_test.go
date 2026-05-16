@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +40,7 @@ func minimalCodegenContractProjectClean(t *testing.T) string {
 
 func TestVerifyCodegenContract_UnknownFlag(t *testing.T) {
 	t.Parallel()
-	if err := verifyCodegenContract([]string{"--bogus"}); err == nil {
+	if err := verifyCodegenContract(context.Background(), []string{"--bogus"}); err == nil {
 		t.Fatal("expected flag-parse error")
 	}
 }
@@ -50,7 +51,7 @@ func TestVerifyCodegenContract_LocalNoDrift(t *testing.T) {
 	// Not parallel: uses os.Chdir which is process-global.
 	root := minimalCodegenContractProjectClean(t)
 	chdirToRoot(t, root)
-	if err := verifyCodegenContract([]string{"--local"}); err != nil {
+	if err := verifyCodegenContract(context.Background(), []string{"--local"}); err != nil {
 		t.Fatalf("verifyCodegenContract --local on clean project: %v", err)
 	}
 }
@@ -66,7 +67,7 @@ func TestVerifyCodegenContract_LocalDriftWhenGenFileMissing(t *testing.T) {
 	}
 
 	chdirToRoot(t, root)
-	err := verifyCodegenContract([]string{"--local"})
+	err := verifyCodegenContract(context.Background(), []string{"--local"})
 	if err == nil || !strings.Contains(err.Error(), "drift") {
 		t.Fatalf("expected drift error, got %v", err)
 	}
@@ -77,7 +78,7 @@ func TestVerifyCodegenContract_LocalNoProjectFails(t *testing.T) {
 	// An empty temp dir without go.mod fails before reaching contractgen.
 	root := t.TempDir()
 	chdirToRoot(t, root)
-	if err := verifyCodegenContract([]string{"--local"}); err == nil {
+	if err := verifyCodegenContract(context.Background(), []string{"--local"}); err == nil {
 		t.Fatal("expected error when no project root")
 	}
 }
@@ -99,7 +100,7 @@ func TestVerifyCodegenContract_SandboxNoDrift(t *testing.T) {
 	gitInit(t, root)
 	chdirToRoot(t, root)
 
-	if err := verifyCodegenContract([]string{"--local=false"}); err != nil {
+	if err := verifyCodegenContract(context.Background(), []string{"--local=false"}); err != nil {
 		t.Fatalf("verifyCodegenContract sandbox on clean repo: %v", err)
 	}
 }

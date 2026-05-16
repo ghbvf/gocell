@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -73,7 +74,7 @@ func captureExportStdout(t *testing.T, fn func()) []byte {
 // TestRunExport_NoSubcommand_Error verifies that `gocell export` with no
 // subcommand returns an error.
 func TestRunExport_NoSubcommand_Error(t *testing.T) {
-	err := runExport([]string{})
+	err := runExport(context.Background(), []string{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "usage:")
 }
@@ -81,21 +82,21 @@ func TestRunExport_NoSubcommand_Error(t *testing.T) {
 // TestRunExport_UnknownSubcommand verifies that `gocell export frobnicate`
 // returns an error naming the unknown subcommand.
 func TestRunExport_UnknownSubcommand(t *testing.T) {
-	err := runExport([]string{"frobnicate"})
+	err := runExport(context.Background(), []string{"frobnicate"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "frobnicate")
 }
 
 // TestRunExport_RootMissing verifies that a non-existent --root returns an error.
 func TestRunExport_RootMissing(t *testing.T) {
-	err := runExport([]string{"catalog", "--root=/nonexistent/path/xyz"})
+	err := runExport(context.Background(), []string{"catalog", "--root=/nonexistent/path/xyz"})
 	require.Error(t, err)
 }
 
 // TestRunExport_FormatBad verifies that --format=badvalue returns an error.
 func TestRunExport_FormatBad(t *testing.T) {
 	root := copyFixtureToTempDir(t)
-	err := runExport([]string{"catalog", "--root=" + root, "--format=xml", "--include="})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--format=xml", "--include="})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "xml")
 }
@@ -104,7 +105,7 @@ func TestRunExport_FormatBad(t *testing.T) {
 // a message that lists valid options but does not echo the invalid value.
 func TestRunExport_BadInclude(t *testing.T) {
 	root := copyFixtureToTempDir(t)
-	err := runExport([]string{"catalog", "--root=" + root, "--include=foobar"})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--include=foobar"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "include")
 	assert.NotContains(t, err.Error(), "foobar")
@@ -116,7 +117,7 @@ func TestRunExport_BadInclude(t *testing.T) {
 // echoing the invalid value.
 func TestRunExport_BadKind(t *testing.T) {
 	root := copyFixtureToTempDir(t)
-	err := runExport([]string{"catalog", "--root=" + root, "--kinds=Bogus", "--include="})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--kinds=Bogus", "--include="})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "kinds")
 	assert.NotContains(t, err.Error(), "Bogus")
@@ -126,7 +127,7 @@ func TestRunExport_BadKind(t *testing.T) {
 // echoing the invalid value.
 func TestRunExport_BadLayer(t *testing.T) {
 	root := copyFixtureToTempDir(t)
-	err := runExport([]string{"catalog", "--root=" + root, "--layers=foo", "--include="})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--layers=foo", "--include="})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "layers")
 	assert.NotContains(t, err.Error(), "foo")
@@ -137,7 +138,7 @@ func TestRunExport_BadLayer(t *testing.T) {
 func TestRunExport_IncludeNone(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	outPath := filepath.Join(t.TempDir(), "out.json")
-	require.NoError(t, runExport([]string{"catalog", "--root=" + root, "--include=", "--out=" + outPath}))
+	require.NoError(t, runExport(context.Background(), []string{"catalog", "--root=" + root, "--include=", "--out=" + outPath}))
 
 	data := fileutil.MustReadFile(t, outPath)
 
@@ -156,7 +157,7 @@ func TestRunExport_IncludeNone(t *testing.T) {
 func TestRunExport_IncludeOnlyEntities(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	outPath := filepath.Join(t.TempDir(), "out.json")
-	require.NoError(t, runExport([]string{"catalog", "--root=" + root, "--include=relations", "--out=" + outPath}))
+	require.NoError(t, runExport(context.Background(), []string{"catalog", "--root=" + root, "--include=relations", "--out=" + outPath}))
 
 	data := fileutil.MustReadFile(t, outPath)
 
@@ -173,7 +174,7 @@ func TestRunExport_IncludeOnlyEntities(t *testing.T) {
 func TestRunExport_IncludeCellDepsOnly(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	outPath := filepath.Join(t.TempDir(), "out.json")
-	require.NoError(t, runExport([]string{"catalog", "--root=" + root, "--include=cellDeps", "--out=" + outPath}))
+	require.NoError(t, runExport(context.Background(), []string{"catalog", "--root=" + root, "--include=cellDeps", "--out=" + outPath}))
 
 	data := fileutil.MustReadFile(t, outPath)
 
@@ -248,7 +249,7 @@ func TestRunExport_CellDepsValidationErrors(t *testing.T) {
 		done <- buf.Bytes()
 	}()
 
-	err := runExport([]string{"catalog", "--root=" + root, "--include=cellDeps"})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--include=cellDeps"})
 	_ = w.Close()
 	os.Stdout = origOut
 	stdout.Write(<-done)
@@ -269,7 +270,7 @@ func TestRunExport_CatalogStdoutJSON(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 
 	out := captureExportStdout(t, func() {
-		err := runExport([]string{"catalog", "--root=" + root, "--include=relations"})
+		err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--include=relations"})
 		require.NoError(t, err)
 	})
 
@@ -291,7 +292,7 @@ func TestRunExport_CatalogStdoutJSON_CLIPipeline(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 
 	out := captureExportStdout(t, func() {
-		err := runExport([]string{"catalog", "--root=" + root, "--include="})
+		err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--include="})
 		require.NoError(t, err)
 	})
 
@@ -309,7 +310,7 @@ func TestRunExport_CatalogToFile(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	outPath := filepath.Join(t.TempDir(), "catalog.json")
 
-	err := runExport([]string{"catalog", "--root=" + root, "--include=", "--out=" + outPath})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--include=", "--out=" + outPath})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(outPath)
@@ -322,7 +323,7 @@ func TestRunExport_FormatYAML(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	outPath := filepath.Join(t.TempDir(), "catalog.yaml")
 
-	err := runExport([]string{"catalog", "--root=" + root, "--format=yaml", "--include=", "--out=" + outPath})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--format=yaml", "--include=", "--out=" + outPath})
 	require.NoError(t, err)
 
 	data := fileutil.MustReadFile(t, outPath)
@@ -338,7 +339,7 @@ func TestRunExport_FormatYAML(t *testing.T) {
 func TestRunExport_KindsFilter(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	outPath := filepath.Join(t.TempDir(), "out.json")
-	require.NoError(t, runExport([]string{
+	require.NoError(t, runExport(context.Background(), []string{
 		"catalog", "--root=" + root,
 		"--kinds=Cell,Contract",
 		"--include=",
@@ -363,14 +364,14 @@ func TestRunExport_KindsFilter(t *testing.T) {
 // TestRunExport_LayersFilter verifies that --layers= flag is accepted without error.
 func TestRunExport_LayersFilter(t *testing.T) {
 	root := copyFixtureToTempDir(t)
-	err := runExport([]string{"catalog", "--root=" + root, "--layers=cells", "--include="})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--layers=cells", "--include="})
 	require.NoError(t, err)
 }
 
 // TestRunExport_CellsFocus verifies that --cells= flag is accepted without error.
 func TestRunExport_CellsFocus(t *testing.T) {
 	root := copyFixtureToTempDir(t)
-	err := runExport([]string{"catalog", "--root=" + root, "--cells=testcell", "--include="})
+	err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--cells=testcell", "--include="})
 	require.NoError(t, err)
 }
 
@@ -382,12 +383,12 @@ func TestRunExport_MetadataAlias(t *testing.T) {
 	var catalogOut, metadataOut []byte
 
 	catalogOut = captureExportStdout(t, func() {
-		err := runExport([]string{"catalog", "--root=" + root, "--include="})
+		err := runExport(context.Background(), []string{"catalog", "--root=" + root, "--include="})
 		require.NoError(t, err)
 	})
 
 	metadataOut = captureExportStdout(t, func() {
-		err := runExport([]string{"metadata", "--root=" + root, "--include="})
+		err := runExport(context.Background(), []string{"metadata", "--root=" + root, "--include="})
 		require.NoError(t, err)
 	})
 
@@ -398,7 +399,7 @@ func TestRunExport_MetadataAlias(t *testing.T) {
 // TestDispatch_ExportNoSubcommand verifies that `gocell export` with no
 // subcommand returns ExitRuntime via the Dispatch path.
 func TestDispatch_ExportNoSubcommand(t *testing.T) {
-	exit, _, stderr := captureDispatch(t, []string{"export"})
+	exit, _, stderr := captureDispatch(t, context.Background(), []string{"export"})
 	assert.Equal(t, ExitRuntime, exit)
 	assert.Contains(t, stderr, "usage:")
 }
@@ -406,7 +407,7 @@ func TestDispatch_ExportNoSubcommand(t *testing.T) {
 // TestDispatch_ExportUnknown verifies that `gocell export badcmd` returns
 // ExitRuntime.
 func TestDispatch_ExportUnknown(t *testing.T) {
-	exit, _, stderr := captureDispatch(t, []string{"export", "badcmd"})
+	exit, _, stderr := captureDispatch(t, context.Background(), []string{"export", "badcmd"})
 	assert.Equal(t, ExitRuntime, exit)
 	assert.Contains(t, stderr, "badcmd")
 }
@@ -414,7 +415,7 @@ func TestDispatch_ExportUnknown(t *testing.T) {
 // TestDispatch_UsageContainsExport verifies that the top-level usage string
 // mentions the export command.
 func TestDispatch_UsageContainsExport(t *testing.T) {
-	exit, stdout, _ := captureDispatch(t, []string{})
+	exit, stdout, _ := captureDispatch(t, context.Background(), []string{})
 	assert.Equal(t, ExitUsage, exit)
 	assert.Contains(t, stdout, "export")
 }
@@ -426,7 +427,7 @@ func TestRunExport_WireSummaryInjected(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	outPath := filepath.Join(t.TempDir(), "out.json")
 
-	err := runExport([]string{
+	err := runExport(context.Background(), []string{
 		"catalog", "--root=" + root,
 		"--include=", // skip deps for speed
 		"--out=" + outPath,
@@ -529,7 +530,7 @@ allowedFiles:
 	require.NoError(t, os.MkdirAll(filepath.Join(cellDir, "cell.go"), 0o755))
 
 	outPath := filepath.Join(t.TempDir(), "out.json")
-	err := runExport([]string{
+	err := runExport(context.Background(), []string{
 		"catalog", "--root=" + root,
 		"--include=",
 		"--out=" + outPath,
@@ -572,7 +573,7 @@ func TestRunExport_DefaultPackageDepsLoadError(t *testing.T) {
 		[]byte("# no entries\n"), 0o644))
 
 	outPath := filepath.Join(t.TempDir(), "out.json")
-	err := runExport([]string{
+	err := runExport(context.Background(), []string{
 		"catalog", "--root=" + root,
 		"--out=" + outPath,
 	})

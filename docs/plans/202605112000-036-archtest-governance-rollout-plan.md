@@ -233,7 +233,8 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | B-FLOOR-FOLLOWUP §2.5/§4 | contract.yaml status ↔ adapter typed return 漂移事故首现 | charter §4 |
 | AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | `hasFMT27AuthModeConflict` 被重新 inline 化 | charter §4 |
 | TEST-POLLING-DETERMINISM typed marker | 第二次 race CI flake / 进入下一治理批 / 339 站点新增违反 | charter §4 |
-| FINDFIRSTCHILD-TYPED-API-01 | 第 7 处 closure+done sentinel helper 出现 | charter §4 + `docs/backlog/cap-14-tooling.md` PR460-FU |
+| FINDFIRSTCHILD-TYPED-API-01 | ✅ 已 ship → 037 PR-A1（提前收口；`scanner.FindFirstChild[N]` + SCANNER-FRAMEWORK-USAGE-02 allowlist=0；subtree 版拆出独立触发型 `FINDFIRSTINSUBTREE-API-01`） | charter §4 + `docs/backlog/cap-14-tooling.md` PR460-FU / 037 §1.1 |
+| FINDFIRSTINSUBTREE-API-01 | 第 N 处 EachInSubtree 早返 sentinel 触发（FindFirstChild 只覆盖 depth-1，正交轴） | `docs/backlog/cap-14-tooling.md` §14.1 + 037 §1.1 |
 
 ### 保留触发型条目（trigger 是真事故/方案待定/量级未到，A + C 类筛选后 6 条）
 | 项 | trigger | backlog 锚点 |

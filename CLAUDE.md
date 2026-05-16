@@ -28,7 +28,7 @@ adapters/     — 外部系统适配（postgres / redis / rabbitmq / websocket /
 pkg/          — 共享工具包（errcode / ctxkeys / httputil / query）
 cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
 examples/     — 示例项目（ssobff / todoorder / iotdevice），可内置示例 cells/contracts/journeys
-generated/    — 工具生成产物（indexes / 派生视图，禁止手工编辑）
+generated/    — 工具生成产物（codegen 契约派生，禁止手工编辑）
 actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型的系统）
 ```
 

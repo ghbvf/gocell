@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestRunScaffold_PathTraversal(t *testing.T) {
 				t.Parallel()
 				args := append([]string{}, tc.baseArgs...)
 				args = append(args, tc.flag+"="+payload)
-				err := runScaffoldWithRoot(root, args)
+				err := runScaffoldWithRoot(context.Background(), root, args)
 				if err == nil {
 					t.Fatalf("expected error for %s=%s, got nil", tc.flag, payload)
 				}
@@ -89,7 +90,7 @@ func TestRunScaffold_ControlCharInjection(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := runScaffoldWithRoot(root, tc.args)
+			err := runScaffoldWithRoot(context.Background(), root, tc.args)
 			if err == nil {
 				t.Fatalf("expected error for control-char injection, got nil")
 			}

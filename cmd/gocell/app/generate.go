@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -13,41 +14,89 @@ import (
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
-// runGenerate implements:
-//
-//	gocell generate assembly --id=<id> [--module=<module>]
-//	gocell generate catalog --out=<path> --package=<pkg>
-//	gocell generate metrics-schema --id=<id>
-//	gocell generate cell [<cellID>] [--dry-run | --verify]
-//	gocell generate contract [<contractID>] [--dry-run | --verify]
-//	gocell generate indexes (placeholder)
-func runGenerate(args []string) error {
+// generateSubcommands is the single source of truth for `gocell generate`
+// (see subcommand.go / CLI-UNIMPL-HIDE-01). assembly/catalog/cell/contract
+// have no cancelable downstream (codegen is metadata + file IO), so their
+// closures discard ctx; metrics-schema threads it into metricschema.Build.
+var generateSubcommands = []subcommand[func(ctx context.Context, args []string) error]{
+	{
+		name: "assembly",
+		help: []string{
+			"Generate the assembly entrypoint cmd/<id>/main.go,",
+			"assemblies/<id>/generated/boundary.yaml, and",
+			"cmd/<id>/modules_gen.go (the cell→Module factory).",
+			"Generated files are owned by gocell. Hand-written",
+			"helpers may live in cmd/<id>/run.go etc., but",
+			"cmd/<id>/main.go and cmd/<id>/modules_gen.go must",
+			"carry the gocell generated header or generation",
+			"aborts to protect your edits.",
+			"--id=<assemblyID> | --all [--module=<module>]",
+		},
+		run: func(_ context.Context, a []string) error { return generateAssembly(a) },
+	},
+	{
+		name: "metrics-schema",
+		help: []string{
+			"Generate assemblies/<id>/generated/metrics-schema.yaml",
+			"by walking the assembly's reachable packages with",
+			"go/types. --id=<assemblyID>",
+		},
+		run: generateMetricsSchema,
+	},
+	{
+		name: "catalog",
+		help: []string{
+			"Render the project catalog Go source from metadata.",
+			"--out=<path> --package=<pkg>",
+		},
+		run: func(_ context.Context, a []string) error { return generateCatalog(a) },
+	},
+	{
+		name: "cell",
+		help: []string{
+			"Render cell_gen.go and slice_gen.go from cell.yaml /",
+			"slice.yaml. Default: all opted-in cells (goStructName set).",
+			"Optional: [<cellID>] scopes to a single cell.",
+			"--verify reports drift without writing; --dry-run prints",
+			"would-write file paths without writing.",
+			"CI: commit cell_gen.go and run with --verify to detect stale artifacts.",
+		},
+		run: func(_ context.Context, a []string) error { return generateCell(a) },
+	},
+	{
+		name: "contract",
+		help: []string{
+			"Render generated/contracts/**/*_gen.go from contract.yaml",
+			"+ JSON schemas. <contractID> | --all [--dry-run | --verify].",
+			"--verify reports drift without writing; --dry-run prints",
+			"would-write paths without writing.",
+			"Prerequisite: set codegen: true in the contract.yaml.",
+			"CI: commit *_gen.go files and run with --verify.",
+		},
+		run: func(_ context.Context, a []string) error { return generateContract(a) },
+	},
+}
+
+// runGenerate dispatches `gocell generate <type>` through the
+// generateSubcommands registry. ctx originates from the signal-aware
+// context wired in main.go and reaches metricschema.Build for the
+// metrics-schema type.
+func runGenerate(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell generate <assembly|catalog|metrics-schema|cell|contract|indexes> [flags]")
+		return fmt.Errorf("usage: gocell generate <%s> [flags]",
+			strings.Join(subNames(generateSubcommands), "|"))
 	}
 	if isHelpFlag(args[0]) {
-		return printGenerateHelp()
+		return renderSubHelp("generate", generateSubcommands,
+			"Generated artifacts must be committed in HEAD; gocell verify generated",
+			"rejects stale or staged-only files.")
 	}
-
-	subtype := args[0]
-	subArgs := args[1:]
-
-	switch subtype {
-	case "assembly":
-		return generateAssembly(subArgs)
-	case "metrics-schema":
-		return generateMetricsSchema(subArgs)
-	case "catalog":
-		return generateCatalog(subArgs)
-	case "cell":
-		return generateCell(subArgs)
-	case "contract":
-		return generateContract(subArgs)
-	case "indexes":
-		return fmt.Errorf("not implemented: gocell generate indexes")
-	default:
-		return fmt.Errorf("unknown generate type: %s (expected assembly, catalog, metrics-schema, cell, contract, or indexes)", subtype)
+	run, ok := findSub(generateSubcommands, args[0])
+	if !ok {
+		return fmt.Errorf("unknown generate type: %s (expected %s)",
+			args[0], strings.Join(subNames(generateSubcommands), ", "))
 	}
+	return run(ctx, args[1:])
 }
 
 func generateAssembly(args []string) error {
@@ -170,7 +219,7 @@ func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id str
 // assemblies/<id>/generated/metrics-schema.yaml, and prints the output path.
 // Run this command locally and commit the result whenever a metric name, label
 // set, bucket list, or bucket source changes.
-func generateMetricsSchema(args []string) error {
+func generateMetricsSchema(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("generate metrics-schema", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
 	if err := fs.Parse(args); err != nil {
@@ -191,11 +240,10 @@ func generateMetricsSchema(args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	// Boundary: the gocell sub-command dispatcher passes args, not ctx, so
-	// metricschema.Build receives Background here. Same pattern as the
-	// validate sub-command; replacing both at once requires plumbing a
-	// signal-aware ctx through the dispatcher.
-	schema, err := metricschema.Build(context.Background(), root, project, *id)
+	// ctx is the signal-aware context plumbed from main.go through
+	// Dispatch → runGenerate; metricschema.Build walks packages with
+	// go/types and honors cancellation.
+	schema, err := metricschema.Build(ctx, root, project, *id)
 	if err != nil {
 		return fmt.Errorf("scan metrics: %w", err)
 	}

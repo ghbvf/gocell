@@ -209,7 +209,7 @@ build:
 |------|------|---------|
 | `gocell validate` | 校验全部元数据 | blocking |
 | `gocell scaffold cell\|slice\|contract\|journey` | 生成骨架 | — |
-| `gocell generate assembly\|indexes\|boundaries` | 生成代码和派生文件 | derived-only |
+| `gocell generate assembly\|metrics-schema\|catalog\|cell\|contract` | 生成代码和派生文件 | derived-only |
 | `gocell check contract-health\|slice-coverage\|...` | 针对性分析 | — |
 | `gocell verify slice\|cell\|journey` | 执行测试 | blocking |
 | `gocell verify targets` | 影响面分析 | advisory |
