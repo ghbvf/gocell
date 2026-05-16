@@ -1,7 +1,6 @@
 package oidc
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"sync/atomic"
@@ -180,8 +179,8 @@ func TestRefreshWorker_FailOpen(t *testing.T) {
 	require.NotNil(t, oldProvider)
 
 	// Wire a slog JSON handler so we can assert log fields.
-	var logBuf bytes.Buffer
-	handler := slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	logBuf := sloghelper.NewSyncBuffer()
+	handler := slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	oldDefault := slog.Default()
 	slog.SetDefault(slog.New(handler))
 	defer slog.SetDefault(oldDefault)
@@ -238,8 +237,8 @@ func TestRefreshWorker_FailureThenSuccess(t *testing.T) {
 	a := newTestAdapter(t, srv.URL, clk, col)
 
 	// Capture logs.
-	var logBuf bytes.Buffer
-	handler := slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	logBuf := sloghelper.NewSyncBuffer()
+	handler := slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	oldDefault := slog.Default()
 	slog.SetDefault(slog.New(handler))
 	defer slog.SetDefault(oldDefault)
@@ -335,8 +334,8 @@ func TestRefreshWorker_WarnLogFields(t *testing.T) {
 	col := &fakeRefreshCollector{}
 	a := newTestAdapter(t, srv.URL, clk, col)
 
-	var logBuf bytes.Buffer
-	handler := slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	logBuf := sloghelper.NewSyncBuffer()
+	handler := slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	oldDefault := slog.Default()
 	slog.SetDefault(slog.New(handler))
 	defer slog.SetDefault(oldDefault)

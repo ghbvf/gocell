@@ -80,8 +80,12 @@ type Adapter struct {
 	clk              clock.Clock
 	refreshCollector RefreshCollector
 
-	mu       sync.RWMutex
-	provider *gooidc.Provider
+	// provider is swapped atomically by discover(). Readers (Provider /
+	// Verifier / OAuth2Config / readyz) Load() lock-free, so a slow or hung
+	// refresh never blocks them — the network round-trip in discover() runs
+	// with no lock held and only the pointer swap is atomic (post-init
+	// fail-open availability). See refresh_worker.go invariant (a).
+	provider atomic.Pointer[gooidc.Provider]
 
 	// consecutiveFailures counts how many consecutive refresh attempts have
 	// failed since the last success. Reset to 0 on any successful refresh.
@@ -130,7 +134,7 @@ func New(ctx context.Context, cfg Config) (*Adapter, error) {
 		stopCh:           make(chan struct{}),
 		workerDone:       make(chan struct{}),
 	}
-	if _, err := a.discover(ctx, true); err != nil {
+	if _, err := a.discover(ctx); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -140,53 +144,53 @@ func (a *Adapter) oidcCtx(ctx context.Context) context.Context {
 	return gooidc.ClientContext(ctx, a.client)
 }
 
-// Provider returns the go-oidc Provider, performing discovery on first call.
-// Subsequent calls return the cached provider without re-fetching.
+// Provider returns the cached go-oidc Provider. Discovery runs synchronously
+// in New (fail-fast at boot), so a successfully constructed Adapter always
+// has a populated provider. This read is lock-free (atomic.Pointer.Load); the
+// refresh worker swaps the pointer atomically and never blocks readers, even
+// across a slow or hung re-discovery (post-init fail-open availability).
 //
-// IMPORTANT: The cached provider never expires automatically. For long-lived
-// processes, the caller (typically bootstrap/runtime) MUST call Refresh()
-// periodically to pick up OIDC metadata and JWKS key rotation. A common
-// pattern is a background goroutine with a 24h ticker.
-func (a *Adapter) Provider(ctx context.Context) (*gooidc.Provider, error) {
-	a.mu.RLock()
-	if a.provider != nil {
-		p := a.provider
-		a.mu.RUnlock()
+// IMPORTANT: The cached provider never expires automatically. The refresh
+// worker (Worker(), auto-wired by bootstrap.WithManagedResource) re-discovers
+// every refreshInterval to pick up OIDC metadata rotation.
+func (a *Adapter) Provider(_ context.Context) (*gooidc.Provider, error) {
+	if p := a.provider.Load(); p != nil {
 		return p, nil
 	}
-	a.mu.RUnlock()
-
-	return a.discover(ctx, false)
+	return nil, errcode.New(errcode.KindInternal, ErrAdapterOIDCDiscovery,
+		"oidc: provider not initialized")
 }
 
-// Refresh forces re-discovery of the OIDC provider metadata. Use this
-// periodically in long-lived processes to pick up JWKS/metadata rotation.
+// Refresh re-discovers the OIDC provider metadata and atomically swaps the
+// cached provider. The refresh worker calls this on each tick; it is also
+// safe to call manually.
 func (a *Adapter) Refresh(ctx context.Context) (*gooidc.Provider, error) {
-	return a.discover(ctx, true)
+	return a.discover(ctx)
 }
 
-// discover performs OIDC discovery. When force is false, it double-checks
-// whether another goroutine already completed initialization before making
-// a network call (cold-start thundering-herd protection).
-func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+// discover fetches provider metadata from the issuer and atomically swaps the
+// cached provider.
+//
+// The gooidc.NewProvider network round-trip runs with NO lock held, so
+// concurrent Provider()/Verifier()/OAuth2Config()/readyz keep serving the
+// previously discovered provider for the full duration of a slow or hung
+// refresh (post-init fail-open availability). The pointer is Stored only
+// after a successful fetch — a failed refresh returns early and leaves the
+// old provider untouched (fail-open correctness). Both properties are
+// test-guarded; see refresh_worker.go invariant (a).
+func (a *Adapter) discover(ctx context.Context) (*gooidc.Provider, error) {
+	hadProvider := a.provider.Load() != nil
 
-	if !force && a.provider != nil {
-		return a.provider, nil
-	}
-
-	isRediscovery := force && a.provider != nil
 	p, err := gooidc.NewProvider(a.oidcCtx(ctx), a.config.IssuerURL)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOIDCDiscovery,
 			"oidc: discovery failed", err,
 			errcode.WithDetails(slog.String("issuer", a.config.IssuerURL)))
 	}
-	a.provider = p
+	a.provider.Store(p)
 	// Distinguish periodic re-discovery from first-time discovery so that ops
 	// alerts can filter out expected refresh noise (F-6: PR #504 review).
-	if isRediscovery {
+	if hadProvider {
 		slog.Info("oidc: provider re-discovered", slog.String("issuer", a.config.IssuerURL))
 	} else {
 		slog.Info("oidc: provider discovered", slog.String("issuer", a.config.IssuerURL))

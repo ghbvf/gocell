@@ -1,10 +1,21 @@
 // INVARIANT: OIDC-JWKS-ROTATION-WORKER-01
 //
-// (a) fail-open structural Hard — discover() returns early on error without
-//     touching a.provider (oidc.go:127-135). Any future edit that makes
-//     discover() clear a.provider on error would break this invariant.
-//     The fail-open test case (TestRefreshWorker_FailOpen) asserts that the
-//     old provider is preserved after a failed refresh.
+// (a) fail-open — TWO independent properties, test-guarded (Medium, NOT a
+//     type-system Hard: Go cannot express "no network I/O before the atomic
+//     pointer swap", so this is not violation-unexpressible):
+//       - correctness: discover() Stores a.provider only AFTER a successful
+//         gooidc.NewProvider fetch and returns early on error, so a failed
+//         refresh leaves the old provider untouched. Guarded by
+//         TestRefreshWorker_FailOpen.
+//       - availability: the discovery network round-trip runs with NO lock
+//         held and a.provider is an atomic.Pointer, so concurrent
+//         Provider()/Verifier()/OAuth2Config()/readyz keep serving the old
+//         provider for the full duration of a slow or hung refresh. Guarded
+//         by TestProvider_ConcurrentReadDuringSlowRefresh.
+//     A future edit that re-introduces a lock around gooidc.NewProvider, or
+//     Stores before the fetch succeeds, regresses this — the named tests fail
+//     in CI (the lock-granularity bug fixed in PR #504 review proves the
+//     comment alone is not a guard).
 //
 // (b) no readyz gate — gating readyz on JWKS staleness would remove all
 //     running instances during a systemic IdP outage, amplifying the incident
@@ -96,8 +107,9 @@ func (a *Adapter) refreshInterval() time.Duration {
 //     slog.Info("oidc: jwks refresh recovered") if recovering from prior failures.
 //   - failure → increment consecutiveFailures, emit RecordRefresh(false),
 //     emit slog.Warn with issuer/error/consecutive_failures fields.
-//     The fail-open invariant is structural: discover() returns early on
-//     error without touching a.provider, so the old provider is preserved.
+//     Fail-open is test-guarded (see invariant (a)): discover() returns
+//     early on error without Storing a.provider, so the old provider is
+//     preserved and readers are never blocked by the refresh.
 func (a *Adapter) runRefreshLoop(ctx context.Context) {
 	a.started.Store(true)
 	defer close(a.workerDone)
