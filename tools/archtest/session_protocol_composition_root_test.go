@@ -3,108 +3,140 @@
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
+const (
+	sessionProtocolRuleID = "SESSION-PROTOCOL-COMPOSITION-ROOT-01"
+	sessionPkgImportPath  = "github.com/ghbvf/gocell/runtime/auth/session"
+)
+
+// sessionProtocolForbidden is the closed set of session-package constructors
+// banned outside the composition root. Both forms (error-returning + panic-
+// wrapping) belong to wiring authority, not consumer Cell code.
+var sessionProtocolForbidden = map[string]struct{}{
+	"NewProtocol":     {},
+	"MustNewProtocol": {},
+}
+
+// TestSessionProtocol_CompositionRootOnly enforces
 // SESSION-PROTOCOL-COMPOSITION-ROOT-01: session.NewProtocol /
 // session.MustNewProtocol may only be invoked from cmd/* (composition root)
 // or runtime/auth/session/* (the package itself + storetest helpers). Cells,
 // runtime/* (non-session), adapters/*, and tests outside session/* must
 // receive an injected *session.Protocol — not construct one.
 //
-// This is a Medium AI-rebust archtest (type-aware AST scan of call sites by
-// package path; not a string anchor). Hard is unattainable without removing
-// session-package import from cells, which would defeat the typed-Go-heavy
-// paradigm (cells must consume the typed Protocol shape).
+// # AI-rebust: Medium (type-aware)
 //
-// AI 协作章程 .claude/rules/gocell/ai-collab.md: ≥ Medium qualifies for
-// adoption; this archtest does not need to be Soft-fallback.
+// T3 Wave 2 upgrade (docs/plans/202605082145-034-pg-corecell-b-route-plan.md
+// §S4c T3, FU-3b 闭环): the rule resolves every CallExpr's callee through
+// archtest.ResolvePackageRef, matching by the callee's owning package import
+// path rather than the source-level Ident name. The Soft predecessor matched
+// `pkg.Name == "session"` on raw AST and missed two bypass forms:
+//
+//   - aliased import:  `import sess "…/session"; sess.NewProtocol(...)`
+//   - dot import:      `import . "…/session"; NewProtocol(...)`
+//
+// archtest.ResolvePackageRef covers all three callee shapes in one resolution:
+//   - SelectorExpr `pkg.Func` / `alias.Func` → info.Uses[sel.X].(*types.PkgName)
+//   - bare Ident `Func` (dot-import)          → info.Uses[id].(*types.Func)
+//
+// Hard is architecturally unattainable for this rule's shape (caller-allowlist
+// across multiple non-nested roots — cmd/, runtime/auth/session/, examples/):
+// Go's internal/ package mechanic admits only a single owning subtree, so
+// NewProtocol cannot be sealed to permit cmd/ + session/* simultaneously
+// without reshaping the typed Protocol injection paradigm (defeats S2 / K-04
+// decisions). See plan §S4c T3 reflection L3 for the full Hard analysis.
+//
+// # _test.go scope
+//
+// RunTyped(opts.Tests=false) loads only production-variant packages, so
+// _test.go files are not in pass.Files. The rule additionally filters by
+// rel suffix for clarity — both gates are conservative and align with the
+// SESSIONREFRESH-NO-SESSION-CREATE-01 convention.
+//
+// # 盲区 (BS)
+//
+//   - BS-1 Name shadowing: a non-session package with a top-level function
+//     literally named NewProtocol/MustNewProtocol does NOT match (pkgPath
+//     comparison rejects it). archtest.ResolvePackageRef returns the
+//     callee's owning package via go/types, not the import-site alias.
+//   - BS-2 Function-value indirection: `var fn = session.NewProtocol; fn()`
+//     — the `session.NewProtocol` reference itself is a SelectorExpr that
+//     ResolvePackageRef would match if it were a CallExpr.Fun. But the
+//     subsequent `fn()` callee is a *types.Var (not *types.Func), so the
+//     resolver returns ok=false. Accepted: the repo has no such pattern;
+//     PASS-FUNNEL-RESOLVE-01 fixture-side blind-spot coverage already
+//     anchors this resolver behavior (typeseval call_target_test.go).
+//   - BS-3 Reflection construction (reflect.New + MethodByName): out of
+//     scope per ai-collab.md §3 (no Go static rule reaches it).
 func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
-	root := findModuleRoot(t)
+	diags := RunTyped(t,
+		TypedOpts{Tests: false},
+		sessionProtocolProductionPatterns(),
+		scanSessionProtocolViolations,
+	)
+	Report(t, sessionProtocolRuleID, diags)
+}
 
-	// Scan cells/, runtime/ (excluding runtime/auth/session/), adapters/.
-	// cmd/ is not scanned — it is the composition root and is naturally allowed
-	// to call session.NewProtocol / session.MustNewProtocol.
-	// examples/ is also excluded: it owns its own composition root (mirroring
-	// the AUTH-PLAN-04 allowance in auth_plan_test.go).
-	scanDirs := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "runtime"),
-		filepath.Join(root, "adapters"),
+// sessionProtocolProductionPatterns returns the package patterns scanned by
+// the production rule (cells / runtime / adapters). cmd/ and examples/ own
+// their own composition roots and are intentionally outside scope.
+func sessionProtocolProductionPatterns() []string {
+	return []string{
+		"./cells/...",
+		"./runtime/...",
+		"./adapters/...",
 	}
+}
 
-	var files []string
-	for _, dir := range scanDirs {
-		ff, err := findProductionGoFilesInDir(dir)
-		require.NoError(t, err)
-		files = append(files, ff...)
-	}
-
-	// Allowlist: runtime/auth/session/ owns the package itself (protocol.go,
-	// protocol_test.go, future storetest sub-package).
-	sessionPrefix := filepath.ToSlash(filepath.Join(root, "runtime", "auth", "session")) + "/"
-
-	type hit struct {
-		file string
-		line int
-		name string
-	}
-	var hits []hit
-
-	forbidden := map[string]bool{
-		"NewProtocol":     true,
-		"MustNewProtocol": true,
-	}
-
-	for _, f := range files {
-		if strings.HasPrefix(filepath.ToSlash(f), sessionPrefix) {
+// scanSessionProtocolViolations walks every CallExpr in pass.Files, resolves
+// the callee to its (pkgPath, name) tuple via archtest.ResolvePackageRef, and
+// flags hits whose owning package is runtime/auth/session and whose name is in
+// sessionProtocolForbidden.
+//
+// Two file-level filters apply:
+//
+//   - _test.go suffix: defense-in-depth alongside TypedOpts{Tests: false}.
+//   - rel under "runtime/auth/session/": the package itself owns the
+//     constructor; subpackages (storetest, etc.) are part of the wiring
+//     authority and need NewProtocol for fake construction.
+//
+// Used by both TestSessionProtocol_CompositionRootOnly (production scan,
+// asserts zero diagnostics) and TestSessionProtocol_RedFixtureDetected
+// (fixture scan, asserts ≥ 6 diagnostics across qualified / aliased / dot
+// import shapes × NewProtocol + MustNewProtocol).
+func scanSessionProtocolViolations(p *Pass) []Diagnostic {
+	var out []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-
-		fset := token.NewFileSet()
-		af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
-		if err != nil {
+		if strings.HasPrefix(rel, "runtime/auth/session/") {
 			continue
 		}
-		scanner.EachInSubtree[ast.CallExpr](af, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+			if !ok || pkgPath != sessionPkgImportPath {
 				return
 			}
-			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "session" {
+			if _, banned := sessionProtocolForbidden[name]; !banned {
 				return
 			}
-			if forbidden[sel.Sel.Name] {
-				hits = append(hits, hit{
-					file: rel,
-					line: fset.Position(call.Pos()).Line,
-					name: sel.Sel.Name,
-				})
-			}
+			line := p.Fset.Position(call.Pos()).Line
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"session.%s must only be called from cmd/* (composition root) or runtime/auth/session/*; "+
+						"cells / runtime (non-session) / adapters must consume an injected *session.Protocol",
+					name),
+			})
 		})
 	}
-
-	if len(hits) > 0 {
-		for _, h := range hits {
-			t.Logf("SESSION-PROTOCOL-COMPOSITION-ROOT-01: %s:%d calls session.%s outside cmd/ + runtime/auth/session/",
-				h.file, h.line, h.name)
-		}
-	}
-	assert.Empty(t, hits,
-		"SESSION-PROTOCOL-COMPOSITION-ROOT-01: session.NewProtocol / session.MustNewProtocol "+
-			"must only be called from cmd/* (composition root) or runtime/auth/session/*; "+
-			"cells/runtime/adapters must consume an injected *session.Protocol")
+	return out
 }
