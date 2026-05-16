@@ -43,6 +43,9 @@ type Service struct {
 type Option func(*Service)
 
 // WithEmitter sets the event emitter used for role-change outbox entries.
+// Typed-nil inputs are silently ignored (builder-option semantics, see
+// runtime-api.md Option Pattern Layering); the service defaults to
+// outbox.NewNoopEmitter() (demo mode wrapper).
 func WithEmitter(e outbox.Emitter) Option {
 	return func(s *Service) {
 		if e != nil {

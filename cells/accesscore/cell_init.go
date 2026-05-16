@@ -30,7 +30,7 @@ import (
 
 // resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
 // WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
-// warn) and applies the per-cell rbacEmitterMode side-effect.
+// warn).
 //
 // accesscore uses DirectPublishFailClosed: security topics (session.*, user.*,
 // role.*) must not drop on publisher failure. Per-entry fail-open opt-in is
@@ -66,7 +66,6 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 		return err
 	}
 	c.emitter = outcome.Emitter
-	c.rbacEmitterMode = outcome.Durable
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
 	return nil
@@ -264,8 +263,8 @@ func (c *AccessCore) initSlices() error {
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbaccheck", "accesscore", cellvocab.L0))
 
-	// rbac-assign — durable mode (outboxWriter + txRunner) upgrades to L2 OutboxFact;
-	// demo mode (both nil) stays at L0 (in-memory repos, synchronous dual-write).
+	// rbac-assign is always L2 OutboxFact (locked by RBACASSIGN-L2-STATIC-01 archtest);
+	// runtime emit fidelity depends on resolveEmitter output — see initRbacAssign godoc.
 	if err := c.initRbacAssign(); err != nil {
 		return err
 	}
@@ -313,23 +312,30 @@ func (c *AccessCore) initSlices() error {
 	return nil
 }
 
-// initRbacAssign constructs the rbac-assign slice. Extracted to keep initSlices
-// within cognitive complexity bounds.
+// initRbacAssign constructs the rbac-assign slice. rbacassign is L2 OutboxFact:
+// the slice's behavioral contract is to emit role.assigned / role.revoked
+// outbox facts atomically inside RunInTx. The consistency level is declared
+// `cellvocab.L2` independent of runtime mode (RBACASSIGN-L2-STATIC-01 archtest
+// locks the literal).
+//
+// Runtime emit fidelity depends on cell.ResolveCellEmitter's output:
+//   - durable mode (publisher + writer + txRunner) → WriterEmitter writes a row
+//     in the outbox table; the row + role write co-commit, providing real L2
+//     atomicity end-to-end.
+//   - publisher-only demo (no writer) → DirectEmitter synchronously publishes
+//     without a durable outbox row. The slice still drives the funnel
+//     (RunInTx → emit) but there is no row to replay on failure — this is
+//     test/demo fidelity only, not L2 atomicity.
 func (c *AccessCore) initRbacAssign() error {
-	rbacOpts := []rbacassign.Option{rbacassign.WithTxManager(c.txRunner)}
-	if c.rbacEmitterMode {
-		rbacOpts = append(rbacOpts, rbacassign.WithEmitter(c.emitter))
-	}
-	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.invalidator, c.logger, rbacOpts...)
+	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.invalidator, c.logger,
+		rbacassign.WithEmitter(c.emitter),
+		rbacassign.WithTxManager(c.txRunner),
+	)
 	if err != nil {
 		return err
 	}
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
-	rbacAssignLevel := cellvocab.L0
-	if c.rbacEmitterMode {
-		rbacAssignLevel = cellvocab.L2
-	}
-	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
+	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", cellvocab.L2))
 	return nil
 }
 

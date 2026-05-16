@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -19,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -101,40 +103,67 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
 
-// TestContract_EventRoleAssignedV1_Publish_PayloadValid is a minimum-viability smoke test
-// that marshals RoleChangedEvent (action=assigned) and validates it against the
-// event.role.assigned.v1 payload JSON Schema.
-// Full contract coverage is tracked as S8-FOLLOWUP (VERIFY-01 waiver expiry 2026-07-01).
+// TestContract_EventRoleAssignedV1_Publish_PayloadValid drives the rbacassign
+// Service through a real Assign call and validates the captured outbox entry
+// against the event.role.assigned.v1 payload schema. This replaces the prior
+// smoke-only test (B2-T-02 waiver expiry 2026-07-01 — closed by S4c-T1).
 func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
-	evt := dto.RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: dto.ActionAssigned}
-	payload, err := json.Marshal(evt)
+	ow := &testutil.RecordingWriter{}
+	tx := &stubTxRunner{}
+	svc, _, _ := newDurableTestService(t, ow, tx)
+
+	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
+
+	require.Len(t, ow.Entries, 1, "Assign must emit exactly one outbox entry")
+	entry := ow.Entries[0]
+	assert.Equal(t, dto.TopicRoleAssigned, entry.EventType)
+	assert.NotEmpty(t, entry.ID, "emitter must derive a non-empty event_id")
+	assert.True(t, strings.HasPrefix(entry.ID, outbox.EntryIDPrefix),
+		"entry.ID %q must have %q prefix (event_id schema format)", entry.ID, outbox.EntryIDPrefix)
+
+	// Real emit must pass payload schema.
+	c.ValidatePayload(t, entry.Payload)
+	headerBytes, err := json.Marshal(map[string]string{"event_id": entry.ID})
 	require.NoError(t, err)
+	c.ValidateHeaders(t, headerBytes)
 
-	// Positive: well-formed payload must pass schema.
-	c.ValidatePayload(t, payload)
-
-	// Negative: missing userId must FAIL schema (required field absent).
+	// Negative path: malformed payload must fail schema.
 	c.MustRejectPayload(t, []byte(`{"roleId":"admin","action":"assigned"}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
-// TestContract_EventRoleRevokedV1_Publish_PayloadValid is a minimum-viability smoke test
-// that marshals RoleChangedEvent (action=revoked) and validates it against the
-// event.role.revoked.v1 payload JSON Schema.
-// Full contract coverage is tracked as S8-FOLLOWUP (VERIFY-01 waiver expiry 2026-07-01).
+// TestContract_EventRoleRevokedV1_Publish_PayloadValid drives the rbacassign
+// Service through a real Revoke call and validates the captured outbox entry
+// against the event.role.revoked.v1 payload schema. This replaces the prior
+// smoke-only test (B2-T-02 waiver expiry 2026-07-01 — closed by S4c-T1).
 func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
-	evt := dto.RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: dto.ActionRevoked}
-	payload, err := json.Marshal(evt)
+	ow := &testutil.RecordingWriter{}
+	tx := &stubTxRunner{}
+	svc, store, _ := newDurableTestService(t, ow, tx)
+	// Two effective admins so the last-admin guard does not block Revoke.
+	assignActiveAdmin(t, store, "alice")
+	assignActiveAdmin(t, store, "bob")
+
+	require.NoError(t, svc.Revoke(context.Background(), "alice", "admin"))
+
+	require.Len(t, ow.Entries, 1, "Revoke must emit exactly one outbox entry")
+	entry := ow.Entries[0]
+	assert.Equal(t, dto.TopicRoleRevoked, entry.EventType)
+	assert.NotEmpty(t, entry.ID, "emitter must derive a non-empty event_id")
+	assert.True(t, strings.HasPrefix(entry.ID, outbox.EntryIDPrefix),
+		"entry.ID %q must have %q prefix (event_id schema format)", entry.ID, outbox.EntryIDPrefix)
+
+	c.ValidatePayload(t, entry.Payload)
+	headerBytes, err := json.Marshal(map[string]string{"event_id": entry.ID})
 	require.NoError(t, err)
+	c.ValidateHeaders(t, headerBytes)
 
-	// Positive: well-formed payload must pass schema.
-	c.ValidatePayload(t, payload)
-
-	// Negative: missing userId must FAIL schema (required field absent).
 	c.MustRejectPayload(t, []byte(`{"roleId":"admin","action":"revoked"}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }

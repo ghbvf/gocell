@@ -1,8 +1,8 @@
 # 034 PG / accesscore / auditcore / configcore B 路线实施计划
 
 **生成日期**: 2026-05-08
-**最后更新**: 2026-05-16（v9 — **S4-FU PR #501 review 闭环批**：PR #501 已 MERGED（`db251441`，2026-05-16 10:42），六角色 review + 用户补充共 18 项 findings 按文件域+影响面切成 4 个独立 follow-up PR：FU-1 文档/ADR/注释一致性 / FU-2 契约/errcode/小修 / FU-3 测试硬化+archtest 防御 / FU-4 Journey 升级；与 S4c T1-T4 文件域零重叠完全并行。新登记 5 项触发型 backlog（U-3/4/7/8/9）。详见 §S4-FU。)
-**前一版**: 2026-05-16 v8（S4c 并行拆解为 T1-T5；与 PR #502 完全并行，与 PR #501 按文件域分流）
+**最后更新**: 2026-05-16（v10 — **S4c T1 rbacassign 闭环 shipped**：单 PR 收口 B2-T-02 (event contract waiver expiry, real-emit 断言) / B2-T-07-FU-1 (caller wiring 双重防线 + handler_test 四象限覆盖) / RBAC-ASSIGN-LEVEL-UPGRADE-01 (删 `rbacEmitterMode` 二态，统一 `cellvocab.L2` 字面量 + RBACASSIGN-L2-STATIC-01 Medium archtest 锁字面量) / SEED-ROLE-IFACE-01 (adminprovision 重构隐性闭环 + SEED-ROLE-IFACE-01 Hard archtest 锁生产代码零 `*mem.RoleRepository`)。原 v8 措辞 "L0 → L1" 修正为 "L0 → L2"——rbacassign emit outbox event 必然 L2 OutboxFact，demo mode 下 emitter wrapper 已透传 noop，无需 slice 层降级。详见 §S4c T1。)
+**前一版**: 2026-05-16 v9（S4-FU PR #501 review 闭环批）；2026-05-16 v8（S4c 并行拆解为 T1-T5）
 **对接来源**:
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`（B 路线源）
 - `docs/plans/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代）
@@ -489,7 +489,7 @@ sessionrefresh 漏检 `CanAuthenticate()`，无单一 Hard 收口。
 
 | 任务 | 范围 | 文件域 | vs #501 | vs #502 |
 |------|------|--------|---------|---------|
-| **T1** rbacassign 闭环 | B2-T-02（contract waiver expiry，用 `outboxtest.Publisher` 断言真实 emit + 移除 waiver）+ B2-T-07-FU-1（caller wiring 核实/收口）+ 联动 RBAC-ASSIGN-LEVEL-UPGRADE-01 / SEED-ROLE-IFACE-01 | `slices/rbacassign/*`、`cell_init.go:332`(rbacAssignLevel) | ✅ 并行（#501 不碰 rbacassign） | ✅ |
+| **T1** ✅ rbacassign 闭环 | B2-T-02（contract waiver expiry — 改 `RecordingWriter` 真实 emit + `c.ValidatePayload`/`ValidateHeaders`/`MustRejectPayload`/`MustRejectHeaders` 完整 schema 校验）+ B2-T-07-FU-1（handler_test 四象限覆盖 caller wiring）+ RBAC-ASSIGN-LEVEL-UPGRADE-01（删 `rbacEmitterMode` 二态 → 统一 `cellvocab.L2` 字面量 + RBACASSIGN-L2-STATIC-01 Medium archtest）+ SEED-ROLE-IFACE-01（adminprovision 隐性闭环 + SEED-ROLE-IFACE-01 Hard archtest 锁生产代码零 `*mem.RoleRepository`） | `slices/rbacassign/*`、`cell_init.go:318-334`、`cell.go:339`、`kernel/cell/mode_resolver.go:184`、`tools/archtest/{seed_role_iface,rbacassign_l2_static}_invariants_test.go`（新） | **shipped** PR #TBD | ✅ |
 | **T2** 一致性等级校正 | IDENTITYMANAGE-LEVEL-MISLABEL（`cell_init.go:214` L1→L2）+ 复核其余 8 处 `NewBaseSlice` L 字面量 + ACCESS-LEVEL-AUDIT-01 slice.yaml + 新 archtest `slice.consistencyLevel ≥ contractUsages 最低等级` | `cell_init.go`、各 `slice.yaml`、新 archtest | ✅ 并行（#501 不碰 cell_init.go） | ✅ |
 | **T3** FU-3b archtest 升级 ✅ shipped (PR #587-t3) | `session_protocol_composition_root_test.go` 升 type-aware + `refresh_invariants_test.go` 守新 lookup 链 + RED fixtures；Soft → Medium。两 archtest 切到 archtest.RunTyped + ResolvePackageRef/ResolveMethodCall（不进 LegacyAllowlist）；archtest_fixture-gated 夹具覆盖 qualified/aliased/dot import × sessionStore.Get 新 lookup 链 | `tools/archtest/{两文件}` + `tools/archtest/internal/{session,refresh}*fixture/` | ✅ 并行（与 #501 改的 archtest 文件不同） | ✅ |
 | **T4** L2 e2e harness | B2-C-13：新建 `tests/integration/l2_atomicity/` 覆盖 login→refresh→revoke/logout→validate fail-closed + CI race lane + no-tests guard | 新增 `tests/integration/*`、CI yaml | ⚠️ 文件不冲突但**行为断言语义依赖 #501**（sessionvalidate epoch 比对 / refresh reuse cascade）→ harness 骨架可并行起，断言 rebase 到 #501 后收口 | ✅ |
