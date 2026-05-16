@@ -350,13 +350,104 @@ func conflictPass(plan []PlannedFile) error {
 	return nil
 }
 
+// restoreKind classifies the original inode kind at a ForceOverwrite target,
+// captured before the destructive unlinkat so rollback can restore it. ENOENT
+// at capture time → kindNone (no original, rollback only removes the freshly
+// written file). Directories / devices / pipes / sockets are rejected pre-write
+// (cannot be sensibly restored by writePass).
+type restoreKind int
+
+const (
+	kindNone restoreKind = iota
+	kindRegular
+	kindSymlink
+)
+
+// writeRecord pairs the written path with the captured original-inode state
+// needed to make ForceOverwrite plans transactional. The default zero value
+// is {kindNone}, matching the non-ForceOverwrite case where rollback only
+// removes the newly written file.
+type writeRecord struct {
+	path           string
+	originalKind   restoreKind
+	originalBytes  []byte      // regular only
+	originalMode   os.FileMode // regular only
+	originalTarget string      // symlink only
+}
+
+// captureOriginal reads the existing inode at path so rollbackWrites can
+// restore it if a subsequent plan entry fails. Called only for entries with
+// ForceOverwrite=true. Returns:
+//
+//   - kindNone (no original to restore) when path does not exist
+//   - kindRegular + content + mode for regular files
+//   - kindSymlink + link target for symlinks
+//   - error for anything else (directory, device, pipe, socket): ForceOverwrite
+//     over a non-file/non-symlink slot cannot be rolled back coherently, so
+//     it is rejected pre-write and the destructive unlinkat is never reached.
+//
+// Capture is path-based (os.Lstat / os.ReadFile / os.Readlink), consistent with
+// the path-based os.Remove used by rollbackWrites already (see rollbackWrites
+// godoc — rollback is not a TOCTOU security boundary; the fd-walk in writePass
+// is the one-shot defense at write time).
+func captureOriginal(path string) (writeRecord, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return writeRecord{path: path, originalKind: kindNone}, nil
+		}
+		return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"pathsafe: lstat original for ForceOverwrite capture", err,
+			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+	}
+	mode := info.Mode()
+	switch {
+	case mode.IsRegular():
+		// path already passed planContainmentPass + caller-side ContainPath;
+		// this read is the capture-for-rollback step (path-based; rollback
+		// is not a TOCTOU boundary — see rollbackWrites godoc).
+		content, readErr := os.ReadFile(path) //nolint:gosec // R2-approved: G304 capture-for-rollback (see above)
+		if readErr != nil {
+			return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"pathsafe: read original for ForceOverwrite capture", readErr,
+				errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+		}
+		return writeRecord{
+			path:          path,
+			originalKind:  kindRegular,
+			originalBytes: content,
+			originalMode:  mode.Perm(),
+		}, nil
+	case mode&os.ModeSymlink != 0:
+		target, readErr := os.Readlink(path)
+		if readErr != nil {
+			return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"pathsafe: readlink original for ForceOverwrite capture", readErr,
+				errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+		}
+		return writeRecord{
+			path:           path,
+			originalKind:   kindSymlink,
+			originalTarget: target,
+		}, nil
+	default:
+		return writeRecord{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"pathsafe: ForceOverwrite supports regular files and symlinks only",
+			errcode.WithDetails(slog.String("path", path)))
+	}
+}
+
 // writePass executes the plan via the platform-specific secureMkdirAllAndWrite
 // funnel (fd-anchored openat/mkdirat/openat chain on unix; path-based
-// os.MkdirAll + O_EXCL on Windows as advisory). On the first failure all
-// previously-written files and previously-created directories are removed in
+// os.MkdirAll + O_EXCL on Windows as advisory). ForceOverwrite entries have
+// their original inode captured via captureOriginal before the destructive
+// write so that rollback can restore the original on mid-plan failure
+// (preserving the funnel's all-or-nothing contract). On the first failure all
+// previously-written files are rolled back (originals restored where captured,
+// otherwise removed) and previously-created directories are removed, in
 // reverse order.
 func writePass(realRoot string, plan []PlannedFile) error {
-	var writtenPaths []string
+	var written []writeRecord
 	var createdDirs []string
 
 	for _, f := range plan {
@@ -368,35 +459,59 @@ func writePass(realRoot string, plan []PlannedFile) error {
 		if fileMode == 0 {
 			fileMode = defaultFileMode
 		}
+		record := writeRecord{path: f.AbsPath, originalKind: kindNone}
+		if f.ForceOverwrite {
+			captured, err := captureOriginal(f.AbsPath)
+			if err != nil {
+				return rollbackWrites(written, createdDirs, err)
+			}
+			record = captured
+		}
 		if err := secureMkdirAllAndWrite(
 			realRoot, f.AbsPath, f.Content, dirMode, fileMode,
 			f.ForceOverwrite, &createdDirs,
 		); err != nil {
-			return rollbackWrites(writtenPaths, createdDirs, err)
+			return rollbackWrites(written, createdDirs, err)
 		}
-		writtenPaths = append(writtenPaths, f.AbsPath)
+		written = append(written, record)
 	}
 	return nil
 }
 
-// rollbackWrites removes all written files and created directories (in reverse
-// creation order) and wraps originalErr with rollback statistics.
+// rollbackWrites unwinds a partial plan: removes the freshly-written file at
+// every recorded path, restores any ForceOverwrite original inode (regular
+// content + mode, or symlink target), then removes any newly-created dirs
+// in reverse creation order. Wraps originalErr with rollback statistics.
 //
-// Note: rollback uses path-based os.Remove (NOT fd-anchored unlinkat).
-// This is best-effort: if a parent directory has been swapped to a symlink
-// between the original write and rollback, os.Remove follows the symlink.
-// The TOCTOU defense (writePass fd-walk) is one-shot at write time;
-// rollback is forensic cleanup, not a security boundary.
-func rollbackWrites(written, dirs []string, originalErr error) error {
+// Note: rollback uses path-based os.Remove / os.WriteFile / os.Symlink (NOT
+// fd-anchored). This is best-effort: if a parent directory has been swapped
+// to a symlink between the original write and rollback, those operations
+// follow the symlink. The TOCTOU defense (writePass fd-walk) is one-shot at
+// write time; rollback is forensic cleanup, not a security boundary.
+func rollbackWrites(written []writeRecord, dirs []string, originalErr error) error {
+	restored := 0
 	for i := len(written) - 1; i >= 0; i-- {
-		_ = os.Remove(written[i])
+		r := written[i]
+		_ = os.Remove(r.path)
+		switch r.originalKind {
+		case kindRegular:
+			if err := os.WriteFile(r.path, r.originalBytes, r.originalMode); err == nil {
+				restored++
+			}
+		case kindSymlink:
+			if err := os.Symlink(r.originalTarget, r.path); err == nil {
+				restored++
+			}
+		case kindNone:
+			// Nothing to restore; the entry didn't exist before the write.
+		}
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
 		_ = os.Remove(dirs[i])
 	}
 	return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 		"pathsafe: write failed; rollback removed files and dirs", originalErr,
-		errcode.WithInternal(fmt.Sprintf("rollback removed %d files %d dirs", len(written), len(dirs))))
+		errcode.WithInternal(fmt.Sprintf("rollback removed %d files %d dirs, restored %d originals", len(written), len(dirs), restored)))
 }
 
 // collectMissingDirs returns the directories that do not exist yet, starting

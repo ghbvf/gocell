@@ -18,6 +18,7 @@ package pathsafe_test
 // After Lane A GREEN commits all pass for the correct reason.
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"os"
@@ -483,7 +484,7 @@ func TestWritePlannedFiles_ForceOverwrite_RollbackRestoresOriginalRegular(t *tes
 	if err != nil {
 		t.Fatalf("rollback: F0 lost after ForceOverwrite + mid-plan failure: %v", err)
 	}
-	if string(data) != string(originalContent) {
+	if !bytes.Equal(data, originalContent) {
 		t.Errorf("rollback: F0 content = %q, want original %q", data, originalContent)
 	}
 	info, err := os.Lstat(f0)
