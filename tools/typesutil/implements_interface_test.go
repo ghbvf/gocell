@@ -13,8 +13,9 @@ import (
 
 // checkPkg parses + type-checks src in-memory and returns the typed
 // package so tests can pull named/interface types out of package scope.
-// (buildFakePkg in receiver_type_test.go returns only *types.Info, which
-// is insufficient for scope lookups — hence a distinct helper.)
+// (buildFakePkg in receiver_type_test.go returns *types.Info, not the
+// *types.Package these scope lookups need — hence a distinct helper
+// rather than a change to the shared one.)
 func checkPkg(t *testing.T, src string) *types.Package {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -103,6 +104,34 @@ var BoxIntVar Box[int]
 				"ImplementsInterfaceExact")
 		})
 	}
+}
+
+// TestImplementsInterface_InterfaceAsInput covers the discriminating shape
+// that motivates ImplementsInterfaceExact: at cell_public_option_param:229
+// (CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01) the checked type t is frequently
+// itself a *types.Interface (an anonymous-interface parameter). A synthetic
+// pointer-to-interface (*iface) has an empty method set, so the value-only
+// Exact form is the correct semantic; the value-or-pointer form must still
+// return the right answer (the pointer fallback simply never adds a hit on
+// an interface input) and must not panic.
+func TestImplementsInterface_InterfaceAsInput(t *testing.T) {
+	pkg := checkPkg(t, `package fixture
+type I interface { M() }
+type J interface { M(); N() }
+type K interface { N() }
+`)
+	I := lookupIface(t, pkg, "I")
+	// Pass the *types.Interface itself as t (the anonymous-interface
+	// param shape), not the *types.Named wrapper.
+	// J's method set ⊇ I's → J implements I (interface-to-interface).
+	var J types.Type = lookupIface(t, pkg, "J")
+	// K lacks M() → K does not implement I.
+	var K types.Type = lookupIface(t, pkg, "K")
+
+	require.True(t, ImplementsInterface(J, I), "iface J implements I (value-or-ptr)")
+	require.True(t, ImplementsInterfaceExact(J, I), "iface J implements I (exact)")
+	require.False(t, ImplementsInterface(K, I), "iface K does not implement I (value-or-ptr); ptr-to-iface fallback must not spuriously hit")
+	require.False(t, ImplementsInterfaceExact(K, I), "iface K does not implement I (exact)")
 }
 
 func TestImplementsInterface_NilGuards(t *testing.T) {

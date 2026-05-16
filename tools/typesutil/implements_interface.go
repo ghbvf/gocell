@@ -14,6 +14,18 @@ import "go/types"
 // intentional — e.g. t may itself be an interface type and a synthetic
 // pointer-to-interface check would be meaningless.
 //
+// Signature note: the backlog-described (typesInfo, expr, ifaceObj) shape
+// was deliberately rejected — none of the consolidated call sites hold an
+// ast.Expr at the point of check (they take a struct field, obj.Type(), or
+// a parameter type). This shape mirrors stdlib go/types.Implements(V, T).
+//
+// AI-rebust note: the ImplementsInterface vs ImplementsInterfaceExact
+// choice is a name-level (Medium) distinction — both share one signature,
+// so picking the wrong one is not a compile error. The fixture-level guard
+// is the discriminating test case in implements_interface_test.go. The
+// Hard layer (banning raw go/types.Implements outside this file) is
+// TYPESUTIL-IMPLEMENTS-FUNNEL-01, landing in PR-b (see below).
+//
 // Edge cases (covered by implements_interface_test.go):
 //   - value-receiver impl / pointer-receiver-only impl via value / via *T
 //   - t already *types.Pointer (true path, no double-wrap)
@@ -42,11 +54,15 @@ func ImplementsInterface(t types.Type, iface *types.Interface) bool {
 // the deliberate no-pointer-fallback counterpart of ImplementsInterface.
 // Use it where t may itself be an interface type and a synthetic
 // pointer-to-interface check would be semantically meaningless (e.g. the
-// anonymous-interface bypass detector in cell_public_option_param_test).
+// CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 anonymous-interface bypass
+// detector, where t is frequently a *types.Interface).
 //
-// It is also the SOLE sanctioned raw go/types.Implements call site outside
-// ImplementsInterface — TYPESUTIL-IMPLEMENTS-FUNNEL-01 bans the raw call
-// everywhere else.
+// Once TYPESUTIL-IMPLEMENTS-FUNNEL-01 lands (PR-b,
+// tools/archtest/implements_funnel_test.go), this file will be the sole
+// sanctioned site for raw go/types.Implements; CI will then reject the raw
+// call anywhere else. Until PR-b merges that ban is NOT yet enforced — do
+// not add new raw go/types.Implements calls outside this file in the
+// interim.
 func ImplementsInterfaceExact(t types.Type, iface *types.Interface) bool {
 	if t == nil || iface == nil {
 		return false
