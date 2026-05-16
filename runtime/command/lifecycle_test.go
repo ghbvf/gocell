@@ -189,6 +189,35 @@ func TestSweeperLifecycle_OnStop_GracefulExit(t *testing.T) {
 	require.NoError(t, lc.Stop(stopCtx), "Stop must be idempotent")
 }
 
+// TestSweeperLifecycle_OwnerCtxCancelDuringProbe verifies the awaitProbe
+// runCtx.Done() branch: if ownerCtx is canceled during the probe window
+// (before the ticker fires its first tick), Start returns nil and a subsequent
+// Stop is a no-op. The goroutine exits via runCtx.Done().
+func TestSweeperLifecycle_OwnerCtxCancelDuringProbe(t *testing.T) {
+	t.Parallel()
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	q := commandtest.NewInMemQueue()
+	sw, err := kcommand.NewSweeper(q, q)
+	require.NoError(t, err)
+	// Use a very long interval so the first tick never fires during the probe window.
+	lc := NewSweeperLifecycle("probe-cancel-test", sw, testtime.D1h)
+
+	ownerCtx, ownerCancel := context.WithCancel(context.Background())
+	// Cancel immediately — before the goroutine can fire its first tick.
+	ownerCancel()
+
+	// Start must return nil (owner-cancel is not a Start error).
+	require.NoError(t, lc.Start(ownerCtx),
+		"Start must return nil when ownerCtx is already canceled")
+
+	// Stop must be a no-op (l.cancel was cleared by awaitProbe runCtx.Done() branch).
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer stopCancel()
+	require.NoError(t, lc.Stop(stopCtx), "Stop must be no-op after owner-cancel during probe")
+	// goleak verifies no goroutine survives.
+}
+
 // TestSweeperLifecycle_ContributesHook verifies Hook() returns correct shape.
 func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 	t.Parallel()

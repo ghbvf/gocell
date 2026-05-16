@@ -194,9 +194,13 @@ func (l *SweeperLifecycle) Start(ownerCtx context.Context) error {
 		return err
 	}
 
-	l.logger().Info("runtime/command: sweeper started",
-		slog.String("hook", l.hookName()),
-		slog.String("cell", l.cellID()))
+	// l.cancel is nil if awaitProbe hit the runCtx.Done() branch (owner ctx
+	// canceled before first tick); the goroutine is self-exiting, not "started".
+	if l.cancel != nil {
+		l.logger().Info("runtime/command: sweeper started",
+			slog.String("hook", l.hookName()),
+			slog.String("cell", l.cellID()))
+	}
 	return nil
 }
 
@@ -233,9 +237,28 @@ func (l *SweeperLifecycle) runLoop(
 	}
 }
 
-// awaitProbe waits up to startProbeTimeout for the sweeper goroutine to fire
-// its first tick. Returns a non-nil error only if the goroutine exits with an
-// error within the probe window. Rolls back l.cancel / l.done on failure.
+// awaitProbe waits up to startProbeTimeout for the sweeper goroutine to signal
+// readiness (first tick fired). Returns nil in all non-error cases.
+//
+// earlyExit semantics: runLoop always sends nil on first tick as a startup
+// signal; it never sends a non-nil error (fire-and-forget design — SweepTick
+// failures are logged but do not propagate through earlyExit). The channel
+// exists solely to confirm the goroutine is alive and has received its first
+// tick, distinguishing "goroutine launched and ticked" from "probe window
+// elapsed before first tick" (both are normal operations).
+//
+// Three outcomes:
+//
+//  1. First tick fires within startProbeTimeout: earlyExit receives nil. The
+//     goroutine is confirmed running. Start returns nil.
+//
+//  2. Probe window elapses (common case: interval >> startProbeTimeout): Start
+//     returns nil. The goroutine is running — the ticker just hasn't fired yet.
+//
+//  3. ownerCtx canceled before probe window closed: Start logs a Warn (owner
+//     ctx canceled before sweeper confirmed running) and returns nil. The
+//     goroutine will exit via runCtx.Done() on its own; l.cancel / l.done are
+//     cleared so a subsequent Stop is a no-op.
 //
 // C.1: probe timer is funneled through controlPlaneProbeTimer.
 func (l *SweeperLifecycle) awaitProbe(
@@ -247,19 +270,20 @@ func (l *SweeperLifecycle) awaitProbe(
 	defer probeTimer.Stop()
 
 	select {
-	case err := <-earlyExit:
-		if err != nil {
-			cancel()
-			l.cancel = nil
-			l.done = nil
-			return &lifecycleError{"runtime/command: sweeper failed on startup: " + err.Error()}
-		}
-		// First tick fired within probe window — goroutine is running.
+	case <-earlyExit:
+		// First tick fired within probe window — goroutine is confirmed running.
+		// earlyExit always carries nil (fire-and-forget semantics; see godoc).
 	case <-probeTimer.C:
 		// Probe window elapsed without first tick (interval > startProbeTimeout,
 		// which is the common case). Goroutine is running normally.
 	case <-runCtx.Done():
-		// Owner ctx was canceled before probe window closed. Goroutine will exit.
+		// Owner ctx was canceled before the probe window closed and before the
+		// goroutine fired its first tick. The goroutine will exit via runCtx.Done().
+		// Start still returns nil — cancellation is not an error from Start's
+		// perspective. l.cancel / l.done are cleared so Stop is a no-op.
+		l.logger().Warn("runtime/command: sweeper owner ctx canceled before first tick",
+			slog.String("hook", l.hookName()),
+			slog.String("cell", l.cellID()))
 		cancel()
 		l.cancel = nil
 		l.done = nil
