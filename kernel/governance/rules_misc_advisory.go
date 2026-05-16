@@ -341,6 +341,30 @@ func isL2OrHigher(level string) bool {
 }
 
 // =============================================================================
+// SLICE-CONSISTENCY-02 — contractUsages role → minimum consistencyLevel
+// =============================================================================
+
+// validateSliceConsistencyContractUsages enforces the lower-bound side of the
+// slice consistency contract: when a slice declares any contractUsage with
+// role=publish, the effective consistency level must be L2 or higher (the
+// L2 OutboxFact invariant requires durable atomic publication).
+//
+// Pair with SLICE-CONSISTENCY-01, which enforces the upper bound (slice ≤ cell).
+// SLICE-CONSISTENCY-02 is metadata-only — codegen funnel + parser strict mode
+// project slice.yaml.consistencyLevel into Go (sliceMeta literal), so a
+// publish role + L0/L1 declaration is the only remaining drift class this
+// rule catches.
+//
+// AI-rebust evaluation: Medium. Role values are kernel/cellvocab.ContractRole
+// const enum; the rule's string comparison is const-equivalent. New slices
+// with role=publish auto-enrol.
+//
+// Stub (RED). Real implementation lands in the Wave 0 GREEN commit.
+func (v *Validator) validateSliceConsistencyContractUsages() []ValidationResult {
+	return nil
+}
+
+// =============================================================================
 // SLICE-CONSISTENCY-01 (formerly rules_slice.go)
 // =============================================================================
 

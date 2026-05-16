@@ -324,9 +324,13 @@ verify:
 		fmt.Sprintf("expected error to contain 'line N' but got: %s", err.Error()))
 }
 
-// TestParser_SliceConsistencyLevelAccepted verifies that the new optional
+// TestParser_SliceConsistencyLevelAccepted verifies that explicit
 // slice.yaml field "consistencyLevel" is accepted by KnownFields(true) and
 // correctly round-trips through the parser into SliceMeta.ConsistencyLevel.
+//
+// Inheritance-from-cell fallback (empty consistencyLevel) is rejected — see
+// TestParser_SliceConsistencyLevelRequired. slice.yaml is the SoR for slice
+// level; codegen funnel + parser strict mode make inheritance unrepresentable.
 func TestParser_SliceConsistencyLevelAccepted(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -345,17 +349,6 @@ verify:
 `,
 			wantLevel: "L1",
 		},
-		{
-			name: "slice without consistencyLevel accepted",
-			sliceYAML: `id: testslice
-belongsToCell: testcell
-contractUsages: []
-verify:
-  unit: []
-  contract: []
-`,
-			wantLevel: "",
-		},
 	}
 
 	for _, tt := range tests {
@@ -372,4 +365,30 @@ verify:
 			assert.Equal(t, tt.wantLevel, s.ConsistencyLevel)
 		})
 	}
+}
+
+// TestParser_SliceConsistencyLevelRequired asserts that slice.yaml omitting
+// `consistencyLevel` is rejected by the strict parser. Inheritance from cell
+// (the prior fallback) is no longer supported — slice.yaml is the single SoR
+// for slice consistency level, projected to slice_gen.go.sliceMeta by codegen.
+func TestParser_SliceConsistencyLevelRequired(t *testing.T) {
+	sliceYAML := `id: testslice
+belongsToCell: testcell
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`
+	fsys := fstest.MapFS{
+		"cells/testcell/cell.yaml":                   &fstest.MapFile{Data: []byte(minimalCellYAML)},
+		"cells/testcell/slices/testslice/slice.yaml": &fstest.MapFile{Data: []byte(sliceYAML)},
+	}
+	p := NewParser("")
+	_, err := p.ParseFS(fsys)
+	require.Error(t, err, "slice.yaml without consistencyLevel must be rejected")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	require.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+	require.Contains(t, err.Error(), "consistencyLevel",
+		"error must name the missing field")
 }

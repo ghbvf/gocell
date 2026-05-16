@@ -292,12 +292,37 @@ type BaseSlice struct {
 }
 
 // NewBaseSlice creates a BaseSlice with the given identity and consistency level.
+//
+// DEPRECATED — kept temporarily for RED→GREEN transition. Production callers
+// MUST migrate to MustNewBaseSliceFromMeta (slice.yaml SoR). Removal happens
+// in the GREEN commit; do not introduce new callers.
 func NewBaseSlice(id, cellID string, level cellvocab.Level) *BaseSlice {
 	return &BaseSlice{
 		id:     id,
 		cellID: cellID,
 		level:  level,
 	}
+}
+
+// NewBaseSliceFromMeta constructs a BaseSlice from parsed slice.yaml metadata.
+//
+// Stub (RED). Real implementation lands in the Wave 0 GREEN commit.
+func NewBaseSliceFromMeta(meta *metadata.SliceMeta) (*BaseSlice, error) {
+	_ = meta
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		"cell.NewBaseSliceFromMeta: not implemented (RED stub)")
+}
+
+// MustNewBaseSliceFromMeta is the panic-on-error twin of NewBaseSliceFromMeta.
+//
+// Stub (RED). Real implementation lands in the Wave 0 GREEN commit.
+func MustNewBaseSliceFromMeta(meta *metadata.SliceMeta) *BaseSlice {
+	s, err := NewBaseSliceFromMeta(meta)
+	if err != nil {
+		panic(panicregister.Approved("slice-base-init",
+			errcode.Assertion("cell.MustNewBaseSliceFromMeta: %v", err)))
+	}
+	return s
 }
 
 func (s *BaseSlice) ID() string                        { return s.id }

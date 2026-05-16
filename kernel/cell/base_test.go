@@ -467,6 +467,78 @@ func TestBaseCell_Metadata_Isolation(t *testing.T) {
 	assert.Equal(t, "shared", c.Metadata().L0Dependencies[0].Cell)
 }
 
+// TestNewBaseSliceFromMeta_ErrorPaths covers all error returns of
+// NewBaseSliceFromMeta. Reads slice.yaml metadata (the SoR) into a typed
+// BaseSlice; refuses any missing/invalid input (no inheritance fallback).
+func TestNewBaseSliceFromMeta_ErrorPaths(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		meta       *metadata.SliceMeta
+		wantSubstr string
+	}{
+		{"nil meta", nil, "meta is nil"},
+		{"empty id", &metadata.SliceMeta{BelongsToCell: "c", ConsistencyLevel: "L0"}, "meta.ID is empty"},
+		{"empty belongsToCell", &metadata.SliceMeta{ID: "s", ConsistencyLevel: "L0"}, "meta.BelongsToCell is empty"},
+		{"empty consistencyLevel", &metadata.SliceMeta{ID: "s", BelongsToCell: "c"}, "meta.ConsistencyLevel is empty"},
+		{"invalid level", &metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L9"}, "invalid consistency level"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := NewBaseSliceFromMeta(tt.meta)
+			require.Error(t, err)
+			require.Nil(t, s)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			require.Contains(t, ec.Message, tt.wantSubstr)
+		})
+	}
+}
+
+// TestNewBaseSliceFromMeta_HappyPath covers L0–L4 round-trip.
+func TestNewBaseSliceFromMeta_HappyPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		level     string
+		wantLevel cellvocab.Level
+	}{
+		{"L0", "L0", cellvocab.L0},
+		{"L1", "L1", cellvocab.L1},
+		{"L2", "L2", cellvocab.L2},
+		{"L3", "L3", cellvocab.L3},
+		{"L4", "L4", cellvocab.L4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := NewBaseSliceFromMeta(&metadata.SliceMeta{
+				ID:               "login",
+				BelongsToCell:    "accesscore",
+				ConsistencyLevel: tt.level,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, s)
+			assert.Equal(t, "login", s.ID())
+			assert.Equal(t, "accesscore", s.BelongsToCell())
+			assert.Equal(t, tt.wantLevel, s.ConsistencyLevel())
+		})
+	}
+}
+
+// TestMustNewBaseSliceFromMeta_PanicsOnError verifies the Must* wrapper panics
+// with a "cell.MustNewBaseSliceFromMeta:" prefixed message.
+func TestMustNewBaseSliceFromMeta_PanicsOnError(t *testing.T) {
+	t.Parallel()
+	assertPanicsWithAssertionMessage(t,
+		"cell.MustNewBaseSliceFromMeta: [ERR_VALIDATION_FAILED] cell.NewBaseSliceFromMeta: meta is nil",
+		func() { MustNewBaseSliceFromMeta(nil) },
+	)
+	// Also verify the prefix on a non-nil but invalid case.
+	assert.Panics(t, func() {
+		MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "bad"})
+	})
+}
+
 // assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error
 // whose Message field equals wantMsg. Used to test Must* wrappers that now panic
 // with errcode.Assertion(...) instead of bare strings.
