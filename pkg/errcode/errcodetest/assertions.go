@@ -96,12 +96,19 @@ type wireEnvelope struct {
 // assertions in the same test still run.
 func AssertWireCode(t testing.TB, rec *httptest.ResponseRecorder, expectedStatus int, expected errcode.Code) {
 	t.Helper()
+	// Explicit `return` after each t.Fatalf — testing.TB is an interface, so
+	// staticcheck cannot see Fatalf's noreturn semantics through the method
+	// set and reports SA5011 ("possible nil pointer dereference") on the
+	// subsequent rec.Body / rec.Code accesses. The returns are formally
+	// unreachable at runtime but document the guard to the analyzer.
 	if rec == nil {
 		t.Fatalf("errcodetest.AssertWireCode: rec is nil; test never served a response")
+		return
 	}
 	if rec.Body == nil {
 		t.Fatalf("errcodetest.AssertWireCode: rec.Body is nil; " +
 			"use httptest.NewRecorder() instead of &httptest.ResponseRecorder{}")
+		return
 	}
 	if rec.Code != expectedStatus {
 		t.Fatalf("errcodetest.AssertWireCode: HTTP status mismatch — "+
