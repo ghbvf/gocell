@@ -107,6 +107,46 @@ Save the returned `accessToken` as your admin token:
 export ADMIN_TOKEN="<accessToken from admin login>"
 ```
 
+### Login Failure UX (uniform 401)
+
+The public login endpoint deliberately collapses every failure mode to a
+single `401 ERR_AUTH_LOGIN_FAILED` response so an attacker cannot enumerate
+accounts or status from response body/timing:
+
+```json
+{
+  "error": {
+    "code": "ERR_AUTH_LOGIN_FAILED",
+    "message": "invalid credentials",
+    "details": []
+  }
+}
+```
+
+The same wire shape covers all four cases:
+
+| Cause | Underlying state |
+|-------|------------------|
+| Missing user | Username does not exist in `users` table |
+| Wrong password | bcrypt compare fails against stored hash |
+| Inactive account | User exists but `status` ∈ {`locked`, `suspended`} |
+| Concurrent deactivation race | User passed pre-tx active check but was locked between then and the in-tx FOR UPDATE re-fetch |
+
+**Timing normalization**: the handler always runs a real bcrypt compare —
+even on missing-user it compares against a pre-computed `dummyBcryptHash`
+(cost=12) so response latency does not leak whether the user exists.
+
+**Server-side observability**: each failure records the underlying cause via
+`errcode.WithInternal` into structured `slog` (never on the wire). Operators
+distinguish causes via the `internal` slog field — see
+[`docs/ops/login-failure-triage.md`](../../docs/ops/login-failure-triage.md)
+for query recipes and the four Internal-text templates.
+
+**Admin path divergence**: `identitymanage.IssueForUser` (used when an admin
+changes a user's password) returns `403 ERR_AUTH_USER_NOT_ACTIVE` for non-active
+users rather than the uniform 401. The admin path is authenticated, so there
+is no enumeration concern; surfacing the specific cause helps admin tooling.
+
 ### 2. Create a user (requires admin)
 
 ```bash

@@ -14,8 +14,11 @@ package archtest
 //
 // Rule: the function body of (sessionvalidate.*).enforceSessionState in
 // cells/accesscore/slices/sessionvalidate/service.go must:
-//  1. Contain a SelectorExpr referencing claims.AuthzEpoch (or any field named
-//     AuthzEpoch, to tolerate minor refactors while keeping the invariant stable).
+//  1. Contain a SelectorExpr referencing view.AuthzEpochAtIssue (or any field
+//     named AuthzEpoch, to tolerate minor refactors while keeping the invariant
+//     stable). The compared value is the session row's AuthzEpochAtIssue
+//     snapshot (row-SoR per ADR §A8) — the access JWT carries no authz_epoch
+//     claim since S4d.
 //  2. Contain a call to a method named GetByID (user repo read to obtain the
 //     current server-side epoch for comparison).
 //  3. Contain a BinaryExpr with Op == token.NEQ (!=) that references AuthzEpoch
@@ -24,7 +27,7 @@ package archtest
 //
 // Blind-spot note (ai-collab.md §"工具选定后强制盲区自检"):
 // EachInSubtree[ast.FuncDecl] + EachInSubtree[ast.SelectorExpr] covers the
-// literal `claims.AuthzEpoch` selector. If the epoch check were refactored
+// literal `view.AuthzEpochAtIssue` selector. If the epoch check were refactored
 // into a helper function called from enforceSessionState, the body scan would
 // miss it (the SelectorExpr moves into the helper's body). This is an
 // acceptable Medium trade-off: such a refactor would require a deliberate

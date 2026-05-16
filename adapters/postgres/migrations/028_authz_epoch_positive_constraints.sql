@@ -22,11 +22,18 @@
 -- The ADD CONSTRAINT ... CHECK (c > 0) is validated in-place (NOT VALID is
 -- NOT used) and enforced immediately from the moment this migration runs.
 --
--- The DEFAULT 0 that migration 026/027 used for DDL ALTER compatibility is
--- dropped here so that any INSERT that omits the column value fails explicitly
--- rather than silently inserting the sentinel. The application always supplies
--- the epoch value explicitly (insertUserSQL sets $8=user.AuthzEpoch(); session
--- and refresh stores set the value in their INSERT statements).
+-- The DEFAULT 0 is dropped from all three columns here so that any INSERT that
+-- omits the column value fails explicitly rather than silently inserting the
+-- sentinel. Historical origin of the DEFAULT 0 (relevant when reading the
+-- migration chain in sequence):
+--
+--   users.authz_epoch              — DEFAULT 0 from migration 017 (original schema)
+--   sessions.authz_epoch_at_issue  — DEFAULT 0 from migration 026 (DDL ALTER device)
+--   refresh_tokens.authz_epoch_at_issue — DEFAULT 0 from migration 027 (DDL ALTER device)
+--
+-- The application always supplies the epoch value explicitly (insertUserSQL
+-- sets $8=user.AuthzEpoch(); session and refresh stores set the value in
+-- their INSERT statements).
 --
 -- schema_guard.go asserts column type / NOT NULL and registers each CHECK
 -- constraint name in expectedChecks (verifyChecks path). Both this migration
