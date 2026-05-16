@@ -172,22 +172,41 @@ func createUserForContractTest(t *testing.T, handler http.Handler, contract *con
 
 // TestHttpAuthUserPathParamConstraints asserts that the id path param (format: uuid)
 // schema rejects non-UUID strings for all user management contracts.
+// Each contract uses a distinct variable with an explicit literal LoadByID so
+// CONTRACT-PATH-QUERY-COVERAGE-01 can associate each MustRejectPathParam call
+// with its contract by per-variable name tracking.
 func TestHttpAuthUserPathParamConstraints(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
-	contracts := []string{
-		"http.auth.user.get.v1",
-		"http.auth.user.update.v1",
-		"http.auth.user.patch.v1",
-		"http.auth.user.delete.v1",
-		"http.auth.user.lock.v1",
-		"http.auth.user.unlock.v1",
-		"http.auth.user.change-password.v1",
-	}
-	for _, id := range contracts {
-		c := contracttest.LoadByID(t, root, id)
-		c.ValidatePathParam(t, "id", "550e8400-e29b-41d4-a716-446655440000")
-		c.MustRejectPathParam(t, "id", "not-a-uuid") // violates format: uuid
-	}
+	const validUUID = "550e8400-e29b-41d4-a716-446655440000"
+	const invalidUUID = "not-a-uuid"
+
+	cGet := contracttest.LoadByID(t, root, "http.auth.user.get.v1")
+	cGet.ValidatePathParam(t, "id", validUUID)
+	cGet.MustRejectPathParam(t, "id", invalidUUID) // violates format: uuid
+
+	cUpdate := contracttest.LoadByID(t, root, "http.auth.user.update.v1")
+	cUpdate.ValidatePathParam(t, "id", validUUID)
+	cUpdate.MustRejectPathParam(t, "id", invalidUUID) // violates format: uuid
+
+	cPatch := contracttest.LoadByID(t, root, "http.auth.user.patch.v1")
+	cPatch.ValidatePathParam(t, "id", validUUID)
+	cPatch.MustRejectPathParam(t, "id", invalidUUID) // violates format: uuid
+
+	cDelete := contracttest.LoadByID(t, root, "http.auth.user.delete.v1")
+	cDelete.ValidatePathParam(t, "id", validUUID)
+	cDelete.MustRejectPathParam(t, "id", invalidUUID) // violates format: uuid
+
+	cLock := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
+	cLock.ValidatePathParam(t, "id", validUUID)
+	cLock.MustRejectPathParam(t, "id", invalidUUID) // violates format: uuid
+
+	cUnlock := contracttest.LoadByID(t, root, "http.auth.user.unlock.v1")
+	cUnlock.ValidatePathParam(t, "id", validUUID)
+	cUnlock.MustRejectPathParam(t, "id", invalidUUID) // violates format: uuid
+
+	cChgPwd := contracttest.LoadByID(t, root, "http.auth.user.change-password.v1")
+	cChgPwd.ValidatePathParam(t, "id", validUUID)
+	cChgPwd.MustRejectPathParam(t, "id", invalidUUID) // violates format: uuid
 }
 
 func TestHttpAuthUserCreateV1Serve(t *testing.T) {

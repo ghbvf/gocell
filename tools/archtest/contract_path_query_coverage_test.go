@@ -22,14 +22,16 @@
 //  1. Contract ID discovered only via string literal in LoadByID call. A call
 //     like c := LoadByID(t, root, computedID) where computedID is not a literal
 //     will NOT be associated with the contract. Compensation: archtest
-//     CONTRACTTEST-LOADBYID-LITERAL-01 (in contracttest_boundary_test.go) locks
-//     all LoadByID calls to literal strings; non-literal form fails that rule.
+//     CONTRACTTEST-LOADBYID-LITERAL-01 (in tools/archtest/contracttest_loadbyid_literal_test.go)
+//     locks all LoadByID calls to literal strings; non-literal form fails that rule.
 //
-//  2. MustRejectPathParam / MustRejectQueryParam called on a different
-//     *Contract variable than the one loaded for the target contract. E.g.:
-//     c := LoadByID(t, root, "a.v1"); d.MustRejectPathParam(t, "key", "x")
-//     where d was loaded for "a.v1" in an outer scope. Compensation: contract
-//     tests conventionally use a single c per test function; code review.
+//  2. MustRejectPathParam / MustRejectQueryParam called on a *Contract variable
+//     loaded in an outer function scope (e.g. passed as argument) rather than
+//     via a LoadByID call visible in the same function. The per-variable
+//     association tracks LoadByID assignments and MustReject calls within the
+//     same function body; cross-function use remains a blind spot.
+//     Compensation: contract tests conventionally use a single c per test
+//     function; code review.
 //
 //  3. MustRejectPathParam call inside a helper function that is not visible to
 //     the file-level scan. Compensation: the TypesInfo receiver-type check
@@ -87,6 +89,13 @@ type contractPQParamInfo struct {
 // pathParams or queryParams declarations has at least one MustRejectPathParam
 // or MustRejectQueryParam call site in a cells/**/contract_test.go file whose
 // LoadByID call references that contract ID.
+//
+// Coverage is tracked at per-variable granularity: each LoadByID assignment
+// (c := contracttest.LoadByID(t, root, "<lit>")) establishes a mapping from
+// variable name to contract ID within its enclosing function body. Only
+// MustReject calls whose receiver is that same variable are attributed to the
+// associated contract, preventing false coverage when a file loads contract A
+// and contract B but calls MustRejectPathParam only for A.
 func TestContractPathQueryCoverage01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -114,41 +123,15 @@ func TestContractPathQueryCoverage01(t *testing.T) {
 			if !isCellsContractTestFile(rel) {
 				continue
 			}
-			// Extract the contract IDs loaded in this file via LoadByID.
-			fileContractIDs := extractLoadByIDContractIDs(file, p.TypesInfo)
-			if len(fileContractIDs) == 0 {
-				continue
-			}
-			// Find MustRejectPathParam / MustRejectQueryParam calls.
-			pathCalls, queryCalls := extractMustRejectCalls(file, p.TypesInfo)
-			for _, id := range fileContractIDs {
-				if pathCalls {
-					pathParamCovered[id] = true
-				}
-				if queryCalls {
-					queryParamCovered[id] = true
-				}
-			}
+			// Per-function-body association: build loadByIDVars for each
+			// top-level function, then mark coverage by receiver variable name.
+			attributePQCoverageFromFile(file, p.TypesInfo, pathParamCovered, queryParamCovered)
 		}
 		return nil
 	})
 
 	// --- Assert coverage ---
-	var failures []string
-	for _, req := range wantCoverage {
-		if req.HasPath && !pathParamCovered[req.ID] {
-			failures = append(failures, fmt.Sprintf(
-				"contract %q (server: %s) has pathParams but no MustRejectPathParam call site in cells/**/contract_test.go",
-				req.ID, req.ServerCell,
-			))
-		}
-		if req.HasQuery && !queryParamCovered[req.ID] {
-			failures = append(failures, fmt.Sprintf(
-				"contract %q (server: %s) has queryParams but no MustRejectQueryParam call site in cells/**/contract_test.go",
-				req.ID, req.ServerCell,
-			))
-		}
-	}
+	failures := computePQFailures(wantCoverage, pathParamCovered, queryParamCovered)
 	for _, f := range failures {
 		t.Errorf("CONTRACT-PATH-QUERY-COVERAGE-01: %s", f)
 	}
@@ -174,28 +157,145 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 	}
 
 	// Build the requirements from the fixture contracts root.
-	_ = fixtureContractsRoot
 	fixtureRelDir := filepath.Join("tools", "archtest", "contract_path_query_coverage_fixtures",
 		"red_missing_reject", "contracts", "http")
 	fixtureReqs := buildContractPQRequirementsFromRelDir(t, root, fixtureRelDir)
 	require.NotEmpty(t, fixtureReqs, "fixture must have at least one contract with path/queryParams")
 
-	// The fixture test file does NOT call MustRejectPathParam, so coverage is empty.
-	// We simulate the scan by checking that at least one fixture requirement is unfulfilled.
-	// Since we don't load the fixture package (it uses a special build tag), we simply
-	// assert that the fixture contract has pathParams (HasPath=true) and no coverage.
-	var found bool
-	for _, req := range fixtureReqs {
-		if req.HasPath && req.ID == "http.test.paramcoverage.v1" {
-			found = true
-			// No MustRejectPathParam coverage (not in pathParamCovered map).
-			// This is the RED state the archtest should catch.
-			t.Logf("CONTRACT-PATH-QUERY-COVERAGE-01 fixture correctly has pathParams for %q with no coverage (RED fixture)", req.ID)
+	// The fixture test file does NOT call MustRejectPathParam, so both coverage
+	// maps are empty — simulate this by passing empty maps.
+	emptyPath := make(map[string]bool)
+	emptyQuery := make(map[string]bool)
+	failures := computePQFailures(fixtureReqs, emptyPath, emptyQuery)
+	require.NotEmpty(t, failures,
+		"CONTRACT-PATH-QUERY-COVERAGE-01 reverse self-check: fixture must produce ≥1 missing-reject failure "+
+			"(fixture contract has pathParams but no MustRejectPathParam call)")
+}
+
+// --- Core logic helpers ---
+
+// computePQFailures returns the list of failure messages for contracts that
+// declare pathParams/queryParams but lack the corresponding MustReject call.
+// Extracted so both the main rule and the reverse self-check run the same
+// assertion logic.
+func computePQFailures(wantCoverage []contractPQParamInfo, pathParamCovered, queryParamCovered map[string]bool) []string {
+	var failures []string
+	for _, req := range wantCoverage {
+		if req.HasPath && !pathParamCovered[req.ID] {
+			failures = append(failures, fmt.Sprintf(
+				"contract %q (server: %s) has pathParams but no MustRejectPathParam call site in cells/**/contract_test.go",
+				req.ID, req.ServerCell,
+			))
+		}
+		if req.HasQuery && !queryParamCovered[req.ID] {
+			failures = append(failures, fmt.Sprintf(
+				"contract %q (server: %s) has queryParams but no MustRejectQueryParam call site in cells/**/contract_test.go",
+				req.ID, req.ServerCell,
+			))
 		}
 	}
-	if !found {
-		t.Errorf("fixture contract http.test.paramcoverage.v1 with pathParams not found in fixture contracts root %s", fixtureContractsRoot)
-	}
+	return failures
+}
+
+// attributePQCoverageFromFile walks the top-level function declarations in
+// file. For each function body it builds a per-variable map of
+// (varName → contractID) from LoadByID assignments, then marks
+// pathParamCovered / queryParamCovered for the contract associated with each
+// MustReject receiver variable.
+//
+// This per-variable granularity ensures that a file loading contract A and
+// contract B only marks A as covered when MustRejectPathParam is called on
+// the variable bound to A, not on the variable bound to B.
+func attributePQCoverageFromFile(
+	file *ast.File,
+	info *types.Info,
+	pathParamCovered map[string]bool,
+	queryParamCovered map[string]bool,
+) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
+		}
+		// Build varName → contractID map for this function body.
+		loadByIDVars := extractLoadByIDVars(fn.Body, info)
+		if len(loadByIDVars) == 0 {
+			return
+		}
+		// Scan MustReject calls and attribute coverage per receiver variable.
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil {
+				return
+			}
+			name := sel.Sel.Name
+			if name != contractPQMethodPathParam && name != contractPQMethodQueryParam {
+				return
+			}
+			if !isContractPQReceiverMethod(sel, info, name) {
+				return
+			}
+			// Receiver must be a plain identifier bound to a LoadByID variable.
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return
+			}
+			contractID, found := loadByIDVars[recv.Name]
+			if !found {
+				return
+			}
+			switch name {
+			case contractPQMethodPathParam:
+				pathParamCovered[contractID] = true
+			case contractPQMethodQueryParam:
+				queryParamCovered[contractID] = true
+			}
+		})
+	})
+}
+
+// extractLoadByIDVars scans a function body for variable assignments of the
+// forms:
+//
+//	c := contracttest.LoadByID(t, root, "<literal>")   // short declaration
+//	c  = contracttest.LoadByID(t, root, "<literal>")   // reassignment
+//
+// and returns a map from variable name to contract ID. When a variable is
+// reassigned multiple times, the last assignment wins (later MustReject calls
+// in the same function will be attributed to the latest contract).
+// Uses *types.Info to confirm the callee is contracttest.LoadByID; only
+// string literal third arguments are recorded.
+func extractLoadByIDVars(body *ast.BlockStmt, info *types.Info) map[string]string {
+	result := make(map[string]string)
+	EachInSubtree[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
+		// Accept both short declarations (:=) and regular assignments (=).
+		if assign.Tok != token.DEFINE && assign.Tok != token.ASSIGN {
+			return
+		}
+		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return
+		}
+		varIdent, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok {
+			return
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok || len(call.Args) < 3 {
+			return
+		}
+		if !isContractPQFunc(call.Fun, info, contractPQLoadByID) {
+			return
+		}
+		lit, ok := call.Args[2].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return
+		}
+		id, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return
+		}
+		result[varIdent.Name] = id
+	})
+	return result
 }
 
 // --- Helpers ---
@@ -276,60 +376,6 @@ func isCellsContractTestFile(rel string) bool {
 		filepath.Base(rel) == "contract_test.go"
 }
 
-// extractLoadByIDContractIDs scans one file for LoadByID calls and extracts
-// the contract ID string literals from the third argument.
-//
-// Recognized form: contracttest.LoadByID(t, root, "<literal>")
-// Uses TypesInfo to confirm the callee is contracttest.LoadByID.
-func extractLoadByIDContractIDs(file *ast.File, info *types.Info) []string {
-	var ids []string
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if len(call.Args) < 3 {
-			return
-		}
-		if !isContractPQFunc(call.Fun, info, contractPQLoadByID) {
-			return
-		}
-		// Third arg (index 2) is the contract ID string literal.
-		lit, ok := call.Args[2].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return
-		}
-		id, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			return
-		}
-		ids = append(ids, id)
-	})
-	return ids
-}
-
-// extractMustRejectCalls scans one file and returns whether any
-// MustRejectPathParam or MustRejectQueryParam calls exist on a *Contract.
-func extractMustRejectCalls(file *ast.File, info *types.Info) (pathFound, queryFound bool) {
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
-			return
-		}
-		name := sel.Sel.Name
-		if name != contractPQMethodPathParam && name != contractPQMethodQueryParam {
-			return
-		}
-		// Verify the receiver type is *contracttest.Contract.
-		if !isContractPQReceiverMethod(sel, info, name) {
-			return
-		}
-		switch name {
-		case contractPQMethodPathParam:
-			pathFound = true
-		case contractPQMethodQueryParam:
-			queryFound = true
-		}
-	})
-	return pathFound, queryFound
-}
-
 // isContractPQReceiverMethod reports whether sel is a method call on
 // *contracttest.Contract with the given method name.
 func isContractPQReceiverMethod(sel *ast.SelectorExpr, info *types.Info, methodName string) bool {
@@ -348,6 +394,10 @@ func isContractPQReceiverMethod(sel *ast.SelectorExpr, info *types.Info, methodN
 }
 
 // isContractPQFunc reports whether funExpr refers to contracttest.<funcName>.
+// Caller must always supply non-nil TypesInfo; info == nil returns false
+// without attempting an AST-string fallback (which would be an unsafe
+// security downgrade — a method named identically on a different type would
+// pass the check).
 func isContractPQFunc(funExpr ast.Expr, info *types.Info, funcName string) bool {
 	sel, ok := funExpr.(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil {
@@ -356,21 +406,16 @@ func isContractPQFunc(funExpr ast.Expr, info *types.Info, funcName string) bool 
 	if sel.Sel.Name != funcName {
 		return false
 	}
-	if info != nil {
-		obj := info.Uses[sel.Sel]
-		if obj == nil {
-			return false
-		}
-		fn, ok := obj.(*types.Func)
-		if !ok || fn.Pkg() == nil {
-			return false
-		}
-		return fn.Pkg().Path() == contractPQPkgPath && fn.Name() == funcName
-	}
-	// AST fallback.
-	xIdent, ok := sel.X.(*ast.Ident)
-	if !ok {
+	if info == nil {
 		return false
 	}
-	return xIdent.Name == "contracttest"
+	obj := info.Uses[sel.Sel]
+	if obj == nil {
+		return false
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return false
+	}
+	return fn.Pkg().Path() == contractPQPkgPath && fn.Name() == funcName
 }
