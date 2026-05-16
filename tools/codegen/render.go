@@ -32,7 +32,12 @@ func init() {
 // declaration so gofumpt can group imports by module locality.
 //
 // These values must stay aligned with the CI formatter gate
-// (.golangci.yml formatters.enable: gofumpt + golangci-lint v2.11.4).
+// (.golangci.yml formatters.settings.gofumpt + golangci-lint v2.11.4).
+// SYNC: golangci-lint auto-injects LangVersion from the go.mod `go`
+// directive; the literal below is a second manual truth point — when the
+// go.mod `go` directive changes, update "go1.25" here in lockstep (the
+// .golangci.yml gofumpt comment carries the matching note). ModulePath is
+// single-sourced against .golangci.yml formatters.settings.gofumpt.module-path.
 // Exported so tests across tools/codegen, tools/codegen/cellgen, and
 // tools/generatedcatalog can reference a single authoritative copy.
 var GofumptOptions = gofumpt.Options{

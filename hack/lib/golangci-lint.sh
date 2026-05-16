@@ -23,7 +23,9 @@
 #      formatter gate calls the same package vendored inside golangci-lint;
 #      a version split here means producer output passes producer tests
 #      but trips the gate (or vice versa) — exactly the drift this rollout
-#      closes on the consumer side.
+#      closes on the consumer side. Current state: go.mod declares
+#      mvdan.cc/gofumpt v0.9.2 — invariant satisfied (PR #534 restored it
+#      from a stray v0.10.0).
 #
 # Reviewer-enforced sync — no archtest because both upstreams are yaml /
 # go.mod literals shellcheck/Go can't cross-reference cleanly.
