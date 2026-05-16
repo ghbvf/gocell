@@ -164,11 +164,12 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 // Using a params struct avoids the 11-positional-argument footgun and allows
 // callers to name each field explicitly.
 //
-// Field order: identity / credentials / lifecycle metadata first, then the
-// three authz-controlled fields grouped at the end. The authz subgroup
-// (Status / PasswordResetRequired / AuthzEpoch) mirrors User's private field
-// order (status → passwordResetRequired → authzEpoch) so that the storage
-// boundary and the aggregate read in the same direction.
+// Field order: identity + credentials + lifecycle timestamps first
+// (ID, Username, Email, PasswordHash, PasswordVersion, Source, CreatedAt,
+// UpdatedAt), then the three authz-controlled fields grouped at the end
+// (Status, PasswordResetRequired, AuthzEpoch). The authz subgroup mirrors
+// User's private field order (status → passwordResetRequired → authzEpoch)
+// so the storage boundary and the aggregate read in the same direction.
 type ReconstituteUserParams struct {
 	ID              string
 	Username        string
