@@ -13,9 +13,8 @@ import (
 
 func TestPGUserRepo_Conformance(t *testing.T) {
 	conformance.RunUserRepoConformance(t, pgUserRepoFactory(t), conformance.Features{
-		RequiresAmbientTx:         true,
-		SupportsForUpdateLockHold: true,
-		SupportsCASConflict:       true,
+		RequiresAmbientTx:   true,
+		SupportsCASConflict: true,
 	})
 }
 

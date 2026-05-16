@@ -30,6 +30,17 @@ import (
 // reuse — kept in this file).
 const concurrencyDeadlineBudget = 30 * time.Second
 
+// quickGracePeriod is the small wall-time used to differentiate "immediately
+// returned" from "blocked on lock" in conformGetByIDForUpdateLockContention.
+// 50ms is large enough to avoid scheduler-noise false positives on typical CI
+// hardware, small enough to not balloon the suite runtime.
+const quickGracePeriod = 50 * time.Millisecond
+
+// holderTimeout bounds the holder and contender goroutines in
+// conformGetByIDForUpdateLockContention so a wedge surfaces as a test failure
+// rather than hanging the whole `go test` invocation.
+const holderTimeout = 3 * time.Second
+
 // UserRepoFactory constructs a fresh ports.UserRepository, its paired
 // persistence.TxRunner, and a cleanup func for use in a single test sub-case.
 // The factory is called once per sub-test; the cleanup func is registered via
@@ -47,10 +58,6 @@ type Features struct {
 	// RequiresAmbientTx: GetByIDForUpdate / GetByUsernameForUpdate WITHOUT a
 	// persistence ambient tx returns errcode.ErrInternal. PG=true, mem=false.
 	RequiresAmbientTx bool
-
-	// SupportsForUpdateLockHold: caller holding tx blocks concurrent GetForUpdate.
-	// PG=true (real row lock), mem=false (store.mu releases between calls).
-	SupportsForUpdateLockHold bool
 
 	// SupportsCASConflict: concurrent UpdatePassword / BumpAuthzEpoch returns
 	// errcode.ErrConflict-family on the loser. PG=true (version column CAS),
@@ -82,8 +89,11 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	t.Run("BumpAuthzEpoch_Succeeds", func(t *testing.T) {
 		conformBumpAuthzEpochSucceeds(t, factory)
 	})
-	t.Run("BumpAuthzEpoch_CASConflict", func(t *testing.T) {
-		conformBumpAuthzEpochCASConflict(t, factory, features)
+	t.Run("BumpAuthzEpoch_MonotonicIncrement", func(t *testing.T) {
+		conformBumpAuthzEpochMonotonic(t, factory)
+	})
+	t.Run("GetByIDForUpdate_LockContention", func(t *testing.T) {
+		conformGetByIDForUpdateLockContention(t, factory)
 	})
 	t.Run("NotFound_PropagatesErrAuthUserNotFound", func(t *testing.T) {
 		conformNotFoundPropagates(t, factory)
@@ -344,17 +354,17 @@ func conformBumpAuthzEpochSucceeds(t *testing.T, factory UserRepoFactory) {
 	}
 }
 
-// conformBumpAuthzEpochCASConflict verifies monotonic epoch increments.
+// conformBumpAuthzEpochMonotonic verifies monotonic epoch increments.
 //
 // BumpAuthzEpoch is a monotonic increment with no caller-supplied expected value,
 // so concurrent calls cannot produce a KindConflict. The test verifies that two
 // sequential bumps both succeed and produce strictly increasing epoch values.
-func conformBumpAuthzEpochCASConflict(t *testing.T, factory UserRepoFactory, _ Features) {
+func conformBumpAuthzEpochMonotonic(t *testing.T, factory UserRepoFactory) {
 	t.Helper()
 	repo, txRunner, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	u := seedActive(t, txRunner, repo, uuid.NewString(), "epochCAS_"+uuid.NewString())
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "epochMono_"+uuid.NewString())
 
 	var epoch1 int64
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
@@ -362,7 +372,7 @@ func conformBumpAuthzEpochCASConflict(t *testing.T, factory UserRepoFactory, _ F
 		epoch1, err = repo.BumpAuthzEpoch(ctx, u.ID)
 		return err
 	}); err != nil {
-		t.Fatalf("BumpAuthzEpoch_CASConflict: first bump: %v", err)
+		t.Fatalf("BumpAuthzEpoch_MonotonicIncrement: first bump: %v", err)
 	}
 
 	var epoch2 int64
@@ -371,11 +381,11 @@ func conformBumpAuthzEpochCASConflict(t *testing.T, factory UserRepoFactory, _ F
 		epoch2, err = repo.BumpAuthzEpoch(ctx, u.ID)
 		return err
 	}); err != nil {
-		t.Fatalf("BumpAuthzEpoch_CASConflict: second bump: %v", err)
+		t.Fatalf("BumpAuthzEpoch_MonotonicIncrement: second bump: %v", err)
 	}
 
 	if epoch2 <= epoch1 {
-		t.Errorf("BumpAuthzEpoch_CASConflict: second bump (%d) must be > first bump (%d)", epoch2, epoch1)
+		t.Errorf("BumpAuthzEpoch_MonotonicIncrement: second bump (%d) must be > first bump (%d)", epoch2, epoch1)
 	}
 }
 
@@ -438,4 +448,81 @@ func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// conformGetByIDForUpdateLockContention verifies the lock-hold guarantee shared
+// by both implementations: a contender calling GetByIDForUpdate inside a
+// RunInTx must block until the holder's RunInTx completes. The guarantee is
+// delivered by different mechanisms (mem: store.mu held for the entire tx;
+// PG: row-level lock held until commit/rollback), but the observable behavior
+// — contender blocks while holder holds, then succeeds after release — is
+// identical.
+func conformGetByIDForUpdateLockContention(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "lockhold_"+uuid.NewString())
+
+	holderEntered := make(chan struct{})
+	releaseHolder := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Holder: enter tx, GetByIDForUpdate, signal entered, wait for explicit release.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), holderTimeout)
+		defer cancel()
+		_ = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.GetByIDForUpdate(txCtx, u.ID)
+			if err != nil {
+				t.Errorf("holder GetByIDForUpdate: %v", err)
+				return err
+			}
+			close(holderEntered)
+			<-releaseHolder
+			return nil
+		})
+	}()
+
+	<-holderEntered
+
+	// Contender: must block until releaseHolder is closed.
+	contenderDone := make(chan struct{})
+	contenderStart := time.Now()
+	var contenderErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), holderTimeout)
+		defer cancel()
+		contenderErr = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.GetByIDForUpdate(txCtx, u.ID)
+			return err
+		})
+		close(contenderDone)
+	}()
+
+	// Within quickGracePeriod the contender must still be blocked.
+	select {
+	case <-contenderDone:
+		t.Errorf("GetByIDForUpdate_LockContention: contender returned in %v without holder release; expected to block on lock", time.Since(contenderStart))
+	case <-time.After(quickGracePeriod):
+		// Expected: contender is still blocked waiting for holder.
+	}
+
+	// Release holder; contender must now complete.
+	close(releaseHolder)
+	select {
+	case <-contenderDone:
+		// OK: contender unblocked after holder released.
+	case <-time.After(holderTimeout):
+		t.Fatal("GetByIDForUpdate_LockContention: contender did not complete within holderTimeout after holder release")
+	}
+
+	wg.Wait()
+	if contenderErr != nil {
+		t.Errorf("GetByIDForUpdate_LockContention: contender RunInTx err = %v, want nil", contenderErr)
+	}
 }

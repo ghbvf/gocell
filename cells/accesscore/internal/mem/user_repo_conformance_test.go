@@ -11,9 +11,8 @@ import (
 
 func TestMemUserRepo_Conformance(t *testing.T) {
 	conformance.RunUserRepoConformance(t, memUserRepoFactory, conformance.Features{
-		RequiresAmbientTx:         false,
-		SupportsForUpdateLockHold: false,
-		SupportsCASConflict:       false,
+		RequiresAmbientTx:   false,
+		SupportsCASConflict: false,
 	})
 }
 
