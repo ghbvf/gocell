@@ -242,7 +242,7 @@ func TestSweeperLifecycle_SweepErrorCounter(t *testing.T) {
 	mock := &errSweepTickMock{tickErr: errTick}
 
 	// Use a real counter for verification
-	provider := kernelmetrics.NewTestProvider()
+	provider := newTestProvider()
 	counterVec, err := provider.CounterVec(kernelmetrics.CounterOpts{
 		Name:       "command_sweep_errors_total",
 		Help:       "Total command sweep errors",
@@ -270,7 +270,7 @@ func TestSweeperLifecycle_SweepErrorCounter(t *testing.T) {
 	require.NoError(t, lc.Stop(stopCtx))
 
 	// Counter must have been incremented at least once with the injected cell label.
-	count := kernelmetrics.TestProviderCounterValue(provider, "command_sweep_errors_total",
+	count := testProviderCounterValue(provider, "command_sweep_errors_total",
 		map[string]string{"cell": testCellID})
 	assert.GreaterOrEqual(t, count, 1.0,
 		"sweep error counter must be incremented with cell=%q on SweepTick error", testCellID)
