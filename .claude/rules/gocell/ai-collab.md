@@ -36,7 +36,7 @@
    - 加载 fixture 子包 → `archtest.RunTypedFixture` typed funnel（`FixtureOpts` 不含 Tags 字段）
    - 元数据 / YAML 派生 → `archtest.EachContentFile` + 解析
 
-> **防误判**：以上路由是写**新** archtest 的指引。既有 archtest 直接 import `internal/scanner` / `internal/typeseval` 的 walk + resolve helper（如 `EachInSubtree`、`ResolvePackageRef`）合法，由 ADR `202605141519` §163 明确允许，不需要批量重构。被禁用的是 `scanner.EachFile` / `typeseval.LoadPackages` / `SharedResolver` / `LoadProductionPackages` / `EachFileInPackage` 等 INV-1 / load-bearing 符号，由 PASS-FUNNEL 元治理 archtest 类型化拦截。
+> **防误判**：以上路由是写**新** archtest 的指引。既有 archtest 直接 import `internal/scanner` / `internal/typeseval` 的 walk + resolve helper（如 `EachInSubtree`、`ResolvePackageRef`）合法，由 ADR `docs/architecture/202605141519-adr-archtest-pass-funnel.md` §Termination criteria 明确允许，不需要批量重构。被禁用的是 `scanner.EachFile` / `typeseval.LoadPackages` / `SharedResolver` / `LoadProductionPackages` / `EachFileInPackage` 等 INV-1 / load-bearing 符号，由 PASS-FUNNEL 元治理 archtest 类型化拦截。
 
 **工具选定后强制盲区自检**：作者在 archtest 测试函数 godoc 列出所选工具 godoc 声明范围外的 AST 形态（与 package-doc `// INVARIANT:` 分离），并对每项添加反向自检测试，断言其在 production AST 不出现。盲区清单 + 反向自检测试是 Hard/Medium 评级的前置举证材料。
 
@@ -57,7 +57,13 @@
 
 - **string-typed concept funnel**（设计范本，GoCell 内尚无严格 ship 实例）— 字符串承载独立语义（rule code / error code / event topic 等）时：(1) `type FooCode string` 把语义类型化，API 签名收口；(2) 值定义集中在 `*codes.go`，archtest 守声明位置；(3) 构造/比较点用 `*types.Info` 检查实参 resolve 到声明集合。形态锁 vs 值求值依 §3 工具原则选。
 
-- **typed function choice with input-struct field exclusion** — typed function choice 范本的升级形态。`RunTypedFixture(t, opts FixtureOpts, patterns, rule)` + 专用 `FixtureOpts struct { Tests bool }`（**不含 Tags 字段**）让"加载 fixture 时业务自传 build tag"在 type system 上不可表达——编译失败。不仅 function name 选择参与 type system 约束，连 input struct 字段集也参与。**适用条件**（三条同时满足才适用，日常 fixture loader 不引用）：(a) framework 收口 build tag / 加载 mode 等横切关注点，业务无控制权诉求；(b) 业务调用方无需感知该字段（不是仅默认值，是结构上不该出现）；(c) 同一加载模式被 ≥3 处调用复用。ref: `tools/archtest/fixture.go`。
+- **typed function choice with input-struct field exclusion** — typed function choice 范本的升级形态。`RunTypedFixture(t, opts FixtureOpts, patterns, rule)` + 专用 `FixtureOpts struct { Tests bool }`（**不含 Tags 字段**）让"加载 fixture 时业务自传 build tag"在 type system 上不可表达——编译失败。不仅 function name 选择参与 type system 约束，连 input struct 字段集也参与。**适用条件 — 以下三条必须 AND 满足**（日常 fixture loader 不引用此范本）：
+
+  - (a) framework 收口 build tag / 加载 mode 等横切关注点，业务无控制权诉求；
+  - (b) 业务调用方无需感知该字段（不是仅默认值，是结构上不该出现）；
+  - (c) 同一加载模式有多处调用复用（≥3 处是经济性阈值，并非 Hard 评级前提；1-2 处调用时优先直接传 TypedOpts.Tags + 注释说明即可，避免过早 funnel 化）。
+
+  ref: `tools/archtest/fixture.go`。
 
 ## archtest 文件命名
 

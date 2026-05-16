@@ -18,11 +18,11 @@ type FixtureOpts struct {
 
 // RunTypedFixture loads packages tagged with the conventional
 // archtest_fixture build tag, then dispatches via Pass + Rule. It is the
-// typed funnel for fixture-package archtest loading; all 6 existing
-// fixture-load sites in pass_test.go and pass_funnel_test.go's
-// TestPassFunnel_FixtureCoverage MUST use this entry point (the
-// FixtureCoverage test uses typeseval.SharedResolver directly for its
-// own framework-internal reasons documented in pass_funnel_test.go).
+// typed funnel for fixture-package archtest loading; all fixture-load sites
+// across archtest *_test.go MUST use this entry point. The sole
+// framework-internal exception is TestPassFunnel_FixtureCoverage in
+// pass_funnel_test.go, which calls typeseval.SharedResolver directly for its
+// passFunnelTarget construction needs.
 //
 // The "archtest_fixture" literal is the single source — see passfunnelfixture
 // and basesliceredfixture sub-packages' //go:build directives, which must
@@ -35,6 +35,14 @@ type FixtureOpts struct {
 // *testing.T. RunTypedDir uses testing.TB for its standalone-fixture-module
 // spy testing — orthogonal use case. See ADR 202605141519 §Migration path
 // Stage 4.
+//
+// AI-rebust:
+//   - Outward Hard (business callers): FixtureOpts has no Tags field; writing
+//     RunTypedFixture(t, FixtureOpts{Tags: ...}, ...) is a compile error.
+//   - Inward Medium (framework internal): the field set of FixtureOpts itself
+//     is frozen by TestRunTypedFixture_FixtureOptsLacksTagsField via reflect
+//     assertion (NumField == 1, sole field "Tests" of kind Bool) — drift here
+//     is a test failure, not a compile error.
 func RunTypedFixture(t *testing.T, opts FixtureOpts, patterns []string, rule Rule) []Diagnostic {
 	t.Helper()
 	return runTypedWithRoot(t, findModuleRoot(t), TypedOpts{

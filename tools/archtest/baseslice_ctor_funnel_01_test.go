@@ -232,8 +232,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTyped(t,
-		TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
@@ -287,8 +287,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTyped(t,
-		TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)

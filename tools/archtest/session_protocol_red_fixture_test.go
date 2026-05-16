@@ -40,8 +40,8 @@ import (
 // "MustNewProtocol") — the type-aware rule does not care about the source
 // callee shape.
 func TestSessionProtocol_RedFixtureDetected(t *testing.T) {
-	diags := RunTyped(t,
-		TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/sessionprotocolfixture/..."},
 		scanSessionProtocolViolations,
 	)

@@ -814,7 +814,7 @@ func pkgFileRel(modRoot string, pkg *packages.Package, file *ast.File) string {
 // deletes the package, the test passes permanently and prevents regression
 // (accidental re-introduction of the scaffold directory).
 //
-// RED until the archtestmeta directory is deleted in Wave 2.
+// RED until the archtestmeta directory is deleted in Stage 4 (this PR).
 func TestArchtestmetaPackageDeleted(t *testing.T) {
 	root := findModuleRoot(t)
 	archtestmetaDir := filepath.Join(root, "tools", "archtest", "internal", "archtestmeta")

@@ -131,7 +131,7 @@ func TestAdapterErrorClassificationTransient01_FixturePattern(t *testing.T) {
 	fixturePkgPath := modPath + "/tools/archtest/internal/transientmarkerfixture"
 	fixturePattern := "./tools/archtest/internal/transientmarkerfixture/..."
 
-	diags := RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != fixturePkgPath {

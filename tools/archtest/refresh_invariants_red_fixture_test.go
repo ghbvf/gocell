@@ -41,8 +41,8 @@ import (
 // (session, Store, Get). The fixture must yield exactly 2 hits: both
 // outside-closure calls.
 func TestRefreshCrossStoreTX01_RedFixtureDetected(t *testing.T) {
-	diags := RunTyped(t,
-		TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/refreshinvariantsfixture/..."},
 		scanRefreshCrossStoreTX,
 	)
