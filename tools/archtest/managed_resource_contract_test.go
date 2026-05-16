@@ -76,6 +76,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/ratelimit.Config":                "config: construction input value",
 	"adapters/ratelimit.Limiter":               "close-only-resource: in-memory limiter has no readiness or worker surface",
 	"adapters/redis.Cache":                     "subresource-not-owner: uses caller-owned Redis Client",
+	"adapters/redis.CachingSessionStore":       "subresource-not-owner: session.Store decorator over caller-owned inner store + Cache",
 	"adapters/redis.Config":                    "config: construction input value",
 	"adapters/redis.IdempotencyClaimer":        "subresource-not-owner: uses caller-owned Redis Client",
 	"adapters/redis.KeyNamespace":              "value-object: typed string for cell-scoped Redis key prefix",

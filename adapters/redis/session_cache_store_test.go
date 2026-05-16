@@ -11,19 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 const (
-	scsTestTTL    = 30 * time.Second
-	scsTestSID    = "sess-test-1"
-	scsTestSubj   = "subject-A"
-	scsTestEpoch  = int64(7)
-	scsCachedKey  = "testns:session:sess-test-1"
-	scsErrFmtGet  = "Get: %v"
-	scsErrFmtRev  = "Revoke: %v"
-	scsErrFmtCrea = "Create: %v"
+	scsTestTTL     = 30 * time.Second
+	scsNegativeTTL = -1 * time.Second
+	scsTestSID     = "sess-test-1"
+	scsTestSubj    = "subject-A"
+	scsTestEpoch   = int64(7)
+	scsCachedKey   = "testns:session:sess-test-1"
 )
 
 // fakeSessionStore is an inner session.Store used by CachingSessionStore unit
@@ -32,15 +29,15 @@ const (
 type fakeSessionStore struct {
 	view *session.ValidateView
 
-	getErr      error
-	createErr   error
-	revokeErr   error
+	getErr        error
+	createErr     error
+	revokeErr     error
 	revokeSubjErr error
-	repoReadyErr error
+	repoReadyErr  error
 
-	getCalls      int
-	createCalls   int
-	revokeCalls   int
+	getCalls        int
+	createCalls     int
+	revokeCalls     int
 	revokeSubjCalls int
 	repoReadyCalls  int
 }
@@ -109,7 +106,7 @@ func TestNewCachingSessionStore_FailFast(t *testing.T) {
 		{name: "nil_inner", inner: nil, cache: cache, ttl: scsTestTTL},
 		{name: "nil_cache", inner: inner, cache: nil, ttl: scsTestTTL},
 		{name: "zero_ttl", inner: inner, cache: cache, ttl: 0},
-		{name: "negative_ttl", inner: inner, cache: cache, ttl: -1 * time.Second},
+		{name: "negative_ttl", inner: inner, cache: cache, ttl: scsNegativeTTL},
 	}
 	for _, c := range cases {
 		c := c
@@ -337,6 +334,3 @@ func TestCachingSessionStore_Get_NilViewFromInner_DoesNotPopulate(t *testing.T) 
 	_, err = cmd.Result()
 	assert.Error(t, err, "nil view must not be cached")
 }
-
-// Cosmetic: silence unused-const linter when tests are skipped.
-var _ = testtime.D5min

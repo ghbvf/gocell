@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
@@ -28,6 +29,28 @@ func TestConformance_CachingSessionStore_AgainstMem(t *testing.T) {
 	t.Parallel()
 	protocol := storetest.NewTestProtocol(t)
 	storetest.Run(t, cachingMemFactory(protocol), protocol)
+}
+
+// TestCachingSessionStore_RepoReadinessConformance wires CachingSessionStore
+// through the shared RepoHealthProber conformance harness (P1 of
+// CELL-REPO-READYZ-PROBE-01). broken=nil because the wrapper delegates
+// RepoReady to inner; pairing it with MemStore — which has no differentiated
+// failure domain — yields a healthy probe. PG-backed conformance is covered
+// by adapters/postgres TestPGSessionStore_RepoReadinessConformance against
+// the unwrapped PG store; cache wrapping does not alter that contract.
+func TestCachingSessionStore_RepoReadinessConformance(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(storetest.EpochAnchor())
+	inner, err := session.NewMemStore(storetest.NewTestProtocol(t), fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	cache := mustNewCacheFromCmdable(t, newMockCmdable())
+	store, err := NewCachingSessionStore(inner, cache, conformanceCacheTTL, nil)
+	if err != nil {
+		t.Fatalf("NewCachingSessionStore: %v", err)
+	}
+	celltest.RunRepoReadinessConformance(t, "session-cache-mem", store, nil)
 }
 
 // cachingMemFactory closes over the test protocol so each conformance case
