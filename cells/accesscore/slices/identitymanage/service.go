@@ -861,7 +861,7 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 
 	// Step 3: Verify old password (expensive — inside tx by design, see ChangePassword godoc).
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); err != nil {
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "old password incorrect")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthOldPasswordIncorrect, "old password incorrect")
 	}
 
 	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)

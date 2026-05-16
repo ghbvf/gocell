@@ -163,18 +163,28 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 // ReconstituteUserParams holds all fields required by ReconstituteUser.
 // Using a params struct avoids the 11-positional-argument footgun and allows
 // callers to name each field explicitly.
+//
+// Field order: identity / credentials / lifecycle metadata first, then the
+// three authz-controlled fields grouped at the end. The authz subgroup
+// (Status / PasswordResetRequired / AuthzEpoch) mirrors User's private field
+// order (status → passwordResetRequired → authzEpoch) so that the storage
+// boundary and the aggregate read in the same direction.
 type ReconstituteUserParams struct {
-	ID                    string
-	Username              string
-	Email                 string
-	PasswordHash          string
-	PasswordVersion       int64
-	PasswordResetRequired bool
+	ID              string
+	Username        string
+	Email           string
+	PasswordHash    string
+	PasswordVersion int64
+	Source          UserSource
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+
+	// Authz-controlled fields. Mutating these on a live User must go through
+	// the authzmutate funnel; ReconstituteUser is the storage-boundary
+	// rehydration path and is allowlisted for direct assignment.
 	Status                UserStatus
-	Source                UserSource
+	PasswordResetRequired bool
 	AuthzEpoch            int64
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
 }
 
 // ReconstituteUser is the DDD rehydration constructor for the persistence
@@ -213,16 +223,17 @@ func ReconstituteUser(p ReconstituteUserParams) (*User, error) {
 			"ReconstituteUser: authzEpoch must be > 0")
 	}
 	return &User{
-		ID:                    p.ID,
-		Username:              p.Username,
-		Email:                 p.Email,
-		PasswordHash:          p.PasswordHash,
-		PasswordVersion:       p.PasswordVersion,
-		passwordResetRequired: p.PasswordResetRequired,
+		ID:              p.ID,
+		Username:        p.Username,
+		Email:           p.Email,
+		PasswordHash:    p.PasswordHash,
+		PasswordVersion: p.PasswordVersion,
+		CreationSource:  p.Source,
+		CreatedAt:       p.CreatedAt,
+		UpdatedAt:       p.UpdatedAt,
+
 		status:                p.Status,
-		CreationSource:        p.Source,
+		passwordResetRequired: p.PasswordResetRequired,
 		authzEpoch:            p.AuthzEpoch,
-		CreatedAt:             p.CreatedAt,
-		UpdatedAt:             p.UpdatedAt,
 	}, nil
 }

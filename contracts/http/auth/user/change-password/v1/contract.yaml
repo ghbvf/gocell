@@ -25,7 +25,7 @@ endpoints:
         description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID), request body decode failure, or new password equals old password"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
-        description: "Unauthorized — missing or invalid bearer token, or old password incorrect (ErrAuthLoginFailed)"
+        description: "Unauthorized — missing or invalid bearer token, or old password incorrect (ErrAuthOldPasswordIncorrect)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
         description: "Forbidden — authenticated subject is neither self nor admin"
