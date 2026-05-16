@@ -43,6 +43,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 readonly ARCHTEST_PKG="./tools/archtest"
+# SYNC: SHARD_COUNT must match .github/workflows/_build-lint.yml archtest job env
 readonly SHARD_COUNT="${SHARD_COUNT:-16}"
 readonly TIMEOUT="${TIMEOUT:-5m}"
 readonly SLOWGATE_BIN="${SLOWGATE_BIN:-}"

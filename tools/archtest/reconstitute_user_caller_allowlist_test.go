@@ -43,11 +43,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // ─── constants ──────────────────────────────────────────────────────────────
@@ -97,33 +92,33 @@ func isReconstituteCallerAllowlisted(rel string) bool {
 	return false
 }
 
-// scanReconstituteViolations walks a single file's AST for CallExpr nodes
+// scanReconstituteViolationsPass walks a single file's AST for CallExpr nodes
 // where the callee resolves to domain.ReconstituteUser via
-// typeseval.ResolvePackageRef. Returns one violation string per disallowed
-// call site.
+// ResolvePackageRef (facade over typeseval.ResolvePackageRef). Returns one
+// Diagnostic per disallowed call site.
 //
 // AST form covered: `domain.ReconstituteUser(...)` where `domain` is the
 // package alias resolving to reconstituteUserPkg via info.Uses[*ast.Ident]
 // → *types.PkgName. See ResolvePackageRef godoc for the exact lookup.
-func scanReconstituteViolations(
-	pkg *packages.Package,
-	file *ast.File,
-	rel string,
-) []string {
-	var out []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		pkgPath, name, ok := typeseval.ResolvePackageRef(pkg.TypesInfo, call.Fun)
+func scanReconstituteViolationsPass(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
 		if !ok {
 			return
 		}
 		if pkgPath != reconstituteUserPkg || name != reconstituteUserName {
 			return
 		}
-		line := pkg.Fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: RECONSTITUTE-USER-CALLER-01: disallowed caller of domain.ReconstituteUser; "+
-				"allowed prefixes: %v",
-			rel, line, reconstituteUserCallerAllowlistPrefixes))
+		line := p.Fset.Position(call.Pos()).Line
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"RECONSTITUTE-USER-CALLER-01: disallowed caller of domain.ReconstituteUser; "+
+					"allowed prefixes: %v",
+				reconstituteUserCallerAllowlistPrefixes),
+		})
 	})
 	return out
 }
@@ -146,29 +141,30 @@ func scanReconstituteViolations(
 // by TestReconstituteUserCallerAllowlist_REDFixture.
 func TestReconstituteUserCallerAllowlist(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
-	patterns := []string{
-		"./cells/accesscore/...",
-		"./cmd/...",
-	}
-	resolver, err := typeseval.SharedResolver(root, false, nil, patterns...)
-	require.NoError(t, err, "typeseval.SharedResolver for production packages")
+	var allDiags []Diagnostic
+	RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/...", "./cmd/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			var diags []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if isReconstituteCallerAllowlisted(rel) {
+					continue
+				}
+				diags = append(diags, scanReconstituteViolationsPass(p, file, rel)...)
+			}
+			allDiags = append(allDiags, diags...)
+			return nil
+		})
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if isReconstituteCallerAllowlisted(rel) {
-				continue
-			}
-			violations = append(violations, scanReconstituteViolations(pkg, file, rel)...)
-		}
+	for _, d := range allDiags {
+		violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
 	}
-
 	sort.Strings(violations)
 	for _, v := range violations {
 		t.Log(v)
@@ -192,28 +188,23 @@ func TestReconstituteUserCallerAllowlist(t *testing.T) {
 // a count > 1 means the fixture has grown unexpectedly.
 func TestReconstituteUserCallerAllowlist_REDFixture(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	fixturePattern := "./cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red"
-	resolver, err := typeseval.SharedResolver(root, false, nil, fixturePattern)
-	require.NoError(t, err,
-		"RED fixture load FAILED (RECONSTITUTE-USER-CALLER-01): "+
-			"a broken fixture silently disables the reverse self-check. "+
-			"Repair the fixture or remove the rule; do not let this skip past.")
 
 	var found int
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			// The fixture path is not in the allowlist, so scanReconstituteViolations
-			// should flag it. We do NOT call isReconstituteCallerAllowlisted here —
-			// the fixture is intentionally a non-allowlisted prod-shaped path.
-			found += len(scanReconstituteViolations(pkg, file, rel))
-		}
-	}
+	RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red"},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				// The fixture path is not in the allowlist, so scanReconstituteViolationsPass
+				// should flag it. We do NOT call isReconstituteCallerAllowlisted here —
+				// the fixture is intentionally a non-allowlisted prod-shaped path.
+				found += len(scanReconstituteViolationsPass(p, file, rel))
+			}
+			return nil
+		})
 
 	assert.Equal(t, 1, found,
 		"RECONSTITUTE-USER-CALLER-01 RED fixture self-check: expected exactly 1 violation, got %d. "+
@@ -244,72 +235,83 @@ func TestReconstituteUserCallerAllowlist_REDFixture(t *testing.T) {
 // MethodByName("ReconstituteUser") patterns.
 func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
-	resolver, err := typeseval.SharedResolver(root, false, nil,
-		"./cells/accesscore/...", "./cmd/...")
-	require.NoError(t, err)
+	var allDiags []Diagnostic
+	RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/...", "./cmd/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Fset == nil {
+				return nil
+			}
+			var diags []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+
+				// Blind spot 1: SelectorExpr with Sel.Name == "ReconstituteUser" that is
+				// NOT in a CallExpr.Fun position. We collect all CallExpr.Fun selectors
+				// first, then flag any SelectorExpr with the target name that is absent
+				// from that set.
+				callFunPositions := map[ast.Node]bool{}
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+						callFunPositions[sel] = true
+					}
+				})
+				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+					if sel.Sel == nil || sel.Sel.Name != reconstituteUserName {
+						return
+					}
+					if callFunPositions[sel] {
+						return // legitimate direct call — already checked by main rule
+					}
+					line := p.Fset.Position(sel.Pos()).Line
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: line,
+						Message: fmt.Sprintf(
+							"method-value assignment of domain.ReconstituteUser detected — "+
+								"RECONSTITUTE-USER-CALLER-01 would miss the deferred call site"),
+					})
+				})
+
+				// Blind spot 2: MethodByName("ReconstituteUser")
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
+						return
+					}
+					if len(call.Args) != 1 {
+						return
+					}
+					lit, ok := call.Args[0].(*ast.BasicLit)
+					if !ok {
+						return
+					}
+					name := strings.Trim(lit.Value, `"`)
+					if name == reconstituteUserName {
+						line := p.Fset.Position(call.Pos()).Line
+						diags = append(diags, Diagnostic{
+							Rel:  rel,
+							Line: line,
+							Message: fmt.Sprintf(
+								"reflect.MethodByName(%q) detected — "+
+									"RECONSTITUTE-USER-CALLER-01 cannot see reflect-based invocations",
+								name),
+						})
+					}
+				})
+			}
+			allDiags = append(allDiags, diags...)
+			return nil
+		})
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-
-			// Blind spot 1: SelectorExpr with Sel.Name == "ReconstituteUser" that is
-			// NOT in a CallExpr.Fun position. We collect all CallExpr.Fun selectors
-			// first, then flag any SelectorExpr with the target name that is absent
-			// from that set.
-			callFunPositions := map[ast.Node]bool{}
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-					callFunPositions[sel] = true
-				}
-			})
-			scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-				if sel.Sel == nil || sel.Sel.Name != reconstituteUserName {
-					return
-				}
-				if callFunPositions[sel] {
-					return // legitimate direct call — already checked by main rule
-				}
-				line := pkg.Fset.Position(sel.Pos()).Line
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: method-value assignment of domain.ReconstituteUser detected — "+
-						"RECONSTITUTE-USER-CALLER-01 would miss the deferred call site",
-					rel, line))
-			})
-
-			// Blind spot 2: MethodByName("ReconstituteUser")
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				name := strings.Trim(lit.Value, `"`)
-				if name == reconstituteUserName {
-					line := pkg.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.MethodByName(%q) detected — "+
-							"RECONSTITUTE-USER-CALLER-01 cannot see reflect-based invocations",
-						rel, line, name))
-				}
-			})
-		}
+	for _, d := range allDiags {
+		violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
 	}
-
 	sort.Strings(violations)
 	for _, v := range violations {
 		t.Log(v)
