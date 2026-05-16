@@ -30,4 +30,3 @@ func TestParseRealProject(t *testing.T) {
 	_, err := p.Parse()
 	require.NoError(t, err, "Parse should succeed on real project files")
 }
-
