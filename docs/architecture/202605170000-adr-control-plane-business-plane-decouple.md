@@ -179,7 +179,11 @@ owner ctx 语义下仍通过——rollback 正确 LIFO 运行，goleak 无 gorou
 2. 若 `SweepErrorCounter != nil`，调用 `SweepErrorCounter.With(Labels{"cell": ""}).Inc()`
 
 `SweepErrorCounter` 是可选注入的 `kernelmetrics.CounterVec`（composition root 注入，
-nil 则跳过 counter），对齐 `observability.md` 的 `cell` label 约定。
+nil 则跳过 counter）。`SweeperLifecycle.CellID` 字段由 composition root 注入（如
+`lc.CellID = c.ID()`），默认值为 `"_runtime"` sentinel（空时回退）。counter label
+`{"cell": CellID}` 与 slog.Error `slog.String("cell", CellID)` 同源，对齐
+`observability.md` 的 `cell` label 约定。`WithSweepErrorCounter(cv)` Option 暴露给
+DeviceCell composition root 用于生产注入。
 
 ---
 

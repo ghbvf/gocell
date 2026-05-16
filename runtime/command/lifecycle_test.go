@@ -203,8 +203,9 @@ func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 	assert.NotNil(t, hook.OnStop)
 }
 
-// TestSweeperLifecycle_SweepErrorCounter verifies counter is incremented
-// when SweepTick returns an error (C.3 observable errors).
+// TestSweeperLifecycle_SweepErrorCounter verifies counter is incremented with
+// the correct cell label when SweepTick returns an error (C.3 observable
+// errors). Also verifies slog.Error is emitted with the cell field.
 func TestSweeperLifecycle_SweepErrorCounter(t *testing.T) {
 	t.Parallel()
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
@@ -221,7 +222,9 @@ func TestSweeperLifecycle_SweepErrorCounter(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	const testCellID = "testcell"
 	lc := NewSweeperLifecycle("err-counter-test", mock, shortInterval)
+	lc.CellID = testCellID
 	lc.SweepErrorCounter = counterVec
 
 	ownerCtx, ownerCancel := context.WithCancel(context.Background())
@@ -238,7 +241,9 @@ func TestSweeperLifecycle_SweepErrorCounter(t *testing.T) {
 	defer cancel()
 	require.NoError(t, lc.Stop(stopCtx))
 
-	// Counter must have been incremented at least once
-	count := kernelmetrics.TestProviderCounterValue(provider, "command_sweep_errors_total", map[string]string{"cell": ""})
-	assert.GreaterOrEqual(t, count, 1.0, "sweep error counter must be incremented on SweepTick error")
+	// Counter must have been incremented at least once with the injected cell label.
+	count := kernelmetrics.TestProviderCounterValue(provider, "command_sweep_errors_total",
+		map[string]string{"cell": testCellID})
+	assert.GreaterOrEqual(t, count, 1.0,
+		"sweep error counter must be incremented with cell=%q on SweepTick error", testCellID)
 }

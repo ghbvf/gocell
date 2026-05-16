@@ -91,6 +91,19 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 	return func(c *DeviceCell) { c.metricsProvider = mp }
 }
 
+// WithSweepErrorCounter wires a pre-bound CounterVec for C.3 observable sweep
+// errors. The counter must have a "cell" label; it is incremented with
+// Labels{"cell": devicecell.ID()} on every SweepTick error. Leave unset to
+// disable counter tracking (appropriate for demo/test deployments where a full
+// metrics provider is unavailable).
+func WithSweepErrorCounter(cv metrics.CounterVec) Option {
+	return func(c *DeviceCell) {
+		if cv != nil {
+			c.sweepErrorCounter = cv
+		}
+	}
+}
+
 // WithClock sets the clock used by this cell. Must be called before Init.
 func WithClock(clk clock.Clock) Option {
 	return func(c *DeviceCell) { c.clk = clk }
@@ -303,10 +316,10 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command sweeper: %w", err)
 	}
-	lc := commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, 30*time.Second)
-	if c.sweepErrorCounter != nil {
-		lc.SweepErrorCounter = c.sweepErrorCounter
-	}
+	// interval=0 lets NewSweeperLifecycle apply defaultCommandSweeperInterval (30s).
+	lc := commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, 0)
+	lc.CellID = c.ID()
+	lc.SweepErrorCounter = c.sweepErrorCounter // nil-safe: runLoop guards with != nil
 	c.commandSweeper = lc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommand.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandinternal.SliceMetadata()))

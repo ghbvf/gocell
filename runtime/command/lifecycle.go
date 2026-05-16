@@ -66,6 +66,12 @@ var _ SweepTicker = (*kcommand.Sweeper)(nil)
 // cancels it and waits for the goroutine to exit within the bootstrap stop
 // budget.
 //
+// OnStart must return promptly (spawn goroutine + fast probe, then return).
+// Blocking OnStart occupies the entire lifecycle.Start chain and stalls all
+// subsequent hooks. SweeperLifecycle is the reference implementation of the
+// LifecycleHook.OnStart fast-return contract: it spawns the loop, awaits the
+// first-tick probe (≤50 ms), then returns.
+//
 // C.1 Hard carrier: SweeperLifecycle holds no clock.Clock field. All stdlib
 // time.* calls are funneled through controlPlaneTicker / controlPlaneProbeTimer
 // (function-level marker //archtest:allow:clock-injection:control-plane) —
@@ -77,8 +83,10 @@ var _ SweepTicker = (*kcommand.Sweeper)(nil)
 // that assembly shutdown (ownerCancel) exits the goroutine even without an
 // explicit OnStop call.
 //
-// C.3 Observable errors: SweepTick errors are logged via slog.Error and
-// optionally counted via SweepErrorCounter, instead of silently swallowed.
+// C.3 Observable errors: SweepTick errors are logged via slog.Error (with
+// slog.String("cell", CellID)) and optionally counted via SweepErrorCounter
+// (With(Labels{"cell": CellID})). CellID defaults to "_runtime" when empty,
+// aligning with the observability.md sentinel convention.
 //
 // ref: uber-go/fx lifecycle Hook — start returns promptly; long-running work
 // is owned by the hook and canceled from OnStop.
@@ -89,11 +97,19 @@ type SweeperLifecycle struct {
 	Sweeper      SweepTicker
 	Interval     time.Duration
 	StartTimeout time.Duration
-	StopTimeout  time.Duration
-	Logger       *slog.Logger
+	// StartTimeout is informational only; the runner does not enforce it as an
+	// OnStart ctx deadline (see ADR 202605102000 §D1 RETRACTED). It is used only
+	// for the slow-start warning threshold in the lifecycle runner.
+	StopTimeout time.Duration
+	Logger      *slog.Logger
+
+	// CellID is the owner cell identifier for observability labels and log fields.
+	// Inject from the composition root (e.g. cell.ID()). Defaults to "_runtime"
+	// sentinel when empty, aligning with the observability.md cell label convention.
+	CellID string
 
 	// SweepErrorCounter is an optional pre-bound CounterVec. When non-nil,
-	// it is incremented (With({"cell": ""})) on every SweepTick error.
+	// it is incremented (With({"cell": CellID})) on every SweepTick error.
 	// Inject via composition root; leave nil to disable counter tracking.
 	SweepErrorCounter kernelmetrics.CounterVec
 
@@ -178,7 +194,9 @@ func (l *SweeperLifecycle) Start(ownerCtx context.Context) error {
 		return err
 	}
 
-	l.logger().Info("runtime/command: sweeper started", slog.String("hook", l.hookName()))
+	l.logger().Info("runtime/command: sweeper started",
+		slog.String("hook", l.hookName()),
+		slog.String("cell", l.cellID()))
 	return nil
 }
 
@@ -205,9 +223,10 @@ func (l *SweeperLifecycle) runLoop(
 			if err := l.Sweeper.SweepTick(runCtx, now); err != nil {
 				l.logger().Error("runtime/command: SweepTick error",
 					slog.String("hook", l.hookName()),
+					slog.String("cell", l.cellID()),
 					slog.Any("error", err))
 				if l.SweepErrorCounter != nil {
-					l.SweepErrorCounter.With(kernelmetrics.Labels{"cell": ""}).Inc()
+					l.SweepErrorCounter.With(kernelmetrics.Labels{"cell": l.cellID()}).Inc()
 				}
 			}
 		}
@@ -268,11 +287,22 @@ func (l *SweeperLifecycle) Stop(ctx context.Context) error {
 
 	select {
 	case <-done:
-		l.logger().Info("runtime/command: sweeper stopped", slog.String("hook", l.hookName()))
+		l.logger().Info("runtime/command: sweeper stopped",
+			slog.String("hook", l.hookName()),
+			slog.String("cell", l.cellID()))
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// cellID returns the cell ID for observability labels. Defaults to "_runtime"
+// sentinel when CellID is empty, aligning with the observability.md convention.
+func (l *SweeperLifecycle) cellID() string {
+	if l != nil && l.CellID != "" {
+		return l.CellID
+	}
+	return "_runtime"
 }
 
 func (l *SweeperLifecycle) hookName() string {
