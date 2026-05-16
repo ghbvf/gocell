@@ -47,6 +47,14 @@ func writeFileNoFollow(path string, content []byte, mode os.FileMode) error {
 //     security contract.
 //
 // Callers MUST NOT rely on Windows pathsafe for untrusted-input writes.
+//   - ForceOverwrite (Remove → O_EXCL recreate) path has an additional
+//     race window: between os.Remove and os.OpenFile a leaf symlink
+//     could be placed pointing outside root, and Windows O_EXCL does
+//     not block symlink follow. This is acceptable under the same
+//     SeCreateSymbolicLinkPrivilege assumption — non-elevated processes
+//     cannot create symlinks. Do not use Windows pathsafe with
+//     ForceOverwrite for inputs that may originate from
+//     symlink-creating contexts (e.g., privileged tooling).
 func secureMkdirAllAndWrite(
 	realRoot, absPath string,
 	content []byte,
