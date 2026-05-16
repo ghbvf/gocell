@@ -40,7 +40,11 @@ import (
 // ADV-01..06 (formerly rules_advisory.go)
 // =============================================================================
 
-// validateADV01 checks that every journey has a corresponding entry in the status board.
+// validateADV01 checks that every platform journey has a corresponding entry
+// in the status board. Journeys under examples/ are exempt — example
+// projects manage their own readiness tracking and should not pollute the
+// platform status-board.yaml (consistent with CONTRACT-CONSISTENCY-EMIT-01
+// and JOURNEY-CONTRACT-EXISTENCE-01 examples-exemption posture).
 func (v *Validator) validateADV01() []ValidationResult {
 	var results []ValidationResult
 
@@ -51,6 +55,9 @@ func (v *Validator) validateADV01() []ValidationResult {
 	}
 
 	for _, j := range v.project.Journeys {
+		if strings.HasPrefix(journeyFile(j), "examples/") {
+			continue
+		}
 		if !sbJourneys[j.ID] {
 			results = append(results, v.newResult(
 				codeADV01, SeverityWarning, IssueRefNotFound,

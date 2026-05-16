@@ -194,17 +194,28 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 	return result, nil
 }
 
-// RunActiveJourneys runs every active journey in the parsed project.
+// RunActiveJourneys runs every active journey in the parsed project. A
+// non-nil project with zero active journeys is treated as a fail-fast
+// condition (K-02 (b)): without this guard, RunActiveJourneys would
+// silently pass on a project whose journeys are all stuck at experimental
+// — exactly the failure mode the K-02 closure is meant to detect.
+//
+// nil project is preserved as a pass path: CLI startup invokes
+// RunActiveJourneys before metadata is parsed in some flows, and "no
+// project loaded" is a different defect class (already surfaced by the
+// caller) from "project loaded, no active journey".
 func (r *Runner) RunActiveJourneys(ctx context.Context) (*VerifyResult, error) {
 	result := &VerifyResult{TargetID: "active journeys", Passed: true}
 	if r.project == nil {
 		return result, nil
 	}
+	activeCount := 0
 	for _, id := range sortedJourneyIDs(r.project.Journeys) {
 		j := r.project.Journeys[id]
 		if j.Lifecycle != "active" {
 			continue
 		}
+		activeCount++
 		jr, err := r.RunJourney(ctx, j.ID)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
@@ -226,6 +237,19 @@ func (r *Runner) RunActiveJourneys(ctx context.Context) (*VerifyResult, error) {
 		if !jr.Passed || len(jr.Errors) > 0 {
 			result.Passed = false
 		}
+	}
+	if activeCount == 0 {
+		result.Passed = false
+		result.Results = append(result.Results, TestResult{
+			Name:   "active journeys",
+			Passed: false,
+			Output: "no active journey present — RunActiveJourneys would silently pass" +
+				" without verifying anything;" +
+				" fix: promote at least one journey to lifecycle: active (with an" +
+				" auto checkRef that resolves to an executable test target), or" +
+				" remove the --active gate from CI if the project has no active" +
+				" journeys yet",
+		})
 	}
 	return result, nil
 }

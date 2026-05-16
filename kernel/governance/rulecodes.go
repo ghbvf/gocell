@@ -24,7 +24,7 @@ package governance
 // part of any public API. RuleCode itself is exported so external consumers
 // (cmd/gocell, tools) can create ValidationResult values with the correct type.
 //
-// Total: 83 constants across 11 series, matching goldenRuleIDs() in
+// Total: 85 constants across 12 series, matching goldenRuleIDs() in
 // rule_inventory_test.go. FMT-18 and ADV-02 are retired; the numbering gaps
 // are intentional.
 
@@ -109,7 +109,8 @@ const (
 	codeFMTC1 RuleCode = "FMT-C1"
 
 	// ADV — advisory warnings & dead-event detection (rules_misc_advisory.go).
-	// ADV-02 retired; ADV-05/06 are SeverityError; ADV-01/03/04 are warnings.
+	// 5 active constants (ADV-01/03/04/05/06); ADV-02 retired, gap intentional.
+	// ADV-05/06 are SeverityError; ADV-01/03/04 are SeverityWarning.
 	codeADV01 RuleCode = "ADV-01"
 	codeADV03 RuleCode = "ADV-03"
 	codeADV04 RuleCode = "ADV-04"
@@ -130,6 +131,15 @@ const (
 	codeDEP01 RuleCode = "DEP-01"
 	codeDEP02 RuleCode = "DEP-02"
 	codeDEP03 RuleCode = "DEP-03"
+
+	// JOURNEY — journey lifecycle & cross-file consistency (rules_journey.go).
+	// JOURNEY-CONTRACT-EXISTENCE-01 is the inverse direction of REF-07:
+	// REF-07 checks journey.contracts[] → contracts/ existence; JOURNEY-CONTRACT-
+	// EXISTENCE-01 checks contracts/ (active, non-examples) → at least one
+	// journey.contracts[] reference. JOURNEY-STATUS-LIFECYCLE-01 enforces
+	// status-board[i].state × J-*.yaml.lifecycle matrix.
+	codeJOURNEYCONTRACTEXISTENCE01 RuleCode = "JOURNEY-CONTRACT-EXISTENCE-01"
+	codeJOURNEYSTATUSLIFECYCLE01   RuleCode = "JOURNEY-STATUS-LIFECYCLE-01"
 
 	// Misc single-rule clusters.
 	codeOUTGUARD01                RuleCode = "OUTGUARD-01"

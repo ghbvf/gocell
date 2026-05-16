@@ -9,8 +9,26 @@ cells:
   - accesscore
   - auditcore
 contracts:
+  # Config CRUD + feature flags CRUD + lifecycle events. Journey-level
+  # closure for JOURNEY-CONTRACT-EXISTENCE-01 — feature flags are a
+  # specialization of config and belong to the same hot-reload flow.
   - event.config.entry-upserted.v1
   - event.config.entry-deleted.v1
+  - event.config.version-published.v1
+  - http.config.get.v1
+  - http.config.list.v1
+  - http.config.write.v1
+  - http.config.update.v1
+  - http.config.delete.v1
+  - http.config.publish.v1
+  - http.config.internal.get.v1
+  - http.config.flags.create.v1
+  - http.config.flags.get.v1
+  - http.config.flags.list.v1
+  - http.config.flags.update.v1
+  - http.config.flags.delete.v1
+  - http.config.flags.toggle.v1
+  - http.config.flags.evaluate.v1
 passCriteria:
   - text: 配置写入后发布 config.entry-upserted / config.entry-deleted 状态同步事件
     mode: auto

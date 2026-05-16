@@ -1,7 +1,7 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-16（Wave 1 7/8 ship — PR-3 CLI-HARDEN ✅ #502（+CLI-UNIMPL-HIDE-01 Hard）+ PR-9 REPO-READYZ ✅ fix/202-repo-readyz（+CELL-REPO-READYZ-PROBE-01 Hard）；040 阶段 1 ✅ PR #492 → PR-4/PR-5/Wave 4 ADAPTER-ERR-CLASS 阻塞解除）
+**最后更新**：2026-05-16（Wave 1 8/8 ship — PR-3 CLI-HARDEN ✅ #502 + PR-9 REPO-READYZ ✅ fix/202 + PR-4 JOURNEY-LIFECYCLE-GOV ✅ fix/208（+JOURNEY-CONTRACT-EXISTENCE-01 + JOURNEY-STATUS-LIFECYCLE-01 + 2 Hard upgrade backlog 登记）；040 阶段 1 ✅ PR #492 → PR-5/Wave 4 ADAPTER-ERR-CLASS 阻塞解除）
 **关系**：
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S3+S5/S3F/S4.0/S4a/S4b 已 ship；S4c 串行推进）。本计划不重复 accesscore 路线
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
@@ -85,7 +85,7 @@
 - CLI-UNIMPL-HIDE-01：archtest `tools/archtest/cli_unimpl_hide_test.go`（Pass-Driver `archtest.Run`，不进 LegacyAllowlist）全 `cmd/gocell/app` 强制上游 Hard（4 dispatch 无 switch + 必 findSub）+ 下游 Hard（无 string-literal name helpEntry）+ 无 `not implemented` 字面量 + 4 项反向 fixture 自检；declared blind spot（顶层 PrintUsage prose）补偿断言 + 显式 backlog `CLI-TOPLEVEL-HELP-REGISTRY-01`（非 silent carryover）
 - ctx 透传逐个核实非假设：validate/verify/generate-metricschema 真透传；scaffold/check/graph/export 无 cancelable 下游（depgraph.Load 非 ctx-native 等），统一形参 + godoc 注明
 
-#### PR-4 PR-JOURNEY-LIFECYCLE-GOV（合并 3 个 P0/🔴）
+#### PR-4 PR-JOURNEY-LIFECYCLE-GOV（合并 3 个 P0/🔴）— ✅ shipped as fix/208-journey-lifecycle-gov
 
 **包含**：K-02 + JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01 + JOURNEY-STATUS-BOARD-LIFECYCLE-CONSISTENCY-01
 **依据**：K-02 (c) 与 JOURNEY-CONTRACT-EXISTENCE 是同一规则的两种描述；3 项都改 `kernel/governance/rules_journey.go` + `journeys/J-*.yaml` + `kernel/verify/`
@@ -93,6 +93,14 @@
 - PR-6 (G-13) ✅ PR #487 已落：新 rule 注册直接走 `kernel/governance/rulecodes.go` 单源 + `validateJourney*()` 方法范式 + SeverityError `; fix:` 后缀（参照 ADV-06）；无 rebase 成本
 - 040 阶段 1 ✅ PR #492 已落（2026-05-14）：journey YAML 完整性 / lifecycle 守护新增 archtest 走 `archtest.Run` / `archtest.RunTyped` 入口，**不进** LegacyAllowlist
 **Cx**：Cx2-Cx3
+**ship 摘要（branch fix/208-journey-lifecycle-gov，2026-05-16）**：
+- K-02 (a): `journeys/J-ssologin.yaml` lifecycle: experimental → active；新建 `tests/integration/journey_ssologin_session_db_test.go::TestJSsologinSessionDb`（in-memory session.MemStore + storetest 同源 fixture）实现 `journey.J-ssologin.session-db` checkRef 闭环
+- K-02 (b): `kernel/verify/runner.go::RunActiveJourneys` 非 nil project + activeCount=0 时 fail + `; fix:` 后缀；`TestRunActiveJourneys_SkipsInactiveJourneys` 重命名 `TestRunActiveJourneys_EmptyActiveSetFails` 并改断言为 Passed=false
+- K-02 (c) / JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01: 新建 `kernel/governance/rules_journey.go` `validateJOURNEYCONTRACTEXISTENCE01`（反向 REF-07，active 非 examples/ 平台 contract 必须被至少 1 个 journey.contracts[] 引用）；扇出 5 个平台 journey 扩 contracts[] 覆盖 37 个原孤立 active contract（user/role mgmt → J-useronboarding；lock/unlock → J-accountlockout；audit list → J-auditlogintrail；config CRUD + flags → J-confighotreload；config rollback → J-configrollback；setup admin/status + change-password → J-ssologin）
+- STATUS-BOARD-LIFECYCLE-CONSISTENCY: `validateJOURNEYSTATUSLIFECYCLE01` `validBoardLifecycleMatrix` 三态强映射（todo→{experimental} / doing→{experimental,active} / done→{active}）+ active+doing Warning（in-transit reminder, 非阻断）；矩阵与 rules_fmt.go validJourneyLifecycles + journey.schema.json enum 单源对齐，不引入 stable phantom state
+- 顺带修 `validateADV01` 加 examples/ 豁免（对齐 CONTRACT-CONSISTENCY-EMIT-01 已有 examples-exempt 模式）；删 platform `journeys/status-board.yaml` 中 J-ordercreate orphan entry（J-ordercreate 是 example journey 不应在 platform board）
+- AI-rebust Medium（INV-1/2/3 自动守）；同 PR 显式登记两条 Hard 升级 backlog：`JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01`（P2/Cx3 🟠）+ `JOURNEY-CONTRACT-EXISTENCE-CODEGEN-DERIVE-01`（P3/Cx4 🟢）；rules_journey.go godoc 点名两个 backlog ID（参照 cap-14 PASS-PRODUCTION-UPSTREAM-HARD-01 / USAGE-02-HARD-UPGRADE-01 范式）
+- 验证：`gocell validate` 0 errors / 1 warning（J-ssologin active+doing 提醒）；`gocell verify journey --active` 双 active journey (J-ssologin platform + J-ordercreate example) 自动 checkRef 全 PASS
 
 #### PR-5 PR-GOV-NEW-RULES（合并 2 个 governance 新规则，PR-6 ✅ 阻塞解除）
 
@@ -163,11 +171,11 @@
 ## 3. 依赖图与执行 Wave
 
 ```
-Wave 1（独立并行，8 PR） — 7/8 ship：
+Wave 1（独立并行，8 PR） — 8/8 ship：
   PR-1 OTEL-HARDEN-5         ✅ PR #486 (OTEL-HARDEN-4，B2-R-05 split)
   PR-2 PROM-HARDEN-3         ✅ PR #484
   PR-3 CLI-HARDEN            ✅ PR #502 (038 Wave 1, 2026-05-15) — +CLI-UNIMPL-HIDE-01 闭环 Hard 升级
-  PR-4 JOURNEY-LIFECYCLE-GOV ⏳ 未启动
+  PR-4 JOURNEY-LIFECYCLE-GOV ✅ fix/208-journey-lifecycle-gov (2026-05-16) — JOURNEY rule 系列新建 + Hard upgrade backlog 登记
   PR-6 G-13 元治理 guard     ✅ PR #487 merged 2026-05-13
   PR-7 BOOTSTRAP-CLIENTS-MUTEX ✅ PR #483
   PR-8 OIDC-MR-COMPLETENESS  ✅ PR #485
@@ -226,7 +234,7 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | PR-1 OTEL-HARDEN-5 | 8h | 4h | ✅ PR #486 | 实际 4 of 5（B2-R-05 split → METRICS-CTX-FUNNEL-01） |
 | PR-2 PROM-HARDEN-3 | 4h | 2h | ✅ PR #484 | +review Hard funnel 升级 |
 | PR-3 CLI-HARDEN | 8h | 4h | ✅ PR #502 (2026-05-15) | 3 项 + L3 根因升级 CLI-UNIMPL-HIDE-01 闭环 Hard（4 树统一 registry）+ follow-up CLI-TOPLEVEL-HELP-REGISTRY-01 |
-| PR-4 JOURNEY-LIFECYCLE-GOV | 6h | 3h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| K-02 束；新 rule 走 PR-6 ✅ 范式；新增 archtest 走 `archtest.Run`/`RunTyped` |
+| PR-4 JOURNEY-LIFECYCLE-GOV | 10h | 4h | ✅ fix/208-journey-lifecycle-gov | K-02 三子项 (a)(b)(c) + 2 新 governance rule (JOURNEY-CONTRACT-EXISTENCE-01 + JOURNEY-STATUS-LIFECYCLE-01) + ADV-01 examples 豁免 + 5 journey 扇出扩 contracts[] + integration test for session-db checkRef + 2 Hard 升级 backlog 同 PR 登记 |
 | PR-6 G-13 元治理 guard | 6h | 3h | ✅ PR #487 | 注册框架；review 派生 plan 040 archtest Pass-Driver；4 follow-up 登记 cap-02 |
 | PR-7 BOOTSTRAP-CLIENTS-MUTEX | 3h | 1.5h | ✅ PR #483 | +review type-aware Hard 全形态覆盖 |
 | PR-8 OIDC-MR-COMPLETENESS | 18h | 8h | ✅ PR #485 | A-01 + A-07 + A-08 束 |

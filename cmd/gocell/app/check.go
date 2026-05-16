@@ -525,7 +525,14 @@ func journeyReadinessFor(
 }
 
 // journeyStatusCheck validates the status-board entry count for a journey.
+// Example projects (journeys under examples/) are exempt from the platform
+// status-board entry requirement — example projects manage their own
+// readiness tracking. Same posture as validateADV01 (rules_misc_advisory.go)
+// and CONTRACT-CONSISTENCY-EMIT-01.
 func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []governance.ValidationResult {
+	if strings.HasPrefix(jm.File, "examples/") {
+		return nil
+	}
 	count := statusCount[jm.ID]
 	switch {
 	case count == 0:

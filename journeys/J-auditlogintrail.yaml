@@ -9,6 +9,8 @@ cells:
   - auditcore
 contracts:
   - event.session.created.v1
+  - event.audit.appended.v1
+  - http.audit.list.v1
 passCriteria:
   - text: session.created 事件被 auditcore 消费
     mode: auto
