@@ -63,12 +63,11 @@ func TestBFSReachabilityFixtures(t *testing.T) {
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
-func (v *Validator) isValidationResultEmitter()              {}
-func (v *Validator) rules()                                  { helper(v) }
-func helper(v *Validator)                                    { v.newResult("FIX-A-01") }
-func (v *Validator) newResult(s RuleCode) ValidationResult   { return ValidationResult{} }
+type locator struct{}
+func (l *locator) newResult(s RuleCode) ValidationResult { return ValidationResult{} }
+type Validator struct{ locator }
+func (v *Validator) rules()                              { helper(v) }
+func helper(v *Validator)                                { v.newResult("FIX-A-01") }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"FIX-A-01"},
@@ -78,8 +77,8 @@ func (v *Validator) newResult(s RuleCode) ValidationResult   { return Validation
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code string }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
+type locator struct{}
+type Validator struct{ locator }
 type Other struct{ Code string }
 func (v *Validator) rules() {
 	_ = []Other{{Code: "FOREIGN-02"}}
@@ -93,8 +92,8 @@ func (v *Validator) rules() {
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code string }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
+type locator struct{}
+type Validator struct{ locator }
 func (v *Validator) rules() []ValidationResult {
 	return []ValidationResult{{Code: "VR-INFERRED-03"}}
 }
@@ -107,13 +106,12 @@ func (v *Validator) rules() []ValidationResult {
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
-func (v *Validator) isValidationResultEmitter()              {}
-func (v *Validator) rules()                                  { v.live() }
-func (v *Validator) live()                                   { v.newResult("LIVE-04") }
-func (v *Validator) dead()                                   { v.newResult("DEAD-99") }
-func (v *Validator) newResult(s RuleCode) ValidationResult   { return ValidationResult{} }
+type locator struct{}
+func (l *locator) newResult(s RuleCode) ValidationResult { return ValidationResult{} }
+type Validator struct{ locator }
+func (v *Validator) rules()                              { v.live() }
+func (v *Validator) live()                               { v.newResult("LIVE-04") }
+func (v *Validator) dead()                               { v.newResult("DEAD-99") }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"LIVE-04"},
@@ -123,13 +121,12 @@ func (v *Validator) newResult(s RuleCode) ValidationResult   { return Validation
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
-func (v *Validator) isValidationResultEmitter()              {}
+type locator struct{}
+func (l *locator) newResult(s RuleCode) ValidationResult { return ValidationResult{} }
+type Validator struct{ locator }
 const ruleX RuleCode = "X-CONST-05"
-func (v *Validator) rules()                                  { v.do() }
-func (v *Validator) do()                                     { v.newResult(ruleX) }
-func (v *Validator) newResult(s RuleCode) ValidationResult   { return ValidationResult{} }
+func (v *Validator) rules()                              { v.do() }
+func (v *Validator) do()                                 { v.newResult(ruleX) }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: []string{"X-CONST-05"},
@@ -138,17 +135,15 @@ func (v *Validator) newResult(s RuleCode) ValidationResult   { return Validation
 			name: "signature_mismatched_same_named_method_ignored_RED",
 			// Method literally named newResult with RuleCode arg 0 but
 			// missing the ValidationResult return type — handleCall's
-			// signature filter must reject it. Pre-PR-TS1 (name-based
-			// match) this would have captured "RED-06" into reachable.
-			// Marker is present on *Validator but shape gate fires first.
+			// result-arity gate (Results().Len() != 1) rejects before
+			// the owner gate runs.
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
-func (v *Validator) isValidationResultEmitter() {}
-func (v *Validator) rules()               { v.newResult("RED-06") }
-func (v *Validator) newResult(s RuleCode) {}
+type locator struct{}
+func (l *locator) newResult(s RuleCode) {}
+type Validator struct{ locator }
+func (v *Validator) rules() { v.newResult("RED-06") }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: nil,
@@ -158,16 +153,14 @@ func (v *Validator) newResult(s RuleCode) {}
 			// A method with the canonical (string, ...) → ValidationResult
 			// shape but variadic must NOT be treated as an emitter:
 			// x.Args[0] would be the format template, not a rule ID.
-			// Variadic gate fires first; the marker on *Validator is a
-			// no-op here.
+			// Variadic gate fires first regardless of receiver identity.
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code string }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
-func (v *Validator) isValidationResultEmitter() {}
-func (v *Validator) rules()                                       { v.newResultf("rule %s applied", "FOO-BAR") }
-func (v *Validator) newResultf(fmtStr string, args ...interface{}) ValidationResult { return ValidationResult{} }
+type locator struct{}
+func (l *locator) newResultf(fmtStr string, args ...interface{}) ValidationResult { return ValidationResult{} }
+type Validator struct{ locator }
+func (v *Validator) rules() { v.newResultf("rule %s applied", "FOO-BAR") }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: nil,
@@ -181,19 +174,18 @@ func (v *Validator) newResultf(fmtStr string, args ...interface{}) ValidationRes
 			// matches an emitter, dynamic dispatch is not statically
 			// resolvable and therefore not picked up.
 			//
-			// Post-R2-P1: cross-package emitter rejection becomes
-			// structurally impossible — validationResultEmitter is
-			// unexported, so packages outside kernel/governance cannot
-			// implement it. The dedicated CrossPackageRejected synthesis
-			// test was retired in favor of MarkerNotImplemented (covered
-			// in signature_match_predicate_test.go).
+			// Cross-package emitter rejection: post-R2-P1 the owner gate
+			// is types.Identical(recvNamed, locatorType) using the
+			// loaded package's locator type, so a same-named "locator"
+			// in a foreign package would produce a distinct *types.Named
+			// and Identical returns false — no cross-package leak path.
+			// Validated structurally; no synthetic test required.
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code string }
-type validationResultEmitter interface { isValidationResultEmitter() }
+type locator struct{}
 type Emitter interface{ newResult(s string) ValidationResult }
 type Validator struct{ e Emitter }
-func (v *Validator) isValidationResultEmitter() {}
 func (v *Validator) rules() { v.e.newResult("IFACE-07") }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
@@ -201,59 +193,48 @@ func (v *Validator) rules() { v.e.newResult("IFACE-07") }
 		},
 		{
 			name: "embedded_locator_outer_receiver_ignored_RED",
-			// Reviewer follow-up RED (post-PR #521 commit baba2a6f2):
-			// the marker-based owner gate (types.Implements) is defeated
-			// by Go method-set promotion via embedding. Validator embeds
-			// locator by value (mirroring kernel/governance/validate.go),
-			// so *Validator's method set INHERITS *locator's marker
-			// method — types.Implements(*Validator, emitterIface) returns
-			// true. If the outer receiver adds an emitter-shaped method
-			// (fakeEmit here), the pre-fix predicate incorrectly accepts
-			// it and captures "EMBED-PROMO-09" into reachable IDs.
-			//
-			// This fixture pins the actual R2-P1 invariant ("only
-			// *locator is an emitter holder") — the original
-			// non_marker_receiver_with_emitter_shape RED used Helper
-			// (no embedding) and missed this promotion path entirely.
-			// Post-fix (types.Identical-based owner gate, scoped to the
-			// locator type only) the predicate rejects fakeEmit because
-			// recvNamed=Validator is not identical to locator.
+			// Reviewer F-1 (PR #521) RED: Go method-set promotion via
+			// embedding inherits *locator's method set into the outer
+			// Validator's method set. An earlier marker-iface-based
+			// owner gate (types.Implements) returned true for *Validator
+			// and accepted any emitter-shape method added there. This
+			// fixture pins the actual R2-P1 invariant ("only *locator
+			// is an emitter holder"): under the types.Identical owner
+			// gate, recvNamed=Validator is not identical to locator,
+			// so fakeEmit is rejected and "EMBED-PROMO-09" stays out
+			// of reachable.
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
-type validationResultEmitter interface { isValidationResultEmitter() }
 type locator struct{}
-func (*locator) isValidationResultEmitter()              {}
 func (l *locator) newResult(s RuleCode) ValidationResult { return ValidationResult{} }
 type Validator struct{ locator }
-func (v *Validator) rules()                              { _ = v.fakeEmit("EMBED-PROMO-09") }
+func (v *Validator) rules()                               { _ = v.fakeEmit("EMBED-PROMO-09") }
 func (v *Validator) fakeEmit(s RuleCode) ValidationResult { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: nil,
 		},
 		{
-			name: "non_marker_receiver_with_emitter_shape_ignored_RED",
-			// R2-P1 marker upgrade RED proof: perfect emitter shape
-			// (RuleCode arg 0 + ValidationResult return + same-package
-			// owner) on receiver Helper, which does NOT implement
-			// validationResultEmitter. Post-R2-P1 the BFS must reject
-			// the call site; pre-R2-P1 (signature + same-pkg owner
-			// only) the same fixture incorrectly captured the rule ID
-			// into reachable. This fixture pins the Soft → Hard owner
-			// gate upgrade described in
-			// docs/plans/202605162000-037r2-wave4-advance-round2.md
-			// §1 R2-P1.
+			name: "unrelated_receiver_with_emitter_shape_ignored_RED",
+			// R2-P1 owner-allowlist RED proof: perfect emitter shape
+			// (RuleCode arg 0 + ValidationResult return + same package)
+			// on an unrelated receiver Helper that has no relation to
+			// locator. Pre-R2-P1 (signature + same-pkg owner only)
+			// captured "UNRELATED-08" into reachable; post-R2-P1
+			// types.Identical(Helper, locator) returns false → rejected.
+			// Complements embedded_locator_outer_receiver_ignored_RED
+			// (which covers the embedding-promotion path) by covering
+			// the "completely unrelated type" path.
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
-type validationResultEmitter interface { isValidationResultEmitter() }
-type Validator struct{}
+type locator struct{}
+type Validator struct{ locator }
 type Helper struct{}
-func (v *Validator) isValidationResultEmitter()           {}
-func (v *Validator) rules()                               { v.delegate() }
-func (v *Validator) delegate()                            { _ = Helper{}.emit("MARKER-MISSING-08") }
-func (h Helper) emit(s RuleCode) ValidationResult         { return ValidationResult{} }
+func (v *Validator) rules()                          { v.delegate() }
+func (v *Validator) delegate()                       { _ = Helper{}.emit("UNRELATED-08") }
+func (h Helper) emit(s RuleCode) ValidationResult    { return ValidationResult{} }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: nil,

@@ -8,12 +8,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// synthesizeEmitterGateForTest constructs an emitterGate plus a receiver
-// named X in a single synthetic package, returning the receiver named
-// type and gate. Both predicate-tests below share this scaffolding;
-// MarkerImplementedAccepted additionally injects the marker method into
-// *X's method set, while MarkerNotImplementedRejected leaves it absent.
-func synthesizeEmitterGateForTest() (xNamed *types.Named, gate emitterGate, pkg *types.Package) {
+// synthesizeEmitterGateForTest constructs an emitterGate plus a synthetic
+// locator named type in a single package, returning all three so the
+// two predicate tests can either reuse the locator as the receiver
+// (Accepted path) or synthesize a foreign receiver (Rejected path).
+//
+// Predicate body uses types.Identical(recvNamed, gate.locatorType), so
+// distinguishing the two cases reduces to "pass locatorNamed as
+// recvNamed" vs "pass a different *types.Named".
+func synthesizeEmitterGateForTest() (locatorNamed *types.Named, gate emitterGate, pkg *types.Package) {
 	pkg = types.NewPackage("p", "p")
 
 	rcName := types.NewTypeName(token.NoPos, pkg, "RuleCode", nil)
@@ -24,79 +27,75 @@ func synthesizeEmitterGateForTest() (xNamed *types.Named, gate emitterGate, pkg 
 	vrNamed := types.NewNamed(vrName, types.NewStruct(nil, nil), nil)
 	pkg.Scope().Insert(vrName)
 
-	ifaceMethodSig := types.NewSignatureType(nil, nil, nil, nil, nil, false)
-	ifaceMethod := types.NewFunc(token.NoPos, pkg, "isValidationResultEmitter", ifaceMethodSig)
-	iface := types.NewInterfaceType([]*types.Func{ifaceMethod}, nil)
-	iface.Complete()
+	locatorName := types.NewTypeName(token.NoPos, pkg, "locator", nil)
+	locatorNamed = types.NewNamed(locatorName, types.NewStruct(nil, nil), nil)
+	pkg.Scope().Insert(locatorName)
 
 	gate = emitterGate{
 		ruleCodeType:         rcNamed,
 		validationResultType: vrNamed,
-		emitterIface:         iface,
+		locatorType:          locatorNamed,
 	}
-
-	xName := types.NewTypeName(token.NoPos, pkg, "X", nil)
-	xNamed = types.NewNamed(xName, types.NewStruct(nil, nil), nil)
-	pkg.Scope().Insert(xName)
-
-	return xNamed, gate, pkg
+	return locatorNamed, gate, pkg
 }
 
-// synthesizeEmitterSig builds a (recv *X) emit(code RuleCode)
+// synthesizeEmitterSig builds a (*recv) emit(code RuleCode)
 // ValidationResult signature against the synthetic emitterGate, suitable
 // for feeding signatureMatchesValidationResultEmitter.
-func synthesizeEmitterSig(pkg *types.Package, xNamed *types.Named, gate emitterGate) *types.Signature {
-	recv := types.NewVar(token.NoPos, pkg, "x", types.NewPointer(xNamed))
+func synthesizeEmitterSig(pkg *types.Package, recvNamed *types.Named, gate emitterGate) *types.Signature {
+	recv := types.NewVar(token.NoPos, pkg, "x", types.NewPointer(recvNamed))
 	p0 := types.NewVar(token.NoPos, pkg, "code", gate.ruleCodeType)
 	r0 := types.NewVar(token.NoPos, pkg, "", gate.validationResultType)
 	return types.NewSignatureType(recv, nil, nil,
 		types.NewTuple(p0), types.NewTuple(r0), false)
 }
 
-// TestSignatureMatchesValidationResultEmitter_MarkerNotImplementedRejected
-// pins the post-R2-P1 sealed-marker owner gate: a method whose signature
-// fully matches the emitter shape (param 0 type-identical to RuleCode,
-// result 0 type-identical to ValidationResult, non-variadic, single
-// result) but whose receiver does NOT implement the validationResultEmitter
-// marker must be rejected.
+// TestSignatureMatchesValidationResultEmitter_NonLocatorReceiverRejected
+// pins the R2-P1 owner gate: a method whose signature fully matches the
+// emitter shape (param 0 type-identical to RuleCode, result 0 type-
+// identical to ValidationResult, non-variadic, single result) but whose
+// receiver is not types.Identical to the locator type must be rejected.
 //
-// Pre-R2-P1 the equivalent rejection path was "cross-package owner"
-// (recvNamed.Obj().Pkg() != ValidationResult.Obj().Pkg()) — that branch
-// has been replaced wholesale by types.Implements, which becomes
-// structurally impossible for non-marker types regardless of package.
-// The new test composes a same-package shape match without injecting
-// the marker method, asserting the marker gate fires.
-func TestSignatureMatchesValidationResultEmitter_MarkerNotImplementedRejected(t *testing.T) {
+// This covers both threat surfaces R2-P1 closes:
+//
+//  1. Unrelated same-package type (analogous to Helper in
+//     unrelated_receiver_with_emitter_shape_ignored_RED).
+//  2. Outer type that embeds locator and inherits methods via promotion
+//     (analogous to Validator in embedded_locator_outer_receiver_ignored_RED).
+//
+// At the predicate level both reduce to "recvNamed is a different
+// *types.Named than gate.locatorType" — types.Identical returns false.
+// Method promotion does not change *types.Named identity, so this gate
+// is structurally immune to the embedding attack surface that defeated
+// the prior marker-iface design (PR #521 review F-1).
+func TestSignatureMatchesValidationResultEmitter_NonLocatorReceiverRejected(t *testing.T) {
 	t.Parallel()
 
-	xNamed, gate, pkg := synthesizeEmitterGateForTest()
-	// Intentionally do NOT call xNamed.AddMethod — *X's method set is
-	// empty, so types.Implements(*X, emitterIface) returns false.
+	_, gate, pkg := synthesizeEmitterGateForTest()
+
+	xName := types.NewTypeName(token.NoPos, pkg, "X", nil)
+	xNamed := types.NewNamed(xName, types.NewStruct(nil, nil), nil)
+	pkg.Scope().Insert(xName)
 
 	sig := synthesizeEmitterSig(pkg, xNamed, gate)
 
 	assert.False(t, signatureMatchesValidationResultEmitter(sig, xNamed, gate),
-		"shape-matched receiver lacking marker method must be rejected by Implements gate")
+		"shape-matched non-locator receiver must be rejected by types.Identical owner gate")
 }
 
-// TestSignatureMatchesValidationResultEmitter_MarkerImplementedAccepted
-// is the positive twin: same emitter shape plus the
-// isValidationResultEmitter() method injected on *X's method set, so
-// types.Implements returns true and the predicate accepts.
+// TestSignatureMatchesValidationResultEmitter_LocatorReceiverAccepted is
+// the positive twin: same emitter shape, recvNamed is the locator named
+// type itself, so types.Identical returns true and the predicate accepts.
 //
 // Together with the Rejected test these two pin the gate transitions at
 // the function boundary, independent of BFS plumbing.
-func TestSignatureMatchesValidationResultEmitter_MarkerImplementedAccepted(t *testing.T) {
+func TestSignatureMatchesValidationResultEmitter_LocatorReceiverAccepted(t *testing.T) {
 	t.Parallel()
 
-	xNamed, gate, pkg := synthesizeEmitterGateForTest()
+	locatorNamed, gate, pkg := synthesizeEmitterGateForTest()
 
-	markerRecv := types.NewVar(token.NoPos, pkg, "_", types.NewPointer(xNamed))
-	markerSig := types.NewSignatureType(markerRecv, nil, nil, nil, nil, false)
-	xNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "isValidationResultEmitter", markerSig))
+	sig := synthesizeEmitterSig(pkg, locatorNamed, gate)
 
-	sig := synthesizeEmitterSig(pkg, xNamed, gate)
-
-	assert.True(t, signatureMatchesValidationResultEmitter(sig, xNamed, gate),
-		"shape-matched receiver implementing marker must be accepted by Implements gate")
+	assert.True(t, signatureMatchesValidationResultEmitter(sig, locatorNamed, gate),
+		"shape-matched locator receiver must be accepted by types.Identical owner gate")
 }
