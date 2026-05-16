@@ -4,9 +4,17 @@ package governance
 //
 // CONTRACT-ENDPOINT-TEST-MAPPING-01 (Error):
 //
-//	Every active HTTP platform contract must be referenced by at least one
-//	slice in its server cell (endpoints.server) via a verify.contract entry
-//	with the ".serve" role suffix:  "contract.<contractID>.serve".
+//	与 ADV-06 同形态双向校验：方向 A (contract → slice) + 方向 B (slice → contract).
+//
+//	Direction A (contract → slice): every active HTTP platform contract must be
+//	referenced by at least one slice in its server cell (endpoints.server) via a
+//	verify.contract entry with the ".serve" role suffix: "contract.<contractID>.serve".
+//
+//	Direction B (slice → contract): when a slice declares "contract.<id>.serve" in
+//	verify.contract, the referenced contract must exist, have kind == "http",
+//	lifecycle == "active", and its endpoints.server must equal the slice's
+//	belongsToCell. Otherwise the slice claims coverage for a contract it does not
+//	own or that does not require coverage.
 //
 //	This is the HTTP-serve direction complement of ADV-06 (which checks the
 //	event-subscribe direction). Both rules close the same gap from opposite
@@ -33,22 +41,31 @@ package governance
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// validateCONTRACTENDPOINTTESTMAPPING01 checks that every active HTTP
-// platform contract has at least one slice in its server cell declaring
-// "contract.<id>.serve" in verify.contract.
+// validateCONTRACTENDPOINTTESTMAPPING01 runs the bidirectional check:
+//   - Direction A (contract → slice): every active HTTP contract has at least
+//     one slice in its server cell declaring "contract.<id>.serve".
+//   - Direction B (slice → contract): every slice verify.contract entry of the
+//     form "contract.<id>.serve" refers to an active HTTP contract whose
+//     endpoints.server equals the slice's belongsToCell.
 //
-// Algorithm:
-//  1. Build cellServes index: for each slice, scan verify.contract for entries
-//     matching "contract.<id>.serve" and map cellID → set of covered contractIDs.
-//  2. For each active HTTP non-examples contract, look up cellServes[server][id].
-//     Missing entry → SeverityError with IssueRequired.
+// Algorithm mirrors ADV-06 (see rules_misc_advisory.go lines 177-182).
 func (v *Validator) validateCONTRACTENDPOINTTESTMAPPING01() []ValidationResult {
 	cellServes := buildCellServeIndex(v.project.Slices)
+	results := v.ctmContractToSlice(cellServes)
+	results = append(results, v.ctmSliceToContract()...)
+	return results
+}
+
+// ctmContractToSlice implements direction A: for each active HTTP platform
+// contract, verify at least one slice in its server cell declares the serve entry.
+// Reports error with candidate slice paths (up to 3) to aid the developer.
+func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if !isActiveHTTPPlatformContract(c) {
@@ -57,6 +74,7 @@ func (v *Validator) validateCONTRACTENDPOINTTESTMAPPING01() []ValidationResult {
 		if cellServes[c.Endpoints.Server][c.ID] {
 			continue
 		}
+		candidateHint := v.buildCandidateSliceHint(c.Endpoints.Server)
 		results = append(results, v.newResult(
 			codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueRequired,
 			contractFile(c),
@@ -65,12 +83,73 @@ func (v *Validator) validateCONTRACTENDPOINTTESTMAPPING01() []ValidationResult {
 				"active HTTP contract %q (server cell: %s) is not referenced by any slice "+
 					"verify.contract entry with .serve role; "+
 					"fix: add \"contract.%s.serve\" to a slice in cell %q under verify.contract, "+
-					"or change lifecycle to experimental/deprecated",
-				c.ID, c.Endpoints.Server, c.ID, c.Endpoints.Server,
+					"or change lifecycle to experimental/deprecated%s",
+				c.ID, c.Endpoints.Server, c.ID, c.Endpoints.Server, candidateHint,
 			),
 		))
 	}
 	return results
+}
+
+// ctmSliceToContract implements direction B: for each verify.contract entry
+// of the form "contract.<id>.serve", the referenced contract must exist, be an
+// active HTTP contract, and its endpoints.server must equal the slice's belongsToCell.
+func (v *Validator) ctmSliceToContract() []ValidationResult {
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		for i, entry := range s.Verify.Contract {
+			contractID := extractServeContractID(entry)
+			if contractID == "" {
+				continue
+			}
+			c := v.project.Contracts[contractID]
+			if !isActiveHTTPPlatformContract(c) {
+				continue
+			}
+			if c.Endpoints.Server == s.BelongsToCell {
+				continue
+			}
+			results = append(results, v.newResult(
+				codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+				sliceFile(s),
+				fmt.Sprintf("verify.contract[%d]", i),
+				fmt.Sprintf(
+					"slice %q declares verify.contract %q (.serve role) but contract's endpoints.server (%s) ≠ slice's belongsToCell (%s); "+
+						"fix: remove this entry or change the slice's belongsToCell to match, "+
+						"or update contract %q endpoints.server to %q",
+					s.ID, entry, c.Endpoints.Server, s.BelongsToCell, contractID, s.BelongsToCell,
+				),
+			))
+		}
+	}
+	return results
+}
+
+// buildCandidateSliceHint returns a "; candidate slices: ..." suffix listing
+// up to 3 slice file paths that belong to the given owner cell, in alphabetical
+// order. Used in direction A error messages to help developers locate the slice
+// that should carry the verify.contract entry.
+//
+// If no slices belong to the owner cell, returns a hint to create one or change
+// endpoints.server. If there are 4+ candidates, the tail is truncated with "+N more".
+func (v *Validator) buildCandidateSliceHint(ownerCell string) string {
+	var paths []string
+	for _, s := range v.project.Slices {
+		if s.BelongsToCell == ownerCell {
+			paths = append(paths, s.File)
+		}
+	}
+	if len(paths) == 0 {
+		return fmt.Sprintf("; no slice belongs to owner cell %s, create one or change endpoints.server", ownerCell)
+	}
+	sort.Strings(paths)
+	const maxShow = 3
+	if len(paths) <= maxShow {
+		return "; candidate slices: " + strings.Join(paths, ", ")
+	}
+	shown := paths[:maxShow]
+	extra := len(paths) - maxShow
+	return fmt.Sprintf("; candidate slices: %s, +%d more", strings.Join(shown, ", "), extra)
 }
 
 // isActiveHTTPPlatformContract reports whether a contract is subject to

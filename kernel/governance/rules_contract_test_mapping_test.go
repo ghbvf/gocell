@@ -69,6 +69,17 @@ func TestCONTRACTENDPOINTTESTMAPPING01_NonActiveExempt(t *testing.T) {
 	assert.Empty(t, got, "non-active (experimental) contracts must not require serve coverage")
 }
 
+func TestCONTRACTENDPOINTTESTMAPPING01_DeprecatedExempt(t *testing.T) {
+	// lifecycle = "deprecated" → exempt (same policy as experimental).
+	pm := minimalHTTPProject()
+	pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
+	// No serve entry added.
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	assert.Empty(t, got, "deprecated contracts must not require slice serve coverage")
+}
+
 func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
 	// kind = "event" → exempt (event contracts are handled by ADV-06).
 	pm := minimalHTTPProject()
@@ -78,6 +89,89 @@ func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
 	assert.Empty(t, got, "non-HTTP (event) contracts must not trigger this rule")
+}
+
+// TestCONTRACTENDPOINTTESTMAPPING01_SliceServeServerMismatch guards direction B
+// (slice → contract): a slice declares "contract.X.serve" in verify.contract but
+// contract X's endpoints.server is a different cell than the slice's belongsToCell.
+func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeServerMismatch(t *testing.T) {
+	pm := minimalHTTPProject()
+	// slice belongs to "accesscore", but contract endpoints.server is also "accesscore"
+	// in minimalHTTPProject. To create a mismatch: change the slice to belong to a
+	// different cell but still declare the .serve entry for the contract.
+	const otherCell = "configcore"
+	pm.Cells[otherCell] = &metadata.CellMeta{
+		ID:               otherCell,
+		Type:             "core",
+		ConsistencyLevel: "L1",
+		Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + otherCell + ".startup"}},
+		Dir:              otherCell,
+		File:             "cells/" + otherCell + "/cell.yaml",
+	}
+	// Add a second slice in configcore that declares .serve for a contract owned by accesscore.
+	pm.Slices[otherCell+"/flag-read"] = &metadata.SliceMeta{
+		ID:            "flag-read",
+		BelongsToCell: otherCell,
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "http.auth.login.v1", Role: "serve"},
+		},
+		Verify: metadata.SliceVerifyMeta{
+			Unit:     []string{"unit.flag-read.service"},
+			Contract: []string{"contract.http.auth.login.v1.serve"},
+		},
+		AllowedFiles: []string{"cells/" + otherCell + "/slices/flag-read/**"},
+		Dir:          "flag-read",
+		CellDir:      otherCell,
+		File:         "cells/" + otherCell + "/slices/flag-read/slice.yaml",
+	}
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	// Direction B should fire: configcore/flag-read declares .serve for http.auth.login.v1
+	// but that contract's endpoints.server = "accesscore", not "configcore".
+	require.GreaterOrEqual(t, len(got), 1, "direction B must fire when slice's cell ≠ contract's endpoints.server")
+	var found bool
+	for _, r := range got {
+		if r.Severity == SeverityError && r.IssueType == IssueMismatch &&
+			strings.Contains(r.Message, "configcore") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "direction B result must reference the mismatched cell; got: %v", got)
+}
+
+// TestCONTRACTENDPOINTTESTMAPPING01_CandidateSliceHint verifies that direction A
+// error messages include candidate slice paths (F13 fix).
+func TestCONTRACTENDPOINTTESTMAPPING01_CandidateSliceHint(t *testing.T) {
+	t.Run("single candidate", func(t *testing.T) {
+		pm := minimalHTTPProject()
+		// minimalHTTPProject has one slice in accesscore. No serve entry → direction A fires.
+		val := NewValidator(pm, "", clock.Real())
+		got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+		require.Len(t, got, 1)
+		assert.Contains(t, got[0].Message, "candidate slices:",
+			"error message must include candidate slice hint; got: %s", got[0].Message)
+		assert.Contains(t, got[0].Message, "cells/accesscore/slices/session-login/slice.yaml",
+			"candidate hint must include the actual slice file; got: %s", got[0].Message)
+	})
+
+	t.Run("no candidate when cell has no slices", func(t *testing.T) {
+		pm := minimalHTTPProject()
+		// Change server to a cell that exists but has no slices.
+		pm.Contracts["http.auth.login.v1"].Endpoints.Server = "auditcore"
+		pm.Cells["auditcore"] = &metadata.CellMeta{
+			ID:   "auditcore",
+			Type: "core",
+			File: "cells/auditcore/cell.yaml",
+		}
+		val := NewValidator(pm, "", clock.Real())
+		got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+		require.Len(t, got, 1)
+		assert.Contains(t, got[0].Message, "no slice belongs to owner cell auditcore",
+			"error message must suggest creating a slice; got: %s", got[0].Message)
+	})
 }
 
 // TestCONTRACTENDPOINTTESTMAPPING01_Integrated guards against silent de-registration:
