@@ -140,3 +140,64 @@ func TestQuote_RoundTrip_ColonValue(t *testing.T) {
 		t.Errorf("Round-trip got %q, want %q", out["id"], raw)
 	}
 }
+
+// roundTripYAML is a helper that embeds quoted into a YAML map and returns the
+// decoded value for key "key". Used by C0/DEL round-trip tests.
+func roundTripYAML(t *testing.T, raw string) string {
+	t.Helper()
+	quoted := yamlsafe.Quote(raw).String()
+	doc := "key: " + quoted + "\n"
+	var out map[string]string
+	if err := yaml.Unmarshal([]byte(doc), &out); err != nil {
+		t.Fatalf("Quote(%q): round-trip yaml.Unmarshal failed: %v\ndoc=%q", raw, err, doc)
+	}
+	return out["key"]
+}
+
+// TestQuote_CR verifies that a carriage-return byte round-trips correctly.
+func TestQuote_CR(t *testing.T) {
+	t.Parallel()
+	raw := "a\rb"
+	if got := roundTripYAML(t, raw); got != raw {
+		t.Errorf("Quote(%q) round-trip = %q, want original", raw, got)
+	}
+}
+
+// TestQuote_NUL verifies that a NUL byte round-trips correctly.
+func TestQuote_NUL(t *testing.T) {
+	t.Parallel()
+	raw := "a\x00b"
+	if got := roundTripYAML(t, raw); got != raw {
+		t.Errorf("Quote(%q) round-trip = %q, want original", raw, got)
+	}
+}
+
+// TestQuote_CRLF verifies that a CRLF sequence round-trips correctly.
+func TestQuote_CRLF(t *testing.T) {
+	t.Parallel()
+	raw := "a\r\nb"
+	if got := roundTripYAML(t, raw); got != raw {
+		t.Errorf("Quote(%q) round-trip = %q, want original", raw, got)
+	}
+}
+
+// TestQuote_LeadingTab verifies that a leading TAB round-trips correctly.
+// TAB is safe in YAML scalars (YAML 1.2 §5.1) but triggers needsQuoting via
+// leading-whitespace detection, so it gets single-quoted.
+func TestQuote_LeadingTab(t *testing.T) {
+	t.Parallel()
+	raw := "\tindented"
+	if got := roundTripYAML(t, raw); got != raw {
+		t.Errorf("Quote(%q) round-trip = %q, want original", raw, got)
+	}
+}
+
+// TestQuote_OtherC0 verifies that non-printable C0 bytes (\x01, \x07) that
+// previously bypassed needsQuoting round-trip correctly after the fix.
+func TestQuote_OtherC0(t *testing.T) {
+	t.Parallel()
+	raw := "a\x01\x07b"
+	if got := roundTripYAML(t, raw); got != raw {
+		t.Errorf("Quote(%q) round-trip = %q, want original", raw, got)
+	}
+}
