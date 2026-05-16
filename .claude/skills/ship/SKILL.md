@@ -15,7 +15,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 |------|------|---------|-----------|--------|
 | L1 | 不探索 | 不需要 | 1-2 并行 | 1 reviewer |
 | L2 | 1 explorer | 展示给用户 | 1-2 并行 | 1 reviewer |
-| L3（默认） | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 1 reviewer |
+| L3（默认） | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 1–3 reviewer（按 diff 行数，见阶段 7） |
 | L4 | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 6角色6个并行 |
 
 ---
@@ -129,7 +129,18 @@ PR body 包含：Summary、`Refs: <ID>`、`ref: framework file`、Test plan chec
 
 ## 阶段 7：Review
 
-**L1/L2/L3**：1 个 `reviewer` agent（GoCell 六维度）。
+**L1/L2**：1 个 `reviewer` agent（GoCell 六维度）。
+
+**L3**：按 PR diff 净增删行数（`git -C worktrees/<NNN> diff --stat origin/develop` 末行 insertions+deletions）确定 `reviewer` agent 数量：
+
+| diff 行数 | reviewer 数 | 维度切分 |
+|-----------|------------|---------|
+| < 200 | 1 | 单 agent 跑 GoCell 全六维度 |
+| 200–600 | 2 | A：正确性 + 测试；B：安全 + 运维可观测 + 架构合规 + DX |
+| 600–1500 | 3 | A：正确性 + 测试；B：安全 + 架构合规；C：运维可观测 + DX |
+| > 1500 | — | 不在 L3 内强跑：提示用户拆 PR 或升 L4（6 角色并行） |
+
+多 agent 时并行启动，每个 agent prompt 自包含负责维度；全部完成后由主 agent 汇总去重 findings 表（含 Cx 分级）。维度不重不漏，覆盖 GoCell 六维度全集。
 
 **L4**：并行 6 个 `reviewer` agent（正确性 / 安全 / 测试 / 运维可观测 / 开发者体验 / 架构合规）。全部完成后汇总 findings 表（含 Cx 分级）。
 
