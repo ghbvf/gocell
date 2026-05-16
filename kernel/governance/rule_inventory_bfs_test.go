@@ -53,7 +53,9 @@ func TestBFSReachabilityFixtures(t *testing.T) {
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Validator struct{}
+func (v *Validator) isValidationResultEmitter()              {}
 func (v *Validator) rules()                                  { helper(v) }
 func helper(v *Validator)                                    { v.newResult("FIX-A-01") }
 func (v *Validator) newResult(s RuleCode) ValidationResult   { return ValidationResult{} }
@@ -64,7 +66,9 @@ func (v *Validator) newResult(s RuleCode) ValidationResult   { return Validation
 		{
 			name: "non_validationresult_composite_literal_skipped",
 			source: `package fixture
+type RuleCode string
 type ValidationResult struct{ Code string }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Validator struct{}
 type Other struct{ Code string }
 func (v *Validator) rules() {
@@ -77,7 +81,9 @@ func (v *Validator) rules() {
 		{
 			name: "validationresult_inferred_inner_literal_picked_up",
 			source: `package fixture
+type RuleCode string
 type ValidationResult struct{ Code string }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Validator struct{}
 func (v *Validator) rules() []ValidationResult {
 	return []ValidationResult{{Code: "VR-INFERRED-03"}}
@@ -91,7 +97,9 @@ func (v *Validator) rules() []ValidationResult {
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Validator struct{}
+func (v *Validator) isValidationResultEmitter()              {}
 func (v *Validator) rules()                                  { v.live() }
 func (v *Validator) live()                                   { v.newResult("LIVE-04") }
 func (v *Validator) dead()                                   { v.newResult("DEAD-99") }
@@ -105,7 +113,9 @@ func (v *Validator) newResult(s RuleCode) ValidationResult   { return Validation
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Validator struct{}
+func (v *Validator) isValidationResultEmitter()              {}
 const ruleX RuleCode = "X-CONST-05"
 func (v *Validator) rules()                                  { v.do() }
 func (v *Validator) do()                                     { v.newResult(ruleX) }
@@ -120,10 +130,13 @@ func (v *Validator) newResult(s RuleCode) ValidationResult   { return Validation
 			// missing the ValidationResult return type — handleCall's
 			// signature filter must reject it. Pre-PR-TS1 (name-based
 			// match) this would have captured "RED-06" into reachable.
+			// Marker is present on *Validator but shape gate fires first.
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Validator struct{}
+func (v *Validator) isValidationResultEmitter() {}
 func (v *Validator) rules()               { v.newResult("RED-06") }
 func (v *Validator) newResult(s RuleCode) {}
 `,
@@ -135,9 +148,14 @@ func (v *Validator) newResult(s RuleCode) {}
 			// A method with the canonical (string, ...) → ValidationResult
 			// shape but variadic must NOT be treated as an emitter:
 			// x.Args[0] would be the format template, not a rule ID.
+			// Variadic gate fires first; the marker on *Validator is a
+			// no-op here.
 			source: `package fixture
+type RuleCode string
 type ValidationResult struct{ Code string }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Validator struct{}
+func (v *Validator) isValidationResultEmitter() {}
 func (v *Validator) rules()                                       { v.newResultf("rule %s applied", "FOO-BAR") }
 func (v *Validator) newResultf(fmtStr string, args ...interface{}) ValidationResult { return ValidationResult{} }
 `,
@@ -153,16 +171,19 @@ func (v *Validator) newResultf(fmtStr string, args ...interface{}) ValidationRes
 			// matches an emitter, dynamic dispatch is not statically
 			// resolvable and therefore not picked up.
 			//
-			// Cross-package emitter rejection (recv/result Pkg().Path() mismatch)
-			// is covered directly via go/types synthesis in
-			// TestSignatureMatchesValidationResultEmitter_CrossPackageRejected
-			// — the fixture path cannot reach that branch because
-			// types.Config.Check on a single in-memory file produces only
-			// one *types.Package.
+			// Post-R2-P1: cross-package emitter rejection becomes
+			// structurally impossible — validationResultEmitter is
+			// unexported, so packages outside kernel/governance cannot
+			// implement it. The dedicated CrossPackageRejected synthesis
+			// test was retired in favor of MarkerNotImplemented (covered
+			// in signature_match_predicate_test.go).
 			source: `package fixture
+type RuleCode string
 type ValidationResult struct{ Code string }
+type validationResultEmitter interface { isValidationResultEmitter() }
 type Emitter interface{ newResult(s string) ValidationResult }
 type Validator struct{ e Emitter }
+func (v *Validator) isValidationResultEmitter() {}
 func (v *Validator) rules() { v.e.newResult("IFACE-07") }
 `,
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
@@ -215,13 +236,15 @@ func (h Helper) emit(s RuleCode) ValidationResult         { return ValidationRes
 				Instances:  make(map[*ast.Ident]types.Instance),
 			}
 			conf := types.Config{Importer: importer.Default()}
-			if _, err := conf.Check("fixture", fset, files, info); err != nil {
+			pkg, err := conf.Check("fixture", fset, files, info)
+			if err != nil {
 				t.Fatalf("type-check fixture: %v", err)
 			}
 
 			funcIdx := buildFuncIndex(files)
+			gate := resolveEmitterGate(t, pkg.Scope())
 
-			actual := runReachabilityBFS(t, fset, files, info, funcIdx, tc.roots)
+			actual := runReachabilityBFS(t, fset, files, info, funcIdx, tc.roots, gate)
 			if diff := symmetricDiff(tc.expected, actual); len(diff) > 0 {
 				t.Errorf("BFS reachable mismatch for %q:\n%s",
 					tc.name, strings.Join(diff, "\n"))

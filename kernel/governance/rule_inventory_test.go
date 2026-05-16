@@ -50,7 +50,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 	t.Parallel()
 
 	fset := token.NewFileSet()
-	files, typesInfo := loadGovernancePackageWithTypes(t, fset, ".")
+	files, typesInfo, pkg := loadGovernancePackageWithTypes(t, fset, ".")
 
 	funcIdx := buildFuncIndex(files)
 
@@ -61,7 +61,8 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 			"public methods on Validator")
 	}
 
-	actual := runReachabilityBFS(t, fset, files, typesInfo, funcIdx, roots)
+	gate := resolveEmitterGate(t, pkg.Scope())
+	actual := runReachabilityBFS(t, fset, files, typesInfo, funcIdx, roots, gate)
 	golden := goldenRuleIDs()
 
 	if diff := symmetricDiff(golden, actual); len(diff) > 0 {
@@ -191,7 +192,7 @@ type funcKey struct {
 // dir must contain the governance package (the test's CWD when called
 // with "."). The cost (~1-2s first call) is paid once; subsequent test
 // runs share Go build cache.
-func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir string) ([]*ast.File, *types.Info) {
+func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir string) ([]*ast.File, *types.Info, *types.Package) {
 	t.Helper()
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -218,6 +219,9 @@ func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir strin
 	if pkg.TypesInfo == nil {
 		t.Fatalf("governance package has nil TypesInfo")
 	}
+	if pkg.Types == nil {
+		t.Fatalf("governance package has nil Types")
+	}
 
 	// Filter test files: rule_inventory_test.go and rule_inventory_bfs_test.go
 	// must not appear in the BFS sweep (they would self-reference the helpers).
@@ -241,9 +245,53 @@ func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir strin
 		files = append(files, f)
 	}
 	if len(files) == 0 {
-		t.Fatalf("no governance .go files parsed via packages.Load in %q", absDir)
+		t.Fatalf("no governance .go files parsed via governance.Load in %q", absDir)
 	}
-	return files, pkg.TypesInfo
+	return files, pkg.TypesInfo, pkg.Types
+}
+
+// emitterGate bundles the three type-system objects the
+// signatureMatchesValidationResultEmitter predicate needs. Resolved once
+// at BFS start from the loaded package's scope so the predicate body
+// itself contains zero string anchors — every comparison goes through
+// go/types Identical / Implements on pointer-equal type objects.
+type emitterGate struct {
+	ruleCodeType         types.Type       // governance.RuleCode (or fixture's RuleCode)
+	validationResultType types.Type       // governance.ValidationResult
+	emitterIface         *types.Interface // validationResultEmitter underlying
+}
+
+// resolveEmitterGate populates an emitterGate from the loaded package's
+// top-level scope. Fail-fast on any missing identifier — go/types' loader
+// boundary has no compile-time type-reference mechanism, but compile-time
+// witnesses in emitter_marker.go ensure rename of any of these three
+// names fails build before this lookup ever runs in production. For
+// fixture packages, the fixture source must declare matching identifiers
+// (it is a closed synthetic package, decoupled from governance renames).
+func resolveEmitterGate(t *testing.T, scope *types.Scope) emitterGate {
+	t.Helper()
+	rcObj := scope.Lookup("RuleCode")
+	if rcObj == nil {
+		t.Fatalf("emitter gate: scope.Lookup(\"RuleCode\") returned nil")
+	}
+	vrObj := scope.Lookup("ValidationResult")
+	if vrObj == nil {
+		t.Fatalf("emitter gate: scope.Lookup(\"ValidationResult\") returned nil")
+	}
+	emObj := scope.Lookup("validationResultEmitter")
+	if emObj == nil {
+		t.Fatalf("emitter gate: scope.Lookup(\"validationResultEmitter\") returned nil")
+	}
+	iface, ok := emObj.Type().Underlying().(*types.Interface)
+	if !ok {
+		t.Fatalf("emitter gate: validationResultEmitter underlying is %T, want *types.Interface",
+			emObj.Type().Underlying())
+	}
+	return emitterGate{
+		ruleCodeType:         rcObj.Type(),
+		validationResultType: vrObj.Type(),
+		emitterIface:         iface,
+	}
 }
 
 // scanPackageConstStrings collects package-level `const NAME = "literal"`
@@ -384,6 +432,7 @@ type bfsContext struct {
 	funcIdx   map[funcKey]*ast.FuncDecl
 	constMap  map[string]string
 	inferred  map[*ast.CompositeLit]struct{}
+	gate      emitterGate
 
 	reachable map[string]struct{}
 	queue     []funcKey
@@ -493,7 +542,7 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 		return
 	}
 	sig := fn.Type().(*types.Signature)
-	if !signatureMatchesValidationResultEmitter(sig, recvNamed) {
+	if !signatureMatchesValidationResultEmitter(sig, recvNamed, c.gate) {
 		return
 	}
 	if id := c.resolveID(x.Args[0]); id != "" {
@@ -506,14 +555,21 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 //
 //	(receiver recvNamed) (ruleID RuleCode, ...) ValidationResult
 //
-// where recvNamed and ValidationResult belong to the same package. This is
-// the type-system definition of "ValidationResult emitter", independent of
-// any method-name convention.
+// where recvNamed implements validationResultEmitter (the sealed marker).
 //
-// The RuleCode named type (not plain string) is the distinguishing marker:
-// helpers like docNamingResult(file string, ...) share the same structural
-// shape but take a plain string at param 0, so they are correctly excluded.
-func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *types.Named) bool {
+// All three gates are type-system based; predicate body contains zero
+// string anchors:
+//  1. param 0 type-identical to gate.ruleCodeType
+//  2. result 0 type-identical to gate.validationResultType
+//  3. *recvNamed implements gate.emitterIface (the sealed marker)
+//
+// Pre-R2-P1 the predicate compared by *types.Named.Obj().Name() strings
+// and used "same-package owner" as the owner gate — a Soft heuristic
+// that any same-package method with the emitter shape would silently
+// match. Replacing both shape and owner gates with type-system
+// equivalents (Identical / Implements) brings the predicate to Hard
+// (违反不可表达 inside the predicate body).
+func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *types.Named, gate emitterGate) bool {
 	// Variadic emitters are not a canonical shape — a format-string
 	// emitter like `newResultf(fmt string, args ...any) ValidationResult`
 	// has a string at param 0 but x.Args[0] is the format template, not a
@@ -525,21 +581,18 @@ func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *ty
 	if sig.Params().Len() < 1 || sig.Results().Len() != 1 {
 		return false
 	}
-	// Param 0 must be the RuleCode named type (not plain string). This
-	// distinguishes rule emitters (newResult, newScopedResult, newResultAt)
-	// from helpers whose first param is a plain file path (docNamingResult).
-	p0Named, ok := sig.Params().At(0).Type().(*types.Named)
-	if !ok || p0Named.Obj().Name() != "RuleCode" {
+	if !types.Identical(sig.Params().At(0).Type(), gate.ruleCodeType) {
 		return false
 	}
-	if p0Named.Obj().Pkg() == nil || p0Named.Obj().Pkg().Path() != recvNamed.Obj().Pkg().Path() {
+	if !types.Identical(sig.Results().At(0).Type(), gate.validationResultType) {
 		return false
 	}
-	r0, ok := sig.Results().At(0).Type().(*types.Named)
-	if !ok || r0.Obj().Name() != "ValidationResult" {
-		return false
-	}
-	return recvNamed.Obj().Pkg().Path() == r0.Obj().Pkg().Path()
+	// Owner gate: sealed marker via pointer method set. The marker method
+	// is pointer-receiver on *locator; wrapping recvNamed in NewPointer
+	// makes the check uniform regardless of whether the call site uses a
+	// pointer or value receiver (pointer method set is a superset of
+	// value method set).
+	return types.Implements(types.NewPointer(recvNamed), gate.emitterIface)
 }
 
 // captureCodeFields walks one CompositeLit and records the rule ID from
@@ -657,6 +710,7 @@ func runReachabilityBFS(
 	typesInfo *types.Info,
 	funcIdx map[funcKey]*ast.FuncDecl,
 	roots []funcKey,
+	gate emitterGate,
 ) []string {
 	t.Helper()
 	ctx := &bfsContext{
@@ -666,6 +720,7 @@ func runReachabilityBFS(
 		funcIdx:   funcIdx,
 		constMap:  scanPackageConstStrings(files),
 		inferred:  collectInferredVRLits(files),
+		gate:      gate,
 	}
 	return ctx.run(roots)
 }

@@ -8,78 +8,95 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestSignatureMatchesValidationResultEmitter_CrossPackageRejected pins
-// the same-package owner guard: a method whose receiver type and result
-// type live in different packages is NOT a ValidationResult emitter, even
-// when the result type happens to share the name "ValidationResult".
-//
-// This branch (recvNamed.Obj().Pkg().Path() == r0.Obj().Pkg().Path()) is
-// not reachable via the BFS fixture path because types.Config.Check on a
-// single in-memory file produces only one *types.Package — fixture tests
-// inherently can't synthesize cross-package shapes. We exercise it here
-// by composing *types.Signature directly via go/types constructors.
-func TestSignatureMatchesValidationResultEmitter_CrossPackageRejected(t *testing.T) {
-	t.Parallel()
+// synthesizeEmitterGateForTest constructs an emitterGate plus a receiver
+// named X in a single synthetic package, returning the receiver named
+// type and gate. Both predicate-tests below share this scaffolding;
+// MarkerImplementedAccepted additionally injects the marker method into
+// *X's method set, while MarkerNotImplementedRejected leaves it absent.
+func synthesizeEmitterGateForTest() (xNamed *types.Named, gate emitterGate, pkg *types.Package) {
+	pkg = types.NewPackage("p", "p")
 
-	// Package A holds the ValidationResult result type.
-	pkgTarget := types.NewPackage("targetpkg", "targetpkg")
-	vrName := types.NewTypeName(token.NoPos, pkgTarget, "ValidationResult", nil)
-	vrNamed := types.NewNamed(vrName, types.NewStruct(nil, nil), nil)
-	pkgTarget.Scope().Insert(vrName)
-
-	// Package A also holds RuleCode.
-	rcName := types.NewTypeName(token.NoPos, pkgTarget, "RuleCode", nil)
-	rcNamed := types.NewNamed(rcName, types.Typ[types.String], nil)
-	pkgTarget.Scope().Insert(rcName)
-
-	// Package B holds the receiver type X.
-	pkgConsumer := types.NewPackage("consumerpkg", "consumerpkg")
-	xName := types.NewTypeName(token.NoPos, pkgConsumer, "X", nil)
-	xNamed := types.NewNamed(xName, types.NewStruct(nil, nil), nil)
-	pkgConsumer.Scope().Insert(xName)
-
-	// Signature: (x consumerpkg.X) emit(code targetpkg.RuleCode) targetpkg.ValidationResult
-	// The result is in targetpkg but receiver is in consumerpkg — cross-package.
-	recv := types.NewVar(token.NoPos, pkgConsumer, "x", xNamed)
-	p0 := types.NewVar(token.NoPos, pkgTarget, "code", rcNamed)
-	r0 := types.NewVar(token.NoPos, pkgTarget, "", vrNamed)
-	sig := types.NewSignatureType(recv, nil, nil,
-		types.NewTuple(p0), types.NewTuple(r0), false)
-
-	assert.False(t, signatureMatchesValidationResultEmitter(sig, xNamed),
-		"cross-package shape must be rejected by the same-pkg owner guard")
-}
-
-// TestSignatureMatchesValidationResultEmitter_SamePackageAccepted is the
-// positive twin: both receiver and result in the same synthetic package,
-// with param 0 typed as RuleCode (not plain string), satisfies all three
-// predicates (arg0 RuleCode, return ValidationResult, same-package owner).
-// Together with the Rejected case, these two tests pin the guard at the
-// function boundary, independent of BFS plumbing.
-func TestSignatureMatchesValidationResultEmitter_SamePackageAccepted(t *testing.T) {
-	t.Parallel()
-
-	pkg := types.NewPackage("p", "p")
-	vrName := types.NewTypeName(token.NoPos, pkg, "ValidationResult", nil)
-	vrNamed := types.NewNamed(vrName, types.NewStruct(nil, nil), nil)
-	pkg.Scope().Insert(vrName)
-
-	// RuleCode must live in the same package as ValidationResult to pass the
-	// same-pkg owner check.
 	rcName := types.NewTypeName(token.NoPos, pkg, "RuleCode", nil)
 	rcNamed := types.NewNamed(rcName, types.Typ[types.String], nil)
 	pkg.Scope().Insert(rcName)
 
+	vrName := types.NewTypeName(token.NoPos, pkg, "ValidationResult", nil)
+	vrNamed := types.NewNamed(vrName, types.NewStruct(nil, nil), nil)
+	pkg.Scope().Insert(vrName)
+
+	ifaceMethodSig := types.NewSignatureType(nil, nil, nil, nil, nil, false)
+	ifaceMethod := types.NewFunc(token.NoPos, pkg, "isValidationResultEmitter", ifaceMethodSig)
+	iface := types.NewInterfaceType([]*types.Func{ifaceMethod}, nil)
+	iface.Complete()
+
+	gate = emitterGate{
+		ruleCodeType:         rcNamed,
+		validationResultType: vrNamed,
+		emitterIface:         iface,
+	}
+
 	xName := types.NewTypeName(token.NoPos, pkg, "X", nil)
-	xNamed := types.NewNamed(xName, types.NewStruct(nil, nil), nil)
+	xNamed = types.NewNamed(xName, types.NewStruct(nil, nil), nil)
 	pkg.Scope().Insert(xName)
 
-	recv := types.NewVar(token.NoPos, pkg, "x", xNamed)
-	p0 := types.NewVar(token.NoPos, pkg, "code", rcNamed)
-	r0 := types.NewVar(token.NoPos, pkg, "", vrNamed)
-	sig := types.NewSignatureType(recv, nil, nil,
-		types.NewTuple(p0), types.NewTuple(r0), false)
+	return xNamed, gate, pkg
+}
 
-	assert.True(t, signatureMatchesValidationResultEmitter(sig, xNamed),
-		"same-package emitter shape must be accepted")
+// synthesizeEmitterSig builds a (recv *X) emit(code RuleCode)
+// ValidationResult signature against the synthetic emitterGate, suitable
+// for feeding signatureMatchesValidationResultEmitter.
+func synthesizeEmitterSig(pkg *types.Package, xNamed *types.Named, gate emitterGate) *types.Signature {
+	recv := types.NewVar(token.NoPos, pkg, "x", types.NewPointer(xNamed))
+	p0 := types.NewVar(token.NoPos, pkg, "code", gate.ruleCodeType)
+	r0 := types.NewVar(token.NoPos, pkg, "", gate.validationResultType)
+	return types.NewSignatureType(recv, nil, nil,
+		types.NewTuple(p0), types.NewTuple(r0), false)
+}
+
+// TestSignatureMatchesValidationResultEmitter_MarkerNotImplementedRejected
+// pins the post-R2-P1 sealed-marker owner gate: a method whose signature
+// fully matches the emitter shape (param 0 type-identical to RuleCode,
+// result 0 type-identical to ValidationResult, non-variadic, single
+// result) but whose receiver does NOT implement the validationResultEmitter
+// marker must be rejected.
+//
+// Pre-R2-P1 the equivalent rejection path was "cross-package owner"
+// (recvNamed.Obj().Pkg() != ValidationResult.Obj().Pkg()) — that branch
+// has been replaced wholesale by types.Implements, which becomes
+// structurally impossible for non-marker types regardless of package.
+// The new test composes a same-package shape match without injecting
+// the marker method, asserting the marker gate fires.
+func TestSignatureMatchesValidationResultEmitter_MarkerNotImplementedRejected(t *testing.T) {
+	t.Parallel()
+
+	xNamed, gate, pkg := synthesizeEmitterGateForTest()
+	// Intentionally do NOT call xNamed.AddMethod — *X's method set is
+	// empty, so types.Implements(*X, emitterIface) returns false.
+
+	sig := synthesizeEmitterSig(pkg, xNamed, gate)
+
+	assert.False(t, signatureMatchesValidationResultEmitter(sig, xNamed, gate),
+		"shape-matched receiver lacking marker method must be rejected by Implements gate")
+}
+
+// TestSignatureMatchesValidationResultEmitter_MarkerImplementedAccepted
+// is the positive twin: same emitter shape plus the
+// isValidationResultEmitter() method injected on *X's method set, so
+// types.Implements returns true and the predicate accepts.
+//
+// Together with the Rejected test these two pin the gate transitions at
+// the function boundary, independent of BFS plumbing.
+func TestSignatureMatchesValidationResultEmitter_MarkerImplementedAccepted(t *testing.T) {
+	t.Parallel()
+
+	xNamed, gate, pkg := synthesizeEmitterGateForTest()
+
+	markerRecv := types.NewVar(token.NoPos, pkg, "_", types.NewPointer(xNamed))
+	markerSig := types.NewSignatureType(markerRecv, nil, nil, nil, nil, false)
+	xNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "isValidationResultEmitter", markerSig))
+
+	sig := synthesizeEmitterSig(pkg, xNamed, gate)
+
+	assert.True(t, signatureMatchesValidationResultEmitter(sig, xNamed, gate),
+		"shape-matched receiver implementing marker must be accepted by Implements gate")
 }
