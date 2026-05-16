@@ -552,7 +552,7 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 // supplied a context with a deadline (strictTailVerifyOnStartup must wrap ctx
 // with WithTimeout). It does NOT actually wait for the deadline to fire —
 // it returns ctx.DeadlineExceeded immediately so the test runs in milliseconds
-// rather than paying 30 s of wall-clock cost (slowgate cap 15 s).
+// rather than paying 30 s of wall-clock cost (slowgate cap 20 s).
 type deadlineProbeStore struct {
 	ledger.Store
 	gotDeadline bool
@@ -581,7 +581,7 @@ func (b *deadlineProbeStore) Verify(ctx context.Context, from, to int64) (bool, 
 // wraps the caller context with a deadline before calling ledger.Store.Verify,
 // so a hung store cannot stall k8s readiness indefinitely.
 //
-// F-04: rather than block on the production 30 s timeout (slowgate cap 15 s),
+// F-04: rather than block on the production 30 s timeout (slowgate cap 20 s),
 // the probe store inspects ctx.Deadline() at call time and returns
 // DeadlineExceeded immediately — testing the deadline-injection contract
 // without paying wall-clock cost.
