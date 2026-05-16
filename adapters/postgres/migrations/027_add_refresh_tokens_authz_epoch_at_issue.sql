@@ -1,18 +1,18 @@
 -- Migration 027: add refresh_tokens.authz_epoch_at_issue (S4d).
 --
--- Companion to migration 026. Refresh tokens were never carrying an
--- epoch_at_issue field — neither in S3 (sessions had it, refresh did not)
--- nor after 025 (sessions also lost it). This left the refresh path with
--- no server-side credential provenance: sessionrefresh re-minted access
--- tokens from live users.authz_epoch, so a stale refresh always "upgraded"
--- to the current epoch — defeating the entire credential-invalidation
--- mechanism for refresh-based attackers (PR #490 review P1).
+-- Companion to migration 026. The refresh_tokens row is the credential-
+-- provenance source of truth at rotate time; see ADR
+-- `202605101400-adr-credential-session-protocol.md` §A8. Pre-S4d the refresh
+-- chain had no row-level epoch, so sessionrefresh re-mint silently upgraded
+-- stale grants to current epoch (PR #490 review P1 — historical).
 --
 -- After 027:
 --   - refresh_tokens row carries authz_epoch_at_issue (set at Issue time)
---   - Rotate creates child rows with the issuing user's current epoch
+--   - Rotate creates child rows with the parent's authz_epoch_at_issue
+--     (refresh-chain epoch stability, ADR §A8)
 --   - sessionrefresh rejects when row.authz_epoch_at_issue != user.authz_epoch
---     (single cascade entry: stale + reuse share handleReuseDetected)
+--     via a dedicated stale-epoch path that is independent from reuse
+--     detection (see ADR §A6 and runtime/auth/refresh).
 --
 -- DDL form: NOT NULL DEFAULT 0 (rules/go-standards.md). This project has no
 -- deployed environment and no historical data (project invariant — no

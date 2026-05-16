@@ -3,8 +3,9 @@
 -- Backs cells/accesscore/internal/adapters/postgres/user_repo.go (S3+S5).
 -- ADR-credential D2 mandates `authz_epoch BIGINT NOT NULL DEFAULT 0` for
 -- login-vs-role-revoke ordering — every credential state change bumps the
--- column; JWTs snapshot the epoch at issuance and validate paths reject
--- claim.epoch < user.authz_epoch.
+-- column. The row is the credential-provenance source of truth; sessions
+-- and refresh_tokens snapshot user.authz_epoch into their own
+-- authz_epoch_at_issue columns at issue time (see ADR §A8).
 --
 -- Schema mirrors cells/accesscore/internal/domain/user.go (S2) one-to-one:
 --   * UserStatus = active|suspended|locked
@@ -27,15 +28,14 @@ CREATE TABLE IF NOT EXISTS users (
     password_reset_required  BOOLEAN     NOT NULL DEFAULT FALSE,
     status                   TEXT        NOT NULL,
     creation_source          TEXT        NOT NULL,
-    -- ADR-credential D2: monotonic epoch bumped on every credential state
-    -- change (role assignment, password reset, lock, delete). JWTs include
-    -- this snapshot in the epoch claim; validate rejects when claim.epoch <
-    -- users.authz_epoch.
-    --
-    -- **Note**: this column is read by S4 via cell rewiring; in S3+S5 the
-    -- column is set on INSERT and never updated. JWT issuer/validate paths
-    -- do NOT consume authz_epoch yet — closed loop lands in S4 (backlog
-    -- JWT-AUTHZEPOCH-CLOSED-LOOP-S4-01).
+    -- ADR-credential D2 + §A8: monotonic epoch bumped on every credential
+    -- state change (role-revoke, password reset, lock, delete). This row is
+    -- the credential-provenance source of truth. session / refresh_tokens
+    -- rows snapshot user.authz_epoch into their own authz_epoch_at_issue
+    -- column at issue time; validate compares
+    --     view.AuthzEpochAtIssue != user.AuthzEpoch → 401.
+    -- The access JWT does not carry an authz_epoch claim (S4d retired it;
+    -- see ADR §A8).
     authz_epoch              BIGINT      NOT NULL DEFAULT 0,
     created_at               TIMESTAMPTZ NOT NULL,
     updated_at               TIMESTAMPTZ NOT NULL

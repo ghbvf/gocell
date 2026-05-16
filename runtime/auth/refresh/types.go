@@ -33,12 +33,16 @@ type Token struct {
 	// AuthzEpochAtIssue snapshots users.authz_epoch at the moment this
 	// refresh row was inserted (Issue / Rotate child). sessionrefresh rejects
 	// a presented token whose AuthzEpochAtIssue != current users.authz_epoch
-	// — the stale-grant cascade shares handleReuseDetected with reuse
-	// detection (PR S4d). Without this column, refresh re-mints access
-	// tokens with live user.epoch and stale grants "upgrade" to current
-	// epoch (PR #490 review P1-#2).
+	// via an independent stale-epoch code path (Rotate returns a stale-epoch
+	// error which the slice routes to `cascadeRevoke("stale-epoch")`,
+	// a session-scoped revocation). This is separate from handleReuseDetected,
+	// which is reserved for double-submit reuse detection and triggers a
+	// user-wide Invalidator.Apply cascade. Without this column, refresh
+	// re-mints access tokens with live user.epoch and stale grants "upgrade"
+	// to current epoch (PR #490 review P1-#2).
 	//
-	// ADR-credential §A8 — row-level credential provenance.
+	// ADR-credential §A6 (stale-epoch path) + §A8 (row-level credential
+	// provenance).
 	AuthzEpochAtIssue int64
 }
 

@@ -1,5 +1,11 @@
 -- Migration 025: drop sessions.authz_epoch_at_issue column (S4b Batch 1C).
 --
+-- RETRACTED: this migration was reversed by migration 026 (S4d).
+-- ADR `202605101400-adr-credential-session-protocol.md` §0 A1 RETRACTED explains
+-- why: the drop was justified on the (incorrect) premise that the JWT claim
+-- mirrors the column, but row-level provenance is the source of truth — see
+-- §A8. Do not re-apply this migration.
+--
 -- Up: drops sessions.authz_epoch_at_issue (replaced by JWT claim authz_epoch).
 -- Down: ADD COLUMN back with DEFAULT 0 — this is a destructive Down (S3F GUC).
 --

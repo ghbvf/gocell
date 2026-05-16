@@ -557,6 +557,16 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // locked), consistent with Login and sessionrefresh. A non-active user must not
 // receive a fresh token pair even via the ChangePassword path.
 //
+// Why this path returns the specific 403 ErrAuthUserNotActive rather than the
+// uniform 401 ErrAuthLoginFailed used by the public Login endpoint: IssueForUser
+// is reached only from identitymanage.ChangePassword, which runs under an
+// authenticated admin/self caller (the caller has already proven knowledge of
+// either an admin token or the user's old password). Account-existence
+// enumeration is not a concern here — the caller already knows the user
+// exists — so the specific error code surfaces the actual reason for the
+// admin/UI to handle. The 401 enumeration-collapse design lives only on the
+// public Login endpoint where any unauthenticated requester can probe.
+//
 // Returns dto.TokenPair (internal/dto, value not pointer) so this method
 // implements the identitymanage.TokenIssuer interface without a cross-slice
 // import (F-ARCH-1). Value type makes (nil, nil) unrepresentable.

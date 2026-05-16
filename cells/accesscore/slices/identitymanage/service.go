@@ -422,13 +422,25 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 // credential trifecta.
 //
 // F2 fix: resolveCredentialMutation is invoked inside tx1 using the user row
-// already fetched (and FOR-UPDATE-locked on PG) by GetByID within the tx.
-// Previously the RequirePasswordReset idempotency pre-check called GetByID
-// outside any transaction, creating an undocumented TOCTOU window: a
-// concurrent BumpAuthzEpoch between the pre-check read and tx1's FOR UPDATE
-// could cause a spurious "no-op" return, skipping the needed epoch bump and
-// leaving live sessions unrevoked. Reusing the tx1-locked row eliminates
-// the window without adding an extra DB round-trip.
+// already fetched by GetByID within the same transaction. Note that tx1's
+// GetByID is a plain read (not GetByIDForUpdate / SELECT FOR UPDATE) — the
+// write-lock gap inside tx1 is the same accepted trade-off described in the
+// "TOCTOU trade-off (KNOWN, ACCEPTED)" paragraph above. authzmutate's
+// independent tx cannot be folded into tx1 without coupling cross-aggregate
+// transaction scopes (see ADR §A10 co-tx atomicity rationale).
+//
+// What F2 specifically closed: a separate pre-tx GetByID that the old
+// RequirePasswordReset idempotency check ran outside any transaction.
+// A concurrent BumpAuthzEpoch between that pre-check read and the start of
+// the credential-mutation tx could cause a spurious "no-op" return, skipping
+// the needed epoch bump and leaving live sessions unrevoked. Resolving the
+// mutation from tx1's already-fetched user row eliminates that window
+// without adding an extra DB round-trip.
+//
+// The remaining tx1-internal write-lock gap is defended at validate time by
+// sessionvalidate.enforceSessionState's row-epoch mismatch check + the
+// P1.3b CanAuthenticate gate — see runtime/auth/session/store.go (row epoch
+// != user epoch → 401) and cells/accesscore/slices/sessionvalidate.
 //
 // hasCombinedAuthzFields produces a deterministic 400 and is still evaluated
 // before tx1 — it is a pure-input check that requires no DB read.
