@@ -55,6 +55,7 @@ verify:
 // minimalSliceYAML is the smallest valid slice.yaml content.
 const minimalSliceYAML = `id: testslice
 belongsToCell: testcell
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit: []
@@ -389,6 +390,6 @@ verify:
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	require.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-	require.Contains(t, err.Error(), "consistencyLevel",
+	require.Contains(t, ecErr.Message, "consistencyLevel",
 		"error must name the missing field")
 }

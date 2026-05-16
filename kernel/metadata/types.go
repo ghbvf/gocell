@@ -83,8 +83,11 @@ type L0DepMeta struct {
 type SliceMeta struct {
 	ID            string `yaml:"id"`
 	BelongsToCell string `yaml:"belongsToCell"`
-	// ConsistencyLevel: "L0"-"L4"; if empty, inherits cell.ConsistencyLevel; if set, MUST be ≤ cell.ConsistencyLevel
-	ConsistencyLevel string          `yaml:"consistencyLevel,omitempty"`
+	// ConsistencyLevel: "L0"-"L4"; required (parser rejects empty);
+	// MUST be ≤ cell.ConsistencyLevel. slice.yaml is the SoR for slice
+	// level (codegen funnel projects to slice_gen.go.sliceMeta);
+	// inheritance from cell.consistencyLevel is no longer supported.
+	ConsistencyLevel string          `yaml:"consistencyLevel"`
 	ContractUsages   []ContractUsage `yaml:"contractUsages"`
 	Verify           SliceVerifyMeta `yaml:"verify"`
 	AllowedFiles     []string        `yaml:"allowedFiles,omitempty"`

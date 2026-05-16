@@ -359,9 +359,52 @@ func isL2OrHigher(level string) bool {
 // const enum; the rule's string comparison is const-equivalent. New slices
 // with role=publish auto-enrol.
 //
-// Stub (RED). Real implementation lands in the Wave 0 GREEN commit.
+// Other roles (serve / call / subscribe / handle / provide / read / invoke)
+// do NOT enforce a lower bound — empirically valid forms span L0..L3 (e.g.
+// auditcore subscribes user events at L2; configreceive subscribes at L3).
+// SLICE-CONSISTENCY-02 keeps narrow truth: only publish is durably bound.
 func (v *Validator) validateSliceConsistencyContractUsages() []ValidationResult {
-	return nil
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		if !hasPublishRole(s.ContractUsages) {
+			continue
+		}
+		// The parser now rejects empty ConsistencyLevel; defensively skip if
+		// any (e.g. in-memory ProjectMeta fixtures) reach this point.
+		if s.ConsistencyLevel == "" {
+			continue
+		}
+		level, err := cellvocab.ParseLevel(s.ConsistencyLevel)
+		if err != nil {
+			// Invalid level is already flagged by SLICE-CONSISTENCY-01.
+			continue
+		}
+		if level < cellvocab.L2 {
+			results = append(results, v.newResult(
+				codeSLICECONSISTENCY02, SeverityError, IssueInvalid,
+				sliceFile(s),
+				"consistencyLevel",
+				fmt.Sprintf(
+					"slice %q declares contractUsages with role=publish but consistencyLevel=%q; "+
+						"publishing events requires the L2 OutboxFact invariant (transactional outbox); "+
+						"fix: raise consistencyLevel to L2 or higher",
+					s.ID, s.ConsistencyLevel,
+				),
+			))
+		}
+	}
+	return results
+}
+
+// hasPublishRole reports whether any contractUsage in usages declares
+// role=publish (cellvocab.RolePublish).
+func hasPublishRole(usages []metadata.ContractUsage) bool {
+	for _, u := range usages {
+		if u.Role == string(cellvocab.RolePublish) {
+			return true
+		}
+	}
+	return false
 }
 
 // =============================================================================

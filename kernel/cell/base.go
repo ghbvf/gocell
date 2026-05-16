@@ -291,11 +291,11 @@ type BaseSlice struct {
 	journeys []string
 }
 
-// NewBaseSlice creates a BaseSlice with the given identity and consistency level.
-//
-// DEPRECATED — kept temporarily for RED→GREEN transition. Production callers
-// MUST migrate to MustNewBaseSliceFromMeta (slice.yaml SoR). Removal happens
-// in the GREEN commit; do not introduce new callers.
+// NewBaseSlice is retained ONLY during the Wave 0→Wave 2 transition window.
+// Production callers MUST use MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())
+// instead; the codegen funnel projecting slice.yaml is the SoR. Removal lands
+// in Wave 2 (T2). BASESLICE-CTOR-FUNNEL-01 archtest flags every remaining
+// call site to keep migration progress visible.
 func NewBaseSlice(id, cellID string, level cellvocab.Level) *BaseSlice {
 	return &BaseSlice{
 		id:     id,
@@ -304,18 +304,66 @@ func NewBaseSlice(id, cellID string, level cellvocab.Level) *BaseSlice {
 	}
 }
 
-// NewBaseSliceFromMeta constructs a BaseSlice from parsed slice.yaml metadata.
+// NewBaseSliceFromMeta constructs a BaseSlice from parsed slice.yaml metadata,
+// which is the single source of truth for slice identity and consistency level.
 //
-// Stub (RED). Real implementation lands in the Wave 0 GREEN commit.
+// The metadata projection lives in `<slicePkg>/slice_gen.go` as `var sliceMeta`
+// rendered by `gocell generate cell`; cell composition roots call
+// `cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())`. Hand-written
+// `cell.NewBaseSlice(id, cellID, level)` literals (the prior form) are
+// forbidden — see `tools/archtest/baseslice_ctor_funnel_test.go`
+// BASESLICE-CTOR-FUNNEL-01 and the codegen funnel in
+// `tools/codegen/cellgen/templates/slice.tmpl`.
+//
+// All four metadata invariants are validated:
+//   - meta must be non-nil
+//   - meta.ID must be non-empty
+//   - meta.BelongsToCell must be non-empty
+//   - meta.ConsistencyLevel must be non-empty and parse to a valid Level
+//
+// There is no fallback inheritance from cell.consistencyLevel — the strict
+// parser (`kernel/metadata.Parser`) rejects slice.yaml that omits the field.
+//
+// ref: kubernetes/kubernetes pkg/apis/core/validation/validation.go —
+// schema-driven validation pattern; meta is the typed projection of the
+// source-of-truth YAML.
 func NewBaseSliceFromMeta(meta *metadata.SliceMeta) (*BaseSlice, error) {
-	_ = meta
-	return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-		"cell.NewBaseSliceFromMeta: not implemented (RED stub)")
+	if meta == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta is nil")
+	}
+	if meta.ID == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta.ID is empty")
+	}
+	if meta.BelongsToCell == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta.BelongsToCell is empty",
+			errcode.WithInternal(fmt.Sprintf("slice=%q", meta.ID)))
+	}
+	if meta.ConsistencyLevel == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.NewBaseSliceFromMeta: meta.ConsistencyLevel is empty",
+			errcode.WithInternal(fmt.Sprintf("slice=%q", meta.ID)))
+	}
+	level, err := cellvocab.ParseLevel(meta.ConsistencyLevel)
+	if err != nil {
+		return nil, fmt.Errorf("cell.NewBaseSliceFromMeta: slice %q: %w", meta.ID, err)
+	}
+	return &BaseSlice{
+		id:     meta.ID,
+		cellID: meta.BelongsToCell,
+		level:  level,
+	}, nil
 }
 
-// MustNewBaseSliceFromMeta is the panic-on-error twin of NewBaseSliceFromMeta.
+// MustNewBaseSliceFromMeta is the panic-on-error twin of NewBaseSliceFromMeta,
+// intended for composition-root and test sites that build slices from static
+// metadata literals where a construction failure is a programmer error and
+// must abort startup. Mirrors MustNewBaseCell semantics.
 //
-// Stub (RED). Real implementation lands in the Wave 0 GREEN commit.
+// Do not call from request handlers, hot paths, or config-reload callbacks —
+// use NewBaseSliceFromMeta and propagate the error.
 func MustNewBaseSliceFromMeta(meta *metadata.SliceMeta) *BaseSlice {
 	s, err := NewBaseSliceFromMeta(meta)
 	if err != nil {
