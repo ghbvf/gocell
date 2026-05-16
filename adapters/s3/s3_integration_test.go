@@ -74,6 +74,11 @@ func newIntegrationConfig(endpoint, user, pass string) Config {
 //   - Upload stores an object without error
 //   - Health() returns nil (live HeadBucket call)
 //   - Checkers()["s3_ready"] returns nil (atomic state read, no network)
+//
+// Not t.Parallel(): per-test independent MinIO container is heavyweight
+// (~3s startup + RAM/disk), running concurrently on a CI runner risks
+// resource contention. Integration tests are bound by docker daemon
+// throughput, not Go scheduler parallelism.
 func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 	ctx := context.Background()
 
@@ -105,8 +110,8 @@ func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 
 	// State-machine probe: reads atomic state, no network I/O.
 	checkers := client.Checkers()
-	require.Contains(t, checkers, "s3_ready")
-	assert.NoError(t, checkers["s3_ready"](ctx), "s3_ready checker should be nil")
+	require.Contains(t, checkers, ReadyProbeName)
+	assert.NoError(t, checkers[ReadyProbeName](ctx), "s3_ready checker should be nil")
 }
 
 // TestIntegration_S3_RecoveryAfterContainerRestart verifies the stop/start
@@ -120,6 +125,11 @@ func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 // A named volume keeps the bucket data alive across stop/start so HeadBucket
 // finds the bucket on recovery — without it MinIO would lose in-memory state and
 // return NoSuchBucket (permanent), masking the transient→recovery path.
+//
+// Not t.Parallel(): per-test independent MinIO container is heavyweight
+// (~3s startup + RAM/disk), running concurrently on a CI runner risks
+// resource contention. Integration tests are bound by docker daemon
+// throughput, not Go scheduler parallelism.
 func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 	ctx := context.Background()
 
@@ -130,7 +140,7 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 			testcontainers.VolumeMount(volumeName, "/data"),
 		),
 	)
-	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
+	t.Cleanup(func() { _ = ctr.Terminate(ctx, testcontainers.RemoveVolumes(volumeName)) })
 
 	connStr, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err)
@@ -153,7 +163,7 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 	// Stop the container. Health() should now fail.
 	// "connection refused" is classified permanent by classifyS3Error fail-closed;
 	// we only assert non-nil, not IsTransient.
-	stopTimeout := 5 * time.Second
+	stopTimeout := testtime.D5s
 	require.NoError(t, ctr.Stop(ctx, &stopTimeout), "stop container")
 
 	healthErr := client.Health(ctx)
@@ -187,6 +197,11 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 // After container restart Docker may reassign the host port, so recovery is
 // verified by constructing a new client (with the fresh endpoint) and confirming
 // its Checkers()["s3_ready"] flips to nil after the first worker tick.
+//
+// Not t.Parallel(): per-test independent MinIO container is heavyweight
+// (~3s startup + RAM/disk), running concurrently on a CI runner risks
+// resource contention. Integration tests are bound by docker daemon
+// throughput, not Go scheduler parallelism.
 func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -201,7 +216,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	t.Cleanup(func() {
 		termCtx, termCancel := context.WithTimeout(context.Background(), testtime.D10s)
 		defer termCancel()
-		_ = ctr.Terminate(termCtx)
+		_ = ctr.Terminate(termCtx, testcontainers.RemoveVolumes(volumeName))
 	})
 
 	connStr, err := ctr.ConnectionString(ctx)
@@ -227,19 +242,19 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 
 	// Wait for the worker to observe a healthy state on its first tick.
 	checkers := client.Checkers()
-	require.Contains(t, checkers, "s3_ready")
+	require.Contains(t, checkers, ReadyProbeName)
 	require.Eventually(t, func() bool {
-		return checkers["s3_ready"](ctx) == nil
+		return checkers[ReadyProbeName](ctx) == nil
 	}, testtime.EventuallyLong, testtime.SlowPoll,
 		"s3_ready should be nil once worker probes healthy MinIO")
 
 	// Stop the container. Worker tick will call HeadBucket and update state to
 	// non-nil. We assert the probe becomes non-nil.
-	stopTimeout := 5 * time.Second
+	stopTimeout := testtime.D5s
 	require.NoError(t, ctr.Stop(ctx, &stopTimeout), "stop container for worker test")
 
 	require.Eventually(t, func() bool {
-		return checkers["s3_ready"](ctx) != nil
+		return checkers[ReadyProbeName](ctx) != nil
 	}, testtime.EventuallyExtraLong, testtime.SlowPoll,
 		"s3_ready should flip to non-nil error while container is stopped")
 
@@ -268,9 +283,9 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	})
 
 	newCheckers := newClient.Checkers()
-	require.Contains(t, newCheckers, "s3_ready")
+	require.Contains(t, newCheckers, ReadyProbeName)
 	require.Eventually(t, func() bool {
-		return newCheckers["s3_ready"](ctx) == nil
+		return newCheckers[ReadyProbeName](ctx) == nil
 	}, testtime.EventuallyExtraLong, testtime.SlowPoll,
 		"s3_ready on new client should recover to nil after container restart")
 }

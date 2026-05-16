@@ -17,10 +17,10 @@ const (
 
 	// MinIOImage pins the MinIO server image by content digest. MinIO upstream
 	// uses ISO timestamp release tags (RELEASE.YYYY-MM-DDTHH-MM-SSZ) that don't
-	// fit SemVer patterns, so the regex in images_test.go enforces only
-	// "digest mandatory"; the @sha256 digest is the immutable content reference
-	// and the sole pinning mechanism (tag segment is informational).
-	MinIOImage = "minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+	// fit SemVer patterns; the tag segment matches the upstream release cadence
+	// (verified from image labels: release="RELEASE.2025-09-07T16-13-09Z") and
+	// the @sha256 digest is the immutable content reference and authoritative pin.
+	MinIOImage = "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
 )
 
 // RedisClusterTestAddrsEnv is the discovery env consumed by

@@ -133,12 +133,16 @@ func respondSuccess() stepFn {
 }
 
 // newTestClientWithSDK builds a *Client backed by a real *awss3.Client whose
-// HTTPClient is the supplied transport. SDK auto-retry is disabled so that
-// "1× injected status → 1× RoundTripper call → 1× classifyS3Error invocation"
-// is the truth-table invariant the failure-injection tests rely on.
+// HTTPClient is the supplied transport.
 //
-// Production New() retains the SDK default retry policy; this helper only
-// applies to test paths.
+// SDK auto-retry is disabled (RetryMaxAttempts=1, NopRetryer) so that exactly
+// one injected HTTP response produces exactly one classifyS3Error invocation.
+// This is the contract that failure-injection tests depend on: if retry were
+// enabled, tr.calls.Load() would be > 1 and assertions like
+// assert.EqualValues(t, 1, tr.calls.Load()) would fail non-deterministically.
+//
+// Production New() retains the SDK default retry policy; this helper is
+// strictly test-only.
 //
 // ref: aws-sdk-go-v2 aws/retry NopRetryer
 func newTestClientWithSDK(t *testing.T, cfg Config, tr aws.HTTPClient) *Client {
@@ -336,8 +340,8 @@ func TestCheckers_ReadyWhenStateHealthy(t *testing.T) {
 	c := newTestClient(validConfig(), mock)
 	// state is nil (healthy by default after zero-value)
 	checkers := c.Checkers()
-	require.Contains(t, checkers, "s3_ready")
-	require.NoError(t, checkers["s3_ready"](context.Background()))
+	require.Contains(t, checkers, ReadyProbeName)
+	require.NoError(t, checkers[ReadyProbeName](context.Background()))
 }
 
 func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
@@ -349,8 +353,8 @@ func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
 	c.state.Store(&sentinel)
 
 	checkers := c.Checkers()
-	require.Contains(t, checkers, "s3_ready")
-	err := checkers["s3_ready"](context.Background())
+	require.Contains(t, checkers, ReadyProbeName)
+	err := checkers[ReadyProbeName](context.Background())
 	require.Error(t, err)
 	assert.Equal(t, sentinel, err)
 }
@@ -362,7 +366,7 @@ func TestCheckers_NoNetworkCall(t *testing.T) {
 	c := newTestClient(validConfig(), mock)
 	checkers := c.Checkers()
 
-	_ = checkers["s3_ready"](context.Background())
+	_ = checkers[ReadyProbeName](context.Background())
 	assert.EqualValues(t, 0, mock.callCount.Load(), "Checkers probe must not call HeadBucket")
 }
 
@@ -424,7 +428,7 @@ func TestWorker_UpdatesStateOnError(t *testing.T) {
 	checkers := c.Checkers()
 	var lastErr error
 	require.Eventually(t, func() bool {
-		lastErr = checkers["s3_ready"](context.Background())
+		lastErr = checkers[ReadyProbeName](context.Background())
 		return lastErr != nil
 	}, testtime.D250ms, testtime.FastPoll)
 
@@ -465,7 +469,7 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 	checkers := c.Checkers()
 	var lastErr error
 	require.Eventually(t, func() bool {
-		lastErr = checkers["s3_ready"](context.Background())
+		lastErr = checkers[ReadyProbeName](context.Background())
 		return callN.Load() >= 2 && lastErr == nil
 	}, testtime.D300ms, testtime.FastPoll)
 
@@ -633,6 +637,7 @@ func TestNew_SDKAccessorAvailable(t *testing.T) {
 // classified as a permanent (non-transient) error with code ErrAdapterS3Upload.
 // SDK auto-retry is disabled via NopRetryer so exactly 1 HTTP call is made.
 func TestUpload_403Permanent(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
 	c := newTestClientWithSDK(t, validConfig(), tr)
 
@@ -649,6 +654,7 @@ func TestUpload_403Permanent(t *testing.T) {
 // TestUpload_5xxTransient verifies that a 503 ServiceUnavailable response from
 // S3 is classified as transient, triggering retry-eligible handling in the caller.
 func TestUpload_5xxTransient(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
 	c := newTestClientWithSDK(t, validConfig(), tr)
 
@@ -665,6 +671,7 @@ func TestUpload_5xxTransient(t *testing.T) {
 // TestUpload_TimeoutTransient verifies that a network-level timeout during
 // Upload is classified as transient (net.Error.Timeout()==true branch).
 func TestUpload_TimeoutTransient(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondNetError()}}
 	c := newTestClientWithSDK(t, validConfig(), tr)
 
@@ -675,12 +682,14 @@ func TestUpload_TimeoutTransient(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected (NopRetryer disables retry)")
 }
 
 // TestUpload_RecoveryAfter5xx verifies the recovery sequence: the first Upload
 // call returns a transient 503 error, the second call succeeds (HTTP 200).
 // Transport call count must be exactly 2 across both Upload invocations.
 func TestUpload_RecoveryAfter5xx(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{
 		respondStatus(503, "ServiceUnavailable"),
 		respondSuccess(),
@@ -709,6 +718,7 @@ func TestUpload_RecoveryAfter5xx(t *testing.T) {
 // TestHealth_403Permanent verifies that a 403 AccessDenied response during
 // Health() is classified as permanent with code ErrAdapterS3Health.
 func TestHealth_403Permanent(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
 	c := newTestClientWithSDK(t, validConfig(), tr)
 
@@ -725,6 +735,7 @@ func TestHealth_403Permanent(t *testing.T) {
 // TestHealth_5xxTransient verifies that a 503 ServiceUnavailable response
 // during Health() is classified as transient with code ErrAdapterS3Health.
 func TestHealth_5xxTransient(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
 	c := newTestClientWithSDK(t, validConfig(), tr)
 
@@ -741,6 +752,7 @@ func TestHealth_5xxTransient(t *testing.T) {
 // TestHealth_TimeoutTransient verifies that a network-level timeout during
 // Health() is classified as transient (net.Error.Timeout()==true branch).
 func TestHealth_TimeoutTransient(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondNetError()}}
 	c := newTestClientWithSDK(t, validConfig(), tr)
 
@@ -751,6 +763,7 @@ func TestHealth_TimeoutTransient(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Health, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected (NopRetryer disables retry)")
 }
 
 // ---------------------------------------------------------------------------
@@ -760,7 +773,13 @@ func TestHealth_TimeoutTransient(t *testing.T) {
 // TestWorker_Tick403_StateUnhealthyPermanent verifies that when the background
 // health ticker receives a 403 AccessDenied from S3, the Client state is marked
 // unhealthy with a permanent (non-transient) error.
+//
+// recordingTransport reuses the last step when calls > len(steps); Worker
+// tick tests do NOT assert tr.calls.Load() because the ticker invokes Do()
+// repeatedly during Eventually polling. The state-machine transition is the
+// authoritative truth-table assertion here.
 func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
 	cfg := validConfig()
 	cfg.HealthInterval = testtime.D50ms
@@ -776,7 +795,7 @@ func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
 	checkers := c.Checkers()
 	var stateErr error
 	require.Eventually(t, func() bool {
-		stateErr = checkers["s3_ready"](context.Background())
+		stateErr = checkers[ReadyProbeName](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 403 tick")
 
@@ -791,7 +810,13 @@ func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
 // TestWorker_Tick5xx_StateUnhealthyTransient verifies that when the background
 // health ticker receives a 503 ServiceUnavailable from S3, the Client state is
 // marked unhealthy with a transient error.
+//
+// recordingTransport reuses the last step when calls > len(steps); Worker
+// tick tests do NOT assert tr.calls.Load() because the ticker invokes Do()
+// repeatedly during Eventually polling. The state-machine transition is the
+// authoritative truth-table assertion here.
 func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
 	cfg := validConfig()
 	cfg.HealthInterval = testtime.D50ms
@@ -807,7 +832,7 @@ func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
 	checkers := c.Checkers()
 	var stateErr error
 	require.Eventually(t, func() bool {
-		stateErr = checkers["s3_ready"](context.Background())
+		stateErr = checkers[ReadyProbeName](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 503 tick")
 
@@ -822,7 +847,13 @@ func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
 // TestWorker_TickTimeoutThenRecovery verifies the full recovery cycle: the
 // health ticker first receives two timeout errors (state → unhealthy/transient),
 // then two successes (state → healthy/nil).
+//
+// recordingTransport reuses the last step when calls > len(steps); Worker
+// tick tests do NOT assert tr.calls.Load() because the ticker invokes Do()
+// repeatedly during Eventually polling. The state-machine transition is the
+// authoritative truth-table assertion here.
 func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
+	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{
 		respondNetError(), // tick 1 — timeout, unhealthy
 		respondNetError(), // tick 2 — timeout, still unhealthy
@@ -845,15 +876,16 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 	// Phase 1: wait for state to become unhealthy with a transient error.
 	var stateErr error
 	require.Eventually(t, func() bool {
-		stateErr = checkers["s3_ready"](context.Background())
+		stateErr = checkers[ReadyProbeName](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after timeout ticks")
 	assert.True(t, errcode.IsTransient(stateErr), "timeout tick error must be transient")
 
 	// Phase 2: wait for state to recover to healthy (nil).
+	// Budget widened to D500ms to absorb CI scheduler jitter between ticks 2 and 3.
 	require.Eventually(t, func() bool {
-		return checkers["s3_ready"](context.Background()) == nil
-	}, testtime.D300ms, testtime.FastPoll, "state must recover to healthy after success ticks")
+		return checkers[ReadyProbeName](context.Background()) == nil
+	}, testtime.D500ms, testtime.FastPoll, "state must recover to healthy after success ticks")
 
 	cancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)

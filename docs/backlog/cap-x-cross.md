@@ -16,6 +16,7 @@
 | DEVOPS-INTEGRATION-CLEANUP-WAIT-TIMEOUT-01 | **Devops integration cleanup wait timeout** — 现状: e2e cleanup 超时；修复: 加 wait helper | arch-opt | Cx1 | 🟡 | — | `tests/e2e/` | GitHub #19 |
 | ADAPTER-CONNECT-BUDGET-01 | **adapter 级 ConnectTimeout 强制** — 现状: 各 adapter 依赖上层 ctx；修复: adapter 级 ConnectTimeout（默认 5s）写 Config + Validate + `ERR_ADAPTER_CONNECT_TIMEOUT` (also: cap-08, cap-10；PG 部分由 PR#401 已部分覆盖) | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/rabbitmq/connection.go` + `adapters/postgres/pool.go` | backlog1 §2.4 |
 | S3-FAILURE-INJECTION-01 | **S3 故障注入测试** — 现状: 缺 MinIO testcontainer 集成测；修复: 上传 403/5xx/timeout/recovery 路径覆盖 (also: cap-13) | test | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/s3/s3_test.go` | backlog1 §2.5 |
+| S3-CLASSIFYERROR-CONN-REFUSED-01 | **S3 classifyS3Error 把 connection refused 分类为 permanent** — `*net.OpError + syscall.ECONNREFUSED` 的 `Timeout()==false`，走 isTransientS3Error step 6 fail-closed。生产影响：容器临时不可达 → ConsumerBase permanent → DLX 而非自动 retry。修复方向：step 5 net.Error 分支增加 `*net.OpError` 形态识别 → 归 transient。发现于 PR #538 集成测试 #2（`TestIntegration_S3_RecoveryAfterContainerRestart`）。 | bug | P1/Cx2 | 🟡 | v1.0 GA 前 | `adapters/s3/errors.go` |
 
 ## x.2 PR-specific 跨域 FU
 
