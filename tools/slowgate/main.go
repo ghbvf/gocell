@@ -61,19 +61,19 @@ const (
 	// value is shown instead so the message stays accurate.
 	defaultAllowlistPath = "tools/slowgate/allowlist.txt"
 
-	// defaultThreshold is the default per-test wall-clock budget. 15s is
+	// defaultThreshold is the default per-test wall-clock budget. 20s is
 	// calibrated for GHA ubuntu-latest runner hardware: packages.Load-bound
 	// tests (archtest / typeseval / metricschema / generatedverify) and
 	// subprocess-go-toolchain tests (kernel/verify) run 5–15× slower on
 	// CI's 2-CPU shared runners than on a developer laptop, so locally
 	// "fast" 2–7s tests routinely show 5–43s on CI. 2s and 5s thresholds
 	// both produced perpetual allowlist churn from this hardware mismatch;
-	// 15s preserves real signal (a sleep regression from 100ms to 16s+ is
+	// 20s preserves real signal (a sleep regression from 100ms to 21s+ is
 	// still caught) while letting the slow-by-design population pass
-	// without per-PR allowlist edits. A handful of tests genuinely > 15s
+	// without per-PR allowlist edits. A handful of tests genuinely > 20s
 	// (large packages.Load scans, subprocess go invocations, long YAML
 	// fixtures) live in tools/slowgate/allowlist.txt.
-	defaultThreshold = 15 * time.Second
+	defaultThreshold = 20 * time.Second
 )
 
 func main() {

@@ -46,7 +46,7 @@ readonly ARCHTEST_PKG="./tools/archtest"
 readonly SHARD_COUNT="${SHARD_COUNT:-16}"
 readonly TIMEOUT="${TIMEOUT:-5m}"
 readonly SLOWGATE_BIN="${SLOWGATE_BIN:-}"
-readonly SLOWGATE_THRESHOLD="${SLOWGATE_THRESHOLD:-15s}"
+readonly SLOWGATE_THRESHOLD="${SLOWGATE_THRESHOLD:-20s}"
 readonly SLOWGATE_ALLOWLIST="${SLOWGATE_ALLOWLIST:-tools/slowgate/allowlist.txt}"
 
 # Validate SHARD_COUNT before doing any work.

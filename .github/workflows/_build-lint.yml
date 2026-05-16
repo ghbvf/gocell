@@ -171,7 +171,7 @@ jobs:
       # it by default, and without it a non-zero `go test` exit code would
       # be masked by `tee`/`slowgate` success. Do not remove this line.
       #
-      # `--threshold=15s` matches `defaultThreshold` in tools/slowgate/main.go;
+      # `--threshold=20s` matches `defaultThreshold` in tools/slowgate/main.go;
       # the literal is duplicated to keep the workflow self-documenting at
       # the call site. Calibrated for GHA ubuntu-latest 2-CPU runners where
       # packages.Load-bound tests run 5–15× slower than developer laptops.
@@ -195,7 +195,7 @@ jobs:
             $PKGS \
             -count=1 -timeout 5m \
             | tee "$RUNNER_TEMP/test-${{ matrix.shard }}.json" \
-            | "$RUNNER_TEMP/slowgate" --threshold=15s --allowlist=tools/slowgate/allowlist.txt
+            | "$RUNNER_TEMP/slowgate" --threshold=20s --allowlist=tools/slowgate/allowlist.txt
 
       # Upload the raw `go test -json` event stream only on Test step
       # failure. Restored as a P1 review fix: without it, a non-slowgate
@@ -306,7 +306,7 @@ jobs:
           SHARD_TARGET: ${{ matrix.shard }}
           TIMEOUT: 5m
           SLOWGATE_BIN: ${{ runner.temp }}/slowgate
-          SLOWGATE_THRESHOLD: 15s
+          SLOWGATE_THRESHOLD: 20s
           SLOWGATE_ALLOWLIST: tools/slowgate/allowlist.txt
         run: bash hack/verify-archtest.sh
 

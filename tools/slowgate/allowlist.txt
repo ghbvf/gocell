@@ -1,4 +1,4 @@
-# slowgate allowlist — tests permitted to exceed the default 15s budget.
+# slowgate allowlist — tests permitted to exceed the default 20s budget.
 #
 # Format: each data line is `Package<TAB>TestName`. Every data line MUST
 # be preceded by a `# <reason>` comment explaining why the wall-clock cost
@@ -7,13 +7,13 @@
 # top-level test func. Independent table-driven negative cases for the
 # parser live in TestLoadSlowgateAllowlist_ParseRules (same file).
 #
-# Threshold rationale (15s, see tools/slowgate/main.go defaultThreshold):
+# Threshold rationale (20s, see tools/slowgate/main.go defaultThreshold):
 # packages.Load-bound and subprocess-go-toolchain tests run 5–15× slower
 # on GHA ubuntu-latest 2-CPU runners than on developer laptops. 2s and 5s
 # thresholds both produced perpetual allowlist churn driven by hardware
-# mismatch, not real regression. 15s lets the slow-by-design population
+# mismatch, not real regression. 20s lets the slow-by-design population
 # pass while still catching meaningful regressions (a 100ms sleep drifting
-# to 16s+ still fires).
+# to 21s+ still fires).
 #
 # Adding entries: only when CI has empirically failed the gate. The
 # failing slowgate step prints `SLOW <Package> <TestName> <Elapsed>` lines
