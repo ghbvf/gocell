@@ -242,7 +242,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | **PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01**（A2）| (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要 sealed marker 范本时顺带建立 | `docs/backlog/cap-02-metadata-governance.md` |
 | **PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01**（A3）| 首次出现 cross-function file-scope `var pat = "./..."` 间接调用 escape，或新 archtest 规则需要绕过 funnel；unexport `typeseval.SharedResolver/LoadPackages` 为包内私有 + `LoadPackagesForFixtures` 显式入口 | `docs/backlog/cap-14-tooling.md` |
 | **CELLGEN-ERRCODE-FUNNEL-HARDEN**（C2）| depguard method-level rule 方案确定 OR typed wrapper 抽出；cellgen 包 errcode Hard 升级路径 | `docs/backlog/cap-14-tooling.md` |
-| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| 第 3 个 file-level carve-out 出现；改 function-level（仅豁免 `WrapOrInfra` / `writeErrcodeError` struct literal 行）+ 新 ADR 登记 carve-out 列表+理由 | `docs/backlog/cap-14-tooling.md` + line 361 |
+| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| ✅ 提前推进 → 037 PR-A2 (581-archtest-carveout-narrow)；function-level carve-out + ADR registry + ERRCODE-CARVEOUT-ADR-CONSISTENCY-01 Hard 守卫 | `docs/backlog/cap-14-tooling.md` + line 361 |
 | **PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01**（C6）| 第二次主题归属错误；`list-archtests.sh` grep → go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 `referenced_by` 列 | `docs/backlog/cap-02-metadata-governance.md` |
 | **POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01**（C8）| 第 2 次同类漂移；archtest 静态扫 `*_test.go`，`_NotFound` 后缀测试必须断言 typed `errcode.Error.Code` 等于 `Err*NotFound`，禁裸 `assert.AnError`（违反不可表达 → Hard）| `docs/backlog/cap-14-tooling.md` |
 
