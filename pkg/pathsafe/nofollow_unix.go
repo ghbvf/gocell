@@ -5,6 +5,7 @@ package pathsafe
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,10 @@ func mkdiratThenOpen(parentFd int, name string, mode os.FileMode) (int, error) {
 // is written. This closes the last TOCTOU window: prior to this commit the
 // leaf open was path-based (caller could race a parent swap between mkdirat
 // and openat); now both anchor on the same fd chain.
+//
+// fd ownership: the descriptor opened by openat is wrapped by os.NewFile
+// and closed by f.Close before return. Callers MUST NOT close any fd
+// returned by this function — none is returned.
 func writeFileNoFollowAt(parentFd int, basename string, content []byte, mode os.FileMode) error {
 	var fd int
 	err := ignoringEINTR(func() error {
@@ -85,7 +90,7 @@ func writeFileNoFollowAt(parentFd int, basename string, content []byte, mode os.
 	// fd is guaranteed non-negative here (unix.Openat returns -1 with non-nil
 	// err, which we already returned above) so the int→uintptr conversion is
 	// safe; G115 cannot prove this statically.
-	f := os.NewFile(uintptr(fd), basename) //nolint:gosec // G115: fd is non-negative on this path
+	f := os.NewFile(uintptr(fd), basename) //nolint:gosec // R2-approved: G115 false-positive — POSIX openat(2) returns -1 on error (non-nil err returned above) or ≥0 on success
 	_, writeErr := f.Write(content)
 	closeErr := f.Close()
 	if writeErr != nil {
@@ -123,7 +128,7 @@ func openRootDirNoFollow(realRoot string) (int, error) {
 	if err != nil {
 		return -1, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: open root for fd-walk", err,
-			errcode.WithInternal("root="+realRoot))
+			errcode.WithDetails(slog.String("root", realRoot)))
 	}
 	return fd, nil
 }
@@ -155,6 +160,15 @@ func openOrCreateDir(parentFd int, comp string, dirMode os.FileMode) (childFd in
 //
 // Returns the final parent dir fd. When rel == "" or "." the leaf parent IS
 // rootFd itself — returned unchanged with no descent.
+//
+// fd ownership contract:
+//   - rootFd is NOT appended to *fds; caller is responsible for its
+//     lifecycle (typically via defer Close).
+//   - Every successfully opened intermediate childFd IS appended to *fds.
+//   - The returned parent fd is the last element of *fds when rel != "" /
+//     ".", or rootFd itself when rel is empty/dot.
+//   - Callers MUST defer-close every fd in *fds after this function
+//     returns, including failure paths.
 func walkAndCreateDirs(rootFd int, realRoot, rel string, dirMode os.FileMode, fds *[]int, created *[]string) (int, error) {
 	if rel == "." || rel == "" {
 		return rootFd, nil
@@ -239,7 +253,9 @@ func secureMkdirAllAndWrite(
 
 	if forceOverwrite {
 		if err := unlinkatLeafIgnoreENOENT(parentFd, basename); err != nil {
-			return err
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"pathsafe: unlinkat leaf for force-overwrite", err,
+				errcode.WithInternal(fmt.Sprintf("basename=%s", basename)))
 		}
 	}
 	return writeFileNoFollowAt(parentFd, basename, content, fileMode)
