@@ -491,7 +491,7 @@ sessionrefresh 漏检 `CanAuthenticate()`，无单一 Hard 收口。
 |------|------|--------|---------|---------|
 | **T1** rbacassign 闭环 | B2-T-02（contract waiver expiry，用 `outboxtest.Publisher` 断言真实 emit + 移除 waiver）+ B2-T-07-FU-1（caller wiring 核实/收口）+ 联动 RBAC-ASSIGN-LEVEL-UPGRADE-01 / SEED-ROLE-IFACE-01 | `slices/rbacassign/*`、`cell_init.go:332`(rbacAssignLevel) | ✅ 并行（#501 不碰 rbacassign） | ✅ |
 | **T2** 一致性等级校正 | IDENTITYMANAGE-LEVEL-MISLABEL（`cell_init.go:214` L1→L2）+ 复核其余 8 处 `NewBaseSlice` L 字面量 + ACCESS-LEVEL-AUDIT-01 slice.yaml + 新 archtest `slice.consistencyLevel ≥ contractUsages 最低等级` | `cell_init.go`、各 `slice.yaml`、新 archtest | ✅ 并行（#501 不碰 cell_init.go） | ✅ |
-| **T3** FU-3b archtest 升级 | `session_protocol_composition_root_test.go` 升 type-aware + `refresh_invariants_test.go` 守新 lookup 链 + RED fixture；Soft → Medium | `tools/archtest/{两文件}` + testdata | ✅ 并行（与 #501 改的 archtest 文件不同） | ✅ |
+| **T3** FU-3b archtest 升级 ✅ shipped (PR #587-t3) | `session_protocol_composition_root_test.go` 升 type-aware + `refresh_invariants_test.go` 守新 lookup 链 + RED fixtures；Soft → Medium。两 archtest 切到 archtest.RunTyped + ResolvePackageRef/ResolveMethodCall（不进 LegacyAllowlist）；archtest_fixture-gated 夹具覆盖 qualified/aliased/dot import × sessionStore.Get 新 lookup 链 | `tools/archtest/{两文件}` + `tools/archtest/internal/{session,refresh}*fixture/` | ✅ 并行（与 #501 改的 archtest 文件不同） | ✅ |
 | **T4** L2 e2e harness | B2-C-13：新建 `tests/integration/l2_atomicity/` 覆盖 login→refresh→revoke/logout→validate fail-closed + CI race lane + no-tests guard | 新增 `tests/integration/*`、CI yaml | ⚠️ 文件不冲突但**行为断言语义依赖 #501**（sessionvalidate epoch 比对 / refresh reuse cascade）→ harness 骨架可并行起，断言 rebase 到 #501 后收口 | ✅ |
 | **T5**（可延后） | AUTH-CACHE-01 Redis session cache 注入（默认关闭）；PR267-FU-AUTHTEST-INTERNAL（需先 ADR/dry-run，建议剥离独立 PR） | `adapters/redis`、`cmd/corebundle`；`runtime/auth/authtest`→internal | ✅ 并行 | ✅ |
 
@@ -512,7 +512,7 @@ sessionrefresh 漏检 `CanAuthenticate()`，无单一 Hard 收口。
 **收口 backlog**（原有）：
 - ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 🔴 P1 — **改独立 PR**（非 S4b/S4c，业务能力维度不同；v6 修订澄清）
 - CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01 🔴 Cx1（ACCESS-LEVEL-AUDIT 同主题）— S4c
-- B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 ✅ closed by PR #482（archtest 类型化的 composition-root + refresh_invariants 升级折入 S4c，不另开 backlog）
+- B5-FU-PG-RUNTIME-WIRING-AND-ARCHTEST-TYPE-AWARE-01 ✅ closed by PR #587-t3（archtest 类型化的 composition-root + refresh_invariants 升级落地：Soft → Medium，archtest.RunTyped + ResolvePackageRef/ResolveMethodCall + RED 夹具）
 - PR338-FU-LOGIN-DURABLE-TX-ATOMICITY-TEST ✅ closed by PR #482
 - P3-TD-10 TOCTOU 竞态修复 ✅ closed by PR #490（ChangePassword in-tx + bcrypt + epoch bump 原子）
 - B2-PROVISIONER-MUTEX-REVIEW 🟠 P2（PG users 落地后 mutex 不再需要）— S4c
