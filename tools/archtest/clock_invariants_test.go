@@ -112,8 +112,32 @@ func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File) map[stri
 }
 
 // enclosingFuncDeclKey returns the position-string key for the nearest
-// enclosing *ast.FuncDecl that contains pos, or "" if pos is not inside any
-// FuncDecl. The key matches the format produced by clockControlPlaneAllowedFuncs.
+// enclosing top-level *ast.FuncDecl that directly (not via a FuncLit/closure)
+// contains pos. Returns "" if pos is not inside any FuncDecl body, or if pos
+// is inside a nested FuncLit within a FuncDecl body.
+//
+// The key matches the format produced by clockControlPlaneAllowedFuncs.
+//
+// Why the FuncLit exclusion matters (carve-out boundary):
+//
+// Without the exclusion, `fd.Body.Pos() <= pos <= fd.Body.End()` is true for
+// any code inside the function — including closures/FuncLits. This would
+// exempt `time.*` calls inside closures of a marked function, which violates
+// the documented carve-out semantics: "the exemption does NOT extend to closures
+// within the exempt FuncDecl body."
+//
+// The exclusion is implemented by walking FuncLits within fd.Body and returning
+// "" whenever pos falls inside one.
+//
+// Blind spots (per ai-collab.md §"工具选定后强制盲区自检"):
+//
+//  1. FuncLit nested inside another FuncLit inside a marked FuncDecl: also
+//     excluded (EachInSubtree[ast.FuncLit] is recursive, so all depths covered).
+//     Reverse self-check: control_plane_exempt_func_closure_violates fixture
+//     asserts that time.* inside a closure of a marked function IS flagged.
+//
+//  2. A method (receiver FuncDecl) declared inside a file-scope var init block:
+//     not possible in Go syntax; not a blind spot.
 //
 // Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
 // direct children of *ast.File; no nested function literal can be a top-level
@@ -124,7 +148,22 @@ func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) st
 		if result != "" || fd.Body == nil {
 			return
 		}
-		if fd.Body.Pos() <= pos && pos <= fd.Body.End() {
+		// pos must be within this FuncDecl's body.
+		if !(fd.Body.Pos() <= pos && pos <= fd.Body.End()) {
+			return
+		}
+		// pos is inside fd.Body. Now check it is NOT inside a nested FuncLit.
+		// EachInSubtree[ast.FuncLit](fd.Body, ...) walks all FuncLits at any depth.
+		insideClosure := false
+		EachInSubtree[ast.FuncLit](fd.Body, func(fl *ast.FuncLit) {
+			if insideClosure || fl.Body == nil {
+				return
+			}
+			if fl.Body.Pos() <= pos && pos <= fl.Body.End() {
+				insideClosure = true
+			}
+		})
+		if !insideClosure {
 			result = fset.Position(fd.Name.Pos()).String()
 		}
 	})
@@ -1078,10 +1117,10 @@ var forbiddenTimeFns = map[string]string{
 // Registry: the carve-out ADR (docs/architecture/202605121800-adr-archtest-carveout-narrow.md)
 // is scoped to ERRCODE-KIND-LITERAL-01 and does not govern clock carve-outs.
 // Clock function-level carve-outs are self-documented here in the INVARIANT
-// godoc + in the marker functions' own godoc. B4 ADR author must consolidate
-// into a dedicated clock carve-out ADR or extend the existing one; until then
-// this godoc is the single truth source for the function list.
+// godoc + in the marker functions' own godoc. The in-source marker is the
+// single enforcement truth source; this godoc is documentation only.
 //
+// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
 // ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 // ref: dominikh/go-tools analysis/code/code.go CallName / IsCallToAny
@@ -1141,12 +1180,19 @@ func isAllowedRealClockPath(rel string) bool {
 // Blind spots (documented per ai-collab.md §"工具选定后强制盲区自检"):
 //  1. Marker in a non-doc inline comment (e.g. // inside the function body):
 //     NOT recognized — only doc comments (fd.Doc) are scanned.
-//     Reverse self-check: TestProdClockInjectionControlPlaneMarkerFixtures/
-//     no_marker_violates asserts such a function IS flagged.
-//  2. time.* inside a FuncLit/closure within an exempt FuncDecl: NOT exempt
-//     (enclosingFuncDeclKey only matches outermost FuncDecl bodies, not nested
-//     FuncLit bodies). Reverse self-check: closure_violates fixture asserts
-//     the closure reference IS flagged.
+//     Reverse self-check: control_plane_no_marker_violates fixture asserts
+//     such a function IS flagged.
+//  2. time.* inside a FuncLit/closure within an exempt FuncDecl: NOT exempt.
+//     enclosingFuncDeclKey explicitly excludes positions inside nested FuncLit
+//     bodies via EachInSubtree[ast.FuncLit], so closures are never granted
+//     the FuncDecl-level carve-out.
+//     Reverse self-check A: control_plane_closure_violates — a non-exempt
+//     function's closure calling time.NewTicker is flagged.
+//     Reverse self-check B: control_plane_exempt_func_closure_violates — a
+//     closure inside a marked (exempt) function calling time.NewTicker is
+//     still flagged (blind-spot-A closure-within-exempt-func self-check).
+//
+// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
 //
 // scanProdClockInjectionAST is exported within the archtest package so the
 // fixture-based regression tests in prod_clock_injection_fixtures_test.go can

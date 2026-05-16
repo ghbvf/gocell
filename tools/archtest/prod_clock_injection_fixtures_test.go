@@ -14,6 +14,9 @@
 //     is NOT recognized; time.NewTicker is still flagged (1 violation).
 //   - control_plane_closure_violates: RED — a non-exempt function containing
 //     a closure that calls time.NewTicker is still flagged (1 violation).
+//   - control_plane_exempt_func_closure_violates: RED — blind-spot-A closure
+//     self-check: time.* inside a FuncLit within an exempt (marked) FuncDecl
+//     is NOT exempt; still flagged (1 violation).
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 package archtest
@@ -87,6 +90,9 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		{"control_plane_no_marker_violates", []int{16}},
 		// RED: non-exempt function with closure calling time.NewTicker is flagged.
 		{"control_plane_closure_violates", []int{22}},
+		// RED: blind-spot-A self-check — time.* inside a FuncLit (closure) within
+		// an exempt (marked) FuncDecl is NOT exempt; must still be flagged.
+		{"control_plane_exempt_func_closure_violates", []int{21}},
 	}
 
 	for _, tc := range cases {

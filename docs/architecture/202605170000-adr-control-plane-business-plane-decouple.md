@@ -94,6 +94,15 @@ func controlPlaneProbeTimer(d time.Duration) *time.Timer {
 
 不同于 `ERRCODE-KIND-LITERAL-01` 的 carve-out 机制（其独立维护了 `errcodeKindLiteralCarveOuts` map，与 ADR registry 表存在两份真值源，因此需要 `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 双向校验 archtest），本 clock carve-out **没有独立的代码侧 map**——marker 本身就是登记，无第二真值源，因此**本 ADR 是文档，不是 enforcement 来源，不新增 consistency archtest**。
 
+**carve-out 盲区已关闭（L4 review 修复）**：`enclosingFuncDeclKey` 已通过
+`EachInSubtree[ast.FuncLit]` 递归排除所有嵌套 FuncLit body，确保闭包内
+`time.*` 调用不被豁免。反向自检：fixture
+`control_plane_exempt_func_closure_violates` 断言 exempt 函数内闭包的
+`time.NewTicker` 仍被 flag（RED）。
+
+ref: `tools/archtest/clock_invariants_test.go::enclosingFuncDeclKey`（盲区修复实现）
+ref: `tools/archtest/prod_clock_injection_fixtures_test.go`（反向自检 fixture 列表）
+
 **本 clock carve-out 不登记于 `202605121800-adr-archtest-carveout-narrow.md`**：该 ADR 的 `CARVEOUT-REGISTRY` 仅定义 `ERRCODE-KIND-LITERAL-01` 规则的豁免，`ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` archtest 的解析锚点限定在该规则范围内。将 clock carve-out 插入该 registry 会破坏 `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 的严格等价断言，导致 CI 误报。
 
 **Medium 同 PR Hard 升级 backlog 登记**（ai-collab.md 要求，不可 silent carryover）：
