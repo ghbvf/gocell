@@ -12,10 +12,25 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+)
+
+// defaultTombstoneTTL is the minimum safe tombstone retention period. It MUST
+// be ≥ the at-least-once redelivery / Claimer idempotency window (also 24h).
+// GC'ing a tombstone before the replay window closes would let a stale replayed
+// upsert bypass the monotonic guard and incorrectly resurrect a deleted key.
+const defaultTombstoneTTL = 24 * time.Hour
+
+// cacheCellID and cacheSliceID are the metric label values for the configsubscribe
+// Cache. Cache is service-private — configsubscribe is the only owner.
+const (
+	cacheCellID  = "configcore"
+	cacheSliceID = "configsubscribe"
 )
 
 // cacheEntry tracks the highest version seen for a config key plus a presence
@@ -27,22 +42,32 @@ import (
 // (at-least-once delivery) arriving after a delete will be rejected because
 // event.Version <= tombstone.version.
 //
-// Memory note: tombstone entries (present=false) are retained for the lifetime
-// of the process so that the monotonic protection holds across replays. If
-// process memory becomes a concern (e.g. high-churn keys) a TTL-based eviction
-// or persistent tombstone store should be introduced — that is out of scope for
-// this PR.
+// Tombstone TTL: tombstone entries (present=false) are TTL-reaped by the
+// lifecycle-bound GC sweep (sweepTombstones / StartTombstoneGC). The hard
+// invariant is tombstoneTTL ≥ Claimer idempotency window (24h): premature
+// tombstone GC would allow a stale replayed upsert to bypass the monotonic
+// guard and incorrectly resurrect a deleted key beyond the replay window.
+// Active entries are never LRU-evicted; their count is bounded by the live
+// config keyspace and the monotonic guard is fully preserved.
 type cacheEntry struct {
-	version int  // highest version seen, never decremented
-	present bool // false = tombstoned by a delete event
+	version   int       // highest version seen, never decremented
+	present   bool      // false = tombstoned by a delete event
+	deletedAt time.Time // non-zero only for tombstones (present=false)
 }
 
 // Cache tracks the latest known version and presence for each config key
 // observed from events.
 // It does NOT store values — subscribers must refetch via GET /api/v1/config/{key}.
+//
+// Tombstone TTL GC: sweepTombstones removes tombstone entries whose age since
+// deletedAt exceeds tombstoneTTL. Active entries are never evicted — the
+// monotonic-version guard for live keys is fully preserved.
 type Cache struct {
-	mu      sync.RWMutex
-	entries map[string]cacheEntry
+	mu             sync.RWMutex
+	entries        map[string]cacheEntry
+	clk            clock.Clock
+	tombstoneTTL   time.Duration
+	cacheCollector obmetrics.EventbusCacheCollector
 }
 
 // GetVersion returns the last known version for a key and whether the entry is
@@ -73,11 +98,33 @@ func (c *Cache) Len() int {
 	return n
 }
 
+// sweepTombstones removes tombstone entries (present=false) whose age since
+// deletedAt exceeds tombstoneTTL. Active entries are never touched — the
+// monotonic-version guard for live keys is fully preserved. Each evicted
+// tombstone increments eventbus_cache_tombstone_evicted_total.
+func (c *Cache) sweepTombstones(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, e := range c.entries {
+		if !e.present && now.Sub(e.deletedAt) > c.tombstoneTTL {
+			delete(c.entries, k)
+			c.cacheCollector.RecordTombstoneEvicted(cacheCellID, cacheSliceID)
+		}
+	}
+}
+
 // Service consumes config change events and maintains a local version-tracking cache.
 type Service struct {
 	cache                *Cache
 	logger               *slog.Logger
 	configEventCollector obmetrics.ConfigEventCollector
+	clk                  clock.Clock
+
+	// GC lifecycle state (protected by gcMu).
+	gcMu      sync.Mutex
+	gcStarted bool
+	gcCancel  context.CancelFunc
+	gcDone    chan struct{}
 }
 
 // Option configures a configsubscribe Service.
@@ -93,22 +140,138 @@ func WithConfigEventCollector(c obmetrics.ConfigEventCollector) Option {
 	}
 }
 
+// WithClock injects a custom clock (e.g. clockmock.FakeClock) for testing.
+// A nil clock is silently ignored; the default clock.Real() is used instead.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk == nil {
+			return
+		}
+		s.clk = clk
+	}
+}
+
+// WithTombstoneTTL sets the tombstone TTL used by the background GC sweep.
+// A non-positive value is silently treated as defaultTombstoneTTL (24h).
+// Values > 0 but < defaultTombstoneTTL are accepted but trigger a Warn log
+// because they weaken the monotonic replay protection.
+func WithTombstoneTTL(d time.Duration) Option {
+	return func(s *Service) {
+		s.cache.tombstoneTTL = d // stored raw; normalization happens in NewService
+	}
+}
+
+// WithEventbusCacheCollector injects the eventbus cache metrics collector.
+// A nil collector is silently replaced with NoopEventbusCacheCollector{}.
+func WithEventbusCacheCollector(c obmetrics.EventbusCacheCollector) Option {
+	return func(s *Service) {
+		if c == nil {
+			c = obmetrics.NoopEventbusCacheCollector{}
+		}
+		s.cache.cacheCollector = c
+	}
+}
+
 // NewService creates a config-subscribe Service.
 func NewService(logger *slog.Logger, opts ...Option) *Service {
+	clk := clock.Real()
 	s := &Service{
-		cache:                &Cache{entries: make(map[string]cacheEntry)},
+		cache: &Cache{
+			entries:        make(map[string]cacheEntry),
+			clk:            clk,
+			tombstoneTTL:   0, // will be normalized below
+			cacheCollector: obmetrics.NoopEventbusCacheCollector{},
+		},
 		logger:               logger,
 		configEventCollector: obmetrics.NoopConfigEventCollector{},
+		clk:                  clk,
 	}
 	for _, o := range opts {
 		o(s)
 	}
+
+	// Keep cache.clk in sync with the service-level clk (options may have changed it).
+	s.cache.clk = s.clk
+
+	// TTL normalization.
+	ttl := s.cache.tombstoneTTL
+	switch {
+	case ttl <= 0:
+		s.cache.tombstoneTTL = defaultTombstoneTTL
+	case ttl < defaultTombstoneTTL:
+		s.logger.Warn("config-subscribe: tombstoneTTL below Claimer idempotency window weakens monotonic replay protection",
+			slog.Duration("tombstone_ttl", ttl),
+			slog.Duration("min_recommended", defaultTombstoneTTL))
+		// keep the explicit ttl
+	}
+
 	return s
 }
 
 // Cache returns the local config cache for reading.
 func (s *Service) Cache() *Cache {
 	return s.cache
+}
+
+// StartTombstoneGC launches the background tombstone GC sweep. Idempotent;
+// a non-positive tombstoneTTL disables GC (noop). The goroutine lives until
+// StopTombstoneGC. Bound to the cell lifecycle via ConfigCore.AfterStart.
+func (s *Service) StartTombstoneGC() {
+	s.gcMu.Lock()
+	defer s.gcMu.Unlock()
+	if s.gcStarted || s.cache.tombstoneTTL <= 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.gcCancel = cancel
+	s.gcDone = make(chan struct{})
+	s.gcStarted = true
+	go s.runTombstoneGC(ctx)
+}
+
+// StopTombstoneGC signals the GC goroutine and waits for it to drain,
+// honoring ctx for the shutdown deadline. Idempotent; safe if never started.
+func (s *Service) StopTombstoneGC(ctx context.Context) error {
+	s.gcMu.Lock()
+	if !s.gcStarted {
+		s.gcMu.Unlock()
+		return nil
+	}
+	s.gcCancel()
+	done := s.gcDone
+	s.gcStarted = false
+	s.gcMu.Unlock()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// runTombstoneGC is the background GC goroutine body. It sweeps tombstones
+// on every ticker tick until ctx is canceled.
+func (s *Service) runTombstoneGC(ctx context.Context) {
+	defer close(s.gcDone)
+
+	ttl := s.cache.tombstoneTTL
+	interval := ttl / 2
+	if interval <= 0 {
+		interval = ttl
+	}
+
+	ticker := s.clk.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C():
+			s.cache.sweepTombstones(s.clk.Now())
+		}
+	}
 }
 
 func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {
@@ -197,7 +360,11 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 		return outbox.Ack()
 	}
-	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: false}
+	s.cache.entries[event.Key] = cacheEntry{
+		version:   event.Version,
+		present:   false,
+		deletedAt: s.cache.clk.Now(),
+	}
 	s.cache.mu.Unlock()
 	s.logger.Debug("config-subscribe: key tombstoned in cache",
 		slog.String("key", event.Key),

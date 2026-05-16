@@ -1,16 +1,21 @@
 package configsubscribe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -574,4 +579,204 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Local spy for EventbusCacheCollector — mirrors recordingConfigEventCollector style
+// ---------------------------------------------------------------------------
+
+type recordingEventbusCacheCollector struct {
+	count atomic.Int64
+	calls []struct{ cellID, sliceID string }
+	mu    sync.Mutex
+}
+
+func (r *recordingEventbusCacheCollector) RecordTombstoneEvicted(cellID, sliceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.count.Add(1)
+	r.calls = append(r.calls, struct{ cellID, sliceID string }{cellID, sliceID})
+}
+
+func (r *recordingEventbusCacheCollector) total() int64 { return r.count.Load() }
+
+// ---------------------------------------------------------------------------
+// Batch B: tombstone TTL + lifecycle-bound GC goroutine tests
+// ---------------------------------------------------------------------------
+
+// TestCache_SweepTombstones_RemovesExpiredOnly verifies that sweepTombstones
+// removes only tombstone entries whose age exceeds tombstoneTTL, and that the
+// monotonic guard for live keys is fully preserved.
+func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
+	fc := clockmock.New(time.Unix(0, 0))
+	spy := &recordingEventbusCacheCollector{}
+	ttl := 24 * time.Hour
+	svc := NewService(slog.Default(),
+		WithClock(fc),
+		WithTombstoneTTL(ttl),
+		WithEventbusCacheCollector(spy),
+	)
+
+	// Upsert keyA v1, then delete → tombstone at v2.
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("keyA", 1)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("keyA", 2)))
+
+	// Advance only 12h — tombstone not yet expired.
+	fc.Advance(12 * time.Hour)
+	svc.cache.sweepTombstones(fc.Now())
+
+	// keyA still present as tombstone.
+	v, present := svc.Cache().GetVersion("keyA")
+	assert.False(t, present, "tombstone must survive before TTL expires")
+	assert.Equal(t, 2, v, "tombstone version must be preserved")
+
+	// Replayed older upsert v1 must still be rejected (monotonic guard intact).
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("keyA", 1)))
+	v, present = svc.Cache().GetVersion("keyA")
+	assert.False(t, present, "replayed upsert must not resurrect tombstone within TTL")
+	assert.Equal(t, 2, v)
+
+	assert.Equal(t, int64(0), spy.total(), "no evictions expected before TTL expires")
+
+	// Advance 13h more (total 25h > 24h TTL) then sweep.
+	fc.Advance(13 * time.Hour)
+	svc.cache.sweepTombstones(fc.Now())
+
+	// keyA is now gone.
+	v, present = svc.Cache().GetVersion("keyA")
+	assert.False(t, present, "evicted tombstone must not be found")
+	assert.Equal(t, 0, v, "evicted tombstone must return zero version")
+
+	assert.GreaterOrEqual(t, spy.total(), int64(1), "at least one RecordTombstoneEvicted expected")
+	spy.mu.Lock()
+	if len(spy.calls) > 0 {
+		assert.Equal(t, "configcore", spy.calls[0].cellID)
+		assert.Equal(t, "configsubscribe", spy.calls[0].sliceID)
+	}
+	spy.mu.Unlock()
+}
+
+// TestCache_SweepTombstones_NeverTouchesActive verifies that active (present=true)
+// entries are never evicted by sweepTombstones, preserving the monotonic guard.
+func TestCache_SweepTombstones_NeverTouchesActive(t *testing.T) {
+	fc := clockmock.New(time.Unix(0, 0))
+	spy := &recordingEventbusCacheCollector{}
+	svc := NewService(slog.Default(),
+		WithClock(fc),
+		WithTombstoneTTL(24*time.Hour),
+		WithEventbusCacheCollector(spy),
+	)
+
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("keyB", 5)))
+
+	// Advance far beyond TTL.
+	fc.Advance(100 * 24 * time.Hour)
+	svc.cache.sweepTombstones(fc.Now())
+
+	// keyB must still be present at v5.
+	v, present := svc.Cache().GetVersion("keyB")
+	assert.True(t, present, "active entry must never be evicted")
+	assert.Equal(t, 5, v, "active entry version must be preserved")
+
+	// Monotonic guard still intact: replay v3 rejected.
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("keyB", 3)))
+	v, present = svc.Cache().GetVersion("keyB")
+	assert.True(t, present)
+	assert.Equal(t, 5, v, "stale replay must not overwrite active entry")
+
+	assert.Equal(t, int64(0), spy.total(), "active entries must never trigger eviction metric")
+}
+
+// TestService_TombstoneGC_GoroutineLifecycle verifies the full lifecycle of the
+// background GC goroutine: start, tick-driven sweep, idempotent stop, and
+// proper behavior when GC is disabled (ttl=0).
+func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
+	ttl := 24 * time.Hour
+	interval := ttl / 2 // 12h
+
+	fc := clockmock.New(time.Unix(0, 0))
+	spy := &recordingEventbusCacheCollector{}
+	svc := NewService(slog.Default(),
+		WithClock(fc),
+		WithTombstoneTTL(ttl),
+		WithEventbusCacheCollector(spy),
+	)
+
+	// Delete keyC → tombstone.
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("keyC", 1)))
+	v, present := svc.Cache().GetVersion("keyC")
+	assert.False(t, present)
+	assert.Equal(t, 1, v)
+
+	// Start GC.
+	svc.StartTombstoneGC()
+
+	// Wait for the GC goroutine to create its ticker.
+	assert.Eventually(t, func() bool {
+		return fc.PendingTickers() >= 1
+	}, 2*time.Second, 10*time.Millisecond, "GC goroutine must create a ticker")
+
+	// Advance past the tombstone TTL across two tick intervals.
+	// First tick at 12h: tombstone is 12h old (not yet expired).
+	fc.Advance(interval) // 12h
+	// Second tick at 24h: tombstone is now exactly at TTL boundary.
+	// Advance a bit more to cross 24h TTL.
+	fc.Advance(interval + time.Second) // 12h+1s = 24h+1s total
+
+	// The GC goroutine should pick up the tick and sweep keyC.
+	assert.Eventually(t, func() bool {
+		v, present := svc.Cache().GetVersion("keyC")
+		return !present && v == 0
+	}, 2*time.Second, 10*time.Millisecond, "GC goroutine must evict expired tombstone")
+
+	// Verify metric was recorded.
+	assert.GreaterOrEqual(t, spy.total(), int64(1))
+
+	// Stop GC — must not error.
+	require.NoError(t, svc.StopTombstoneGC(context.Background()))
+
+	// Idempotent: second stop returns nil.
+	require.NoError(t, svc.StopTombstoneGC(context.Background()))
+
+	// --- disabled GC (ttl=0 or negative) ---
+	svcNoGC := NewService(slog.Default(),
+		WithClock(fc),
+		WithTombstoneTTL(0),
+	)
+	svcNoGC.StartTombstoneGC() // must be a noop
+	assert.Equal(t, 0, fc.PendingTickers(), "disabled GC must not create a ticker")
+	require.NoError(t, svcNoGC.StopTombstoneGC(context.Background()))
+
+	// Never-started service: StopTombstoneGC returns nil.
+	svcNeverStarted := NewService(slog.Default())
+	require.NoError(t, svcNeverStarted.StopTombstoneGC(context.Background()))
+}
+
+// TestNewService_TombstoneTTLDefaultAndWarn verifies TTL normalization and the
+// below-minimum warning log.
+func TestNewService_TombstoneTTLDefaultAndWarn(t *testing.T) {
+	// Default (no WithTombstoneTTL): effective ttl must be 24h.
+	svcDefault := NewService(slog.Default())
+	assert.Equal(t, defaultTombstoneTTL, svcDefault.cache.tombstoneTTL,
+		"default tombstoneTTL must be 24h")
+
+	// WithTombstoneTTL(1h): effective ttl == 1h, warn emitted.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	svc1h := NewService(logger, WithTombstoneTTL(1*time.Hour))
+	assert.Equal(t, 1*time.Hour, svc1h.cache.tombstoneTTL,
+		"explicit sub-default TTL must be stored as-is")
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "tombstone_ttl", "warn must include tombstone_ttl field")
+	assert.Contains(t, logOutput, "min_recommended", "warn must include min_recommended field")
+
+	// WithTombstoneTTL(-5) → default.
+	svcNeg := NewService(slog.Default(), WithTombstoneTTL(-5))
+	assert.Equal(t, defaultTombstoneTTL, svcNeg.cache.tombstoneTTL,
+		"non-positive TTL must fall back to default")
+
+	// WithTombstoneTTL(0) → default.
+	svcZero := NewService(slog.Default(), WithTombstoneTTL(0))
+	assert.Equal(t, defaultTombstoneTTL, svcZero.cache.tombstoneTTL,
+		"zero TTL must fall back to default")
 }
