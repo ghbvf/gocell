@@ -1314,8 +1314,8 @@ func _(file *ast.File, other []ast.Decl) {
 // INVARIANT: SCANNER-FRAMEWORK-USAGE-02
 //
 // archtest *_test.go files at tools/archtest/<file>_test.go must not hand-roll
-// the closure+done/found sentinel idiom over scanner.EachInChildren to fake
-// find-first-and-stop:
+// the closure+done/found sentinel idiom over scanner.EachInChildren or its
+// 040 façade archtest.EachInChildren to fake find-first-and-stop:
 //
 //	found := false
 //	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
@@ -1323,11 +1323,18 @@ func _(file *ast.File, other []ast.Decl) {
 //		if match(kv) { found = true }  // ← same bool set to literal true
 //	})
 //
-// Use the typed funnel scanner.FindFirstChild[N] instead — the early-return
-// is implicit, there is no caller-held flag, and the wrong N is a compile
-// error. allowlist = 0: the migration is 100% complete, so the live scan
-// over the whole archtest tree must return zero diagnostics; this is
-// self-consistent with the migration (rule GREEN ⟺ all sites migrated).
+// Use the typed funnel scanner.FindFirstChild[N] (or its façade
+// archtest.FindFirstChild[N]) instead — the early-return is implicit, there
+// is no caller-held flag, and the wrong N is a compile error. allowlist = 0:
+// the migration is 100% complete, so the live scan over the whole archtest
+// tree must return zero diagnostics; this is self-consistent with the
+// migration (rule GREEN ⟺ all sites migrated).
+//
+// Callee-identity recognition (single Hard path): isMonitoredEachInChildren
+// uses typeseval.ResolvePackageRef to resolve sel.Sel to its declaring package.
+// The target set is {scannerPkgPath, archtestPkgPath}; both names are
+// equivalent depth-1 walkers (archtest.EachInChildren is a thin façade around
+// scanner.EachInChildren) and equally forbid the sentinel idiom.
 //
 // AI-rebust 双向锁评级:
 //
@@ -1343,10 +1350,18 @@ func _(file *ast.File, other []ast.Decl) {
 //	  reachable). FINDFIRSTINSUBTREE-API-01 is an orthogonal coverage axis
 //	  (subtree find-first), not this funnel's hardening path — do not
 //	  conflate.
+//	Fixture-live anti-drift (Hard, 040 Stage 1.8): both
+//	  TestScannerFrameworkUsage02 (live) and TestScannerFrameworkUsage02_Fixture
+//	  (typed fixtures under tools/archtest/internal/usage02fixtures/) load
+//	  source through the same typeseval.SharedResolver typed pipeline and
+//	  invoke the same forbiddenClosureDoneSentinel pure detector with the
+//	  same *types.Info — there is no syntactic fallback (the PR-505
+//	  scannerLocalName + id-name fixture branch has been removed). A
+//	  typeseval miss is a fixture bug, not a callee-identity ambiguity.
 //
 // Tool blind spots (godoc-declared scope of the chosen AST tooling —
-// scanner.EachInSubtree[ast.CallExpr/IfStmt/AssignStmt/Ident] + syntactic
-// scanner.EachInChildren callee match). Each has a reverse self-test in
+// scanner.EachInSubtree[ast.CallExpr/IfStmt/AssignStmt/Ident] + typed
+// callee resolution). Each has a reverse self-test in
 // TestScannerFrameworkUsage02_BlindSpotReverse asserting it does NOT occur
 // in production AST:
 //
@@ -1368,15 +1383,6 @@ func _(file *ast.File, other []ast.Decl) {
 //	     in production; TestScannerFrameworkUsage02_BlindSpotForwardFixtures
 //	     documents that the MAIN detector (forbiddenClosureDoneSentinel) by
 //	     design returns 0 hits for the BS3 shape.
-//
-// Fixture vs live callee resolution: the live scan resolves the
-// scanner.EachInChildren callee through typeseval (alias-robust); the
-// string fixtures (TestScannerFrameworkUsage02_Fixture) and the few non-
-// stdlib-resolvable cases fall back to a syntactic `<ident>.EachInChildren`
-// match where <ident> is the local name bound to scannerPkgPath (default
-// "scanner"). Both paths call the same forbiddenClosureDoneSentinel pure
-// function, so fixture and live cannot drift (same anti-drift contract as
-// USAGE-01 / runFixture).
 func TestScannerFrameworkUsage02(t *testing.T) {
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
@@ -1407,24 +1413,6 @@ func TestScannerFrameworkUsage02(t *testing.T) {
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
 }
 
-// scannerLocalName returns the local identifier bound to scannerPkgPath in
-// file (handles named/aliased imports), defaulting to "scanner".
-func scannerLocalName(file *ast.File) string {
-	for _, imp := range file.Imports {
-		if imp == nil || imp.Path == nil {
-			continue
-		}
-		if imp.Path.Value != strconv.Quote(scannerPkgPath) {
-			continue
-		}
-		if imp.Name != nil && imp.Name.Name != "" && imp.Name.Name != "_" {
-			return imp.Name.Name
-		}
-		return "scanner"
-	}
-	return "scanner"
-}
-
 // eachInChildrenCalleeSel returns the SelectorExpr `<pkg>.EachInChildren`
 // from a generic call's Fun (IndexExpr / IndexListExpr base), or nil.
 func eachInChildrenCalleeSel(call *ast.CallExpr) *ast.SelectorExpr {
@@ -1442,15 +1430,23 @@ func eachInChildrenCalleeSel(call *ast.CallExpr) *ast.SelectorExpr {
 	return sel
 }
 
-// isScannerEachInChildren reports whether sel resolves to
-// scannerPkgPath.EachInChildren. Live path: typeseval (alias-robust). Fixture
-// fallback: syntactic <scannerLocalName>.EachInChildren.
-func isScannerEachInChildren(info *types.Info, file *ast.File, sel *ast.SelectorExpr) bool {
-	if path, name, ok := typeseval.ResolvePackageRef(info, sel); ok {
-		return path == scannerPkgPath && name == "EachInChildren"
+// isMonitoredEachInChildren reports whether sel resolves to either
+// scannerPkgPath.EachInChildren (legacy direct call) or
+// archtestPkgPath.EachInChildren (040 façade end-state, thin wrapper
+// around scanner.EachInChildren). Both forms are equivalent depth-1
+// walkers and equally forbid the closure+done sentinel idiom.
+//
+// Single Hard path: typeseval.ResolvePackageRef. There is no syntactic
+// fallback — fixture and live scan share the same typed pipeline
+// (TestScannerFrameworkUsage02_Fixture loads fixtures via
+// typeseval.SharedResolver), so a typeseval miss is a fixture or
+// detector bug, not a callee-identity ambiguity to paper over.
+func isMonitoredEachInChildren(info *types.Info, sel *ast.SelectorExpr) bool {
+	path, name, ok := typeseval.ResolvePackageRef(info, sel)
+	if !ok || name != "EachInChildren" {
+		return false
 	}
-	id, ok := sel.X.(*ast.Ident)
-	return ok && id.Name == scannerLocalName(file)
+	return path == scannerPkgPath || path == archtestPkgPath
 }
 
 // ifBodyHasDirectReturn reports whether ifStmt.Body has a ReturnStmt as a
@@ -1477,14 +1473,15 @@ func condIdentNames(cond ast.Expr) map[string]bool {
 	return names
 }
 
-// forbiddenClosureDoneSentinel flags scanner.EachInChildren callbacks whose
-// body contains BOTH (a) an early-return guard `if <sentinel> ... { return }`
-// and (b) `<sentinel> = true`, i.e. the hand-rolled find-first sentinel.
+// forbiddenClosureDoneSentinel flags scanner.EachInChildren or
+// archtest.EachInChildren callbacks whose body contains BOTH (a) an
+// early-return guard `if <sentinel> ... { return }` and (b)
+// `<sentinel> = true`, i.e. the hand-rolled find-first sentinel.
 func forbiddenClosureDoneSentinel(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var out []scanner.Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel := eachInChildrenCalleeSel(call)
-		if sel == nil || !isScannerEachInChildren(info, file, sel) {
+		if sel == nil || !isMonitoredEachInChildren(info, sel) {
 			return
 		}
 		// The callback is the sole FuncLit direct child of the call (depth-1);
@@ -1531,10 +1528,11 @@ func forbiddenClosureDoneSentinel(info *types.Info, fset *token.FileSet, file *a
 			out = append(out, scanner.Diagnostic{
 				Rel:  rel,
 				Line: fset.Position(call.Pos()).Line,
-				Message: "closure+done/found sentinel over scanner.EachInChildren " +
-					"is forbidden (SCANNER-FRAMEWORK-USAGE-02): use the typed " +
-					"funnel scanner.FindFirstChild[N](root, predicate) instead — " +
-					"the early-return is implicit and there is no caller-held flag",
+				Message: "closure+done/found sentinel over scanner.EachInChildren or " +
+					"archtest.EachInChildren is forbidden (SCANNER-FRAMEWORK-USAGE-02): " +
+					"use the typed funnel scanner.FindFirstChild[N] / " +
+					"archtest.FindFirstChild[N](root, predicate) instead — the " +
+					"early-return is implicit and there is no caller-held flag",
 			})
 		}
 	})
@@ -1619,7 +1617,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 	var out []scanner.Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel := eachInChildrenCalleeSel(call)
-		if sel == nil || !isScannerEachInChildren(info, file, sel) {
+		if sel == nil || !isMonitoredEachInChildren(info, sel) {
 			return
 		}
 		// The callback is the sole FuncLit direct child of the call (depth-1);
@@ -1755,7 +1753,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 								Message: "BS3 blind-spot shape (guard ident \"" + name + "\" is used " +
 									"as if-return guard inside callback but `= true` is outside " +
 									"the callback — non-functional find-first, scoping limitation) " +
-									"in scanner.EachInChildren callback",
+									"in scanner/archtest.EachInChildren callback",
 							})
 						}
 					})
@@ -1774,7 +1772,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 							out = append(out, scanner.Diagnostic{
 								Rel: rel, Line: fset.Position(ifStmt.Pos()).Line,
 								Message: "BS2 blind-spot shape (else-branch return " +
-									"guard on a false-init sentinel) in scanner.EachInChildren callback",
+									"guard on a false-init sentinel) in scanner/archtest.EachInChildren callback",
 							})
 						}
 					}
@@ -1791,7 +1789,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 					out = append(out, scanner.Diagnostic{
 						Rel: rel, Line: fset.Position(ifStmt.Pos()).Line,
 						Message: "BS1 blind-spot shape (false-init sentinel set via " +
-							"non-true-literal RHS) in scanner.EachInChildren callback",
+							"non-true-literal RHS) in scanner/archtest.EachInChildren callback",
 					})
 				}
 			}
