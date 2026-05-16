@@ -227,7 +227,10 @@ func TestNewPool_ConnectTimeout_Blackhole(t *testing.T) {
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec), "blackhole error must be structured errcode: %v", err)
-	assert.Equal(t, ErrAdapterPGConnect, ec.Code)
+	assert.Equal(t, ErrAdapterPGConnectTimeout, ec.Code,
+		"blackhole dial must carry distinct timeout code, not the generic connect code")
+	assert.True(t, errcode.IsTransient(err),
+		"blackhole dial timeout must classify as transient (consumer Requeue path)")
 	assert.Less(t, elapsed, poolTestConnectAssertCap,
 		"NewPool must respect ConnectTimeout=200ms; elapsed=%v (would otherwise hang ~2 min on pgxpool fallback)",
 		elapsed)

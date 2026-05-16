@@ -55,11 +55,10 @@ func TestNewConnection_ConnectTimeout_Blackhole(t *testing.T) {
 
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr), "error must wrap *errcode.Error, got %T: %v", err, err)
-	// Either ErrAdapterAMQPConnect (transient classification) or ErrAdapterAMQPConnectPermanent
-	// is acceptable — but timeout from blackhole is transient by amqp091 classification.
-	assert.True(t,
-		ecErr.Code == ErrAdapterAMQPConnect || ecErr.Code == ErrAdapterAMQPConnectPermanent,
-		"expected AMQP connect errcode, got %s", ecErr.Code)
+	assert.Equal(t, ErrAdapterAMQPConnectTimeout, ecErr.Code,
+		"blackhole dial must carry distinct timeout code, not the generic connect code")
+	assert.True(t, errcode.IsTransient(err),
+		"blackhole dial timeout must classify as transient (consumer Requeue path)")
 
 	// The underlying cause must surface a net.Error with Timeout()=true,
 	// proving amqp.DefaultDial(timeout) actually fired (not OS default).

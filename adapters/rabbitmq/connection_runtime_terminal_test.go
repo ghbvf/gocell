@@ -19,6 +19,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
+// timeoutErr is a minimal net.Error stub whose Timeout() reports true. Used
+// to simulate amqp091's *net.OpError whose inner Err is a timeout signal
+// (the shape produced by net.DialTimeout against an unreachable host).
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
 // =============================================================================
 // classifyDialError — unit-level table for the runtime classifier.
 // Single source of truth for which dial errors map to which class. Higher-level
@@ -37,47 +46,47 @@ func TestClassifyDialError(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
-		want permanentDialClass
+		want dialClass
 	}{
 		// nil / unknown
-		{"nil", nil, permanentClassNone},
-		{"unknown plain error", errors.New("anything else"), permanentClassNone},
+		{"nil", nil, dialClassUnknown},
+		{"unknown plain error", errors.New("anything else"), dialClassUnknown},
 
 		// Inferred sentinels — amqp091-go infers these from socket close.
 		// A single hit must NOT promote (transient handshake fault could
 		// produce the same observation); the reconnect loop confirms via
 		// runtimePermanentConfirmHits.
-		{"ErrCredentials sentinel (P0 path)", amqp.ErrCredentials, permanentClassInferred},
-		{"ErrVhost sentinel", amqp.ErrVhost, permanentClassInferred},
-		{"wrapped ErrCredentials", fmt.Errorf("dial tune: %w", amqp.ErrCredentials), permanentClassInferred},
+		{"ErrCredentials sentinel (P0 path)", amqp.ErrCredentials, dialClassPermanentInferred},
+		{"ErrVhost sentinel", amqp.ErrVhost, dialClassPermanentInferred},
+		{"wrapped ErrCredentials", fmt.Errorf("dial tune: %w", amqp.ErrCredentials), dialClassPermanentInferred},
 
 		// Definitive sentinels — amqp091-go protocol/library hard errors.
-		{"ErrSASL sentinel", amqp.ErrSASL, permanentClassDefinitive},
-		{"ErrSyntax sentinel", amqp.ErrSyntax, permanentClassDefinitive},
-		{"ErrFrame sentinel", amqp.ErrFrame, permanentClassDefinitive},
-		{"ErrCommandInvalid sentinel", amqp.ErrCommandInvalid, permanentClassDefinitive},
-		{"ErrUnexpectedFrame sentinel", amqp.ErrUnexpectedFrame, permanentClassDefinitive},
+		{"ErrSASL sentinel", amqp.ErrSASL, dialClassPermanentDefinitive},
+		{"ErrSyntax sentinel", amqp.ErrSyntax, dialClassPermanentDefinitive},
+		{"ErrFrame sentinel", amqp.ErrFrame, dialClassPermanentDefinitive},
+		{"ErrCommandInvalid sentinel", amqp.ErrCommandInvalid, dialClassPermanentDefinitive},
+		{"ErrUnexpectedFrame sentinel", amqp.ErrUnexpectedFrame, dialClassPermanentDefinitive},
 
 		// Broker-emitted *amqp.Error frames (Server=true && !Recover).
 		{
 			"AMQP 403 ACCESS_REFUSED Server=true Recover=false",
 			&amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false},
-			permanentClassDefinitive,
+			dialClassPermanentDefinitive,
 		},
 		{
 			"AMQP 404 NOT_FOUND Server=true Recover=false",
 			&amqp.Error{Code: 404, Reason: "NOT_FOUND", Server: true, Recover: false},
-			permanentClassDefinitive,
+			dialClassPermanentDefinitive,
 		},
 		{
 			"AMQP 530 NOT_ALLOWED Server=true Recover=false",
 			&amqp.Error{Code: 530, Reason: "NOT_ALLOWED", Server: true, Recover: false},
-			permanentClassDefinitive,
+			dialClassPermanentDefinitive,
 		},
 		{
 			"wrapped broker AMQP 403",
 			fmt.Errorf("dial: %w", &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}),
-			permanentClassDefinitive,
+			dialClassPermanentDefinitive,
 		},
 
 		// Server=false *amqp.Error — amqp091-go local synthesis (transport fault).
@@ -85,33 +94,43 @@ func TestClassifyDialError(t *testing.T) {
 		{
 			"AMQP 501 Server=false Recover=false (mid-handshake reset)",
 			&amqp.Error{Code: 501, Reason: "read: connection reset by peer", Server: false, Recover: false},
-			permanentClassNone,
+			dialClassUnknown,
 		},
 		{
 			"AMQP 501 Server=true Recover=true (recoverable broker)",
 			&amqp.Error{Code: 501, Reason: "FRAME_ERROR", Server: true, Recover: true},
-			permanentClassNone,
+			dialClassUnknown,
 		},
 		{
 			"AMQP 320 CONNECTION_FORCED Server=true Recover=true",
 			&amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Server: true, Recover: true},
-			permanentClassNone,
+			dialClassUnknown,
 		},
 
 		// URI parse failures (real amqp.ParseURI products).
-		{"amqp.ParseURI rejects ftp:// scheme", malformedSchemeErr, permanentClassDefinitive},
-		{"amqp.ParseURI rejects non-numeric port", missingPortErr, permanentClassDefinitive},
+		{"amqp.ParseURI rejects ftp:// scheme", malformedSchemeErr, dialClassPermanentDefinitive},
+		{"amqp.ParseURI rejects non-numeric port", missingPortErr, dialClassPermanentDefinitive},
 
 		// Network-level errors → recoverable.
 		{
 			"net.OpError connection refused",
 			&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
-			permanentClassNone,
+			dialClassUnknown,
+		},
+
+		// Network-level timeout (net.Error.Timeout() == true) → transient timeout.
+		// The mock surfaces an *net.OpError whose inner error implements
+		// net.Error.Timeout() == true (matching amqp091.DefaultDial behavior
+		// against an unreachable host).
+		{
+			"net.OpError timeout (blackhole dial)",
+			&net.OpError{Op: "dial", Net: "tcp", Err: timeoutErr{}},
+			dialClassTimeout,
 		},
 
 		// String-fallback (TLS/x509 plain errors with no typed shape).
-		{"x509 certificate error", errors.New("x509: certificate signed by unknown authority"), permanentClassDefinitive},
-		{"TLS handshake error", errors.New("tls: handshake failure"), permanentClassDefinitive},
+		{"x509 certificate error", errors.New("x509: certificate signed by unknown authority"), dialClassPermanentDefinitive},
+		{"TLS handshake error", errors.New("tls: handshake failure"), dialClassPermanentDefinitive},
 	}
 
 	for _, tt := range tests {

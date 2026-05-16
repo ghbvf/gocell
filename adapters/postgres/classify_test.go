@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -10,6 +11,18 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// pgTimeoutErr is a net.Error stub whose Timeout()=true; used to exercise the
+// classifyPGError net.Error.Timeout() branch (pgxpool surfaces *net.OpError
+// for dial-level timeouts when ConnectTimeout fires).
+type pgTimeoutErr struct{}
+
+func (pgTimeoutErr) Error() string   { return "i/o timeout" }
+func (pgTimeoutErr) Timeout() bool   { return true }
+func (pgTimeoutErr) Temporary() bool { return true }
+
+// compile-time assertion: pgTimeoutErr implements net.Error.
+var _ net.Error = pgTimeoutErr{}
 
 // safeToRetryErr mimics pgx's connect/exec wrapper: pgconn.SafeToRetry
 // recognizes any error whose chain implements SafeToRetry() bool == true.
@@ -112,65 +125,83 @@ func TestIsRetryablePGError(t *testing.T) {
 
 // TestClassifyPGError verifies that classifyPGError routes transient errors
 // through errcode.WrapInfra (IsTransient == true) and permanent errors through
-// errcode.Wrap (IsTransient == false).
+// errcode.Wrap (IsTransient == false). Timeout-class errors carry the distinct
+// ErrAdapterPGConnectTimeout code (Wave-4-B ADAPTER-CONNECT-BUDGET-01).
 func TestClassifyPGError(t *testing.T) {
-	const opCode = errcode.Code("ERR_ADAPTER_PG_QUERY")
+	const opCode = ErrAdapterPGConnect
 	const opMsg = "op"
 
 	tests := []struct {
 		name          string
 		err           error
 		wantTransient bool
+		wantCode      errcode.Code
 	}{
 		{
 			name:          "serialization_failure 40001 → transient",
 			err:           &pgconn.PgError{Code: "40001"},
 			wantTransient: true,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
 			name:          "deadlock_detected 40P01 → transient",
 			err:           &pgconn.PgError{Code: "40P01"},
 			wantTransient: true,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
 			name:          "connection_failure 08006 → transient",
 			err:           &pgconn.PgError{Code: "08006"},
 			wantTransient: true,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
 			name:          "connection_does_not_exist 08003 → transient",
 			err:           &pgconn.PgError{Code: "08003"},
 			wantTransient: true,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
 			name:          "unique_violation 23505 → permanent",
 			err:           &pgconn.PgError{Code: "23505"},
 			wantTransient: false,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
 			name:          "invalid_password 28P01 → permanent",
 			err:           &pgconn.PgError{Code: "28P01"},
 			wantTransient: false,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
 			name:          "invalid_catalog_name 3D000 → permanent",
 			err:           &pgconn.PgError{Code: "3D000"},
 			wantTransient: false,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
-			name:          "context.DeadlineExceeded → transient",
+			name:          "context.DeadlineExceeded → transient ConnectTimeout code",
 			err:           context.DeadlineExceeded,
 			wantTransient: true,
+			wantCode:      ErrAdapterPGConnectTimeout,
+		},
+		{
+			name:          "net.Error Timeout()=true → transient ConnectTimeout code",
+			err:           pgTimeoutErr{},
+			wantTransient: true,
+			wantCode:      ErrAdapterPGConnectTimeout,
 		},
 		{
 			name:          "context.Canceled → permanent",
 			err:           context.Canceled,
 			wantTransient: false,
+			wantCode:      ErrAdapterPGConnect,
 		},
 		{
 			name:          "plain error → permanent",
 			err:           errors.New("unknown error"),
 			wantTransient: false,
+			wantCode:      ErrAdapterPGConnect,
 		},
 	}
 
@@ -179,6 +210,11 @@ func TestClassifyPGError(t *testing.T) {
 			got := classifyPGError(tt.err, opCode, opMsg)
 			assert.Equal(t, tt.wantTransient, errcode.IsTransient(got),
 				"IsTransient mismatch for %q", tt.name)
+			var ec *errcode.Error
+			require := assert.New(t)
+			require.ErrorAs(got, &ec, "classify result must be *errcode.Error")
+			assert.Equal(t, tt.wantCode, ec.Code,
+				"code mismatch for %q", tt.name)
 		})
 	}
 }

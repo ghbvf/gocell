@@ -169,18 +169,23 @@ var inferredPermanentSentinels = []error{
 	amqp.ErrVhost,       // openVhost L1096 — vhost denied (or socket dropped)
 }
 
-// permanentDialClass categorizes a dial error for runtime classification:
-//   - permanentClassNone       — recoverable / unknown (retry)
-//   - permanentClassDefinitive — single-hit promote (broker frame, SASL,
-//     hard protocol, URI parse, TLS / x509)
-//   - permanentClassInferred   — amqp091-go-inferred from socket close;
-//     promote only after runtimePermanentConfirmHits consecutive hits
-type permanentDialClass int
+// dialClass categorizes a dial error so callers can choose the right errcode
+// envelope. Naming follows transient-vs-permanent semantics directly (no
+// "permanent" misnomer for the timeout value):
+//   - dialClassUnknown             — unmatched permanent sentinel, treated as
+//     transient (fail-open: retry).
+//   - dialClassPermanentDefinitive — single-hit permanent (broker frame, SASL,
+//     hard protocol, URI parse, TLS / x509).
+//   - dialClassPermanentInferred   — amqp091-go-inferred from socket close;
+//     promote only after runtimePermanentConfirmHits consecutive hits.
+//   - dialClassTimeout             — network-level timeout (transient).
+type dialClass int
 
 const (
-	permanentClassNone permanentDialClass = iota
-	permanentClassDefinitive
-	permanentClassInferred
+	dialClassUnknown dialClass = iota
+	dialClassPermanentDefinitive
+	dialClassPermanentInferred
+	dialClassTimeout
 )
 
 // classifyDialError categorizes a dial error.
@@ -200,23 +205,23 @@ const (
 //  6. String keyword fallback (TLS / x509 / amqp091-go pre-handshake plain
 //     errors) → definitive.
 //  7. Default → none.
-func classifyDialError(err error) permanentDialClass {
+func classifyDialError(err error) dialClass {
 	if err == nil {
-		return permanentClassNone
+		return dialClassUnknown
 	}
 	if matchesAnySentinel(err, inferredPermanentSentinels) {
-		return permanentClassInferred
+		return dialClassPermanentInferred
 	}
 	if matchesAnySentinel(err, definitivePermanentSentinels) {
-		return permanentClassDefinitive
+		return dialClassPermanentDefinitive
 	}
 	if c, ok := classifyStructuredDialError(err); ok {
 		return c
 	}
 	if matchesPermanentSubstring(err.Error()) {
-		return permanentClassDefinitive
+		return dialClassPermanentDefinitive
 	}
-	return permanentClassNone
+	return dialClassUnknown
 }
 
 // matchesAnySentinel reports whether err wraps any sentinel in the list.
@@ -236,23 +241,23 @@ func matchesAnySentinel(err error, sentinels []error) bool {
 // *url.Error must be tried before net.Error: *url.Error satisfies net.Error
 // via embedded Timeout/Temporary forwarders, so net.Error-first would silently
 // classify URI parse failures as recoverable.
-func classifyStructuredDialError(err error) (permanentDialClass, bool) {
+func classifyStructuredDialError(err error) (dialClass, bool) {
 	var amqpErr *amqp.Error
 	if errors.As(err, &amqpErr) {
 		if amqpErr.Server && !amqpErr.Recover {
-			return permanentClassDefinitive, true
+			return dialClassPermanentDefinitive, true
 		}
-		return permanentClassNone, true
+		return dialClassUnknown, true
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return permanentClassDefinitive, true
+		return dialClassPermanentDefinitive, true
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return permanentClassNone, true
+		return dialClassUnknown, true
 	}
-	return permanentClassNone, false
+	return dialClassUnknown, false
 }
 
 // matchesPermanentSubstring is the last-resort string-keyword fallback for
@@ -271,7 +276,8 @@ func matchesPermanentSubstring(msg string) bool {
 // a convenience for NewConnection (startup-time fail-fast where the inferred
 // vs definitive distinction does not matter — a single hit always aborts).
 func isPermanentDialError(err error) bool {
-	return classifyDialError(err) != permanentClassNone
+	class := classifyDialError(err)
+	return class == dialClassPermanentDefinitive || class == dialClassPermanentInferred
 }
 
 // permanentDialSubstrings are substrings in amqp091-go plain-error messages
@@ -723,13 +729,13 @@ func (c *Connection) reconnectWithBackoff() bool {
 			class := classifyDialError(unwrapDialErr(err))
 
 			switch class {
-			case permanentClassDefinitive:
+			case dialClassPermanentDefinitive:
 				c.markPermanent(err, sanitizedErr)
 				slog.Error("rabbitmq: reconnect dial classified permanent (definitive); /readyz will return 503 until recovery",
 					slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
 					slog.Int("attempt", attempt+1),
 					slog.String("error", sanitizedErr))
-			case permanentClassInferred:
+			case dialClassPermanentInferred:
 				c.mu.Lock()
 				c.pendingPermanentHits++
 				hits := c.pendingPermanentHits
@@ -749,7 +755,7 @@ func (c *Connection) reconnectWithBackoff() bool {
 						slog.Int("confirmThreshold", runtimePermanentConfirmHits),
 						slog.String("error", sanitizedErr))
 				}
-			default: // permanentClassNone
+			default: // dialClassUnknown / dialClassTimeout — transient retries
 				c.mu.Lock()
 				c.lastError = sanitizedErr
 				c.pendingPermanentHits = 0

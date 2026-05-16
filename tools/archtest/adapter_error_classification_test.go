@@ -94,6 +94,7 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 		modPath + "/adapters/postgres": false,
 		modPath + "/adapters/redis":    false,
 		modPath + "/adapters/s3":       false,
+		modPath + "/adapters/rabbitmq": false,
 	}
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
