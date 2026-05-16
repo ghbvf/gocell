@@ -25,6 +25,27 @@ const (
 	scsCachedKey   = "testns:session:sess-test-1"
 )
 
+// lastCreateArgs records the arguments passed to the most recent Create call.
+type lastCreateArgs struct {
+	sess *session.Session
+}
+
+// lastGetArgs records the arguments passed to the most recent Get call.
+type lastGetArgs struct {
+	id string
+}
+
+// lastRevokeArgs records the arguments passed to the most recent Revoke call.
+type lastRevokeArgs struct {
+	id string
+}
+
+// lastRevokeSubjArgs records the arguments passed to the most recent RevokeForSubject call.
+type lastRevokeSubjArgs struct {
+	subjectID string
+	event     session.CredentialEvent
+}
+
 // fakeSessionStore is an inner session.Store used by CachingSessionStore unit
 // tests. It records every call and can inject errors per-method so the
 // wrapper's pass-through vs. fail-safe behavior is observable.
@@ -32,6 +53,9 @@ const (
 // T5 fix: call counters use atomic.Int64 so that concurrent tests
 // (TestCachingSessionStore_Get_ConcurrentAccess) pass under -race without
 // a mutex. Load() replaces direct field reads; Add(1) replaces ++.
+//
+// lastCreate/lastGet/lastRevoke/lastRevokeSubj capture the most-recent
+// call arguments for precise delegation assertions (F2 finding).
 type fakeSessionStore struct {
 	view *session.ValidateView
 
@@ -46,28 +70,37 @@ type fakeSessionStore struct {
 	revokeCalls     atomic.Int64
 	revokeSubjCalls atomic.Int64
 	repoReadyCalls  atomic.Int64
+
+	lastCreate     atomic.Pointer[lastCreateArgs]
+	lastGet        atomic.Pointer[lastGetArgs]
+	lastRevoke     atomic.Pointer[lastRevokeArgs]
+	lastRevokeSubj atomic.Pointer[lastRevokeSubjArgs]
 }
 
-func (f *fakeSessionStore) Create(_ context.Context, _ *session.Session) error {
+func (f *fakeSessionStore) Create(_ context.Context, sess *session.Session) error {
 	f.createCalls.Add(1)
+	f.lastCreate.Store(&lastCreateArgs{sess: sess})
 	return f.createErr
 }
 
-func (f *fakeSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
+func (f *fakeSessionStore) Get(_ context.Context, id string) (*session.ValidateView, error) {
 	f.getCalls.Add(1)
+	f.lastGet.Store(&lastGetArgs{id: id})
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
 	return f.view, nil
 }
 
-func (f *fakeSessionStore) Revoke(_ context.Context, _ string) error {
+func (f *fakeSessionStore) Revoke(_ context.Context, id string) error {
 	f.revokeCalls.Add(1)
+	f.lastRevoke.Store(&lastRevokeArgs{id: id})
 	return f.revokeErr
 }
 
-func (f *fakeSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
+func (f *fakeSessionStore) RevokeForSubject(_ context.Context, subjectID string, event session.CredentialEvent) error {
 	f.revokeSubjCalls.Add(1)
+	f.lastRevokeSubj.Store(&lastRevokeSubjArgs{subjectID: subjectID, event: event})
 	return f.revokeSubjErr
 }
 
@@ -162,6 +195,9 @@ func TestCachingSessionStore_Get_CacheMiss_PrimesCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, int64(1), inner.getCalls.Load())
+	if args := inner.lastGet.Load(); assert.NotNil(t, args, "lastGet must be set") {
+		assert.Equal(t, scsTestSID, args.id, "Get must delegate exact id")
+	}
 
 	// Cache should now hold the view; second Get must not bump inner.
 	got2, err := store.Get(ctx, scsTestSID)
@@ -230,6 +266,9 @@ func TestCachingSessionStore_Create_DoesNotTouchCache(t *testing.T) {
 	sess := &session.Session{ID: scsTestSID, SubjectID: scsTestSubj, JTI: "jti-x", AuthzEpochAtIssue: scsTestEpoch}
 	require.NoError(t, store.Create(context.Background(), sess))
 	assert.Equal(t, int64(1), inner.createCalls.Load())
+	if args := inner.lastCreate.Load(); assert.NotNil(t, args, "lastCreate must be set") {
+		assert.Equal(t, scsTestSID, args.sess.ID, "Create must delegate exact sess")
+	}
 
 	// The mock store must remain empty.
 	cmd := mock.Get(context.Background(), scsCachedKey)
@@ -258,6 +297,9 @@ func TestCachingSessionStore_Revoke_DoesNotTouchCache(t *testing.T) {
 
 	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
 	assert.Equal(t, int64(1), inner.revokeCalls.Load())
+	if args := inner.lastRevoke.Load(); assert.NotNil(t, args, "lastRevoke must be set") {
+		assert.Equal(t, scsTestSID, args.id, "Revoke must delegate exact id")
+	}
 
 	// Cache entry must still be present — wrapper must not have invalidated.
 	cmd := mock.Get(context.Background(), scsCachedKey)
@@ -307,6 +349,10 @@ func TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache(t *testing.T) {
 	err = store.RevokeForSubject(context.Background(), scsTestSubj, session.CredentialEventPasswordReset)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), inner.revokeSubjCalls.Load())
+	if args := inner.lastRevokeSubj.Load(); assert.NotNil(t, args, "lastRevokeSubj must be set") {
+		assert.Equal(t, scsTestSubj, args.subjectID, "RevokeForSubject must delegate exact subjectID")
+		assert.Equal(t, session.CredentialEventPasswordReset, args.event, "RevokeForSubject must delegate exact event")
+	}
 
 	// Cache entry must still be present — wrapper must not have invalidated.
 	cmd := mock.Get(context.Background(), scsCachedKey)
@@ -498,13 +544,16 @@ func TestCachingSessionStore_Get_RevokedViewFromInner_DoesNotPopulate(t *testing
 //
 // When the cache holds a corrupt (non-JSON) entry, Get must:
 //  1. Fall through to inner.Get (inner.getCalls == 1).
-//  2. Synchronously delete the corrupt entry so subsequent Gets do not keep
-//     hitting the same corrupt value (DEL the key, not just fall through).
+//  2. Synchronously delete the corrupt entry so the second Get does not
+//     re-parse the same corrupt bytes. The second Get must go to cache
+//     (populated by the first call's lazyPopulate) not inner again.
 //
 // The current code falls through (step 1) but does NOT delete the corrupt
-// entry (step 2 missing). This test FAILS on the pre-GREEN codebase — that
-// is the intentional RED state. The GREEN fix adds a synchronous cache.Delete
-// in the unmarshal-fail branch.
+// entry (step 2 missing). Without DELETE, a second Get would encounter the
+// same corrupt bytes again and fall through to inner a second time.
+// This test FAILS on the pre-GREEN codebase — that is the intentional RED
+// state. The GREEN fix adds a synchronous cache.Delete in the unmarshal-fail
+// branch, after which lazyPopulate re-primes the cache with a valid entry.
 func TestCachingSessionStore_Get_CorruptCacheEntry_DeletesAndFallsThrough(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -512,15 +561,23 @@ func TestCachingSessionStore_Get_CorruptCacheEntry_DeletesAndFallsThrough(t *tes
 	inner := &fakeSessionStore{view: newTestView()}
 	store := newTestCachingStore(t, inner, mock)
 
-	got, err := store.Get(context.Background(), scsTestSID)
+	ctx := context.Background()
+	got, err := store.Get(ctx, scsTestSID)
 	require.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Equal(t, int64(1), inner.getCalls.Load(), "corrupt cache entry must fall through to inner")
 
-	// The corrupt entry must have been deleted so subsequent Gets are clean.
-	cmd := mock.Get(context.Background(), scsCachedKey)
-	_, getErr := cmd.Result()
-	assert.Error(t, getErr, "corrupt cache entry must be deleted after fall-through; key must not exist")
+	// After the first Get, the corrupt entry was deleted and lazyPopulate
+	// re-primed the cache with a valid entry. A second Get must hit the cache
+	// (inner.getCalls stays at 1) — if corrupt entry was NOT deleted, the second
+	// Get would again encounter the corrupt bytes and fall through to inner
+	// (inner.getCalls would be 2).
+	got2, err2 := store.Get(ctx, scsTestSID)
+	require.NoError(t, err2)
+	assert.NotNil(t, got2)
+	assert.Equal(t, int64(1), inner.getCalls.Load(),
+		"second Get must hit the re-primed cache (corrupt entry was deleted and lazyPopulated with valid entry); "+
+			"inner.getCalls==2 means corrupt entry was NOT deleted")
 }
 
 // TestNewCachingSessionStore_TypedNilInner_Rejected — T3 RED test.

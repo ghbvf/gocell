@@ -20,10 +20,12 @@ import (
 // Behavior summary (T5/AUTH-CACHE-01 plan):
 //
 //   - Get: cache hit → unmarshal sessionCacheEntry → entry.validate(id). On
-//     validation failure: slog.Warn + best-effort async cache.Delete + fall
-//     through to inner.Get. Miss / Redis error / corrupt JSON → slog.Warn +
-//     fall through to inner.Get. On inner success only active (RevokedAt == nil)
-//     views are lazily populated into the cache (Set error is also swallowed).
+//     validation failure: slog.Warn + synchronous cache.Delete (best-effort,
+//     Delete errors logged at Warn) + fall through to inner.Get. Miss / Redis
+//     error / corrupt JSON → slog.Warn + synchronous cache.Delete (same
+//     best-effort contract) + fall through to inner.Get. On inner success only
+//     active (RevokedAt == nil) views are lazily populated into the cache
+//     (Set error is also swallowed).
 //   - Create: delegated to inner. No cache write — the first Get after Create
 //     primes the cache via the read-through path (avoids "created then revoked"
 //     edge thinking and removes a method's worth of code).
@@ -195,6 +197,11 @@ func (s *CachingSessionStore) Create(ctx context.Context, sess *session.Session)
 // returns immediately; any error in the cache path is logged at Warn and
 // fallthrough occurs. On inner success the returned view is lazily populated
 // into the cache for the next request.
+//
+// Both fall-through paths — corrupt JSON (unmarshal-fail) and invalid entry
+// (validate-fail) — synchronously delete the bad cache key before falling
+// through. This prevents repeated hits on a known-bad entry within the same
+// TTL window. Delete errors are logged at Warn and ignored (best-effort).
 func (s *CachingSessionStore) Get(ctx context.Context, id string) (*session.ValidateView, error) {
 	key := sessionCacheKey + id
 
@@ -204,15 +211,28 @@ func (s *CachingSessionStore) Get(ctx context.Context, id string) (*session.Vali
 			if verr := entry.validate(id); verr == nil {
 				return entry.toView(), nil
 			} else {
+				// validate fail: invalid entry — fall through + synchronous DEL to
+				// prevent repeated hits on a known-bad cache entry.
 				s.logger.Warn("session-cache: invalid cached entry; falling through",
 					slog.String("sid", id),
 					slog.Any("error", verr))
-				go func() { _ = s.cache.Delete(context.WithoutCancel(ctx), key) }()
+				if delErr := s.cache.Delete(ctx, key); delErr != nil {
+					s.logger.Warn("session-cache: failed to clean invalid entry",
+						slog.String("sid", id),
+						slog.Any("error", delErr))
+				}
 			}
 		} else {
+			// unmarshal fail: corrupt entry — fall through + synchronous DEL to
+			// prevent repeated hits on a corrupt cache entry.
 			s.logger.Warn("session-cache: corrupt cached entry; falling through",
 				slog.String("sid", id),
 				slog.Any("error", jerr))
+			if delErr := s.cache.Delete(ctx, key); delErr != nil {
+				s.logger.Warn("session-cache: failed to clean corrupt entry",
+					slog.String("sid", id),
+					slog.Any("error", delErr))
+			}
 		}
 	} else if err != nil {
 		s.logger.Warn("session-cache: get failed; falling through",

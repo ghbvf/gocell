@@ -161,6 +161,8 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 //   - the ReturnStmt result count ≠ 1
 //   - the single result is not a CallExpr
 //   - the CallExpr Fun is not `*ast.SelectorExpr` with X=*ast.SelectorExpr `<recv>.inner` and Sel.Name==methodName
+//   - the receiver ident in the callee's X does not match the method's own receiver name
+//   - the arguments to the call are not all plain parameter idents (in order)
 func scanRevokeDelegateViolations(p *Pass, file *ast.File, rel string) []string {
 	var out []string
 	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
@@ -184,9 +186,26 @@ func scanRevokeDelegateViolations(p *Pass, file *ast.File, rel string) []string 
 			return
 		}
 
+		// Derive the receiver name. Anonymous receivers have no Names — treat
+		// as empty string so the check reliably detects any callee mismatch.
+		recvName := ""
+		if recvNames := fn.Recv.List[0].Names; len(recvNames) > 0 {
+			recvName = recvNames[0].Name
+		}
+
+		// Collect param ident names in order (one Field may name multiple same-type params).
+		var paramNames []string
+		if fn.Type.Params != nil {
+			for _, field := range fn.Type.Params.List {
+				for _, n := range field.Names {
+					paramNames = append(paramNames, n.Name)
+				}
+			}
+		}
+
 		methodName := fn.Name.Name
 		line := p.Fset.Position(fn.Pos()).Line
-		violation := checkRevokeDelegateBody(fn.Body, methodName)
+		violation := checkRevokeDelegateBody(fn.Body, methodName, recvName, paramNames)
 
 		if violation != "" {
 			out = append(out, fmt.Sprintf(
@@ -200,10 +219,13 @@ func scanRevokeDelegateViolations(p *Pass, file *ast.File, rel string) []string 
 
 // checkRevokeDelegateBody validates that body is exactly:
 //
-//	{ return <recv>.inner.<methodName>(args...) }
+//	{ return <recvName>.inner.<methodName>(paramNames...) }
+//
+// recvName is the method's receiver variable name (e.g. "s").
+// paramNames is the ordered list of method parameter ident names.
 //
 // Returns a non-empty violation description string on failure, "" on pass.
-func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string) string {
+func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName string, paramNames []string) string {
 	if len(body.List) != 1 {
 		return fmt.Sprintf("body has %d statement(s); want exactly 1", len(body.List))
 	}
@@ -234,6 +256,47 @@ func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string) string {
 	}
 	if innerSel.Sel.Name != cachingStoreInnerField {
 		return fmt.Sprintf("callee accesses field .%s; want .%s", innerSel.Sel.Name, cachingStoreInnerField)
+	}
+	// step 8: innerSel.X must be an *ast.Ident whose Name matches the method receiver.
+	recvIdent, ok := innerSel.X.(*ast.Ident)
+	if !ok {
+		return fmt.Sprintf("callee receiver is %T; want *ast.Ident (receiver variable)", innerSel.X)
+	}
+	if recvName != "" && recvIdent.Name != recvName {
+		return fmt.Sprintf("callee receiver is %q; want method receiver %q", recvIdent.Name, recvName)
+	}
+	// step 9: arg count must match param count.
+	if len(callExpr.Args) != len(paramNames) {
+		return fmt.Sprintf("callee has %d arg(s); want %d (one per param)", len(callExpr.Args), len(paramNames))
+	}
+	// step 10: each arg must be a plain *ast.Ident matching the corresponding param name.
+	// Index-based iteration avoids the "for-range []ast.Expr + type-assert" pattern
+	// that SCANNER-FRAMEWORK-USAGE-01 Path-B prohibits in archtest files.
+	i := 0
+	mismatch := ""
+	EachInChildren[ast.Ident](callExpr, func(argIdent *ast.Ident) {
+		if mismatch != "" || i >= len(paramNames) {
+			return
+		}
+		// EachInChildren visits all direct *ast.Ident children of callExpr,
+		// which includes Fun idents. We only want Args; skip any Ident that
+		// is the callee selector (Fun is a SelectorExpr, not a bare Ident here,
+		// so direct Ident children of callExpr are exactly the args).
+		// Double-check: if callExpr.Fun is *ast.SelectorExpr, its Ident parts
+		// are NOT direct children of callExpr — they are children of the
+		// SelectorExpr child. EachInChildren depth=1 is thus safe.
+		if argIdent.Name != paramNames[i] {
+			mismatch = fmt.Sprintf("callee arg[%d] is %q; want param ident %q", i, argIdent.Name, paramNames[i])
+		}
+		i++
+	})
+	if mismatch != "" {
+		return mismatch
+	}
+	// Check for non-Ident args: if i < len(paramNames) after visiting all
+	// direct Ident children, some args were non-Ident expressions.
+	if i != len(paramNames) {
+		return fmt.Sprintf("callee has %d plain-ident arg(s); want %d (some args are non-Ident expressions)", i, len(paramNames))
 	}
 	return ""
 }
