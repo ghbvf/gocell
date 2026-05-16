@@ -157,7 +157,8 @@ func TestParamValueToJSON_RejectsNaNInf(t *testing.T) {
 			}
 			isQuoted := len(got) >= 2 && got[0] == '"' && got[len(got)-1] == '"'
 			if tc.wantJSONString && !isQuoted {
-				t.Errorf("paramValueToJSON(%q) = %s, want a JSON string (quoted); NaN/Inf must not be emitted as bare JSON number tokens", tc.input, got)
+				t.Errorf("paramValueToJSON(%q) = %s, want a JSON string (quoted); "+
+					"NaN/Inf must not be emitted as bare JSON number tokens", tc.input, got)
 			}
 			if !tc.wantJSONString && isQuoted {
 				t.Errorf("paramValueToJSON(%q) = %s, want a JSON number (unquoted)", tc.input, got)

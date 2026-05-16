@@ -642,7 +642,7 @@ func mustRejectParamValue(t testing.TB, schema *jsonschema.Schema, name, value, 
 //     Example: "Inf" → []byte(`"Inf"`), "hello" → []byte(`"hello"`).
 //     NaN, +Inf, -Inf are not valid JSON number literals; returning them as JSON
 //     strings ensures that integer/number schemas reject them via type mismatch
-//     (the intended behaviour) rather than via a JSON parse error in the caller
+//     (the intended behavior) rather than via a JSON parse error in the caller
 //     that would be silently misclassified as a schema rejection.
 //
 // Returns (token, true) on success. The only failure path is json.Marshal of
