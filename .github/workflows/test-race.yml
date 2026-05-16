@@ -103,11 +103,15 @@ jobs:
         #
         # tests/integration/l2atomicity (T4 / backlog B2-C-13): cross-layer
         # accesscore L2 e2e — login → refresh reuse cascade → rbac revoke
-        # cross-cell outbox→consumer→credentialinvalidate funnel. The cascade
-        # path crosses goroutine boundaries (producer → relay → publisher →
-        # consumer → invalidator), giving the race detector real coverage of
-        # the L2 cross-cell flow that the adapter / store scope does not
-        # reach. Now covered automatically via discovery.
+        # cross-cell outbox path. The harness boots producer (rbacassign),
+        # outbox writer (PG TX), relay worker, publisher (in-process
+        # eventbus), and two subscribers (auditcore role consumer +
+        # accesscore rbac-session-sync). Tests assert the complete chain
+        # via auditcore's audit-ledger Append as the consumer-side terminal
+        # observable, plus same-tx PG row state for the invalidator effect.
+        # The race detector covers the cross-goroutine concurrency safety
+        # of the producer→relay→publisher→subscriber goroutine boundaries.
+        # Now covered automatically via discovery.
         env:
           # Ensures testutil.RequireDocker(t) calls t.Fatal (not t.Skip) when
           # Docker is unavailable, preventing silent skip in CI where Docker

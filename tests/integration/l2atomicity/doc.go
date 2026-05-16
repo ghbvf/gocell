@@ -14,12 +14,19 @@
 //   - refresh reuse detected → credentialinvalidate funnel cascades (BumpAuthzEpoch +
 //     RevokeForSubject + RevokeUser) under same tx
 //   - rbacassign Revoke → same-tx credentialinvalidate funnel revokes the
-//     victim's sessions + refresh chains synchronously (the cascade itself
-//     is intra-tx, not eventbus-driven); _additionally_, the L2 outbox row
-//     committed alongside is drained by runtime/outbox.NewRelay, republished
-//     into the in-process eventbus, and observed by the auditcore subscriber
-//     advancing the audit chain Tail. This is the producer → relay →
-//     publisher → consumer evidence on the in-process transport.
+//     victim's sessions + refresh chains synchronously (the cascade is
+//     intra-tx, not eventbus-driven — this is the "invalidator" effect and
+//     is asserted directly on PG rows above). Independently, the L2 outbox
+//     row committed alongside is drained by runtime/outbox.NewRelay,
+//     republished onto the in-process eventbus, and appended to the audit
+//     chain by auditcore's role-event subscriber. The audit Append is the
+//     consumer-side terminal observable: only producer → relay → publisher
+//     → subscriber → Append all succeeding can advance the filtered count.
+//     The producer-side fix landed in this PR (rbacassign now populates
+//     RoleChangedEvent.ActorID from the service-token caller cell,
+//     satisfying auditcore's ActorRequireExplicit mode that previously
+//     DLX-rejected role events) — see contracts/event/role/{assigned,revoked}/v1
+//     schema additions and cells/accesscore/internal/dto/role_event.go.
 //   - sessionvalidate epoch mismatch → 401 (session.authz_epoch_at_issue <
 //     users.authz_epoch via row provenance)
 //   - login uniform 401 wire shape: missing user / wrong password / inactive

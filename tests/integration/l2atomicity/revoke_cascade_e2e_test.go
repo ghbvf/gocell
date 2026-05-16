@@ -63,15 +63,15 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 		"victim must have 2 live sessions before revoke")
 
 	epochBefore := queryUserAuthzEpoch(t, h, victimID)
-	// Snapshot how many event.role.revoked.v1 rows the outbox has published
-	// before the revoke. published_at is set by runtime/outbox.Relay's
-	// writeBack only after the publisher returns success, so an unchanged
-	// count would prove the relay never drained this revoke's outbox row.
-	// Filtering by event_type locks the assertion on this specific event
-	// class — any concurrent event.role.assigned.v1 / event.session.* row
-	// being relay-published would otherwise satisfy a generic "more rows
-	// published" check.
-	revokedPublishedBefore := countPublishedOutboxEntries(t, ctx, h, eventRoleRevokedV1)
+	// Snapshot how many event.role.revoked.v1 entries the audit ledger holds
+	// before the revoke. The audit chain Append is the consumer-side
+	// terminal observable: it can only advance if the relay drained the
+	// outbox row, the publisher emitted onto the in-process eventbus, and
+	// the auditcore role-event subscriber accepted the payload. Filtering
+	// by event type locks the assertion on this specific event class —
+	// generic Tail().SeqNo would also advance from concurrent
+	// event.role.assigned.v1 / event.session.created.v1 deliveries.
+	revokedAuditedBefore := countAuditEntries(t, ctx, h, eventRoleRevokedV1)
 
 	// Revoke "editor" via internal listener — triggers same-tx
 	// credentialinvalidate funnel.
@@ -100,46 +100,42 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 		victimID).Scan(&roleCount))
 	assert.Equal(t, 0, roleCount, "editor role assignment must be removed after revoke")
 
-	// Real producer → relay → publisher evidence: rbacassign's L2
-	// event.role.revoked.v1 outbox row must be drained by runtime/outbox.Relay
-	// and its published_at column set by writeBack. The previous
-	// Tail().SeqNo-only check was too loose — any concurrent event of any
-	// type would have advanced SeqNo. Filtering published-outbox rows by
-	// event_type locks the assertion on this specific event class.
+	// End-to-end consumer-terminal observable: rbacassign's L2
+	// event.role.revoked.v1 outbox row must be drained by runtime/outbox.Relay,
+	// republished onto the in-process eventbus, and appended to the audit
+	// chain by auditcore's role consumer. Only producer→relay→publisher→
+	// subscriber→Append all succeeding can advance this counter.
 	//
-	// Note on the consumer link: in this harness auditcore subscribes to
-	// role events but rejects payloads missing `actor` identity (the
-	// rbacassign service-token caller cell does not populate actor in the
-	// event payload — a real production gap captured separately as
-	// AUDIT-ROLE-EVENT-ACTOR-PROPAGATION-01). The relay still publishes the
-	// event and the accesscore rbac-session-sync subscriber receives it; the
-	// auditcore rejection routes to DLX by design (DispositionReject is a
-	// designed-for outcome, not a chain failure). Asserting on
-	// outbox_entries.published_at therefore tests the chain link that this
-	// PR actually wires (producer→relay→publisher), without coupling the
-	// test to a subscriber-side gap that belongs to a separate fix.
+	// Production wiring (per the fix in this PR): rbacassign populates
+	// RoleChangedEvent.ActorID from the service-token caller cell (here
+	// "accesscore" per assignRole / revokeRole), satisfying the auditcore
+	// role consumer's ActorRequireExplicit mode. Without that fix the
+	// event would DLX and this assertion would (correctly) fail.
 	require.Eventually(t, func() bool {
-		return countPublishedOutboxEntries(t, ctx, h, eventRoleRevokedV1) > revokedPublishedBefore
+		return countAuditEntries(t, ctx, h, eventRoleRevokedV1) > revokedAuditedBefore
 	}, testtime.EventuallyLong, testtime.MediumPoll,
-		"runtime/outbox.Relay must mark an additional event.role.revoked.v1 row as published_at after rbacassign emits (before=%d)",
-		revokedPublishedBefore)
+		"auditcore must append an additional event.role.revoked.v1 entry after the role revoke (before=%d)",
+		revokedAuditedBefore)
 
-	// Payload validation on the most-recent published row — defends against
-	// a future "wrong event delivered" regression: a stray
-	// event.role.revoked.v1 for a different user/role would pass the count
-	// check above but should not match this victim's identity.
-	row := latestPublishedOutboxEntry(t, ctx, h, eventRoleRevokedV1)
+	// Payload validation on the most-recent audit entry — defends against a
+	// "wrong event delivered" regression: a stray event.role.revoked.v1 for
+	// a different user/role/actor would pass the count check above but
+	// should not match this victim's identity.
+	entry := latestAuditEntry(t, ctx, h, eventRoleRevokedV1)
 	var payload struct {
-		UserID string `json:"userId"`
-		RoleID string `json:"roleId"`
-		Action string `json:"action"`
+		UserID  string `json:"userId"`
+		RoleID  string `json:"roleId"`
+		Action  string `json:"action"`
+		ActorID string `json:"actorId"`
 	}
-	require.NoError(t, json.Unmarshal(row.Payload, &payload),
-		"outbox row payload must be a valid RoleChangedEvent JSON")
+	require.NoError(t, json.Unmarshal(entry.Payload, &payload),
+		"audit entry payload must be a valid RoleChangedEvent JSON")
 	assert.Equal(t, victimID, payload.UserID,
-		"outbox row must record the revoked victim (not a stray subject)")
+		"audit entry must record the revoked victim (not a stray subject)")
 	assert.Equal(t, "editor", payload.RoleID,
-		"outbox row must record the revoked role")
+		"audit entry must record the revoked role")
 	assert.Equal(t, "revoked", payload.Action,
-		"outbox row payload.action must be 'revoked'")
+		"audit entry payload.action must be 'revoked'")
+	assert.Equal(t, "accesscore", payload.ActorID,
+		"audit entry payload.actorId must be the service-token caller cell")
 }

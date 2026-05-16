@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -388,41 +389,25 @@ func countLiveRefreshTokens(t *testing.T, h *l2Harness, sessionID string) int {
 	return n
 }
 
-// countPublishedOutboxEntries returns the number of outbox_entries rows for
-// the given event_type whose published_at column has been set by
-// runtime/outbox.Relay's writeBack. Used by cascade tests to prove the
-// producer → relay → publisher chain link without coupling to subscriber
-// success semantics (subscribers may legitimately reject and route to DLX).
-// Filtering by event_type locks the assertion on a specific event class.
-func countPublishedOutboxEntries(t *testing.T, ctx context.Context, h *l2Harness, eventType string) int {
+// countAuditEntries returns the number of audit-ledger entries whose
+// EventType matches the supplied label. Used by cascade tests to lock the
+// assertion on a specific event class (not just "Tail advanced", which any
+// concurrent role.assigned / session.created delivery could satisfy).
+func countAuditEntries(t *testing.T, ctx context.Context, h *l2Harness, eventType string) int {
 	t.Helper()
-	var n int
-	err := h.pool.DB().QueryRow(ctx,
-		`SELECT count(*) FROM outbox_entries WHERE event_type = $1 AND published_at IS NOT NULL`,
-		eventType).Scan(&n)
+	entries, err := h.auditStore.Query(ctx, ledger.AuditFilters{EventType: eventType}, ledger.QueryListParams{})
 	require.NoError(t, err)
-	return n
+	return len(entries)
 }
 
-// publishedOutboxRow is the subset of an outbox_entries row the cascade tests
-// need to validate payload contents.
-type publishedOutboxRow struct {
-	Payload []byte
-}
-
-// latestPublishedOutboxEntry returns the most recently published outbox_entries
-// row for the given event_type. Fails if zero published rows exist.
-func latestPublishedOutboxEntry(t *testing.T, ctx context.Context, h *l2Harness, eventType string) publishedOutboxRow {
+// latestAuditEntry returns the most recent audit-ledger entry for the given
+// event type. Fails if zero entries exist.
+func latestAuditEntry(t *testing.T, ctx context.Context, h *l2Harness, eventType string) *ledger.Entry {
 	t.Helper()
-	var row publishedOutboxRow
-	err := h.pool.DB().QueryRow(ctx,
-		`SELECT payload FROM outbox_entries
-		 WHERE event_type = $1 AND published_at IS NOT NULL
-		 ORDER BY published_at DESC LIMIT 1`,
-		eventType).Scan(&row.Payload)
-	require.NoError(t, err,
-		"expected at least one published outbox row for event %s", eventType)
-	return row
+	entries, err := h.auditStore.Query(ctx, ledger.AuditFilters{EventType: eventType}, ledger.QueryListParams{})
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "expected at least one audit entry for event %s", eventType)
+	return entries[len(entries)-1]
 }
 
 // countLiveRefreshTokensForSubject returns the count of live (not revoked) refresh
