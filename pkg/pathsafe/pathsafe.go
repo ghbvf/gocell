@@ -99,6 +99,14 @@ type PlannedFile struct {
 	Content  []byte
 	DirMode  os.FileMode // optional; defaults 0o755 (per helm/helm chartutil; F12)
 	FileMode os.FileMode // optional; defaults 0o644 (per helm/helm chartutil; F12)
+	// ForceOverwrite, when true, instructs WritePlannedFiles to bypass the
+	// conflictPass "file already exists" rejection for this entry and instead
+	// replace the existing inode (Remove → O_EXCL|O_NOFOLLOW recreate). Used by
+	// codegen-regenerate flows where derived artifacts intentionally overwrite
+	// previous output. O_NOFOLLOW is preserved: a leaf symlink at the target
+	// path is still removed (not followed) before the fresh file is written.
+	// Zero value (false) is the default and matches pre-A-API behavior.
+	ForceOverwrite bool
 }
 
 // ResolveRoot returns root resolved through filepath.EvalSymlinks so that
@@ -334,7 +342,10 @@ func rollbackWrites(written, dirs []string, originalErr error) error {
 // tracked (realRoot itself is assumed to pre-exist).
 func mkdirAllTracked(dir string, mode os.FileMode, realRoot string, created *[]string) error {
 	// Collect non-existent components from innermost outward.
-	toCreate := collectMissingDirs(dir, realRoot)
+	toCreate, err := collectMissingDirs(dir, realRoot)
+	if err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(dir, mode); err != nil {
 		return err
@@ -352,17 +363,31 @@ func mkdirAllTracked(dir string, mode os.FileMode, realRoot string, created *[]s
 // from dir and walking up to (but not including) realRoot. Returned slice is
 // ordered leaf-first (innermost first), so callers that reverse it get
 // outermost-first creation order.
-func collectMissingDirs(dir, realRoot string) []string {
+//
+// The second return value carries any non-ENOENT stat error (most importantly
+// EACCES when an intermediate parent is chmoded 0o000); callers MUST propagate
+// it so rollback runs over previously-written entries. Treating EACCES as
+// "directory exists" — the develop @ 41fc70074 behavior — causes the rollback
+// path to skip dirs that were never actually created and leave goroutine-local
+// state inconsistent with disk.
+func collectMissingDirs(dir, realRoot string) ([]string, error) {
 	var missing []string
 	cur := dir
 	for cur != realRoot && cur != filepath.Dir(cur) {
-		if _, err := os.Stat(cur); os.IsNotExist(err) {
-			missing = append(missing, cur)
-		} else {
-			// Once we hit an existing dir, all parents exist too.
+		if _, err := os.Stat(cur); err != nil {
+			if os.IsNotExist(err) {
+				missing = append(missing, cur)
+				cur = filepath.Dir(cur)
+				continue
+			}
+			// RED-commit stub: original develop swallowed every non-ENOENT
+			// error as "directory exists". Returning nil here preserves that
+			// (buggy) behavior so the internal RED test fails until A9 GREEN
+			// commit replaces this with `return nil, errcode.Wrap(...)`.
 			break
 		}
-		cur = filepath.Dir(cur)
+		// Once we hit an existing dir, all parents exist too.
+		break
 	}
-	return missing
+	return missing, nil
 }
