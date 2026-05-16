@@ -208,6 +208,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateCONTRACTCONSISTENCYEMIT01,
 		v.validateJOURNEYCONTRACTEXISTENCE01,
 		v.validateJOURNEYSTATUSLIFECYCLE01,
+		v.validateCONTRACTENDPOINTTESTMAPPING01,
 	}
 }
 
