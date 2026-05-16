@@ -5,7 +5,7 @@ package archtest
 // notfound_test_strict_test.go — typed function-call funnel guard for
 // `_NotFound` tests.
 //
-// INVARIANT: any Go function declared as `func Test.*_NotFound(...)` or
+// Rule statement: any Go function declared as `func Test.*_NotFound(...)` or
 // any t.Run("..._NotFound", ...) table case must contain at least one
 // CallExpr whose Fun resolves via *types.Info to
 //   - github.com/ghbvf/gocell/pkg/errcode/errcodetest.AssertCode, or
@@ -77,6 +77,13 @@ const errcodetestPkgPath = "github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 // *types.Info to a constant declared in this package.
 const notFoundCodeErrcodePkgPath = "github.com/ghbvf/gocell/pkg/errcode"
 
+// notFoundCodeTypeName is the unqualified name of the typed-string named
+// type that all errcode.Err* constants share. The rule's type check
+// requires the const's static type to be this named type — not a sibling
+// named string-typed const in the same package — to anchor the form to
+// the specific declared sentinel surface.
+const notFoundCodeTypeName = "Code"
+
 // notFoundCodePattern matches the value of an errcode.Code constant that
 // represents a NotFound sentinel (e.g. ERR_SESSION_NOT_FOUND,
 // ERR_CONFIG_REPO_NOT_FOUND, ERR_FLAG_NOT_FOUND). All current Err*NotFound
@@ -90,11 +97,25 @@ var notFoundCodePattern = regexp.MustCompile(`^ERR_[A-Z0-9_]+_NOT_FOUND$`)
 // distinguishing identifier between Test and the suffix).
 var notFoundFuncNamePattern = regexp.MustCompile(`^Test[A-Za-z][A-Za-z0-9_]*_NotFound$`)
 
-// notFoundTRunNamePattern matches t.Run table-case names that end in
-// _NotFound. The leading "Test" prefix is NOT required here — the table-case
-// name is independent of the parent function name (e.g. parent is
-// TestRepo_Errors with sub-case GetByKey_NotFound).
-var notFoundTRunNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+_NotFound$`)
+// notFoundTRunSuffix is the literal suffix that selects a t.Run table case
+// for this rule. Go's testing package allows any non-empty string as a
+// subtest name (slashes for /-run filter, spaces, hyphens, unicode all
+// permitted), so an explicit suffix check accepts every name the test
+// runtime would accept — strictly more general than a regex over a fixed
+// character class (which would silently miss `Get/missing_NotFound`,
+// `nested case foo_NotFound`, etc.).
+const notFoundTRunSuffix = "_NotFound"
+
+// tRunCaseNameMatches reports whether a t.Run table-case name selects into
+// this rule. The name must end in _NotFound AND have at least one character
+// before the suffix (rejecting the degenerate `_NotFound` literal with no
+// distinguishing identifier).
+func tRunCaseNameMatches(name string) bool {
+	if !strings.HasSuffix(name, notFoundTRunSuffix) {
+		return false
+	}
+	return len(name) > len(notFoundTRunSuffix)
+}
 
 // notFoundFunnelExpectedArgIdx is the 0-based position of the `expected
 // errcode.Code` parameter inside each approved funnel callee's parameter
@@ -117,13 +138,34 @@ type notFoundViolation struct {
 	Reason string
 }
 
+// stopAtNestedFuncLit is the boundary predicate that excludes funnel calls
+// inside dead closures. A `_NotFound` test that contains a funnel call only
+// inside a nested *ast.FuncLit cannot statically prove that closure runs —
+// crediting such calls would be fail-open (the canonical mutation-test
+// hazard the rule exists to forbid).
+//
+// Boundary semantics: ANY *ast.FuncLit beneath the root body stops descent.
+// Root itself is exempt by scanner.EachInSubtreeStopAt contract.
+func stopAtNestedFuncLit(n ast.Node) bool {
+	_, ok := n.(*ast.FuncLit)
+	return ok
+}
+
 // findFunnelCallSitesInBlock returns the set of CallExpr nodes inside body
-// whose callee selector name appears in notFoundFunnelExpectedArgIdx. The
-// slice is pre-filtered by name only; full typed-callee resolution happens
-// in callSatisfiesFunnelRule via *types.Info.
+// whose callee selector name appears in notFoundFunnelExpectedArgIdx,
+// EXCLUDING any call inside a nested *ast.FuncLit boundary (dead closure).
+// The slice is pre-filtered by name only; full typed-callee resolution
+// happens in callSatisfiesFunnelRule via *types.Info.
+//
+// Uses scanner.EachInSubtreeStopAt — the third typed-function-choice-for-
+// walk-depth member (depth=full + boundary), picked over EachInSubtree
+// (which would credit nested-FuncLit calls = fail-open) and EachInChildren
+// (which would miss multi-stmt nested-block real call sites). Picking the
+// wrong walker is a typed-API-name mistake at the call site, not a hidden
+// AST behavior.
 func findFunnelCallSitesInBlock(body *ast.BlockStmt) []*ast.CallExpr {
 	var sites []*ast.CallExpr
-	scanner.EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+	scanner.EachInSubtreeStopAt[ast.CallExpr](body, stopAtNestedFuncLit, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil {
 			return
@@ -194,6 +236,20 @@ func callSatisfiesFunnelRule(info *types.Info, call *ast.CallExpr) bool {
 			return false
 		}
 		if c.Pkg().Path() != notFoundCodeErrcodePkgPath {
+			return false
+		}
+		// Verify the const's static type is the named type errcode.Code.
+		// Without this check, a sibling const in the same pkg with a
+		// different named type but a value matching notFoundCodePattern
+		// (e.g. a hypothetical errcode.Kind = "ERR_X_NOT_FOUND") would
+		// pass the value-pattern gate. Form-locking the named type
+		// closes that drift surface.
+		named, ok := c.Type().(*types.Named)
+		if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+			return false
+		}
+		if named.Obj().Pkg().Path() != notFoundCodeErrcodePkgPath ||
+			named.Obj().Name() != notFoundCodeTypeName {
 			return false
 		}
 		v, ok := EvaluateConstString(info, expectedArg)
@@ -270,11 +326,20 @@ func scanFileForNotFoundViolations(
 			return
 		}
 		caseName, err := strconv.Unquote(nameLit.Value)
-		if err != nil || !notFoundTRunNamePattern.MatchString(caseName) {
+		if err != nil || !tRunCaseNameMatches(caseName) {
 			return
 		}
+		// Fail-closed on non-inline body: t.Run("..._NotFound", runHelper)
+		// or t.Run("..._NotFound", makeCase(args)) are cross-function helper
+		// forms that the static AST scan cannot verify for funnel-call
+		// presence. Emitting a violation forces inline FuncLit bodies as
+		// the only sanctioned shape — closing the "helper escape" hole
+		// that was previously declared a tool blind spot but silently
+		// skipped (fail-open).
 		funLit, ok := call.Args[1].(*ast.FuncLit)
 		if !ok || funLit.Body == nil {
+			emitMissingFunnel(call.Pos(),
+				`t.Run("`+caseName+`", <non-inline body>)`)
 			return
 		}
 		funnelCalls := findFunnelCallSitesInBlock(funLit.Body)
@@ -406,7 +471,7 @@ func TestNotFoundTestStrict(t *testing.T) {
 
 // TestNotFoundTestStrictFixtures verifies the rule logic against static
 // fixture packages under tools/archtest/testdata/notfound_test_strict_fixtures/.
-// Each subdir contains a single usage_fixture.go declaring one _NotFound
+// Each subdir contains a single usage.go declaring one _NotFound
 // site; the parent test asserts the precise line(s) flagged (or 0 for
 // compliant fixtures).
 //
@@ -447,6 +512,26 @@ func TestNotFoundTestStrictFixtures(t *testing.T) {
 		// RED — HTTP handler test only asserts status, no funnel call.
 		// fn at line 14.
 		{"status_only_red", []int{14}},
+
+		// RED — t.Run("..._NotFound", helperFunc) with non-inline body.
+		// Fail-closed: helper function references cannot be statically
+		// verified for funnel-call presence. t.Run at line 17.
+		{"non_inline_body_red", []int{17}},
+		// RED — t.Run name contains '/' (subtest path separator). The
+		// strings.HasSuffix predicate accepts any Go-legal subtest name
+		// ending in _NotFound; the regex-only predicate would have
+		// missed this. t.Run at line 15.
+		{"trun_slash_case_red", []int{15}},
+		// RED — funnel call lives inside a nested *ast.FuncLit (dead
+		// closure) that is never invoked. EachInSubtreeStopAt boundary
+		// must NOT credit the call. fn at line 17.
+		{"nested_funclit_red", []int{17}},
+		// RED — expected arg is errcode.Code("ERR_X_NOT_FOUND") CallExpr
+		// conversion form. Same SelectorExpr form lock as
+		// basic_lit_expected_red; the named-type guard for production
+		// code is exercised by TestNotFoundTestStrict against real
+		// errcode imports (typed scan). fn at line 31.
+		{"wrong_const_type_red", []int{31}},
 	}
 
 	for _, tc := range cases {
@@ -485,11 +570,11 @@ func TestNotFoundTestStrictFixtures(t *testing.T) {
 }
 
 // TestNotFoundTestStrict_RegexPredicates is a defense-in-depth blind-spot
-// self-test: it pins notFoundFuncNamePattern / notFoundTRunNamePattern /
+// self-test: it pins notFoundFuncNamePattern / tRunCaseNameMatches /
 // notFoundCodePattern against a table of accept/reject examples so future
 // authors do not silently widen or narrow the rule scope. Pair with
-// TestNotFoundTestStrictFixtures (form/value) — this test catches regex
-// drift at the predicate level.
+// TestNotFoundTestStrictFixtures (form/value) — this test catches regex /
+// predicate drift at the rule-scope level.
 func TestNotFoundTestStrict_RegexPredicates(t *testing.T) {
 	t.Parallel()
 
@@ -527,21 +612,29 @@ func TestNotFoundTestStrict_RegexPredicates(t *testing.T) {
 			"Toggle_NotFound",
 			"Sub_NotFound",
 			"A_NotFound",
+			// F-2: Go testing allows any non-empty string as a subtest
+			// name. Names with /, spaces, hyphens, or unicode used to
+			// be silently missed by the regex `^[A-Za-z0-9_]+_NotFound$`;
+			// the suffix-only predicate accepts them.
+			"Get/missing_NotFound",      // slash (subtest path separator)
+			"nested case foo_NotFound",  // space
+			"with-hyphen-name_NotFound", // hyphen
+			"日本語subtest_NotFound",       // non-ASCII
 		}
 		reject := []string{
 			"GetByKey_NotFound_Returns404", // suffixed past _NotFound
 			"GetByKey",                     // no _NotFound suffix
-			"_NotFound",                    // leading underscore only
+			"_NotFound",                    // suffix only (no body before)
 			"GetByKey_notfound",            // lowercase
 			"",                             // empty string
 			"NotFound",                     // no _ separator
 		}
 		for _, name := range accept {
-			assert.True(t, notFoundTRunNamePattern.MatchString(name),
+			assert.True(t, tRunCaseNameMatches(name),
 				"tRunCaseName should accept %q", name)
 		}
 		for _, name := range reject {
-			assert.False(t, notFoundTRunNamePattern.MatchString(name),
+			assert.False(t, tRunCaseNameMatches(name),
 				"tRunCaseName should reject %q", name)
 		}
 	})

@@ -577,3 +577,150 @@ func _() {}
 		t.Errorf("BlockStmt has no FuncDecl children; got (%v, %v), want (nil, false)", got, found)
 	}
 }
+
+// -----------------------------------------------------------------------
+// EachInSubtreeStopAt — boundary-aware recursive traversal tests.
+//
+// Anchor pair with EachInSubtree: same fixture, different result depending
+// on whether nested FuncLit boundaries stop descent. This nails the third
+// member of the typed-function-choice-for-walk-depth Hard template.
+// -----------------------------------------------------------------------
+
+const nestedFuncLitSrc = `package fake
+func _() {
+	foo()
+	_ = func() { bar() }
+	baz()
+}
+`
+
+// stopAtFuncLit is the canonical boundary predicate used by the
+// notfound_test_strict archtest: stop descent at nested *ast.FuncLit so
+// calls inside dead closures do not count as funnel-call-presence in the
+// outer body.
+func stopAtFuncLit(n ast.Node) bool {
+	_, ok := n.(*ast.FuncLit)
+	return ok
+}
+
+// callExprIdents extracts the bare identifier name of a CallExpr's Fun when
+// Fun is *ast.Ident. Used by the stop-at tests to assert which calls are
+// visited (foo / bar / baz) rather than relying on token.Position.
+func callExprIdent(call *ast.CallExpr) string {
+	if id, ok := call.Fun.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+func TestEachInSubtreeStopAt_SkipsNestedFuncLit(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	var names []string
+	scanner.EachInSubtreeStopAt[ast.CallExpr](fn.Body, stopAtFuncLit, func(c *ast.CallExpr) {
+		names = append(names, callExprIdent(c))
+	})
+	// Expected: foo + baz (direct children of fn.Body). bar is inside a
+	// nested FuncLit — must be skipped.
+	want := []string{"foo", "baz"}
+	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
+		t.Errorf("EachInSubtreeStopAt[CallExpr] with stopAtFuncLit: got %v, want %v", names, want)
+	}
+}
+
+func TestEachInSubtree_VisitsNestedFuncLit_Baseline(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	var names []string
+	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(c *ast.CallExpr) {
+		names = append(names, callExprIdent(c))
+	})
+	// Baseline contrast: full subtree DOES visit bar (inside nested FuncLit).
+	// This anchors the stop-at semantics — same fixture, different walker,
+	// different result.
+	want := []string{"foo", "bar", "baz"}
+	if len(names) != len(want) {
+		t.Errorf("EachInSubtree[CallExpr] baseline: got %v, want %v", names, want)
+	}
+}
+
+func TestEachInSubtreeStopAt_NilStopAt_EquivalentToSubtree(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	var names []string
+	scanner.EachInSubtreeStopAt[ast.CallExpr](fn.Body, nil, func(c *ast.CallExpr) {
+		names = append(names, callExprIdent(c))
+	})
+	// Nil stopAt == "always false" == EachInSubtree behavior.
+	want := []string{"foo", "bar", "baz"}
+	if len(names) != len(want) {
+		t.Errorf("EachInSubtreeStopAt[CallExpr] with nil stopAt: got %v, want %v", names, want)
+	}
+}
+
+func TestEachInSubtreeStopAt_RootIsAlwaysEntered(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+func _() {
+	_ = func() { inner() }
+}
+`)
+	// Use the nested FuncLit ITSELF as root. stopAt is "stop at *ast.FuncLit",
+	// which would also stop at root if root-exemption were missing. The
+	// contract is that root is always entered regardless of stopAt.
+	funcLit, ok := firstNodeOfKind[ast.FuncLit](file)
+	if !ok {
+		t.Fatal("setup: FuncLit not found in fixture")
+	}
+	var names []string
+	scanner.EachInSubtreeStopAt[ast.CallExpr](funcLit, stopAtFuncLit, func(c *ast.CallExpr) {
+		names = append(names, callExprIdent(c))
+	})
+	// Root FuncLit is entered, inner() is visited. Without root-exemption
+	// we would get an empty result.
+	if len(names) != 1 || names[0] != "inner" {
+		t.Errorf("EachInSubtreeStopAt root-exemption: got %v, want [inner]", names)
+	}
+}
+
+func TestEachInSubtreeStopAt_BoundaryNodeNotPassedAsN(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	// N = *ast.FuncLit, stopAt = isFuncLit. The nested FuncLit IS the
+	// boundary kind. Contract: boundary node is excluded — fn must not see
+	// it, even though it matches N.
+	var count int
+	scanner.EachInSubtreeStopAt[ast.FuncLit](fn.Body, stopAtFuncLit, func(*ast.FuncLit) {
+		count++
+	})
+	if count != 0 {
+		t.Errorf("EachInSubtreeStopAt boundary exclusion: got %d FuncLit matches, want 0", count)
+	}
+}
+
+func TestEachInSubtreeStopAt_NilRootNoOp(t *testing.T) {
+	t.Parallel()
+	var count int
+	scanner.EachInSubtreeStopAt[ast.CallExpr](nil, stopAtFuncLit, func(*ast.CallExpr) {
+		count++
+	})
+	if count != 0 {
+		t.Errorf("EachInSubtreeStopAt nil root: got %d invocations, want 0", count)
+	}
+}
