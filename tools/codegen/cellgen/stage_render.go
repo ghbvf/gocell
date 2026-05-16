@@ -18,12 +18,20 @@
 //     rebased onto realRoot with ForceOverwrite=true before merging.
 //
 // The depguard scaffold-os-ban rule covers files starting with "scaffold" or
-// "generate_" in tools/codegen/cellgen/; this file does not match either
-// prefix and is therefore not in scope. Direct os.MkdirTemp / os.RemoveAll
-// calls here are intentional and reviewed.
+// "generate_" in tools/codegen/cellgen/; stage_render.go IS also scanned by
+// archtest SCAFFOLD-WRITE-FUNNEL-01 (scaffoldFunnelPred accepts base=="stage_render.go").
+// Direct os.MkdirTemp / os.RemoveAll / os.ReadFile calls here are intentional
+// and reviewed; write-side ops (MkdirAll/WriteFile/Mkdir/Create/OpenFile) remain
+// banned and would trip the archtest.
+//
+// Temp-dir cleanup: materializeSkeletonStage uses a named-return + deferred
+// cleanup so that any inner failure (filepath.Rel / WritePlannedFiles) removes
+// the staging dir before returning. appendDerivedCodegenStaged additionally
+// defers RemoveAll for the success path.
 package cellgen
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -42,28 +50,56 @@ const sharedErrorSchemaRelPath = "contracts/shared/errors/error-response-v1.sche
 
 // materializeSkeletonStage writes the skeleton plan into a temporary staging
 // directory via pathsafe.WritePlannedFiles (funnel reuse, not bypass) and
-// returns the staging root path. The caller must defer os.RemoveAll(stageRoot).
+// returns the resolved staging root path. Cleanup of the staging dir is
+// internal: if any step after MkdirTemp fails, the dir is removed before
+// returning. On success, the caller (appendDerivedCodegenStaged) defers the
+// final RemoveAll.
+//
+// realRoot must already be the output of pathsafe.ResolveRoot.
 //
 // The shared error schema is copied from realRoot into the staging plan so
 // contractgen can resolve relative SchemaRef links in scaffolded contract.yaml
 // files without requiring the schema to be present in the real project tree.
+// If the schema is absent in realRoot, a Warn is logged and the file is omitted
+// from staging (contractgen will fail gracefully if it actually requires it).
 //
-// Returns the staging root path or an error.
-func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFile) (stageRoot string, err error) {
-	stageRoot, err = os.MkdirTemp("", "gocell-scaffold-stage-*")
-	if err != nil {
+// Returns the resolved staging root path or an error.
+func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFile) (_ string, err error) {
+	rawStage, mkErr := os.MkdirTemp("", "gocell-scaffold-stage-*")
+	if mkErr != nil {
 		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"scaffold stage: create temp dir", err)
+			"scaffold stage: create temp dir", mkErr)
 	}
+
+	// Resolve symlinks on the staging root (e.g. macOS /var→/private/var) so
+	// pathsafe.WritePlannedFiles ContainPath checks work correctly.
+	stageRoot, resolveErr := pathsafe.ResolveRoot(rawStage)
+	if resolveErr != nil {
+		_ = os.RemoveAll(rawStage)
+		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold stage: resolve temp dir", resolveErr,
+			errcode.WithInternal(fmt.Sprintf("stageRoot=%s", rawStage)))
+	}
+
+	// If any step below fails, remove the staging dir before returning.
+	// stageRoot is captured by closure — not overwritten on error return path —
+	// so RemoveAll always targets the correct directory.
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 
 	// Build the staging plan by rebasing skeleton AbsPaths from realRoot → stageRoot.
 	stagePlan := make([]pathsafe.PlannedFile, 0, len(skeletonPlan)+1)
 	for _, f := range skeletonPlan {
 		rel, relErr := filepath.Rel(realRoot, f.AbsPath)
 		if relErr != nil {
-			return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			err = errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold stage: rebase skeleton path", relErr,
-				errcode.WithDetails(slog.String("path", f.AbsPath)))
+				errcode.WithDetails(slog.String("path", f.AbsPath)),
+				errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
+			return "", err
 		}
 		stagePlan = append(stagePlan, pathsafe.PlannedFile{
 			AbsPath:        filepath.Join(stageRoot, rel),
@@ -74,20 +110,26 @@ func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFi
 
 	// Copy the shared error schema from realRoot so contractgen can resolve
 	// relative SchemaRef paths in the scaffolded contract.yaml.
+	// If absent, log a warning — projects may not have the shared schema yet.
 	schemaAbs := filepath.Join(realRoot, filepath.FromSlash(sharedErrorSchemaRelPath))
 	schemaContent, readErr := os.ReadFile(schemaAbs) //nolint:gosec // known fixed path under project root
 	if readErr == nil {
-		// Only include when present — projects may not have the shared schema yet.
+		// Only include when present.
 		stagePlan = append(stagePlan, pathsafe.PlannedFile{
 			AbsPath: filepath.Join(stageRoot, filepath.FromSlash(sharedErrorSchemaRelPath)),
 			Content: schemaContent,
 		})
+	} else {
+		slog.Warn("scaffold stage: shared error schema not found; derived codegen may be incomplete",
+			slog.String("path", schemaAbs))
 	}
 
 	// Write skeleton + schema into the staging root via the funnel.
 	if writeErr := pathsafe.WritePlannedFiles(stageRoot, stagePlan, false); writeErr != nil {
-		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"scaffold stage: materialize skeleton", writeErr)
+		err = errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold stage: materialize skeleton", writeErr,
+			errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
+		return "", err
 	}
 	return stageRoot, nil
 }
@@ -111,41 +153,38 @@ func appendDerivedCodegenStaged(realRoot, cellID string, skeletonPlan []pathsafe
 // appendDerivedCodegen parses the staging root, renders contractgen and cellgen
 // artifacts in-memory (contract first, then cell so DTO types are available),
 // and appends them to mergedPlan with AbsPaths rebased to realRoot and
-// ForceOverwrite=true. The staging root is ephemeral and must be cleaned up by
-// the caller.
+// ForceOverwrite=true. The staging root is managed by the caller
+// (appendDerivedCodegenStaged), which defers RemoveAll.
 func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []pathsafe.PlannedFile) ([]pathsafe.PlannedFile, error) {
 	project, err := metadata.NewParser(stageRoot).Parse()
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: parse staged metadata", err,
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(slog.String("cellID", cellID)),
+			errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
 	}
 
 	// Contract artifacts first so generated DTO types are available for cellgen.
-	contractIDs, err := contractgen.ContractIDsForCell(project, cellID)
-	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"scaffold stage: list contracts for cell", err,
-			errcode.WithDetails(slog.String("cellID", cellID)))
-	}
+	contractIDs := contractgen.ContractIDsForCell(project, cellID)
 	for _, cid := range contractIDs {
 		artifacts, artErr := contractgen.RenderContractArtifacts(stageRoot, project, cid)
 		if artErr != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold stage: render contract artifacts", artErr,
-				errcode.WithDetails(slog.String("contractID", cid)))
+				errcode.WithDetails(slog.String("contractID", cid)),
+				errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
 		}
 		for _, a := range artifacts {
-			// a.Path is stageRoot-relative (slash-separated).
-			absStage := filepath.Join(stageRoot, filepath.FromSlash(a.Path))
-			rel, relErr := filepath.Rel(stageRoot, absStage)
-			if relErr != nil {
+			// a.Path is stageRoot-relative (slash-separated). Route through
+			// pathsafe.ContainPath for defense-in-depth symlink walk on realRoot.
+			absReal, cerr := pathsafe.ContainPath(realRoot, filepath.FromSlash(a.Path))
+			if cerr != nil {
 				return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-					"scaffold stage: rebase contract artifact", relErr,
+					"scaffold stage: rebase contract artifact", cerr,
 					errcode.WithDetails(slog.String("artifactPath", a.Path)))
 			}
 			mergedPlan = append(mergedPlan, pathsafe.PlannedFile{
-				AbsPath:        filepath.Join(realRoot, rel),
+				AbsPath:        absReal,
 				Content:        a.Content,
 				ForceOverwrite: true,
 			})
@@ -157,12 +196,20 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: render cell artifacts", err,
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(slog.String("cellID", cellID)),
+			errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
 	}
 	for _, a := range cellArtifacts {
-		// a.RelPath is stageRoot-relative.
+		// a.RelPath is stageRoot-relative. Route through ContainPath on realRoot
+		// for defense-in-depth symlink walk.
+		absReal, cerr := pathsafe.ContainPath(realRoot, filepath.FromSlash(a.RelPath))
+		if cerr != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"scaffold stage: rebase cell artifact", cerr,
+				errcode.WithDetails(slog.String("relPath", a.RelPath)))
+		}
 		mergedPlan = append(mergedPlan, pathsafe.PlannedFile{
-			AbsPath:        filepath.Join(realRoot, filepath.FromSlash(a.RelPath)),
+			AbsPath:        absReal,
 			Content:        a.Content,
 			ForceOverwrite: true,
 		})

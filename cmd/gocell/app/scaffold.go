@@ -508,7 +508,7 @@ func validateSliceScaffoldFlags(id, cellID, level string) error {
 // scaffoldSlice produces an empty slice skeleton (slice.yaml only) under
 // cells/{cellID}/slices/{sliceID}/. K#09 inline-template path replaces the
 // deleted kernel/scaffold package; the bundle path used by `scaffold cell`
-// produces a richer slice via cellgen.ScaffoldCellBundle. For a complete
+// produces a richer slice via cellgen.PlanCellBundleScaffold. For a complete
 // slice with service.go + service_test.go skeleton, prefer
 // `gocell scaffold cell --id=<cell> --with-http`.
 //

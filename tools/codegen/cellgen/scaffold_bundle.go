@@ -1,8 +1,9 @@
-// scaffold_bundle.go implements K#09 ScaffoldCellBundle: a one-shot scaffold
-// orchestrator that produces a compilable + testable cell skeleton in a
-// single call. Composes ScaffoldCell (cell.yaml + cell.go) with
-// ScaffoldExampleSlice (slice.yaml + service.go + service_test.go) and
-// ScaffoldExampleContract (contract.yaml + JSON schemas).
+// scaffold_bundle.go implements K#09 PlanCellBundleScaffold: a one-shot scaffold
+// planner that returns a merged []pathsafe.PlannedFile covering a compilable +
+// testable cell skeleton. Composes planCell (cell.yaml + cell.go) with
+// planHTTPExampleArtifacts / planEventExampleArtifacts (slice.yaml + service.go +
+// service_test.go + contract.yaml + JSON schemas). When SkipGenerate is false,
+// appendDerivedCodegenStaged (stage_render.go) appends derived codegen files.
 //
 // The resulting bundle layout (HTTP variant):
 //
@@ -55,7 +56,7 @@ var contractBundleTemplate = template.Must(template.New("scaffold-contract.tmpl"
 	ParseFS(templateFS, "templates/scaffold-contract.tmpl"))
 
 // bundleData is the shared template context for slice + contract bundle
-// templates. Computed once in ScaffoldCellBundle from a ScaffoldSpec.
+// templates. Computed once in planCellBundle from a ScaffoldSpec.
 type bundleData struct {
 	CellID         string
 	SlicePackage   string // SliceID with no dashes (Go package name)

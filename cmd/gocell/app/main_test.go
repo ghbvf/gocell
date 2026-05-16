@@ -21,6 +21,12 @@ import (
 // fd while another is still printing → empty capture). Independent mutexes
 // per stream avoid cross-stream deadlock; same-stream nested capture is not
 // a pattern any test uses.
+//
+// WARNING: nested same-stream capture DEADLOCKS — sync.Mutex is not
+// re-entrant. Calling captureStdout inside a captureStdout callback (or
+// captureStderr inside captureStderr) will block forever waiting for a lock
+// the outer call already holds. Cross-stream nesting (captureStdout inside
+// captureStderr or vice-versa) is safe because they use independent mutexes.
 var (
 	stdoutCaptureMu sync.Mutex
 	stderrCaptureMu sync.Mutex

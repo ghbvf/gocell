@@ -682,7 +682,8 @@ func TestPlanEventExampleArtifacts_HTTPAndEvents_DistinctSliceID(t *testing.T) {
 // and derived codegen files (ForceOverwrite=true), with no duplicate AbsPath.
 // Nothing is written to the project tree.
 //
-// RED: PlanCellBundleScaffold does not exist yet.
+// GREEN: PlanCellBundleScaffold delegates to appendDerivedCodegenStaged which
+// merges skeleton + derived into a single plan in-memory.
 func TestPlanCellBundleScaffold_MergedPlan(t *testing.T) {
 	t.Parallel()
 
@@ -789,6 +790,244 @@ func TestPlanCellBundleScaffold_MergedPlan(t *testing.T) {
 	// Nothing written to project tree (plan is in-memory only).
 	if _, statErr := os.Stat(filepath.Join(realRoot, "cells", "plantestcell")); statErr == nil {
 		t.Error("PlanCellBundleScaffold must not write to project tree")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F2 / F10: temp-dir cleanup + dup-guard backstop + cross-stage rollback
+// ---------------------------------------------------------------------------
+
+// TestMaterializeSkeletonStage_NoLeakOnInnerFailure asserts that when
+// materializeSkeletonStage fails after creating the temp dir (e.g. the
+// WritePlannedFiles step returns an error), no gocell-scaffold-stage-* entry
+// remains in os.TempDir(). This locks the F2 fix: named return + deferred
+// cleanup inside materializeSkeletonStage.
+func TestMaterializeSkeletonStage_NoLeakOnInnerFailure(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("os.TempDir() listing semantics differ on windows")
+	}
+
+	// Snapshot existing stage dirs before the test.
+	stageBefore := listStageDirs(t)
+
+	// Feed a skeleton plan that rebases from a realRoot that does NOT match
+	// the AbsPath prefix — filepath.Rel will produce a relative path with ".."
+	// segments if we pass a totally different root, but actually to trigger the
+	// WritePlannedFiles failure we can use a containment-escape path.
+	// Simplest reliable failure: pass an AbsPath whose Rel(...) call succeeds
+	// but then pathsafe.WritePlannedFiles fails because the plan contains an
+	// absolute path outside stageRoot (symlink-escape).
+	//
+	// Even simpler: use a plan with a file whose content triggers an OS-level
+	// write error by making the stageRoot read-only after MkdirTemp — but that
+	// is fragile as root. Instead, just make realRoot → AbsPath relationship
+	// inconsistent so filepath.Rel returns a "../../..." path, causing
+	// pathsafe.WritePlannedFiles to reject it (containment check).
+	realRoot := t.TempDir()
+	resolved, err := pathsafe.ResolveRoot(realRoot)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+	// Craft a plan entry whose AbsPath is NOT under resolved — triggers
+	// pathsafe containment rejection inside materializeSkeletonStage.
+	outsideDir := t.TempDir()
+	badPlan := []pathsafe.PlannedFile{
+		{AbsPath: filepath.Join(outsideDir, "evil.txt"), Content: []byte("bad")},
+	}
+
+	_, stageErr := materializeSkeletonStage(resolved, badPlan)
+	if stageErr == nil {
+		t.Fatal("materializeSkeletonStage with outside AbsPath: want error, got nil")
+	}
+
+	// No new stage dirs should remain after the failure.
+	stageAfter := listStageDirs(t)
+	leaked := setDiff(stageAfter, stageBefore)
+	if len(leaked) > 0 {
+		t.Errorf("temp-dir leak: %d gocell-scaffold-stage-* dir(s) remain after inner failure: %v",
+			len(leaked), leaked)
+	}
+}
+
+// listStageDirs returns the set of gocell-scaffold-stage-* entries in os.TempDir().
+func listStageDirs(t *testing.T) map[string]struct{} {
+	t.Helper()
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		t.Fatalf("ReadDir(TempDir): %v", err)
+	}
+	out := make(map[string]struct{})
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "gocell-scaffold-stage-") {
+			out[filepath.Join(os.TempDir(), e.Name())] = struct{}{}
+		}
+	}
+	return out
+}
+
+// setDiff returns elements in a that are not in b.
+func setDiff(a, b map[string]struct{}) []string {
+	var out []string
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// TestPlanCellBundle_WithBothFlags_DupGuardIsBackstop asserts that the OLD
+// behavior (event reuses HTTP sliceID when withHTTP=true) would produce
+// duplicate AbsPath entries that pathsafe's duplicate-detection pass rejects.
+// This proves the dup-guard is the actual backstop and that planCellBundle's
+// distinct-sliceID fix closed the primary window.
+//
+// The test reconstructs the old behavior by calling planEventExampleArtifacts
+// with withHTTP=false (forcing same sliceID as HTTP) and then confirming that
+// when merged with HTTP artifacts, duplicates appear.
+func TestPlanCellBundle_WithBothFlags_DupGuardIsBackstop(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	realRoot, err := pathsafe.ResolveRoot(dir)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+
+	spec := ScaffoldSpec{
+		CellID:           "dupguardcell",
+		StructName:       "DupGuardCell",
+		Package:          "dupguardcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+	}
+	cellNoDash := strings.ReplaceAll(spec.CellID, "-", "")
+	sliceID := cellNoDash + "example"
+
+	// HTTP artifacts.
+	httpItems, err := planHTTPExampleArtifacts(realRoot, spec, cellNoDash, sliceID)
+	if err != nil {
+		t.Fatalf("planHTTPExampleArtifacts: %v", err)
+	}
+
+	// OLD behavior: event artifacts with same sliceID (withHTTP=false in old code).
+	// We simulate by calling planEventExampleArtifacts with withHTTP=false,
+	// which keeps the same sliceID instead of appending "eventexample".
+	oldEventItems, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, sliceID, false /* withHTTP=false → same sliceID */)
+	if err != nil {
+		t.Fatalf("planEventExampleArtifacts (old behavior): %v", err)
+	}
+
+	combined := make([]pathsafe.PlannedFile, 0, len(httpItems)+len(oldEventItems))
+	combined = append(combined, httpItems...)
+	combined = append(combined, oldEventItems...)
+
+	// Detect duplicates — the dup-guard backstop must fire.
+	seen := make(map[string]int)
+	for _, f := range combined {
+		seen[f.AbsPath]++
+	}
+	var dups []string
+	for path, count := range seen {
+		if count > 1 {
+			rel, _ := filepath.Rel(realRoot, path)
+			dups = append(dups, rel)
+		}
+	}
+	if len(dups) == 0 {
+		t.Fatal("expected duplicate AbsPath entries with old same-sliceID behavior; got none — dup-guard backstop not exercised")
+	}
+	// Verify WritePlannedFiles rejects the duplicate plan (dup-guard backstop).
+	if err := pathsafe.WritePlannedFiles(realRoot, combined, true /* dryRun */); err == nil {
+		t.Error("WritePlannedFiles must reject duplicate AbsPath plan; got nil error")
+	}
+}
+
+// TestPlanCellBundleScaffold_CrossStageRollback_NoStagingDir asserts that when
+// a derived-file write failure (e.g. ForceOverwrite target is a directory)
+// rolls back skeleton files AND leaves no gocell-scaffold-stage-* dir in TempDir.
+func TestPlanCellBundleScaffold_CrossStageRollback_NoStagingDir(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("MkdirAll on conflict path semantics differ on windows")
+	}
+
+	root := t.TempDir()
+	// Must have go.mod for metadata.NewParser to work inside appendDerivedCodegen.
+	if err := os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module github.com/ghbvf/gocell\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Include shared error schema so contractgen can render.
+	schemaDir := filepath.Join(root, "contracts", "shared", "errors")
+	if err := os.MkdirAll(schemaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realSchemaPath := filepath.Join("..", "..", "..", "contracts", "shared", "errors", "error-response-v1.schema.json")
+	schemaContent, schemaErr := os.ReadFile(realSchemaPath) //nolint:gosec // test fixture
+	if schemaErr != nil {
+		t.Skipf("cannot read shared error schema: %v", schemaErr)
+	}
+	schemaOut := filepath.Join(schemaDir, "error-response-v1.schema.json")
+	if err := os.WriteFile(schemaOut, schemaContent, 0o644); err != nil { //nolint:gosec // tempdir test fixture
+		t.Fatal(err)
+	}
+
+	// Pre-place a directory at the types_gen.go path to cause WritePlannedFiles
+	// to fail when writing the ForceOverwrite derived file.
+	conflictDir := filepath.Join(root, "generated", "contracts", "http", "rollbackstage", "example", "v1", "types_gen.go")
+	if err := os.MkdirAll(conflictDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stageBefore := listStageDirs(t)
+
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+
+	spec := ScaffoldSpec{
+		CellID:           "rollbackstage",
+		StructName:       "RollbackStage",
+		Package:          "rollbackstage",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithHTTP:         true,
+	}
+
+	plan, planErr := PlanCellBundleScaffold(realRoot, spec)
+	if planErr != nil {
+		t.Fatalf("PlanCellBundleScaffold: %v", planErr)
+	}
+	writeErr := pathsafe.WritePlannedFiles(realRoot, plan, false)
+	if writeErr == nil {
+		t.Fatal("WritePlannedFiles with conflicting derived path: want error, got nil")
+	}
+
+	// Skeleton files must not exist after rollback.
+	for _, rel := range []string{
+		"cells/rollbackstage/cell.yaml",
+		"cells/rollbackstage/cell.go",
+		"cells/rollbackstage/slices/rollbackstageexample/slice.yaml",
+	} {
+		if _, statErr := os.Stat(filepath.Join(root, rel)); statErr == nil {
+			t.Errorf("cross-stage rollback: skeleton file must not exist: %s", rel)
+		}
+	}
+
+	// No staging temp dir must remain.
+	stageAfter := listStageDirs(t)
+	leaked := setDiff(stageAfter, stageBefore)
+	if len(leaked) > 0 {
+		t.Errorf("staging temp dir leaked after write failure: %v", leaked)
 	}
 }
 
