@@ -9,10 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -195,7 +192,7 @@ func TestSweepOnce_CoversSentAndDelivered(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Sweeper integration tests (new: uses ActiveScanner + Queue)
+// Mock helpers
 // ---------------------------------------------------------------------------
 
 // mockScanner is an in-test ActiveScanner that returns a fixed set of entries.
@@ -270,190 +267,144 @@ func (a *mockAckQueue) Calls() []ackCall {
 
 var _ command.Queue = (*mockAckQueue)(nil)
 
-func TestSweeper_Start_CtxCancelExits(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	scanner := &mockScanner{}
-	q := &mockAckQueue{}
-	s, err := command.NewSweeper(scanner, q, clock.Real(),
-		command.WithSweeperInterval(testtime.D10ms))
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-	cancel()
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(testtime.D2s):
-		t.Fatal("Start did not exit after ctx cancel")
-	}
-}
+// ---------------------------------------------------------------------------
+// SweepTick tests (new API — B1-a: replaces runTick/Start)
+// ---------------------------------------------------------------------------
 
-func TestSweeper_Stop_Idempotent(t *testing.T) {
+// TestSweepTick_ScannerError verifies that when scanner returns an error,
+// SweepTick returns that error (no longer silently calls onError).
+func TestSweepTick_ScannerError(t *testing.T) {
 	t.Parallel()
-	s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clock.Real())
+	scanErr := errors.New("db unavailable")
+	scanner := &mockScanner{err: scanErr}
+	q := &mockAckQueue{}
+
+	s, err := command.NewSweeper(scanner, q)
 	require.NoError(t, err)
-	// Stop is a no-op regardless of state.
-	assert.NoError(t, s.Stop(context.Background()))
-	assert.NoError(t, s.Stop(context.Background()))
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	got := s.SweepTick(context.Background(), now)
+	require.Error(t, got)
+	assert.ErrorIs(t, got, scanErr)
 }
 
-func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
-	// created is well in the past so the entry is expired relative to clock.Real().Now().
+// TestSweepTick_AckError verifies that a single Ack error is returned.
+func TestSweepTick_AckError(t *testing.T) {
+	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+	expiredEntry := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
 		OverallDeadline: testtime.D1min,
 	}, created)
-
 	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
-	q := &mockAckQueue{}
 
-	s, err := command.NewSweeper(scanner, q, clock.Real(),
-		command.WithSweeperFilter(command.ScanFilter{DeviceID: "dev-1"}),
-		command.WithSweeperInterval(testtime.D10ms))
+	ackErr := errors.New("ack rejected")
+	q := &mockAckQueue{err: ackErr}
+
+	s, err := command.NewSweeper(scanner, q)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-
-	require.Eventually(t, func() bool {
-		return q.CallCount() >= 1
-	}, testtime.D2s, testtime.D10ms, "Queue.Ack must have been called at least once")
-	cancel()
-	<-done
-
-	calls := q.Calls()
-	require.NotEmpty(t, calls, "Queue.Ack must have been called at least once")
-	assert.Equal(t, "cmd-expired", calls[0].id)
-	assert.Equal(t, command.AckTimeout, calls[0].reason)
+	now := created.Add(testtime.D5min) // past deadline
+	got := s.SweepTick(context.Background(), now)
+	require.Error(t, got)
+	assert.ErrorIs(t, got, ackErr)
 }
 
-func TestSweeper_Start_PropagatesScanFilter(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
-	scanner := &mockScanner{}
-	q := &mockAckQueue{}
-	filter := command.ScanFilter{DeviceID: "dev-42", Statuses: []command.Status{command.StatusPending}}
-	s, err := command.NewSweeper(scanner, q, clock.Real(),
-		command.WithSweeperFilter(filter),
-		command.WithSweeperInterval(testtime.D10ms))
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-
-	require.Eventually(t, func() bool {
-		scanner.mu.Lock()
-		defer scanner.mu.Unlock()
-		return scanner.calls >= 1
-	}, testtime.D2s, testtime.D10ms, "Sweeper must call Scanner.ScanActive at least once")
-	cancel()
-	<-done
-
-	scanner.mu.Lock()
-	defer scanner.mu.Unlock()
-	assert.Equal(t, filter, scanner.lastFilter, "Sweeper must pass Filter to Scanner.ScanActive")
-}
-
-func TestSweeper_Start_OnError_Callback(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
-	scannerErr := errors.New("db unavailable")
-	scanner := &mockScanner{err: scannerErr}
-	q := &mockAckQueue{}
-
-	var (
-		errMu     sync.Mutex
-		errCalled int
-	)
-	s, err := command.NewSweeper(scanner, q, clock.Real(),
-		command.WithSweeperInterval(testtime.D10ms),
-		command.WithSweeperOnError(func(err error) {
-			errMu.Lock()
-			defer errMu.Unlock()
-			errCalled++
-		}))
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-
-	require.Eventually(t, func() bool {
-		errMu.Lock()
-		defer errMu.Unlock()
-		return errCalled >= 1
-	}, testtime.D2s, testtime.D10ms, "OnError must be called when Scanner returns error")
-	cancel()
-	<-done
-
-	errMu.Lock()
-	n := errCalled
-	errMu.Unlock()
-	assert.GreaterOrEqual(t, n, 1, "OnError must be called when Scanner returns error")
-}
-
-func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
-	// created is well in the past so the entry is expired relative to clock.Real().Now().
+// TestSweepTick_MultipleAckErrors verifies errors.Join aggregates all Ack errors.
+func TestSweepTick_MultipleAckErrors(t *testing.T) {
+	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+	e1 := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
 		OverallDeadline: testtime.D1min,
 	}, created)
+	e2 := command.NewEntry("cmd-2", "dev-2", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: testtime.D1min,
+	}, created)
+	scanner := &mockScanner{entries: []command.Entry{e1, e2}}
 
-	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
-	q := &mockAckQueue{err: errors.New("ack rejected")}
+	ackErr := errors.New("ack rejected")
+	q := &mockAckQueue{err: ackErr}
 
-	var (
-		errMu     sync.Mutex
-		errCalled int
-	)
-	s, err := command.NewSweeper(scanner, q, clock.Real(),
-		command.WithSweeperInterval(testtime.D10ms),
-		command.WithSweeperOnError(func(err error) {
-			errMu.Lock()
-			defer errMu.Unlock()
-			errCalled++
-		}))
+	s, err := command.NewSweeper(scanner, q)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
+	now := created.Add(testtime.D5min)
+	got := s.SweepTick(context.Background(), now)
+	require.Error(t, got)
+	// Both Ack errors should be joined
+	assert.ErrorIs(t, got, ackErr)
+	// Two ack calls were made
+	assert.Equal(t, 2, q.CallCount())
+}
 
-	require.Eventually(t, func() bool {
-		errMu.Lock()
-		defer errMu.Unlock()
-		return errCalled >= 1
-	}, testtime.D2s, testtime.D10ms, "OnError must be called when Queue.Ack returns error")
-	cancel()
-	<-done
+// TestSweepTick_MixedErrors verifies scanner error AND Ack errors are all joined.
+func TestSweepTick_MixedErrors(t *testing.T) {
+	t.Parallel()
+	scanErr := errors.New("scan failed")
+	scanner := &mockScanner{err: scanErr}
+	q := &mockAckQueue{}
 
-	errMu.Lock()
-	n := errCalled
-	errMu.Unlock()
-	assert.GreaterOrEqual(t, n, 1, "OnError must be called when Queue.Ack returns error")
+	s, err := command.NewSweeper(scanner, q)
+	require.NoError(t, err)
+
+	now := time.Now()
+	got := s.SweepTick(context.Background(), now)
+	require.Error(t, got)
+	assert.ErrorIs(t, got, scanErr)
+	// No Ack calls when scanner fails
+	assert.Equal(t, 0, q.CallCount())
+}
+
+// TestSweepTick_NoExpiredEntries verifies nil error when nothing expires.
+func TestSweepTick_NoExpiredEntries(t *testing.T) {
+	t.Parallel()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: testtime.D1h,
+	}, created)
+	scanner := &mockScanner{entries: []command.Entry{e}}
+	q := &mockAckQueue{}
+
+	s, err := command.NewSweeper(scanner, q)
+	require.NoError(t, err)
+
+	now := created.Add(testtime.D30min) // before deadline
+	got := s.SweepTick(context.Background(), now)
+	assert.NoError(t, got)
+	assert.Equal(t, 0, q.CallCount())
+}
+
+// TestSweepTick_NilReceiverReturnsError pins the nil-receiver guard in SweepTick.
+func TestSweepTick_NilReceiverReturnsError(t *testing.T) {
+	t.Parallel()
+	var s *command.Sweeper
+	err := s.SweepTick(context.Background(), time.Now())
+	require.Error(t, err)
+}
+
+// TestSweepTick_ZeroValueLiteralReturnsError pins built sentinel guard in SweepTick.
+func TestSweepTick_ZeroValueLiteralReturnsError(t *testing.T) {
+	t.Parallel()
+	var s command.Sweeper
+	err := s.SweepTick(context.Background(), time.Now())
+	require.Error(t, err)
+}
+
+// TestNewSweeper_NewSignatureNoClockParam verifies the new signature
+// (scanner, queue, opts...) — no clock parameter.
+func TestNewSweeper_NewSignatureNoClockParam(t *testing.T) {
+	t.Parallel()
+	s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{})
+	require.NoError(t, err)
+	require.NotNil(t, s)
 }
 
 // TestNewSweeper_TypedNilScannerRejected pins the typed-nil interface guard
-// for the scanner positional dep. Composition roots routinely write
-// `var s *postgresActiveScanner; command.NewSweeper(s, ...)` and a bare
-// nil check returns false; the typed-nil pointer would be stored as a
-// non-nil interface and panic on the first ScanActive call.
-//
-// We use mockScanner (already implementing ActiveScanner) as the typed-nil
-// vessel — declaring a fresh interface-implementing type just for this test
-// would duplicate the full method set without changing what we're testing.
+// for the scanner positional dep.
 func TestNewSweeper_TypedNilScannerRejected(t *testing.T) {
 	t.Parallel()
 	var s *mockScanner
 	var scanner command.ActiveScanner = s
-	_, err := command.NewSweeper(scanner, &mockAckQueue{}, clock.Real())
+	_, err := command.NewSweeper(scanner, &mockAckQueue{})
 	require.Error(t, err, "NewSweeper must reject typed-nil scanner")
 }
 
@@ -461,97 +412,61 @@ func TestNewSweeper_TypedNilQueueRejected(t *testing.T) {
 	t.Parallel()
 	var q *mockAckQueue
 	var queue command.Queue = q
-	_, err := command.NewSweeper(&mockScanner{}, queue, clock.Real())
+	_, err := command.NewSweeper(&mockScanner{}, queue)
 	require.Error(t, err, "NewSweeper must reject typed-nil queue")
 }
 
-// TestNewSweeper_TypedNilClockRejected uses clockmock.FakeClock as the
-// typed-nil vessel — clock.Real() returns a concrete value, so we need
-// any *T that implements Clock to construct the typed-nil interface.
-func TestNewSweeper_TypedNilClockRejected(t *testing.T) {
+// TestSweepTick_AcksExpiredEntries verifies that Ack is called for expired entries.
+func TestSweepTick_AcksExpiredEntries(t *testing.T) {
 	t.Parallel()
-	var c *clockmock.FakeClock
-	var clk clock.Clock = c
-	_, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clk)
-	require.Error(t, err, "NewSweeper must reject typed-nil clock")
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: testtime.D1min,
+	}, created)
+	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
+	q := &mockAckQueue{}
+
+	s, err := command.NewSweeper(scanner, q)
+	require.NoError(t, err)
+
+	now := created.Add(testtime.D5min) // past deadline
+	require.NoError(t, s.SweepTick(context.Background(), now))
+	calls := q.Calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "cmd-expired", calls[0].id)
+	assert.Equal(t, command.AckTimeout, calls[0].reason)
+}
+
+// TestSweepTick_FilterPropagated verifies filter is passed to scanner.
+func TestSweepTick_FilterPropagated(t *testing.T) {
+	t.Parallel()
+	scanner := &mockScanner{}
+	q := &mockAckQueue{}
+	filter := command.ScanFilter{DeviceID: "dev-42", Statuses: []command.Status{command.StatusPending}}
+
+	s, err := command.NewSweeper(scanner, q, command.WithSweeperFilter(filter))
+	require.NoError(t, err)
+
+	require.NoError(t, s.SweepTick(context.Background(), time.Now()))
+	scanner.mu.Lock()
+	defer scanner.mu.Unlock()
+	assert.Equal(t, filter, scanner.lastFilter)
 }
 
 // TestSweeper_StartZeroValueLiteralRejected closes the zero-value literal
-// attack surface: `&command.Sweeper{}` from outside the package is legal
-// (no unexported field references), so callers can bypass NewSweeper. The
-// built-sentinel + Start head fail-closed turns this into a clean error
-// instead of a panic on nil clock.NewTicker.
-//
-// Repro of pre-fix bug: deleting the `built` field check from Start makes
-// this test panic with a nil pointer dereference inside s.clk.NewTicker.
+// attack surface via SweepTick (Start is removed; SweepTick is the new API).
 func TestSweeper_StartZeroValueLiteralRejected(t *testing.T) {
 	t.Parallel()
 	var s command.Sweeper
-	err := s.Start(context.Background())
-	require.Error(t, err, "zero-value Sweeper.Start must fail-closed instead of panicking on nil clock")
+	// SweepTick has the built guard now
+	err := s.SweepTick(context.Background(), time.Now())
+	require.Error(t, err, "zero-value Sweeper.SweepTick must fail-closed instead of panicking")
 }
 
-// TestSweeper_StartNilReceiverRejected pins the nil-receiver branch:
-// `var s *command.Sweeper; s.Start(ctx)` would otherwise panic on the
-// s.built read inside Start. The `if s == nil` guard returns a typed error
-// instead, completing the runtime fail-closed defense around the unexported
-// `built` sentinel (the literal `&Sweeper{}` and pointer-zero forms now
-// both surface as errors rather than panics).
+// TestSweeper_StartNilReceiverRejected pins the nil-receiver branch on SweepTick.
 func TestSweeper_StartNilReceiverRejected(t *testing.T) {
 	t.Parallel()
 	var s *command.Sweeper
-	err := s.Start(context.Background())
-	require.Error(t, err, "nil-receiver Sweeper.Start must fail-closed instead of panicking on s.built")
-}
-
-// negativeIntervalSentinel is a single-source non-positive duration used
-// by TestNewSweeper_NegativeIntervalDefaulted; extracted as a const to
-// satisfy TEST-TIME-LITERAL-01 (test-time durations must come from a
-// package-level const, not inline literals).
-const negativeIntervalSentinel = -1 * time.Second
-
-// TestNewSweeper_NegativeIntervalDefaulted pins the non-positive-interval
-// branch of Start: WithSweeperInterval(<= 0) is silently overridden by
-// defaultCommandSweeperInterval (30s) so the loop ticker is well-defined.
-// Without this test, a future refactor dropping the `if interval <= 0`
-// guard could regress to clock.NewTicker(-1) panics.
-func TestNewSweeper_NegativeIntervalDefaulted(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		interval time.Duration
-	}{
-		{"zero", 0},
-		{"negative", negativeIntervalSentinel},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clock.Real(),
-				command.WithSweeperInterval(tc.interval))
-			require.NoError(t, err)
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel() // cancel immediately — no ticks fire
-			err = s.Start(ctx)
-			require.NoError(t, err, "non-positive interval must default; Start must not panic")
-		})
-	}
-}
-
-func TestSweeper_DefaultInterval(t *testing.T) {
-	t.Parallel()
-	// Verify that omitting WithSweeperInterval defaults the tick to 30s and
-	// does not panic during Start; cancel immediately so no tick fires.
-	scanner := &mockScanner{}
-	q := &mockAckQueue{}
-
-	s, err := command.NewSweeper(scanner, q, clock.Real())
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately — no ticks will fire
-
-	// Should return immediately without error (ctx already canceled).
-	err = s.Start(ctx)
-	assert.NoError(t, err)
+	err := s.SweepTick(context.Background(), time.Now())
+	require.Error(t, err, "nil-receiver Sweeper.SweepTick must fail-closed")
 }
