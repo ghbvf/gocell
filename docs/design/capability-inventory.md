@@ -14,8 +14,8 @@
 | **cells/** | 3 platform Cell, 22 platform slices | 全部 IMPL | accesscore(10s) / auditcore(5s) / configcore(7s) |
 | **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + corebundle |
 | **pkg/** | 5 包 | 全部 IMPL | errcode/ctxkeys/httputil/id/uid |
-| **contracts/** | 64 active YAML | 声明完成 | 45 platform + 19 examples |
-| **journeys/** | 8 YAML | 声明完成 | SSO/onboarding/lockout/refresh/logout/audit-trail/hot-reload/rollback |
+| **contracts/** | 66 active YAML | 声明完成 | 47 platform + 19 examples |
+| **journeys/** | 9 YAML | 声明完成 | SSO/onboarding/lockout/refresh/logout/audit-trail/hot-reload/rollback/typed-envelope-roundtrip |
 | **infra** | 4 服务 | 配置完成 | Docker Compose (PG/Redis/RabbitMQ/MinIO) + Makefile |
 | **docs** | 28 文件 | 完成 | 架构/指南/评审/参考 |
 
@@ -200,7 +200,7 @@
 
 ---
 
-## 5. Cells 层（3 platform Cells, 19 platform Slices）
+## 5. Cells 层（3 platform Cells, 22 platform Slices）
 
 ### 5.1 accesscore (L2, core)
 | Slice | 功能 | 端点 |
@@ -214,6 +214,7 @@
 | rbacassign | RBAC 角色授予/撤销 | POST /internal/v1/access/roles/assign, POST /internal/v1/access/roles/revoke |
 | authorizationdecide | 权限决策 | internal service capability; no public HTTP route |
 | configreceive | 配置状态同步接收 | event.config.entry-upserted.v1 + event.config.entry-deleted.v1 subscriber |
+| setup | 首启引导（管理员初始化 + 状态查询） | GET /api/v1/access/setup/status, POST /api/v1/access/setup/admin |
 
 Domain: User (PasswordHash/Status/CreatedAt) + Session (TokenPair/ExpiresAt/PreviousRefreshToken) + Role
 Ports: UserRepository + SessionRepository + RoleRepository
@@ -222,14 +223,15 @@ Adapters: internal/mem (in-memory)
 ### 5.2 auditcore (L3, core)
 | Slice | 功能 |
 |-------|------|
-| auditappend | 事件追加 + HMAC-SHA256 hash chain |
-| auditverify | 完整性验证 |
-| auditquery | GET /api/v1/audit/entries + time.Parse 400 校验 |
-| auditarchive | S3 归档（stub） |
+| auditappendconfig | event.config.entry-upserted.v1 → event.audit.appended.v1（hash chain 追加） |
+| auditappendrole | event.role.assigned.v1 → event.audit.appended.v1 |
+| auditappendsession | event.session.created.v1 → event.audit.appended.v1 |
+| auditappenduser | event.user.created.v1 → event.audit.appended.v1 |
+| auditquery | GET /api/v1/audit/entries + time.Parse 400 校验 + 出站 redaction |
 
-Domain: AuditEntry (PrevHash/Hash/Payload)
-Ports: AuditRepository + ArchiveStore
-Adapters: internal/mem + internal/adapters/postgres (AuditRepository PG) + internal/adapters/s3archive (ArchiveStore wrapper)
+Domain: AuditEntry (PrevHash/Hash/Payload)，HMAC-SHA256 hash chain
+Ports: `runtime/audit/ledger.Store`（Append/Tail + RepoReady → `audit_ledger_ready` probe）
+Adapters: internal/mem + PG-backed ledger store（`audit_entries` JSONB）
 
 ### 5.3 configcore (L2, core)
 | Slice | 功能 |
@@ -268,13 +270,13 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 
 ---
 
-## 7. Contracts（64 active, including examples）
+## 7. Contracts（66 active, including examples）
 
 | Scope | HTTP | Event | Command | Total |
 |-------|------|-------|---------|-------|
-| Platform (`contracts/`) | 32 | 13 | 0 | 45 |
+| Platform (`contracts/`) | 33 | 14 | 0 | 47 |
 | Examples (`examples/*/contracts/`) | 12 | 2 | 5 | 19 |
-| Total | 44 | 15 | 5 | 64 |
+| Total | 45 | 16 | 5 | 66 |
 
 当前公开 HTTP route 只来自 `contract.yaml` 的 `kind: http` + `method/path`。`sessionvalidate` 与 `authorizationdecide` 是 accesscore 内部 service 能力，不再作为公开 HTTP route 记录。
 
@@ -288,7 +290,7 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 
 ---
 
-## 8. Journeys（8 个）
+## 8. Journeys（9 个）
 
 | Journey | 涉及 Cell | 类型 |
 |---------|----------|------|
@@ -300,6 +302,7 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 | J-auditlogintrail | auditcore, accesscore | 跨 Cell |
 | J-confighotreload | configcore, accesscore, auditcore | 跨 Cell |
 | J-configrollback | configcore, accesscore, auditcore | 跨 Cell |
+| J-typed-envelope-roundtrip | accesscore | 单 Cell |
 
 ---
 
