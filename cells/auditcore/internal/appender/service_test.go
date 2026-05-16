@@ -252,6 +252,16 @@ func TestService_HandleEvent_AppendFails_Classified(t *testing.T) {
 			wantDisp:    outbox.DispositionReject,
 			wantPermErr: true,
 		},
+		{
+			// context.Canceled is infra (IsInfraError true) and NOT transient
+			// → predicate !IsTransient && !IsInfraError == false → Requeue.
+			// Locks the fail-closed direction: a future change to the
+			// predicate that drops the IsInfraError clause would wrongly
+			// Reject canceled-context store failures.
+			name:     "context.Canceled (infra, not transient) → Requeue",
+			storeErr: context.Canceled,
+			wantDisp: outbox.DispositionRequeue,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

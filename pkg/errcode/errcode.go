@@ -389,11 +389,18 @@ const (
 	// ErrKeyProviderKeyNotFound / ErrKeyProviderRotateFailed, which signal
 	// permanent conditions (400 Bad Request, 403 Forbidden, 404 Not Found).
 	//
-	// EventBus Disposition routing:
-	//   - ErrKeyProviderTransient → DispositionRequeue (back-off retry)
-	//   - All other KeyProvider errors → DispositionReject (DLX)
+	// EventBus Disposition routing is driven by the WrapInfra transient
+	// marker, NOT by this code string (post-206). An error carries transient
+	// semantics only when constructed via WrapInfra (which sets the private
+	// Error.transient marker that IsTransient keys on):
 	//
-	// Use IsTransient to check the full error chain.
+	//   - WrapInfra(ErrKeyProviderTransient, …) → IsTransient true → Requeue
+	//   - New/Wrap(KindUnavailable, ErrKeyProviderTransient, …) → IsTransient
+	//     FALSE (no marker) → not transient. Do not hand-build this code and
+	//     expect Requeue; route through WrapInfra (vault.classifyVaultError).
+	//
+	// Use IsTransient(err) to check the full error chain — never compare
+	// against this code string for disposition.
 	//
 	// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
 	// (GenerateKeyError / DecryptKeyError transient vs permanent split).

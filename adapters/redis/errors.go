@@ -54,8 +54,16 @@ func classifyRedisError(err error, opCode errcode.Code, opMsg string) error {
 //  1. context.DeadlineExceeded → transient (deadline exceeded may succeed on retry).
 //     context.Canceled is excluded (caller gave up; retrying is pointless).
 //  2. net.Error.Timeout() == true → transient (socket I/O timeout).
-//  3. Error string contains "i/o timeout" → transient (fallback for plain errors
-//     that carry the network timeout message without implementing net.Error).
+//  3. Error string contains "i/o timeout" → transient. SOFT best-effort
+//     fallback, intentionally AFTER the typed net.Error.Timeout() check (2)
+//     which is the primary path: go-redis dial/socket timeouts implement
+//     net.Error and are caught by (2). (3) only catches plain errors that
+//     carry the message text without implementing net.Error. It is not the
+//     authoritative classifier; over/under-match here degrades to the
+//     fail-closed-permanent default (Requeue-then-budget-DLX), never to
+//     event loss. Not an AI-rebust enforcement mechanism (business
+//     classification, not archtest/governance) — no Soft-upgrade backlog
+//     entry required; the typed check (2) is the durable signal.
 //  4. Redis reply-code prefixes CLUSTERDOWN / LOADING / TRYAGAIN / MASTERDOWN →
 //     transient (server-recovering states; go-redis typed helpers via HasErrorPrefix
 //     are preferred; plain errors.New strings match the HasPrefix fallback path).

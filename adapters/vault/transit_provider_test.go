@@ -806,9 +806,13 @@ func TestIsTransientVaultError_ContextError(t *testing.T) {
 			wantTrans: true,
 		},
 		{
-			name:      "context.Canceled → transient",
+			// Post-206 unified semantic: context.Canceled is NOT transient
+			// (the caller gave up; retrying is pointless) — consistent with
+			// errcode.IsTransient and grpc-ecosystem retry defaults. Falls
+			// through step-4 (not a net error) → permanent.
+			name:      "context.Canceled → NOT transient (caller gave up)",
 			err:       context.Canceled,
-			wantTrans: true,
+			wantTrans: false,
 		},
 		{
 			name: "net.OpError → transient",

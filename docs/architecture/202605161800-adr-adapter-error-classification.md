@@ -86,6 +86,7 @@ reported (exact count, both false-negative and false-positive drift caught).
 | dual truth source (code string vs marker) | n/a | ✅ single marker; vault migrated; old branch deleted |
 | transient-looking error forged outside funnel | ⚠️ any code | ✅ unexported field + archtest = Hard |
 | oidc/websocket adapters classified | ❌ | ❌ (declared out of scope; fail-closed safe) |
+| classifier unknown-error default symmetry | ⚠️ vault step-4 was fail-open (any unknown → transient) | ✅ all four classifiers fail-closed-on-unknown: vault step-4 now requires `*net.OpError`/`net.Error`, else permanent — symmetric with classifyPG/Redis/S3 |
 
 ## Consequences
 

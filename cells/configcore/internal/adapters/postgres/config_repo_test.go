@@ -289,6 +289,16 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 					"transient KeyProvider faults must remain CategoryInfra (Vault outage signal)")
 				assert.True(t, errcode.IsInfraError(ec),
 					"IsInfraError must stay true so existing infra alerts fire")
+				// Design contract (206): cryptoOpError re-wraps the transient
+				// cause with errcode.Wrap (NOT WrapInfra) under its own
+				// ErrConfig* code, so the OUTER error does not carry the
+				// transient marker — IsTransient(ec) is false by design. The
+				// retry-safe signal is preserved via CategoryInfra/IsInfraError
+				// (the auditcore disposition predicate keys on IsInfraError,
+				// not IsTransient, for this re-classified cell-layer error).
+				assert.False(t, errcode.IsTransient(ec),
+					"cryptoOpError Wrap intentionally drops the transient marker; "+
+						"callers route on IsInfraError, not IsTransient")
 			})
 		}
 	})

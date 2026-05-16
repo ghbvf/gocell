@@ -8,10 +8,11 @@
 //   - WrapInfra      — the allowed writer (clean; MUST NOT be reported)
 //   - badAssign      — RED: assignment write outside WrapInfra
 //   - badLiteral     — RED: composite-literal write outside WrapInfra
+//   - badDeref       — RED: `(*e).transient = …` deref-form write outside WrapInfra
 //   - readOnly       — clean: a read of transient (MUST NOT be reported)
 //
 // The detector scanTransientMarkerWrites, pointed at this package's import
-// path, must report exactly the two RED sites. Loaded as a real Go package
+// path, must report exactly the three RED sites. Loaded as a real Go package
 // via packages.Load with the archtest_fixture build tag — bypassing the
 // reverse self-check requires editing this real source.
 package transientmarkerfixture
@@ -41,6 +42,15 @@ func badLiteral(code string) *Error {
 	return &Error{Code: code, transient: true} // RED: composite literal outside WrapInfra
 }
 
+// badDeref writes the marker via an explicit pointer deref outside WrapInfra
+// (RED). Locks that `(*e).transient = …` — whose SelectorExpr is still the
+// outermost AssignStmt LHS child — is detected, not a blind spot.
+func badDeref(code string) *Error {
+	e := &Error{Code: code}
+	(*e).transient = true // RED: deref-form assignment outside WrapInfra
+	return e
+}
+
 // readOnly only reads the marker — must not be flagged as a write.
 func readOnly(e *Error) bool {
 	if e.transient {
@@ -49,6 +59,9 @@ func readOnly(e *Error) bool {
 	return false
 }
 
-var _ = readOnly
-var _ = badAssign
-var _ = badLiteral
+var (
+	_ = readOnly
+	_ = badAssign
+	_ = badLiteral
+	_ = badDeref
+)

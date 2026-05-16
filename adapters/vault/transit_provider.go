@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -1043,10 +1044,13 @@ func classifyVaultReadError(err error) error {
 //  2. If err chain contains any other errcode.Error (permanent code like
 //     ErrKeyProviderEncryptFailed / ErrKeyProviderDecryptFailed) → permanent.
 //  3. If err is a *vaultapi.ResponseError → classify by HTTP status code.
-//  4. Pure network/context errors (no errcode, no ResponseError) → transient.
+//  4. Genuine *net.OpError / net.Error (no errcode, no ResponseError) →
+//     transient. Any other unknown error → permanent (fail-closed-on-unknown,
+//     consistent with classifyPGError / classifyRedisError / classifyS3Error).
 //
 // This ordering ensures injected permanent errcode errors (e.g. in unit tests)
-// are not accidentally re-classified as transient by the network-fallback case.
+// are not accidentally re-classified as transient by the network-fallback case,
+// and that a non-network unknown (JSON decode, SDK bug) is not retried forever.
 // errors.As is used throughout to support errors.Join / multi-Unwrap chains.
 func isTransientVaultError(err error) bool {
 	// 1. Explicit transient code in chain → transient.
@@ -1066,8 +1070,20 @@ func isTransientVaultError(err error) bool {
 		return isTransientHTTPStatus(respErr.StatusCode)
 	}
 
-	// 4. Pure network/context error (no errcode, no ResponseError) → transient.
-	return true
+	// 4. Genuine network error (no errcode, no ResponseError) → transient.
+	//    context.DeadlineExceeded and net.Error.Timeout() are already covered
+	//    transitively by step 1 (errcode.IsTransient). This branch catches the
+	//    non-timeout network failures — dial refused / connection reset —
+	//    surfaced as *net.OpError. Any OTHER unknown error (JSON decode, SDK
+	//    internal bug) falls through to false: fail-closed-on-unknown, the
+	//    same default as classifyPGError / classifyRedisError / classifyS3Error
+	//    (an unknown error degrades to Reject/permanent, never wrongly retried
+	//    forever). See ADR 202605161800 §"Coverage / threat re-eval".
+	// *net.OpError (dial refused / connection reset) implements net.Error,
+	// so a single net.Error probe covers both timeout and non-timeout
+	// network failures; any other unknown error → false (fail-closed).
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 // isTransientHTTPStatus reports whether an HTTP status code indicates a

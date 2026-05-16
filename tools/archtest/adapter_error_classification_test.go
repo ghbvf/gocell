@@ -34,6 +34,17 @@
 //     IsTransient false → consumer Requeues on the retry-then-budget-DLX path
 //     (fail-closed toward not losing an event). The broad no-bare-error sweep
 //     covering oidc/websocket is a separate, larger rule out of this PR's Cx3.
+//  5. Field address taken then written through the pointer
+//     (`p := &e.transient; *p = true`): the SelectorExpr is nested in a
+//     UnaryExpr (RHS of a different AssignStmt), not a direct AssignStmt-LHS
+//     child, so the AST scan does not see it. Compensation: the field is
+//     unexported — outside pkg/errcode this is a compile error (Go type
+//     system, the true Hard line); inside pkg/errcode the established
+//     convention is direct `e.transient = …` (caught) and the deref form
+//     `(*e).transient = …` is also caught (locked by fixture badDeref). The
+//     address-taken form is exotic, in-package only, and additionally caught
+//     by code review. Not closing it in the AST scan keeps the rule simple;
+//     the type-system Hard line already bounds the blast radius to this file.
 //
 // Reverse self-check: TestAdapterErrorClassificationTransient01_FixturePattern
 // loads a real build-tag-gated package whose transient-marker writes outside
@@ -129,10 +140,10 @@ func TestAdapterErrorClassificationTransient01_FixturePattern(t *testing.T) {
 	for _, d := range diags {
 		t.Log(d.Message)
 	}
-	require.Len(t, diags, 2,
-		"fixture must yield exactly 2 RED writes (badAssign assignment + "+
-			"badLiteral composite literal); WrapInfra writer and readOnly read "+
-			"must not be flagged")
+	require.Len(t, diags, 3,
+		"fixture must yield exactly 3 RED writes (badAssign assignment + "+
+			"badLiteral composite literal + badDeref (*e).transient); WrapInfra "+
+			"writer and readOnly read must not be flagged")
 
 	joined := ""
 	for _, d := range diags {
@@ -140,6 +151,7 @@ func TestAdapterErrorClassificationTransient01_FixturePattern(t *testing.T) {
 	}
 	assert.Contains(t, joined, "in badAssign (assignment)")
 	assert.Contains(t, joined, "in badLiteral (composite literal)")
+	assert.Contains(t, joined, "in badDeref (assignment)")
 	assert.NotContains(t, joined, "in WrapInfra")
 	assert.NotContains(t, joined, "in readOnly")
 }
@@ -171,7 +183,8 @@ func scanTransientMarkerWrites(p *Pass, errcodePkgPath, writerFunc string) []Dia
 				Message: fmt.Sprintf(
 					"errcode.Error.%s written in %s (%s); only func %s may set the "+
 						"transient marker (ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01)",
-					transientMarkerField, where, form, writerFunc),
+					transientMarkerField, where, form, writerFunc,
+				),
 			})
 		}
 		EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
