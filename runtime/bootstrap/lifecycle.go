@@ -63,11 +63,25 @@ const (
 //
 //	(containerName + pod structured slog fields, not name-encoded)
 type Hook struct {
-	CellID       string                          // runtime-stamped by phase3b; "" for WithLifecycle-appended hooks
-	Name         string                          // diagnostic name (log dimension)
-	OnStart      func(ctx context.Context) error // nil = no-op
+	CellID string // runtime-stamped by phase3b; "" for WithLifecycle-appended hooks
+	Name   string // diagnostic name (log dimension)
+
+	// OnStart is called with the owner ctx (long-lived, not a startup-deadline
+	// ctx). Bootstrap passes the ownerCtx derived from runCtx directly, without
+	// wrapping in a StartTimeout deadline. StartTimeout is retained as the hook's
+	// self-declared probe-window budget (informational; runner does not enforce).
+	//
+	// Supersedes ADR 202605102000 §D1 ("OnStart ctx carries startup-deadline
+	// semantics"). The new contract aligns with controller-runtime
+	// Runnable.Start(managerCtx): the hook should spawn a long-running goroutine
+	// on ownerCtx, run a fast synchronous probe, and return.
+	//
+	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go (engageStopProcedure)
+	OnStart func(ctx context.Context) error // nil = no-op
+
+	// OnStop carries a context with StopTimeout deadline applied by the runner.
 	OnStop       func(ctx context.Context) error // nil = no-op
-	StartTimeout time.Duration                   // 0=use default, <0=no timeout
+	StartTimeout time.Duration                   // hook self-declared probe budget (not enforced by runner)
 	StopTimeout  time.Duration                   // 0=use default, <0=no timeout
 }
 
@@ -242,8 +256,15 @@ func (lc *lifecycle) rollback(ctx context.Context) []error {
 	return errs
 }
 
-// runHook executes either OnStart (isStart=true) or OnStop (isStart=false) for h,
-// applying the per-hook timeout. Logs before/after each call.
+// runHook executes either OnStart (isStart=true) or OnStop (isStart=false) for h.
+//
+// OnStart path (isStart=true): ctx is passed directly to fn — it is the long-lived
+// owner ctx, NOT wrapped in a StartTimeout deadline. StartTimeout is used only for
+// the slow-start warning threshold (informational). This supersedes ADR 202605102000
+// §D1, which wrapped OnStart in applyTimeout(StartTimeout).
+//
+// OnStop path (isStart=false): applyTimeout(StopTimeout) is applied as before.
+// Logs before/after each call.
 func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 	var fn func(context.Context) error
 	var hookTimeout time.Duration
@@ -275,7 +296,17 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 
 	lc.logger.LogAttrs(ctx, slog.LevelInfo, startMsg, hookIdentityAttrs(h)...)
 
-	hookCtx, cancel := lc.applyTimeout(ctx, hookTimeout)
+	var hookCtx context.Context
+	var cancel context.CancelFunc
+	if isStart {
+		// OnStart receives the owner ctx directly (no timeout wrapping).
+		// The hook spawns its own worker goroutine and returns promptly.
+		// StartTimeout is retained as a slow-start warning threshold only.
+		hookCtx = ctx
+		cancel = func() {}
+	} else {
+		hookCtx, cancel = lc.applyTimeout(ctx, hookTimeout)
+	}
 	defer cancel()
 
 	t0 := lc.clock.Now()

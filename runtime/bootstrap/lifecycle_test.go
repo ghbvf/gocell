@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -225,38 +224,51 @@ func TestLifecycle_StopBestEffort_ErrorsCollected(t *testing.T) {
 	assert.Equal(t, want, stopCalls, "stop order")
 }
 
-// TestLifecycle_PerHookStartTimeout — hook blocks 100ms, StartTimeout=50ms →
-// Start returns error containing context.DeadlineExceeded; rollback runs for
-// the hooks that succeeded (none in this test, only hook failed).
-func TestLifecycle_PerHookStartTimeout(t *testing.T) {
+// TestLifecycle_OnStart_NoTimeoutEnforced verifies that StartTimeout is NOT
+// enforced by the lifecycle runner (supersedes ADR 202605102000 §D1).
+//
+// Old behavior: OnStart wrapped in context.WithTimeout(StartTimeout) — a hook
+// that blocked past StartTimeout would receive DeadlineExceeded from ctx.Done().
+//
+// New behavior: OnStart receives the owner ctx directly. A hook that takes
+// longer than StartTimeout still succeeds — the StartTimeout is informational
+// (used only for the slow-start warning). Hooks must return promptly on their
+// own (spawn goroutine + synchronous probe, then return).
+func TestLifecycle_OnStart_NoTimeoutEnforced(t *testing.T) {
 	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
-	var stopCalled atomic.Bool
+	startReturned := make(chan struct{})
 	_ = lc.Append(Hook{
 		Name: "blocker",
 		OnStart: func(ctx context.Context) error {
-			// Block longer than the per-hook timeout.
+			// Block for longer than StartTimeout (100ms > 50ms).
+			// Under old semantics this would cause DeadlineExceeded.
+			// Under new semantics the hook completes normally.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(lifecycleBlockHook):
+			case <-time.After(lifecycleBlockHook): // 100ms
+				close(startReturned)
 				return nil
 			}
 		},
-		OnStop: func(_ context.Context) error {
-			stopCalled.Store(true)
-			return nil
-		},
-		StartTimeout: lifecycleHookTimeout,
+		OnStop: func(_ context.Context) error { return nil },
+		StartTimeout: lifecycleHookTimeout, // 50ms — informational only, NOT enforced
 	})
 
 	ctx := context.Background()
 	err := lc.Start(ctx)
-	require.Error(t, err, "Start should return error on timeout")
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	// No error: StartTimeout is no longer a runner deadline.
+	require.NoError(t, err, "Start must not return error: StartTimeout is not enforced by runner")
 
-	// Hook never succeeded → its OnStop must NOT be called by rollback.
-	assert.False(t, stopCalled.Load(), "OnStop of failed hook must not be called during rollback")
+	// The hook ran to completion.
+	select {
+	case <-startReturned:
+	default:
+		t.Fatal("expected hook to complete and close startReturned channel")
+	}
+
+	require.NoError(t, lc.Stop(ctx))
 }
 
 // TestLifecycle_PerHookStopTimeoutIndependent — OnStop blocks 200ms with

@@ -131,6 +131,17 @@ type Bootstrap struct {
 
 	// --- time source ---
 	clock clock.Clock // required: bootstrap.New panics when WithClock is not applied
+
+	// --- owner ctx: long-lived worker context (controller-runtime pattern) ---
+	// Derived from runCtx (background-derived assembly runtime ctx) in Run(),
+	// before lifecycle.Start. Lifecycle hooks receive this ctx as their OnStart
+	// ctx so workers respond to assembly shutdown (ownerCancel) before lifecycle.Stop
+	// drains them. ownerCancel is invoked in LIFO teardown BEFORE lifecycle.Stop.
+	//
+	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
+	//      internalCtx=WithCancel(ctx) passed to Runnable.Start.
+	ownerCtx    context.Context
+	ownerCancel context.CancelFunc
 }
 
 // namedChecker pairs a readiness probe name with its check function.
@@ -425,16 +436,38 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase3bDrainLifecycleHooks(s); err != nil {
 		return rollback(err)
 	}
-	// Lifecycle Start — fail-fast; LIFO rollback is handled by Lifecycle itself.
+	// Derive ownerCtx from runCtx (the background-derived assembly runtime ctx).
+	// Lifecycle hooks receive ownerCtx as their OnStart ctx: workers can respond
+	// to ownerCancel for graceful shutdown before lifecycle.Stop drains them.
+	//
+	// LIFO teardown registration order (last-registered runs FIRST in LIFO):
+	//   1. Register lifecycle.Stop teardown first (runs second in LIFO).
+	//   2. Register ownerCancel teardown second (runs first in LIFO).
+	// Result: ownerCancel() → lifecycle.Stop() → asm.Stop → ...
+	// Workers receive ctx cancellation first, then OnStop drain waits.
+	//
 	// Registered after the asm.Stop teardown (phase3) so that lifecycle.Stop
 	// executes before asm.Stop in the LIFO teardown sequence, letting hooks
 	// still access cell resources during shutdown.
+	//
+	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
+	//      internalCtx=WithCancel(ctx) → Runnable.Start, then cancel before Stop.
 	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
-	if err := b.lifecycle.Start(ctx); err != nil {
+	b.ownerCtx, b.ownerCancel = context.WithCancel(runCtx)
+
+	if err := b.lifecycle.Start(b.ownerCtx); err != nil {
+		b.ownerCancel() // release before returning
 		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
 	}
+	// lifecycle.Stop teardown registered first → runs second in LIFO.
 	s.addTeardown(func(stopCtx context.Context) error {
 		return b.lifecycle.Stop(stopCtx)
+	})
+	// ownerCancel teardown registered second → runs first in LIFO (before lifecycle.Stop).
+	// This signals workers to exit via ctx cancellation before OnStop drains them.
+	s.addTeardown(func(_ context.Context) error {
+		b.ownerCancel()
+		return nil
 	})
 	if err := b.phase4WireAuthAndWatcher(s); err != nil {
 		return rollback(err)
