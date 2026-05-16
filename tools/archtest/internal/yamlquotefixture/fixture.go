@@ -29,3 +29,29 @@ func BypassViaAlias(raw string) AliasOfScalar {
 func CompliantQuoted() AliasOfScalar {
 	return AliasOfScalar(yamlsafe.Quote("safe"))
 }
+
+// BypassViaLiteral is a second violation site: a string literal directly
+// wrapped in the Scalar conversion. Without const-value detection in
+// allowedScalarConversionArg, Go's contextual typing would assign the
+// target type (Scalar) to the literal, causing the scanner to misidentify
+// it as "already typed as Scalar" and silently allow the bypass. Archtest
+// must flag this exactly like the variable-arg case.
+func BypassViaLiteral() yamlsafe.Scalar {
+	return yamlsafe.Scalar("evil-static-literal") //nolint:staticcheck // intentional bypass fixture
+}
+
+// BypassViaConstConcat exercises the next degree of constant evaluation:
+// a const expression "a"+"b" still resolves to a constant value under
+// types.Info.Types, so the same defense applies.
+func BypassViaConstConcat() yamlsafe.Scalar {
+	return yamlsafe.Scalar("evil-" + "concat") //nolint:staticcheck // intentional bypass fixture
+}
+
+// CompliantTypedScalar is a negative control: a yamlsafe.Scalar-typed
+// local variable feeding through an identity conversion (this is the
+// "already-Scalar" allowed path, distinct from the const-typing
+// misclassification fixed by the const-value detector).
+func CompliantTypedScalar() yamlsafe.Scalar {
+	s := yamlsafe.Quote("via-helper")
+	return yamlsafe.Scalar(s) // identity conversion, OK
+}
