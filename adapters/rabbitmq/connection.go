@@ -29,6 +29,11 @@ import (
 const (
 	ErrAdapterAMQPConnect            errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
 	ErrAdapterAMQPConnectPermanent   errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
+	// ErrAdapterAMQPConnectTimeout signals an AMQP dial/handshake timeout
+	// (net.Error.Timeout() == true). Always routed via errcode.WrapInfra →
+	// IsTransient(err) == true, distinguishing transient timeout from generic
+	// dial failures so consumers and operators can route differently.
+	ErrAdapterAMQPConnectTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_TIMEOUT"
 	ErrAdapterAMQPPublish            errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
 	ErrAdapterAMQPConfirmTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
 	ErrAdapterAMQPSubscribe          errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
