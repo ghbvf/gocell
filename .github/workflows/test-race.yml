@@ -90,28 +90,36 @@ jobs:
       # session.Store conformance fan-out) was previously only exercised
       # without -race. The integration build tag opts in the testcontainer
       # PG path; the runner image carries Docker so containers come up.
-      - name: go test -race -tags=integration (postgres adapter + cell repos + L2 atomicity e2e)
+      - name: go test -race -tags=integration (discovered integration packages)
+        # Auto-discover the integration package set the same way
+        # _build-lint.yml::integration-test does (set-diff between
+        # `go list` and `go list -tags=integration` outputs) so the race lane
+        # cannot drift from the integration coverage surface. The previous
+        # hardcoded list was a treadmill: every new integration package
+        # (adapters/postgres, cells/accesscore PG repos, tests/integration/
+        # l2atomicity, …) required manually editing this file or its race
+        # coverage silently lapsed. archtest CI-INTEGRATION-DISCOVERY-01
+        # now guards both _build-lint.yml::integration-test and this step.
+        #
         # tests/integration/l2atomicity (T4 / backlog B2-C-13): cross-layer
         # accesscore L2 e2e — login → refresh reuse cascade → rbac revoke
         # cross-cell outbox→consumer→credentialinvalidate funnel. The cascade
         # path crosses goroutine boundaries (producer → relay → publisher →
         # consumer → invalidator), giving the race detector real coverage of
-        # the L2 cross-cell flow that race-pg-integration's adapter / store
-        # scope does not reach.
-        #
-        # NOTE: This step uses a hardcoded package list (not `go list -tags=integration`
-        # discovery) — this differs from _build-lint.yml::integration-test which uses
-        # dynamic discovery. The current CI-INTEGRATION-DISCOVERY-01 archtest only
-        # guards _build-lint.yml; it does not cover this step. A backlog item tracks
-        # extending the archtest to close this gap:
-        # see CI-RACE-INTEGRATION-DISCOVERY-ARCHTEST-01 in docs/backlog/cap-14-tooling.md
+        # the L2 cross-cell flow that the adapter / store scope does not
+        # reach. Now covered automatically via discovery.
         env:
           # Ensures testutil.RequireDocker(t) calls t.Fatal (not t.Skip) when
           # Docker is unavailable, preventing silent skip in CI where Docker
           # is always expected. Mirrors _build-lint.yml::integration-test.
           GOCELL_TEST_DOCKER_REQUIRED: "1"
         run: |
-          go test -race -count=1 -timeout 15m -tags=integration \
-            ./adapters/postgres/... \
-            ./cells/accesscore/internal/adapters/postgres/... \
-            ./tests/integration/l2atomicity/...
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          list_fmt='{{.ImportPath}}|{{join .GoFiles ","}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}'
+          go list -find -f "$list_fmt" ./... | sort >"$tmp/bare.txt"
+          go list -tags=integration -find -f "$list_fmt" ./... | sort >"$tmp/tagged.txt"
+          mapfile -t pkgs < <(comm -13 "$tmp/bare.txt" "$tmp/tagged.txt" | awk -F'|' '{print $1}' | sort -u)
+          test "${#pkgs[@]}" -gt 0 || { echo "FAIL: no integration packages discovered (no //go:build integration files visible, or tag misconfiguration)" >&2; exit 1; }
+          go test -race -count=1 -timeout 15m -tags=integration "${pkgs[@]}"

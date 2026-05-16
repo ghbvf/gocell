@@ -488,11 +488,13 @@ func runBootstrap(
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
 		bootstrap.WithManagedResource(relayWorker),
-		// Race-detector overhead inflates pending request completion. The
-		// shutdown timeout must be ≥ httpClient.Timeout so the last in-flight
-		// request can finish before forced close. 20s gives the longest
-		// observed (~17s) request a safety margin without bloating CI time.
-		bootstrap.WithShutdownTimeout(testtime.D20s),
+		// Invariant: ShutdownTimeout ≥ httpClient.Timeout. The last in-flight
+		// request must be allowed to finish (or its own timeout fire) before
+		// bootstrap forces a close, otherwise we get spurious EOF mid-request
+		// even when the server is healthy. httpClient.Timeout is 60s under
+		// the race-detector lane; we match it (no headroom is harmless — the
+		// graceful drain returns immediately once all sockets are quiet).
+		bootstrap.WithShutdownTimeout(testtime.D60s),
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -506,7 +508,11 @@ func runBootstrap(
 		// Cleanup window must exceed bootstrap WithShutdownTimeout so we
 		// observe the graceful-drain outcome (success or its error) rather
 		// than time out the harness before bootstrap reports.
-		case <-time.After(testtime.D30s):
+		// Cleanup window > bootstrap.WithShutdownTimeout (= testtime.D60s) so
+		// we observe the graceful-drain outcome rather than time out the
+		// harness first. 90s gives the LIFO unwind room for slow Docker
+		// terminations on contended runners.
+		case <-time.After(testtime.D60s + testtime.D30s):
 			t.Fatal("bootstrap did not shut down in time")
 		}
 	})

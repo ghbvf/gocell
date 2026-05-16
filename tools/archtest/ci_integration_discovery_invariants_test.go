@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -95,25 +96,57 @@ func fileHasExclusivelyTag(path, tag string) (bool, error) {
 	return withTagCtx && !withoutTagCtx, nil
 }
 
-// readIntegrationTestStep reads _build-lint.yml and returns the
-// "Integration tests (testcontainers)" step from the integration-test job.
-// Step / job names are coupled to the workflow file by string; renaming
-// either is a coordinated change with this archtest.
-func readIntegrationTestStep(t *testing.T) workflowStep {
+// readWorkflowStep reads <workflowFile> under .github/workflows/ and returns
+// the named step from the named job. Step + job + workflow names are coupled
+// to the YAML by string; renaming any of them is a coordinated change with
+// this archtest.
+func readWorkflowStep(t *testing.T, workflowFile, jobName, stepNamePrefix string) workflowStep {
 	t.Helper()
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", workflowFile)))
 	require.NoError(t, err)
 
 	var cfg workflowConfig
 	require.NoError(t, yaml.NewDecoder(bytes.NewReader(body)).Decode(&cfg))
 
-	job, ok := cfg.Jobs["integration-test"]
-	require.True(t, ok, "integration-test job missing from _build-lint.yml")
+	job, ok := cfg.Jobs[jobName]
+	require.True(t, ok, "job %q missing from %s", jobName, workflowFile)
 
-	step, ok := findWorkflowStep(job.Steps, "Integration tests (testcontainers)")
-	require.True(t, ok, "Integration tests (testcontainers) step missing from integration-test job")
-	return step
+	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Name, stepNamePrefix) {
+			return step
+		}
+	}
+	require.FailNowf(t, "step missing", "step with name prefix %q missing from %s::%s", stepNamePrefix, workflowFile, jobName)
+	return workflowStep{}
+}
+
+// readIntegrationTestStep reads the integration-test step of _build-lint.yml.
+// Thin wrapper kept for clarity at the call site.
+func readIntegrationTestStep(t *testing.T) workflowStep {
+	return readWorkflowStep(t, "_build-lint.yml", "integration-test", "Integration tests (testcontainers)")
+}
+
+// readRaceIntegrationStep reads the go-test-race-integration step of
+// test-race.yml. The step name contains a long descriptive suffix listing
+// the package sets it covers; prefix match keeps this archtest stable when
+// that suffix evolves.
+func readRaceIntegrationStep(t *testing.T) workflowStep {
+	return readWorkflowStep(t, "test-race.yml", "race-pg-integration", "go test -race -tags=integration")
+}
+
+// ciDiscoverySteps enumerates every CI workflow step that must run
+// integration tests via `go list -tags=integration` discovery (as opposed
+// to a hardcoded package list). Adding a third step requires only an
+// append here; the parametrized archtests below pick it up automatically.
+type ciDiscoveryStepSpec struct {
+	name string
+	read func(t *testing.T) workflowStep
+}
+
+var ciDiscoverySteps = []ciDiscoveryStepSpec{
+	{"_build-lint.yml::integration-test", readIntegrationTestStep},
+	{"test-race.yml::race-pg-integration", readRaceIntegrationStep},
 }
 
 // TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages asserts
@@ -165,18 +198,22 @@ func TestArchtest_CIIntegrationDiscovery_DiscoversE2EPackages(t *testing.T) {
 // `./...` (used inside the `go list` call itself) is allowed — it's the
 // deeper-segment globs that signal hardcoded-list regression.
 func TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList(t *testing.T) {
-	step := readIntegrationTestStep(t)
-	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
+	for _, spec := range ciDiscoverySteps {
+		t.Run(spec.name, func(t *testing.T) {
+			step := spec.read(t)
+			require.NotEmpty(t, step.Run, "step run block missing")
 
-	assert.Contains(t, step.Run, "go list -tags=integration",
-		"integration-test step must auto-discover via `go list -tags=integration ...`; "+
-			"see CI-INTEGRATION-DISCOVERY-01")
+			assert.Contains(t, step.Run, "go list -tags=integration",
+				"step must auto-discover via `go list -tags=integration ...`; "+
+					"see CI-INTEGRATION-DISCOVERY-01")
 
-	hardcodedGlobRE := regexp.MustCompile(`\./[a-z][a-zA-Z0-9_-]*/\.\.\.`)
-	matches := hardcodedGlobRE.FindAllString(step.Run, -1)
-	assert.Empty(t, matches,
-		"integration-test step must not hardcode package globs (found %v); "+
-			"use the discovered package set from `go list` instead", matches)
+			hardcodedGlobRE := regexp.MustCompile(`\./[a-z][a-zA-Z0-9_-]*/\.\.\.`)
+			matches := hardcodedGlobRE.FindAllString(step.Run, -1)
+			assert.Empty(t, matches,
+				"step must not hardcode package globs (found %v); "+
+					"use the discovered package set from `go list` instead", matches)
+		})
+	}
 }
 
 // TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery asserts that the
@@ -191,19 +228,22 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList(t *testing.T) {
 //   - test "${#pkgs[@]}" -gt 0 || { ...; exit 1; }
 //   - [ "${#pkgs[@]}" -eq 0 ] && { ...; exit 1; }
 func TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery(t *testing.T) {
-	step := readIntegrationTestStep(t)
-	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
-
 	guardRE := regexp.MustCompile(
 		`(test\s+-n\s+["']?\$\{?pkgs\}?["']?\s*\|\|.*\bexit\s+1\b` +
 			`|\[\s+-z\s+["']?\$\{?pkgs\}?["']?\s+\]\s*&&.*\bexit\s+1\b` +
 			`|test\s+"\$\{#pkgs\[@\]\}"\s+-gt\s+0\s*\|\|.*\bexit\s+1\b` +
 			`|\[\s+"\$\{#pkgs\[@\]\}"\s+-eq\s+0\s+\]\s*&&.*\bexit\s+1\b)`,
 	)
-	assert.True(t, guardRE.MatchString(step.Run),
-		"integration-test step must fail fast on empty discovery — the empty-check "+
-			"must be paired with `|| { ...; exit 1; }` (positive form) or `&& { ...; exit 1; }` "+
-			"(negated form); a check without an exit path is decorative")
+	for _, spec := range ciDiscoverySteps {
+		t.Run(spec.name, func(t *testing.T) {
+			step := spec.read(t)
+			require.NotEmpty(t, step.Run, "step run block missing")
+			assert.True(t, guardRE.MatchString(step.Run),
+				"step must fail fast on empty discovery — the empty-check "+
+					"must be paired with `|| { ...; exit 1; }` (positive form) or `&& { ...; exit 1; }` "+
+					"(negated form); a check without an exit path is decorative")
+		})
+	}
 }
 
 // TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs
@@ -212,13 +252,16 @@ func TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery(t *testing.T) {
 // current form). This is the symmetric positive check to WorkflowUsesGoList:
 // discovery output must actually flow into the test invocation.
 func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs(t *testing.T) {
-	step := readIntegrationTestStep(t)
-	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
-
 	invokeRE := regexp.MustCompile(`go test\s+[^\n]*(\$\{?pkgs\}?|"\$\{pkgs\[@\]\}")`)
-	assert.True(t, invokeRE.MatchString(step.Run),
-		"integration-test step's `go test` must run on the discovered package set "+
-			"($pkgs or \"${pkgs[@]}\"); got run block:\n%s", step.Run)
+	for _, spec := range ciDiscoverySteps {
+		t.Run(spec.name, func(t *testing.T) {
+			step := spec.read(t)
+			require.NotEmpty(t, step.Run, "step run block missing")
+			assert.True(t, invokeRE.MatchString(step.Run),
+				"step's `go test` must run on the discovered package set "+
+					"($pkgs or \"${pkgs[@]}\"); got run block:\n%s", step.Run)
+		})
+	}
 }
 
 // TestArchtest_CIIntegrationDiscovery_WorkflowInvokesExactlyOneGoTest asserts
@@ -231,14 +274,17 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesGoTestOnDiscoveredPkgs(t
 // The line-anchored regex `(?m)^\s*go test\s` avoids false positives from
 // `go test` mentioned in shell comments or echo strings.
 func TestArchtest_CIIntegrationDiscovery_WorkflowInvokesExactlyOneGoTest(t *testing.T) {
-	step := readIntegrationTestStep(t)
-	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
-
 	goTestRE := regexp.MustCompile(`(?m)^\s*go test\s`)
-	matches := goTestRE.FindAllString(step.Run, -1)
-	assert.Len(t, matches, 1,
-		"integration-test step must invoke `go test` exactly once on the discovered "+
-			"package set; found %d invocations: %v", len(matches), matches)
+	for _, spec := range ciDiscoverySteps {
+		t.Run(spec.name, func(t *testing.T) {
+			step := spec.read(t)
+			require.NotEmpty(t, step.Run, "step run block missing")
+			matches := goTestRE.FindAllString(step.Run, -1)
+			assert.Len(t, matches, 1,
+				"step must invoke `go test` exactly once on the discovered "+
+					"package set; found %d invocations: %v", len(matches), matches)
+		})
+	}
 }
 
 // TestArchtest_CIIntegrationDiscovery_FixtureMetaTest verifies the
