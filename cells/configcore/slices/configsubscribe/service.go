@@ -16,15 +16,18 @@ import (
 
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// defaultTombstoneTTL is the minimum safe tombstone retention period. It MUST
-// be ≥ the at-least-once redelivery / Claimer idempotency window (also 24h).
-// GC'ing a tombstone before the replay window closes would let a stale replayed
-// upsert bypass the monotonic guard and incorrectly resurrect a deleted key.
-const defaultTombstoneTTL = 24 * time.Hour
+// defaultTombstoneTTL is the minimum safe tombstone retention period. It is
+// defined as idempotency.DefaultTTL (the ConsumerBase Claimer window) — single
+// source of truth, cannot drift. Any caller-supplied TTL below this value is
+// clamped up to it (enforced by NewService), ensuring tombstones are never
+// GC'd while an at-least-once redelivery of an older event for that key is
+// still possible.
+const defaultTombstoneTTL = idempotency.DefaultTTL
 
 // cacheCellID and cacheSliceID are the metric label values for the configsubscribe
 // Cache. Cache is service-private — configsubscribe is the only owner.
@@ -47,10 +50,11 @@ const gcSweepDivisor = 2
 // event.Version <= tombstone.version.
 //
 // Tombstone TTL: tombstone entries (present=false) are TTL-reaped by the
-// lifecycle-bound GC sweep (sweepTombstones / StartTombstoneGC). The hard
-// invariant is tombstoneTTL ≥ Claimer idempotency window (24h): premature
-// tombstone GC would allow a stale replayed upsert to bypass the monotonic
-// guard and incorrectly resurrect a deleted key beyond the replay window.
+// lifecycle-bound GC sweep (sweepTombstones / StartTombstoneGC). The
+// invariant tombstoneTTL ≥ Claimer idempotency window (defaultTombstoneTTL)
+// is enforced by clamp in NewService — any caller-supplied value below the
+// window is raised to it. Premature tombstone GC would allow a stale replayed
+// upsert to bypass the monotonic guard and incorrectly resurrect a deleted key.
 // Active entries are never LRU-evicted; their count is bounded by the live
 // config keyspace and the monotonic guard is fully preserved.
 type cacheEntry struct {
@@ -125,10 +129,11 @@ type Service struct {
 	clk                  clock.Clock
 
 	// GC lifecycle state (protected by gcMu).
-	gcMu      sync.Mutex
-	gcStarted bool
-	gcCancel  context.CancelFunc
-	gcDone    chan struct{}
+	gcMu       sync.Mutex
+	gcStarted  bool
+	gcStopping bool
+	gcCancel   context.CancelFunc
+	gcDone     chan struct{}
 }
 
 // Option configures a configsubscribe Service.
@@ -158,9 +163,10 @@ func WithClock(clk clock.Clock) Option {
 }
 
 // WithTombstoneTTL sets the tombstone TTL used by the background GC sweep.
-// A non-positive value is silently treated as defaultTombstoneTTL (24h).
-// Values > 0 but < defaultTombstoneTTL are accepted but trigger a Warn log
-// because they weaken the monotonic replay protection.
+// 0, negative, or any value below the Claimer idempotency window
+// (defaultTombstoneTTL = idempotency.DefaultTTL) is raised to that window;
+// the tombstone-GC always runs; there is no API to disable it.
+// A Warn log is emitted when a sub-window value is clamped up.
 func WithTombstoneTTL(d time.Duration) Option {
 	return func(s *Service) {
 		s.cache.tombstoneTTL = d // stored raw; normalization happens in NewService
@@ -199,16 +205,18 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 	// Keep cache.clk in sync with the service-level clk (options may have changed it).
 	s.cache.clk = s.clk
 
-	// TTL normalization.
+	// TTL normalization: effective tombstoneTTL is always ≥ defaultTombstoneTTL
+	// (= idempotency.DefaultTTL, the Claimer window) — see Fix A invariant.
 	ttl := s.cache.tombstoneTTL
 	switch {
 	case ttl <= 0:
 		s.cache.tombstoneTTL = defaultTombstoneTTL
 	case ttl < defaultTombstoneTTL:
-		s.logger.Warn("config-subscribe: tombstoneTTL below Claimer idempotency window weakens monotonic replay protection",
-			slog.Duration("tombstone_ttl", ttl),
-			slog.Duration("min_recommended", defaultTombstoneTTL))
-		// keep the explicit ttl
+		s.logger.Warn("config-subscribe: requested tombstoneTTL below Claimer idempotency window;"+
+			" clamped up to preserve monotonic replay protection",
+			slog.Duration("requested_ttl", ttl),
+			slog.Duration("effective_ttl", defaultTombstoneTTL))
+		s.cache.tombstoneTTL = defaultTombstoneTTL
 	}
 
 	return s
@@ -223,60 +231,84 @@ func (s *Service) Cache() *Cache {
 // The goroutine lives until StopTombstoneGC. Bound to the cell lifecycle via
 // ConfigCore.AfterStart.
 //
-// Defense-in-depth guard: the tombstoneTTL <= 0 branch below is unreachable
-// in practice because NewService normalization guarantees tombstoneTTL > 0.
-// It exists solely to prevent a clk.NewTicker(0) panic if a Cache is ever
-// constructed without going through NewService normalization (e.g., in a
-// future refactor). There is no "disable GC" API — passing 0 or negative to
-// WithTombstoneTTL results in the 24h default.
+// After Fix A, tombstoneTTL is always ≥ defaultTombstoneTTL (> 0) — no
+// tombstoneTTL ≤ 0 guard is needed here. A stop that timed out (gcStopping=true)
+// blocks any restart until the original goroutine has fully drained.
 func (s *Service) StartTombstoneGC() {
 	s.gcMu.Lock()
 	defer s.gcMu.Unlock()
-	if s.gcStarted || s.cache.tombstoneTTL <= 0 {
+	if s.gcStarted || s.gcStopping {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.gcCancel = cancel
-	s.gcDone = make(chan struct{})
+	ch := make(chan struct{})
+	s.gcDone = ch
 	s.gcStarted = true
-	go s.runTombstoneGC(ctx)
+	go s.runTombstoneGC(ctx, ch)
 }
 
 // StopTombstoneGC signals the GC goroutine and waits for it to drain,
 // honoring ctx for the shutdown deadline. Idempotent; safe if never started.
+//
+// State machine:
+//   - !gcStarted → return nil immediately (never started or already fully stopped).
+//   - gcStarted && !gcStopping → transition to gcStopping=true, call cancel(),
+//     wait on done. Success: clear all state. Timeout: retain state so a
+//     subsequent Stop can keep waiting on the same goroutine.
+//   - gcStarted && gcStopping → cancel() already called; just wait on retained
+//     done. Same success/timeout handling.
 func (s *Service) StopTombstoneGC(ctx context.Context) error {
 	s.gcMu.Lock()
 	if !s.gcStarted {
 		s.gcMu.Unlock()
 		return nil
 	}
-	cancel := s.gcCancel
+	if !s.gcStopping {
+		// First Stop: transition to stopping and signal the goroutine.
+		s.gcStopping = true
+		s.gcCancel()
+	}
+	// Capture the done channel while holding the lock; the goroutine closes it.
 	done := s.gcDone
-	s.gcStarted = false
-	// Release the stale cancel closure and done channel so they can be GC'd.
-	s.gcCancel = nil
-	s.gcDone = nil
 	s.gcMu.Unlock()
 
-	cancel()
+	return s.awaitGCDone(ctx, done)
+}
+
+// awaitGCDone waits for the GC goroutine to drain. On success it clears all
+// GC state so StartTombstoneGC may be called again. On timeout it retains state
+// so a subsequent StopTombstoneGC can keep waiting on the same goroutine.
+func (s *Service) awaitGCDone(ctx context.Context, done chan struct{}) error {
 	select {
 	case <-done:
+		// Goroutine has exited; reset state so restart is allowed.
+		s.gcMu.Lock()
+		s.gcStarted = false
+		s.gcStopping = false
+		s.gcCancel = nil
+		s.gcDone = nil
+		s.gcMu.Unlock()
 		return nil
 	case <-ctx.Done():
+		// Timed out — retain gcStarted/gcStopping/gcCancel/gcDone.
+		// A subsequent Stop will re-enter and wait on the same done channel.
 		return ctx.Err()
 	}
 }
 
 // runTombstoneGC is the background GC goroutine body. It sweeps tombstones
-// on every ticker tick until ctx is canceled.
-func (s *Service) runTombstoneGC(ctx context.Context) {
-	defer close(s.gcDone)
+// on every ticker tick until ctx is canceled. The done channel is passed as a
+// parameter to avoid a shared-field race: StartTombstoneGC captures ch before
+// launching the goroutine; the goroutine closes ch on exit, and StopTombstoneGC
+// waits on the same ch captured under the lock.
+func (s *Service) runTombstoneGC(ctx context.Context, done chan struct{}) {
+	defer close(done)
 
 	ttl := s.cache.tombstoneTTL
+	// interval is provably > 0: tombstoneTTL ≥ defaultTombstoneTTL (Fix A)
+	// and gcSweepDivisor is a small positive const, so ttl/divisor > 0.
 	interval := ttl / gcSweepDivisor
-	if interval <= 0 {
-		interval = ttl
-	}
 
 	ticker := s.clk.NewTicker(interval)
 	defer ticker.Stop()

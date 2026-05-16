@@ -32,6 +32,9 @@ const (
 	testFarFuture = 100 * 24 * time.Hour
 	// testSubDefaultTTL is a tombstone TTL below the minimum (1h) for warn tests.
 	testSubDefaultTTL = 1 * time.Hour
+	// testSubWindowTTL is a sub-window value (1h) used by clamp-up tests.
+	// Must be > 0 and < defaultTombstoneTTL to exercise the clamp path.
+	testSubWindowTTL = 1 * time.Hour
 	// testNegativeTTL is a non-positive TTL that must fall back to defaultTombstoneTTL.
 	testNegativeTTL = -5 * time.Second
 	// testGCEventuallyTimeout is the Eventually timeout for GC goroutine observation.
@@ -760,52 +763,28 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	// Idempotent: second stop returns nil.
 	require.NoError(t, svc.StopTombstoneGC(context.Background()))
 
-	// --- defense-in-depth guard: tombstoneTTL forced to 0 via white-box write ---
-	// NewService normalization guarantees tombstoneTTL > 0 in all normal paths, so
-	// the StartTombstoneGC tombstoneTTL<=0 guard is unreachable in practice.
-	// This sub-test exercises that defensive branch by force-writing the field
-	// directly (same-package white-box access) and asserts that StartTombstoneGC
-	// becomes a noop — no ticker is ever created.
-	//
-	// Note: WithTombstoneTTL(0) does NOT disable GC; it yields tombstoneTTL=24h
-	// (default) because NewService normalizes 0 → defaultTombstoneTTL. That
-	// behavior is verified separately by TestNewService_TombstoneTTLDefaultAndWarn.
-	svcGuard := NewService(slog.Default(),
-		WithClock(fc),
-		WithTombstoneTTL(testTTL),
-	)
-	// Force the defensive branch by setting tombstoneTTL=0 after construction.
-	svcGuard.cache.tombstoneTTL = 0
-	svcGuard.StartTombstoneGC() // must be a noop — guard fires
-	assert.Never(t, func() bool {
-		return fc.PendingTickers() > 0
-	}, testGCEventuallyTimeout, testGCEventuallyTick,
-		"StartTombstoneGC guard (tombstoneTTL<=0) must never create a ticker")
-	// Safe to call StopTombstoneGC — goroutine was never started.
-	require.NoError(t, svcGuard.StopTombstoneGC(context.Background()))
-
 	// Never-started service: StopTombstoneGC returns nil.
 	svcNeverStarted := NewService(slog.Default(), WithClock(clock.Real()))
 	require.NoError(t, svcNeverStarted.StopTombstoneGC(context.Background()))
 }
 
-// TestNewService_TombstoneTTLDefaultAndWarn verifies TTL normalization and the
-// below-minimum warning log.
+// TestNewService_TombstoneTTLDefaultAndWarn verifies TTL normalization:
+// sub-window values are clamped up to defaultTombstoneTTL (Fix A).
 func TestNewService_TombstoneTTLDefaultAndWarn(t *testing.T) {
-	// Default (no WithTombstoneTTL): effective ttl must be 24h.
+	// Default (no WithTombstoneTTL): effective ttl must be defaultTombstoneTTL.
 	svcDefault := NewService(slog.Default(), WithClock(clock.Real()))
 	assert.Equal(t, defaultTombstoneTTL, svcDefault.cache.tombstoneTTL,
-		"default tombstoneTTL must be 24h")
+		"default tombstoneTTL must equal idempotency.DefaultTTL")
 
-	// WithTombstoneTTL(1h): effective ttl == 1h, warn emitted.
+	// WithTombstoneTTL(1h): sub-window value is clamped to defaultTombstoneTTL; Warn emitted.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	svc1h := NewService(logger, WithClock(clock.Real()), WithTombstoneTTL(testSubDefaultTTL))
-	assert.Equal(t, testSubDefaultTTL, svc1h.cache.tombstoneTTL,
-		"explicit sub-default TTL must be stored as-is")
+	assert.Equal(t, defaultTombstoneTTL, svc1h.cache.tombstoneTTL,
+		"sub-window TTL must be clamped up to defaultTombstoneTTL")
 	logOutput := buf.String()
-	assert.Contains(t, logOutput, "tombstone_ttl", "warn must include tombstone_ttl field")
-	assert.Contains(t, logOutput, "min_recommended", "warn must include min_recommended field")
+	assert.Contains(t, logOutput, "requested_ttl", "warn must include requested_ttl field")
+	assert.Contains(t, logOutput, "effective_ttl", "warn must include effective_ttl field")
 
 	// WithTombstoneTTL(-5) → default.
 	svcNeg := NewService(slog.Default(), WithClock(clock.Real()), WithTombstoneTTL(testNegativeTTL))
@@ -825,11 +804,9 @@ func TestNewService_TombstoneTTLDefaultAndWarn(t *testing.T) {
 // The test is deterministic — no real sleeps — because the ctx is pre-canceled
 // before the Stop call, so the <-ctx.Done() arm wins immediately.
 //
-// Goroutine-leak safety: StopTombstoneGC internally calls cancel() on the GC
-// goroutine's context before selecting on ctx.Done(), so the goroutine will
-// exit independently after the call returns. We wait for PendingTickers to
-// drop to 0 as evidence that the goroutine has exited before the test ends,
-// preventing a false positive from the package-level goleak TestMain.
+// Fix B semantics: on timeout, gcStarted/gcStopping/gcCancel/gcDone are
+// retained. The goroutine still drains because cancel() was called. A
+// subsequent StopTombstoneGC(context.Background()) clears the state.
 func TestStopTombstoneGC_CtxTimeout(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
 	svc := NewService(slog.Default(),
@@ -853,11 +830,109 @@ func TestStopTombstoneGC_CtxTimeout(t *testing.T) {
 	require.Error(t, err, "StopTombstoneGC with canceled ctx must return non-nil error")
 	assert.ErrorIs(t, err, context.Canceled)
 
+	// Fix B: state is retained on timeout — gcStarted and gcStopping remain true.
+	svc.gcMu.Lock()
+	assert.True(t, svc.gcStarted, "gcStarted must remain true after timeout")
+	assert.True(t, svc.gcStopping, "gcStopping must remain true after timeout")
+	svc.gcMu.Unlock()
+
 	// StopTombstoneGC called cancel() on the GC goroutine's context before
-	// returning, so the goroutine will exit shortly. Wait for it to drain so
-	// the goleak TestMain does not report a false leak.
-	assert.Eventually(t, func() bool {
-		return fc.PendingTickers() == 0
+	// returning, so the goroutine will exit shortly. A second Stop with a live
+	// ctx clears the state and returns nil.
+	require.NoError(t, svc.StopTombstoneGC(context.Background()),
+		"second StopTombstoneGC must drain the goroutine and return nil")
+
+	// After successful drain, state must be fully cleared.
+	svc.gcMu.Lock()
+	assert.False(t, svc.gcStarted, "gcStarted must be false after successful drain")
+	assert.False(t, svc.gcStopping, "gcStopping must be false after successful drain")
+	svc.gcMu.Unlock()
+}
+
+// TestTombstoneTTL_SubWindowClampedPreventsResurrection verifies Fix A:
+// a sub-window TTL is clamped up to defaultTombstoneTTL, the tombstone is not
+// GC'd before the idempotency window closes, and a replayed older upsert is
+// still rejected after the requested (sub-window) TTL would have expired.
+func TestTombstoneTTL_SubWindowClampedPreventsResurrection(t *testing.T) {
+	fc := clockmock.New(time.Unix(0, 0))
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	svc := NewService(logger,
+		WithClock(fc),
+		WithTombstoneTTL(testSubWindowTTL), // 1h, below the 24h window → clamp
+	)
+
+	// Assert clamped effective TTL.
+	assert.Equal(t, defaultTombstoneTTL, svc.cache.tombstoneTTL,
+		"sub-window TTL must be clamped to defaultTombstoneTTL")
+
+	// Assert Warn was emitted with the right fields.
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "requested_ttl", "warn must include requested_ttl field")
+	assert.Contains(t, logOutput, "effective_ttl", "warn must include effective_ttl field")
+
+	// Upsert k v5 then delete k v5 → tombstone at v5.
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 5)))
+
+	// Advance past the requested sub-window (1h) but below defaultTombstoneTTL (24h).
+	fc.Advance(testSubWindowTTL + time.Second) // 1h+1s — would have expired if clamp hadn't fired
+
+	// Sweep: tombstone must still be present (not GC'd).
+	svc.cache.sweepTombstones(fc.Now())
+	v, present := svc.Cache().GetVersion("k")
+	assert.False(t, present, "tombstone must survive past sub-window; clamped TTL holds")
+	assert.Equal(t, 5, v, "tombstone version must be preserved")
+
+	// Replayed older upsert k v3 must be rejected by the monotonic guard.
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	v, present = svc.Cache().GetVersion("k")
+	assert.False(t, present, "replayed upsert must not resurrect tombstone within idempotency window")
+	assert.Equal(t, 5, v, "monotonic guard must hold: tombstone version unchanged")
+}
+
+// TestStopTombstoneGC_TimeoutThenNoRestartThenDrains verifies Fix B:
+// a timed-out Stop blocks StartTombstoneGC (no second goroutine created);
+// a subsequent Stop with a background ctx drains the original goroutine.
+func TestStopTombstoneGC_TimeoutThenNoRestartThenDrains(t *testing.T) {
+	fc := clockmock.New(time.Unix(0, 0))
+	svc := NewService(slog.Default(),
+		WithClock(fc),
+		WithTombstoneTTL(testTTL),
+	)
+
+	svc.StartTombstoneGC()
+
+	// Wait for GC goroutine to create its ticker.
+	require.Eventually(t, func() bool {
+		return fc.PendingTickers() >= 1
 	}, testGCEventuallyTimeout, testGCEventuallyTick,
-		"GC goroutine must exit after its context is canceled")
+		"GC goroutine must start before test proceeds")
+
+	tickersBefore := fc.PendingTickers()
+
+	// Stop with pre-canceled ctx → context.Canceled, state retained.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := svc.StopTombstoneGC(canceledCtx)
+	require.ErrorIs(t, err, context.Canceled)
+
+	// StartTombstoneGC must be a no-op while gcStopping=true (no 2nd goroutine).
+	svc.StartTombstoneGC()
+	assert.Never(t, func() bool {
+		return fc.PendingTickers() > tickersBefore
+	}, testGCEventuallyTimeout, testGCEventuallyTick,
+		"StartTombstoneGC must not create a second ticker while gcStopping=true")
+
+	// Drain the original goroutine with a live context.
+	require.NoError(t, svc.StopTombstoneGC(context.Background()),
+		"second StopTombstoneGC must drain and return nil")
+
+	// State is fully cleared; StartTombstoneGC may now be called again.
+	svc.gcMu.Lock()
+	assert.False(t, svc.gcStarted)
+	assert.False(t, svc.gcStopping)
+	svc.gcMu.Unlock()
 }

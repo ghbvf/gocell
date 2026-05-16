@@ -59,7 +59,7 @@
 **PR 207-cfg-cache-lifecycle 实施范围决策（2026-05-16）**：
 
 - D1: 未实施 OnStart hydrate / OnStop snapshot — 无持久化后端，内存 map 重启即重建，正确性由版本单调性 + 事件回放保证；对标 Watermill `MapExpiringKeyRepository` / k8s informer / go-micro 均无跨重启 cache 持久化。
-- D2: TTL 通过 `configcore.WithTombstoneTTL` Option 注入（cell.yaml 无 params 模型）；composition root 注入，24h default 在 `configsubscribe.NewService` 内。
+- D2: TTL 通过 `configcore.WithTombstoneTTL` Option 注入（cell.yaml 无 params 模型）；composition root 注入，24h default 在 `configsubscribe.NewService` 内。**PR #518 深度 review 后更新（F1–F3）**: 原"Warn 不硬 clamp"立场被超越 — 任何低于 Claimer idempotency window 的调用方 TTL 在 `NewService` 内被 clamp-up 到 `idempotency.DefaultTTL`（硬不变量）；resurrection-via-stale-replay 路径已封闭。`defaultTombstoneTTL` 改为 `const defaultTombstoneTTL = idempotency.DefaultTTL`（单一真值源）。GC Stop/Restart 状态机引入 `gcStopping` 字段，timeout 后保留状态供后续 Stop 继续等同一 goroutine。`runTombstoneGC` 死卫与 `StartTombstoneGC tombstoneTTL<=0` 分支均已删除（clamp 后永远 >0）。
 - D3: `eventbus_cache_size` gauge → 单 counter `eventbus_cache_tombstone_evicted_total`（kernel Provider 无 Gauge by design；`shutdown_metrics.go` 先例）。
 - D5（自审）: 完全放弃 LRU/cap — LRU 驱逐活跃 entry 会静默破坏单调回放守护（与过早墓碑 GC 同类风险）；Watermill `MapExpiringKeyRepository` 原始码为纯 TTL 无 LRU/cap（原 §1 benchmark 引用不准确）；活跃 entry 由 live config keyspace 自然有界。内存治理 = tombstone TTL GC only。
 
