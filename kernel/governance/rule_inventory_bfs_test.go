@@ -168,6 +168,32 @@ func (v *Validator) rules() { v.e.newResult("IFACE-07") }
 			roots:    []funcKey{{recv: "Validator", name: "rules"}},
 			expected: nil,
 		},
+		{
+			name: "non_marker_receiver_with_emitter_shape_ignored_RED",
+			// R2-P1 marker upgrade RED proof: perfect emitter shape
+			// (RuleCode arg 0 + ValidationResult return + same-package
+			// owner) on receiver Helper, which does NOT implement
+			// validationResultEmitter. Post-R2-P1 the BFS must reject
+			// the call site; pre-R2-P1 (signature + same-pkg owner
+			// only) the same fixture incorrectly captured the rule ID
+			// into reachable. This fixture pins the Soft → Hard owner
+			// gate upgrade described in
+			// docs/plans/202605162000-037r2-wave4-advance-round2.md
+			// §1 R2-P1.
+			source: `package fixture
+type RuleCode string
+type ValidationResult struct{ Code RuleCode }
+type validationResultEmitter interface { isValidationResultEmitter() }
+type Validator struct{}
+type Helper struct{}
+func (v *Validator) isValidationResultEmitter()           {}
+func (v *Validator) rules()                               { v.delegate() }
+func (v *Validator) delegate()                            { _ = Helper{}.emit("MARKER-MISSING-08") }
+func (h Helper) emit(s RuleCode) ValidationResult         { return ValidationResult{} }
+`,
+			roots:    []funcKey{{recv: "Validator", name: "rules"}},
+			expected: nil,
+		},
 	}
 
 	for _, tc := range cases {
