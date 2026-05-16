@@ -318,22 +318,32 @@ func TestNeedsQuoting_PlainStyleIndicators(t *testing.T) {
 
 // exhaustiveCorpus enumerates the reachable input space for Quote's
 // YAML-injection classification: every ASCII byte, every 2-byte combination
-// of a YAML structural indicator with a letter / space / EOL, and the
-// whitespace / document-marker edge cases.
+// of a YAML structural indicator with a letter / space / EOL, plus the
+// multi-byte edge tokens that the byte sweep cannot reach (document markers
+// and the YAML null-token word forms).
 //
-// Scope note: the sweep is ASCII (0x00..0x7F). Every YAML structural
-// indicator and control character that can break scalar framing is ASCII,
-// so this fully covers the injection surface that needsQuoting classifies.
-// Bytes 0x80..0xFF exercise Go rune decoding inside doubleQuote (not
-// touched by the needsQuoting decomposition) and a lone invalid-UTF-8 byte
-// does not round-trip through yaml.v3 on the pre-refactor code either, so
-// including them would assert Go UTF-8 semantics rather than pin the
+// Scope note 1 — byte range: the sweep is ASCII (0x00..0x7F). Every YAML
+// structural indicator and control character that can break scalar framing
+// is ASCII. Bytes 0x80..0xFF exercise Go rune decoding inside doubleQuote
+// (not touched by the needsQuoting decomposition) and a lone invalid-UTF-8
+// byte does not round-trip through yaml.v3 on the pre-refactor code either,
+// so including them would assert Go UTF-8 semantics rather than pin the
 // injection invariant.
+//
+// Scope note 2 — multi-byte tokens: the single-byte sweep covers "~" (0x7E)
+// and "" (seeded), but the >1-byte YAML null tokens ("null"/"Null"/"NULL")
+// and document markers ("---"/"...") are NOT reachable by a byte loop, so
+// they are explicit seeds below. They keep this pin sensitive to removal of
+// any individual yamlNullTokens entry — required for the Hard rating. Any
+// future multi-byte YAML token added to needsQuoting must be seeded here too.
 func exhaustiveCorpus() []string {
 	const indicators = ":{}[],&*#?|>!%@`\"'-\n\r\t\x00 "
 	companions := []byte{'a', ' ', '\n', '\r', '\t'}
 
-	corpus := []string{"", "---", "...", "--", "....", "- ", "-", "?", ":", "? ", ": "}
+	corpus := []string{
+		"", "---", "...", "--", "....", "- ", "-", "?", ":", "? ", ": ",
+		"null", "Null", "NULL", // yamlNullTokens word forms (byte sweep covers "~")
+	}
 	for b := 0; b < 0x80; b++ {
 		corpus = append(corpus, string(rune(b)))
 	}

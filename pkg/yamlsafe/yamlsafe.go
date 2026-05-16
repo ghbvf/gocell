@@ -111,6 +111,10 @@ func doubleQuote(raw string) string {
 // values. Bool/int/float plain scalars do NOT need this guard because
 // yaml.v3 coerces them back to their source text when the decode target is
 // a string; only null collapses to the zero value.
+//
+// Read-only invariant after package init: never mutated at runtime, in
+// init(), or in tests. TestQuote_ExhaustiveRoundTripInvariant seeds every
+// entry so removing any line turns that pin red.
 var yamlNullTokens = map[string]struct{}{
 	"~": {}, "null": {}, "Null": {}, "NULL": {},
 }
@@ -152,6 +156,10 @@ func hasPlainStyleIndicatorPrefix(raw string) bool {
 // YAML 1.2 §5.1, and any YAML-meta character. Each predicate is factored
 // into a single-purpose helper; the C0/DEL scan reuses
 // containsControlNeedsDoubleQuote (single source of that classification).
+//
+// The empty-string check stays first so the index-based helpers
+// (hasLeadingWhitespace / hasPlainStyleIndicatorPrefix /
+// hasTrailingWhitespace) can assume raw is non-empty.
 func needsQuoting(raw string) bool {
 	if raw == "" {
 		return true
