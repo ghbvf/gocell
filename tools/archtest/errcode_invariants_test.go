@@ -277,13 +277,15 @@ type errcodeErrorHit struct {
 //	    this cannot happen in practice (import-path uniqueness).
 //	(b) Dot-import: `import . "github.com/.../pkg/errcode"` + `Error{}`
 //	    — errcodeImportNames explicitly skips "." names (line: `imp.Name.Name != "."`).
-//	    A dot-import `Error{}` will NOT be detected. Reverse self-check below
-//	    asserts no production file uses dot-import of pkg/errcode.
+//	    A dot-import `Error{}` will NOT be detected. errcodeDotImported (a
+//	    pure-AST reverse self-check, no source-text prefilter) asserts no
+//	    production file uses dot-import of pkg/errcode.
 //	(c) Cross-package type-alias re-export: `type Error = errcode.Error` in a
 //	    third package + `thirdpkg.Error{}` — the SelectorExpr.X.Name would be
-//	    the third-package alias, not in errcodeNames; NOT detected. Reverse
-//	    self-check below asserts no production file re-exports errcode.Error as
-//	    a type alias.
+//	    the third-package alias, not in errcodeNames; NOT detected.
+//	    errcodeErrorAliasReexports (pure-AST, resolves the qualifier through
+//	    errcodeImportNames so an aliased import is caught too) asserts no
+//	    production file re-exports errcode.Error as a type alias.
 func scanErrcodeErrorLiteralsInAST(fset *token.FileSet, f *ast.File, rel string, carveOuts map[carveOut]struct{}) []errcodeErrorHit {
 	errcodeNames := errcodeImportNames(f)
 	if len(errcodeNames) == 0 {
@@ -297,6 +299,12 @@ func scanErrcodeErrorLiteralsInAST(fset *token.FileSet, f *ast.File, rel string,
 	var carvedRanges []posRange
 	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
+			return
+		}
+		// Carve-outs are package-level functions only. The ADR registry has
+		// no receiver dimension; a method sharing a carved function's name
+		// (e.g. `func (T) WritePublic`) must NOT inherit the exemption.
+		if fd.Recv != nil {
 			return
 		}
 		key := carveOut{rel: rel, fn: fd.Name.Name}
@@ -585,10 +593,12 @@ func TestParseCarveOutADRRegistry(t *testing.T) {
 //	    — IS detected because errcodeImportNames collects aliases.
 //	(b) Dot-import: `import . "...errcode"` + `Error{}`
 //	    — NOT detected (errcodeImportNames skips "." alias).
-//	    Reverse self-check: assert no production file uses dot-import of errcode.
+//	    Reverse self-check (pure-AST, errcodeDotImported): assert no
+//	    production file dot-imports errcode.
 //	(c) Cross-pkg type-alias: `type MyErr = errcode.Error` in pkg B + `B.MyErr{}`
 //	    — NOT detected (SelectorExpr.X.Name is B, not in errcodeNames).
-//	    Reverse self-check: assert no production file re-exports errcode.Error as alias.
+//	    Reverse self-check (pure-AST, errcodeErrorAliasReexports; resolves
+//	    aliased imports too): assert no production file re-exports it as alias.
 func TestFindErrcodeErrorLiteralsFunctionLevel(t *testing.T) {
 	const errcodeImport = `"github.com/ghbvf/gocell/pkg/errcode"`
 
@@ -650,6 +660,22 @@ func OtherFunc() {
 			carveOuts: map[carveOut]struct{}{},
 			wantLines: nil,
 		},
+		{
+			// Finding F2 regression: a method whose name collides with a
+			// carved package-level function must NOT inherit the carve-out.
+			name: "method sharing carve-out name: NOT exempt (function-level only)",
+			src: makeSrc(`func WritePublic() {
+	_ = errcode.Error{}
+}
+type T struct{}
+func (T) WritePublic() {
+	_ = errcode.Error{}
+}`),
+			rel:       "pkg/httputil/response.go",
+			carveOuts: map[carveOut]struct{}{{rel: "pkg/httputil/response.go", fn: "WritePublic"}: {}},
+			// p=1 import=2 funcWritePublic=3 carvedLit=4 }=5 typeT=6 method=7 lit=8 }=9
+			wantLines: []int{8},
+		},
 	}
 
 	for _, tc := range tests {
@@ -667,37 +693,18 @@ func OtherFunc() {
 		})
 	}
 
-	// ── Reverse self-checks for the three declared blind spots ────────────────
-	t.Run("reverse-self-check: no dot-import of pkg/errcode in production", func(t *testing.T) {
+	// ── Reverse self-checks for declared blind spots (b) dot-import and
+	//    (c) cross-pkg type-alias re-export. Pure-AST, no string prefilter:
+	//    a prefilter anchored on usage-site text (`= errcode.Error`) is blind
+	//    to aliased imports (`import ec ".../errcode"; type X = ec.Error`),
+	//    which is exactly the form the AST logic must catch. One walk; the
+	//    AST visit is gated cheaply by errcodeImportNames inside each helper.
+	t.Run("reverse-self-check: no dot-import / type-alias re-export of pkg/errcode in production", func(t *testing.T) {
 		root := findModuleRoot(t)
 		files, err := collectGoFiles(root)
 		require.NoError(t, err)
 
-		const dotImportLit = `. "github.com/ghbvf/gocell/pkg/errcode"`
-		var found []string
-		for _, file := range files {
-			rel, _ := filepath.Rel(root, file)
-			rel = filepath.ToSlash(rel)
-			if !fileroles.IsProductionCode(rel) {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Clean(file))
-			require.NoError(t, err)
-			if strings.Contains(string(data), dotImportLit) {
-				found = append(found, rel)
-			}
-		}
-		assert.Empty(t, found,
-			"production files must not use dot-import of pkg/errcode "+
-				"(blind spot: dot-import escapes errcodeImportNames detection)")
-	})
-
-	t.Run("reverse-self-check: no cross-pkg type-alias re-export of errcode.Error in production", func(t *testing.T) {
-		root := findModuleRoot(t)
-		files, err := collectGoFiles(root)
-		require.NoError(t, err)
-
-		var found []string
+		var dotImports, aliasReexports []string
 		for _, file := range files {
 			rel, _ := filepath.Rel(root, file)
 			rel = filepath.ToSlash(rel)
@@ -709,36 +716,97 @@ func OtherFunc() {
 			}
 			data, err := os.ReadFile(filepath.Clean(file))
 			require.NoError(t, err)
-			src := string(data)
-			// Detect: type <Ident> = errcode.Error
-			if strings.Contains(src, "= errcode.Error") {
-				fset := token.NewFileSet()
-				f, err := parser.ParseFile(fset, file, src, parser.SkipObjectResolution)
-				if err != nil {
-					continue
-				}
-				scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-					if !ts.Assign.IsValid() {
-						return // not a type alias
-					}
-					sel, ok := ts.Type.(*ast.SelectorExpr)
-					if !ok || sel.Sel.Name != "Error" {
-						return
-					}
-					pkg, ok := sel.X.(*ast.Ident)
-					if !ok {
-						return
-					}
-					errcodeNames := errcodeImportNames(f)
-					if _, inNames := errcodeNames[pkg.Name]; inNames {
-						found = append(found, fmt.Sprintf("%s: type %s = errcode.Error", rel, ts.Name.Name))
-					}
-				})
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, file, data, parser.SkipObjectResolution)
+			require.NoError(t, err, "parse %s", rel)
+			if errcodeDotImported(f) {
+				dotImports = append(dotImports, rel)
+			}
+			for _, name := range errcodeErrorAliasReexports(f) {
+				aliasReexports = append(aliasReexports,
+					fmt.Sprintf("%s: type %s = errcode.Error", rel, name))
 			}
 		}
-		assert.Empty(t, found,
+		assert.Empty(t, dotImports,
+			"production files must not dot-import pkg/errcode "+
+				"(blind spot: dot-import escapes errcodeImportNames detection)")
+		assert.Empty(t, aliasReexports,
 			"production files must not re-export errcode.Error as a type alias "+
 				"(blind spot: cross-pkg alias escapes pure-AST detection)")
+	})
+}
+
+// TestErrcodeBlindSpotHelpers is the regression coverage for Finding F1:
+// the dot-import and type-alias blind-spot detectors must work purely from
+// the AST, with no source-text prefilter. The decisive case is
+// "aliased import + alias re-export" — a `= errcode.Error` string prefilter
+// would have skipped the AST parse entirely and missed it.
+func TestErrcodeBlindSpotHelpers(t *testing.T) {
+	parse := func(t *testing.T, src string) *ast.File {
+		t.Helper()
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+		require.NoError(t, err)
+		return f
+	}
+
+	t.Run("errcodeDotImported", func(t *testing.T) {
+		tests := []struct {
+			name string
+			src  string
+			want bool
+		}{
+			{"dot-import detected", "package p\nimport . \"github.com/ghbvf/gocell/pkg/errcode\"\n", true},
+			{"normal import not flagged", "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\n", false},
+			{"aliased import not flagged", "package p\nimport ec \"github.com/ghbvf/gocell/pkg/errcode\"\nvar _ = ec.Error{}\n", false},
+			{"no errcode import", "package p\nimport \"fmt\"\n", false},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.want, errcodeDotImported(parse(t, tc.src)))
+			})
+		}
+	})
+
+	t.Run("errcodeErrorAliasReexports", func(t *testing.T) {
+		tests := []struct {
+			name string
+			src  string
+			want []string
+		}{
+			{
+				name: "default import name re-export detected",
+				src:  "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\ntype MyErr = errcode.Error\n",
+				want: []string{"MyErr"},
+			},
+			{
+				// Finding F1 lock: aliased import + alias re-export. A
+				// `= errcode.Error` source prefilter never matches `= ec.Error`.
+				name: "aliased import re-export detected",
+				src:  "package p\nimport ec \"github.com/ghbvf/gocell/pkg/errcode\"\ntype MyErr = ec.Error\n",
+				want: []string{"MyErr"},
+			},
+			{
+				name: "type definition (not alias) not flagged",
+				src:  "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\ntype MyErr errcode.Error\n",
+				want: nil,
+			},
+			{
+				name: "alias to other type not flagged",
+				src:  "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\ntype C = errcode.Code\n",
+				want: nil,
+			},
+			{
+				name: "no errcode import: short-circuit, nil",
+				src:  "package p\ntype Error = struct{}\n",
+				want: nil,
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.want, errcodeErrorAliasReexports(parse(t, tc.src)))
+			})
+		}
 	})
 }
 
@@ -771,6 +839,60 @@ func isErrcodeErrorType(expr ast.Expr, errcodeNames map[string]struct{}) bool {
 	}
 	_, ok = errcodeNames[pkg.Name]
 	return ok
+}
+
+// errcodeDotImported reports whether f dot-imports pkg/errcode
+// (`import . "github.com/ghbvf/gocell/pkg/errcode"`). Under a dot-import,
+// `Error{}` has no selector, so it escapes isErrcodeErrorType (which only
+// matches *ast.SelectorExpr). Production code must never dot-import errcode;
+// this is blind spot (b)'s reverse self-check, computed from the import AST
+// (alias-independent) rather than a source-text anchor.
+func errcodeDotImported(f *ast.File) bool {
+	for _, imp := range f.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != errcodeImportPath {
+			continue
+		}
+		if imp.Name != nil && imp.Name.Name == "." {
+			return true
+		}
+	}
+	return false
+}
+
+// errcodeErrorAliasReexports returns the names of every package-level type
+// alias `type X = <errcode>.Error` in f, where <errcode> is errcode's local
+// import name (default "errcode" OR any explicit alias). Such a re-export
+// lets a third package construct `thirdpkg.X{}`, whose SelectorExpr.X is the
+// third package — invisible to the pure-AST scanner. This is blind spot
+// (c)'s reverse self-check. It resolves the package qualifier through
+// errcodeImportNames, so an aliased import (`import ec ".../errcode";
+// type X = ec.Error`) is detected — the bug a `= errcode.Error` source-text
+// prefilter would have missed. errcodeImportNames is empty when f does not
+// import errcode at all, short-circuiting the AST walk cheaply.
+func errcodeErrorAliasReexports(f *ast.File) []string {
+	errcodeNames := errcodeImportNames(f)
+	if len(errcodeNames) == 0 {
+		return nil
+	}
+	var names []string
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if !ts.Assign.IsValid() {
+			return // `type X T` (definition), not `type X = T` (alias)
+		}
+		sel, ok := ts.Type.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Error" {
+			return
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+		if _, inNames := errcodeNames[pkg.Name]; inNames {
+			names = append(names, ts.Name.Name)
+		}
+	})
+	return names
 }
 
 // INVARIANT: MESSAGE-CONST-LITERAL-01
