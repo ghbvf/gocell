@@ -10,6 +10,14 @@
 // Hard funnel for unbounded operations; same template as
 // pkg/panicregister.Approved + PANIC-REGISTERED-01).
 //
+// Upstream funnel enforcement (archtest POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01)
+// lands in the immediate follow-up PR (docs/backlog/cap-14-tooling.md:18 —
+// R2-P3 PR-b 212-pg-notfound-archtest). Until that PR merges, the funnel is
+// downstream-Hard (calling AssertCode/AssertWireCode is type-bound) but
+// upstream-Soft (a _NotFound test can currently still write inline assertions
+// without being rejected). This is an ai-collab.md §"Funnel 双向锁评级"
+// transitional form, registered explicitly to prevent silent carry-over.
+//
 // Per pkg/ layering: the package depends only on the standard library and
 // pkg/errcode (a sibling of this package). It does not import third-party
 // assertion frameworks because pkg/.go files must stay on the standard
@@ -90,6 +98,10 @@ func AssertWireCode(t testing.TB, rec *httptest.ResponseRecorder, expectedStatus
 	t.Helper()
 	if rec == nil {
 		t.Fatalf("errcodetest.AssertWireCode: rec is nil; test never served a response")
+	}
+	if rec.Body == nil {
+		t.Fatalf("errcodetest.AssertWireCode: rec.Body is nil; " +
+			"use httptest.NewRecorder() instead of &httptest.ResponseRecorder{}")
 	}
 	if rec.Code != expectedStatus {
 		t.Fatalf("errcodetest.AssertWireCode: HTTP status mismatch — "+

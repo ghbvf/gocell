@@ -152,6 +152,20 @@ func TestAssertWireCode_NilRecFatal(t *testing.T) {
 	}
 }
 
+func TestAssertWireCode_NilBodyFatal(t *testing.T) {
+	rec := &httptest.ResponseRecorder{Code: http.StatusNotFound}
+	tb := &fakeTB{}
+	fatal := runCapturing(func() {
+		errcodetest.AssertWireCode(tb, rec, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
+	})
+	if !fatal {
+		t.Fatalf("expected Fatalf on nil rec.Body")
+	}
+	if got := strings.Join(tb.fatalMsgs, "|"); !strings.Contains(got, "rec.Body is nil") {
+		t.Errorf("fatal message must mention nil Body: %q", got)
+	}
+}
+
 func TestAssertWireCode_StatusMismatchFatal(t *testing.T) {
 	rec := envelopeBody(http.StatusInternalServerError,
 		errcode.New(errcode.KindInternal, errcode.ErrInternal, "boom"))

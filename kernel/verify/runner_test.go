@@ -50,6 +50,7 @@ func TestVerifySlice_NotFound(t *testing.T) {
 	}, t.TempDir())
 	_, err := r.VerifySlice(context.Background(), "cell/missing")
 	errcodetest.AssertCode(t, err, errcode.ErrSliceNotFound)
+	// retained for Details assertion — errors.As fills ecErrSlice for assertDetailString.
 	var ecErrSlice *errcode.Error
 	require.True(t, errors.As(err, &ecErrSlice))
 	assertDetailString(t, ecErrSlice, "slice", "cell/missing")
@@ -61,6 +62,7 @@ func TestVerifyCell_NotFound(t *testing.T) {
 	}, t.TempDir())
 	_, err := r.VerifyCell(context.Background(), "missing")
 	errcodetest.AssertCode(t, err, errcode.ErrCellNotFound)
+	// retained for Details assertion — errors.As fills ecErrCell for assertDetailString.
 	var ecErrCell *errcode.Error
 	require.True(t, errors.As(err, &ecErrCell))
 	assertDetailString(t, ecErrCell, "cell", "missing")
@@ -72,6 +74,7 @@ func TestRunJourney_NotFound(t *testing.T) {
 	}, t.TempDir())
 	_, err := r.RunJourney(context.Background(), "missing")
 	errcodetest.AssertCode(t, err, errcode.ErrJourneyNotFound)
+	// retained for Details assertion — errors.As fills ecErrJourney for assertDetailString.
 	var ecErrJourney *errcode.Error
 	require.True(t, errors.As(err, &ecErrJourney))
 	assertDetailString(t, ecErrJourney, "journey", "missing")
