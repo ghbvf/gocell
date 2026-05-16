@@ -153,7 +153,7 @@ func (m AccessCoreModule) Provide(
 	// docs/architecture/202605101400-adr-credential-session-protocol.md
 	// (cache.miss / stale / outage are fail-safe; epoch invariant tolerates
 	// stale ValidateView via user.AuthzEpoch live read).
-	sessionStore, err := wrapSessionStoreWithCache(innerSessionStore, shared, slog.Default())
+	sessionStore, err := wrapSessionStoreWithCache(innerSessionStore, shared, nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -265,7 +265,15 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 //     (mis-namespaced KeyNamespace is a wiring bug, not a runtime tolerance).
 //
 // Successful path returns a *CachingSessionStore around inner.
+//
+// logger may be nil; the function falls back to slog.Default(), matching the
+// nil-fallback convention used by cell service constructors (sessionlogin /
+// sessionlogout / identitymanage / etc.). Tests inject a buffer-backed logger
+// directly to assert on captured records without touching global state.
 func wrapSessionStoreWithCache(inner session.Store, shared *SharedDeps, logger *slog.Logger) (session.Store, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	raw := strings.TrimSpace(os.Getenv(envSessionCacheTTL))
 	if raw == "" {
 		return inner, nil

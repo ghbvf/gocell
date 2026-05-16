@@ -129,3 +129,17 @@ func TestWrapSessionStoreWithCache_RedisStubFailsConstruction(t *testing.T) {
 	assert.Nil(t, got)
 	assert.Contains(t, err.Error(), "session cache")
 }
+
+// TestWrapSessionStoreWithCache_NilLogger_FallsBackToDefault — the helper
+// follows the cell-constructor nil-fallback convention so the production
+// Provide call site can pass nil and let the helper own the slog.Default()
+// snapshot. Tests inject a real logger; production passes nil.
+func TestWrapSessionStoreWithCache_NilLogger_FallsBackToDefault(t *testing.T) {
+	t.Setenv(envSessionCacheTTL, "")
+
+	inner := stubSessionStore{}
+	got, err := wrapSessionStoreWithCache(inner, &SharedDeps{}, nil)
+
+	require.NoError(t, err, "nil logger must fall back to slog.Default(), not crash")
+	assert.Equal(t, inner, got)
+}
