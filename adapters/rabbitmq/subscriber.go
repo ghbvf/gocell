@@ -462,7 +462,7 @@ func (s *Subscriber) subscribeOnce(
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
-		return classifyAcquireChannelError(err)
+		return routeAcquireChannelError(err)
 	}
 
 	// closeChannel cleans up the AMQP channel on setup failure.
@@ -561,10 +561,15 @@ func (s *Subscriber) subscribeOnce(
 	return loopErr
 }
 
-// classifyAcquireChannelError maps AcquireChannel failures into the right
+// routeAcquireChannelError maps AcquireChannel failures into the right
 // error surface for the outer Subscribe loop: terminal → propagate;
 // recoverable → errSubscriptionLost (triggers reconnect); other → wrap.
-func classifyAcquireChannelError(err error) error {
+//
+// Named "route" rather than "classify" to distinguish it from the errcode
+// classify-funnel pattern (^classify\w*Error functions that call WrapInfra);
+// this function routes an already-wrapped error to the correct exit path
+// without producing a new errcode envelope.
+func routeAcquireChannelError(err error) error {
 	if isTerminalConnectionError(err) {
 		return err
 	}
