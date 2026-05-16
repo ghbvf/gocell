@@ -201,3 +201,118 @@ func TestQuote_OtherC0(t *testing.T) {
 		t.Errorf("Quote(%q) round-trip = %q, want original", raw, got)
 	}
 }
+
+// TestNeedsQuoting_PlainStyleIndicators verifies that leading `-` / `?` / `:`
+// followed by whitespace or EOL (i.e. the full single-char scalar) triggers
+// quoting, and that internal dashes do not.
+func TestNeedsQuoting_PlainStyleIndicators(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		raw          string
+		wantQuoted   bool
+		roundTrip    bool // if true, also verify yaml round-trip preserves raw
+	}{
+		{
+			name:       "dash_space_sequence_indicator",
+			raw:        "- oncall",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "question_space_explicit_key",
+			raw:        "? key",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "colon_space_mapping_value",
+			raw:        ": value",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "single_dash_scalar",
+			raw:        "-",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "single_question",
+			raw:        "?",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "single_colon",
+			raw:        ":",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "trailing_space",
+			raw:        "platform ",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "trailing_tab",
+			raw:        "team\t",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "doc_start_marker",
+			raw:        "---",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		{
+			name:       "doc_end_marker",
+			raw:        "...",
+			wantQuoted: true,
+			roundTrip:  true,
+		},
+		// Negative cases: these must NOT trigger quoting from the new rules.
+		{
+			name:       "internal_dash_not_indicator",
+			raw:        "team-a",
+			wantQuoted: false,
+		},
+		{
+			name:       "dash_followed_by_letter",
+			raw:        "-foo",
+			wantQuoted: false,
+		},
+		{
+			name:       "colon_followed_by_letter",
+			raw:        "key:value",
+			wantQuoted: true, // colon already detected by ContainsAny
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			quoted := yamlsafe.Quote(tc.raw)
+			isQuoted := quoted.String() != tc.raw
+
+			if tc.wantQuoted && !isQuoted {
+				t.Errorf("Quote(%q) = %q: expected quoted form, got plain", tc.raw, quoted.String())
+			}
+			if !tc.wantQuoted && isQuoted {
+				t.Errorf("Quote(%q) = %q: expected plain form, got quoted", tc.raw, quoted.String())
+			}
+
+			if tc.roundTrip {
+				got := roundTripYAML(t, tc.raw)
+				if got != tc.raw {
+					t.Errorf("Quote(%q) round-trip = %q, want original", tc.raw, got)
+				}
+			}
+		})
+	}
+}

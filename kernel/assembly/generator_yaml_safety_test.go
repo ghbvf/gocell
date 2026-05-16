@@ -62,6 +62,21 @@ func TestScaffoldAssembly_YAMLScalarInjection(t *testing.T) {
 			team: `& *anchor !tag |literal >folded`,
 			role: `%directive @reserved`,
 		},
+		{
+			name: "team_leading_dash_space",
+			team: "- oncall",
+			role: "maintainer",
+		},
+		{
+			name: "role_trailing_space",
+			team: "platform",
+			role: "maintainer ",
+		},
+		{
+			name: "team_doc_marker",
+			team: "---",
+			role: "maintainer",
+		},
 	}
 
 	for _, tc := range cases {

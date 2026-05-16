@@ -106,14 +106,39 @@ func doubleQuote(raw string) string {
 
 // needsQuoting reports whether raw must be wrapped in quotes for safe
 // YAML plain-style emission. Returns true for empty strings, strings with
-// leading whitespace, strings containing any YAML-meta character, or strings
-// containing C0/DEL control characters (except TAB) per YAML 1.2 §5.1.
+// leading whitespace, strings containing any YAML-meta character, strings
+// containing C0/DEL control characters (except TAB) per YAML 1.2 §5.1,
+// strings with leading block/mapping indicators, strings with trailing
+// whitespace, and document marker strings.
 func needsQuoting(raw string) bool {
 	if raw == "" {
 		return true
 	}
 	// Leading whitespace
 	if strings.HasPrefix(raw, " ") || strings.HasPrefix(raw, "\t") {
+		return true
+	}
+	// YAML 1.2 §6.3.5 plain-style indicators: `-` / `?` / `:` are flow /
+	// explicit-key / mapping-value indicators when followed by space, tab, EOL,
+	// or when they are the entire scalar. Quoting forces literal scalar
+	// interpretation and prevents the value from being parsed as a block
+	// sequence entry, explicit mapping key, or mapping value indicator.
+	if len(raw) >= 1 {
+		first := raw[0]
+		if first == '-' || first == '?' || first == ':' {
+			if len(raw) == 1 || raw[1] == ' ' || raw[1] == '\t' || raw[1] == '\n' || raw[1] == '\r' {
+				return true
+			}
+		}
+	}
+	// Trailing whitespace is stripped from plain scalars by yaml.v3, so a
+	// value ending in space or tab would silently lose characters on round-trip.
+	if last := raw[len(raw)-1]; last == ' ' || last == '\t' {
+		return true
+	}
+	// Document marker lines must be quoted to prevent consumer parsers from
+	// treating the scalar value as a document boundary or end-of-document marker.
+	if raw == "---" || raw == "..." {
 		return true
 	}
 	// YAML 1.2 §5.1 — C0/DEL control characters (except TAB) cannot appear
