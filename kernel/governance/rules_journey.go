@@ -15,9 +15,9 @@ package governance
 //	(work-progress vs production-maturity); the matrix below codifies the
 //	legal combinations rather than collapsing them into a single field.
 //
-//	  todo  → {experimental}         — not yet started, must be experimental
-//	  doing → {experimental, active} — in progress, contract can be either
-//	  done  → {active}               — finished, must have promoted to active
+//	  "todo"  → {"experimental"}              — not yet started, must be experimental
+//	  "doing" → {"experimental", "active"}    — in progress, lifecycle can be either
+//	  "done"  → {"active"}                    — finished, must have promoted to active
 //
 //	The matrix tracks the lifecycle vocab actually accepted by FMT (rules_fmt.go
 //	validJourneyLifecycles) and the journey.schema.json enum — currently
@@ -56,9 +56,9 @@ import (
 // (typed const + parse-time reject) is the planned path to make even
 // same-package mutation unrepresentable.
 //
-// Reverse-lookup intuition for readers: `state: todo` requires
-// `lifecycle: experimental`; `state: done` requires `lifecycle: active`;
-// `state: doing` accepts either. The matrix entries are kept in lock-step
+// Reverse-lookup intuition for readers: `state: "todo"` requires
+// `lifecycle: "experimental"`; `state: "done"` requires `lifecycle: "active"`;
+// `state: "doing"` accepts either. The matrix entries are kept in lock-step
 // with rules_fmt.go validJourneyLifecycles so an unsupported lifecycle
 // value cannot show up here as a "phantom" target.
 var validBoardLifecycleMatrix = map[string]map[string]bool{

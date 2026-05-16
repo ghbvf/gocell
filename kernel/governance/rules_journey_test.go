@@ -92,7 +92,7 @@ func TestJOURNEYSTATUSLIFECYCLE01_ZeroFindingsOnTodoExperimental(t *testing.T) {
 	// True happy path: every status-board state is paired with an allowed
 	// lifecycle AND the active+doing in-transit warning is not triggered.
 	pm := validProject()
-	// Demote J-ssologin lifecycle to experimental and board state to todo —
+	// Demote J-ssologin lifecycle to experimental and board state to "todo" —
 	// the canonical "not started yet" combination, fully clean.
 	pm.Journeys["J-ssologin"].Lifecycle = "experimental"
 	pm.StatusBoard[0].State = "todo"
@@ -104,7 +104,7 @@ func TestJOURNEYSTATUSLIFECYCLE01_ZeroFindingsOnTodoExperimental(t *testing.T) {
 func TestJOURNEYSTATUSLIFECYCLE01_TodoMustBeExperimental(t *testing.T) {
 	pm := validProject()
 	pm.StatusBoard[0].State = "todo"
-	// Keep J-ssologin lifecycle=active → todo+active is illegal.
+	// Keep J-ssologin lifecycle=active → "todo"+active is illegal.
 	val := NewValidator(pm, ".", clock.Real())
 	got := findByCode(val.validateJOURNEYSTATUSLIFECYCLE01(), codeJOURNEYSTATUSLIFECYCLE01)
 	require.Len(t, got, 1)
@@ -170,8 +170,8 @@ func TestValidateStrict_JourneyRulesIntegrated(t *testing.T) {
 	// Set up one violation per JOURNEY rule:
 	//   - JOURNEY-CONTRACT-EXISTENCE-01: drop projection.session.active.v1
 	//     from J-ssologin.contracts so it goes unreferenced.
-	//   - JOURNEY-STATUS-LIFECYCLE-01: set board state=todo while lifecycle
-	//     stays active → illegal pair.
+	//   - JOURNEY-STATUS-LIFECYCLE-01: set board state="todo" while lifecycle
+	//     stays "active" → illegal pair.
 	pm.Journeys["J-ssologin"].Contracts = []string{
 		"http.auth.login.v1",
 		"event.session.created.v1",
