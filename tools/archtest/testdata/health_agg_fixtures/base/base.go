@@ -20,5 +20,5 @@ type Worker interface {
 type FakeResource struct{}
 
 func (*FakeResource) Checkers() map[string]func(context.Context) error { return nil }
-func (*FakeResource) Worker() Worker                                   { return nil }
-func (*FakeResource) Close(_ context.Context) error                    { return nil }
+func (*FakeResource) Worker() Worker                                    { return nil }
+func (*FakeResource) Close(_ context.Context) error                     { return nil }

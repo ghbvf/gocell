@@ -150,10 +150,12 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 }
 
 // diagsLoadPackages is the pure detector for PASS-FUNNEL-LOADPACKAGES-01.
-// It bans business archtest *_test.go files from directly calling the three
-// typeseval package-load symbols: LoadPackages, SharedResolver, and
-// LoadProductionPackages (Stage 1.7 funnel widen). Detection is type-aware
-// via typeseval.ResolvePackageRef on all SelectorExpr / bare Ident nodes.
+// It bans business archtest *_test.go files from directly calling the four
+// typeseval package-load symbols: LoadPackages, SharedResolver,
+// LoadProductionPackages (Stage 1.7 funnel widen), and EachFileInPackage
+// (the INV-1 suppression helper that the Pass funnel replaces — #522 review
+// A1, closes ADR termination-criteria §(c)). Detection is type-aware via
+// typeseval.ResolvePackageRef on all SelectorExpr / bare Ident nodes.
 //
 // # AI-rebust: Medium
 //
@@ -176,10 +178,9 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 //
 // # Per-form fixture coverage
 //
-// LoadPackages and SharedResolver are each fixtured in two qualified + alias
-// forms in redfixture.go (lines for typeseval.LoadPackages / te.LoadPackages
-// and typeseval.SharedResolver / te.SharedResolver).
-// LoadProductionPackages is fixtured in the same two forms (Stage 1.7 addition).
+// LoadPackages, SharedResolver, LoadProductionPackages, and EachFileInPackage
+// are each fixtured in two qualified + alias forms in redfixture.go.
+// (LoadProductionPackages: Stage 1.7 addition; EachFileInPackage: #522 review A1.)
 // Dot-import of typeseval is infeasible in redfixture.go (conflicting imports).
 // TestPassFunnel_FixtureCoverage enforces ≥1 diagnostic per symbol, so
 // removing any of the three loader fixture lines fails the coverage lock.
@@ -200,6 +201,7 @@ func diagsLoadPackages(tgt passFunnelTarget) []scanner.Diagnostic {
 				"LoadPackages":           true,
 				"SharedResolver":         true,
 				"LoadProductionPackages": true,
+				"EachFileInPackage":      true,
 			},
 		},
 		"archtest.RunTyped / archtest.RunTypedProduction",
@@ -360,14 +362,13 @@ func TestPassFunnelEachFile01(t *testing.T) {
 //
 // Archtest tools/archtest/<file>_test.go must NOT call
 // tools/archtest/internal/typeseval.LoadPackages, typeseval.SharedResolver,
-// or typeseval.LoadProductionPackages directly. Use archtest.RunTyped (full
-// set) or archtest.RunTypedProduction (generated/-excluded set) — both load
-// packages once via the singleflight-cached SharedResolver underneath and
-// construct Pass with *types.Package (not *packages.Package) so .Syntax is
-// unreachable. The funnel is widened to include the production loader (Stage
-// 1.7), not bypassed: RunTypedProduction is the only legitimate
-// production-load entry, preserving ProductionResolver's Hard grade in the
-// Pass model.
+// typeseval.LoadProductionPackages, or typeseval.EachFileInPackage directly.
+// Use archtest.RunTyped (full set) or archtest.RunTypedProduction
+// (generated/-excluded set) — both load packages once via the
+// singleflight-cached SharedResolver underneath and construct Pass with
+// *types.Package (not *packages.Package) so .Syntax is unreachable.
+// The funnel is widened to include the production loader (Stage 1.7) and
+// EachFileInPackage (#522 review A1, closes ADR termination-criteria §(c)).
 //
 // Detection: same SelectorExpr / Ident walk as EACHFILE-01.
 func TestPassFunnelLoadPackages01(t *testing.T) {
@@ -635,11 +636,11 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 
 	// Strengthened per-symbol check for PASS-FUNNEL-LOADPACKAGES-01.
 	//
-	// Each of the three banned load symbols (LoadPackages, SharedResolver,
-	// LoadProductionPackages) must generate ≥1 diagnostic independently.
-	// The ≥1 total check above (now removed from the basicRules loop) would
-	// pass even if the LoadProductionPackages fixture lines were deleted
-	// (the other two symbols still fire). The per-symbol assertion locks each
+	// Each of the four banned load symbols (LoadPackages, SharedResolver,
+	// LoadProductionPackages, EachFileInPackage) must generate ≥1 diagnostic
+	// independently. The ≥1 total check above (now removed from the basicRules
+	// loop) would pass even if a single symbol's fixture lines were deleted
+	// (the other symbols still fire). The per-symbol assertion locks each
 	// symbol independently so removing any fixture line fails exactly that
 	// symbol's assertion.
 	{
@@ -651,6 +652,7 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			"LoadPackages":           0,
 			"SharedResolver":         0,
 			"LoadProductionPackages": 0,
+			"EachFileInPackage":      0,
 		}
 		for _, d := range lpDiags {
 			for sym := range perSymbol {

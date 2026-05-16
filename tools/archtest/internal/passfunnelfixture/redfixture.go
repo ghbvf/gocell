@@ -69,9 +69,11 @@ var (
 	_ = typeseval.LoadPackages           // qualified
 	_ = typeseval.SharedResolver         // qualified
 	_ = typeseval.LoadProductionPackages // qualified (Stage 1.7 funnel widen)
+	_ = typeseval.EachFileInPackage      // qualified (#522 review A1, ADR §(c))
 	_ = te.LoadPackages                  // alias-import
 	_ = te.SharedResolver                // alias-import
 	_ = te.LoadProductionPackages        // alias-import (Stage 1.7 funnel widen)
+	_ = te.EachFileInPackage             // alias-import (#522 review A1, ADR §(c))
 
 	// Force a packages reference so the import is not elided. The Config
 	// type usage exists only to keep the import live; the import itself is
