@@ -14,6 +14,15 @@ import (
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
+const (
+	// testTombstoneTTL is the tombstone TTL used in lifecycle tests.
+	testTombstoneTTL = 24 * time.Hour
+	// testGCEventuallyTimeout is the Eventually timeout for GC goroutine observation.
+	testGCEventuallyTimeout = 2 * time.Second
+	// testGCEventuallyTick is the polling tick for GC goroutine observation.
+	testGCEventuallyTick = 5 * time.Millisecond
+)
+
 // TestConfigCore_AfterStart_StartsTombstoneGC verifies that AfterStart launches
 // the tombstone-GC goroutine (which creates a ticker), and that BeforeStop
 // drains it cleanly. Also asserts BeforeStop idempotency.
@@ -23,7 +32,7 @@ func TestConfigCore_AfterStart_StartsTombstoneGC(t *testing.T) {
 
 	c := NewConfigCore(
 		WithClock(fc),
-		WithTombstoneTTL(24*time.Hour),
+		WithTombstoneTTL(testTombstoneTTL),
 		WithEventbusCacheCollector(obmetrics.NoopEventbusCacheCollector{}),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
@@ -35,7 +44,7 @@ func TestConfigCore_AfterStart_StartsTombstoneGC(t *testing.T) {
 	// The GC goroutine creates a ticker asynchronously — wait for it to register.
 	assert.Eventually(t, func() bool {
 		return fc.PendingTickers() >= 1
-	}, 2*time.Second, 5*time.Millisecond,
+	}, testGCEventuallyTimeout, testGCEventuallyTick,
 		"GC goroutine must create a ticker after AfterStart")
 
 	// BeforeStop drains the goroutine.

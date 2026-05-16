@@ -15,9 +15,29 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+)
+
+const (
+	// testTTL is the tombstone TTL used by Batch B/C GC tests.
+	testTTL = 24 * time.Hour
+	// testHalfTTL is the half-TTL advance used to test pre-expiry sweep.
+	testHalfTTL = 12 * time.Hour
+	// testOverTTL is the advance beyond TTL (13h) to cross the 24h boundary.
+	testOverTTL = 13 * time.Hour
+	// testFarFuture advances far beyond TTL to verify active entries are not evicted.
+	testFarFuture = 100 * 24 * time.Hour
+	// testSubDefaultTTL is a tombstone TTL below the minimum (1h) for warn tests.
+	testSubDefaultTTL = 1 * time.Hour
+	// testNegativeTTL is a non-positive TTL that must fall back to defaultTombstoneTTL.
+	testNegativeTTL = -5 * time.Second
+	// testGCEventuallyTimeout is the Eventually timeout for GC goroutine observation.
+	testGCEventuallyTimeout = 2 * time.Second
+	// testGCEventuallyTick is the polling tick for GC goroutine observation.
+	testGCEventuallyTick = 10 * time.Millisecond
 )
 
 // makeEntryUpserted builds a metadata-only outbox.Entry for entry-upserted.
@@ -118,7 +138,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(slog.Default())
+			svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 			for _, e := range tt.events {
 				requireAck(t, svc.HandleEntryUpserted(context.Background(), e))
@@ -135,7 +155,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 // TestService_HandleEntryUpserted_Monotonicity verifies that stale or replayed
 // events (version <= known version) are ignored without overwriting the cache.
 func TestService_HandleEntryUpserted_Monotonicity(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 	// v3 → v5 → v3 (replay): final state must be v5.
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
@@ -148,7 +168,7 @@ func TestService_HandleEntryUpserted_Monotonicity(t *testing.T) {
 }
 
 func TestService_HandleEntryDeleted(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
 
@@ -163,7 +183,7 @@ func TestService_HandleEntryDeleted(t *testing.T) {
 // TestService_HandleEntryDeleted_NonExistentKey verifies that deleting a key that
 // was never seen records a tombstone and does not error.
 func TestService_HandleEntryDeleted_NonExistentKey(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 	// No prior upsert — delete must still succeed and record a tombstone.
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("nonexistent", 1)))
@@ -176,7 +196,7 @@ func TestService_HandleEntryDeleted_NonExistentKey(t *testing.T) {
 // TestService_Tombstone_ReplayedOlderUpsertRejected verifies the core protection:
 // upsert v1 → delete v2 → replayed upsert v1 → cache stays tombstoned at v2.
 func TestService_Tombstone_ReplayedOlderUpsertRejected(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
@@ -193,7 +213,7 @@ func TestService_Tombstone_ReplayedOlderUpsertRejected(t *testing.T) {
 // protection on the delete side: upsert v3 → delete v2 (stale) → cache stays
 // active at v3.
 func TestService_Tombstone_ReplayedOlderDeleteRejected(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
 	// Stale delete with older version must be dropped (silently — returns Ack).
@@ -208,7 +228,7 @@ func TestService_Tombstone_ReplayedOlderDeleteRejected(t *testing.T) {
 // TestService_Tombstone_DeleteThenHigherUpsertRestores verifies the recovery
 // path: delete v2 → upsert v3 → cache becomes active at v3.
 func TestService_Tombstone_DeleteThenHigherUpsertRestores(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
@@ -225,7 +245,7 @@ func TestService_Tombstone_DeleteThenHigherUpsertRestores(t *testing.T) {
 // the tombstone semantics of GetVersion: present=false, version=tombstone version.
 // The delete event carries the same version as the last upsert (normal producer path).
 func TestService_GetVersion_AfterDelete_ReturnsTombstoneVersion(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
 	// Normal delete: version equals the last upsert version (V >= known → accepted).
@@ -241,7 +261,7 @@ func TestService_GetVersion_AfterDelete_ReturnsTombstoneVersion(t *testing.T) {
 // This is the normal producer path: Delete returns the row's current version, so
 // the delete event version == last upsert version.
 func TestService_Tombstone_SameVersionDeleteAccepted(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
 	// delete at same version as existing upsert: V >= known → accepted as tombstone.
@@ -257,7 +277,7 @@ func TestService_Tombstone_SameVersionDeleteAccepted(t *testing.T) {
 
 // TestHandleEntryUpserted_HappyPath_Ack verifies the happy path returns DispositionAck.
 func TestHandleEntryUpserted_HappyPath_Ack(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 	result := svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1))
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
@@ -280,7 +300,7 @@ func TestHandleEntryUpserted_InvalidPayload_Reject(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := NewService(slog.Default())
+			svc := NewService(slog.Default(), WithClock(clock.Real()))
 			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tc.payload}
 			result := svc.HandleEntryUpserted(context.Background(), entry)
 
@@ -299,7 +319,7 @@ func TestHandleEntryUpserted_InvalidPayload_Reject(t *testing.T) {
 // TestHandleEntryUpserted_StaleVersion_Ack verifies that a stale (lower-version)
 // replay returns DispositionAck (silently dropped, not requeued).
 func TestHandleEntryUpserted_StaleVersion_Ack(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 	// Seed version 5.
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
 	// Stale replay (version 3 <= 5) — returns Ack, not an error.
@@ -310,7 +330,7 @@ func TestHandleEntryUpserted_StaleVersion_Ack(t *testing.T) {
 
 // TestHandleEntryDeleted_HappyPath_Ack verifies the happy path returns DispositionAck.
 func TestHandleEntryDeleted_HappyPath_Ack(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
 	result := svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2))
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
@@ -334,7 +354,7 @@ func TestHandleEntryDeleted_InvalidPayload_Reject(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := NewService(slog.Default())
+			svc := NewService(slog.Default(), WithClock(clock.Real()))
 			entry := outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: tc.payload}
 			result := svc.HandleEntryDeleted(context.Background(), entry)
 
@@ -350,7 +370,7 @@ func TestHandleEntryDeleted_InvalidPayload_Reject(t *testing.T) {
 // TestHandleEntryDeleted_RepoErr_Requeue: in-memory cache does not error;
 // stale deletes return Ack (silently dropped).
 func TestHandleEntryDeleted_RepoErr_Requeue(t *testing.T) {
-	svc := NewService(slog.Default())
+	svc := NewService(slog.Default(), WithClock(clock.Real()))
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
 	// Stale delete (version 3 < 5) — returns Ack, not an error.
 	result := svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 3))
@@ -373,7 +393,7 @@ func TestService_HandleEntryUpserted_InvalidPayload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(slog.Default())
+			svc := NewService(slog.Default(), WithClock(clock.Real()))
 			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tt.payload}
 
 			result := svc.HandleEntryUpserted(context.Background(), entry)
@@ -403,7 +423,7 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(slog.Default())
+			svc := NewService(slog.Default(), WithClock(clock.Real()))
 			requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("existing.key", 1)))
 
 			entry := outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: tt.payload}
@@ -434,7 +454,7 @@ func TestHandleEntryUpserted_Reject_Cases(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := NewService(slog.Default())
+			svc := NewService(slog.Default(), WithClock(clock.Real()))
 			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tc.payload}
 			result := svc.HandleEntryUpserted(context.Background(), entry)
 
@@ -485,7 +505,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			collector := &recordingConfigEventCollector{}
-			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
+			svc := NewService(slog.Default(), WithClock(clock.Real()), WithConfigEventCollector(collector))
 			if tt.arrange != nil {
 				tt.arrange(svc)
 				collector.records = nil
@@ -564,7 +584,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			collector := &recordingConfigEventCollector{}
-			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
+			svc := NewService(slog.Default(), WithClock(clock.Real()), WithConfigEventCollector(collector))
 			if tt.arrange != nil {
 				tt.arrange(svc)
 				collector.records = nil
@@ -610,10 +630,9 @@ func (r *recordingEventbusCacheCollector) total() int64 { return r.count.Load() 
 func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
-	ttl := 24 * time.Hour
 	svc := NewService(slog.Default(),
 		WithClock(fc),
-		WithTombstoneTTL(ttl),
+		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
 	)
 
@@ -622,7 +641,7 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("keyA", 2)))
 
 	// Advance only 12h — tombstone not yet expired.
-	fc.Advance(12 * time.Hour)
+	fc.Advance(testHalfTTL)
 	svc.cache.sweepTombstones(fc.Now())
 
 	// keyA still present as tombstone.
@@ -639,7 +658,7 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 	assert.Equal(t, int64(0), spy.total(), "no evictions expected before TTL expires")
 
 	// Advance 13h more (total 25h > 24h TTL) then sweep.
-	fc.Advance(13 * time.Hour)
+	fc.Advance(testOverTTL)
 	svc.cache.sweepTombstones(fc.Now())
 
 	// keyA is now gone.
@@ -663,14 +682,14 @@ func TestCache_SweepTombstones_NeverTouchesActive(t *testing.T) {
 	spy := &recordingEventbusCacheCollector{}
 	svc := NewService(slog.Default(),
 		WithClock(fc),
-		WithTombstoneTTL(24*time.Hour),
+		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
 	)
 
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("keyB", 5)))
 
 	// Advance far beyond TTL.
-	fc.Advance(100 * 24 * time.Hour)
+	fc.Advance(testFarFuture)
 	svc.cache.sweepTombstones(fc.Now())
 
 	// keyB must still be present at v5.
@@ -691,14 +710,13 @@ func TestCache_SweepTombstones_NeverTouchesActive(t *testing.T) {
 // background GC goroutine: start, tick-driven sweep, idempotent stop, and
 // proper behavior when GC is disabled (ttl=0).
 func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
-	ttl := 24 * time.Hour
-	interval := ttl / 2 // 12h
+	interval := testTTL / gcSweepDivisor // 12h
 
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
 	svc := NewService(slog.Default(),
 		WithClock(fc),
-		WithTombstoneTTL(ttl),
+		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
 	)
 
@@ -714,7 +732,7 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	// Wait for the GC goroutine to create its ticker.
 	assert.Eventually(t, func() bool {
 		return fc.PendingTickers() >= 1
-	}, 2*time.Second, 10*time.Millisecond, "GC goroutine must create a ticker")
+	}, testGCEventuallyTimeout, testGCEventuallyTick, "GC goroutine must create a ticker")
 
 	// Advance past the tombstone TTL across two tick intervals.
 	// First tick at 12h: tombstone is 12h old (not yet expired).
@@ -727,7 +745,7 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		v, present := svc.Cache().GetVersion("keyC")
 		return !present && v == 0
-	}, 2*time.Second, 10*time.Millisecond, "GC goroutine must evict expired tombstone")
+	}, testGCEventuallyTimeout, testGCEventuallyTick, "GC goroutine must evict expired tombstone")
 
 	// Verify metric was recorded.
 	assert.GreaterOrEqual(t, spy.total(), int64(1))
@@ -748,7 +766,7 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	require.NoError(t, svcNoGC.StopTombstoneGC(context.Background()))
 
 	// Never-started service: StopTombstoneGC returns nil.
-	svcNeverStarted := NewService(slog.Default())
+	svcNeverStarted := NewService(slog.Default(), WithClock(clock.Real()))
 	require.NoError(t, svcNeverStarted.StopTombstoneGC(context.Background()))
 }
 
@@ -756,27 +774,27 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 // below-minimum warning log.
 func TestNewService_TombstoneTTLDefaultAndWarn(t *testing.T) {
 	// Default (no WithTombstoneTTL): effective ttl must be 24h.
-	svcDefault := NewService(slog.Default())
+	svcDefault := NewService(slog.Default(), WithClock(clock.Real()))
 	assert.Equal(t, defaultTombstoneTTL, svcDefault.cache.tombstoneTTL,
 		"default tombstoneTTL must be 24h")
 
 	// WithTombstoneTTL(1h): effective ttl == 1h, warn emitted.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	svc1h := NewService(logger, WithTombstoneTTL(1*time.Hour))
-	assert.Equal(t, 1*time.Hour, svc1h.cache.tombstoneTTL,
+	svc1h := NewService(logger, WithClock(clock.Real()), WithTombstoneTTL(testSubDefaultTTL))
+	assert.Equal(t, testSubDefaultTTL, svc1h.cache.tombstoneTTL,
 		"explicit sub-default TTL must be stored as-is")
 	logOutput := buf.String()
 	assert.Contains(t, logOutput, "tombstone_ttl", "warn must include tombstone_ttl field")
 	assert.Contains(t, logOutput, "min_recommended", "warn must include min_recommended field")
 
 	// WithTombstoneTTL(-5) → default.
-	svcNeg := NewService(slog.Default(), WithTombstoneTTL(-5))
+	svcNeg := NewService(slog.Default(), WithClock(clock.Real()), WithTombstoneTTL(testNegativeTTL))
 	assert.Equal(t, defaultTombstoneTTL, svcNeg.cache.tombstoneTTL,
 		"non-positive TTL must fall back to default")
 
 	// WithTombstoneTTL(0) → default.
-	svcZero := NewService(slog.Default(), WithTombstoneTTL(0))
+	svcZero := NewService(slog.Default(), WithClock(clock.Real()), WithTombstoneTTL(0))
 	assert.Equal(t, defaultTombstoneTTL, svcZero.cache.tombstoneTTL,
 		"zero TTL must fall back to default")
 }

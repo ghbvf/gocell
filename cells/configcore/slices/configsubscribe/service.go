@@ -33,6 +33,10 @@ const (
 	cacheSliceID = "configsubscribe"
 )
 
+// gcSweepDivisor sets the tombstone-GC ticker cadence to tombstoneTTL/2 — the
+// Watermill window/2 heuristic: worst-case tombstone staleness = 1.5×TTL.
+const gcSweepDivisor = 2
+
 // cacheEntry tracks the highest version seen for a config key plus a presence
 // flag indicating whether the key is currently active (present=true) or
 // tombstoned by a delete event (present=false).
@@ -140,8 +144,10 @@ func WithConfigEventCollector(c obmetrics.ConfigEventCollector) Option {
 	}
 }
 
-// WithClock injects a custom clock (e.g. clockmock.FakeClock) for testing.
-// A nil clock is silently ignored; the default clock.Real() is used instead.
+// WithClock injects the clock. Required — NewService calls clock.MustHaveClock
+// after options and panics if no non-nil clock was provided.
+// Use clock.Real() at composition roots; clockmock.New(...) in tests.
+// A nil clock is silently ignored (the subsequent MustHaveClock will catch it).
 func WithClock(clk clock.Clock) Option {
 	return func(s *Service) {
 		if clk == nil {
@@ -173,22 +179,22 @@ func WithEventbusCacheCollector(c obmetrics.EventbusCacheCollector) Option {
 }
 
 // NewService creates a config-subscribe Service.
+// WithClock must be passed — clock.MustHaveClock panics on missing injection.
 func NewService(logger *slog.Logger, opts ...Option) *Service {
-	clk := clock.Real()
 	s := &Service{
 		cache: &Cache{
 			entries:        make(map[string]cacheEntry),
-			clk:            clk,
 			tombstoneTTL:   0, // will be normalized below
 			cacheCollector: obmetrics.NoopEventbusCacheCollector{},
 		},
 		logger:               logger,
 		configEventCollector: obmetrics.NoopConfigEventCollector{},
-		clk:                  clk,
 	}
 	for _, o := range opts {
 		o(s)
 	}
+
+	clock.MustHaveClock(s.clk, "configsubscribe.NewService")
 
 	// Keep cache.clk in sync with the service-level clk (options may have changed it).
 	s.cache.clk = s.clk
@@ -256,7 +262,7 @@ func (s *Service) runTombstoneGC(ctx context.Context) {
 	defer close(s.gcDone)
 
 	ttl := s.cache.tombstoneTTL
-	interval := ttl / 2
+	interval := ttl / gcSweepDivisor
 	if interval <= 0 {
 		interval = ttl
 	}
