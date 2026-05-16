@@ -8,6 +8,9 @@ cells:
   - accesscore
 contracts:
   - event.user.locked.v1
+  - event.user.unlocked.v1
+  - http.auth.user.lock.v1
+  - http.auth.user.unlock.v1
 passCriteria:
   - text: 连续失败达阈值后账户锁定
     mode: auto

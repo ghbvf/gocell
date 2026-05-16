@@ -2,7 +2,7 @@
   state: doing
   risk: low
   blocker: ""
-  updatedAt: 2026-04-04
+  updatedAt: 2026-05-16
 - journeyId: J-sessionrefresh
   state: todo
   risk: low
@@ -38,11 +38,6 @@
   risk: low
   blocker: ""
   updatedAt: 2026-04-05
-- journeyId: J-ordercreate
-  state: todo
-  risk: low
-  blocker: ""
-  updatedAt: 2026-04-23
 - journeyId: J-typed-envelope-roundtrip
   state: doing
   risk: low

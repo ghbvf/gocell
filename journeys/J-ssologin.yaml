@@ -1,6 +1,6 @@
 id: J-ssologin
 goal: 用户完成 SSO 登录并获得有效 session
-lifecycle: experimental
+lifecycle: active
 owner:
   team: platform
   role: journey-owner
@@ -10,6 +10,9 @@ cells:
   - configcore
 contracts:
   - http.auth.login.v1
+  - http.auth.setup.admin.v1
+  - http.auth.setup.status.v1
+  - http.auth.user.change-password.v1
   - event.session.created.v1
 passCriteria:
   - text: OIDC 重定向完成 # Phase 3 OIDC 适配器就绪后验证

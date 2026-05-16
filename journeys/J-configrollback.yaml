@@ -11,6 +11,7 @@ cells:
 contracts:
   - event.config.entry-upserted.v1
   - event.config.rollback.v1
+  - http.config.rollback.v1
 passCriteria:
   - text: 配置回滚到指定版本
     mode: auto

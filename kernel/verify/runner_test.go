@@ -171,7 +171,11 @@ func TestRunActiveJourneys_NilProjectPasses(t *testing.T) {
 	assert.Empty(t, result.Results)
 }
 
-func TestRunActiveJourneys_SkipsInactiveJourneys(t *testing.T) {
+// TestRunActiveJourneys_EmptyActiveSetFails closes K-02 (b): a non-nil
+// project with zero active journeys must fail RunActiveJourneys, otherwise
+// the verifier silently passes on a regressed project where every journey
+// is stuck at experimental.
+func TestRunActiveJourneys_EmptyActiveSetFails(t *testing.T) {
 	r := NewRunner(&metadata.ProjectMeta{
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-draft": {
@@ -186,8 +190,13 @@ func TestRunActiveJourneys_SkipsInactiveJourneys(t *testing.T) {
 
 	result, err := r.RunActiveJourneys(context.Background())
 	require.NoError(t, err)
-	assert.True(t, result.Passed)
-	assert.Empty(t, result.Results)
+	assert.False(t, result.Passed,
+		"a project with zero active journeys must not silently pass")
+	require.NotEmpty(t, result.Results)
+	last := result.Results[len(result.Results)-1]
+	assert.False(t, last.Passed)
+	assert.Contains(t, last.Output, "no active journey present")
+	assert.Contains(t, last.Output, "; fix:")
 }
 
 func TestRunActiveJourneys_AutoCheckRefPasses(t *testing.T) {

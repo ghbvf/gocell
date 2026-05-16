@@ -165,9 +165,13 @@ func validProject() *metadata.ProjectMeta {
 				Lifecycle: "active",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
 				Cells:     []string{"accesscore", "auditcore"},
+				// All three active platform contracts (http + event + projection)
+				// must be journey-referenced to satisfy JOURNEY-CONTRACT-EXISTENCE-01
+				// (inverse direction of REF-07).
 				Contracts: []string{
 					"http.auth.login.v1",
 					"event.session.created.v1",
+					"projection.session.active.v1",
 				},
 				PassCriteria: []metadata.PassCriterion{
 					{Text: "login returns token", Mode: "auto", CheckRef: "journey.J-ssologin.login-returns-token"},
@@ -1845,6 +1849,19 @@ func TestADV01(t *testing.T) {
 				pm.StatusBoard = nil
 			},
 			wantCount: 1,
+		},
+		{
+			name: "examples/ journey exempt from platform board requirement",
+			setup: func(pm *metadata.ProjectMeta) {
+				// Add an example journey with no status-board entry.
+				pm.Journeys["J-ordercreate"] = &metadata.JourneyMeta{
+					ID:        "J-ordercreate",
+					Lifecycle: "active",
+					Owner:     metadata.OwnerMeta{Team: "examples", Role: "journey-owner"},
+					File:      "examples/todoorder/journeys/J-ordercreate.yaml",
+				}
+			},
+			wantCount: 0,
 		},
 	}
 	for _, tt := range tests {

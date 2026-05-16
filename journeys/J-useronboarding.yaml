@@ -7,7 +7,23 @@ owner:
 cells:
   - accesscore
 contracts:
+  # User identity CRUD + role mgmt + lifecycle events. Journey-level closure
+  # for JOURNEY-CONTRACT-EXISTENCE-01 — every active user/role contract
+  # belongs here unless a future J-rbac journey splits them out.
   - event.user.created.v1
+  - event.user.updated.v1
+  - event.user.deleted.v1
+  - event.role.assigned.v1
+  - event.role.revoked.v1
+  - http.auth.user.create.v1
+  - http.auth.user.get.v1
+  - http.auth.user.update.v1
+  - http.auth.user.patch.v1
+  - http.auth.user.delete.v1
+  - http.auth.role.assign.v1
+  - http.auth.role.revoke.v1
+  - http.auth.role.check.v1
+  - http.auth.role.list.v1
 passCriteria:
   - text: 用户记录创建成功
     mode: auto

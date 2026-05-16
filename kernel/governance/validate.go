@@ -205,6 +205,8 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateContractDeprecatedCleanup01,
 		v.validateFMTInputConstraint01,
 		v.validateCONTRACTCONSISTENCYEMIT01,
+		v.validateJOURNEYCONTRACTEXISTENCE01,
+		v.validateJOURNEYSTATUSLIFECYCLE01,
 	}
 }
 
