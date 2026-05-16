@@ -219,9 +219,16 @@ func (s *Service) Cache() *Cache {
 	return s.cache
 }
 
-// StartTombstoneGC launches the background tombstone GC sweep. Idempotent;
-// a non-positive tombstoneTTL disables GC (noop). The goroutine lives until
-// StopTombstoneGC. Bound to the cell lifecycle via ConfigCore.AfterStart.
+// StartTombstoneGC launches the background tombstone GC sweep. Idempotent.
+// The goroutine lives until StopTombstoneGC. Bound to the cell lifecycle via
+// ConfigCore.AfterStart.
+//
+// Defense-in-depth guard: the tombstoneTTL <= 0 branch below is unreachable
+// in practice because NewService normalization guarantees tombstoneTTL > 0.
+// It exists solely to prevent a clk.NewTicker(0) panic if a Cache is ever
+// constructed without going through NewService normalization (e.g., in a
+// future refactor). There is no "disable GC" API — passing 0 or negative to
+// WithTombstoneTTL results in the 24h default.
 func (s *Service) StartTombstoneGC() {
 	s.gcMu.Lock()
 	defer s.gcMu.Unlock()
@@ -243,11 +250,15 @@ func (s *Service) StopTombstoneGC(ctx context.Context) error {
 		s.gcMu.Unlock()
 		return nil
 	}
-	s.gcCancel()
+	cancel := s.gcCancel
 	done := s.gcDone
 	s.gcStarted = false
+	// Release the stale cancel closure and done channel so they can be GC'd.
+	s.gcCancel = nil
+	s.gcDone = nil
 	s.gcMu.Unlock()
 
+	cancel()
 	select {
 	case <-done:
 		return nil

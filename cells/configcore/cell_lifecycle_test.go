@@ -20,6 +20,10 @@ const (
 	// testGCEventuallyTimeout is the Eventually timeout for GC goroutine observation.
 	testGCEventuallyTimeout = 2 * time.Second
 	// testGCEventuallyTick is the polling tick for GC goroutine observation.
+	// 5ms is tighter than the 10ms used in the configsubscribe package
+	// (service_test.go, a different package — consts cannot be shared).
+	// The cell-level lifecycle test has fewer competing goroutines and no
+	// cache-lock contention, so a tighter poll is safe and reduces test latency.
 	testGCEventuallyTick = 5 * time.Millisecond
 )
 

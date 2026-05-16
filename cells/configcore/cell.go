@@ -111,7 +111,9 @@ func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 // WithTombstoneTTL sets the configsubscribe cache tombstone TTL. The cell
 // forwards it to the configsubscribe service, which applies a 24h default
 // when unset (must stay >= the Claimer idempotency window — see
-// configsubscribe.Service godoc).
+// configsubscribe.Service godoc). Passing 0 or a negative duration results in
+// the 24h default (>= Claimer idempotency window); there is no API to disable
+// the tombstone-GC via this option.
 func WithTombstoneTTL(d time.Duration) Option { return func(c *ConfigCore) { c.tombstoneTTL = d } }
 
 // WithEventbusCacheCollector injects the subscriber-cache tombstone-GC metric

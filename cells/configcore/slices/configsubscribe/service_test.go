@@ -37,6 +37,10 @@ const (
 	// testGCEventuallyTimeout is the Eventually timeout for GC goroutine observation.
 	testGCEventuallyTimeout = 2 * time.Second
 	// testGCEventuallyTick is the polling tick for GC goroutine observation.
+	// 10ms is intentionally looser than the 5ms used in cell_lifecycle_test.go
+	// (a different package); the two files cannot share consts. The slice-level
+	// tests tolerate a slightly wider polling window because they exercise
+	// white-box cache internals with additional lock contention.
 	testGCEventuallyTick = 10 * time.Millisecond
 )
 
@@ -756,14 +760,29 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	// Idempotent: second stop returns nil.
 	require.NoError(t, svc.StopTombstoneGC(context.Background()))
 
-	// --- disabled GC (ttl=0 or negative) ---
-	svcNoGC := NewService(slog.Default(),
+	// --- defense-in-depth guard: tombstoneTTL forced to 0 via white-box write ---
+	// NewService normalization guarantees tombstoneTTL > 0 in all normal paths, so
+	// the StartTombstoneGC tombstoneTTL<=0 guard is unreachable in practice.
+	// This sub-test exercises that defensive branch by force-writing the field
+	// directly (same-package white-box access) and asserts that StartTombstoneGC
+	// becomes a noop — no ticker is ever created.
+	//
+	// Note: WithTombstoneTTL(0) does NOT disable GC; it yields tombstoneTTL=24h
+	// (default) because NewService normalizes 0 → defaultTombstoneTTL. That
+	// behavior is verified separately by TestNewService_TombstoneTTLDefaultAndWarn.
+	svcGuard := NewService(slog.Default(),
 		WithClock(fc),
-		WithTombstoneTTL(0),
+		WithTombstoneTTL(testTTL),
 	)
-	svcNoGC.StartTombstoneGC() // must be a noop
-	assert.Equal(t, 0, fc.PendingTickers(), "disabled GC must not create a ticker")
-	require.NoError(t, svcNoGC.StopTombstoneGC(context.Background()))
+	// Force the defensive branch by setting tombstoneTTL=0 after construction.
+	svcGuard.cache.tombstoneTTL = 0
+	svcGuard.StartTombstoneGC() // must be a noop — guard fires
+	assert.Never(t, func() bool {
+		return fc.PendingTickers() > 0
+	}, testGCEventuallyTimeout, testGCEventuallyTick,
+		"StartTombstoneGC guard (tombstoneTTL<=0) must never create a ticker")
+	// Safe to call StopTombstoneGC — goroutine was never started.
+	require.NoError(t, svcGuard.StopTombstoneGC(context.Background()))
 
 	// Never-started service: StopTombstoneGC returns nil.
 	svcNeverStarted := NewService(slog.Default(), WithClock(clock.Real()))
@@ -797,4 +816,48 @@ func TestNewService_TombstoneTTLDefaultAndWarn(t *testing.T) {
 	svcZero := NewService(slog.Default(), WithClock(clock.Real()), WithTombstoneTTL(0))
 	assert.Equal(t, defaultTombstoneTTL, svcZero.cache.tombstoneTTL,
 		"zero TTL must fall back to default")
+}
+
+// TestStopTombstoneGC_CtxTimeout verifies the context-deadline branch of
+// StopTombstoneGC: when the provided ctx is already canceled, StopTombstoneGC
+// returns context.Canceled without waiting for the GC goroutine to drain.
+//
+// The test is deterministic — no real sleeps — because the ctx is pre-canceled
+// before the Stop call, so the <-ctx.Done() arm wins immediately.
+//
+// Goroutine-leak safety: StopTombstoneGC internally calls cancel() on the GC
+// goroutine's context before selecting on ctx.Done(), so the goroutine will
+// exit independently after the call returns. We wait for PendingTickers to
+// drop to 0 as evidence that the goroutine has exited before the test ends,
+// preventing a false positive from the package-level goleak TestMain.
+func TestStopTombstoneGC_CtxTimeout(t *testing.T) {
+	fc := clockmock.New(time.Unix(0, 0))
+	svc := NewService(slog.Default(),
+		WithClock(fc),
+		WithTombstoneTTL(testTTL),
+	)
+
+	svc.StartTombstoneGC()
+
+	// Wait for the GC goroutine to actually start and create its ticker.
+	require.Eventually(t, func() bool {
+		return fc.PendingTickers() >= 1
+	}, testGCEventuallyTimeout, testGCEventuallyTick,
+		"GC goroutine must be running before we test ctx-timeout stop")
+
+	// Use a pre-canceled context so the <-ctx.Done() arm wins immediately.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := svc.StopTombstoneGC(canceledCtx)
+	require.Error(t, err, "StopTombstoneGC with canceled ctx must return non-nil error")
+	assert.ErrorIs(t, err, context.Canceled)
+
+	// StopTombstoneGC called cancel() on the GC goroutine's context before
+	// returning, so the goroutine will exit shortly. Wait for it to drain so
+	// the goleak TestMain does not report a false leak.
+	assert.Eventually(t, func() bool {
+		return fc.PendingTickers() == 0
+	}, testGCEventuallyTimeout, testGCEventuallyTick,
+		"GC goroutine must exit after its context is canceled")
 }
