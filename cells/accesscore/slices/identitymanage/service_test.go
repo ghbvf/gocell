@@ -902,8 +902,8 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	// CAS semantics: exactly one goroutine must succeed and the other must
 	// receive ErrVersionConflict. Any loginFailure indicates a test defect
 	// (unexpected error classification — the race path should always resolve
-	// to ErrVersionConflict, not ErrAuthLoginFailed, when reads are interleaved
-	// after the CAS guard is in place).
+	// to ErrVersionConflict, not ErrAuthOldPasswordIncorrect, when reads are
+	// interleaved after the CAS guard is in place).
 	if loginFailures > 0 {
 		t.Fatalf("unexpected loginFailure(s) in concurrent ChangePassword test: successes=%d versionConflicts=%d loginFailures=%d",
 			successes, versionConflicts, loginFailures)

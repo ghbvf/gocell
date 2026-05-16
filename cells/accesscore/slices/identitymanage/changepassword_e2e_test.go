@@ -329,5 +329,5 @@ func TestChangePassword_RejectsBadOldPassword(t *testing.T) {
 	f.mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
-	assert.Contains(t, w.Body.String(), string(errcode.ErrAuthLoginFailed))
+	assert.Contains(t, w.Body.String(), string(errcode.ErrAuthOldPasswordIncorrect))
 }

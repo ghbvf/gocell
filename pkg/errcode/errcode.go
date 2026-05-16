@@ -122,6 +122,15 @@ const (
 	ErrAuthIdentityInvalidInput Code = "ERR_AUTH_IDENTITY_INVALID_INPUT"
 	ErrAuthLoginInvalidInput    Code = "ERR_AUTH_LOGIN_INVALID_INPUT"
 	ErrAuthLoginFailed          Code = "ERR_AUTH_LOGIN_FAILED"
+	// ErrAuthOldPasswordIncorrect signals the supplied old password did not
+	// match the stored credential during a ChangePassword flow. Distinct from
+	// ErrAuthLoginFailed: login paths collapse missing-user / wrong-password /
+	// inactive-account into a single opaque 401 to prevent enumeration of
+	// account state; the ChangePassword caller is an already-authenticated
+	// subject mutating their own credential, so the precise reason
+	// ("old password incorrect") is safe to surface and useful for UX. Both
+	// codes map to KindUnauthenticated → HTTP 401.
+	ErrAuthOldPasswordIncorrect Code = "ERR_AUTH_OLD_PASSWORD_INCORRECT"
 	ErrAuthLogoutInvalidInput   Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
 	ErrAuthLogoutUnavailable    Code = "ERR_AUTH_LOGOUT_UNAVAILABLE"
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"

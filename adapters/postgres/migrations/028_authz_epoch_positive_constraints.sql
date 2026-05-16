@@ -32,6 +32,14 @@
 -- constraint name in expectedChecks (verifyChecks path). Both this migration
 -- and schema_guard.expectedChecks are authoritative — they must remain in sync.
 --
+-- Idempotency note (FU-2 R1, 2026-05-16): the Up section is structured as
+-- "DROP CONSTRAINT IF EXISTS; ADD CONSTRAINT" so the migration can be safely
+-- re-run by operators in manual recovery scenarios (e.g. partial apply, replay
+-- on staging). PostgreSQL does not support "ADD CONSTRAINT IF NOT EXISTS"
+-- directly; the DROP+ADD idiom is the canonical equivalent (cf. migration 023
+-- Down section). Constraint names are unchanged, so schema_guard.expectedChecks
+-- stays in sync without modification.
+--
 -- ref: ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A8
 
 -- +goose Up
@@ -39,14 +47,17 @@ SET LOCAL lock_timeout = '5s';
 
 -- users.authz_epoch
 ALTER TABLE users ALTER COLUMN authz_epoch DROP DEFAULT;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive;
 ALTER TABLE users ADD CONSTRAINT users_authz_epoch_positive CHECK (authz_epoch > 0);
 
 -- sessions.authz_epoch_at_issue
 ALTER TABLE sessions ALTER COLUMN authz_epoch_at_issue DROP DEFAULT;
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_authz_epoch_at_issue_positive;
 ALTER TABLE sessions ADD CONSTRAINT sessions_authz_epoch_at_issue_positive CHECK (authz_epoch_at_issue > 0);
 
 -- refresh_tokens.authz_epoch_at_issue
 ALTER TABLE refresh_tokens ALTER COLUMN authz_epoch_at_issue DROP DEFAULT;
+ALTER TABLE refresh_tokens DROP CONSTRAINT IF EXISTS refresh_tokens_authz_epoch_at_issue_positive;
 ALTER TABLE refresh_tokens ADD CONSTRAINT refresh_tokens_authz_epoch_at_issue_positive CHECK (authz_epoch_at_issue > 0);
 
 -- +goose Down
@@ -59,6 +70,9 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
+-- lock_timeout is set AFTER the GUC gate by design: the fail-closed path
+-- (RAISE EXCEPTION above) does not reach any DDL, so a timeout is only
+-- needed once we know the rollback is authorized.
 SET LOCAL lock_timeout = '5s';
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive;
 ALTER TABLE users ALTER COLUMN authz_epoch SET DEFAULT 0;
