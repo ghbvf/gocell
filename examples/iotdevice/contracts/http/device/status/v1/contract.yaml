@@ -21,6 +21,9 @@ endpoints:
       400:
         description: "Bad request — path parameter id is too short or too long"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — device with given id does not exist"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

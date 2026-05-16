@@ -73,4 +73,5 @@ func TestHttpDeviceStatusV1Serve_NotFound(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
 	h.ServeHTTP(rec, req)
 	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrDeviceNotFound)
+	c.ValidateErrorResponse(t, http.StatusNotFound, rec.Body.Bytes())
 }

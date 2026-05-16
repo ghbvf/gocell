@@ -71,6 +71,7 @@ func TestHttpOrderGetV1Serve_NotFound(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 
 	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrOrderNotFound)
+	c.ValidateErrorResponse(t, http.StatusNotFound, rec.Body.Bytes())
 }
 
 func TestHttpOrderListV1Serve(t *testing.T) {
