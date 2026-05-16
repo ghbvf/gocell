@@ -431,6 +431,163 @@ func TestWriteFileForce_EscapesRoot(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// ForceOverwrite rollback atomicity — original inode (regular file / symlink)
+// must be restored when a subsequent plan entry fails to write. Without this,
+// ForceOverwrite breaks the WritePlannedFiles "all-or-nothing" funnel
+// contract: a mid-plan failure leaves the original gone with no recovery.
+// =============================================================================
+
+// TestWritePlannedFiles_ForceOverwrite_RollbackRestoresOriginalRegular:
+// plan[0] ForceOverwrite=true over an existing regular file F0; plan[1]
+// fails mid-write. After rollback, F0 MUST exist with its original content
+// and mode — not "no such file or directory".
+func TestWritePlannedFiles_ForceOverwrite_RollbackRestoresOriginalRegular(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0o000 semantics differ on windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("chmod 0o000 ineffective as root")
+	}
+	// Not Parallel: chmod 0o000 affects process-wide os.Stat / unix.Openat.
+	root := resolveRealRoot(t)
+
+	f0 := filepath.Join(root, "gen", "stamp.go")
+	if err := os.MkdirAll(filepath.Dir(f0), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalContent := []byte("// original content\n")
+	if err := os.WriteFile(f0, originalContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := filepath.Join(root, "blocked")
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatalf("Chmod 0o000: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: f0, Content: []byte("// new content\n"), ForceOverwrite: true},
+		{AbsPath: filepath.Join(blocked, "sub", "fail.go"), Content: []byte("// fail\n")},
+	}
+	if err := pathsafe.WritePlannedFiles(root, plan, false); err == nil {
+		t.Fatal("WritePlannedFiles(P1 fails): want error, got nil")
+	}
+
+	// Atomicity contract: F0 MUST still exist with the original content.
+	data, err := os.ReadFile(f0) //nolint:gosec // R2-approved: G304 — tempdir test fixture, path constructed in-test
+	if err != nil {
+		t.Fatalf("rollback: F0 lost after ForceOverwrite + mid-plan failure: %v", err)
+	}
+	if string(data) != string(originalContent) {
+		t.Errorf("rollback: F0 content = %q, want original %q", data, originalContent)
+	}
+	info, err := os.Lstat(f0)
+	if err != nil {
+		t.Fatalf("rollback: Lstat F0 after restore: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("rollback: F0 mode = %o, want 0o644", info.Mode().Perm())
+	}
+}
+
+// TestWritePlannedFiles_ForceOverwrite_RollbackRestoresOriginalSymlink:
+// plan[0] ForceOverwrite=true over an existing in-root symlink S0 → T0;
+// plan[1] fails. After rollback, S0 MUST be restored as a symlink pointing
+// to T0 (not gone, not a regular file).
+func TestWritePlannedFiles_ForceOverwrite_RollbackRestoresOriginalSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("chmod 0o000 ineffective as root")
+	}
+	root := resolveRealRoot(t)
+
+	target := filepath.Join(root, "gen", "real-target.go")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("// target\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s0 := filepath.Join(root, "gen", "alias.go")
+	if err := os.Symlink(target, s0); err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := filepath.Join(root, "blocked")
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatalf("Chmod 0o000: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: s0, Content: []byte("// overwrite\n"), ForceOverwrite: true},
+		{AbsPath: filepath.Join(blocked, "sub", "fail.go"), Content: []byte("// fail\n")},
+	}
+	if err := pathsafe.WritePlannedFiles(root, plan, false); err == nil {
+		t.Fatal("WritePlannedFiles(P1 fails): want error, got nil")
+	}
+
+	// S0 must be restored as a symlink → target.
+	info, err := os.Lstat(s0)
+	if err != nil {
+		t.Fatalf("rollback: Lstat S0 after restore: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("rollback: S0 should be a symlink after restore, got mode=%v", info.Mode())
+	}
+	gotTarget, err := os.Readlink(s0)
+	if err != nil {
+		t.Fatalf("rollback: Readlink S0: %v", err)
+	}
+	if gotTarget != target {
+		t.Errorf("rollback: S0 target = %q, want %q", gotTarget, target)
+	}
+}
+
+// TestWritePlannedFiles_ForceOverwrite_RejectsUnsupportedOriginalKind:
+// when the existing entry at AbsPath is neither a regular file nor a
+// symlink (e.g., a directory), ForceOverwrite is rejected pre-write
+// because rollback cannot restore it.
+func TestWritePlannedFiles_ForceOverwrite_RejectsUnsupportedOriginalKind(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink/mode semantics differ on windows")
+	}
+	root := resolveRealRoot(t)
+
+	// Pre-place a directory at the leaf path.
+	dirAtLeaf := filepath.Join(root, "gen", "occupied")
+	if err := os.MkdirAll(dirAtLeaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: dirAtLeaf, Content: []byte("// data\n"), ForceOverwrite: true},
+	}
+	err := pathsafe.WritePlannedFiles(root, plan, false)
+	if err == nil {
+		t.Fatal("WritePlannedFiles(ForceOverwrite over directory): want error, got nil")
+	}
+	// Directory must still exist (no destructive operation happened).
+	info, statErr := os.Lstat(dirAtLeaf)
+	if statErr != nil {
+		t.Fatalf("dir was destroyed by failed ForceOverwrite: %v", statErr)
+	}
+	if !info.IsDir() {
+		t.Errorf("dir at leaf was replaced by non-dir: mode=%v", info.Mode())
+	}
+}
+
 // TestWritePlannedFiles_PlanContainmentPass_EscapesRoot exercises the
 // lexical escape branch of planContainmentPass (separate from the existing
 // "absolute path" / "dotdot" cases handled via ContainPath).
