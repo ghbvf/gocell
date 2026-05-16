@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,10 @@ const (
 // fakeSessionStore is an inner session.Store used by CachingSessionStore unit
 // tests. It records every call and can inject errors per-method so the
 // wrapper's pass-through vs. fail-safe behavior is observable.
+//
+// T5 fix: call counters use atomic.Int64 so that concurrent tests
+// (TestCachingSessionStore_Get_ConcurrentAccess) pass under -race without
+// a mutex. Load() replaces direct field reads; Add(1) replaces ++.
 type fakeSessionStore struct {
 	view *session.ValidateView
 
@@ -36,20 +41,20 @@ type fakeSessionStore struct {
 	revokeSubjErr error
 	repoReadyErr  error
 
-	getCalls        int
-	createCalls     int
-	revokeCalls     int
-	revokeSubjCalls int
-	repoReadyCalls  int
+	getCalls        atomic.Int64
+	createCalls     atomic.Int64
+	revokeCalls     atomic.Int64
+	revokeSubjCalls atomic.Int64
+	repoReadyCalls  atomic.Int64
 }
 
 func (f *fakeSessionStore) Create(_ context.Context, _ *session.Session) error {
-	f.createCalls++
+	f.createCalls.Add(1)
 	return f.createErr
 }
 
 func (f *fakeSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
-	f.getCalls++
+	f.getCalls.Add(1)
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -57,17 +62,17 @@ func (f *fakeSessionStore) Get(_ context.Context, _ string) (*session.ValidateVi
 }
 
 func (f *fakeSessionStore) Revoke(_ context.Context, _ string) error {
-	f.revokeCalls++
+	f.revokeCalls.Add(1)
 	return f.revokeErr
 }
 
 func (f *fakeSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
-	f.revokeSubjCalls++
+	f.revokeSubjCalls.Add(1)
 	return f.revokeSubjErr
 }
 
 func (f *fakeSessionStore) RepoReady(_ context.Context) error {
-	f.repoReadyCalls++
+	f.repoReadyCalls.Add(1)
 	return f.repoReadyErr
 }
 
@@ -140,7 +145,7 @@ func TestCachingSessionStore_Get_CacheHit(t *testing.T) {
 	assert.Equal(t, view.ID, got.ID)
 	assert.Equal(t, view.SubjectID, got.SubjectID)
 	assert.Equal(t, view.AuthzEpochAtIssue, got.AuthzEpochAtIssue)
-	assert.Zero(t, inner.getCalls, "cache hit must not delegate to inner")
+	assert.Zero(t, inner.getCalls.Load(), "cache hit must not delegate to inner")
 }
 
 // TestCachingSessionStore_Get_CacheMiss_PrimesCache — first Get misses the
@@ -156,13 +161,13 @@ func TestCachingSessionStore_Get_CacheMiss_PrimesCache(t *testing.T) {
 	got, err := store.Get(ctx, scsTestSID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, 1, inner.getCalls)
+	assert.Equal(t, int64(1), inner.getCalls.Load())
 
 	// Cache should now hold the view; second Get must not bump inner.
 	got2, err := store.Get(ctx, scsTestSID)
 	require.NoError(t, err)
 	require.NotNil(t, got2)
-	assert.Equal(t, 1, inner.getCalls, "second Get must hit cache")
+	assert.Equal(t, int64(1), inner.getCalls.Load(), "second Get must hit cache")
 }
 
 // TestCachingSessionStore_Get_RedisDown_FallsThrough — cache.Get returns an
@@ -179,7 +184,7 @@ func TestCachingSessionStore_Get_RedisDown_FallsThrough(t *testing.T) {
 	got, err := store.Get(context.Background(), scsTestSID)
 	require.NoError(t, err)
 	assert.NotNil(t, got)
-	assert.Equal(t, 1, inner.getCalls)
+	assert.Equal(t, int64(1), inner.getCalls.Load())
 }
 
 // TestCachingSessionStore_Get_CorruptCacheEntry_FallsThrough — cache returns
@@ -194,7 +199,7 @@ func TestCachingSessionStore_Get_CorruptCacheEntry_FallsThrough(t *testing.T) {
 	got, err := store.Get(context.Background(), scsTestSID)
 	require.NoError(t, err)
 	assert.NotNil(t, got)
-	assert.Equal(t, 1, inner.getCalls)
+	assert.Equal(t, int64(1), inner.getCalls.Load())
 }
 
 // TestCachingSessionStore_Get_InnerError_PropagatesAsInfra — inner returns a
@@ -224,7 +229,7 @@ func TestCachingSessionStore_Create_DoesNotTouchCache(t *testing.T) {
 
 	sess := &session.Session{ID: scsTestSID, SubjectID: scsTestSubj, JTI: "jti-x", AuthzEpochAtIssue: scsTestEpoch}
 	require.NoError(t, store.Create(context.Background(), sess))
-	assert.Equal(t, 1, inner.createCalls)
+	assert.Equal(t, int64(1), inner.createCalls.Load())
 
 	// The mock store must remain empty.
 	cmd := mock.Get(context.Background(), scsCachedKey)
@@ -246,7 +251,7 @@ func TestCachingSessionStore_Revoke_DeletesCache(t *testing.T) {
 	store := newTestCachingStore(t, inner, mock)
 
 	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
-	assert.Equal(t, 1, inner.revokeCalls)
+	assert.Equal(t, int64(1), inner.revokeCalls.Load())
 
 	// Cache entry must be gone.
 	cmd := mock.Get(context.Background(), scsCachedKey)
@@ -264,7 +269,7 @@ func TestCachingSessionStore_Revoke_RedisDown_StillSucceeds(t *testing.T) {
 	store := newTestCachingStore(t, inner, mock)
 
 	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
-	assert.Equal(t, 1, inner.revokeCalls)
+	assert.Equal(t, int64(1), inner.revokeCalls.Load())
 }
 
 // TestCachingSessionStore_Revoke_InnerError_Propagates — inner errors flow
@@ -297,7 +302,7 @@ func TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache(t *testing.T) {
 
 	err = store.RevokeForSubject(context.Background(), scsTestSubj, session.CredentialEventPasswordReset)
 	require.NoError(t, err)
-	assert.Equal(t, 1, inner.revokeSubjCalls)
+	assert.Equal(t, int64(1), inner.revokeSubjCalls.Load())
 
 	// Cache entry must still be present — wrapper must not have invalidated.
 	cmd := mock.Get(context.Background(), scsCachedKey)
@@ -316,7 +321,7 @@ func TestCachingSessionStore_RepoReady_Delegates(t *testing.T) {
 
 	err := store.RepoReady(context.Background())
 	require.Error(t, err)
-	assert.Equal(t, 1, inner.repoReadyCalls)
+	assert.Equal(t, int64(1), inner.repoReadyCalls.Load())
 }
 
 // TestCachingSessionStore_Get_NilViewFromInner_DoesNotPopulate — inner may
@@ -360,13 +365,13 @@ func TestCachingSessionStore_Revoke_FollowedByGet_FallsThroughToInner(t *testing
 	store := newTestCachingStore(t, inner, mock)
 
 	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
-	assert.Equal(t, 1, inner.revokeCalls)
+	assert.Equal(t, int64(1), inner.revokeCalls.Load())
 
 	got, err := store.Get(context.Background(), scsTestSID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.NotNil(t, got.RevokedAt, "Get after Revoke must reflect revoked state, not stale cache")
-	assert.Equal(t, 1, inner.getCalls, "Get after Revoke must fall through to inner")
+	assert.Equal(t, int64(1), inner.getCalls.Load(), "Get after Revoke must fall through to inner")
 }
 
 // TestCachingSessionStore_Get_ConcurrentAccess — exercises the read-through
@@ -401,4 +406,108 @@ func TestCachingSessionStore_Get_ConcurrentAccess(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestCachingSessionStore_Get_InvalidCachedEntry_FallsThrough — T2 RED test.
+//
+// When the Redis cache holds a well-formed JSON payload that passes
+// json.Unmarshal but contains a semantically invalid cached entry (mismatched
+// ID, empty SubjectID, zero AuthzEpochAtIssue, empty object, or JSON null),
+// the Get method must:
+//  1. fall through to inner.Get (inner.getCalls == 1)
+//  2. return the view from inner, not from the invalid cache
+//  3. not return the corrupt cache entry as the result
+//
+// Current code (session_cache_store.go:160-163) returns any successfully
+// unmarshalled entry without validation, so all five cases FAIL — that is the
+// intentional RED state. The GREEN fix will add an entry.validate() helper.
+func TestCachingSessionStore_Get_InvalidCachedEntry_FallsThrough(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "mismatched_id",
+			payload: `{"id":"different-sid","subjectId":"subject-A","authzEpochAtIssue":7}`,
+		},
+		{
+			name:    "empty_subject_id",
+			payload: `{"id":"sess-test-1","subjectId":"","authzEpochAtIssue":7}`,
+		},
+		{
+			name:    "zero_epoch",
+			payload: `{"id":"sess-test-1","subjectId":"subject-A","authzEpochAtIssue":0}`,
+		},
+		{
+			name:    "empty_object",
+			payload: `{}`,
+		},
+		{
+			name:    "json_null",
+			payload: `null`,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mock := newMockCmdable()
+			// Prime the cache with the invalid payload.
+			require.NoError(t,
+				mock.Set(context.Background(), scsCachedKey, tc.payload, scsTestTTL).Err(),
+				"setup: prime cache with invalid payload")
+
+			// inner returns a known-good view.
+			innerView := newTestView()
+			inner := &fakeSessionStore{view: innerView}
+			store := newTestCachingStore(t, inner, mock)
+
+			got, err := store.Get(context.Background(), scsTestSID)
+			require.NoError(t, err, "Get must not return an error for invalid cache entry")
+
+			// Must fall through to inner.
+			assert.Equal(t, int64(1), inner.getCalls.Load(),
+				"invalid cache entry must not prevent inner.Get call (fall-through required)")
+
+			// Result must come from inner, not from the bad cache entry.
+			require.NotNil(t, got, "Get must return the inner view after cache miss/fallthrough")
+			assert.Equal(t, scsTestSID, got.ID,
+				"returned view must have correct ID from inner")
+			assert.Equal(t, scsTestSubj, got.SubjectID,
+				"returned view must have correct SubjectID from inner")
+			assert.Equal(t, scsTestEpoch, got.AuthzEpochAtIssue,
+				"returned view must have correct AuthzEpochAtIssue from inner")
+		})
+	}
+}
+
+// TestNewCachingSessionStore_TypedNilInner_Rejected — T3 RED test.
+//
+// A typed-nil session.Store interface (concrete type is non-nil, pointer value
+// is nil) must be rejected at construction time with errcode.ErrValidationFailed.
+//
+// Current code (session_cache_store.go:125) uses `inner == nil` which evaluates
+// to false for typed-nil interfaces — the nil-pointer panic is deferred to the
+// first method call. This test FAILS on develop tip — that is the intentional
+// RED state. The GREEN fix replaces the check with validation.IsNilInterface(inner).
+func TestNewCachingSessionStore_TypedNilInner_Rejected(t *testing.T) {
+	t.Parallel()
+	cache := mustNewCacheFromCmdable(t, newMockCmdable())
+
+	// Construct a typed-nil: interface is non-nil (has a type), pointer value is nil.
+	var typedNilInner session.Store = (*fakeSessionStore)(nil)
+
+	store, err := NewCachingSessionStore(typedNilInner, cache, scsTestTTL, nil)
+
+	assert.Nil(t, store, "constructor must return nil store for typed-nil inner")
+	require.Error(t, err, "constructor must return an error for typed-nil inner")
+
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded,
+		"error must be *errcode.Error for typed-nil inner; got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrValidationFailed, coded.Code,
+		"error code must be ErrValidationFailed for typed-nil inner")
 }

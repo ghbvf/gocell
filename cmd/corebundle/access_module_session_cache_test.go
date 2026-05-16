@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -142,4 +143,45 @@ func TestWrapSessionStoreWithCache_NilLogger_FallsBackToDefault(t *testing.T) {
 
 	require.NoError(t, err, "nil logger must fall back to slog.Default(), not crash")
 	assert.Equal(t, inner, got)
+}
+
+// TestWrapSessionStoreWithCache_TTLExceedsMax_FailFast — T4 RED test.
+//
+// GOCELL_SESSION_CACHE_TTL=31s exceeds the documented ≤ 30s recommended
+// maximum. The wiring function must fail-fast with errcode.ErrValidationFailed
+// (not silently return inner unchanged) because a TTL above the documented
+// maximum is a wiring misconfiguration, not a runtime tolerance.
+//
+// The type godoc (session_cache_store.go:57) declares "≤ 30s recommended",
+// and Q7 from the plan aligns this to a hard wiring upper bound.
+//
+// Current code (access_module.go:288) only checks `ttl <= 0` and has no Redis
+// client → falls through to the "no Redis client" warn path and returns
+// (inner, nil) unchanged. This test asserts that behavior is WRONG — we
+// should get a validation error before reaching the Redis-nil check.
+//
+// RED state: current code returns (inner, nil) for TTL=31s + nil Redis.
+// GREEN fix: adds a 30s upper-bound check after `ttl <= 0`, returning an error
+// before the Redis-nil guard runs.
+func TestWrapSessionStoreWithCache_TTLExceedsMax_FailFast(t *testing.T) {
+	t.Setenv(envSessionCacheTTL, "31s")
+	logger, _ := newDisableTestLogger()
+
+	inner := stubSessionStore{}
+	// SharedDeps with nil RedisClient — current code warns and returns (inner, nil).
+	// After the GREEN fix, the TTL upper-bound check fires first and returns an error.
+	got, err := wrapSessionStoreWithCache(inner, &SharedDeps{}, logger)
+
+	// RED: current code returns (inner, nil) here; GREEN fix returns (nil, err).
+	require.Error(t, err,
+		"TTL=31s exceeds documented max (30s): wrapSessionStoreWithCache must fail-fast with an error, "+
+			"not silently return inner unchanged")
+	assert.Nil(t, got,
+		"wrapSessionStoreWithCache must return nil store on TTL-exceeds-max error")
+
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded,
+		"error must be *errcode.Error for TTL-exceeds-max; got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrValidationFailed, coded.Code,
+		"error code must be ErrValidationFailed for TTL-exceeds-max wiring misconfiguration")
 }
