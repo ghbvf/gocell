@@ -462,24 +462,34 @@ func TestNotFoundTestStrict(t *testing.T) {
 	seen := make(map[string]struct{})
 	var violations []notFoundViolation
 
-	for _, tagGroup := range KnownNonDefaultTags() {
-		// Fixture packages live under tools/archtest/testdata/ and are
-		// exercised by TestNotFoundTestStrictFixtures with pure-AST mode.
-		// They are skipped from the module-wide scan via
-		// shouldSkipForNotFoundStrict regardless of build tags.
-		opts := TypedOpts{Tests: true, Tags: tagGroup}
-		_ = RunTyped(t, opts, []string{"./..."}, func(p *Pass) []Diagnostic {
-			for _, v := range notFoundDiagsFromPass(p) {
-				key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Name)
-				if _, dup := seen[key]; dup {
-					continue
-				}
-				seen[key] = struct{}{}
-				violations = append(violations, v)
+	// FlatNonDefaultTags() returns the union of all distinct non-empty build
+	// tags across KnownNonDefaultTags() groups, sorted. Using FlatNonDefaultTags
+	// + single RunTyped (clock_invariants_test.go pattern) collapses N
+	// packages.Load calls into 1; KnownNonDefaultTags loop (panic_invariants
+	// pattern) does N parallel loads with full *types.Info cached per call,
+	// accumulating RSS that pushes GHA 2-CPU 7GB runners into OOM SIGTERM and
+	// running 7× wall-time (43s observed on CI run 25971613882 shard 14 vs
+	// 20s slowgate budget). The flat-tag union covers every conditional-build
+	// _test.go that any group would visit; for a presence-check rule like this
+	// one (the rule only cares whether SOME tag-group sees a violation), the
+	// flat union is semantically equivalent to the loop-and-merge form.
+	//
+	// Fixture packages live under tools/archtest/testdata/ and are exercised
+	// via the t.Run("Fixtures", ...) subtest below with pure-AST mode. They
+	// are skipped from the module-wide scan via shouldSkipForNotFoundStrict
+	// regardless of build tags.
+	opts := TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}
+	_ = RunTyped(t, opts, []string{"./..."}, func(p *Pass) []Diagnostic {
+		for _, v := range notFoundDiagsFromPass(p) {
+			key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Name)
+			if _, dup := seen[key]; dup {
+				continue
 			}
-			return nil
-		})
-	}
+			seen[key] = struct{}{}
+			violations = append(violations, v)
+		}
+		return nil
+	})
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
