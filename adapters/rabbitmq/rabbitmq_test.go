@@ -510,7 +510,9 @@ func TestConnection_Health_Closed(t *testing.T) {
 
 	err := conn.Health(context.Background())
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
+	assert.False(t, errcode.IsTransient(err),
+		"closed connection must NOT be transient — explicit Close() does not self-heal")
 }
 
 func TestConnection_AcquireChannel(t *testing.T) {
@@ -3465,6 +3467,14 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 			want: true,
 		},
 		{
+			// ErrAdapterAMQPConnectTimeout is produced by classifyConnectError for
+			// net.Error.Timeout()==true dials. It is always WrapInfra → transient,
+			// so subscribers must Requeue (retry path), not Reject.
+			name: "ErrAdapterAMQPConnectTimeout via WrapInfra (transient)",
+			err:  errcode.WrapInfra(ErrAdapterAMQPConnectTimeout, "rabbitmq: dial timeout", nil),
+			want: true,
+		},
+		{
 			// errHealthClosed remains errcode.New(KindInternal) because an
 			// explicit Close() does not self-heal; subscribers must NOT retry
 			// on this signal (fail-fast on terminal lifecycle).
@@ -3994,10 +4004,13 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			// errHealthNeverConnected uses ErrAdapterAMQPNeverConnected (distinct
+			// from ErrAdapterAMQPConnect) so operators can distinguish "never
+			// successfully dialed" from connection-available or connection-closed.
 			name:     "StateConnecting never connected",
 			state:    StateConnecting,
 			conn:     nil,
-			wantCode: ErrAdapterAMQPConnect,
+			wantCode: ErrAdapterAMQPNeverConnected,
 		},
 		{
 			name:     "StateDisconnected reconnecting",

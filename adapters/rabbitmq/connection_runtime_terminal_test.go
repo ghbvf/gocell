@@ -22,11 +22,15 @@ import (
 // timeoutErr is a minimal net.Error stub whose Timeout() reports true. Used
 // to simulate amqp091's *net.OpError whose inner Err is a timeout signal
 // (the shape produced by net.DialTimeout against an unreachable host).
+//
+// Temporary() returns false: Go 1.18+ deprecated Temporary(); the stdlib
+// *net.OpError wrapping a timeout also returns false for Temporary() in
+// modern Go — aligning with actual net.DialTimeout behavior.
 type timeoutErr struct{}
 
 func (timeoutErr) Error() string   { return "i/o timeout" }
 func (timeoutErr) Timeout() bool   { return true }
-func (timeoutErr) Temporary() bool { return true }
+func (timeoutErr) Temporary() bool { return false }
 
 // =============================================================================
 // classifyDialError — unit-level table for the runtime classifier.
@@ -645,4 +649,87 @@ func TestReconnectWithBackoff_PermanentError_DoesNotLeakCredentials(t *testing.T
 		assert.NotContains(t, lastError, secret,
 			"lastError must not leak %q", secret)
 	}
+}
+
+// =============================================================================
+// classifyConnectError — unit-level table for the startup-time funnel.
+// =============================================================================
+
+// TestClassifyConnectError covers all three branches of classifyConnectError:
+// timeout, permanent (definitive/inferred), and unknown (transient fail-open).
+// Each branch is verified by its errcode.Code and errcode.IsTransient value.
+func TestClassifyConnectError(t *testing.T) {
+	// Pre-build a sanitized cause that represents an already-redacted dial error.
+	sanitized := errors.New("rabbitmq: dial sanitized")
+
+	tests := []struct {
+		name          string
+		rawErr        error
+		wantCode      errcode.Code
+		wantTransient bool
+	}{
+		{
+			name:          "timeout branch (net.OpError Timeout()=true)",
+			rawErr:        &net.OpError{Op: "dial", Net: "tcp", Err: timeoutErr{}},
+			wantCode:      ErrAdapterAMQPConnectTimeout,
+			wantTransient: true,
+		},
+		{
+			name: "permanent definitive branch (broker 403 ACCESS_REFUSED)",
+			rawErr: &amqp.Error{
+				Code:    403,
+				Reason:  "ACCESS_REFUSED",
+				Server:  true,
+				Recover: false,
+			},
+			wantCode:      ErrAdapterAMQPConnectPermanent,
+			wantTransient: false,
+		},
+		{
+			name:          "unknown branch (connection refused) — transient fail-open",
+			rawErr:        &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			wantCode:      ErrAdapterAMQPConnect,
+			wantTransient: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyConnectError(tt.rawErr, sanitized)
+			require.Error(t, err)
+
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr),
+				"classifyConnectError must return *errcode.Error, got %T: %v", err, err)
+			assert.Equal(t, tt.wantCode, ecErr.Code,
+				"unexpected errcode.Code for %q", tt.name)
+			assert.Equal(t, tt.wantTransient, errcode.IsTransient(err),
+				"unexpected IsTransient for %q", tt.name)
+		})
+	}
+}
+
+// TestClassifyConnectError_DoesNotLeakRawURL verifies that classifyConnectError
+// does not re-expose the raw error string when a sanitized cause is supplied.
+// The security contract (SECURITY godoc on classifyConnectError) requires the
+// caller to pass a pre-sanitized cause; this test exercises the nominal path
+// where sanitizedCause is already redacted and the raw error contains fake URL
+// credentials — the output must not surface those credentials.
+func TestClassifyConnectError_DoesNotLeakRawURL(t *testing.T) {
+	// rawErr simulates what the dial layer returns when the URL contains credentials.
+	// Constructed as concat to avoid gosec G101 false-positive on the inline literal.
+	rawURL := "amqp://admin:" + "secret99@broker.internal:5672/vh"
+	rawErr := fmt.Errorf("dial %s: connection refused", rawURL)
+
+	// sanitizedCause is what the caller should pass — URL already redacted.
+	sanitizedCause := errors.New("amqp://***:***@broker.internal:5672/vh: connection refused")
+
+	err := classifyConnectError(rawErr, sanitizedCause)
+	require.Error(t, err)
+
+	errText := err.Error()
+	assert.NotContains(t, errText, "secret99",
+		"classifyConnectError output must not leak raw URL credentials")
+	assert.NotContains(t, errText, "admin:",
+		"classifyConnectError output must not leak raw URL username")
 }

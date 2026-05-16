@@ -15,9 +15,11 @@ import (
 )
 
 // testAMQPBlackholeURL is the RFC 5737 TEST-NET-1 address used for
-// ConnectTimeout fast-fail tests. String concat defeats gosec G101 false-positive
-// on test fixture URLs (not real credentials; gosec does not flag this form).
-var testAMQPBlackholeURL = "amqp://guest:" + "guest@192.0.2.1:5672/"
+// ConnectTimeout fast-fail tests. TEST-NET-1 (192.0.2.0/24) is
+// documentation-only and never routed on the public internet.
+//
+//nolint:gosec // G101: fake fixture URL, not real credentials
+var testAMQPBlackholeURL = "amqp://guest:guest@192.0.2.1:5672/"
 
 // connectTimeoutBlackholeBudget is the upper bound for the blackhole dial
 // to fail. The configured ConnectTimeout (testtime.D200ms) plus error
@@ -40,6 +42,9 @@ const connectTimeoutDefaultExpected = testtime.D5s
 // Mirrors adapters/postgres pool TestNewPool_ConnectTimeout_Blackhole.
 func TestNewConnection_ConnectTimeout_Blackhole(t *testing.T) {
 	t.Parallel()
+	if testing.Short() {
+		t.Skip("blackhole timeout test requires network reach to RFC 5737 TEST-NET-1; skipped in -short mode")
+	}
 
 	start := time.Now()
 	_, err := NewConnection(Config{
