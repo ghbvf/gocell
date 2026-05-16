@@ -74,7 +74,7 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 
 		var (
 			workerDone        = make(chan struct{}) // closed when worker goroutine exits
-			capturedOwnerCtx  context.Context      // ownerCtx captured in OnStart closure
+			capturedOwnerCtx  context.Context       // ownerCtx captured in OnStart closure
 			ownerCtxErrOnStop error                 // ownerCtx.Err() sampled inside OnStop
 			mu                sync.Mutex
 		)
