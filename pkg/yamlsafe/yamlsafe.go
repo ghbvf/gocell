@@ -94,7 +94,7 @@ func doubleQuote(raw string) string {
 		default:
 			// C0 control characters (except TAB which is safe) and DEL need hex escapes.
 			if (r < 0x20 && r != '\t') || r == 0x7f {
-				b.WriteString(fmt.Sprintf(`\x%02x`, r))
+				fmt.Fprintf(&b, `\x%02x`, r)
 			} else {
 				b.WriteRune(r)
 			}
