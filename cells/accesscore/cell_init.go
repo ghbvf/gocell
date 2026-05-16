@@ -263,8 +263,8 @@ func (c *AccessCore) initSlices() error {
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbaccheck", "accesscore", cellvocab.L0))
 
-	// rbac-assign — durable mode (outboxWriter + txRunner) upgrades to L2 OutboxFact;
-	// demo mode (both nil) stays at L0 (in-memory repos, synchronous dual-write).
+	// rbac-assign is always L2 OutboxFact (locked by RBACASSIGN-L2-STATIC-01 archtest);
+	// demo mode wraps emitter in noop publisher, slice still writes outbox row in tx.
 	if err := c.initRbacAssign(); err != nil {
 		return err
 	}

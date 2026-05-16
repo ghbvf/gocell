@@ -95,9 +95,7 @@ func TestSEED_ROLE_IFACE_01(t *testing.T) {
 
 // scanForMemRoleRepositoryUsage returns violation strings for the file at
 // path when it (a) imports cells/accesscore/internal/mem and (b) references
-// mem.RoleRepository via any selector expression.
-//
-// Also detects type aliases targeting mem.RoleRepository.
+// mem.RoleRepository via any selector expression OR type alias.
 func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []string {
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
@@ -114,6 +112,8 @@ func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []stri
 	}
 
 	var violations []string
+
+	// Scan selector expressions: mem.RoleRepository (in any AST position).
 	scanner.EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
 		ident, ok := sel.X.(*ast.Ident)
 		if !ok || ident.Name != alias {
@@ -131,6 +131,12 @@ func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []stri
 		))
 	})
 
+	// Scan type alias declarations: `type X = mem.RoleRepository` or
+	// `type X = *mem.RoleRepository`. These are *ast.TypeSpec nodes with
+	// Assign != token.NoPos; their Type is a SelectorExpr (or a StarExpr
+	// wrapping one) whose base Ident matches the mem package alias.
+	violations = append(violations, scanForMemRoleRepositoryAliases(fset, f, rel, alias)...)
+
 	// Deduplicate.
 	seen := make(map[string]bool, len(violations))
 	out := violations[:0]
@@ -141,6 +147,44 @@ func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []stri
 		}
 	}
 	return out
+}
+
+// scanForMemRoleRepositoryAliases detects type alias declarations of the form
+// `type X = mem.RoleRepository` or `type X = *mem.RoleRepository` (covered by
+// the T-ALIAS RED fixture).
+//
+// AST shape: *ast.TypeSpec with Assign != token.NoPos and Type being either:
+//   - *ast.SelectorExpr{X: Ident(alias), Sel: "RoleRepository"}
+//   - *ast.StarExpr{X: *ast.SelectorExpr{X: Ident(alias), Sel: "RoleRepository"}}
+func scanForMemRoleRepositoryAliases(fset *token.FileSet, f *ast.File, rel, alias string) []string {
+	var violations []string
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Assign == token.NoPos {
+			return // not a type alias
+		}
+		if isMemRoleRepositoryExpr(ts.Type, alias) {
+			pos := fset.Position(ts.Pos())
+			violations = append(violations, fmt.Sprintf(
+				"%s:%d: type alias %s = %s.RoleRepository (concrete mem type) — "+
+					"production code must use ports.RoleRepository interface",
+				rel, pos.Line, ts.Name.Name, alias,
+			))
+		}
+	})
+	return violations
+}
+
+// isMemRoleRepositoryExpr reports whether expr is `alias.RoleRepository` or
+// `*alias.RoleRepository`.
+func isMemRoleRepositoryExpr(expr ast.Expr, alias string) bool {
+	switch e := expr.(type) {
+	case *ast.SelectorExpr:
+		ident, ok := e.X.(*ast.Ident)
+		return ok && ident.Name == alias && e.Sel.Name == "RoleRepository"
+	case *ast.StarExpr:
+		return isMemRoleRepositoryExpr(e.X, alias)
+	}
+	return false
 }
 
 // memPackageAlias returns the local alias for cells/accesscore/internal/mem
@@ -238,6 +282,35 @@ type Other struct {
 	if len(violations) != 0 {
 		t.Errorf("GREEN fixture (no mem import) must produce 0 violations; got %d: %v",
 			len(violations), violations)
+	}
+}
+
+// TestSEED_ROLE_IFACE_01_RedFixture_TypeAlias verifies the scanner flags a type
+// alias declaration `type LocalRoleRepo = mem.RoleRepository` (T-ALIAS RED fixture
+// from the blind-spot inventory).
+func TestSEED_ROLE_IFACE_01_RedFixture_TypeAlias(t *testing.T) {
+	t.Parallel()
+	src := `package p
+import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+type LocalRoleRepo = mem.RoleRepository
+`
+	violations := scanSrcForViolations(t, src, "cells/accesscore/some_prod.go")
+	if len(violations) == 0 {
+		t.Errorf("RED fixture (type alias mem.RoleRepository) must produce a violation; got 0")
+	}
+}
+
+// TestSEED_ROLE_IFACE_01_RedFixture_TypeAliasPointer verifies the scanner flags
+// `type LocalRoleRepo = *mem.RoleRepository` (StarExpr-wrapped alias form).
+func TestSEED_ROLE_IFACE_01_RedFixture_TypeAliasPointer(t *testing.T) {
+	t.Parallel()
+	src := `package p
+import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+type LocalRoleRepo = *mem.RoleRepository
+`
+	violations := scanSrcForViolations(t, src, "cells/accesscore/some_prod.go")
+	if len(violations) == 0 {
+		t.Errorf("RED fixture (type alias *mem.RoleRepository) must produce a violation; got 0")
 	}
 }
 

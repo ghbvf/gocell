@@ -149,6 +149,8 @@
 |---|---|---|---|---|---|---|---|
 | PR341-FU-OUTBOXTEST-CLOSE-BUDGET-COVERAGE | **OUTBOXTEST-CLOSE-BUDGET-COVERAGE-01** — 现状: conformance suite 仍裸调 `sub.Close(ctx)`；修复: 全部走 closeWithBudget 或 godoc 强约定 | test | P2/Cx1 | 🟡 | — | `kernel/outbox/outboxtest/conformance.go` | PR #341 round-1 |
 | AUDITAPPEND-L2-FAILURE-PROOF-01 | **AuditAppend L2 失败注入测试** — ✅ closed by PR #450 (S7, 2026-05-11)：`TestAuditLedgerStore_OutboxAtomicityFailureProof` testcontainer 故意 fail outbox writer 验证 DB 写成功 + outbox 失败 → tx rollback | test | P1/Cx3 | ✅ PR #450 | — | `adapters/postgres/audit_ledger_store_test.go` | backlog1 §2.5 → PR #450 (S7) |
+| RBACASSIGN-L2-PG-ATOMICITY-01 | **RbacAssign L2 PG 原子性测试** — 现状: rbacassign 仅有 mem-based L2 路径测试（RecordingWriter），无 PG-level outbox 原子性验证；修复: testcontainer 驱动 PG outbox writer，故意 fail writer → 验证 domain 写成功 + outbox 失败 → tx rollback（与 AUDITAPPEND-L2-FAILURE-PROOF-01 同模式）。当前 mem adapter 不支持 RunInTx 故障注入，等 PG accesscore 仓储落地后补充。 | test | P1/Cx2 | 🟠 | X1 PG-DOMAIN-REPO 上线后 | `adapters/postgres/` (新) + `cells/accesscore/slices/rbacassign/` | PR #514 reviewer F9 |
+| RBACASSIGN-L2-STATIC-HARD-UPGRADE-01 | **RbacAssign L2 静态检查 Hard 升级** — 现状: RBACASSIGN-L2-STATIC-01 archtest 为 Medium（AST literal lock）；修复方向: 当 kernel/cell 引入 typed factory `cell.NewL2SliceWithEmit(name, cellID, emitter)` 带强制 emitter 参数时，L2 一致性声明退化为编译期约束（Hard）。 | arch-opt | P3/Cx2 | 🟢 | kernel/cell 引入 typed factory `cell.NewL2SliceWithEmit` | `kernel/cell/` + `tools/archtest/rbacassign_l2_static_test.go` | PR #514 reviewer F2 |
 
 ---
 

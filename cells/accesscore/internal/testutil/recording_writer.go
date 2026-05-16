@@ -6,9 +6,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// RecordingWriter is a test-only outbox.Writer that records every Entry written
-// to it. Tests assert against Entries to verify L2 OutboxFact semantics
-// (transactional outbox row presence, EventType, payload shape, event_id).
+// RecordingWriter is test-only and does NOT satisfy L2 durability semantics
+// (no retry, no idempotency, no transactional row visibility). Production code
+// must use adapters/postgres OutboxWriter.
+//
+// It records every Entry written to it. Tests assert against Entries to verify
+// L2 OutboxFact semantics (transactional outbox row presence, EventType, payload
+// shape, event_id).
 //
 // Set Err to simulate failure for negative-path tests; when Err is non-nil,
 // Write returns Err immediately and Entries is not appended (rolling-back

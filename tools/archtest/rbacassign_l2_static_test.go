@@ -20,8 +20,9 @@
 // AI-rebust grade: Medium (type-aware AST literal lock).
 // Hard upgrade path: when kernel/cell introduces a typed factory
 // `cell.NewL2SliceWithEmit(name, cellID, emitter)` with mandatory emitter
-// argument, the rule degrades to a compile-time constraint. Tracked as a
-// trigger-type backlog item (no follow-up issue today).
+// argument, the rule degrades to a compile-time constraint. Tracked as backlog
+// RBACASSIGN-L2-STATIC-HARD-UPGRADE-01 (trigger: kernel/cell typed factory
+// introduction).
 //
 // Blind-spot inventory:
 //   - Adding a *second* NewBaseSlice("rbacassign", ...) call elsewhere —
@@ -171,7 +172,7 @@ func init() {
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
 }
 `
-	violations := scanSrcForRbacassignLevelLiteral(t, src, rbacassignCellInitPath)
+	violations := scanSrcForRbacassignLevelLiteral(t, src)
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (variable level arg) must produce a violation; got 0")
 	}
@@ -195,9 +196,36 @@ func init() {
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", cellvocab.L0))
 }
 `
-	violations := scanSrcForRbacassignLevelLiteral(t, src, rbacassignCellInitPath)
+	violations := scanSrcForRbacassignLevelLiteral(t, src)
 	if len(violations) == 0 {
 		t.Errorf("RED fixture (cellvocab.L0) must produce a violation; got 0")
+	}
+}
+
+// TestRBACASSIGN_L2_STATIC_01_RedFixture_ConstAlias verifies the scanner flags
+// `const myL2 = cellvocab.L2; NewBaseSlice(..., myL2)`. A bare Ident is not a
+// SelectorExpr, so the scanner reports a violation (blind-spot inventory entry:
+// "indirection through a constant alias — explicitly rejected").
+func TestRBACASSIGN_L2_STATIC_01_RedFixture_ConstAlias(t *testing.T) {
+	t.Parallel()
+	src := `package p
+type Cell struct{}
+func (Cell) AddSlice(any) {}
+var c Cell
+var cellvocab = struct{ L0, L2 int }{L0: 0, L2: 2}
+var cell = struct {
+	NewBaseSlice func(string, string, int) any
+}{
+	NewBaseSlice: func(string, string, int) any { return nil },
+}
+const myL2 = 2
+func init() {
+	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", myL2))
+}
+`
+	violations := scanSrcForRbacassignLevelLiteral(t, src)
+	if len(violations) == 0 {
+		t.Errorf("RED fixture (const alias myL2) must produce a violation; got 0")
 	}
 }
 
@@ -219,7 +247,7 @@ func init() {
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", cellvocab.L2))
 }
 `
-	violations := scanSrcForRbacassignLevelLiteral(t, src, rbacassignCellInitPath)
+	violations := scanSrcForRbacassignLevelLiteral(t, src)
 	if len(violations) != 0 {
 		t.Errorf("GREEN fixture (cellvocab.L2) must produce 0 violations; got %d: %v",
 			len(violations), violations)
@@ -227,8 +255,9 @@ func init() {
 }
 
 // scanSrcForRbacassignLevelLiteral writes src to a temp file and runs the
-// scanner with the given relative path.
-func scanSrcForRbacassignLevelLiteral(t *testing.T, src, rel string) []string {
+// scanner. The relative path is always rbacassignCellInitPath — matching the
+// production file under test — so that violation messages are consistent.
+func scanSrcForRbacassignLevelLiteral(t *testing.T, src string) []string {
 	t.Helper()
 	tmp, err := os.CreateTemp(t.TempDir(), "rbac_l2_*.go")
 	if err != nil {
@@ -240,5 +269,5 @@ func scanSrcForRbacassignLevelLiteral(t *testing.T, src, rel string) []string {
 	if err := tmp.Close(); err != nil {
 		t.Fatalf("close temp: %v", err)
 	}
-	return scanForRbacassignLevelLiteral(t, token.NewFileSet(), tmp.Name(), rel)
+	return scanForRbacassignLevelLiteral(t, token.NewFileSet(), tmp.Name(), rbacassignCellInitPath)
 }
