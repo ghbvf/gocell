@@ -1,9 +1,14 @@
 package usage02fixtures
 
+// The dot-import below is intentional and is the entire point of this
+// fixture: it models the AST + typeseval resolution of a same-package bare
+// call to archtest.EachInChildren from within package archtest itself.
+// Outside this single line dot-imports remain forbidden by the global lint
+// rule.
 import (
 	"go/ast"
 
-	. "github.com/ghbvf/gocell/tools/archtest"
+	. "github.com/ghbvf/gocell/tools/archtest" //nolint:revive,staticcheck // intentional: model package-internal bare callee resolution
 )
 
 // dot-import models a call site that resolves identically to a same-package

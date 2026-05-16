@@ -1331,11 +1331,14 @@ func _(file *ast.File, other []ast.Decl) {
 // tree must return zero diagnostics; this is self-consistent with the
 // migration (rule GREEN ⟺ all sites migrated).
 //
-// Callee-identity recognition (single Hard path): isMonitoredEachInChildren
-// uses typeseval.ResolvePackageRef to resolve sel.Sel to its declaring package.
-// The target set is {scannerPkgPath, archtestPkgPath}; both names are
-// equivalent depth-1 walkers (archtest.EachInChildren is a thin façade around
-// scanner.EachInChildren) and equally forbid the sentinel idiom.
+// Callee-identity recognition (single Hard path): monitoredEachInChildrenCallee
+// uses typeseval.ResolvePackageRef to resolve the post-generic-strip callee
+// (either *ast.SelectorExpr for qualified calls or *ast.Ident for same-package
+// bare calls / dot-import) to its declaring package. The target set is
+// {scannerPkgPath, archtestPkgPath}; both names are equivalent depth-1 walkers
+// (archtest.EachInChildren is a thin façade around scanner.EachInChildren) and
+// equally forbid the sentinel idiom. The Ident branch is the form produced by
+// tools/archtest/*_test.go themselves (package archtest internal callers).
 //
 // AI-rebust 双向锁评级:
 //
@@ -1414,15 +1417,30 @@ func TestScannerFrameworkUsage02(t *testing.T) {
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
 }
 
-// eachInChildrenCalleeSel returns the SelectorExpr `<pkg>.EachInChildren`
-// from a generic call's Fun (IndexExpr / IndexListExpr base), or nil.
+// monitoredEachInChildrenCallee reports whether call invokes one of the
+// monitored depth-1 walkers — i.e. EachInChildren declared in either
+// scannerPkgPath (legacy direct call from outside package archtest) or
+// archtestPkgPath (040 façade, callable both qualified from external packages
+// and bare from inside package archtest). Both forms are equivalent walkers
+// and equally forbid the closure+done sentinel idiom.
 //
-// This is a syntactic fast-path skip (not a fallback): if the selector name
-// is not "EachInChildren", the call is provably not the monitored idiom and
-// nil short-circuits the whole detector. Callee-identity authority rests
-// with isMonitoredEachInChildren (typeseval, single Hard path) — a typeseval
-// miss causes a false negative (rule under-fires), never silent acceptance.
-func eachInChildrenCalleeSel(call *ast.CallExpr) *ast.SelectorExpr {
+// The callee expression has four legal AST shapes after stripping the
+// IndexExpr / IndexListExpr generic instantiation wrapper:
+//
+//	scanner.EachInChildren[...]    → *ast.SelectorExpr
+//	archtest.EachInChildren[...]   → *ast.SelectorExpr
+//	EachInChildren[...]            → *ast.Ident  (same-package bare or dot-import)
+//	(anything else)                → ignored
+//
+// Pre-typeseval the function applies a syntactic Name fast-path skip: if the
+// trailing identifier is not "EachInChildren", no further work is needed.
+// This is NOT a fallback — a typeseval miss never reaches an "accept on name"
+// branch; identity authority rests solely with typeseval.ResolvePackageRef,
+// which canonicalizes both Ident (including dot-import) and SelectorExpr to
+// (declaring-package path, exported name). A typeseval miss yields a false
+// negative (rule under-fires), never silent acceptance — the single Hard path
+// invariant declared for SCANNER-FRAMEWORK-USAGE-02.
+func monitoredEachInChildrenCallee(info *types.Info, call *ast.CallExpr) bool {
 	base := call.Fun
 	switch idx := base.(type) {
 	case *ast.IndexExpr:
@@ -1430,26 +1448,19 @@ func eachInChildrenCalleeSel(call *ast.CallExpr) *ast.SelectorExpr {
 	case *ast.IndexListExpr:
 		base = idx.X
 	}
-	sel, ok := base.(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil || sel.Sel.Name != "EachInChildren" {
-		return nil
+	switch x := base.(type) {
+	case *ast.SelectorExpr:
+		if x.Sel == nil || x.Sel.Name != "EachInChildren" {
+			return false
+		}
+	case *ast.Ident:
+		if x.Name != "EachInChildren" {
+			return false
+		}
+	default:
+		return false
 	}
-	return sel
-}
-
-// isMonitoredEachInChildren reports whether sel resolves to either
-// scannerPkgPath.EachInChildren (legacy direct call) or
-// archtestPkgPath.EachInChildren (040 façade end-state, thin wrapper
-// around scanner.EachInChildren). Both forms are equivalent depth-1
-// walkers and equally forbid the closure+done sentinel idiom.
-//
-// Single Hard path: typeseval.ResolvePackageRef. There is no syntactic
-// fallback — fixture and live scan share the same typed pipeline
-// (TestScannerFrameworkUsage02_Fixture loads fixtures via
-// typeseval.SharedResolver), so a typeseval miss is a fixture or
-// detector bug, not a callee-identity ambiguity to paper over.
-func isMonitoredEachInChildren(info *types.Info, sel *ast.SelectorExpr) bool {
-	path, name, ok := typeseval.ResolvePackageRef(info, sel)
+	path, name, ok := typeseval.ResolvePackageRef(info, base)
 	if !ok || name != "EachInChildren" {
 		return false
 	}
@@ -1487,8 +1498,7 @@ func condIdentNames(cond ast.Expr) map[string]bool {
 func forbiddenClosureDoneSentinel(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var out []scanner.Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel := eachInChildrenCalleeSel(call)
-		if sel == nil || !isMonitoredEachInChildren(info, sel) {
+		if !monitoredEachInChildrenCallee(info, call) {
 			return
 		}
 		// The callback is the sole FuncLit direct child of the call (depth-1);
@@ -1631,8 +1641,7 @@ func TestScannerFrameworkUsage02_Fixture(t *testing.T) {
 func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var out []scanner.Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel := eachInChildrenCalleeSel(call)
-		if sel == nil || !isMonitoredEachInChildren(info, sel) {
+		if !monitoredEachInChildrenCallee(info, call) {
 			return
 		}
 		// The callback is the sole FuncLit direct child of the call (depth-1);
