@@ -233,6 +233,9 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 	if len(plan) == 0 {
 		return nil
 	}
+	if err := duplicatePass(plan); err != nil {
+		return err
+	}
 	if err := containmentPass(realRoot, plan); err != nil {
 		return err
 	}
@@ -243,6 +246,24 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 		return nil
 	}
 	return writePass(realRoot, plan)
+}
+
+// duplicatePass rejects plans containing two entries with the same AbsPath.
+// Runs before containmentPass so dry-run callers also fail-closed on dup plans
+// (the develop @ 41fc70074 dry-run silently accepted duplicates because
+// O_EXCL only fired at writePass time). A plan-content invariant, not a
+// filesystem-state check.
+func duplicatePass(plan []PlannedFile) error {
+	seen := make(map[string]struct{}, len(plan))
+	for _, f := range plan {
+		if _, dup := seen[f.AbsPath]; dup {
+			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+				"pathsafe: duplicate AbsPath in plan",
+				errcode.WithDetails(slog.String("absPath", f.AbsPath)))
+		}
+		seen[f.AbsPath] = struct{}{}
+	}
+	return nil
 }
 
 // containmentPass verifies that every AbsPath in plan is contained within
@@ -275,8 +296,17 @@ func containmentPass(realRoot string, plan []PlannedFile) error {
 // non-dangling — are detected and rejected even when the symlink destination
 // does not exist. This prevents an attacker from pre-placing a symlink at the
 // target path to redirect writes outside root.
+//
+// Entries with ForceOverwrite=true are skipped: callers using force-overwrite
+// expect to replace prior content (writePass will os.Remove the existing
+// inode before O_EXCL|O_NOFOLLOW recreate). This is a path-based pre-check
+// for friendlier error messages; the authoritative TOCTOU defense lives in
+// writePass via syscall O_EXCL|O_NOFOLLOW at the actual write call.
 func conflictPass(plan []PlannedFile) error {
 	for _, f := range plan {
+		if f.ForceOverwrite {
+			continue
+		}
 		info, err := os.Lstat(f.AbsPath)
 		if err != nil {
 			// Path does not exist → no conflict. Continue.
@@ -314,6 +344,16 @@ func writePass(realRoot string, plan []PlannedFile) error {
 		dir := filepath.Dir(f.AbsPath)
 		if err := mkdirAllTracked(dir, dirMode, realRoot, &createdDirs); err != nil {
 			return rollbackWrites(writtenPaths, createdDirs, err)
+		}
+		if f.ForceOverwrite {
+			// Remove any existing inode at AbsPath (regular file, symlink,
+			// empty dir) so the O_EXCL|O_NOFOLLOW recreate below opens a
+			// fresh slot. os.Remove on a symlink unlinks the symlink itself
+			// (does not follow), preserving root containment. ENOENT is
+			// expected when nothing is there yet.
+			if err := os.Remove(f.AbsPath); err != nil && !os.IsNotExist(err) {
+				return rollbackWrites(writtenPaths, createdDirs, err)
+			}
 		}
 		if err := writeFileNoFollow(f.AbsPath, f.Content, fileMode); err != nil {
 			return rollbackWrites(writtenPaths, createdDirs, err)
