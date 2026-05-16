@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/yamlsafe"
 )
 
 // Generator produces derived files for an assembly.
@@ -134,14 +135,17 @@ type AssemblyScaffoldSpec struct {
 }
 
 // scaffoldAssemblyContext is the template context for the K#09 scaffold
-// templates (assembly-yaml / run-go / app-go).
+// templates (assembly-yaml / run-go / app-go). User-input fields are typed
+// as yamlsafe.Scalar so the type system rejects raw string interpolation
+// into the inline YAML template; buildScaffoldContext is the single funnel
+// that wraps user input through yamlsafe.Quote.
 type scaffoldAssemblyContext struct {
-	ID             string
-	Cells          []string
-	OwnerTeam      string
-	OwnerRole      string
-	DeployTemplate string                      // empty when --deploy=k8s (default — omitted from yaml)
-	HelperName     string                      // run{ID-PascalCase} for runXxx() in run.go
+	ID             yamlsafe.Scalar
+	Cells          []yamlsafe.Scalar
+	OwnerTeam      yamlsafe.Scalar
+	OwnerRole      yamlsafe.Scalar
+	DeployTemplate yamlsafe.Scalar             // empty when --deploy=k8s (default — omitted from yaml)
+	HelperName     string                      // run{ID-PascalCase} for runXxx() in run.go (Go identifier, not YAML scalar)
 	CellModules    []scaffoldAssemblyCellEntry // {StructName + Module suffix, cellID} pairs for run.go stubs
 }
 
@@ -382,7 +386,13 @@ type scaffoldAssemblyFile struct {
 
 // buildScaffoldContext builds the scaffoldAssemblyContext for a spec by
 // resolving the helper name, normalizing the deploy template, and collecting
-// per-cell Module stub entries.
+// per-cell Module stub entries. Every user-input field is routed through
+// pkg/yamlsafe.Quote so YAML metacharacters in user values (`:` `{` `#`
+// leading whitespace, embedded quotes) cannot inject adjacent keys or
+// break scalar structure in the inline YAML template.
+//
+// ref: pkg/yamlsafe.Quote — single funnel enforced by archtest
+// YAML-QUOTE-FUNNEL-01.
 func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAssemblyContext, error) {
 	helperName, err := assemblyRunHelperName(spec.ID)
 	if err != nil {
@@ -391,13 +401,18 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID)))
 	}
 
-	deployTemplate := spec.Deploy
-	if deployTemplate == "k8s" {
+	// deployTemplate is a typed-Scalar sentinel: zero value `Scalar("")`
+	// signals "omit from yaml" (template guard `{{- if .DeployTemplate }}`
+	// evaluates the alias's zero value as false). Non-default values go
+	// through yamlsafe.Quote like other user-input fields.
+	var deployTemplate yamlsafe.Scalar
+	if spec.Deploy != "" && spec.Deploy != "k8s" {
 		// K#10 minimal default — parser/schema inherits k8s; omit from yaml.
-		deployTemplate = ""
+		deployTemplate = yamlsafe.Quote(spec.Deploy)
 	}
 
 	cellModuleEntries := make([]scaffoldAssemblyCellEntry, 0, len(spec.Cells))
+	quotedCells := make([]yamlsafe.Scalar, 0, len(spec.Cells))
 	for _, cellID := range spec.Cells {
 		cellMeta := g.cells.Get(cellID)
 		// Cell existence already validated; fall back to cellID when
@@ -410,13 +425,14 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 			Name: structName + "Module",
 			ID:   cellID,
 		})
+		quotedCells = append(quotedCells, yamlsafe.Quote(cellID))
 	}
 
 	return scaffoldAssemblyContext{
-		ID:             spec.ID,
-		Cells:          append([]string(nil), spec.Cells...),
-		OwnerTeam:      spec.OwnerTeam,
-		OwnerRole:      spec.OwnerRole,
+		ID:             yamlsafe.Quote(spec.ID),
+		Cells:          quotedCells,
+		OwnerTeam:      yamlsafe.Quote(spec.OwnerTeam),
+		OwnerRole:      yamlsafe.Quote(spec.OwnerRole),
 		DeployTemplate: deployTemplate,
 		HelperName:     helperName,
 		CellModules:    cellModuleEntries,

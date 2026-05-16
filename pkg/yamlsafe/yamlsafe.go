@@ -13,8 +13,9 @@
 //
 // Quote is the single funnel for YAML scalar quoting in scaffold templates.
 // Direct string interpolation into YAML templates is statically detected by
-// archtest SCAFFOLD-WRITE-FUNNEL-01 (path safety) and in GREEN phase will be
-// covered by YAML-QUOTE-FUNNEL-01.
+// archtest SCAFFOLD-WRITE-FUNNEL-01 (path safety) and YAML-QUOTE-FUNNEL-01
+// (every yamlsafe.Scalar(...) type conversion outside this package must
+// have a yamlsafe.Quote(...) call as its argument).
 package yamlsafe
 
 import "strings"
