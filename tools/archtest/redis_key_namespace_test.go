@@ -167,35 +167,31 @@ func assertConstructorValidatesNamespace(t *testing.T, spec redisConstructorSpec
 	}
 	leading := fn.Body.List[:limit]
 
-	// Synthetic BlockStmt wrapping the leading window: EachInChildren[ast.IfStmt]
-	// iterates only direct IfStmt children, scoped to the leading slice so
+	// Synthetic BlockStmt wrapping the leading window: FindFirstChild[ast.IfStmt]
+	// visits only direct IfStmt children (depth-1), scoped to the leading slice so
 	// Validate calls beyond the limit window are not matched.
 	syntheticLeading := &ast.BlockStmt{List: leading}
-	found := false
-	scanner.EachInChildren[ast.IfStmt](syntheticLeading, func(ifStmt *ast.IfStmt) {
-		if found {
-			return
-		}
+	_, found := scanner.FindFirstChild[ast.IfStmt](syntheticLeading, func(ifStmt *ast.IfStmt) bool {
 		if ifStmt.Init == nil {
-			return
+			return false
 		}
 		assign, ok := ifStmt.Init.(*ast.AssignStmt)
 		if !ok || len(assign.Rhs) != 1 {
-			return
+			return false
 		}
 		call, ok := assign.Rhs[0].(*ast.CallExpr)
 		if !ok {
-			return
+			return false
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Validate" {
-			return
+			return false
 		}
 		recv, ok := sel.X.(*ast.Ident)
 		if !ok || recv.Name != "ns" {
-			return
+			return false
 		}
-		found = true
+		return true
 	})
 	require.True(t, found,
 		"%s.%s: must call `ns.Validate()` within the first %d body statements "+

@@ -102,6 +102,68 @@ func EachInChildren[S any, N interface {
 	ast.Walk(v, root)
 }
 
+// FindFirstChild walks root's direct children (depth = 1, identical
+// semantics to [EachInChildren]) and returns the first child whose concrete
+// type is N and for which predicate returns true, together with ok = true.
+// If no direct child matches, it returns the zero value and ok = false.
+//
+// FindFirstChild is the typed funnel that replaces the hand-written
+// closure+done/found sentinel idiom:
+//
+//	// before — Soft: hand-rolled sentinel, scoping/guard easy to get wrong
+//	found := false
+//	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
+//		if found { return }
+//		if match(kv) { found = true }
+//	})
+//
+//	// after — early-return implicit, no caller-held flag
+//	_, found := scanner.FindFirstChild[ast.KeyValueExpr](lit,
+//		func(kv *ast.KeyValueExpr) bool { return match(kv) })
+//
+// The early-return is implicit (predicate is not invoked again after the
+// first match), there is no caller-exposed done flag, and picking the wrong
+// N (an interface such as ast.Expr instead of a concrete *S) is a compile
+// error via the same `interface { *S; ast.Node }` constraint as
+// EachInChildren. Enforced against regression by archtest
+// SCANNER-FRAMEWORK-USAGE-02 (allowlist = 0).
+//
+// # Depth
+//
+// depth = 1 only. Grandchildren are never inspected and root itself is
+// never passed to predicate (see [EachInChildren]).
+//
+// # Subtree variant
+//
+// Recursive (subtree) find-first is intentionally NOT provided here — that
+// is an orthogonal coverage axis tracked as backlog FINDFIRSTINSUBTREE-API-01
+// (separate-trigger upgrade, 037 plan §1.1 scope boundary), not this
+// funnel's upstream hardening path.
+//
+// # Nil root
+//
+// Returns (zero, false) silently (no-op), matching EachInChildren.
+//
+// Implementation reuses EachInChildren wholesale; the single sentinel the
+// codebase-wide ban removes from business code is internalized here exactly
+// once, under central governance.
+func FindFirstChild[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, predicate func(N) bool) (N, bool) {
+	var match N
+	var found bool
+	EachInChildren[S, N](root, func(n N) {
+		if found {
+			return
+		}
+		if predicate(n) {
+			match, found = n, true
+		}
+	})
+	return match, found
+}
+
 // childrenVisitor implements ast.Visitor for depth-1 traversal:
 //
 //   - The first Visit call receives root itself; flip atRoot to false and

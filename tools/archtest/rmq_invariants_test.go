@@ -798,16 +798,10 @@ func checkPublishIfBlockViolations(ifStmt *ast.IfStmt, fset *token.FileSet, inCt
 	// block's child statements' concern — checkStmt will recurse and
 	// reach them via the inner if/select being its own checkIfBlock /
 	// SelectStmt handler. Counting them here would double-attribute the
-	// violation to two ancestor blocks. EachInChildren visits only direct
-	// children of ifStmt.Body.
-	hasNonNilReturn := false
-	scanner.EachInChildren[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
-		if hasNonNilReturn {
-			return
-		}
-		if !isNilReturn(ret) {
-			hasNonNilReturn = true
-		}
+	// violation to two ancestor blocks. FindFirstChild visits only direct
+	// children of ifStmt.Body (depth-1).
+	_, hasNonNilReturn := scanner.FindFirstChild[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) bool {
+		return !isNilReturn(ret)
 	})
 
 	// Exempt: if-block guarding the "publisher is closed" early exit.
@@ -820,16 +814,13 @@ func checkPublishIfBlockViolations(ifStmt *ast.IfStmt, fset *token.FileSet, inCt
 		hasRecord := blockContainsRecordPublishFailure(body)
 		if !hasRecord {
 			// Report the first top-level non-nil return.
-			reported := false
-			scanner.EachInChildren[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) {
-				if reported || isNilReturn(ret) {
-					return
-				}
+			if ret, found := scanner.FindFirstChild[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) bool {
+				return !isNilReturn(ret)
+			}); found {
 				pos := fset.Position(ret.Pos())
 				*violations = append(*violations,
 					fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
-				reported = true
-			})
+			}
 		}
 	}
 
