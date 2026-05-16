@@ -430,6 +430,26 @@ func TestSourceFingerprint_ResponseSchemaRefChange(t *testing.T) {
 	assert.NotEqual(t, baseline, got, "adding response schemaRef must change fingerprint")
 }
 
+// TestSourceFingerprint_DeployTemplateChange asserts that changing
+// AssemblyMeta.Build.DeployTemplate changes the boundary sourceFingerprint.
+// Without hashAssemblyIdentity covering this field, a --deploy=k8s →
+// --deploy=compose switch would leave the boundary.yaml sourceFingerprint
+// unchanged, silently masking that boundary.yaml needs regeneration.
+func TestSourceFingerprint_DeployTemplateChange(t *testing.T) {
+	t.Parallel()
+
+	p1 := fingerprintProject()
+	p1.Assemblies["ssobff"].Build.DeployTemplate = "k8s"
+	fp1 := computeFingerprint(t, p1)
+
+	p2 := fingerprintProject()
+	p2.Assemblies["ssobff"].Build.DeployTemplate = "compose"
+	fp2 := computeFingerprint(t, p2)
+
+	assert.NotEqual(t, fp1, fp2,
+		"changing Build.DeployTemplate from k8s to compose must change the boundary fingerprint")
+}
+
 func TestHashAssemblyIdentityPropagatesWriterError(t *testing.T) {
 	p := fingerprintProject()
 	gen := NewGenerator(p, "github.com/ghbvf/gocell", "")

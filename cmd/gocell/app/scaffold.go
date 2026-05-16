@@ -257,6 +257,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
 			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
 			"[--deploy=k8s|compose|binary] (default: k8s) [--skip-generate] [--dry-run]",
+			"Note: --id must not contain '-' (use nodash identifiers; min 2 chars).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldAssembly(root, a) },
 	},
