@@ -1,6 +1,6 @@
 //go:build integration
 
-package l2_atomicity
+package l2atomicity
 
 import (
 	"bytes"
@@ -316,16 +316,6 @@ func queryUserAuthzEpoch(t *testing.T, h *l2Harness, userID string) int64 {
 	return epoch
 }
 
-// queryUserStatus returns users.status for the given user ID.
-func queryUserStatus(t *testing.T, h *l2Harness, userID string) string {
-	t.Helper()
-	var status string
-	err := h.pool.DB().QueryRow(context.Background(),
-		`SELECT status FROM users WHERE id = $1`, userID).Scan(&status)
-	require.NoError(t, err)
-	return status
-}
-
 // bumpUserAuthzEpoch increments users.authz_epoch directly.
 func bumpUserAuthzEpoch(t *testing.T, h *l2Harness, userID string) {
 	t.Helper()
@@ -397,4 +387,3 @@ func revokeRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	require.Equal(t, http.StatusOK, resp.StatusCode,
 		"role revoke must return 200; body=%s", respBody)
 }
-

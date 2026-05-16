@@ -56,7 +56,7 @@ var wellKnownDemoKeys = []string{
 	// cmd/corebundle and CI; real mode must refuse this value.
 	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 
-	// L2 atomicity e2e harness keys (tests/integration/l2_atomicity).
+	// L2 atomicity e2e harness keys (tests/integration/l2atomicity).
 	// Published in the source tree; real mode must refuse all four.
 	"l2-test-secret-32-bytes-padding!!", // harness internal HMAC ring
 	"l2-test-hmac-key-32-bytes-pad!!!",  // audit HMAC

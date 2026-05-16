@@ -1,6 +1,6 @@
 //go:build integration
 
-package l2_atomicity
+package l2atomicity
 
 import (
 	"context"
@@ -60,6 +60,12 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 	revokeRole(t, h, victimID, "editor")
 
 	// Eventual terminal state: authz_epoch advanced + all victim sessions revoked.
+	//
+	// rbacassign.Revoke runs the credentialinvalidate.Apply funnel inside the
+	// same tx, so the row mutations commit before the 200 response. The
+	// require.Eventually wrapper absorbs the small CI-side gap between handler
+	// completion and SELECT visibility under load; the cascade itself is not
+	// eventually-consistent.
 	require.Eventually(t, func() bool {
 		return queryUserAuthzEpoch(t, h, victimID) > epochBefore
 	}, testtime.EventuallyLong, testtime.MediumPoll,
@@ -76,4 +82,3 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 		victimID).Scan(&roleCount))
 	assert.Equal(t, 0, roleCount, "editor role assignment must be removed after revoke")
 }
-

@@ -1,13 +1,14 @@
 //go:build integration
 
-package l2_atomicity
+package l2atomicity
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -18,6 +19,11 @@ import (
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
+	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -33,11 +39,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/state/cas"
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
-	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -48,19 +49,39 @@ const (
 )
 
 // Seed admin credentials provisioned by the harness via setup/admin.
+// These are integration-test fixtures behind `//go:build integration` and
+// are never compiled into production binaries; mirrors the same pattern
+// used by cmd/corebundle/setup_pg_integration_test.go::sessionPGAdminPassword.
+//
+//nolint:gosec // G101 false positive: integration-test fixture, not a real credential.
 const (
 	adminUsername = "l2-admin"
 	adminEmail    = "l2-admin@gocell.local"
 	adminPassword = "L2AdminPass!99"
 )
 
-// HTTP client timeout sized for the race-detector lane under CI load:
-// bcrypt at domain.BcryptCost=12 plus race instrumentation plus docker
-// daemon contention on a shared CI runner can stretch individual setup/admin
-// and login requests past 30s in pathological cases (observed up to ~3s
-// per request × cascading retries). 60s gives CI plenty of headroom while
-// remaining well within the 15-minute race-pg-integration job budget.
-var httpClient = &http.Client{Timeout: testtime.D60s}
+// httpClient is shared across tests. *http.Client is safe for concurrent use
+// per the net/http documentation; tests do not mutate any client state and
+// each test currently runs serially (no t.Parallel()), but reusing a single
+// client keeps connection pooling consistent if parallelism is added later.
+//
+// Timeout sized for the race-detector lane under CI load: bcrypt at
+// domain.BcryptCost=12 plus race instrumentation plus docker daemon
+// contention on a shared CI runner can stretch individual setup/admin and
+// login requests past 30s in pathological cases. 60s gives CI plenty of
+// headroom while remaining well within the 15-minute race-pg-integration
+// job budget.
+//
+// DisableKeepAlives ensures every request opens a fresh TCP connection.
+// Without it, the connection pool can carry over half-closed connections
+// from a previous test whose harness has already torn down its
+// bootstrap+listener, surfacing as spurious "EOF" responses on the next
+// test's first POST (observed under -race load when 8 harnesses are
+// created and torn down serially).
+var httpClient = &http.Client{
+	Timeout:   testtime.D60s,
+	Transport: &http.Transport{DisableKeepAlives: true},
+}
 
 // l2Harness boots a full PG-backed assembly (accesscore + configcore + auditcore)
 // with three listeners (primary + internal + health-via-fallback). Provisions
@@ -175,12 +196,62 @@ func newL2Harness(t *testing.T) *l2Harness {
 
 // newL2HarnessWithWriter allows callers to inject a custom outbox.Writer for the
 // accesscore cell. Pass nil to use the default adapterpg.NewOutboxWriter.
+//
+// The body is composed of focused helpers (buildPGStores / buildAuthLayer /
+// buildCells / runBootstrap / seedAdmin) to keep this entry point readable and
+// each step independently auditable. The same shape mirrors cmd/corebundle's
+// composition root (SharedDeps + BuildApp + buildAssembly + bootstrap.New).
 func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	t.Helper()
 
-	dsn := startPostgresContainer(t)
+	pg := buildPGStores(t)
+	authDeps := buildAuthLayer(t)
+	primaryLn := localListener(t)
+	internalLn := localListener(t)
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	pgOutboxWriter := pickOutboxWriter(pgOutboxOverride)
 
+	ac, cc, auc := buildCells(t, pg, authDeps, eb, pgOutboxWriter)
+
+	// DurabilityDemo: uses in-process eventbus instead of PG outbox relay,
+	// which is sufficient to cover L2 cross-cell cascade in this integration
+	// harness.
+	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Register(ac))
+	require.NoError(t, asm.Register(cc))
+	require.NoError(t, asm.Register(auc))
+
+	runBootstrap(t, asm, primaryLn, internalLn, eb, authDeps)
+	base := "http://" + primaryLn.Addr().String()
+	waitForHealthz(t, base)
+	seedAdmin(t, base)
+
+	return &l2Harness{
+		pool:         pg.pool,
+		base:         base,
+		internalBase: "http://" + internalLn.Addr().String(),
+		ring:         authDeps.ring,
+	}
+}
+
+// pgStores bundles the PG-backed accesscore stores plus the pool / tx manager
+// that all of them share. The store wiring is exposed as a slice of
+// accesscore.Option values because the underlying repository types live in
+// `cells/accesscore/internal/ports`, which is not importable from this test
+// package; storing options sidesteps the visibility constraint without
+// leaking unexported types.
+type pgStores struct {
+	pool      *adapterpg.Pool
+	txMgr     *adapterpg.TxManager
+	storeOpts []accesscore.Option
+}
+
+// buildPGStores spins up the PG container, runs migrations, seeds the editor
+// role used by cascade tests, then constructs the accesscore PG store family.
+func buildPGStores(t *testing.T) *pgStores {
+	t.Helper()
 	ctx := context.Background()
+	dsn := startPostgresContainer(t)
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err)
@@ -204,11 +275,11 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 
 	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
-	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
+	userRepo, err := accesspg.NewUserRepository(pgDeps)
 	require.NoError(t, err)
-	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
+	roleRepo, err := accesspg.NewRoleRepository(pgDeps)
 	require.NoError(t, err)
-	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
+	setupLock, err := accesspg.NewSetupLock(pgDeps)
 	require.NoError(t, err)
 
 	sessionProto := session.MustNewProtocol(
@@ -216,17 +287,44 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
-	pgSessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
+	sessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
 	require.NoError(t, err)
-	pgRefreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), rand.Reader)
+	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), rand.Reader)
 	require.NoError(t, err)
 
-	primaryLn := localListener(t)
-	internalLn := localListener(t)
+	return &pgStores{
+		pool:  pool,
+		txMgr: txMgr,
+		storeOpts: []accesscore.Option{
+			accesscore.WithUserRepository(userRepo),
+			accesscore.WithRoleRepository(roleRepo),
+			accesscore.WithSessionStore(sessionStore),
+			accesscore.WithRefreshStore(refreshStore),
+			accesscore.WithSetupLock(setupLock),
+		},
+	}
+}
 
-	internalRing, err := auth.NewHMACKeyRing([]byte("l2-test-secret-32-bytes-padding!!"), nil)
+// authLayer bundles the auth-side dependencies wired into both listeners and
+// the accesscore cell.
+type authLayer struct {
+	ring        *auth.HMACKeyRing
+	nonceStore  auth.NonceStore
+	jwtIssuer   *auth.JWTIssuer
+	jwtVerifier *auth.JWTVerifier
+	bootstrapMW func(http.Handler) http.Handler
+}
+
+// buildAuthLayer constructs the internal-listener HMAC ring + nonce store, the
+// JWT issuer/verifier pair, and the bootstrap (setup/admin) middleware. All
+// values are test-only; the HMAC key + cursor keys are registered in
+// cmd/corebundle/demo_keys.wellKnownDemoKeys so rejectDemoKey blocks them in
+// real-mode startup.
+func buildAuthLayer(t *testing.T) *authLayer {
+	t.Helper()
+	ring, err := auth.NewHMACKeyRing([]byte("l2-test-secret-32-bytes-padding!!"), nil)
 	require.NoError(t, err)
-	internalNonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
@@ -238,20 +336,6 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
-	var pgOutboxWriter outbox.Writer
-	if pgOutboxOverride != nil {
-		pgOutboxWriter = pgOutboxOverride
-	} else {
-		pgOutboxWriter = adapterpg.NewOutboxWriter(clock.Real())
-	}
-	var nw outbox.Writer = outbox.NoopWriter{}
-
-	auditCursorCodec, err := query.NewCursorCodec([]byte("l2-audit-cursor-key-32-bytes!!!!"))
-	require.NoError(t, err)
-	configCursorCodec, err := query.NewCursorCodec([]byte("l2-config-cursor-key-32-bytes!!!"))
-	require.NoError(t, err)
-
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
 			Username: []byte(bootstrapUsername),
@@ -261,21 +345,52 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		nil,
 	)
 
-	ac := accesscore.NewAccessCore(
+	return &authLayer{
+		ring:        ring,
+		nonceStore:  nonceStore,
+		jwtIssuer:   jwtIssuer,
+		jwtVerifier: jwtVerifier,
+		bootstrapMW: bootstrapMW,
+	}
+}
+
+// pickOutboxWriter returns the caller-supplied override or the default durable
+// PG outbox writer.
+func pickOutboxWriter(override outbox.Writer) outbox.Writer {
+	if override != nil {
+		return override
+	}
+	return adapterpg.NewOutboxWriter(clock.Real())
+}
+
+// buildCells constructs accesscore + configcore + auditcore. Only accesscore
+// holds PG state in this harness; configcore + auditcore stay in-memory.
+func buildCells(
+	t *testing.T,
+	pg *pgStores,
+	a *authLayer,
+	eb *eventbus.InMemoryEventBus,
+	pgOutboxWriter outbox.Writer,
+) (*accesscore.AccessCore, *configcore.ConfigCore, *auditcore.AuditCore) {
+	t.Helper()
+
+	var nw outbox.Writer = outbox.NoopWriter{}
+
+	auditCursorCodec, err := query.NewCursorCodec([]byte("l2-audit-cursor-key-32-bytes!!!!"))
+	require.NoError(t, err)
+	configCursorCodec, err := query.NewCursorCodec([]byte("l2-config-cursor-key-32-bytes!!!"))
+	require.NoError(t, err)
+
+	ac := accesscore.NewAccessCore(append(pg.storeOpts,
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithUserRepository(pgUserRepo),
-		accesscore.WithRoleRepository(pgRoleRepo),
-		accesscore.WithSessionStore(pgSessionStore),
-		accesscore.WithRefreshStore(pgRefreshStore),
-		accesscore.WithSetupLock(pgSetupLock),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
-		accesscore.WithJWTIssuer(jwtIssuer),
-		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
+		accesscore.WithJWTIssuer(a.jwtIssuer),
+		accesscore.WithJWTVerifier(a.jwtVerifier),
+		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
-		accesscore.WithBootstrapAuth(bootstrapMW),
+		accesscore.WithBootstrapAuth(a.bootstrapMW),
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
@@ -285,21 +400,29 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
+	auditHMACKey := []byte("l2-test-hmac-key-32-bytes-pad!!!")
+	//archtest:allow:clock-injection:via-slice WithClock in first slice arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, buildAuditcoreLedgerOpts(t, []byte("l2-test-hmac-key-32-bytes-pad!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, buildAuditcoreLedgerOpts(t, auditHMACKey)...)...)
 
-	// DurabilityDemo: uses in-process eventbus instead of PG outbox relay, which
-	// is sufficient to cover L2 cross-cell cascade in this integration harness.
-	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	require.NoError(t, asm.Register(ac))
-	require.NoError(t, asm.Register(cc))
-	require.NoError(t, asm.Register(auc))
+	return ac, cc, auc
+}
 
+// runBootstrap launches bootstrap.App on the supplied listeners and registers
+// the LIFO cleanup that drains it gracefully.
+func runBootstrap(
+	t *testing.T,
+	asm *assembly.CoreAssembly,
+	primaryLn, internalLn net.Listener,
+	eb *eventbus.InMemoryEventBus,
+	a *authLayer,
+) {
+	t.Helper()
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
@@ -307,7 +430,7 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(internalNonceStore, internalRing)},
+			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(a.nonceStore, a.ring)},
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
@@ -333,37 +456,66 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 			t.Fatal("bootstrap did not shut down in time")
 		}
 	})
+}
 
-	addr := primaryLn.Addr().String()
+// waitForHealthz polls the primary listener until both /healthz and the
+// accesscore setup-status route return 200. Probing the setup-status route
+// (not just /healthz) ensures the bootstrap has completed phase5 route
+// mount + FinalizeAuth, so the subsequent setup/admin POST is guaranteed
+// to land on a wired handler rather than racing against mux finalization
+// (race-detector + concurrent load occasionally surfaced "EOF" responses
+// when only /healthz was probed).
+func waitForHealthz(t *testing.T, base string) {
+	t.Helper()
 	require.Eventually(t, func() bool {
-		resp, err := httpClient.Get(fmt.Sprintf("http://%s/healthz", addr))
-		if err != nil {
+		if !httpGetOK(base + "/healthz") {
 			return false
 		}
-		_ = resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
+		return httpGetOK(base + "/api/v1/access/setup/status")
 	}, testtime.EventuallyLong, testtime.MediumPoll, "HTTP server did not become ready")
+}
 
-	base := "http://" + addr
+// httpGetOK is a tiny helper that returns true iff GET returns 200.
+func httpGetOK(url string) bool {
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
 
-	// Provision the initial admin so login is immediately available.
-	adminBody, _ := json.Marshal(map[string]string{
+// seedAdmin provisions the initial admin via POST /api/v1/access/setup/admin so
+// login is immediately available to tests.
+//
+// The single eligible-for-retry failure mode is io.EOF: under -race + heavy
+// Docker contention on slow machines the bcrypt-bound handler can complete
+// server-side (200 logged) while the client's TCP socket has already
+// surfaced a transport-level EOF. Retry exactly once with a fresh
+// connection so we don't hide a real failure but tolerate the rare
+// transport flake. Any other error type fails fast.
+func seedAdmin(t *testing.T, base string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
 		"username": adminUsername,
 		"email":    adminEmail,
 		"password": adminPassword,
 	})
-	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/setup/admin", bytes.NewReader(adminBody))
-	req.SetBasicAuth(bootstrapUsername, bootstrapPassword)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
+	postBody := func() *bytes.Reader { return bytes.NewReader(body) }
+
+	resp, err := postSetupAdmin(base, postBody())
+	if errors.Is(err, io.EOF) {
+		t.Logf("seedAdmin: transient io.EOF on first attempt; retrying once")
+		resp, err = postSetupAdmin(base, postBody())
+	}
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "harness: admin provisioning must succeed")
+}
 
-	return &l2Harness{
-		pool:         pool,
-		base:         base,
-		internalBase: "http://" + internalLn.Addr().String(),
-		ring:         internalRing,
-	}
+func postSetupAdmin(base string, body *bytes.Reader) (*http.Response, error) {
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/setup/admin", body)
+	req.SetBasicAuth(bootstrapUsername, bootstrapPassword)
+	req.Header.Set("Content-Type", "application/json")
+	return httpClient.Do(req)
 }

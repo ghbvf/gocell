@@ -1,6 +1,6 @@
 //go:build integration
 
-package l2_atomicity
+package l2atomicity
 
 import (
 	"testing"
@@ -62,6 +62,13 @@ func TestL2_RefreshReuseTriggersCascade(t *testing.T) {
 		"grace-exhausted reuse must surface as ERR_AUTH_REFRESH_FAILED")
 
 	// PG terminal state: epoch bumped + all victim sessions revoked.
+	//
+	// credentialinvalidate.Apply runs synchronously inside the refresh tx, so
+	// the row mutations (users.authz_epoch / sessions.revoked_at /
+	// refresh_tokens.revoked_at) are visible by the time the 401 HTTP response
+	// returns. The require.Eventually wrapper exists only to absorb the small
+	// CI-side gap between handler completion and SELECT visibility under load;
+	// the cascade itself is not eventually-consistent.
 	require.Eventually(t, func() bool {
 		return queryUserAuthzEpoch(t, h, victimID) > epochBefore
 	}, testtime.EventuallyLong, testtime.MediumPoll,

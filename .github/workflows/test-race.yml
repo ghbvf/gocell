@@ -91,7 +91,7 @@ jobs:
       # without -race. The integration build tag opts in the testcontainer
       # PG path; the runner image carries Docker so containers come up.
       - name: go test -race -tags=integration (postgres adapter + cell repos + L2 atomicity e2e)
-        # tests/integration/l2_atomicity (T4 / backlog B2-C-13): cross-layer
+        # tests/integration/l2atomicity (T4 / backlog B2-C-13): cross-layer
         # accesscore L2 e2e — login → refresh reuse cascade → rbac revoke
         # cross-cell outbox→consumer→credentialinvalidate funnel. The cascade
         # path crosses goroutine boundaries (producer → relay → publisher →
@@ -114,4 +114,4 @@ jobs:
           go test -race -count=1 -timeout 15m -tags=integration \
             ./adapters/postgres/... \
             ./cells/accesscore/internal/adapters/postgres/... \
-            ./tests/integration/l2_atomicity/...
+            ./tests/integration/l2atomicity/...

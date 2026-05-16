@@ -1,6 +1,6 @@
 //go:build integration
 
-package l2_atomicity
+package l2atomicity
 
 import (
 	"testing"
