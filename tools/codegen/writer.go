@@ -43,8 +43,9 @@ type WriteOptions struct {
 	Path string
 	// Content is the bytes to compare against / write to the target.
 	Content []byte
-	// RepoRoot, when non-empty, gates Path through governance.IsWithinRoot
-	// to reject path traversal.
+	// RepoRoot gates Path through governance.IsWithinRoot to reject path
+	// traversal. Must be non-empty (the output of pathsafe.ResolveRoot);
+	// Write returns an error immediately if RepoRoot is empty.
 	RepoRoot string
 	// DryRun suppresses the filesystem mutation and returns ActionWouldWrite
 	// (or ActionUnchanged when content matches).
@@ -64,8 +65,9 @@ type WriteResult struct {
 
 // Write persists Content to opts.Path with two safety guards:
 //
-//  1. opts.Path must be inside opts.RepoRoot (governance.IsWithinRoot)
-//     when RepoRoot is set. Out-of-root writes are refused.
+//  1. opts.Path must be inside opts.RepoRoot (governance.IsWithinRoot);
+//     opts.RepoRoot must be non-empty — Write returns an error otherwise.
+//     Out-of-root writes are refused.
 //  2. If opts.Path already exists on disk, its first bytes must match
 //     governance.IsGoCellGenerated. User-edited files cannot be silently
 //     overwritten — the caller must move the file or delete it first.
@@ -78,7 +80,10 @@ func Write(opts WriteOptions) (WriteResult, error) {
 	if opts.Path == "" {
 		return res, fmt.Errorf("codegen write: Path is empty")
 	}
-	if opts.RepoRoot != "" && !governance.IsWithinRoot(opts.RepoRoot, opts.Path) {
+	if opts.RepoRoot == "" {
+		return res, fmt.Errorf("codegen write: RepoRoot is required")
+	}
+	if !governance.IsWithinRoot(opts.RepoRoot, opts.Path) {
 		return res, fmt.Errorf("codegen write: path escapes RepoRoot: %s", opts.Path)
 	}
 

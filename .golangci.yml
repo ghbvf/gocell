@@ -162,6 +162,7 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/google/uuid
             - github.com/santhosh-tekuri/jsonschema
+            - golang.org/x/sys/unix  # pkg/pathsafe fd-anchored openat/mkdirat/unlinkat on non-Windows platforms (stdlib syscall.Openat is linux-only; x/sys/unix provides unified linux/darwin/freebsd API)
             - gopkg.in/yaml.v3
         runtime-isolation:
           # LAYER-03: runtime/ depends on kernel/ + pkg/ + curated externals.

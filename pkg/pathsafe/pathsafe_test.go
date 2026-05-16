@@ -602,7 +602,7 @@ func TestWritePlannedFiles_RollbackOnPartialWriteFailure_WriteStageFail(t *testi
 	if _, statErr := os.Stat(goodFile); statErr == nil {
 		t.Error("rollback: goodFile must have been removed after write-stage failure")
 	}
-	// Rollback: the cells/goodcell directory created by mkdirAllTracked must be removed.
+	// Rollback: the cells/goodcell directory created by secureMkdirAllAndWrite must be removed.
 	if _, statErr := os.Stat(filepath.Join(root, "cells", "goodcell")); statErr == nil {
 		t.Error("rollback: cells/goodcell dir must have been cleaned up after write-stage failure")
 	}
