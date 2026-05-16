@@ -90,8 +90,16 @@ jobs:
       # session.Store conformance fan-out) was previously only exercised
       # without -race. The integration build tag opts in the testcontainer
       # PG path; the runner image carries Docker so containers come up.
-      - name: go test -race -tags=integration (postgres adapter + cell repos)
+      - name: go test -race -tags=integration (postgres adapter + cell repos + L2 atomicity e2e)
+        # tests/integration/l2_atomicity (T4 / backlog B2-C-13): cross-layer
+        # accesscore L2 e2e — login → refresh reuse cascade → rbac revoke
+        # cross-cell outbox→consumer→credentialinvalidate funnel. The cascade
+        # path crosses goroutine boundaries (producer → relay → publisher →
+        # consumer → invalidator), giving the race detector real coverage of
+        # the L2 cross-cell flow that race-pg-integration's adapter / store
+        # scope does not reach.
         run: |
           go test -race -count=1 -timeout 15m -tags=integration \
             ./adapters/postgres/... \
-            ./cells/accesscore/internal/adapters/postgres/...
+            ./cells/accesscore/internal/adapters/postgres/... \
+            ./tests/integration/l2_atomicity/...

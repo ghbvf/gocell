@@ -54,9 +54,13 @@ const (
 	adminPassword = "L2AdminPass!99"
 )
 
-// HTTP client with a longer timeout because bcrypt at domain.BcryptCost=12
-// takes ~1-2s per password hash; mirrors cmd/corebundle's setupHTTPClient.
-var httpClient = &http.Client{Timeout: testtime.SelectAsyncSettle}
+// HTTP client timeout sized for the race-detector lane under CI load:
+// bcrypt at domain.BcryptCost=12 plus race instrumentation plus docker
+// daemon contention on a shared CI runner can stretch individual setup/admin
+// and login requests past 30s in pathological cases (observed up to ~3s
+// per request × cascading retries). 60s gives CI plenty of headroom while
+// remaining well within the 15-minute race-pg-integration job budget.
+var httpClient = &http.Client{Timeout: 60 * time.Second}
 
 // l2Harness boots a full PG-backed assembly (accesscore + configcore + auditcore)
 // with three listeners (primary + internal + health-via-fallback). Provisions
@@ -300,7 +304,11 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
-		bootstrap.WithShutdownTimeout(testtime.D2s),
+		// Race-detector overhead inflates pending request completion. The
+		// shutdown timeout must be ≥ httpClient.Timeout so the last in-flight
+		// request can finish before forced close. 20s gives the longest
+		// observed (~17s) request a safety margin without bloating CI time.
+		bootstrap.WithShutdownTimeout(20*time.Second),
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -311,7 +319,10 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		select {
 		case runErr := <-done:
 			assert.NoError(t, runErr)
-		case <-time.After(testtime.SelectShutdown):
+		// Cleanup window must exceed bootstrap WithShutdownTimeout so we
+		// observe the graceful-drain outcome (success or its error) rather
+		// than time out the harness before bootstrap reports.
+		case <-time.After(30 * time.Second):
 			t.Fatal("bootstrap did not shut down in time")
 		}
 	})

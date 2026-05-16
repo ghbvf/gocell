@@ -158,15 +158,61 @@ func httpLockUser(t *testing.T, base, adminAccessToken, userID string) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, "user lock must return 200; body=%s", respBody)
 }
 
-// httpChangePassword calls POST /api/v1/access/users/me/change-password with a bearer access token.
-// Pass expectStatus to assert the HTTP status; returns the parsed error envelope (empty on 204).
-func httpChangePassword(t *testing.T, base, accessToken, oldPass, newPass string, expectStatus int) errorEnvelope {
+// changePasswordResult is the success-path response shape from change-password.
+type changePasswordResult struct {
+	AccessToken           string
+	RefreshToken          string
+	SessionID             string
+	UserID                string
+	PasswordResetRequired bool
+}
+
+// httpChangePasswordOK calls POST /api/v1/access/users/{userID}/password and expects 200.
+// Returns the new access/refresh token pair (success-path emits a fresh session).
+func httpChangePasswordOK(t *testing.T, base, accessToken, userID, oldPass, newPass string) changePasswordResult {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{
 		"oldPassword": oldPass,
 		"newPassword": newPass,
 	})
-	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/users/me/change-password", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/users/"+userID+"/password", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "change-password must return 200; body=%s", respBody)
+
+	var parsed struct {
+		Data struct {
+			AccessToken           string `json:"accessToken"`
+			RefreshToken          string `json:"refreshToken"`
+			SessionID             string `json:"sessionId"`
+			UserID                string `json:"userId"`
+			PasswordResetRequired bool   `json:"passwordResetRequired"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	return changePasswordResult{
+		AccessToken:           parsed.Data.AccessToken,
+		RefreshToken:          parsed.Data.RefreshToken,
+		SessionID:             parsed.Data.SessionID,
+		UserID:                parsed.Data.UserID,
+		PasswordResetRequired: parsed.Data.PasswordResetRequired,
+	}
+}
+
+// httpChangePasswordExpect calls POST /api/v1/access/users/{userID}/password and
+// asserts the given non-2xx status. Returns the parsed error envelope.
+func httpChangePasswordExpect(t *testing.T, base, accessToken, userID, oldPass, newPass string, expectStatus int) errorEnvelope {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"oldPassword": oldPass,
+		"newPassword": newPass,
+	})
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/users/"+userID+"/password", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
@@ -176,7 +222,26 @@ func httpChangePassword(t *testing.T, base, accessToken, oldPass, newPass string
 	respBody, _ := io.ReadAll(resp.Body)
 	require.Equal(t, expectStatus, resp.StatusCode, "change-password expected %d; body=%s", expectStatus, respBody)
 
-	if expectStatus == http.StatusNoContent || len(respBody) == 0 {
+	var env errorEnvelope
+	require.NoError(t, json.Unmarshal(respBody, &env))
+	return env
+}
+
+// httpGetUserExpect calls GET /api/v1/access/users/{userID} and asserts the
+// given status; used by tests to validate that a stale access token is rejected
+// after credential mutation events.
+func httpGetUserExpect(t *testing.T, base, accessToken, userID string, expectStatus int) errorEnvelope {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/api/v1/access/users/"+userID, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, expectStatus, resp.StatusCode, "GET user expected %d; body=%s", expectStatus, respBody)
+
+	if expectStatus >= 200 && expectStatus < 300 {
 		return errorEnvelope{}
 	}
 	var env errorEnvelope
