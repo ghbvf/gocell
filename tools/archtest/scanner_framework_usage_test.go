@@ -1605,6 +1605,7 @@ func TestScannerFrameworkUsage02_Fixture(t *testing.T) {
 		{"red_scanner_done_sentinel", 1},
 		{"red_scanner_found_disjunct", 1},
 		{"red_archtest_done_sentinel", 1},
+		{"red_archtest_bare_done_sentinel", 1},
 		{"green_scanner_findfirstchild", 0},
 		{"green_scanner_pure_iteration", 0},
 		{"green_scanner_eachinsubtree_existence", 0},
