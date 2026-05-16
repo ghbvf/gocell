@@ -272,7 +272,7 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 						Rel:  rel,
 						Line: line,
 						Message: fmt.Sprintf(
-							"method-value assignment of domain.ReconstituteUser detected — "+
+							"method-value assignment of domain.ReconstituteUser detected — " +
 								"RECONSTITUTE-USER-CALLER-01 would miss the deferred call site"),
 					})
 				})

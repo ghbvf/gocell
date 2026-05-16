@@ -14,7 +14,7 @@
 //
 // Performance note: each Test* function calls loadGovernancePackage (single
 // RunTyped over ./kernel/governance) or RunTyped over targeted fixture
-// patterns. The typeseval.SharedResolver process-wide cache amortises repeated
+// patterns. The typeseval.SharedResolver process-wide cache amortizes repeated
 // loads across sub-tests in the same go test binary invocation. Measured
 // locally (2026-05-16): TestGovernanceRulesRegistrationGuard ≈3s,
 // TestGovernanceRuleCodeConstSingleSource ≈5s,
