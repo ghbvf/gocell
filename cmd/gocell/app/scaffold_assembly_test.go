@@ -227,6 +227,103 @@ func TestRunScaffoldAssembly_LiveRollback_OnSecondStageConflict(t *testing.T) {
 	}
 }
 
+// TestRunScaffoldAssembly_IDMetadataRule asserts that scaffold assembly's
+// --id flag routes through kernel/metadata.MatchAssemblyID single-source
+// pattern (^[a-z][a-z0-9]+$) — rejecting kebab-case, capitalised, and
+// digit-leading IDs that the legacy path-traversal blacklist used to accept.
+// This is the cmd-layer side of SCAFFOLD-ASSEMBLY-ID-METADATA-RULE-01.
+//
+// ref: kubernetes/apimachinery IsDNS1123Label — same single-helper validation
+// dispatched from CLI flag layer.
+func TestRunScaffoldAssembly_IDMetadataRule(t *testing.T) {
+	t.Parallel()
+
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	cases := []struct {
+		name      string
+		id        string
+		wantValid bool
+	}{
+		{"valid_id", "myassembly", true},
+		{"kebab_rejected", "my-assembly", false},
+		{"capitalised_rejected", "MyAssembly", false},
+		{"digit_start_rejected", "9asm", false},
+		{"single_char_rejected", "a", false},
+		{"underscore_rejected", "my_asm", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args := []string{
+				"--id=" + tc.id,
+				"--cells=examplecell",
+				"--team=platform",
+				"--role=maintainer",
+				"--dry-run",
+			}
+			err := scaffoldAssembly(root, args)
+			gotValid := err == nil
+			if gotValid != tc.wantValid {
+				t.Fatalf("scaffoldAssembly(--id=%q) valid=%v err=%v; want valid=%v",
+					tc.id, gotValid, err, tc.wantValid)
+			}
+			if !tc.wantValid && !strings.Contains(err.Error(), "ERR_SCAFFOLD_INVALID_OPTS") {
+				t.Errorf("expected ERR_SCAFFOLD_INVALID_OPTS in error; got %v", err)
+			}
+		})
+	}
+}
+
+// TestRunScaffoldAssembly_CellsMetadataRule asserts --cells[] elements route
+// through kernel/metadata.MatchCellID (same pattern as MatchAssemblyID by
+// design — FMT-16 / FMT-C1 no-dash convention). Note: cmd flag layer routes
+// invalid cell ids first through pattern rejection; existence check applies
+// only to syntactically valid IDs.
+func TestRunScaffoldAssembly_CellsMetadataRule(t *testing.T) {
+	t.Parallel()
+
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	cases := []struct {
+		name      string
+		cells     string
+		wantValid bool
+	}{
+		{"valid_cell", "examplecell", true},
+		{"kebab_rejected", "my-cell", false},
+		{"capitalised_rejected", "MyCell", false},
+		{"digit_start_rejected", "9cell", false},
+		{"underscore_rejected", "my_cell", false},
+		{"second_cell_invalid", "examplecell,9bad", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args := []string{
+				"--id=myassembly",
+				"--cells=" + tc.cells,
+				"--team=platform",
+				"--role=maintainer",
+				"--dry-run",
+			}
+			err := scaffoldAssembly(root, args)
+			gotValid := err == nil
+			if gotValid != tc.wantValid {
+				t.Fatalf("scaffoldAssembly(--cells=%q) valid=%v err=%v; want valid=%v",
+					tc.cells, gotValid, err, tc.wantValid)
+			}
+			if !tc.wantValid && !strings.Contains(err.Error(), "ERR_SCAFFOLD_INVALID_OPTS") {
+				t.Errorf("expected ERR_SCAFFOLD_INVALID_OPTS in error; got %v", err)
+			}
+		})
+	}
+}
+
 // setupAssemblyTestProject creates a tempdir project with go.mod and the
 // supplied cell skeleton (cell.yaml only — sufficient for assembly scaffold
 // validation).
