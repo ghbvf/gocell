@@ -98,6 +98,12 @@ type Hook struct {
 	// Runnable.Start(managerCtx): the hook should spawn a long-running goroutine
 	// on ownerCtx, run a fast synchronous probe, and return.
 	//
+	// OnStart hooks run sequentially in the Start goroutine; a slow or blocking
+	// OnStart delays all subsequent hooks, and the aggregate elapsed time may
+	// exceed WithStartupTimeout — later hooks then never get a chance to start.
+	// Implementations MUST spawn their worker goroutine and fast-probe-return,
+	// respecting ctx for cooperative cancellation.
+	//
 	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go (engageStopProcedure)
 	OnStart func(ctx context.Context) error // nil = no-op
 
@@ -168,6 +174,13 @@ type lifecycle struct {
 	// exactly one context whose only cancellation triggers are ownerCancel
 	// (assembly shutdown) and start-failure teardown — both "owner is going
 	// away", never a competing startup deadline.
+	//
+	// Concurrency invariant: workCtx / workCancel are written exactly once under
+	// mu at the top of Start (before the single-goroutine hook loop). After that
+	// point workCtx is read-only and is accessed only from the Start goroutine
+	// (via hookContext). No further locking is required for reads. OnStop must
+	// NOT assume a spawned goroutine is still alive because workCancel may have
+	// already fired; use a buffered done channel for goroutine rendezvous.
 	workCtx    context.Context
 	workCancel context.CancelFunc
 }
@@ -399,6 +412,13 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 // OnStart receives the owner ctx directly (no timeout wrapping); StartTimeout
 // is retained as a slow-start warning threshold only.
 // OnStop applies applyTimeout(StopTimeout).
+//
+// workCtx read is concurrency-safe here: it is written exactly once under mu
+// before the hook loop in Start; this method is only ever called from the
+// Start goroutine (the sequential hook loop), so no additional locking is
+// needed. OnStop hooks must NOT assume a goroutine spawned in OnStart is still
+// alive when OnStop runs — workCancel may have fired; use a buffered done
+// channel for goroutine rendezvous in OnStop.
 func (lc *lifecycle) hookContext(ctx context.Context, p hookPhase) (context.Context, context.CancelFunc) {
 	if p.isStart {
 		// OnStart receives workCtx (child of the Start ctx = ownerCtx). It is

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -411,14 +412,23 @@ func (l *SweeperLifecycle) Stop(ctx context.Context) error {
 // crash-on-first-error wiring bug into a fail-fast OnStart error so bootstrap
 // rolls back at startup (review P1-4). No counter value is mutated (.Inc is
 // not called) — .With alone triggers label validation.
+//
+// SEC-1: the recovered panic value is redacted via pkg/redaction.RedactError
+// before logging so a credential-bearing panic string cannot leak into slog.
+// C-2: the actual label set passed to With is captured in a local and included
+// in the error message so developers can see what was passed vs the required
+// {"cell"} set.
 func (l *SweeperLifecycle) preflightSweepErrorCounter() (err error) {
+	labels := kernelmetrics.Labels{"cell": l.cellID()}
 	defer func() {
 		if r := recover(); r != nil {
+			rawErr := fmt.Errorf("%v", r)
+			redacted := redaction.RedactError(rawErr)
 			err = fmt.Errorf("runtime/command: SweepErrorCounter label set invalid "+
-				"(must be exactly {\"cell\"}): %v", r)
+				"(passed labels %v, must be exactly {\"cell\"}): %w", labels, redacted)
 		}
 	}()
-	_ = l.SweepErrorCounter.With(kernelmetrics.Labels{"cell": l.cellID()})
+	_ = l.SweepErrorCounter.With(labels)
 	return nil
 }
 

@@ -99,23 +99,28 @@ func TestSuperviseLifecycleStart_StartupBudgetElapsed(t *testing.T) {
 	fl := &superviseFakeLifecycle{startedCh: make(chan struct{}), blockUntilCancel: true}
 	b := newSuperviseBootstrap(t, fl, fc, superviseBudget)
 
-	done := make(chan error, 1)
-	go func() { done <- b.superviseLifecycleStart(context.Background()) }()
+	// resultCh carries the superviseLifecycleStart return value exactly once.
+	resultCh := make(chan error, 1)
+	go func() { resultCh <- b.superviseLifecycleStart(context.Background()) }()
 
 	<-fl.startedCh
 	// Let the supervisor arm its budget timer, then blow past it.
+	// Advance the fake clock in the Eventually loop until the goroutine exits.
+	var got error
+	var closed bool
 	require.Eventually(t, func() bool {
 		fc.Advance(superviseBudgetOvershoot)
 		select {
-		case err := <-done:
-			done <- err // put back for the assertion below
+		case err := <-resultCh:
+			got = err
+			closed = true
 			return true
 		default:
 			return false
 		}
 	}, testtime.D1s, testtime.D1ms, "budget timer never fired")
 
-	err := <-done
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrBootstrapStartupTimeout)
+	require.True(t, closed, "superviseLifecycleStart goroutine did not return")
+	require.Error(t, got)
+	assert.ErrorIs(t, got, ErrBootstrapStartupTimeout)
 }

@@ -38,7 +38,9 @@ func WithLifecycle(fn func(lc Lifecycle)) Option {
 // elapses ≥ 80% of it). A hook whose OnStart never returns is bounded by the
 // orchestration-layer backstop (caller ctx + WithStartupTimeout), not by this
 // value. Negative therefore only disables the slow-start warning; it does NOT
-// remove a startup deadlock backstop.
+// remove a startup deadlock backstop. The actual startup deadlock backstop is
+// WithStartupTimeout (orchestration-layer); this option only affects the
+// slow-start warning threshold.
 func WithLifecycleDefaultStartTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) { b.defaultStartTimeout = d }
 }

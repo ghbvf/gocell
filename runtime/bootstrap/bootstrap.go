@@ -469,7 +469,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// superviseLifecycleStart cancels ownerCtx (unblocking the wedged OnStart)
 	// and waits for Start to fully unwind before returning.
 	if err := b.superviseLifecycleStart(ctx); err != nil {
-		b.ownerCancel() // idempotent; supervise already canceled on abort paths
+		// On the caller-cancel and budget abort paths superviseLifecycleStart
+		// already called ownerCancel; this call covers the hook-error path where
+		// Start returned a hook error directly. context.CancelFunc is safe to
+		// call repeatedly (idempotent by contract).
+		b.ownerCancel()
 		return rollback(err)
 	}
 	// lifecycle.Stop teardown registered first → runs second in LIFO.
@@ -529,12 +533,20 @@ func (b *Bootstrap) superviseLifecycleStart(callerCtx context.Context) error {
 		return nil
 	case <-callerCtx.Done():
 		b.ownerCancel()
+		slog.Default().Error("bootstrap: lifecycle startup aborted",
+			slog.String("reason", "caller_canceled"),
+			slog.Duration("budget", b.startupBudgetDuration()),
+			slog.String("hint", "the last hook.start Info log line identifies the in-flight hook"))
 		unwind := <-startErr // Start observes ownerCtx cancel, unwinds + rolls back
 		return errors.Join(
 			fmt.Errorf("bootstrap: startup aborted by caller: %w", callerCtx.Err()),
 			unwind)
 	case <-budgetCh:
 		b.ownerCancel()
+		slog.Default().Error("bootstrap: lifecycle startup aborted",
+			slog.String("reason", "startup_budget_exceeded"),
+			slog.Duration("budget", b.startupBudgetDuration()),
+			slog.String("hint", "the last hook.start Info log line identifies the in-flight hook"))
 		unwind := <-startErr
 		return errors.Join(ErrBootstrapStartupTimeout, unwind)
 	}
@@ -545,15 +557,22 @@ func (b *Bootstrap) superviseLifecycleStart(callerCtx context.Context) error {
 // never fires; caller ctx remains the sole abort path). Uses the injected
 // clock so tests drive the budget deterministically with a fake clock.
 func (b *Bootstrap) startupBudget() (<-chan time.Time, func()) {
-	d := b.startupTimeout
-	if d == 0 {
-		d = DefaultStartupTimeout
-	}
+	d := b.startupBudgetDuration()
 	if d < 0 {
 		return nil, func() {}
 	}
 	timer := b.clock.NewTimerAt(b.clock.Now().Add(d))
 	return timer.C(), func() { timer.Stop() }
+}
+
+// startupBudgetDuration returns the resolved startup budget duration:
+// 0 → DefaultStartupTimeout, <0 → disabled.
+func (b *Bootstrap) startupBudgetDuration() time.Duration {
+	d := b.startupTimeout
+	if d == 0 {
+		d = DefaultStartupTimeout
+	}
+	return d
 }
 
 // ---------------------------------------------------------------------------
