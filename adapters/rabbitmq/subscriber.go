@@ -95,22 +95,28 @@ func waitInflightDrain(ctx context.Context, clk clock.Clock, runs []*subscriptio
 // isRecoverableAMQPError returns true if the error indicates a transient
 // connection/channel loss that can be recovered via reconnect. Permanent errors
 // (ACCESS_REFUSED, PRECONDITION_FAILED, channel_max exhausted) return false.
+//
+// Decision sources (single-source-of-truth per signal):
+//  1. amqp.ErrClosed — transport-level signal that connection/channel closed;
+//     amqp091-go raises this whenever a remote close races with a local op,
+//     and it is always transient (reconnect logic owns the recovery).
+//  2. errcode.IsTransient — gocell-side single predicate for adapter signals.
+//     Replaces the prior ErrAdapterAMQPConnect/Reconnecting code whitelist
+//     (Soft → Hard upgrade in Wave-4-B): the AcquireChannel transient paths
+//     and Health pre-allocated reconnecting/never-connected sentinels now
+//     route through errcode.WrapInfra so this predicate sees them.
+//  3. *amqp.Error.Recover — protocol-level signal (Recover=true means broker
+//     will restart the channel; Recover=false is permanent).
 func isRecoverableAMQPError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// amqp.ErrClosed: connection or channel was closed.
 	if errors.Is(err, amqp.ErrClosed) {
 		return true
 	}
-	// ErrAdapterAMQPConnect or ErrAdapterAMQPReconnecting from AcquireChannel /
-	// Health means the connection is nil, IsClosed, or mid-reconnect — transient.
-	var ecErr *errcode.Error
-	if errors.As(err, &ecErr) && (ecErr.Code == ErrAdapterAMQPConnect || ecErr.Code == ErrAdapterAMQPReconnecting) {
+	if errcode.IsTransient(err) {
 		return true
 	}
-	// AMQP protocol errors: Recover=true means the broker will restart the
-	// channel; Recover=false (ACCESS_REFUSED, PRECONDITION_FAILED) is permanent.
 	var amqpErr *amqp.Error
 	if errors.As(err, &amqpErr) {
 		return amqpErr.Recover

@@ -27,8 +27,8 @@ import (
 
 // Error codes for the RabbitMQ adapter.
 const (
-	ErrAdapterAMQPConnect            errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
-	ErrAdapterAMQPConnectPermanent   errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
+	ErrAdapterAMQPConnect          errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
+	ErrAdapterAMQPConnectPermanent errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
 	// ErrAdapterAMQPConnectTimeout signals an AMQP dial/handshake timeout
 	// (net.Error.Timeout() == true). Always routed via errcode.WrapInfra →
 	// IsTransient(err) == true, distinguishing transient timeout from generic
@@ -66,9 +66,19 @@ const (
 )
 
 // Pre-allocated Health() errors to avoid per-call allocation.
+//
+// Transient vs permanent distinction (Wave-4-B ADAPTER-CONNECT-BUDGET-01):
+//   - reconnecting / never-connected → transient (broker may recover, subscribers
+//     should retry) → errcode.WrapInfra → IsTransient == true
+//   - closed → permanent (explicit Close, will not self-heal) →
+//     errcode.New(KindInternal) → IsTransient == false
+//
+// This makes the transient marker (single source of truth) drive subscriber
+// retry decisions; consumer of Health() can use errcode.IsTransient directly
+// instead of keying on code strings.
 var (
-	errHealthReconnecting   = errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
-	errHealthNeverConnected = errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: never connected")
+	errHealthReconnecting   = errcode.WrapInfra(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting", nil)
+	errHealthNeverConnected = errcode.WrapInfra(ErrAdapterAMQPConnect, "rabbitmq: never connected", nil)
 	errHealthClosed         = errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
 )
 
@@ -128,8 +138,8 @@ type ConnectionState struct {
 
 // unwrapDialErr peels one layer of *errcode.Error wrapping (applied by
 // connect()) so callers can pass the underlying transport/AMQP error to
-// isPermanentDialError. Returns err unchanged when it is not an *errcode.Error
-// or when the wrapped Cause is nil.
+// classifyDialError / classifyConnectError. Returns err unchanged when it
+// is not an *errcode.Error or when the wrapped Cause is nil.
 func unwrapDialErr(err error) error {
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
@@ -255,9 +265,43 @@ func classifyStructuredDialError(err error) (dialClass, bool) {
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
+		// Timeout() == true => transport-level timeout (TCP SYN / handshake
+		// deadline fired). amqp091.DefaultDial routes ConnectTimeout through
+		// net.DialTimeout, so timeouts surface as *net.OpError whose inner
+		// error reports Timeout()=true. Distinct from refused/reset/etc.
+		if netErr.Timeout() {
+			return dialClassTimeout, true
+		}
 		return dialClassUnknown, true
 	}
 	return dialClassUnknown, false
+}
+
+// classifyConnectError is the single typed funnel that wraps a raw
+// dial/handshake error into the appropriate errcode envelope:
+//   - dialClassTimeout              → errcode.WrapInfra(ErrAdapterAMQPConnectTimeout, …) (transient)
+//   - dialClassPermanent{Definitive,Inferred} → errcode.Wrap(KindInternal, ErrAdapterAMQPConnectPermanent, …) (permanent)
+//   - dialClassUnknown              → errcode.WrapInfra(ErrAdapterAMQPConnect, …) (transient, fail-open)
+//
+// Caller is responsible for passing an already-sanitized cause (URL credentials
+// redacted via c.sanitizeDialError) because this funnel does not own URL state.
+//
+// archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 verifies this function's
+// body routes through errcode.WrapInfra (upstream Hard).
+//
+// ref: archtest tools/archtest/adapter_error_classification_test.go
+func classifyConnectError(rawErr, sanitizedCause error) error {
+	switch classifyDialError(unwrapDialErr(rawErr)) {
+	case dialClassTimeout:
+		return errcode.WrapInfra(ErrAdapterAMQPConnectTimeout,
+			"rabbitmq: dial timeout", sanitizedCause)
+	case dialClassPermanentDefinitive, dialClassPermanentInferred:
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
+			"rabbitmq: initial connection failed (permanent)", sanitizedCause)
+	default: // dialClassUnknown — transient (fail-open: unmatched ⇒ retry)
+		return errcode.WrapInfra(ErrAdapterAMQPConnect,
+			"rabbitmq: initial connection failed", sanitizedCause)
+	}
 }
 
 // matchesPermanentSubstring is the last-resort string-keyword fallback for
@@ -270,14 +314,6 @@ func matchesPermanentSubstring(msg string) bool {
 		}
 	}
 	return false
-}
-
-// isPermanentDialError returns true for any non-none classification. Kept as
-// a convenience for NewConnection (startup-time fail-fast where the inferred
-// vs definitive distinction does not matter — a single hit always aborts).
-func isPermanentDialError(err error) bool {
-	class := classifyDialError(err)
-	return class == dialClassPermanentDefinitive || class == dialClassPermanentInferred
 }
 
 // permanentDialSubstrings are substrings in amqp091-go plain-error messages
@@ -548,13 +584,10 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 	clock.MustHaveClock(c.clock, "rabbitmq.NewConnection")
 
 	if err := c.connect(); err != nil {
-		// Classify initial connection failure: permanent errors get a distinct code
-		// so callers can fail-fast on bad credentials, bad URI, TLS misconfiguration.
-		if isPermanentDialError(unwrapDialErr(err)) {
-			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
-				"rabbitmq: initial connection failed (permanent)", c.sanitizeDialError(err))
-		}
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", c.sanitizeDialError(err))
+		// classifyConnectError funnel selects timeout / permanent / transient
+		// envelope from the underlying dial error; caller pre-sanitizes URL
+		// credentials since the funnel does not own URL state.
+		return nil, classifyConnectError(err, c.sanitizeDialError(err))
 	}
 
 	c.mu.Lock()
@@ -907,7 +940,9 @@ func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	}
 
 	if conn == nil || conn.IsClosed() {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection not available")
+		// Transient: connection unavailable during reconnect/startup; subscribers
+		// retry via errcode.IsTransient on the AcquireChannel return.
+		return nil, errcode.WrapInfra(ErrAdapterAMQPConnect, "rabbitmq: connection not available", nil)
 	}
 
 	// Pool miss — increment in-use BEFORE allocating; rollback on cap miss
@@ -922,7 +957,10 @@ func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		c.inUseChannels.Add(-1)
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: open channel", err)
+		// Transient: channel-open failures are typically transient broker
+		// conditions (broker restart, channel exhaustion); subscribers retry
+		// via errcode.IsTransient.
+		return nil, errcode.WrapInfra(ErrAdapterAMQPConnect, "rabbitmq: open channel", err)
 	}
 
 	return ch, nil
@@ -1230,8 +1268,9 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 // so the error chain cannot leak credentials when .Error() is called upstream.
 // Returns the original error unchanged if the URL is empty or not found in the
 // error string. The returned error is a plain fmt.Errorf (losing type info),
-// which is acceptable because isPermanentDialError classification happens BEFORE
-// this sanitization, and the outer errcode.Wrap provides the error code.
+// which is acceptable because classifyConnectError reads the raw error for
+// classification BEFORE this sanitization, and the outer errcode.Wrap /
+// WrapInfra provides the error code.
 func (c *Connection) sanitizeDialError(err error) error {
 	if err == nil || c.config.URL == "" {
 		return err

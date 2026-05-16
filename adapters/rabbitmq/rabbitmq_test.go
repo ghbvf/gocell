@@ -3450,14 +3450,27 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "ErrAdapterAMQPConnect errcode",
-			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "connection not available"),
+			// Wave-4-B: AcquireChannel "connection not available" / "open
+			// channel" + Health errHealthNeverConnected sentinel are now
+			// produced via errcode.WrapInfra (transient) — the recoverable
+			// signal is errcode.IsTransient, not the code string.
+			name: "ErrAdapterAMQPConnect via WrapInfra (transient)",
+			err:  errcode.WrapInfra(ErrAdapterAMQPConnect, "connection not available", nil),
 			want: true,
 		},
 		{
-			name: "ErrAdapterAMQPReconnecting errcode",
-			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnecting, "reconnecting"),
+			// Wave-4-B: errHealthReconnecting sentinel is now WrapInfra.
+			name: "ErrAdapterAMQPReconnecting via WrapInfra (transient)",
+			err:  errcode.WrapInfra(ErrAdapterAMQPReconnecting, "reconnecting", nil),
 			want: true,
+		},
+		{
+			// errHealthClosed remains errcode.New(KindInternal) because an
+			// explicit Close() does not self-heal; subscribers must NOT retry
+			// on this signal (fail-fast on terminal lifecycle).
+			name: "ErrAdapterAMQPConnect via New(KindInternal) — closed terminal, NOT recoverable",
+			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection is closed"),
+			want: false,
 		},
 	}
 
