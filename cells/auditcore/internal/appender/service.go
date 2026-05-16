@@ -151,6 +151,18 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 			slog.Any("error", err),
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
+		// Disposition 收口 (ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01):
+		// adapter classifiers now mark retry-safe failures via
+		// errcode.WrapInfra. A positively-transient error Requeues. A
+		// positively-permanent error (domain/validation/auth — classified,
+		// not infra) short-circuits to Reject → DLX instead of burning the
+		// whole retry budget. Unknown/ambiguous infra errors stay on the
+		// Requeue (retry-then-budget-DLX) path — fail-closed toward not
+		// losing an event on a transient blip. Mirrors the configreceive
+		// positive-permanent precedent.
+		if !errcode.IsTransient(err) && !errcode.IsInfraError(err) {
+			return outbox.Reject(outbox.NewPermanentError(err))
+		}
 		return outbox.Requeue(err)
 	}
 
