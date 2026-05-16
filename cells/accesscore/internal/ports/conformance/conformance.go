@@ -23,6 +23,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// concurrencyDeadlineBudget bounds the Concurrent_NoDeadlock sub-test so a
+// hung implementation surfaces as a deadline-exceeded failure rather than
+// hanging the whole `go test` invocation. Extracted to a const per
+// TEST-TIME-LITERAL-01 (file-local site-specific deadline; no cross-cutting
+// reuse — kept in this file).
+const concurrencyDeadlineBudget = 30 * time.Second
+
 // UserRepoFactory constructs a fresh ports.UserRepository, its paired
 // persistence.TxRunner, and a cleanup func for use in a single test sub-case.
 // The factory is called once per sub-test; the cleanup func is registered via
@@ -407,7 +414,7 @@ func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 	u := seedActive(t, txRunner, repo, uuid.NewString(), "concurrent_"+uuid.NewString())
 
 	const goroutines = 50
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(concurrencyDeadlineBudget)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	t.Cleanup(cancel)
 

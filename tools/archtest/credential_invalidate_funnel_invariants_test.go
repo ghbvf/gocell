@@ -155,6 +155,11 @@ var funnelAllowlistPathPrefixes = []string{
 	// storetest suites (conformance test helpers for store impls).
 	"runtime/auth/refresh/storetest/",
 	"runtime/auth/session/storetest/",
+	// ports.UserRepository conformance helper (FU-3 H1/K-B). Same role as the
+	// runtime/auth/*/storetest packages: conformance suite covers every method
+	// of the contract (including BumpAuthzEpoch / UpdatePassword) so every impl
+	// is held to the same behavior — direct method calls are intentional.
+	"cells/accesscore/internal/ports/conformance/",
 }
 
 // isAllowlisted reports whether a module-relative path is in the funnel
