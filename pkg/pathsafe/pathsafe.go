@@ -59,11 +59,10 @@ func WriteFile(realRoot, absPath string, content []byte, mode os.FileMode) error
 // O_NOFOLLOW|O_DIRECTORY; the existing leaf inode is removed via unlinkat
 // relative to the parent fd (symlinks unlinked rather than followed).
 //
-// realRoot must be the output of ResolveRoot; when empty the containment
-// check is skipped (caller-responsible mode, kept for backward compatibility
-// with codegen.Write at the package-internal boundary). The dropped/created
-// dir list is discarded: WriteFileForce is the single-shot variant and is
-// not transactional across multiple files.
+// realRoot must be non-empty and the output of ResolveRoot; an empty realRoot
+// is rejected with ErrValidationFailed. The dropped/created dir list is
+// discarded: WriteFileForce is the single-shot variant and is not transactional
+// across multiple files.
 func WriteFileForce(realRoot, absPath string, content []byte, mode os.FileMode) error {
 	if realRoot == "" {
 		// No containment anchor available → cannot run fd-walk against an
@@ -136,6 +135,14 @@ func ResolveRoot(root string) (string, error) {
 //   - targetRel is absolute
 //   - targetRel contains ".." segments that escape realRoot
 //   - any existing parent directory in the resolved path lies outside realRoot
+//
+// Note: this is a caller-side early-reject check used during plan
+// CONSTRUCTION (e.g., scaffold flag parsing). It accepts symlinks that
+// resolve within realRoot. The authoritative TOCTOU defense at WRITE
+// time is the fd-anchored openat chain in WritePlannedFiles, which
+// rejects ALL parent symlinks regardless of destination. Callers MUST
+// NOT treat a successful ContainPath as a guarantee that subsequent
+// WritePlannedFiles will succeed for the same path.
 func ContainPath(realRoot, targetRel string) (string, error) {
 	if filepath.IsAbs(targetRel) {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -221,7 +228,10 @@ func PlannedPaths(plan []PlannedFile) []string {
 
 // WritePlannedFiles is the SINGLE filesystem write entry for scaffold/codegen.
 //
-//  1. Each plan[i].AbsPath is verified via ContainPath against realRoot.
+//  1. Each plan[i].AbsPath is lexically verified against realRoot via
+//     planContainmentPass (path-prefix only); authoritative symlink
+//     rejection happens at writePass via the fd-anchored openat(O_NOFOLLOW)
+//     chain (unix) or O_EXCL leaf write (windows advisory).
 //  2. Each AbsPath must not already exist (conflict detection over the
 //     FULL plan — no partial-write semantics).
 //  3. dryRun returns nil after steps 1-2 succeed (validation only, no write).
@@ -259,6 +269,10 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 // plans (the develop @ 41fc70074 dry-run silently accepted duplicates because
 // O_EXCL only fired at writePass time). A plan-content invariant, not a
 // filesystem-state check.
+//
+// Backlog: PATHSAFE-PLANSET-TYPED-HARD-01 (cap-14) — upgrade to
+// type-system Hard via PlanSet newtype + dup-reject in constructor,
+// scheduled with Lane E typed-scaffold-ID single-source收编.
 func duplicatePass(plan []PlannedFile) error {
 	seen := make(map[string]struct{}, len(plan))
 	for _, f := range plan {
@@ -278,13 +292,10 @@ func duplicatePass(plan []PlannedFile) error {
 // runs at writePass via syscall-level fd-anchored openat O_NOFOLLOW chain
 // (unix) or O_EXCL leaf write (windows advisory).
 //
-// Path-based parent-symlink rejection (previously the develop
-// containmentPass + walkParentsForSymlinkContainment combo) has been
-// removed: it was a check-then-use TOCTOU window — a symlink could be
-// swapped in after this check and before writePass. The new write funnel
-// resolves every component relative to the fd chain, so symlinks anywhere
-// in the parent walk fail closed at syscall time regardless of when they
-// appeared.
+// Path-based parent-symlink rejection has been removed FROM THE WRITE
+// PIPELINE (containmentPass deleted); ContainPath (caller-side early-reject)
+// still performs the path-based walk as an orthogonal early-fail signal —
+// see ContainPath godoc for that boundary.
 func planContainmentPass(realRoot string, plan []PlannedFile) error {
 	sep := string(filepath.Separator)
 	for _, f := range plan {
@@ -370,6 +381,12 @@ func writePass(realRoot string, plan []PlannedFile) error {
 
 // rollbackWrites removes all written files and created directories (in reverse
 // creation order) and wraps originalErr with rollback statistics.
+//
+// Note: rollback uses path-based os.Remove (NOT fd-anchored unlinkat).
+// This is best-effort: if a parent directory has been swapped to a symlink
+// between the original write and rollback, os.Remove follows the symlink.
+// The TOCTOU defense (writePass fd-walk) is one-shot at write time;
+// rollback is forensic cleanup, not a security boundary.
 func rollbackWrites(written, dirs []string, originalErr error) error {
 	for i := len(written) - 1; i >= 0; i-- {
 		_ = os.Remove(written[i])
@@ -416,7 +433,7 @@ func collectMissingDirs(dir, realRoot string) ([]string, error) {
 		// of previously-written entries actually runs. Wrap once with
 		// errcode so callers' errors.Is(err, fs.ErrPermission) walk
 		// continues to match the underlying syscall.Errno.
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+		return nil, errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrInternal,
 			"pathsafe: stat parent dir", err,
 			errcode.WithInternal(fmt.Sprintf("dir=%s", cur)))
 	}
