@@ -8,9 +8,12 @@
 //
 // AI-rebust: Hard (charter §1 string-typed concept funnel template). The
 // conversion callee is resolved via *types.Info.Uses[ident] so a same-name
-// local TypeName or alias cannot bypass the check; the argument expression
-// is also resolved through *types.Info to its callee Func so only
-// yamlsafe.Quote — not shadowed identifiers — satisfies the funnel.
+// local TypeName cannot bypass the check. Type aliases of yamlsafe.Scalar
+// are handled by routing through types.Unalias before reading the underlying
+// named type, so `type aliasScalar = yamlsafe.Scalar; aliasScalar(raw)` is
+// also detected (verified by TestYAMLQuoteFunnel_DetectsAliasBypass). The
+// argument expression is also resolved through *types.Info to its callee
+// Func so only yamlsafe.Quote — not shadowed identifiers — satisfies the funnel.
 //
 // Funnel 双向锁: 下游 Hard（types.Info-resolved Scalar conversion call site
 // must have Quote arg or already-typed Scalar). 上游 Medium — Pass.Pkg 路径
@@ -26,6 +29,9 @@
 //   - Arg shape: only direct `yamlsafe.Quote(x)` CallExpr is allowed (a value
 //     of declared static type yamlsafe.Scalar is also allowed as a no-op
 //     identity conversion, covering helpers that return a Scalar)
+//   - type alias form `type AliasOfScalar = yamlsafe.Scalar; AliasOfScalar(raw)`
+//     — covered by types.Unalias resolution; verified by
+//     TestYAMLQuoteFunnel_DetectsAliasBypass with yamlquotefixture.
 //   - reverse self-test fixture: scanner applied to pkg/yamlsafe production
 //     AST (path filter bypassed) MUST report at least one bare Scalar(raw) site
 //     present in Quote() — proves types.Info resolution actually fires
@@ -170,6 +176,11 @@ func scanYAMLQuoteFunnel(p *Pass, file *ast.File, rel string) []Diagnostic {
 // TypeName (i.e. the CallExpr is a type conversion, not a function call).
 // Resolution goes through *types.Info.Uses so a same-name local variable
 // does NOT register as the funnel target — the Hard property.
+//
+// Type aliases are handled by routing through types.Unalias before reading
+// the underlying named type, so `type AliasOfScalar = yamlsafe.Scalar`
+// followed by `AliasOfScalar(raw)` is correctly detected as a Scalar
+// conversion (the alias resolves to the canonical yamlsafe.Scalar TypeName).
 func isYAMLScalarConversion(info *types.Info, fun ast.Expr) bool {
 	if info == nil {
 		return false
@@ -188,10 +199,22 @@ func isYAMLScalarConversion(info *types.Info, fun ast.Expr) bool {
 		return false
 	}
 	tn, ok := obj.(*types.TypeName)
-	if !ok || tn.Pkg() == nil {
+	if !ok {
 		return false
 	}
-	return tn.Pkg().Path() == yamlsafePkgPath && tn.Name() == yamlsafeScalarType
+	// Route through types.Unalias so that `type AliasOfScalar = yamlsafe.Scalar`
+	// followed by `AliasOfScalar(raw)` is detected. Without Unalias, the TypeName
+	// resolves to the alias declaration in the caller package, not yamlsafe.Scalar,
+	// and Pkg().Path() returns the caller package — silently bypassing the guard.
+	named, ok := types.Unalias(tn.Type()).(*types.Named)
+	if !ok {
+		return false
+	}
+	nObj := named.Obj()
+	if nObj == nil || nObj.Pkg() == nil {
+		return false
+	}
+	return nObj.Pkg().Path() == yamlsafePkgPath && nObj.Name() == yamlsafeScalarType
 }
 
 // allowedScalarConversionArg reports whether arg is an acceptable input to
@@ -213,7 +236,10 @@ func allowedScalarConversionArg(info *types.Info, arg ast.Expr) bool {
 	if t == nil {
 		return false
 	}
-	named, ok := t.(*types.Named)
+	// Route through types.Unalias so that an argument whose declared static type
+	// is `type AliasOfScalar = yamlsafe.Scalar` (i.e. an alias of Scalar used as
+	// an identity no-op conversion target) is also recognized as already-typed Scalar.
+	named, ok := types.Unalias(t).(*types.Named)
 	if !ok {
 		return false
 	}
@@ -248,4 +274,46 @@ func isYAMLQuoteCall(info *types.Info, fun ast.Expr) bool {
 		return false
 	}
 	return fn.Pkg().Path() == yamlsafePkgPath && fn.Name() == yamlsafeQuoteFunc
+}
+
+const yamlquotefixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/yamlquotefixture"
+
+// TestYAMLQuoteFunnel_DetectsAliasBypass loads the archtest_fixture-gated
+// yamlquotefixture package (which declares `type AliasOfScalar = yamlsafe.Scalar`)
+// and asserts the scanner detects the bare alias conversion site (BypassViaAlias)
+// while leaving the Quote-wrapped compliant site (CompliantQuoted) untouched.
+//
+// Without types.Unalias resolution in isYAMLScalarConversion, the TypeName for
+// AliasOfScalar resolves to the caller package rather than pkg/yamlsafe, and the
+// check silently passes — making this test fail RED and proving the regression.
+func TestYAMLQuoteFunnel_DetectsAliasBypass(t *testing.T) {
+	t.Parallel()
+
+	var diags []Diagnostic
+	found := false
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/yamlquotefixture/"},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != yamlquotefixturePkgPath {
+				return nil
+			}
+			found = true
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				diags = append(diags, scanYAMLQuoteFunnel(p, f, rel)...)
+			}
+			return nil
+		})
+
+	require.True(t, found, "yamlquotefixture package must be loaded (check -tags=archtest_fixture)")
+	require.NotEmpty(t, diags,
+		"scanner must detect AliasOfScalar(\"evil-alias-raw\") via types.Unalias; "+
+			"empty result means alias bypass is silently allowed (regression)")
+	require.Len(t, diags, 1,
+		"exactly 1 violation expected (BypassViaAlias); CompliantQuoted must not fire. got: %v", diags)
+	require.Contains(t, diags[0].Message, "yamlsafe.Scalar(...)")
 }
