@@ -87,10 +87,10 @@ func writeFileNoFollowAt(parentFd int, basename string, content []byte, mode os.
 		return err
 	}
 	// os.NewFile takes ownership of fd → Close releases it.
-	// fd is guaranteed non-negative here (unix.Openat returns -1 with non-nil
-	// err, which we already returned above) so the int→uintptr conversion is
-	// safe; G115 cannot prove this statically.
-	f := os.NewFile(uintptr(fd), basename) //nolint:gosec // R2-approved: G115 false-positive — POSIX openat(2) returns -1 on error (non-nil err returned above) or ≥0 on success
+	// fd is guaranteed non-negative here: POSIX openat(2) returns -1 on error
+	// (the non-nil err branch returned above) or ≥0 on success, so the
+	// int→uintptr conversion is safe; G115 cannot prove this statically.
+	f := os.NewFile(uintptr(fd), basename) //nolint:gosec // R2-approved: G115 false-positive (see above)
 	_, writeErr := f.Write(content)
 	closeErr := f.Close()
 	if writeErr != nil {
