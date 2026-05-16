@@ -244,6 +244,7 @@ func (errorSessionStore) Revoke(_ context.Context, _ string) error { return nil 
 func (errorSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
 	return nil
 }
+func (errorSessionStore) RepoReady(_ context.Context) error { return nil }
 
 func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
 	// Infrastructure errors from the session store are fail-closed: they surface
@@ -400,6 +401,7 @@ func (r capturingStore) Revoke(_ context.Context, _ string) error { return nil }
 func (r capturingStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
 	return nil
 }
+func (r capturingStore) RepoReady(_ context.Context) error { return nil }
 
 // capturingUserRepo is a ports.UserRepository whose GetByID injects a
 // configurable error for infra-error-path tests.

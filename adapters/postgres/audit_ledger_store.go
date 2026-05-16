@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
@@ -21,8 +22,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
-// Compile-time assertion: LedgerStore implements ledger.Store.
-var _ ledger.Store = (*LedgerStore)(nil)
+// Compile-time assertions.
+var (
+	_ ledger.Store          = (*LedgerStore)(nil)
+	_ cell.RepoHealthProber = (*LedgerStore)(nil)
+)
 
 // SQL statements for audit_entries operations.
 // All statements use positional parameters ($N); no dynamic SQL concatenation.
@@ -333,18 +337,24 @@ func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 	}, nil
 }
 
-// Probes returns a readiness probe for the audit ledger store.
-// The probe "audit_ledger_ready" calls Tail to verify PG connectivity.
-// This method satisfies the cell.HealthProber duck-type interface so that
-// cells/auditcore/cell.go can register it via type assertion without
-// importing kernel/cell in adapters/.
-func (s *LedgerStore) Probes() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		"audit_ledger_ready": func(ctx context.Context) error {
-			_, err := s.Tail(ctx)
-			return err
-		},
+// ledgerRepoReadySQL is a representative zero-cost query for the audit_entries
+// table. It returns no rows but exercises schema existence and table-level
+// permissions, surfacing migration drift that a pool-level ping cannot detect.
+// Matches the SELECT 1 FROM <t> WHERE false pattern used by PGSessionStore.
+const ledgerRepoReadySQL = `SELECT 1 FROM audit_entries WHERE false`
+
+// RepoReady implements cell.RepoHealthProber. It issues a cheap
+// non-transactional representative query against the audit_entries table so
+// that schema/migration drift and table-level permission loss are surfaced as a
+// differentiated failure domain distinct from the pool-level postgres_ready
+// probe registered by *Pool.
+func (s *LedgerStore) RepoReady(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, ledgerRepoReadySQL)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"audit ledger: repo ready", err)
 	}
+	return nil
 }
 
 // GetBySeq fetches a single entry by sequence number.

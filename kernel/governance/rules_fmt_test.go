@@ -897,3 +897,232 @@ func TestFMT31_MultipleContracts_Aggregate(t *testing.T) {
 		t.Fatalf("FMT-31: expected 2 findings (one per offending contract), got %d: %v", len(matches), matches)
 	}
 }
+
+// --- FMT-32: serviceOwned=true contracts must declare endpoints.http.ownership ---
+
+// fmt32Project builds a minimal *metadata.ProjectMeta with one HTTP contract.
+// serviceOwned controls whether auth.ServiceOwned is true. ownership may be
+// nil (block absent) or non-nil (block present, possibly with empty fields).
+// pathParams declares route path parameters for referential integrity checks.
+func fmt32Project(
+	serviceOwned bool,
+	ownership *metadata.HTTPOwnershipMeta,
+	pathParams map[string]metadata.ParamSchema,
+) *metadata.ProjectMeta {
+	h := &metadata.HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/resource/{id}",
+		SuccessStatus: 200,
+		PathParams:    pathParams,
+		Auth:          metadata.HTTPAuthMeta{ServiceOwned: serviceOwned},
+		Ownership:     ownership,
+	}
+	return &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.resource.get.v1": {
+				ID:               "http.resource.get.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "samplecore",
+					Clients: []string{"edgecell"},
+					HTTP:    h,
+				},
+				Dir:  "contracts/http/resource/get/v1",
+				File: "contracts/http/resource/get/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+}
+
+// TestFMT32_OwnershipDeclarationRequired is the main table-driven test for
+// FMT-32. It covers: skip non-serviceOwned, valid full block, missing block,
+// empty subjectPath, empty resourcePath, invalid DSL, path param referential
+// integrity, both paths invalid, non-http kind skip, HTTP=nil skip, and
+// multiple-contract aggregation.
+func TestFMT32_OwnershipDeclarationRequired(t *testing.T) {
+	sidParam := map[string]metadata.ParamSchema{
+		"id": {Type: "string"},
+	}
+
+	tests := []struct {
+		name      string
+		project   *metadata.ProjectMeta
+		wantCount int
+		wantIssue IssueType
+		wantField string
+	}{
+		{
+			name:      "serviceOwned=false skip",
+			project:   fmt32Project(false, nil, sidParam),
+			wantCount: 0,
+		},
+		{
+			name: "valid complete block",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "ctx.userID",
+				ResourcePath: "path.id.ownerID",
+			}, sidParam),
+			wantCount: 0,
+		},
+		{
+			name:      "missing ownership block",
+			project:   fmt32Project(true, nil, sidParam),
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.http.ownership",
+		},
+		{
+			name: "subjectPath empty",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "",
+				ResourcePath: "path.id.ownerID",
+			}, sidParam),
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.http.ownership.subjectPath",
+		},
+		{
+			name: "resourcePath empty",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "ctx.userID",
+				ResourcePath: "",
+			}, sidParam),
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.http.ownership.resourcePath",
+		},
+		{
+			name: "subjectPath invalid DSL",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "foo bar",
+				ResourcePath: "path.id.ownerID",
+			}, sidParam),
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "endpoints.http.ownership.subjectPath",
+		},
+		{
+			name: "resourcePath param not in pathParams",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "ctx.userID",
+				ResourcePath: "path.sid.ownerID",
+			}, sidParam), // pathParams only has "id", not "sid"
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "endpoints.http.ownership.resourcePath",
+		},
+		{
+			name: "both paths invalid",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "bad path",
+				ResourcePath: "bad path",
+			}, sidParam),
+			wantCount: 2,
+		},
+		{
+			name: "kind=event skip",
+			project: func() *metadata.ProjectMeta {
+				p := fmt32Project(false, nil, nil)
+				p.Contracts["http.resource.get.v1"].Kind = "event"
+				return p
+			}(),
+			wantCount: 0,
+		},
+		{
+			name: "HTTP=nil skip",
+			project: func() *metadata.ProjectMeta {
+				p := fmt32Project(false, nil, nil)
+				p.Contracts["http.resource.get.v1"].Endpoints.HTTP = nil
+				return p
+			}(),
+			wantCount: 0,
+		},
+		{
+			// path.id single-segment: the path param value itself is the owner key
+			// (e.g. DELETE /users/{id} where {id} directly identifies the owned
+			// resource). The dotIdx<0 branch treats the entire rest string as the
+			// param name. pathParams contains "id" so referential integrity passes.
+			name: "resourcePath path.id single-segment valid",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "ctx.userID",
+				ResourcePath: "path.id",
+			}, sidParam),
+			wantCount: 0,
+		},
+		{
+			// path.missing single-segment: dotIdx<0 branch extracts "missing" as
+			// param name; pathParams does not contain "missing" so referential
+			// integrity fails with IssueInvalid.
+			name: "resourcePath path.missing single-segment not in pathParams",
+			project: fmt32Project(true, &metadata.HTTPOwnershipMeta{
+				SubjectPath:  "ctx.userID",
+				ResourcePath: "path.missing",
+			}, sidParam),
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "endpoints.http.ownership.resourcePath",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := NewValidator(tc.project, "", clock.Real())
+			matches := findByCode(v.validateFMT32(), codeFMT32)
+			if len(matches) != tc.wantCount {
+				t.Fatalf("FMT-32 %s: expected %d findings, got %d: %v", tc.name, tc.wantCount, len(matches), matches)
+			}
+			if tc.wantCount == 1 {
+				if matches[0].IssueType != tc.wantIssue {
+					t.Errorf("FMT-32: expected IssueType=%v, got %v", tc.wantIssue, matches[0].IssueType)
+				}
+				if matches[0].Field != tc.wantField {
+					t.Errorf("FMT-32: expected Field=%q, got %q", tc.wantField, matches[0].Field)
+				}
+				if matches[0].Severity != SeverityError {
+					t.Errorf("FMT-32: expected SeverityError, got %v", matches[0].Severity)
+				}
+			}
+		})
+	}
+}
+
+// TestFMT32_MultipleContracts_Aggregate verifies that FMT-32 reports findings
+// for all offending contracts in one pass (not short-circuit on first).
+func TestFMT32_MultipleContracts_Aggregate(t *testing.T) {
+	// Two serviceOwned contracts: first lacks ownership, second is valid.
+	p := fmt32Project(true, nil, map[string]metadata.ParamSchema{"id": {Type: "string"}})
+	p.Contracts["http.resource.other.v1"] = &metadata.ContractMeta{
+		ID:               "http.resource.other.v1",
+		Kind:             "http",
+		ConsistencyLevel: "L1",
+		Lifecycle:        "active",
+		Endpoints: metadata.EndpointsMeta{
+			Server:  "samplecore",
+			Clients: []string{"edgecell"},
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:        "POST",
+				Path:          "/api/v1/resource",
+				SuccessStatus: 201,
+				Auth:          metadata.HTTPAuthMeta{ServiceOwned: true},
+				Ownership: &metadata.HTTPOwnershipMeta{
+					SubjectPath:  "ctx.userID",
+					ResourcePath: "ctx.tenantID",
+				},
+			},
+		},
+		Dir:  "contracts/http/resource/other/v1",
+		File: "contracts/http/resource/other/v1/contract.yaml",
+	}
+	v := NewValidator(p, "", clock.Real())
+	matches := findByCode(v.validateFMT32(), codeFMT32)
+	// Only the first contract should produce a finding (missing ownership block).
+	if len(matches) != 1 {
+		t.Fatalf("FMT-32 aggregate: expected 1 finding (first contract missing block), got %d: %v", len(matches), matches)
+	}
+}

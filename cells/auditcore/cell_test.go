@@ -610,8 +610,27 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 			"caller-supplied context.Background has none")
 }
 
+// TestAuditCore_HealthCheckers_AuditLedgerReady verifies that Init registers
+// the "audit_ledger_ready" probe via cell.RegisterRepoReadiness typed funnel
+// (ledger.Store implements cell.RepoHealthProber). The probe is always present
+// regardless of the emitter type — MemStore always returns nil.
+func TestAuditCore_HealthCheckers_AuditLedgerReady(t *testing.T) {
+	c := newTestCell(t)
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(context.Background(), recorder))
+
+	snap := recorder.Snapshot()
+	const probeKey = "audit_ledger_ready"
+	require.Contains(t, snap.HealthCheckers, probeKey,
+		"audit_ledger_ready probe must be registered via cell.RegisterRepoReadiness")
+	require.NoError(t, snap.HealthCheckers[probeKey](context.Background()),
+		"MemStore audit_ledger_ready must return nil (always ready)")
+}
+
 // TestAuditCore_HealthCheckers_NilEmitter verifies that when the emitter does
-// not implement the health-checker interface, no health checkers are registered.
+// not implement the health-checker interface, no emitter health checkers are
+// registered — but audit_ledger_ready is always present (ledger.Store satisfies
+// cell.RepoHealthProber regardless of emitter type).
 func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
@@ -624,5 +643,9 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), recorder))
 	snap := recorder.Snapshot()
-	assert.Empty(t, snap.HealthCheckers, "WriterEmitter must produce empty health checkers map")
+	// WriterEmitter does not add emitter probes; only audit_ledger_ready is present.
+	assert.NotContains(t, snap.HealthCheckers, "outbox-failopen-rate.auditcore",
+		"WriterEmitter must not add outbox-failopen-rate checker")
+	assert.Contains(t, snap.HealthCheckers, "audit_ledger_ready",
+		"audit_ledger_ready must always be registered via cell.RegisterRepoReadiness")
 }

@@ -88,6 +88,10 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error 
 		}
 	}
 
+	// Register the differentiated config repo readiness probe.
+	// c.configRepo satisfies cell.RepoHealthProber via ports.ConfigRepository.RepoReady.
+	cell.RegisterRepoReadiness(reg, "config_repo_ready", c.configRepo)
+
 	return nil
 }
 

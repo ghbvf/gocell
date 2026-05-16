@@ -229,11 +229,12 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | 项 | trigger | backlog 锚点 |
 |---|---|---|
 | HANDLER-POLICY-TYPEAWARE-SCANNER-01 | scanner 误报/漏报触发 | charter §4 |
-| SERVICEOWNED-OWNERSHIP-GUARD-01 | `auth.serviceOwned` endpoint > 1 | charter §4 |
+| SERVICEOWNED-OWNERSHIP-GUARD-01 | `auth.serviceOwned` endpoint > 1 → **037 PR-A3（worktree 584 实现中）**：schema if/then + FMT-32（Batch-1/2a）+ archtest（Batch-2b）+ session/delete 迁移（Batch-3）已实现，待 merge | charter §4 |
 | B-FLOOR-FOLLOWUP §2.5/§4 | contract.yaml status ↔ adapter typed return 漂移事故首现 | charter §4 |
 | AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | `hasFMT27AuthModeConflict` 被重新 inline 化 | charter §4 |
 | TEST-POLLING-DETERMINISM typed marker | 第二次 race CI flake / 进入下一治理批 / 339 站点新增违反 | charter §4 |
-| FINDFIRSTCHILD-TYPED-API-01 | 第 7 处 closure+done sentinel helper 出现 | charter §4 + `docs/backlog/cap-14-tooling.md` PR460-FU |
+| FINDFIRSTCHILD-TYPED-API-01 | ✅ 已 ship → 037 PR-A1（提前收口；`scanner.FindFirstChild[N]` + SCANNER-FRAMEWORK-USAGE-02 allowlist=0；subtree 版拆出独立触发型 `FINDFIRSTINSUBTREE-API-01`） | charter §4 + `docs/backlog/cap-14-tooling.md` PR460-FU / 037 §1.1 |
+| FINDFIRSTINSUBTREE-API-01 | 第 N 处 EachInSubtree 早返 sentinel 触发（FindFirstChild 只覆盖 depth-1，正交轴） | `docs/backlog/cap-14-tooling.md` §14.1 + 037 §1.1 |
 
 ### 保留触发型条目（trigger 是真事故/方案待定/量级未到，A + C 类筛选后 6 条）
 | 项 | trigger | backlog 锚点 |
@@ -241,7 +242,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | **PR-TS1-FU-VALIDATIONRESULT-EMITTER-SEALED-MARKER-01**（A2）| (a) 同包内新增非-`*locator` emitter receiver 出现真 false-positive / (b) 任何 archtest 规则需要 sealed marker 范本时顺带建立 | `docs/backlog/cap-02-metadata-governance.md` |
 | **PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01**（A3）| 首次出现 cross-function file-scope `var pat = "./..."` 间接调用 escape，或新 archtest 规则需要绕过 funnel；unexport `typeseval.SharedResolver/LoadPackages` 为包内私有 + `LoadPackagesForFixtures` 显式入口 | `docs/backlog/cap-14-tooling.md` |
 | **CELLGEN-ERRCODE-FUNNEL-HARDEN**（C2）| depguard method-level rule 方案确定 OR typed wrapper 抽出；cellgen 包 errcode Hard 升级路径 | `docs/backlog/cap-14-tooling.md` |
-| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| 第 3 个 file-level carve-out 出现；改 function-level（仅豁免 `WrapOrInfra` / `writeErrcodeError` struct literal 行）+ 新 ADR 登记 carve-out 列表+理由 | `docs/backlog/cap-14-tooling.md` + line 361 |
+| **ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL** + **B2-K-08-CARVEOUT-NARROW** 合并条目（C3）| ✅ 提前推进 → 037 PR-A2 (581-archtest-carveout-narrow)；function-level carve-out + ADR registry + ERRCODE-CARVEOUT-ADR-CONSISTENCY-01 Hard 守卫 | `docs/backlog/cap-14-tooling.md` + line 361 |
 | **PR408-FU-GOVERNANCE-OWNER-AST-EXTRACTION-01**（C6）| 第二次主题归属错误；`list-archtests.sh` grep → go/ast 解析按 `Rule{ID:...}` struct literal 或 `const ruleID = "..."` 定位 canonical owner + inventory 加 `referenced_by` 列 | `docs/backlog/cap-02-metadata-governance.md` |
 | **POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01**（C8）| 第 2 次同类漂移；archtest 静态扫 `*_test.go`，`_NotFound` 后缀测试必须断言 typed `errcode.Error.Code` 等于 `Err*NotFound`，禁裸 `assert.AnError`（违反不可表达 → Hard）| `docs/backlog/cap-14-tooling.md` |
 

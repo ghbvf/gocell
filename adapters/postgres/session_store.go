@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -22,6 +23,7 @@ import (
 var (
 	_ session.Store             = (*PGSessionStore)(nil)
 	_ lifecycle.ManagedResource = (*PGSessionStore)(nil)
+	_ cell.RepoHealthProber     = (*PGSessionStore)(nil)
 )
 
 // Session SQL statements.
@@ -236,17 +238,45 @@ func (s *PGSessionStore) Revoke(ctx context.Context, id string) error {
 	return nil
 }
 
+// ─── session.Store: RepoReady ────────────────────────────────────────────────
+
+// repoReadySQL is a representative query for the sessions table that returns
+// zero rows but exercises schema existence and table-level permissions.
+// It surfaces schema/migration drift (missing table, dropped column, revoked
+// GRANT) that a pool-level ping cannot detect.
+const repoReadySQL = `SELECT 1 FROM sessions WHERE false`
+
+// RepoReady implements cell.RepoHealthProber. It issues a cheap non-transactional
+// representative query against the sessions table so that schema/migration
+// drift and table-level permission loss are surfaced as a differentiated failure
+// domain distinct from the pool-level postgres_ready probe registered by *Pool.
+// Errors are wrapped via pkg/errcode.
+func (s *PGSessionStore) RepoReady(ctx context.Context) error {
+	_, err := s.db.Exec(ctx, repoReadySQL)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"session store: repo ready", err)
+	}
+	return nil
+}
+
 // ─── lifecycle.ManagedResource ───────────────────────────────────────────────
 //
 // PGSessionStore is stateless with respect to lifecycle: it does not own its
-// connection pool (that is *postgres.Pool's responsibility), has no background
-// worker, and has no independent readiness probe. The three methods below are
-// no-ops satisfying the A54 archtest contract
-// (TestAdaptersExportedTypesManagedResourceOrOptOut). Pool health is surfaced
-// by the *Pool ManagedResource that the composition root registers separately.
+// connection pool (that is *postgres.Pool's responsibility) and has no
+// background worker. The ManagedResource methods below satisfy the A54 archtest
+// contract (TestAdaptersExportedTypesManagedResourceOrOptOut).
+//
+// Pool-level connection liveness is surfaced by the *Pool ManagedResource that
+// the composition root registers separately (postgres_ready probe). The
+// cell-level differentiated repository probe (session_store_ready) is
+// PGSessionStore's responsibility via RepoReady — it detects schema/migration
+// drift and table-level permission loss that a pool ping cannot.
 
-// Checkers returns an empty map: PGSessionStore has no independent readiness
-// surface — the underlying pool's _ready probe (registered by *Pool) covers it.
+// Checkers returns nil: pool-level connection liveness is *Pool's concern.
+// Cell-level differentiated readiness is exposed through RepoReady, which is
+// registered as "session_store_ready" via cell.RegisterRepoReadiness in the
+// accesscore cell init path.
 func (s *PGSessionStore) Checkers() map[string]func(context.Context) error {
 	return nil
 }

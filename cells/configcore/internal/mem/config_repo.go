@@ -198,6 +198,12 @@ func (r *ConfigRepository) PublishVersion(_ context.Context, version *domain.Con
 	return nil
 }
 
+// RepoReady implements cell.RepoHealthProber.
+// In-memory store is always ready (MemStore convention).
+func (r *ConfigRepository) RepoReady(_ context.Context) error {
+	return nil
+}
+
 func (r *ConfigRepository) GetVersion(_ context.Context, configID string, version int) (*domain.ConfigVersion, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

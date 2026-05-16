@@ -57,6 +57,12 @@ type QueryListParams struct {
 // HMAC-SHA256 hash chain link, and enforces idempotency via content
 // fingerprint.
 //
+// Store also satisfies cell.RepoHealthProber: RepoReady exercises the
+// audit_entries relation directly (differentiated check) so that schema/migration
+// drift or table-level permission loss is detected independently from the
+// pool-level postgres_ready ping. In-memory implementations return nil (always
+// ready). See kernel/cell.RepoHealthProber godoc for the full contract.
+//
 // Method semantics (ADR-AuditLedger §4.2):
 //   - Append: persist a new entry. Computes PrevHash from Tail, computes
 //     Hash via Protocol.ComputeHash, assigns SeqNo. Rejects invalid JSON
@@ -71,6 +77,9 @@ type QueryListParams struct {
 //   - Verify: re-compute HMAC for each entry in [fromSeq, toSeq] and check
 //     chain linkage. Returns valid=true and firstInvalidSeq=-1 when all
 //     entries are intact.
+//   - RepoReady: differentiated readiness check against the audit_entries
+//     relation. Distinct failure domain from pool-level postgres_ready probe.
+//     In-memory implementations return nil (always ready).
 type Store interface {
 	// Append persists a new entry into the namespace's hash chain. Computes
 	// PrevHash from Tail, assigns SeqNo, and computes Hash via Protocol.ComputeHash.
@@ -95,4 +104,11 @@ type Store interface {
 	// all entries are intact. Returns valid=false and the first invalid seq_no
 	// when tampering is detected.
 	Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error)
+
+	// RepoReady is a differentiated readiness check that exercises the
+	// audit_entries relation directly. SQL-backed implementations issue a
+	// representative query (e.g. Tail) so that schema/migration drift or
+	// table-level permission loss surfaces independently from the pool-level
+	// postgres_ready ping. In-memory implementations return nil (always ready).
+	RepoReady(ctx context.Context) error
 }

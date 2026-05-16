@@ -36,6 +36,17 @@
 
 `WithInternal` 不受 const literal 约束。archtest `MESSAGE-CONST-LITERAL-01` 静态守卫，拦截任何在 `errcode.New/Wrap` 第三参数位置出现 `fmt.Sprintf` 或字符串拼接的调用点。
 
+### archtest carve-out 约束
+
+archtest 对上述规则的豁免（carve-out）仅允许 **function-level** 粒度，禁止 file-level 或 package-level 豁免。任何 carve-out 必须登记于 ADR `docs/architecture/202605121800-adr-archtest-carveout-narrow.md` 的 registry 表中，并说明理由。
+
+新增或删除 carve-out 必须在**同一 PR 内**同时完成：
+
+1. 修改 ADR registry 表（增删对应行）
+2. 修改 `tools/archtest/errcode_invariants_test.go` 中的 `errcodeKindLiteralCarveOuts` 映射
+
+archtest `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` Hard 守卫：任一侧单独漂移即导致 CI 红，阻止合并。
+
 ## Panic taxonomy and Approved funnel
 
 All production panic calls must wrap with the typed marker:

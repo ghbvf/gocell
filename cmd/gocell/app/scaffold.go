@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -187,50 +188,98 @@ const (
 // --dry-run renders templates (validating their output) and detects path
 // conflicts without writing files; CI pre-commit hooks can use it to fail fast
 // on bad inputs.
-func runScaffold(args []string) error {
+func runScaffold(ctx context.Context, args []string) error {
 	// Check args shape before resolving project root — lets callers
 	// (and tests) hit the usage error path without a valid cwd/go.mod.
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell scaffold <cell|slice|contract|journey|assembly> [flags]")
+		return fmt.Errorf("usage: gocell scaffold <%s> [flags]",
+			strings.Join(subNames(scaffoldSubcommands), "|"))
 	}
 	if isHelpFlag(args[0]) {
-		return printScaffoldHelp()
+		return renderSubHelp("scaffold", scaffoldSubcommands,
+			"--dry-run validates inputs and path conflicts without writing.")
 	}
 	root, err := findRoot()
 	if err != nil {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
-	return runScaffoldWithRoot(root, args)
+	return runScaffoldWithRoot(ctx, root, args)
+}
+
+// scaffoldSubcommands is the single source of truth for `gocell scaffold`
+// (see subcommand.go / CLI-UNIMPL-HIDE-01). The handler also takes the
+// resolved project root so tests drive a temp dir via runScaffoldWithRoot
+// without os.Chdir. Scaffolding is metadata + file IO + codegen with no
+// cancelable downstream, so handlers discard ctx; it is threaded for
+// signature uniformity with the other verb trees.
+var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, args []string) error]{
+	{
+		name: "cell",
+		help: []string{
+			"Create cell skeleton + example slice + example contract.",
+			"--id=<id> --team=<team> --role=<role>",
+			"[--type=core|edge|support] [--level=L0..L4]",
+			"[--with-http] [--with-events] [--with-both]",
+			"[--skip-generate] [--dry-run]",
+			"Note: --id must not contain '-' (use nodash identifiers).",
+		},
+		run: func(_ context.Context, root string, a []string) error { return scaffoldCell(root, a) },
+	},
+	{
+		name: "slice",
+		help: []string{
+			"Create cells/<cellID>/slices/<id>/slice.yaml.",
+			"--id=<id> --cell=<cellID> [--dry-run]",
+			"Note: --id must not contain '-' (use nodash identifiers).",
+		},
+		run: func(_ context.Context, root string, a []string) error { return scaffoldSlice(root, a) },
+	},
+	{
+		name: "contract",
+		help: []string{
+			"Create contracts/<kind>/<domain>/<v>/contract.yaml.",
+			"--id=<id> --kind=<kind> --owner=<cellID> [--dry-run]",
+		},
+		run: func(_ context.Context, root string, a []string) error { return scaffoldContract(root, a) },
+	},
+	{
+		name: "journey",
+		help: []string{
+			"Create journeys/<id>.yaml.",
+			"--id=<id> --goal=<goal> --team=<team> --cells=<a,b,...>",
+			"[--dry-run]",
+		},
+		run: func(_ context.Context, root string, a []string) error { return scaffoldJourney(root, a) },
+	},
+	{
+		name: "assembly",
+		help: []string{
+			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
+			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
+			"[--deploy=k8s|compose|binary] (default: k8s) [--skip-generate] [--dry-run]",
+		},
+		run: func(_ context.Context, root string, a []string) error { return scaffoldAssembly(root, a) },
+	},
 }
 
 // runScaffoldWithRoot dispatches a scaffold sub-command against an explicit
 // project root — decoupling the dispatch from process cwd so tests can drive
 // a temp directory without os.Chdir (which serializes the whole test binary).
-func runScaffoldWithRoot(root string, args []string) error {
+func runScaffoldWithRoot(ctx context.Context, root string, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell scaffold <cell|slice|contract|journey|assembly> [flags]")
+		return fmt.Errorf("usage: gocell scaffold <%s> [flags]",
+			strings.Join(subNames(scaffoldSubcommands), "|"))
 	}
 	if isHelpFlag(args[0]) {
-		return printScaffoldHelp()
+		return renderSubHelp("scaffold", scaffoldSubcommands,
+			"--dry-run validates inputs and path conflicts without writing.")
 	}
-
-	subtype := args[0]
-	subArgs := args[1:]
-
-	switch subtype {
-	case "cell":
-		return scaffoldCell(root, subArgs)
-	case "slice":
-		return scaffoldSlice(root, subArgs)
-	case "contract":
-		return scaffoldContract(root, subArgs)
-	case "journey":
-		return scaffoldJourney(root, subArgs)
-	case "assembly":
-		return scaffoldAssembly(root, subArgs)
-	default:
-		return fmt.Errorf("unknown scaffold type: %s (expected cell, slice, contract, journey, or assembly)", subtype)
+	run, ok := findSub(scaffoldSubcommands, args[0])
+	if !ok {
+		return fmt.Errorf("unknown scaffold type: %s (expected %s)",
+			args[0], strings.Join(subNames(scaffoldSubcommands), ", "))
 	}
+	return run(ctx, root, args[1:])
 }
 
 // scaffoldReport carries everything reportScaffold needs. Using a struct

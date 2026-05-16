@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -701,6 +702,21 @@ func casUpdateRetryWorker(ctx context.Context, repo *ConfigRepository, key, valu
 func isVersionConflict(err error) bool {
 	var ecErr *errcode.Error
 	return errors.As(err, &ecErr) && ecErr.Code == errcode.ErrVersionConflict
+}
+
+// TestConfigRepository_RepoReady verifies that the in-memory ConfigRepository
+// always returns nil from RepoReady (MemStore convention — no external dependency).
+func TestConfigRepository_RepoReady(t *testing.T) {
+	repo := NewConfigRepository(clock.Real())
+	assert.NoError(t, repo.RepoReady(context.Background()), "in-memory RepoReady must always return nil")
+}
+
+// TestConfigRepository_RepoReady_Conformance wires the mem repo through the
+// single-source celltest harness. broken=nil signals "no differentiated failure
+// domain" — the harness skips the broken sub-test with a clear message.
+func TestConfigRepository_RepoReady_Conformance(t *testing.T) {
+	repo := NewConfigRepository(clock.Real())
+	celltest.RunRepoReadinessConformance(t, "configcore-mem", repo, nil)
 }
 
 // TestConcurrentUpdate_CAS verifies that concurrent Update calls on the same key

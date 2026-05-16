@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,8 +31,14 @@ var validKinds = catalog.AllKinds
 var validLayersList = catalog.AllLayers
 
 // runExport dispatches `export <subcommand>` to its handler. catalog and
-// metadata are byte-equal aliases sharing exportCatalog as the implementation.
-func runExport(args []string) error {
+// metadata are byte-equal aliases sharing exportCatalog as the
+// implementation — there is no per-type help surface (no helpEntry list),
+// so this stays a plain alias switch rather than a subcommand registry;
+// CLI-UNIMPL-HIDE-01 only governs the four help-bearing verb trees.
+//
+// ctx is part of the uniform commands-map signature; exportCatalog is
+// metadata + file IO with no cancelable downstream.
+func runExport(_ context.Context, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell export <catalog|metadata> [flags]")
 	}

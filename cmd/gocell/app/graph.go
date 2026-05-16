@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -50,7 +51,11 @@ func (o graphOptions) writer() io.Writer {
 // runGraph implements `gocell graph [--format=json|dot] [--pattern=...]`.
 // It loads the module's package graph via depgraph.Load and emits either
 // JSON (default) or Graphviz DOT to stdout.
-func runGraph(args []string) error {
+//
+// ctx is part of the uniform commands-map signature; depgraph.Load wraps
+// golang.org/x/tools/go/packages, which is not ctx-native, so there is no
+// cancelable downstream to thread it into.
+func runGraph(_ context.Context, args []string) error {
 	opts, err := parseGraphArgs(args)
 	if err != nil {
 		return err

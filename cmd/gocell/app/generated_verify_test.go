@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ func TestRunVerifyGenerated_SyntheticProjectPasses(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = runVerify([]string{"generated"})
+		err = runVerify(context.Background(), []string{"generated"})
 	})
 
 	require.NoError(t, err)
@@ -33,7 +34,7 @@ func TestRunVerifyGenerated_ReportsDrift(t *testing.T) {
 	generateAllAppFixtureArtifacts(t)
 	writeAppFixtureFile(t, root, "assemblies/fixture/generated/boundary.yaml", []byte("stale\n"))
 
-	err := runVerify([]string{"generated"})
+	err := runVerify(context.Background(), []string{"generated"})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "verify generated: 1 drift(s)")
@@ -132,11 +133,11 @@ func (PlaceholderModule) ID() string { return "placeholder" }
 func generateAllAppFixtureArtifacts(t *testing.T) {
 	t.Helper()
 
-	require.NoError(t, runGenerate([]string{"assembly", "--id=fixture"}))
-	require.NoError(t, runGenerate([]string{"metrics-schema", "--id=fixture"}))
+	require.NoError(t, runGenerate(context.Background(), []string{"assembly", "--id=fixture"}))
+	require.NoError(t, runGenerate(context.Background(), []string{"metrics-schema", "--id=fixture"}))
 	// The placeholder cell has goStructName set so it also needs cell_gen.go
 	// in the expected manifest; generate it so verify passes.
-	require.NoError(t, runGenerate([]string{"cell", "placeholder"}))
+	require.NoError(t, runGenerate(context.Background(), []string{"cell", "placeholder"}))
 }
 
 func withWorkingDir(t *testing.T, dir string) {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -154,7 +155,7 @@ func TestCollectAssemblyModulesGenDrift_DetectsMissing(t *testing.T) {
 func TestVerifyCodegenAssembly_LocalNoDrift(t *testing.T) {
 	root := minimalAssemblyProject(t)
 	chdirToRoot(t, root)
-	if err := runVerifyCodegenAssembly([]string{"--local"}); err != nil {
+	if err := runVerifyCodegenAssembly(context.Background(), []string{"--local"}); err != nil {
 		t.Fatalf("runVerifyCodegenAssembly --local on clean project: %v", err)
 	}
 }
@@ -167,7 +168,7 @@ func TestVerifyCodegenAssembly_LocalDriftWhenFileMissing(t *testing.T) {
 		t.Fatalf("remove modules_gen.go: %v", err)
 	}
 	chdirToRoot(t, root)
-	err := runVerifyCodegenAssembly([]string{"--local"})
+	err := runVerifyCodegenAssembly(context.Background(), []string{"--local"})
 	if err == nil || !strings.Contains(err.Error(), "drift") {
 		t.Fatalf("expected drift error, got %v", err)
 	}
@@ -176,7 +177,7 @@ func TestVerifyCodegenAssembly_LocalDriftWhenFileMissing(t *testing.T) {
 // TestVerifyCodegenAssembly_UnknownFlag ensures flag-parse errors propagate.
 func TestVerifyCodegenAssembly_UnknownFlag(t *testing.T) {
 	t.Parallel()
-	if err := runVerifyCodegenAssembly([]string{"--bogus"}); err == nil {
+	if err := runVerifyCodegenAssembly(context.Background(), []string{"--bogus"}); err == nil {
 		t.Fatal("expected flag-parse error")
 	}
 }
@@ -202,7 +203,7 @@ func TestVerifyCodegenAssembly_RejectsPathEscapesRoot(t *testing.T) {
 	}
 
 	chdirToRoot(t, root)
-	err := runVerifyCodegenAssembly([]string{"--local"})
+	err := runVerifyCodegenAssembly(context.Background(), []string{"--local"})
 	if err == nil {
 		t.Fatal("expected verify to reject path escaping repo root, got nil")
 	}

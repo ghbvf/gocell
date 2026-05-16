@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,7 +33,7 @@ func goModVersion() string {
 
 func TestCheckContractHealthCI(t *testing.T) {
 	// Run against the real project — should pass with 0 issues.
-	err := runCheck([]string{"contract-health"})
+	err := runCheck(context.Background(), []string{"contract-health"})
 	assert.NoError(t, err, "contract-health should pass on the project's contracts")
 }
 
@@ -42,7 +43,7 @@ func TestCheckContractHealthCI(t *testing.T) {
 // the structural shape — exact issue list depends on repo state.
 func TestCheckContractHealth_JSONFormat(t *testing.T) {
 	out := captureStdout(t, func() {
-		_ = runCheck([]string{"contract-health", "--format=json"})
+		_ = runCheck(context.Background(), []string{"contract-health", "--format=json"})
 	})
 	require.NotEmpty(t, out, "JSON format must produce output")
 
@@ -70,7 +71,7 @@ func TestCheckContractHealth_JSONFormat(t *testing.T) {
 // `gocell check contract-health` output.
 func TestCheckContractHealth_TextFormat_HasMethodPathColumns(t *testing.T) {
 	out := captureStdout(t, func() {
-		_ = runCheck([]string{"contract-health"})
+		_ = runCheck(context.Background(), []string{"contract-health"})
 	})
 	assert.Contains(t, out, "METHOD",
 		"PR239-OB1: text table must have a METHOD column header")
@@ -82,7 +83,7 @@ func TestCheckContractHealth_TextFormat_HasMethodPathColumns(t *testing.T) {
 // on unknown format strings rather than silently emitting the default —
 // catches typos before they become silent CI passes.
 func TestCheckContractHealth_UnknownFormat(t *testing.T) {
-	err := runCheck([]string{"contract-health", "--format=yaml"})
+	err := runCheck(context.Background(), []string{"contract-health", "--format=yaml"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown format")
 }
@@ -92,7 +93,7 @@ func TestCheckContractHealth_UnknownFormat(t *testing.T) {
 // with the kernel-shard CI step (`gocell check unconditional-skip ./...`)
 // so local dev catches regressions before push.
 func TestCheckUnconditionalSkipCI(t *testing.T) {
-	err := runCheck([]string{"unconditional-skip"})
+	err := runCheck(context.Background(), []string{"unconditional-skip"})
 	assert.NoError(t, err, "unconditional-skip must stay at zero on the project")
 }
 
@@ -101,7 +102,7 @@ func TestCheckUnconditionalSkipCI(t *testing.T) {
 // into the JSON output.
 func TestCheckUnconditionalSkip_JSONFormat(t *testing.T) {
 	out := captureStdout(t, func() {
-		_ = runCheck([]string{"unconditional-skip", "--format=json"})
+		_ = runCheck(context.Background(), []string{"unconditional-skip", "--format=json"})
 	})
 	require.NotEmpty(t, out, "JSON format must produce output")
 
@@ -122,7 +123,7 @@ func TestCheckUnconditionalSkip_JSONFormat(t *testing.T) {
 // pass — the printed scope reveals the boundary at a glance.
 func TestCheckUnconditionalSkip_TextFormat_PrintsScope(t *testing.T) {
 	out := captureStdout(t, func() {
-		_ = runCheck([]string{"unconditional-skip"})
+		_ = runCheck(context.Background(), []string{"unconditional-skip"})
 	})
 	assert.Contains(t, out, "Scanned scope:",
 		"text mode must print the scan scope so users can verify boundary")
@@ -134,7 +135,7 @@ func TestCheckUnconditionalSkip_TextFormat_PrintsScope(t *testing.T) {
 // dispatch contract — unknown --format strings must error out instead of
 // silently degrading to default output.
 func TestCheckUnconditionalSkip_UnknownFormat(t *testing.T) {
-	err := runCheck([]string{"unconditional-skip", "--format=yaml"})
+	err := runCheck(context.Background(), []string{"unconditional-skip", "--format=yaml"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown format")
 }
@@ -233,13 +234,13 @@ func TestRelativeToRoot(t *testing.T) {
 // TestCheckSliceCoverage_HappyPath exercises the real accesscore cell —
 // its slices/ directory is well-formed so the check should pass.
 func TestCheckSliceCoverage_HappyPath(t *testing.T) {
-	err := runCheck([]string{"slice-coverage", "--cell=accesscore"})
+	err := runCheck(context.Background(), []string{"slice-coverage", "--cell=accesscore"})
 	assert.NoError(t, err, "slice-coverage on a well-formed cell must pass")
 }
 
 // TestCheckSliceCoverage_AllCells exercises all cells (no --cell flag).
 func TestCheckSliceCoverage_AllCells(t *testing.T) {
-	err := runCheck([]string{"slice-coverage"})
+	err := runCheck(context.Background(), []string{"slice-coverage"})
 	assert.NoError(t, err, "slice-coverage with no --cell must pass on this project")
 }
 
@@ -263,7 +264,7 @@ func TestCheckSliceCoverage_EmptyDirViolation(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"slice-coverage", "--cell=testcell"})
+	err := runCheck(context.Background(), []string{"slice-coverage", "--cell=testcell"})
 	require.Error(t, err, "must fail when a slices/ subdir lacks slice.yaml")
 	assert.Contains(t, err.Error(), "issue(s)")
 }
@@ -274,13 +275,13 @@ func TestCheckSliceCoverage_EmptyDirViolation(t *testing.T) {
 
 // TestCheckAssemblyCompleteness_HappyPath checks the real corebundle assembly.
 func TestCheckAssemblyCompleteness_HappyPath(t *testing.T) {
-	err := runCheck([]string{"assembly-completeness", "--id=corebundle"})
+	err := runCheck(context.Background(), []string{"assembly-completeness", "--id=corebundle"})
 	assert.NoError(t, err, "assembly-completeness on corebundle must pass")
 }
 
 // TestCheckAssemblyCompleteness_MissingID ensures --id is required.
 func TestCheckAssemblyCompleteness_MissingID(t *testing.T) {
-	err := runCheck([]string{"assembly-completeness"})
+	err := runCheck(context.Background(), []string{"assembly-completeness"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--id is required")
 }
@@ -309,7 +310,7 @@ func TestCheckAssemblyCompleteness_MissingCell(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"assembly-completeness", "--id=testbundle"})
+	err := runCheck(context.Background(), []string{"assembly-completeness", "--id=testbundle"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "issue(s)")
 }
@@ -320,19 +321,19 @@ func TestCheckAssemblyCompleteness_MissingCell(t *testing.T) {
 
 // TestCheckJourneyReadiness_HappyPath checks a single known-good journey.
 func TestCheckJourneyReadiness_HappyPath(t *testing.T) {
-	err := runCheck([]string{"journey-readiness", "--journey=J-ssologin"})
+	err := runCheck(context.Background(), []string{"journey-readiness", "--journey=J-ssologin"})
 	assert.NoError(t, err, "J-ssologin must pass journey-readiness")
 }
 
 // TestCheckJourneyReadiness_AllJourneys checks all journeys in the project.
 func TestCheckJourneyReadiness_AllJourneys(t *testing.T) {
-	err := runCheck([]string{"journey-readiness"})
+	err := runCheck(context.Background(), []string{"journey-readiness"})
 	assert.NoError(t, err, "all journeys must pass readiness on this project")
 }
 
 // TestCheckJourneyReadiness_UnknownJourney verifies error for unknown journey ID.
 func TestCheckJourneyReadiness_UnknownJourney(t *testing.T) {
-	err := runCheck([]string{"journey-readiness", "--journey=J-nonexistent"})
+	err := runCheck(context.Background(), []string{"journey-readiness", "--journey=J-nonexistent"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -355,7 +356,7 @@ func TestCheckJourneyReadiness_NoStatusEntry(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"journey-readiness", "--journey=J-orphan"})
+	err := runCheck(context.Background(), []string{"journey-readiness", "--journey=J-orphan"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "issue(s)")
 }
@@ -367,7 +368,7 @@ func TestCheckJourneyReadiness_NoStatusEntry(t *testing.T) {
 // TestCheckL0Imports_NoL0Cells verifies that the check passes cleanly when
 // there are no L0 cells (the common project state right now).
 func TestCheckL0Imports_NoL0Cells(t *testing.T) {
-	err := runCheck([]string{"l0-imports"})
+	err := runCheck(context.Background(), []string{"l0-imports"})
 	assert.NoError(t, err, "l0-imports must pass when no L0 cells exist")
 }
 
@@ -375,7 +376,7 @@ func TestCheckL0Imports_NoL0Cells(t *testing.T) {
 // for a non-L0 cell prints an informational message and exits 0 (success).
 func TestCheckL0Imports_NonL0CellSkipsWithSuccess(t *testing.T) {
 	out := captureStdout(t, func() {
-		err := runCheck([]string{"l0-imports", "--cell=accesscore"})
+		err := runCheck(context.Background(), []string{"l0-imports", "--cell=accesscore"})
 		assert.NoError(t, err, "non-L0 cell must exit 0 with skip message")
 	})
 	// Assert against the exported constant so the test does not rely on fragile
@@ -390,7 +391,7 @@ func TestCheckL0Imports_AllCellsScanned(t *testing.T) {
 	// The project has 0 L0 cells in its current state; the pass path differs.
 	// We still verify exit 0 and that no count-less generic message is emitted.
 	out := captureStdout(t, func() {
-		err := runCheck([]string{"l0-imports"})
+		err := runCheck(context.Background(), []string{"l0-imports"})
 		assert.NoError(t, err, "l0-imports with no L0 cells must exit 0")
 	})
 	// Either "checked 0 L0 cells" (no L0 cells) or "checked N L0 cells" (has L0 cells).
@@ -584,20 +585,20 @@ func TestCheckSliceCoverage_UnknownCell(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"slice-coverage", "--cell=does-not-exist"})
+	err := runCheck(context.Background(), []string{"slice-coverage", "--cell=does-not-exist"})
 	require.Error(t, err, "unknown --cell must produce non-zero exit")
 	assert.Contains(t, err.Error(), "issue(s)", "error must report finding count")
 
 	// Verify the text-format output contains the finding code and available cells.
 	textOut := captureStdout(t, func() {
-		_ = runCheck([]string{"slice-coverage", "--cell=does-not-exist"})
+		_ = runCheck(context.Background(), []string{"slice-coverage", "--cell=does-not-exist"})
 	})
 	assert.Contains(t, textOut, "CHECK-CELL-NOT-FOUND", "text output must contain CHECK-CELL-NOT-FOUND code")
 	assert.Contains(t, textOut, "available cells", "text output must list available cells")
 
 	// Also verify the finding code in JSON output.
 	out := captureStdout(t, func() {
-		_ = runCheck([]string{"slice-coverage", "--cell=does-not-exist", "--format=json"})
+		_ = runCheck(context.Background(), []string{"slice-coverage", "--cell=does-not-exist", "--format=json"})
 	})
 	assert.Contains(t, out, "CHECK-CELL-NOT-FOUND", "JSON output must contain CHECK-CELL-NOT-FOUND code")
 	assert.Contains(t, out, "available cells", "JSON output must include available cells in message")
@@ -666,7 +667,7 @@ func TestCheckSliceCoverage_MetadataParseError(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"slice-coverage"})
+	err := runCheck(context.Background(), []string{"slice-coverage"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metadata parse")
 }
@@ -685,7 +686,7 @@ func TestCheckJourneyReadiness_MetadataParseError(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"journey-readiness"})
+	err := runCheck(context.Background(), []string{"journey-readiness"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metadata parse")
 }
@@ -704,7 +705,7 @@ func TestCheckAssemblyCompleteness_MetadataParseError(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"assembly-completeness", "--id=testbundle"})
+	err := runCheck(context.Background(), []string{"assembly-completeness", "--id=testbundle"})
 	require.Error(t, err)
 	// Note: may fail with parse error or "not found" depending on parse order.
 	require.Error(t, err)
@@ -724,7 +725,7 @@ func TestCheckL0Imports_MetadataParseError(t *testing.T) {
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
-	err := runCheck([]string{"l0-imports"})
+	err := runCheck(context.Background(), []string{"l0-imports"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metadata parse")
 }

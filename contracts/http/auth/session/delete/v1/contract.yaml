@@ -23,6 +23,9 @@ endpoints:
       passwordResetExempt: true
       responses:
         - 503
+    ownership:
+      subjectPath: ctx.subjectID
+      resourcePath: path.id.userID
     responses:
       400:
         description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID)"

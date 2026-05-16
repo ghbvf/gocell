@@ -1260,6 +1260,96 @@ func (v *Validator) validateFMT31() []ValidationResult {
 }
 
 // =============================================================================
+// FMT-32 — serviceOwned contracts must declare endpoints.http.ownership
+// =============================================================================
+
+// validateFMT32 enforces OWNERSHIP-DECLARATION-REQUIRED-01: every HTTP contract
+// with auth.serviceOwned=true must declare an endpoints.http.ownership block with
+// valid subjectPath and resourcePath expressions conforming to the DSL defined by
+// metadata.OwnershipPathValid, and path.<param>.* forms must reference a param
+// declared in endpoints.http.pathParams.
+//
+// Governance oracle: metadata.OwnershipDeclarationRequired (single-source predicate
+// shared with contract.schema.json if/then rule).
+func (v *Validator) validateFMT32() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "http" {
+			continue
+		}
+		h := c.Endpoints.HTTP
+		if h == nil {
+			continue
+		}
+		if !metadata.OwnershipDeclarationRequired(h.Auth) {
+			continue
+		}
+		if h.Ownership == nil {
+			results = append(results, v.newResult(
+				codeFMT32, SeverityError, IssueRequired,
+				contractFile(c),
+				"endpoints.http.ownership",
+				fmt.Sprintf(
+					"contract %q has auth.serviceOwned=true but no ownership block; "+
+						"fix: declare endpoints.http.ownership with subjectPath and resourcePath",
+					c.ID,
+				),
+			))
+			continue
+		}
+		results = append(results, v.checkOwnershipPath(c, h, "subjectPath", h.Ownership.SubjectPath)...)
+		results = append(results, v.checkOwnershipPath(c, h, "resourcePath", h.Ownership.ResourcePath)...)
+	}
+	return results
+}
+
+// checkOwnershipPath validates a single ownership path expression (subjectPath or
+// resourcePath). Empty expressions are reported as IssueRequired; non-empty but
+// invalid DSL or unresolved path.<param>.* references are reported as IssueInvalid.
+// Cognitive complexity ≤ 15 (split from validateFMT32 to stay within limit).
+func (v *Validator) checkOwnershipPath(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, field, expr string) []ValidationResult {
+	fullField := "endpoints.http.ownership." + field
+	if expr == "" {
+		return []ValidationResult{
+			v.newResult(codeFMT32, SeverityError, IssueRequired, contractFile(c), fullField,
+				fmt.Sprintf("contract %q has auth.serviceOwned=true but ownership.%s is empty; "+
+					"fix: set endpoints.http.ownership.%s to a ctx.* or path.* expression", c.ID, field, field)),
+		}
+	}
+	if !metadata.OwnershipPathValid(expr) {
+		return []ValidationResult{
+			v.newResult(codeFMT32, SeverityError, IssueInvalid, contractFile(c), fullField,
+				fmt.Sprintf("contract %q ownership.%s %q is not a valid DSL path expression; "+
+					"fix: use a valid path expression (ctx.<seg> or path.<param>.<seg>, camelCase segments)", c.ID, field, expr)),
+		}
+	}
+	// path.<param>.* — verify <param> is declared in pathParams.
+	const pathPrefix = "path."
+	if strings.HasPrefix(expr, pathPrefix) {
+		rest := expr[len(pathPrefix):]
+		dotIdx := strings.Index(rest, ".")
+		var param string
+		if dotIdx >= 0 {
+			param = rest[:dotIdx]
+		} else {
+			param = rest
+		}
+		_, paramExists := h.PathParams[param]
+		if len(h.PathParams) == 0 || !paramExists {
+			return []ValidationResult{
+				v.newResult(codeFMT32, SeverityError, IssueInvalid, contractFile(c), fullField,
+					fmt.Sprintf(
+						"contract %q ownership.%s %q references path param %q not declared in endpoints.http.pathParams; "+
+							"fix: declare %q under endpoints.http.pathParams or correct the path expression",
+						c.ID, field, expr, param, param,
+					)),
+			}
+		}
+	}
+	return nil
+}
+
+// =============================================================================
 // REF-12 — schema ref file existence (relocated from rules_ref.go in
 // PR-FUNNEL-03; the check is I/O-flavored and pairs with the FMT cluster's
 // disk-format rules rather than the REF cluster's metadata-graph rules).

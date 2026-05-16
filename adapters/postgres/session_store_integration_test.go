@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -108,6 +109,13 @@ func (w *pgSessionStoreWrapper) RevokeForSubject(ctx context.Context, subjectID 
 	}
 	uid := subjectUUID(subjectID)
 	return w.inner.RevokeForSubject(ctx, uid.String(), event)
+}
+
+// RepoReady delegates to the inner PGSessionStore. The wrapper does not add
+// any translation for readiness probes — the inner store's sessions-table
+// query exercises the real failure domain.
+func (w *pgSessionStoreWrapper) RepoReady(ctx context.Context) error {
+	return w.inner.RepoReady(ctx)
 }
 
 // resolveSubjectName is the inverse of upsertUser: given a UUID string it
@@ -248,4 +256,55 @@ func TestNewSessionStore_NilClock_Rejected(t *testing.T) {
 	var coded *errcode.Error
 	require.True(t, errors.As(err, &coded))
 	assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
+}
+
+// ---------------------------------------------------------------------------
+// RepoReady differentiated readiness probe
+// ---------------------------------------------------------------------------
+
+// TestPGSessionStore_RepoReadinessConformance wires PGSessionStore through the
+// shared RepoHealthProber conformance harness:
+//   - healthy: a fully migrated store returns nil from RepoReady.
+//   - broken: a store whose sessions table has been dropped returns non-nil.
+//
+// Each store uses an isolated schema pool so the DROP TABLE for the broken
+// scenario does not affect the healthy store's sessions table. The real
+// *PGSessionStore (not the pgSessionStoreWrapper) is passed to
+// RunRepoReadinessConformance so the archtest type-resolution still detects
+// coverage.
+func TestPGSessionStore_RepoReadinessConformance(t *testing.T) {
+	base, baseTeardown := setupPostgres(t)
+	t.Cleanup(baseTeardown)
+
+	ctx := context.Background()
+	proto := storetest.NewTestProtocol(t)
+	fc := clockmock.New(storetest.EpochAnchor())
+
+	// healthy: isolated schema with full migrations — sessions table intact.
+	healthyPool := isolatedSchemaPool(t, ctx, base)
+	t.Cleanup(func() { _ = healthyPool.Close(context.Background()) })
+	healthyMigrator, err := NewMigrator(healthyPool, testMigrationsFS(t), "schema_migrations_readyz_healthy")
+	require.NoError(t, err)
+	require.NoError(t, healthyMigrator.Up(ctx))
+
+	healthyTxm := NewTxManager(healthyPool)
+	healthy, err := NewSessionStore(healthyPool.DB(), healthyTxm, proto, fc)
+	require.NoError(t, err)
+
+	// broken: isolated schema with migrations applied, then sessions table dropped
+	// to simulate schema drift / missing migration.
+	brokenPool := isolatedSchemaPool(t, ctx, base)
+	t.Cleanup(func() { _ = brokenPool.Close(context.Background()) })
+	brokenMigrator, err := NewMigrator(brokenPool, testMigrationsFS(t), "schema_migrations_readyz_broken")
+	require.NoError(t, err)
+	require.NoError(t, brokenMigrator.Up(ctx))
+
+	_, dropErr := brokenPool.DB().Exec(ctx, "DROP TABLE IF EXISTS sessions CASCADE")
+	require.NoError(t, dropErr, "drop sessions table for broken scenario")
+
+	brokenTxm := NewTxManager(brokenPool)
+	broken, err := NewSessionStore(brokenPool.DB(), brokenTxm, proto, fc)
+	require.NoError(t, err)
+
+	celltest.RunRepoReadinessConformance(t, "session-pg", healthy, broken)
 }

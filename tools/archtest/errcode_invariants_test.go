@@ -2,6 +2,7 @@ package archtest
 
 // errcode_invariants_test.go consolidates errcode-theme invariants:
 //   - INVARIANT: ERRCODE-KIND-LITERAL-01
+//   - INVARIANT: ERRCODE-CARVEOUT-ADR-CONSISTENCY-01
 //   - INVARIANT: MESSAGE-CONST-LITERAL-01
 //   - INVARIANT: ERROR-FIRST-API-01
 //   - INVARIANT: ERROR-FIRST-TYPED-NIL-01
@@ -9,10 +10,13 @@ package archtest
 //   - INVARIANT: EXPORTED-ERROR-NEW-01
 
 import (
+	"bufio"
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -20,7 +24,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -145,6 +151,29 @@ var errorFirstPanicWhitelist = map[string]struct{}{
 	"adapters/postgres/tx_manager.go::repanicAfterSavepointRollback":         {},
 }
 
+// ─── errcode_kind_literal carve-out registry ─────────────────────────────────
+
+// carveOut identifies a single function-level carve-out for ERRCODE-KIND-LITERAL-01.
+// The key format mirrors errorFirstPanicWhitelist: "<rel-path>::<funcName>".
+// Keyed as a struct so map lookup is typed and cannot accidentally match
+// on a partial path or name.
+type carveOut struct{ rel, fn string }
+
+// errcodeKindLiteralCarveOuts is the authoritative code-side list of functions
+// permitted to construct errcode.Error{} struct literals directly.
+//
+// This map must be kept in strict equality with the CARVEOUT-REGISTRY table in
+// docs/architecture/202605121800-adr-archtest-carveout-narrow.md.
+// Any drift (code-only or ADR-only entry) is detected by
+// ERRCODE-CARVEOUT-ADR-CONSISTENCY-01 and causes CI to turn red.
+//
+// To add or remove a carve-out, update BOTH this map AND the ADR registry
+// table in the same PR. Attempting either in isolation will fail CI.
+var errcodeKindLiteralCarveOuts = map[carveOut]struct{}{
+	{rel: "pkg/ctxcancel/ctxcancel.go", fn: "WrapOrInfra"}: {},
+	{rel: "pkg/httputil/response.go", fn: "WritePublic"}:   {},
+}
+
 // ─── details_slog_attr constants ─────────────────────────────────────────────
 
 const ruleDetailsSlogAttr01 = "DETAILS-SLOG-ATTR-01"
@@ -190,22 +219,22 @@ const errcodeAllowlistPath = "pkg/errcode/"
 // TestErrcodeLiteralConstructionBanned seals the Kind-based error model:
 // callers outside pkg/errcode must use errcode.New/Wrap so every error chooses
 // a transport Kind explicitly.
+//
+// Carve-outs are function-level only (see errcodeKindLiteralCarveOuts).
+// File-level skips are intentionally removed — any new errcode.Error{} literal
+// outside a carved function, even in the same file, is a violation.
 func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 	root := findModuleRoot(t)
 
-	// Build a set of file-level allowlisted relative paths for O(1) lookup.
-	// Only exact-path or prefix entries from the original allowlist.
+	// Package-level scope skip (NOT a carve-out): only pkg/errcode/ itself.
+	// Function-level carve-outs are applied inside findErrcodeErrorLiteralsPass
+	// via errcodeKindLiteralCarveOuts.
 	errcodeKindAllowedRel := func(rel string) bool {
-		if strings.HasPrefix(rel, "pkg/errcode/") {
-			return true
-		}
-		if rel == "pkg/ctxcancel/ctxcancel.go" {
-			return true
-		}
-		if rel == "pkg/httputil/response.go" {
-			return true
-		}
-		return false
+		// pkg/errcode/ is the definition site of errcode.Error; its New/Wrap
+		// implementation legitimately constructs the struct literal. This is a
+		// package-level skip, not a carve-out. Everything else outside the
+		// function-level errcodeKindLiteralCarveOuts entries is a violation.
+		return strings.HasPrefix(rel, "pkg/errcode/")
 	}
 
 	diags := Run(t, ModuleScope(root, MatchRels(func(rel string) bool {
@@ -215,29 +244,555 @@ func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 	Report(t, "ERRCODE-KIND-LITERAL-01", diags)
 }
 
-// findErrcodeErrorLiteralsPass scans all Pass files for errcode.Error composite
-// literals (direct construction, which bypasses New/Wrap).
+// findErrcodeErrorLiteralsPass reports errcode.Error composite literals
+// constructed outside the function-level carve-outs declared in
+// errcodeKindLiteralCarveOuts. It delegates to scanErrcodeErrorLiteralsInAST
+// so the production scan and the TestFindErrcodeErrorLiteralsFunctionLevel
+// red-fixture proof share one carve-out-aware core — a single funnel with no
+// file-level allowlist and no parallel disk-read path.
 func findErrcodeErrorLiteralsPass(p *Pass) []Diagnostic {
 	var out []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		names := errcodeImportNames(file)
-		if len(names) == 0 {
-			continue
-		}
-		EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
-			if !isErrcodeErrorType(lit.Type, names) {
-				return
-			}
+		for _, h := range scanErrcodeErrorLiteralsInAST(p.Fset, file, rel, errcodeKindLiteralCarveOuts) {
 			out = append(out, Diagnostic{
-				Rel:  rel,
-				Line: p.Fset.Position(lit.Pos()).Line,
-				Message: fmt.Sprintf(
-					"%s constructs errcode.Error directly; use errcode.New/Wrap", rel),
+				Rel:     rel,
+				Line:    h.line,
+				Message: fmt.Sprintf("%s constructs errcode.Error directly; use errcode.New/Wrap", rel),
 			})
-		})
+		}
 	}
 	return out
+}
+
+// errcodeErrorHit records a detected errcode.Error{} literal with its line number.
+type errcodeErrorHit struct {
+	line int
+}
+
+// scanErrcodeErrorLiteralsInAST is the unit-testable core of the scanner.
+// It takes a parsed *ast.File, the module-relative path (used only for
+// carve-out lookup), and the carve-out map, and returns hits for every
+// errcode.Error composite literal that is NOT in a carved function.
+//
+// AST forms OUTSIDE the declared detection range (pure-AST isErrcodeErrorType):
+//
+//	(a) Aliased errcode import: `import ec "github.com/.../pkg/errcode"` + `ec.Error{}`
+//	    — errcodeImportNames collects the alias, so aliased imports ARE detected.
+//	    The blind spot is `ec.Error{}` when the alias is the same as another pkg;
+//	    this cannot happen in practice (import-path uniqueness).
+//	(b) Dot-import: `import . "github.com/.../pkg/errcode"` + `Error{}`
+//	    — errcodeImportNames explicitly skips "." names (line: `imp.Name.Name != "."`).
+//	    A dot-import `Error{}` will NOT be detected. errcodeDotImported (a
+//	    pure-AST reverse self-check, no source-text prefilter) asserts no
+//	    production file uses dot-import of pkg/errcode.
+//	(c) Cross-package type-alias re-export: `type Error = errcode.Error` in a
+//	    third package + `thirdpkg.Error{}` — the SelectorExpr.X.Name would be
+//	    the third-package alias, not in errcodeNames; NOT detected.
+//	    errcodeErrorAliasReexports (pure-AST, resolves the qualifier through
+//	    errcodeImportNames so an aliased import is caught too) asserts no
+//	    production file re-exports errcode.Error as a type alias.
+func scanErrcodeErrorLiteralsInAST(fset *token.FileSet, f *ast.File, rel string, carveOuts map[carveOut]struct{}) []errcodeErrorHit {
+	errcodeNames := errcodeImportNames(f)
+	if len(errcodeNames) == 0 {
+		return nil
+	}
+
+	var hits []errcodeErrorHit
+
+	// Collect carved function body position ranges so we can skip literals inside.
+	type posRange struct{ lo, hi token.Pos }
+	var carvedRanges []posRange
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
+		}
+		// Carve-outs are package-level functions only. The ADR registry has
+		// no receiver dimension; a method sharing a carved function's name
+		// (e.g. `func (T) WritePublic`) must NOT inherit the exemption.
+		if fd.Recv != nil {
+			return
+		}
+		key := carveOut{rel: rel, fn: fd.Name.Name}
+		if _, ok := carveOuts[key]; ok {
+			carvedRanges = append(carvedRanges, posRange{fd.Body.Pos(), fd.Body.End()})
+		}
+	})
+
+	inCarvedRange := func(pos token.Pos) bool {
+		for _, r := range carvedRanges {
+			if pos >= r.lo && pos < r.hi {
+				return true
+			}
+		}
+		return false
+	}
+
+	scanner.EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+		if !isErrcodeErrorType(lit.Type, errcodeNames) {
+			return
+		}
+		if inCarvedRange(lit.Pos()) {
+			return
+		}
+		hits = append(hits, errcodeErrorHit{fset.Position(lit.Pos()).Line})
+	})
+	return hits
+}
+
+// INVARIANT: ERRCODE-CARVEOUT-ADR-CONSISTENCY-01
+//
+// TestErrcodeCarveOutADRConsistency enforces strict equality between the
+// code-side errcodeKindLiteralCarveOuts map and the CARVEOUT-REGISTRY table
+// in docs/architecture/202605121800-adr-archtest-carveout-narrow.md.
+//
+// Parser contract: locate <!-- CARVEOUT-REGISTRY:BEGIN --> and
+// <!-- CARVEOUT-REGISTRY:END --> anchors; between them skip the header row
+// (| Rule | File | Function |...) and the |---|...| separator row; for each
+// remaining |-delimited row, trim-space col 2 (File) and col 3 (Function).
+//
+// Failure message lists code-only and ADR-only entries for readability.
+func TestErrcodeCarveOutADRConsistency(t *testing.T) {
+	root := findModuleRoot(t)
+	adrPath := filepath.Join(root, "docs", "architecture", "202605121800-adr-archtest-carveout-narrow.md")
+
+	adrSet, err := parseCarveOutADRRegistry(adrPath)
+	require.NoError(t, err, "parse carve-out ADR registry")
+
+	// Build code-side set.
+	codeSet := make(map[carveOut]struct{}, len(errcodeKindLiteralCarveOuts))
+	for k := range errcodeKindLiteralCarveOuts {
+		codeSet[k] = struct{}{}
+	}
+
+	// Find ADR-only entries.
+	var adrOnly []string
+	for k := range adrSet {
+		if _, ok := codeSet[k]; !ok {
+			adrOnly = append(adrOnly, fmt.Sprintf("  ADR has {%s::%s} but code map does not", k.rel, k.fn))
+		}
+	}
+	sort.Strings(adrOnly)
+
+	// Find code-only entries.
+	var codeOnly []string
+	for k := range codeSet {
+		if _, ok := adrSet[k]; !ok {
+			codeOnly = append(codeOnly, fmt.Sprintf("  code map has {%s::%s} but ADR does not", k.rel, k.fn))
+		}
+	}
+	sort.Strings(codeOnly)
+
+	var msgs []string
+	msgs = append(msgs, adrOnly...)
+	msgs = append(msgs, codeOnly...)
+	for _, m := range msgs {
+		t.Log(m)
+	}
+	assert.Empty(t, msgs,
+		"ERRCODE-CARVEOUT-ADR-CONSISTENCY-01: errcodeKindLiteralCarveOuts and the ADR "+
+			"registry table in docs/architecture/202605121800-adr-archtest-carveout-narrow.md "+
+			"must be in strict equality. Update BOTH in the same PR.")
+}
+
+// parseCarveOutADRRegistry reads the ADR file at path and extracts the
+// (File, Function) pairs from the CARVEOUT-REGISTRY table.
+//
+// It requires the <!-- CARVEOUT-REGISTRY:BEGIN --> and <!-- CARVEOUT-REGISTRY:END -->
+// markers to be present. Between them the first in-table line must be the header row
+// (starting with "| Rule") and the second must be the separator row (starting with
+// "|---"). Missing or mismatched structural rows are hard errors with diagnostics.
+func parseCarveOutADRRegistry(path string) (map[carveOut]struct{}, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("open ADR: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only file; close error is not actionable
+
+	const beginMarker = "<!-- CARVEOUT-REGISTRY:BEGIN -->"
+	const endMarker = "<!-- CARVEOUT-REGISTRY:END -->"
+
+	result := make(map[carveOut]struct{})
+	inTable := false
+	beginSeen := false
+	endSeen := false
+	headerValidated := false
+	separatorValidated := false
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.TrimSpace(line) == beginMarker {
+			inTable = true
+			beginSeen = true
+			continue
+		}
+		if strings.TrimSpace(line) == endMarker {
+			endSeen = true
+			break
+		}
+		if !inTable {
+			continue
+		}
+		// Validate and skip header row: | Rule | File | Function | ...
+		if !headerValidated {
+			if !strings.HasPrefix(line, "| Rule") {
+				return nil, fmt.Errorf(
+					"parseCarveOutADRRegistry: %s: unexpected registry table structure at %q;"+
+						" expected header row then |---| separator", path, line)
+			}
+			headerValidated = true
+			continue
+		}
+		// Validate and skip separator row: |---|---|...
+		if !separatorValidated {
+			if !strings.HasPrefix(line, "|---") {
+				return nil, fmt.Errorf(
+					"parseCarveOutADRRegistry: %s: unexpected registry table structure at %q;"+
+						" expected header row then |---| separator", path, line)
+			}
+			separatorValidated = true
+			continue
+		}
+		// Parse data row: | Rule | File | Function | Reason |
+		cols := strings.Split(line, "|")
+		// cols[0] is empty (before first |), cols[1]=Rule, cols[2]=File, cols[3]=Function, cols[4]=Reason, cols[5]=empty
+		if len(cols) < 5 {
+			continue
+		}
+		rel := strings.TrimSpace(cols[2])
+		fn := strings.TrimSpace(cols[3])
+		if rel == "" || fn == "" {
+			continue
+		}
+		result[carveOut{rel: rel, fn: fn}] = struct{}{}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("scan ADR: %w", err)
+	}
+	if !beginSeen {
+		return nil, fmt.Errorf("parseCarveOutADRRegistry: %s: CARVEOUT-REGISTRY:BEGIN marker not found", path)
+	}
+	if !endSeen {
+		return nil, fmt.Errorf("parseCarveOutADRRegistry: %s: CARVEOUT-REGISTRY:END marker not found", path)
+	}
+	return result, nil
+}
+
+// TestParseCarveOutADRRegistry is a table-driven unit test for parseCarveOutADRRegistry.
+// It verifies: well-formed table → entries parsed; missing BEGIN → error;
+// blank line where header expected → error; missing END marker → error.
+func TestParseCarveOutADRRegistry(t *testing.T) {
+	wellFormed := `# ADR
+<!-- CARVEOUT-REGISTRY:BEGIN -->
+| Rule | File | Function | Reason |
+|---|---|---|---|
+| R1 | pkg/a/a.go | FuncA | reason A |
+| R2 | pkg/b/b.go | FuncB | reason B |
+<!-- CARVEOUT-REGISTRY:END -->
+`
+	tests := []struct {
+		name     string
+		content  string
+		wantErr  string
+		wantKeys []carveOut
+	}{
+		{
+			name:    "well-formed table: 2 rows parsed",
+			content: wellFormed,
+			wantKeys: []carveOut{
+				{rel: "pkg/a/a.go", fn: "FuncA"},
+				{rel: "pkg/b/b.go", fn: "FuncB"},
+			},
+		},
+		{
+			name: "missing BEGIN marker: error",
+			content: `# ADR
+| Rule | File | Function | Reason |
+|---|---|---|---|
+<!-- CARVEOUT-REGISTRY:END -->
+`,
+			wantErr: "CARVEOUT-REGISTRY:BEGIN marker not found",
+		},
+		{
+			name: "blank line where header expected: error",
+			content: `# ADR
+<!-- CARVEOUT-REGISTRY:BEGIN -->
+
+| Rule | File | Function | Reason |
+|---|---|---|---|
+<!-- CARVEOUT-REGISTRY:END -->
+`,
+			wantErr: "unexpected registry table structure",
+		},
+		{
+			name: "missing END marker: error",
+			content: `# ADR
+<!-- CARVEOUT-REGISTRY:BEGIN -->
+| Rule | File | Function | Reason |
+|---|---|---|---|
+| R1 | pkg/a/a.go | FuncA | reason A |
+`,
+			wantErr: "CARVEOUT-REGISTRY:END marker not found",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Write content to a temp file so parseCarveOutADRRegistry can open it.
+			tmp, err := os.CreateTemp(t.TempDir(), "adr-*.md")
+			require.NoError(t, err)
+			_, err = tmp.WriteString(tc.content)
+			require.NoError(t, err)
+			require.NoError(t, tmp.Close())
+
+			got, err := parseCarveOutADRRegistry(tmp.Name())
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			gotSet := make(map[carveOut]struct{}, len(got))
+			for k := range got {
+				gotSet[k] = struct{}{}
+			}
+			for _, k := range tc.wantKeys {
+				assert.Contains(t, gotSet, k, "expected key %v in parsed result", k)
+			}
+			assert.Len(t, got, len(tc.wantKeys))
+		})
+	}
+}
+
+// TestFindErrcodeErrorLiteralsFunctionLevel is a table-driven unit test for
+// scanErrcodeErrorLiteralsInAST. It uses in-memory source strings to verify:
+//   - errcode.Error{} inside a carved func is NOT reported
+//   - errcode.Error{} inside a non-carved func in the same file IS reported
+//   - empty carve-out map → carved-func site IS reported (proves guard is active)
+//   - package-level (GenDecl) errcode.Error{} is ALWAYS reported (never carved)
+//
+// Blind-spot self-check: AST forms outside isErrcodeErrorType's declared range:
+//
+//	(a) Aliased import + construction: `import ec "...errcode"` + `ec.Error{}`
+//	    — IS detected because errcodeImportNames collects aliases.
+//	(b) Dot-import: `import . "...errcode"` + `Error{}`
+//	    — NOT detected (errcodeImportNames skips "." alias).
+//	    Reverse self-check (pure-AST, errcodeDotImported): assert no
+//	    production file dot-imports errcode.
+//	(c) Cross-pkg type-alias: `type MyErr = errcode.Error` in pkg B + `B.MyErr{}`
+//	    — NOT detected (SelectorExpr.X.Name is B, not in errcodeNames).
+//	    Reverse self-check (pure-AST, errcodeErrorAliasReexports; resolves
+//	    aliased imports too): assert no production file re-exports it as alias.
+func TestFindErrcodeErrorLiteralsFunctionLevel(t *testing.T) {
+	const errcodeImport = `"github.com/ghbvf/gocell/pkg/errcode"`
+
+	makeSrc := func(body string) string {
+		return `package p
+import ` + errcodeImport + `
+` + body
+	}
+
+	tests := []struct {
+		name      string
+		src       string
+		rel       string
+		carveOuts map[carveOut]struct{}
+		wantLines []int // nil or empty = expect no hits
+	}{
+		{
+			name: "carved func: errcode.Error literal suppressed",
+			src: makeSrc(`func WrapOrInfra() {
+	_ = errcode.Error{}
+}`),
+			rel:       "pkg/ctxcancel/ctxcancel.go",
+			carveOuts: map[carveOut]struct{}{{rel: "pkg/ctxcancel/ctxcancel.go", fn: "WrapOrInfra"}: {}},
+			wantLines: nil,
+		},
+		{
+			name: "non-carved func in same file: errcode.Error literal reported",
+			src: makeSrc(`func WrapOrInfra() {
+	_ = errcode.Error{}
+}
+func OtherFunc() {
+	_ = errcode.Error{}
+}`),
+			rel:       "pkg/ctxcancel/ctxcancel.go",
+			carveOuts: map[carveOut]struct{}{{rel: "pkg/ctxcancel/ctxcancel.go", fn: "WrapOrInfra"}: {}},
+			// package p=1, import=2, WrapOrInfra decl=3, carved literal=4, }=5, OtherFunc decl=6, literal=7
+			wantLines: []int{7},
+		},
+		{
+			name: "empty carve-out map: WrapOrInfra site IS reported",
+			src: makeSrc(`func WrapOrInfra() {
+	_ = errcode.Error{}
+}`),
+			rel:       "pkg/ctxcancel/ctxcancel.go",
+			carveOuts: map[carveOut]struct{}{},
+			wantLines: []int{4}, // package p=1, import=2, func decl=3, literal=4
+		},
+		{
+			name:      "package-level errcode.Error literal: always reported (never carved)",
+			src:       makeSrc(`var _ = errcode.Error{}`),
+			rel:       "some/file.go",
+			carveOuts: map[carveOut]struct{}{{rel: "some/file.go", fn: "someFunc"}: {}},
+			wantLines: []int{3},
+		},
+		{
+			name:      "no errcode import: no hits",
+			src:       `package p; func F() {}`,
+			rel:       "some/file.go",
+			carveOuts: map[carveOut]struct{}{},
+			wantLines: nil,
+		},
+		{
+			// Finding F2 regression: a method whose name collides with a
+			// carved package-level function must NOT inherit the carve-out.
+			name: "method sharing carve-out name: NOT exempt (function-level only)",
+			src: makeSrc(`func WritePublic() {
+	_ = errcode.Error{}
+}
+type T struct{}
+func (T) WritePublic() {
+	_ = errcode.Error{}
+}`),
+			rel:       "pkg/httputil/response.go",
+			carveOuts: map[carveOut]struct{}{{rel: "pkg/httputil/response.go", fn: "WritePublic"}: {}},
+			// p=1 import=2 funcWritePublic=3 carvedLit=4 }=5 typeT=6 method=7 lit=8 }=9
+			wantLines: []int{8},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, tc.rel, tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err)
+
+			hits := scanErrcodeErrorLiteralsInAST(fset, f, tc.rel, tc.carveOuts)
+			var gotLines []int
+			for _, h := range hits {
+				gotLines = append(gotLines, h.line)
+			}
+			assert.Equal(t, tc.wantLines, gotLines)
+		})
+	}
+
+	// ── Reverse self-checks for declared blind spots (b) dot-import and
+	//    (c) cross-pkg type-alias re-export. Pure-AST, no string prefilter:
+	//    a prefilter anchored on usage-site text (`= errcode.Error`) is blind
+	//    to aliased imports (`import ec ".../errcode"; type X = ec.Error`),
+	//    which is exactly the form the AST logic must catch. One walk; the
+	//    AST visit is gated cheaply by errcodeImportNames inside each helper.
+	t.Run("reverse-self-check: no dot-import / type-alias re-export of pkg/errcode in production", func(t *testing.T) {
+		root := findModuleRoot(t)
+		files, err := collectGoFiles(root)
+		require.NoError(t, err)
+
+		var dotImports, aliasReexports []string
+		for _, file := range files {
+			rel, _ := filepath.Rel(root, file)
+			rel = filepath.ToSlash(rel)
+			if strings.HasPrefix(rel, "pkg/errcode/") {
+				continue
+			}
+			if !fileroles.IsProductionCode(rel) {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Clean(file))
+			require.NoError(t, err)
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, file, data, parser.SkipObjectResolution)
+			require.NoError(t, err, "parse %s", rel)
+			if errcodeDotImported(f) {
+				dotImports = append(dotImports, rel)
+			}
+			for _, name := range errcodeErrorAliasReexports(f) {
+				aliasReexports = append(aliasReexports,
+					fmt.Sprintf("%s: type %s = errcode.Error", rel, name))
+			}
+		}
+		assert.Empty(t, dotImports,
+			"production files must not dot-import pkg/errcode "+
+				"(blind spot: dot-import escapes errcodeImportNames detection)")
+		assert.Empty(t, aliasReexports,
+			"production files must not re-export errcode.Error as a type alias "+
+				"(blind spot: cross-pkg alias escapes pure-AST detection)")
+	})
+}
+
+// TestErrcodeBlindSpotHelpers is the regression coverage for Finding F1:
+// the dot-import and type-alias blind-spot detectors must work purely from
+// the AST, with no source-text prefilter. The decisive case is
+// "aliased import + alias re-export" — a `= errcode.Error` string prefilter
+// would have skipped the AST parse entirely and missed it.
+func TestErrcodeBlindSpotHelpers(t *testing.T) {
+	parse := func(t *testing.T, src string) *ast.File {
+		t.Helper()
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+		require.NoError(t, err)
+		return f
+	}
+
+	t.Run("errcodeDotImported", func(t *testing.T) {
+		tests := []struct {
+			name string
+			src  string
+			want bool
+		}{
+			{"dot-import detected", "package p\nimport . \"github.com/ghbvf/gocell/pkg/errcode\"\n", true},
+			{"normal import not flagged", "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\n", false},
+			{"aliased import not flagged", "package p\nimport ec \"github.com/ghbvf/gocell/pkg/errcode\"\nvar _ = ec.Error{}\n", false},
+			{"no errcode import", "package p\nimport \"fmt\"\n", false},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.want, errcodeDotImported(parse(t, tc.src)))
+			})
+		}
+	})
+
+	t.Run("errcodeErrorAliasReexports", func(t *testing.T) {
+		tests := []struct {
+			name string
+			src  string
+			want []string
+		}{
+			{
+				name: "default import name re-export detected",
+				src:  "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\ntype MyErr = errcode.Error\n",
+				want: []string{"MyErr"},
+			},
+			{
+				// Finding F1 lock: aliased import + alias re-export. A
+				// `= errcode.Error` source prefilter never matches `= ec.Error`.
+				name: "aliased import re-export detected",
+				src:  "package p\nimport ec \"github.com/ghbvf/gocell/pkg/errcode\"\ntype MyErr = ec.Error\n",
+				want: []string{"MyErr"},
+			},
+			{
+				name: "type definition (not alias) not flagged",
+				src:  "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\ntype MyErr errcode.Error\n",
+				want: nil,
+			},
+			{
+				name: "alias to other type not flagged",
+				src:  "package p\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\ntype C = errcode.Code\n",
+				want: nil,
+			},
+			{
+				name: "no errcode import: short-circuit, nil",
+				src:  "package p\ntype Error = struct{}\n",
+				want: nil,
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.want, errcodeErrorAliasReexports(parse(t, tc.src)))
+			})
+		}
+	})
 }
 
 func errcodeImportNames(f *ast.File) map[string]struct{} {
@@ -269,6 +824,60 @@ func isErrcodeErrorType(expr ast.Expr, errcodeNames map[string]struct{}) bool {
 	}
 	_, ok = errcodeNames[pkg.Name]
 	return ok
+}
+
+// errcodeDotImported reports whether f dot-imports pkg/errcode
+// (`import . "github.com/ghbvf/gocell/pkg/errcode"`). Under a dot-import,
+// `Error{}` has no selector, so it escapes isErrcodeErrorType (which only
+// matches *ast.SelectorExpr). Production code must never dot-import errcode;
+// this is blind spot (b)'s reverse self-check, computed from the import AST
+// (alias-independent) rather than a source-text anchor.
+func errcodeDotImported(f *ast.File) bool {
+	for _, imp := range f.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != errcodeImportPath {
+			continue
+		}
+		if imp.Name != nil && imp.Name.Name == "." {
+			return true
+		}
+	}
+	return false
+}
+
+// errcodeErrorAliasReexports returns the names of every package-level type
+// alias `type X = <errcode>.Error` in f, where <errcode> is errcode's local
+// import name (default "errcode" OR any explicit alias). Such a re-export
+// lets a third package construct `thirdpkg.X{}`, whose SelectorExpr.X is the
+// third package — invisible to the pure-AST scanner. This is blind spot
+// (c)'s reverse self-check. It resolves the package qualifier through
+// errcodeImportNames, so an aliased import (`import ec ".../errcode";
+// type X = ec.Error`) is detected — the bug a `= errcode.Error` source-text
+// prefilter would have missed. errcodeImportNames is empty when f does not
+// import errcode at all, short-circuiting the AST walk cheaply.
+func errcodeErrorAliasReexports(f *ast.File) []string {
+	errcodeNames := errcodeImportNames(f)
+	if len(errcodeNames) == 0 {
+		return nil
+	}
+	var names []string
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if !ts.Assign.IsValid() {
+			return // `type X T` (definition), not `type X = T` (alias)
+		}
+		sel, ok := ts.Type.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Error" {
+			return
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+		if _, inNames := errcodeNames[pkg.Name]; inNames {
+			names = append(names, ts.Name.Name)
+		}
+	})
+	return names
 }
 
 // INVARIANT: MESSAGE-CONST-LITERAL-01

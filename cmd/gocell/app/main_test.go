@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -98,7 +99,7 @@ func TestCommands(t *testing.T) {
 func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 	const cmdName = "test-errcode-public"
 	orig, hadOrig := commands[cmdName]
-	commands[cmdName] = func([]string) error {
+	commands[cmdName] = func(context.Context, []string) error {
 		return errcode.New(
 			errcode.KindInvalid,
 			errcode.ErrValidationFailed,
@@ -116,7 +117,7 @@ func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 	})
 
 	out := captureStderr(t, func() {
-		if code := Dispatch([]string{cmdName}); code != ExitRuntime {
+		if code := Dispatch(context.Background(), []string{cmdName}); code != ExitRuntime {
 			t.Fatalf("Dispatch exit code = %d, want %d", code, ExitRuntime)
 		}
 	})
@@ -135,7 +136,7 @@ func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 func TestDispatch_ErrcodeServerErrorKeepsOperatorRoutingMetadata(t *testing.T) {
 	const cmdName = "test-errcode-operator"
 	orig, hadOrig := commands[cmdName]
-	commands[cmdName] = func([]string) error {
+	commands[cmdName] = func(context.Context, []string) error {
 		return errcode.New(
 			errcode.KindInternal,
 			errcode.ErrAuthRoleFetchFailed,
@@ -152,7 +153,7 @@ func TestDispatch_ErrcodeServerErrorKeepsOperatorRoutingMetadata(t *testing.T) {
 	})
 
 	out := captureStderr(t, func() {
-		if code := Dispatch([]string{cmdName}); code != ExitRuntime {
+		if code := Dispatch(context.Background(), []string{cmdName}); code != ExitRuntime {
 			t.Fatalf("Dispatch exit code = %d, want %d", code, ExitRuntime)
 		}
 	})
@@ -175,7 +176,7 @@ func TestDispatch_ErrcodeServerErrorKeepsOperatorRoutingMetadata(t *testing.T) {
 func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
 	cases := []struct {
 		name string
-		run  func([]string) error
+		run  func(context.Context, []string) error
 		want []string
 	}{
 		{"generate", runGenerate, []string{"Usage: gocell generate", "metrics-schema", "owned by gocell"}},
@@ -193,10 +194,10 @@ func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
 	}
 }
 
-func assertHelpOutput(t *testing.T, name string, run func([]string) error, flag string, want []string) {
+func assertHelpOutput(t *testing.T, name string, run func(context.Context, []string) error, flag string, want []string) {
 	t.Helper()
 	out := captureStdout(t, func() {
-		if err := run([]string{flag}); err != nil {
+		if err := run(context.Background(), []string{flag}); err != nil {
 			t.Fatalf("%s %q: unexpected error: %v", name, flag, err)
 		}
 	})
@@ -237,118 +238,135 @@ func TestRunValidate(t *testing.T) {
 	// Run validate with explicit root. It may return an error if there are
 	// validation errors in the project, but it should not panic.
 	// We only assert no panic; validation errors are expected.
-	t.Logf("runValidate result: %v", runValidate([]string{"--root", root}))
+	t.Logf("runValidate result: %v", runValidate(context.Background(), []string{"--root", root}))
 }
 
 func TestRunValidateNoRoot(t *testing.T) {
 	// Running without --root should auto-detect.
 	// May succeed or fail with validation errors; just ensure no panic.
-	t.Logf("runValidate result: %v", runValidate([]string{}))
+	t.Logf("runValidate result: %v", runValidate(context.Background(), []string{}))
 }
 
 func TestRunScaffoldNoArgs(t *testing.T) {
-	err := runScaffold([]string{})
+	err := runScaffold(context.Background(), []string{})
 	if err == nil {
 		t.Error("scaffold with no args should return error")
 	}
 }
 
 func TestRunScaffoldUnknownType(t *testing.T) {
-	err := runScaffold([]string{"unknown"})
+	err := runScaffold(context.Background(), []string{"unknown"})
 	if err == nil {
 		t.Error("scaffold unknown type should return error")
 	}
 }
 
 func TestRunScaffoldCellMissingFlags(t *testing.T) {
-	err := runScaffold([]string{"cell"})
+	err := runScaffold(context.Background(), []string{"cell"})
 	if err == nil {
 		t.Error("scaffold cell without --id should return error")
 	}
 }
 
 func TestRunScaffoldCellMissingTeam(t *testing.T) {
-	err := runScaffold([]string{"cell", "--id=testcell"})
+	err := runScaffold(context.Background(), []string{"cell", "--id=testcell"})
 	if err == nil {
 		t.Error("scaffold cell without --team should return error")
 	}
 }
 
 func TestRunScaffoldSliceMissingFlags(t *testing.T) {
-	err := runScaffold([]string{"slice"})
+	err := runScaffold(context.Background(), []string{"slice"})
 	if err == nil {
 		t.Error("scaffold slice without --id should return error")
 	}
-	err = runScaffold([]string{"slice", "--id=test-slice"})
+	err = runScaffold(context.Background(), []string{"slice", "--id=test-slice"})
 	if err == nil {
 		t.Error("scaffold slice without --cell should return error")
 	}
 }
 
 func TestRunScaffoldContractMissingFlags(t *testing.T) {
-	err := runScaffold([]string{"contract"})
+	err := runScaffold(context.Background(), []string{"contract"})
 	if err == nil {
 		t.Error("scaffold contract without --id should return error")
 	}
-	err = runScaffold([]string{"contract", "--id=test.contract.v1"})
+	err = runScaffold(context.Background(), []string{"contract", "--id=test.contract.v1"})
 	if err == nil {
 		t.Error("scaffold contract without --kind should return error")
 	}
-	err = runScaffold([]string{"contract", "--id=test.contract.v1", "--kind=http"})
+	err = runScaffold(context.Background(), []string{"contract", "--id=test.contract.v1", "--kind=http"})
 	if err == nil {
 		t.Error("scaffold contract without --owner should return error")
 	}
 }
 
 func TestRunScaffoldJourneyMissingFlags(t *testing.T) {
-	err := runScaffold([]string{"journey"})
+	err := runScaffold(context.Background(), []string{"journey"})
 	if err == nil {
 		t.Error("scaffold journey without --id should return error")
 	}
-	err = runScaffold([]string{"journey", "--id=test"})
+	err = runScaffold(context.Background(), []string{"journey", "--id=test"})
 	if err == nil {
 		t.Error("scaffold journey without --goal should return error")
 	}
-	err = runScaffold([]string{"journey", "--id=test", "--goal=test"})
+	err = runScaffold(context.Background(), []string{"journey", "--id=test", "--goal=test"})
 	if err == nil {
 		t.Error("scaffold journey without --team should return error")
 	}
-	err = runScaffold([]string{"journey", "--id=test", "--goal=test", "--team=team"})
+	err = runScaffold(context.Background(), []string{"journey", "--id=test", "--goal=test", "--team=team"})
 	if err == nil {
 		t.Error("scaffold journey without --cells should return error")
 	}
 }
 
 func TestRunGenerateNoArgs(t *testing.T) {
-	err := runGenerate([]string{})
+	err := runGenerate(context.Background(), []string{})
 	if err == nil {
 		t.Error("generate with no args should return error")
 	}
 }
 
 func TestRunGenerateUnknownType(t *testing.T) {
-	err := runGenerate([]string{"unknown"})
+	err := runGenerate(context.Background(), []string{"unknown"})
 	if err == nil {
 		t.Error("generate unknown type should return error")
 	}
 }
 
-func TestRunGenerateIndexes(t *testing.T) {
-	err := runGenerate([]string{"indexes"})
+// TestRunGenerateIndexesRemoved pins B2-X-05: `generate indexes` is a
+// removed V2.1 concept (superseded by `gocell export` / `gocell graph`).
+// It must behave exactly like any unregistered type — the unknown-type
+// error listing the real registry, with no "not implemented" placeholder
+// and no "indexes" entry in the help surface.
+func TestRunGenerateIndexesRemoved(t *testing.T) {
+	err := runGenerate(context.Background(), []string{"indexes"})
 	if err == nil {
-		t.Error("generate indexes should return not-implemented error")
+		t.Fatal("generate indexes must return the unknown-type error")
+	}
+	if !strings.Contains(err.Error(), "unknown generate type: indexes") {
+		t.Errorf("want unknown-type error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "not implemented") {
+		t.Errorf("removed type must not report 'not implemented': %v", err)
+	}
+	help := captureStdout(t, func() {
+		_ = runGenerate(context.Background(), []string{"-h"})
+	})
+	if strings.Contains(help, "indexes") {
+		t.Errorf("generate -h must not list removed 'indexes':\n%s", help)
 	}
 }
 
 func TestRunGenerateAssemblyMissingID(t *testing.T) {
-	err := runGenerate([]string{"assembly"})
+	err := runGenerate(context.Background(), []string{"assembly"})
 	if err == nil {
 		t.Error("generate assembly without --id should return error")
 	}
 }
 
 func TestRunGenerateAssemblyBoundaryOnlyRejected(t *testing.T) {
-	err := runGenerate([]string{"assembly", "--id=corebundle", "--boundary-only"})
+	err := runGenerate(context.Background(), []string{"assembly", "--id=corebundle", "--boundary-only"})
 	if err == nil {
 		t.Error("generate assembly --boundary-only should be rejected")
 	}
@@ -358,7 +376,7 @@ func TestRunGenerateAssemblyBoundaryOnlyRejected(t *testing.T) {
 }
 
 func TestRunGenerateMetricsSchemaMissingID(t *testing.T) {
-	err := runGenerate([]string{"metrics-schema"})
+	err := runGenerate(context.Background(), []string{"metrics-schema"})
 	if err == nil {
 		t.Error("generate metrics-schema without --id should return error")
 	}
@@ -400,21 +418,21 @@ func TestWriteGeneratedFileAllowsGeneratedExistingFile(t *testing.T) {
 }
 
 func TestRunCheckNoArgs(t *testing.T) {
-	err := runCheck([]string{})
+	err := runCheck(context.Background(), []string{})
 	if err == nil {
 		t.Error("check with no args should return error")
 	}
 }
 
 func TestRunCheckUnknownType(t *testing.T) {
-	err := runCheck([]string{"unknown"})
+	err := runCheck(context.Background(), []string{"unknown"})
 	if err == nil {
 		t.Error("check unknown type should return error")
 	}
 }
 
 func TestRunCheckContractHealth(t *testing.T) {
-	err := runCheck([]string{"contract-health"})
+	err := runCheck(context.Background(), []string{"contract-health"})
 	// Should succeed (may find 0 or N contracts).
 	if err != nil {
 		t.Errorf("check contract-health should succeed, got: %v", err)
@@ -423,49 +441,49 @@ func TestRunCheckContractHealth(t *testing.T) {
 
 func TestRunCheckUnconditionalSkip(t *testing.T) {
 	// PR-CFG-D wired the real analyzer; the repo is clean so it must succeed.
-	err := runCheck([]string{"unconditional-skip"})
+	err := runCheck(context.Background(), []string{"unconditional-skip"})
 	if err != nil {
 		t.Errorf("check unconditional-skip should succeed on clean repo, got: %v", err)
 	}
 }
 
 func TestRunVerifyNoArgs(t *testing.T) {
-	err := runVerify([]string{})
+	err := runVerify(context.Background(), []string{})
 	if err == nil {
 		t.Error("verify with no args should return error")
 	}
 }
 
 func TestRunVerifyUnknownType(t *testing.T) {
-	err := runVerify([]string{"unknown"})
+	err := runVerify(context.Background(), []string{"unknown"})
 	if err == nil {
 		t.Error("verify unknown type should return error")
 	}
 }
 
 func TestRunVerifySliceMissingID(t *testing.T) {
-	err := runVerify([]string{"slice"})
+	err := runVerify(context.Background(), []string{"slice"})
 	if err == nil {
 		t.Error("verify slice without --id should return error")
 	}
 }
 
 func TestRunVerifyCellMissingID(t *testing.T) {
-	err := runVerify([]string{"cell"})
+	err := runVerify(context.Background(), []string{"cell"})
 	if err == nil {
 		t.Error("verify cell without --id should return error")
 	}
 }
 
 func TestRunVerifyJourneyMissingID(t *testing.T) {
-	err := runVerify([]string{"journey"})
+	err := runVerify(context.Background(), []string{"journey"})
 	if err == nil {
 		t.Error("verify journey without --id should return error")
 	}
 }
 
 func TestRunVerifyTargetsMissingFiles(t *testing.T) {
-	err := runVerify([]string{"targets"})
+	err := runVerify(context.Background(), []string{"targets"})
 	if err == nil {
 		t.Error("verify targets without --files should return error")
 	}
@@ -473,28 +491,28 @@ func TestRunVerifyTargetsMissingFiles(t *testing.T) {
 
 func TestRunVerifyTargets(t *testing.T) {
 	// Provide a file path; the result depends on project metadata.
-	err := runVerify([]string{"targets", "--files=cells/accesscore/cell.yaml"})
+	err := runVerify(context.Background(), []string{"targets", "--files=cells/accesscore/cell.yaml"})
 	if err != nil {
 		t.Errorf("verify targets should succeed, got: %v", err)
 	}
 }
 
 func TestRunVerifySliceNotFound(t *testing.T) {
-	err := runVerify([]string{"slice", "--id=nonexistent/slice"})
+	err := runVerify(context.Background(), []string{"slice", "--id=nonexistent/slice"})
 	if err == nil {
 		t.Error("verify slice with nonexistent ID should return error")
 	}
 }
 
 func TestRunVerifyCellNotFound(t *testing.T) {
-	err := runVerify([]string{"cell", "--id=nonexistent"})
+	err := runVerify(context.Background(), []string{"cell", "--id=nonexistent"})
 	if err == nil {
 		t.Error("verify cell with nonexistent ID should return error")
 	}
 }
 
 func TestRunVerifyJourneyNotFound(t *testing.T) {
-	err := runVerify([]string{"journey", "--id=nonexistent"})
+	err := runVerify(context.Background(), []string{"journey", "--id=nonexistent"})
 	if err == nil {
 		t.Error("verify journey with nonexistent ID should return error")
 	}

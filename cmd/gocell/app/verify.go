@@ -14,50 +14,107 @@ import (
 	"github.com/ghbvf/gocell/tools/generatedverify"
 )
 
-// runVerify implements:
-//
-//	gocell verify slice --id=<cellID/sliceID>
-//	gocell verify cell --id=<cellID>
-//	gocell verify journey --id=<journeyID>
-//	gocell verify journey --active
-//	gocell verify targets --files=<file1,file2,...>
-//	gocell verify generated [--module=<module>]
-//	gocell verify codegen-cell [--local]
-//	gocell verify codegen-contract [--local]
-//	gocell verify codegen-assembly [--local]
-func runVerify(args []string) error {
+// verifySubcommands is the single source of truth for `gocell verify`
+// (see subcommand.go / CLI-UNIMPL-HIDE-01). slice/cell/journey/generated
+// thread ctx into kernel/verify.Runner / generatedverify.Verify, whose
+// go test subprocesses honor cancellation (pkg/cmdrun process-group kill)
+// and whose cmd-layer call sites carry an explicit ctxInterrupted guard so
+// a signal-killed run surfaces as "interrupted" rather than a masked
+// "FAILED". targets has no cancelable downstream; the codegen-* sandbox
+// checks discard ctx because codegen.VerifyInWorktree is not ctx-native —
+// for those, prompt Ctrl+C termination is provided by the main.go
+// signal watchdog (signalGraceWindow in signalrun.go), not by ctx.
+var verifySubcommands = []subcommand[func(ctx context.Context, args []string) error]{
+	{
+		name: "slice",
+		help: []string{
+			"Run verify.unit + verify.contract for a slice.",
+			"--id=<cellID/sliceID> [--format text|json|sarif]",
+		},
+		run: verifySlice,
+	},
+	{
+		name: "cell",
+		help: []string{
+			"Run verify.smoke + per-slice checks for a cell.",
+			"--id=<cellID> [--format text|json|sarif]",
+		},
+		run: verifyCell,
+	},
+	{
+		name: "journey",
+		help: []string{
+			"Run a single journey or every active journey.",
+			"--id=<journeyID> | --active [--format text|json|sarif]",
+		},
+		run: verifyJourney,
+	},
+	{
+		name: "targets",
+		help: []string{
+			"List slices/cells/contracts/journeys reachable from",
+			"the given files. --files=<file1,file2,...>",
+		},
+		run: verifyTargets,
+	},
+	{
+		name: "generated",
+		help: []string{
+			"Verify assembly entrypoints, boundary.yaml, and",
+			"metrics-schema.yaml against metadata-derived",
+			"expectations and HEAD. Fails on stale, staged-only,",
+			"or unexpected committed artifacts. [--module=<module>]",
+		},
+		run: verifyGenerated,
+	},
+	{
+		name: "codegen-cell",
+		help: []string{
+			"Verify cell_gen.go / slice_gen.go are in sync with",
+			"cell.yaml / slice.yaml. Default: --local in-place verify",
+			"(fast, no sandbox). CI: pass --local=false to use the",
+			"K8s-style git worktree sandbox mode.",
+		},
+		run: verifyCodegenCell,
+	},
+	{
+		name: "codegen-contract",
+		help: []string{
+			"Verify generated/contracts/**/*_gen.go are in sync with",
+			"contract.yaml / schema files. Default: --local in-place",
+			"verify (fast, no sandbox). CI: pass --local=false for",
+			"git worktree sandbox mode.",
+		},
+		run: verifyCodegenContract,
+	},
+	{
+		name: "codegen-assembly",
+		help: []string{
+			"Verify cmd/*/modules_gen.go are in sync with assembly.yaml /",
+			"cell.yaml goStructName. Default --local in-place verify (fast).",
+			"CI: pass --local=false for git worktree sandbox.",
+		},
+		run: runVerifyCodegenAssembly,
+	},
+}
+
+// runVerify dispatches `gocell verify <type>` through the
+// verifySubcommands registry. ctx is the signal-aware context from
+// main.go; it reaches the go test subprocesses run by kernel/verify.
+func runVerify(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell verify " +
-			"<slice|cell|journey|targets|generated|codegen-cell|codegen-contract|codegen-assembly> [flags]")
+		return fmt.Errorf("usage: gocell verify <%s> [flags]",
+			strings.Join(subNames(verifySubcommands), "|"))
 	}
 	if isHelpFlag(args[0]) {
-		return printVerifyHelp()
+		return renderSubHelp("verify", verifySubcommands)
 	}
-
-	subtype := args[0]
-	subArgs := args[1:]
-
-	switch subtype {
-	case "slice":
-		return verifySlice(subArgs)
-	case "cell":
-		return verifyCell(subArgs)
-	case "journey":
-		return verifyJourney(subArgs)
-	case "targets":
-		return verifyTargets(subArgs)
-	case "generated":
-		return verifyGenerated(subArgs)
-	case "codegen-cell":
-		return verifyCodegenCell(subArgs)
-	case "codegen-contract":
-		return verifyCodegenContract(subArgs)
-	case "codegen-assembly":
-		return runVerifyCodegenAssembly(subArgs)
-	default:
-		return fmt.Errorf("unknown verify type: %s "+
-			"(expected slice, cell, journey, targets, generated, codegen-cell, codegen-contract, or codegen-assembly)", subtype)
+	run, ok := findSub(verifySubcommands, args[0])
+	if !ok {
+		return fmt.Errorf("unknown verify type: %s (expected %s)",
+			args[0], strings.Join(subNames(verifySubcommands), ", "))
 	}
+	return run(ctx, args[1:])
 }
 
 // verifyResultExec captures the per-subcommand differences (flag name +
@@ -74,7 +131,7 @@ type verifyResultExec struct {
 // renders the VerifyResult. Used by verify slice / cell / journey —
 // verify targets has a different output shape (AffectedTargets) and
 // stays separate.
-func runVerifyResultCmd(args []string, spec verifyResultExec) error {
+func runVerifyResultCmd(ctx context.Context, args []string, spec verifyResultExec) error {
 	fs := flag.NewFlagSet("verify "+spec.name, flag.ContinueOnError)
 	id := fs.String(spec.flag, "", "<required>")
 	format := fs.String("format", "text",
@@ -101,7 +158,10 @@ func runVerifyResultCmd(args []string, spec verifyResultExec) error {
 	}
 
 	runner := verify.NewRunner(project, root)
-	result, err := spec.exec(context.Background(), runner, *id)
+	result, err := spec.exec(ctx, runner, *id)
+	if cerr := ctxInterrupted(ctx, spec.name); cerr != nil {
+		return cerr
+	}
 	if err != nil {
 		return fmt.Errorf("verify %s: %w", spec.name, err)
 	}
@@ -115,8 +175,8 @@ func runVerifyResultCmd(args []string, spec verifyResultExec) error {
 	return nil
 }
 
-func verifySlice(args []string) error {
-	return runVerifyResultCmd(args, verifyResultExec{
+func verifySlice(ctx context.Context, args []string) error {
+	return runVerifyResultCmd(ctx, args, verifyResultExec{
 		name: "slice",
 		flag: "id",
 		exec: func(ctx context.Context, r *verify.Runner, id string) (*verify.VerifyResult, error) {
@@ -125,8 +185,8 @@ func verifySlice(args []string) error {
 	})
 }
 
-func verifyCell(args []string) error {
-	return runVerifyResultCmd(args, verifyResultExec{
+func verifyCell(ctx context.Context, args []string) error {
+	return runVerifyResultCmd(ctx, args, verifyResultExec{
 		name: "cell",
 		flag: "id",
 		exec: func(ctx context.Context, r *verify.Runner, id string) (*verify.VerifyResult, error) {
@@ -135,7 +195,7 @@ func verifyCell(args []string) error {
 	})
 }
 
-func verifyJourney(args []string) error {
+func verifyJourney(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("verify journey", flag.ContinueOnError)
 	id := fs.String("id", "", "journey id")
 	active := fs.Bool("active", false, "run all active journeys")
@@ -163,9 +223,12 @@ func verifyJourney(args []string) error {
 	runner := verify.NewRunner(project, root)
 	var result *verify.VerifyResult
 	if *active {
-		result, err = runner.RunActiveJourneys(context.Background())
+		result, err = runner.RunActiveJourneys(ctx)
 	} else {
-		result, err = runner.RunJourney(context.Background(), *id)
+		result, err = runner.RunJourney(ctx, *id)
+	}
+	if cerr := ctxInterrupted(ctx, "journey"); cerr != nil {
+		return cerr
 	}
 	if err != nil {
 		return fmt.Errorf("verify journey: %w", err)
@@ -184,7 +247,9 @@ func verifyJourney(args []string) error {
 	return nil
 }
 
-func verifyTargets(args []string) error {
+// verifyTargets has no cancelable downstream (pure metadata selection);
+// ctx is part of the uniform verifySubcommands handler signature.
+func verifyTargets(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("verify targets", flag.ContinueOnError)
 	files := fs.String("files", "", "comma-separated file paths (required)")
 	if err := fs.Parse(args); err != nil {
@@ -222,7 +287,7 @@ func verifyTargets(args []string) error {
 	return nil
 }
 
-func verifyGenerated(args []string) error {
+func verifyGenerated(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("verify generated", flag.ContinueOnError)
 	module := fs.String("module", "", "Go module path (default: read from go.mod)")
 	if err := fs.Parse(args); err != nil {
@@ -241,7 +306,10 @@ func verifyGenerated(args []string) error {
 		}
 	}
 
-	result, err := generatedverify.Verify(context.Background(), root, mod, project)
+	result, err := generatedverify.Verify(ctx, root, mod, project)
+	if cerr := ctxInterrupted(ctx, "generated"); cerr != nil {
+		return cerr
+	}
 	if err != nil {
 		return fmt.Errorf("verify generated: %w", err)
 	}
@@ -254,6 +322,24 @@ func verifyGenerated(args []string) error {
 			len(result.Drifts))
 	}
 	fmt.Printf("Generated artifacts verified: %d files\n", len(result.Artifacts))
+	return nil
+}
+
+// ctxInterrupted returns a context.Canceled-wrapping error when ctx was
+// canceled (SIGINT/SIGTERM via main.go signal.NotifyContext), else nil.
+//
+// Why this guard is needed: kernel/verify folds a signal-killed `go test`
+// into a *exec.ExitError → goTestResult{Passed:false} with NO error
+// (gotest.go run()). Without this check the cmd layer would surface that as
+// "verify <x>: FAILED" — masking the interruption as a test failure and
+// breaking the context.Canceled chain Dispatch relies on to print
+// "interrupted". Checking ctx.Err() restores B2-X-06 end-to-end transparency
+// so a Ctrl+C during `gocell verify` is reported as an interruption, not a
+// spurious test failure.
+func ctxInterrupted(ctx context.Context, label string) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("verify %s interrupted: %w", label, ctx.Err())
+	}
 	return nil
 }
 

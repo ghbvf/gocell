@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -756,5 +757,34 @@ func TestMemStore_Idempotency_DifferentTimestamp_SameEventID(t *testing.T) {
 	}
 	if tail.EntryCount != 1 {
 		t.Errorf("EntryCount: got %d, want 1 (duplicate must not be appended)", tail.EntryCount)
+	}
+}
+
+// TestMemStore_RepoReady_Conformance runs the single-source RepoHealthProber
+// conformance harness against MemStore. In-memory stores always return nil
+// (no differentiated failure domain); broken is passed as nil to signal this.
+func TestMemStore_RepoReady_Conformance(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Now())
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	celltest.RunRepoReadinessConformance(t, "ledger-mem", store, nil)
+}
+
+// TestMemStore_RepoReady_AlwaysNil verifies directly that MemStore.RepoReady
+// returns nil regardless of store state.
+func TestMemStore_RepoReady_AlwaysNil(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Now())
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	if err := store.RepoReady(context.Background()); err != nil {
+		t.Errorf("MemStore.RepoReady = %v, want nil", err)
 	}
 }

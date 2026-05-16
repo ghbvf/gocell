@@ -856,21 +856,12 @@ func isUpgradeConfigType(expr ast.Expr) bool {
 }
 
 // hasKey reports whether cl has a TOP-LEVEL key field equal to key.
-// EachInChildren visits only direct children of cl, so nested composites
-// (e.g. `Other: Sub{Authenticator: ...}`) are not reached.
+// FindFirstChild visits only direct children of cl (depth-1), so nested
+// composites (e.g. `Other: Sub{Authenticator: ...}`) are not reached.
 func hasKey(cl *ast.CompositeLit, key string) bool {
-	// done/found sentinel: EachInChildren has no early-exit return value;
-	// the found flag skips subsequent matches to preserve "find-first-and-stop"
-	// semantics. Intentional GoCell pattern — closure+done family.
-	found := false
-	scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-		if found {
-			return
-		}
+	_, found := scanner.FindFirstChild[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) bool {
 		ident, ok := kv.Key.(*ast.Ident)
-		if ok && ident.Name == key {
-			found = true
-		}
+		return ok && ident.Name == key
 	})
 	return found
 }
