@@ -1,38 +1,3 @@
-// INVARIANT: ASSEMBLY-META-SYNTHESIS-FIELD-GUARD
-//
-// TestAssemblyMetaSynthesisFieldGuard asserts that synthesizeAssemblyMeta
-// populates every yaml-bearing field (recursively, through nested structs
-// like BuildMeta / OwnerMeta) on metadata.AssemblyMeta — except those
-// explicitly listed in synthesisFieldExemptions with a documented reason.
-//
-// Without this gate, adding a field to metadata.AssemblyMeta (or any nested
-// struct) silently produces zero-valued synthesized values that flow into
-// GenerateBoundary / GenerateModulesGen / GenerateEntrypoint as
-// "intentionally omitted" — the failure class identified in 041 plan B8
-// SCAFFOLD-ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
-//
-// AI-rebust: Hard (charter §三档 reflect-field-freeze template). reflect
-// enumerates the field set; new fields automatically register and trigger
-// the guard if synthesize does not populate them. The yaml-bearing filter
-// matches the existing ASSEMBLY-META-DTO-COVERAGE-01 convention.
-//
-// Blind-spot inventory:
-//   - Top-level yaml-bearing fields on AssemblyMeta — handled by reflect.
-//   - Nested struct fields (BuildMeta, OwnerMeta) — handled by recursion;
-//     covered by reverse self-test that constructs partial structs and
-//     asserts missing-field detection.
-//   - yaml:"-" fields (MaxConsistencyLevel, Dir, File) — intentionally
-//     skipped because they are parser-internal, not synthesizable input
-//     state; the yaml tag filter matches the existing DTO-COVERAGE-01
-//     convention.
-//
-// Reverse self-test (TestAssemblyMetaSynthesisFieldGuard_DetectsViolation)
-// constructs three partial fixtures to prove the detector fires:
-//   - blind spot 1: top-level fields missing
-//   - blind spot 2: nested BuildMeta field missing
-//   - blind spot 3: exemption suppresses the targeted field but still
-//     surfaces siblings
-
 package assembly
 
 import (
@@ -53,10 +18,36 @@ import (
 // reason before the new field reaches AssemblyMeta.
 var synthesisFieldExemptions = map[string]string{}
 
-// TestAssemblyMetaSynthesisFieldGuard runs the production gate: for a
-// fully-populated AssemblyScaffoldSpec, every yaml-bearing field on the
-// resulting *metadata.AssemblyMeta must be non-zero (or listed in
-// synthesisFieldExemptions).
+// TestAssemblyMetaSynthesisFieldGuard uses reflection to assert that
+// synthesizeAssemblyMeta populates every yaml-bearing field on
+// metadata.AssemblyMeta (recursively, through nested structs like
+// BuildMeta / OwnerMeta) — except those explicitly listed in
+// synthesisFieldExemptions with a documented reason.
+//
+// Without this gate, adding a field to metadata.AssemblyMeta (or any nested
+// struct) silently produces zero-valued synthesized values that flow into
+// GenerateBoundary / GenerateModulesGen / GenerateEntrypoint as
+// "intentionally omitted" — the failure class identified in 041 plan B8.
+//
+// Field-coverage invariant pattern: same shape as
+// kernel/outbox.TestObservabilityMetadata_IsZero_FieldCoverageInvariant
+// and TestSourceFingerprint_AnyFieldChange in this package — same-package
+// unit test that exercises an unexported function via reflection. Not an
+// archtest (tools/archtest/ is reserved for cross-package static-alignment
+// enforcement with INVARIANT ID registration; behavioral field-coverage
+// tests like this one stay in the package under test).
+//
+// Blind-spot inventory:
+//   - top-level yaml-bearing fields — handled by reflect
+//   - nested struct fields (BuildMeta / OwnerMeta) — handled by recursion
+//   - yaml:"-" fields (MaxConsistencyLevel / Dir / File) — intentionally
+//     skipped (parser-internal, not synthesizable input state)
+//
+// Reverse self-test fixtures (TestAssemblyMetaSynthesisFieldGuard_DetectsViolation)
+// prove the detector fires on:
+//  1. top-level fields missing
+//  2. nested BuildMeta field missing
+//  3. exemption suppresses target only
 func TestAssemblyMetaSynthesisFieldGuard(t *testing.T) {
 	t.Parallel()
 
