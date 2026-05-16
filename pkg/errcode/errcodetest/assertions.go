@@ -11,12 +11,11 @@
 // pkg/panicregister.Approved + PANIC-REGISTERED-01).
 //
 // Upstream funnel enforcement (archtest POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01)
-// lands in the immediate follow-up PR (docs/backlog/cap-14-tooling.md:18 —
-// R2-P3 PR-b 212-pg-notfound-archtest). Until that PR merges, the funnel is
-// downstream-Hard (calling AssertCode/AssertWireCode is type-bound) but
-// upstream-Soft (a _NotFound test can currently still write inline assertions
-// without being rejected). This is an ai-collab.md §"Funnel 双向锁评级"
-// transitional form, registered explicitly to prevent silent carry-over.
+// lands together with this package via R2-P3 PR-b
+// (branch 213-pg-notfound-archtest). Once PR-b is merged, the funnel is
+// downstream-Hard (calling AssertCode/AssertWireCode is type-bound) AND
+// upstream-Hard (a _NotFound test missing the funnel call fails archtest CI),
+// forming a closed-loop funnel per ai-collab.md §"Funnel 双向锁评级".
 //
 // Per pkg/ layering: the package depends only on the standard library and
 // pkg/errcode (a sibling of this package). It does not import third-party
@@ -55,11 +54,13 @@ func AssertCode(t testing.TB, err error, expected errcode.Code) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("errcodetest.AssertCode: expected error with Code=%s, got nil", expected)
+		return
 	}
 	var ec *errcode.Error
 	if !errors.As(err, &ec) {
 		t.Fatalf("errcodetest.AssertCode: expected *errcode.Error chain "+
 			"with Code=%s, got %T: %v", expected, err, err)
+		return
 	}
 	if ec.Code != expected {
 		t.Errorf("errcodetest.AssertCode: Code mismatch — want %s, got %s "+
@@ -113,17 +114,20 @@ func AssertWireCode(t testing.TB, rec *httptest.ResponseRecorder, expectedStatus
 	if rec.Code != expectedStatus {
 		t.Fatalf("errcodetest.AssertWireCode: HTTP status mismatch — "+
 			"want %d, got %d; body=%q", expectedStatus, rec.Code, rec.Body.String())
+		return
 	}
 	body := rec.Body.Bytes()
 	if len(body) == 0 {
 		t.Fatalf("errcodetest.AssertWireCode: response body is empty; "+
 			"expected wire envelope with Code=%s", expected)
+		return
 	}
 	var env wireEnvelope
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&env); err != nil {
 		t.Fatalf("errcodetest.AssertWireCode: body is not the wire "+
 			"envelope shape: %v; body=%q", err, string(body))
+		return
 	}
 	if env.Error.Code != string(expected) {
 		t.Errorf("errcodetest.AssertWireCode: error.code mismatch — "+

@@ -191,3 +191,85 @@ func (v *childrenVisitor[N]) Visit(n ast.Node) ast.Visitor {
 	}
 	return nil
 }
+
+// EachInSubtreeStopAt traverses root's subtree like [EachInSubtree], invoking
+// fn for each *N encountered, but stops descending into any non-root node for
+// which stopAt returns true. The boundary node itself is NOT visited as N
+// even if its type matches (it is excluded along with its subtree).
+//
+// Use this for archtest rules whose presence-check must IGNORE syntactic
+// scopes that do not execute at the rule's site of interest — e.g. a
+// funnel-call-presence check on a test body that must not credit funnel
+// calls inside a nested *ast.FuncLit dead closure (the closure body runs
+// only if the closure is invoked, which a static AST scan cannot prove).
+//
+// Picking EachInSubtreeStopAt over EachInSubtree is the third member of the
+// typed-function-choice-for-walk-depth Hard template (ai-collab.md §"Hard
+// 范本" #1, alongside EachInChildren depth=1 and EachInSubtree full-recursive):
+// boundary-aware recursion is its own depth semantic, so picking the wrong
+// walker = picking the wrong API name and fails archtest at the call site.
+//
+// # Root handling
+//
+// root is ALWAYS entered regardless of stopAt — stopAt only applies to
+// non-root nodes, so a stopAt predicate may simply check the node's type
+// (`_, isFL := n.(*ast.FuncLit); return isFL`) without manually excluding
+// root. If root itself is of type N it is passed to fn before descent begins.
+//
+// # Nil root
+//
+// Returns silently (no-op).
+//
+// # Nil stopAt
+//
+// A nil stopAt is treated as the zero predicate (always false), making
+// EachInSubtreeStopAt[N](root, nil, fn) equivalent to EachInSubtree[N](root, fn).
+// Callers should prefer the simpler EachInSubtree in that case for clarity.
+//
+// ref: go/ast.Walk — Go stdlib Visitor pattern (descent control via returning
+// nil from Visit).
+func EachInSubtreeStopAt[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, stopAt func(ast.Node) bool, fn func(N)) {
+	if root == nil {
+		return
+	}
+	v := &subtreeStopAtVisitor[N]{fn: fn, stopAt: stopAt, atRoot: true}
+	ast.Walk(v, root)
+}
+
+// subtreeStopAtVisitor implements ast.Visitor for boundary-aware recursive
+// traversal. The walker visits root + every descendant in preorder, except
+// that any non-root node for which stopAt returns true is skipped entirely
+// (no fn invocation for the boundary node, no descent into its children).
+type subtreeStopAtVisitor[N ast.Node] struct {
+	fn     func(N)
+	stopAt func(ast.Node) bool
+	atRoot bool
+}
+
+func (v *subtreeStopAtVisitor[N]) Visit(n ast.Node) ast.Visitor {
+	if n == nil {
+		// ast.Walk signals "children done" by calling Visit(nil) after each
+		// subtree. Treat as no-op to match EachInChildren convention.
+		return nil
+	}
+	if v.atRoot {
+		v.atRoot = false
+		if typed, ok := n.(N); ok {
+			v.fn(typed)
+		}
+		return v
+	}
+	if v.stopAt != nil && v.stopAt(n) {
+		// Boundary: skip this node and its subtree. The boundary node is
+		// NOT passed to fn even if it matches N — fail-closed against
+		// "boundary kind also accidentally credited" semantics.
+		return nil
+	}
+	if typed, ok := n.(N); ok {
+		v.fn(typed)
+	}
+	return v
+}
