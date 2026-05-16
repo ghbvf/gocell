@@ -199,7 +199,7 @@ takes a standard `outbox.EntryHandler` — no custom interface to implement.
 | Mistake | Effect | Fix |
 |---------|--------|-----|
 | `wrapper.ContractSpec{}` literal in cells/ | archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 fail | Use generated `NewHandler` / `NewSubscription` |
-| Stale `codegen: false` left in contract.yaml | Generator skips the contract (codegen defaults to on) | Remove the `codegen: false` line |
+| Stale `codegen: false` left in contract.yaml | Generator skips the contract (explicit false overrides the default-on) | Remove the `codegen: false` line |
 | Editing files in `generated/` | Overwritten on next generate | Implement the `Service` interface instead |
 | Wrong `contractUsages` role | `gocell validate` ADV-06 fail | Set `role: serve` for HTTP server, `role: subscribe` for event subscriber |
 | `return nil, err` for business 4xx | Generated handler falls through to `httputil.WriteError` 5xx path; business error loses its intended status code | Return typed struct: `return createg.Create404ErrorResponse{Body: *errcode.New(...)}, nil` |
