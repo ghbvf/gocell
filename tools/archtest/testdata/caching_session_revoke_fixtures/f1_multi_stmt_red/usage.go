@@ -15,7 +15,7 @@ type fakeInner struct{}
 
 func (fakeInner) Create(context.Context, *session.Session) error             { return nil }
 func (fakeInner) Get(context.Context, string) (*session.ValidateView, error) { return nil, nil }
-func (fakeInner) Revoke(context.Context, string) error                        { return nil }
+func (fakeInner) Revoke(context.Context, string) error                       { return nil }
 func (fakeInner) RevokeForSubject(context.Context, string, session.CredentialEvent) error {
 	return nil
 }

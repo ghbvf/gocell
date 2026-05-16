@@ -146,7 +146,8 @@ func (m AccessCoreModule) Provide(
 			return nil, nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
 		}
 		innerSessionStore = sessionMemStore
-		accessOpts = append(accessOpts,
+		accessOpts = append(
+			accessOpts,
 			accesscore.WithUserRepository(userMemStore.UserRepository()),
 			accesscore.WithRoleRepository(userMemStore.RoleRepository()),
 			accesscore.WithRefreshStore(refreshMemStore),
@@ -237,7 +238,8 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
 	}
-	accessOpts = append(accessOpts,
+	accessOpts = append(
+		accessOpts,
 		accesscore.WithUserRepository(pgUserRepo),
 		accesscore.WithRoleRepository(pgRoleRepo),
 		accesscore.WithSetupLock(pgSetupLock),
@@ -253,7 +255,8 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 	// in log-only mode.
 	if shared.InternalGuard != nil {
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
-		accessOpts = append(accessOpts,
+		accessOpts = append(
+			accessOpts,
 			configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring, shared.Clock),
 		)
 	}

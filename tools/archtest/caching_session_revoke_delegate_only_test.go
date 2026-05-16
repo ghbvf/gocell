@@ -164,7 +164,8 @@ func scanRevokeDelegateViolations(p *Pass, file *ast.File, rel string) []string 
 		if violation != "" {
 			out = append(out, fmt.Sprintf(
 				"%s:%d: CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: (*CachingSessionStore).%s: %s",
-				rel, line, methodName, violation))
+				rel, line, methodName, violation,
+			))
 		}
 	})
 	return out
@@ -288,7 +289,8 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue(t *testing.T) {
 						line := p.Fset.Position(assign.Pos()).Line
 						violations = append(violations, fmt.Sprintf(
 							"%s:%d: method-value assignment of %s detected — blind spot for body-shape check",
-							rel, line, sel.Sel.Name))
+							rel, line, sel.Sel.Name,
+						))
 					}
 				})
 			})
@@ -332,7 +334,8 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect(t *testing.T) {
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reflect.MethodByName(%q) detected — "+
 							"archtest cannot see reflect-based invocations",
-						rel, line, name))
+						rel, line, name,
+					))
 				}
 			})
 		}
