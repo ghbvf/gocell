@@ -799,39 +799,23 @@ const configEntriesProbeSQL = `SELECT 1 FROM config_entries WHERE false`
 const featureFlagsProbeSQL = `SELECT 1 FROM feature_flags WHERE false`
 
 // RepoReady implements cell.RepoHealthProber. It issues two cheap
-// non-transactional representative queries — SELECT 1 FROM config_entries WHERE
-// false and SELECT 1 FROM feature_flags WHERE false — so that missing tables,
-// dropped columns, or revoked table-level permissions are detected independently
-// of the pool-level postgres_ready probe. Neither query returns rows (WHERE
-// false short-circuits the scan), so there is no latency overhead from result
-// iteration. No transaction is opened.
+// non-transactional representative Exec probes — SELECT 1 FROM config_entries
+// WHERE false and SELECT 1 FROM feature_flags WHERE false — so that missing
+// tables, dropped columns, or revoked table-level permissions are detected
+// independently of the pool-level postgres_ready probe. WHERE false
+// short-circuits the scan so there is no result-iteration overhead, and Exec
+// (matching PGSessionStore.RepoReady / LedgerStore.RepoReady) collapses each
+// table probe to a single failure branch — no transaction is opened.
 func (r *ConfigRepository) RepoReady(ctx context.Context) error {
 	db := r.resolveDB(ctx)
 
-	rows, err := db.Query(ctx, configEntriesProbeSQL)
-	if err != nil {
+	if _, err := db.Exec(ctx, configEntriesProbeSQL); err != nil {
 		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
 			"config repo readiness check failed", err,
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
-			"config repo readiness check failed", err,
-			errcode.WithCategory(errcode.CategoryInfra),
-		)
-	}
-
-	rows, err = db.Query(ctx, featureFlagsProbeSQL)
-	if err != nil {
-		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
-			"config repo readiness check failed", err,
-			errcode.WithCategory(errcode.CategoryInfra),
-		)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	if _, err := db.Exec(ctx, featureFlagsProbeSQL); err != nil {
 		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
 			"config repo readiness check failed", err,
 			errcode.WithCategory(errcode.CategoryInfra),

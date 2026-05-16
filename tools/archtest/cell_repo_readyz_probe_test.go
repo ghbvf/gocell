@@ -153,40 +153,62 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 	Report(t, "CELL-REPO-READYZ-PROBE-01/N2", n2Diags)
 
 	// -----------------------------------------------------------------------
-	// P1: load RepoHealthProber interface.
+	// P1: single-load iface + impls (one type universe).
+	//
+	// repoHealthProberIface and the concrete impl types MUST originate from the
+	// same packages.Load invocation. types.Implements compares the named types
+	// in the RepoReady signature (context.Context, error) by *types.TypeName
+	// pointer identity; an iface resolved in a separate RunTyped call lands in a
+	// different SharedResolver cache entry (key = modRoot|tests|tags|patterns)
+	// → a different packages.Load → a disjoint type universe → types.Implements
+	// is false for every production type and the P1 backstop silently collects
+	// zero implementations (dead code). We therefore load ./kernel/cell/...
+	// together with the prod patterns under ONE call with ONE tag set, capture
+	// the iface and the candidate impl packages during the pass, and defer the
+	// types.Implements filtering until after the pass loop — order-independent
+	// because every type shares one universe. runRepoReadyzP1Fixture applies the
+	// fixture-side equivalent (resolves iface from p.Pkg.Imports()).
 	// -----------------------------------------------------------------------
 	var repoHealthProberIface *types.Interface
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/cell/..."}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != repoReadyzCellPkgPath {
-			return nil
-		}
-		obj := p.Pkg.Scope().Lookup("RepoHealthProber")
-		if obj == nil {
-			return nil
-		}
-		named, ok := obj.Type().(*types.Named)
-		if !ok {
-			return nil
-		}
-		iface, ok := named.Underlying().(*types.Interface)
-		if !ok {
-			return nil
-		}
-		repoHealthProberIface = iface.Complete()
-		return nil
-	})
-	require.NotNil(t, repoHealthProberIface, "CELL-REPO-READYZ-PROBE-01/P1: failed to load RepoHealthProber")
-
-	// P1: collect concrete implementations.
-	implSet := make(map[string]bool)
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	var implPkgs []*types.Package
+	p1LoadPatterns := append([]string{"./kernel/cell/..."}, prodPatterns...)
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, p1LoadPatterns,
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
-			collectRepoHealthProberImpls(p.Pkg, repoHealthProberIface, implSet)
+			if p.Pkg.Path() == repoReadyzCellPkgPath {
+				if obj := p.Pkg.Scope().Lookup("RepoHealthProber"); obj != nil {
+					if named, ok := obj.Type().(*types.Named); ok {
+						if iface, ok := named.Underlying().(*types.Interface); ok {
+							repoHealthProberIface = iface.Complete()
+						}
+					}
+				}
+				return nil
+			}
+			if strings.HasPrefix(p.Pkg.Path(), "github.com/ghbvf/gocell/cells/") ||
+				strings.HasPrefix(p.Pkg.Path(), "github.com/ghbvf/gocell/adapters/") ||
+				strings.HasPrefix(p.Pkg.Path(), "github.com/ghbvf/gocell/runtime/") {
+				implPkgs = append(implPkgs, p.Pkg)
+			}
 			return nil
 		})
+	require.NotNil(t, repoHealthProberIface, "CELL-REPO-READYZ-PROBE-01/P1: failed to load RepoHealthProber")
+
+	// P1: filter collected packages against the iface (same universe).
+	implSet := make(map[string]bool)
+	for _, pkg := range implPkgs {
+		collectRepoHealthProberImpls(pkg, repoHealthProberIface, implSet)
+	}
+	// Regression guard for the cross-packages.Load type-universe trap above:
+	// production has ≥1 RepoHealthProber implementation (3 mem + 3 PG stores +
+	// wrappers). A zero collection means iface and impls fell into disjoint
+	// universes again — fail loud rather than pass a no-op backstop.
+	require.NotEmpty(t, implSet,
+		"CELL-REPO-READYZ-PROBE-01/P1: zero RepoHealthProber implementations "+
+			"collected — type-universe regression (iface and impls must share "+
+			"one packages.Load)")
 
 	// P1: scan test corpus for conformance coverage.
 	conformanceCovered := make(map[string]bool)
@@ -383,6 +405,14 @@ func scanRepoReadyzN2(fset *token.FileSet, file *ast.File, rel string, info *typ
 
 // collectRepoHealthProberImpls adds to implSet all exported concrete types in
 // pkg that implement RepoHealthProber (directly or via pointer).
+//
+// Interface types are skipped: a port interface that embeds RepoReady (e.g.
+// ports.ConfigRepository, session.Store, ledger.Store) structurally satisfies
+// RepoHealthProber, but it is abstract — only concrete stores are registrable
+// probers and only concrete types are passed to RunRepoReadinessConformance
+// (recordConformanceArgConcreteType strips to the concrete named type). Without
+// this filter the now-live P1 backstop would emit false positives for every
+// port interface.
 func collectRepoHealthProberImpls(pkg *types.Package, iface *types.Interface, implSet map[string]bool) {
 	for _, name := range pkg.Scope().Names() {
 		obj, ok := pkg.Scope().Lookup(name).(*types.TypeName)
@@ -390,6 +420,9 @@ func collectRepoHealthProberImpls(pkg *types.Package, iface *types.Interface, im
 			continue
 		}
 		t := obj.Type()
+		if _, isIface := t.Underlying().(*types.Interface); isIface {
+			continue
+		}
 		if types.Implements(t, iface) || types.Implements(types.NewPointer(t), iface) {
 			implSet[pkg.Path()+"."+name] = true
 		}
