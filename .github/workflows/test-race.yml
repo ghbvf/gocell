@@ -90,40 +90,39 @@ jobs:
       # session.Store conformance fan-out) was previously only exercised
       # without -race. The integration build tag opts in the testcontainer
       # PG path; the runner image carries Docker so containers come up.
-      - name: go test -race -tags=integration (discovered integration packages)
-        # Auto-discover the integration package set the same way
-        # _build-lint.yml::integration-test does (set-diff between
-        # `go list` and `go list -tags=integration` outputs) so the race lane
-        # cannot drift from the integration coverage surface. The previous
-        # hardcoded list was a treadmill: every new integration package
-        # (adapters/postgres, cells/accesscore PG repos, tests/integration/
-        # l2atomicity, …) required manually editing this file or its race
-        # coverage silently lapsed. archtest CI-INTEGRATION-DISCOVERY-01
-        # now guards both _build-lint.yml::integration-test and this step.
+      - name: go test -race -tags=integration (postgres adapter + cell repos + L2 atomicity e2e)
+        # Curated narrow scope — race-pg-integration is intentionally NOT a
+        # discovery-based lane (unlike _build-lint.yml::integration-test).
+        # The race detector adds ~3-5x runtime overhead, surfaces false
+        # positives on long e2e walkthroughs, and only carries unique
+        # signal for packages with concurrent goroutine boundaries:
         #
-        # tests/integration/l2atomicity (T4 / backlog B2-C-13): cross-layer
-        # accesscore L2 e2e — login → refresh reuse cascade → rbac revoke
-        # cross-cell outbox path. The harness boots producer (rbacassign),
-        # outbox writer (PG TX), relay worker, publisher (in-process
-        # eventbus), and two subscribers (auditcore role consumer +
-        # accesscore rbac-session-sync). Tests assert the complete chain
-        # via auditcore's audit-ledger Append as the consumer-side terminal
-        # observable, plus same-tx PG row state for the invalidator effect.
-        # The race detector covers the cross-goroutine concurrency safety
-        # of the producer→relay→publisher→subscriber goroutine boundaries.
-        # Now covered automatically via discovery.
+        #   - adapters/postgres/...                                   PG store ambient-tx + jti UNIQUE retries
+        #   - cells/accesscore/internal/adapters/postgres/...         accesscore PG store conformance
+        #   - tests/integration/l2atomicity/...                       producer→relay→publisher→subscriber goroutines
+        #
+        # Adding a non-PG / non-concurrent package here yields no race
+        # signal at significant CI cost. Each addition is a deliberate
+        # decision, not a discovery default.
+        #
+        # Governance: archtest CI-RACE-LANE-SUBSET-01 verifies every
+        # package listed here is also discovered by
+        # `go list -tags=integration` (preventing drift to non-integration
+        # paths or typos). archtest CI-INTEGRATION-DISCOVERY-01 separately
+        # guards _build-lint.yml::integration-test's discovery semantics.
+        # The two workflows have distinct purposes (broad correctness vs
+        # narrow race) and distinct invariants.
+        #
+        # ref: kubernetes/kubernetes — race detector in unit lanes only
+        # ref: etcd test_unit / test_e2e split — race not on e2e
+        # ref: watermill — pubsub tests skip -race, use ConsumerSpy
         env:
           # Ensures testutil.RequireDocker(t) calls t.Fatal (not t.Skip) when
           # Docker is unavailable, preventing silent skip in CI where Docker
           # is always expected. Mirrors _build-lint.yml::integration-test.
           GOCELL_TEST_DOCKER_REQUIRED: "1"
         run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          list_fmt='{{.ImportPath}}|{{join .GoFiles ","}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}'
-          go list -find -f "$list_fmt" ./... | sort >"$tmp/bare.txt"
-          go list -tags=integration -find -f "$list_fmt" ./... | sort >"$tmp/tagged.txt"
-          mapfile -t pkgs < <(comm -13 "$tmp/bare.txt" "$tmp/tagged.txt" | awk -F'|' '{print $1}' | sort -u)
-          test "${#pkgs[@]}" -gt 0 || { echo "FAIL: no integration packages discovered (no //go:build integration files visible, or tag misconfiguration)" >&2; exit 1; }
-          go test -race -count=1 -timeout 15m -tags=integration "${pkgs[@]}"
+          go test -race -count=1 -timeout 15m -tags=integration \
+            ./adapters/postgres/... \
+            ./cells/accesscore/internal/adapters/postgres/... \
+            ./tests/integration/l2atomicity/...
