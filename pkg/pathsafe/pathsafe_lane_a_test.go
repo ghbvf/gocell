@@ -6,12 +6,14 @@ package pathsafe_test
 //   - A9   : EACCES rollback (intermediate 0o000 parent → rollback cleans partial writes)
 //
 // Tests run against develop @ 41fc70074 are expected to:
-//   - DupAbsPath_RejectsInDryRun                          : FAIL  (no duplicatePass)
-//   - ForceOverwrite_OverwritesExistingFile               : FAIL  (conflictPass blocks)
-//   - ForceOverwrite_ReplacesLeafSymlinkWithoutFollow     : FAIL  (conflictPass blocks)
-//   - ParentSymlink_DirectParent / _Intermediate          : FAIL  (in-root symlinks accepted)
-//   - DupAbsPath_Rejects                                  : PASS  (whole-plan EEXIST rollback)
-//   - EACCESRollbackCleansCreatedDirs                     : PASS  (containmentPass masks)
+//   - DupAbsPath_RejectsInDryRun                                   : FAIL  (no duplicatePass)
+//   - ForceOverwrite_OverwritesExistingFile                        : FAIL  (conflictPass blocks)
+//   - ForceOverwrite_ReplacesLeafSymlinkWithoutFollow              : FAIL  (conflictPass blocks leaf symlink before A-API; after A-API
+//     conflictPass skips ForceOverwrite entries → writePass Remove
+//     + O_NOFOLLOW recreate succeeds without following target)
+//   - ParentSymlink_DirectParent / _Intermediate                   : FAIL  (in-root symlinks accepted)
+//   - DupAbsPath_Rejects                                           : PASS  (whole-plan EEXIST rollback)
+//   - EACCESRollbackCleansCreatedDirs                              : PASS  (containmentPass masks)
 //
 // After Lane A GREEN commits all pass for the correct reason.
 
@@ -90,7 +92,7 @@ func TestWritePlannedFiles_ForceOverwrite_OverwritesExistingFile(t *testing.T) {
 	if err := pathsafe.WritePlannedFiles(root, plan, false); err != nil {
 		t.Fatalf("WritePlannedFiles(ForceOverwrite=true over existing): unexpected error: %v", err)
 	}
-	data, err := os.ReadFile(abs) //nolint:gosec // tempdir test fixture
+	data, err := os.ReadFile(abs) //nolint:gosec // R2-approved: G304 — tempdir test fixture, path constructed in-test
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,7 @@ func TestWritePlannedFiles_ForceOverwrite_ReplacesLeafSymlinkWithoutFollow(t *te
 	if info.Mode()&os.ModeSymlink != 0 {
 		t.Error("leaf path is still a symlink; ForceOverwrite should have replaced it with a real file")
 	}
-	data, err := os.ReadFile(leafLink) //nolint:gosec // tempdir test fixture
+	data, err := os.ReadFile(leafLink) //nolint:gosec // R2-approved: G304 — tempdir test fixture, path constructed in-test
 	if err != nil {
 		t.Fatalf("ReadFile leafLink: %v", err)
 	}
@@ -235,7 +237,13 @@ func TestWritePlannedFiles_EACCESRollbackCleansCreatedDirs(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("chmod 0o000 ineffective as root")
 	}
-	// Not Parallel: chmod state is process-global.
+	// Not Parallel: chmod 0o000 affects every os.Stat / unix.Openat in this
+	// test binary. Other tests in package pathsafe_test that use chmod
+	// 0o555 (TestWritePlannedFiles_MkdirFailureRollback) tolerate parallel
+	// execution because 0o555 still permits Stat traversal; only 0o000
+	// serializes against the whole binary. TestCollectMissingDirs_EACCES
+	// (in pathsafe_internal_test.go) runs in a different binary (different
+	// package) so does not interact.
 	root := resolveRealRoot(t)
 
 	goodFile := filepath.Join(root, "good", "ok.yaml")
@@ -272,5 +280,72 @@ func TestWritePlannedFiles_EACCESRollbackCleansCreatedDirs(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "good")); statErr == nil {
 		t.Error("rollback: root/good/ dir not cleaned after EACCES failure")
+	}
+}
+
+// =============================================================================
+// A4 invariant — post-ContainPath pre-write swap (deterministic, no goroutine)
+// =============================================================================
+
+// TestWritePass_TOCTOURaceWindow_PostContainmentPreSwap verifies the A4
+// invariant: even when caller-side ContainPath has accepted a path
+// (parent dir was a real directory at that moment), if the parent is
+// swapped to a symlink before WritePlannedFiles' writePass runs, the
+// fd-anchored openat(O_NOFOLLOW|O_DIRECTORY) chain fails closed.
+//
+// Deterministic post-ContainPath pre-swap injection (no goroutine, no
+// time.Sleep): we manually replicate "caller passes ContainPath, then
+// attacker swaps parent" as a single-threaded sequence — call ContainPath
+// to confirm acceptance, replace the parent real dir with a symlink to
+// outside, then call WritePlannedFiles and assert fail-closed.
+func TestWritePass_TOCTOURaceWindow_PostContainmentPreSwap(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows; fd-anchored walk not implemented on windows")
+	}
+
+	root := resolveRealRoot(t)
+	outside := t.TempDir()
+
+	// Create a real parent directory so ContainPath succeeds.
+	parentDir := filepath.Join(root, "cells", "racetest")
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	targetAbs := filepath.Join(parentDir, "cell.yaml")
+	targetRel, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Verify ContainPath accepts the path (parent is a real dir at this moment).
+	_, err = pathsafe.ContainPath(targetRel, filepath.Join("cells", "racetest", "cell.yaml"))
+	if err != nil {
+		t.Fatalf("ContainPath: unexpected error before swap: %v", err)
+	}
+
+	// Swap: replace the real parent dir with a symlink to outside.
+	// This simulates the TOCTOU window: attacker acts after ContainPath but
+	// before WritePlannedFiles' writePass resolves the fd chain.
+	if err := os.Remove(parentDir); err != nil {
+		t.Fatalf("Remove real dir for swap: %v", err)
+	}
+	if err := os.Symlink(outside, parentDir); err != nil {
+		t.Fatalf("Symlink parent to outside: %v", err)
+	}
+
+	// WritePlannedFiles must fail closed: the fd-anchored walk hits O_NOFOLLOW
+	// on the symlink at cells/racetest and returns ENOTDIR or ELOOP.
+	plan := []pathsafe.PlannedFile{
+		{AbsPath: targetAbs, Content: []byte("id: racetest\n")},
+	}
+	if err := pathsafe.WritePlannedFiles(root, plan, false); err == nil {
+		t.Fatal("WritePlannedFiles post-ContainPath-pre-write swap: want error, got nil")
+	}
+
+	// outside must remain empty — nothing was written through the symlink.
+	entries, _ := os.ReadDir(outside)
+	if len(entries) > 0 {
+		t.Errorf("TOCTOU escape: outside dir has %d entries after swap, want 0: %v", len(entries), entries)
 	}
 }
