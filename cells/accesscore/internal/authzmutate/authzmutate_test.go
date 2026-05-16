@@ -14,26 +14,16 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
-
-// nilTxRunner is a pass-through TxRunner used only for nil-dep construction
-// tests that do not exercise ForUpdate paths.
-type nilTxRunner struct{}
-
-func (nilTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
 
 func newTestMutator(t testing.TB, store *mem.Store, sessionStore session.Store) *authzmutate.Mutator {
 	t.Helper()
 	refreshStore := testutil.RealRefreshStore(t)
 	inv, err := credentialinvalidate.New(store.UserRepository(), sessionStore, refreshStore)
 	require.NoError(t, err)
-	// Use store.TxRunner() so that GetByIDForUpdate receives the mem-tx sentinel.
-	m, err := authzmutate.New(inv, store.UserRepository(), persistence.WrapForCell(store.TxRunner()))
+	m, err := authzmutate.New(inv, store.UserRepository())
 	require.NoError(t, err)
 	return m
 }
@@ -66,58 +56,41 @@ func TestNew_NilDeps(t *testing.T) {
 	inv, err := credentialinvalidate.New(store.UserRepository(), sessionStore, refreshStore)
 	require.NoError(t, err)
 
-	tests := []struct {
-		name    string
-		inv     *credentialinvalidate.Invalidator
-		repo    interface{}
-		txMgr   interface{}
-		wantErr string
-	}{
-		{"nil invalidator", nil, store.UserRepository(), persistence.WrapForCell(nilTxRunner{}), "Invalidator required"},
-		{"nil txMgr", inv, store.UserRepository(), nil, "CellTxManager required"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// We can't easily pass nil for typed interfaces, so test separately below.
-			_ = tt
-		})
-	}
-
 	// nil invalidator
-	_, err = authzmutate.New(nil, store.UserRepository(), persistence.WrapForCell(nilTxRunner{}))
+	_, err = authzmutate.New(nil, store.UserRepository())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Invalidator required")
 
 	// nil repo passed as interface — use nil UserRepository
-	_, err = authzmutate.New(inv, nil, persistence.WrapForCell(nilTxRunner{}))
+	_, err = authzmutate.New(inv, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "UserRepository required")
-
-	// nil txMgr
-	_, err = authzmutate.New(inv, store.UserRepository(), nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "CellTxManager required")
 }
 
-func TestApply_NilMutation(t *testing.T) {
+func TestApplyInTx_NilMutation(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	sessionStore := testutil.RealSessionRepo(t)
 	m := newTestMutator(t, store, sessionStore)
 
-	err := m.Apply(context.Background(), "usr-1", nil, time.Now())
+	ctx := context.Background()
+	err := store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
+		return m.ApplyInTx(ctx, txCtx, "usr-1", nil, time.Now())
+	})
 	require.Error(t, err)
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
 	assert.Equal(t, errcode.KindInvalid, ce.Kind)
 }
 
-func TestApply_EmptyUserID(t *testing.T) {
+func TestApplyInTx_EmptyUserID(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	sessionStore := testutil.RealSessionRepo(t)
 	m := newTestMutator(t, store, sessionStore)
 
-	err := m.Apply(context.Background(), "", authzmutate.LockUser{}, time.Now())
+	ctx := context.Background()
+	err := store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
+		return m.ApplyInTx(ctx, txCtx, "", authzmutate.LockUser{}, time.Now())
+	})
 	require.Error(t, err)
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
@@ -193,7 +166,7 @@ func TestApply_AllMutations(t *testing.T) {
 			refreshStore := testutil.RealRefreshStore(t)
 			inv, err := credentialinvalidate.New(store.UserRepository(), sessionStore, refreshStore)
 			require.NoError(t, err)
-			mutator, err := authzmutate.New(inv, store.UserRepository(), persistence.WrapForCell(store.TxRunner()))
+			mutator, err := authzmutate.New(inv, store.UserRepository())
 			require.NoError(t, err)
 
 			// Seed user with initial status and passwordResetRequired=false.
@@ -204,8 +177,11 @@ func TestApply_AllMutations(t *testing.T) {
 			require.NoError(t, err)
 			initialEpoch := u.AuthzEpoch()
 
-			// Apply mutation.
-			err = mutator.Apply(context.Background(), "usr-1", tt.mutation, now.Add(time.Second))
+			// Apply mutation inside a caller-provided RunInTx (ApplyInTx contract).
+			ctx := context.Background()
+			err = store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
+				return mutator.ApplyInTx(ctx, txCtx, "usr-1", tt.mutation, now.Add(time.Second))
+			})
 			require.NoError(t, err)
 
 			// Read back from repo.
@@ -228,7 +204,7 @@ func TestApply_AllMutations(t *testing.T) {
 				assert.Greater(t, got.AuthzEpoch(), initialEpoch, "epoch must be bumped on invalidating mutation")
 			} else {
 				// epoch must NOT be bumped — proves inv.Apply was not called
-				// (Invalidates==false means Apply skips inv.Apply entirely)
+				// (Invalidates==false means ApplyInTx skips inv.Apply entirely)
 				assert.Equal(t, initialEpoch, got.AuthzEpoch(),
 					"epoch must NOT be bumped on additive mutation")
 			}
@@ -236,12 +212,15 @@ func TestApply_AllMutations(t *testing.T) {
 	}
 }
 
-func TestApply_UserNotFound(t *testing.T) {
+func TestApplyInTx_UserNotFound(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	sessionStore := testutil.RealSessionRepo(t)
 	m := newTestMutator(t, store, sessionStore)
 
-	err := m.Apply(context.Background(), "usr-nonexistent", authzmutate.LockUser{}, time.Now())
+	ctx := context.Background()
+	err := store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
+		return m.ApplyInTx(ctx, txCtx, "usr-nonexistent", authzmutate.LockUser{}, time.Now())
+	})
 	require.Error(t, err)
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)

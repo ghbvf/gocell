@@ -113,7 +113,9 @@ type SubscriptionGenSpec struct {
 
 // SliceGenSpec is the rendering input for slice.tmpl. It declares the
 // canonical Service interface a slice must implement so that the cell can
-// call its handler methods through a typed reference.
+// call its handler methods through a typed reference, and projects the
+// parsed slice.yaml into a typed `sliceMeta` literal that the cell
+// composition root consumes via cell.MustNewBaseSliceFromMeta.
 type SliceGenSpec struct {
 	// Package is the Go package name for slice_gen.go.
 	Package string
@@ -128,6 +130,11 @@ type SliceGenSpec struct {
 	// Handlers lists the handler methods the slice's service must provide.
 	// Order is deterministic to keep generated diff stable.
 	Handlers []SliceHandlerSpec
+	// RenderedMetaLiteral is the pre-rendered Go source literal for the
+	// slice's metadata.SliceMeta value (the typed projection of slice.yaml).
+	// BuildSliceSpec invokes renderSliceMetaLiteral(s) at spec build time and
+	// assigns the result; slice.tmpl emits `var sliceMeta = {{ .RenderedMetaLiteral }}`.
+	RenderedMetaLiteral string
 }
 
 // SliceHandlerSpec describes one method on the slice Service interface

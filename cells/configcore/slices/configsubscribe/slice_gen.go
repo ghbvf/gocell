@@ -6,8 +6,43 @@ package configsubscribe
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
+
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
+
+// sliceMeta is the canonical metadata literal projected from slice.yaml.
+// SliceMetadata returns the package-scope pointer; the cell composition root
+// passes it to cell.MustNewBaseSliceFromMeta to construct *BaseSlice through
+// the typed funnel.
+var sliceMeta = &metadata.SliceMeta{
+	ID:               "configsubscribe",
+	BelongsToCell:    "configcore",
+	ConsistencyLevel: "L3",
+	ContractUsages: []metadata.ContractUsage{
+		{Contract: "event.config.entry-upserted.v1", Role: "subscribe"},
+		{Contract: "event.config.entry-deleted.v1", Role: "subscribe"},
+	},
+	Verify: metadata.SliceVerifyMeta{
+		Unit: []string{
+			"unit.configsubscribe.service",
+		},
+		Contract: []string{
+			"contract.event.config.entry-upserted.v1.subscribe",
+			"contract.event.config.entry-deleted.v1.subscribe",
+		},
+	},
+	AllowedFiles: []string{
+		"cells/configcore/slices/configsubscribe/**",
+	},
+}
+
+// SliceMetadata returns the package-scope *metadata.SliceMeta projected
+// from slice.yaml. Composition roots consume this via
+// cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata()) — the typed
+// funnel that replaces the legacy `cell.NewBaseSlice(id, cellID, level)`
+// literal pattern.
+func SliceMetadata() *metadata.SliceMeta { return sliceMeta.Clone() }
 
 // eventHandlerService documents the handler methods configsubscribe's service
 // must provide so that cell_gen.go's reg.Subscribe call is typed. The interface

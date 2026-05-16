@@ -1,5 +1,6 @@
 id: featureflag
 belongsToCell: configcore
+consistencyLevel: L0
 contractUsages:
   - contract: http.config.flags.list.v1
     role: serve

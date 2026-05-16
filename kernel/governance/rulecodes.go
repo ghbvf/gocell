@@ -144,6 +144,7 @@ const (
 	// Misc single-rule clusters.
 	codeOUTGUARD01                RuleCode = "OUTGUARD-01"
 	codeSLICECONSISTENCY01        RuleCode = "SLICE-CONSISTENCY-01"
+	codeSLICECONSISTENCY02        RuleCode = "SLICE-CONSISTENCY-02"
 	codeDOCNAME01                 RuleCode = "DOC-NAME-01"
 	codeCONTRACTCONSISTENCYEMIT01 RuleCode = "CONTRACT-CONSISTENCY-EMIT-01"
 )

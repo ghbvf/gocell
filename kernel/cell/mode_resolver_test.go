@@ -352,8 +352,8 @@ func TestResolveCellEmitter(t *testing.T) {
 		if outcome.Durable {
 			t.Fatal("expected non-durable outcome")
 		}
-		if !strings.Contains(buf.String(), "L2 transactional atomicity not guaranteed") {
-			t.Fatalf("expected cellvocab.L2 warn log, got: %q", buf.String())
+		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
+			t.Fatalf("expected non-durable warn log, got: %q", buf.String())
 		}
 		if !strings.Contains(buf.String(), "durability_mode=demo") {
 			t.Fatalf("expected durability_mode=demo in log, got: %q", buf.String())
@@ -375,8 +375,8 @@ func TestResolveCellEmitter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if strings.Contains(buf.String(), "L2 transactional atomicity") {
-			t.Fatalf("expected no cellvocab.L2 warn at cellvocab.L1, got: %q", buf.String())
+		if strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
+			t.Fatalf("expected no non-durable warn at cellvocab.L1, got: %q", buf.String())
 		}
 	})
 
@@ -404,8 +404,8 @@ func TestResolveCellEmitter(t *testing.T) {
 		if outcome.Durable {
 			t.Fatal("expected non-durable DirectEmitter")
 		}
-		if !strings.Contains(buf.String(), "L2 transactional atomicity not guaranteed") {
-			t.Fatalf("expected cellvocab.L2 warn for non-durable demo path, got: %q", buf.String())
+		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
+			t.Fatalf("expected non-durable warn for non-durable demo path, got: %q", buf.String())
 		}
 	})
 

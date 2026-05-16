@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/verify"
@@ -43,6 +45,79 @@ func TestRunScaffoldSlice_Success(t *testing.T) {
 	err := runScaffoldWithRoot(context.Background(), dir,
 		[]string{"slice", "--id=myslice", "--cell=testcell"})
 	require.NoError(t, err)
+}
+
+// TestRunScaffoldSlice_GeneratesParseableSliceYaml asserts that the scaffold
+// output is parseable by the strict metadata parser (includes consistencyLevel).
+func TestRunScaffoldSlice_GeneratesParseableSliceYaml(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		args      []string
+		wantLevel string
+	}{
+		{
+			name:      "default level L1",
+			args:      []string{"slice", "--id=myslice", "--cell=testcell"},
+			wantLevel: "L1",
+		},
+		{
+			name:      "explicit level L0",
+			args:      []string{"slice", "--id=myslice", "--cell=testcell", "--level=L0"},
+			wantLevel: "L0",
+		},
+		{
+			name:      "explicit level L2",
+			args:      []string{"slice", "--id=myslice", "--cell=testcell", "--level=L2"},
+			wantLevel: "L2",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, "cells", "testcell", "slices"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+				[]byte("module example.com/test\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "testcell", "cell.yaml"),
+				[]byte("id: testcell\ntype: core\n"), 0o644))
+
+			err := runScaffoldWithRoot(context.Background(), dir, tt.args)
+			require.NoError(t, err)
+
+			sliceYAML := filepath.Join(dir, "cells", "testcell", "slices", "myslice", "slice.yaml")
+			raw, err := os.ReadFile(sliceYAML) //nolint:gosec // tempdir test fixture
+			require.NoError(t, err)
+
+			// Parse with strict YAML parser — must not error.
+			var m map[string]any
+			require.NoError(t, strictUnmarshalYAML(raw, &m), "scaffold output must be parseable by strict YAML parser")
+			assert.Equal(t, "myslice", m["id"], "id field mismatch")
+			assert.Equal(t, "testcell", m["belongsToCell"], "belongsToCell field mismatch")
+			assert.Equal(t, tt.wantLevel, m["consistencyLevel"], "consistencyLevel field must match --level")
+		})
+	}
+}
+
+// TestRunScaffoldSlice_InvalidLevel asserts that --level rejects non-LN values.
+func TestRunScaffoldSlice_InvalidLevel(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cells", "testcell", "slices"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "testcell", "cell.yaml"),
+		[]byte("id: testcell\ntype: core\n"), 0o644))
+
+	err := runScaffoldWithRoot(context.Background(), dir,
+		[]string{"slice", "--id=myslice", "--cell=testcell", "--level=invalid"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_SCAFFOLD_INVALID_OPTS")
 }
 
 func TestRunScaffoldContract_Success(t *testing.T) {
@@ -276,4 +351,13 @@ func TestReadModule_MalformedGoMod(t *testing.T) {
 
 	_, err := readModule(dir)
 	assert.Error(t, err)
+}
+
+// strictUnmarshalYAML unmarshals raw YAML into dest using KnownFields=true, so
+// unknown keys cause an error. Used by scaffold slice tests to verify the
+// generated slice.yaml is parseable.
+func strictUnmarshalYAML(raw []byte, dest any) error {
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	return dec.Decode(dest)
 }

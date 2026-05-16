@@ -45,7 +45,7 @@ func minimalAssemblyProject(t *testing.T) string {
 	if err := os.MkdirAll(sliceDir, 0o755); err != nil {
 		t.Fatalf("mkdir slice: %v", err)
 	}
-	sliceYAML := "id: s1\nbelongsToCell: alpha\ncontractUsages: []\n" +
+	sliceYAML := "id: s1\nbelongsToCell: alpha\nconsistencyLevel: L1\ncontractUsages: []\n" +
 		"verify:\n  unit: []\n  contract: []\n" +
 		"allowedFiles:\n  - cells/alpha/slices/s1/**\n"
 	if err := os.WriteFile(filepath.Join(sliceDir, "slice.yaml"), []byte(sliceYAML), 0o644); err != nil {

@@ -1,5 +1,6 @@
 id: sessionlogin
 belongsToCell: accesscore
+consistencyLevel: L2
 contractUsages:
   - contract: http.auth.login.v1
     role: serve

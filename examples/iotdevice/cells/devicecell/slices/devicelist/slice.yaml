@@ -1,5 +1,6 @@
 id: devicelist
 belongsToCell: devicecell
+consistencyLevel: L0
 contractUsages:
   - contract: http.device.list.v1
     role: serve

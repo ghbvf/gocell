@@ -135,8 +135,9 @@ func goldenRuleIDs() []string {
 		"REF-11", "REF-12", "REF-13", "REF-14", "REF-15",
 		"REF-16", "REF-17",
 
-		// SLICE-CONSISTENCY — slice level vs parent cell (rules_misc_advisory.go)
+		// SLICE-CONSISTENCY — slice level vs parent cell + contractUsages role lower bound (rules_misc_advisory.go)
 		"SLICE-CONSISTENCY-01",
+		"SLICE-CONSISTENCY-02",
 
 		// TOPO — topology (rules_topo.go)
 		"TOPO-01", "TOPO-02", "TOPO-03", "TOPO-04", "TOPO-05",

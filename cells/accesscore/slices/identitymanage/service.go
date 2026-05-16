@@ -198,7 +198,7 @@ func NewService(
 	}
 	// Build authzmutator from injected deps if not explicitly provided via WithAuthzMutator.
 	if s.authzmutator == nil {
-		m, mErr := authzmutate.New(s.invalidator, s.repo, s.txRunner)
+		m, mErr := authzmutate.New(s.invalidator, s.repo)
 		if mErr != nil {
 			return nil, fmt.Errorf("identitymanage: build authzmutator: %w", mErr)
 		}
@@ -445,55 +445,69 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 // hasCombinedAuthzFields produces a deterministic 400 and is still evaluated
 // before tx1 — it is a pure-input check that requires no DB read.
 func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor string) (*domain.User, error) {
-	var user *domain.User
-	var credMut pendingCredMutation
-	now := s.clock.Now()
-
 	// hasCombinedAuthzFields is a pure input check — 400 before any DB access.
 	if hasCombinedAuthzFields(input) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			msgCombinedAuthzFields)
 	}
 
-	// Apply non-authz field changes (name, email) inside a transaction that
-	// also publishes the event. resolveCredentialMutation is called inside the
-	// tx so the RequirePasswordReset idempotency read uses the tx-locked user
-	// row — no separate pre-tx GetByID (F2: eliminates TOCTOU window).
+	now := s.clock.Now()
+	var user *domain.User
+	// All changes (non-authz fields + credential mutation + event publish) run
+	// in a single RunInTx so that domain mutation and event publish co-commit
+	// atomically (L2 OutboxFact).
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		u, err := s.repo.GetByID(txCtx, input.ID)
-		if err != nil {
-			return fmt.Errorf("identity-manage: update: %w", err)
-		}
-		if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
-			return err
-		}
-		// Resolve the credential mutation inside the tx using the already-fetched
-		// locked row, avoiding a separate pre-tx GetByID (F2).
-		credMut = resolveCredentialMutationFromUser(u, input)
-		applyNonAuthzFields(u, input, now)
-		if err := s.repo.Update(txCtx, u); err != nil {
-			return fmt.Errorf("identity-manage: update: %w", err)
-		}
-		user = u
-		return s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor})
+		var err error
+		user, err = s.applyUserUpdateTx(ctx, txCtx, input, actor, now)
+		return err
 	}); err != nil {
 		return nil, err
 	}
+	return user, nil
+}
 
-	// Apply credential mutation via the funnel (after the main tx commits so
-	// the mutation's own RunInTx sees the committed state).
+// applyUserUpdateTx executes the update body inside an already-open transaction.
+// It fetches the user row, guards status demotion, applies non-authz fields,
+// optionally applies the credential mutation via authzmutator.ApplyInTx, and
+// publishes the UserUpdated event — all in the caller-provided txCtx.
+//
+// Extracted from applyUserUpdate to keep each function's cognitive complexity ≤ 15.
+func (s *Service) applyUserUpdateTx(
+	ctx context.Context, txCtx context.Context,
+	input UpdateInput, actor string, now time.Time,
+) (*domain.User, error) {
+	u, err := s.repo.GetByID(txCtx, input.ID)
+	if err != nil {
+		return nil, fmt.Errorf("identity-manage: update: %w", err)
+	}
+	if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
+		return nil, err
+	}
+	// Resolve the credential mutation inside the tx using the already-fetched
+	// locked row, avoiding a separate pre-tx GetByID (F2).
+	credMut := resolveCredentialMutationFromUser(u, input)
+	applyNonAuthzFields(u, input, now)
+	if err := s.repo.Update(txCtx, u); err != nil {
+		return nil, fmt.Errorf("identity-manage: update: %w", err)
+	}
+	user := u
+
+	// Apply credential mutation via funnel inside the same tx — L2 OutboxFact:
+	// domain mutation, credential invalidation, and event publish co-commit.
 	if credMut.ok {
-		if err := s.authzmutator.Apply(ctx, input.ID, credMut.m, now); err != nil {
+		if err := s.authzmutator.ApplyInTx(ctx, txCtx, input.ID, credMut.m, now); err != nil {
 			return nil, fmt.Errorf("identity-manage: update credential mutation: %w", err)
 		}
-		// Re-fetch user to get the updated epoch/status.
-		updated, err := s.repo.GetByID(ctx, input.ID)
+		// Re-read updated aggregate from txCtx to capture epoch/status changes.
+		updated, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
 			return nil, fmt.Errorf("identity-manage: update re-fetch after mutation: %w", err)
 		}
 		user = updated
 	}
-
+	if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor}); err != nil {
+		return nil, err
+	}
 	return user, nil
 }
 
@@ -665,10 +679,10 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 // lockUserAndRevokeSessions runs the transactional body of Lock.
 //
 // TOCTOU trade-off (KNOWN, ACCEPTED): the last-admin guard runs in tx1
-// (GetByID + checkLastAdminRemoval) and the credential mutation runs in tx2
-// (authzmutator.Apply via RunInTx). A concurrent admin-status change between
-// tx1 and tx2 could in theory cause the guard to pass on a stale read. This
-// split is intentional:
+// (GetByID + checkLastAdminRemoval) and the mutation+publish run in tx2
+// (ApplyInTx + publish). A concurrent admin-status change between tx1 and
+// tx2 could in theory cause the guard to pass on a stale read. This split is
+// intentional:
 //
 //   - The last-admin guard is an operability/UX guard, NOT a security boundary.
 //     Its purpose is to prevent an admin from accidentally locking themselves
@@ -677,16 +691,14 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 //     admin session.
 //   - The security net for any status/epoch intermediate window is
 //     sessionvalidate.enforceSessionState's CanAuthenticate check (P1.3b
-//     defense-in-depth, added in this PR): any request from a non-active user
-//     is fail-closed at the validate layer regardless of epoch, making the
-//     intermediate window safe from an authentication perspective.
+//     defense-in-depth): any request from a non-active user is fail-closed at
+//     the validate layer regardless of epoch.
 //
-// Changing this to a single-tx design would require passing the RunInTx
-// context through authzmutate, coupling the event-publish tx to the guard tx
-// and significantly raising cognitive complexity. The trade-off is accepted.
+// Lock/ApplyInTx/publish are in the same RunInTx closure (tx2), satisfying
+// the L2 OutboxFact guarantee: domain mutation + event publish co-commit.
 func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor string) error {
 	now := s.clock.Now()
-	// Guard: check last-admin protection before applying the mutation.
+	// Guard tx (tx1): check last-admin protection before applying the mutation.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		user, err := s.repo.GetByID(txCtx, id)
 		if err != nil {
@@ -696,12 +708,12 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 	}); err != nil {
 		return err
 	}
-	// Apply via funnel: LockUser sets status=locked + bumps epoch + revokes sessions/refresh.
-	if err := s.authzmutator.Apply(ctx, id, authzmutate.LockUser{}, now); err != nil {
-		return fmt.Errorf("identity-manage: lock: %w", err)
-	}
-	// Publish event (outside the authzmutate tx — event is informational).
+	// Apply + publish in a single RunInTx (tx2) — L2 OutboxFact: mutation and
+	// event publish co-commit atomically.
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.LockUser{}, now); err != nil {
+			return fmt.Errorf("identity-manage: lock: %w", err)
+		}
 		return s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
 	})
 }
@@ -760,13 +772,14 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		return err
 	}
 
-	// Apply via funnel: ActivateUser sets status=active (Invalidates()==false,
-	// so no epoch-bump — re-activating is additive, ADR §A6).
-	if err := s.authzmutator.Apply(ctx, id, authzmutate.ActivateUser{}, s.clock.Now()); err != nil {
-		return fmt.Errorf("identity-manage: unlock: %w", err)
-	}
-	// Publish event.
+	// Apply + publish in a single RunInTx — L2 OutboxFact: ActivateUser mutation
+	// and event publish co-commit atomically. Invalidates()==false so no
+	// epoch-bump — re-activating is additive, ADR §A6.
+	now := s.clock.Now()
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.ActivateUser{}, now); err != nil {
+			return fmt.Errorf("identity-manage: unlock: %w", err)
+		}
 		return s.publish(txCtx, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
 	}); err != nil {
 		return err

@@ -66,7 +66,7 @@ func TestGenerateCell_SuccessPath(t *testing.T) {
 	if err := os.MkdirAll(sliceDir, 0o755); err != nil {
 		t.Fatalf("mkdir slice: %v", err)
 	}
-	sliceYAML := "id: alpha\nbelongsToCell: demo\ncontractUsages: []\n" +
+	sliceYAML := "id: alpha\nbelongsToCell: demo\nconsistencyLevel: L1\ncontractUsages: []\n" +
 		"verify:\n  unit: []\n  contract: []\n" +
 		"allowedFiles:\n  - cells/demo/slices/alpha/**\n"
 	if err := os.WriteFile(filepath.Join(sliceDir, "slice.yaml"), []byte(sliceYAML), 0o644); err != nil {

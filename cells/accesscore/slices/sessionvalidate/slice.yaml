@@ -1,5 +1,6 @@
 id: sessionvalidate
 belongsToCell: accesscore
+consistencyLevel: L0
 contractUsages: []
 verify:
   unit:

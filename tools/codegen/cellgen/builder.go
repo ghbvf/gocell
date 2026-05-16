@@ -124,13 +124,16 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string, bundle markergen.Wire
 	return spec, nil
 }
 
-// BuildSliceSpec returns the rendering input for slice.tmpl. Returns nil
-// (with nil error) when the bundle declares no subscribes for this slice —
-// slice_gen.go is only emitted when there is a typed handler interface to
-// declare.
+// BuildSliceSpec returns the rendering input for slice.tmpl. Every slice in
+// the project produces a slice_gen.go with a typed `sliceMeta` literal so
+// that cell composition roots can build BaseSlice through the funnel
+// `cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())`. Slices that
+// also declare event subscriptions get the typed eventHandlerService
+// interface rendered alongside the metadata literal.
 //
 // bundle is the WireBundle for the parent cell (from markergen.Merge). Only
-// the Subscribes entries whose Slice field matches sliceID are used.
+// the Subscribes entries whose Slice field matches sliceID are used to
+// populate the handler set.
 func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string, bundle markergen.WireBundle) (*SliceGenSpec, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -144,25 +147,23 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string, bundle mark
 			errcode.WithDetails(slog.String("sliceKey", key)))
 	}
 
-	// Collect subscribe entries for this slice from the bundle.
+	spec := &SliceGenSpec{
+		Package:             s.Dir,
+		CellID:              cellID,
+		SliceID:             sliceID,
+		SourceFile:          s.File,
+		RenderedMetaLiteral: renderSliceMetaLiteral(s),
+	}
+
+	// Collect subscribe entries for this slice from the bundle. Slices without
+	// subscribes still produce slice_gen.go (sliceMeta only); the handler
+	// interface block is rendered conditionally by slice.tmpl when Handlers
+	// is non-empty.
 	var sliceSubs []markergen.SubscribeSpec
 	for _, sub := range bundle.Subscribes {
 		if sub.Slice == sliceID {
 			sliceSubs = append(sliceSubs, sub)
 		}
-	}
-
-	if len(sliceSubs) == 0 {
-		// Intentional (nil, nil): caller (Generate) treats nil spec as
-		// "skip slice_gen.go for this slice". Sentinel error would force
-		// every call site to errors.Is-check the success path.
-		return nil, nil //nolint:nilnil // intentional API: nil spec means "no slice_gen.go for this slice"
-	}
-	spec := &SliceGenSpec{
-		Package:    s.Dir,
-		CellID:     cellID,
-		SliceID:    sliceID,
-		SourceFile: s.File,
 	}
 	// Deduplicate handlers by method name: when multiple topics share the same
 	// handler (e.g. HandleEvent for 13 audit topics), the interface only needs

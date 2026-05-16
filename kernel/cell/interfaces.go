@@ -124,13 +124,23 @@ type Cell interface {
 
 // Slice is a cohesive sub-unit within a Cell — typically a single feature
 // (handler + service + repo + tests) that maps 1:1 to a slice.yaml entry.
+//
+// K#04 codegen pattern: slice.yaml is the single source of truth (SoR) for all
+// slice-level metadata. `gocell generate cell` emits slice_gen.go containing a
+// `var sliceMeta` literal and `SliceMetadata() *metadata.SliceMeta` accessor.
+// Cell composition roots call `cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())`
+// — the typed funnel that projects all metadata fields into BaseSlice. Direct
+// `cell.NewBaseSlice` literals and `metadata.SliceMeta{...}` hand-written literals
+// are forbidden in non-gen production code (BASESLICE-CTOR-FUNNEL-01 archtest).
+// The `Init` lifecycle method is generated in cell_gen.go; business-specific
+// initialisation lives in the hand-written `initInternal(ctx, reg)` hook (K#04 convention).
 type Slice interface {
 	// ID returns the slice's stable identifier (matches slice.yaml id).
 	ID() string
 	// BelongsToCell returns the parent cell's ID.
 	BelongsToCell() string
-	// ConsistencyLevel reports the slice's consistency tier; falls back to the
-	// owning cell's level when not declared explicitly.
+	// ConsistencyLevel reports the slice's consistency tier (from slice.yaml,
+	// which is the strict SoR; inheritance from cell.consistencyLevel is not supported).
 	ConsistencyLevel() cellvocab.Level
 	// Init runs slice-local initialisation (no dependencies; that lives on Cell.Init).
 	Init(ctx context.Context) error

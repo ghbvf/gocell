@@ -262,6 +262,16 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 			"duplicate slice ID",
 			errcode.WithInternal(fmt.Sprintf(internalIDPathQuotedFmt, key, path)))
 	}
+	// slice.yaml is the single source of truth for slice consistency level
+	// (codegen funnel projects it into slice_gen.go.sliceMeta). The prior
+	// "inherit from cell" fallback is removed — slice.yaml must declare
+	// consistencyLevel explicitly, and cell.NewBaseSlice literals are no
+	// longer the SoR. See T2 / BASESLICE-CTOR-FUNNEL-01.
+	if m.ConsistencyLevel == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"slice consistencyLevel is empty: declare consistencyLevel: L0|L1|L2|L3|L4",
+			errcode.WithInternal(fmt.Sprintf("slice=%q path=%s", m.ID, path)))
+	}
 	pm.Slices[key] = &m
 	return nil
 }

@@ -4,7 +4,7 @@
   "title": "GoCell Slice Descriptor",
   "description": "Defines a Slice, the implementation mapping unit within a Cell. A Slice is the sole write-side for dependency truth via contractUsages.",
   "type": "object",
-  "required": ["id", "contractUsages", "verify"],
+  "required": ["id", "consistencyLevel", "contractUsages", "verify"],
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -93,7 +93,7 @@
     },
     "consistencyLevel": {
       "type": "string",
-      "description": "Optional override; defaults to the parent cell's consistencyLevel. Must be ≤ cell.consistencyLevel when set.",
+      "description": "Required: L0|L1|L2|L3|L4. slice.yaml is the SoR for slice consistency level (codegen funnel projects into slice_gen.go.sliceMeta). MUST be ≤ cell.consistencyLevel.",
       "enum": ["L0", "L1", "L2", "L3", "L4"]
     }
   }

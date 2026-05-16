@@ -1,5 +1,6 @@
 id: configsubscribe
 belongsToCell: configcore
+consistencyLevel: L3
 contractUsages:
   - contract: event.config.entry-upserted.v1
     role: subscribe

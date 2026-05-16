@@ -16,7 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -192,7 +192,7 @@ func (c *ConfigCore) initWriteSlice() error {
 		return fmt.Errorf("configcore: init write slice: %w", err)
 	}
 	c.writeHandler = configwrite.NewHandler(writeSvc)
-	c.AddSlice(cell.NewBaseSlice("configwrite", "configcore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configwrite.SliceMetadata()))
 	return nil
 }
 
@@ -202,7 +202,7 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 		return fmt.Errorf("config-read: %w", err)
 	}
 	c.readHandler = configread.NewHandler(readSvc)
-	c.AddSlice(cell.NewBaseSlice("configread", "configcore", cellvocab.L0))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configread.SliceMetadata()))
 	return nil
 }
 
@@ -216,7 +216,7 @@ func (c *ConfigCore) initPublishSlice() error {
 		return fmt.Errorf("configcore: init publish slice: %w", err)
 	}
 	c.publishHandler = configpublish.NewHandler(publishSvc)
-	c.AddSlice(cell.NewBaseSlice("configpublish", "configcore", cellvocab.L2))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configpublish.SliceMetadata()))
 	return nil
 }
 
@@ -227,7 +227,7 @@ func (c *ConfigCore) initSubscribeSlice() {
 		configsubscribe.WithTombstoneTTL(c.tombstoneTTL),
 		configsubscribe.WithEventbusCacheCollector(c.cacheCollector),
 	)
-	c.AddSlice(cell.NewBaseSlice("configsubscribe", "configcore", cellvocab.L3))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(configsubscribe.SliceMetadata()))
 }
 
 func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
@@ -236,7 +236,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 		return fmt.Errorf("feature-flag: %w", err)
 	}
 	c.flagHandler = featureflag.NewHandler(flagSvc)
-	c.AddSlice(cell.NewBaseSlice("featureflag", "configcore", cellvocab.L0))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(featureflag.SliceMetadata()))
 	return nil
 }
 
@@ -249,6 +249,6 @@ func (c *ConfigCore) initFlagWriteSlice() error {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)
 	}
 	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
-	c.AddSlice(cell.NewBaseSlice("flagwrite", "configcore", cellvocab.L1))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(flagwrite.SliceMetadata()))
 	return nil
 }
