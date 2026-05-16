@@ -4,6 +4,7 @@ package configcore
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
@@ -107,6 +108,18 @@ func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 	return func(c *ConfigCore) { c.configEventCollector = collector }
 }
 
+// WithTombstoneTTL sets the configsubscribe cache tombstone TTL. The cell
+// forwards it to the configsubscribe service, which applies a 24h default
+// when unset (must stay >= the Claimer idempotency window — see
+// configsubscribe.Service godoc).
+func WithTombstoneTTL(d time.Duration) Option { return func(c *ConfigCore) { c.tombstoneTTL = d } }
+
+// WithEventbusCacheCollector injects the subscriber-cache tombstone-GC metric
+// collector. nil is normalized to NoopEventbusCacheCollector by the slice.
+func WithEventbusCacheCollector(col obmetrics.EventbusCacheCollector) Option {
+	return func(c *ConfigCore) { c.cacheCollector = col }
+}
+
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *ConfigCore) { c.cursorCodec = codec }
@@ -178,6 +191,8 @@ type ConfigCore struct {
 	logger               *slog.Logger
 	metricsProvider      metrics.Provider
 	configEventCollector obmetrics.ConfigEventCollector
+	tombstoneTTL         time.Duration
+	cacheCollector       obmetrics.EventbusCacheCollector
 
 	// Slice services and handlers.
 	// +slice:route:slice=configwrite,subPath=/config
