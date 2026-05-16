@@ -294,6 +294,10 @@ type BaseSlice struct {
 // NewBaseSliceFromMeta constructs a BaseSlice from parsed slice.yaml metadata,
 // which is the single source of truth for slice identity and consistency level.
 //
+// Projects all SliceMeta fields (ID / BelongsToCell / ConsistencyLevel / Verify /
+// AllowedFiles) into BaseSlice. Verify.Unit/Contract/Waivers and AllowedFiles slices
+// are deep-copied so subsequent caller mutations of meta do not affect the BaseSlice.
+//
 // The metadata projection lives in `<slicePkg>/slice_gen.go` as `var sliceMeta`
 // rendered by `gocell generate cell`; cell composition roots call
 // `cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())`. Hand-written
@@ -337,11 +341,31 @@ func NewBaseSliceFromMeta(meta *metadata.SliceMeta) (*BaseSlice, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cell.NewBaseSliceFromMeta: slice %q: %w", meta.ID, err)
 	}
-	return &BaseSlice{
+	s := &BaseSlice{
 		id:     meta.ID,
 		cellID: meta.BelongsToCell,
 		level:  level,
-	}, nil
+	}
+	// Project Verify — deep copy slices so caller mutation of meta does not leak.
+	waivers := make([]Waiver, len(meta.Verify.Waivers))
+	for i, w := range meta.Verify.Waivers {
+		waivers[i] = Waiver{
+			Contract:  w.Contract,
+			Owner:     w.Owner,
+			Reason:    w.Reason,
+			ExpiresAt: w.ExpiresAt,
+		}
+	}
+	s.SetVerify(VerifySpec{
+		Unit:     append([]string(nil), meta.Verify.Unit...),
+		Contract: append([]string(nil), meta.Verify.Contract...),
+		Waivers:  waivers,
+	})
+	// Project AllowedFiles — deep copy.
+	if len(meta.AllowedFiles) > 0 {
+		s.SetAllowedFiles(meta.AllowedFiles)
+	}
+	return s, nil
 }
 
 // MustNewBaseSliceFromMeta is the panic-on-error twin of NewBaseSliceFromMeta,

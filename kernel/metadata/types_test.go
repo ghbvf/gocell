@@ -487,6 +487,81 @@ func TestContractMeta_ProviderEndpoint(t *testing.T) {
 	}
 }
 
+// TestSliceMeta_Clone_Independence asserts that Clone produces an independent
+// deep copy — mutations to the source do not affect the clone and vice-versa.
+// This mirrors the K8s zz_generated.deepcopy.go independence guarantee.
+func TestSliceMeta_Clone_Independence(t *testing.T) {
+	src := &SliceMeta{
+		ID:               "sessionlogin",
+		BelongsToCell:    "accesscore",
+		ConsistencyLevel: "L2",
+		ContractUsages: []ContractUsage{
+			{Contract: "http.auth.login.v1", Role: "serve"},
+			{Contract: "event.session.created.v1", Role: "publish"},
+		},
+		Verify: SliceVerifyMeta{
+			Unit:     []string{"unit.sessionlogin.service"},
+			Contract: []string{"contract.http.auth.login.v1.serve"},
+			Waivers: []WaiverMeta{
+				{
+					Contract: "http.config.get.v1", Owner: "platform-team",
+					Reason: "read-only config call", ExpiresAt: "2026-06-01",
+				},
+			},
+		},
+		AllowedFiles: []string{"cells/accesscore/slices/sessionlogin/**"},
+		Dir:          "sessionlogin",
+		CellDir:      "accesscore",
+		File:         "cells/accesscore/slices/sessionlogin/slice.yaml",
+	}
+
+	clone := src.Clone()
+
+	// Clone must equal source initially.
+	assert.Equal(t, src.ID, clone.ID)
+	assert.Equal(t, src.BelongsToCell, clone.BelongsToCell)
+	assert.Equal(t, src.ConsistencyLevel, clone.ConsistencyLevel)
+	assert.Equal(t, src.ContractUsages, clone.ContractUsages)
+	assert.Equal(t, src.Verify.Unit, clone.Verify.Unit)
+	assert.Equal(t, src.Verify.Contract, clone.Verify.Contract)
+	assert.Equal(t, src.Verify.Waivers, clone.Verify.Waivers)
+	assert.Equal(t, src.AllowedFiles, clone.AllowedFiles)
+
+	// Mutate source slices — clone must be unaffected.
+	src.ContractUsages[0].Role = "MUTATED"
+	src.Verify.Unit[0] = "MUTATED"
+	src.Verify.Contract[0] = "MUTATED"
+	src.Verify.Waivers[0].Owner = "MUTATED"
+	src.AllowedFiles[0] = "MUTATED"
+
+	assert.Equal(t, "serve", clone.ContractUsages[0].Role, "clone ContractUsages must be independent of source")
+	assert.Equal(t, "unit.sessionlogin.service", clone.Verify.Unit[0], "clone Verify.Unit must be independent")
+	assert.Equal(t, "contract.http.auth.login.v1.serve", clone.Verify.Contract[0], "clone Verify.Contract must be independent")
+	assert.Equal(t, "platform-team", clone.Verify.Waivers[0].Owner, "clone Verify.Waivers must be independent")
+	assert.Equal(t, "cells/accesscore/slices/sessionlogin/**", clone.AllowedFiles[0], "clone AllowedFiles must be independent")
+
+	// Mutate clone — source must be unaffected (values already mutated above, reset check on a fresh pair).
+	src2 := &SliceMeta{
+		ContractUsages: []ContractUsage{{Contract: "c.v1", Role: "serve"}},
+		Verify:         SliceVerifyMeta{Unit: []string{"u1"}, Contract: []string{"c1"}},
+		AllowedFiles:   []string{"files/**"},
+	}
+	clone2 := src2.Clone()
+	clone2.ContractUsages[0].Role = "CLONE-MUTATED"
+	clone2.Verify.Unit[0] = "CLONE-MUTATED"
+	clone2.AllowedFiles[0] = "CLONE-MUTATED"
+
+	assert.Equal(t, "serve", src2.ContractUsages[0].Role, "source ContractUsages must be independent of clone")
+	assert.Equal(t, "u1", src2.Verify.Unit[0], "source Verify.Unit must be independent of clone")
+	assert.Equal(t, "files/**", src2.AllowedFiles[0], "source AllowedFiles must be independent of clone")
+}
+
+// TestSliceMeta_Clone_Nil asserts that nil.Clone() returns nil without panicking.
+func TestSliceMeta_Clone_Nil(t *testing.T) {
+	var s *SliceMeta
+	assert.Nil(t, s.Clone(), "nil SliceMeta.Clone() must return nil")
+}
+
 func TestActorSliceRoundTrip(t *testing.T) {
 	orig := []ActorMeta{
 		{ID: "edge-bff", MaxConsistencyLevel: "L1"},

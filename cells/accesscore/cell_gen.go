@@ -34,7 +34,7 @@ var cellMeta = &metadata.CellMeta{
 	GoStructName: metadata.MustNewGoIdentifier("AccessCore"),
 }
 
-func loadCellMetadata() *metadata.CellMeta { return cellMeta }
+func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {

@@ -425,7 +425,8 @@ func TestNewBaseCell_ErrorPaths(t *testing.T) {
 // with a "cell.MustNewBaseCell:" prefixed message.
 func TestMustNewBaseCell_PanicsOnError(t *testing.T) {
 	t.Parallel()
-	assertPanicsWithAssertionMessage(t,
+	assertPanicsWithAssertionMessage(
+		t,
 		"cell.MustNewBaseCell: [ERR_VALIDATION_FAILED] cell.NewBaseCell: meta is nil",
 		func() { MustNewBaseCell(nil) },
 	)
@@ -529,7 +530,8 @@ func TestNewBaseSliceFromMeta_HappyPath(t *testing.T) {
 // with a "cell.MustNewBaseSliceFromMeta:" prefixed message.
 func TestMustNewBaseSliceFromMeta_PanicsOnError(t *testing.T) {
 	t.Parallel()
-	assertPanicsWithAssertionMessage(t,
+	assertPanicsWithAssertionMessage(
+		t,
 		"cell.MustNewBaseSliceFromMeta: [ERR_VALIDATION_FAILED] cell.NewBaseSliceFromMeta: meta is nil",
 		func() { MustNewBaseSliceFromMeta(nil) },
 	)
@@ -541,6 +543,79 @@ func TestMustNewBaseSliceFromMeta_PanicsOnError(t *testing.T) {
 	assert.Panics(t, func() {
 		MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L9"})
 	})
+}
+
+// TestNewBaseSliceFromMeta_ProjectsVerifyAndAllowedFiles asserts that
+// NewBaseSliceFromMeta projects Verify and AllowedFiles from metadata, and
+// that the projected values are defensively copied — caller mutation of the
+// original meta does not affect the constructed BaseSlice.
+func TestNewBaseSliceFromMeta_ProjectsVerifyAndAllowedFiles(t *testing.T) {
+	t.Parallel()
+
+	meta := &metadata.SliceMeta{
+		ID:               "sessionlogin",
+		BelongsToCell:    "accesscore",
+		ConsistencyLevel: "L2",
+		Verify: metadata.SliceVerifyMeta{
+			Unit:     []string{"unit.sessionlogin.service"},
+			Contract: []string{"contract.http.auth.login.v1.serve"},
+			Waivers: []metadata.WaiverMeta{
+				{
+					Contract: "http.config.get.v1", Owner: "platform-team",
+					Reason: "read-only config call", ExpiresAt: "2026-06-01",
+				},
+			},
+		},
+		AllowedFiles: []string{"cells/accesscore/slices/sessionlogin/**"},
+	}
+
+	s, err := NewBaseSliceFromMeta(meta)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	// --- Fields projected ---
+	v := s.Verify()
+	require.Equal(t, []string{"unit.sessionlogin.service"}, v.Unit)
+	require.Equal(t, []string{"contract.http.auth.login.v1.serve"}, v.Contract)
+	require.Len(t, v.Waivers, 1)
+	assert.Equal(t, "http.config.get.v1", v.Waivers[0].Contract)
+	assert.Equal(t, "platform-team", v.Waivers[0].Owner)
+
+	af := s.AllowedFiles()
+	require.Equal(t, []string{"cells/accesscore/slices/sessionlogin/**"}, af)
+
+	// --- Defensive copy: mutate meta, BaseSlice must be unaffected ---
+	meta.Verify.Unit[0] = "MUTATED"
+	meta.Verify.Contract[0] = "MUTATED"
+	meta.Verify.Waivers[0].Owner = "MUTATED"
+	meta.AllowedFiles[0] = "MUTATED"
+
+	v2 := s.Verify()
+	assert.Equal(t, "unit.sessionlogin.service", v2.Unit[0], "meta mutation must not affect BaseSlice.Verify.Unit")
+	assert.Equal(t, "contract.http.auth.login.v1.serve", v2.Contract[0], "meta mutation must not affect BaseSlice.Verify.Contract")
+	assert.Equal(t, "platform-team", v2.Waivers[0].Owner, "meta mutation must not affect BaseSlice.Verify.Waivers")
+	af2 := s.AllowedFiles()
+	assert.Equal(t, "cells/accesscore/slices/sessionlogin/**", af2[0], "meta mutation must not affect BaseSlice.AllowedFiles")
+}
+
+// TestNewBaseSliceFromMeta_EmptyVerifyAndAllowedFiles asserts that a meta with
+// empty Verify and AllowedFiles results in a valid BaseSlice with nil AllowedFiles.
+func TestNewBaseSliceFromMeta_EmptyVerifyAndAllowedFiles(t *testing.T) {
+	t.Parallel()
+
+	s, err := NewBaseSliceFromMeta(&metadata.SliceMeta{
+		ID:               "bare",
+		BelongsToCell:    "testcell",
+		ConsistencyLevel: "L0",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	v := s.Verify()
+	assert.Empty(t, v.Unit)
+	assert.Empty(t, v.Contract)
+	assert.Empty(t, v.Waivers)
+	assert.Nil(t, s.AllowedFiles(), "AllowedFiles must be nil when not set in meta")
 }
 
 // assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error

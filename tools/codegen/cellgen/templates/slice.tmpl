@@ -23,7 +23,7 @@ var sliceMeta = {{ .RenderedMetaLiteral }}
 // cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata()) — the typed
 // funnel that replaces the legacy `cell.NewBaseSlice(id, cellID, level)`
 // literal pattern.
-func SliceMetadata() *metadata.SliceMeta { return sliceMeta }
+func SliceMetadata() *metadata.SliceMeta { return sliceMeta.Clone() }
 {{- if .Handlers }}
 
 // eventHandlerService documents the handler methods {{ .SliceID }}'s service

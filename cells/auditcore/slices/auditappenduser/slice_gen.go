@@ -50,7 +50,7 @@ var sliceMeta = &metadata.SliceMeta{
 // cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata()) — the typed
 // funnel that replaces the legacy `cell.NewBaseSlice(id, cellID, level)`
 // literal pattern.
-func SliceMetadata() *metadata.SliceMeta { return sliceMeta }
+func SliceMetadata() *metadata.SliceMeta { return sliceMeta.Clone() }
 
 // eventHandlerService documents the handler methods auditappenduser's service
 // must provide so that cell_gen.go's reg.Subscribe call is typed. The interface
