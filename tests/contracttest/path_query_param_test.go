@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // testContractsRoot returns the testdata/contracts directory shipped with this package.
@@ -107,15 +109,83 @@ func TestMustRejectQueryParam_UnknownName(t *testing.T) {
 	}
 }
 
-// captureT wraps *testing.T and records whether Errorf was called, without
-// propagating the failure to the outer test. Used to assert that the API
-// produces a test error for invalid inputs.
+// TestCompileInlineParamSchema_RejectsUnsupportedType asserts that
+// compileInlineParamSchema calls t.Fatal when given a type not in the
+// metadata.ParamTypes whitelist (e.g. "object").
+func TestCompileInlineParamSchema_RejectsUnsupportedType(t *testing.T) {
+	t.Parallel()
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("compileInlineParamSchema with unsupported type should have called t.Fatalf (panic sentinel)")
+			}
+		}()
+		// captureT.Fatalf panics to simulate test termination.
+		inner := &captureT{T: t}
+		compileInlineParamSchema(inner, "test/unsupported", metadata.ParamSchema{Type: "object"})
+	}()
+}
+
+// TestParamValueToJSON_RejectsNaNInf asserts that NaN/Inf values fall back to
+// JSON strings rather than returning bare "NaN"/"Inf" bytes that would be
+// invalid JSON numbers and cause silent misclassification in schema rejection.
+func TestParamValueToJSON_RejectsNaNInf(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		input string
+		// wantJSONString: the result should be a JSON-encoded string (quoted),
+		// not the raw value as a JSON number token.
+		wantJSONString bool
+	}{
+		{"Inf", true},
+		{"+Inf", true},
+		{"-Inf", true},
+		{"NaN", true},
+		// Sanity: plain integers and floats still produce JSON numbers.
+		{"42", false},
+		{"3.14", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got, ok := paramValueToJSON(tc.input)
+			if !ok {
+				t.Fatalf("paramValueToJSON(%q) returned ok=false, want a JSON token", tc.input)
+			}
+			isQuoted := len(got) >= 2 && got[0] == '"' && got[len(got)-1] == '"'
+			if tc.wantJSONString && !isQuoted {
+				t.Errorf("paramValueToJSON(%q) = %s, want a JSON string (quoted); NaN/Inf must not be emitted as bare JSON number tokens", tc.input, got)
+			}
+			if !tc.wantJSONString && isQuoted {
+				t.Errorf("paramValueToJSON(%q) = %s, want a JSON number (unquoted)", tc.input, got)
+			}
+		})
+	}
+}
+
+// captureT wraps *testing.T and records whether Errorf or Fatalf was called,
+// without propagating the failure to the outer test. Used to assert that the
+// API produces a test error for invalid inputs.
 type captureT struct {
 	*testing.T
 	failed bool
 }
 
+// Helper is overridden to prevent the call stack frame from pointing into the
+// real *testing.T internals, which would misattribute error line numbers.
+func (c *captureT) Helper() {}
+
 func (c *captureT) Errorf(format string, args ...any) {
 	c.failed = true
 	// Do not forward to c.T to avoid failing the outer test.
+}
+
+// Fatalf records the failure and panics to simulate test termination
+// (mirroring mockTB.Fatalf semantics used elsewhere in this package).
+func (c *captureT) Fatalf(format string, args ...any) {
+	c.failed = true
+	panic("captureT.Fatalf called")
 }

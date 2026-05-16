@@ -21,9 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -532,6 +534,8 @@ func newHTTPTransport(meta *metadata.HTTPTransportMeta) *HTTPTransport {
 
 // ValidatePathParam validates value against the path param schema for name.
 // Calls t.Errorf if name is not declared in pathParams or value violates schema.
+//
+// See paramValueToJSON for the value-to-JSON conversion semantics.
 func (c *Contract) ValidatePathParam(t testing.TB, name, value string) {
 	t.Helper()
 	schema, ok := c.pathParamSchemas[name]
@@ -544,6 +548,8 @@ func (c *Contract) ValidatePathParam(t testing.TB, name, value string) {
 
 // MustRejectPathParam asserts that value is rejected by the path param schema for name.
 // Calls t.Errorf if name is not declared in pathParams or value is accepted by schema.
+//
+// See paramValueToJSON for the value-to-JSON conversion semantics.
 func (c *Contract) MustRejectPathParam(t testing.TB, name, value string) {
 	t.Helper()
 	schema, ok := c.pathParamSchemas[name]
@@ -556,6 +562,8 @@ func (c *Contract) MustRejectPathParam(t testing.TB, name, value string) {
 
 // ValidateQueryParam validates value against the query param schema for name.
 // Calls t.Errorf if name is not declared in queryParams or value violates schema.
+//
+// See paramValueToJSON for the value-to-JSON conversion semantics.
 func (c *Contract) ValidateQueryParam(t testing.TB, name, value string) {
 	t.Helper()
 	schema, ok := c.queryParamSchemas[name]
@@ -568,6 +576,8 @@ func (c *Contract) ValidateQueryParam(t testing.TB, name, value string) {
 
 // MustRejectQueryParam asserts that value is rejected by the query param schema for name.
 // Calls t.Errorf if name is not declared in queryParams or value is accepted by schema.
+//
+// See paramValueToJSON for the value-to-JSON conversion semantics.
 func (c *Contract) MustRejectQueryParam(t testing.TB, name, value string) {
 	t.Helper()
 	schema, ok := c.queryParamSchemas[name]
@@ -617,18 +627,41 @@ func mustRejectParamValue(t testing.TB, schema *jsonschema.Schema, name, value, 
 	}
 }
 
-// paramValueToJSON converts the string value to a JSON token []byte.
-// It tries integer, then float, and falls back to a JSON string.
-// Returns (token, true) on success, (nil, false) if the value cannot be
-// represented as any JSON primitive.
+// paramValueToJSON converts the string value to a JSON token []byte suitable
+// for unmarshalling into a Go value and validating against a JSON Schema.
+//
+// Conversion priority:
+//  1. If value parses as a base-10 integer (strconv.ParseInt), return the raw
+//     bytes as a JSON number. Example: "42" → []byte("42").
+//  2. If value parses as a float (strconv.ParseFloat) AND the result is finite
+//     (not NaN, not ±Inf), return the raw bytes as a JSON number.
+//     Example: "3.14" → []byte("3.14").
+//     Note: "1.0" parses as float but NOT as integer, so it is returned as the
+//     JSON number 1.0; an integer schema will reject it (type mismatch).
+//  3. Otherwise fall back to a JSON-encoded string.
+//     Example: "Inf" → []byte(`"Inf"`), "hello" → []byte(`"hello"`).
+//     NaN, +Inf, -Inf are not valid JSON number literals; returning them as JSON
+//     strings ensures that integer/number schemas reject them via type mismatch
+//     (the intended behaviour) rather than via a JSON parse error in the caller
+//     that would be silently misclassified as a schema rejection.
+//
+// Returns (token, true) on success. The only failure path is json.Marshal of
+// the string itself, which cannot happen for well-formed string values —
+// (nil, false) is included for interface completeness.
 func paramValueToJSON(value string) ([]byte, bool) {
 	// Try integer first.
 	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return []byte(value), true
 	}
-	// Try float.
-	if _, err := strconv.ParseFloat(value, 64); err == nil {
-		return []byte(value), true
+	// Try float — but reject NaN and Inf, which are not valid JSON number literals.
+	if f, err := strconv.ParseFloat(value, 64); err == nil {
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			// Fall through to JSON string encoding so that integer/number
+			// schemas reject the value via type mismatch, not via a JSON
+			// parse error that the caller would silently treat as rejection.
+		} else {
+			return []byte(value), true
+		}
 	}
 	// Fall back to JSON string.
 	b, err := json.Marshal(value)
@@ -643,8 +676,15 @@ func paramValueToJSON(value string) ([]byte, bool) {
 // fields (type, minLength, maxLength, minimum, maximum, pattern, format, required)
 // and registers it via jsonschema.Compiler.AddResource + Compile.
 // Calls t.Fatal on errors.
+//
+// param.Type must be one of the values in metadata.ParamTypes (string, integer,
+// number, boolean). Any other value is rejected at compile time; t.Fatalf is
+// called with the allowed type list so the error is immediately actionable.
 func compileInlineParamSchema(t testing.TB, name string, param metadata.ParamSchema) *jsonschema.Schema {
 	t.Helper()
+	if !metadata.ParamTypes[param.Type] {
+		t.Fatalf("contracttest: compileInlineParamSchema %q: unsupported type %q (allowed: %v)", name, param.Type, sortedParamTypeNames())
+	}
 	doc := map[string]any{
 		"type": param.Type,
 	}
@@ -677,6 +717,17 @@ func compileInlineParamSchema(t testing.TB, name string, param metadata.ParamSch
 		t.Fatalf("contracttest: compileInlineParamSchema %q: compile: %v", name, err)
 	}
 	return schema
+}
+
+// sortedParamTypeNames returns the allowed param type names from metadata.ParamTypes
+// in sorted order, for use in human-readable error messages.
+func sortedParamTypeNames() []string {
+	names := make([]string, 0, len(metadata.ParamTypes))
+	for name := range metadata.ParamTypes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ValidateErrorResponse validates body against the JSON Schema declared for
