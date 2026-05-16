@@ -2,7 +2,6 @@ package configread
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,11 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -89,6 +83,11 @@ func TestHttpConfigListV1Serve(t *testing.T) {
 		`"nextCursor":"","hasMore":false}`))
 }
 
+// NOTE: authzCase/runAuthzCases are intentionally duplicated with the sibling slice's
+// contract_test.go — accepted architectural cost of the FMT-33 public/internal slice
+// split (Go test-package isolation; cf. cell-patterns.md "跨 cell decode 重复属预期成本").
+// Do not extract a shared testutil for 2 call sites.
+
 // authzCase models a row in the runtime mux authz negative-test tables.
 // principal=nil produces an anonymous request — the Mount's auth.AnyRole
 // policy short-circuits to ErrAuthUnauthorized before role inspection.
@@ -101,36 +100,11 @@ type authzCase struct {
 	wantErrCode string
 }
 
-// setupInternalHandler wires the handler onto a celltest mux via
-// RegisterInternalRoutes — nested under /internal/v1/config to mirror the
-// production cell_routes.go InternalListener layout. The internal route
-// applies auth.AnyRole(auth.RoleInternalAdmin); a request without a
-// Principal must surface as 401 and a service principal without
-// RoleInternalAdmin must surface as 403 — the same Policy production runs.
-func setupInternalHandler() http.Handler {
-	repo := mem.NewConfigRepository(clock.Real())
-	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
-	if err != nil {
-		panic(err)
-	}
-	mux := celltest.NewTestMux()
-	mux.Route("/internal/v1/config", func(sub kcell.RouteMux) {
-		_ = NewHandler(svc).RegisterInternalRoutes(sub)
-	})
-	return mux
-}
-
 // runAuthzCases drives a table of authz cases through h with the given
-// request. The single helper covers all three negative tests — primary
-// list/get and internal get — by accepting an optional pre-built principal,
-// keeping the assertion shape identical across listeners.
-//
-// In addition to status + error.code, the recorded body is validated
-// against the contract's declared 4xx schemaRef so that drift in the
-// shared error envelope (message / details / request_id presence) or in
-// contract.yaml's responses[<status>] declaration is caught here, not
-// only in upstream contract conformance tooling.
+// request. In addition to status + error.code, the recorded body is
+// validated against the contract's declared 4xx schemaRef so that drift in
+// the shared error envelope or in contract.yaml's responses[<status>]
+// declaration is caught here, not only in upstream contract conformance.
 func runAuthzCases(t *testing.T, h http.Handler, c *contracttest.Contract, method, target string, cases []authzCase) {
 	t.Helper()
 	for _, tc := range cases {
@@ -157,21 +131,10 @@ func runAuthzCases(t *testing.T, h http.Handler, c *contracttest.Contract, metho
 
 // userPrincipal builds a PrincipalUser for table-driven authz cases. Mirrors
 // auth.TestContext but exposes the *Principal so it can be embedded in the
-// authzCase struct alongside service principals.
+// authzCase struct.
 func userPrincipal(subject string, roles []string) *auth.Principal {
 	return &auth.Principal{
 		Kind:       auth.PrincipalUser,
-		Subject:    subject,
-		Roles:      append([]string(nil), roles...),
-		AuthMethod: "test",
-	}
-}
-
-// servicePrincipal builds a PrincipalService for the internal listener
-// authz cases — paired with userPrincipal for symmetry.
-func servicePrincipal(subject string, roles []string) *auth.Principal {
-	return &auth.Principal{
-		Kind:       auth.PrincipalService,
 		Subject:    subject,
 		Roles:      append([]string(nil), roles...),
 		AuthMethod: "test",
@@ -196,7 +159,7 @@ func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
 // TestHttpConfigListV1_AuthzNegative locks the runtime auth-guard contract
 // for the admin-gated GET /api/v1/config/ list endpoint, mirroring the
 // single-entry GET semantics. The base path's trailing slash matches the
-// production registration in cell_routes.go (mux.Route("/config", ...)).
+// production registration in cell_gen.go (mux.Route("/config", ...)).
 func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.list.v1")
@@ -204,33 +167,5 @@ func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
 	runAuthzCases(t, h, c, http.MethodGet, configBasePath+"/", []authzCase{
 		{"no_auth", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
 		{"non_admin", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-	})
-}
-
-// TestHttpConfigInternalGetV1_PolicyDefenceInDepth locks the route-level
-// Policy guard on /internal/v1/config/{key} as a defense-in-depth layer
-// behind the listener's service-token authn chain, NOT the listener-level
-// "missing or invalid service token" path declared by the contract — that
-// path involves token parsing, nonce replay, and PrincipalService
-// injection wired by composition root (cmd/corebundle.internalGuardFromEnv +
-// runtime/auth.NewServiceTokenAuthenticator) and is exercised end-to-end
-// in integration tests, not here. This test asserts:
-//   - missing Principal → 401 (the route-policy short-circuit when the
-//     listener auth chain failed to inject a Principal — guards against a
-//     wiring regression that lets an unauth request reach the route)
-//   - PrincipalService without RoleInternalAdmin → 403 (guards against a
-//     downgrade of the route Policy to a weaker guard like AnyRole(any))
-//
-// The package-level TestMux (kernel/cell/celltest/mux.go) is intentionally
-// scoped to route-policy semantics, so a real bundle.Run harness is the
-// right fit for token-chain coverage; this slice-local test does not
-// replace it.
-func TestHttpConfigInternalGetV1_PolicyDefenceInDepth(t *testing.T) {
-	root := contracttest.ContractsRoot(t)
-	c := contracttest.LoadByID(t, root, "http.config.internal.get.v1")
-	h := setupInternalHandler()
-	runAuthzCases(t, h, c, http.MethodGet, "/internal/v1/config/some-key", []authzCase{
-		{"no_principal", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"service_principal_without_role", servicePrincipal("svc-x", nil), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
 }

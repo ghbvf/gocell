@@ -366,11 +366,11 @@ flowchart LR
 
 ### 7.5 `cells/`
 
-- `accesscore` 9 slices
-- `auditcore` 4 slices
-- `configcore` 6 slices
+- `accesscore` 10 slices
+- `auditcore` 5 slices
+- `configcore` 7 slices
 - `ordercell` 2 slices
-- `devicecell` 4 slices
+- `devicecell` 5 slices
 - `demo` 0 slices
 
 ## 8. 当前关键状态

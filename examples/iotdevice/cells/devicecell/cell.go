@@ -9,22 +9,18 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
+	devicecommandinternal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandinternal"
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
-	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
-	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
-	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
-	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
-	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
-	internallistcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -120,17 +116,9 @@ type DeviceCell struct {
 	registerHandler *registercontract.Handler
 
 	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
-	commandEnqueueHandler *enqueuecontract.Handler
-	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
-	commandDequeueHandler *dequeuecontract.Handler
-	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
-	commandReportHandler *reportcontract.Handler
-	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
-	commandAckHandler *ackcontract.Handler
-	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
-	commandExtendLeaseHandler *extendleasecontract.Handler
-	// +slice:route:slice=devicecommand,listener=cell.InternalListener,subPath=
-	commandInternalHandler *internallistcontract.Handler
+	commandHandler *devicecommand.Handler
+	// +slice:route:slice=devicecommandinternal,listener=cell.InternalListener,subPath=
+	commandInternalHandler *devicecommandinternal.Handler
 
 	// +slice:route:slice=devicestatus,subPath=/api/v1/devices
 	statusHandler *statuscontract.Handler
@@ -285,25 +273,30 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		c.commandQueue = commandtest.NewInMemQueue()
 	}
 	cmdQueue := c.commandQueue
-	commandSvc, err := devicecommand.NewService(
+	runMode := query.RunModeForDemo(durabilityMode == cell.DurabilityDemo)
+	// Public slice service: sliceName "devicecommand" for observability labels.
+	pubSvc, err := devicecmd.NewService(
 		cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo),
-		devicecommand.WithClock(c.clk),
+		runMode,
+		devicecmd.WithClock(c.clk),
+		devicecmd.WithSliceName("devicecommand"),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
 	}
-	// enqueue: only admin/operator may send commands to devices.
-	c.commandEnqueueHandler = enqueuecontract.NewHandler(commandSvc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator))
-	// dequeue/report/ack/extend-lease: device polls/reports on its own commands
-	// (subject == path {id}); admin and operator may also access for observability.
-	c.commandDequeueHandler = dequeuecontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
-	c.commandReportHandler = reportcontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
-	c.commandAckHandler = ackcontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
-	c.commandExtendLeaseHandler = extendleasecontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	// Internal slice service: sliceName "devicecommandinternal" for observability labels.
+	intSvc, err := devicecmd.NewService(
+		cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
+		runMode,
+		devicecmd.WithClock(c.clk),
+		devicecmd.WithSliceName("devicecommandinternal"),
+	)
+	if err != nil {
+		return fmt.Errorf("device-command-internal: %w", err)
+	}
+	c.commandHandler = devicecommand.NewHandler(pubSvc)
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
-	// auth.clientsOnly:true → single-arg NewHandler; no policy needed, caller-cell allowlist is the guard.
-	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc)
+	c.commandInternalHandler = devicecommandinternal.NewHandler(intSvc)
 	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue, c.clk,
 		kcommand.WithSweeperInterval(30*time.Second),
 		kcommand.WithSweeperOnError(func(err error) {
@@ -314,6 +307,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	}
 	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, c.clk)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommand.SliceMetadata()))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandinternal.SliceMetadata()))
 
 	// device-status slice
 	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)

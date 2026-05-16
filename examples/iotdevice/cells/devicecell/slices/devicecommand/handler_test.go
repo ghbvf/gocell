@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,15 +14,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
-	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
-	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
-	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
-	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
-	listcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -33,62 +27,38 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// setupHandlers creates all generated handlers and seeds a device so that command operations succeed.
-func setupHandlers() (
-	*enqueuecontract.Handler,
-	*dequeuecontract.Handler,
-	*reportcontract.Handler,
-	*ackcontract.Handler,
-	*extendleasecontract.Handler,
-	*listcontract.Handler,
-	*commandtest.InMemQueue,
-) {
+// Compile-time check: the type alias is transparent.
+var _ *devicecmd.Service = (*Service)(nil)
+
+// setupSvc creates a Service and seeds a device so that command operations succeed.
+func setupSvc() (*Service, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc, err := NewService(q, devRepo, codec, slog.Default(), query.RunModeProd, WithClock(clock.Real()))
+	svc, err := devicecmd.NewService(
+		q, devRepo, codec, slog.Default(), query.RunModeProd,
+		devicecmd.WithClock(clock.Real()),
+		devicecmd.WithSliceName("devicecommand"),
+	)
 	if err != nil {
 		panic(err)
 	}
-
 	_ = devRepo.Create(context.Background(), &domain.Device{
 		ID: "dev-1", Name: "sensor-a", Status: "online",
 	})
-
-	enqH := enqueuecontract.NewHandler(svc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator))
-	deqH := dequeuecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	repH := reportcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	ackH := ackcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	extH := extendleasecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	intH := listcontract.NewHandler(svc)
-	return enqH, deqH, repH, ackH, extH, intH, q
+	return svc, q
 }
 
-// setupCommandMux creates a TestMux with policies registered via
-// Secured, used by trust boundary tests so that policy checks run as in production.
+// setupCommandMux creates a TestMux with the composite Handler registered.
 func setupCommandMux() (http.Handler, *commandtest.InMemQueue) {
-	enqH, deqH, repH, ackH, extH, intH, q := setupHandlers()
+	svc, q := setupSvc()
+	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
-		if err := enqH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := deqH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := repH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := ackH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := extH.RegisterRoutes(sub); err != nil {
+		if err := h.RegisterRoutes(sub); err != nil {
 			panic(err)
 		}
 	})
-	if err := intH.RegisterRoutes(mux); err != nil {
-		panic(err)
-	}
 	return mux, q
 }
 
@@ -161,13 +131,14 @@ func TestHandleEnqueue(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			enqH, _, _, _, _, _, _ := setupHandlers()
+			svc, _ := setupSvc()
+			h := NewHandler(svc)
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetPathValue("id", tc.deviceID)
 			req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
-			enqH.ServeHTTP(w, req)
+			h.enqueueH.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
@@ -225,24 +196,26 @@ func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 }
 
 func TestHandleDequeue_InvalidLimit(t *testing.T) {
-	_, deqH, _, _, _, _, _ := setupHandlers()
+	svc, _ := setupSvc()
+	h := NewHandler(svc)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=abc", nil)
 	req.SetPathValue("id", "dev-1")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
-	deqH.ServeHTTP(w, req)
+	h.dequeueH.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
 }
 
 func TestHandleDequeue_ExceedsMaxLimit(t *testing.T) {
-	_, deqH, _, _, _, _, _ := setupHandlers()
+	svc, _ := setupSvc()
+	h := NewHandler(svc)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=501", nil)
 	req.SetPathValue("id", "dev-1")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
-	deqH.ServeHTTP(w, req)
+	h.dequeueH.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -279,7 +252,8 @@ func TestHandleDequeue(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, deqH, _, _, _, _, q := setupHandlers()
+			svc, q := setupSvc()
+			h := NewHandler(svc)
 			ctx := context.Background()
 			now := time.Now()
 			for i := range tc.seedCmds {
@@ -294,7 +268,7 @@ func TestHandleDequeue(t *testing.T) {
 			req.SetPathValue("id", tc.deviceID)
 			// Device authenticates as itself (self-access).
 			req = req.WithContext(auth.TestContext(tc.deviceID, nil))
-			deqH.ServeHTTP(w, req)
+			h.dequeueH.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantStatus == http.StatusOK {
@@ -316,7 +290,8 @@ func TestHandleDequeue(t *testing.T) {
 }
 
 func TestHandleDequeue_ClaimBatches(t *testing.T) {
-	_, deqH, _, _, _, _, q := setupHandlers()
+	svc, q := setupSvc()
+	h := NewHandler(svc)
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 7 {
@@ -334,7 +309,7 @@ func TestHandleDequeue_ClaimBatches(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		req.SetPathValue("id", "dev-1")
 		req = req.WithContext(auth.TestContext("dev-1", nil))
-		deqH.ServeHTTP(w, req)
+		h.dequeueH.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
@@ -358,124 +333,6 @@ func TestHandleDequeue_ClaimBatches(t *testing.T) {
 	for _, id := range allIDs {
 		assert.False(t, seen[id], "duplicate ID: %s", id)
 		seen[id] = true
-	}
-}
-
-func TestHandleScanActive(t *testing.T) {
-	_, _, _, _, _, intH, q := setupHandlers()
-	ctx := context.Background()
-	now := time.Now()
-	// Seed 3 commands so pagination cursor logic is exercised.
-	for i := range 3 {
-		id := fmt.Sprintf("cmd-scan-%d", i)
-		entry := command.NewEntry(id, "dev-1", "reboot", []byte("payload"),
-			command.Timeouts{}, now.Add(time.Duration(i)*time.Second))
-		require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
-	}
-
-	mux := celltest.NewTestMux()
-	require.NoError(t, intH.RegisterRoutes(mux))
-
-	// Fetch first page.
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/internal/v1/devicecommands?limit=2", nil)
-	req = req.WithContext(auth.TestServiceContext("devicecell"))
-	mux.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	data, ok := resp["data"].([]any)
-	require.True(t, ok, "response should have data array")
-	assert.Len(t, data, 2)
-	assert.Equal(t, true, resp["hasMore"])
-	assert.NotEmpty(t, resp["nextCursor"])
-
-	// Fetch second page using cursor.
-	cursor := resp["nextCursor"].(string)
-	w2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodGet, "/internal/v1/devicecommands?limit=2&cursor="+cursor, nil)
-	req2 = req2.WithContext(auth.TestServiceContext("devicecell"))
-	mux.ServeHTTP(w2, req2)
-
-	require.Equal(t, http.StatusOK, w2.Code)
-	var resp2 map[string]any
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
-	data2, ok := resp2["data"].([]any)
-	require.True(t, ok)
-	assert.Len(t, data2, 1)
-	assert.Equal(t, false, resp2["hasMore"])
-}
-
-func TestHandleScanActive_InvalidCursor(t *testing.T) {
-	codec := testCodec()
-
-	wrongSort := []query.SortColumn{{Name: "other", Direction: query.SortASC}, {Name: "x", Direction: query.SortASC}}
-	missingFieldsToken, _ := codec.Encode(query.Cursor{Values: []any{"v1", "v2"}})
-	crossContextToken, _ := codec.Encode(query.Cursor{
-		Values:  []any{"v1", "v2"},
-		Scope:   query.SortScope(wrongSort),
-		Context: query.QueryContext("endpoint", "wrong-endpoint"),
-	})
-
-	tests := []struct {
-		name   string
-		cursor string
-	}{
-		{"garbage token", "not-a-valid-cursor!!!"},
-		{"missing scope and context", missingFieldsToken},
-		{"cross-context replay", crossContextToken},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, _, _, _, intH, _ := setupHandlers()
-			// Route via a test mux so the path is recognized.
-			mux := celltest.NewTestMux()
-			if err := intH.RegisterRoutes(mux); err != nil {
-				t.Fatal(err)
-			}
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/internal/v1/devicecommands?deviceId=dev-1&cursor="+tc.cursor, nil)
-			req = req.WithContext(auth.TestServiceContext("devicecell"))
-			mux.ServeHTTP(w, req)
-
-			assert.Equal(t, http.StatusBadRequest, w.Code)
-			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
-		})
-	}
-}
-
-func TestParseStatusFilterInternal(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		wantLen int
-		wantErr bool
-	}{
-		{"empty string returns nil", "", 0, false},
-		{"whitespace returns nil", "   ", 0, false},
-		{"pending only", "pending", 1, false},
-		{"sent only", "sent", 1, false},
-		{"delivered only", "delivered", 1, false},
-		{"all keyword skipped", "all", 0, false},
-		{"mixed pending and sent", "pending,sent", 2, false},
-		{"all three statuses", "pending,sent,delivered", 3, false},
-		{"with whitespace", " pending , sent ", 2, false},
-		{"invalid status returns error", "unknown", 0, true},
-		{"empty part skipped", ",pending", 1, false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			statuses, err := parseStatusFilter(tc.input)
-			if tc.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.Len(t, statuses, tc.wantLen)
-			}
-		})
 	}
 }
 
@@ -505,7 +362,8 @@ func TestHandleAck(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, _, ackH, _, _, q := setupHandlers()
+			svc, q := setupSvc()
+			h := NewHandler(svc)
 			if tc.seedCmd {
 				ctx := context.Background()
 				seedEntry := command.NewEntry(tc.cmdID, tc.deviceID, "reboot",
@@ -522,7 +380,7 @@ func TestHandleAck(t *testing.T) {
 			req.SetPathValue("cmdId", tc.cmdID)
 			// Device authenticates as itself.
 			req = req.WithContext(auth.TestContext(tc.deviceID, nil))
-			ackH.ServeHTTP(w, req)
+			h.ackH.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantStatus == http.StatusOK {
@@ -539,7 +397,8 @@ func TestHandleAck(t *testing.T) {
 }
 
 func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
-	_, _, _, ackH, _, _, q := setupHandlers()
+	svc, q := setupSvc()
+	h := NewHandler(svc)
 	ctx := context.Background()
 	require.NoError(t, q.Enqueue(ctx,
 		command.NewEntry("cmd-timeout", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
@@ -553,7 +412,7 @@ func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
 	req.SetPathValue("id", "dev-1")
 	req.SetPathValue("cmdId", "cmd-timeout")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
-	ackH.ServeHTTP(w, req)
+	h.ackH.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	got, err := q.GetCommand(ctx, "cmd-timeout")
@@ -563,7 +422,8 @@ func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
 }
 
 func TestHandleAck_RejectsFailedAlias(t *testing.T) {
-	_, _, _, ackH, _, _, q := setupHandlers()
+	svc, q := setupSvc()
+	h := NewHandler(svc)
 	ctx := context.Background()
 	require.NoError(t, q.Enqueue(ctx,
 		command.NewEntry("cmd-failed-alias", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
@@ -577,7 +437,7 @@ func TestHandleAck_RejectsFailedAlias(t *testing.T) {
 	req.SetPathValue("id", "dev-1")
 	req.SetPathValue("cmdId", "cmd-failed-alias")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
-	ackH.ServeHTTP(w, req)
+	h.ackH.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	got, err := q.GetCommand(ctx, "cmd-failed-alias")

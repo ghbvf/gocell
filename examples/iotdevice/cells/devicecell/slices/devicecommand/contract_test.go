@@ -10,15 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
-	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
-	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
-	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
-	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
-	listcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -29,46 +24,31 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-// newContractCommandHandler wires all generated handlers on a TestMux.
-// TestMux.Route mirrors production chi so auth.Mount strips "/api/v1/devices"
-// off Contract.Path directly — no StripPrefix or relative-alias magic.
+// newContractCommandHandler wires all public handlers via the composite NewHandler
+// on a TestMux. TestMux.Route mirrors production chi so auth.Mount strips
+// "/api/v1/devices" off Contract.Path directly — no StripPrefix magic.
+// Note: the internal list handler lives in devicecommandinternal; its contract
+// test is in that package.
 func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc, err := NewService(q, devRepo, codec, slog.Default(), query.RunModeProd, WithClock(clock.Real()))
+	svc, err := devicecmd.NewService(
+		q, devRepo, codec, slog.Default(), query.RunModeProd,
+		devicecmd.WithClock(clock.Real()),
+		devicecmd.WithSliceName("devicecommand"),
+	)
 	if err != nil {
 		panic(err)
 	}
 
-	enqH := enqueuecontract.NewHandler(svc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator))
-	deqH := dequeuecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	repH := reportcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	ackH := ackcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	extH := extendleasecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
-	intH := listcontract.NewHandler(svc)
-
+	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
-		if err := enqH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := deqH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := repH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := ackH.RegisterRoutes(sub); err != nil {
-			panic(err)
-		}
-		if err := extH.RegisterRoutes(sub); err != nil {
+		if err := h.RegisterRoutes(sub); err != nil {
 			panic(err)
 		}
 	})
-	if err := intH.RegisterRoutes(mux); err != nil {
-		panic(err)
-	}
 	return mux, devRepo, q
 }
 
@@ -192,25 +172,6 @@ func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"extensionSeconds":60}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
-	handler.ServeHTTP(rec, req)
-	c.ValidateHTTPResponseRecorder(t, rec)
-}
-
-func TestHttpInternalDeviceCommandsListV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "http.internal.devicecommands.list.v1")
-
-	handler, devRepo, q := newContractCommandHandler()
-	_ = devRepo.Create(context.Background(), &domain.Device{
-		ID: "dev-1", Name: "sensor-a", Status: "online",
-	})
-	_ = q.Enqueue(context.Background(),
-		command.NewEntry("cmd-1", "dev-1", "reboot", []byte("reboot"), command.Timeouts{}, time.Now()),
-		command.EnqueueOptions{})
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?deviceId=dev-1&statuses=pending", nil)
-	req = req.WithContext(auth.TestServiceContext("devicecell"))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }

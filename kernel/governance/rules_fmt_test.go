@@ -1126,3 +1126,185 @@ func TestFMT32_MultipleContracts_Aggregate(t *testing.T) {
 		t.Fatalf("FMT-32 aggregate: expected 1 finding (first contract missing block), got %d: %v", len(matches), matches)
 	}
 }
+
+// fmt33Usage is one (contract, kind, http-path, role) tuple attached to the
+// single slice that fmt33Project builds. dangling=true declares the usage
+// but skips registering the contract (exercises the REF-05-covered missing
+// contract branch).
+type fmt33Usage struct {
+	id, kind, path, role string
+	dangling             bool
+}
+
+// fmt33Project builds a *metadata.ProjectMeta with exactly one slice whose
+// contractUsages mirror the supplied tuples; each referenced contract is
+// auto-registered. Only the fields validateFMT33 reads are populated.
+func fmt33Project(usages []fmt33Usage) *metadata.ProjectMeta {
+	p := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	var cus []metadata.ContractUsage
+	for _, u := range usages {
+		cus = append(cus, metadata.ContractUsage{Contract: u.id, Role: u.role})
+		if u.dangling {
+			continue // declared usage, contract intentionally unregistered
+		}
+		cm := &metadata.ContractMeta{
+			ID:               u.id,
+			Kind:             u.kind,
+			ConsistencyLevel: "L1",
+			Lifecycle:        "active",
+			File:             "contracts/" + u.id + "/contract.yaml",
+		}
+		if u.kind == "http" && u.path != "" {
+			cm.Endpoints = metadata.EndpointsMeta{
+				Server: "samplecore",
+				HTTP: &metadata.HTTPTransportMeta{
+					Method: "GET", Path: u.path, SuccessStatus: 200,
+				},
+			}
+		}
+		p.Contracts[u.id] = cm
+	}
+	p.Slices["samplecore/sampleslice"] = &metadata.SliceMeta{
+		ID:             "sampleslice",
+		BelongsToCell:  "samplecore",
+		ContractUsages: cus,
+		File:           "cells/samplecore/slices/sampleslice/slice.yaml",
+	}
+	return p
+}
+
+// TestFMT33_VisibilitySegregation pins SLICE-HTTP-VISIBILITY-SEGREGATION-01.
+// Case "mixed_public_internal_error" is the configread regression: the
+// pre-split slice serving http.config.get.v1 + http.config.internal.get.v1
+// must flag exactly one SeverityError; the two post-split cases prove the
+// remediation goes green.
+func TestFMT33_VisibilitySegregation(t *testing.T) {
+	tests := []struct {
+		name      string
+		usages    []fmt33Usage
+		wantCount int
+	}{
+		{
+			// post-split public slice: get + list, same trust boundary.
+			name: "public_only_ok",
+			usages: []fmt33Usage{
+				{"http.config.get.v1", "http", "/api/v1/config/{key}", "serve", false},
+				{"http.config.list.v1", "http", "/api/v1/config/", "serve", false},
+			},
+			wantCount: 0,
+		},
+		{
+			// post-split internal slice: internal-get alone.
+			name: "internal_only_ok",
+			usages: []fmt33Usage{
+				{"http.config.internal.get.v1", "http", "/internal/v1/config/{key}", "serve", false},
+			},
+			wantCount: 0,
+		},
+		{
+			// pre-split configread: public + internal in one slice → violation.
+			name: "mixed_public_internal_error",
+			usages: []fmt33Usage{
+				{"http.config.get.v1", "http", "/api/v1/config/{key}", "serve", false},
+				{"http.config.list.v1", "http", "/api/v1/config/", "serve", false},
+				{"http.config.internal.get.v1", "http", "/internal/v1/config/{key}", "serve", false},
+			},
+			wantCount: 1,
+		},
+		{
+			// internal contract used as a client (role=call) is unrelated.
+			name: "internal_call_role_skipped",
+			usages: []fmt33Usage{
+				{"http.config.get.v1", "http", "/api/v1/config/{key}", "serve", false},
+				{"http.config.internal.get.v1", "http", "/internal/v1/config/{key}", "call", false},
+			},
+			wantCount: 0,
+		},
+		{
+			// non-http kind never participates even if a path string is set.
+			name: "event_kind_skipped",
+			usages: []fmt33Usage{
+				{"http.config.get.v1", "http", "/api/v1/config/{key}", "serve", false},
+				{"event.config.entry-upserted.v1", "event", "", "subscribe", false},
+			},
+			wantCount: 0,
+		},
+		{
+			// paths that are neither /api/v1 nor /internal/v1 (bootstrap) set
+			// no flag — reverse self-check against over-firing.
+			name: "neither_prefix_no_false_positive",
+			usages: []fmt33Usage{
+				{"http.config.get.v1", "http", "/api/v1/config/{key}", "serve", false},
+				{"http.health.v1", "http", "/healthz", "serve", false},
+			},
+			wantCount: 0,
+		},
+		{
+			// dangling contract ref (unregistered) is skipped — REF-05's
+			// domain — so it cannot pair with the public usage into a
+			// false violation.
+			name: "dangling_internal_ref_skipped",
+			usages: []fmt33Usage{
+				{"http.config.get.v1", "http", "/api/v1/config/{key}", "serve", false},
+				{"http.config.internal.get.v1", "http", "/internal/v1/config/{key}", "serve", true},
+			},
+			wantCount: 0,
+		},
+		{
+			// http-kind contract with nil endpoints.http is skipped
+			// (FMT-07/FMT-13's domain) so it cannot pair into a violation.
+			name: "http_kind_nil_endpoint_skipped",
+			usages: []fmt33Usage{
+				{"http.broken.v1", "http", "", "serve", false},
+				{"http.config.internal.get.v1", "http", "/internal/v1/config/{key}", "serve", false},
+			},
+			wantCount: 0,
+		},
+		{
+			// oracle generalisation: /api/v2 is public-surface, mixing with
+			// /internal/v1 in the same slice must trigger — locks the F-A fix
+			// that replaced the hard-coded /api/v1 prefix with IsPublicHTTPPath.
+			name: "api_v2_with_internal_error",
+			usages: []fmt33Usage{
+				{"http.x.v2", "http", "/api/v2/x", "serve", false},
+				{"http.y.internal.v1", "http", "/internal/v1/y", "serve", false},
+			},
+			wantCount: 1,
+		},
+		{
+			// reverse self-check: two internal serve usages and no public one
+			// must never fire — guards against hasPublic/hasInternal logic swap.
+			name: "two_internal_no_public_ok",
+			usages: []fmt33Usage{
+				{"http.config.internal.get.v1", "http", "/internal/v1/config/{key}", "serve", false},
+				{"http.config.internal.list.v1", "http", "/internal/v1/config/", "serve", false},
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := fmt33Project(tc.usages)
+			v := NewValidator(p, "", clock.Real())
+			matches := findByCode(v.validateFMT33(), codeFMT33)
+			if len(matches) != tc.wantCount {
+				t.Fatalf("FMT-33 %s: expected %d findings, got %d: %v",
+					tc.name, tc.wantCount, len(matches), matches)
+			}
+			if tc.wantCount == 1 {
+				if matches[0].Severity != SeverityError {
+					t.Errorf("FMT-33: expected SeverityError, got %v", matches[0].Severity)
+				}
+				if matches[0].Field != "contractUsages" {
+					t.Errorf("FMT-33: expected Field=contractUsages, got %q", matches[0].Field)
+				}
+			}
+		})
+	}
+}

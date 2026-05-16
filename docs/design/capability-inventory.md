@@ -11,7 +11,7 @@
 | **kernel/** | 11 包 | 全部 IMPL | cell/assembly/metadata/governance/outbox/idempotency/journey/registry/scaffold/slice + schemas |
 | **runtime/** | 11 子包 | 全部 IMPL | auth/bootstrap/config/eventbus/http×3/observability×3/shutdown/worker |
 | **adapters/** | 6 包 | 全部 IMPL | postgres/redis/rabbitmq/oidc/s3/websocket |
-| **cells/** | 3 platform Cell, 19 platform slices | 全部 IMPL | accesscore(9s) / auditcore(4s) / configcore(6s) |
+| **cells/** | 3 platform Cell, 22 platform slices | 全部 IMPL | accesscore(10s) / auditcore(5s) / configcore(7s) |
 | **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + corebundle |
 | **pkg/** | 5 包 | 全部 IMPL | errcode/ctxkeys/httputil/id/uid |
 | **contracts/** | 64 active YAML | 声明完成 | 45 platform + 19 examples |
@@ -234,7 +234,8 @@ Adapters: internal/mem + internal/adapters/postgres (AuditRepository PG) + inter
 ### 5.3 configcore (L2, core)
 | Slice | 功能 |
 |-------|------|
-| configread | GET /api/v1/config/{key} |
+| configread | GET /api/v1/config/{key} + GET /api/v1/config/ (public, admin-gated) |
+| configreadinternal | GET /internal/v1/config/{key} (internal control-plane, caller-cell gated) |
 | configwrite | POST /api/v1/config/ + outbox 事件 |
 | configpublish | POST /api/v1/config/{key}/publish + POST /api/v1/config/{key}/rollback |
 | configsubscribe | 变更订阅（event consumer） |

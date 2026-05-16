@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/internal/configreader"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
@@ -38,7 +39,7 @@ func asAdmin(req *http.Request) *http.Request {
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := configreader.NewService(repo, codec, slog.Default(), "configread", query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}

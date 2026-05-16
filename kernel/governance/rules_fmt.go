@@ -1397,3 +1397,81 @@ func (v *Validator) checkREF12Contract(c *metadata.ContractMeta) []ValidationRes
 	}
 	return results
 }
+
+// validateFMT33 enforces SLICE-HTTP-VISIBILITY-SEGREGATION-01: a single slice
+// must not serve both a public HTTP contract (path under /api/*) and an
+// internal HTTP contract (path matching metadata.IsInternalHTTPPath, i.e.
+// /internal/v1). Public-facing and internal control-plane endpoints sit on
+// different trust boundaries (distinct listeners, auth chains, and failure
+// domains; the public surface authenticates external principals while the
+// internal surface enforces caller-cell allowlists). Co-locating both surfaces
+// in one slice couples two trust boundaries into one deployable/ownership unit
+// and makes the "same struct, two register paths" mistake expressible. Both
+// visibility classes route through metadata oracles (IsPublicHTTPPath /
+// IsInternalHTTPPath) — no inline string anchor. IsPublicHTTPPath covers all
+// /api/vN versions (not locked to v1), ensuring future /api/v2 endpoints on
+// the public surface are caught by the same rule.
+//
+// Scope: only role=serve HTTP usages participate (a slice calling an internal
+// contract as a client is unrelated). Paths that match neither oracle (e.g.
+// bootstrap /healthz) set no flag and never trigger; the rule fires only when
+// one slice holds at least one of each.
+//
+// Membership guard: TestRuleReachabilityFromRegistrationRoots locks FMT-33 in
+// goldenRuleIDs — deleting the rules() registration turns CI red.
+//
+// AI-rebust: Medium (governance YAML-metadata validate layer, same tier as
+// FMT-31/ADV-06). Both visibility classes route through metadata oracles
+// (IsPublicHTTPPath / IsInternalHTTPPath) — no inline string anchor.
+//
+// Fix pattern: move shared logic to cells/{cell}/internal/{domain}/, create
+// one public slice (/api) and one internal slice (/internal/v1), each
+// type-aliasing the shared service. Canonical reference: configread +
+// configreadinternal sharing cells/configcore/internal/configreader.
+func (v *Validator) validateFMT33() []ValidationResult {
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		if v.sliceMixesHTTPVisibility(s) {
+			results = append(results, v.newResult(
+				codeFMT33, SeverityError, IssueForbidden,
+				sliceFile(s),
+				"contractUsages",
+				fmt.Sprintf(
+					"slice %q serves both public (/api/v1) and internal (/internal/v1) HTTP "+
+						"contracts; public and internal API surfaces are distinct trust "+
+						"boundaries and must be segregated into separate slices; "+
+						"fix: split into a public slice and an internal slice",
+					s.ID,
+				),
+			))
+		}
+	}
+	return results
+}
+
+// sliceMixesHTTPVisibility reports whether s serves at least one public
+// (/api/*) HTTP contract and at least one internal (/internal/v1) HTTP
+// contract via role=serve usages — the SLICE-HTTP-VISIBILITY-SEGREGATION-01
+// violation condition.
+func (v *Validator) sliceMixesHTTPVisibility(s *metadata.SliceMeta) bool {
+	var hasPublic, hasInternal bool
+	for _, cu := range s.ContractUsages {
+		if cu.Role != string(cellvocab.RoleServe) {
+			continue
+		}
+		c, ok := v.project.Contracts[cu.Contract]
+		if !ok {
+			continue // REF-05 covers dangling contract refs
+		}
+		if c.Kind != "http" || c.Endpoints.HTTP == nil {
+			continue
+		}
+		switch path := c.Endpoints.HTTP.Path; {
+		case metadata.IsInternalHTTPPath(path):
+			hasInternal = true
+		case metadata.IsPublicHTTPPath(path):
+			hasPublic = true
+		}
+	}
+	return hasPublic && hasInternal
+}
