@@ -357,13 +357,22 @@ func (g *Generator) appendGeneratedFiles(
 // derived files before the assembly exists on disk.
 //
 // In-memory only; reverted by PlanAssemblyScaffold after Generate* completes.
-// Field set must stay in sync with what GenerateModulesGen/Entrypoint/Boundary
-// read — see backlog ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
+// Field-set completeness is enforced by ASSEMBLY-META-SYNTHESIS-FIELD-GUARD
+// (synthesize_field_guard_test.go) — adding a field to metadata.AssemblyMeta
+// without populating it here (or exempting it with a documented reason)
+// fails CI.
 //
-// Build.Binary intentionally omitted — new assembly has no binary name
-// declared; GenerateBoundary/Entrypoint do not read this field (verified
-// by grep). Tracked in backlog ASSEMBLY-META-SYNTHESIS-FIELD-GUARD.
+// Build.Binary defaults to spec.ID, matching the entrypoint path's ID
+// component (cmd/{spec.ID}/main.go); Build.DeployTemplate mirrors
+// spec.Deploy (empty for the k8s default, just as the rendered yaml omits
+// the block).
 func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
+	deployTemplate := spec.Deploy
+	if deployTemplate == "k8s" {
+		// Mirror buildScaffoldContext: k8s default is omitted from yaml,
+		// so the in-memory metadata also leaves the field empty for parity.
+		deployTemplate = ""
+	}
 	return &metadata.AssemblyMeta{
 		ID:    spec.ID,
 		Cells: append([]string(nil), spec.Cells...),
@@ -372,7 +381,9 @@ func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 			Role: spec.OwnerRole,
 		},
 		Build: metadata.BuildMeta{
-			Entrypoint: filepath.Join("cmd", spec.ID, "main.go"),
+			Entrypoint:     filepath.Join("cmd", spec.ID, "main.go"),
+			Binary:         spec.ID,
+			DeployTemplate: deployTemplate,
 		},
 	}
 }
